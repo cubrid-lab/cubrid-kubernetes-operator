@@ -30,7 +30,7 @@ Use [template.md](./template.md) for new ADRs.
 | [0002](./0002-broker-routing.md) | Broker topology and RW/RO routing | Accepted (POC-gated) | #3 |
 | [0003](./0003-instance-manager.md) | Instance Manager architecture | Accepted (POC-gated) | #10 |
 | [0004](./0004-ha-hostname-dns.md) | Stable HA hostname and DNS model | Accepted (POC-gated) | #4 |
-| [0005](./0005-failover-split-brain.md) | Failover and split-brain responsibility | Proposed | #5 |
+| [0005](./0005-failover-split-brain.md) | Failover and split-brain responsibility | Accepted (POC-gated) | #5 |
 | [0006](./0006-node-join-rebuild.md) | Node join, rejoin, and rebuild | Proposed | #6 |
 | [0007](./0007-backup-execution.md) | Backup execution model | Proposed | #7 |
 | [0008](./0008-restore-semantics.md) | Restore semantics | Proposed | #8 |
