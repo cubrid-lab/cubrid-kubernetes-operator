@@ -1,9 +1,8 @@
 # CUBRID Kubernetes Operator — Design
 
-> A Kubernetes-native operator for running highly available,
-> production-grade CUBRID clusters.
+> A Kubernetes-native operator for running highly available CUBRID clusters.
 
-**Status:** Draft
+**Status:** Draft (rev. 2 — CUBRID-specific operational semantics added)
 **API Version:** `v1alpha1`
 
 ---
@@ -29,12 +28,32 @@ actual database state and safely manage:
 - database-aware health
 - storage
 - backup and restore
-- rolling upgrades
+- rolling updates
 - observability
 - Kubernetes failures
 
 This project explores a Kubernetes-native architecture for operating
 CUBRID as a stateful database workload.
+
+A generic Kubernetes database-operator structure — declarative
+reconciliation, Conditions, envtest/Kind E2E — is necessary but not
+sufficient. Before implementation starts, the following
+**CUBRID-specific operational semantics** must be defined, because they
+shape the CRD, StatefulSet structure, Service structure, Instance
+Manager API, and controller state machine:
+
+1. CUBRID HA master / slave / replica semantics
+2. `ha_db_list` and the database lifecycle
+3. CUBRID Broker and RW/RO routing responsibility
+4. The hostname and DNS model used for `ha_node_list`
+5. Failover and split-brain responsibility
+6. New slave join, failed node rejoin, and PVC-loss rebuild
+7. Backup execution locality and backup artifact storage
+8. Restore semantics
+9. The distinction between CUBRID engine upgrade and rolling updates
+
+These are tracked as P0 decisions in [ROADMAP.md](./ROADMAP.md) and
+[docs/adr/](./docs/adr/).
 
 ---
 
@@ -53,7 +72,7 @@ CUBRID Kubernetes Operator
        ├── Failure recovery
        ├── Storage
        ├── Backup / Restore
-       ├── Upgrade
+       ├── Updates
        └── Observability
        │
        ▼
@@ -71,18 +90,29 @@ metadata:
 spec:
   version: "11.4"
 
-  instances: 3
+  databases:
+    - name: appdb
+
+  topology:
+    standbys: 2
+    replicas: 0
 
   highAvailability:
     enabled: true
 
   storage:
-    size: 100Gi
-    storageClass: standard
+    data:
+      size: 100Gi
+      storageClassName: standard
 ```
 
 and the operator should continuously converge the actual cluster toward
 that desired state.
+
+The guiding statement for all design decisions in this project:
+
+> **Operate CUBRID safely using Kubernetes-native control-plane semantics
+> while preserving CUBRID-native database semantics.**
 
 ---
 
@@ -98,6 +128,9 @@ The first version will **NOT** attempt to provide:
 - AI troubleshooting
 - automatic database performance tuning
 - a replacement for CUBRID native HA
+- non-promotable replica nodes (`replicas` role) in `v1alpha1`
+- CUBRID engine version migration in the initial MVP
+- in-place destructive restore of an active HA cluster in `v1alpha1`
 
 CUBRID native HA remains responsible for database-level replication and
 role transitions.
@@ -184,435 +217,7 @@ The architecture must assume:
 
 Recovery must not depend on in-memory controller state.
 
----
-
-## 5. High-Level Architecture
-
-```text
-                       Kubernetes API
-                             │
-                             ▼
-                     CubridCluster CR
-                             │
-                             ▼
-                +-------------------------+
-                | CUBRID Operator         |
-                |                         |
-                | Cluster Reconciler      |
-                | HA Reconciler           |
-                | Service Reconciler      |
-                | Storage Reconciler      |
-                | Backup Reconciler       |
-                | Upgrade Reconciler      |
-                +-------------------------+
-                     │          │
-              desired state     │ status
-                     │          │
-                     ▼          │
-        +--------------------------------+
-        |       CUBRID Cluster           |
-        |                                |
-        | primary   standby   replica    |
-        |    │          │         │      |
-        | agent      agent     agent     |
-        |    │          │         │      |
-        |    PVC        PVC       PVC    |
-        +--------------------------------+
-```
-
----
-
-## 6. Instance Manager
-
-Each CUBRID Pod may run a lightweight instance manager.
-
-The instance manager handles operations local to the database process.
-
-Responsibilities may include:
-
-- CUBRID process health
-- CUBRID role discovery
-- Broker health
-- HA state
-- configuration reload
-- safe shutdown
-- backup invocation
-- upgrade preparation
-
-The Kubernetes Operator remains responsible for cluster-level decisions.
-
-```text
-Operator
-   │
-   │ desired cluster state
-   ▼
-Instance Manager
-   │
-   │ local DB operation
-   ▼
-CUBRID
-```
-
-This avoids making the Kubernetes controller depend heavily on
-remote shell execution.
-
-Whether the Instance Manager is implemented as a sidecar or integrated
-into the CUBRID image remains an open design decision.
-
----
-
-## 7. Custom Resources
-
-### 7.1 CubridCluster
-
-Represents one logical CUBRID cluster.
-
-```yaml
-apiVersion: database.cubrid.io/v1alpha1
-kind: CubridCluster
-
-metadata:
-  name: production
-
-spec:
-  version: "11.4"
-
-  instances: 3
-
-  highAvailability:
-    enabled: true
-
-  storage:
-    size: 100Gi
-    storageClass: standard
-
-status:
-  phase: Healthy
-  primary: production-0
-
-  instances:
-    ready: 3
-    total: 3
-
-  conditions:
-    - type: Ready
-      status: "True"
-
-    - type: HAReady
-      status: "True"
-```
-
-One `CubridCluster` owns the complete topology.
-
-A separate CR should not be required for a standby or replica belonging
-to the same logical cluster.
-
-### 7.2 CubridBackup
-
-Represents a single backup operation.
-
-```yaml
-apiVersion: database.cubrid.io/v1alpha1
-kind: CubridBackup
-
-metadata:
-  name: production-20260915
-
-spec:
-  cluster:
-    name: production
-
-status:
-  phase: Completed
-  startedAt: ...
-  completedAt: ...
-```
-
-Backup execution should use Kubernetes Jobs rather than an in-memory
-controller goroutine.
-
-### 7.3 CubridRestore
-
-Represents restoration of a CUBRID database.
-
-```yaml
-apiVersion: database.cubrid.io/v1alpha1
-kind: CubridRestore
-
-metadata:
-  name: restore-production
-
-spec:
-  cluster:
-    name: production
-
-  backup:
-    name: production-20260915
-```
-
-Restore must be treated as a first-class lifecycle operation.
-
-Backup without restore validation is not sufficient for production
-readiness.
-
----
-
-## 8. High Availability
-
-CUBRID native HA remains the database replication mechanism.
-
-The operator provides Kubernetes lifecycle orchestration around it.
-
-```text
-Primary
-   │
-   ├──── Standby
-   │
-   └──── Replica
-```
-
-The operator must understand:
-
-- database role
-- replication health
-- pod health
-- node health
-- service routing
-
-A typical failure sequence is:
-
-```text
-Primary failure
-      ↓
-Detect unhealthy instance
-      ↓
-Observe CUBRID HA transition
-      ↓
-Verify new primary
-      ↓
-Update cluster status
-      ↓
-Ensure write endpoint routes correctly
-      ↓
-Recover failed instance
-      ↓
-Rejoin cluster
-```
-
-The operator must **NOT** blindly promote a node without considering CUBRID
-HA state.
-
----
-
-## 9. Service Model
-
-At minimum the operator should expose:
-
-- `<cluster>-rw`
-- `<cluster>-ro`
-- `<cluster>-instances`
-
-Example:
-
-```text
-production-rw
-      ↓
-Current writable primary
-
-production-ro
-      ↓
-Read-capable replicas
-```
-
-Applications should not need to know the identity of the current primary.
-
-Primary transitions should be transparent to clients as much as the
-CUBRID protocol permits.
-
----
-
-## 10. Health Model
-
-The operator should not consider a database healthy merely because the
-container is running.
-
-Proposed health hierarchy:
-
-```text
-PodScheduled
-     ↓
-ProcessHealthy
-     ↓
-BrokerHealthy
-     ↓
-DatabaseReady
-     ↓
-HAReady
-     ↓
-ClusterReady
-```
-
-Possible conditions:
-
-- `Ready`
-- `Progressing`
-- `Degraded`
-- `HAReady`
-- `BackupReady`
-- `Restoring`
-- `Upgrading`
-- `FailingOver`
-
-These should use `metav1.Condition`.
-
----
-
-## 11. Storage
-
-Each database instance owns persistent storage.
-
-```text
-production-0 → PVC-0
-production-1 → PVC-1
-production-2 → PVC-2
-```
-
-Initial support:
-
-- StorageClass
-- ReadWriteOnce
-- PersistentVolumeClaim
-- volume expansion
-- PVC retention
-
-Deleting a CubridCluster must **NOT** accidentally destroy database data
-without an explicit retention policy.
-
-Example:
-
-```yaml
-storage:
-  size: 100Gi
-  storageClass: premium
-
-  retentionPolicy: Retain
-```
-
----
-
-## 12. Backup Architecture
-
-Preferred model:
-
-```text
-CubridBackup
-      ↓
-Backup Controller
-      ↓
-Kubernetes Job
-      ↓
-CUBRID backup
-      ↓
-Backup Storage
-```
-
-Scheduled backup:
-
-```text
-BackupSchedule
-      ↓
-CubridBackup
-      ↓
-Job
-```
-
-The controller should not keep the backup scheduler exclusively in
-process memory.
-
----
-
-## 13. Upgrade Architecture
-
-Database upgrade must be database-aware.
-
-A possible rolling sequence:
-
-```text
-Replica A
-   ↓ upgrade
-health verification
-
-Replica B
-   ↓ upgrade
-health verification
-
-Primary
-   ↓ controlled transition
-
-Former Primary
-   ↓ upgrade
-```
-
-The operator must not rely only on StatefulSet rolling-update semantics.
-
----
-
-## 14. Observability
-
-The operator should expose both controller and database metrics.
-
-Example metrics:
-
-```text
-cubrid_cluster_ready
-cubrid_cluster_instances
-cubrid_cluster_primary
-cubrid_instance_ready
-cubrid_replication_lag_seconds
-cubrid_failover_total
-cubrid_backup_last_success_timestamp
-cubrid_backup_duration_seconds
-cubrid_restore_duration_seconds
-```
-
-Events should also be generated for important lifecycle transitions.
-
-Example:
-
-```text
-PrimaryFailed
-PrimaryChanged
-ReplicaRecovered
-BackupStarted
-BackupCompleted
-RestoreStarted
-UpgradeStarted
-UpgradeCompleted
-```
-
----
-
-## 15. Security
-
-Production defaults:
-
-- No hard-coded credentials
-- No `InsecureSkipVerify`
-- No privileged containers
-- No `:latest` image
-- Minimal RBAC
-- Secrets for credentials
-- TLS verification
-- Non-root operator
-
-The operator should avoid requiring `pods/exec` privileges wherever
-possible.
-
----
-
-## 16. Kubernetes-Native Requirements
-
-The design should use current Kubernetes primitives.
+### 4.6 Use Kubernetes Primitives
 
 Prefer:
 
@@ -631,20 +236,1030 @@ Prefer:
 Avoid building custom replacements for functionality Kubernetes already
 provides.
 
+### 4.7 Conditions Are the Source of Truth
+
+`phase` is informational only.
+
+Conditions are the source of truth for cluster state.
+
+### 4.8 Expose Semantics, Not Configuration Surface
+
+```text
+Expose semantics, not every CUBRID configuration parameter.
+```
+
+The API exposes operational intent (topology, HA, storage, routing).
+Detailed CUBRID tuning parameters are only surfaced when they carry
+operator-visible semantics.
+
 ---
 
-## 17. Testing Strategy
+## 5. Terminology
 
-Testing is part of the product.
+### Master
 
-**Unit:**
+The currently writable CUBRID HA node.
+
+### Slave
+
+A failover-capable HA node that may become master when the
+current master becomes unavailable.
+
+### Replica
+
+A replication target that is not eligible for automatic promotion.
+
+Replica nodes are not supported in the initial MVP.
+
+### Instance
+
+A Kubernetes Pod running one CUBRID HA member.
+
+### Cluster
+
+A logical group of CUBRID instances managed by one `CubridCluster`.
+
+### Database
+
+A CUBRID database participating in the HA configuration.
+
+### Broker
+
+The CUBRID middleware layer used by applications to connect to databases.
+
+### Terminology mapping
+
+Do not mix vocabularies within a single context. The project distinguishes:
+
+```text
+CUBRID terminology:
+master / slave / replica
+
+Operator-facing generalized terminology:
+primary / standby
+```
+
+CUBRID-level state (for example `status.instances[].role`) uses CUBRID
+terms (`master`, `slave`). Operator-level concepts (for example
+`status.currentPrimary`) use the generalized terms (`primary`,
+`standby`). Each API field and document section uses exactly one
+vocabulary.
+
+---
+
+## 6. CUBRID HA Model
+
+### Roles
+
+```text
+Master (writable)
+   ├── Slave (failover-capable)
+   └── Slave (failover-capable)
+
+Replica (non-promotable) — not supported in v1alpha1
+```
+
+CUBRID native HA remains the database replication and role-transition
+mechanism.
+
+The fundamental responsibility split:
+
+```text
+CUBRID native HA owns database role transition.
+
+The operator observes, validates, and reconciles
+Kubernetes resources around the transition.
+```
+
+The operator must **NOT** blindly promote a node without considering
+CUBRID HA state, and must not treat itself as the replication engine.
+
+### Databases and `ha_db_list`
+
+Each CUBRID HA member runs one or more databases, enumerated in the
+node's `ha_db_list`.
+
+The participating database set is part of cluster identity: the operator
+must know which databases participate in HA in order to configure nodes,
+validate health, select backup targets, and generate `ha_db_list` for
+joining nodes.
+
+The exact API model (`spec.databases`), creation ownership, and
+deletion semantics are decided in #2.
+
+### MVP Topology
+
+```text
+1 active master
+2 failover-capable slaves
+0 non-promotable replicas
+```
+
+Rationale for excluding the replica role from the MVP:
+
+- slave and replica failover semantics differ
+- including replicas complicates routing, status, and backup-target
+  semantics
+- a 3-node master + slaves topology is sufficient to validate the core
+  HA operator features
+- the API can be extended later to add the replica role
+
+### Hostnames and DNS
+
+`ha_node_list` requires stable node names. Candidates:
+
+```text
+production-0
+production-1
+production-2
+```
+
+or:
+
+```text
+production-0.production-instances.namespace.svc.cluster.local
+```
+
+To be verified:
+
+- how CUBRID compares hostname and HA node name
+- whether FQDNs are usable
+- StatefulSet Pod hostname behavior
+- headless Service
+- Pod DNS search domain
+- identity preservation across Pod restarts
+
+Required invariant:
+
+```text
+A CUBRID HA member must have a stable identity independent of Pod restart.
+```
+
+The final model is decided in #4 (ADR-0004).
+
+---
+
+## 7. High-Level Architecture
+
+```text
+                        Kubernetes API
+                              │
+                              ▼
+                      CubridCluster CR
+                              │
+                              ▼
+                 +-------------------------+
+                 | CUBRID Operator         |
+                 |                         |
+                 | Cluster Reconciler      |
+                 | HA Reconciler           |
+                 | Service Reconciler      |
+                 | Storage Reconciler      |
+                 | Backup Reconciler       |
+                 | Update Reconciler       |
+                 +-------------------------+
+                      │          │
+               desired state     │ status
+                      │          │
+                      ▼          │
+         +--------------------------------+
+         |       CUBRID Cluster           |
+         |                                |
+         | master     slave      slave    |
+         |    │         │          │      |
+         | IM          IM         IM      |
+         |    │         │          │      |
+         |   PVC       PVC        PVC     |
+         +--------------------------------+
+```
+
+`IM` = Instance Manager (see Section 9). Broker placement is decided by
+ADR-0002 (see Section 10).
+
+The single most important structural requirement:
+
+> HA, Services, Storage, Backup, and Updates must not be independent
+> subsystems. They must connect into **one lifecycle state machine**
+> (Sections 12 and 13) that the controller reconciles.
+
+---
+
+## 8. CubridCluster API
+
+### 8.1 Spec (draft)
+
+```yaml
+apiVersion: database.cubrid.io/v1alpha1
+kind: CubridCluster
+metadata:
+  name: production
+
+spec:
+  version: "11.4"
+
+  databases:
+    - name: appdb
+
+  topology:
+    standbys: 2
+    replicas: 0
+
+  image:
+    repository: cubrid/cubrid
+    tag: "11.4"
+
+  highAvailability:
+    enabled: true
+
+  broker:
+    mode: integrated
+
+  storage:
+    data:
+      size: 100Gi
+      storageClassName: standard
+
+    logs:
+      size: 50Gi
+      storageClassName: standard
+
+    retentionPolicy: Retain
+
+  credentials:
+    dbaPasswordSecretRef:
+      name: production-auth
+      key: dba-password
+
+  config:
+    cubrid: {}
+    ha: {}
+    broker: {}
+
+  resources: {}
+
+  scheduling:
+    affinity: {}
+    topologySpreadConstraints: []
+```
+
+Not every option needs to be exposed from day one. The API principle:
+
+```text
+Expose semantics, not every CUBRID configuration parameter.
+```
+
+If `instances` is kept instead of `topology`, its semantics must be
+defined explicitly:
+
+```text
+instances = master + promotable slaves
+
+Replica role is not supported in v1alpha1.
+```
+
+The `topology` form is preferred because it is explicit. Final decision:
+#1.
+
+### 8.2 Status (draft)
+
+```yaml
+status:
+  observedGeneration: 7
+
+  currentPrimary: production-1
+
+  instances:
+    - name: production-0
+      role: slave
+      haState: active
+      ready: true
+
+    - name: production-1
+      role: master
+      haState: active
+      ready: true
+
+    - name: production-2
+      role: slave
+      haState: active
+      ready: true
+
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: ClusterReady
+
+    - type: HAReady
+      status: "True"
+      reason: HealthyReplication
+```
+
+If a `phase` field is kept for convenience:
+
+```text
+phase is informational only.
+
+Conditions are the source of truth.
+```
+
+One `CubridCluster` owns the complete topology.
+A separate CR should not be required for a standby or replica belonging
+to the same logical cluster.
+
+### 8.3 CubridBackup (draft)
+
+Represents a single backup operation. Draft fields — final CRD fields are
+confirmed after the backup POC (#7):
+
+```yaml
+spec:
+  clusterRef:
+    name: production
+
+  database: appdb
+
+  target:
+    preference: PreferStandby
+
+  level: 0
+
+  destination:
+    type: ObjectStorage
+```
+
+### 8.4 Restore
+
+For `v1alpha1`, recovery into a **new CubridCluster** via bootstrap is
+preferred (see Section 16). Whether a separate `CubridRestore` CR is
+needed, or bootstrap is expressed on `CubridCluster` alone, is decided in
+#8.
+
+---
+
+## 9. Instance Manager
+
+Each CUBRID Pod runs (or is accompanied by) a lightweight instance
+manager that handles operations local to the database process.
+
+### Responsibilities
+
+```text
+process health
+role discovery
+HA status
+broker health
+safe shutdown
+backup invocation
+restore preparation
+configuration inspection
+local database lifecycle operations
+```
+
+The operator keeps only cluster-level responsibility:
+
+```text
+desired state
+cluster-level decisions
+resource reconciliation
+failover observation
+status aggregation
+routing reconciliation
+```
+
+```text
+Operator
+   │
+   │ desired cluster state
+   ▼
+Instance Manager
+   │
+   │ local DB operation
+   ▼
+CUBRID
+```
+
+This avoids making the Kubernetes controller depend heavily on remote
+shell execution (`pods/exec`).
+
+### Deployment Options
+
+#### Option A — Integrated process supervisor
+
+Advantages:
+
+- complete process lifecycle control
+- straightforward graceful shutdown design
+
+Disadvantages:
+
+- requires a custom CUBRID image
+
+#### Option B — Sidecar
+
+Advantages:
+
+- can reuse the official image
+
+Disadvantages:
+
+- process namespace / CLI sharing problems
+- complex shutdown coordination
+
+### Instance Manager API
+
+Decisions required:
+
+```text
+HTTP vs gRPC
+
+authentication
+authorization
+mTLS
+port
+health endpoints
+timeouts
+retry semantics
+idempotency
+```
+
+Decision: #10 (ADR-0003).
+
+---
+
+## 10. Broker and Service Architecture
+
+The Broker is the CUBRID middleware layer that applications connect to.
+Where brokers run and who owns RW/RO routing is a P0 decision (ADR-0002).
+
+### Option A — Broker per database Pod
+
+```text
+Application
+    ↓
+production-rw Service
+    ↓
+Broker on current master Pod
+    ↓
+CUBRID
+```
+
+Advantages:
+
+- intuitive linkage between Kubernetes Service and role labels
+- clear meaning of `production-rw`
+
+Disadvantages:
+
+- the operator must precisely manage role changes and Service routing
+- reconcile latency directly affects client routing
+
+### Option B — Separate Broker Deployment
+
+```text
+Application
+    ↓
+production-rw Service
+    ↓
+RW Broker Deployment
+    ↓
+CUBRID HA nodes
+```
+
+Advantages:
+
+- leverages CUBRID native Broker routing
+- separates application endpoints from DB Pod lifecycle
+
+Disadvantages:
+
+- separate Broker configuration lifecycle management
+- Broker HA itself must be considered
+
+### Current Direction
+
+For the MVP, **a structure that maximizes CUBRID native routing is
+verified first**, but the final decision is made in an ADR after a POC of
+actual CUBRID Broker reconnect/failover behavior.
+
+### Services
+
+At minimum the operator exposes:
+
+- `<cluster>-rw`
+- `<cluster>-ro`
+- `<cluster>-instances` (headless, for stable Pod DNS)
+
+Applications should not need to know the identity of the current master.
+Primary transitions should be transparent to clients as much as the
+CUBRID protocol permits.
+
+The exact routing responsibility of `-rw` and `-ro` (Kubernetes label
+selection vs CUBRID Broker routing) is part of ADR-0002.
+
+---
+
+## 11. Health Model
+
+Pod readiness and cluster health are separate concepts.
+
+### Pod readiness
+
+```text
+ProcessHealthy
+BrokerHealthy
+DatabaseReady
+```
+
+### Cluster Conditions
+
+```text
+HAReady
+ReplicationHealthy
+ClusterReady
+```
+
+`HAReady` is **not** put directly into Pod readiness by default.
+
+Reason: during failover the HA state is briefly unstable; that must not
+cause every Pod to be removed from Kubernetes Services as a side effect.
+
+Full proposed hierarchy:
+
+```text
+PodScheduled
+     ↓
+ProcessHealthy
+     ↓
+BrokerHealthy
+     ↓
+DatabaseReady
+     ↓
+HAReady (cluster-level)
+     ↓
+ClusterReady
+```
+
+Possible conditions:
+
+- `Ready`
+- `Progressing`
+- `Degraded`
+- `HAReady`
+- `BackupReady`
+- `Restoring`
+- `Updating`
+- `FailingOver`
+
+These use `metav1.Condition`.
+
+---
+
+## 12. Failover and Split-Brain Model
+
+### Failover State Machine
+
+```text
+Healthy
+  ↓
+PrimaryUnavailable
+  ↓
+AwaitNativeHATransition
+  ↓
+CandidateObserved
+  ↓
+CandidateVerified
+  ↓
+RoutingReconciled
+  ↓
+OldPrimaryStateVerified
+  ↓
+FailedInstanceRecovery
+  ↓
+ReplicationCaughtUp
+  ↓
+Healthy
+```
+
+The operator does **not** directly promote nodes as its default
+behavior:
+
+```text
+CUBRID native HA owns database role transition.
+
+The operator observes, validates, and reconciles
+Kubernetes resources around the transition.
+```
+
+### Split-Brain Policy
+
+At minimum, the following scenarios must be documented and handled
+explicitly:
+
+```text
+Operator → reachable
+Master → reachable
+Slave A → isolated
+
+Operator → reachable
+Master → isolated
+Slave A → reachable
+
+Operator itself partitioned
+
+Kubernetes node partition
+
+Broker sees old master but Operator sees new master
+```
+
+For each scenario the design must define:
+
+- who decides promotion
+- what the writable endpoint points to
+- how a stale master is identified
+- how writes to a stale master are minimized
+- who performs fencing when fencing is required
+- how fencing failure is surfaced
+
+Example condition:
+
+```text
+Ready=False
+HAReady=False
+Degraded=True
+Reason=AmbiguousPrimary
+```
+
+Hard invariant:
+
+> **The operator must never simultaneously recognize two writable
+> masters as healthy.**
+
+Whether active fencing is performed by the operator, delegated to
+CUBRID native HA, or implemented as a hybrid mechanism is decided
+through ADR-0005. Pod deletion is not presumed to be the only fencing
+mechanism.
+
+---
+
+## 13. Node Join / Rejoin / Rebuild
+
+These lifecycle operations are distinct from simple Pod restarts and
+from StatefulSet scale operations.
+
+### New Slave Join
+
+```text
+Requested
+   ↓
+PVCProvisioned
+   ↓
+InstanceBootstrapping
+   ↓
+ReplicationSourceSelected
+   ↓
+BackupCreated
+   ↓
+BackupTransferred
+   ↓
+DatabaseRestored
+   ↓
+HAMembershipConfigured
+   ↓
+ReplicationStarted
+   ↓
+CatchUp
+   ↓
+Ready
+```
+
+### Pod Recreation with PVC Intact
+
+```text
+PodLost
+  ↓
+ReplacementPodCreated
+  ↓
+ExistingPVCAttached
+  ↓
+CUBRIDStarted
+  ↓
+HAStateVerified
+  ↓
+ReplicationCatchUp
+  ↓
+Ready
+```
+
+### PVC Loss
+
+PVC loss is not a simple Pod restart. It requires a rebuild:
+
+```text
+PVCLost
+  ↓
+NewPVC
+  ↓
+RebuildRequired
+  ↓
+SelectSource
+  ↓
+Backup/Restore
+  ↓
+HARejoin
+  ↓
+CatchUp
+  ↓
+Ready
+```
+
+Condition example:
+
+```text
+Ready=False
+Progressing=True
+Reason=InstanceRebuilding
+```
+
+A change such as `standbys: 2 → 3` must **not** be treated as a plain
+StatefulSet scale operation; it enters the join state machine.
+Decision: #6 (ADR-0006).
+
+---
+
+## 14. Storage
+
+Each database instance owns persistent storage.
+
+```text
+production-0 → PVC-0
+production-1 → PVC-1
+production-2 → PVC-2
+```
+
+### Volume Layout
+
+The internal design distinguishes at least:
+
+```text
+data
+active/archive logs
+HA replication logs
+backup staging
+```
+
+The initial API does not have to expose every volume separately, but
+controller logic and volume naming must be designed so volumes can be
+separated later.
+
+### Monitoring Targets
+
+```text
+filesystem usage
+archive log growth
+replication lag
+backup space
+PVC capacity
+```
+
+### Initial Support
+
+- StorageClass
+- ReadWriteOnce
+- PersistentVolumeClaim
+- volume expansion
+- PVC retention
+
+Deleting a CubridCluster must **NOT** accidentally destroy database data
+without an explicit retention policy.
+
+Example:
+
+```yaml
+storage:
+  data:
+    size: 100Gi
+    storageClassName: premium
+
+  retentionPolicy: Retain
+```
+
+Decision: #17.
+
+---
+
+## 15. Backup Architecture
+
+Backup execution is an **open design decision**, not a settled structure.
+
+```text
+CubridBackup
+     ↓
+Backup Controller
+     ↓
+Execution Strategy
+     ├── Job
+     ├── Instance Manager
+     └── Hybrid
+     ↓
+CUBRID backupdb
+     ↓
+Backup Artifact
+     ↓
+Backup Destination
+```
+
+### Evaluation Questions (POC)
+
+```text
+1. Can backupdb run in remote/client mode?
+2. Can the backup target slave be specified explicitly?
+3. On which filesystem is backup output created?
+4. Where does output land under remote execution?
+5. Who moves backup artifacts to object storage?
+6. Must a Job mount a DB Pod's PVC?
+7. Is a Job valuable even as pure orchestration?
+```
+
+The candidate models — Kubernetes Job directly invoking CUBRID backup,
+Instance Manager executing backup locally, or a hybrid Job + Instance
+Manager orchestration — must account for:
+
+```text
+execution locality
+backup artifact locality
+PVC access semantics
+failure recovery
+resumability
+```
+
+Also to be verified: cancellation, retry, and operator restart during
+backup.
+
+Decision: #7 (ADR-0007), after a working backup/restore prototype in
+a real Kind/CUBRID environment.
+
+---
+
+## 16. Restore and Recovery
+
+For `v1alpha1`:
+
+```text
+For v1alpha1, recovery into a new CubridCluster is preferred.
+
+In-place restore of an active HA cluster is considered
+a separate destructive lifecycle operation and is out of MVP scope.
+```
+
+Model:
+
+```text
+Backup
+  ↓
+New CubridCluster
+  ↓
+Bootstrap from recovery
+```
+
+Example:
+
+```yaml
+spec:
+  bootstrap:
+    recovery:
+      backupRef:
+        name: production-20260920
+```
+
+Restore must be treated as a first-class lifecycle operation.
+Backup without restore validation is not sufficient for production
+readiness.
+
+Decision: #8 (ADR-0008).
+
+---
+
+## 17. Update and Upgrade
+
+Update and upgrade are distinct operations.
+
+### Rolling Update (MVP scope)
+
+```text
+compatible container image changes
+operator-managed restart
+configuration-compatible changes
+OS/package layer update
+```
+
+The operator must not rely only on StatefulSet rolling-update semantics;
+restarts follow a database-aware sequence.
+
+### Engine Upgrade (excluded from initial MVP)
+
+```text
+CUBRID engine version migration
+volume format migration
+cross-version HA compatibility
+major/minor database upgrade
+```
+
+Terminology rule: this project uses **"database-aware rolling updates"**
+(not "upgrades") for the MVP capability, and reserves "upgrade" for
+CUBRID engine version migration, which is a future, separately designed
+operation.
+
+Decision: #9 (ADR-0009).
+
+---
+
+## 18. Observability
+
+The operator exposes both controller and database metrics.
+
+### Metrics
+
+```text
+cubrid_cluster_ready
+cubrid_cluster_instances
+cubrid_instance_ready
+cubrid_instance_role
+cubrid_ha_state
+cubrid_replication_lag_seconds
+cubrid_failover_total
+cubrid_backup_last_success_timestamp
+cubrid_backup_duration_seconds
+cubrid_restore_duration_seconds
+```
+
+### Events
+
+```text
+PrimaryChanged
+InstanceRebuilding
+ReplicaCaughtUp
+BackupStarted
+BackupCompleted
+RecoveryStarted
+RecoveryCompleted
+AmbiguousPrimaryDetected
+```
+
+Events are generated for important lifecycle transitions and conditions
+changes, so that failover, rebuild, and recovery are auditable through
+`kubectl describe` alone.
+
+---
+
+## 19. Security
+
+Production defaults:
+
+- No hard-coded credentials
+- No `InsecureSkipVerify`
+- No privileged containers
+- No `:latest` image
+- Minimal RBAC
+- Secrets via Secret refs (never in CR spec)
+- TLS verification
+- Non-root operator and workload
+- Pod Security Standards compliance
+- Instance Manager authentication (and mTLS where required)
+- `pods/exec` avoidance by design
+
+The operator should avoid requiring `pods/exec` privileges wherever
+possible.
+
+Decision: #18.
+
+---
+
+## 20. Testing Strategy
+
+Testing is part of the product. envtest and E2E are treated as
+product components, not afterthoughts — the E2E harness starts in
+Phase 1, not Phase 5.
+
+### Cluster Providers
+
+```text
+Local development → minikube (single node is sufficient for smoke tests)
+CI                → Kind (kind-action is the de facto standard)
+Failure E2E       → multi-node Kind (node drain, network partition)
+```
+
+The E2E harness must be provider-agnostic: it consumes only a
+`KUBECONFIG` and must not depend on minikube- or Kind-specific
+behavior. Any conformant cluster can run the smoke suite.
+
+### Unit
 
 - CR validation
 - reconciliation decisions
 - topology decisions
 - status conditions
 
-**envtest:**
+### envtest
 
 - CubridCluster reconciliation
 - StatefulSet creation
@@ -652,19 +1267,72 @@ Testing is part of the product.
 - PVC creation
 - Backup CR lifecycle
 
-**Kind E2E:**
+### Kind E2E — Phase 1 skeleton
 
-At minimum:
+```text
+Kind cluster creation
+operator install
+single-node CubridCluster
+StatefulSet creation
+Service creation
+PVC creation
+Ready Condition
+```
 
-- Create cluster
-- Primary Pod deletion
-- Replica Pod deletion
-- Node drain
-- Operator restart
-- Scale cluster
-- Backup
-- Restore
-- Rolling upgrade
+### Kind E2E — after HA
+
+```text
+3-node startup
+primary discovery
+slave role discovery
+```
+
+### Kind E2E — failure scenarios
+
+```text
+kill primary under write load
+kill slave
+operator restart
+node drain
+network partition
+broker restart
+PVC-preserving Pod recreation
+PVC-loss rebuild
+```
+
+### Kind E2E — backup / restore
+
+```text
+backup from preferred slave
+backup failure
+operator restart during backup
+restore new cluster
+validate known dataset
+```
+
+### Data Consistency Criteria
+
+"Data consistency is verified" is too abstract. Minimum test definition:
+
+```text
+Before failure:
+write monotonically increasing IDs.
+
+During failure:
+continue write attempts.
+
+After recovery:
+validate:
+
+- acknowledged transactions
+- missing committed records
+- duplicate records
+- ordering anomalies
+- writable endpoint recovery time
+```
+
+The project does **not** promise "zero data loss" in documentation at
+this stage. It measures first.
 
 The most important invariant:
 
@@ -672,16 +1340,68 @@ The most important invariant:
 
 ---
 
-## 18. MVP
+## 21. Compatibility
+
+| Component | MVP Target |
+|---|---|
+| CUBRID | 11.4.x |
+| Kubernetes | TBD after envtest/Kind validation |
+| Architecture | amd64 initially |
+| Storage | CSI-backed PVC |
+| Access Mode | ReadWriteOnce initially |
+| HA topology | 1 master + 2 slaves |
+| Non-promotable replica | Not supported in MVP |
+
+Kubernetes version support is recorded only after the CI matrix is
+established, not asserted upfront.
+
+---
+
+## 22. Open Decisions / ADRs
+
+All decisions that would change the CRD, StatefulSet, Service, or
+Instance Manager architecture are made through ADRs before HA controller
+implementation:
+
+| ADR | Topic | Issue |
+|---|---|---|
+| [0001](./docs/adr/0001-ha-topology.md) | HA topology semantics | #1 |
+| [0002](./docs/adr/0002-broker-routing.md) | Broker topology and RW/RO routing | #3 |
+| [0003](./docs/adr/0003-instance-manager.md) | Instance Manager architecture | #10 |
+| [0004](./docs/adr/0004-ha-hostname-dns.md) | HA hostname and DNS model | #4 |
+| [0005](./docs/adr/0005-failover-split-brain.md) | Failover and split-brain responsibility | #5 |
+| [0006](./docs/adr/0006-node-join-rebuild.md) | Node join / rejoin / rebuild | #6 |
+| [0007](./docs/adr/0007-backup-execution.md) | Backup execution model | #7 |
+| [0008](./docs/adr/0008-restore-semantics.md) | Restore semantics | #8 |
+| [0009](./docs/adr/0009-update-vs-upgrade.md) | Update vs upgrade | #9 |
+
+See [docs/adr/README.md](./docs/adr/README.md) for the ADR process and
+template.
+
+### Implementation Gate
+
+HA controller implementation does not start until all P0 decisions are
+accepted. Kubebuilder scaffold, CI, envtest, and the Kind harness may
+proceed in parallel.
+
+---
+
+## 23. MVP
 
 The initial MVP targets one production scenario:
 
 **3-node CUBRID HA cluster**
 
+```text
+1 active master
+2 failover-capable slaves
+0 non-promotable replicas
+```
+
 Required capabilities:
 
 - CubridCluster CRD
-- 3-node deployment
+- 3-node HA deployment
 - Persistent storage
 - CUBRID native HA
 - Database-aware health
@@ -689,8 +1409,8 @@ Required capabilities:
 - Stable write endpoint
 - Pod failure recovery
 - Backup
-- Restore
-- Rolling update
+- Restore into a new cluster
+- Database-aware rolling update for compatible image/configuration changes
 - Prometheus metrics
 - E2E tests
 
@@ -702,10 +1422,13 @@ Not required for MVP:
 - Multi-region
 - Multi-database engine support
 - Auto tuning
+- Replica (non-promotable) role
+- CUBRID engine version migration
+- In-place restore of an active HA cluster
 
 ---
 
-## 19. Demo Scenario
+## 24. Demo Scenario
 
 ```bash
 $ kubectl get cubridclusters
@@ -743,25 +1466,41 @@ NAME   PRIMARY   READY   STATUS
 prod   prod-1    3/3     Healthy
 ```
 
-The test should also validate:
+The test also validates:
 
 - RTO
-- data consistency
+- data consistency (per the criteria in Section 20)
 - transaction availability
 - cluster recovery
 
 ---
 
-## 20. Design Success Criteria
+## 25. Success Criteria
 
 The project succeeds when the operator can demonstrate:
+
+```text
+Observe actual CUBRID database state
+        ↓
+Understand HA topology and node roles
+        ↓
+Coordinate Kubernetes lifecycle with CUBRID HA
+        ↓
+Recover safely from infrastructure failures
+        ↓
+Expose deterministic status and routing
+        ↓
+Validate recovery through reproducible E2E tests
+```
+
+Concretely:
 
 - declarative CUBRID cluster management
 - repeatable reconciliation
 - safe HA operation
 - automatic Kubernetes failure recovery
-- backup and restore
-- database-aware rolling upgrades
+- backup and restore validation
+- database-aware rolling updates
 - meaningful Kubernetes status and metrics
 - reproducible E2E failure tests
 
@@ -769,6 +1508,15 @@ The goal is **not** merely:
 
 > Run CUBRID inside Kubernetes.
 
+nor:
+
+> Create StatefulSet + Service + PVC.
+
 The goal is:
 
-> Operate CUBRID safely using Kubernetes-native control-plane semantics.
+> **Operate CUBRID safely using Kubernetes-native control-plane semantics
+> while preserving CUBRID-native database semantics.**
+
+This statement is the criterion against which every CRD, Controller,
+Instance Manager, Broker, and Backup/Restore design decision in this
+project is judged.

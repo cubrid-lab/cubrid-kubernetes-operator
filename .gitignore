@@ -24,3 +24,7 @@ cover.out
 testbin/
 artifacts/
 tmp/
+
+# Agent / tool state
+.omc/
+.omo/
