@@ -124,3 +124,6 @@ are accepted.
 - [DESIGN.md](./DESIGN.md) — architecture and design principles
 - [ROADMAP.md](./ROADMAP.md) — proposed implementation plan
 - [docs/adr/](./docs/adr/) — architecture decision records
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — how to contribute and the ADR process
+- [docs/compatibility.md](./docs/compatibility.md) — support matrix and cluster providers
+- [docs/governance.md](./docs/governance.md) — license (#19) and API-group (#20) decisions (pending)
