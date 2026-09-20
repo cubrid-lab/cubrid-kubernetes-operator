@@ -599,24 +599,29 @@ to the same logical cluster.
 
 ### 8.3 CubridBackup (draft)
 
-Represents a single backup operation. Draft fields — final CRD fields are
-confirmed after the backup POC (#7):
+Represents a single (single-shot) backup operation. Per ADR-0007 (issue
+#7); scheduling is a future separate API.
 
 ```yaml
 spec:
-  clusterRef:
-    name: production
-
+  clusterRef: { name: production }
   database: appdb
-
-  target:
-    preference: PreferStandby
-
-  level: 0
-
+  target: { preference: PreferStandby }   # StandbyOnly | PrimaryOnly
+  level: Full                             # maps to CUBRID level 0; no 1/2 in v1alpha1
   destination:
-    type: ObjectStorage
+    type: ObjectStorage                   # S3-compatible; PVC is dev-only
+    objectStorage:
+      provider: S3Compatible
+      bucket: cubrid-backups
+      prefix: prod/production
+      endpointRef: { name: s3-endpoint }
+      credentialsRef: { name: s3-credentials }
 ```
+
+The Instance Manager executes `backupdb` locally and uploads the artifact
++ `manifest.json` (the completion marker) to object storage; ADR-0006
+rebuild consumes that manifest. Final CRD fields are confirmed after the
+ADR-0007 POC.
 
 ### 8.4 Restore
 
@@ -1153,54 +1158,37 @@ Decision: #17.
 
 ## 15. Backup Architecture
 
-Backup execution is an **open design decision**, not a settled structure.
+### Decision (ADR-0007, issue #7)
+
+**Accepted (POC-gated): Option B — the Instance Manager executes
+`backupdb` locally** in a selected DB pod; artifacts are
+**object-storage-backed, single-shot, full backups.**
 
 ```text
 CubridBackup
-     ↓
-Backup Controller
-     ↓
-Execution Strategy
-     ├── Job
-     ├── Instance Manager
-     └── Hybrid
-     ↓
-CUBRID backupdb
-     ↓
-Backup Artifact
-     ↓
-Backup Destination
+     ↓ operator selects target (PreferStandby, master fallback)
+Instance Manager /v1/backup  (in the DB pod; ADR-0003 idempotent op)
+     ↓ cubrid backupdb → backup-staging dir on the PVC
+     ↓ upload artifact + manifest.json (written LAST = completion marker)
+S3-compatible object storage  (canonical; ADR-0006 rebuild consumes it)
 ```
 
-### Evaluation Questions (POC)
+- **No Kubernetes Job** in the v1alpha1 critical path (RWO PVC + it would
+  duplicate the Instance Manager). Jobs are reserved for future
+  retention/verification/copy work.
+- **Target selection:** prefer the most caught-up healthy slave; fall
+  back to master (recording `fallbackUsed`) so single-node/degraded
+  clusters stay backup-capable without destabilizing the writer.
+- **Successful `backupdb` ≠ successful backup** — completion requires
+  upload + checksum + `manifest.json`; restore/rebuild trust only a
+  validated manifest.
+- **Full only, single-shot** in v1alpha1 (`level: Full` → CUBRID level 0;
+  scheduling is a future separate API).
+- Backup state is reported separately from cluster/HA readiness
+  (`CubridBackup.status` + cluster `BackupReady`).
 
-```text
-1. Can backupdb run in remote/client mode?
-2. Can the backup target slave be specified explicitly?
-3. On which filesystem is backup output created?
-4. Where does output land under remote execution?
-5. Who moves backup artifacts to object storage?
-6. Must a Job mount a DB Pod's PVC?
-7. Is a Job valuable even as pure orchestration?
-```
-
-The candidate models — Kubernetes Job directly invoking CUBRID backup,
-Instance Manager executing backup locally, or a hybrid Job + Instance
-Manager orchestration — must account for:
-
-```text
-execution locality
-backup artifact locality
-PVC access semantics
-failure recovery
-resumability
-```
-
-Also to be verified: cancellation, retry, and operator restart during
-backup.
-
-Decision: #7 (ADR-0007), after a working backup/restore prototype in
-a real Kind/CUBRID environment.
+See ADR-0007 for the full CR shape, division of labor, artifact/upload
+model, idempotency, status, and the 15-item POC checklist.
 
 ---
 
