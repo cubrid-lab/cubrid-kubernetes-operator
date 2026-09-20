@@ -23,7 +23,7 @@ Use [template.md](./template.md) for new ADRs.
 
 | ADR | Title | Status | Issue |
 |---|---|---|---|
-| [0001](./0001-ha-topology.md) | CUBRID HA topology semantics | Proposed | #1 |
+| [0001](./0001-ha-topology.md) | CUBRID HA topology semantics | Accepted | #1 |
 | [0002](./0002-broker-routing.md) | Broker topology and RW/RO routing | Proposed | #3 |
 | [0003](./0003-instance-manager.md) | Instance Manager architecture | Proposed | #10 |
 | [0004](./0004-ha-hostname-dns.md) | Stable HA hostname and DNS model | Proposed | #4 |
