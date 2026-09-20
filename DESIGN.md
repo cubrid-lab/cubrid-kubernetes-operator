@@ -1381,6 +1381,18 @@ Production defaults:
 The operator should avoid requiring `pods/exec` privileges wherever
 possible.
 
+### Phase 1 status (#18)
+
+Implemented: DB pods run under **Pod Security Standards "restricted"** —
+`runAsNonRoot`, `allowPrivilegeEscalation: false`, `seccompProfile:
+RuntimeDefault` (pod + container), and all Linux capabilities dropped
+(`drop: ["ALL"]`). The operator does not use `pods/exec` (role discovery
+and DB-local ops go through the Instance Manager, ADR-0003).
+Secrets are referenced (`dbaPasswordSecretRef`, restore
+`storageSecretRef`), never inlined. Instance Manager authN/mTLS,
+NetworkPolicy, and least-privilege object-storage credentials land with
+the Instance Manager and backup phases (ADR-0003/0007).
+
 Decision: #18.
 
 ---

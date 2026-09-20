@@ -191,7 +191,10 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 	return corev1.PodSpec{
 		// terminationGracePeriodSeconds >= 120s for ordered HA shutdown (ADR-0003).
 		TerminationGracePeriodSeconds: &gracePeriod,
-		SecurityContext:               &corev1.PodSecurityContext{RunAsNonRoot: &runAsNonRoot},
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsNonRoot:   &runAsNonRoot,
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		},
 		Containers: []corev1.Container{{
 			Name:      appName,
 			Image:     image,
@@ -220,9 +223,12 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "data", MountPath: "/var/lib/cubrid"},
 			},
+			// Pod Security Standards "restricted" (#18).
 			SecurityContext: &corev1.SecurityContext{
 				RunAsNonRoot:             &runAsNonRoot,
 				AllowPrivilegeEscalation: &noPrivEscalation,
+				SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 			},
 		}},
 	}
