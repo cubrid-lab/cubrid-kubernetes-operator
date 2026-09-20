@@ -1052,9 +1052,41 @@ Progressing=True
 Reason=InstanceRebuilding
 ```
 
-A change such as `promotableMembers: 3 → 4` must **not** be treated as a
-plain StatefulSet scale operation; it enters the join state machine.
-Decision: #6 (ADR-0006).
+A change such as adding a member (`promotableMembers: 3 → 4`) must **not**
+be treated as a plain StatefulSet scale operation; it enters the join
+state machine. ADR-0001 pins the v1alpha1 HA topology at exactly 3
+members, so **scale-out and live membership expansion are a future
+concern**; the v1alpha1 scope is pod-recreate (PVC intact) and PVC-loss
+rebuild **within** the fixed 3-member topology.
+
+### Decision (ADR-0006, issue #6)
+
+**Accepted (POC-gated): explicit, durable, resumable per-instance
+lifecycles.** A pod being `Running`, a PVC existing, or a replica-count
+increase is **not** sufficient to mark a member usable.
+
+- **Seed only from the currently resolved master** in v1alpha1;
+  bootstrap/rebuild targets stay **quarantined** (no heartbeat, no
+  endpoint) until restored, HA-configured, started, and caught up.
+- **PVC-intact vs rebuild is decided by durable identity markers, not pod
+  lifecycle.** Never re-seed a valid PVC; never start ambiguous/foreign
+  data as authoritative; a returning former master is **blocked/fenced**
+  until authoritative verification.
+- **Catch-up ≠ `role=slave`:** Ready requires replication lag below
+  `spec.highAvailability.catchUp.maxLag` for a stable window; catching-up
+  members are excluded from read endpoints.
+- **Scale-down / member removal is out of v1alpha1 scope**
+  (`Degraded/ScaleDownUnsupported`; never shrink `ha_node_list` or delete
+  PVCs).
+- **Future (when the topology bound is relaxed):** new-slave join /
+  scale-out via live `cubrid heartbeat reload` — append to `ha_node_list`,
+  reload **slaves first, master last**, never a StatefulSet rolling
+  restart (restarting the master could trigger failover, ADR-0005).
+
+This requires Instance Manager additions (idempotent config apply,
+`cubrid heartbeat reload`, HA start, config-hash reporting) beyond the
+ADR-0003 initial set. See ADR-0006 for the full state machines, conditions,
+and POC/E2E checklist.
 
 ---
 
