@@ -344,8 +344,14 @@ must know which databases participate in HA in order to configure nodes,
 validate health, select backup targets, and generate `ha_db_list` for
 joining nodes.
 
-The exact API model (`spec.databases`), creation ownership, and
-deletion semantics are decided in #2.
+Per ADR-0010 (issue #2): `spec.databases` is a required list of `{name}`
+(v1alpha1 validates exactly one; list shape reserved for multi-DB). The
+operator **owns creation** — `cubrid createdb` on the master only if
+absent, then seeds slaves from the master, then starts HA with an
+identical `ha_db_list` (comma-join of names in order) on every node.
+Database names are immutable; removing a name is rejected/blocked and
+never auto-drops data (physical deletion is governed by storage
+retention, Section 14).
 
 ### MVP Topology
 
@@ -546,6 +552,12 @@ status:
       ordinal: 2
       role: slave
       ready: true
+
+  databases:
+    - name: appdb
+      phase: Created          # Pending | Creating | Created | Failed | Blocked
+      primaryCreated: true
+      haConfigured: true
 
   conditions:
     - type: PrimaryResolved

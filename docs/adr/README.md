@@ -32,6 +32,7 @@ Use [template.md](./template.md) for new ADRs.
 | [0007](./0007-backup-execution.md) | Backup execution model | Proposed | #7 |
 | [0008](./0008-restore-semantics.md) | Restore semantics | Proposed | #8 |
 | [0009](./0009-update-vs-upgrade.md) | Rolling update vs engine upgrade | Proposed | #9 |
+| [0010](./0010-database-lifecycle.md) | Database lifecycle and `ha_db_list` | Accepted | #2 |
 
 All ADRs above must be **Accepted** before HA controller implementation
 starts (see the [implementation gate](../../ROADMAP.md#implementation-gate)).
