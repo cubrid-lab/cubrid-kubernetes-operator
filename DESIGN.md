@@ -937,10 +937,39 @@ Hard invariant:
 > **The operator must never simultaneously recognize two writable
 > masters as healthy.**
 
-Whether active fencing is performed by the operator, delegated to
-CUBRID native HA, or implemented as a hybrid mechanism is decided
-through ADR-0005. Pod deletion is not presumed to be the only fencing
-mechanism.
+### Decision (ADR-0005, issue #5)
+
+**Accepted (POC-gated): a conservative, safety-first posture.** For
+v1alpha1 the operator is an **HA observer and reconciler, not a failover
+authority**:
+
+- **CUBRID native HA owns** role election, automatic failover, promotion
+  priority, and heartbeat split-brain avoidance. **Failback is not
+  automatic** — the operator owns rejoin.
+- **The operator only** observes roles (Instance Manager `/v1/role` +
+  `/v1/ha/status`), aggregates status/conditions, reconciles
+  Kubernetes/broker resources, and recovers failed members.
+- **No automatic emergency DB fencing.** Only planned lifecycle fencing
+  via `/v1/shutdown`, plus **write-path quarantine** (`RoutingReady=False`,
+  withhold the RW endpoint) on ambiguous/incomplete/multi-primary
+  evidence. Pod delete / scale-down / cordon / NetworkPolicy isolation
+  are **rejected** as automatic split-brain resolution.
+- **Detection:** `PrimaryResolved=True` only when **all** promotable
+  members are freshly, authoritatively observed and exactly one is
+  master; otherwise `NoPrimaryObserved` / `MultiplePrimariesObserved` /
+  `PrimaryObservationIncomplete` / `AmbiguousPrimaryObservation`. An
+  unreachable manager means "no evidence", never "node is down".
+- **Conditions:** `PrimaryResolved`, `HAReady`, `RoutingReady`,
+  `Degraded`, `FencingRequired`, `FailingOver` (open-ended reasons).
+- A reserved `spec.highAvailability.fencingPolicy`
+  (`Disabled | Manual | Automatic`, default `Manual`) keeps future active
+  fencing non-breaking.
+
+The operator never promotes/picks/fences a primary on ambiguous evidence,
+never auto-failbacks, and degrades safely under its own partition/restart
+(it cannot manufacture a second writable master). Confirmed split-brain
+or an unverified old primary requires manual intervention. See ADR-0005
+for the full per-scenario table, hard NEVER rules, and POC/E2E checklist.
 
 ---
 
