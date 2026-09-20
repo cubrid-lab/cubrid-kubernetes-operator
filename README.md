@@ -57,9 +57,10 @@ the broader CUBRID ecosystem.
 
 - `CubridCluster`
 - `CubridBackup`
-- `CubridRestore`
 
-The initial API version is planned as `v1alpha1`.
+The initial API version is planned as `v1alpha1`. Restore in v1alpha1 is a
+bootstrap mode of `CubridCluster` (`spec.bootstrap.recovery`), not a
+separate CR; a `CubridRestore` workflow CR may be added later (non-MVP).
 
 ## MVP
 

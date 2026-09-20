@@ -625,10 +625,11 @@ ADR-0007 POC.
 
 ### 8.4 Restore
 
-For `v1alpha1`, recovery into a **new CubridCluster** via bootstrap is
-preferred (see Section 16). Whether a separate `CubridRestore` CR is
-needed, or bootstrap is expressed on `CubridCluster` alone, is decided in
-#8.
+For `v1alpha1`, recovery is a **bootstrap mode of a new CubridCluster**
+keyed by the object-storage `manifestUri` — **no separate `CubridRestore`
+CR** and no in-place restore (ADR-0008, issue #8; see Section 16). A
+higher-level `CubridRestore` workflow CR may be added later
+non-breakingly.
 
 ---
 
@@ -1206,28 +1207,50 @@ a separate destructive lifecycle operation and is out of MVP scope.
 Model:
 
 ```text
-Backup
+Backup (object-storage manifest.json)
   ↓
-New CubridCluster
+New CubridCluster (spec.bootstrap.recovery)
   ↓
-Bootstrap from recovery
+restore initial master → validate → configure HA master → seed slaves
 ```
 
 Example:
 
 ```yaml
 spec:
+  databases: [{ name: production }]
   bootstrap:
     recovery:
-      backupRef:
-        name: production-20260920
+      manifestUri: s3://bucket/prod/production/<backup-uid>/manifest.json
+      storageSecretRef: { name: restore-object-storage }
 ```
 
-Restore must be treated as a first-class lifecycle operation.
-Backup without restore validation is not sufficient for production
-readiness.
+### Decision (ADR-0008, issue #8)
 
-Decision: #8 (ADR-0008).
+**Accepted (POC-gated): restore is a bootstrap mode of a NEW
+`CubridCluster`**, keyed by the object-storage **`manifestUri`** (the
+ADR-0007 artifact identity) — **no separate `CubridRestore` CR** and **no
+in-place restore** in v1alpha1.
+
+- When `spec.bootstrap.recovery` is set, the operator **restores instead
+  of `createdb`** on the initial master (ADR-0010), validates it,
+  configures it as the HA master, then seeds slaves via ADR-0006.
+- `manifestUri` (not a `CubridBackup` CR name) is the canonical input so
+  cross-namespace / cross-cluster / migration recovery works; restore uses
+  the **new** cluster's object-storage credentials only.
+- **Validation gate:** not Ready until manifest trust passes, the DB
+  opens, HA forms, and slaves catch up. A half-restored DB is never
+  reported healthy.
+- **Safety:** bootstrap recovery only targets an empty/operator-owned
+  initial master PVC; a valid/ambiguous existing DB → refused and blocked
+  (never dropped/overwritten). Source `clusterUid` is recorded as
+  provenance, not required to match.
+- Full-manifest restore only; no point-in-time / level selection in
+  v1alpha1.
+
+Restore must be treated as a first-class lifecycle operation. Backup
+without restore validation is not sufficient for production readiness. See
+ADR-0008 for the flow, CR surface, status, and POC checklist.
 
 ---
 
