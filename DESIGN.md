@@ -861,6 +861,15 @@ Possible conditions:
 
 These use `metav1.Condition`.
 
+### Phase 1 status (#14)
+
+Implemented: Pod `readinessProbe`/`livenessProbe` hit the Instance Manager
+`/readyz` / `/livez` (port 9090, ADR-0003) — Pod readiness reflects
+DB-instance readiness only. `HAReady` is a **separate** cluster Condition,
+never wired into Pod readiness. HA role discovery lands in Phase 2, so
+`HAReady` is reported `Unknown` (reason `HADiscoveryNotImplemented`) while
+HA is enabled.
+
 ---
 
 ## 12. Failover and Split-Brain Model

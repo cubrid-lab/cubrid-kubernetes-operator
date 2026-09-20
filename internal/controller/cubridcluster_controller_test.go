@@ -117,6 +117,19 @@ var _ = Describe("CubridCluster Controller", func() {
 			ready := meta.FindStatusCondition(updated.Status.Conditions, "Ready")
 			Expect(ready).NotTo(BeNil())
 			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+
+			By("configuring readiness/liveness probes on the Instance Manager port (#14)")
+			c := sts.Spec.Template.Spec.Containers[0]
+			Expect(c.ReadinessProbe).NotTo(BeNil())
+			Expect(c.ReadinessProbe.HTTPGet.Path).To(Equal("/readyz"))
+			Expect(c.ReadinessProbe.HTTPGet.Port.IntValue()).To(Equal(9090))
+			Expect(c.LivenessProbe).NotTo(BeNil())
+			Expect(c.LivenessProbe.HTTPGet.Path).To(Equal("/livez"))
+
+			By("reporting HAReady as a distinct condition, Unknown in Phase 1 while HA is enabled (#14)")
+			haReady := meta.FindStatusCondition(updated.Status.Conditions, "HAReady")
+			Expect(haReady).NotTo(BeNil())
+			Expect(haReady.Status).To(Equal(metav1.ConditionUnknown))
 		})
 	})
 
