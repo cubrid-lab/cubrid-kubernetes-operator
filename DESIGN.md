@@ -1372,6 +1372,19 @@ Events are generated for important lifecycle transitions and conditions
 changes, so that failover, rebuild, and recovery are auditable through
 `kubectl describe` alone.
 
+### Phase 1 status (#23)
+
+Implemented: custom gauges registered on the controller-runtime metrics
+registry (exposed on the manager's metrics endpoint) —
+`cubrid_cluster_ready`, `cubrid_cluster_instances`,
+`cubrid_cluster_instances_ready` (labels: `namespace`, `cluster`). The
+reconciler emits Kubernetes Events via an `EventRecorder`
+(`ClusterReady` Normal; reconcile-failure Warnings). Role/HA/failover/
+backup/restore metrics and their Events land with the corresponding
+phases (ADR-0003/0005/0006/0007/0008).
+
+Decision: #23.
+
 ---
 
 ## 19. Security

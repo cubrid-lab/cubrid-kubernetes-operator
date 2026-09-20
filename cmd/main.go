@@ -185,6 +185,8 @@ func main() {
 	if err := (&controller.CubridClusterReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // v0.25 GetEventRecorder returns an events/v1 interface incompatible with record.EventRecorder.
+		Recorder: mgr.GetEventRecorderFor("cubridcluster-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "cubridcluster")
 		os.Exit(1)

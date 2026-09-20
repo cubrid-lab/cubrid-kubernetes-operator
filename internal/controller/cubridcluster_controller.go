@@ -24,15 +24,20 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/metrics"
 )
 
 const (
@@ -54,7 +59,8 @@ const (
 // CubridClusterReconciler reconciles a CubridCluster object.
 type CubridClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters,verbs=get;list;watch;create;update;patch;delete
@@ -249,6 +255,19 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 	}
 }
 
+func boolToFloat(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func (r *CubridClusterReconciler) event(cluster *databasev1alpha1.CubridCluster, eventType, reason, msg string) {
+	if r.Recorder != nil {
+		r.Recorder.Event(cluster, eventType, reason, msg)
+	}
+}
+
 func httpGet(path string) corev1.ProbeHandler {
 	return corev1.ProbeHandler{
 		HTTPGet: &corev1.HTTPGetAction{Path: path, Port: intOrString(instanceManagerPort)},
@@ -266,12 +285,21 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",
 			fmt.Sprintf("%d/%d instances ready", ready, desired))
 		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled", "cluster reconciled")
+		if !meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady) {
+			r.event(cluster, corev1.EventTypeNormal, "ClusterReady",
+				fmt.Sprintf("all %d instances ready", desired))
+		}
 	} else {
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, "InstancesNotReady",
 			fmt.Sprintf("%d/%d instances ready", ready, desired))
 		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, "InstancesStarting",
 			fmt.Sprintf("waiting for %d/%d instances", ready, desired))
 	}
+
+	labels := prometheus.Labels{"namespace": cluster.Namespace, "cluster": cluster.Name}
+	metrics.ClusterInstances.With(labels).Set(float64(desired))
+	metrics.InstanceReady.With(labels).Set(float64(ready))
+	metrics.ClusterReady.With(labels).Set(boolToFloat(ready >= desired && desired > 0))
 
 	// HAReady is separate from Ready and from Pod readiness (#14). Role
 	// discovery lands in Phase 2, so it is Unknown while HA is enabled.
@@ -296,33 +324,20 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev1alpha1.CubridCluster, reason string, cause error) (ctrl.Result, error) {
 	setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, cause.Error())
 	setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, cause.Error())
+	r.event(cluster, corev1.EventTypeWarning, reason, cause.Error())
 	// Best-effort status update; return the original cause for requeue.
 	_ = r.Status().Update(ctx, cluster)
 	return ctrl.Result{}, cause
 }
 
 func setCondition(cluster *databasev1alpha1.CubridCluster, condType string, status metav1.ConditionStatus, reason, msg string) {
-	meta := metav1.Condition{
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               condType,
 		Status:             status,
 		Reason:             reason,
 		Message:            msg,
 		ObservedGeneration: cluster.Generation,
-	}
-	for i := range cluster.Status.Conditions {
-		if cluster.Status.Conditions[i].Type == condType {
-			// Preserve LastTransitionTime unless the status actually changed.
-			if cluster.Status.Conditions[i].Status == status {
-				meta.LastTransitionTime = cluster.Status.Conditions[i].LastTransitionTime
-			} else {
-				meta.LastTransitionTime = metav1.Now()
-			}
-			cluster.Status.Conditions[i] = meta
-			return
-		}
-	}
-	meta.LastTransitionTime = metav1.Now()
-	cluster.Status.Conditions = append(cluster.Status.Conditions, meta)
+	})
 }
 
 func intOrString(port int32) intstr.IntOrString { return intstr.FromInt32(port) }

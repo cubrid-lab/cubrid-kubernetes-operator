@@ -21,15 +21,19 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	metricspkg "github.com/cubrid-lab/cubrid-kubernetes-operator/internal/metrics"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
@@ -85,8 +89,9 @@ var _ = Describe("CubridCluster Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &CubridClusterReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Recorder: record.NewFakeRecorder(10),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -144,6 +149,9 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(*sc.AllowPrivilegeEscalation).To(BeFalse())
 			Expect(sc.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
 			Expect(sc.Capabilities.Drop).To(ContainElement(corev1.Capability("ALL")))
+
+			By("recording the cubrid_cluster_instances metric (#23)")
+			Expect(testutil.ToFloat64(metricspkg.ClusterInstances.WithLabelValues(resourceNamespace, resourceName))).To(Equal(float64(3)))
 		})
 	})
 
