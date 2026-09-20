@@ -1,0 +1,9 @@
+apiVersion: database.cubrid.io/v1alpha1
+kind: CubridCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: cubrid-kubernetes-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: cubridcluster-sample
+spec:
+  # TODO(user): Add fields here

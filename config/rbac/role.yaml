@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - database.cubrid.io
+  resources:
+  - cubridclusters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - database.cubrid.io
+  resources:
+  - cubridclusters/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - database.cubrid.io
+  resources:
+  - cubridclusters/status
+  verbs:
+  - get
+  - patch
+  - update
