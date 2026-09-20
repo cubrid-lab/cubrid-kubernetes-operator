@@ -28,7 +28,7 @@ Use [template.md](./template.md) for new ADRs.
 |---|---|---|---|
 | [0001](./0001-ha-topology.md) | CUBRID HA topology semantics | Accepted | #1 |
 | [0002](./0002-broker-routing.md) | Broker topology and RW/RO routing | Accepted (POC-gated) | #3 |
-| [0003](./0003-instance-manager.md) | Instance Manager architecture | Proposed | #10 |
+| [0003](./0003-instance-manager.md) | Instance Manager architecture | Accepted (POC-gated) | #10 |
 | [0004](./0004-ha-hostname-dns.md) | Stable HA hostname and DNS model | Accepted (POC-gated) | #4 |
 | [0005](./0005-failover-split-brain.md) | Failover and split-brain responsibility | Proposed | #5 |
 | [0006](./0006-node-join-rebuild.md) | Node join, rejoin, and rebuild | Proposed | #6 |

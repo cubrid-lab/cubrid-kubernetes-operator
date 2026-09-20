@@ -638,13 +638,15 @@ manager that handles operations local to the database process.
 process health
 role discovery
 HA status
-broker health
 safe shutdown
 backup invocation
 restore preparation
 configuration inspection
 local database lifecycle operations
 ```
+
+Broker health is **not** a DB-pod manager responsibility — brokers are a
+separate tier with their own readiness (ADR-0002).
 
 The operator keeps only cluster-level responsibility:
 
@@ -672,55 +674,50 @@ CUBRID
 This avoids making the Kubernetes controller depend heavily on remote
 shell execution (`pods/exec`).
 
-### Deployment Options
+### Decision (ADR-0003, issue #10)
 
-#### Option A — Integrated process supervisor
+**Accepted (POC-gated): Option A — integrated process supervisor.** A
+small `cubrid-instance-manager` binary runs as PID 1 (under `tini`) in a
+thin image built `FROM` the official CUBRID image (preserving
+`operator_conf.sh` / `backupdb.sh`). It supervises CUBRID and runs all
+local CLIs (`cubrid heartbeat status`, `changemode`, `backupdb`, …) from
+inside the same container. A sidecar is rejected: it cannot cleanly run
+the local CUBRID CLIs (`shareProcessNamespace` shares only process
+visibility, not the env/filesystem/helper-script contract).
 
-Advantages:
+#### API
 
-- complete process lifecycle control
-- straightforward graceful shutdown design
+- **HTTP/JSON** on port `instance-manager: 9090`, cluster-internal only.
+- Kubelet (unauthenticated): `GET /livez`, `GET /readyz` (not-ready
+  during startup/shutdown/restore/ambiguous HA).
+- Operator (bearer-token, `/v1/`): `GET /v1/role`, `GET /v1/ha/status`,
+  `GET /v1/config`, `POST /v1/shutdown`, `POST /v1/backup`,
+  `POST /v1/restore/prepare`, `GET /v1/operations/{id}`.
+- Auth: bearer token from a Secret + NetworkPolicy (not mTLS in
+  v1alpha1). The manager holds **no** Kubernetes RBAC.
 
-Disadvantages:
+#### Role discovery
 
-- requires a custom CUBRID image
+`GET /v1/role` returns `master|slave|replica|unknown` (+ `source`,
+`reason`) parsed from `heartbeat status` / `changemode`. `unknown` is
+non-authoritative: the operator never declares a primary from it, never
+auto-failbacks (ADR-0001, ADR-0005).
 
-#### Option B — Sidecar
+#### Shutdown & state
 
-Advantages:
-
-- can reuse the official image
-
-Disadvantages:
-
-- process namespace / CLI sharing problems
-- complex shutdown coordination
-
-### Instance Manager API
-
-Decisions required:
-
-```text
-HTTP vs gRPC
-
-authentication
-authorization
-mTLS
-port
-health endpoints
-timeouts
-retry semantics
-idempotency
-```
-
-Decision: #10 (ADR-0003).
+preStop + PID-1 `SIGTERM` run the same ordered shutdown (readyz false →
+withdraw HA → stop server → verify); `terminationGracePeriodSeconds` ≥120s
+(POC-tuned). Mutating ops are idempotent via an `Idempotency-Key` and
+PVC-durable operation records; the manager reconstructs state from durable
+facts, not RAM.
 
 ---
 
 ## 10. Broker and Service Architecture
 
 The Broker is the CUBRID middleware layer that applications connect to.
-Where brokers run and who owns RW/RO routing is a P0 decision (ADR-0002).
+Where brokers run and who owns RW/RO routing is decided in ADR-0002
+(issue #3): a separate operator-managed broker tier.
 
 ### Option A — Broker per database Pod
 
