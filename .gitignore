@@ -28,3 +28,4 @@ tmp/
 # Agent / tool state
 .omc/
 .omo/
+.codegraph/

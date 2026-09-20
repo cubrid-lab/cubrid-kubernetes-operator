@@ -1,0 +1,471 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: cubridclusters.database.cubrid.io
+spec:
+  group: database.cubrid.io
+  names:
+    kind: CubridCluster
+    listKind: CubridClusterList
+    plural: cubridclusters
+    shortNames:
+    - cubrid
+    - cc
+    singular: cubridcluster
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.currentPrimary
+      name: Primary
+      type: string
+    - jsonPath: .spec.highAvailability.enabled
+      name: HA
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CubridCluster is the Schema for the cubridclusters API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of CubridCluster
+            properties:
+              bootstrap:
+                description: bootstrap selects cluster initialization (fresh vs recovery;
+                  ADR-0008).
+                properties:
+                  recovery:
+                    description: |-
+                      recovery, when set, restores the initial master from a backup manifest
+                      instead of running createdb (ADR-0008). Omit for a fresh cluster.
+                    properties:
+                      manifestUri:
+                        description: |-
+                          manifestUri is the object-storage URI of the backup manifest.json (the
+                          ADR-0007 artifact identity). Required for recovery bootstrap.
+                        minLength: 1
+                        type: string
+                      storageSecretRef:
+                        description: |-
+                          storageSecretRef references object-storage credentials on THIS cluster
+                          (never the source cluster's secrets).
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - manifestUri
+                    type: object
+                type: object
+              databases:
+                description: |-
+                  databases lists the CUBRID databases under HA (ADR-0010). v1alpha1 allows
+                  exactly one; the list shape is reserved for multi-database support.
+                items:
+                  description: |-
+                    CubridDatabase identifies one CUBRID database participating in HA (ADR-0010).
+                    v1alpha1 supports exactly one database; the list shape is reserved for
+                    multi-database support.
+                  properties:
+                    name:
+                      description: |-
+                        name is the CUBRID database name. Immutable after creation; the operator
+                        generates ha_db_list from the database names in order.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z][a-z0-9_]*$
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 1
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              dbaPasswordSecretRef:
+                description: dbaPasswordSecretRef references the DBA password Secret.
+                properties:
+                  key:
+                    description: The key of the secret to select from.  Must be a
+                      valid secret key.
+                    type: string
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  optional:
+                    description: Specify whether the Secret or its key must be defined
+                    type: boolean
+                required:
+                - key
+                type: object
+                x-kubernetes-map-type: atomic
+              highAvailability:
+                description: highAvailability configures CUBRID HA (ADR-0001, ADR-0005).
+                properties:
+                  enabled:
+                    description: |-
+                      enabled turns on CUBRID HA configuration. When false, v1alpha1 supports
+                      only a single standalone promotable member (ha_mode=off).
+                    type: boolean
+                  fencingPolicy:
+                    default: Manual
+                    description: |-
+                      fencingPolicy controls operator fencing (ADR-0005). Automatic is rejected
+                      in v1alpha1.
+                    enum:
+                    - Disabled
+                    - Manual
+                    - Automatic
+                    type: string
+                required:
+                - enabled
+                type: object
+              image:
+                description: image selects the operator-compatible CUBRID image (ADR-0003).
+                properties:
+                  repository:
+                    description: repository is the container image repository.
+                    type: string
+                  tag:
+                    description: tag is the container image tag. Prefer pinning by
+                      digest via repository@sha256.
+                    type: string
+                type: object
+              resources:
+                description: resources sets container resource requirements for the
+                  DB pods.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              storage:
+                description: storage configures the per-instance data volume.
+                properties:
+                  data:
+                    description: data is the primary database data volume.
+                    properties:
+                      size:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: size is the requested data volume size.
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      storageClassName:
+                        description: storageClassName selects the StorageClass for
+                          the data volume.
+                        type: string
+                    required:
+                    - size
+                    type: object
+                  retentionPolicy:
+                    default: Retain
+                    description: retentionPolicy governs PVC retention on cluster
+                      deletion (default Retain).
+                    enum:
+                    - Retain
+                    - Delete
+                    type: string
+                required:
+                - data
+                type: object
+              topology:
+                description: topology declares the HA pool size (ADR-0001).
+                properties:
+                  promotableMembers:
+                    description: |-
+                      promotableMembers is the total number of promotable CUBRID HA members
+                      (listed in ha_node_list, ha_mode=on). Exactly one is master at runtime,
+                      chosen by CUBRID heartbeat; the rest are runtime slaves. v1alpha1 allows
+                      1 (standalone) or 3 (HA).
+                    format: int32
+                    maximum: 3
+                    minimum: 1
+                    type: integer
+                  readReplicas:
+                    description: |-
+                      readReplicas is the number of non-promotable CUBRID replica-role members
+                      (ha_replica_list, ha_mode=replica). Reserved; must be 0 in v1alpha1.
+                    format: int32
+                    maximum: 0
+                    minimum: 0
+                    type: integer
+                required:
+                - promotableMembers
+                - readReplicas
+                type: object
+              version:
+                description: |-
+                  version is the desired CUBRID engine compatibility version (e.g. "11.4").
+                  Effectively immutable for an initialized HA cluster (ADR-0009).
+                minLength: 1
+                type: string
+            required:
+            - databases
+            - highAvailability
+            - storage
+            - topology
+            - version
+            type: object
+            x-kubernetes-validations:
+            - message: each database must have a non-empty name
+              rule: self.databases.all(d, d.name.size() > 0)
+            - message: readReplicas must be 0 in v1alpha1 (CUBRID replica role not
+                supported)
+              rule: self.topology.readReplicas == 0
+            - message: when highAvailability.enabled is false, topology.promotableMembers
+                must be 1
+              rule: '!self.highAvailability.enabled ? self.topology.promotableMembers
+                == 1 : true'
+            - message: when highAvailability.enabled is true, v1alpha1 requires exactly
+                3 promotable members
+              rule: 'self.highAvailability.enabled ? self.topology.promotableMembers
+                == 3 : true'
+            - message: fencingPolicy Automatic is not supported in v1alpha1
+              rule: self.highAvailability.fencingPolicy != 'Automatic'
+            - message: database names are immutable; existing names must be preserved
+              rule: oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))
+          status:
+            description: status defines the observed state of CubridCluster
+            properties:
+              conditions:
+                description: |-
+                  conditions represent the current state of the CubridCluster. Conditions
+                  are the source of truth (phase, if any, is informational only). Notable
+                  types: Ready, HAReady, PrimaryResolved, RoutingReady, Degraded,
+                  FencingRequired, Progressing, Updating (ADR-0005/0006/0009).
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              currentPrimary:
+                description: |-
+                  currentPrimary is the currently observed master instance name. Unset when
+                  no primary is resolved or the primary is ambiguous (ADR-0001/0005).
+                type: string
+              databases:
+                description: databases reports coarse per-database state.
+                items:
+                  description: DatabaseStatus reports coarse per-database state (ADR-0010).
+                  properties:
+                    haConfigured:
+                      description: haConfigured indicates the DB is in ha_db_list
+                        on all nodes.
+                      type: boolean
+                    name:
+                      description: name is the database name.
+                      type: string
+                    phase:
+                      description: phase is a coarse database lifecycle phase.
+                      enum:
+                      - Pending
+                      - Creating
+                      - Created
+                      - Failed
+                      - Blocked
+                      type: string
+                    primaryCreated:
+                      description: primaryCreated indicates the DB exists on the master.
+                      type: boolean
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              instances:
+                description: instances reports per-instance observed state.
+                items:
+                  description: InstanceStatus reports the observed state of one CUBRID
+                    instance (ADR-0001).
+                  properties:
+                    name:
+                      description: name is the instance (StatefulSet pod / short HA
+                        hostname) name.
+                      type: string
+                    ordinal:
+                      description: ordinal is the StatefulSet ordinal.
+                      format: int32
+                      type: integer
+                    ready:
+                      description: ready indicates the instance passed its per-instance
+                        readiness (ADR-0006 catch-up).
+                      type: boolean
+                    role:
+                      description: role is the CUBRID runtime role; unknown when not
+                        authoritatively observed.
+                      enum:
+                      - master
+                      - slave
+                      - replica
+                      - unknown
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: observedGeneration is the most recent generation observed
+                  by the operator.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
