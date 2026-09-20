@@ -444,8 +444,8 @@ The final model is decided in #4 (ADR-0004).
          +--------------------------------+
 ```
 
-`IM` = Instance Manager (see Section 9). Broker placement is decided by
-ADR-0002 (see Section 10).
+`IM` = Instance Manager (see Section 9). Brokers run as a separate
+operator-managed tier, not in the DB pods (ADR-0002, see Section 10).
 
 The single most important structural requirement:
 
@@ -483,7 +483,9 @@ spec:
     enabled: true
 
   broker:
-    mode: integrated
+    # Option B (ADR-0002): a separate operator-managed broker tier.
+    # No `integrated` default; broker placement fields are minimal in v1alpha1.
+    replicas: 2
 
   storage:
     data:
@@ -760,26 +762,39 @@ Disadvantages:
 - separate Broker configuration lifecycle management
 - Broker HA itself must be considered
 
-### Current Direction
+### Decision (ADR-0002, issue #3)
 
-For the MVP, **a structure that maximizes CUBRID native routing is
-verified first**, but the final decision is made in an ADR after a POC of
-actual CUBRID Broker reconnect/failover behavior.
+**Accepted (POC-gated): Option B — a separate operator-managed broker
+tier.** `<cluster>-rw` and `<cluster>-ro` front **broker pods, not DB
+pods**. RW/RO routing is **CUBRID-native**: RW brokers (`ACCESS_MODE=RW`)
+carry a generated `databases.txt` of all promotable HA member hostnames
+and seek the master themselves, so the write path never depends on
+operator reconcile latency or a `role=master` Service selector (the
+master is runtime-decided, ADR-0001). RO/PHRO brokers serve reads.
 
 ### Services
 
 At minimum the operator exposes:
 
-- `<cluster>-rw`
-- `<cluster>-ro`
-- `<cluster>-instances` (headless, for stable Pod DNS)
+- `<cluster>-rw` — application **write endpoint**; selects only ready RW
+  broker pods. Never changes with `status.currentPrimary`.
+- `<cluster>-ro` — application **read endpoint**; selects only ready
+  RO/PHRO broker pods.
+- `<cluster>-instances` — internal **headless** Service for stable DB pod
+  identity DNS (HA config, broker `databases.txt`). Not an application
+  connection surface.
 
 Applications should not need to know the identity of the current master.
 Primary transitions should be transparent to clients as much as the
 CUBRID protocol permits.
 
-The exact routing responsibility of `-rw` and `-ro` (Kubernetes label
-selection vs CUBRID Broker routing) is part of ADR-0002.
+Broker Endpoints are **readiness-gated** (published only when the broker
+port is actually listening, following the official operator's pattern).
+Broker availability is reported separately from DB HA health via
+`BrokerReady` / `WriteEndpointReady` / `ReadEndpointReady` /
+`RoutingReady` conditions. Client-side `altHosts` behavior behind a
+Service is confirmed by the ADR-0002 POC checklist; if stable broker
+identities are required, the broker tier becomes a StatefulSet.
 
 ---
 
