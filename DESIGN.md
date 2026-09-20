@@ -377,36 +377,40 @@ Rationale for excluding the replica role from the MVP:
 
 ### Hostnames and DNS
 
-`ha_node_list` requires stable node names. Candidates:
+Per ADR-0004 (issue #4): `ha_node_list` uses **short StatefulSet pod
+names**, made peer-resolvable by **per-member headless alias Services**.
 
 ```text
-production-0
-production-1
-production-2
+ha_node_list = prod@production-0:production-1:production-2
 ```
 
-or:
+Identity is pinned as:
 
 ```text
-production-0.production-instances.namespace.svc.cluster.local
+member identity = StatefulSet pod name = OS hostname
+                = short HA hostname = per-member alias Service name
 ```
 
-To be verified:
+Mechanism:
 
-- how CUBRID compares hostname and HA node name
-- whether FQDNs are usable
-- StatefulSet Pod hostname behavior
-- headless Service
-- Pod DNS search domain
-- identity preservation across Pod restarts
+- StatefulSet pod name is the CUBRID OS hostname (Kubernetes default; no
+  `setHostnameAsFQDN`/`hostAliases`).
+- governing headless Service `<cluster>-instances`
+  (`publishNotReadyAddresses: true`).
+- one per-member headless Service named exactly as each short HA name
+  (`production-0`, ...), so bare short peer names resolve via namespace
+  DNS search and follow pod IP changes across restart/reschedule.
+
+`cubrid_ha.conf` never embeds an FQDN or `cluster.local`; no IPs are used
+(CUBRID forbids them). `ha_node_list` order is failover priority
+(runtime master is still decided by CUBRID, ADR-0001). The identity
+scheme is immutable for a created cluster.
 
 Required invariant:
 
 ```text
 A CUBRID HA member must have a stable identity independent of Pod restart.
 ```
-
-The final model is decided in #4 (ADR-0004).
 
 ---
 
@@ -781,7 +785,9 @@ At minimum the operator exposes:
 - `<cluster>-ro` — application **read endpoint**; selects only ready
   RO/PHRO broker pods.
 - `<cluster>-instances` — internal **headless** Service for stable DB pod
-  identity DNS (HA config, broker `databases.txt`). Not an application
+  identity DNS. HA short names resolve via per-member alias Services
+  (ADR-0004); broker `databases.txt` may use the governing per-pod FQDNs.
+  Not an application
   connection surface.
 
 Applications should not need to know the identity of the current master.
