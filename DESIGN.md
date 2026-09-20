@@ -93,12 +93,12 @@ spec:
   databases:
     - name: appdb
 
-  topology:
-    standbys: 2
-    replicas: 0
-
   highAvailability:
     enabled: true
+
+  topology:
+    promotableMembers: 3   # nodes in ha_node_list (ha_mode=on); master is runtime-decided
+    readReplicas: 0        # ha_replica_list (ha_mode=replica); must be 0 in v1alpha1
 
   storage:
     data:
@@ -355,6 +355,11 @@ deletion semantics are decided in #2.
 0 non-promotable replicas
 ```
 
+Expressed in the CR as `topology.promotableMembers: 3` (pool listed in
+`ha_node_list`, `ha_mode=on`) and `topology.readReplicas: 0`. The spec
+declares the pool size only — CUBRID heartbeat decides at runtime which
+member is master (see ADR-0001, issue #1).
+
 Rationale for excluding the replica role from the MVP:
 
 - slave and replica failover semantics differ
@@ -461,8 +466,8 @@ spec:
     - name: appdb
 
   topology:
-    standbys: 2
-    replicas: 0
+    promotableMembers: 3   # nodes in ha_node_list (ha_mode=on); master is runtime-decided
+    readReplicas: 0        # ha_replica_list (ha_mode=replica); must be 0 in v1alpha1
 
   image:
     repository: cubrid/cubrid
@@ -508,17 +513,15 @@ Not every option needs to be exposed from day one. The API principle:
 Expose semantics, not every CUBRID configuration parameter.
 ```
 
-If `instances` is kept instead of `topology`, its semantics must be
-defined explicitly:
+The topology is expressed as pool sizes, not runtime roles:
 
 ```text
-instances = master + promotable slaves
-
-Replica role is not supported in v1alpha1.
+topology.promotableMembers → ha_node_list (ha_mode=on); one runtime master, rest slaves
+topology.readReplicas      → ha_replica_list (ha_mode=replica); 0 in v1alpha1
 ```
 
-The `topology` form is preferred because it is explicit. Final decision:
-#1.
+The spec never pins a master — CUBRID heartbeat decides at runtime.
+Decision: #1 (ADR-0001).
 
 ### 8.2 Status (draft)
 
@@ -526,25 +529,29 @@ The `topology` form is preferred because it is explicit. Final decision:
 status:
   observedGeneration: 7
 
-  currentPrimary: production-1
+  currentPrimary: production-1     # unset/null when unresolved or ambiguous
 
   instances:
     - name: production-0
+      ordinal: 0
       role: slave
-      haState: active
       ready: true
 
     - name: production-1
+      ordinal: 1
       role: master
-      haState: active
       ready: true
 
     - name: production-2
+      ordinal: 2
       role: slave
-      haState: active
       ready: true
 
   conditions:
+    - type: PrimaryResolved
+      status: "True"
+      reason: SinglePrimaryObserved
+
     - type: Ready
       status: "True"
       reason: ClusterReady
@@ -553,6 +560,12 @@ status:
       status: "True"
       reason: HealthyReplication
 ```
+
+`status.instances[].role` is one of `master`, `slave`, `replica`, or
+`unknown`. When no primary or multiple primaries are observed,
+`currentPrimary` is unset and `PrimaryResolved=False` with reason
+`NoPrimaryObserved` or `MultiplePrimariesObserved` (see ADR-0005). The
+operator must never report two `master` roles as a healthy steady state.
 
 If a `phase` field is kept for convenience:
 
@@ -980,8 +993,8 @@ Progressing=True
 Reason=InstanceRebuilding
 ```
 
-A change such as `standbys: 2 → 3` must **not** be treated as a plain
-StatefulSet scale operation; it enters the join state machine.
+A change such as `promotableMembers: 3 → 4` must **not** be treated as a
+plain StatefulSet scale operation; it enters the join state machine.
 Decision: #6 (ADR-0006).
 
 ---
