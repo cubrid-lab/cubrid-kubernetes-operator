@@ -21,7 +21,10 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -90,6 +93,30 @@ var _ = Describe("CubridCluster Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
+
+			By("creating the governing headless Service")
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: resourceName + "-instances", Namespace: resourceNamespace,
+			}, svc)).To(Succeed())
+			Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
+			Expect(svc.Spec.PublishNotReadyAddresses).To(BeTrue())
+
+			By("creating the StatefulSet with the desired replicas and OnDelete strategy")
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, sts)).To(Succeed())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(3)))
+			Expect(sts.Spec.ServiceName).To(Equal(resourceName + "-instances"))
+			Expect(sts.Spec.UpdateStrategy.Type).To(Equal(appsv1.OnDeleteStatefulSetStrategyType))
+			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
+			Expect(sts.Spec.VolumeClaimTemplates[0].Name).To(Equal("data"))
+
+			By("setting a Ready condition (False until instances are ready)")
+			updated := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			ready := meta.FindStatusCondition(updated.Status.Conditions, "Ready")
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
 		})
 	})
 
