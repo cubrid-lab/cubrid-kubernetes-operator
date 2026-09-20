@@ -35,9 +35,9 @@ import (
 )
 
 // haCluster returns a valid HA CubridCluster (1 master + 2 slaves) per ADR-0001.
-func haCluster(name, namespace string) *databasev1alpha1.CubridCluster {
+func haCluster(name string) *databasev1alpha1.CubridCluster {
 	return &databasev1alpha1.CubridCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: databasev1alpha1.CubridClusterSpec{
 			Version:          "11.4",
 			Databases:        []databasev1alpha1.CubridDatabase{{Name: "appdb"}},
@@ -69,7 +69,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			By("creating a valid HA CubridCluster")
 			err := k8sClient.Get(ctx, typeNamespacedName, cubridcluster)
 			if err != nil && errors.IsNotFound(err) {
-				Expect(k8sClient.Create(ctx, haCluster(resourceName, resourceNamespace))).To(Succeed())
+				Expect(k8sClient.Create(ctx, haCluster(resourceName))).To(Succeed())
 			}
 		})
 
@@ -125,13 +125,13 @@ var _ = Describe("CubridCluster Controller", func() {
 		ctx := context.Background()
 
 		It("accepts a valid HA topology (3/0)", func() {
-			c := haCluster("valid-ha", ns)
+			c := haCluster("valid-ha")
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, c)).To(Succeed())
 		})
 
 		It("accepts a valid standalone topology (1/0, HA disabled)", func() {
-			c := haCluster("valid-standalone", ns)
+			c := haCluster("valid-standalone")
 			c.Spec.HighAvailability.Enabled = false
 			c.Spec.Topology.PromotableMembers = 1
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())
@@ -139,38 +139,38 @@ var _ = Describe("CubridCluster Controller", func() {
 		})
 
 		It("rejects readReplicas != 0", func() {
-			c := haCluster("bad-replicas", ns)
+			c := haCluster("bad-replicas")
 			c.Spec.Topology.ReadReplicas = 1
 			Expect(k8sClient.Create(ctx, c)).NotTo(Succeed())
 		})
 
 		It("rejects HA enabled with promotableMembers != 3", func() {
-			c := haCluster("bad-ha-count", ns)
+			c := haCluster("bad-ha-count")
 			c.Spec.Topology.PromotableMembers = 2
 			Expect(k8sClient.Create(ctx, c)).NotTo(Succeed())
 		})
 
 		It("rejects HA disabled with promotableMembers != 1", func() {
-			c := haCluster("bad-standalone-count", ns)
+			c := haCluster("bad-standalone-count")
 			c.Spec.HighAvailability.Enabled = false
 			c.Spec.Topology.PromotableMembers = 3
 			Expect(k8sClient.Create(ctx, c)).NotTo(Succeed())
 		})
 
 		It("rejects fencingPolicy Automatic", func() {
-			c := haCluster("bad-fencing", ns)
+			c := haCluster("bad-fencing")
 			c.Spec.HighAvailability.FencingPolicy = databasev1alpha1.FencingAutomatic
 			Expect(k8sClient.Create(ctx, c)).NotTo(Succeed())
 		})
 
 		It("rejects zero databases", func() {
-			c := haCluster("bad-nodb", ns)
+			c := haCluster("bad-nodb")
 			c.Spec.Databases = []databasev1alpha1.CubridDatabase{}
 			Expect(k8sClient.Create(ctx, c)).NotTo(Succeed())
 		})
 
 		It("rejects a database name rename (immutability)", func() {
-			c := haCluster("immutable-db", ns)
+			c := haCluster("immutable-db")
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())
 			created := &databasev1alpha1.CubridCluster{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "immutable-db", Namespace: ns}, created)).To(Succeed())

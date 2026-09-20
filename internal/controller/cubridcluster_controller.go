@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -45,6 +46,8 @@ const (
 	// Condition types (ADR-0005/0006).
 	conditionReady       = "Ready"
 	conditionProgressing = "Progressing"
+
+	appName = "cubrid"
 )
 
 // CubridClusterReconciler reconciles a CubridCluster object.
@@ -97,7 +100,7 @@ func instancesServiceName(name string) string { return name + "-instances" }
 // labelsFor returns the standard selector labels for a cluster's DB instances.
 func labelsFor(cluster *databasev1alpha1.CubridCluster) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":       "cubrid",
+		"app.kubernetes.io/name":       appName,
 		"app.kubernetes.io/instance":   cluster.Name,
 		"app.kubernetes.io/component":  "database",
 		"app.kubernetes.io/managed-by": "cubrid-kubernetes-operator",
@@ -182,12 +185,14 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 		}
 	}
 	runAsNonRoot := true
+	noPrivEscalation := false
+	gracePeriod := int64(120)
 	return corev1.PodSpec{
 		// terminationGracePeriodSeconds >= 120s for ordered HA shutdown (ADR-0003).
-		TerminationGracePeriodSeconds: ptr(int64(120)),
+		TerminationGracePeriodSeconds: &gracePeriod,
 		SecurityContext:               &corev1.PodSecurityContext{RunAsNonRoot: &runAsNonRoot},
 		Containers: []corev1.Container{{
-			Name:      "cubrid",
+			Name:      appName,
 			Image:     image,
 			Resources: cluster.Spec.Resources,
 			Ports: []corev1.ContainerPort{
@@ -200,7 +205,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			},
 			SecurityContext: &corev1.SecurityContext{
 				RunAsNonRoot:             &runAsNonRoot,
-				AllowPrivilegeEscalation: ptr(false),
+				AllowPrivilegeEscalation: &noPrivEscalation,
 			},
 		}},
 	}
@@ -226,7 +231,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 
 	if err := r.Status().Update(ctx, cluster); err != nil {
 		if apierrors.IsConflict(err) {
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 		return ctrl.Result{}, err
 	}
@@ -267,8 +272,6 @@ func setCondition(cluster *databasev1alpha1.CubridCluster, condType string, stat
 }
 
 func intOrString(port int32) intstr.IntOrString { return intstr.FromInt32(port) }
-
-func ptr[T any](v T) *T { return &v }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
