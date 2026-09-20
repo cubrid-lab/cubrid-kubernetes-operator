@@ -46,6 +46,7 @@ const (
 	// Condition types (ADR-0005/0006).
 	conditionReady       = "Ready"
 	conditionProgressing = "Progressing"
+	conditionHAReady     = "HAReady"
 
 	appName = "cubrid"
 )
@@ -200,6 +201,22 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 				{Name: "broker", ContainerPort: cubridBrokerPort},
 				{Name: "manager", ContainerPort: instanceManagerPort},
 			},
+			// Readiness reflects DB-instance readiness only (Instance Manager
+			// /readyz). Cluster HAReady is a SEPARATE Condition and must never
+			// gate Pod readiness, else failover instability evicts every pod
+			// from Services (ADR-0003/0005, #14).
+			LivenessProbe: &corev1.Probe{
+				ProbeHandler:        httpGet("/livez"),
+				InitialDelaySeconds: 30,
+				PeriodSeconds:       10,
+				FailureThreshold:    6,
+			},
+			ReadinessProbe: &corev1.Probe{
+				ProbeHandler:        httpGet("/readyz"),
+				InitialDelaySeconds: 10,
+				PeriodSeconds:       5,
+				FailureThreshold:    3,
+			},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "data", MountPath: "/var/lib/cubrid"},
 			},
@@ -208,6 +225,12 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 				AllowPrivilegeEscalation: &noPrivEscalation,
 			},
 		}},
+	}
+}
+
+func httpGet(path string) corev1.ProbeHandler {
+	return corev1.ProbeHandler{
+		HTTPGet: &corev1.HTTPGetAction{Path: path, Port: intOrString(instanceManagerPort)},
 	}
 }
 
@@ -227,6 +250,16 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			fmt.Sprintf("%d/%d instances ready", ready, desired))
 		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, "InstancesStarting",
 			fmt.Sprintf("waiting for %d/%d instances", ready, desired))
+	}
+
+	// HAReady is separate from Ready and from Pod readiness (#14). Role
+	// discovery lands in Phase 2, so it is Unknown while HA is enabled.
+	if cluster.Spec.HighAvailability.Enabled {
+		setCondition(cluster, conditionHAReady, metav1.ConditionUnknown, "HADiscoveryNotImplemented",
+			"HA role discovery is implemented in Phase 2")
+	} else {
+		setCondition(cluster, conditionHAReady, metav1.ConditionFalse, "HADisabled",
+			"highAvailability.enabled is false")
 	}
 
 	if err := r.Status().Update(ctx, cluster); err != nil {
