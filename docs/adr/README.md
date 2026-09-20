@@ -14,7 +14,10 @@ decisions that are expensive to change after implementation begins.
 2. Open questions are resolved through POCs (Track C) and design
    discussion on the linked issue.
 3. Once a decision is reached and validated, the ADR is marked
-   **Accepted** and the Decision section is finalized.
+   **Accepted** and the Decision section is finalized. An ADR whose
+   architectural direction is settled but whose empirical details await a
+   POC may be marked **Accepted (POC-gated)** with a POC checklist in its
+   Validation section.
 4. Superseded ADRs are kept for history.
 
 Use [template.md](./template.md) for new ADRs.
@@ -24,7 +27,7 @@ Use [template.md](./template.md) for new ADRs.
 | ADR | Title | Status | Issue |
 |---|---|---|---|
 | [0001](./0001-ha-topology.md) | CUBRID HA topology semantics | Accepted | #1 |
-| [0002](./0002-broker-routing.md) | Broker topology and RW/RO routing | Proposed | #3 |
+| [0002](./0002-broker-routing.md) | Broker topology and RW/RO routing | Accepted (POC-gated) | #3 |
 | [0003](./0003-instance-manager.md) | Instance Manager architecture | Proposed | #10 |
 | [0004](./0004-ha-hostname-dns.md) | Stable HA hostname and DNS model | Proposed | #4 |
 | [0005](./0005-failover-split-brain.md) | Failover and split-brain responsibility | Proposed | #5 |
