@@ -130,6 +130,15 @@ var _ = Describe("CubridCluster Controller", func() {
 			haReady := meta.FindStatusCondition(updated.Status.Conditions, "HAReady")
 			Expect(haReady).NotTo(BeNil())
 			Expect(haReady.Status).To(Equal(metav1.ConditionUnknown))
+
+			By("hardening the pod to Pod Security Standards restricted (#18)")
+			Expect(sts.Spec.Template.Spec.SecurityContext.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
+			Expect(*sts.Spec.Template.Spec.SecurityContext.RunAsNonRoot).To(BeTrue())
+			sc := c.SecurityContext
+			Expect(*sc.RunAsNonRoot).To(BeTrue())
+			Expect(*sc.AllowPrivilegeEscalation).To(BeFalse())
+			Expect(sc.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
+			Expect(sc.Capabilities.Drop).To(ContainElement(corev1.Capability("ALL")))
 		})
 	})
 
