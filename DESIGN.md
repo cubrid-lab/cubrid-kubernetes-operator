@@ -1284,7 +1284,34 @@ Terminology rule: this project uses **"database-aware rolling updates"**
 CUBRID engine version migration, which is a future, separately designed
 operation.
 
-Decision: #9 (ADR-0009).
+### Decision (ADR-0009, issue #9)
+
+**Accepted (POC-gated): `OnDelete`, operator-owned, database-aware.**
+
+- **StatefulSet strategy = `OnDelete`** (not user-configurable in
+  v1alpha1). The operator patches the pod template, then **deletes exactly
+  one eligible pod at a time**, gating each replacement on health.
+- **Change classification** before touching pods: **ReloadOnly** (via
+  `cubrid heartbeat reload`, no restart), **RestartRequiredRollingUpdate**
+  (engine-compatible), or **EngineUpgradeBlocked**.
+- **Detection guard:** never trust image tags — compare a desired engine
+  compatibility key (metadata + preflight `cubrid --version`) against the
+  recorded **observed engine version**. Different / missing / unverifiable
+  → blocked (`UpdateBlockedEngineUpgrade` /
+  `UpdateBlockedUnverifiableEngineVersion`), no pod deletion.
+  `spec.version` is effectively immutable for an initialized HA cluster.
+- **Restart sequence:** slaves first; when only the master is outdated,
+  **pause with `MasterUpdatePending`**. Updating the master requires
+  **explicit planned-failover intent** → fail over to an updated slave →
+  update the old master only after it is no longer master (never
+  voluntarily terminate the current master, ADR-0005).
+- **Health guard:** an update is availability maintenance, not recovery —
+  it **pauses** when not `PrimaryResolved`, on `FencingRequired`,
+  role ambiguity, incomplete catch-up, or PDB denial.
+
+**Non-goals (future engine-upgrade ADR):** engine version migration,
+volume/on-disk format migration, cross-version HA, downgrade. See ADR-0009
+for classification, conditions, and the POC checklist.
 
 ---
 
