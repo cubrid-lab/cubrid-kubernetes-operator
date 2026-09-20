@@ -1164,6 +1164,18 @@ storage:
 
 Decision: #17.
 
+### Phase 1 status (#17)
+
+Implemented: a single `data` volume per instance (RWO, per-ordinal PVC via
+the StatefulSet `volumeClaimTemplate`, `storageClassName` from
+`spec.storage.data`). `spec.storage.retentionPolicy` drives the
+StatefulSet `persistentVolumeClaimRetentionPolicy`: `whenDeleted` follows
+the policy (`Retain` default, `Delete` on request), while **`whenScaled`
+is always `Retain`** — ADR-0006 forbids implicit PVC deletion on
+scale-down. Separated volumes (active/archive logs, HA replication logs,
+backup staging) remain an internal design target; controller volume naming
+already isolates `data` so they can be split later without an API break.
+
 ---
 
 ## 15. Backup Architecture

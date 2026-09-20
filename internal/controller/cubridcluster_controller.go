@@ -152,6 +152,7 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 		sts.Spec.Replicas = &replicas
 		// OnDelete: the operator owns pod replacement sequencing (ADR-0003/0009).
 		sts.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
+		sts.Spec.PersistentVolumeClaimRetentionPolicy = pvcRetentionPolicy(cluster)
 		sts.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec:       r.podSpec(cluster),
@@ -162,6 +163,20 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 		return nil, err
 	}
 	return sts, nil
+}
+
+// pvcRetentionPolicy maps spec.storage.retentionPolicy to StatefulSet PVC
+// retention. WhenScaled is ALWAYS Retain: ADR-0006 forbids implicit PVC
+// deletion on scale-down, even when retentionPolicy is Delete.
+func pvcRetentionPolicy(cluster *databasev1alpha1.CubridCluster) *appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy {
+	whenDeleted := appsv1.RetainPersistentVolumeClaimRetentionPolicyType
+	if cluster.Spec.Storage.RetentionPolicy == "Delete" {
+		whenDeleted = appsv1.DeletePersistentVolumeClaimRetentionPolicyType
+	}
+	return &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
+		WhenDeleted: whenDeleted,
+		WhenScaled:  appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+	}
 }
 
 func (r *CubridClusterReconciler) dataPVCTemplate(cluster *databasev1alpha1.CubridCluster) corev1.PersistentVolumeClaim {

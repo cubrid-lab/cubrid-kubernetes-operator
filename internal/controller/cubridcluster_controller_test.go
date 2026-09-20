@@ -111,6 +111,11 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
 			Expect(sts.Spec.VolumeClaimTemplates[0].Name).To(Equal("data"))
 
+			By("wiring the PVC retention policy (default Retain; scale-down always retains, #17)")
+			Expect(sts.Spec.PersistentVolumeClaimRetentionPolicy).NotTo(BeNil())
+			Expect(sts.Spec.PersistentVolumeClaimRetentionPolicy.WhenDeleted).To(Equal(appsv1.RetainPersistentVolumeClaimRetentionPolicyType))
+			Expect(sts.Spec.PersistentVolumeClaimRetentionPolicy.WhenScaled).To(Equal(appsv1.RetainPersistentVolumeClaimRetentionPolicyType))
+
 			By("setting a Ready condition (False until instances are ready)")
 			updated := &databasev1alpha1.CubridCluster{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
