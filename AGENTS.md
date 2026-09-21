@@ -56,6 +56,13 @@ Always use `kubebuilder create api` and `kubebuilder create webhook` to scaffold
 The e2e tests are designed to validate the solution in an isolated environment (similar to GitHub Actions CI).
 Ensure you run them against a dedicated [Kind](https://kind.sigs.k8s.io/) cluster (not your “real” dev/prod cluster).
 
+### Issue Labels
+Every issue MUST carry exactly one `priority:` label and one `size:` label.
+- **Priority**: `priority: critical` | `priority: high` | `priority: medium`
+- **Size**: `size: XS` (<1h) | `size: S` (hours) | `size: M` (1-2 days) | `size: L` (multi-day)
+
+Do NOT use flat priority labels like `P0`/`P1`/`P2` — the scoped `priority:` scheme is the source of truth. Add both labels when opening an issue.
+
 ## After Making Changes
 
 **After editing `*_types.go` or markers:**
