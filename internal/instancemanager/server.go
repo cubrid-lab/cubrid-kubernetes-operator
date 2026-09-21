@@ -17,7 +17,10 @@ limitations under the License.
 package instancemanager
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 )
 
@@ -31,10 +34,21 @@ const errKey = "error"
 type Server struct {
 	cli   CLI
 	token string
+	// store is the durable operation store; nil disables the async operation
+	// endpoints (so unit tests can construct a store-less server).
+	store *OperationStore
 }
 
 func NewServer(cli CLI, token string) *Server {
 	return &Server{cli: cli, token: token}
+}
+
+// WithOperationStore attaches a durable operation store, enabling the async
+// /v1/backup + /v1/operations endpoints (ADR-0003). Returns the server for
+// chaining.
+func (s *Server) WithOperationStore(store *OperationStore) *Server {
+	s.store = store
+	return s
 }
 
 // Handler builds the API mux.
@@ -44,7 +58,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /v1/role", s.auth(s.role))
 	mux.HandleFunc("GET /v1/ha/status", s.auth(s.haStatus))
+	mux.HandleFunc("GET /v1/ha/convergence", s.auth(s.convergence))
 	mux.HandleFunc("POST /v1/backup", s.auth(s.backup))
+	mux.HandleFunc("GET /v1/operations/{id}", s.auth(s.getOperation))
 	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdown))
 	return mux
 }
@@ -75,19 +91,113 @@ func (s *Server) haStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, HeartbeatStatus(r.Context(), s.cli))
 }
 
-// backup runs a local `cubrid backupdb` (ADR-0007).
+// backup runs a local `cubrid backupdb` (ADR-0007). With an operation store
+// attached it is an async, idempotent operation: the request must carry an
+// Idempotency-Key; a repeat with the same key returns the existing operation,
+// a repeat with a different body is a 409, and a concurrent op on the same
+// database is a 409. Without a store it stays the original synchronous path.
 func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "cannot read request body"})
+		return
+	}
 	var req BackupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "invalid request body"})
 		return
 	}
-	res, err := Backup(r.Context(), s.cli, req)
+
+	if s.store == nil {
+		res, err := Backup(r.Context(), s.cli, req)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "Idempotency-Key header is required"})
+		return
+	}
+
+	op, existed, err := s.store.FindOrCreate(OpBackup, key, HashRequest(body), req.Database)
+	switch {
+	case errors.Is(err, ErrIdempotencyConflict):
+		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		return
+	case errors.Is(err, ErrOperationInProgress):
+		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		return
+	}
+	if existed {
+		writeJSON(w, http.StatusAccepted, op)
+		return
+	}
+
+	s.runBackup(op.ID, req)
+	writeJSON(w, http.StatusAccepted, op)
+}
+
+// runBackup executes the backup in the background and records the durable state
+// transitions. A successful `backupdb` is NOT Completed on its own — upload +
+// manifest are a later PR, so a bare backup terminates as Failed with an
+// explicit reason rather than a false Completed (ADR-0003/0007).
+func (s *Server) runBackup(id string, req BackupRequest) {
+	go func() {
+		ctx := context.Background()
+		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRunningBackup }); err != nil {
+			return
+		}
+		if _, err := Backup(ctx, s.cli, req); err != nil {
+			_, _ = s.store.Update(id, func(op *Operation) {
+				op.State = OpFailed
+				op.FailureReason = "backupdb failed: " + err.Error()
+			})
+			return
+		}
+		_, _ = s.store.Update(id, func(op *Operation) {
+			op.State = OpFailed
+			op.FailureReason = "backupdb succeeded but object-storage upload is not yet implemented"
+		})
+	}()
+}
+
+// getOperation returns a durable operation by ID (ADR-0003 poll endpoint).
+func (s *Server) getOperation(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{errKey: "operations are not enabled"})
+		return
+	}
+	op, err := s.store.Get(r.PathValue("id"))
+	if errors.Is(err, ErrOperationNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{errKey: "operation not found"})
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, op)
+}
+
+// convergence reports the local replication apply-pipeline facts (POC-7/9:
+// HA registration does not imply caught up). database + copiedLogPath identify
+// the master's copy-log directory to inspect.
+func (s *Server) convergence(w http.ResponseWriter, r *http.Request) {
+	db := r.URL.Query().Get("database")
+	path := r.URL.Query().Get("copiedLogPath")
+	if db == "" || path == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "database and copiedLogPath are required"})
+		return
+	}
+	writeJSON(w, http.StatusOK, ApplyConvergenceStatus(r.Context(), s.cli, db, path))
 }
 
 // shutdown performs the ADR-0003 ordered graceful shutdown (withdraw HA, stop server).

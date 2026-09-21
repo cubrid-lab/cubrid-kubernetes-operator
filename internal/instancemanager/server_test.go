@@ -51,7 +51,7 @@ func doReq(t *testing.T, h http.Handler, path, token, remoteAddr string) *httpte
 
 func TestServer_Livez(t *testing.T) {
 	h := NewServer(fakeCLI{out: masterOut}, "tok").Handler()
-	rr := doReq(t, h, "/livez", "", "10.0.0.1:5000")
+	rr := doReq(t, h, "/livez", "", testRemoteAddr)
 	if rr.Code != http.StatusOK {
 		t.Errorf("/livez = %d, want 200", rr.Code)
 	}
@@ -59,7 +59,7 @@ func TestServer_Livez(t *testing.T) {
 
 func TestServer_Readyz_MasterReady(t *testing.T) {
 	h := NewServer(fakeCLI{out: masterOut}, "tok").Handler()
-	rr := doReq(t, h, "/readyz", "", "10.0.0.1:5000")
+	rr := doReq(t, h, "/readyz", "", testRemoteAddr)
 	if rr.Code != http.StatusOK {
 		t.Errorf("/readyz(master) = %d, want 200", rr.Code)
 	}
@@ -67,7 +67,7 @@ func TestServer_Readyz_MasterReady(t *testing.T) {
 
 func TestServer_Readyz_UnknownNotReady(t *testing.T) {
 	h := NewServer(fakeCLI{out: transitionOut}, "tok").Handler()
-	rr := doReq(t, h, "/readyz", "", "10.0.0.1:5000")
+	rr := doReq(t, h, "/readyz", "", testRemoteAddr)
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("/readyz(transition) = %d, want 503", rr.Code)
 	}
@@ -77,11 +77,11 @@ func TestServer_Role_RequiresToken(t *testing.T) {
 	h := NewServer(fakeCLI{out: masterOut}, "tok").Handler()
 
 	// remote without token -> 401
-	if rr := doReq(t, h, "/v1/role", "", "10.0.0.1:5000"); rr.Code != http.StatusUnauthorized {
+	if rr := doReq(t, h, "/v1/role", "", testRemoteAddr); rr.Code != http.StatusUnauthorized {
 		t.Errorf("/v1/role no-token = %d, want 401", rr.Code)
 	}
 	// remote with token -> 200, parsed master
-	rr := doReq(t, h, "/v1/role", "tok", "10.0.0.1:5000")
+	rr := doReq(t, h, "/v1/role", "tok", testRemoteAddr)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("/v1/role with-token = %d, want 200", rr.Code)
 	}
@@ -107,7 +107,7 @@ func TestServer_Backup(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/backup", strings.NewReader(`{"database":"appdb","destination":"/tmp/bk"}`))
 	req.Header.Set("Authorization", "Bearer tok")
-	req.RemoteAddr = "10.0.0.1:5000"
+	req.RemoteAddr = testRemoteAddr
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -125,7 +125,7 @@ func TestServer_Backup(t *testing.T) {
 func TestServer_Backup_RequiresToken(t *testing.T) {
 	h := NewServer(fakeCLI{}, "tok").Handler()
 	req := httptest.NewRequest("POST", "/v1/backup", strings.NewReader(`{}`))
-	req.RemoteAddr = "10.0.0.1:5000"
+	req.RemoteAddr = testRemoteAddr
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {

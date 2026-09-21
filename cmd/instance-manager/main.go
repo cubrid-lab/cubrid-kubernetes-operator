@@ -40,9 +40,21 @@ func run() error {
 	addr := envOr("IM_ADDR", fmt.Sprintf(":%d", instancemanager.DefaultPort))
 	token := os.Getenv("IM_TOKEN")
 
+	server := instancemanager.NewServer(instancemanager.ExecCLI{Timeout: 10 * time.Second}, token)
+
+	// Durable operation store on the PVC enables the async /v1/backup +
+	// /v1/operations endpoints; without it those endpoints stay disabled.
+	if opsDir := os.Getenv("IM_OPERATIONS_DIR"); opsDir != "" {
+		store, err := instancemanager.NewOperationStore(opsDir)
+		if err != nil {
+			return fmt.Errorf("open operation store: %w", err)
+		}
+		server = server.WithOperationStore(store)
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           instancemanager.NewServer(instancemanager.ExecCLI{Timeout: 10 * time.Second}, token).Handler(),
+		Handler:           server.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
