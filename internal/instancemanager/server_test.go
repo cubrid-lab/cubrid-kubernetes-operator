@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -98,5 +99,47 @@ func TestServer_Role_LoopbackExempt(t *testing.T) {
 	// loopback without token -> allowed (preStop path, ADR-0003)
 	if rr := doReq(t, h, "/v1/role", "", "127.0.0.1:6000"); rr.Code != http.StatusOK {
 		t.Errorf("/v1/role loopback no-token = %d, want 200", rr.Code)
+	}
+}
+
+func TestServer_Backup(t *testing.T) {
+	h := NewServer(fakeCLI{out: "Backup Volume Label: Level: 0"}, "tok").Handler()
+
+	req := httptest.NewRequest("POST", "/v1/backup", strings.NewReader(`{"database":"appdb","destination":"/tmp/bk"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	req.RemoteAddr = "10.0.0.1:5000"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/v1/backup = %d, want 200 (body %s)", rr.Code, rr.Body.String())
+	}
+	var res BackupResult
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if res.Database != dbName {
+		t.Errorf("backup result = %+v", res)
+	}
+}
+
+func TestServer_Backup_RequiresToken(t *testing.T) {
+	h := NewServer(fakeCLI{}, "tok").Handler()
+	req := httptest.NewRequest("POST", "/v1/backup", strings.NewReader(`{}`))
+	req.RemoteAddr = "10.0.0.1:5000"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("/v1/backup no-token = %d, want 401", rr.Code)
+	}
+}
+
+func TestServer_Shutdown_LoopbackExempt(t *testing.T) {
+	h := NewServer(fakeCLI{out: "ok"}, "tok").Handler()
+	req := httptest.NewRequest("POST", "/v1/shutdown?database=appdb", nil)
+	req.RemoteAddr = "127.0.0.1:6000"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("/v1/shutdown loopback = %d, want 200", rr.Code)
 	}
 }
