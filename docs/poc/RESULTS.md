@@ -250,7 +250,69 @@ inconsistent with the master.
   resync — the operator must not assume a healed slave is consistent.
 - Detecting `MultiplePrimariesObserved` is necessary but not sufficient; ADR-0005
   fencing/`FencingRequired` handling and ADR-0006 rebuild are what actually
-  prevent divergence from persisting.
+   prevent divergence from persisting.
+
+---
+
+## POC-7 — node rebuild + HA rejoin (ADR-0006, #45) — **PASS + two critical findings**
+
+Rebuilt a node from the authoritative master and rejoined it to HA, exercising
+the exact path POC-6 flagged as required after a partition. Rebuild sequence on
+the target node:
+
+1. `cubrid backupdb -C` on the **master** (authoritative source).
+2. On the target: `cubrid createdb` to **register `databases.txt`** with correct
+   absolute paths, then delete the created volumes (keep `databases.txt`).
+3. `cubrid restoredb -B <master-backup>` into the clean dir.
+4. `cubrid heartbeat start` **exactly once**.
+
+### Rejoin — PASS
+
+After a single clean `heartbeat start`, the rebuilt node settled to
+`current <node>, state slave`, `Server registered_and_standby`, with
+`copylogdb`/`applylogdb` **registered** on both master and slave — a healthy HA
+topology, consistent from both nodes.
+
+### Critical finding 1 — `heartbeat start` is single-shot; retrying wedges the node
+
+Re-issuing `heartbeat stop`/`start` while activation/shutdown was still in
+progress drove the node to `state unknown` and failed activation
+(`++ cubrid heartbeat start: fail`). The server log showed
+`Disconnected with the cub_master and will shut itself down` exactly when a
+premature `stop` landed. Recovery required a **full** stop (`cubrid master stop`
+until `master is not running`) followed by **one** `heartbeat start`, then
+leaving it alone. This reconfirms POC-3 the hard way: the operator must treat
+`heartbeat start` as a single idempotent op and **never** retry-spam it — a
+retry mid-activation flips activate/deactivate. (Feeds ADR-0003 operation
+idempotency + ADR-0006 rejoin sequencing.)
+
+### Critical finding 2 — the rebuild seed point must be consistent with the replication log start
+
+With the node cleanly rejoined as standby, `applylogdb` still **failed to
+converge**: `applyinfo` reported `Fail count: 3`, `Insert count: 0`, and the
+apply log showed
+`failed to apply insert replication log. class: "dba.rj", key: "7", server
+error: -64` (`-1032`). Root cause: the rebuild backup was restored at a point
+**before** the `rj` table's `CREATE TABLE` DDL, while the copied replication log
+began **after** it — so `applylogdb` replayed INSERTs against a class that never
+existed on the slave. End state: master `rj` = 8 rows; rebuilt slave has **no
+`rj` table** and a stalled, non-converging apply pipeline — a **silent** replica
+inconsistency (topology looks healthy; data is not).
+
+### Operator takeaways (feed ADR-0003/0006)
+
+- Rebuild = master `backupdb -C` → register `databases.txt` via `createdb` →
+  `restoredb` into a clean dir → **one** `heartbeat start`. Never hand-write
+  `databases.txt`; never retry `heartbeat start`.
+- **The seed backup's LSA and the replication copy start must be consistent.**
+  Restoring a seed older (or newer) than the log the slave then applies yields a
+  stalled/failing `applylogdb` that looks registered but never converges. The
+  operator must verify apply convergence (`applyinfo` Fail=0, delay bounded)
+  before declaring a rebuilt node caught up — a `registered_and_standby` state
+  alone is **not** proof of a consistent replica.
+- Detecting rejoin at the topology level is necessary but not sufficient;
+  ADR-0006 rebuild must gate "caught up" on **apply-pipeline convergence**, not
+  just HA registration.
 
 ---
 
@@ -276,6 +338,16 @@ master's writes survive as a silent replica inconsistency. This makes ADR-0006
 rebuild (not trusted resync) the required rejoin path for a node that was master
 during a partition.
 
+Node rebuild + rejoin (#45) is confirmed to work (master `backupdb -C` →
+`createdb`-register `databases.txt` → `restoredb` → **one** `heartbeat start`),
+with two operator-critical findings: `heartbeat start` must never be
+retry-spammed (a retry mid-activation wedges the node to `unknown`), and the
+rebuild **seed point must be consistent with the replication log start LSA** —
+otherwise `applylogdb` stalls (replaying INSERTs against a class the seed
+predates) and the node looks `registered_and_standby` while never actually
+converging. ADR-0006 must gate "caught up" on apply-pipeline convergence, not HA
+registration.
+
 The riskiest ADR assumptions are validated; remaining POCs (broker routing #46,
-join/rebuild #45, update/upgrade #49, and the operator wiring of all this) are
-the next tracked work (#45–#49).
+update/upgrade #49, and the operator wiring of all this) are the next tracked
+work (#46, #49).
