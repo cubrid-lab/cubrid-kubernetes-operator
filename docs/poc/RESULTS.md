@@ -106,6 +106,53 @@ self-name resolution to the real pod IP, (b) seed the slave from the master,
 
 ---
 
+## POC-4 — backup (ADR-0007, #47) — **PASS**
+
+Single node (`CUBRID_COMPONENTS=SERVER`, db `bkdb`, 5 rows written via CS
+mode):
+
+- `cubrid backupdb -D /tmp/bk -C bkdb@localhost` produced a single backup
+  volume `bkdb_bk0v000` (~5.2 MB, **Level: 0**) at the `-D` destination.
+- Backup ran in **CS mode** (`-C`) against the running server without
+  stopping it.
+
+**Findings (validate ADR-0007):**
+- `-D <dir>` controls artifact locality; the artifact lands on the local
+  filesystem of the node running `backupdb`. Confirms the ADR-0007 model:
+  the Instance Manager runs `backupdb` **in-pod**, stages to a local dir,
+  then uploads. A single level-0 volume matches the "full backups only"
+  v1alpha1 decision.
+- Entrypoint lesson repeats: use the image's `CUBRID_COMPONENTS` entrypoint
+  to bring the server up reliably; hand-running `cubrid server start` in a
+  bare container hung in this environment. The operator should drive the
+  image's supervised startup, not ad-hoc CLIs (feeds ADR-0003).
+
+## POC-5 — restore round-trip (ADR-0008, #48) — **PASS + key finding**
+
+From the POC-4 backup: mutated the data (`DELETE` all + insert a
+`corrupted` row, committed) → `cubrid server stop` → `cubrid restoredb
+-B /tmp/bk bkdb` → server start → read back.
+
+**Result:** restore succeeded but the DB came back at the **latest**
+state (the `corrupted` row), **not** the backup instant.
+
+**Finding (validates the ADR-0008 design decision):** a plain `restoredb`
+from a full backup **rolls forward using the available transaction logs**
+(media recovery to the most recent consistent state), so restoring
+in-place over a DB whose logs contain newer changes recovers to *latest*,
+not to the backup point. To get the backup instant you need point-in-time
+(`restoredb -d <datetime>`) or a target **without** the newer logs.
+
+This is exactly why **ADR-0008 restores into a NEW cluster from the
+object-storage manifest**: the fresh target has no conflicting logs, so it
+comes up cleanly at the backup's consistent point. In-place restore of an
+active DB is genuinely hazardous (log roll-forward + "in use" volume
+conflicts), confirming it as an MVP non-goal. Also reconfirms POC-1's
+finding: `-S` (SA) mode conflicts a running server; restore requires the
+server stopped.
+
+---
+
 ## Net assessment
 
 The fundamentals for a production operator are **confirmed present and
