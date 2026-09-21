@@ -24,6 +24,8 @@ type OperationKind string
 const (
 	// OpBackup is a `cubrid backupdb` + upload operation (ADR-0007).
 	OpBackup OperationKind = "backup"
+	// OpRestore is a verify + download + `cubrid restoredb` operation (ADR-0008).
+	OpRestore OperationKind = "restore"
 )
 
 // OperationState is the durable lifecycle state of an Operation (ADR-0003).
@@ -35,6 +37,8 @@ const (
 	OpPending       OperationState = "Pending"
 	OpRunningBackup OperationState = "RunningBackup"
 	OpUploading     OperationState = "Uploading"
+	OpDownloading   OperationState = "Downloading"
+	OpRestoring     OperationState = "Restoring"
 	OpCompleted     OperationState = "Completed"
 	OpFailed        OperationState = "Failed"
 	OpCleaningUp    OperationState = "CleaningUp"
@@ -82,5 +86,6 @@ type OperationArtifact struct {
 	ManifestDigest string `json:"manifestDigest,omitempty"`
 	SizeBytes      int64  `json:"sizeBytes,omitempty"`
 	Database       string `json:"database,omitempty"`
+	CubridVersion  string `json:"cubridVersion,omitempty"`
 	Level          int    `json:"level,omitempty"`
 }
