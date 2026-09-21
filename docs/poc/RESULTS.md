@@ -379,6 +379,59 @@ items 2–4); that is deferred to the operator-level broker wiring.
 
 ---
 
+## POC-9 — rolling update primitives (ADR-0009, #49) — **PASS**
+
+Validated the two CUBRID-level primitives ADR-0009 relies on, against the formed
+2-node HA cluster (the operator's engine-version guard / PDB / pause logic is
+code-level and belongs in operator wiring, not a CUBRID POC).
+
+### Primitive 1 — reload-only config via `cubrid heartbeat reload` — PASS
+
+`cubrid heartbeat reload` on the master returned `++ success` with the master
+identity **unchanged** (`current cub-0, state master`, `Server pocdb pid 88,
+registered_and_active`) and the slave still `slave` — **no restart, no
+failover**. Confirms ADR-0009's `ReloadOnly` class: reloadable HA config applies
+without a pod restart (and therefore without risking a master failover,
+ADR-0004/0006).
+
+### Primitive 2 — slave-first rolling restart preserves the master + replication — PASS
+
+Restarted the **slave** (ADR-0009's safe first step), recording the master
+server pid before/after:
+
+- The master stayed `current cub-0, state master`, **pid 88 throughout** — never
+  restarted, never failed over, while the slave was down and after it returned.
+- The slave rejoined as `registered_and_standby` with `copylogdb`/`applylogdb`
+  registered, then **replication converged**: `applyinfo` went `recovering` →
+  `Insert count: 5`, `Fail count: 0`, `Delayed log page count: 0`, and the
+  restarted slave's data matched the master (`{1,2,3,10,11}`).
+
+### Operational findings (reconfirm earlier POCs)
+
+- **Single clean `heartbeat start`.** The slave restart failed repeatedly
+  (`heartbeat start: fail`, `state unknown`) whenever a start raced a still-
+  completing shutdown. Recovery required a **full** stop (`cubrid master stop`
+  until `master is not running`) followed by **one** start — the same
+  idempotency discipline POC-3/POC-7 established. The operator's `OnDelete`
+  sequencing must wait for full termination before starting a replacement.
+- **"Caught up" ≠ "registered".** After restart the slave passed through a
+  `recovering` apply window where new master writes were not yet visible even
+  though HA showed `registered_and_standby`. The operator must gate a member's
+  update-complete on **`applyinfo` convergence** (inserts applied, `Fail=0`,
+  delay→0), not on HA registration alone — consistent with the POC-7 finding.
+
+### Operator takeaways (feed ADR-0009)
+
+- `ReloadOnly` changes are real: apply reloadable config with `heartbeat reload`,
+  never a pod restart.
+- Slaves-first `OnDelete` rolling restart keeps the master stable and does not
+  trigger failover; each replaced member must be gated on apply-pipeline
+  convergence before moving to the next.
+- Never retry `heartbeat start`; wait for full shutdown between delete and
+  replacement.
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
@@ -419,5 +472,12 @@ change and no operator action (broker CAS logs show `cub-0` → `cub-1` on
 promotion). Write-persistence + driver `altHosts` failover must still be checked
 with a real CCI/JDBC client (`broker_tester` does not durably commit).
 
-The riskiest ADR assumptions are validated; the remaining POC (update/upgrade
-#49) and the operator wiring of all this are the next tracked work (#49).
+The riskiest ADR assumptions are validated; rolling-update primitives (#49) are
+confirmed too — reloadable config applies via `cubrid heartbeat reload` with no
+restart/failover, and a slaves-first `OnDelete` restart keeps the master stable
+(same pid, no failover) with the replaced slave converging on `applyinfo`
+(Fail=0, delay→0). All core CUBRID HA behaviors the ADRs depend on are now
+empirically confirmed against real CUBRID 11.4; the remaining work is the
+operator-level wiring of these primitives (broker tier, backup/restore workflow,
+rolling-update controller) plus a real CCI/JDBC client test for broker write
+persistence + `altHosts` failover.
