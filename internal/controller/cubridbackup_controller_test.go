@@ -29,7 +29,43 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
+
+const (
+	opFake = "op-fake"
+	demoDB = "demodb"
+)
+
+type fakeProber struct{ obs RoleObservation }
+
+func (f *fakeProber) ProbeRole(_ context.Context, _, _ string) RoleObservation { return f.obs }
+
+type fakeBackupClient struct {
+	started        bool
+	completed      bool
+	idempotencyKey string
+}
+
+func (f *fakeBackupClient) StartBackup(_ context.Context, _, _, key string, _ instancemanager.BackupRequest) (instancemanager.Operation, error) {
+	f.started = true
+	f.idempotencyKey = key
+	return instancemanager.Operation{ID: opFake, State: instancemanager.OpRunningBackup}, nil
+}
+
+func (f *fakeBackupClient) GetOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, error) {
+	if f.completed {
+		return instancemanager.Operation{
+			ID:    opFake,
+			State: instancemanager.OpCompleted,
+			Artifact: &instancemanager.OperationArtifact{
+				ManifestURI: "s3://cubrid-backups/p/manifest.json",
+				Database:    demoDB,
+			},
+		}, nil
+	}
+	return instancemanager.Operation{ID: opFake, State: instancemanager.OpRunningBackup}, nil
+}
 
 var _ = Describe("CubridBackup Controller", func() {
 	const namespace = "default"
@@ -41,7 +77,7 @@ var _ = Describe("CubridBackup Controller", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 			Spec: databasev1alpha1.CubridBackupSpec{
 				ClusterRef: databasev1alpha1.LocalObjectRef{Name: cluster},
-				Database:   "demodb",
+				Database:   demoDB,
 				Level:      databasev1alpha1.CubridBackupFull,
 				Destination: databasev1alpha1.CubridBackupDestination{
 					Type: databasev1alpha1.DestinationObjectStorage,
@@ -66,9 +102,9 @@ var _ = Describe("CubridBackup Controller", func() {
 		cluster := &databasev1alpha1.CubridCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "bk-cluster", Namespace: namespace},
 			Spec: databasev1alpha1.CubridClusterSpec{
-				Version:   "11.4",
+				Version:   cubridVersion,
 				Topology:  databasev1alpha1.CubridTopology{PromotableMembers: 1},
-				Databases: []databasev1alpha1.CubridDatabase{{Name: "demodb"}},
+				Databases: []databasev1alpha1.CubridDatabase{{Name: demoDB}},
 				Storage: databasev1alpha1.CubridStorage{
 					Data: databasev1alpha1.CubridStorageSpec{Size: resource.MustParse("1Gi")},
 				},
@@ -94,7 +130,55 @@ var _ = Describe("CubridBackup Controller", func() {
 		ready := meta.FindStatusCondition(updated.Status.Conditions, conditionBackupReady)
 		Expect(ready).NotTo(BeNil())
 		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-		Expect(ready.Reason).To(Equal("BackupWorkflowNotImplemented"))
+		Expect(ready.Reason).To(Equal("BackupWorkflowNotConfigured"))
+	})
+
+	It("drives a backup to Completed via the Instance Manager and records the artifact", func() {
+		cluster := &databasev1alpha1.CubridCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "bk-cluster-run", Namespace: namespace},
+			Spec: databasev1alpha1.CubridClusterSpec{
+				Version:   cubridVersion,
+				Topology:  databasev1alpha1.CubridTopology{PromotableMembers: 1},
+				Databases: []databasev1alpha1.CubridDatabase{{Name: demoDB}},
+				Storage: databasev1alpha1.CubridStorage{
+					Data: databasev1alpha1.CubridStorageSpec{Size: resource.MustParse("1Gi")},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+
+		backup := newBackup("bk-run", "bk-cluster-run")
+		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+
+		prober := &fakeProber{obs: RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown}}
+		backupClient := &fakeBackupClient{}
+		r := &CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: prober, Backup: backupClient}
+		key := types.NamespacedName{Name: "bk-run", Namespace: namespace}
+
+		By("starting the backup (single-instance unknown-role fallback)")
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(backupClient.started).To(BeTrue())
+		Expect(backupClient.idempotencyKey).To(ContainSubstring("cubridbackup:default:bk-run:"))
+
+		running := &databasev1alpha1.CubridBackup{}
+		Expect(k8sClient.Get(ctx, key, running)).To(Succeed())
+		Expect(running.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+		Expect(running.Status.OperationRef).To(Equal(opFake))
+		Expect(running.Status.TargetInstance).To(Equal("bk-cluster-run-0"))
+
+		By("polling to Completed once the operation finishes")
+		backupClient.completed = true
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		done := &databasev1alpha1.CubridBackup{}
+		Expect(k8sClient.Get(ctx, key, done)).To(Succeed())
+		Expect(done.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseCompleted))
+		Expect(done.Status.Artifact).NotTo(BeNil())
+		Expect(done.Status.Artifact.URI).To(Equal("s3://cubrid-backups/p/manifest.json"))
 	})
 
 	It("fails a backup whose referenced cluster does not exist", func() {
