@@ -74,35 +74,76 @@ concrete item to nail in the full HA POC.
 
 ---
 
-## POC-3 — 2-node HA formation (ADR-0004/0005, #42/#44) — **NOT YET FORMED**
+## POC-3 — 2-node HA formation + replication + failover (ADR-0004/0005/0006, #42/#44) — **PASS**
 
-Manual operator-style setup (identical `ha_node_list=cubrid@cub-0:cub-1`
-on both, `createdb` on master, `heartbeat start`):
+Two nodes `cub-0`/`cub-1` on a docker network, identical
+`ha_node_list=cubrid@cub-0:cub-1`, master seeded then slave seeded from it.
+Full chain works: **formation → replication → automatic failover →
+writable-endpoint recovery → no auto-failback.**
 
-- Master `heartbeat start` **blocked** (long-running / did not return
-  promptly); node stayed `HA-Node Info (current cub-0, state unknown)`.
-- A retry produced `activate ... already activated` → `deactivate` in
-  `cub-0_master.err` (self-inflicted from the timeout-retry).
-- `cub-1` was never seeded from the master (ADR-0006 requires slave seeding
-  via backup/restore or `ha_make_slavedb`), so no master/slave pair formed.
+### Two root causes found and fixed (both are real ADR-0004 implementation requirements)
 
-**Findings (validate ADR-0005/0006):**
-1. HA bring-up is **order- and seeding-sensitive** exactly as ADR-0006
-   predicted — a slave cannot just `createdb`; it must be seeded from the
-   master first. Independent `heartbeat start` without a seeded, reachable
-   peer does not settle to a healthy state.
-2. `heartbeat start` should be issued **once** and given time; retrying
-   mid-activation drives an activate/deactivate flip. The operator/Instance
-   Manager must treat it as a single idempotent operation (ADR-0003), never
-   retry-spam.
-3. Self-name→loopback resolution (POC-2) is a strong candidate contributor
-   to `state unknown`; must be resolved before HA can settle.
+1. **Self-name → loopback (`::1`).** The cause is glibc's **`nss-myhostname`**
+   NSS module, not `/etc/hosts`: a node resolving its **own** short name
+   returns loopback while **peers** resolve to real IPs via the `files`
+   (hosts) module. Fixed by making `files` win:
+   `nsswitch.conf: hosts: files dns`. CUBRID HA needs the current node
+   resolvable to its **real** address, so the operator must ensure this
+   (in Kubernetes the per-member headless Service already resolves a pod's
+   own name to its pod IP, so this docker artifact does not occur there —
+   which validates the ADR-0004 per-member-Service design).
+2. **`databases.txt` path error → `Unable to mount log volume "/pocdb_lgat"`.**
+   A hand-written `databases.txt` with `file:/` registered the log path at
+   `/` (root). Fix: let **`cubrid createdb` register `databases.txt`** (run
+   it inside the DB dir), which writes correct **absolute** vol/log paths —
+   exactly what the image's `init_db()` does. The operator must never
+   hand-write `databases.txt` paths.
 
-**Status:** full 2-node master/slave formation is **still to be proven** —
-tracked in #42 (DNS) and #44 (failover). Next attempt must: (a) fix
-self-name resolution to the real pod IP, (b) seed the slave from the master,
-(c) start each node's heartbeat exactly once, (d) verify roles via
-`cubrid heartbeat status` + `cubrid changemode`.
+### Formation (after fixes)
+
+Master `heartbeat start` (issued **once**) settled through
+`slave → to-be-master → master`; `copylogdb`/`applylogdb` reached
+`registered`. Slave was **seeded from the master** (backup → transfer →
+`restoredb`; `ha_make_slavedb.sh` is **not** in the image, so backup/restore
+is the seeding path — matches ADR-0006/0008), its db registered in
+`databases.txt`, then `heartbeat start`. Final state, **consistent from both
+nodes** (no split-brain):
+
+```
+master (cub-0): current=master; cub-0=master, cub-1=slave;
+                Server pocdb registered_and_active; copylog/applylog registered
+slave  (cub-1): current=slave;  cub-0=master, cub-1=slave;
+                Server pocdb registered_and_standby
+```
+
+### Replication — PASS
+
+3 rows written to master (`repl`) were read back on the slave within seconds
+(standby serves reads). Confirms `copylogdb`→`applylogdb` replication.
+
+### Automatic failover — PASS (validates ADR-0005)
+
+`docker kill cub-0` (master node loss) → CUBRID heartbeat **automatically
+promoted** the slave to master within ~6 s **with no operator involvement**
+(`current cub-1, state master`). Confirms ADR-0005's core posture: **CUBRID
+native HA owns role transition; the operator only observes.**
+
+- New master accepted writes immediately (`INSERT ... after-failover`
+  committed); all replicated data intact → **writable-endpoint recovery**
+  works.
+- Restarting the old master did **not** auto-promote it back → **no
+  automatic failback**, confirming ADR-0005/0006: rejoin of a former master
+  is an explicit operator-driven step, not automatic.
+
+### Operator takeaways (feed ADR-0003/0004/0006)
+
+- Ensure each pod's own short name resolves to its pod IP (per-member
+  Service; `nss-myhostname` must not win).
+- Never hand-write `databases.txt`; let `createdb` register absolute paths.
+- `heartbeat start` is a **single idempotent** op — never retry-spam
+  (retry mid-activation flips activate/deactivate).
+- Slave seeding = master backup → restore on the slave (with the db first
+  registered in `databases.txt`).
 
 ---
 
@@ -155,11 +196,16 @@ server stopped.
 
 ## Net assessment
 
-The fundamentals for a production operator are **confirmed present and
-working**: the official image runs, single-node DB lifecycle works
-end-to-end, HA CLIs/config are all there, and container DNS resolves peers.
-The remaining risk — and the real production gate — is **HA formation,
-failover, and rebuild**, which the POCs above already show is
-seeding/ordering-sensitive (consistent with ADR-0005/0006). That work is now
-issue-tracked (#42–#49) and must be executed methodically against real
-CUBRID before any "production-ready" claim.
+The fundamentals **and the core HA lifecycle** are now empirically confirmed
+against real CUBRID 11.4: the official image runs, single-node DB lifecycle
+works end-to-end, backup/restore work, and — the production gate —
+**2-node HA formation → replication → automatic failover → writable-endpoint
+recovery → no auto-failback** all work, exactly matching ADR-0004/0005/0006.
+
+Two real implementation requirements surfaced (both feed ADR-0004): a node's
+own short name must resolve to its real IP (Kubernetes per-member Service
+handles this; `nss-myhostname` must not win), and `databases.txt` must be
+registered by `createdb` (never hand-written). The riskiest ADR assumptions
+are validated; remaining POCs (broker routing #46, join/rebuild #45,
+update/upgrade #49, and the operator wiring of all this) are the next tracked
+work (#42–#49).
