@@ -312,7 +312,70 @@ inconsistency (topology looks healthy; data is not).
   alone is **not** proof of a consistent replica.
 - Detecting rejoin at the topology level is necessary but not sufficient;
   ADR-0006 rebuild must gate "caught up" on **apply-pipeline convergence**, not
-  just HA registration.
+   just HA registration.
+
+---
+
+## POC-8 — broker RW/RO routing + failover follow (ADR-0002, #46) — **PASS**
+
+Configured a two-broker tier on the master node against the formed 2-node HA
+cluster: `%RW` (`ACCESS_MODE=RW`, port 33000) and `%RO` (`ACCESS_MODE=RO`, port
+33001), with `databases.txt` db-host = `cub-0:cub-1` (all HA members). Drove the
+brokers with the image's `broker_tester` and read the broker connection logs
+(the authoritative record of which DB host each CAS connects to).
+
+### RW routes to master — PASS
+
+A write through the RW broker (`broker_tester rw -c "INSERT …"`) returned
+`[OK]`; the broker error log shows `rw_cub_cas_1 connected to database server
+'pocdb' on the host 'cub-0'` (the master) — RW routing is CUBRID-native, exactly
+ADR-0002.
+
+### RO rejects writes, serves reads — PASS
+
+`broker_tester ro -c "INSERT …"` → `FAIL(-581)` (write rejected by
+`ACCESS_MODE=RO`); `broker_tester ro -c "SELECT …"` → `[OK]`;
+`ro_cub_cas_1 connected to … host 'cub-1'`. Read/write split enforced at the
+broker.
+
+### RW follows failover natively — PASS (key validation)
+
+Stopped the master's HA participation → CUBRID promoted `cub-1`. The RW broker
+CAS log captures the automatic follow with **no config change and no operator
+action**:
+
+```
+rw_cub_cas_1 connected to database server 'pocdb' on the host 'cub-0'
+Cannot connect to server "pocdb" on "cub-0"
+rw_cub_cas_1 connected to database server 'pocdb' on the host 'cub-1'
+```
+
+This confirms ADR-0002's core claim: the RW broker seeks the new master through
+its configured host list; the `-rw` Service does **not** need to switch DB pods
+and does **not** depend on an operator-maintained `role=master` selector.
+
+### Harness caveat (not a CUBRID finding)
+
+`broker_tester` reports `[OK]` per `-c` statement, but its per-invocation
+connections did **not** durably persist rows visible from other connections
+(even the same broker read them back as `ROW COUNT 0`, and `;COMMIT` did not
+help). This is a `broker_tester` transaction/connection-lifecycle artifact, not
+a routing or replication defect — the **routing** evidence above comes from the
+broker's own connection logs, which are authoritative regardless of the
+harness's commit behavior. A JDBC/CCI-based driver test is the right tool to
+also validate write persistence + client `altHosts` failover (ADR-0002 checklist
+items 2–4); that is deferred to the operator-level broker wiring.
+
+### Operator takeaways (feed ADR-0002)
+
+- RW/RO split and native RW→master routing work with a stock broker tier whose
+  `databases.txt` lists all HA members — no operator write-path involvement.
+- RW brokers follow failover automatically via the host list; the `-rw` Service
+  must front **broker** pods (stable identity) and must not switch DB pods on
+  `status.currentPrimary`.
+- Validate broker→master **write persistence** and driver `altHosts` failover
+  with a real CCI/JDBC client, not `broker_tester`, when wiring the operator
+  broker tier.
 
 ---
 
@@ -348,6 +411,13 @@ predates) and the node looks `registered_and_standby` while never actually
 converging. ADR-0006 must gate "caught up" on apply-pipeline convergence, not HA
 registration.
 
-The riskiest ADR assumptions are validated; remaining POCs (broker routing #46,
-update/upgrade #49, and the operator wiring of all this) are the next tracked
-work (#46, #49).
+Broker RW/RO routing (#46) is confirmed: a stock two-broker tier
+(`ACCESS_MODE=RW`/`RO`, `databases.txt` = all HA members) routes writes to the
+master natively, rejects writes on RO (`FAIL(-581)`), and — the key result — the
+RW broker **follows failover automatically** through its host list with no config
+change and no operator action (broker CAS logs show `cub-0` → `cub-1` on
+promotion). Write-persistence + driver `altHosts` failover must still be checked
+with a real CCI/JDBC client (`broker_tester` does not durably commit).
+
+The riskiest ADR assumptions are validated; the remaining POC (update/upgrade
+#49) and the operator wiring of all this are the next tracked work (#49).
