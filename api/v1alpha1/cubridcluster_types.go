@@ -230,6 +230,13 @@ type InstanceStatus struct {
 	// ready indicates the instance passed its per-instance readiness (ADR-0006 catch-up).
 	// +optional
 	Ready bool `json:"ready,omitempty"`
+	// observedEngineVersion is the CUBRID engine version observed on this member
+	// (ADR-0009 update-vs-upgrade guard). Never inferred from the image tag.
+	// +optional
+	ObservedEngineVersion string `json:"observedEngineVersion,omitempty"`
+	// imageID is the resolved container image ID/digest of this member.
+	// +optional
+	ImageID string `json:"imageID,omitempty"`
 }
 
 // DatabaseStatus reports coarse per-database state (ADR-0010).
@@ -284,6 +291,30 @@ type CubridClusterStatus struct {
 	// cluster is being restored from a backup manifest.
 	// +optional
 	Bootstrap *BootstrapStatus `json:"bootstrap,omitempty"`
+
+	// observedEngineVersion is the CUBRID engine version observed across the
+	// cluster (ADR-0009). Recorded once initialized and used as the immutable
+	// baseline the desired spec.version is checked against.
+	// +optional
+	ObservedEngineVersion string `json:"observedEngineVersion,omitempty"`
+
+	// update reports rolling-update progress (ADR-0009).
+	// +optional
+	Update *UpdateStatus `json:"update,omitempty"`
+}
+
+// UpdateStatus reports database-aware rolling-update progress (ADR-0009).
+type UpdateStatus struct {
+	// desiredRevision is the StatefulSet revision the operator is rolling toward.
+	// +optional
+	DesiredRevision string `json:"desiredRevision,omitempty"`
+	// currentRevision is the revision currently observed.
+	// +optional
+	CurrentRevision string `json:"currentRevision,omitempty"`
+	// engineVersion is the engine version the update targets (must equal the
+	// observed baseline; a change is an upgrade, not an update).
+	// +optional
+	EngineVersion string `json:"engineVersion,omitempty"`
 }
 
 // BootstrapPhase is the recovery-bootstrap lifecycle phase (ADR-0008).

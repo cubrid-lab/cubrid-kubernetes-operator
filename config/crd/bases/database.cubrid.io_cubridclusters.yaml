@@ -451,9 +451,18 @@ spec:
                   description: InstanceStatus reports the observed state of one CUBRID
                     instance (ADR-0001).
                   properties:
+                    imageID:
+                      description: imageID is the resolved container image ID/digest
+                        of this member.
+                      type: string
                     name:
                       description: name is the instance (StatefulSet pod / short HA
                         hostname) name.
+                      type: string
+                    observedEngineVersion:
+                      description: |-
+                        observedEngineVersion is the CUBRID engine version observed on this member
+                        (ADR-0009 update-vs-upgrade guard). Never inferred from the image tag.
                       type: string
                     ordinal:
                       description: ordinal is the StatefulSet ordinal.
@@ -479,11 +488,33 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              observedEngineVersion:
+                description: |-
+                  observedEngineVersion is the CUBRID engine version observed across the
+                  cluster (ADR-0009). Recorded once initialized and used as the immutable
+                  baseline the desired spec.version is checked against.
+                type: string
               observedGeneration:
                 description: observedGeneration is the most recent generation observed
                   by the operator.
                 format: int64
                 type: integer
+              update:
+                description: update reports rolling-update progress (ADR-0009).
+                properties:
+                  currentRevision:
+                    description: currentRevision is the revision currently observed.
+                    type: string
+                  desiredRevision:
+                    description: desiredRevision is the StatefulSet revision the operator
+                      is rolling toward.
+                    type: string
+                  engineVersion:
+                    description: |-
+                      engineVersion is the engine version the update targets (must equal the
+                      observed baseline; a change is an upgrade, not an update).
+                    type: string
+                type: object
             type: object
         required:
         - spec

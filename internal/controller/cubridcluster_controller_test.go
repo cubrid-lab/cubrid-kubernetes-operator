@@ -66,7 +66,7 @@ func haCluster(name string) *databasev1alpha1.CubridCluster {
 	return &databasev1alpha1.CubridCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: databasev1alpha1.CubridClusterSpec{
-			Version:          "11.4",
+			Version:          cubridVersion,
 			Databases:        []databasev1alpha1.CubridDatabase{{Name: "appdb"}},
 			Topology:         databasev1alpha1.CubridTopology{PromotableMembers: 3, ReadReplicas: 0},
 			HighAvailability: databasev1alpha1.CubridHighAvailability{Enabled: true},
