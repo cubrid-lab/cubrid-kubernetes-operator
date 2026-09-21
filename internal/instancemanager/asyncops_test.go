@@ -113,6 +113,37 @@ func TestServer_Backup_NoFalseCompletion(t *testing.T) {
 	}
 }
 
+func TestServer_Backup_CompletesAfterUpload(t *testing.T) {
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOperationStore: %v", err)
+	}
+	objStore := newFakeStore()
+	// Pre-stage a backup file at the destination, since the fake CLI does not
+	// actually run backupdb.
+	staging := stageBackup(t, map[string]string{stagedFileName: backupContent})
+	h := NewServer(fakeCLI{out: "ok"}, "tok").
+		WithOperationStore(store).
+		WithObjectStore(objStore).
+		Handler()
+
+	body := `{"database":"appdb","destination":"` + staging + `","upload":{"bucket":"cubrid-backups","prefix":"prod/uid-1","clusterUID":"cuid","cubridVersion":"11.4.6","sourceInstance":"appdb-1","sourceRole":"slave"}}`
+	rr := postBackup(t, h, "key-1", body)
+	var op Operation
+	_ = json.Unmarshal(rr.Body.Bytes(), &op)
+
+	final := pollUntilTerminal(t, h, op.ID)
+	if final.State != OpCompleted {
+		t.Fatalf("final state = %s (reason %q), want Completed", final.State, final.FailureReason)
+	}
+	if final.Artifact == nil || final.Artifact.ManifestURI != "s3://cubrid-backups/prod/uid-1/manifest.json" {
+		t.Errorf("artifact = %+v", final.Artifact)
+	}
+	if _, ok := objStore.objects["cubrid-backups/prod/uid-1/manifest.json"]; !ok {
+		t.Error("manifest.json was not uploaded on completion")
+	}
+}
+
 func TestServer_GetOperation_NotFound(t *testing.T) {
 	h := newAsyncServer(t, fakeCLI{out: "ok"})
 	req := httptest.NewRequest("GET", "/v1/operations/op-00000000000000000000000000000000", nil)

@@ -26,6 +26,21 @@ type BackupRequest struct {
 	Database    string `json:"database"`
 	Destination string `json:"destination"`
 	Level       int    `json:"level,omitempty"`
+	// Upload, when set, uploads the staged backup to object storage and writes
+	// manifest.json as the atomic completion marker (async /v1/backup only).
+	Upload *BackupUpload `json:"upload,omitempty"`
+}
+
+// BackupUpload describes the object-storage destination + source metadata used
+// to build the manifest (ADR-0007). Credentials come from the manager's env,
+// never the request body.
+type BackupUpload struct {
+	Bucket         string `json:"bucket"`
+	Prefix         string `json:"prefix"`
+	ClusterUID     string `json:"clusterUID"`
+	CubridVersion  string `json:"cubridVersion"`
+	SourceInstance string `json:"sourceInstance"`
+	SourceRole     string `json:"sourceRole"`
 }
 
 // BackupResult reports the outcome of a local backup.
