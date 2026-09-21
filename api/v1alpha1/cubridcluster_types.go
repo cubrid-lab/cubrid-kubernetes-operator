@@ -279,6 +279,50 @@ type CubridClusterStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// bootstrap reports recovery-bootstrap progress (ADR-0008). Set only while a
+	// cluster is being restored from a backup manifest.
+	// +optional
+	Bootstrap *BootstrapStatus `json:"bootstrap,omitempty"`
+}
+
+// BootstrapPhase is the recovery-bootstrap lifecycle phase (ADR-0008).
+type BootstrapPhase string
+
+const (
+	// BootstrapPreparing means the restore operation is being started.
+	BootstrapPreparing BootstrapPhase = "Preparing"
+	// BootstrapRestoring means restoredb is running on the initial master.
+	BootstrapRestoring BootstrapPhase = "Restoring"
+	// BootstrapValidating means the restored DB is being validated.
+	BootstrapValidating BootstrapPhase = "Validating"
+	// BootstrapSeedingReplicas means slaves are being seeded (ADR-0006).
+	BootstrapSeedingReplicas BootstrapPhase = "SeedingReplicas"
+	// BootstrapComplete means recovery bootstrap finished successfully.
+	BootstrapComplete BootstrapPhase = "Complete"
+	// BootstrapFailed means recovery bootstrap failed terminally.
+	BootstrapFailed BootstrapPhase = "Failed"
+)
+
+// BootstrapStatus reports recovery-bootstrap progress (ADR-0008). It never
+// advertises a half-restored DB as healthy; Ready stays False until the gate
+// passes.
+type BootstrapStatus struct {
+	// mode is the bootstrap mode; "Recovery" for restore-from-backup.
+	// +optional
+	Mode string `json:"mode,omitempty"`
+	// phase is the recovery lifecycle phase.
+	// +optional
+	Phase BootstrapPhase `json:"phase,omitempty"`
+	// manifestUri is the artifact being restored (provenance).
+	// +optional
+	ManifestURI string `json:"manifestUri,omitempty"`
+	// operationID is the Instance Manager restore operation on targetMember.
+	// +optional
+	OperationID string `json:"operationID,omitempty"`
+	// targetMember is the initial master pod being restored into.
+	// +optional
+	TargetMember string `json:"targetMember,omitempty"`
 }
 
 // +kubebuilder:object:root=true

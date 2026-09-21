@@ -322,6 +322,29 @@ spec:
           status:
             description: status defines the observed state of CubridCluster
             properties:
+              bootstrap:
+                description: |-
+                  bootstrap reports recovery-bootstrap progress (ADR-0008). Set only while a
+                  cluster is being restored from a backup manifest.
+                properties:
+                  manifestUri:
+                    description: manifestUri is the artifact being restored (provenance).
+                    type: string
+                  mode:
+                    description: mode is the bootstrap mode; "Recovery" for restore-from-backup.
+                    type: string
+                  operationID:
+                    description: operationID is the Instance Manager restore operation
+                      on targetMember.
+                    type: string
+                  phase:
+                    description: phase is the recovery lifecycle phase.
+                    type: string
+                  targetMember:
+                    description: targetMember is the initial master pod being restored
+                      into.
+                    type: string
+                type: object
               conditions:
                 description: |-
                   conditions represent the current state of the CubridCluster. Conditions
