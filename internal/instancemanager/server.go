@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ha/status", s.auth(s.haStatus))
 	mux.HandleFunc("GET /v1/ha/convergence", s.auth(s.convergence))
 	mux.HandleFunc("POST /v1/backup", s.auth(s.backup))
+	mux.HandleFunc("POST /v1/restore/prepare", s.auth(s.restorePrepare))
 	mux.HandleFunc("GET /v1/operations/{id}", s.auth(s.getOperation))
 	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdown))
 	return mux
@@ -216,6 +217,88 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 				SizeBytes:      res.SizeBytes,
 				Database:       req.Database,
 				Level:          req.Level,
+			}
+		})
+	}()
+}
+
+// restorePrepare verifies + downloads + restoredb's a backup artifact into an
+// empty target as an async, idempotent operation (ADR-0008). It requires an
+// operation store and an object store; the request must carry an Idempotency-Key.
+func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil || s.objects == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: "restore is not enabled (no operation/object store)"})
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "cannot read request body"})
+		return
+	}
+	var req RestoreRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "invalid request body"})
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "Idempotency-Key header is required"})
+		return
+	}
+
+	op, existed, err := s.store.FindOrCreate(OpRestore, key, HashRequest(body), req.Database)
+	switch {
+	case errors.Is(err, ErrIdempotencyConflict):
+		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		return
+	case errors.Is(err, ErrOperationInProgress):
+		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		return
+	}
+	if existed {
+		writeJSON(w, http.StatusAccepted, op)
+		return
+	}
+
+	s.runRestore(op.ID, req)
+	writeJSON(w, http.StatusAccepted, op)
+}
+
+// runRestore executes the restore in the background and records the durable
+// state transitions. It reaches Completed only after restoredb succeeds against
+// a verified artifact; any failure (trust, download, wrong-target, restoredb)
+// terminates Failed with an explicit reason (ADR-0003/0008).
+func (s *Server) runRestore(id string, req RestoreRequest) {
+	go func() {
+		ctx := context.Background()
+		fail := func(reason string) {
+			_, _ = s.store.Update(id, func(op *Operation) {
+				op.State = OpFailed
+				op.FailureReason = reason
+			})
+		}
+
+		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpDownloading }); err != nil {
+			return
+		}
+		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
+			return
+		}
+		res, err := Restore(ctx, s.cli, s.objects, req)
+		if err != nil {
+			fail("restore failed: " + err.Error())
+			return
+		}
+		_ = os.RemoveAll(req.StagingDir)
+		_, _ = s.store.Update(id, func(op *Operation) {
+			op.State = OpCompleted
+			op.Artifact = &OperationArtifact{
+				ManifestURI:   res.ManifestURI,
+				Database:      res.Database,
+				CubridVersion: res.CubridVersion,
 			}
 		})
 	}()
