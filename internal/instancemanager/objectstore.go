@@ -33,6 +33,9 @@ type ObjectStore interface {
 	Put(ctx context.Context, bucket, key string, r io.Reader, size int64, contentType string) (int64, error)
 	// StatSize returns the stored object's size, used to verify an upload landed.
 	StatSize(ctx context.Context, bucket, key string) (int64, error)
+	// Get opens bucket/key for reading (restore/verify download path). The caller
+	// closes the returned reader.
+	Get(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 }
 
 // ObjectStoreConfig configures an S3-compatible endpoint (ADR-0007).
@@ -76,4 +79,12 @@ func (s *MinioObjectStore) StatSize(ctx context.Context, bucket, key string) (in
 		return 0, fmt.Errorf("stat %s/%s: %w", bucket, key, err)
 	}
 	return info.Size, nil
+}
+
+func (s *MinioObjectStore) Get(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	obj, err := s.client.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get %s/%s: %w", bucket, key, err)
+	}
+	return obj, nil
 }

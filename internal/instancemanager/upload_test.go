@@ -32,9 +32,10 @@ const stagedFileName = "pocdb_bk0v000"
 
 // fakeObjectStore records uploads in memory and can inject failures.
 type fakeObjectStore struct {
-	objects   map[string][]byte
-	putErrKey string // if a key contains this substring, Put fails
-	shortKey  string // if a key contains this substring, StatSize under-reports
+	objects    map[string][]byte
+	putErrKey  string // if a key contains this substring, Put fails
+	shortKey   string // if a key contains this substring, StatSize under-reports
+	corruptKey string // if a key contains this substring, Get corrupts the bytes
 }
 
 func newFakeStore() *fakeObjectStore {
@@ -62,6 +63,17 @@ func (f *fakeObjectStore) StatSize(_ context.Context, bucket, key string) (int64
 		return int64(len(data)) - 1, nil
 	}
 	return int64(len(data)), nil
+}
+
+func (f *fakeObjectStore) Get(_ context.Context, bucket, key string) (io.ReadCloser, error) {
+	data, ok := f.objects[bucket+"/"+key]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	if f.corruptKey != "" && strings.Contains(key, f.corruptKey) {
+		data = append([]byte("x"), data...)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 func (f *fakeObjectStore) keys() []string {
@@ -96,10 +108,10 @@ func baseSpec(staging string) UploadSpec {
 		Manifest: BackupManifest{
 			Database:       dbName,
 			ClusterUID:     "cluster-uid",
-			CubridVersion:  "11.4.6",
+			CubridVersion:  testCubridVersion,
 			Level:          0,
 			SourceInstance: "appdb-1",
-			SourceRole:     "slave",
+			SourceRole:     string(RoleSlave),
 			CreatedAt:      "2026-09-21T00:00:00Z",
 		},
 	}

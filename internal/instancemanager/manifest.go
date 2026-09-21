@@ -107,3 +107,44 @@ func ParseManifest(data []byte) (BackupManifest, error) {
 	}
 	return m, nil
 }
+
+// ManifestExpectation is what a restore/rebuild consumer requires of a manifest
+// before trusting it (ADR-0008 validation gate). Empty fields are not checked,
+// so a caller opts into each guard it needs.
+type ManifestExpectation struct {
+	// Database, when set, must equal the manifest's database.
+	Database string
+	// CubridVersion, when set, must equal the manifest's engine version (no
+	// cross-version restore in v1alpha1, ADR-0009).
+	CubridVersion string
+	// Level, when set (non-nil), must equal the manifest's backup level.
+	Level *int
+	// RequireSourceRole, when non-empty, must equal the manifest's source role
+	// (ADR-0006 rebuild seeds only from the resolved master).
+	RequireSourceRole string
+}
+
+// Verify rejects a manifest whose identity does not match the intended
+// operation (ADR-0007/0008 artifact trust). It checks metadata only; per-object
+// checksum validation is the caller's separate step.
+func (m BackupManifest) Verify(exp ManifestExpectation) error {
+	if m.ManifestVersion != ManifestVersion {
+		return fmt.Errorf("manifest version %d does not match supported %d", m.ManifestVersion, ManifestVersion)
+	}
+	if exp.Database != "" && m.Database != exp.Database {
+		return fmt.Errorf("manifest database %q does not match expected %q", m.Database, exp.Database)
+	}
+	if exp.CubridVersion != "" && m.CubridVersion != exp.CubridVersion {
+		return fmt.Errorf("manifest cubridVersion %q does not match expected %q", m.CubridVersion, exp.CubridVersion)
+	}
+	if exp.Level != nil && m.Level != *exp.Level {
+		return fmt.Errorf("manifest level %d does not match expected %d", m.Level, *exp.Level)
+	}
+	if exp.RequireSourceRole != "" && m.SourceRole != exp.RequireSourceRole {
+		return fmt.Errorf("manifest sourceRole %q does not match required %q", m.SourceRole, exp.RequireSourceRole)
+	}
+	if len(m.Objects) == 0 {
+		return fmt.Errorf("manifest lists no backup objects")
+	}
+	return nil
+}
