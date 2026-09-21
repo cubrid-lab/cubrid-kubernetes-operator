@@ -39,8 +39,9 @@ func memberNames(cluster *databasev1alpha1.CubridCluster, count int32) []string 
 
 // reconcileHAStatus polls each member's Instance Manager, aggregates the
 // observations safely (ADR-0005), and sets currentPrimary, instances[], and the
-// PrimaryResolved / HAReady conditions.
-func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, count int32) {
+// PrimaryResolved / HAReady conditions. It returns the resolution so callers
+// (e.g. the broker tier's RoutingReady) can reuse it.
+func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, count int32) PrimaryResolution {
 	members := memberNames(cluster, count)
 
 	obs := make(map[string]RoleObservation, len(members))
@@ -69,6 +70,7 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	} else {
 		setCondition(cluster, conditionHAReady, metav1.ConditionFalse, res.Reason, primaryResolvedMessage(res))
 	}
+	return res
 }
 
 func primaryResolvedMessage(res PrimaryResolution) string {
