@@ -222,6 +222,9 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			Name:      appName,
 			Image:     image,
 			Resources: cluster.Spec.Resources,
+			// preStop triggers the ADR-0003 ordered graceful shutdown via the
+			// local Instance Manager (loopback is token-exempt).
+			Lifecycle: preStopShutdown(cluster),
 			Ports: []corev1.ContainerPort{
 				{Name: "cubrid", ContainerPort: cubridServerPort},
 				{Name: "broker", ContainerPort: cubridBrokerPort},
@@ -273,6 +276,22 @@ func (r *CubridClusterReconciler) event(cluster *databasev1alpha1.CubridCluster,
 func httpGet(path string) corev1.ProbeHandler {
 	return corev1.ProbeHandler{
 		HTTPGet: &corev1.HTTPGetAction{Path: path, Port: intOrString(instanceManagerPort)},
+	}
+}
+
+func preStopShutdown(cluster *databasev1alpha1.CubridCluster) *corev1.Lifecycle {
+	db := ""
+	if len(cluster.Spec.Databases) > 0 {
+		db = cluster.Spec.Databases[0].Name
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/v1/shutdown?database=%s", instanceManagerPort, db)
+	return &corev1.Lifecycle{
+		PreStop: &corev1.LifecycleHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"/bin/sh", "-c",
+					fmt.Sprintf("curl -fsS -m 110 -X POST '%s' || true", url)},
+			},
+		},
 	}
 }
 
