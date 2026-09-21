@@ -96,7 +96,7 @@ func TestParseHAStatus_TopologyPriorities(t *testing.T) {
 	if byName["cub-0"].Priority != 1 || byName["cub-0"].State != "master" {
 		t.Errorf("cub-0 = %+v, want priority 1 / master", byName["cub-0"])
 	}
-	if byName["cub-1"].Priority != 2 || byName["cub-1"].State != "slave" {
+	if byName["cub-1"].Priority != 2 || byName["cub-1"].State != string(RoleSlave) {
 		t.Errorf("cub-1 = %+v, want priority 2 / slave", byName["cub-1"])
 	}
 }
