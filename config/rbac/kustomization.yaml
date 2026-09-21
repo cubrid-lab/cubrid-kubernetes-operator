@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the cubrid-kubernetes-operator itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- cubridbackup_admin_role.yaml
+- cubridbackup_editor_role.yaml
+- cubridbackup_viewer_role.yaml
 - cubridcluster_admin_role.yaml
 - cubridcluster_editor_role.yaml
 - cubridcluster_viewer_role.yaml

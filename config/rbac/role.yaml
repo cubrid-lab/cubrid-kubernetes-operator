@@ -46,6 +46,7 @@ rules:
 - apiGroups:
   - database.cubrid.io
   resources:
+  - cubridbackups
   - cubridclusters
   verbs:
   - create
@@ -58,12 +59,14 @@ rules:
 - apiGroups:
   - database.cubrid.io
   resources:
+  - cubridbackups/finalizers
   - cubridclusters/finalizers
   verbs:
   - update
 - apiGroups:
   - database.cubrid.io
   resources:
+  - cubridbackups/status
   - cubridclusters/status
   verbs:
   - get

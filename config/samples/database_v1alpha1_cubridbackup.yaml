@@ -1,0 +1,24 @@
+apiVersion: database.cubrid.io/v1alpha1
+kind: CubridBackup
+metadata:
+  labels:
+    app.kubernetes.io/name: cubrid-kubernetes-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: cubridbackup-sample
+spec:
+  clusterRef:
+    name: cubridcluster-sample
+  database: demodb
+  target:
+    preference: PreferStandby
+  level: Full
+  destination:
+    type: ObjectStorage
+    objectStorage:
+      provider: S3Compatible
+      bucket: cubrid-backups
+      prefix: prod/example
+      endpointRef:
+        name: s3-endpoint
+      credentialsRef:
+        name: s3-credentials
