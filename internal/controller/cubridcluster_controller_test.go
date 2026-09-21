@@ -214,5 +214,38 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(k8sClient.Update(ctx, created)).NotTo(Succeed())
 			Expect(k8sClient.Delete(ctx, c)).To(Succeed())
 		})
+
+		It("round-trips spec.bootstrap.recovery and status.bootstrap (ADR-0008)", func() {
+			c := haCluster("recovery-bootstrap")
+			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+				Recovery: &databasev1alpha1.RecoverySource{
+					ManifestURI:      "s3://bucket/prefix/manifest.json",
+					StorageSecretRef: &corev1.LocalObjectReference{Name: "restore-object-storage"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, c)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+
+			key := types.NamespacedName{Name: "recovery-bootstrap", Namespace: ns}
+			created := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, created)).To(Succeed())
+			Expect(created.Spec.Bootstrap).NotTo(BeNil())
+			Expect(created.Spec.Bootstrap.Recovery.ManifestURI).To(Equal("s3://bucket/prefix/manifest.json"))
+
+			created.Status.Bootstrap = &databasev1alpha1.BootstrapStatus{
+				Mode:         "Recovery",
+				Phase:        databasev1alpha1.BootstrapRestoring,
+				ManifestURI:  "s3://bucket/prefix/manifest.json",
+				OperationID:  "op-restore-1",
+				TargetMember: "recovery-bootstrap-0",
+			}
+			Expect(k8sClient.Status().Update(ctx, created)).To(Succeed())
+
+			updated := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Status.Bootstrap).NotTo(BeNil())
+			Expect(updated.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapRestoring))
+			Expect(updated.Status.Bootstrap.TargetMember).To(Equal("recovery-bootstrap-0"))
+		})
 	})
 })
