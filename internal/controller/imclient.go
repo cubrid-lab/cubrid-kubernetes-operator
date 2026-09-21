@@ -38,6 +38,17 @@ type BackupClient interface {
 	GetOperation(ctx context.Context, podName, namespace, id string) (instancemanager.Operation, error)
 }
 
+// RestoreClient drives one instance's Instance Manager restore operation
+// (ADR-0008). It is an interface so the reconciler can be tested without a live
+// manager.
+type RestoreClient interface {
+	// StartRestore POSTs /v1/restore/prepare with the idempotency key and returns
+	// the durable operation. A repeat with the same key returns the same operation.
+	StartRestore(ctx context.Context, podName, namespace, idempotencyKey string, req instancemanager.RestoreRequest) (instancemanager.Operation, error)
+	// GetOperation polls /v1/operations/{id}.
+	GetOperation(ctx context.Context, podName, namespace, id string) (instancemanager.Operation, error)
+}
+
 // HTTPBackupClient talks to the per-member Instance Manager over the pod's
 // stable DNS (ADR-0004), port 9090 (ADR-0003), with the shared bearer token.
 type HTTPBackupClient struct {
@@ -73,6 +84,31 @@ func (c *HTTPBackupClient) StartBackup(ctx context.Context, podName, namespace, 
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
 		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: unexpected status %d", podName, resp.StatusCode)
+	}
+	return decodeOperation(resp)
+}
+
+func (c *HTTPBackupClient) StartRestore(ctx context.Context, podName, namespace, idempotencyKey string, req instancemanager.RestoreRequest) (instancemanager.Operation, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return instancemanager.Operation{}, err
+	}
+	url := c.baseURL(podName, namespace) + "/v1/restore/prepare"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return instancemanager.Operation{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Idempotency-Key", idempotencyKey)
+	c.authorize(httpReq)
+
+	resp, err := c.Client.Do(httpReq)
+	if err != nil {
+		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: %w", podName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: unexpected status %d", podName, resp.StatusCode)
 	}
 	return decodeOperation(resp)
 }
