@@ -61,6 +61,8 @@ type CubridClusterReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// Prober is nil-safe: nil skips HA role discovery (HAReady=Unknown).
+	Prober RoleProber
 }
 
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters,verbs=get;list;watch;create;update;patch;delete
@@ -302,13 +304,15 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	metrics.ClusterReady.With(labels).Set(boolToFloat(ready >= desired && desired > 0))
 
 	// HAReady is separate from Ready and from Pod readiness (#14). Role
-	// discovery lands in Phase 2, so it is Unknown while HA is enabled.
-	if cluster.Spec.HighAvailability.Enabled {
-		setCondition(cluster, conditionHAReady, metav1.ConditionUnknown, "HADiscoveryNotImplemented",
-			"HA role discovery is implemented in Phase 2")
-	} else {
+	// discovery polls each member's Instance Manager /v1/role (ADR-0003/0005).
+	if !cluster.Spec.HighAvailability.Enabled {
 		setCondition(cluster, conditionHAReady, metav1.ConditionFalse, "HADisabled",
 			"highAvailability.enabled is false")
+	} else if r.Prober == nil {
+		setCondition(cluster, conditionHAReady, metav1.ConditionUnknown, "RoleDiscoveryDisabled",
+			"no role prober configured")
+	} else {
+		r.reconcileHAStatus(ctx, cluster, desired)
 	}
 
 	if err := r.Status().Update(ctx, cluster); err != nil {

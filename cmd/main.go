@@ -187,6 +187,7 @@ func main() {
 		Scheme: mgr.GetScheme(),
 		//nolint:staticcheck // v0.25 GetEventRecorder returns an events/v1 interface incompatible with record.EventRecorder.
 		Recorder: mgr.GetEventRecorderFor("cubridcluster-controller"),
+		Prober:   controller.NewHTTPRoleProber(os.Getenv("IM_TOKEN")),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "cubridcluster")
 		os.Exit(1)

@@ -136,10 +136,11 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(c.LivenessProbe).NotTo(BeNil())
 			Expect(c.LivenessProbe.HTTPGet.Path).To(Equal("/livez"))
 
-			By("reporting HAReady as a distinct condition, Unknown in Phase 1 while HA is enabled (#14)")
+			By("reporting HAReady Unknown when no role prober is configured (#14/#44)")
 			haReady := meta.FindStatusCondition(updated.Status.Conditions, "HAReady")
 			Expect(haReady).NotTo(BeNil())
 			Expect(haReady.Status).To(Equal(metav1.ConditionUnknown))
+			Expect(haReady.Reason).To(Equal("RoleDiscoveryDisabled"))
 
 			By("hardening the pod to Pod Security Standards restricted (#18)")
 			Expect(sts.Spec.Template.Spec.SecurityContext.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
