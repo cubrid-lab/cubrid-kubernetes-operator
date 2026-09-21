@@ -1,0 +1,11 @@
+# Scoped ignore for the Instance Manager image build (BuildKit uses
+# <Dockerfile>.dockerignore in preference to the root .dockerignore).
+# The root .dockerignore excludes everything except *.go/go.mod; this build
+# also needs the entrypoint script and the Go source trees.
+**
+
+!**/*.go
+**/*_test.go
+!go.mod
+!go.sum
+!build/instance-manager/entrypoint.sh
