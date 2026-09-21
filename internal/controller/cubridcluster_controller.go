@@ -63,6 +63,9 @@ type CubridClusterReconciler struct {
 	Recorder record.EventRecorder
 	// Prober is nil-safe: nil skips HA role discovery (HAReady=Unknown).
 	Prober RoleProber
+	// Restore is nil-safe: nil skips recovery-bootstrap orchestration
+	// (BootstrapReady=False/RestoreClientNotConfigured).
+	Restore RestoreClient
 }
 
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters,verbs=get;list;watch;create;update;patch;delete
@@ -301,6 +304,25 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	ready := sts.Status.ReadyReplicas
 
 	cluster.Status.ObservedGeneration = cluster.Generation
+
+	// Recovery bootstrap gates Ready: while restoring, the operator must never
+	// advertise a half-restored DB as healthy (ADR-0008).
+	if recoveryActive(cluster) {
+		res, active := r.reconcileRecovery(ctx, cluster)
+		if active {
+			setCondition(cluster, conditionReady, metav1.ConditionFalse, "BootstrapRecoveryInProgress",
+				"restoring from backup; cluster not ready")
+			setCondition(cluster, conditionProgressing, metav1.ConditionTrue, "BootstrapRecoveryInProgress",
+				"restoring from backup")
+			if err := r.Status().Update(ctx, cluster); err != nil {
+				if apierrors.IsConflict(err) {
+					return ctrl.Result{RequeueAfter: time.Second}, nil
+				}
+				return ctrl.Result{}, err
+			}
+			return res, nil
+		}
+	}
 
 	if ready >= desired && desired > 0 {
 		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",

@@ -36,7 +36,30 @@ import (
 	metricspkg "github.com/cubrid-lab/cubrid-kubernetes-operator/internal/metrics"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
+
+// fakeRestoreClient stands in for the Instance Manager restore endpoint.
+type fakeRestoreClient struct {
+	started        bool
+	completed      bool
+	idempotencyKey string
+}
+
+const opRestore = "op-restore"
+
+func (f *fakeRestoreClient) StartRestore(_ context.Context, _, _, key string, _ instancemanager.RestoreRequest) (instancemanager.Operation, error) {
+	f.started = true
+	f.idempotencyKey = key
+	return instancemanager.Operation{ID: opRestore, State: instancemanager.OpRestoring}, nil
+}
+
+func (f *fakeRestoreClient) GetOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, error) {
+	if f.completed {
+		return instancemanager.Operation{ID: opRestore, State: instancemanager.OpCompleted}, nil
+	}
+	return instancemanager.Operation{ID: opRestore, State: instancemanager.OpRestoring}, nil
+}
 
 // haCluster returns a valid HA CubridCluster (1 master + 2 slaves) per ADR-0001.
 func haCluster(name string) *databasev1alpha1.CubridCluster {
@@ -246,6 +269,47 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(updated.Status.Bootstrap).NotTo(BeNil())
 			Expect(updated.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapRestoring))
 			Expect(updated.Status.Bootstrap.TargetMember).To(Equal("recovery-bootstrap-0"))
+		})
+
+		It("drives recovery bootstrap and gates Ready until restore completes (ADR-0008)", func() {
+			c := haCluster("recovery-run")
+			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: "s3://bucket/prod/uid/manifest.json"},
+			}
+			Expect(k8sClient.Create(ctx, c)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+
+			restore := &fakeRestoreClient{}
+			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore}
+			key := types.NamespacedName{Name: "recovery-run", Namespace: ns}
+
+			By("starting the restore on the initial master and gating Ready")
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(restore.started).To(BeTrue())
+			Expect(restore.idempotencyKey).To(ContainSubstring("restore:"))
+
+			restoring := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, restoring)).To(Succeed())
+			Expect(restoring.Status.Bootstrap).NotTo(BeNil())
+			Expect(restoring.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapRestoring))
+			Expect(restoring.Status.Bootstrap.TargetMember).To(Equal("recovery-run-0"))
+			ready := meta.FindStatusCondition(restoring.Status.Conditions, conditionReady)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			Expect(ready.Reason).To(Equal("BootstrapRecoveryInProgress"))
+
+			By("completing recovery once the restore operation finishes")
+			restore.completed = true
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			done := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, done)).To(Succeed())
+			Expect(done.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapComplete))
+			bootstrapReady := meta.FindStatusCondition(done.Status.Conditions, conditionBootstrapReady)
+			Expect(bootstrapReady).NotTo(BeNil())
+			Expect(bootstrapReady.Status).To(Equal(metav1.ConditionTrue))
 		})
 	})
 })
