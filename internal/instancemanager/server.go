@@ -24,6 +24,8 @@ import (
 // DefaultPort is the Instance Manager API port (ADR-0003).
 const DefaultPort = 9090
 
+const errKey = "error"
+
 // Server exposes the Instance Manager HTTP/JSON API (ADR-0003). Kubelet probes
 // (/livez, /readyz) are unauthenticated; /v1 endpoints require the bearer token.
 type Server struct {
@@ -42,6 +44,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("GET /v1/role", s.auth(s.role))
 	mux.HandleFunc("GET /v1/ha/status", s.auth(s.haStatus))
+	mux.HandleFunc("POST /v1/backup", s.auth(s.backup))
+	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdown))
 	return mux
 }
 
@@ -71,6 +75,30 @@ func (s *Server) haStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, HeartbeatStatus(r.Context(), s.cli))
 }
 
+// backup runs a local `cubrid backupdb` (ADR-0007).
+func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
+	var req BackupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "invalid request body"})
+		return
+	}
+	res, err := Backup(r.Context(), s.cli, req)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// shutdown performs the ADR-0003 ordered graceful shutdown (withdraw HA, stop server).
+func (s *Server) shutdown(w http.ResponseWriter, r *http.Request) {
+	if err := Shutdown(r.Context(), s.cli, r.URL.Query().Get("database")); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "shutdown"})
+}
+
 // auth wraps /v1 handlers with bearer-token authentication (loopback is exempt
 // so preStop can call locally without a token; ADR-0003).
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
@@ -80,7 +108,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if r.Header.Get("Authorization") != "Bearer "+s.token {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{errKey: "unauthorized"})
 			return
 		}
 		next(w, r)
