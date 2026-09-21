@@ -72,7 +72,9 @@ type CubridClusterReconciler struct {
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -353,7 +355,13 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		setCondition(cluster, conditionHAReady, metav1.ConditionUnknown, "RoleDiscoveryDisabled",
 			"no role prober configured")
 	} else {
-		r.reconcileHAStatus(ctx, cluster, desired)
+		res := r.reconcileHAStatus(ctx, cluster, desired)
+		// Reconcile the broker tier and set routing conditions from the same
+		// safety-first primary resolution (ADR-0002/0005).
+		if err := r.reconcileBrokerTier(ctx, cluster, res); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
+			setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, "BrokerReconcileFailed", err.Error())
+		}
 	}
 
 	if err := r.Status().Update(ctx, cluster); err != nil {
@@ -392,7 +400,9 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&databasev1alpha1.CubridCluster{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Owns(&corev1.ConfigMap{}).
 		Named("cubridcluster").
 		Complete(r)
 }

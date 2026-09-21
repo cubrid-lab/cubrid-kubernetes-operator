@@ -41,6 +41,7 @@ const (
 	c2                = "c-2"
 	incomplete        = "PrimaryObservationIncomplete"
 	multiplePrimaries = "MultiplePrimariesObserved"
+	singlePrimary     = "SinglePrimaryObserved"
 	cubridVersion     = "11.4"
 )
 
@@ -54,7 +55,7 @@ func TestResolvePrimary(t *testing.T) {
 		prim   string
 	}{
 		{"healthy single primary", map[string]RoleObservation{c0: master(), c1: slave(), c2: slave()},
-			metav1.ConditionTrue, "SinglePrimaryObserved", c0},
+			metav1.ConditionTrue, singlePrimary, c0},
 		{"two masters -> not resolved", map[string]RoleObservation{c0: master(), c1: master(), c2: slave()},
 			metav1.ConditionFalse, multiplePrimaries, ""},
 		{"no master", map[string]RoleObservation{c0: slave(), c1: slave(), c2: slave()},

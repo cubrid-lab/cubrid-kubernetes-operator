@@ -36,7 +36,7 @@ func obsUnknown() RoleObservation {
 func obsDown() RoleObservation { return RoleObservation{Reachable: false} }
 
 func resolvedPrimary() PrimaryResolution {
-	return PrimaryResolution{CurrentPrimary: c0, Status: metav1.ConditionTrue, Reason: "SinglePrimaryObserved"}
+	return PrimaryResolution{CurrentPrimary: c0, Status: metav1.ConditionTrue, Reason: singlePrimary}
 }
 func ambiguousPrimary() PrimaryResolution {
 	return PrimaryResolution{Status: metav1.ConditionFalse, Reason: multiplePrimaries}
