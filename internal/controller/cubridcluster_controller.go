@@ -364,6 +364,11 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		}
 	}
 
+	// Engine-version detection guard (ADR-0009): record the observed baseline and
+	// block engine upgrades / unverifiable versions. This sets a condition only;
+	// it never deletes a pod.
+	r.reconcileUpdateGuard(cluster)
+
 	if err := r.Status().Update(ctx, cluster); err != nil {
 		if apierrors.IsConflict(err) {
 			return ctrl.Result{RequeueAfter: time.Second}, nil

@@ -30,7 +30,7 @@ func brokerTestCluster() *databasev1alpha1.CubridCluster {
 	return &databasev1alpha1.CubridCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cc", Namespace: "ns"},
 		Spec: databasev1alpha1.CubridClusterSpec{
-			Version:   "11.4",
+			Version:   cubridVersion,
 			Databases: []databasev1alpha1.CubridDatabase{{Name: "demodb"}},
 			Topology:  databasev1alpha1.CubridTopology{PromotableMembers: 3},
 		},
