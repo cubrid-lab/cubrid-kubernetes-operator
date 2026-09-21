@@ -3,8 +3,12 @@
 > An experimental Kubernetes-native operator for running highly available CUBRID clusters.
 
 > [!IMPORTANT]
-> This project is currently in the **design / pre-implementation stage**.
-> It is an experimental project under `cubrid-lab`, is not production-ready,
+> This project is **early-stage and under active development**.
+> The P0 architecture decisions are accepted, the operator scaffold, the
+> `CubridCluster` API, and an in-pod Instance Manager are implemented, and
+> the core CUBRID HA behaviors (formation, replication, automatic failover,
+> backup, restore) are validated by POCs against real CUBRID 11.4. It is an
+> experimental project under `cubrid-lab`, is **not yet production-ready**,
 > and does not replace the existing official CUBRID Operator.
 > See [Relationship to the existing CUBRID Operator](#relationship-to-the-existing-cubrid-operator).
 
@@ -100,24 +104,27 @@ CUBRID engine version migration is not included in the initial MVP.
 
 ## Current Status
 
-**Experimental / Pre-implementation**
+**Experimental / early implementation**
 
 - [x] Existing CUBRID Operator architecture reviewed
 - [x] Initial design principles documented
 - [x] Repository initialized
-- [ ] P0 architecture decisions (ADRs)
-- [ ] Kubebuilder project scaffold
-- [ ] `CubridCluster` API
-- [ ] Single-node reconciliation
-- [ ] CUBRID HA integration
-- [ ] Backup / Restore
-- [ ] Failure and E2E tests
+- [x] P0 architecture decisions (ADRs 0001–0010 accepted)
+- [x] Kubebuilder project scaffold
+- [x] `CubridCluster` API (v1alpha1)
+- [x] Single-node reconciliation (StatefulSet, headless Service, Conditions)
+- [x] In-pod Instance Manager (role discovery, `/v1` API, backup, graceful shutdown)
+- [x] CUBRID HA validated by POCs on real CUBRID 11.4 (formation, replication,
+      automatic failover, backup, restore) — see [docs/poc/RESULTS.md](./docs/poc/RESULTS.md)
+- [x] Operator HA role discovery + safety-first primary resolution
+- [ ] Broker tier and RW/RO routing
+- [ ] Node join / rejoin / rebuild
+- [ ] `CubridBackup` CR and object-storage backup workflow
+- [ ] Database-aware rolling update
+- [ ] Failure and E2E tests (Kind)
 
-Implementation is intentionally not started yet.
-Architecture and API boundaries are being defined before operator code is
-introduced. HA controller implementation starts only after the
-[P0 architecture decisions](./ROADMAP.md#phase-0--architecture-decisions)
-are accepted.
+The P0 architecture decisions are accepted and early operator code has landed.
+Remaining work is tracked in [ROADMAP.md](./ROADMAP.md) and the issue tracker.
 
 ## Documentation
 
