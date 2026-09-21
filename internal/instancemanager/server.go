@@ -22,6 +22,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"time"
 )
 
 // DefaultPort is the Instance Manager API port (ADR-0003).
@@ -37,6 +39,9 @@ type Server struct {
 	// store is the durable operation store; nil disables the async operation
 	// endpoints (so unit tests can construct a store-less server).
 	store *OperationStore
+	// objects uploads backups to S3-compatible storage; nil means a backup
+	// cannot complete (bare backupdb is never a false Completed, ADR-0007).
+	objects ObjectStore
 }
 
 func NewServer(cli CLI, token string) *Server {
@@ -48,6 +53,14 @@ func NewServer(cli CLI, token string) *Server {
 // chaining.
 func (s *Server) WithOperationStore(store *OperationStore) *Server {
 	s.store = store
+	return s
+}
+
+// WithObjectStore attaches the object-storage backend used to upload backups
+// and write the manifest completion marker (ADR-0007). Returns the server for
+// chaining.
+func (s *Server) WithObjectStore(objects ObjectStore) *Server {
+	s.objects = objects
 	return s
 }
 
@@ -146,25 +159,64 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 }
 
 // runBackup executes the backup in the background and records the durable state
-// transitions. A successful `backupdb` is NOT Completed on its own — upload +
-// manifest are a later PR, so a bare backup terminates as Failed with an
-// explicit reason rather than a false Completed (ADR-0003/0007).
+// transitions. A successful `backupdb` is NOT Completed on its own: the staged
+// output must upload and manifest.json (the atomic completion marker) must be
+// written before the operation reaches Completed. On any failure it terminates
+// Failed and removes the staging directory (ADR-0003/0007).
 func (s *Server) runBackup(id string, req BackupRequest) {
 	go func() {
 		ctx := context.Background()
+		fail := func(reason string) {
+			_, _ = s.store.Update(id, func(op *Operation) {
+				op.State = OpFailed
+				op.FailureReason = reason
+			})
+		}
+
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRunningBackup }); err != nil {
 			return
 		}
 		if _, err := Backup(ctx, s.cli, req); err != nil {
-			_, _ = s.store.Update(id, func(op *Operation) {
-				op.State = OpFailed
-				op.FailureReason = "backupdb failed: " + err.Error()
-			})
+			fail("backupdb failed: " + err.Error())
 			return
 		}
+		if s.objects == nil || req.Upload == nil {
+			fail("backupdb succeeded but no object-storage destination is configured")
+			return
+		}
+
+		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpUploading }); err != nil {
+			return
+		}
+		res, err := UploadBackup(ctx, s.objects, UploadSpec{
+			StagingDir: req.Destination,
+			Bucket:     req.Upload.Bucket,
+			Prefix:     req.Upload.Prefix,
+			Manifest: BackupManifest{
+				Database:       req.Database,
+				ClusterUID:     req.Upload.ClusterUID,
+				CubridVersion:  req.Upload.CubridVersion,
+				Level:          req.Level,
+				SourceInstance: req.Upload.SourceInstance,
+				SourceRole:     req.Upload.SourceRole,
+				CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+			},
+		})
+		if err != nil {
+			fail("upload failed: " + err.Error())
+			return
+		}
+		// Upload + manifest succeeded: remove staging, then mark Completed.
+		_ = os.RemoveAll(req.Destination)
 		_, _ = s.store.Update(id, func(op *Operation) {
-			op.State = OpFailed
-			op.FailureReason = "backupdb succeeded but object-storage upload is not yet implemented"
+			op.State = OpCompleted
+			op.Artifact = &OperationArtifact{
+				ManifestURI:    res.ManifestURI,
+				ManifestDigest: res.ManifestDigest,
+				SizeBytes:      res.SizeBytes,
+				Database:       req.Database,
+				Level:          req.Level,
+			}
 		})
 	}()
 }

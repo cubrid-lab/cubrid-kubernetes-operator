@@ -52,6 +52,22 @@ func run() error {
 		server = server.WithOperationStore(store)
 	}
 
+	// Object-storage credentials come only from the manager's env (never a
+	// request body); without an endpoint configured, a backup cannot complete.
+	if endpoint := os.Getenv("IM_S3_ENDPOINT"); endpoint != "" {
+		objects, err := instancemanager.NewMinioObjectStore(instancemanager.ObjectStoreConfig{
+			Endpoint:  endpoint,
+			AccessKey: os.Getenv("IM_S3_ACCESS_KEY"),
+			SecretKey: os.Getenv("IM_S3_SECRET_KEY"),
+			Region:    os.Getenv("IM_S3_REGION"),
+			Secure:    os.Getenv("IM_S3_INSECURE") != "true",
+		})
+		if err != nil {
+			return fmt.Errorf("init object store: %w", err)
+		}
+		server = server.WithObjectStore(objects)
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           server.Handler(),
