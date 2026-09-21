@@ -36,10 +36,12 @@ func unknown() RoleObservation {
 func unreach() RoleObservation { return RoleObservation{Reachable: false} }
 
 const (
-	c0         = "c-0"
-	c1         = "c-1"
-	c2         = "c-2"
-	incomplete = "PrimaryObservationIncomplete"
+	c0                = "c-0"
+	c1                = "c-1"
+	c2                = "c-2"
+	incomplete        = "PrimaryObservationIncomplete"
+	multiplePrimaries = "MultiplePrimariesObserved"
+	cubridVersion     = "11.4"
 )
 
 func TestResolvePrimary(t *testing.T) {
@@ -54,7 +56,7 @@ func TestResolvePrimary(t *testing.T) {
 		{"healthy single primary", map[string]RoleObservation{c0: master(), c1: slave(), c2: slave()},
 			metav1.ConditionTrue, "SinglePrimaryObserved", c0},
 		{"two masters -> not resolved", map[string]RoleObservation{c0: master(), c1: master(), c2: slave()},
-			metav1.ConditionFalse, "MultiplePrimariesObserved", ""},
+			metav1.ConditionFalse, multiplePrimaries, ""},
 		{"no master", map[string]RoleObservation{c0: slave(), c1: slave(), c2: slave()},
 			metav1.ConditionFalse, "NoPrimaryObserved", ""},
 		{"one unreachable -> incomplete (safety)", map[string]RoleObservation{c0: master(), c1: slave(), c2: unreach()},
@@ -64,7 +66,7 @@ func TestResolvePrimary(t *testing.T) {
 		{"missing member -> incomplete", map[string]RoleObservation{c0: master(), c1: slave()},
 			metav1.ConditionFalse, incomplete, ""},
 		{"multiple masters wins over incomplete", map[string]RoleObservation{c0: master(), c1: master(), c2: unreach()},
-			metav1.ConditionFalse, "MultiplePrimariesObserved", ""},
+			metav1.ConditionFalse, multiplePrimaries, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

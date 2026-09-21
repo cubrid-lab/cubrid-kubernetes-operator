@@ -195,6 +195,8 @@ func main() {
 	if err := (&controller.CubridBackupReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Prober: controller.NewHTTPRoleProber(os.Getenv("IM_TOKEN")),
+		Backup: controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "cubridbackup")
 		os.Exit(1)
