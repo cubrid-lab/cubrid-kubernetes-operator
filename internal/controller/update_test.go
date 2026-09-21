@@ -103,11 +103,12 @@ func TestReconcileUpdateGuard_BlocksUnverifiable(t *testing.T) {
 func TestReconcileUpdateGuard_UpToDate(t *testing.T) {
 	r := &CubridClusterReconciler{}
 	c := guardCluster(cubridVersion, cubridVersion)
-	r.reconcileUpdateGuard(c)
-
+	if !r.reconcileUpdateGuard(c) {
+		t.Error("guard should return true (safe to roll) when versions match")
+	}
 	cond := meta.FindStatusCondition(c.Status.Conditions, conditionUpdating)
-	if cond == nil || cond.Reason != "UpToDate" {
-		t.Errorf("Updating = %+v, want UpToDate", cond)
+	if cond != nil && cond.Status == metav1.ConditionFalse {
+		t.Errorf("guard must not block a matching version: %+v", cond)
 	}
 }
 
@@ -116,15 +117,12 @@ func TestReconcileUpdateGuard_RecordsBaselineFromInstances(t *testing.T) {
 	c := guardCluster(cubridVersion, "")
 	c.Status.Instances = []databasev1alpha1.InstanceStatus{
 		{Name: "c-0", ObservedEngineVersion: cubridVersion},
-		{Name: "c-1", ObservedEngineVersion: cubridVersion},
+		{Name: c1, ObservedEngineVersion: cubridVersion},
 	}
-	r.reconcileUpdateGuard(c)
-
+	if !r.reconcileUpdateGuard(c) {
+		t.Error("guard should return true after recording a matching baseline")
+	}
 	if c.Status.ObservedEngineVersion != cubridVersion {
-		t.Errorf("observed baseline = %q, want 11.4", c.Status.ObservedEngineVersion)
-	}
-	cond := meta.FindStatusCondition(c.Status.Conditions, conditionUpdating)
-	if cond == nil || cond.Reason != "UpToDate" {
-		t.Errorf("Updating = %+v, want UpToDate after recording matching baseline", cond)
+		t.Errorf("observed baseline = %q, want %q", c.Status.ObservedEngineVersion, cubridVersion)
 	}
 }

@@ -75,6 +75,7 @@ type CubridClusterReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -362,12 +363,13 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
 			setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, "BrokerReconcileFailed", err.Error())
 		}
+		// Rolling update (ADR-0009): only when the engine-version guard permits
+		// (no blocked upgrade / unverifiable version), roll outdated slaves one at
+		// a time, gated on the same primary resolution. Never during recovery.
+		if r.reconcileUpdateGuard(cluster) && !recoveryActive(cluster) {
+			r.reconcileRollingUpdate(ctx, cluster, sts, res)
+		}
 	}
-
-	// Engine-version detection guard (ADR-0009): record the observed baseline and
-	// block engine upgrades / unverifiable versions. This sets a condition only;
-	// it never deletes a pod.
-	r.reconcileUpdateGuard(cluster)
 
 	if err := r.Status().Update(ctx, cluster); err != nil {
 		if apierrors.IsConflict(err) {
