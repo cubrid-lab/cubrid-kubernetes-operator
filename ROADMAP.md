@@ -13,18 +13,18 @@ envtest, and the Kind E2E harness — may proceed in parallel.
 
 ## Phase 0 — Architecture Decisions
 
-**Status:** In Progress
+**Status:** Accepted
 
-- [ ] Existing Operator review
-- [ ] CUBRID HA semantic review
-- [ ] Broker architecture ADR (#3 / ADR-0002)
-- [ ] Instance Manager ADR (#10 / ADR-0003)
-- [ ] Backup execution POC / ADR (#7 / ADR-0007)
-- [ ] Restore semantic ADR (#8 / ADR-0008)
-- [ ] Failover / split-brain ADR (#5 / ADR-0005)
-- [ ] Join / rebuild ADR (#6 / ADR-0006)
-- [ ] Compatibility target
-- [ ] API group ownership decision (#20)
+- [x] Existing Operator review
+- [x] CUBRID HA semantic review
+- [x] Broker architecture ADR (#3 / ADR-0002)
+- [x] Instance Manager ADR (#10 / ADR-0003)
+- [x] Backup execution POC / ADR (#7 / ADR-0007)
+- [x] Restore semantic ADR (#8 / ADR-0008)
+- [x] Failover / split-brain ADR (#5 / ADR-0005)
+- [x] Join / rebuild ADR (#6 / ADR-0006)
+- [x] Compatibility target
+- [ ] API group ownership decision (#20) — pending (governance)
 
 ### Exit Criteria
 
@@ -37,6 +37,10 @@ StatefulSet, Service, or Instance Manager architecture.
 ---
 
 ## Phase 1 — Foundation
+
+**Status:** Done — Kubebuilder scaffold, `CubridCluster` v1alpha1 + CRD
+validation, single-node reconciliation (StatefulSet / Service / PVC),
+Conditions, envtest, Kind E2E skeleton, and CI are all merged.
 
 - Kubebuilder scaffold
 - leader election
@@ -54,6 +58,11 @@ StatefulSet, Service, or Instance Manager architecture.
 
 ## Phase 2 — CUBRID HA
 
+**Status:** Done — HA role discovery + safety-first status (ADR-0005), the
+in-pod Instance Manager (`/v1` API), the broker model (`-rw`/`-ro` tier,
+ADR-0002), current-master discovery, and failover observation are merged and
+POC-validated on real CUBRID 11.4.
+
 - 1 master + 2 slaves
 - HA configuration
 - stable DNS identity
@@ -69,6 +78,12 @@ StatefulSet, Service, or Instance Manager architecture.
 
 ## Phase 3 — Recovery Lifecycle
 
+**Status:** Done — slave rejoin/rebuild (ADR-0006), network-partition +
+split-brain detection (ADR-0005), and the pod-failure recovery path are
+merged and POC-validated (split-brain two-master divergence reproduced;
+`resolvePrimary()` refuses ambiguous primaries). Live multi-node E2E for
+write-under-failure is deferred to real-hardware validation.
+
 - Pod failure recovery
 - slave rejoin
 - PVC-loss rebuild
@@ -81,6 +96,11 @@ StatefulSet, Service, or Instance Manager architecture.
 
 ## Phase 4 — Backup / Recovery
 
+**Status:** Done — `CubridBackup` API + reconciler, Instance Manager backup
+execution (upload + versioned manifest, ADR-0007), object-storage artifact
+model, manifest trust/validation, and recovery-bootstrap
+(`spec.bootstrap.recovery` + `/v1/restore/prepare`, ADR-0008) are merged.
+
 - `CubridBackup`
 - backup execution implementation
 - artifact destination
@@ -91,6 +111,12 @@ StatefulSet, Service, or Instance Manager architecture.
 ---
 
 ## Phase 5 — Production Hardening
+
+**Status:** In Progress — rolling updates (engine-version guard + slaves-first
+`OnDelete` sequencing, ADR-0009), observability (metrics + Events), and
+security hardening (PSS restricted, bearer-token auth) are merged. PDB object,
+topology spread, storage expansion, retention, compatibility CI matrix, and
+live-hardware E2E remain.
 
 - PDB
 - topology spread
@@ -105,19 +131,21 @@ StatefulSet, Service, or Instance Manager architecture.
 
 ## Implementation Gate
 
-Full HA controller implementation does not start until:
+The gate below required all P0 ADRs accepted before the HA controller
+implementation started. It is now **satisfied** — every ADR is Accepted and
+the corresponding implementation is merged:
 
 ```text
-[ ] #1 HA topology
-[ ] #2 database model
-[ ] #3 Broker architecture
-[ ] #4 hostname/DNS
-[ ] #5 failover/split-brain
-[ ] #6 join/rebuild
-[ ] #7 backup POC
-[ ] #8 restore semantics
-[ ] #9 update/upgrade
-[ ] #10 Instance Manager
+[x] #1 HA topology
+[x] #2 database model
+[x] #3 Broker architecture
+[x] #4 hostname/DNS
+[x] #5 failover/split-brain
+[x] #6 join/rebuild
+[x] #7 backup POC
+[x] #8 restore semantics
+[x] #9 update/upgrade
+[x] #10 Instance Manager
 ```
 
 Kubebuilder scaffold, CI, envtest, and Kind harness construction may
