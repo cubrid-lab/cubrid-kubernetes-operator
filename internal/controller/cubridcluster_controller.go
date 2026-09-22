@@ -79,10 +79,11 @@ type CubridClusterReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile drives the CubridCluster toward its desired state. Phase 1 scope:
-// a headless governing Service and a StatefulSet with a data PVC template, plus
-// Ready/Progressing Conditions. HA role discovery, broker tier, backup/restore,
-// and failover are later phases (see the accepted ADRs).
+// Reconcile drives the CubridCluster toward its desired state: a headless
+// governing Service and a StatefulSet with a data PVC template; HA role
+// discovery + safety-first status (ADR-0005); the broker tier (ADR-0002);
+// recovery-bootstrap orchestration (ADR-0008); and the engine-version guard +
+// slaves-first rolling update (ADR-0009).
 func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 

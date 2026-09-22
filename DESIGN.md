@@ -861,14 +861,16 @@ Possible conditions:
 
 These use `metav1.Condition`.
 
-### Phase 1 status (#14)
+### Implementation status (#14)
 
 Implemented: Pod `readinessProbe`/`livenessProbe` hit the Instance Manager
 `/readyz` / `/livez` (port 9090, ADR-0003) — Pod readiness reflects
 DB-instance readiness only. `HAReady` is a **separate** cluster Condition,
-never wired into Pod readiness. HA role discovery lands in Phase 2, so
-`HAReady` is reported `Unknown` (reason `HADiscoveryNotImplemented`) while
-HA is enabled.
+never wired into Pod readiness. HA role discovery is implemented (the
+reconciler polls each member's `/v1/role` and aggregates safety-first,
+ADR-0005): when a role prober is configured `HAReady` reflects the resolved
+primary; when none is configured it is `Unknown` (reason
+`RoleDiscoveryDisabled`).
 
 ---
 
@@ -1164,7 +1166,7 @@ storage:
 
 Decision: #17.
 
-### Phase 1 status (#17)
+### Implementation status (#17)
 
 Implemented: a single `data` volume per instance (RWO, per-ordinal PVC via
 the StatefulSet `volumeClaimTemplate`, `storageClassName` from
@@ -1372,16 +1374,17 @@ Events are generated for important lifecycle transitions and conditions
 changes, so that failover, rebuild, and recovery are auditable through
 `kubectl describe` alone.
 
-### Phase 1 status (#23)
+### Implementation status (#23)
 
 Implemented: custom gauges registered on the controller-runtime metrics
 registry (exposed on the manager's metrics endpoint) —
 `cubrid_cluster_ready`, `cubrid_cluster_instances`,
 `cubrid_cluster_instances_ready` (labels: `namespace`, `cluster`). The
 reconciler emits Kubernetes Events via an `EventRecorder`
-(`ClusterReady` Normal; reconcile-failure Warnings). Role/HA/failover/
-backup/restore metrics and their Events land with the corresponding
-phases (ADR-0003/0005/0006/0007/0008).
+(`ClusterReady` Normal; reconcile-failure Warnings). Role/HA/failover and
+backup/restore observation are implemented in the reconciler and Instance
+Manager (ADR-0003/0005/0006/0007/0008); richer per-operation metrics remain
+an incremental extension.
 
 Decision: #23.
 
@@ -1406,7 +1409,7 @@ Production defaults:
 The operator should avoid requiring `pods/exec` privileges wherever
 possible.
 
-### Phase 1 status (#18)
+### Implementation status (#18)
 
 Implemented: DB pods run under **Pod Security Standards "restricted"** —
 `runAsNonRoot`, `allowPrivilegeEscalation: false`, `seccompProfile:
@@ -1414,9 +1417,11 @@ RuntimeDefault` (pod + container), and all Linux capabilities dropped
 (`drop: ["ALL"]`). The operator does not use `pods/exec` (role discovery
 and DB-local ops go through the Instance Manager, ADR-0003).
 Secrets are referenced (`dbaPasswordSecretRef`, restore
-`storageSecretRef`), never inlined. Instance Manager authN/mTLS,
-NetworkPolicy, and least-privilege object-storage credentials land with
-the Instance Manager and backup phases (ADR-0003/0007).
+`storageSecretRef`), never inlined. The Instance Manager authenticates
+`/v1` endpoints with a bearer token (loopback-exempt for the preStop path,
+ADR-0003), and object-storage credentials come from the manager's env,
+never a request body. mTLS, NetworkPolicy, and finer-grained least-privilege
+credentials remain incremental hardening (ADR-0003/0007).
 
 Decision: #18.
 
