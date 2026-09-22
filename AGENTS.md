@@ -63,6 +63,11 @@ Every issue MUST carry exactly one `priority:` label and one `size:` label.
 
 Do NOT use flat priority labels like `P0`/`P1`/`P2` — the scoped `priority:` scheme is the source of truth. Add both labels when opening an issue.
 
+Each issue SHOULD also carry one `phase:` label classifying which roadmap stage
+the work belongs to (a classification, not a status — status lives only in
+`ROADMAP.md`):
+- **Phase**: `phase: 0-decisions` | `phase: 1-foundation` | `phase: 2-ha` | `phase: 3-recovery` | `phase: 4-backup` | `phase: 5-hardening`
+
 ## After Making Changes
 
 **After editing `*_types.go` or markers:**
