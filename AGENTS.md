@@ -77,6 +77,16 @@ make lint-fix   # Auto-fix code style
 make test       # Run unit tests
 ```
 
+**When a feature graduates from planned to implemented:**
+Keep status in ONE place (`ROADMAP.md`) — never embed mutable project-phase
+status ("Phase N", "later phase", "not implemented yet") in code docstrings or
+`DESIGN.md` prose. Code comments describe present behavior, invariants, and
+non-obvious choices only. When a PR ships a previously-planned feature, grep the
+docs for the feature name plus `later phase`, `not implemented`, `Phase`, `TODO`,
+and any old status-bearing strings (e.g. a renamed condition reason) and fix
+them in the same PR — stale "not implemented" docs cause duplicate work and
+break runbooks/alerts that reference the old strings.
+
 ## CLI Commands Cheat Sheet
 
 ### Create API (your own types)
