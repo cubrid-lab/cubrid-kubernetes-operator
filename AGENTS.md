@@ -113,6 +113,50 @@ title becomes the commit title. The `PR title` check enforces it.
 
 Preserve actual contributor authorship and existing credits.
 
+## Working on an Issue
+
+Follow [CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow).
+In short:
+
+1. Pick a sub-issue sized `size: S` or `size: M`. A `size: L` issue is a
+   tracking issue: do not implement it directly. Read the issue's "Depends on"
+   and "Where to look" sections first, and check for an open PR on the same
+   issue.
+2. State the expected result and what must never happen before changing code.
+3. Write the smallest failing test, and confirm it fails for the intended
+   reason. A compile error, a missing dependency or a broken environment is
+   not a valid failing test.
+4. Implement, refactor, then run the related tests.
+5. If the behavior needs a real database or a real failure, verify it there.
+   Never report a unit or envtest pass as real-cluster validation.
+6. If CUBRID's behavior is unknown, do not invent it in a mock. Run a small
+   POC, record the observation in `docs/poc/`, then write the test.
+
+Documentation-only, license-only and generated-file-only changes do not need a
+failing test. Do not rewrite working code or existing tests only to follow
+this order.
+
+**One PR, one behavior change**, with its tests and documentation. If the work
+will take more than two days, stop and split the issue at a boundary that can
+be verified on its own.
+
+**In the PR**, fill in the "Validation Evidence" section of the template:
+issue and scenario IDs, the expected behavior and its source, the test level
+(unit / envtest / real database on Kind / VM lab), the failing-test evidence,
+the passing-test evidence, the environment, and what remains unverified. Use
+`Closes #N` for the sub-issue and `Refs #M` for its tracking issue. Never
+close a tracking issue from a PR.
+
+**Report honestly.** Say which checks were not run and why. A scenario that
+was skipped, blocked or not run is never described as passed, and an unknown
+measurement is never reported as zero.
+
+**Safety contract.** Do not change these without amending the ADR first
+(`docs/adr/0005-failover-split-brain.md`): CUBRID performs failover; the
+Operator never promotes a member on incomplete observations, never treats
+ordinal 0 as the permanent master, and never picks a winner between diverged
+data sets.
+
 ## After Making Changes
 
 **After editing `*_types.go` or markers:**

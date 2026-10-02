@@ -40,12 +40,28 @@ See CONTRIBUTING.md#pull-request-and-commit-titles.
 
 ## Validation Evidence
 
-Head SHA, commands actually run and results (with CI links):
+<!-- Fill in what applies. For documentation-only, license-only or generated-file-only changes, write "n/a" where a field does not apply. -->
 
-Checks not run and reasons:
+Scenario IDs (S00-S17), if any:
+
+Expected behavior and where the expectation comes from (ADR, CUBRID 11.4 documentation, or POC result):
+
+Test level (unit / envtest / real database on Kind / VM lab):
+
+Failing-test evidence (baseline revision, command, the relevant failure):
+
+Passing-test evidence (tested head SHA, command, result, CI link):
+
+Environment, engine version and image digest, where they apply:
+
+Checks not run, with reasons:
+
+Behavior that remains unverified, with a linked follow-up:
+
+Reason the test was not written first, if that applies:
 
 Optional AI review (tool/findings; separate from executed tests):
 
 ## Related Issues
 
-<!-- Closes #123 / Refs #456. Issue numbers go here, not in the PR title. -->
+<!-- Closes #123 for the issue this PR finishes. Refs #456 for its tracking issue. Issue numbers go here, not in the PR title. -->

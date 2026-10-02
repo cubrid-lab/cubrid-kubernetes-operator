@@ -46,6 +46,40 @@ make run &                   # run the operator
 kubectl apply -f config/samples/
 ```
 
+## Development workflow
+
+Work starts from an issue. Tracking issues (`size: L`) only link to their
+sub-issues; pick a sub-issue sized `S` or `M`, read its "Depends on" section,
+and check that nobody has an open PR for it.
+
+For a change in behavior, follow this order:
+
+1. **Agree on the expected result.** State what should happen and what must
+   never happen. For a failure or recovery scenario, use the scenario contract
+   (scenario IDs `S00` to `S17`).
+2. **Write the smallest failing test** for the bug or the new behavior.
+3. **Check that it fails for the intended reason.** A compile error, a missing
+   dependency or a broken environment does not prove anything.
+4. **Implement** until the test passes.
+5. **Refactor**, then run the related regression tests.
+6. **Verify on a real environment** when the behavior needs a real database or
+   a real failure. A unit or envtest pass does not replace that.
+
+When CUBRID's behavior is not known, do not guess it in a mock. Run a small
+time-limited POC, record what was observed in `docs/poc/`, decide what the
+Operator will support, and only then write the test and the implementation.
+
+This order is not required for changes that touch only documentation, the
+license or generated files. If writing the test first is not practical for a
+code change, say why in the PR and describe how the change was verified
+instead. A separate failing commit, a deliberately broken shared CI run and
+100% coverage are not required. Keep and extend existing tests; do not rewrite
+working code only to say it was developed test-first.
+
+The author of a change writes its tests. The reviewer checks the expected
+results against the agreed contract and independent evidence, not only against
+the implementation.
+
 ## Pull requests
 
 - One logical change per PR; keep the diff focused and explain the motivation
@@ -62,6 +96,11 @@ kubectl apply -f config/samples/
   change.
 - Reference the issue in the PR body (`Closes #123` / `Refs #123`), not in the
   title.
+- Close a sub-issue from its PR with `Closes #123`, and refer to its tracking
+  issue with `Refs #45`. A tracking issue is closed by a maintainer after its
+  sub-issues are done and the integrated validation is confirmed.
+- Fill in the "Validation Evidence" section of the PR template. Keep what was
+  implemented separate from what was validated on a real cluster.
 - Preserve contributor authorship; add tool attribution only when that tool
   actually produced a commit.
 
@@ -154,11 +193,26 @@ When filing a bug, include:
 
 ## Testing expectations
 
+Use the smallest test level that can prove the behavior, and say in the PR
+which level was used.
+
+| Level | What it can prove | What it cannot prove alone |
+|-------|-------------------|----------------------------|
+| Unit | State decisions, parsing, validation, retry and operation rules | Real engine or network behavior |
+| envtest | API validation and the Kubernetes resources the controller creates | Pod execution, scheduling or database recovery |
+| Real database on Kind | Installation, SQL, replication, backup and restore working together | What happens when a real VM fails |
+| VM lab | The supported topology, VM failures and controlled network faults | Resilience across physical zones or a whole provider |
+
 - API/validation changes: add envtest assertions (including CEL-rejection
   cases where relevant).
 - Reconciler changes: assert the created/updated resources and Conditions.
 - Behavior visible to a user: verify it on a real cluster (kind/minikube), not
   only envtest.
+- Recovery is judged with SQL and data, not with Pod readiness or Conditions
+  alone.
+- A measurement that could not be taken is reported as unknown, never as zero.
+- `make test-e2e` runs only against an isolated Kind cluster. Runs on the VM
+  lab are started explicitly and one at a time.
 
 ## License and DCO
 
