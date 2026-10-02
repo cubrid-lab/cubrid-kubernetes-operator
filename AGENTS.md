@@ -56,17 +56,62 @@ Always use `kubebuilder create api` and `kubebuilder create webhook` to scaffold
 The e2e tests are designed to validate the solution in an isolated environment (similar to GitHub Actions CI).
 Ensure you run them against a dedicated [Kind](https://kind.sigs.k8s.io/) cluster (not your “real” dev/prod cluster).
 
-### Issue Labels
-Every issue MUST carry exactly one `priority:` label and one `size:` label.
-- **Priority**: `priority: critical` | `priority: high` | `priority: medium`
-- **Size**: `size: XS` (<1h) | `size: S` (hours) | `size: M` (1-2 days) | `size: L` (multi-day)
+### Issue Labeling (cubrid-lab org standard)
+Write GitHub issues, PRs and comments in English.
 
-Do NOT use flat priority labels like `P0`/`P1`/`P2` — the scoped `priority:` scheme is the source of truth. Add both labels when opening an issue.
+Every issue MUST carry exactly one `priority: <value>` label and exactly one
+`size: <value>` label, alongside a type label
+(`bug`/`enhancement`/`documentation`/`testing`/`chore`/`ci`/…). These must be
+GitHub labels, not just text in the issue title or body. Agents and workflows
+creating issues through CLI/API must supply the canonical title and labels at
+creation.
+
+Use the following exact names, with **one space after the colon**:
+
+- **Priority**: `priority: critical` | `priority: high` | `priority: medium` | `priority: low`
+- **Size**: `size: XS` | `size: S` | `size: M` | `size: L` | `size: XL`
+
+Do NOT introduce variants such as `priority:high`, `priority-high`, `P0`/`P1`/`P2`
+or `size:S`. Reuse the repository's canonical labels; if a required label is
+missing, create it with the exact name above before filing the issue.
+
+| Label | Meaning | Rough guide |
+|-------|---------|-------------|
+| `size: XS` | Trivial change | < ~10 lines; single-file typo/config/one-liner |
+| `size: S` | Small change | One Go file or one focused function; a single test or doc page |
+| `size: M` | Medium change | A few files in one package; a new `_test.go` suite, a bug fix with a regression test, a CI job |
+| `size: L` | Large change | Cross-cutting change across packages (API types + controller + Instance Manager); split into independently reviewable PRs |
+| `size: XL` | Very large | Consider splitting into smaller issues before starting |
+
+Generated output (`**/zz_generated.*.go`, `config/crd/bases/*`, `config/rbac/role.yaml`)
+does not count toward size; estimate from the hand-written change.
+
+Rules:
+
+1. **Size reflects effort, not importance** — a one-line fix for a critical bug is still `size: XS`.
+2. **Assign both `priority:` and `size:` at creation.** If scope or impact is
+   uncertain, use a provisional estimate, explain the uncertainty in the body,
+   and add `status: needs triage`. Refine the estimates during triage rather
+   than omitting either required label.
+3. **`good first issue` should be `size: XS` or `size: S`.**
+4. **`size: XL` is a signal to split**, not a green light to start a sprawling change.
 
 Each issue SHOULD also carry one `phase:` label classifying which roadmap stage
 the work belongs to (a classification, not a status — status lives only in
 `ROADMAP.md`):
 - **Phase**: `phase: 0-decisions` | `phase: 1-foundation` | `phase: 2-ha` | `phase: 3-recovery` | `phase: 4-backup` | `phase: 5-hardening`
+
+### Issue, PR and Commit Titles
+Issue titles, pull request titles and commit subjects follow
+[CONTRIBUTING.md - Pull request and commit titles](CONTRIBUTING.md#pull-request-and-commit-titles):
+`type(scope)!: description` with types `feat`, `fix`, `docs`, `test`, `perf`,
+`refactor`, `ci`, `build`, `chore`, `style`, `revert`; English, lowercase start
+unless the first word is an API name, acronym, or proper noun; no trailing
+period, no issue numbers in pull request titles (use `Closes #N` /
+`Refs #N` in the body). Pull requests are squash-merged and the pull request
+title becomes the commit title. The `PR title` check enforces it.
+
+Preserve actual contributor authorship and existing credits.
 
 ## After Making Changes
 
