@@ -212,6 +212,31 @@ binary path); the `/v1/` API surface (endpoint names, role enum, operation
 status enum, error schema); the named port `instance-manager: 9090`; the
 durable state directory; strict `unknown` role semantics.
 
+### Pod runtime contract (#97, #98)
+
+What the operator puts in the DB Pod and the Instance Manager image's
+entrypoint reads. Changing any of these needs both sides changed together.
+
+| Item | Value |
+|---|---|
+| Image | `spec.image` if set, else the operator's `--instance-manager-image` (default `cubrid-operator/instance-manager:dev`) |
+| User | UID/GID 1000 (the official image's `cubrid` user), `fsGroup` 1000 so the data PVC is writable |
+| Data volume | the `data` PVC at `/var/lib/cubrid` |
+| `CUBRID_DATABASES` | `/var/lib/cubrid/databases`, on the PVC (the image's own default is an anonymous volume) |
+| `CUBRID_DB` | the cluster's first database |
+| `CUBRID_COMPONENTS` | `SERVER` for one member; `HA` otherwise, refined by the HA bootstrap (#106) |
+| `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
+| `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
+
+The operator reads its own token from `IM_TOKEN`, set from the Secret
+`instance-manager-token` in its namespace, and copies it into each cluster's
+`<cluster>-im-token` Secret (owned by the cluster). Operator and DB Pods may
+live in different namespaces, so one Secret cannot be mounted into both. With
+no operator token the Instance Manager would accept any caller, so the operator
+creates no DB Pods and reports `Ready=False`, reason `InstanceManagerTokenMissing`.
+A Pod reads the token when it starts; a changed token reaches running Pods only
+when they are replaced.
+
 The concrete `/v1/` request/response, operation-status enum, and error
 schemas are **not yet defined** and are **POC-gated**: they are drafted
 and validated during the POC before being frozen. Every mutating command

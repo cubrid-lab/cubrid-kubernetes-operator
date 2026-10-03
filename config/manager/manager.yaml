@@ -65,6 +65,18 @@ spec:
           - --health-probe-bind-address=:8081
         image: controller:latest
         name: manager
+        env:
+        # The Instance Manager token (ADR-0003). The operator copies it into each
+        # cluster's <cluster>-im-token Secret for the DB Pods, and creates no DB
+        # Pods while it is unset. Create it with:
+        #   kubectl -n <operator namespace> create secret generic instance-manager-token \
+        #     --from-literal=token="$(openssl rand -hex 32)"
+        - name: IM_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: instance-manager-token
+              key: token
+              optional: true
         ports:
         - containerPort: 8081
           name: health

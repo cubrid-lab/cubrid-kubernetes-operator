@@ -48,6 +48,19 @@ const (
 	// instanceManagerPort is the Instance Manager HTTP API port (ADR-0003).
 	instanceManagerPort = 9090
 
+	// Pod runtime contract with the Instance Manager image (ADR-0003, #97/#98).
+	//
+	// DefaultInstanceManagerImage is used when neither spec.image nor the
+	// operator's --instance-manager-image setting names an image.
+	DefaultInstanceManagerImage = "cubrid-operator/instance-manager:dev"
+	// dataMountPath is where the data PVC is mounted; CUBRID_DATABASES points
+	// below it so databases live on the PVC, not in the image's own volume.
+	dataMountPath = "/var/lib/cubrid"
+	// cubridUID is the cubrid user and group of the official CUBRID image.
+	cubridUID int64 = 1000
+	// imTokenKey is the key of the Instance Manager token in <cluster>-im-token.
+	imTokenKey = "token"
+
 	// Condition types (ADR-0005/0006).
 	conditionReady       = "Ready"
 	conditionProgressing = "Progressing"
@@ -66,6 +79,14 @@ type CubridClusterReconciler struct {
 	// Restore is nil-safe: nil skips recovery-bootstrap orchestration
 	// (BootstrapReady=False/RestoreClientNotConfigured).
 	Restore RestoreClient
+	// IMToken is the Instance Manager bearer token the operator itself uses. It
+	// is copied into each cluster's <cluster>-im-token Secret for the DB Pods.
+	// Empty means the operator is not configured: no DB Pods are created,
+	// because an Instance Manager without a token accepts any caller.
+	IMToken string
+	// DefaultImage is the DB Pod image when spec.image is not set; empty falls
+	// back to DefaultInstanceManagerImage.
+	DefaultImage string
 }
 
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters,verbs=get;list;watch;create;update;patch;delete
@@ -75,6 +96,7 @@ type CubridClusterReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
@@ -98,6 +120,20 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.reconcileHeadlessService(ctx, &cluster); err != nil {
 		log.Error(err, "Failed to reconcile headless Service")
 		return r.failed(ctx, &cluster, "ServiceReconcileFailed", err)
+	}
+
+	// The DB Pods authenticate the operator with a shared token (ADR-0003).
+	// Without one the Instance Manager would accept any caller, so refuse to
+	// create DB Pods until the operator is configured.
+	if r.IMToken == "" {
+		msg := "the operator has no Instance Manager token (IM_TOKEN); DB Pods are not created"
+		setCondition(&cluster, conditionReady, metav1.ConditionFalse, "InstanceManagerTokenMissing", msg)
+		r.event(&cluster, corev1.EventTypeWarning, "InstanceManagerTokenMissing", msg)
+		return ctrl.Result{}, r.Status().Update(ctx, &cluster)
+	}
+	if err := r.reconcileIMTokenSecret(ctx, &cluster); err != nil {
+		log.Error(err, "Failed to reconcile Instance Manager token Secret")
+		return r.failed(ctx, &cluster, "SecretReconcileFailed", err)
 	}
 
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
@@ -143,6 +179,25 @@ func (r *CubridClusterReconciler) reconcileHeadlessService(ctx context.Context, 
 			{Name: "manager", Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
 		}
 		return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
+	})
+	return err
+}
+
+func imTokenSecretName(cluster string) string { return cluster + "-im-token" }
+
+// reconcileIMTokenSecret keeps <cluster>-im-token equal to the operator's token,
+// so the cluster's DB Pods and the operator authenticate with the same value.
+// A Pod reads the token when it starts; a changed token reaches running Pods
+// only when they are replaced.
+func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cluster *databasev1alpha1.CubridCluster) error {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: imTokenSecretName(cluster.Name), Namespace: cluster.Namespace},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		secret.Labels = labelsFor(cluster)
+		secret.Type = corev1.SecretTypeOpaque
+		secret.Data = map[string][]byte{imTokenKey: []byte(r.IMToken)}
+		return controllerutil.SetControllerReference(cluster, secret, r.Scheme)
 	})
 	return err
 }
@@ -208,7 +263,10 @@ func (r *CubridClusterReconciler) dataPVCTemplate(cluster *databasev1alpha1.Cubr
 }
 
 func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluster) corev1.PodSpec {
-	image := "cubrid/cubrid:11.4"
+	image := r.DefaultImage
+	if image == "" {
+		image = DefaultInstanceManagerImage
+	}
 	if cluster.Spec.Image != nil && cluster.Spec.Image.Repository != "" {
 		image = cluster.Spec.Image.Repository
 		if cluster.Spec.Image.Tag != "" {
@@ -218,16 +276,25 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 	runAsNonRoot := true
 	noPrivEscalation := false
 	gracePeriod := int64(120)
+	uid := cubridUID
+	fsGroupPolicy := corev1.FSGroupChangeOnRootMismatch
 	return corev1.PodSpec{
 		// terminationGracePeriodSeconds >= 120s for ordered HA shutdown (ADR-0003).
 		TerminationGracePeriodSeconds: &gracePeriod,
 		SecurityContext: &corev1.PodSecurityContext{
-			RunAsNonRoot:   &runAsNonRoot,
-			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+			RunAsNonRoot: &runAsNonRoot,
+			// The official image's user is root; run as its cubrid user instead,
+			// and let fsGroup make the data PVC writable by that user.
+			RunAsUser:           &uid,
+			RunAsGroup:          &uid,
+			FSGroup:             &uid,
+			FSGroupChangePolicy: &fsGroupPolicy,
+			SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
 		Containers: []corev1.Container{{
 			Name:      appName,
 			Image:     image,
+			Env:       instanceManagerEnv(cluster),
 			Resources: cluster.Spec.Resources,
 			// preStop triggers the ADR-0003 ordered graceful shutdown via the
 			// local Instance Manager (loopback is token-exempt).
@@ -254,7 +321,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 				FailureThreshold:    3,
 			},
 			VolumeMounts: []corev1.VolumeMount{
-				{Name: "data", MountPath: "/var/lib/cubrid"},
+				{Name: "data", MountPath: dataMountPath},
 			},
 			// Pod Security Standards "restricted" (#18).
 			SecurityContext: &corev1.SecurityContext{
@@ -264,6 +331,37 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 				Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 			},
 		}},
+	}
+}
+
+// instanceManagerEnv is the environment the Instance Manager image's
+// entrypoint reads (build/instance-manager/entrypoint.sh, ADR-0003).
+func instanceManagerEnv(cluster *databasev1alpha1.CubridCluster) []corev1.EnvVar {
+	db := ""
+	if len(cluster.Spec.Databases) > 0 {
+		db = cluster.Spec.Databases[0].Name
+	}
+	// A single member runs a plain server. HA members are started by the HA
+	// bootstrap (#106), which sets their role.
+	components := "SERVER"
+	if cluster.Spec.Topology.PromotableMembers > 1 {
+		components = "HA"
+	}
+	// In recovery the database comes from a backup (ADR-0008): the entrypoint
+	// must not create an empty one first.
+	bootstrap := "new"
+	if cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Recovery != nil {
+		bootstrap = "recovery"
+	}
+	return []corev1.EnvVar{
+		{Name: "CUBRID_DB", Value: db},
+		{Name: "CUBRID_DATABASES", Value: dataMountPath + "/databases"},
+		{Name: "CUBRID_COMPONENTS", Value: components},
+		{Name: "CUBRID_BOOTSTRAP", Value: bootstrap},
+		{Name: "IM_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: imTokenSecretName(cluster.Name)},
+			Key:                  imTokenKey,
+		}}},
 	}
 }
 
@@ -411,6 +509,7 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.Secret{}).
 		Named("cubridcluster").
 		Complete(r)
 }

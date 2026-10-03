@@ -115,6 +115,7 @@ var _ = Describe("CubridCluster Controller", func() {
 				Client:   k8sClient,
 				Scheme:   k8sClient.Scheme(),
 				Recorder: record.NewFakeRecorder(10),
+				IMToken:  testIMToken,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -280,7 +281,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 
 			restore := &fakeRestoreClient{}
-			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore}
+			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore, IMToken: testIMToken}
 			key := types.NamespacedName{Name: "recovery-run", Namespace: ns}
 
 			By("starting the restore on the initial master and gating Ready")

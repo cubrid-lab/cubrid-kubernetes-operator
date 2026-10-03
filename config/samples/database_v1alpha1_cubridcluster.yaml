@@ -1,3 +1,6 @@
+# A single-member CubridCluster (ADR-0001: HA disabled, one promotable member).
+# The operator needs its Instance Manager token Secret before it creates DB Pods;
+# see config/manager/manager.yaml.
 apiVersion: database.cubrid.io/v1alpha1
 kind: CubridCluster
 metadata:
@@ -6,4 +9,14 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: cubridcluster-sample
 spec:
-  # TODO(user): Add fields here
+  version: "11.4"
+  databases:
+    - name: appdb
+  topology:
+    promotableMembers: 1
+    readReplicas: 0
+  highAvailability:
+    enabled: false
+  storage:
+    data:
+      size: 1Gi

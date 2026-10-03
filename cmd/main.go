@@ -60,12 +60,15 @@ func main() {
 	var webhookPort int
 	var enableLeaderElection bool
 	var probeAddr string
+	var instanceManagerImage string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.StringVar(&instanceManagerImage, "instance-manager-image", controller.DefaultInstanceManagerImage,
+		"The DB Pod image (CUBRID with the Instance Manager) when a CubridCluster does not set spec.image.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -186,9 +189,11 @@ func main() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		//nolint:staticcheck // v0.25 GetEventRecorder returns an events/v1 interface incompatible with record.EventRecorder.
-		Recorder: mgr.GetEventRecorderFor("cubridcluster-controller"),
-		Prober:   controller.NewHTTPRoleProber(os.Getenv("IM_TOKEN")),
-		Restore:  controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
+		Recorder:     mgr.GetEventRecorderFor("cubridcluster-controller"),
+		Prober:       controller.NewHTTPRoleProber(os.Getenv("IM_TOKEN")),
+		Restore:      controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
+		IMToken:      os.Getenv("IM_TOKEN"),
+		DefaultImage: instanceManagerImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "cubridcluster")
 		os.Exit(1)

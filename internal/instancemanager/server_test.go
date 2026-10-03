@@ -80,6 +80,10 @@ func TestServer_Role_RequiresToken(t *testing.T) {
 	if rr := doReq(t, h, "/v1/role", "", testRemoteAddr); rr.Code != http.StatusUnauthorized {
 		t.Errorf("/v1/role no-token = %d, want 401", rr.Code)
 	}
+	// remote with a wrong token -> 401: a present but different token is not accepted
+	if rr := doReq(t, h, "/v1/role", "not-the-token", testRemoteAddr); rr.Code != http.StatusUnauthorized {
+		t.Errorf("/v1/role wrong-token = %d, want 401", rr.Code)
+	}
 	// remote with token -> 200, parsed master
 	rr := doReq(t, h, "/v1/role", "tok", testRemoteAddr)
 	if rr.Code != http.StatusOK {
