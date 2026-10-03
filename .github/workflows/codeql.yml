@@ -1,0 +1,30 @@
+name: CodeQL Security Analysis
+
+# Code scanning (#131). Uses the cubrid-lab reusable workflow at the same
+# revision pycubrid pins. GitHub detects two scannable languages here: Go for the
+# operator and Instance Manager, and the workflow files themselves.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 0 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  go:
+    name: Analyze (go)
+    uses: cubrid-lab/.github/.github/workflows/codeql.yml@f7d8c0f6c28392c10306f367de38b40f13eed4b7
+    with:
+      language: go
+
+  actions:
+    name: Analyze (actions)
+    uses: cubrid-lab/.github/.github/workflows/codeql.yml@f7d8c0f6c28392c10306f367de38b40f13eed4b7
+    with:
+      language: actions
