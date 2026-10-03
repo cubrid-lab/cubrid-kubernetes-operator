@@ -59,6 +59,23 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+.PHONY: verify
+verify: manifests generate fmt ## Fail if generated files, formatting or go.mod/go.sum differ from what is committed.
+	go mod tidy
+	@# Regenerating rewrites the boilerplate year (YEAR defaults to the current
+	@# year), so a header that differs only in its copyright year is ignored;
+	@# otherwise every PR would fail each January.
+	@git diff --exit-code -I'^Copyright [0-9]{4}\.$$' || { \
+		echo "error: the files above differ from what is committed. Run 'go mod tidy' and 'make manifests generate fmt', then commit the result." >&2; \
+		exit 1; }
+	@# git diff does not see files that controller-gen creates for a new type.
+	@untracked="$$(git ls-files --others --exclude-standard -- api config)"; \
+	if [ -n "$$untracked" ]; then \
+		echo "$$untracked"; \
+		echo "error: the generated files above are not committed." >&2; \
+		exit 1; \
+	fi
+
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
