@@ -27,3 +27,10 @@ jobs:
         run: |
           go mod tidy
           make test
+
+      # make test regenerates CRDs, RBAC and DeepCopy and runs go fmt, and the
+      # step above runs go mod tidy, all in this workspace. Without this check a
+      # PR with stale generated files or an untidy go.mod passed, because CI
+      # quietly fixed its own copy (#104).
+      - name: Verify generated files and go.mod are committed
+        run: make verify

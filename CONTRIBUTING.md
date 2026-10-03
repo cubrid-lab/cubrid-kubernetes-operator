@@ -68,6 +68,7 @@ make build        # compile
 make test         # unit + envtest (downloads envtest binaries on first run)
 make lint         # golangci-lint
 make manifests generate   # regenerate CRDs/RBAC/DeepCopy after API changes
+make verify      # fail if generated files, formatting or go.mod/go.sum are not committed (CI runs this)
 make run          # run the operator against your current kubecontext
 make test-e2e     # Kind-based e2e (isolated cluster)
 ```
@@ -148,14 +149,19 @@ the implementation.
 
 - One logical change per PR; keep the diff focused and explain the motivation
   in the PR description.
-- `make build`, `make test`, and `make lint` must pass (`make lint-fix` applies
-  gofmt/golangci-lint fixes); CI runs Lint, Tests, and E2E. Report the commands actually run with their results, and the checks
+- `make build`, `make test`, `make lint` and `make verify` must pass
+  (`make lint-fix` applies gofmt/golangci-lint fixes); CI runs Lint, Tests
+  (which includes `make verify`), and E2E. Report the commands actually run with their results, and the checks
   not run with reasons.
 - Add or update tests for behavior changes.
 - After editing `*_types.go` or kubebuilder markers, run
   `make manifests generate` and commit the regenerated files in the same PR.
 - After changing imports or dependencies, run `go mod tidy` and commit
   `go.mod`/`go.sum`.
+- `make verify` checks both rules above: it regenerates, formats and tidies,
+  then fails if anything differs from what is committed. A header that
+  differs only in its copyright year is ignored. It compares against your
+  working tree, so run it on a clean checkout or after committing.
 - Update the relevant ADR/`DESIGN.md`/`ROADMAP.md` when behavior or decisions
   change.
 - Reference the issue in the PR body (`Closes #123` / `Refs #123`), not in the
