@@ -17,12 +17,15 @@ limitations under the License.
 package instancemanager
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 // RestoreRequest asks the manager to restore a backup artifact into an empty,
@@ -55,15 +58,36 @@ type RestoreResult struct {
 // to staging, and runs `cubrid restoredb -B` into the empty target directory.
 // It refuses to overwrite a pre-existing DB (wrong-target guard) and never
 // reports success unless restoredb succeeds against a verified artifact.
-func Restore(ctx context.Context, cli CLI, store ObjectStore, req RestoreRequest) (RestoreResult, error) {
-	if req.Database == "" || req.Bucket == "" || req.Prefix == "" || req.StagingDir == "" || req.TargetDir == "" {
-		return RestoreResult{}, fmt.Errorf("database, bucket, prefix, stagingDir and targetDir are required")
+func Restore(ctx context.Context, cli CLI, store ObjectStore, req RestoreRequest) (result RestoreResult, err error) {
+	// Everything below is checked before anything is read, written or run, so a
+	// rejected request leaves no side effects (#119).
+	if err := validateRestoreRequest(req); err != nil {
+		return RestoreResult{}, err
 	}
 
 	// ADR-0008 wrong-target guard: restore only into an empty target. A
-	// pre-existing DB volume is a hard block, never dropped or overwritten.
+	// pre-existing DB volume, or the database already registered in the
+	// target's databases.txt, is a hard block, never dropped or overwritten.
 	if hasExistingDB(req.TargetDir, req.Database) {
 		return RestoreResult{}, fmt.Errorf("target %s already holds database %q; refusing to overwrite (ADR-0008)", req.TargetDir, req.Database)
+	}
+	registered, err := registeredInDatabasesTxt(req.TargetDir, req.Database)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if registered {
+		return RestoreResult{}, fmt.Errorf("database %q is already registered in %s; refusing to overwrite (ADR-0008)",
+			req.Database, filepath.Join(req.TargetDir, databasesTxt))
+	}
+
+	// A staging directory this restore creates is removed if the restore fails,
+	// so a failed restore leaves no downloaded artifact behind.
+	if _, statErr := os.Stat(req.StagingDir); os.IsNotExist(statErr) {
+		defer func() {
+			if err != nil {
+				_ = os.RemoveAll(req.StagingDir)
+			}
+		}()
 	}
 
 	exp := ManifestExpectation{Database: req.Database, CubridVersion: req.ExpectedCubridVersion}
@@ -87,6 +111,68 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, req RestoreRequest
 		CubridVersion: manifest.CubridVersion,
 		ManifestURI:   fmt.Sprintf("s3://%s/%s", req.Bucket, path.Join(req.Prefix, ManifestObjectName)),
 	}, nil
+}
+
+// databasesTxt is CUBRID's database location file in $CUBRID_DATABASES.
+const databasesTxt = "databases.txt"
+
+// databaseNamePattern is a database name that cannot carry a path: a letter,
+// then letters, digits or underscores.
+var databaseNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
+
+// validateRestoreRequest rejects a request that could restore somewhere other
+// than an explicit, separate target (#119): every field is required, the
+// database name cannot carry a path, and the staging and target directories are
+// clean absolute paths, not the filesystem root, and do not contain each other.
+func validateRestoreRequest(req RestoreRequest) error {
+	if req.Database == "" || req.Bucket == "" || req.Prefix == "" || req.StagingDir == "" || req.TargetDir == "" {
+		return fmt.Errorf("database, bucket, prefix, stagingDir and targetDir are required")
+	}
+	if !databaseNamePattern.MatchString(req.Database) {
+		return fmt.Errorf("database name %q is not a plain identifier", req.Database)
+	}
+	for name, dir := range map[string]string{"targetDir": req.TargetDir, "stagingDir": req.StagingDir} {
+		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == string(filepath.Separator) {
+			return fmt.Errorf("%s %q must be a clean absolute path other than the root", name, dir)
+		}
+	}
+	if within(req.StagingDir, req.TargetDir) || within(req.TargetDir, req.StagingDir) {
+		return fmt.Errorf("stagingDir %q and targetDir %q must not contain each other", req.StagingDir, req.TargetDir)
+	}
+	return nil
+}
+
+// within reports whether target is dir or lies below it.
+func within(target, dir string) bool {
+	rel, err := filepath.Rel(dir, target)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// registeredInDatabasesTxt reports whether targetDir's databases.txt already
+// lists database. A missing file means nothing is registered.
+func registeredInDatabasesTxt(targetDir, database string) (bool, error) {
+	f, err := os.Open(filepath.Join(targetDir, databasesTxt)) // #nosec G304 -- targetDir is validated above
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", databasesTxt, err)
+	}
+	defer func() { _ = f.Close() }()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if fields := strings.Fields(line); fields[0] == database {
+			return true, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return false, fmt.Errorf("read %s: %w", databasesTxt, err)
+	}
+	return false, nil
 }
 
 // hasExistingDB reports whether targetDir already contains the database's main
