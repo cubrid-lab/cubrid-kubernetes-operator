@@ -33,7 +33,47 @@ func newAsyncServer(t *testing.T, cli CLI) http.Handler {
 	if err != nil {
 		t.Fatalf("NewOperationStore: %v", err)
 	}
+	// Backup and restore answer 202 and finish in a goroutine that keeps
+	// recording state transitions, each one a temp file created in the store
+	// directory and renamed into place. If the test returns first, t.TempDir's
+	// RemoveAll races that goroutine and fails with "directory not empty"
+	// (#130). Cleanups run last-in first-out, so this one runs before the
+	// TempDir removal registered above.
+	t.Cleanup(func() { awaitTerminalOperations(t, store) })
 	return NewServer(cli, "tok").WithOperationStore(store).Handler()
+}
+
+// awaitTerminalOperations blocks until every operation in store has reached a
+// terminal state. The terminal transition is the last write an operation makes
+// to the store, so once it is visible nothing else will create files there.
+// An operation that never terminates fails the test with its ID and state
+// rather than surfacing later as an opaque TempDir cleanup error.
+func awaitTerminalOperations(t *testing.T, store *OperationStore) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		store.mu.Lock()
+		ops, err := store.listLocked()
+		store.mu.Unlock()
+		if err != nil {
+			t.Errorf("list operations: %v", err)
+			return
+		}
+		var running []string
+		for _, op := range ops {
+			if !op.State.IsTerminal() {
+				running = append(running, op.ID+"="+string(op.State))
+			}
+		}
+		if len(running) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("operations still running when the test ended: %v", running)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func postBackup(t *testing.T, h http.Handler, key, body string) *httptest.ResponseRecorder {
