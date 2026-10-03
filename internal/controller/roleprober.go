@@ -33,6 +33,13 @@ import (
 type RoleObservation struct {
 	Reachable bool
 	Role      databasev1alpha1.CubridRole
+	// ObservedAt is when the answer was received. An observation without it, or
+	// older than roleObservationTTL, is not authoritative (ADR-0005).
+	ObservedAt time.Time
+	// Conflicting is set when the Instance Manager's answer contradicts itself
+	// (role vs HA status, ADR-0005 ConflictingLocalHAStatus); the role is then
+	// not trusted.
+	Conflicting bool
 }
 
 // RoleProber polls one instance's Instance Manager /v1/role endpoint.
@@ -45,6 +52,8 @@ type RoleProber interface {
 type HTTPRoleProber struct {
 	Client *http.Client
 	Token  string
+	// Now stamps each observation; nil means time.Now.
+	Now func() time.Time
 }
 
 func NewHTTPRoleProber(token string) *HTTPRoleProber {
@@ -60,22 +69,52 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	url := fmt.Sprintf("http://%s.%s.svc:%d/v1/role", podName, namespace, instancemanager.DefaultPort)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return RoleObservation{Reachable: false}
+		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
 	if p.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+p.Token)
 	}
 	resp, err := p.Client.Do(req)
 	if err != nil {
-		return RoleObservation{Reachable: false}
+		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return RoleObservation{Reachable: false}
+		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
 	var st instancemanager.HAStatus
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
-		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown}
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: p.now()}
 	}
-	return RoleObservation{Reachable: true, Role: databasev1alpha1.CubridRole(st.Role)}
+	return observationFromStatus(st, p.now())
+}
+
+func (p *HTTPRoleProber) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
+}
+
+// observationFromStatus turns an Instance Manager answer into an observation,
+// flagging an answer that contradicts itself (ADR-0005): a master whose server
+// is not registered_and_active, a role that differs from the node's own line
+// in the HA node list, or a master that sees another master.
+func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObservation {
+	o := RoleObservation{Reachable: true, Role: databasev1alpha1.CubridRole(st.Role), ObservedAt: at}
+	if st.Role != instancemanager.RoleMaster && st.Role != instancemanager.RoleSlave {
+		return o
+	}
+	if st.Role == instancemanager.RoleMaster && !st.ServerActive {
+		o.Conflicting = true
+	}
+	for _, n := range st.Nodes {
+		if n.Name == st.Current && n.State != string(st.Role) {
+			o.Conflicting = true
+		}
+		if n.Name != st.Current && st.Role == instancemanager.RoleMaster && n.State == string(instancemanager.RoleMaster) {
+			o.Conflicting = true
+		}
+	}
+	return o
 }

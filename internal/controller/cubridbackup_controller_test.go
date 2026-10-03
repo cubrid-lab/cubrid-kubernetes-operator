@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -39,7 +40,14 @@ const (
 
 type fakeProber struct{ obs RoleObservation }
 
-func (f *fakeProber) ProbeRole(_ context.Context, _, _ string) RoleObservation { return f.obs }
+// ProbeRole answers like the real prober: stamped with the time of the answer.
+func (f *fakeProber) ProbeRole(_ context.Context, _, _ string) RoleObservation {
+	o := f.obs
+	if o.ObservedAt.IsZero() {
+		o.ObservedAt = time.Now()
+	}
+	return o
+}
 
 type fakeBackupClient struct {
 	started        bool

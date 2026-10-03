@@ -110,7 +110,7 @@ member's `/v1/role` + `/v1/ha/status` (bounded timeout), recording
 manager unreachable        → role=unknown, authoritative=false
 /v1/role = unknown         → role=unknown, authoritative=false
 role vs ha/status conflict → role=unknown, authoritative=false (ConflictingLocalHAStatus)
-observation older than TTL → role=unknown, authoritative=false
+observation older than TTL (15s) → role=unknown, authoritative=false
 ```
 
 Cluster classification → `PrimaryResolved`:
