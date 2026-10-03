@@ -48,8 +48,8 @@ type RestoreRequest struct {
 }
 
 // RestoreRoots are the only directories a restore may touch, set from the
-// manager's own configuration, never from a request: TargetDir must be Target
-// or below it, and StagingDir must be strictly below Staging (#119).
+// manager's own configuration, never from a request (#119): TargetDir must be
+// Target itself, and StagingDir must be one directory directly below Staging.
 type RestoreRoots struct {
 	// Target is the database root, $CUBRID_DATABASES.
 	Target string
@@ -75,13 +75,9 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	if err := validateRestoreRequest(req); err != nil {
 		return RestoreResult{}, err
 	}
-	targetDir, err := confine(req.TargetDir, roots.Target, true)
+	targetDir, stagingDir, err := confine(req, roots)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("targetDir: %w", err)
-	}
-	stagingDir, err := confine(req.StagingDir, roots.Staging, false)
-	if err != nil {
-		return RestoreResult{}, fmt.Errorf("stagingDir: %w", err)
+		return RestoreResult{}, err
 	}
 	req.TargetDir, req.StagingDir = targetDir, stagingDir
 
@@ -163,25 +159,28 @@ func validateRestoreRequest(req RestoreRequest) error {
 	return nil
 }
 
-// confine returns the cleaned path when it lies below root (or equals it when
-// allowRoot), and an error otherwise. root must itself be a clean absolute
-// path other than the filesystem root.
-func confine(dir, root string, allowRoot bool) (string, error) {
-	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(filepath.Separator) {
-		return "", fmt.Errorf("restore root %q is not configured as a clean absolute path", root)
-	}
-	clean := filepath.Clean(dir)
-	if clean == root {
-		if allowRoot {
-			// Return the configured root itself, not the request's copy of it.
-			return root, nil
+// stagingNamePattern is one path element: no separator and no "..".
+var stagingNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// confine maps the request's directories onto the manager's roots and returns
+// paths built from those roots, so nothing after this point uses a path taken
+// from the request: the target must be roots.Target itself, and the staging
+// directory one plain name directly below roots.Staging.
+func confine(req RestoreRequest, roots RestoreRoots) (targetDir, stagingDir string, err error) {
+	for _, root := range []string{roots.Target, roots.Staging} {
+		if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(filepath.Separator) {
+			return "", "", fmt.Errorf("restore root %q is not configured as a clean absolute path", root)
 		}
-		return "", fmt.Errorf("%q must be below %q, not the root itself", dir, root)
 	}
-	if !strings.HasPrefix(clean, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("%q is outside %q", dir, root)
+	if filepath.Clean(req.TargetDir) != roots.Target {
+		return "", "", fmt.Errorf("targetDir %q must be the database root %q", req.TargetDir, roots.Target)
 	}
-	return clean, nil
+	staging := filepath.Clean(req.StagingDir)
+	name := filepath.Base(staging)
+	if filepath.Dir(staging) != roots.Staging || !stagingNamePattern.MatchString(name) {
+		return "", "", fmt.Errorf("stagingDir %q must be one directory directly below %q", req.StagingDir, roots.Staging)
+	}
+	return roots.Target, filepath.Join(roots.Staging, name), nil
 }
 
 // within reports whether target is dir or lies below it.
