@@ -87,6 +87,15 @@ type CubridClusterReconciler struct {
 	// DefaultImage is the DB Pod image when spec.image is not set; empty falls
 	// back to DefaultInstanceManagerImage.
 	DefaultImage string
+	// Clock judges observation freshness; nil means time.Now.
+	Clock func() time.Time
+}
+
+func (r *CubridClusterReconciler) now() time.Time {
+	if r.Clock != nil {
+		return r.Clock()
+	}
+	return time.Now()
 }
 
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters,verbs=get;list;watch;create;update;patch;delete

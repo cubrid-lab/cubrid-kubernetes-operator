@@ -114,7 +114,7 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 	count := cluster.Spec.Topology.PromotableMembers
 	members := memberNames(cluster, count)
 	obs := r.probeAll(ctx, members, cluster.Namespace)
-	res := resolvePrimary(members, obs)
+	res := resolvePrimary(members, obs, time.Now())
 
 	sel := selectBackupTarget(members, obs, res, backup.Spec.Target.Preference, count <= 1)
 	if !sel.Selected {

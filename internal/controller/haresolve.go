@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -27,6 +28,12 @@ import (
 )
 
 const conditionPrimaryResolved = "PrimaryResolved"
+
+// roleObservationTTL bounds how old a role observation may be and still count
+// (ADR-0005 "observation older than TTL -> unknown"). Each reconcile polls
+// every member afresh with a 5s timeout, so a valid snapshot is never older
+// than this; the TTL keeps a slow or replayed answer from deciding routing.
+const roleObservationTTL = 15 * time.Second
 
 // memberNames returns the StatefulSet pod names (<cluster>-<ordinal>, ADR-0004).
 func memberNames(cluster *databasev1alpha1.CubridCluster, count int32) []string {
@@ -59,9 +66,10 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	}
 	wg.Wait()
 
-	res := resolvePrimary(members, obs)
+	now := r.now()
+	res := resolvePrimary(members, obs, now)
 	cluster.Status.CurrentPrimary = res.CurrentPrimary
-	cluster.Status.Instances = instanceStatuses(members, obs)
+	cluster.Status.Instances = instanceStatuses(members, obs, now)
 
 	setCondition(cluster, conditionPrimaryResolved, res.Status, res.Reason, primaryResolvedMessage(res))
 	if res.Status == metav1.ConditionTrue {
@@ -89,19 +97,41 @@ type PrimaryResolution struct {
 	Reason         string
 }
 
+// authoritative reports whether an observation may stand for the member's role
+// at `now`: reachable, a known role, stamped within roleObservationTTL (either
+// side, so a skewed future stamp does not count), and not self-contradicting.
+func authoritative(o RoleObservation, now time.Time) bool {
+	if !o.Reachable || o.Role == databasev1alpha1.RoleUnknown || o.Role == "" || o.Conflicting {
+		return false
+	}
+	if o.ObservedAt.IsZero() {
+		return false
+	}
+	age := now.Sub(o.ObservedAt)
+	return age <= roleObservationTTL && age >= -roleObservationTTL
+}
+
 // resolvePrimary computes the primary-resolution verdict from the observations
-// of all expected promotable members. observations is keyed by pod name and
-// must contain an entry for every member (missing = unreachable).
+// of all expected promotable members at `now`. observations is keyed by pod name
+// and must contain an entry for every member (missing = unreachable).
 //
-// It never reports a resolved primary when any member is unreachable/unknown or
-// when more than one master is seen, and never picks a winner (ADR-0005).
-func resolvePrimary(members []string, obs map[string]RoleObservation) PrimaryResolution {
+// It never reports a resolved primary when any member is unreachable, unknown,
+// stale or self-contradicting, or when more than one master is seen, and never
+// picks a winner (ADR-0005). Reasons, most severe first:
+// MultiplePrimariesObserved, AmbiguousPrimaryObservation,
+// PrimaryObservationIncomplete, NoPrimaryObserved.
+func resolvePrimary(members []string, obs map[string]RoleObservation, now time.Time) PrimaryResolution {
 	masters := 0
 	primary := ""
 	incomplete := false
+	ambiguous := false
 	for _, m := range members {
 		o, ok := obs[m]
-		if !ok || !o.Reachable || o.Role == databasev1alpha1.RoleUnknown || o.Role == "" {
+		if ok && o.Reachable && o.Conflicting {
+			ambiguous = true
+			continue
+		}
+		if !ok || !authoritative(o, now) {
 			incomplete = true
 			continue
 		}
@@ -114,6 +144,8 @@ func resolvePrimary(members []string, obs map[string]RoleObservation) PrimaryRes
 	switch {
 	case masters > 1:
 		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "MultiplePrimariesObserved"}
+	case ambiguous:
+		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "AmbiguousPrimaryObservation"}
 	case incomplete:
 		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "PrimaryObservationIncomplete"}
 	case masters == 0:
@@ -125,12 +157,12 @@ func resolvePrimary(members []string, obs map[string]RoleObservation) PrimaryRes
 
 // instanceStatuses builds the per-instance status list from observations,
 // preserving the ordinal ordering of members.
-func instanceStatuses(members []string, obs map[string]RoleObservation) []databasev1alpha1.InstanceStatus {
+func instanceStatuses(members []string, obs map[string]RoleObservation, now time.Time) []databasev1alpha1.InstanceStatus {
 	out := make([]databasev1alpha1.InstanceStatus, 0, len(members))
 	for i, m := range members {
 		role := databasev1alpha1.RoleUnknown
 		ready := false
-		if o, ok := obs[m]; ok && o.Reachable && o.Role != "" {
+		if o, ok := obs[m]; ok && authoritative(o, now) {
 			role = o.Role
 			ready = role == databasev1alpha1.RoleMaster || role == databasev1alpha1.RoleSlave || role == databasev1alpha1.RoleReplica
 		}
