@@ -160,7 +160,8 @@ func TestRestore_RunsRestoredbOnTheStagedBackup(t *testing.T) {
 }
 
 // Paths are confined to the manager's own roots: a request cannot point a
-// restore, or the staging cleanup, anywhere else (#119).
+// restore, or the staging cleanup, anywhere else (#119). The target is the
+// database root itself, and staging is one directory directly below its root.
 func TestRestore_ConfinesPathsToTheManagerRoots(t *testing.T) {
 	outside := t.TempDir()
 	cases := map[string]func(*RestoreRequest, *RestoreRoots){
@@ -178,6 +179,12 @@ func TestRestore_ConfinesPathsToTheManagerRoots(t *testing.T) {
 		},
 		"roots not configured": func(_ *RestoreRequest, roots *RestoreRoots) {
 			*roots = RestoreRoots{}
+		},
+		"target below the database root": func(r *RestoreRequest, roots *RestoreRoots) {
+			r.TargetDir = filepath.Join(roots.Target, "appdb")
+		},
+		"staging two levels below its root": func(r *RestoreRequest, roots *RestoreRoots) {
+			r.StagingDir = filepath.Join(roots.Staging, "a", "b")
 		},
 	}
 	for name, mutate := range cases {
