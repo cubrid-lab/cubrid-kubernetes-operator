@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: CUBRID Documentation
+    url: https://cubrid.org/documentation
+    about: Official CUBRID database documentation
+  - name: Official CUBRID Operator
+    url: https://github.com/CUBRID/cubrid-operator
+    about: The upstream CUBRID Kubernetes Operator

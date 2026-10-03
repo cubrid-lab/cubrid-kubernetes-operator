@@ -3,11 +3,110 @@
 This roadmap describes the development plan for the CUBRID Kubernetes
 Operator.
 
-The project is currently in the design and incubation stage.
+The project is experimental. Merged implementation, manual CUBRID POCs and
+live Operator validation are separate states. Accepted design and POC issues
+remain historical evidence; integration gaps are tracked by the STP IV issues
+below rather than reopening the original work.
 
-Implementation of the HA controller starts only after all P0 architecture
-decisions are accepted. Foundation work — Kubebuilder scaffold, CI,
-envtest, and the Kind E2E harness — may proceed in parallel.
+This file is the source of truth for changing scope and validation status.
+
+## STP IV delivery stages
+
+Season: **2026-10-05 to 2026-12-27** (see issue #77).
+
+| Stage | Dates (2026) | Required outcome |
+|---|---|---|
+| Setup | Oct 05–11 | Scope, scenario contracts and lab settled; real single-database SQL smoke |
+| HA alpha | Oct 12–Nov 01 | Three-member HA, RW/RO access, representative failures and backup/restore alpha |
+| Recovery validation | Nov 02–29 | Write quarantine, rejoin, rebuild and mandatory scenarios validated |
+| Release preparation | Nov 30–Dec 27 | Repeated runs, regression fixes, reproduced runbooks and reviewed release artifacts |
+
+Dates are delivery targets, not evidence of completion. Conditional work
+cannot displace required safety and recovery work. If required evidence is
+missing, report a blocked release or narrower experimental result rather than
+waiving a mandatory scenario to meet the date.
+
+## v0.1 scope
+
+### Required
+
+The initial support claim is limited to one pinned CUBRID 11.4.x/amd64
+configuration, one Kubernetes distribution and one CSI/StorageClass in the
+three-VM lab (#80). Distribution/version/driver selection remains unverified
+until that issue records the inventory and run evidence. Three VMs do not
+establish physical-zone resilience.
+
+| Capability | Completion evidence | Tracking issues |
+|---|---|---|
+| Non-root authenticated Instance Manager and single-node lifecycle | S00 real SQL without manual Pod setup | #81, #97–#99, #101 |
+| Three-member HA, stable identity, real replication, redundant RW/RO access | S01–S02 SQL and role evidence; RW writes accepted, RO writes rejected | #82, #83, #105–#108 |
+| Pod, VM, Broker and Operator failure recovery | S03–S06 confirmed faults, transaction histories and measured recovery | #85, #109–#111 |
+| Managed write quarantine for ambiguous or stale HA | S07–S08 SQL checks on new and existing connections | #86, #112–#115 |
+| Retained-data rejoin and explicit PVC-loss rebuild | S09–S10 roles/data converge; healthy data is not overwritten | #87, #116–#118 |
+| Backup and restore into a new cluster | S11–S12 real artifacts, interrupted-operation handling and exact dataset verification | #88, #89, #119–#121 |
+| Retention, authentication and voluntary-disruption policy | S13–S15 retention, authorization and node-drain evidence | #90, #91 |
+| Operational Conditions, Events and metrics | Status agrees with SQL/fault evidence; unknown observations stay unknown | #92 |
+| Reproducible validation and reviewed release | S00–S15 on the candidate, repeated core faults, soak results, non-author runbook reproduction and traceable artifacts | #79, #84, #94, #95 |
+
+Scenario contracts, exact deadlines and independent pass/fail oracles are
+specified in #79 before acceptance tests are implemented. That issue defines
+acknowledged, failed and unknown client outcomes, observed RPO/RTO and the
+required artifacts. No zero-data-loss or automatic-failback guarantee is
+inferred from a POC or a passing unit test.
+
+### Conditional
+
+- Compatible image/configuration rolling update: S16 / #96, only after the
+  required recovery gates pass. Existing sequencing code and POC-9 do not by
+  themselves establish supported live updates.
+- Disk-full testing: S17, only with a volume whose size limit can be enforced
+  and a documented recovery path. No disk-full support claim without evidence.
+
+Keep unvalidated conditional work on the roadmap, outside v0.1 support claims.
+
+### Future
+
+CUBRID engine-version migration, non-promotable read replicas, a standalone
+restore workflow CR, broader engine/Kubernetes/CSI/architecture matrices and
+multi-zone/provider resilience are outside the initial delivery. New features
+remain proposals until scheduled; required validation takes precedence.
+
+## Implementation and validation inventory
+
+Baseline: main `017dbbe` (2026-10-03); review/update these rows when a relevant
+PR merges or candidate evidence arrives. The table records existing code and
+POC history, not live support certification.
+
+| Area | Existing implementation/evidence | Live Operator validation |
+|---|---|---|
+| Foundation | Kubebuilder scaffold, v1alpha1 APIs, generated resources, unit/envtest and manager E2E skeleton | Real CUBRID SQL smoke remains unverified (#101) |
+| Runtime | Instance Manager handlers and derivative image definition | Non-root startup, Pod wiring and durable operations require #97–#99 |
+| HA and Broker | Role discovery, primary resolution and Broker resource/config generation; manual engine POCs | Automatic cluster bootstrap, replication and RW/RO SQL require #105–#108 and #83 |
+| Recovery and safety | State/role decision code; manual failover and split-brain POCs | Enforced SQL quarantine, rejoin and rebuild require #112–#118 |
+| Backup and restore | CubridBackup API/controller, Instance Manager artifact/restore paths; manual engine POCs | Real workflow, interrupted recovery and dataset checks require #88 and #119–#121 |
+| Hardening | Update sequencing, auth, metrics and Events code | Placement/retention/PDB, security and operational accuracy require #90–#92; updates conditional (#96) |
+| Release | Lint, unit/envtest and manager E2E workflows | Real-DB lane, lab gates, candidate artifacts and runbook reproduction require #104 and #122–#128 |
+
+For live scenarios use **not run**, **blocked**, **fail**, **pass** or **not
+applicable**, with a revision, environment, command, evidence link and reason.
+A required scenario cannot pass through skipping, missing evidence, a timeout
+or unsuccessful fault injection. A unit test pass is not a live scenario pass.
+
+## Two-maintainer start order
+
+| Work stream | First independently reviewable result | Handoff |
+|---|---|---|
+| Runtime | #97 non-root lifecycle, then #98 Pod wiring | #101 consumes a runnable authenticated image and Pod configuration |
+| Test contracts and infrastructure | #78 reference/reuse inventory, #79 scenario oracles, #104 fast-check failure propagation | #100 workload checks and #103 evidence use the agreed contracts |
+| Shared lab | #80 pinned inventory and reproducible provisioning | VM faults start only when controls and cleanup are verified |
+
+These are work streams, not three simultaneous assignments. With two
+maintainers, each chooses one available S/M issue, reviews the other's PR,
+and coordinates the next handoff. Each author owns implementation, tests and
+documentation. Dependencies mean the specific artifact listed in the issue;
+L/XL tracking issues are not implementation assignments. Full-lab runs are
+serialized. Follow [CONTRIBUTING.md](./CONTRIBUTING.md) for external intake,
+test-first exceptions and review rules.
 
 ---
 
@@ -38,9 +137,8 @@ StatefulSet, Service, or Instance Manager architecture.
 
 ## Phase 1 — Foundation
 
-**Status:** Done — Kubebuilder scaffold, `CubridCluster` v1alpha1 + CRD
-validation, single-node reconciliation (StatefulSet / Service / PVC),
-Conditions, envtest, Kind E2E skeleton, and CI are all merged.
+**Implementation:** Foundation code and CI are merged.
+**Live validation:** Real database SQL smoke is not yet established (#101).
 
 - Kubebuilder scaffold
 - leader election
@@ -58,10 +156,10 @@ Conditions, envtest, Kind E2E skeleton, and CI are all merged.
 
 ## Phase 2 — CUBRID HA
 
-**Status:** Done — HA role discovery + safety-first status (ADR-0005), the
-in-pod Instance Manager (`/v1` API), the broker model (`-rw`/`-ro` tier,
-ADR-0002), current-master discovery, and failover observation are merged and
-POC-validated on real CUBRID 11.4.
+**Implementation:** HA role discovery, Instance Manager and Broker model code
+are merged; manual CUBRID POCs are recorded in `docs/poc/RESULTS.md`.
+**Live validation:** Operator-driven formation, replication and working RW/RO
+access remain unverified (#82, #83).
 
 - 1 master + 2 slaves
 - HA configuration
@@ -78,11 +176,10 @@ POC-validated on real CUBRID 11.4.
 
 ## Phase 3 — Recovery Lifecycle
 
-**Status:** Done — slave rejoin/rebuild (ADR-0006), network-partition +
-split-brain detection (ADR-0005), and the pod-failure recovery path are
-merged and POC-validated (split-brain two-master divergence reproduced;
-`resolvePrimary()` refuses ambiguous primaries). Live multi-node E2E for
-write-under-failure is deferred to real-hardware validation.
+**Implementation:** Recovery decision paths and ambiguous-primary detection
+are merged; engine failure/partition behavior has manual POC evidence.
+**Live validation:** SQL quarantine, real rejoin and explicit rebuild remain
+unverified (#86, #87).
 
 - Pod failure recovery
 - slave rejoin
@@ -96,10 +193,10 @@ write-under-failure is deferred to real-hardware validation.
 
 ## Phase 4 — Backup / Recovery
 
-**Status:** Done — `CubridBackup` API + reconciler, Instance Manager backup
-execution (upload + versioned manifest, ADR-0007), object-storage artifact
-model, manifest trust/validation, and recovery-bootstrap
-(`spec.bootstrap.recovery` + `/v1/restore/prepare`, ADR-0008) are merged.
+**Implementation:** Backup API/controller, artifact handling and recovery
+bootstrap code are merged.
+**Live validation:** Integrated backup and new-cluster restore with exact data
+verification remain unverified (#88, #89).
 
 - `CubridBackup`
 - backup execution implementation
@@ -112,11 +209,10 @@ model, manifest trust/validation, and recovery-bootstrap
 
 ## Phase 5 — Production Hardening
 
-**Status:** In Progress — rolling updates (engine-version guard + slaves-first
-`OnDelete` sequencing, ADR-0009), observability (metrics + Events), and
-security hardening (PSS restricted, bearer-token auth) are merged. PDB object,
-topology spread, storage expansion, retention, compatibility CI matrix, and
-live-hardware E2E remain.
+**Implementation:** Rolling sequencing, metrics, Events and authentication
+code are merged; placement, retention and disruption work remains.
+**Live validation:** Hardening evidence is tracked by #90–#92 and #95.
+Compatible rolling updates remain conditional (#96).
 
 - PDB
 - topology spread
@@ -132,8 +228,8 @@ live-hardware E2E remain.
 ## Implementation Gate
 
 The gate below required all P0 ADRs accepted before the HA controller
-implementation started. It is now **satisfied** — every ADR is Accepted and
-the corresponding implementation is merged:
+implementation started. It is now **satisfied** — architectural directions were accepted (including
+Accepted (POC-gated) decisions). This is not the release validation gate:
 
 ```text
 [x] #1 HA topology
@@ -153,7 +249,7 @@ start in parallel with Phase 0.
 
 ---
 
-## Recommended Work Order
+## Historical architecture work order
 
 ```text
 1. HA topology
@@ -181,7 +277,7 @@ start in parallel with Phase 0.
 12. Kubebuilder implementation
 ```
 
-### Parallel Tracks
+### Historical parallel tracks
 
 ```text
 Track A — Architecture

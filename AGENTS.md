@@ -56,17 +56,126 @@ Always use `kubebuilder create api` and `kubebuilder create webhook` to scaffold
 The e2e tests are designed to validate the solution in an isolated environment (similar to GitHub Actions CI).
 Ensure you run them against a dedicated [Kind](https://kind.sigs.k8s.io/) cluster (not your “real” dev/prod cluster).
 
-### Issue Labels
-Every issue MUST carry exactly one `priority:` label and one `size:` label.
-- **Priority**: `priority: critical` | `priority: high` | `priority: medium`
-- **Size**: `size: XS` (<1h) | `size: S` (hours) | `size: M` (1-2 days) | `size: L` (multi-day)
+### Issue Labeling (cubrid-lab org standard)
+Write GitHub issues, PRs and comments in English.
 
-Do NOT use flat priority labels like `P0`/`P1`/`P2` — the scoped `priority:` scheme is the source of truth. Add both labels when opening an issue.
+Every issue MUST carry exactly one `priority: <value>` label and exactly one
+`size: <value>` label, alongside a type label
+(`bug`/`enhancement`/`documentation`/`testing`/`chore`/`ci`/…). These must be
+GitHub labels, not just text in the issue title or body. Agents and workflows
+creating issues through CLI/API must supply the canonical title and labels at
+creation.
+
+Use the following exact names, with **one space after the colon**:
+
+- **Priority**: `priority: critical` | `priority: high` | `priority: medium` | `priority: low`
+- **Size**: `size: XS` | `size: S` | `size: M` | `size: L` | `size: XL`
+
+Do NOT introduce variants such as `priority:high`, `priority-high`, `P0`/`P1`/`P2`
+or `size:S`. Reuse the repository's canonical labels; if a required label is
+missing, create it with the exact name above before filing the issue.
+
+| Label | Meaning | Rough guide |
+|-------|---------|-------------|
+| `size: XS` | Trivial change | < ~10 lines; single-file typo/config/one-liner |
+| `size: S` | Small change | One Go file or one focused function; a single test or doc page |
+| `size: M` | Medium change | A few files in one package; a new `_test.go` suite, a bug fix with a regression test, a CI job |
+| `size: L` | Large change | Cross-cutting change across packages (API types + controller + Instance Manager); split into independently reviewable PRs |
+| `size: XL` | Very large | Consider splitting into smaller issues before starting |
+
+Generated output (`**/zz_generated.*.go`, `config/crd/bases/*`, `config/rbac/role.yaml`)
+does not count toward size; estimate from the hand-written change.
+
+Rules:
+
+1. **Size reflects effort, not importance** — a one-line fix for a critical bug is still `size: XS`.
+2. **Assign both `priority:` and `size:` at creation.** If scope or impact is
+   uncertain, use a provisional estimate, explain the uncertainty in the body,
+   and add `status: needs triage`. Refine the estimates during triage rather
+   than omitting either required label.
+3. **`good first issue` should be `size: XS` or `size: S`.**
+4. **`size: XL` is a signal to split**, not a green light to start a sprawling change.
 
 Each issue SHOULD also carry one `phase:` label classifying which roadmap stage
 the work belongs to (a classification, not a status — status lives only in
 `ROADMAP.md`):
 - **Phase**: `phase: 0-decisions` | `phase: 1-foundation` | `phase: 2-ha` | `phase: 3-recovery` | `phase: 4-backup` | `phase: 5-hardening`
+
+### Issue, PR and Commit Titles
+Issue titles, pull request titles and commit subjects follow
+[CONTRIBUTING.md - Pull request and commit titles](CONTRIBUTING.md#pull-request-and-commit-titles):
+`type(scope)!: description` with types `feat`, `fix`, `docs`, `test`, `perf`,
+`refactor`, `ci`, `build`, `chore`, `style`, `revert`; English, lowercase start
+unless the first word is an API name, acronym, or proper noun; no trailing
+period, no issue numbers in pull request titles (use `Closes #N` /
+`Refs #N` in the body). Pull requests are squash-merged and the pull request
+title becomes the commit title. The `PR title` check enforces it.
+
+Preserve actual contributor authorship and existing credits.
+
+## Working on an Issue
+
+Follow [CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow).
+In short:
+
+1. Pick a sub-issue sized `size: S` or `size: M`. A `size: L` issue is a
+   tracking issue: do not implement it directly. Read the issue's "Depends on"
+   and "Where to look" sections first, and check for an open PR on the same
+   issue. Confirm availability and set the actual implementer as the GitHub
+   Assignee before implementation. A claim comment is not an assignment. If
+   assignment permission is missing, ask a maintainer and wait for assignment.
+   Do not take an assigned issue without an agreed handoff; update Assignees
+   on handoff and unassign when returning unfinished work to the queue.
+2. State the expected result and what must never happen before changing code.
+3. Write the smallest failing test, and confirm it fails for the intended
+   reason. A compile error, a missing dependency or a broken environment is
+   not a valid failing test.
+4. Implement, refactor, then run the related tests.
+5. If the behavior needs a real database or a real failure, verify it there.
+   Never report a unit or envtest pass as real-cluster validation.
+6. If CUBRID's behavior is unknown, do not invent it in a mock. Run a small
+   POC, record the observation in `docs/poc/`, then write the test.
+
+Documentation-only, license-only and generated-file-only changes do not need a
+failing test. Do not rewrite working code or existing tests only to follow
+this order.
+
+**One PR, one behavior change**, with its tests and documentation. If the work
+will take more than two days, stop and split the issue at a boundary that can
+be verified on its own.
+
+**In the PR**, fill in the "Validation Evidence" section of the template:
+issue and scenario IDs, the expected behavior and its source, the test level
+(unit / envtest / real database on Kind / VM lab), the failing-test evidence,
+the passing-test evidence, the environment, and what remains unverified. Use
+`Closes #N` for the sub-issue and `Refs #M` for its tracking issue. Never
+close a tracking issue from a PR.
+
+**Report honestly.** Say which checks were not run and why. A scenario that
+was skipped, blocked or not run is never described as passed, and an unknown
+measurement is never reported as zero.
+
+**Safety contract.** Do not change these without amending the ADR first
+(`docs/adr/0005-failover-split-brain.md`): CUBRID performs failover; the
+Operator never promotes a member on incomplete observations, never treats
+ordinal 0 as the permanent master, and never picks a winner between diverged
+data sets.
+
+## Incubation Coordination
+
+Follow the early-contribution and two-maintainer rules in `CONTRIBUTING.md`.
+Confirm availability on the issue before implementation; maintainers decide
+scope, architecture and releases. Each maintainer normally has one issue in
+progress and reviews a finished PR before starting another issue. S/M effort
+includes tests, documentation and review follow-up. Shared test infrastructure
+has an owner, but each feature author writes their own tests. Do not split
+tests from implementation between people. Reserve full three-VM lab runs so
+only one is active. Never expose lab credentials to public workflows or PRs.
+
+Keep changing delivery and validation status only in `ROADMAP.md`. Code
+existence, unit/envtest results, manual engine POCs and live Operator scenario
+validation are different evidence levels. Do not reopen accepted design or
+completed POC issues just because integrated validation remains pending.
 
 ## After Making Changes
 
