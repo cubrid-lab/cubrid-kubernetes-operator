@@ -2,6 +2,8 @@ module github.com/cubrid-lab/cubrid-kubernetes-operator
 
 go 1.26.0
 
+toolchain go1.26.8
+
 require (
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/onsi/ginkgo/v2 v2.27.4
