@@ -81,10 +81,11 @@ func TestRestore_RejectsInvalidRequestWithoutSideEffects(t *testing.T) {
 				Bucket:     bucket,
 				Prefix:     prefix,
 				TargetDir:  filepath.Join(base, name, "databases"),
-				StagingDir: filepath.Join(base, name, "staging"),
+				StagingDir: filepath.Join(base, name, "restore-staging", "op"),
 			}
+			roots := rootsFor(req)
 			mutate(&req)
-			if _, err := Restore(context.Background(), cli, store, req); err == nil {
+			if _, err := Restore(context.Background(), cli, store, roots, req); err == nil {
 				t.Fatal("expected the request to be rejected")
 			}
 			staging := req.StagingDir
@@ -102,13 +103,12 @@ func TestRestore_RejectsDatabaseRegisteredInTarget(t *testing.T) {
 	fake, bucket, prefix := stageUploadedArtifact(t)
 	store := &countingStore{fakeObjectStore: fake}
 	req := baseRestoreRequest(t, bucket, prefix)
-	req.StagingDir = filepath.Join(t.TempDir(), "staging")
 	entry := dbName + "\t/elsewhere/" + dbName + "\tlocalhost\t/elsewhere/" + dbName + "/log\tfile:/elsewhere/" + dbName + "/lob\n"
 	if err := os.WriteFile(filepath.Join(req.TargetDir, "databases.txt"), []byte("#db-name\tvol-path\n"+entry), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cli := &restoreCLI{}
-	if _, err := Restore(context.Background(), cli, store, req); err == nil {
+	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err == nil {
 		t.Fatal("expected refusal: the database is registered in the target's databases.txt")
 	}
 	assertNoSideEffects(t, store, cli, req.StagingDir)
@@ -122,7 +122,7 @@ func TestRestore_AllowsOtherRegisteredDatabases(t *testing.T) {
 		[]byte("#db-name\tvol-path\nother\t/x/other\tlocalhost\t/x/other/log\tfile:/x/other/lob\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Restore(context.Background(), &restoreCLI{}, store, req); err != nil {
+	if _, err := Restore(context.Background(), &restoreCLI{}, store, rootsFor(req), req); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 }
@@ -132,9 +132,8 @@ func TestRestore_AllowsOtherRegisteredDatabases(t *testing.T) {
 func TestRestore_RemovesItsStagingDirectoryOnFailure(t *testing.T) {
 	store, bucket, prefix := stageUploadedArtifact(t)
 	req := baseRestoreRequest(t, bucket, prefix)
-	req.StagingDir = filepath.Join(t.TempDir(), "staging")
 	cli := &restoreCLI{err: io.ErrUnexpectedEOF}
-	if _, err := Restore(context.Background(), cli, store, req); err == nil {
+	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err == nil {
 		t.Fatal("expected restoredb failure to fail the restore")
 	}
 	if len(cli.calls) != 1 {
@@ -151,11 +150,58 @@ func TestRestore_RunsRestoredbOnTheStagedBackup(t *testing.T) {
 	store, bucket, prefix := stageUploadedArtifact(t)
 	req := baseRestoreRequest(t, bucket, prefix)
 	cli := &restoreCLI{}
-	if _, err := Restore(context.Background(), cli, store, req); err != nil {
+	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	want := "cubrid restoredb -B " + filepath.Join(req.StagingDir, "backup") + " " + dbName
 	if len(cli.calls) != 1 || cli.calls[0] != want {
 		t.Errorf("restoredb = %v, want [%s]", cli.calls, want)
+	}
+}
+
+// Paths are confined to the manager's own roots: a request cannot point a
+// restore, or the staging cleanup, anywhere else (#119).
+func TestRestore_ConfinesPathsToTheManagerRoots(t *testing.T) {
+	outside := t.TempDir()
+	cases := map[string]func(*RestoreRequest, *RestoreRoots){
+		"target outside the database root": func(r *RestoreRequest, _ *RestoreRoots) {
+			r.TargetDir = filepath.Join(outside, "databases")
+		},
+		"staging outside the staging root": func(r *RestoreRequest, _ *RestoreRoots) {
+			r.StagingDir = filepath.Join(outside, "op")
+		},
+		"staging equal to the staging root": func(r *RestoreRequest, roots *RestoreRoots) {
+			r.StagingDir = roots.Staging
+		},
+		"target sharing only a name prefix with the root": func(r *RestoreRequest, roots *RestoreRoots) {
+			r.TargetDir = roots.Target + "-other"
+		},
+		"roots not configured": func(_ *RestoreRequest, roots *RestoreRoots) {
+			*roots = RestoreRoots{}
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			fake, bucket, prefix := stageUploadedArtifact(t)
+			store := &countingStore{fakeObjectStore: fake}
+			req := baseRestoreRequest(t, bucket, prefix)
+			roots := rootsFor(req)
+			mutate(&req, &roots)
+			cli := &restoreCLI{}
+			if _, err := Restore(context.Background(), cli, store, roots, req); err == nil {
+				t.Fatal("expected the request to be rejected")
+			}
+			assertNoSideEffects(t, store, cli, "")
+		})
+	}
+}
+
+// The database root itself is a valid target: the operator restores into
+// $CUBRID_DATABASES.
+func TestRestore_AcceptsTheDatabaseRootAsTarget(t *testing.T) {
+	store, bucket, prefix := stageUploadedArtifact(t)
+	req := baseRestoreRequest(t, bucket, prefix)
+	if _, err := Restore(context.Background(), &restoreCLI{}, store, rootsFor(req), req); err != nil {
+		t.Fatalf("Restore: %v", err)
 	}
 }

@@ -47,6 +47,16 @@ type RestoreRequest struct {
 	TargetDir string `json:"targetDir"`
 }
 
+// RestoreRoots are the only directories a restore may touch, set from the
+// manager's own configuration, never from a request: TargetDir must be Target
+// or below it, and StagingDir must be strictly below Staging (#119).
+type RestoreRoots struct {
+	// Target is the database root, $CUBRID_DATABASES.
+	Target string
+	// Staging is the parent of per-restore staging directories.
+	Staging string
+}
+
 // RestoreResult reports a completed restore (ADR-0008).
 type RestoreResult struct {
 	Database      string `json:"database"`
@@ -58,12 +68,22 @@ type RestoreResult struct {
 // to staging, and runs `cubrid restoredb -B` into the empty target directory.
 // It refuses to overwrite a pre-existing DB (wrong-target guard) and never
 // reports success unless restoredb succeeds against a verified artifact.
-func Restore(ctx context.Context, cli CLI, store ObjectStore, req RestoreRequest) (result RestoreResult, err error) {
+func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots, req RestoreRequest) (result RestoreResult, err error) {
 	// Everything below is checked before anything is read, written or run, so a
-	// rejected request leaves no side effects (#119).
+	// rejected request leaves no side effects (#119). From here on only the
+	// confined paths are used.
 	if err := validateRestoreRequest(req); err != nil {
 		return RestoreResult{}, err
 	}
+	targetDir, err := confine(req.TargetDir, roots.Target, true)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("targetDir: %w", err)
+	}
+	stagingDir, err := confine(req.StagingDir, roots.Staging, false)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("stagingDir: %w", err)
+	}
+	req.TargetDir, req.StagingDir = targetDir, stagingDir
 
 	// ADR-0008 wrong-target guard: restore only into an empty target. A
 	// pre-existing DB volume, or the database already registered in the
@@ -80,15 +100,16 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, req RestoreRequest
 			req.Database, filepath.Join(req.TargetDir, databasesTxt))
 	}
 
-	// A staging directory this restore creates is removed if the restore fails,
-	// so a failed restore leaves no downloaded artifact behind.
-	if _, statErr := os.Stat(req.StagingDir); os.IsNotExist(statErr) {
-		defer func() {
-			if err != nil {
-				_ = os.RemoveAll(req.StagingDir)
-			}
-		}()
-	}
+	// The staging directory is removed after a successful restore, and after a
+	// failed one when this restore created it, so no downloaded artifact is left
+	// behind. It is always strictly below roots.Staging.
+	_, statErr := os.Stat(stagingDir)
+	created := os.IsNotExist(statErr)
+	defer func() {
+		if err == nil || created {
+			_ = os.RemoveAll(stagingDir)
+		}
+	}()
 
 	exp := ManifestExpectation{Database: req.Database, CubridVersion: req.ExpectedCubridVersion}
 	manifest, err := VerifyArtifact(ctx, store, req.Bucket, req.Prefix, exp)
@@ -140,6 +161,26 @@ func validateRestoreRequest(req RestoreRequest) error {
 		return fmt.Errorf("stagingDir %q and targetDir %q must not contain each other", req.StagingDir, req.TargetDir)
 	}
 	return nil
+}
+
+// confine returns the cleaned path when it lies below root (or equals it when
+// allowRoot), and an error otherwise. root must itself be a clean absolute
+// path other than the filesystem root.
+func confine(dir, root string, allowRoot bool) (string, error) {
+	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(filepath.Separator) {
+		return "", fmt.Errorf("restore root %q is not configured as a clean absolute path", root)
+	}
+	clean := filepath.Clean(dir)
+	if clean == root {
+		if allowRoot {
+			return clean, nil
+		}
+		return "", fmt.Errorf("%q must be below %q, not the root itself", dir, root)
+	}
+	if !strings.HasPrefix(clean, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("%q is outside %q", dir, root)
+	}
+	return clean, nil
 }
 
 // within reports whether target is dir or lies below it.

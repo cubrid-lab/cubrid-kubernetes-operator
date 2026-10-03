@@ -24,35 +24,54 @@ import (
 	"testing"
 )
 
-// restoreCLI records restoredb invocations so tests can assert the command.
+// restoreCLI records restoredb invocations so tests can assert the command, and
+// whether a given file existed when it ran (the staged backup).
 type restoreCLI struct {
-	calls []string
-	err   error
+	calls     []string
+	err       error
+	checkPath string
+	sawFile   bool
 }
 
 func (c *restoreCLI) Run(_ context.Context, name string, args ...string) (string, error) {
 	c.calls = append(c.calls, name+" "+strings.Join(args, " "))
+	if c.checkPath != "" {
+		_, statErr := os.Stat(c.checkPath)
+		c.sawFile = statErr == nil
+	}
 	return "ok", c.err
 }
 
+// baseRestoreRequest lays out a test database root and staging root under one
+// temporary directory, the way the manager confines them in production.
 func baseRestoreRequest(t *testing.T, bucket, prefix string) RestoreRequest {
 	t.Helper()
+	base := t.TempDir()
+	target := filepath.Join(base, "databases")
+	if err := os.MkdirAll(target, 0o750); err != nil {
+		t.Fatal(err)
+	}
 	return RestoreRequest{
 		Database:              dbName,
 		Bucket:                bucket,
 		Prefix:                prefix,
 		ExpectedCubridVersion: testCubridVersion,
-		StagingDir:            t.TempDir(),
-		TargetDir:             t.TempDir(),
+		StagingDir:            filepath.Join(base, "restore-staging", "op"),
+		TargetDir:             target,
 	}
+}
+
+// rootsFor returns the roots baseRestoreRequest laid out.
+func rootsFor(req RestoreRequest) RestoreRoots {
+	return RestoreRoots{Target: req.TargetDir, Staging: filepath.Dir(req.StagingDir)}
 }
 
 func TestRestore_HappyPath(t *testing.T) {
 	store, bucket, prefix := stageUploadedArtifact(t)
-	cli := &restoreCLI{}
 	req := baseRestoreRequest(t, bucket, prefix)
+	cli := &restoreCLI{checkPath: filepath.Join(req.StagingDir, "backup", stagedFileName)}
 
-	res, err := Restore(context.Background(), cli, store, req)
+	res, err := Restore(context.Background(), cli, store, rootsFor(req), req)
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -62,9 +81,13 @@ func TestRestore_HappyPath(t *testing.T) {
 	if len(cli.calls) != 1 || !strings.Contains(cli.calls[0], "restoredb -B") {
 		t.Errorf("restoredb not invoked as expected: %v", cli.calls)
 	}
-	// The staged object must have been downloaded.
-	if _, err := os.Stat(filepath.Join(req.StagingDir, "backup", stagedFileName)); err != nil {
-		t.Errorf("staged object not downloaded: %v", err)
+	// The staged object was downloaded before restoredb ran, and staging is
+	// removed once the restore succeeds.
+	if !cli.sawFile {
+		t.Error("staged object was not present when restoredb ran")
+	}
+	if _, err := os.Stat(req.StagingDir); !os.IsNotExist(err) {
+		t.Errorf("staging directory left behind after a successful restore (err=%v)", err)
 	}
 }
 
@@ -77,7 +100,7 @@ func TestRestore_WrongTargetGuard(t *testing.T) {
 	}
 	cli := &restoreCLI{}
 
-	if _, err := Restore(context.Background(), cli, store, req); err == nil {
+	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err == nil {
 		t.Error("expected refusal to overwrite an existing DB (ADR-0008 wrong-target guard)")
 	}
 	if len(cli.calls) != 0 {
@@ -91,7 +114,7 @@ func TestRestore_TrustFailureAborts(t *testing.T) {
 	req.ExpectedCubridVersion = "11.5.0" // manifest says 11.4.6 => trust fails
 	cli := &restoreCLI{}
 
-	if _, err := Restore(context.Background(), cli, store, req); err == nil {
+	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err == nil {
 		t.Error("expected restore to abort on a manifest trust failure")
 	}
 	if len(cli.calls) != 0 {
@@ -105,7 +128,7 @@ func TestRestore_ChecksumDriftAborts(t *testing.T) {
 	req := baseRestoreRequest(t, bucket, prefix)
 	cli := &restoreCLI{}
 
-	if _, err := Restore(context.Background(), cli, store, req); err == nil {
+	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err == nil {
 		t.Error("expected restore to abort when an object checksum drifts")
 	}
 	if len(cli.calls) != 0 {
@@ -114,7 +137,7 @@ func TestRestore_ChecksumDriftAborts(t *testing.T) {
 }
 
 func TestRestore_RequiresArgs(t *testing.T) {
-	if _, err := Restore(context.Background(), &restoreCLI{}, newFakeStore(), RestoreRequest{Database: dbName}); err == nil {
+	if _, err := Restore(context.Background(), &restoreCLI{}, newFakeStore(), RestoreRoots{}, RestoreRequest{Database: dbName}); err == nil {
 		t.Error("expected error when required fields are missing")
 	}
 }

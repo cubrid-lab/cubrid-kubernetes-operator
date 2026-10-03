@@ -40,7 +40,13 @@ func run() error {
 	addr := envOr("IM_ADDR", fmt.Sprintf(":%d", instancemanager.DefaultPort))
 	token := os.Getenv("IM_TOKEN")
 
-	server := instancemanager.NewServer(instancemanager.ExecCLI{Timeout: 10 * time.Second}, token)
+	server := instancemanager.NewServer(instancemanager.ExecCLI{Timeout: 10 * time.Second}, token).
+		WithRestoreRoots(instancemanager.RestoreRoots{
+			// A restore may write only into the database root and stage only
+			// below the staging root; both come from this process, never a request.
+			Target:  envOr("CUBRID_DATABASES", "/var/lib/cubrid/databases"),
+			Staging: envOr("IM_RESTORE_STAGING_ROOT", "/var/lib/cubrid/restore-staging"),
+		})
 
 	// Durable operation store on the PVC enables the async /v1/backup +
 	// /v1/operations endpoints; without it those endpoints stay disabled.
