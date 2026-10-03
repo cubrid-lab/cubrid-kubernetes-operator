@@ -4,12 +4,10 @@
 
 > [!IMPORTANT]
 > This project is **early-stage and under active development**.
-> The P0 architecture decisions are accepted, the operator scaffold, the
-> `CubridCluster` API, and an in-pod Instance Manager are implemented, and
-> the core CUBRID HA behaviors (formation, replication, automatic failover,
-> backup, restore) are validated by POCs against real CUBRID 11.4. It is an
-> experimental project under `cubrid-lab`, is **not yet production-ready**,
-> and does not replace the existing official CUBRID Operator.
+> It is an experimental project under `cubrid-lab` and is **not yet
+> production-ready**. Architecture, implementation and live validation are
+> tracked separately in [ROADMAP.md](./ROADMAP.md). It does not replace the
+> existing official CUBRID Operator.
 > See [Relationship to the existing CUBRID Operator](#relationship-to-the-existing-cubrid-operator).
 
 ## Why this project?
@@ -57,12 +55,12 @@ the broader CUBRID ecosystem.
 - Kubernetes Conditions, Events, and Prometheus metrics
 - Reproducible failure testing with envtest and Kind
 
-## Planned APIs
+## APIs
 
 - `CubridCluster`
 - `CubridBackup`
 
-The initial API version is planned as `v1alpha1`. Restore in v1alpha1 is a
+The API version is `v1alpha1`. Restore in v1alpha1 is a
 bootstrap mode of `CubridCluster` (`spec.bootstrap.recovery`), not a
 separate CR; a `CubridRestore` workflow CR may be added later (non-MVP).
 
@@ -84,53 +82,40 @@ with:
 - primary Pod failure recovery
 - stable write endpoint
 - backup and restore
-- database-aware rolling update for compatible image/configuration changes
+- compatible rolling updates only if the conditional validation gate passes
 - Prometheus metrics
 - automated E2E failure tests
 
 CUBRID engine version migration is not included in the initial MVP.
 
-## Compatibility
+## Scope and validation
 
-| Component | MVP Target |
-|---|---|
-| CUBRID | 11.4.x |
-| Kubernetes | TBD after envtest/Kind validation |
-| Architecture | amd64 initially |
-| Storage | CSI-backed PVC |
-| Access Mode | ReadWriteOnce initially |
-| HA topology | 1 master + 2 slaves |
-| Non-promotable replica | Not supported in MVP |
+See [ROADMAP.md](./ROADMAP.md) for the v0.1 required, conditional and future
+scope, delivery stages, implementation inventory and validation gaps.
+[docs/compatibility.md](./docs/compatibility.md) records environment targets;
+only scenario evidence against a specific candidate establishes support.
+Manual engine POCs are recorded in [docs/poc/RESULTS.md](./docs/poc/RESULTS.md).
 
-## Current Status
+## Contributing
 
-**Experimental / early implementation**
-
-- [x] Existing CUBRID Operator architecture reviewed
-- [x] Initial design principles documented
-- [x] Repository initialized
-- [x] P0 architecture decisions (ADRs 0001–0010 accepted)
-- [x] Kubebuilder project scaffold
-- [x] `CubridCluster` API (v1alpha1)
-- [x] Single-node reconciliation (StatefulSet, headless Service, Conditions)
-- [x] In-pod Instance Manager (role discovery, `/v1` API, backup, graceful shutdown)
-- [x] CUBRID HA validated by POCs on real CUBRID 11.4 (formation, replication,
-      automatic failover, backup, restore) — see [docs/poc/RESULTS.md](./docs/poc/RESULTS.md)
-- [x] Operator HA role discovery + safety-first primary resolution
-- [ ] Broker tier and RW/RO routing
-- [ ] Node join / rejoin / rebuild
-- [ ] `CubridBackup` CR and object-storage backup workflow
-- [ ] Database-aware rolling update
-- [ ] Failure and E2E tests (Kind)
-
-The P0 architecture decisions are accepted and early operator code has landed.
-Remaining work is tracked in [ROADMAP.md](./ROADMAP.md) and the issue tracker.
+We welcome bug reports, reproducible installation feedback, documentation,
+tests and focused fixes. Start with [CONTRIBUTING.md](./CONTRIBUTING.md),
+search issues and open PRs, and confirm the scope on an issue before coding.
+Core API, HA safety and recovery changes require design agreement.
 
 ## Documentation
 
 - [DESIGN.md](./DESIGN.md) — architecture and design principles
-- [ROADMAP.md](./ROADMAP.md) — proposed implementation plan
+- [ROADMAP.md](./ROADMAP.md) — delivery scope, stages and validation status
 - [docs/adr/](./docs/adr/) — architecture decision records
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — how to contribute and the ADR process
 - [docs/compatibility.md](./docs/compatibility.md) — support matrix and cluster providers
-- [docs/governance.md](./docs/governance.md) — license (#19) and API-group (#20) decisions (pending)
+- [docs/governance.md](./docs/governance.md) — Apache-2.0 terms, maintainer responsibilities and API-group decision
+
+## License
+
+Project-authored source and documentation are licensed under
+[Apache License 2.0](./LICENSE), unless a file states otherwise. Dependencies,
+container images and third-party material retain their own terms. The license
+does not grant rights to CUBRID trademarks. See the
+[third-party inventory](./docs/third-party-material.md).

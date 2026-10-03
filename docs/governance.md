@@ -1,22 +1,36 @@
 # Governance notes
 
-This file tracks project-governance decisions that require organizational or
-legal confirmation, so contributors know their current status.
+This document records project ownership, contribution terms and release
+responsibilities. Changing implementation and validation status lives in
+[ROADMAP.md](../ROADMAP.md).
+
+## Maintainer responsibilities
+
+The two maintainers decide scope and architecture, review contributions and
+approve release candidates. A contributor's PR does not automatically grant
+write access, merge rights or a release role. Contributions are welcomed
+within the agreed issue scope; no response-time guarantee is made.
+
+A behavior change is reviewed by the other maintainer. Release publication
+requires reviewed evidence for the candidate; public source availability is
+not a claim of production readiness. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## License (#19)
 
-**Status: pending organizational confirmation.**
+The maintainer confirmed Apache-2.0 for STP IV on 2026-10-02 in issue #19.
+The full license is in [LICENSE](../LICENSE). Project-authored source and
+documentation use Apache-2.0 unless a file states otherwise.
 
-The kubebuilder scaffold generated source files with Apache-2.0 headers
-("Licensed under the Apache License, Version 2.0"), so the code is currently
-authored *as if* Apache-2.0. However, per issue #19 the license must be chosen
-against `cubrid-lab` organizational policy and upstream compatibility rather
-than defaulted — the official CUBRID Operator being Apache-2.0 does not
-automatically make that the right choice here.
+Preserve upstream copyright, license and attribution notices when reusing
+material. Dependencies and container images keep their respective licenses;
+this repository's license does not relicense CUBRID binaries or grant CUBRID
+trademark rights. Record reused material and any required NOTICE attribution
+in [third-party-material.md](./third-party-material.md). The provenance audit
+must be completed before public artifact publication; adding LICENSE alone
+does not complete that audit.
 
-Action required (maintainers): confirm the license, then add a top-level
-`LICENSE` file and reconcile the source headers. Until then, do not add source
-headers that conflict with the existing Apache-2.0 boilerplate.
+No CLA or enforced DCO check is introduced here. Contributors must have the
+right to submit their work under the repository license.
 
 ## API group ownership (#20)
 

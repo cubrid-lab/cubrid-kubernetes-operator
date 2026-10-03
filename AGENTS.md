@@ -157,6 +157,22 @@ Operator never promotes a member on incomplete observations, never treats
 ordinal 0 as the permanent master, and never picks a winner between diverged
 data sets.
 
+## Incubation Coordination
+
+Follow the early-contribution and two-maintainer rules in `CONTRIBUTING.md`.
+Confirm availability on the issue before implementation; maintainers decide
+scope, architecture and releases. Each maintainer normally has one issue in
+progress and reviews a finished PR before starting another issue. S/M effort
+includes tests, documentation and review follow-up. Shared test infrastructure
+has an owner, but each feature author writes their own tests. Do not split
+tests from implementation between people. Reserve full three-VM lab runs so
+only one is active. Never expose lab credentials to public workflows or PRs.
+
+Keep changing delivery and validation status only in `ROADMAP.md`. Code
+existence, unit/envtest results, manual engine POCs and live Operator scenario
+validation are different evidence levels. Do not reopen accepted design or
+completed POC issues just because integrated validation remains pending.
+
 ## After Making Changes
 
 **After editing `*_types.go` or markers:**

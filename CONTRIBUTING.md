@@ -4,10 +4,35 @@ Thanks for your interest in the CUBRID Kubernetes Operator. This is an
 experimental project under `cubrid-lab`; the design is decided before code
 through Architecture Decision Records (ADRs).
 
+## Early external contributions
+
+Contributions are welcome during incubation. Start with bug reproduction,
+installation feedback, documentation, examples, tests, or a focused fix with
+an agreed acceptance criterion. The two maintainers retain responsibility for
+scope, architecture, review and releases; contributing does not automatically
+grant repository write or merge access.
+
+Before starting implementation, search issues and open PRs, then ask on the
+chosen issue whether the work is available. A maintainer confirms the scope
+and dependencies. Use `help wanted` for ready, bounded work and `good first
+issue` only for an XS/S task with setup instructions, file pointers and a
+clear verification command. An unlabelled issue can still be discussed.
+
+Changes to CRD contracts, HA safety, data lifecycle, backup/restore semantics
+or Instance Manager APIs need design agreement before implementation. A fix
+that restores an accepted contract does not need a new ADR. Feature requests
+outside the v0.1 scope remain proposals until maintainers schedule them.
+
+Public contributions must not require access to the private VM lab or its
+credentials. A contributor can provide unit/envtest evidence; maintainers
+run the applicable integration and lab scenarios before declaring support.
+Do not include tokens, kubeconfigs, passwords, customer data or unredacted
+Secrets in issues, logs or test artifacts.
+
 ## Ground rules
 
 - **Design before code.** Changes that affect the CRD, StatefulSet, Service,
-  Instance Manager API, or controller state machine go through an ADR first
+  Instance Manager API, or controller state machine contract go through an ADR first
   (see [docs/adr/](./docs/adr/)). The HA controller implementation is gated on
   the P0 ADRs (see the [implementation gate](./ROADMAP.md#implementation-gate)).
 - **Do not edit generated files.** `config/crd/bases/*`, `config/rbac/role.yaml`,
@@ -37,14 +62,25 @@ make run          # run the operator against your current kubecontext
 make test-e2e     # Kind-based e2e (isolated cluster)
 ```
 
-Local smoke test:
+For the existing Kind E2E suite, use a disposable cluster name:
 
 ```bash
-minikube start
-make install                 # install the CRD
-make run &                   # run the operator
-kubectl apply -f config/samples/
+make test-e2e KIND_CLUSTER=cubrid-contributor-e2e
+# If the test fails before automatic cleanup:
+make cleanup-test-e2e KIND_CLUSTER=cubrid-contributor-e2e
 ```
+
+The target builds the manager image, creates/reuses the named Kind cluster,
+and deletes that cluster after a successful run. Never reuse a valuable
+cluster name. The current suite checks the manager and Kubernetes resources;
+a passing run alone does not establish working CUBRID SQL or HA recovery.
+The real-database lane is tracked in issues #101 and #122.
+
+`make install`, `make deploy` and `make run` use the selected kubecontext.
+Check `kubectl config current-context` before using them in a disposable
+local environment. See [ROADMAP.md](./ROADMAP.md) for validation gaps and
+[compatibility.md](./docs/compatibility.md) for environment targets. The
+sample manifests are development inputs, not a validated installation runbook.
 
 ## Development workflow
 
@@ -79,6 +115,23 @@ working code only to say it was developed test-first.
 The author of a change writes its tests. The reviewer checks the expected
 results against the agreed contract and independent evidence, not only against
 the implementation.
+
+## Two-maintainer coordination
+
+- Each maintainer has one implementation issue in progress by default.
+  Reviewing a finished PR comes before starting another issue.
+- Estimate S as hours and M as one to two days, including implementation,
+  tests, documentation and review follow-up. Split work exceeding two days at
+  independently verifiable boundaries. L/XL issues track smaller issues.
+- Agree an owner for shared test infrastructure. Feature authors still write
+  their own tests; do not hand tests and implementation to different people.
+- The other maintainer reviews the scenario, expected results and failure
+  paths. A passing CI run does not replace maintainer review.
+- A dependency names the exact result needed, rather than requiring a whole
+  tracking issue to finish. Record ownership and the next handoff on the issue.
+- Runs using all three lab VMs happen one at a time. Reserve the run with the
+  other maintainer, record the candidate/environment and leave the lab in a
+  known state. Outside contributors do not receive lab credentials.
 
 ## Pull requests
 
@@ -214,9 +267,14 @@ which level was used.
 - `make test-e2e` runs only against an isolated Kind cluster. Runs on the VM
   lab are started explicitly and one at a time.
 
-## License and DCO
+## License and contribution terms
 
-See [governance notes](./docs/governance.md) for the license and API-group
-decisions, which are pending organizational confirmation. Until the license is
-finalized, note that scaffolded source files carry Apache-2.0 headers; do not
-add conflicting headers.
+This repository adopts [Apache License 2.0](./LICENSE), as confirmed for
+STP IV in issue #19. Contributions are submitted under that license; retain
+existing copyright and third-party notices and identify any copied or
+adapted material in the PR. See [governance.md](./docs/governance.md) and
+[third-party inventory](./docs/third-party-material.md).
+
+No CLA or enforced DCO check is configured by this change. Do not treat an
+optional sign-off as a substitute for permission to contribute the material.
+Any later contribution agreement must be documented before it is required.
