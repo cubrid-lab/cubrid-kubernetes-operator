@@ -71,7 +71,8 @@ type RestoreResult struct {
 func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots, req RestoreRequest) (result RestoreResult, err error) {
 	// Everything below is checked before anything is read, written or run, so a
 	// rejected request leaves no side effects (#119). From here on only the
-	// confined paths are used.
+	// paths confine builds from the manager's roots are used, never the
+	// request's fields.
 	if err := validateRestoreRequest(req); err != nil {
 		return RestoreResult{}, err
 	}
@@ -79,21 +80,20 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	req.TargetDir, req.StagingDir = targetDir, stagingDir
 
 	// ADR-0008 wrong-target guard: restore only into an empty target. A
 	// pre-existing DB volume, or the database already registered in the
 	// target's databases.txt, is a hard block, never dropped or overwritten.
-	if hasExistingDB(req.TargetDir, req.Database) {
-		return RestoreResult{}, fmt.Errorf("target %s already holds database %q; refusing to overwrite (ADR-0008)", req.TargetDir, req.Database)
+	if hasExistingDB(targetDir, req.Database) {
+		return RestoreResult{}, fmt.Errorf("target %s already holds database %q; refusing to overwrite (ADR-0008)", targetDir, req.Database)
 	}
-	registered, err := registeredInDatabasesTxt(req.TargetDir, req.Database)
+	registered, err := registeredInDatabasesTxt(targetDir, req.Database)
 	if err != nil {
 		return RestoreResult{}, err
 	}
 	if registered {
 		return RestoreResult{}, fmt.Errorf("database %q is already registered in %s; refusing to overwrite (ADR-0008)",
-			req.Database, filepath.Join(req.TargetDir, databasesTxt))
+			req.Database, filepath.Join(targetDir, databasesTxt))
 	}
 
 	// The staging directory is removed after a successful restore, and after a
@@ -113,11 +113,11 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 		return RestoreResult{}, fmt.Errorf("artifact verification failed: %w", err)
 	}
 
-	if err := downloadArtifact(ctx, store, req.Bucket, req.Prefix, manifest, req.StagingDir); err != nil {
+	if err := downloadArtifact(ctx, store, req.Bucket, req.Prefix, manifest, stagingDir); err != nil {
 		return RestoreResult{}, err
 	}
 
-	backupDir := filepath.Join(req.StagingDir, "backup")
+	backupDir := filepath.Join(stagingDir, "backup")
 	out, err := cli.Run(ctx, "cubrid", "restoredb", "-B", backupDir, req.Database)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restoredb failed: %w: %s", err, out)
