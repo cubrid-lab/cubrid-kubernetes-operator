@@ -1,0 +1,203 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+)
+
+const (
+	testIMToken   = "test-im-token"
+	testDatabase  = "appdb"
+	testNamespace = "default"
+)
+
+// standaloneCluster returns a single-member CubridCluster (HA disabled, ADR-0001).
+func standaloneCluster(name string) *databasev1alpha1.CubridCluster {
+	return &databasev1alpha1.CubridCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+		Spec: databasev1alpha1.CubridClusterSpec{
+			Version:   cubridVersion,
+			Databases: []databasev1alpha1.CubridDatabase{{Name: testDatabase}},
+			Topology:  databasev1alpha1.CubridTopology{PromotableMembers: 1},
+			Storage: databasev1alpha1.CubridStorage{
+				Data: databasev1alpha1.CubridStorageSpec{Size: resource.MustParse("1Gi")},
+			},
+		},
+	}
+}
+
+func envValue(c corev1.Container, name string) (corev1.EnvVar, bool) {
+	for _, e := range c.Env {
+		if e.Name == name {
+			return e, true
+		}
+	}
+	return corev1.EnvVar{}, false
+}
+
+// The DB Pod runs the Instance Manager image with the configuration, paths and
+// token Secret the image's entrypoint expects (#98, runtime contract in ADR-0003).
+var _ = Describe("Instance Manager runtime wiring (#98)", func() {
+	ctx := context.Background()
+
+	reconcileCluster := func(r *CubridClusterReconciler, cluster *databasev1alpha1.CubridCluster) {
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, cluster))).To(Succeed())
+		})
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{
+			Name: cluster.Name, Namespace: cluster.Namespace,
+		}})
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	newReconciler := func(token string) *CubridClusterReconciler {
+		return &CubridClusterReconciler{
+			Client:       k8sClient,
+			Scheme:       k8sClient.Scheme(),
+			Recorder:     record.NewFakeRecorder(10),
+			IMToken:      token,
+			DefaultImage: "registry.example/cubrid-instance-manager:test",
+		}
+	}
+
+	statefulSet := func(name string) *appsv1.StatefulSet {
+		sts := &appsv1.StatefulSet{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, sts)).To(Succeed())
+		return sts
+	}
+
+	It("runs the Instance Manager image by default and honours spec.image", func() {
+		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-image"))
+		c := statefulSet("wiring-image").Spec.Template.Spec.Containers[0]
+		Expect(c.Image).To(Equal("registry.example/cubrid-instance-manager:test"))
+
+		custom := standaloneCluster("wiring-image-custom")
+		custom.Spec.Image = &databasev1alpha1.CubridImage{Repository: "my.registry/im", Tag: "1.2.3"}
+		reconcileCluster(newReconciler(testIMToken), custom)
+		Expect(statefulSet("wiring-image-custom").Spec.Template.Spec.Containers[0].Image).To(Equal("my.registry/im:1.2.3"))
+	})
+
+	It("passes the database, its path on the data volume and the start mode", func() {
+		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-env"))
+		c := statefulSet("wiring-env").Spec.Template.Spec.Containers[0]
+
+		db, ok := envValue(c, "CUBRID_DB")
+		Expect(ok).To(BeTrue())
+		Expect(db.Value).To(Equal(testDatabase))
+
+		databases, ok := envValue(c, "CUBRID_DATABASES")
+		Expect(ok).To(BeTrue(), "the image's own CUBRID_DATABASES is not on the PVC")
+		Expect(c.VolumeMounts).To(ContainElement(corev1.VolumeMount{Name: "data", MountPath: dataMountPath}))
+		Expect(databases.Value).To(HavePrefix(dataMountPath + "/"))
+
+		components, ok := envValue(c, "CUBRID_COMPONENTS")
+		Expect(ok).To(BeTrue())
+		Expect(components.Value).To(Equal("SERVER"))
+
+		mode, ok := envValue(c, "CUBRID_BOOTSTRAP")
+		Expect(ok).To(BeTrue())
+		Expect(mode.Value).To(Equal("new"))
+	})
+
+	It("starts in recovery mode when the cluster bootstraps from a backup", func() {
+		cluster := standaloneCluster("wiring-recovery")
+		cluster.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+			Recovery: &databasev1alpha1.RecoverySource{ManifestURI: "s3://bucket/backups/appdb/manifest.json"},
+		}
+		reconcileCluster(newReconciler(testIMToken), cluster)
+		mode, ok := envValue(statefulSet("wiring-recovery").Spec.Template.Spec.Containers[0], "CUBRID_BOOTSTRAP")
+		Expect(ok).To(BeTrue())
+		Expect(mode.Value).To(Equal("recovery"))
+	})
+
+	It("gives the DB Pod the operator's token through a Secret it owns", func() {
+		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-token"))
+
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "wiring-token-im-token", Namespace: testNamespace}, secret)).To(Succeed())
+		Expect(string(secret.Data[imTokenKey])).To(Equal(testIMToken))
+		Expect(secret.OwnerReferences).To(HaveLen(1))
+		Expect(secret.OwnerReferences[0].Kind).To(Equal("CubridCluster"))
+
+		token, ok := envValue(statefulSet("wiring-token").Spec.Template.Spec.Containers[0], "IM_TOKEN")
+		Expect(ok).To(BeTrue())
+		Expect(token.Value).To(BeEmpty(), "the token must come from the Secret, never inline")
+		Expect(token.ValueFrom).NotTo(BeNil())
+		Expect(token.ValueFrom.SecretKeyRef).NotTo(BeNil())
+		Expect(token.ValueFrom.SecretKeyRef.Name).To(Equal("wiring-token-im-token"))
+		Expect(token.ValueFrom.SecretKeyRef.Key).To(Equal(imTokenKey))
+	})
+
+	It("brings a changed Secret back to the operator's token", func() {
+		cluster := standaloneCluster("wiring-token-drift")
+		reconcileCluster(newReconciler(testIMToken), cluster)
+		secret := &corev1.Secret{}
+		key := types.NamespacedName{Name: "wiring-token-drift-im-token", Namespace: testNamespace}
+		Expect(k8sClient.Get(ctx, key, secret)).To(Succeed())
+		secret.Data[imTokenKey] = []byte("tampered")
+		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+
+		_, err := newReconciler(testIMToken).Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{
+			Name: cluster.Name, Namespace: cluster.Namespace,
+		}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, key, secret)).To(Succeed())
+		Expect(string(secret.Data[imTokenKey])).To(Equal(testIMToken))
+	})
+
+	It("runs as the image's cubrid user with a data volume that user can write", func() {
+		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-user"))
+		pod := statefulSet("wiring-user").Spec.Template.Spec
+		Expect(pod.SecurityContext.RunAsUser).NotTo(BeNil())
+		Expect(*pod.SecurityContext.RunAsUser).To(Equal(cubridUID))
+		Expect(*pod.SecurityContext.RunAsGroup).To(Equal(cubridUID))
+		Expect(*pod.SecurityContext.FSGroup).To(Equal(cubridUID))
+		Expect(*pod.SecurityContext.RunAsNonRoot).To(BeTrue())
+	})
+
+	It("does not create DB Pods when the operator has no Instance Manager token", func() {
+		cluster := standaloneCluster("wiring-no-token")
+		reconcileCluster(newReconciler(""), cluster)
+
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: cluster.Name, Namespace: testNamespace}, &appsv1.StatefulSet{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "an empty token would switch Instance Manager auth off")
+
+		updated := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cluster.Name, Namespace: testNamespace}, updated)).To(Succeed())
+		ready := meta.FindStatusCondition(updated.Status.Conditions, conditionReady)
+		Expect(ready).NotTo(BeNil())
+		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+		Expect(ready.Reason).To(Equal("InstanceManagerTokenMissing"))
+	})
+})
