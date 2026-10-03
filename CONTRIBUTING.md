@@ -14,7 +14,17 @@ grant repository write or merge access.
 
 Before starting implementation, search issues and open PRs, then ask on the
 chosen issue whether the work is available. A maintainer confirms the scope
-and dependencies. Use `help wanted` for ready, bounded work and `good first
+and dependencies. **Set the actual implementer's GitHub Assignee before
+starting work.** A comment saying "I will take this" does not replace the
+Assignee field. If you cannot assign yourself, ask a maintainer to assign you
+and wait for that assignment before implementation. Do not take an issue
+already assigned to someone else without agreeing a handoff. Keep one primary
+implementation owner per S/M issue; add another assignee only for explicitly
+agreed joint work. Update the Assignee when handing work over, and unassign
+when returning unfinished work to the available queue. A reviewer does not
+need to be an issue assignee.
+
+Use `help wanted` for ready, bounded work and `good first
 issue` only for an XS/S task with setup instructions, file pointers and a
 clear verification command. An unlabelled issue can still be discussed.
 
@@ -86,7 +96,8 @@ sample manifests are development inputs, not a validated installation runbook.
 
 Work starts from an issue. Tracking issues (`size: L`) only link to their
 sub-issues; pick a sub-issue sized `S` or `M`, read its "Depends on" section,
-and check that nobody has an open PR for it.
+and check its current Assignee and open PRs. Confirm availability, then set
+the Assignee to the actual implementer before changing code.
 
 For a change in behavior, follow this order:
 
@@ -128,7 +139,7 @@ the implementation.
 - The other maintainer reviews the scenario, expected results and failure
   paths. A passing CI run does not replace maintainer review.
 - A dependency names the exact result needed, rather than requiring a whole
-  tracking issue to finish. Record ownership and the next handoff on the issue.
+  tracking issue to finish. Keep GitHub Assignees current and record the next handoff on the issue.
 - Runs using all three lab VMs happen one at a time. Reserve the run with the
   other maintainer, record the candidate/environment and leave the lab in a
   known state. Outside contributors do not receive lab credentials.

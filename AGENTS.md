@@ -121,7 +121,11 @@ In short:
 1. Pick a sub-issue sized `size: S` or `size: M`. A `size: L` issue is a
    tracking issue: do not implement it directly. Read the issue's "Depends on"
    and "Where to look" sections first, and check for an open PR on the same
-   issue.
+   issue. Confirm availability and set the actual implementer as the GitHub
+   Assignee before implementation. A claim comment is not an assignment. If
+   assignment permission is missing, ask a maintainer and wait for assignment.
+   Do not take an assigned issue without an agreed handoff; update Assignees
+   on handoff and unassign when returning unfinished work to the queue.
 2. State the expected result and what must never happen before changing code.
 3. Write the smallest failing test, and confirm it fails for the intended
    reason. A compile error, a missing dependency or a broken environment is

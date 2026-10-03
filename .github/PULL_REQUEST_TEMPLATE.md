@@ -29,6 +29,7 @@ See CONTRIBUTING.md#pull-request-and-commit-titles.
 
 ## Checklist
 
+- [ ] The implementation issue is assigned to its actual owner in GitHub; any handoff is reflected in Assignees
 - [ ] The change is focused; scope and non-goals are clear
 - [ ] I have run `make build`, `make test` and `make lint` (gofmt, go vet, golangci-lint, envtest), or recorded checks not run and reasons below
 - [ ] I have run `make manifests generate` after API/marker changes and did not hand-edit generated files
