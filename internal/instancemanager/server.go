@@ -42,6 +42,8 @@ type Server struct {
 	// objects uploads backups to S3-compatible storage; nil means a backup
 	// cannot complete (bare backupdb is never a false Completed, ADR-0007).
 	objects ObjectStore
+	// restoreRoots confine every path a restore request names (#119).
+	restoreRoots RestoreRoots
 }
 
 func NewServer(cli CLI, token string) *Server {
@@ -61,6 +63,13 @@ func (s *Server) WithOperationStore(store *OperationStore) *Server {
 // chaining.
 func (s *Server) WithObjectStore(objects ObjectStore) *Server {
 	s.objects = objects
+	return s
+}
+
+// WithRestoreRoots sets the directories a restore may touch; a request naming a
+// path outside them is rejected. Returns the server for chaining.
+func (s *Server) WithRestoreRoots(roots RestoreRoots) *Server {
+	s.restoreRoots = roots
 	return s
 }
 
@@ -287,12 +296,11 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
 			return
 		}
-		res, err := Restore(ctx, s.cli, s.objects, req)
+		res, err := Restore(ctx, s.cli, s.objects, s.restoreRoots, req)
 		if err != nil {
 			fail("restore failed: " + err.Error())
 			return
 		}
-		_ = os.RemoveAll(req.StagingDir)
 		_, _ = s.store.Update(id, func(op *Operation) {
 			op.State = OpCompleted
 			op.Artifact = &OperationArtifact{
