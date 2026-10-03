@@ -173,7 +173,8 @@ func confine(dir, root string, allowRoot bool) (string, error) {
 	clean := filepath.Clean(dir)
 	if clean == root {
 		if allowRoot {
-			return clean, nil
+			// Return the configured root itself, not the request's copy of it.
+			return root, nil
 		}
 		return "", fmt.Errorf("%q must be below %q, not the root itself", dir, root)
 	}
