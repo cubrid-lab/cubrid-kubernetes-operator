@@ -441,11 +441,13 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		}
 	}
 
+	// Read before the condition is set below, so the event marks the transition.
+	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
 	if ready >= desired && desired > 0 {
 		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",
 			fmt.Sprintf("%d/%d instances ready", ready, desired))
 		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled", "cluster reconciled")
-		if !meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady) {
+		if !wasReady {
 			r.event(cluster, corev1.EventTypeNormal, "ClusterReady",
 				fmt.Sprintf("all %d instances ready", desired))
 		}

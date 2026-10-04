@@ -194,6 +194,56 @@ var _ = Describe("CubridCluster Controller", func() {
 		})
 	})
 
+	Context("ClusterReady event (#151)", func() {
+		ctx := context.Background()
+		key := types.NamespacedName{Name: "ready-event", Namespace: "default"}
+
+		drain := func(recorder *record.FakeRecorder) []string {
+			var events []string
+			for {
+				select {
+				case e := <-recorder.Events:
+					events = append(events, e)
+				default:
+					return events
+				}
+			}
+		}
+
+		It("is emitted once, on the transition to Ready", func() {
+			Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+			DeferCleanup(func() {
+				c := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+			})
+			recorder := record.NewFakeRecorder(20)
+			r := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder, IMToken: testIMToken,
+			}
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("ClusterReady")))
+
+			By("reporting every instance ready")
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, key, sts)).To(Succeed())
+			sts.Status.Replicas = 3
+			sts.Status.ReadyReplicas = 3
+			Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
+
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(drain(recorder)).To(ContainElement(ContainSubstring("ClusterReady")))
+
+			By("reconciling an already Ready cluster")
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("ClusterReady")))
+		})
+	})
+
 	Context("CRD validation (ADR-0001 CEL rules)", func() {
 		const ns = "default"
 		ctx := context.Background()
