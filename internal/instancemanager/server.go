@@ -196,8 +196,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 	go func() {
 		ctx := context.Background()
 		fail := func(reason string) {
-			// req.Destination was confined to the staging root by the handler.
-			_ = os.RemoveAll(req.Destination)
+			s.removeBackupStaging(req.Destination)
 			_, _ = s.store.Update(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
@@ -238,7 +237,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			return
 		}
 		// Upload + manifest succeeded: remove staging, then mark Completed.
-		_ = os.RemoveAll(req.Destination)
+		s.removeBackupStaging(req.Destination)
 		_, _ = s.store.Update(id, func(op *Operation) {
 			op.State = OpCompleted
 			op.Artifact = &OperationArtifact{
@@ -432,4 +431,22 @@ func confineBackupDestination(destination, root string) (string, error) {
 		return "", fmt.Errorf("destination %q must be one directory directly below %q", destination, root)
 	}
 	return filepath.Join(root, name), nil
+}
+
+// removeBackupStaging deletes a backup's staging directory. It removes only a
+// directory that it finds by listing the staging root, so the path it deletes
+// is built from the root and a name the file system returned, never from the
+// request's spelling.
+func (s *Server) removeBackupStaging(destination string) {
+	entries, err := os.ReadDir(s.backupStagingRoot)
+	if err != nil {
+		return
+	}
+	want := filepath.Base(destination)
+	for _, entry := range entries {
+		if entry.Name() == want {
+			_ = os.RemoveAll(filepath.Join(s.backupStagingRoot, entry.Name()))
+			return
+		}
+	}
 }
