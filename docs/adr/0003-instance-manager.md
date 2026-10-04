@@ -50,9 +50,11 @@ derivative CUBRID 11.4 image.
 
 A single DB container runs an image built `FROM` the official
 CUBRID/operator image (preserving `operator_conf.sh`, `backupdb.sh`), with
-a small `cubrid-instance-manager` binary as the main process. **`tini` is
-PID 1 and forwards `SIGTERM` to the manager** (so zombie reaping is
-handled by `tini`, not the manager). The manager: starts CUBRID via the
+a small `cubrid-instance-manager` binary as the main process. **An init
+process is PID 1 and forwards `SIGTERM` to the manager** (so zombie reaping
+is handled by PID 1, not the manager). The image's entrypoint shell is that
+init process; `tini` is not in the official image and is not added. See
+"Pod runtime contract" for why reaping matters. The manager: starts CUBRID via the
 official entrypoint/helpers; supervises the CUBRID server + HA processes;
 serves a small HTTP/JSON API; runs all local CUBRID commands from
 **inside the same container** (same user, hostname, env, volumes,
@@ -227,6 +229,18 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_COMPONENTS` | `SERVER` for one member; `HA` otherwise, refined by the HA bootstrap (#106) |
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
+| PID 1 | the entrypoint shell, running as UID 1000 with no capabilities; the Instance Manager is its child |
+| Termination | on `SIGTERM` the shell stops CUBRID (`cubrid server stop <db>` for `SERVER`, `cubrid heartbeat stop` otherwise), then the manager, and exits with the manager's status |
+
+Observed with the real 11.4 image (#97): the CUBRID daemons are orphans
+adopted by PID 1, and `cubrid server stop` waits for the server process to
+disappear. With the manager as PID 1 the stopped `cub_server` stayed a zombie
+and the stop command never returned; with the shell as PID 1 it returns in
+about a second. The entrypoint needs no root: it does not call `gosu` or
+`chown`, and the image sets `hosts: files dns` in `/etc/nsswitch.conf` at build
+time because a non-root process cannot edit that file. In a recovery bootstrap
+the entrypoint creates no database and starts no server until a restore has
+registered one.
 
 The operator reads its own token from `IM_TOKEN`, set from the Secret
 `instance-manager-token` in its namespace, and copies it into each cluster's

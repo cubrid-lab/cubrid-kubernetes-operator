@@ -18,6 +18,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/instance-manager ./cmd/instance-ma
 FROM ${CUBRID_IMAGE}
 COPY --from=build /out/instance-manager /usr/local/bin/instance-manager
 COPY build/instance-manager/entrypoint.sh /usr/local/bin/im-entrypoint.sh
-# The official image runs as root to set ulimits/chown then drops to `cubrid`
-# via gosu; the entrypoint keeps that model and starts the manager alongside.
+# nss-myhostname must not answer for the node's own short name: it returns
+# loopback, which breaks HA (docs/poc/RESULTS.md). A non-root entrypoint cannot
+# edit this file, so it is fixed here.
+RUN sed -i 's/^hosts:.*/hosts:      files dns/' /etc/nsswitch.conf \
+    && mkdir -p /var/lib/cubrid \
+    && chown cubrid:cubrid /var/lib/cubrid
+# Run as the image's cubrid user (uid 1000), the user the operator's Pod
+# securityContext requires. Numeric, so runAsNonRoot can be verified.
+USER 1000:1000
 ENTRYPOINT ["/usr/local/bin/im-entrypoint.sh"]

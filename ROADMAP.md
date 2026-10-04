@@ -80,7 +80,7 @@ POC history, not live support certification.
 | Area | Existing implementation/evidence | Live Operator validation |
 |---|---|---|
 | Foundation | Kubebuilder scaffold, v1alpha1 APIs, generated resources, unit/envtest and manager E2E skeleton | Real CUBRID SQL smoke remains unverified (#101) |
-| Runtime | Instance Manager handlers and derivative image definition | Non-root startup, Pod wiring and durable operations require #97–#99 |
+| Runtime | Instance Manager handlers and derivative image definition; non-root entrypoint checked with the real 11.4 image under podman (start, stop, restart, recovery start) | Not yet run in a Pod on Kind (#101). Durable operations require #99 |
 | HA and Broker | Role discovery, primary resolution and Broker resource/config generation; manual engine POCs | Automatic cluster bootstrap, replication and RW/RO SQL require #105–#108 and #83 |
 | Recovery and safety | State/role decision code; manual failover and split-brain POCs | Enforced SQL quarantine, rejoin and rebuild require #112–#118 |
 | Backup and restore | CubridBackup API/controller, Instance Manager artifact/restore paths; manual engine POCs | Real workflow, interrupted recovery and dataset checks require #88 and #119–#121 |
