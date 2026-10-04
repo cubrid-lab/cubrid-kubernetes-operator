@@ -18,11 +18,13 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
 
 func TestClassifyEngineChange(t *testing.T) {
@@ -34,9 +36,14 @@ func TestClassifyEngineChange(t *testing.T) {
 	}{
 		{"match -> none", cubridVersion, cubridVersion, UpdateNone},
 		{"no baseline yet -> none", cubridVersion, "", UpdateNone},
-		{"upgrade -> blocked", "11.5", cubridVersion, UpdateEngineUpgradeBlocked},
+		{"upgrade -> blocked", otherSeries, cubridVersion, UpdateEngineUpgradeBlocked},
 		{"downgrade -> blocked", "11.3", cubridVersion, UpdateEngineUpgradeBlocked},
 		{"missing desired -> unverifiable", "", cubridVersion, UpdateUnverifiable},
+		// spec.version names a series; the engine reports its full version (#158).
+		{"full version of the series -> none", cubridVersion, fullEngineVersion, UpdateNone},
+		{"other series -> blocked", otherSeries, fullEngineVersion, UpdateEngineUpgradeBlocked},
+		{"unparseable observed -> unverifiable", cubridVersion, "garbage", UpdateUnverifiable},
+		{"desired without a minor -> unverifiable", "11", fullEngineVersion, UpdateUnverifiable},
 	}
 	for _, tc := range tests {
 		if got := classifyEngineChange(tc.desired, tc.observed); got != tc.want {
@@ -124,5 +131,83 @@ func TestReconcileUpdateGuard_RecordsBaselineFromInstances(t *testing.T) {
 	}
 	if c.Status.ObservedEngineVersion != cubridVersion {
 		t.Errorf("observed baseline = %q, want %q", c.Status.ObservedEngineVersion, cubridVersion)
+	}
+}
+
+const otherSeries = "11.5"
+
+// fullEngineVersion is what cubrid_rel reports for the 11.4 image (POC-10).
+const fullEngineVersion = "11.4.6.1963"
+
+func TestEngineSeries(t *testing.T) {
+	for in, want := range map[string]string{
+		cubridVersion: cubridVersion, fullEngineVersion: cubridVersion, " 11.4.6 ": cubridVersion,
+		"11": "", "": "", "garbage": "", "11.": "", ".4": "", "v11.4": "", "11.x": "",
+	} {
+		if got := engineSeries(in); got != want {
+			t.Errorf("engineSeries(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The members' reported version becomes the baseline; a spec naming that
+// series is not a change, another series is blocked.
+func TestUpdateGuard_UsesReportedEngineVersion(t *testing.T) {
+	now := time.Now()
+	members := []string{c0, c1, c2}
+	obs := map[string]RoleObservation{}
+	for i, m := range members {
+		role := databasev1alpha1.RoleSlave
+		if i == 0 {
+			role = databasev1alpha1.RoleMaster
+		}
+		obs[m] = RoleObservation{Reachable: true, Role: role, ObservedAt: now, EngineVersion: fullEngineVersion}
+	}
+	instances := instanceStatuses(members, obs, now)
+	for _, in := range instances {
+		if in.ObservedEngineVersion != fullEngineVersion {
+			t.Fatalf("instance %s observedEngineVersion = %q", in.Name, in.ObservedEngineVersion)
+		}
+	}
+
+	r := &CubridClusterReconciler{}
+	same := &databasev1alpha1.CubridCluster{}
+	same.Spec.Version = cubridVersion
+	same.Status.Instances = instances
+	if !r.reconcileUpdateGuard(same) {
+		t.Errorf("spec %q on engine %q must not be blocked", cubridVersion, fullEngineVersion)
+	}
+	if same.Status.ObservedEngineVersion != fullEngineVersion {
+		t.Errorf("baseline = %q, want the full version", same.Status.ObservedEngineVersion)
+	}
+
+	other := &databasev1alpha1.CubridCluster{}
+	other.Spec.Version = otherSeries
+	other.Status.Instances = instances
+	if r.reconcileUpdateGuard(other) {
+		t.Errorf("spec 11.5 on engine %q must be blocked", fullEngineVersion)
+	}
+}
+
+// A member that cannot be reached, or whose answer is stale, reports no version.
+func TestInstanceStatuses_VersionNeedsAFreshAnswer(t *testing.T) {
+	now := time.Now()
+	obs := map[string]RoleObservation{
+		c0: {Reachable: false, ObservedAt: now, EngineVersion: fullEngineVersion},
+		c1: {Reachable: true, ObservedAt: now.Add(-time.Hour), EngineVersion: fullEngineVersion},
+	}
+	for _, in := range instanceStatuses([]string{c0, c1}, obs, now) {
+		if in.ObservedEngineVersion != "" {
+			t.Errorf("instance %s reports %q from an unusable observation", in.Name, in.ObservedEngineVersion)
+		}
+	}
+}
+
+func TestObservationFromStatus_CarriesEngineVersion(t *testing.T) {
+	for _, role := range []instancemanager.Role{instancemanager.RoleMaster, instancemanager.RoleUnknown} {
+		o := observationFromStatus(instancemanager.HAStatus{Role: role, EngineVersion: fullEngineVersion}, time.Now())
+		if o.EngineVersion != fullEngineVersion {
+			t.Errorf("role %s: EngineVersion = %q", role, o.EngineVersion)
+		}
 	}
 }

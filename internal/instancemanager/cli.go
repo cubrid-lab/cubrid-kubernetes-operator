@@ -19,6 +19,7 @@ package instancemanager
 import (
 	"context"
 	"os/exec"
+	"regexp"
 	"time"
 )
 
@@ -54,4 +55,18 @@ func HeartbeatStatus(ctx context.Context, cli CLI) HAStatus {
 		return HAStatus{Role: RoleUnknown, Source: "heartbeat", Reason: "heartbeat status failed: " + err.Error()}
 	}
 	return ParseHAStatus(out)
+}
+
+// engineVersionPattern matches the full version in cubrid_rel output:
+// "CUBRID 11.4.6 (11.4.6.1963-0e7d3c1) (64bit ..." (docs/poc/RESULTS.md, POC-10).
+var engineVersionPattern = regexp.MustCompile(`\((\d+\.\d+\.\d+\.\d+)[-)]`)
+
+// ParseEngineVersion extracts the full engine version ("11.4.6.1963") from
+// cubrid_rel output, or "" when the output does not carry one.
+func ParseEngineVersion(out string) string {
+	m := engineVersionPattern.FindStringSubmatch(out)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }

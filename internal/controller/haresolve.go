@@ -101,10 +101,15 @@ type PrimaryResolution struct {
 // at `now`: reachable, a known role, stamped within roleObservationTTL (either
 // side, so a skewed future stamp does not count), and not self-contradicting.
 func authoritative(o RoleObservation, now time.Time) bool {
-	if !o.Reachable || o.Role == databasev1alpha1.RoleUnknown || o.Role == "" || o.Conflicting {
+	if o.Role == databasev1alpha1.RoleUnknown || o.Role == "" || o.Conflicting {
 		return false
 	}
-	if o.ObservedAt.IsZero() {
+	return fresh(o, now)
+}
+
+// fresh reports whether o is an answer received within roleObservationTTL.
+func fresh(o RoleObservation, now time.Time) bool {
+	if !o.Reachable || o.ObservedAt.IsZero() {
 		return false
 	}
 	age := now.Sub(o.ObservedAt)
@@ -166,11 +171,18 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 			role = o.Role
 			ready = role == databasev1alpha1.RoleMaster || role == databasev1alpha1.RoleSlave || role == databasev1alpha1.RoleReplica
 		}
+		// The engine version does not depend on the HA role, so it is kept
+		// from any reachable, fresh answer, also one whose role is not trusted.
+		version := ""
+		if o, ok := obs[m]; ok && fresh(o, now) {
+			version = o.EngineVersion
+		}
 		out = append(out, databasev1alpha1.InstanceStatus{
-			Name:    m,
-			Ordinal: int32(i), //nolint:gosec // member index is a small StatefulSet ordinal
-			Role:    role,
-			Ready:   ready,
+			Name:                  m,
+			Ordinal:               int32(i), //nolint:gosec // member index is a small StatefulSet ordinal
+			Role:                  role,
+			Ready:                 ready,
+			ObservedEngineVersion: version,
 		})
 	}
 	return out

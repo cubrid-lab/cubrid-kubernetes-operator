@@ -46,6 +46,9 @@ type HAStatus struct {
 	Source string `json:"source"`
 	// Reason is a human-readable explanation, set when Role is unknown.
 	Reason string `json:"reason,omitempty"`
+	// EngineVersion is the local engine's full version ("11.4.6.1963"),
+	// independent of the HA role; empty when it could not be read.
+	EngineVersion string `json:"engineVersion,omitempty"`
 }
 
 // NodeState is one node's line in the HA-Node Info block.
