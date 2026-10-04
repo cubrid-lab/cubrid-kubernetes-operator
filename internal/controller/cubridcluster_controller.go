@@ -145,6 +145,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.failed(ctx, &cluster, "SecretReconcileFailed", err)
 	}
 
+	// The HA member list every member reads (ADR-0004); none when standalone.
+	if err := r.reconcileHAConfig(ctx, &cluster); err != nil {
+		log.Error(err, "Failed to reconcile HA ConfigMap")
+		return r.failed(ctx, &cluster, "HAConfigReconcileFailed", err)
+	}
+
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
 	sts, err := r.reconcileStatefulSet(ctx, &cluster)
 	if err != nil {

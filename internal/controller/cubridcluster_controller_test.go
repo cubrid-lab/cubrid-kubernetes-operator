@@ -131,6 +131,20 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
 			Expect(svc.Spec.PublishNotReadyAddresses).To(BeTrue())
 
+			By("publishing one cubrid_ha.conf with the short member names in ordinal order (#105)")
+			haConfig := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: resourceName + "-ha-config", Namespace: resourceNamespace,
+			}, haConfig)).To(Succeed())
+			Expect(haConfig.Data).To(HaveKeyWithValue("cubrid_ha.conf",
+				"[common]\n"+
+					"ha_node_list=cubrid@test-resource-0:test-resource-1:test-resource-2\n"+
+					"ha_db_list=appdb\n"+
+					"ha_port_id=59901\n"))
+			owner := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, owner)).To(Succeed())
+			Expect(metav1.IsControlledBy(haConfig, owner)).To(BeTrue())
+
 			By("creating the StatefulSet with the desired replicas and OnDelete strategy")
 			sts := &appsv1.StatefulSet{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, sts)).To(Succeed())
