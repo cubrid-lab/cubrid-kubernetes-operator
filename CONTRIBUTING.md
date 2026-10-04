@@ -86,9 +86,20 @@ make cleanup-test-e2e KIND_CLUSTER=cubrid-contributor-e2e
 
 The target builds the manager image, creates/reuses the named Kind cluster,
 and deletes that cluster after a successful run. Never reuse a valuable
-cluster name. The current suite checks the manager and Kubernetes resources;
-a passing run alone does not establish working CUBRID SQL or HA recovery.
-The real-database lane is tracked in issues #101 and #122.
+cluster name. The suite has three kinds of scenario: the manager itself, the wiring
+scenario with a fake Instance Manager (label `fake-instance-manager`, no
+CUBRID), and S00 with the real CUBRID image (labels `db` and `S00`), which
+runs on linux/amd64 only and is skipped elsewhere. A skipped scenario was not
+run. S00 covers one standalone member; a passing run does not establish HA,
+failover, backup or restore.
+
+```bash
+make test-e2e E2E_LABEL_FILTER=S00        # one scenario by its ID
+make test-e2e E2E_LABEL_FILTER='!db'      # without the real-database scenarios
+make test-e2e E2E_EVIDENCE_DIR=$PWD/artifacts/e2e   # keep each scenario's result record
+```
+
+Path filters and the VM-lab entry points for this lane are tracked in #122.
 
 `make install`, `make deploy` and `make run` use the selected kubecontext.
 Check `kubectl config current-context` before using them in a disposable

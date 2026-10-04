@@ -150,7 +150,7 @@ spec:
 			// What a reader needs to judge the run, pass or fail.
 			if out, err := kubectl("get", "events", "--field-selector", "reason=Unhealthy",
 				"-o", `jsonpath={range .items[*]}{.involvedObject.name}{": "}{.message}{"\n"}{end}`); err == nil {
-				evidence.ProbeFailureEvents = utils.GetNonEmptyLines(out)
+				evidence.ProbeFailureEvents = append(evidence.ProbeFailureEvents, utils.GetNonEmptyLines(out)...)
 			}
 			if out, err := kubectl("get", "pod", pod, "-o", "jsonpath={.status.containerStatuses[0].restartCount}"); err == nil {
 				evidence.ContainerRestarts = out

@@ -79,8 +79,8 @@ POC history, not live support certification.
 
 | Area | Existing implementation/evidence | Live Operator validation |
 |---|---|---|
-| Foundation | Kubebuilder scaffold, v1alpha1 APIs, generated resources, unit/envtest and manager E2E skeleton | Real CUBRID SQL smoke remains unverified (#101) |
-| Runtime | Instance Manager handlers and derivative image definition; non-root entrypoint checked with the real 11.4 image under podman (start, stop, restart, recovery start) | Not yet run in a Pod on Kind (#101). The Pod gets the operation store, staging roots and the cluster's object-storage settings (envtest only) |
+| Foundation | Kubebuilder scaffold, v1alpha1 APIs, generated resources, unit/envtest and manager E2E skeleton | S00 runs in CI on Kind (linux/amd64): a standalone cluster on the real 11.4 image becomes Ready, answers SQL through `csql` and keeps a row across a Pod deletion. One member only; no HA, broker, backup or failure scenario |
+| Runtime | Instance Manager handlers and derivative image definition; non-root entrypoint checked with the real 11.4 image under podman (start, stop, restart, recovery start) | Runs as a non-root Pod under the restricted Pod Security Standard on Kind (S00). The Pod gets the operation store, staging roots and the cluster's object-storage settings (envtest only) |
 | HA and Broker | Role discovery, primary resolution, Broker resource/config generation, the generated `cubrid_ha.conf` member list and the per-member alias Services (unit/envtest); manual engine POCs | The generated HA configuration is not yet applied to Pods. Automatic cluster bootstrap, replication and RW/RO SQL require #106–#108 and #83 |
 | Recovery and safety | State/role decision code; manual failover and split-brain POCs | Enforced SQL quarantine, rejoin and rebuild require #112–#118 |
 | Backup and restore | CubridBackup API/controller, Instance Manager artifact/restore paths; manual engine POCs | Real workflow, interrupted recovery and dataset checks require #88 and #119–#121 |
@@ -138,7 +138,8 @@ StatefulSet, Service, or Instance Manager architecture.
 ## Phase 1 — Foundation
 
 **Implementation:** Foundation code and CI are merged.
-**Live validation:** Real database SQL smoke is not yet established (#101).
+**Live validation:** S00 (standalone cluster, real SQL, data kept across a Pod
+deletion) runs on Kind in CI. Nothing beyond one member is validated.
 
 - Kubebuilder scaffold
 - leader election
