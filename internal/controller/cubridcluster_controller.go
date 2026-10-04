@@ -131,6 +131,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.failed(ctx, &cluster, "ServiceReconcileFailed", err)
 	}
 
+	// One alias Service per member, so its short HA host name resolves.
+	if err := r.reconcileMemberServices(ctx, &cluster); err != nil {
+		log.Error(err, "Failed to reconcile member Services")
+		return r.failed(ctx, &cluster, "MemberServiceReconcileFailed", err)
+	}
+
 	// The DB Pods authenticate the operator with a shared token (ADR-0003).
 	// Without one the Instance Manager would accept any caller, so refuse to
 	// create DB Pods until the operator is configured.
@@ -189,9 +195,9 @@ func (r *CubridClusterReconciler) reconcileHeadlessService(ctx context.Context, 
 		svc.Spec.PublishNotReadyAddresses = true
 		svc.Spec.Selector = labelsFor(cluster)
 		svc.Spec.Ports = []corev1.ServicePort{
-			{Name: "cubrid", Port: cubridServerPort, TargetPort: intOrString(cubridServerPort)},
+			{Name: portNameCubrid, Port: cubridServerPort, TargetPort: intOrString(cubridServerPort)},
 			{Name: "broker", Port: cubridBrokerPort, TargetPort: intOrString(cubridBrokerPort)},
-			{Name: "manager", Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
+			{Name: portNameManager, Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
 		}
 		return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
 	})

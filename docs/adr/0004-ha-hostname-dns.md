@@ -123,6 +123,16 @@ This is **not** "master is always ordinal 0" — mastership is
 runtime-decided (ADR-0001); ordinal 0 may be bootstrapped first, but that
 is separate from the identity model.
 
+### Alias Services as implemented
+
+The operator creates the alias Service of every promotable member, also for a
+standalone cluster, because it calls each member's Instance Manager by that
+name. A Service of a member's name that the cluster does not control is left
+untouched and the reconcile fails with `MemberServiceReconcileFailed`; it is
+not adopted. Alias Services whose member no longer exists are deleted. Each
+carries `database.cubrid.io/service-role: member` to tell it from the governing
+Service.
+
 ### Generated configuration
 
 The operator renders one `cubrid_ha.conf` per cluster and publishes it in the
