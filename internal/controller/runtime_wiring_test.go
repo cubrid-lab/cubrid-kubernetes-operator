@@ -138,6 +138,13 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		Expect(c.ReadinessProbe.TimeoutSeconds).To(BeNumerically(">=", 5))
 	})
 
+	// With OrderedReady a full restart would start member 0 alone, whatever
+	// its role was; the field cannot be changed after creation (#156).
+	It("creates all members in parallel", func() {
+		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-parallel"))
+		Expect(statefulSet("wiring-parallel").Spec.PodManagementPolicy).To(Equal(appsv1.ParallelPodManagement))
+	})
+
 	It("passes the database, its path on the data volume and the start mode", func() {
 		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-env"))
 		c := statefulSet("wiring-env").Spec.Template.Spec.Containers[0]

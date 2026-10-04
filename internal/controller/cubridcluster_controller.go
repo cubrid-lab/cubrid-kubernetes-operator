@@ -241,6 +241,10 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 			sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 			sts.Spec.ServiceName = instancesServiceName(cluster.Name)
 			sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{r.dataPVCTemplate(cluster)}
+			// Parallel: no member waits for a lower ordinal to be Ready, so a
+			// full restart never starts member 0 alone and no ordinal is
+			// favoured (ADR-0001, "Pod management policy").
+			sts.Spec.PodManagementPolicy = appsv1.ParallelPodManagement
 		}
 		sts.Spec.Replicas = &replicas
 		// OnDelete: the operator owns pod replacement sequencing (ADR-0003/0009).
