@@ -441,11 +441,13 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		}
 	}
 
+	// Read before the condition is set below, so the event marks the transition.
+	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
 	if ready >= desired && desired > 0 {
 		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",
 			fmt.Sprintf("%d/%d instances ready", ready, desired))
 		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled", "cluster reconciled")
-		if !meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady) {
+		if !wasReady {
 			r.event(cluster, corev1.EventTypeNormal, "ClusterReady",
 				fmt.Sprintf("all %d instances ready", desired))
 		}
@@ -490,6 +492,11 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	// A CUBRID failover changes no Kubernetes object, and /readyz answers 200
+	// for a master and a slave alike, so no event would bring the new roles in.
+	if cluster.Spec.HighAvailability.Enabled && r.Prober != nil {
+		return ctrl.Result{RequeueAfter: haResyncInterval}, nil
 	}
 	return ctrl.Result{}, nil
 }
