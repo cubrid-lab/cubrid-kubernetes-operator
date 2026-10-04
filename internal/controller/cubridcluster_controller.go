@@ -52,7 +52,7 @@ const (
 	//
 	// DefaultInstanceManagerImage is used when neither spec.image nor the
 	// operator's --instance-manager-image setting names an image.
-	DefaultInstanceManagerImage = "cubrid-operator/instance-manager:dev"
+	DefaultInstanceManagerImage = "ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev"
 	// dataMountPath is where the data PVC is mounted; CUBRID_DATABASES points
 	// below it so databases live on the PVC, not in the image's own volume.
 	dataMountPath = "/var/lib/cubrid"

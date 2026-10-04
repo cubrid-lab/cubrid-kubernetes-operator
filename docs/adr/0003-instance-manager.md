@@ -221,7 +221,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 
 | Item | Value |
 |---|---|
-| Image | `spec.image` if set, else the operator's `--instance-manager-image` (default `cubrid-operator/instance-manager:dev`) |
+| Image | `spec.image` if set, else the operator's `--instance-manager-image` (default `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev`) |
 | User | UID/GID 1000 (the official image's `cubrid` user), `fsGroup` 1000 so the data PVC is writable |
 | Data volume | the `data` PVC at `/var/lib/cubrid` |
 | `CUBRID_DATABASES` | `/var/lib/cubrid/databases`, on the PVC (the image's own default is an anonymous volume) |

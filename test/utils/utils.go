@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
@@ -31,8 +32,10 @@ const (
 	certmanagerVersion = "v1.21.1"
 	certmanagerURLTmpl = "https://github.com/cert-manager/cert-manager/releases/download/%s/cert-manager.yaml"
 
-	defaultKindBinary  = "kind"
-	defaultKindCluster = "kind"
+	defaultKindBinary = "kind"
+	// defaultContainerTool is the only tool `kind load docker-image` can read.
+	defaultContainerTool = "docker"
+	defaultKindCluster   = "kind"
 )
 
 func warnError(err error) {
@@ -133,20 +136,45 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
+// LoadImageToKindClusterWithName loads a locally built image into the kind
+// cluster. `kind load docker-image` reads the Docker daemon only, so with any
+// other tool (CONTAINER_TOOL, e.g. podman) the image is saved to an archive
+// and loaded from there.
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := defaultKindCluster
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
 	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
 		kindBinary = v
 	}
-	cmd := exec.Command(kindBinary, kindOptions...)
-	_, err := Run(cmd)
+	tool := ContainerTool()
+	if filepath.Base(tool) == defaultContainerTool {
+		_, err := Run(exec.Command(kindBinary, "load", "docker-image", name, "--name", cluster))
+		return err
+	}
+
+	dir, err := os.MkdirTemp("", "kind-image-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	archive := filepath.Join(dir, "image.tar")
+	if _, err := Run(exec.Command(tool, "save", "-o", archive, name)); err != nil {
+		return err
+	}
+	_, err = Run(exec.Command(kindBinary, "load", "image-archive", archive, "--name", cluster))
 	return err
+}
+
+// ContainerTool returns the tool that built the images under test: the
+// CONTAINER_TOOL the Makefile chose, or docker.
+func ContainerTool() string {
+	if v, ok := os.LookupEnv("CONTAINER_TOOL"); ok && v != "" {
+		return v
+	}
+	return defaultContainerTool
 }
 
 // GetNonEmptyLines converts given command output string into individual objects
