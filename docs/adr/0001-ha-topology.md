@@ -179,6 +179,42 @@ Unresolved: `currentPrimary` unset, roles `unknown`,
 must never report two `master` roles as a healthy steady state (see
 ADR-0005).
 
+### Pod management policy
+
+Decided by the maintainers on 2026-10-05 (#156): the StatefulSet is created
+with `podManagementPolicy: Parallel`. The field cannot be changed after the
+StatefulSet exists, so it is set explicitly at creation.
+
+What each policy does on a full restart of a three-member cluster:
+
+- **`OrderedReady`** (the Kubernetes default, used before this decision):
+  member 1 is not created until member 0 is Ready, and member 2 not until
+  member 1 is. Member 0 always starts alone, whatever its role was before the
+  restart. If it was a lagging slave, it is the only member up for as long as
+  it takes to become Ready, and a member that never becomes Ready keeps the
+  others from being created at all. The ordinal decides who comes first, which
+  conflicts with "ordinal 0 is not the permanent master".
+- **`Parallel`**: the three Pods are created together and CUBRID's heartbeat
+  decides the roles among the members that are up. No ordinal is favoured, and
+  one member that cannot start does not hold back the others.
+
+Consequences of `Parallel`:
+
+- The order of the first bootstrap (create the database once, then seed the
+  peers) cannot lean on the StatefulSet. The operator and the entrypoint have
+  to enforce it (#106): a member without HA configuration starts no CUBRID
+  process (#176), so Pods that exist early do nothing until they are told to.
+- Rolling updates are not affected: the update strategy is `OnDelete` and the
+  operator replaces Pods one at a time (ADR-0009).
+- A StatefulSet created before this decision keeps `OrderedReady`; such a
+  cluster has to be recreated. There is no released version, so no migration
+  is provided.
+
+Not verified: how CUBRID behaves when a lagging slave is the only member up,
+and what three members starting at once after a full stop agree on. Both need
+a real HA run on linux/amd64 and are part of the HA validation (#108, #110);
+the decision does not rest on an observation of either.
+
 ## Consequences
 
 ### Positive
