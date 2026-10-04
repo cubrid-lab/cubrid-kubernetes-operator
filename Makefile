@@ -90,6 +90,10 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 # CertManager is installed by default; skip with:
 # - CERT_MANAGER_INSTALL_SKIP=true
 KIND_CLUSTER ?= cubrid-kubernetes-operator-test-e2e
+# E2E_LABEL_FILTER selects scenarios by Ginkgo label, e.g. E2E_LABEL_FILTER=S00
+# for one scenario or E2E_LABEL_FILTER='!db' to leave out the real-database ones.
+# E2E_EVIDENCE_DIR, when set, receives each scenario's result record.
+E2E_LABEL_FILTER ?=
 
 .PHONY: setup-test-e2e
 setup-test-e2e: container-tool kind ## Set up a Kind cluster for e2e tests if it does not exist
@@ -103,7 +107,8 @@ setup-test-e2e: container-tool kind ## Set up a Kind cluster for e2e tests if it
 
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CONTAINER_TOOL=$(CONTAINER_TOOL) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL) \
+		go test -tags=e2e ./test/e2e/ -v -timeout 60m -ginkgo.v $(if $(E2E_LABEL_FILTER),-ginkgo.label-filter='$(E2E_LABEL_FILTER)')
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e

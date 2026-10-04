@@ -36,6 +36,9 @@ var (
 	managerImage = "example.com/cubrid-kubernetes-operator:v0.0.1"
 	// fakeIMImage is the test-only fake Instance Manager image (test/fakeim): no CUBRID.
 	fakeIMImage = "example.com/cubrid-fake-instance-manager:e2e"
+	// instanceManagerImage is the real Instance Manager image for the
+	// real-database scenarios: the official CUBRID image plus the manager.
+	instanceManagerImage = "example.com/cubrid-instance-manager:e2e"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
