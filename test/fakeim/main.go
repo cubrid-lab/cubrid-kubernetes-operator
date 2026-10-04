@@ -111,15 +111,20 @@ func (f *fakeCLI) heartbeatStatus() (string, error) {
 // It is not authenticated: the image exists only for tests.
 func (f *fakeCLI) handleRole(w http.ResponseWriter, r *http.Request) {
 	if set := r.URL.Query().Get("set"); set != "" {
-		role := instancemanager.Role(set)
-		switch role {
-		case instancemanager.RoleMaster, instancemanager.RoleSlave, instancemanager.RoleUnknown:
-			f.SetRole(role)
+		// The stored role is one of the constants, never the request's text.
+		switch set {
+		case string(instancemanager.RoleMaster):
+			f.SetRole(instancemanager.RoleMaster)
+		case string(instancemanager.RoleSlave):
+			f.SetRole(instancemanager.RoleSlave)
+		case string(instancemanager.RoleUnknown):
+			f.SetRole(instancemanager.RoleUnknown)
 		default:
 			http.Error(w, "set must be master, slave or unknown", http.StatusBadRequest)
 			return
 		}
 	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = fmt.Fprintln(w, f.Role())
 }
 
