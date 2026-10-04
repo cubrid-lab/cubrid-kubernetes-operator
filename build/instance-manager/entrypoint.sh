@@ -107,10 +107,15 @@ else
 fi
 
 stop_cubrid() {
-  [ "${started}" = "1" ] || return 0
   case "${CUBRID_COMPONENTS}" in
-    SERVER) cubrid server stop "${CUBRID_DB}" || true ;;
-    *)      cubrid heartbeat stop || true ;;
+    SERVER)
+      # Also when this script started nothing: after a recovery bootstrap the
+      # Instance Manager starts the restored server.
+      { [ "${started}" = "1" ] || database_registered; } || return 0
+      cubrid server stop "${CUBRID_DB}" || true ;;
+    *)
+      [ "${started}" = "1" ] || return 0
+      cubrid heartbeat stop || true ;;
   esac
 }
 

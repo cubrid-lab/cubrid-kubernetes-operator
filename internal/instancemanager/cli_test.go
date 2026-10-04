@@ -109,3 +109,21 @@ func TestTimeouts_Defaults(t *testing.T) {
 		t.Errorf("shutdown default %s is not below the preStop limit", got.Shutdown)
 	}
 }
+
+// `cubrid server start` leaves a daemon that inherits the command's output.
+// Run must return when the command itself exits, with what it printed, and
+// not wait for that daemon (observed with the real image, #178).
+func TestExecCLI_DoesNotWaitForADaemonHoldingTheOutput(t *testing.T) {
+	cli := ExecCLI{Timeout: 20 * time.Second}
+	start := time.Now()
+	out, err := cli.Run(context.Background(), "sh", "-c", "sleep 15 & echo started")
+	if err != nil {
+		t.Fatalf("Run: %v (%s)", err, out)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Run waited %s for the background process", elapsed)
+	}
+	if out != "started\n" {
+		t.Errorf("output = %q, want the command's own output", out)
+	}
+}

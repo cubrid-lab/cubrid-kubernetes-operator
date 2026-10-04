@@ -39,9 +39,11 @@ const (
 	OpUploading     OperationState = "Uploading"
 	OpDownloading   OperationState = "Downloading"
 	OpRestoring     OperationState = "Restoring"
-	OpCompleted     OperationState = "Completed"
-	OpFailed        OperationState = "Failed"
-	OpCleaningUp    OperationState = "CleaningUp"
+	// OpStarting: the restored standalone server is being started.
+	OpStarting   OperationState = "Starting"
+	OpCompleted  OperationState = "Completed"
+	OpFailed     OperationState = "Failed"
+	OpCleaningUp OperationState = "CleaningUp"
 )
 
 // IsTerminal reports whether the state is a final resting state.
