@@ -73,15 +73,15 @@ remain proposals until scheduled; required validation takes precedence.
 
 ## Implementation and validation inventory
 
-Baseline: main `017dbbe` (2026-10-03); review/update these rows when a relevant
+Baseline: main `a6cadd0` (2026-10-05); review/update these rows when a relevant
 PR merges or candidate evidence arrives. The table records existing code and
 POC history, not live support certification.
 
 | Area | Existing implementation/evidence | Live Operator validation |
 |---|---|---|
 | Foundation | Kubebuilder scaffold, v1alpha1 APIs, generated resources, unit/envtest and manager E2E skeleton | S00 runs in CI on Kind (linux/amd64): a standalone cluster on the real 11.4 image becomes Ready, answers SQL through `csql` and keeps a row across a Pod deletion. One member only; no HA, broker, backup or failure scenario |
-| Runtime | Instance Manager handlers and derivative image definition; non-root entrypoint checked with the real 11.4 image under podman (start, stop, restart, recovery start) | Runs as a non-root Pod under the restricted Pod Security Standard on Kind (S00). The Pod gets the operation store, staging roots and the cluster's object-storage settings (envtest only) |
-| HA and Broker | Role discovery, primary resolution, Broker resource/config generation, the generated `cubrid_ha.conf` member list and the per-member alias Services (unit/envtest); manual engine POCs | The generated HA configuration is not yet applied to Pods. Automatic cluster bootstrap, replication and RW/RO SQL require #106–#108 and #83 |
+| Runtime | Instance Manager handlers and derivative image definition; non-root entrypoint checked with the real 11.4 image under podman, which was linux/amd64 under emulation: command output only, no timing evidence (start, stop, restart, recovery start) | Runs as a non-root Pod under the restricted Pod Security Standard on Kind (S00). The Pod gets the operation store, staging roots and the cluster's object-storage settings (envtest only) |
+| HA and Broker | Role discovery, primary resolution, Broker resource/config generation, the generated `cubrid_ha.conf` member list and the per-member alias Services (unit/envtest); manual engine POCs | The generated HA configuration is not yet applied to Pods; an HA member without it stays up with the manager only and reports no role. Automatic cluster bootstrap, replication and RW/RO SQL require #106–#108 and #83 |
 | Recovery and safety | State/role decision code; manual failover and split-brain POCs | Enforced SQL quarantine, rejoin and rebuild require #112–#118 |
 | Backup and restore | CubridBackup API/controller, Instance Manager artifact/restore paths; manual engine POCs | Real workflow, interrupted recovery and dataset checks require #88 and #119–#121 |
 | Hardening | Update sequencing, auth, metrics and Events code | Placement/retention/PDB, security and operational accuracy require #90–#92; updates conditional (#96) |
