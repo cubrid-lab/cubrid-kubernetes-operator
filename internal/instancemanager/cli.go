@@ -37,12 +37,17 @@ type ExecCLI struct {
 }
 
 func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
-	to := c.Timeout
-	if to <= 0 {
-		to = 10 * time.Second
+	// A caller that set a deadline knows how long its command may take
+	// (backupdb, restoredb, server stop); the default bounds everything else.
+	if _, ok := ctx.Deadline(); !ok {
+		to := c.Timeout
+		if to <= 0 {
+			to = 10 * time.Second
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, to)
+		defer cancel()
 	}
-	ctx, cancel := context.WithTimeout(ctx, to)
-	defer cancel()
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	return string(out), err
 }

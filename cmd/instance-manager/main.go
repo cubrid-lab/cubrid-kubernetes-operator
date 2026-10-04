@@ -41,6 +41,9 @@ func run() error {
 	token := os.Getenv("IM_TOKEN")
 
 	server := instancemanager.NewServer(instancemanager.ExecCLI{Timeout: 10 * time.Second}, token).
+		// A backup may stage only below this root; it is also what a failed
+		// backup removes. It matches the operator's backup staging path.
+		WithBackupStagingRoot(envOr("IM_BACKUP_STAGING_ROOT", "/var/lib/cubrid/backup-staging")).
 		WithRestoreRoots(instancemanager.RestoreRoots{
 			// A restore may write only into the database root and stage only
 			// below the staging root; both come from this process, never a request.
@@ -53,6 +56,12 @@ func run() error {
 	if os.Getenv("CUBRID_COMPONENTS") == "SERVER" {
 		server = server.WithStandaloneDatabase(envOr("CUBRID_DB", "appdb"))
 	}
+
+	timeouts, err := timeoutsFromEnv()
+	if err != nil {
+		return err
+	}
+	server = server.WithTimeouts(timeouts)
 
 	// Durable operation store on the PVC enables the async /v1/backup +
 	// /v1/operations endpoints; without it those endpoints stay disabled.
@@ -111,4 +120,27 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// timeoutsFromEnv reads the operation deadlines (Go durations, e.g. "3h").
+// An unset variable keeps the default; an unparseable one is an error rather
+// than a silently ignored setting.
+func timeoutsFromEnv() (instancemanager.Timeouts, error) {
+	var t instancemanager.Timeouts
+	for key, dst := range map[string]*time.Duration{
+		"IM_BACKUP_TIMEOUT":   &t.Backup,
+		"IM_RESTORE_TIMEOUT":  &t.Restore,
+		"IM_SHUTDOWN_TIMEOUT": &t.Shutdown,
+	} {
+		v := os.Getenv(key)
+		if v == "" {
+			continue
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return t, fmt.Errorf("%s=%q is not a positive duration", key, v)
+		}
+		*dst = d
+	}
+	return t, nil
 }

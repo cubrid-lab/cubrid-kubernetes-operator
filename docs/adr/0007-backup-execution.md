@@ -93,6 +93,11 @@ master when role discovery is broken).
   (`/var/lib/cubrid/backup-staging/<backup-uid>/<attempt>/`), logically
   separate from DB data, on the PVC in v1alpha1 (optional dedicated
   staging volume later).
+  As implemented, the Instance Manager accepts a destination only when it is
+  one directory directly below its staging root (`IM_BACKUP_STAGING_ROOT`,
+  default `/var/lib/cubrid/backup-staging`), which is what the operator
+  sends (`<root>/<backup-uid>`), and removes that directory when the backup
+  fails. The per-attempt level above is not implemented.
 - **Stage then upload** (not pure streaming) is the safe baseline;
   preflight free-space check, per-attempt directory, refuse concurrent
   backups per pod, delete staging only after upload+checksum+manifest

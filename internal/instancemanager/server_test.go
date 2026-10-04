@@ -108,9 +108,9 @@ func TestServer_Role_LoopbackExempt(t *testing.T) {
 }
 
 func TestServer_Backup(t *testing.T) {
-	h := NewServer(fakeCLI{out: "Backup Volume Label: Level: 0"}, "tok").Handler()
+	h := NewServer(fakeCLI{out: "Backup Volume Label: Level: 0"}, "tok").WithBackupStagingRoot("/im-test-staging").Handler()
 
-	req := httptest.NewRequest("POST", "/v1/backup", strings.NewReader(`{"database":"appdb","destination":"/tmp/bk"}`))
+	req := httptest.NewRequest("POST", "/v1/backup", strings.NewReader(`{"database":"appdb","destination":"/im-test-staging/bk"}`))
 	req.Header.Set("Authorization", "Bearer tok")
 	req.RemoteAddr = testRemoteAddr
 	rr := httptest.NewRecorder()
