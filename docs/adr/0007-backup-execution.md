@@ -97,7 +97,9 @@ master when role discovery is broken).
   one directory directly below its staging root (`IM_BACKUP_STAGING_ROOT`,
   default `/var/lib/cubrid/backup-staging`), which is what the operator
   sends (`<root>/<backup-uid>`), and removes that directory when the backup
-  fails. The per-attempt level above is not implemented.
+  fails. It creates that directory, and the staging root when the volume
+  does not have it yet, before `backupdb` runs: the command does not create
+  its destination (POC-12). The per-attempt level above is not implemented.
 - **Stage then upload** (not pure streaming) is the safe baseline;
   preflight free-space check, per-attempt directory, refuse concurrent
   backups per pod, delete staging only after upload+checksum+manifest

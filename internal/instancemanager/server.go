@@ -238,6 +238,10 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		ctx, cancel := context.WithTimeout(r.Context(), s.timeouts.Backup)
 		defer cancel()
+		if err := s.createBackupStaging(req.Destination); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+			return
+		}
 		res, err := Backup(ctx, s.cli, req)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
@@ -292,6 +296,10 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		}
 
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRunningBackup }); err != nil {
+			return
+		}
+		if err := s.createBackupStaging(req.Destination); err != nil {
+			fail(err.Error())
 			return
 		}
 		if _, err := Backup(ctx, s.cli, req); err != nil {
@@ -522,6 +530,25 @@ func confineBackupDestination(destination, root string) (string, error) {
 		return "", fmt.Errorf("destination %q must be one directory directly below %q", destination, root)
 	}
 	return filepath.Join(root, name), nil
+}
+
+// createBackupStaging creates a backup's staging directory, and the staging
+// root when the data volume does not have it yet: backupdb fails when its
+// destination does not exist (docs/poc/RESULTS.md, POC-12). The directory is
+// created through an os.Root on the staging root, so it cannot land elsewhere.
+func (s *Server) createBackupStaging(destination string) error {
+	if err := os.MkdirAll(s.backupStagingRoot, 0o750); err != nil {
+		return fmt.Errorf("create the backup staging root: %w", err)
+	}
+	root, err := os.OpenRoot(s.backupStagingRoot)
+	if err != nil {
+		return fmt.Errorf("open the backup staging root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Mkdir(filepath.Base(destination), 0o750); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("create the backup staging directory: %w", err)
+	}
+	return nil
 }
 
 // removeBackupStaging deletes a backup's staging directory. It removes only a

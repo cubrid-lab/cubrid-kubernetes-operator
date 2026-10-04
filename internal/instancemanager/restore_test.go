@@ -181,12 +181,16 @@ func TestRestore_RegistersTheTargetBeforeRestoredb(t *testing.T) {
 	}
 
 	var entryAtRun []string
-	var dirAtRun bool
+	var dirAtRun, lobAtRun bool
 	cli := &restoreCLI{}
 	cli.onRun = func() {
 		entryAtRun = databasesTxtEntry(t, req.TargetDir, dbName)
 		info, err := os.Stat(dbDir)
 		dirAtRun = err == nil && info.IsDir()
+		// restoredb does not create the lob directory the entry names, and
+		// a BLOB insert fails without it (docs/poc/RESULTS.md, POC-12).
+		info, err = os.Stat(filepath.Join(dbDir, "lob"))
+		lobAtRun = err == nil && info.IsDir()
 	}
 
 	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err != nil {
@@ -194,6 +198,9 @@ func TestRestore_RegistersTheTargetBeforeRestoredb(t *testing.T) {
 	}
 	if !dirAtRun {
 		t.Errorf("%s did not exist when restoredb ran", dbDir)
+	}
+	if !lobAtRun {
+		t.Errorf("%s/lob did not exist when restoredb ran", dbDir)
 	}
 	host, err := os.Hostname()
 	if err != nil {
