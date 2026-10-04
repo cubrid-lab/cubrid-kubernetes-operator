@@ -150,10 +150,34 @@ type RecoverySource struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	ManifestURI string `json:"manifestUri"`
-	// storageSecretRef references object-storage credentials on THIS cluster
-	// (never the source cluster's secrets).
+}
+
+// CubridObjectStorage is the S3-compatible object storage the cluster's DB
+// Pods use for backup and restore (ADR-0007/0008). It is set per cluster: the
+// Instance Manager takes its endpoint and credentials from its own
+// environment at Pod start, never from a request, so changing them needs the
+// Pods restarted.
+type CubridObjectStorage struct {
+	// endpoint is the service address as host[:port], without a scheme.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[^/\s]+$`
+	Endpoint string `json:"endpoint"`
+
+	// region is the bucket region, when the service needs one.
 	// +optional
-	StorageSecretRef *corev1.LocalObjectReference `json:"storageSecretRef,omitempty"`
+	Region string `json:"region,omitempty"`
+
+	// insecure makes the DB Pods use plain HTTP instead of TLS. For
+	// development object stores only.
+	// +optional
+	Insecure bool `json:"insecure,omitempty"`
+
+	// credentialsSecretRef names a Secret in the cluster's namespace with the
+	// keys accessKey and secretKey. The operator does not read it; the DB Pods
+	// receive the two keys as environment variables.
+	// +kubebuilder:validation:Required
+	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
 }
 
 // CubridBootstrap selects how a new cluster is initialized (ADR-0008/0010).
@@ -171,6 +195,7 @@ type CubridBootstrap struct {
 // +kubebuilder:validation:XValidation:rule="!self.highAvailability.enabled ? self.topology.promotableMembers == 1 : true",message="when highAvailability.enabled is false, topology.promotableMembers must be 1"
 // +kubebuilder:validation:XValidation:rule="self.highAvailability.enabled ? self.topology.promotableMembers == 3 : true",message="when highAvailability.enabled is true, v1alpha1 requires exactly 3 promotable members"
 // +kubebuilder:validation:XValidation:rule="self.highAvailability.fencingPolicy != 'Automatic'",message="fencingPolicy Automatic is not supported in v1alpha1"
+// +kubebuilder:validation:XValidation:rule="!has(self.bootstrap) || !has(self.bootstrap.recovery) || has(self.objectStorage)",message="bootstrap.recovery requires objectStorage: the DB Pods read the backup from it"
 // +kubebuilder:validation:XValidation:rule="oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))",message="database names are immutable; existing names must be preserved"
 type CubridClusterSpec struct {
 	// version is the desired CUBRID engine compatibility version (e.g. "11.4").
@@ -207,6 +232,12 @@ type CubridClusterSpec struct {
 	// bootstrap selects cluster initialization (fresh vs recovery; ADR-0008).
 	// +optional
 	Bootstrap *CubridBootstrap `json:"bootstrap,omitempty"`
+
+	// objectStorage configures the object storage the DB Pods use for backup
+	// and restore. Required for a recovery bootstrap and for a CubridBackup
+	// with an ObjectStorage destination.
+	// +optional
+	ObjectStorage *CubridObjectStorage `json:"objectStorage,omitempty"`
 
 	// dbaPasswordSecretRef references the DBA password Secret.
 	// +optional

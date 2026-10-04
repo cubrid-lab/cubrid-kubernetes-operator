@@ -144,10 +144,19 @@ spec:
       provider: S3Compatible
       bucket: cubrid-backups
       prefix: prod/example
-      endpointRef: { name: s3-endpoint }
-      credentialsRef: { name: s3-credentials }
 ```
 
+- **Object storage is set per cluster, not per backup** (#99):
+  `CubridCluster.spec.objectStorage` carries the endpoint, optional region,
+  an `insecure` switch for development stores, and `credentialsSecretRef`, a
+  Secret in the cluster's namespace with the keys `accessKey` and
+  `secretKey`. The operator passes them to the DB Pods as environment
+  (`IM_S3_*`), the credentials as Secret references it never reads, so the
+  rule that credentials come only from the manager's environment holds. A
+  backup names only bucket and prefix. Changing the endpoint or the
+  credentials takes effect when the Pods restart. A backup to object storage
+  on a cluster without the setting is not started
+  (`ObjectStorageNotConfigured`).
 - **Full backups only** (`level: Full` → CUBRID level 0); no incremental
   chains in v1alpha1.
 - **Single-shot only**; scheduling is a future separate API

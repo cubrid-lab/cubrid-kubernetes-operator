@@ -134,14 +134,6 @@ type ObjectStorageDestination struct {
 	// prefix is the key prefix under the bucket.
 	// +optional
 	Prefix string `json:"prefix,omitempty"`
-
-	// endpointRef references a ConfigMap/Secret with the endpoint.
-	// +optional
-	EndpointRef *LocalObjectRef `json:"endpointRef,omitempty"`
-
-	// credentialsRef references a Secret with object-storage credentials.
-	// +kubebuilder:validation:Required
-	CredentialsRef LocalObjectRef `json:"credentialsRef"`
 }
 
 // CubridBackupPhase is a high-level lifecycle phase (ADR-0007).

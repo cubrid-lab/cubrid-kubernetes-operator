@@ -56,6 +56,8 @@ const (
 	// dataMountPath is where the data PVC is mounted; CUBRID_DATABASES points
 	// below it so databases live on the PVC, not in the image's own volume.
 	dataMountPath = "/var/lib/cubrid"
+	// operationsDir holds the Instance Manager's durable operation records.
+	operationsDir = dataMountPath + "/operations"
 	// cubridUID is the cubrid user and group of the official CUBRID image.
 	cubridUID int64 = 1000
 	// imTokenKey is the key of the Instance Manager token in <cluster>-im-token.
@@ -384,16 +386,58 @@ func instanceManagerEnv(cluster *databasev1alpha1.CubridCluster) []corev1.EnvVar
 	if cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Recovery != nil {
 		bootstrap = "recovery"
 	}
-	return []corev1.EnvVar{
+	return append([]corev1.EnvVar{
 		{Name: "CUBRID_DB", Value: db},
-		{Name: "CUBRID_DATABASES", Value: dataMountPath + "/databases"},
+		{Name: "CUBRID_DATABASES", Value: restoreTargetRoot},
 		{Name: "CUBRID_COMPONENTS", Value: components},
 		{Name: "CUBRID_BOOTSTRAP", Value: bootstrap},
 		{Name: "IM_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: imTokenSecretName(cluster.Name)},
 			Key:                  imTokenKey,
 		}}},
+		// Operation records live on the data volume so they survive a restart;
+		// without this the manager serves no asynchronous backup or restore.
+		{Name: "IM_OPERATIONS_DIR", Value: operationsDir},
+		// The manager confines every staging path to these roots; they are the
+		// ones the operator builds its requests with.
+		{Name: "IM_BACKUP_STAGING_ROOT", Value: backupStagingRoot},
+		{Name: "IM_RESTORE_STAGING_ROOT", Value: restoreStagingRoot},
+	}, objectStorageEnv(cluster.Spec.ObjectStorage)...)
+}
+
+// Keys of the Secret that spec.objectStorage.credentialsSecretRef names.
+const (
+	objectStorageAccessKey = "accessKey"
+	objectStorageSecretKey = "secretKey"
+)
+
+// objectStorageEnv is the object-storage part of the manager's environment
+// (ADR-0007: credentials come only from the manager's environment). The
+// credentials are passed as references to the user's Secret; the operator
+// never reads them.
+func objectStorageEnv(storage *databasev1alpha1.CubridObjectStorage) []corev1.EnvVar {
+	if storage == nil {
+		return nil
 	}
+	fromSecret := func(key string) *corev1.EnvVarSource {
+		return &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: storage.CredentialsSecretRef,
+			Key:                  key,
+		}}
+	}
+	env := make([]corev1.EnvVar, 0, 5)
+	env = append(env,
+		corev1.EnvVar{Name: "IM_S3_ENDPOINT", Value: storage.Endpoint},
+		corev1.EnvVar{Name: "IM_S3_ACCESS_KEY", ValueFrom: fromSecret(objectStorageAccessKey)},
+		corev1.EnvVar{Name: "IM_S3_SECRET_KEY", ValueFrom: fromSecret(objectStorageSecretKey)},
+	)
+	if storage.Region != "" {
+		env = append(env, corev1.EnvVar{Name: "IM_S3_REGION", Value: storage.Region})
+	}
+	if storage.Insecure {
+		env = append(env, corev1.EnvVar{Name: "IM_S3_INSECURE", Value: "true"})
+	}
+	return env
 }
 
 func boolToFloat(b bool) float64 {

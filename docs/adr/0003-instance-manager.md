@@ -229,6 +229,9 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_COMPONENTS` | `SERVER` for one member; `HA` otherwise, refined by the HA bootstrap (#106) |
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
+| `IM_OPERATIONS_DIR` | `/var/lib/cubrid/operations`, on the PVC: the durable operation records. Without it the manager serves no asynchronous backup or restore |
+| `IM_BACKUP_STAGING_ROOT`, `IM_RESTORE_STAGING_ROOT` | `/var/lib/cubrid/backup-staging` and `/var/lib/cubrid/restore-staging`: the roots the operator builds its requests with |
+| `IM_S3_ENDPOINT`, `IM_S3_REGION`, `IM_S3_INSECURE`, `IM_S3_ACCESS_KEY`, `IM_S3_SECRET_KEY` | from `spec.objectStorage` when set; the two keys are references to the Secret it names (`accessKey`, `secretKey`) |
 | `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the preStop limit (110s). The operator does not set them |
 | PID 1 | the entrypoint shell, running as UID 1000 with no capabilities; the Instance Manager is its child |
 | Termination | on `SIGTERM` the shell stops CUBRID (`cubrid server stop <db>` for `SERVER`, `cubrid heartbeat stop` otherwise), then the manager, and exits with the manager's status |

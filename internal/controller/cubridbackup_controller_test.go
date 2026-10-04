@@ -90,8 +90,7 @@ var _ = Describe("CubridBackup Controller", func() {
 				Destination: databasev1alpha1.CubridBackupDestination{
 					Type: databasev1alpha1.DestinationObjectStorage,
 					ObjectStorage: &databasev1alpha1.ObjectStorageDestination{
-						Bucket:         "cubrid-backups",
-						CredentialsRef: databasev1alpha1.LocalObjectRef{Name: "s3-credentials"},
+						Bucket: "cubrid-backups",
 					},
 				},
 			},
@@ -110,9 +109,10 @@ var _ = Describe("CubridBackup Controller", func() {
 		cluster := &databasev1alpha1.CubridCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "bk-cluster", Namespace: namespace},
 			Spec: databasev1alpha1.CubridClusterSpec{
-				Version:   cubridVersion,
-				Topology:  databasev1alpha1.CubridTopology{PromotableMembers: 1},
-				Databases: []databasev1alpha1.CubridDatabase{{Name: demoDB}},
+				Version:       cubridVersion,
+				Topology:      databasev1alpha1.CubridTopology{PromotableMembers: 1},
+				Databases:     []databasev1alpha1.CubridDatabase{{Name: demoDB}},
+				ObjectStorage: testObjectStorage(),
 				Storage: databasev1alpha1.CubridStorage{
 					Data: databasev1alpha1.CubridStorageSpec{Size: resource.MustParse("1Gi")},
 				},
@@ -145,9 +145,10 @@ var _ = Describe("CubridBackup Controller", func() {
 		cluster := &databasev1alpha1.CubridCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "bk-cluster-run", Namespace: namespace},
 			Spec: databasev1alpha1.CubridClusterSpec{
-				Version:   cubridVersion,
-				Topology:  databasev1alpha1.CubridTopology{PromotableMembers: 1},
-				Databases: []databasev1alpha1.CubridDatabase{{Name: demoDB}},
+				Version:       cubridVersion,
+				Topology:      databasev1alpha1.CubridTopology{PromotableMembers: 1},
+				Databases:     []databasev1alpha1.CubridDatabase{{Name: demoDB}},
+				ObjectStorage: testObjectStorage(),
 				Storage: databasev1alpha1.CubridStorage{
 					Data: databasev1alpha1.CubridStorageSpec{Size: resource.MustParse("1Gi")},
 				},
@@ -187,6 +188,47 @@ var _ = Describe("CubridBackup Controller", func() {
 		Expect(done.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseCompleted))
 		Expect(done.Status.Artifact).NotTo(BeNil())
 		Expect(done.Status.Artifact.URI).To(Equal("s3://cubrid-backups/p/manifest.json"))
+	})
+
+	// The DB Pods take object-storage settings from the cluster at Pod start;
+	// a backup cannot bring its own (#99).
+	It("does not start a backup to object storage on a cluster without objectStorage", func() {
+		cluster := &databasev1alpha1.CubridCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "bk-cluster-nostore", Namespace: namespace},
+			Spec: databasev1alpha1.CubridClusterSpec{
+				Version:   cubridVersion,
+				Topology:  databasev1alpha1.CubridTopology{PromotableMembers: 1},
+				Databases: []databasev1alpha1.CubridDatabase{{Name: demoDB}},
+				Storage: databasev1alpha1.CubridStorage{
+					Data: databasev1alpha1.CubridStorageSpec{Size: resource.MustParse("1Gi")},
+				},
+			},
+		}
+		cluster.Spec.ObjectStorage = nil
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+
+		backup := newBackup("bk-nostore", "bk-cluster-nostore")
+		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+
+		fake := &fakeBackupClient{}
+		r := &CubridBackupReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(),
+			Prober: &memberProber{master: "bk-cluster-nostore-0"}, Backup: fake,
+		}
+		_, err := r.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: "bk-nostore", Namespace: namespace},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fake.idempotencyKey).To(BeEmpty(), "no backup may be started")
+
+		updated := &databasev1alpha1.CubridBackup{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(backup), updated)).To(Succeed())
+		Expect(updated.Status.Phase).NotTo(Equal(databasev1alpha1.BackupPhaseRunning))
+		ready := meta.FindStatusCondition(updated.Status.Conditions, conditionBackupReady)
+		Expect(ready).NotTo(BeNil())
+		Expect(ready.Reason).To(Equal("ObjectStorageNotConfigured"))
 	})
 
 	It("fails a backup whose referenced cluster does not exist", func() {

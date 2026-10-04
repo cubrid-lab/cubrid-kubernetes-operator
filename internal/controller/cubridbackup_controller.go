@@ -92,6 +92,18 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return r.pollBackup(ctx, &backup)
 	}
 
+	// The DB Pods get their object-storage endpoint and credentials from the
+	// cluster at Pod start (ADR-0007); a backup cannot bring its own. Not
+	// terminal: the cluster can be given the setting.
+	if backup.Spec.Destination.Type == databasev1alpha1.DestinationObjectStorage && cluster.Spec.ObjectStorage == nil {
+		if backup.Status.Phase == "" {
+			backup.Status.Phase = databasev1alpha1.BackupPhasePending
+		}
+		setBackupCondition(&backup, conditionBackupReady, metav1.ConditionFalse, "ObjectStorageNotConfigured",
+			"CubridCluster "+cluster.Name+" has no spec.objectStorage; its DB Pods cannot upload the backup")
+		return r.commit(ctx, &backup, ctrl.Result{RequeueAfter: backupPollAfter})
+	}
+
 	// No prober/client wired (envtest): hold Pending with an explicit reason,
 	// never a false Running/Completed.
 	if r.Prober == nil || r.Backup == nil {

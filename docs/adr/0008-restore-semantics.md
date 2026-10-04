@@ -85,10 +85,10 @@ never on the source namespace's secrets or CR.
 
 ### Credentials
 
-Restore uses object-storage credentials referenced from the **new**
-`CubridCluster` (`spec.bootstrap.recovery.storageSecretRef`, or the
-cluster's backup storage Secret). The restored cluster must not depend on
-the source cluster's secrets.
+Restore uses the object storage of the **new** `CubridCluster`
+(`spec.objectStorage`: endpoint and a reference to a credentials Secret in
+its namespace), which a recovery bootstrap requires. The restored cluster
+must not depend on the source cluster's secrets.
 
 ### CR surface
 
@@ -104,7 +104,9 @@ spec:
   bootstrap:
     recovery:
       manifestUri: s3://bucket/path/to/manifest.json
-      storageSecretRef: { name: restore-object-storage }
+  objectStorage:
+    endpoint: s3.example.com
+    credentialsSecretRef: { name: restore-object-storage }
 ```
 
 ### Execution / idempotency
