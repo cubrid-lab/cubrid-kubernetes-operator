@@ -10,7 +10,8 @@
 #      never hand-written.
 #   2. CUBRID_BOOTSTRAP=recovery never creates a database: the data comes from
 #      a backup through the Instance Manager (ADR-0008).
-#   3. `cubrid heartbeat start` is issued exactly once.
+#   3. `cubrid heartbeat start` is issued exactly once, and only when the HA
+#      configuration is in place (CUBRID_HA_CONF).
 #   4. This shell stays PID 1 and runs the Instance Manager as a child. The
 #      CUBRID daemons are orphans adopted by PID 1, and a `cubrid server stop`
 #      waits for the server process to disappear, so PID 1 has to reap them;
@@ -87,10 +88,19 @@ start_cubrid() {
   esac
 }
 
+# An HA member is configured once its cubrid_ha.conf is in place. The HA
+# bootstrap (#106) supplies it; until then `cubrid heartbeat start` would exit
+# 1 ("The server was not configured for HA.", docs/poc/RESULTS.md POC-12).
+CUBRID_HA_CONF="${CUBRID_HA_CONF:-/etc/cubrid-ha/cubrid_ha.conf}"
+
 started=0
 if [ "${CUBRID_BOOTSTRAP}" = "recovery" ] && ! database_registered; then
   # Nothing to start yet: the restore creates and registers the database.
   log "recovery bootstrap: no database is created; waiting for a restore"
+elif [ "${CUBRID_COMPONENTS}" != "SERVER" ] && [ ! -f "${CUBRID_HA_CONF}" ]; then
+  # Stay up with the manager only: no database is created and the member
+  # reports no role, instead of the container crash-looping.
+  log "no HA configuration at ${CUBRID_HA_CONF}: heartbeat is not started; the member reports no role"
 else
   start_cubrid
   started=1

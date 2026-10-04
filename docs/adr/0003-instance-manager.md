@@ -227,6 +227,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_DATABASES` | `/var/lib/cubrid/databases`, on the PVC (the image's own default is an anonymous volume) |
 | `CUBRID_DB` | the cluster's first database |
 | `CUBRID_COMPONENTS` | `SERVER` for one member; `HA` otherwise, refined by the HA bootstrap (#106) |
+| `CUBRID_HA_CONF` | not set by the operator yet; the entrypoint's default is `/etc/cubrid-ha/cubrid_ha.conf`. An HA member whose file is absent starts no CUBRID process and creates no database: only the manager runs and the member reports no role. Mounting the generated configuration there is part of the HA bootstrap (#106) |
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
 | `IM_OPERATIONS_DIR` | `/var/lib/cubrid/operations`, on the PVC: the durable operation records. Without it the manager serves no asynchronous backup or restore |
