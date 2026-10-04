@@ -20,9 +20,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -30,7 +32,11 @@ import (
 // DefaultPort is the Instance Manager API port (ADR-0003).
 const DefaultPort = 9090
 
-const errKey = "error"
+const (
+	errKey    = "error"
+	readyKey  = "ready"
+	reasonKey = "reason"
+)
 
 // Server exposes the Instance Manager HTTP/JSON API (ADR-0003). Kubelet probes
 // (/livez, /readyz) are unauthenticated; /v1 endpoints require the bearer token.
@@ -46,12 +52,66 @@ type Server struct {
 	// version caches the engine version reported by cubrid_rel.
 	versionMu sync.Mutex
 	version   string
+	// standaloneDB is the database of a standalone (non-HA) member; empty
+	// for an HA member.
+	standaloneDB string
+	// backupStagingRoot confines the destination a backup request names.
+	backupStagingRoot string
 	// restoreRoots confine every path a restore request names (#119).
 	restoreRoots RestoreRoots
+	// timeouts are the per-operation deadlines.
+	timeouts Timeouts
 }
 
 func NewServer(cli CLI, token string) *Server {
-	return &Server{cli: cli, token: token}
+	return &Server{cli: cli, token: token, timeouts: Timeouts{}.withDefaults()}
+}
+
+// Timeouts bound each long-running operation as a whole. Their commands
+// (backupdb, restoredb, server stop) take far longer than the CLI default.
+type Timeouts struct {
+	// Backup covers backupdb and the upload. Default 2h.
+	Backup time.Duration
+	// Restore covers the download and restoredb. Default 2h.
+	Restore time.Duration
+	// Shutdown covers the ordered stop. Default 100s, below the Pod's
+	// preStop limit so the hook gets an answer.
+	Shutdown time.Duration
+}
+
+func (t Timeouts) withDefaults() Timeouts {
+	if t.Backup <= 0 {
+		t.Backup = 2 * time.Hour
+	}
+	if t.Restore <= 0 {
+		t.Restore = 2 * time.Hour
+	}
+	if t.Shutdown <= 0 {
+		t.Shutdown = 100 * time.Second
+	}
+	return t
+}
+
+// WithTimeouts sets the operation deadlines; zero values keep the defaults.
+// Returns the server for chaining.
+func (s *Server) WithTimeouts(t Timeouts) *Server {
+	s.timeouts = t.withDefaults()
+	return s
+}
+
+// WithBackupStagingRoot sets the directory below which a backup may stage its
+// output. Returns the server for chaining.
+func (s *Server) WithBackupStagingRoot(root string) *Server {
+	s.backupStagingRoot = root
+	return s
+}
+
+// WithStandaloneDatabase marks this member as a standalone server of database
+// (CUBRID_COMPONENTS=SERVER): it has no HA role, so readiness comes from the
+// server status. Returns the server for chaining.
+func (s *Server) WithStandaloneDatabase(database string) *Server {
+	s.standaloneDB = database
+	return s
 }
 
 // WithOperationStore attaches a durable operation store, enabling the async
@@ -100,12 +160,25 @@ func (s *Server) livez(w http.ResponseWriter, _ *http.Request) {
 // readyz reports DB-instance readiness only (NOT cluster HA health, #14). The
 // instance is ready when it holds an authoritative master/slave role.
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
-	st := HeartbeatStatus(r.Context(), s.cli)
-	if st.Role == RoleMaster || st.Role == RoleSlave || st.Role == RoleReplica {
-		writeJSON(w, http.StatusOK, map[string]any{"ready": true, "role": st.Role})
+	if s.standaloneDB != "" {
+		running, err := ServerRunning(r.Context(), s.cli, s.standaloneDB)
+		switch {
+		case err != nil:
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{readyKey: false, reasonKey: err.Error()})
+		case !running:
+			writeJSON(w, http.StatusServiceUnavailable,
+				map[string]any{readyKey: false, reasonKey: "server " + s.standaloneDB + " is not running"})
+		default:
+			writeJSON(w, http.StatusOK, map[string]any{readyKey: true, "mode": "standalone"})
+		}
 		return
 	}
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ready": false, "reason": st.Reason})
+	st := HeartbeatStatus(r.Context(), s.cli)
+	if st.Role == RoleMaster || st.Role == RoleSlave || st.Role == RoleReplica {
+		writeJSON(w, http.StatusOK, map[string]any{readyKey: true, "role": st.Role})
+		return
+	}
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{readyKey: false, reasonKey: st.Reason})
 }
 
 // role returns the local node's authoritative CUBRID role.
@@ -154,8 +227,18 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// From here on only the path built from the manager's own root is used.
+	destination, err := confineBackupDestination(req.Destination, s.backupStagingRoot)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
+		return
+	}
+	req.Destination = destination
+
 	if s.store == nil {
-		res, err := Backup(r.Context(), s.cli, req)
+		ctx, cancel := context.WithTimeout(r.Context(), s.timeouts.Backup)
+		defer cancel()
+		res, err := Backup(ctx, s.cli, req)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
 			return
@@ -198,8 +281,10 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 // Failed and removes the staging directory (ADR-0003/0007).
 func (s *Server) runBackup(id string, req BackupRequest) {
 	go func() {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.Backup)
+		defer cancel()
 		fail := func(reason string) {
+			s.removeBackupStaging(req.Destination)
 			_, _ = s.store.Update(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
@@ -240,7 +325,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			return
 		}
 		// Upload + manifest succeeded: remove staging, then mark Completed.
-		_ = os.RemoveAll(req.Destination)
+		s.removeBackupStaging(req.Destination)
 		_, _ = s.store.Update(id, func(op *Operation) {
 			op.State = OpCompleted
 			op.Artifact = &OperationArtifact{
@@ -305,7 +390,8 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 // terminates Failed with an explicit reason (ADR-0003/0008).
 func (s *Server) runRestore(id string, req RestoreRequest) {
 	go func() {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.Restore)
+		defer cancel()
 		fail := func(reason string) {
 			_, _ = s.store.Update(id, func(op *Operation) {
 				op.State = OpFailed
@@ -368,7 +454,9 @@ func (s *Server) convergence(w http.ResponseWriter, r *http.Request) {
 
 // shutdown performs the ADR-0003 ordered graceful shutdown (withdraw HA, stop server).
 func (s *Server) shutdown(w http.ResponseWriter, r *http.Request) {
-	if err := Shutdown(r.Context(), s.cli, r.URL.Query().Get("database")); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), s.timeouts.Shutdown)
+	defer cancel()
+	if err := Shutdown(ctx, s.cli, r.URL.Query().Get("database")); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
 		return
 	}
@@ -414,4 +502,42 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// confineBackupDestination maps a backup request's destination onto the
+// manager's staging root and returns a path built from that root: it must be
+// one plain directory directly below the root. Nothing after this uses the
+// path as the request spelled it, and removing it on failure cannot reach
+// outside the root.
+func confineBackupDestination(destination, root string) (string, error) {
+	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(filepath.Separator) {
+		return "", fmt.Errorf("backup staging root %q is not configured as a clean absolute path", root)
+	}
+	if destination == "" {
+		return "", errors.New("destination is required")
+	}
+	clean := filepath.Clean(destination)
+	name := filepath.Base(clean)
+	if filepath.Dir(clean) != root || !stagingNamePattern.MatchString(name) {
+		return "", fmt.Errorf("destination %q must be one directory directly below %q", destination, root)
+	}
+	return filepath.Join(root, name), nil
+}
+
+// removeBackupStaging deletes a backup's staging directory. It removes only a
+// directory that it finds by listing the staging root, so the path it deletes
+// is built from the root and a name the file system returned, never from the
+// request's spelling.
+func (s *Server) removeBackupStaging(destination string) {
+	entries, err := os.ReadDir(s.backupStagingRoot)
+	if err != nil {
+		return
+	}
+	want := filepath.Base(destination)
+	for _, entry := range entries {
+		if entry.Name() == want {
+			_ = os.RemoveAll(filepath.Join(s.backupStagingRoot, entry.Name()))
+			return
+		}
+	}
 }

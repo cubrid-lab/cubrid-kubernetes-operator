@@ -1,0 +1,111 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package instancemanager
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+)
+
+// A caller that brings its own deadline is not cut at the CLI default.
+func TestExecCLI_UsesCallerDeadline(t *testing.T) {
+	cli := ExecCLI{Timeout: 50 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if out, err := cli.Run(ctx, "sleep", "0.4"); err != nil {
+		t.Fatalf("a command inside the caller's deadline failed: %v (%s)", err, out)
+	}
+}
+
+func TestExecCLI_DefaultTimeoutWithoutDeadline(t *testing.T) {
+	cli := ExecCLI{Timeout: 50 * time.Millisecond}
+	start := time.Now()
+	if _, err := cli.Run(context.Background(), "sleep", "5"); err == nil {
+		t.Fatal("a command with no deadline ran past the CLI timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("the default timeout did not apply: took %s", elapsed)
+	}
+}
+
+// deadlineCLI records how far away the deadline of each command's context is.
+type deadlineCLI struct {
+	mu        sync.Mutex
+	remaining map[string]time.Duration
+}
+
+func (d *deadlineCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.remaining == nil {
+		d.remaining = map[string]time.Duration{}
+	}
+	key := name
+	if len(args) > 1 {
+		key = args[0] + " " + args[1]
+	} else if len(args) == 1 {
+		key = args[0]
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		d.remaining[key] = time.Until(deadline)
+	} else {
+		d.remaining[key] = 0
+	}
+	return "", nil
+}
+
+func (d *deadlineCLI) get(key string) (time.Duration, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	v, ok := d.remaining[key]
+	return v, ok
+}
+
+func TestServer_ShutdownRunsUnderItsOwnDeadline(t *testing.T) {
+	cli := &deadlineCLI{}
+	srv := NewServer(cli, "").WithTimeouts(Timeouts{Shutdown: 90 * time.Second})
+	req := httptest.NewRequest(http.MethodPost, "/v1/shutdown?database=appdb", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, step := range []string{"heartbeat stop", "server stop"} {
+		left, ok := cli.get(step)
+		if !ok {
+			t.Fatalf("%q was not run", step)
+		}
+		if left < 60*time.Second || left > 90*time.Second {
+			t.Errorf("%q deadline is %s away, want the shutdown deadline (about 90s)", step, left)
+		}
+	}
+}
+
+func TestTimeouts_Defaults(t *testing.T) {
+	got := Timeouts{}.withDefaults()
+	if got.Backup != 2*time.Hour || got.Restore != 2*time.Hour || got.Shutdown != 100*time.Second {
+		t.Errorf("defaults = %+v", got)
+	}
+	// The shutdown deadline has to end before the Pod's preStop limit (110s).
+	if got.Shutdown >= 110*time.Second {
+		t.Errorf("shutdown default %s is not below the preStop limit", got.Shutdown)
+	}
+}

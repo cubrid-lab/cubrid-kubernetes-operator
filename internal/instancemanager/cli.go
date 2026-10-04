@@ -18,6 +18,7 @@ package instancemanager
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"regexp"
 	"time"
@@ -36,12 +37,17 @@ type ExecCLI struct {
 }
 
 func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
-	to := c.Timeout
-	if to <= 0 {
-		to = 10 * time.Second
+	// A caller that set a deadline knows how long its command may take
+	// (backupdb, restoredb, server stop); the default bounds everything else.
+	if _, ok := ctx.Deadline(); !ok {
+		to := c.Timeout
+		if to <= 0 {
+			to = 10 * time.Second
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, to)
+		defer cancel()
 	}
-	ctx, cancel := context.WithTimeout(ctx, to)
-	defer cancel()
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	return string(out), err
 }
@@ -69,4 +75,24 @@ func ParseEngineVersion(out string) string {
 		return ""
 	}
 	return m[1]
+}
+
+// serverStatusLine matches one running server in `cubrid server status`:
+// " Server appdb (rel 11.4.6, pid 14)" (docs/poc/RESULTS.md, POC-10).
+var serverStatusLine = regexp.MustCompile(`(?m)^\s*Server\s+(\S+)\s+\(rel [^,]+, pid \d+\)`)
+
+// ServerRunning reports whether `cubrid server status` lists database. The
+// command exits 0 whether or not a server runs, and prints one line per
+// running server, so a failed command is an error, not "stopped".
+func ServerRunning(ctx context.Context, cli CLI, database string) (bool, error) {
+	out, err := cli.Run(ctx, "cubrid", "server", "status")
+	if err != nil {
+		return false, fmt.Errorf("server status failed: %w", err)
+	}
+	for _, m := range serverStatusLine.FindAllStringSubmatch(out, -1) {
+		if m[1] == database {
+			return true, nil
+		}
+	}
+	return false, nil
 }
