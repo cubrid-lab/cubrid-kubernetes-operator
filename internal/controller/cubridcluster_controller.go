@@ -491,6 +491,11 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		}
 		return ctrl.Result{}, err
 	}
+	// A CUBRID failover changes no Kubernetes object, and /readyz answers 200
+	// for a master and a slave alike, so no event would bring the new roles in.
+	if cluster.Spec.HighAvailability.Enabled && r.Prober != nil {
+		return ctrl.Result{RequeueAfter: haResyncInterval}, nil
+	}
 	return ctrl.Result{}, nil
 }
 

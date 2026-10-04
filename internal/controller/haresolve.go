@@ -35,6 +35,11 @@ const conditionPrimaryResolved = "PrimaryResolved"
 // than this; the TTL keeps a slow or replayed answer from deciding routing.
 const roleObservationTTL = 15 * time.Second
 
+// haResyncInterval is how often an HA cluster's roles are observed again
+// without any Kubernetes event. It is below roleObservationTTL, so status
+// never rests on an observation that has expired.
+const haResyncInterval = 10 * time.Second
+
 // memberNames returns the StatefulSet pod names (<cluster>-<ordinal>, ADR-0004).
 func memberNames(cluster *databasev1alpha1.CubridCluster, count int32) []string {
 	names := make([]string, 0, count)
