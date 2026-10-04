@@ -194,6 +194,88 @@ var _ = Describe("CubridCluster Controller", func() {
 		})
 	})
 
+	Context("Per-member alias Services (ADR-0004, #154)", func() {
+		const aliasNamespace = "default"
+		ctx := context.Background()
+		newReconciler := func() *CubridClusterReconciler {
+			return &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20), IMToken: testIMToken,
+			}
+		}
+		create := func(name string) types.NamespacedName {
+			key := types.NamespacedName{Name: name, Namespace: aliasNamespace}
+			Expect(k8sClient.Create(ctx, haCluster(name))).To(Succeed())
+			DeferCleanup(func() {
+				c := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+			})
+			return key
+		}
+
+		It("creates one headless Service per member, named as the pod", func() {
+			key := create("alias-ha")
+			_, err := newReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			owner := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, owner)).To(Succeed())
+			for _, member := range []string{"alias-ha-0", "alias-ha-1", "alias-ha-2"} {
+				svc := &corev1.Service{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: member, Namespace: aliasNamespace}, svc)).To(Succeed())
+				Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
+				Expect(svc.Spec.PublishNotReadyAddresses).To(BeTrue())
+				Expect(svc.Spec.Selector).To(Equal(map[string]string{"statefulset.kubernetes.io/pod-name": member}))
+				Expect(metav1.IsControlledBy(svc, owner)).To(BeTrue())
+			}
+		})
+
+		It("does not take over a Service of that name it does not own", func() {
+			foreign := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "alias-taken-1", Namespace: aliasNamespace},
+				Spec: corev1.ServiceSpec{
+					Selector: map[string]string{"app": "someone-else"},
+					Ports:    []corev1.ServicePort{{Port: 80}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+			DeferCleanup(func() { Expect(k8sClient.Delete(ctx, foreign)).To(Succeed()) })
+			key := create("alias-taken")
+
+			_, err := newReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).To(MatchError(ContainSubstring("alias-taken-1")))
+
+			kept := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "alias-taken-1", Namespace: aliasNamespace}, kept)).To(Succeed())
+			Expect(kept.Spec.Selector).To(Equal(map[string]string{"app": "someone-else"}))
+			updated := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, updated)).To(Succeed())
+			ready := meta.FindStatusCondition(updated.Status.Conditions, "Ready")
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Reason).To(Equal("MemberServiceReconcileFailed"))
+		})
+
+		It("removes alias Services that no longer match a member", func() {
+			key := create("alias-shrink")
+			r := newReconciler()
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			cluster := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, cluster)).To(Succeed())
+			cluster.Spec.Topology.PromotableMembers = 1
+			Expect(r.reconcileMemberServices(ctx, cluster)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "alias-shrink-0", Namespace: aliasNamespace}, &corev1.Service{})).To(Succeed())
+			for _, gone := range []string{"alias-shrink-1", "alias-shrink-2"} {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: gone, Namespace: aliasNamespace}, &corev1.Service{})
+				Expect(errors.IsNotFound(err)).To(BeTrue(), gone)
+			}
+			By("leaving the governing Service alone")
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "alias-shrink-instances", Namespace: aliasNamespace}, &corev1.Service{})).To(Succeed())
+		})
+	})
+
 	Context("CRD validation (ADR-0001 CEL rules)", func() {
 		const ns = "default"
 		ctx := context.Background()
