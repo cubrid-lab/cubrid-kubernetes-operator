@@ -1,61 +1,128 @@
 #!/bin/bash
 # Instance Manager image entrypoint (ADR-0003).
 #
-# Bakes in the fixes proven in docs/poc/RESULTS.md so a pod can join CUBRID HA:
-#   1. nss-myhostname must not win: make `files` resolve the node's own short
-#      name to its real IP (self-name->loopback otherwise breaks HA).
-#   2. databases.txt is registered by `cubrid createdb` (absolute paths); it is
+# Runs as the image's `cubrid` user, which is what a DB Pod's securityContext
+# gives it (runAsUser, runAsNonRoot, no capabilities): nothing here needs root.
+# Started as root (a plain `docker run --user 0`), it hands the data directory
+# to `cubrid` and re-executes itself as that user.
+#
+#   1. databases.txt is registered by `cubrid createdb` (absolute paths); it is
 #      never hand-written.
+#   2. CUBRID_BOOTSTRAP=recovery never creates a database: the data comes from
+#      a backup through the Instance Manager (ADR-0008).
 #   3. `cubrid heartbeat start` is issued exactly once.
+#   4. This shell stays PID 1 and runs the Instance Manager as a child. The
+#      CUBRID daemons are orphans adopted by PID 1, and a `cubrid server stop`
+#      waits for the server process to disappear, so PID 1 has to reap them;
+#      the Instance Manager does not. On SIGTERM/SIGINT the shell stops CUBRID
+#      (a no-op after the Pod's preStop hook already did), then the manager.
 #
 # Roles map to CUBRID_COMPONENTS (as in the official image): SERVER | MASTER |
-# SLAVE | HA. The operator sets the env; the Instance Manager then serves the
-# /v1 API for role discovery and (later) local ops.
-set -e
+# SLAVE | HA. The operator sets the environment.
+set -euo pipefail
 
 log() { echo "[im-entrypoint] $*"; }
-
-# 1. Resolver order: files before dns/myhostname.
-if [ -w /etc/nsswitch.conf ] || [ ! -e /etc/nsswitch.conf ]; then
-  printf 'hosts: files dns\n' > /etc/nsswitch.conf 2>/dev/null || true
-  log "nsswitch hosts: files dns"
-fi
+die() { echo "[im-entrypoint] ERROR: $*" >&2; exit 1; }
 
 CUBRID_DB="${CUBRID_DB:-appdb}"
 CUBRID_COMPONENTS="${CUBRID_COMPONENTS:-SERVER}"
-IM_TOKEN="${IM_TOKEN:-}"
+CUBRID_BOOTSTRAP="${CUBRID_BOOTSTRAP:-new}"
+IM_BIN="${IM_BIN:-/usr/local/bin/instance-manager}"
+[ -n "${CUBRID_DATABASES:-}" ] || die "CUBRID_DATABASES is not set"
 
-# 2. Initialise the database only if absent; createdb registers databases.txt.
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p "${CUBRID_DATABASES}"
+  chown -R cubrid:cubrid "${CUBRID_DATABASES}"
+  log "started as root; continuing as cubrid"
+  exec gosu cubrid "$0" "$@"
+fi
+
+case "${CUBRID_COMPONENTS}" in
+  SERVER|MASTER|SLAVE|HA) ;;
+  *) die "unknown CUBRID_COMPONENTS '${CUBRID_COMPONENTS}'" ;;
+esac
+case "${CUBRID_BOOTSTRAP}" in
+  new|recovery) ;;
+  *) die "unknown CUBRID_BOOTSTRAP '${CUBRID_BOOTSTRAP}'" ;;
+esac
+
+# The data volume must already be writable by this user (the Pod's fsGroup).
+mkdir -p "${CUBRID_DATABASES}" 2>/dev/null \
+  || die "cannot create ${CUBRID_DATABASES} as uid $(id -u); the data volume must be writable by this user"
+[ -w "${CUBRID_DATABASES}" ] \
+  || die "${CUBRID_DATABASES} is not writable by uid $(id -u); the data volume must be writable by this user"
+
+export PATH="${CUBRID:-/home/cubrid/CUBRID}/bin:${PATH}"
+
+database_registered() {
+  grep -qwe "^${CUBRID_DB}" "${CUBRID_DATABASES}/databases.txt" 2>/dev/null
+}
+
+# Create the database only if absent; createdb registers databases.txt.
 init_db() {
-  if grep -qwe "^${CUBRID_DB}" "${CUBRID_DATABASES}/databases.txt" 2>/dev/null; then
+  if database_registered; then
     log "database '${CUBRID_DB}' already present"
     return
   fi
   touch "${CUBRID_DATABASES}/databases.txt"
   mkdir -p "${CUBRID_DATABASES}/${CUBRID_DB}"
-  chown -R cubrid:cubrid "${CUBRID_DATABASES}"
   log "createdb '${CUBRID_DB}' (registers databases.txt with absolute paths)"
   ( cd "${CUBRID_DATABASES}/${CUBRID_DB}" \
-    && gosu cubrid cubrid createdb --db-volume-size="${CUBRID_VOLUME_SIZE:-512M}" \
+    && cubrid createdb --db-volume-size="${CUBRID_VOLUME_SIZE:-512M}" \
          --server-name="$(hostname)" "${CUBRID_DB}" "${CUBRID_LOCALE:-en_US}" )
 }
 
 start_cubrid() {
   case "${CUBRID_COMPONENTS}" in
-    SERVER)      init_db; gosu cubrid cubrid server start "${CUBRID_DB}" ;;
+    SERVER)
+      [ "${CUBRID_BOOTSTRAP}" = "new" ] && init_db
+      cubrid server start "${CUBRID_DB}" ;;
     MASTER|SLAVE|HA)
-      # HA nodes: the operator has already written cubrid.conf/cubrid_ha.conf.
       # A MASTER bootstraps via createdb; a SLAVE is seeded by the operator
       # (backup->restore) before this runs, so init_db is a no-op there.
-      [ "${CUBRID_COMPONENTS}" = "MASTER" ] && init_db
-      gosu cubrid cubrid heartbeat start ;;
-    *) log "unknown CUBRID_COMPONENTS '${CUBRID_COMPONENTS}'"; exit 1 ;;
+      if [ "${CUBRID_COMPONENTS}" = "MASTER" ] && [ "${CUBRID_BOOTSTRAP}" = "new" ]; then
+        init_db
+      fi
+      cubrid heartbeat start ;;
   esac
 }
 
-start_cubrid
-log "starting Instance Manager on :9090 (CUBRID_COMPONENTS=${CUBRID_COMPONENTS})"
+started=0
+if [ "${CUBRID_BOOTSTRAP}" = "recovery" ] && ! database_registered; then
+  # Nothing to start yet: the restore creates and registers the database.
+  log "recovery bootstrap: no database is created; waiting for a restore"
+else
+  start_cubrid
+  started=1
+fi
 
-# 3. Run the manager in the CUBRID env, as the cubrid user, in the foreground.
-exec gosu cubrid env PATH="${CUBRID}/bin:${PATH}" IM_TOKEN="${IM_TOKEN}" \
-  /usr/local/bin/instance-manager
+stop_cubrid() {
+  [ "${started}" = "1" ] || return 0
+  case "${CUBRID_COMPONENTS}" in
+    SERVER) cubrid server stop "${CUBRID_DB}" || true ;;
+    *)      cubrid heartbeat stop || true ;;
+  esac
+}
+
+terminating=0
+terminate() {
+  terminating=1
+  log "termination requested: stopping CUBRID, then the Instance Manager"
+  stop_cubrid
+  kill -TERM "${im_pid}" 2>/dev/null || true
+}
+
+log "starting Instance Manager (CUBRID_COMPONENTS=${CUBRID_COMPONENTS}, CUBRID_BOOTSTRAP=${CUBRID_BOOTSTRAP})"
+"${IM_BIN}" &
+im_pid=$!
+trap terminate TERM INT
+
+set +e
+wait "${im_pid}"
+status=$?
+# A trapped signal makes `wait` return early; collect the manager's own status.
+if [ "${terminating}" = "1" ]; then
+  wait "${im_pid}"
+  status=$?
+fi
+exit "${status}"
