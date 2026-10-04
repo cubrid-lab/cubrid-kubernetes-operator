@@ -537,6 +537,40 @@ host column matters for HA (cases 4 and 6 only start a standalone server).
 
 ---
 
+## POC-12 — missing directories, heartbeat without HA configuration, curl (ADR-0003/0007/0008, #175/#176) — **PASS**
+
+`cubrid/cubrid:11.4` (engine 11.4.6), UID 1000, `sleep` as the container
+command (linux/amd64 emulated under podman, `--init`; output only, no timing
+claims).
+
+- **`backupdb` into a directory that does not exist** fails and creates
+  nothing:
+
+  ```text
+  $ cubrid backupdb -C -D /tmp/nodir/uid-1 -l 0 appdb@localhost   # exit 1
+  ERROR: Destination-path does not exist or is not a directory.
+  ```
+
+  The destination has to be created before the command (#175).
+- **A database without its `lob` directory** cannot store a LOB. With
+  `<db>/lob` removed, as after a `restoredb` (POC-11):
+
+  ```text
+  insert into l values (1, bit_to_blob(X'010203'));
+  ERROR: POSIX external storage error: /ces_141... Permission denied
+  ```
+
+  A restore therefore has to create the directory the `databases.txt` entry
+  names (#175).
+- **`cubrid heartbeat start` without HA configuration** exits 1 with
+  `The server was not configured for HA.` and `++ cubrid heartbeat start: fail`,
+  both with no database and with a standalone server running. An entrypoint
+  that runs it under `set -e` ends there (#176).
+- **`curl`** is in the image (`/usr/bin/curl`), so the Pod's preStop hook can
+  call the Instance Manager.
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed

@@ -256,6 +256,12 @@ func registerRestoreTarget(targetDir, database string) (undo func(), err error) 
 	if err := root.Mkdir(database, 0o750); err != nil {
 		return nil, fmt.Errorf("create %s in %s: %w", database, targetDir, err)
 	}
+	// createdb makes the lob directory the entry names; restoredb does not,
+	// and a LOB write fails without it (docs/poc/RESULTS.md, POC-12).
+	if err := root.Mkdir(filepath.Join(database, "lob"), 0o750); err != nil {
+		_ = root.RemoveAll(database)
+		return nil, fmt.Errorf("create %s/lob in %s: %w", database, targetDir, err)
+	}
 	undo = func() {
 		root, err := os.OpenRoot(targetDir)
 		if err != nil {
