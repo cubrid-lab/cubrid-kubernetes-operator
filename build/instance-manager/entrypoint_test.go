@@ -36,6 +36,7 @@ import (
 const (
 	dbName = "appdb"
 
+	componentsServer  = "SERVER"
 	bootstrapRecovery = "recovery"
 	callManagerStart  = "manager start"
 	callHeartbeat     = "cubrid heartbeat start"
@@ -104,7 +105,7 @@ func newFixture(t *testing.T, manager string) *fixture {
 		"CUBRID":            filepath.Join(root, "cubrid"),
 		"CUBRID_DB":         dbName,
 		"CUBRID_DATABASES":  f.databases,
-		"CUBRID_COMPONENTS": "SERVER",
+		"CUBRID_COMPONENTS": componentsServer,
 		"CUBRID_BOOTSTRAP":  "new",
 		"IM_BIN":            im,
 		"CALLS":             f.calls,
@@ -143,6 +144,16 @@ func (f *fixture) recorded() []string {
 		return nil
 	}
 	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+// configureHA puts an HA configuration file where the entrypoint looks for it.
+func (f *fixture) configureHA() {
+	f.t.Helper()
+	conf := filepath.Join(f.root, "cubrid_ha.conf")
+	if err := os.WriteFile(conf, []byte("[common]\nha_node_list=cubrid@a:b\n"), 0o644); err != nil {
+		f.t.Fatal(err)
+	}
+	f.env["CUBRID_HA_CONF"] = conf
 }
 
 // registerDatabase makes the database look already created on the volume.
@@ -234,6 +245,7 @@ func TestEntrypoint_HAComponents(t *testing.T) {
 		t.Run(tc.components, func(t *testing.T) {
 			f := newFixture(t, managerStub)
 			f.env["CUBRID_COMPONENTS"] = tc.components
+			f.configureHA()
 			code, out := f.run()
 			if code != 0 {
 				t.Fatalf("exit %d:\n%s", code, out)
@@ -241,6 +253,47 @@ func TestEntrypoint_HAComponents(t *testing.T) {
 			wantCalls(t, f.recorded(), tc.want...)
 		})
 	}
+}
+
+// `cubrid heartbeat start` exits 1 on a member without HA configuration
+// (docs/poc/RESULTS.md, POC-12), which would end the entrypoint. Until the HA
+// bootstrap supplies the configuration the member stays up with the manager
+// only, creates nothing and reports no role.
+func TestEntrypoint_HAWithoutConfigurationStartsOnlyTheManager(t *testing.T) {
+	for _, components := range []string{"HA", "MASTER", "SLAVE"} {
+		t.Run(components, func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			f.env["CUBRID_COMPONENTS"] = components
+			code, out := f.run()
+			if code != 0 {
+				t.Fatalf("exit %d:\n%s", code, out)
+			}
+			wantCalls(t, f.recorded(), callManagerStart)
+			if !strings.Contains(out, "heartbeat is not started") {
+				t.Errorf("the log does not say why nothing was started:\n%s", out)
+			}
+		})
+	}
+}
+
+// Nothing was started for an unconfigured HA member, so nothing is stopped.
+func TestEntrypoint_TerminationOfUnconfiguredHAMemberStopsOnlyTheManager(t *testing.T) {
+	f := newFixture(t, blockingManagerStub)
+	f.env["CUBRID_COMPONENTS"] = "HA"
+	cmd := f.command()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return contains(f.recorded(), callManagerStart) }, &out)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd, 20*time.Second); err != nil {
+		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
+	}
+	wantCalls(t, f.recorded(), callManagerStart, "manager term")
 }
 
 func TestEntrypoint_RejectsBadConfiguration(t *testing.T) {
@@ -310,13 +363,16 @@ func TestEntrypoint_TerminationStopsCubridThenManager(t *testing.T) {
 		components string
 		stop       string
 	}{
-		{"SERVER", "cubrid server stop " + dbName},
+		{componentsServer, "cubrid server stop " + dbName},
 		{"HA", "cubrid heartbeat stop"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.components, func(t *testing.T) {
 			f := newFixture(t, blockingManagerStub)
 			f.env["CUBRID_COMPONENTS"] = tc.components
+			if tc.components != componentsServer {
+				f.configureHA()
+			}
 			f.registerDatabase()
 			cmd := f.command()
 			var out bytes.Buffer
