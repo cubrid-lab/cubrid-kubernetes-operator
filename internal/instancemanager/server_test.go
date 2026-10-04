@@ -19,6 +19,7 @@ package instancemanager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -145,5 +146,72 @@ func TestServer_Shutdown_LoopbackExempt(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("/v1/shutdown loopback = %d, want 200", rr.Code)
+	}
+}
+
+// Recorded on CUBRID 11.4.6 from a standalone server (docs/poc/RESULTS.md, POC-10).
+const (
+	serverStatusRunning = "@ cubrid server status\n Server appdb (rel 11.4.6, pid 14)\n"
+	serverStatusStopped = "@ cubrid server status\n"
+)
+
+func TestServerRunning_ParsesRecordedStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		out      string
+		database string
+		want     bool
+	}{
+		{"running", serverStatusRunning, dbName, true},
+		{"stopped", serverStatusStopped, dbName, false},
+		{"another database is running", serverStatusRunning, "otherdb", false},
+		{"a longer name is not a match", serverStatusRunning, "app", false},
+		{"empty output", "", dbName, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ServerRunning(context.Background(), fakeCLI{out: tc.out}, tc.database)
+			if err != nil {
+				t.Fatalf("ServerRunning: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ServerRunning = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestServerRunning_CommandFailureIsAnError(t *testing.T) {
+	if _, err := ServerRunning(context.Background(), fakeCLI{err: errors.New("exit status 1")}, dbName); err == nil {
+		t.Fatal("a failed status command must not be read as stopped or running")
+	}
+}
+
+// A standalone server has no HA role; it is ready when its server runs (#147).
+func TestServer_Readyz_Standalone(t *testing.T) {
+	tests := []struct {
+		name string
+		cli  fakeCLI
+		want int
+	}{
+		{"server running", fakeCLI{out: serverStatusRunning}, http.StatusOK},
+		{"server stopped", fakeCLI{out: serverStatusStopped}, http.StatusServiceUnavailable},
+		{"status command fails", fakeCLI{err: errors.New("exit status 1")}, http.StatusServiceUnavailable},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewServer(tc.cli, "tok").WithStandaloneDatabase(dbName).Handler()
+			if rr := doReq(t, h, "/readyz", "", testRemoteAddr); rr.Code != tc.want {
+				t.Errorf("/readyz = %d, want %d (body %s)", rr.Code, tc.want, rr.Body.String())
+			}
+		})
+	}
+}
+
+// An HA member with no role stays not ready, whatever the server status says.
+func TestServer_Readyz_HAMemberStillNeedsARole(t *testing.T) {
+	h := NewServer(fakeCLI{out: serverStatusRunning}, "tok").Handler()
+	if rr := doReq(t, h, "/readyz", "", testRemoteAddr); rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("/readyz = %d, want 503 for a member without an HA role", rr.Code)
 	}
 }

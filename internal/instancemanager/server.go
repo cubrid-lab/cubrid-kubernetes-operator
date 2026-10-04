@@ -31,7 +31,11 @@ import (
 // DefaultPort is the Instance Manager API port (ADR-0003).
 const DefaultPort = 9090
 
-const errKey = "error"
+const (
+	errKey    = "error"
+	readyKey  = "ready"
+	reasonKey = "reason"
+)
 
 // Server exposes the Instance Manager HTTP/JSON API (ADR-0003). Kubelet probes
 // (/livez, /readyz) are unauthenticated; /v1 endpoints require the bearer token.
@@ -44,6 +48,9 @@ type Server struct {
 	// objects uploads backups to S3-compatible storage; nil means a backup
 	// cannot complete (bare backupdb is never a false Completed, ADR-0007).
 	objects ObjectStore
+	// standaloneDB is the database of a standalone (non-HA) member; empty
+	// for an HA member.
+	standaloneDB string
 	// backupStagingRoot confines the destination a backup request names.
 	backupStagingRoot string
 	// restoreRoots confine every path a restore request names (#119).
@@ -95,6 +102,14 @@ func (s *Server) WithBackupStagingRoot(root string) *Server {
 	return s
 }
 
+// WithStandaloneDatabase marks this member as a standalone server of database
+// (CUBRID_COMPONENTS=SERVER): it has no HA role, so readiness comes from the
+// server status. Returns the server for chaining.
+func (s *Server) WithStandaloneDatabase(database string) *Server {
+	s.standaloneDB = database
+	return s
+}
+
 // WithOperationStore attaches a durable operation store, enabling the async
 // /v1/backup + /v1/operations endpoints (ADR-0003). Returns the server for
 // chaining.
@@ -141,12 +156,25 @@ func (s *Server) livez(w http.ResponseWriter, _ *http.Request) {
 // readyz reports DB-instance readiness only (NOT cluster HA health, #14). The
 // instance is ready when it holds an authoritative master/slave role.
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
-	st := HeartbeatStatus(r.Context(), s.cli)
-	if st.Role == RoleMaster || st.Role == RoleSlave || st.Role == RoleReplica {
-		writeJSON(w, http.StatusOK, map[string]any{"ready": true, "role": st.Role})
+	if s.standaloneDB != "" {
+		running, err := ServerRunning(r.Context(), s.cli, s.standaloneDB)
+		switch {
+		case err != nil:
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{readyKey: false, reasonKey: err.Error()})
+		case !running:
+			writeJSON(w, http.StatusServiceUnavailable,
+				map[string]any{readyKey: false, reasonKey: "server " + s.standaloneDB + " is not running"})
+		default:
+			writeJSON(w, http.StatusOK, map[string]any{readyKey: true, "mode": "standalone"})
+		}
 		return
 	}
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ready": false, "reason": st.Reason})
+	st := HeartbeatStatus(r.Context(), s.cli)
+	if st.Role == RoleMaster || st.Role == RoleSlave || st.Role == RoleReplica {
+		writeJSON(w, http.StatusOK, map[string]any{readyKey: true, "role": st.Role})
+		return
+	}
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{readyKey: false, reasonKey: st.Reason})
 }
 
 // role returns the local node's authoritative CUBRID role.

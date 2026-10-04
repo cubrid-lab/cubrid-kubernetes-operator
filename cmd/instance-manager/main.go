@@ -51,6 +51,12 @@ func run() error {
 			Staging: envOr("IM_RESTORE_STAGING_ROOT", "/var/lib/cubrid/restore-staging"),
 		})
 
+	// A standalone member has no HA role; its readiness is its server's
+	// status. The operator sets CUBRID_COMPONENTS=SERVER for one member.
+	if os.Getenv("CUBRID_COMPONENTS") == "SERVER" {
+		server = server.WithStandaloneDatabase(envOr("CUBRID_DB", "appdb"))
+	}
+
 	timeouts, err := timeoutsFromEnv()
 	if err != nil {
 		return err
