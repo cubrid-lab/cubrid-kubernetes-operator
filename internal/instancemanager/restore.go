@@ -65,7 +65,8 @@ type RestoreResult struct {
 }
 
 // Restore verifies the artifact's trust (ADR-0007/0008), downloads its objects
-// to staging, and runs `cubrid restoredb -B` into the empty target directory.
+// to staging, registers the database at the empty target and runs
+// `cubrid restoredb -u -B` into it.
 // It refuses to overwrite a pre-existing DB (wrong-target guard) and never
 // reports success unless restoredb succeeds against a verified artifact.
 func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots, req RestoreRequest) (result RestoreResult, err error) {
@@ -117,9 +118,18 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 		return RestoreResult{}, err
 	}
 
-	backupDir := filepath.Join(stagingDir, "backup")
-	out, err := cli.Run(ctx, "cubrid", "restoredb", "-B", backupDir, req.Database)
+	// restoredb needs the database registered at its target, and -u to place
+	// the volumes there instead of at the paths recorded in the backup
+	// (docs/poc/RESULTS.md, POC-11). A failed restore takes the registration
+	// and the directory back, so a retry finds an empty target again.
+	unregister, err := registerRestoreTarget(targetDir, req.Database)
 	if err != nil {
+		return RestoreResult{}, err
+	}
+	backupDir := filepath.Join(stagingDir, "backup")
+	out, err := cli.Run(ctx, "cubrid", "restoredb", "-u", "-B", backupDir, req.Database)
+	if err != nil {
+		unregister()
 		return RestoreResult{}, fmt.Errorf("restoredb failed: %w: %s", err, out)
 	}
 
@@ -214,6 +224,47 @@ func registeredInDatabasesTxt(targetDir, database string) (bool, error) {
 		return false, fmt.Errorf("read %s: %w", databasesTxt, err)
 	}
 	return false, nil
+}
+
+// registerRestoreTarget creates <targetDir>/<database> and registers the
+// database there in databases.txt, in the form `cubrid createdb` writes. The
+// caller has checked that neither exists. The returned function undoes both:
+// it removes the directory and restores databases.txt to what it was.
+func registerRestoreTarget(targetDir, database string) (undo func(), err error) {
+	host, err := os.Hostname()
+	if err != nil {
+		return nil, fmt.Errorf("host name for %s: %w", databasesTxt, err)
+	}
+	file := filepath.Join(targetDir, databasesTxt)
+	before, err := os.ReadFile(file) // #nosec G304 -- targetDir is the manager's own root
+	existed := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read %s: %w", databasesTxt, err)
+	}
+
+	dbDir := filepath.Join(targetDir, database)
+	if err := os.Mkdir(dbDir, 0o750); err != nil {
+		return nil, fmt.Errorf("create %s: %w", dbDir, err)
+	}
+	undo = func() {
+		_ = os.RemoveAll(dbDir)
+		if existed {
+			_ = os.WriteFile(file, before, 0o600) // #nosec G304,G703 -- as above
+		} else {
+			_ = os.Remove(file)
+		}
+	}
+
+	content := string(before)
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += fmt.Sprintf("%s\t\t%s\t%s\t%s\tfile:%s\n", database, dbDir, host, dbDir, filepath.Join(dbDir, "lob"))
+	if err := os.WriteFile(file, []byte(content), 0o600); err != nil { // #nosec G304,G703 -- as above
+		undo()
+		return nil, fmt.Errorf("register %s in %s: %w", database, databasesTxt, err)
+	}
+	return undo, nil
 }
 
 // hasExistingDB reports whether targetDir already contains the database's main
