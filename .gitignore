@@ -29,3 +29,6 @@ tmp/
 .omc/
 .omo/
 .codegraph/
+
+# Left behind by a test run with a relative staging path
+internal/instancemanager/staging/
