@@ -48,6 +48,12 @@ func run() error {
 			Staging: envOr("IM_RESTORE_STAGING_ROOT", "/var/lib/cubrid/restore-staging"),
 		})
 
+	// A standalone member has no HA role; its readiness is its server's
+	// status. The operator sets CUBRID_COMPONENTS=SERVER for one member.
+	if os.Getenv("CUBRID_COMPONENTS") == "SERVER" {
+		server = server.WithStandaloneDatabase(envOr("CUBRID_DB", "appdb"))
+	}
+
 	// Durable operation store on the PVC enables the async /v1/backup +
 	// /v1/operations endpoints; without it those endpoints stay disabled.
 	if opsDir := os.Getenv("IM_OPERATIONS_DIR"); opsDir != "" {

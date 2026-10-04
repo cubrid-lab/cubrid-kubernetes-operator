@@ -432,6 +432,32 @@ server pid before/after:
 
 ---
 
+## POC-10 — standalone server status, shutdown and version output (ADR-0003, #147/#148) — **PASS**
+
+`cubrid/cubrid:11.4` (engine 11.4.6.1963), one standalone server `appdb`
+started with `cubrid server start`, run as UID 1000 with no capabilities
+(linux/amd64 emulated under podman; output only, no timing claims).
+
+- `cubrid server status` exits **0 whether or not a server runs**. Running:
+
+  ```text
+  @ cubrid server status
+   Server appdb (rel 11.4.6, pid 14)
+  ```
+
+  Stopped: only the `@ cubrid server status` line. Naming a database
+  (`cubrid server status nosuchdb`) prints the same list; the argument does not
+  filter. Readiness therefore has to parse the list, not the exit code.
+- `cubrid heartbeat status` and `cubrid heartbeat stop` on this server exit 1
+  with `The server was not configured for HA.`
+- `csql -u dba appdb@localhost -c "SELECT 1 FROM db_root"` exits 0 when the
+  server runs and 1 with `Failed to connect to database server` when it does not.
+- `cubrid_rel` prints
+  `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1) (64bit release build for Linux) (Sep  7 2026 17:45:11)`.
+- A stopped `cub_server` stays a zombie until PID 1 reaps it, and
+  `cubrid server stop` waits for it to disappear (see ADR-0003, "Pod runtime
+  contract").
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed

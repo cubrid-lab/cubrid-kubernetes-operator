@@ -18,7 +18,9 @@ package instancemanager
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
+	"regexp"
 	"time"
 )
 
@@ -54,4 +56,24 @@ func HeartbeatStatus(ctx context.Context, cli CLI) HAStatus {
 		return HAStatus{Role: RoleUnknown, Source: "heartbeat", Reason: "heartbeat status failed: " + err.Error()}
 	}
 	return ParseHAStatus(out)
+}
+
+// serverStatusLine matches one running server in `cubrid server status`:
+// " Server appdb (rel 11.4.6, pid 14)" (docs/poc/RESULTS.md, POC-10).
+var serverStatusLine = regexp.MustCompile(`(?m)^\s*Server\s+(\S+)\s+\(rel [^,]+, pid \d+\)`)
+
+// ServerRunning reports whether `cubrid server status` lists database. The
+// command exits 0 whether or not a server runs, and prints one line per
+// running server, so a failed command is an error, not "stopped".
+func ServerRunning(ctx context.Context, cli CLI, database string) (bool, error) {
+	out, err := cli.Run(ctx, "cubrid", "server", "status")
+	if err != nil {
+		return false, fmt.Errorf("server status failed: %w", err)
+	}
+	for _, m := range serverStatusLine.FindAllStringSubmatch(out, -1) {
+		if m[1] == database {
+			return true, nil
+		}
+	}
+	return false, nil
 }
