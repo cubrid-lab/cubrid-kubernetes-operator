@@ -17,9 +17,13 @@ limitations under the License.
 package instancemanager
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +44,7 @@ func newAsyncServer(t *testing.T, cli CLI) http.Handler {
 	// (#130). Cleanups run last-in first-out, so this one runs before the
 	// TempDir removal registered above.
 	t.Cleanup(func() { awaitTerminalOperations(t, store) })
-	return NewServer(cli, "tok").WithOperationStore(store).Handler()
+	return NewServer(cli, "tok").WithOperationStore(store).WithBackupStagingRoot("/im-test-staging").Handler()
 }
 
 // awaitTerminalOperations blocks until every operation in store has reached a
@@ -91,7 +95,7 @@ func postBackup(t *testing.T, h http.Handler, key, body string) *httptest.Respon
 
 func TestServer_Backup_RequiresIdempotencyKey(t *testing.T) {
 	h := newAsyncServer(t, fakeCLI{out: "ok"})
-	rr := postBackup(t, h, "", `{"database":"appdb","destination":"/tmp/bk"}`)
+	rr := postBackup(t, h, "", `{"database":"appdb","destination":"/im-test-staging/bk"}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("no Idempotency-Key = %d, want 400", rr.Code)
 	}
@@ -99,7 +103,7 @@ func TestServer_Backup_RequiresIdempotencyKey(t *testing.T) {
 
 func TestServer_Backup_AsyncReturnsOperation(t *testing.T) {
 	h := newAsyncServer(t, fakeCLI{out: "ok"})
-	rr := postBackup(t, h, "key-1", `{"database":"appdb","destination":"/tmp/bk"}`)
+	rr := postBackup(t, h, "key-1", `{"database":"appdb","destination":"/im-test-staging/bk"}`)
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("/v1/backup = %d, want 202 (body %s)", rr.Code, rr.Body.String())
 	}
@@ -114,7 +118,7 @@ func TestServer_Backup_AsyncReturnsOperation(t *testing.T) {
 
 func TestServer_Backup_SameKeySameBodyIsIdempotent(t *testing.T) {
 	h := newAsyncServer(t, fakeCLI{out: "ok"})
-	body := `{"database":"appdb","destination":"/tmp/bk"}`
+	body := `{"database":"appdb","destination":"/im-test-staging/bk"}`
 	first := postBackup(t, h, "key-1", body)
 	second := postBackup(t, h, "key-1", body)
 	if second.Code != http.StatusAccepted {
@@ -130,8 +134,8 @@ func TestServer_Backup_SameKeySameBodyIsIdempotent(t *testing.T) {
 
 func TestServer_Backup_SameKeyDifferentBodyConflicts(t *testing.T) {
 	h := newAsyncServer(t, fakeCLI{out: "ok"})
-	postBackup(t, h, "key-1", `{"database":"appdb","destination":"/tmp/bk"}`)
-	rr := postBackup(t, h, "key-1", `{"database":"appdb","destination":"/tmp/OTHER"}`)
+	postBackup(t, h, "key-1", `{"database":"appdb","destination":"/im-test-staging/bk"}`)
+	rr := postBackup(t, h, "key-1", `{"database":"appdb","destination":"/im-test-staging/OTHER"}`)
 	if rr.Code != http.StatusConflict {
 		t.Errorf("same key diff body = %d, want 409", rr.Code)
 	}
@@ -140,7 +144,7 @@ func TestServer_Backup_SameKeyDifferentBodyConflicts(t *testing.T) {
 func TestServer_Backup_NoFalseCompletion(t *testing.T) {
 	// A successful backupdb must NOT become Completed without upload+manifest.
 	h := newAsyncServer(t, fakeCLI{out: "Backup Volume Label: Level: 0"})
-	rr := postBackup(t, h, "key-1", `{"database":"appdb","destination":"/tmp/bk"}`)
+	rr := postBackup(t, h, "key-1", `{"database":"appdb","destination":"/im-test-staging/bk"}`)
 	var op Operation
 	_ = json.Unmarshal(rr.Body.Bytes(), &op)
 
@@ -165,6 +169,7 @@ func TestServer_Backup_CompletesAfterUpload(t *testing.T) {
 	h := NewServer(fakeCLI{out: "ok"}, "tok").
 		WithOperationStore(store).
 		WithObjectStore(objStore).
+		WithBackupStagingRoot(filepath.Dir(staging)).
 		Handler()
 
 	body := `{"database":"appdb","destination":"` + staging + `","upload":{"bucket":"cubrid-backups","prefix":"prod/uid-1","clusterUID":"cuid","cubridVersion":"11.4.6","sourceInstance":"appdb-1","sourceRole":"slave"}}`
@@ -243,4 +248,82 @@ func pollUntilTerminal(t *testing.T, h http.Handler, id string) Operation {
 	}
 	t.Fatalf("operation %s did not reach a terminal state", id)
 	return Operation{}
+}
+
+// failingCLI fails every command, like a backupdb that cannot run.
+type failingCLI struct{ calls int }
+
+func (f *failingCLI) Run(_ context.Context, _ string, _ ...string) (string, error) {
+	f.calls++
+	return "backupdb: no space left", errors.New("exit status 1")
+}
+
+func TestServer_Backup_RejectsDestinationOutsideStagingRoot(t *testing.T) {
+	root := t.TempDir()
+	for _, destination := range []string{
+		"/etc",                         // another tree
+		root,                           // the root itself
+		filepath.Join(root, "a", "b"),  // deeper than one directory
+		filepath.Join(root, "..", "x"), // escapes through ..
+		filepath.Join(root, "..bad"),   // not a plain name
+		"relative/path",
+	} {
+		store, err := NewOperationStore(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewOperationStore: %v", err)
+		}
+		cli := &failingCLI{}
+		h := NewServer(cli, "tok").WithOperationStore(store).WithBackupStagingRoot(root).Handler()
+		body, _ := json.Marshal(map[string]any{"database": "appdb", "destination": destination})
+		rr := postBackup(t, h, "key-1", string(body))
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("destination %q = %d, want 400 (body %s)", destination, rr.Code, rr.Body.String())
+		}
+		if cli.calls != 0 {
+			t.Errorf("destination %q: %d command(s) ran before the check", destination, cli.calls)
+		}
+	}
+}
+
+func TestServer_Backup_RequiresConfiguredStagingRoot(t *testing.T) {
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOperationStore: %v", err)
+	}
+	h := NewServer(fakeCLI{out: "ok"}, "tok").WithOperationStore(store).Handler()
+	rr := postBackup(t, h, "key-1", `{"database":"appdb","destination":"/im-test-staging/bk"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("backup without a staging root = %d, want 400 (body %s)", rr.Code, rr.Body.String())
+	}
+}
+
+func TestServer_Backup_FailureRemovesStaging(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "uid-1")
+	if err := os.MkdirAll(staging, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "partial_bk0v000"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOperationStore: %v", err)
+	}
+	h := NewServer(&failingCLI{}, "tok").WithOperationStore(store).WithBackupStagingRoot(root).Handler()
+	body, _ := json.Marshal(map[string]any{"database": "appdb", "destination": staging})
+	rr := postBackup(t, h, "key-1", string(body))
+	var op Operation
+	_ = json.Unmarshal(rr.Body.Bytes(), &op)
+
+	final := pollUntilTerminal(t, h, op.ID)
+	if final.State != OpFailed {
+		t.Fatalf("final state = %s, want Failed", final.State)
+	}
+	if _, err := os.Stat(staging); !os.IsNotExist(err) {
+		t.Errorf("staging directory is still there after the failure (err=%v)", err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Errorf("the staging root itself must stay: %v", err)
+	}
 }

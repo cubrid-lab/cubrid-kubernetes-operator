@@ -41,6 +41,9 @@ func run() error {
 	token := os.Getenv("IM_TOKEN")
 
 	server := instancemanager.NewServer(instancemanager.ExecCLI{Timeout: 10 * time.Second}, token).
+		// A backup may stage only below this root; it is also what a failed
+		// backup removes. It matches the operator's backup staging path.
+		WithBackupStagingRoot(envOr("IM_BACKUP_STAGING_ROOT", "/var/lib/cubrid/backup-staging")).
 		WithRestoreRoots(instancemanager.RestoreRoots{
 			// A restore may write only into the database root and stage only
 			// below the staging root; both come from this process, never a request.
