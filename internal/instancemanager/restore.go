@@ -230,37 +230,53 @@ func registeredInDatabasesTxt(targetDir, database string) (bool, error) {
 // database there in databases.txt, in the form `cubrid createdb` writes. The
 // caller has checked that neither exists. The returned function undoes both:
 // it removes the directory and restores databases.txt to what it was.
+//
+// Every file operation goes through an os.Root opened on targetDir, so
+// nothing here can reach outside the manager's database root whatever the
+// database name is.
 func registerRestoreTarget(targetDir, database string) (undo func(), err error) {
+	if !databaseNamePattern.MatchString(database) {
+		return nil, fmt.Errorf("database name %q is not a plain identifier", database)
+	}
 	host, err := os.Hostname()
 	if err != nil {
 		return nil, fmt.Errorf("host name for %s: %w", databasesTxt, err)
 	}
-	file := filepath.Join(targetDir, databasesTxt)
-	before, err := os.ReadFile(file) // #nosec G304 -- targetDir is the manager's own root
+	root, err := os.OpenRoot(targetDir)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", targetDir, err)
+	}
+	defer func() { _ = root.Close() }()
+
+	before, err := root.ReadFile(databasesTxt)
 	existed := err == nil
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read %s: %w", databasesTxt, err)
 	}
-
-	dbDir := filepath.Join(targetDir, database)
-	if err := os.Mkdir(dbDir, 0o750); err != nil {
-		return nil, fmt.Errorf("create %s: %w", dbDir, err)
+	if err := root.Mkdir(database, 0o750); err != nil {
+		return nil, fmt.Errorf("create %s in %s: %w", database, targetDir, err)
 	}
 	undo = func() {
-		_ = os.RemoveAll(dbDir)
+		root, err := os.OpenRoot(targetDir)
+		if err != nil {
+			return
+		}
+		defer func() { _ = root.Close() }()
+		_ = root.RemoveAll(database)
 		if existed {
-			_ = os.WriteFile(file, before, 0o600) // #nosec G304,G703 -- as above
+			_ = root.WriteFile(databasesTxt, before, 0o600)
 		} else {
-			_ = os.Remove(file)
+			_ = root.Remove(databasesTxt)
 		}
 	}
 
+	dbDir := filepath.Join(targetDir, database)
 	content := string(before)
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
 	content += fmt.Sprintf("%s\t\t%s\t%s\t%s\tfile:%s\n", database, dbDir, host, dbDir, filepath.Join(dbDir, "lob"))
-	if err := os.WriteFile(file, []byte(content), 0o600); err != nil { // #nosec G304,G703 -- as above
+	if err := root.WriteFile(databasesTxt, []byte(content), 0o600); err != nil {
 		undo()
 		return nil, fmt.Errorf("register %s in %s: %w", database, databasesTxt, err)
 	}
