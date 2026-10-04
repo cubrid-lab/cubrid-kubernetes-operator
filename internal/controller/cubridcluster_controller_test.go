@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -59,6 +60,17 @@ func (f *fakeRestoreClient) GetOperation(_ context.Context, _, _, _ string) (ins
 		return instancemanager.Operation{ID: opRestore, State: instancemanager.OpCompleted}, nil
 	}
 	return instancemanager.Operation{ID: opRestore, State: instancemanager.OpRestoring}, nil
+}
+
+// memberProber reports one member as master and every other as slave.
+type memberProber struct{ master string }
+
+func (p *memberProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
+	role := databasev1alpha1.RoleSlave
+	if podName == p.master {
+		role = databasev1alpha1.RoleMaster
+	}
+	return RoleObservation{Reachable: true, Role: role, ObservedAt: time.Now()}
 }
 
 // haCluster returns a valid HA CubridCluster (1 master + 2 slaves) per ADR-0001.
@@ -191,6 +203,111 @@ var _ = Describe("CubridCluster Controller", func() {
 
 			By("recording the cubrid_cluster_instances metric (#23)")
 			Expect(testutil.ToFloat64(metricspkg.ClusterInstances.WithLabelValues(resourceNamespace, resourceName))).To(Equal(float64(3)))
+		})
+	})
+
+	Context("ClusterReady event (#151)", func() {
+		ctx := context.Background()
+		key := types.NamespacedName{Name: "ready-event", Namespace: "default"}
+
+		drain := func(recorder *record.FakeRecorder) []string {
+			var events []string
+			for {
+				select {
+				case e := <-recorder.Events:
+					events = append(events, e)
+				default:
+					return events
+				}
+			}
+		}
+
+		It("is emitted once, on the transition to Ready", func() {
+			Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+			DeferCleanup(func() {
+				c := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+			})
+			recorder := record.NewFakeRecorder(20)
+			r := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder, IMToken: testIMToken,
+			}
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("ClusterReady")))
+
+			By("reporting every instance ready")
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, key, sts)).To(Succeed())
+			sts.Status.Replicas = 3
+			sts.Status.ReadyReplicas = 3
+			Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
+
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(drain(recorder)).To(ContainElement(ContainSubstring("ClusterReady")))
+
+			By("reconciling an already Ready cluster")
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("ClusterReady")))
+		})
+	})
+
+	Context("Periodic role observation (#155)", func() {
+		const resyncNamespace = "default"
+		ctx := context.Background()
+
+		It("asks to be reconciled again and follows a failover", func() {
+			key := types.NamespacedName{Name: "resync", Namespace: resyncNamespace}
+			Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+			DeferCleanup(func() {
+				c := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+			})
+			prober := &memberProber{master: "resync-0"}
+			r := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
+				IMToken: testIMToken, Prober: prober,
+			}
+
+			res, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0), "a failover changes no Kubernetes object")
+			Expect(res.RequeueAfter).To(BeNumerically("<", roleObservationTTL))
+			got := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+			Expect(got.Status.CurrentPrimary).To(Equal("resync-0"))
+
+			By("CUBRID failing over with no change to any Pod object")
+			prober.master = "resync-1"
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+			Expect(got.Status.CurrentPrimary).To(Equal("resync-1"))
+		})
+
+		It("does not requeue a standalone cluster for role observation", func() {
+			key := types.NamespacedName{Name: "resync-single", Namespace: resyncNamespace}
+			single := haCluster(key.Name)
+			single.Spec.HighAvailability.Enabled = false
+			single.Spec.Topology.PromotableMembers = 1
+			Expect(k8sClient.Create(ctx, single)).To(Succeed())
+			DeferCleanup(func() {
+				c := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+			})
+			r := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
+				IMToken: testIMToken, Prober: &memberProber{},
+			}
+			res, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
 		})
 	})
 
