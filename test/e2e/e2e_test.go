@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -67,6 +68,12 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("make", "install")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
+		By("creating the Instance Manager token Secret the manager reads at start")
+		cmd = exec.Command("kubectl", "-n", namespace, "create", "secret", "generic", "instance-manager-token",
+			"--from-literal=token=e2e-wiring-token")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to create the Instance Manager token Secret")
 
 		By("deploying the controller-manager")
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
@@ -279,6 +286,136 @@ var _ = Describe("Manager", Ordered, func() {
 		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
 		//    strings.ToLower(<Kind>),
 		// ))
+	})
+
+	// Wiring only: the DB Pods run test/fakeim, which serves the Instance
+	// Manager API over a scripted CLI. There is no CUBRID in this scenario and
+	// a pass is never real-database, replication or failover evidence.
+	Context("Cluster wiring with a fake Instance Manager (no CUBRID)", Label("fake-instance-manager"), Ordered, func() {
+		const (
+			wiringNamespace = "cubrid-wiring-e2e"
+			clusterName     = "wiring"
+		)
+
+		clusterField := func(jsonPath string) (string, error) {
+			return utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "get", "cubridcluster", clusterName,
+				"-o", "jsonpath="+jsonPath))
+		}
+		setFakeRole := func(pod, role string) {
+			// Through the API server's Pod proxy: the fake has no shell tools.
+			path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:9090/proxy/fake/role?set=%s", wiringNamespace, pod, role)
+			out, err := utils.Run(exec.Command("kubectl", "get", "--raw", path))
+			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to set the fake role of %s", pod)
+			ExpectWithOffset(1, strings.TrimSpace(out)).To(Equal(role))
+		}
+
+		BeforeAll(func() {
+			By("building the fake Instance Manager image")
+			_, err := utils.Run(exec.Command("make", "docker-build-fake-im", fmt.Sprintf("FAKE_IM_IMG=%s", fakeIMImage)))
+			Expect(err).NotTo(HaveOccurred(), "Failed to build the fake Instance Manager image")
+
+			By("loading the fake Instance Manager image on Kind")
+			Expect(utils.LoadImageToKindClusterWithName(fakeIMImage)).To(Succeed())
+
+			By("creating a namespace that enforces the restricted security policy")
+			_, err = utils.Run(exec.Command("kubectl", "create", "ns", wiringNamespace))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = utils.Run(exec.Command("kubectl", "label", "--overwrite", "ns", wiringNamespace,
+				"pod-security.kubernetes.io/enforce=restricted"))
+			Expect(err).NotTo(HaveOccurred())
+
+			By("creating a three-member HA CubridCluster that runs the fake image")
+			repository, tag, found := strings.Cut(fakeIMImage, ":")
+			Expect(found).To(BeTrue(), "fakeIMImage needs a tag")
+			manifest := fmt.Sprintf(`apiVersion: database.cubrid.io/v1alpha1
+kind: CubridCluster
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  version: "11.4"
+  image:
+    repository: %s
+    tag: %s
+  databases:
+    - name: appdb
+  topology:
+    promotableMembers: 3
+    readReplicas: 0
+  highAvailability:
+    enabled: true
+  storage:
+    data:
+      size: 100Mi
+`, clusterName, wiringNamespace, repository, tag)
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(manifest)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create the CubridCluster")
+		})
+
+		AfterAll(func() {
+			if CurrentSpecReport().Failed() {
+				for _, args := range [][]string{
+					{"get", "cubridcluster", clusterName, "-o", "yaml"},
+					{"get", "pods,services,statefulsets", "-o", "wide"},
+					{"get", "events", "--sort-by=.lastTimestamp"},
+				} {
+					out, _ := utils.Run(exec.Command("kubectl", append([]string{"-n", wiringNamespace}, args...)...))
+					_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
+				}
+			}
+			_, _ = utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "delete", "cubridcluster", clusterName,
+				"--ignore-not-found", "--timeout=3m"))
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", wiringNamespace, "--ignore-not-found", "--timeout=3m"))
+		})
+
+		It("reaches every member by its alias Service and resolves the primary", func() {
+			By("waiting for the three members to be Ready")
+			Eventually(func(g Gomega) {
+				out, err := utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "get", "statefulset", clusterName,
+					"-o", "jsonpath={.status.readyReplicas}"))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(Equal("3"))
+			}, 5*time.Minute, 2*time.Second).Should(Succeed())
+
+			By("checking one alias Service per member")
+			for _, member := range []string{clusterName + "-0", clusterName + "-1", clusterName + "-2"} {
+				out, err := utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "get", "service", member,
+					"-o", "jsonpath={.spec.clusterIP}"))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(out).To(Equal("None"))
+			}
+
+			By("waiting for the operator to observe the scripted master")
+			Eventually(func(g Gomega) {
+				resolved, err := clusterField(`{.status.conditions[?(@.type=="PrimaryResolved")].status}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(resolved).To(Equal("True"))
+				primary, err := clusterField("{.status.currentPrimary}")
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(primary).To(Equal(clusterName + "-0"))
+				version, err := clusterField("{.status.instances[0].observedEngineVersion}")
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(version).To(Equal("11.4.6.1963"))
+			}).Should(Succeed())
+		})
+
+		It("follows a role change that changes no Kubernetes object", func() {
+			By("scripting a failover: member 0 becomes slave, member 1 becomes master")
+			setFakeRole(clusterName+"-0", "slave")
+			setFakeRole(clusterName+"-1", "master")
+
+			By("waiting for the periodic re-observation to move currentPrimary")
+			Eventually(func(g Gomega) {
+				primary, err := clusterField("{.status.currentPrimary}")
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(primary).To(Equal(clusterName + "-1"))
+				resolved, err := clusterField(`{.status.conditions[?(@.type=="PrimaryResolved")].status}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(resolved).To(Equal("True"))
+			}, time.Minute, time.Second).Should(Succeed())
+		})
 	})
 })
 

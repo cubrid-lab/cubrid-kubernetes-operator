@@ -292,6 +292,11 @@ which level was used.
   | `make docker-build`, `make docker-build-instance-manager`, `make test-e2e` (manager and Kubernetes wiring on Kind) | Docker or Podman, amd64 or arm64 |
   | Anything that runs CUBRID itself | linux/amd64 only: the official CUBRID image has no other architecture. A run under emulation on another architecture can show command output; it is not accepted as HA, timing or recovery evidence |
 
+- The Kind e2e scenario labelled `fake-instance-manager` runs the DB Pods from
+  `test/fakeim`: the real Instance Manager API over a scripted CLI, with no
+  CUBRID. It checks the operator's wiring (alias Services, role probing,
+  status) and is never reported as real-database, replication or failover
+  evidence.
 - `make test-e2e` runs only against an isolated Kind cluster. Runs on the VM
   lab are started explicitly and one at a time.
 
