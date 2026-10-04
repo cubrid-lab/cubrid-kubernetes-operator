@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -54,16 +55,45 @@ const (
 // baseline (cluster not yet initialized) is not a change — there is nothing to
 // upgrade from.
 func classifyEngineChange(desired, observed string) UpdateClass {
-	if desired == "" {
+	want := engineSeries(desired)
+	if want == "" {
 		return UpdateUnverifiable
 	}
 	if observed == "" {
 		return UpdateNone
 	}
-	if desired != observed {
+	got := engineSeries(observed)
+	if got == "" {
+		return UpdateUnverifiable
+	}
+	if want != got {
 		return UpdateEngineUpgradeBlocked
 	}
 	return UpdateNone
+}
+
+// engineSeries reduces an engine version to the series that spec.version
+// names: "11.4.6.1963" -> "11.4". The engine reports its full version while
+// the spec names a series, so the two are compared by series. A value without
+// a numeric major and minor yields "".
+func engineSeries(v string) string {
+	parts := strings.SplitN(strings.TrimSpace(v), ".", 3)
+	if len(parts) < 2 || !isDecimal(parts[0]) || !isDecimal(parts[1]) {
+		return ""
+	}
+	return parts[0] + "." + parts[1]
+}
+
+func isDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // reconcileUpdateGuard records the observed engine baseline and sets the

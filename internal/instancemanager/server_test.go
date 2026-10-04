@@ -149,6 +149,76 @@ func TestServer_Shutdown_LoopbackExempt(t *testing.T) {
 	}
 }
 
+// Recorded from `cubrid_rel` in cubrid/cubrid:11.4 (docs/poc/RESULTS.md, POC-10).
+const reportedEngineVersion = "11.4.6.1963"
+
+const cubridRelOut = "\nCUBRID 11.4.6 (11.4.6.1963-0e7d3c1) (64bit release build for Linux) (Sep  7 2026 17:45:11)\n\n"
+
+func TestParseEngineVersion(t *testing.T) {
+	if got := ParseEngineVersion(cubridRelOut); got != reportedEngineVersion {
+		t.Errorf("ParseEngineVersion = %q, want %s", got, reportedEngineVersion)
+	}
+	for _, out := range []string{"", "CUBRID", "command not found", "CUBRID 11.4.6"} {
+		if got := ParseEngineVersion(out); got != "" {
+			t.Errorf("ParseEngineVersion(%q) = %q, want empty", out, got)
+		}
+	}
+}
+
+// versionCLI answers cubrid_rel and heartbeat status, and counts the former.
+type versionCLI struct {
+	relCalls int
+	relOut   string
+	relErr   error
+}
+
+func (v *versionCLI) Run(_ context.Context, name string, _ ...string) (string, error) {
+	if name == "cubrid_rel" {
+		v.relCalls++
+		return v.relOut, v.relErr
+	}
+	return masterOut, nil
+}
+
+func roleEngineVersion(t *testing.T, h http.Handler) string {
+	t.Helper()
+	rr := doReq(t, h, "/v1/role", "tok", testRemoteAddr)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/v1/role = %d", rr.Code)
+	}
+	var st HAStatus
+	if err := json.Unmarshal(rr.Body.Bytes(), &st); err != nil {
+		t.Fatal(err)
+	}
+	return st.EngineVersion
+}
+
+func TestServer_Role_ReportsEngineVersionReadOnce(t *testing.T) {
+	cli := &versionCLI{relOut: cubridRelOut}
+	h := NewServer(cli, "tok").Handler()
+	for range 3 {
+		if got := roleEngineVersion(t, h); got != reportedEngineVersion {
+			t.Fatalf("engineVersion = %q", got)
+		}
+	}
+	if cli.relCalls != 1 {
+		t.Errorf("cubrid_rel ran %d times, want once: the version cannot change while the process runs", cli.relCalls)
+	}
+}
+
+// A failed read is not cached: the next request tries again.
+func TestServer_Role_RetriesEngineVersionAfterFailure(t *testing.T) {
+	cli := &versionCLI{relErr: errors.New("exit status 127")}
+	h := NewServer(cli, "tok").Handler()
+	if got := roleEngineVersion(t, h); got != "" {
+		t.Fatalf("engineVersion = %q after a failed read", got)
+	}
+	cli.relOut, cli.relErr = cubridRelOut, nil
+	if got := roleEngineVersion(t, h); got != reportedEngineVersion {
+		t.Errorf("engineVersion = %q after the command recovered", got)
+	}
+}
+
 // Recorded on CUBRID 11.4.6 from a standalone server (docs/poc/RESULTS.md, POC-10).
 const (
 	serverStatusRunning = "@ cubrid server status\n Server appdb (rel 11.4.6, pid 14)\n"

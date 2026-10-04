@@ -63,6 +63,20 @@ func HeartbeatStatus(ctx context.Context, cli CLI) HAStatus {
 	return ParseHAStatus(out)
 }
 
+// engineVersionPattern matches the full version in cubrid_rel output:
+// "CUBRID 11.4.6 (11.4.6.1963-0e7d3c1) (64bit ..." (docs/poc/RESULTS.md, POC-10).
+var engineVersionPattern = regexp.MustCompile(`\((\d+\.\d+\.\d+\.\d+)[-)]`)
+
+// ParseEngineVersion extracts the full engine version ("11.4.6.1963") from
+// cubrid_rel output, or "" when the output does not carry one.
+func ParseEngineVersion(out string) string {
+	m := engineVersionPattern.FindStringSubmatch(out)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
 // serverStatusLine matches one running server in `cubrid server status`:
 // " Server appdb (rel 11.4.6, pid 14)" (docs/poc/RESULTS.md, POC-10).
 var serverStatusLine = regexp.MustCompile(`(?m)^\s*Server\s+(\S+)\s+\(rel [^,]+, pid \d+\)`)

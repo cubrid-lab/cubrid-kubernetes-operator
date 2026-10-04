@@ -62,6 +62,13 @@ differs, is missing, or is unverifiable → **block** as
 (no pod deletion). Once a HA cluster is initialized, the desired engine
 version (`spec.version`) is effectively **immutable** for MVP.
 
+As implemented (#158): the Instance Manager reads the full version from
+`cubrid_rel` (`11.4.6.1963`) and reports it with the role; status stores the
+full version. `spec.version` names a series (`11.4`), so the guard compares
+by series (major.minor): a different patch of the same series is not an
+engine upgrade, a different series is blocked, and a version that cannot be
+parsed is unverifiable.
+
 Status records: `observedEngineVersion` (cluster + per member),
 per-member `imageID`/digest, `update.desiredRevision`,
 `update.currentRevision`, `update.engineVersion`.

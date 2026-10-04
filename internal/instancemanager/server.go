@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -48,6 +49,9 @@ type Server struct {
 	// objects uploads backups to S3-compatible storage; nil means a backup
 	// cannot complete (bare backupdb is never a false Completed, ADR-0007).
 	objects ObjectStore
+	// version caches the engine version reported by cubrid_rel.
+	versionMu sync.Mutex
+	version   string
 	// standaloneDB is the database of a standalone (non-HA) member; empty
 	// for an HA member.
 	standaloneDB string
@@ -179,7 +183,26 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 
 // role returns the local node's authoritative CUBRID role.
 func (s *Server) role(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, HeartbeatStatus(r.Context(), s.cli))
+	st := HeartbeatStatus(r.Context(), s.cli)
+	st.EngineVersion = s.engineVersion(r.Context())
+	writeJSON(w, http.StatusOK, st)
+}
+
+// engineVersion reads the engine's version once and keeps it: the binaries in
+// the image do not change while this process runs. A failed read is not kept,
+// so a later request tries again.
+func (s *Server) engineVersion(ctx context.Context) string {
+	s.versionMu.Lock()
+	defer s.versionMu.Unlock()
+	if s.version != "" {
+		return s.version
+	}
+	out, err := s.cli.Run(ctx, "cubrid_rel")
+	if err != nil {
+		return ""
+	}
+	s.version = ParseEngineVersion(out)
+	return s.version
 }
 
 // haStatus returns the full parsed HA view (role + topology).
