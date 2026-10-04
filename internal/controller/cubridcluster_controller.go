@@ -329,17 +329,27 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			// /readyz). Cluster HAReady is a SEPARATE Condition and must never
 			// gate Pod readiness, else failover instability evicts every pod
 			// from Services (ADR-0003/0005, #14).
+			// The entrypoint creates and starts the database before the manager
+			// listens, so nothing answers /livez during the first start. The
+			// startup probe gives it ten minutes; liveness applies only after.
+			StartupProbe: &corev1.Probe{
+				ProbeHandler:     httpGet("/livez"),
+				PeriodSeconds:    10,
+				FailureThreshold: 60,
+			},
 			LivenessProbe: &corev1.Probe{
-				ProbeHandler:        httpGet("/livez"),
-				InitialDelaySeconds: 30,
-				PeriodSeconds:       10,
-				FailureThreshold:    6,
+				ProbeHandler:     httpGet("/livez"),
+				PeriodSeconds:    10,
+				FailureThreshold: 6,
 			},
 			ReadinessProbe: &corev1.Probe{
 				ProbeHandler:        httpGet("/readyz"),
 				InitialDelaySeconds: 10,
 				PeriodSeconds:       5,
-				FailureThreshold:    3,
+				// /readyz runs a CUBRID command; the default of one second
+				// would cancel it under load.
+				TimeoutSeconds:   5,
+				FailureThreshold: 3,
 			},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "data", MountPath: dataMountPath},

@@ -108,6 +108,24 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		Expect(statefulSet("wiring-image-custom").Spec.Template.Spec.Containers[0].Image).To(Equal("my.registry/im:1.2.3"))
 	})
 
+	// The entrypoint creates and starts the database before the manager
+	// listens, and /readyz runs a CUBRID command (#174).
+	It("lets the first start finish before liveness applies and gives readiness time to answer", func() {
+		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-probes"))
+		c := statefulSet("wiring-probes").Spec.Template.Spec.Containers[0]
+
+		Expect(c.StartupProbe).NotTo(BeNil(), "liveness would restart a container that is still creating its database")
+		Expect(c.StartupProbe.HTTPGet).NotTo(BeNil())
+		Expect(c.StartupProbe.HTTPGet.Path).To(Equal("/livez"))
+		allowed := c.StartupProbe.PeriodSeconds * c.StartupProbe.FailureThreshold
+		Expect(allowed).To(BeNumerically(">=", 600), "seconds the first start may take")
+
+		Expect(c.LivenessProbe).NotTo(BeNil())
+		Expect(c.LivenessProbe.InitialDelaySeconds).To(BeZero(), "the startup probe replaces the delay")
+		Expect(c.ReadinessProbe).NotTo(BeNil())
+		Expect(c.ReadinessProbe.TimeoutSeconds).To(BeNumerically(">=", 5))
+	})
+
 	It("passes the database, its path on the data volume and the start mode", func() {
 		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-env"))
 		c := statefulSet("wiring-env").Spec.Template.Spec.Containers[0]
