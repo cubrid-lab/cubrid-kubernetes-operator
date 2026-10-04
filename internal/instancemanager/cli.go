@@ -19,6 +19,7 @@ package instancemanager
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"time"
@@ -48,8 +49,25 @@ func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, 
 		ctx, cancel = context.WithTimeout(ctx, to)
 		defer cancel()
 	}
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
-	return string(out), err
+	// The output goes to a file, not a pipe: `cubrid server start` and
+	// `cubrid heartbeat start` leave daemons that inherit the command's
+	// output, and reading a pipe would wait for them instead of the command.
+	output, err := os.CreateTemp("", "im-cli-*")
+	if err != nil {
+		return "", fmt.Errorf("output file for %s: %w", name, err)
+	}
+	defer func() {
+		_ = output.Close()
+		_ = os.Remove(output.Name())
+	}()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout, cmd.Stderr = output, output
+	runErr := cmd.Run()
+	out, readErr := os.ReadFile(output.Name())
+	if runErr == nil && readErr != nil {
+		return "", fmt.Errorf("read the output of %s: %w", name, readErr)
+	}
+	return string(out), runErr
 }
 
 // HeartbeatStatus runs `cubrid heartbeat status` and parses the local node's

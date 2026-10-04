@@ -128,6 +128,16 @@ form `createdb` writes (with the Pod's host name), and runs
 removes that directory and puts `databases.txt` back as it was, so the target
 is empty again for a retry.
 
+Who starts the restored server (#178): in a recovery bootstrap the entrypoint
+starts nothing, because no database is registered yet, and it runs once per
+container start. The Instance Manager is the only place that runs CUBRID
+commands (ADR-0003), so for a standalone member it starts the server
+(`cubrid server start <db>`) as the last step of the restore operation, in
+state `Starting`; the operation is `Completed` only when that succeeded, and a
+failed start leaves the restored data in place and the operation `Failed`.
+Deleting the Pod to let the entrypoint start it was rejected: it would make a
+restart the start mechanism. An HA member is started by the HA bootstrap.
+
 ### Validation gate (before Ready)
 
 The cluster is **not Ready** until ALL hold: manifest trust checks pass;

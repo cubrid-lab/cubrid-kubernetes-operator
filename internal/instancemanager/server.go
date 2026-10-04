@@ -418,6 +418,19 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			fail("restore failed: " + err.Error())
 			return
 		}
+		// In a recovery bootstrap the entrypoint started nothing and runs only
+		// once, so a standalone member's server is started here: the operation
+		// is not complete until it runs. An HA member is started by the HA
+		// bootstrap. The restored data is kept when the start fails.
+		if s.standaloneDB != "" && s.standaloneDB == req.Database {
+			if _, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting }); err != nil {
+				return
+			}
+			if out, err := s.cli.Run(ctx, "cubrid", "server", "start", req.Database); err != nil {
+				fail("server start failed: " + err.Error() + ": " + out)
+				return
+			}
+		}
 		_, _ = s.store.Update(id, func(op *Operation) {
 			op.State = OpCompleted
 			op.Artifact = &OperationArtifact{

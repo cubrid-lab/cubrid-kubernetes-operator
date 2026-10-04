@@ -286,11 +286,11 @@ func TestEntrypoint_TerminationOfUnconfiguredHAMemberStopsOnlyTheManager(t *test
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return contains(f.recorded(), callManagerStart) }, &out)
+	waitFor(t, func() bool { return managerStarted(f.recorded()) }, &out)
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitExit(cmd, 20*time.Second); err != nil {
+	if err := waitExit(cmd); err != nil {
 		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
 	}
 	wantCalls(t, f.recorded(), callManagerStart, "manager term")
@@ -380,11 +380,11 @@ func TestEntrypoint_TerminationStopsCubridThenManager(t *testing.T) {
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
-			waitFor(t, func() bool { return contains(f.recorded(), callManagerStart) }, &out)
+			waitFor(t, func() bool { return managerStarted(f.recorded()) }, &out)
 			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 				t.Fatal(err)
 			}
-			if err := waitExit(cmd, 20*time.Second); err != nil {
+			if err := waitExit(cmd); err != nil {
 				t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
 			}
 			calls := f.recorded()
@@ -406,14 +406,36 @@ func TestEntrypoint_TerminationBeforeRestoreStopsOnlyTheManager(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return contains(f.recorded(), callManagerStart) }, &out)
+	waitFor(t, func() bool { return managerStarted(f.recorded()) }, &out)
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitExit(cmd, 20*time.Second); err != nil {
+	if err := waitExit(cmd); err != nil {
 		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
 	}
 	wantCalls(t, f.recorded(), callManagerStart, "manager term")
+}
+
+// A restore registers the database and the Instance Manager starts its server
+// while this script runs (#178), so termination has to stop that server too.
+func TestEntrypoint_TerminationAfterRestoreStopsTheRestoredServer(t *testing.T) {
+	f := newFixture(t, blockingManagerStub)
+	f.env["CUBRID_BOOTSTRAP"] = bootstrapRecovery
+	cmd := f.command()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return managerStarted(f.recorded()) }, &out)
+	f.registerDatabase() // what the restore does
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd); err != nil {
+		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
+	}
+	wantCalls(t, f.recorded(), callManagerStart, "cubrid server stop "+dbName, "manager term")
 }
 
 func waitFor(t *testing.T, done func() bool, out *bytes.Buffer) {
@@ -427,19 +449,22 @@ func waitFor(t *testing.T, done func() bool, out *bytes.Buffer) {
 	}
 }
 
-func waitExit(cmd *exec.Cmd, limit time.Duration) error {
+// exitLimit is how long the entrypoint may take to exit after a signal.
+const exitLimit = 20 * time.Second
+
+func waitExit(cmd *exec.Cmd) error {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(limit):
+	case <-time.After(exitLimit):
 		_ = cmd.Process.Kill()
-		return fmt.Errorf("did not exit within %s", limit)
+		return fmt.Errorf("did not exit within %s", exitLimit)
 	}
 }
 
-func contains(calls []string, want string) bool { return index(calls, want) >= 0 }
+func managerStarted(calls []string) bool { return index(calls, callManagerStart) >= 0 }
 
 func index(calls []string, want string) int {
 	for i, call := range calls {

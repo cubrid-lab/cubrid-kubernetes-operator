@@ -568,6 +568,12 @@ claims).
   that runs it under `set -e` ends there (#176).
 - **`curl`** is in the image (`/usr/bin/curl`), so the Pod's preStop hook can
   call the Instance Manager.
+- **A command that leaves a daemon keeps its output open.** `cubrid server
+  start` returns, but the `cub_server` it started inherits the command's
+  standard output. A caller that reads that output through a pipe until it
+  closes waits for the server, not for the command: the Instance Manager's
+  restore stayed in `Starting` for minutes with the server already running.
+  Capturing the output in a file returns as soon as the command exits (#178).
 
 ---
 
