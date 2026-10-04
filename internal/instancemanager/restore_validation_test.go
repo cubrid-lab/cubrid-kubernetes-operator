@@ -153,7 +153,7 @@ func TestRestore_RunsRestoredbOnTheStagedBackup(t *testing.T) {
 	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	want := "cubrid restoredb -B " + filepath.Join(req.StagingDir, "backup") + " " + dbName
+	want := "cubrid restoredb -u -B " + filepath.Join(req.StagingDir, "backup") + " " + dbName
 	if len(cli.calls) != 1 || cli.calls[0] != want {
 		t.Errorf("restoredb = %v, want [%s]", cli.calls, want)
 	}

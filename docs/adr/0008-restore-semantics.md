@@ -116,6 +116,16 @@ checksums, runs `restoredb`, and records durable PVC operation state. The
 operator polls `/v1/operations/{id}` and **resumes** after operator or
 manager restart from status + durable records (never false success).
 
+The restore command as implemented (#169, from POC-11 in
+`docs/poc/RESULTS.md`): `restoredb` does not register a database and, without
+`-u`, writes to the paths recorded in the backup. After the wrong-target
+guard, the artifact verification and the download, the Instance Manager
+creates `<CUBRID_DATABASES>/<db>`, adds the database to `databases.txt` in the
+form `createdb` writes (with the Pod's host name), and runs
+`cubrid restoredb -u -B <staged backup> <db>`. When `restoredb` fails it
+removes that directory and puts `databases.txt` back as it was, so the target
+is empty again for a retry.
+
 ### Validation gate (before Ready)
 
 The cluster is **not Ready** until ALL hold: manifest trust checks pass;

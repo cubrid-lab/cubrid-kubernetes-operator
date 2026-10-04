@@ -18,6 +18,7 @@ package instancemanager
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,8 @@ type restoreCLI struct {
 	err       error
 	checkPath string
 	sawFile   bool
+	// onRun, when set, runs while the command "executes".
+	onRun func()
 }
 
 func (c *restoreCLI) Run(_ context.Context, name string, args ...string) (string, error) {
@@ -38,6 +41,9 @@ func (c *restoreCLI) Run(_ context.Context, name string, args ...string) (string
 	if c.checkPath != "" {
 		_, statErr := os.Stat(c.checkPath)
 		c.sawFile = statErr == nil
+	}
+	if c.onRun != nil {
+		c.onRun()
 	}
 	return "ok", c.err
 }
@@ -78,8 +84,9 @@ func TestRestore_HappyPath(t *testing.T) {
 	if res.Database != dbName || res.CubridVersion != testCubridVersion {
 		t.Errorf("result = %+v", res)
 	}
-	if len(cli.calls) != 1 || !strings.Contains(cli.calls[0], "restoredb -B") {
-		t.Errorf("restoredb not invoked as expected: %v", cli.calls)
+	want := "cubrid restoredb -u -B " + filepath.Join(req.StagingDir, "backup") + " " + dbName
+	if len(cli.calls) != 1 || cli.calls[0] != want {
+		t.Errorf("calls = %v, want [%s]", cli.calls, want)
 	}
 	// The staged object was downloaded before restoredb ran, and staging is
 	// removed once the restore succeeds.
@@ -139,5 +146,121 @@ func TestRestore_ChecksumDriftAborts(t *testing.T) {
 func TestRestore_RequiresArgs(t *testing.T) {
 	if _, err := Restore(context.Background(), &restoreCLI{}, newFakeStore(), RestoreRoots{}, RestoreRequest{Database: dbName}); err == nil {
 		t.Error("expected error when required fields are missing")
+	}
+}
+
+// databasesTxtEntry returns the fields of database's line in the target's
+// databases.txt, or nil when there is none.
+func databasesTxtEntry(t *testing.T, targetDir, database string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(targetDir, databasesTxt))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == database {
+			return fields
+		}
+	}
+	return nil
+}
+
+// restoredb needs the database registered at its target before it runs, and
+// -u so that it uses that path instead of the one recorded in the backup
+// (docs/poc/RESULTS.md, POC-11).
+func TestRestore_RegistersTheTargetBeforeRestoredb(t *testing.T) {
+	store, bucket, prefix := stageUploadedArtifact(t)
+	req := baseRestoreRequest(t, bucket, prefix)
+	dbDir := filepath.Join(req.TargetDir, dbName)
+	other := "otherdb\t\t/data/otherdb\tlocalhost\t/data/otherdb\tfile:/data/otherdb/lob\n"
+	if err := os.WriteFile(filepath.Join(req.TargetDir, databasesTxt), []byte(other), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var entryAtRun []string
+	var dirAtRun bool
+	cli := &restoreCLI{}
+	cli.onRun = func() {
+		entryAtRun = databasesTxtEntry(t, req.TargetDir, dbName)
+		info, err := os.Stat(dbDir)
+		dirAtRun = err == nil && info.IsDir()
+	}
+
+	if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if !dirAtRun {
+		t.Errorf("%s did not exist when restoredb ran", dbDir)
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntry := []string{dbName, dbDir, host, dbDir, "file:" + filepath.Join(dbDir, "lob")}
+	if strings.Join(entryAtRun, "|") != strings.Join(wantEntry, "|") {
+		t.Errorf("entry when restoredb ran = %q, want %q", entryAtRun, wantEntry)
+	}
+	if got := databasesTxtEntry(t, req.TargetDir, dbName); got == nil {
+		t.Error("the entry is gone after a successful restore")
+	}
+	if got := databasesTxtEntry(t, req.TargetDir, "otherdb"); got == nil {
+		t.Error("another database's entry was lost")
+	}
+}
+
+// A failed restore leaves the target as it found it, so a retry is not
+// stopped by the wrong-target guard.
+func TestRestore_FailureUnregistersTheTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing string // databases.txt before the restore; "" means no file
+	}{
+		{"no databases.txt before", ""},
+		{"another database registered", "otherdb\t\t/data/otherdb\tlocalhost\t/data/otherdb\tfile:/data/otherdb/lob\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store, bucket, prefix := stageUploadedArtifact(t)
+			req := baseRestoreRequest(t, bucket, prefix)
+			file := filepath.Join(req.TargetDir, databasesTxt)
+			if tc.existing != "" {
+				if err := os.WriteFile(file, []byte(tc.existing), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dbDir := filepath.Join(req.TargetDir, dbName)
+			cli := &restoreCLI{err: errors.New("exit status 1")}
+			// restoredb left a partial volume behind.
+			cli.onRun = func() { _ = os.WriteFile(filepath.Join(dbDir, dbName+"_vinf"), []byte("partial"), 0o600) }
+
+			if _, err := Restore(context.Background(), cli, store, rootsFor(req), req); err == nil {
+				t.Fatal("expected the restore to fail")
+			}
+			if len(cli.calls) != 1 {
+				t.Fatalf("calls = %v, want one restoredb", cli.calls)
+			}
+			if _, err := os.Stat(dbDir); !os.IsNotExist(err) {
+				t.Errorf("%s is still there after the failure (err=%v)", dbDir, err)
+			}
+			if got := databasesTxtEntry(t, req.TargetDir, dbName); got != nil {
+				t.Errorf("the database is still registered after the failure: %q", got)
+			}
+			data, err := os.ReadFile(file)
+			switch {
+			case tc.existing == "" && !os.IsNotExist(err):
+				t.Errorf("databases.txt did not exist before and is there now (err=%v, content %q)", err, data)
+			case tc.existing != "" && string(data) != tc.existing:
+				t.Errorf("databases.txt = %q, want it as before: %q", data, tc.existing)
+			}
+
+			// The same request can be retried.
+			retry := &restoreCLI{}
+			if _, err := Restore(context.Background(), retry, store, rootsFor(req), req); err != nil {
+				t.Errorf("retry after a failed restore: %v", err)
+			}
+		})
 	}
 }

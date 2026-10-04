@@ -458,6 +458,85 @@ started with `cubrid server start`, run as UID 1000 with no capabilities
   `cubrid server stop` waits for it to disappear (see ADR-0003, "Pod runtime
   contract").
 
+---
+
+## POC-11 — restoredb into a fresh target (ADR-0008, #143) — **PASS + key finding**
+
+`cubrid/cubrid:11.4` (engine 11.4.6), run as UID 1000 with `sleep` as the
+command so that the image entrypoint creates no database (linux/amd64 emulated
+under podman, `--init`; output only, no timing claims).
+
+**Source.** Database `appdb` created at the image default path
+`/home/cubrid/CUBRID/databases/appdb`, one row inserted, then
+`cubrid backupdb -C -D /backup/full -l 0 appdb@localhost` →
+`/backup/full/appdb_bk0v000`. `cubrid restoredb --list` shows that the backup
+records absolute volume names, all below the source path:
+
+```text
+Database Name: /home/cubrid/CUBRID/databases/appdb/appdb
+Database Volume Name: /home/cubrid/CUBRID/databases/appdb/appdb_vinf
+Database Volume Name: /home/cubrid/CUBRID/databases/appdb/appdb
+Database Volume Name: /home/cubrid/CUBRID/databases/appdb/appdb_x001
+Database Volume Name: /home/cubrid/CUBRID/databases/appdb/appdb_lgat
+```
+
+**Target.** A fresh container with `CUBRID_DATABASES=/var/lib/cubrid/databases`
+on a mounted volume and the backup directory mounted at `/backup`. "Target
+directory" below is `/var/lib/cubrid/databases/appdb`.
+
+| # | `databases.txt` in the target | Command | Result |
+|---|---|---|---|
+| 1 | no file | `restoredb -B /backup/full appdb` | exit 1: `Could not obtain write access to database file "/var/lib/cubrid/databases/databases.txt".... No such file or directory`. Nothing written. |
+| 2 | empty file | same | exit 1: `Database "appdb" is unknown, or the file "databases.txt" cannot be accessed.` Nothing written; the file is still empty. |
+| 3 | entry pointing at the target directory (directory exists) | same, without `-u` | exit 1: `LOG FATAL ERROR: logpb_restore`. The error log has code -633: `/backup/full/appdb_bk0v000 is a backup of database /home/cubrid/CUBRID/databases/appdb/appdb ... instead of given database /var/lib/cubrid/databases/appdb/appdb`. Nothing written in the target or at the recorded path, also when the recorded directory exists. |
+| 4 | same entry | `restoredb -u -B /backup/full appdb` | exit 0. Every volume and log file is in the target directory; nothing is under the image default path. `appdb_vinf` lists the target paths. `cubrid server start appdb` succeeds, the source row is read, and an insert commits. |
+| 5 | entry pointing at the path recorded in the backup | `restoredb -B /backup/full appdb` (no `-u`) | Directory missing: exit 1, `Unable to mount disk volume ".../appdb_vinf".... No such file or directory`. Directory present: exit 0, and the volumes land at the recorded path, which is the container's own file system; the mounted volume holds only `databases.txt`. |
+| 6 | entry pointing at the target directory, with the container's host name in the host column | `restoredb -u -B /backup/full appdb` | Target directory missing: exit 1, `Unable to mount disk volume`. After `mkdir`: exit 0, the server starts and the row is read. |
+| 7 | as left by case 6, server stopped | `restoredb -u -B /backup/full appdb` again | exit 0: `restoredb` restores over an existing database without refusing. |
+
+The entry used in cases 3, 4 and 6 has the form `createdb` writes (tab
+separated, absolute paths):
+
+```text
+appdb		/var/lib/cubrid/databases/appdb	localhost	/var/lib/cubrid/databases/appdb	file:/var/lib/cubrid/databases/appdb/lob
+```
+
+**Findings.**
+
+- `restoredb` never registers the database: `databases.txt` is byte-for-byte
+  what it was before the command in every case. The database must be
+  registered before the restore, and the registered directory must exist.
+- Without `-u` the restore goes to the paths recorded in the backup, or fails
+  when the registered path differs from them. It never goes to "the current
+  `CUBRID_DATABASES`". A backup taken from a member whose database lived at the
+  image default path would therefore be restored outside the data volume.
+- With `-u` the restore goes to the registered path, whatever the backup
+  recorded. This is the only tested way to place a restore in a chosen
+  directory.
+- `restoredb` does not protect an existing database (case 7). The wrong-target
+  guard has to be the Instance Manager's.
+- After `-u` the informational `appdb_lginf` still names the source path in its
+  comment lines; `appdb_vinf` and the running server use the target path.
+
+**Consequence for the Instance Manager** (tracked in #169, then #120):
+`Restore` runs `cubrid restoredb -B <staged backup> <db>` and refuses a
+database that is registered, so in a fresh target it ends as case 1 or 2. The
+tested procedure is:
+
+1. Check that the target holds no volume of the database and no entry for it.
+2. Create `<CUBRID_DATABASES>/<db>` and add the entry above to
+   `<CUBRID_DATABASES>/databases.txt` (creating the file when it is absent).
+3. Run `cubrid restoredb -u -B <staged backup> <db>`.
+4. If the restore fails, remove the entry and the directory this restore
+   created.
+
+**Not tested here:** a restore that fails midway and what it leaves behind;
+the `lob` directory, which `createdb` creates and `restoredb` did not; an
+incremental backup level; a backup taken from an HA member; and whether the
+host column matters for HA (cases 4 and 6 only start a standalone server).
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
