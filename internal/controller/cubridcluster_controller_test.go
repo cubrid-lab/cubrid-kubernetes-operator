@@ -456,10 +456,10 @@ var _ = Describe("CubridCluster Controller", func() {
 			c := haCluster("recovery-bootstrap")
 			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 				Recovery: &databasev1alpha1.RecoverySource{
-					ManifestURI:      "s3://bucket/prefix/manifest.json",
-					StorageSecretRef: &corev1.LocalObjectReference{Name: "restore-object-storage"},
+					ManifestURI: "s3://bucket/prefix/manifest.json",
 				},
 			}
+			c.Spec.ObjectStorage = testObjectStorage()
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 
@@ -485,11 +485,22 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(updated.Status.Bootstrap.TargetMember).To(Equal("recovery-bootstrap-0"))
 		})
 
+		It("rejects a recovery bootstrap without objectStorage (#99)", func() {
+			c := haCluster("recovery-no-storage")
+			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: "s3://bucket/prod/uid/manifest.json"},
+			}
+			err := k8sClient.Create(ctx, c)
+			Expect(err).To(HaveOccurred(), "the DB Pods would have no object storage to read the backup from")
+			Expect(err.Error()).To(ContainSubstring("requires objectStorage"))
+		})
+
 		It("drives recovery bootstrap and gates Ready until restore completes (ADR-0008)", func() {
 			c := haCluster("recovery-run")
 			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: "s3://bucket/prod/uid/manifest.json"},
 			}
+			c.Spec.ObjectStorage = testObjectStorage()
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 

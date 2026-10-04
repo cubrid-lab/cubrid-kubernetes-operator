@@ -614,8 +614,6 @@ spec:
       provider: S3Compatible
       bucket: cubrid-backups
       prefix: prod/production
-      endpointRef: { name: s3-endpoint }
-      credentialsRef: { name: s3-credentials }
 ```
 
 The Instance Manager executes `backupdb` locally and uploads the artifact
@@ -1245,7 +1243,9 @@ spec:
   bootstrap:
     recovery:
       manifestUri: s3://bucket/prod/production/<backup-uid>/manifest.json
-      storageSecretRef: { name: restore-object-storage }
+  objectStorage:
+    endpoint: s3.example.com
+    credentialsSecretRef: { name: restore-object-storage }
 ```
 
 ### Decision (ADR-0008, issue #8)
@@ -1416,8 +1416,8 @@ Implemented: DB pods run under **Pod Security Standards "restricted"** —
 RuntimeDefault` (pod + container), and all Linux capabilities dropped
 (`drop: ["ALL"]`). The operator does not use `pods/exec` (role discovery
 and DB-local ops go through the Instance Manager, ADR-0003).
-Secrets are referenced (`dbaPasswordSecretRef`, restore
-`storageSecretRef`), never inlined. The Instance Manager authenticates
+Secrets are referenced (`dbaPasswordSecretRef`,
+`objectStorage.credentialsSecretRef`), never inlined. The Instance Manager authenticates
 `/v1` endpoints with a bearer token (loopback-exempt for the preStop path,
 ADR-0003), and object-storage credentials come from the manager's env,
 never a request body. mTLS, NetworkPolicy, and finer-grained least-privilege

@@ -18,7 +18,3 @@ spec:
       provider: S3Compatible
       bucket: cubrid-backups
       prefix: prod/example
-      endpointRef:
-        name: s3-endpoint
-      credentialsRef:
-        name: s3-credentials

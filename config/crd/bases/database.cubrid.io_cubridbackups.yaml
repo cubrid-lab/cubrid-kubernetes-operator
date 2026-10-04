@@ -80,28 +80,6 @@ spec:
                         description: bucket is the target bucket.
                         minLength: 1
                         type: string
-                      credentialsRef:
-                        description: credentialsRef references a Secret with object-storage
-                          credentials.
-                        properties:
-                          name:
-                            description: name is the referenced object's name.
-                            minLength: 1
-                            type: string
-                        required:
-                        - name
-                        type: object
-                      endpointRef:
-                        description: endpointRef references a ConfigMap/Secret with
-                          the endpoint.
-                        properties:
-                          name:
-                            description: name is the referenced object's name.
-                            minLength: 1
-                            type: string
-                        required:
-                        - name
-                        type: object
                       prefix:
                         description: prefix is the key prefix under the bucket.
                         type: string
@@ -113,7 +91,6 @@ spec:
                         type: string
                     required:
                     - bucket
-                    - credentialsRef
                     type: object
                   type:
                     description: |-

@@ -70,22 +70,6 @@ spec:
                           ADR-0007 artifact identity). Required for recovery bootstrap.
                         minLength: 1
                         type: string
-                      storageSecretRef:
-                        description: |-
-                          storageSecretRef references object-storage credentials on THIS cluster
-                          (never the source cluster's secrets).
-                        properties:
-                          name:
-                            default: ""
-                            description: |-
-                              Name of the referent.
-                              This field is effectively required, but due to backwards compatibility is
-                              allowed to be empty. Instances of this type with an empty value here are
-                              almost certainly wrong.
-                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                            type: string
-                        type: object
-                        x-kubernetes-map-type: atomic
                     required:
                     - manifestUri
                     type: object
@@ -171,6 +155,48 @@ spec:
                     description: tag is the container image tag. Prefer pinning by
                       digest via repository@sha256.
                     type: string
+                type: object
+              objectStorage:
+                description: |-
+                  objectStorage configures the object storage the DB Pods use for backup
+                  and restore. Required for a recovery bootstrap and for a CubridBackup
+                  with an ObjectStorage destination.
+                properties:
+                  credentialsSecretRef:
+                    description: |-
+                      credentialsSecretRef names a Secret in the cluster's namespace with the
+                      keys accessKey and secretKey. The operator does not read it; the DB Pods
+                      receive the two keys as environment variables.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  endpoint:
+                    description: endpoint is the service address as host[:port], without
+                      a scheme.
+                    minLength: 1
+                    pattern: ^[^/\s]+$
+                    type: string
+                  insecure:
+                    description: |-
+                      insecure makes the DB Pods use plain HTTP instead of TLS. For
+                      development object stores only.
+                    type: boolean
+                  region:
+                    description: region is the bucket region, when the service needs
+                      one.
+                    type: string
+                required:
+                - credentialsSecretRef
+                - endpoint
                 type: object
               resources:
                 description: resources sets container resource requirements for the
@@ -317,6 +343,9 @@ spec:
                 == 3 : true'
             - message: fencingPolicy Automatic is not supported in v1alpha1
               rule: self.highAvailability.fencingPolicy != 'Automatic'
+            - message: 'bootstrap.recovery requires objectStorage: the DB Pods read
+                the backup from it'
+              rule: '!has(self.bootstrap) || !has(self.bootstrap.recovery) || has(self.objectStorage)'
             - message: database names are immutable; existing names must be preserved
               rule: oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))
           status:

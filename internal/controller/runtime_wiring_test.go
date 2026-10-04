@@ -39,6 +39,8 @@ const (
 	testIMToken   = "test-im-token"
 	testDatabase  = "appdb"
 	testNamespace = "default"
+
+	testStorageSecret = "object-storage-credentials"
 )
 
 // standaloneCluster returns a single-member CubridCluster (HA disabled, ADR-0001).
@@ -53,6 +55,16 @@ func standaloneCluster(name string) *databasev1alpha1.CubridCluster {
 				Data: databasev1alpha1.CubridStorageSpec{Size: resource.MustParse("1Gi")},
 			},
 		},
+	}
+}
+
+// testObjectStorage is a cluster-level object-storage setting for tests.
+func testObjectStorage() *databasev1alpha1.CubridObjectStorage {
+	return &databasev1alpha1.CubridObjectStorage{
+		Endpoint:             "minio.storage.svc:9000",
+		Region:               "us-east-1",
+		Insecure:             true,
+		CredentialsSecretRef: corev1.LocalObjectReference{Name: testStorageSecret},
 	}
 }
 
@@ -148,11 +160,66 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		Expect(mode.Value).To(Equal("new"))
 	})
 
+	// Without the operation store the manager answers /v1/backup
+	// synchronously and refuses /v1/restore/prepare, while the operator
+	// expects 202 from both (#99).
+	It("gives the manager its operation store and the staging roots the operator uses", func() {
+		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-operations"))
+		c := statefulSet("wiring-operations").Spec.Template.Spec.Containers[0]
+
+		ops, ok := envValue(c, "IM_OPERATIONS_DIR")
+		Expect(ok).To(BeTrue())
+		Expect(ops.Value).To(HavePrefix(dataMountPath+"/"), "operation records must survive a restart")
+
+		for name, want := range map[string]string{
+			"IM_BACKUP_STAGING_ROOT":  backupStagingRoot,
+			"IM_RESTORE_STAGING_ROOT": restoreStagingRoot,
+		} {
+			got, ok := envValue(c, name)
+			Expect(ok).To(BeTrue(), name)
+			Expect(got.Value).To(Equal(want), "%s must be the root the operator builds requests with", name)
+		}
+		databases, _ := envValue(c, "CUBRID_DATABASES")
+		Expect(databases.Value).To(Equal(restoreTargetRoot))
+
+		for _, name := range []string{"IM_S3_ENDPOINT", "IM_S3_ACCESS_KEY", "IM_S3_SECRET_KEY"} {
+			_, ok := envValue(c, name)
+			Expect(ok).To(BeFalse(), "%s without spec.objectStorage", name)
+		}
+	})
+
+	It("passes the cluster's object storage, with credentials only as Secret references", func() {
+		cluster := standaloneCluster("wiring-storage")
+		cluster.Spec.ObjectStorage = testObjectStorage()
+		reconcileCluster(newReconciler(testIMToken), cluster)
+		c := statefulSet("wiring-storage").Spec.Template.Spec.Containers[0]
+
+		for name, want := range map[string]string{
+			"IM_S3_ENDPOINT": "minio.storage.svc:9000",
+			"IM_S3_REGION":   "us-east-1",
+			"IM_S3_INSECURE": "true",
+		} {
+			got, ok := envValue(c, name)
+			Expect(ok).To(BeTrue(), name)
+			Expect(got.Value).To(Equal(want), name)
+		}
+		for name, key := range map[string]string{"IM_S3_ACCESS_KEY": "accessKey", "IM_S3_SECRET_KEY": "secretKey"} {
+			got, ok := envValue(c, name)
+			Expect(ok).To(BeTrue(), name)
+			Expect(got.Value).To(BeEmpty(), "%s must not carry the credential itself", name)
+			Expect(got.ValueFrom).NotTo(BeNil(), name)
+			Expect(got.ValueFrom.SecretKeyRef).NotTo(BeNil(), name)
+			Expect(got.ValueFrom.SecretKeyRef.Name).To(Equal(testStorageSecret))
+			Expect(got.ValueFrom.SecretKeyRef.Key).To(Equal(key))
+		}
+	})
+
 	It("starts in recovery mode when the cluster bootstraps from a backup", func() {
 		cluster := standaloneCluster("wiring-recovery")
 		cluster.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 			Recovery: &databasev1alpha1.RecoverySource{ManifestURI: "s3://bucket/backups/appdb/manifest.json"},
 		}
+		cluster.Spec.ObjectStorage = testObjectStorage()
 		reconcileCluster(newReconciler(testIMToken), cluster)
 		mode, ok := envValue(statefulSet("wiring-recovery").Spec.Template.Spec.Containers[0], "CUBRID_BOOTSTRAP")
 		Expect(ok).To(BeTrue())
