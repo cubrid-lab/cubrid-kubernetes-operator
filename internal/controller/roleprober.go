@@ -40,6 +40,9 @@ type RoleObservation struct {
 	// (role vs HA status, ADR-0005 ConflictingLocalHAStatus); the role is then
 	// not trusted.
 	Conflicting bool
+	// EngineVersion is the engine's full version as the Instance Manager
+	// reports it ("11.4.6.1963"); empty when it did not report one.
+	EngineVersion string
 }
 
 // RoleProber polls one instance's Instance Manager /v1/role endpoint.
@@ -101,7 +104,10 @@ func (p *HTTPRoleProber) now() time.Time {
 // is not registered_and_active, a role that differs from the node's own line
 // in the HA node list, or a master that sees another master.
 func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObservation {
-	o := RoleObservation{Reachable: true, Role: databasev1alpha1.CubridRole(st.Role), ObservedAt: at}
+	o := RoleObservation{
+		Reachable: true, Role: databasev1alpha1.CubridRole(st.Role), ObservedAt: at,
+		EngineVersion: st.EngineVersion,
+	}
 	if st.Role != instancemanager.RoleMaster && st.Role != instancemanager.RoleSlave {
 		return o
 	}

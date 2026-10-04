@@ -229,6 +229,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_COMPONENTS` | `SERVER` for one member; `HA` otherwise, refined by the HA bootstrap (#106) |
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
+| `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the preStop limit (110s). The operator does not set them |
 | PID 1 | the entrypoint shell, running as UID 1000 with no capabilities; the Instance Manager is its child |
 | Termination | on `SIGTERM` the shell stops CUBRID (`cubrid server stop <db>` for `SERVER`, `cubrid heartbeat stop` otherwise), then the manager, and exits with the manager's status |
 
