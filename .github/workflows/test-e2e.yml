@@ -30,6 +30,17 @@ jobs:
           bin/kind version
 
       - name: Running Test e2e
+        env:
+          E2E_EVIDENCE_DIR: ${{ github.workspace }}/e2e-evidence
         run: |
           go mod tidy
           make test-e2e
+
+      # Kept for failed runs too: the record says what ran and on which images.
+      - name: Upload the scenario evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-evidence
+          path: e2e-evidence/
+          if-no-files-found: warn
