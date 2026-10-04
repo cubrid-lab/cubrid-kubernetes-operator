@@ -123,6 +123,31 @@ This is **not** "master is always ordinal 0" — mastership is
 runtime-decided (ADR-0001); ordinal 0 may be bootstrapped first, but that
 is separate from the identity model.
 
+### Generated configuration
+
+The operator renders one `cubrid_ha.conf` per cluster and publishes it in the
+ConfigMap `<cluster>-ha-config`, so every member reads the same file:
+
+```text
+[common]
+ha_node_list=cubrid@<cluster>-0:<cluster>-1:<cluster>-2
+ha_db_list=<database>[,<database>...]
+ha_port_id=59901
+```
+
+- The group id is the constant `cubrid`, the value the POC clusters formed
+  with. Members of different clusters are told apart by their host names.
+- The hosts are the short pod names in ordinal order, each validated as a
+  DNS-1123 label, so a cluster name longer than 61 characters is rejected.
+- `ha_db_list` keeps the order of `spec.databases` (ADR-0010).
+- `ha_port_id` is the CUBRID default, written explicitly because the
+  heartbeat port is part of the network contract between members.
+- Nothing in the file depends on which member reads it, on the observed roles
+  or on the current primary. A standalone cluster has no such ConfigMap.
+
+Whether CUBRID accepts this file from the ConfigMap, and the DNS behavior it
+relies on, are verified with a real engine, not by the configuration tests.
+
 ### Immutability / edges
 
 - The StatefulSet base name, the short HA hostname scheme, the governing

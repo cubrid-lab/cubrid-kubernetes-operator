@@ -25,9 +25,9 @@ Preserve upstream copyright, license and attribution notices when reusing
 material. Dependencies and container images keep their respective licenses;
 this repository's license does not relicense CUBRID binaries or grant CUBRID
 trademark rights. Record reused material and any required NOTICE attribution
-in [third-party-material.md](./third-party-material.md). The provenance audit
-must be completed before public artifact publication; adding LICENSE alone
-does not complete that audit.
+in [third-party-material.md](./third-party-material.md). The source tree has
+been checked and needs no `NOTICE` file; published container images must carry
+the notices of the Go modules they link, which is part of the release work.
 
 No CLA or enforced DCO check is introduced here. Contributors must have the
 right to submit their work under the repository license.
