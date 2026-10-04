@@ -61,7 +61,10 @@ Secrets in issues, logs or test artifacts.
 
 ## Development
 
-Requires Go (see `go.mod`), Docker, and one of kind/minikube for local runs.
+Requires Go (see `go.mod`) and, for images and the Kind e2e, Docker or Podman.
+The Makefile uses Docker when it is installed and Podman otherwise
+(`CONTAINER_TOOL=<tool>` overrides this), and installs the pinned kind into
+`bin/`.
 
 ```bash
 make build        # compile
@@ -281,6 +284,14 @@ which level was used.
 - Recovery is judged with SQL and data, not with Pod readiness or Conditions
   alone.
 - A measurement that could not be taken is reported as unknown, never as zero.
+- Where each check can run:
+
+  | Check | Hosts |
+  |-------|-------|
+  | `make test` (unit and envtest), `make lint` | Any host with Go; no container tool needed |
+  | `make docker-build`, `make docker-build-instance-manager`, `make test-e2e` (manager and Kubernetes wiring on Kind) | Docker or Podman, amd64 or arm64 |
+  | Anything that runs CUBRID itself | linux/amd64 only: the official CUBRID image has no other architecture. A run under emulation on another architecture can show command output; it is not accepted as HA, timing or recovery evidence |
+
 - `make test-e2e` runs only against an isolated Kind cluster. Runs on the VM
   lab are started explicitly and one at a time.
 
