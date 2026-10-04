@@ -227,6 +227,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_COMPONENTS` | `SERVER` for one member; `HA` otherwise, refined by the HA bootstrap (#106) |
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
+| `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the preStop limit (110s). The operator does not set them |
 
 The operator reads its own token from `IM_TOKEN`, set from the Secret
 `instance-manager-token` in its namespace, and copies it into each cluster's

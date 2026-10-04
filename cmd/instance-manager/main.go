@@ -48,6 +48,12 @@ func run() error {
 			Staging: envOr("IM_RESTORE_STAGING_ROOT", "/var/lib/cubrid/restore-staging"),
 		})
 
+	timeouts, err := timeoutsFromEnv()
+	if err != nil {
+		return err
+	}
+	server = server.WithTimeouts(timeouts)
+
 	// Durable operation store on the PVC enables the async /v1/backup +
 	// /v1/operations endpoints; without it those endpoints stay disabled.
 	if opsDir := os.Getenv("IM_OPERATIONS_DIR"); opsDir != "" {
@@ -105,4 +111,27 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// timeoutsFromEnv reads the operation deadlines (Go durations, e.g. "3h").
+// An unset variable keeps the default; an unparseable one is an error rather
+// than a silently ignored setting.
+func timeoutsFromEnv() (instancemanager.Timeouts, error) {
+	var t instancemanager.Timeouts
+	for key, dst := range map[string]*time.Duration{
+		"IM_BACKUP_TIMEOUT":   &t.Backup,
+		"IM_RESTORE_TIMEOUT":  &t.Restore,
+		"IM_SHUTDOWN_TIMEOUT": &t.Shutdown,
+	} {
+		v := os.Getenv(key)
+		if v == "" {
+			continue
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return t, fmt.Errorf("%s=%q is not a positive duration", key, v)
+		}
+		*dst = d
+	}
+	return t, nil
 }
