@@ -17,3 +17,6 @@
 
 # The Instance Manager image's entrypoint
 !build/instance-manager/entrypoint.sh
+
+# The test-only fake Instance Manager (test/fakeim/Dockerfile)
+!test/fakeim

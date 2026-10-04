@@ -159,6 +159,12 @@ IM_IMG ?= ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev
 docker-build-instance-manager: container-tool ## Build the derivative CUBRID + Instance Manager image (ADR-0003).
 	$(CONTAINER_TOOL) build -f build/instance-manager/Dockerfile -t ${IM_IMG} .
 
+# A test-only image: the Instance Manager API over a scripted CLI, no CUBRID.
+FAKE_IM_IMG ?= example.com/cubrid-fake-instance-manager:e2e
+.PHONY: docker-build-fake-im
+docker-build-fake-im: container-tool ## Build the test-only fake Instance Manager image (no CUBRID).
+	$(CONTAINER_TOOL) build -f test/fakeim/Dockerfile -t ${FAKE_IM_IMG} .
+
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
 # - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
