@@ -35,13 +35,24 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
-// The variants of S03 in docs/testing/scenario-contract.md.
+// The variants of S03 in docs/testing/scenario-contract.md. The two abrupt
+// ones differ in which member is the master when its Pod is deleted: CUBRID
+// was observed to elect the first member of the node list again when that
+// member is back before another one has taken over (docs/poc/RESULTS.md,
+// POC-19).
 const (
-	s03Graceful = "graceful"
-	s03Abrupt   = "abrupt"
+	s03AbruptFirst = "abrupt-first-member"
+	s03Graceful    = "graceful"
+	s03Abrupt      = "abrupt"
 )
 
-var s03Variants = []string{s03Graceful, s03Abrupt}
+// s03Variants is the order in which the variants run. The first runs while
+// the first member is the master; the last after the graceful one moved the
+// master away from it.
+var s03Variants = []string{s03AbruptFirst, s03Graceful, s03Abrupt}
+
+// s03Clients names the workload client of each variant.
+var s03Clients = map[string]string{s03AbruptFirst: "s03f", s03Graceful: "s03g", s03Abrupt: "s03a"}
 
 // The limits of S03 for Kind on a GitHub-hosted runner. The values and the
 // baseline they come from are recorded in docs/testing/scenario-contract.md,
@@ -191,15 +202,57 @@ func (r *haRun) stopClient(id string) ([]workload.Event, workload.History) {
 	return events, history
 }
 
+// roleLog records what CUBRID reports on every member, each time it changes.
+// It is evidence for a run that does not end as expected.
+type roleLog struct {
+	lines []string
+	last  string
+}
+
+// sample asks every member for its node and server state.
+func (l *roleLog) sample(r *haRun) {
+	states := make([]string, 0, len(r.members))
+	for _, pod := range r.members {
+		out, err := r.kubectl("exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
+		state := "unreachable"
+		if err == nil {
+			state = "no state"
+			for _, line := range strings.Split(out, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "HA-Node Info") || strings.HasPrefix(line, "Server ") {
+					state = strings.TrimPrefix(state+" | "+line, "no state | ")
+				}
+			}
+		}
+		states = append(states, pod+": "+state)
+	}
+	now := strings.Join(states, "; ")
+	if now == l.last {
+		return
+	}
+	l.last = now
+	line, _ := json.Marshal(map[string]string{"t": time.Now().UTC().Format(time.RFC3339Nano), "roles": now})
+	l.lines = append(l.lines, string(line))
+}
+
+func (l *roleLog) write(rel string) string {
+	return writeScenarioFile(rel, []byte(strings.Join(l.lines, "\n")+"\n"))
+}
+
 // s03Steps registers S03 (primary Pod termination) of the scenario contract,
 // once per variant. Each run continues on the cluster the earlier steps left,
 // with the workload client writing through the read-write Service while the
 // master's Pod is deleted.
 func s03Steps(r *haRun) {
 	for _, variant := range s03Variants {
-		It("S03/"+variant+": a slave takes over when the master Pod is deleted, and no acknowledged write is lost",
-			func() { r.s03(variant) })
+		s03Step(r, variant)
 	}
+}
+
+// s03Step registers one variant of S03.
+func s03Step(r *haRun, variant string) {
+	It("S03/"+variant+": one member is master again after the master Pod is deleted, and no acknowledged write is lost",
+		func() { r.s03(variant) })
 }
 
 func (r *haRun) s03(variant string) {
@@ -208,10 +261,10 @@ func (r *haRun) s03(variant string) {
 	// Reported also when a check below fails.
 	defer func() { r.later = append(r.later, result) }()
 
-	client := "s03" + variant[:1]
+	client := s03Clients[variant]
 
 	By("recording the starting state")
-	master, slaves, err := r.master()
+	master, _, err := r.master()
 	Expect(err).NotTo(HaveOccurred())
 	uid, err := r.kubectl("get", "pod", master, "-o", "jsonpath={.metadata.uid}")
 	Expect(err).NotTo(HaveOccurred())
@@ -226,17 +279,30 @@ func (r *haRun) s03(variant string) {
 	// How long the operator reported the primary as not resolved and the
 	// routing as not ready, as far as the samples of the wait show.
 	var unresolved, notRouting window
+	roles := &roleLog{}
 	outcome := faults.Run(context.Background(), faults.Scenario{
-		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant == s03Abrupt},
+		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful},
 		Limits: s03FlowLimits,
 		Before: func(context.Context) error {
 			now, _, err := r.master()
-			if err == nil && now != master {
-				err = fmt.Errorf("the master is %s, not %s", now, master)
+			if err != nil {
+				return err
 			}
-			return err
+			if now != master {
+				return fmt.Errorf("the master is %s, not %s", now, master)
+			}
+			// Each abrupt variant is about one position of the master.
+			first := r.members[0]
+			switch {
+			case variant == s03AbruptFirst && master != first:
+				return fmt.Errorf("this variant needs the first member %s as master, and the master is %s", first, master)
+			case variant == s03Abrupt && master == first:
+				return fmt.Errorf("this variant needs a master other than the first member %s", first)
+			}
+			return nil
 		},
 		Check: func(context.Context) (bool, error) {
+			roles.sample(r)
 			// The operator's own view, from one read of its status. It must
 			// never offer the write endpoint while the primary is not
 			// resolved (ADR-0005, section 6).
@@ -250,9 +316,11 @@ func (r *haRun) s03(variant string) {
 				unresolved.sample(!resolved)
 				notRouting.sample(!routing)
 			}
-			// CUBRID's election: another member reports itself an active master.
+			// CUBRID's election: a member reports itself an active master.
+			// It is another member, or the deleted one in its new Pod: the
+			// fault is confirmed, so the old Pod no longer answers.
 			if newMaster == "" {
-				if newMaster = r.activeMasterAmong(slaves); newMaster == "" {
+				if newMaster = r.activeMasterAmong(r.members); newMaster == "" {
 					return false, nil
 				}
 				electedAt = time.Now()
@@ -265,9 +333,9 @@ func (r *haRun) s03(variant string) {
 				}
 				noticedAt = time.Now()
 			}
-			// One master and two slaves again, the former master among the
-			// slaves. A master other than the elected one is a second
-			// change of role, which must not happen by itself.
+			// One master and two slaves again. A master other than the
+			// elected one is a second change of role, which must not happen
+			// by itself.
 			now, _, err := r.master()
 			if err != nil {
 				return false, nil
@@ -283,10 +351,15 @@ func (r *haRun) s03(variant string) {
 		},
 	})
 	timeline := writeTimeline("S03/"+variant+"/timeline.jsonl", outcome.Timeline)
+	rolesFile := roles.write("S03/" + variant + "/roles.jsonl")
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
 	if outcome.Result != evidence.Pass {
 		result.Result, result.Reason = outcome.Result, outcome.Reason
+		// Keep what the client saw: the scenario ends here.
+		if text, err := r.client(fmt.Sprintf("cat /tmp/%s.jsonl", client)); err == nil {
+			writeScenarioFile("S03/"+variant+"/client-history.jsonl", []byte(text))
+		}
 	}
 	Expect(outcome.Result).To(Equal(evidence.Pass), "S03/%s: %s", variant, outcome.Reason)
 
@@ -300,11 +373,13 @@ func (r *haRun) s03(variant string) {
 		"the client was acknowledged without interruption for %s only", stable)
 	recovery := recoveredAt.Sub(outcome.FaultIssuedAt)
 
-	By("checking that the former master did not become master again")
+	By("checking that the master did not change a second time")
 	now, nowSlaves, err := r.master()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(now).To(Equal(newMaster), "the master after the stable period")
-	Expect(nowSlaves).To(ContainElement(master), "the former master is a slave")
+	if newMaster != master {
+		Expect(nowSlaves).To(ContainElement(master), "the former master is a slave")
+	}
 	primary, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(primary).To(Equal(newMaster))
@@ -324,8 +399,10 @@ func (r *haRun) s03(variant string) {
 	}
 
 	files := r.evidenceFiles("S03/"+variant, report)
-	if timeline != "" {
-		files = append(files, timeline)
+	for _, f := range []string{timeline, rolesFile} {
+		if f != "" {
+			files = append(files, f)
+		}
 	}
 	since := func(t time.Time) string { return t.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String() }
 	// Writes the client was told are committed while the operator reported
@@ -342,6 +419,9 @@ func (r *haRun) s03(variant string) {
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
 		Measurements: map[string]any{
 			"recoveryTime":           recovery.Round(time.Millisecond).String(),
+			"masterBefore":           master,
+			"masterAfter":            newMaster,
+			"sameMemberMasterAgain":  newMaster == master,
 			"stableFor":              stable.Round(time.Millisecond).String(),
 			"electionObservedWithin": since(electedAt),
 			"operatorNoticedWithin":  since(noticedAt),
