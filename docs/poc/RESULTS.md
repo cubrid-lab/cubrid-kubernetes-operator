@@ -713,6 +713,89 @@ archive logs the applier needs are still on the master after a long gap
 
 ---
 
+## POC-15 — a new HA group where every member creates its own database (ADR-0010, #218) — **PASS + limit**
+
+`cubrid/cubrid:11.4` (engine 11.4.6), three nodes `h-0`, `h-1`, `h-2` on one
+container network, UID 1000, data on a volume at `/var/lib/cubrid`
+(linux/amd64 emulated under podman; output only, no timing claims).
+`data_buffer_size` was lowered to 64M so that three servers fit in the test
+machine. All nodes have `ha_mode=on`, `ha_node_list=cubrid@h-0:h-1:h-2` and
+`ha_db_list=appdb`.
+
+This is the procedure of the CUBRID 11.4 manual's HA quick start. It differs
+from what the operator does today, which creates the database on one member
+and seeds the others from a backup (POC-13, POC-14).
+
+**Part 1: a new, empty group.** Every node runs the same command before any
+heartbeat is started, and no backup is copied between nodes:
+
+```sh
+cubrid createdb --db-volume-size=64M --log-volume-size=64M \
+  --server-name=h-0:h-1:h-2 -F $CUBRID_DATABASES/appdb appdb en_US
+```
+
+Then `cubrid heartbeat start` on `h-0`, `h-1` and `h-2`, in that order.
+
+| Step | Result |
+|---|---|
+| `createdb` on each node | exit 0 on all three. |
+| `heartbeat start` on each node | exit 0 on all three. `h-0` is `master` with the server `registered_and_active`; `h-1` and `h-2` are `slave` with the server `registered_and_standby`. |
+| On `h-0`: create table `t`, insert rows 1 to 3, commit | `Execute OK`. `h-0`, `h-1` and `h-2` all return rows 1, 2, 3. |
+| Insert on the slave `h-1` | `ERROR: Attempted to update the database when updates are disabled.` |
+| `cubrid heartbeat stop` on the master `h-0` | `h-1` becomes `master` (`registered_and_active`); `h-2` stays `slave`. |
+| On `h-1`: insert row 4, commit | `Execute OK`. `h-1` and `h-2` return rows 1 to 4. |
+| `cubrid heartbeat start` on `h-0` again | `h-0` is `slave` (`registered_and_standby`) and returns rows 1 to 4. `h-1` stays master. |
+| `cubrid applyinfo` on `h-1` for the log copied from `h-0` | `Insert count : 3`, `Fail count : 0`. |
+
+The `databases.txt` entry that `createdb` wrote is the same on every node:
+
+```text
+appdb		/var/lib/cubrid/databases/appdb	h-0:h-1:h-2	/var/lib/cubrid/databases/appdb	file:/var/lib/cubrid/databases/appdb/lob
+```
+
+**Part 2: the same command on a member that rejoins a group holding data.**
+Continuing from part 1 (`h-1` master, rows 1 to 4 on every member): on `h-2`,
+`cubrid heartbeat stop`, delete the database directory, the copied log
+directories and the `databases.txt` entry, run the `createdb` command above
+again, and `cubrid heartbeat start`. Meanwhile row 5 is committed on the
+master.
+
+| Check on `h-2` 45 seconds later | Result |
+|---|---|
+| `cubrid heartbeat status` | `slave`, server `registered_and_standby`: the same output as a healthy member. |
+| `select id from t` | Fails: table `t` does not exist. None of rows 1 to 5 is there. |
+| `cubrid applyinfo` for the log copied from `h-1` | `Insert count : 0`, `Schema count : 0`, `Fail count : 1`. |
+| Applier error log | `log applier: failed to apply insert replication log. class: "dba.t", key: "5", server error: -64`. |
+
+**Findings.**
+
+- A new group forms when every member has created an empty database with the
+  same command: roles are assigned, the master accepts writes, the slaves
+  receive them, a failover succeeds and the old master returns as a slave.
+  No backup and no object storage were involved.
+- The same command is wrong for a member that joins after the group holds
+  data. The member only receives what is committed after it joined, cannot
+  apply it, and keeps none of the earlier data, while `cubrid heartbeat
+  status` shows it as a healthy slave. Such a member must be seeded from the
+  master (POC-14). Role and server state do not reveal the difference; the
+  applier's fail count does.
+
+**Consequence for ADR-0010** (decision tracked in #218). Creating the database
+on every member is a valid first bootstrap of an empty cluster and would
+remove the need for object storage at that step. It must be limited to that
+step: once any member has accepted a write, a member without data has to be
+seeded, never created. The operator would need a durable record that the
+first bootstrap is complete, so that a member which later loses its volume is
+not created empty.
+
+**Not tested here:** nodes whose `createdb` options differ (volume sizes,
+locale, page size); heartbeat started in a different order, or on all nodes at
+once as `podManagementPolicy: Parallel` does; a node that starts heartbeat
+long after the other two; more than one database; the same procedure through
+the Instance Manager on a Kubernetes cluster.
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
