@@ -494,5 +494,6 @@ spec:
 		s06Step(scenarios, s06Absent)
 		s03Step(scenarios, s03Abrupt)
 		s03Step(scenarios, s03Graceful)
+		replicationStallStep(scenarios)
 	})
 }
