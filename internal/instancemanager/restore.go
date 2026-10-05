@@ -47,6 +47,10 @@ type RestoreRequest struct {
 	// TargetDir is the empty DB directory to restore into; a pre-existing DB
 	// there is a hard block (ADR-0008 wrong-target guard).
 	TargetDir string `json:"targetDir"`
+	// SeedFromMaster is the host name of the running master the backup was
+	// taken on. When set, this member is restored as a slave of that master.
+	// Empty for a restore into a new cluster, which has no master to follow.
+	SeedFromMaster string `json:"seedFromMaster,omitempty"`
 }
 
 // RestoreRoots are the only directories a restore may touch, set from the
@@ -91,6 +95,11 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	targetDir, stagingDir, err := confine(req, roots)
 	if err != nil {
 		return RestoreResult{}, err
+	}
+	// Only an HA member can be restored as the slave of a master; roots.Host
+	// is the HA member list, which the manager sets for such a member.
+	if req.SeedFromMaster != "" && roots.Host == "" {
+		return RestoreResult{}, fmt.Errorf("seedFromMaster %q was given, but this member is not an HA member", req.SeedFromMaster)
 	}
 
 	// ADR-0008 wrong-target guard: restore only into an empty target. A
@@ -137,10 +146,19 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 		return RestoreResult{}, err
 	}
 	backupDir := filepath.Join(stagingDir, "backup")
-	out, err := cli.Run(ctx, "cubrid", "restoredb", "-u", "-B", backupDir, req.Database)
+	// A member seeded from a running master is restored with restoreslave,
+	// which also writes the replication catalog from the backup: the member
+	// then applies the master's log from the backup's position. With a plain
+	// restoredb it would start at the master's current position and never
+	// receive what was committed in between (docs/poc/RESULTS.md, POC-14).
+	command := []string{"restoredb", "-u", "-B", backupDir, req.Database}
+	if req.SeedFromMaster != "" {
+		command = []string{"restoreslave", "-u", "-s", "master", "-m", req.SeedFromMaster, "-B", backupDir, req.Database}
+	}
+	out, err := cli.Run(ctx, "cubrid", command...)
 	if err != nil {
 		unregister()
-		return RestoreResult{}, fmt.Errorf("restoredb failed: %w: %s", err, out)
+		return RestoreResult{}, fmt.Errorf("%s failed: %w: %s", command[0], err, out)
 	}
 	if err := clearOwned(targetDir, req.Database); err != nil {
 		return RestoreResult{}, err
@@ -160,6 +178,11 @@ const databasesTxt = "databases.txt"
 // then letters, digits or underscores.
 var databaseNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
+// hostLabelPattern is a DNS label, the form of an HA member's host name
+// (ADR-0004): lower-case letters, digits and hyphens, at most 63 characters,
+// not starting or ending with a hyphen.
+var hostLabelPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
 // validateRestoreRequest rejects a request that could restore somewhere other
 // than an explicit, separate target (#119): every field is required, the
 // database name cannot carry a path, and the staging and target directories are
@@ -170,6 +193,10 @@ func validateRestoreRequest(req RestoreRequest) error {
 	}
 	if !databaseNamePattern.MatchString(req.Database) {
 		return fmt.Errorf("database name %q is not a plain identifier", req.Database)
+	}
+	// The master's name becomes a command argument and an HA host name.
+	if req.SeedFromMaster != "" && !hostLabelPattern.MatchString(req.SeedFromMaster) {
+		return fmt.Errorf("seedFromMaster %q is not a host name (a DNS label)", req.SeedFromMaster)
 	}
 	for name, dir := range map[string]string{"targetDir": req.TargetDir, "stagingDir": req.StagingDir} {
 		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == string(filepath.Separator) {

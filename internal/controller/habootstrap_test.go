@@ -284,6 +284,8 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			Expect(seed.restoreReq.Bucket).To(Equal("cluster-artifacts"))
 			Expect(seed.restoreReq.Prefix).To(Equal(seed.backupReq.Upload.Prefix))
 			Expect(seed.restoreReq.TargetDir).To(Equal(restoreTargetRoot))
+			Expect(seed.restoreReq.SeedFromMaster).To(Equal("seed-order-0"),
+				"a seeded member is restored as a slave of the member the backup came from")
 			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
 
 			By("moving to the second peer when the first is done")

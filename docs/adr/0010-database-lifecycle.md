@@ -97,7 +97,10 @@ Seeding as implemented (#106): once the database exists, the operator has the
 member that holds it back it up to the cluster's object storage
 (`spec.objectStorage`, with `bucket`; key prefix
 `<prefix>/<cluster UID>/seed/<db>`), then restores that backup on each other
-member, one at a time. A seeded member's Instance Manager registers the
+member, one at a time, with `cubrid restoreslave -u -s master -m <source
+member>` (#220): unlike `restoredb`, it writes the replication catalog from
+the backup, so the member applies the source's log from the backup's position
+and does not miss what was committed in between (POC-14). A seeded member's Instance Manager registers the
 database under the member list and issues `cubrid heartbeat start` once, so
 the member joins as a slave. Each step is an idempotent operation with a
 fixed key; `status.databases[].haConfigured` and `BootstrapReady=True`
