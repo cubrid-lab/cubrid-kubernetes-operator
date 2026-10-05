@@ -58,6 +58,7 @@ type fakeSeedClient struct {
 	backupOn    []string
 	backupReq   instancemanager.BackupRequest
 	restoreOn   []string
+	restoreKeys map[string]string
 	restoreReq  instancemanager.RestoreRequest
 	backupState instancemanager.OperationState
 	restore     map[string]instancemanager.OperationState
@@ -70,8 +71,12 @@ func (f *fakeSeedClient) StartBackup(_ context.Context, podName, _, _ string, re
 	return instancemanager.Operation{ID: "op-seed-backup", State: f.backupState, FailureReason: f.reason}, nil
 }
 
-func (f *fakeSeedClient) StartRestore(_ context.Context, podName, _, _ string, req instancemanager.RestoreRequest) (instancemanager.Operation, error) {
+func (f *fakeSeedClient) StartRestore(_ context.Context, podName, _, key string, req instancemanager.RestoreRequest) (instancemanager.Operation, error) {
 	f.restoreOn = append(f.restoreOn, podName)
+	if f.restoreKeys == nil {
+		f.restoreKeys = map[string]string{}
+	}
+	f.restoreKeys[podName] = key
 	f.restoreReq = req
 	return instancemanager.Operation{ID: "op-seed-" + podName, State: f.restore[podName], FailureReason: f.reason}, nil
 }
@@ -164,18 +169,50 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 		Expect(boot.members).To(HaveLen(asked))
 	})
 
-	It("reports a failed creation and does not report the database as created", func() {
+	It("starts a failed creation again a limited number of times, then stops (#107)", func() {
 		boot := &fakeHABootstrapClient{state: instancemanager.OpFailed, reason: "createdb failed: no space left"}
 		key := create(haCluster("boot-failed"))
-		got := reconcileOnce(reconcilerWith(boot), key)
+		r := reconcilerWith(boot)
 
-		Expect(got.Status.Databases[0].Phase).To(Equal("Failed"))
-		Expect(got.Status.Databases[0].PrimaryCreated).To(BeFalse())
+		By("retrying under a new key while attempts remain")
+		got := reconcileOnce(r, key)
+		Expect(got.Status.Databases[0].Phase).NotTo(Equal("Failed"))
+		Expect(got.Status.Databases[0].BootstrapAttempts).To(BeEquivalentTo(1))
 		cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
 		Expect(cond).NotTo(BeNil())
-		Expect(cond.Reason).To(Equal("DatabaseCreationFailed"))
+		Expect(cond.Reason).To(Equal("DatabaseCreationFailedRetrying"))
 		Expect(cond.Message).To(ContainSubstring("no space left"))
+
+		got = reconcileOnce(r, key)
+		Expect(got.Status.Databases[0].BootstrapAttempts).To(BeEquivalentTo(2))
+
+		By("giving up at the limit")
+		got = reconcileOnce(r, key)
+		Expect(got.Status.Databases[0].Phase).To(Equal("Failed"))
+		Expect(got.Status.Databases[0].PrimaryCreated).To(BeFalse())
+		cond = meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
+		Expect(cond.Reason).To(Equal("DatabaseCreationFailed"))
+		Expect(cond.Message).To(ContainSubstring("giving up after 3 attempts"))
 		Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionReady)).To(BeFalse())
+
+		By("using a different operation for every attempt, and asking no more afterwards")
+		Expect(boot.keys).To(HaveLen(maxBootstrapAttempts))
+		Expect(boot.keys[0]).NotTo(Equal(boot.keys[1]))
+		Expect(boot.keys[1]).NotTo(Equal(boot.keys[2]))
+		reconcileOnce(r, key)
+		Expect(boot.keys).To(HaveLen(maxBootstrapAttempts))
+	})
+
+	It("addresses the same operation again after the operator restarted (#107)", func() {
+		boot := &fakeHABootstrapClient{state: instancemanager.OpCreating}
+		key := create(haCluster("boot-restart"))
+		reconcileOnce(reconcilerWith(boot), key)
+
+		By("a new reconciler, as after an operator restart")
+		again := &fakeHABootstrapClient{state: instancemanager.OpCreating}
+		reconcileOnce(reconcilerWith(again), key)
+		Expect(again.keys).To(Equal(boot.keys), "the running operation must be found, not a second one started")
+		Expect(again.members).To(Equal(boot.members))
 	})
 
 	It("keeps asking while the member cannot be reached", func() {
@@ -272,19 +309,54 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			Expect(seed.restoreOn).To(BeEmpty())
 		})
 
-		It("stops and reports a failed restore", func() {
+		It("starts a failed restore again without touching a seeded member (#107)", func() {
+			const seeded, failing = "seed-retry-1", "seed-retry-2"
+			seed := &fakeSeedClient{
+				backupState: instancemanager.OpCompleted,
+				restore: map[string]instancemanager.OperationState{
+					seeded:  instancemanager.OpCompleted,
+					failing: instancemanager.OpFailed,
+				},
+				reason: "manager restarted while operation was in progress",
+			}
+			key := create(seededCluster("seed-retry"))
+			r := reconcilerFor(seed)
+
+			got := reconcileOnce(r, key)
+			Expect(got.Status.Databases[0].SeededMembers).To(Equal([]string{seeded}))
+			Expect(got.Status.Databases[0].Phase).NotTo(Equal("Failed"))
+			Expect(got.Status.Databases[0].BootstrapAttempts).To(BeEquivalentTo(1))
+			_, reason := bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedRestoreFailedRetrying"))
+			firstKey := seed.restoreKeys[failing]
+
+			By("the next attempt restores only the member that is not seeded, under a new key")
+			seed.restore[failing] = instancemanager.OpCompleted
+			seed.restoreOn = nil
+			got = reconcileOnce(r, key)
+			Expect(seed.restoreOn).To(Equal([]string{failing}), "a seeded member must not be restored over")
+			Expect(seed.restoreKeys[failing]).NotTo(Equal(firstKey))
+			Expect(got.Status.Databases[0].HAConfigured).To(BeTrue())
+			Expect(got.Status.Databases[0].SeededMembers).To(Equal([]string{seeded, failing}))
+		})
+
+		It("stops after the last attempt of a restore that keeps failing", func() {
 			seed := &fakeSeedClient{
 				backupState: instancemanager.OpCompleted,
 				restore:     map[string]instancemanager.OperationState{"seed-failed-1": instancemanager.OpFailed},
 				reason:      "restoredb failed: exit status 1",
 			}
 			key := create(seededCluster("seed-failed"))
-			got := reconcileOnce(reconcilerFor(seed), key)
+			r := reconcilerFor(seed)
+			var got *databasev1alpha1.CubridCluster
+			for range maxBootstrapAttempts {
+				got = reconcileOnce(r, key)
+			}
 			Expect(got.Status.Databases[0].Phase).To(Equal("Failed"))
 			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
 			_, reason := bootstrapCondition(got)
 			Expect(reason).To(Equal("SeedRestoreFailed"))
-			Expect(seed.restoreOn).To(Equal([]string{"seed-failed-1"}), "the second peer is not touched")
+			Expect(seed.restoreOn).To(HaveEach("seed-failed-1"), "the second peer is not touched")
 		})
 	})
 

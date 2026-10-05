@@ -146,6 +146,12 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 			})
 		}
 
+		// What an interrupted attempt of this manager left is removed first;
+		// anything else that is in the way stops the bootstrap below.
+		if err := s.reclaimIncomplete(req.Database); err != nil {
+			fail(err.Error())
+			return
+		}
 		registered, err := registeredInDatabasesTxt(s.restoreRoots.Target, req.Database)
 		if err != nil {
 			fail(err.Error())
@@ -155,7 +161,7 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 			if _, err := s.store.Update(id, func(op *Operation) { op.State = OpCreating }); err != nil {
 				return
 			}
-			if err := createHADatabase(ctx, s.cli, s.restoreRoots.Target, s.ha, req.Database); err != nil {
+			if err := createHADatabase(ctx, s.cli, s.restoreRoots.Target, s.ha, req.Database, id); err != nil {
 				fail(err.Error())
 				return
 			}
@@ -183,7 +189,7 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 // A directory that exists although the database is not registered is what an
 // interrupted createdb, or someone else's data, looks like. It is never
 // removed here: the bootstrap stops and says so.
-func createHADatabase(ctx context.Context, cli CLI, target string, ha HAConfig, database string) error {
+func createHADatabase(ctx context.Context, cli CLI, target string, ha HAConfig, database, owner string) error {
 	hosts, err := haHosts(ha.ConfPath)
 	if err != nil {
 		return err
@@ -203,6 +209,12 @@ func createHADatabase(ctx context.Context, cli CLI, target string, ha HAConfig, 
 		}
 		return fmt.Errorf("create the database directory: %w", err)
 	}
+	// Marked until createdb has succeeded: an interruption leaves a directory
+	// a later attempt may remove.
+	if err := markOwned(root, database, owner); err != nil {
+		_ = root.RemoveAll(database)
+		return err
+	}
 	dir := filepath.Join(target, database)
 	out, err := cli.Run(ctx, "cubrid", "createdb",
 		"--db-volume-size="+ha.VolumeSize,
@@ -216,5 +228,5 @@ func createHADatabase(ctx context.Context, cli CLI, target string, ha HAConfig, 
 		}
 		return fmt.Errorf("createdb failed: %w: %s", err, strings.TrimSpace(out))
 	}
-	return nil
+	return clearOwned(target, database)
 }

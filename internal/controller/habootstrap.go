@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"path"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,10 +53,39 @@ type HABootstrapClient interface {
 	StartHABootstrap(ctx context.Context, podName, namespace, idempotencyKey string, req instancemanager.HABootstrapRequest) (instancemanager.Operation, error)
 }
 
-// haBootstrapIdempotencyKey is stable for one cluster and database, so every
-// reconcile addresses the same operation.
-func haBootstrapIdempotencyKey(cluster *databasev1alpha1.CubridCluster, database string) string {
-	return "ha-bootstrap-" + string(cluster.UID) + "-" + database
+// maxBootstrapAttempts bounds how often a failed bootstrap step is started
+// again before the bootstrap stops and waits for a person.
+const maxBootstrapAttempts = 3
+
+// bootstrapKey is the idempotency key of one bootstrap step. It is stable for
+// a cluster, a database and an attempt, so every reconcile addresses the same
+// operation, also after the operator restarted; a step that failed is started
+// again under the next attempt's key.
+func bootstrapKey(step string, cluster *databasev1alpha1.CubridCluster, status *databasev1alpha1.DatabaseStatus, member string) string {
+	key := fmt.Sprintf("%s-%s-%s-a%d", step, cluster.UID, status.Name, status.BootstrapAttempts)
+	if member != "" {
+		key += "-" + member
+	}
+	return key
+}
+
+// bootstrapStepFailed handles a failed step: it is started again under a new
+// key while attempts remain, otherwise the bootstrap stops as Failed. The
+// Instance Manager removes what its own failed operation left before the next
+// attempt, and nothing else (ADR-0006).
+func (r *CubridClusterReconciler) bootstrapStepFailed(cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, reason, msg string) {
+	if status.BootstrapAttempts+1 < maxBootstrapAttempts {
+		status.BootstrapAttempts++
+		msg = fmt.Sprintf("%s; starting attempt %d of %d", msg, status.BootstrapAttempts+1, maxBootstrapAttempts)
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason+"Retrying", msg)
+		r.event(cluster, corev1.EventTypeWarning, reason+"Retrying", msg)
+		return
+	}
+	status.Phase = databasePhaseFailed
+	msg = fmt.Sprintf("%s; giving up after %d attempts", msg, maxBootstrapAttempts)
+	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
+	r.event(cluster, corev1.EventTypeWarning, reason, msg)
 }
 
 // databaseStatus returns the status entry of database, adding it when absent.
@@ -96,7 +127,7 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 	}
 
 	op, err := r.HABootstrap.StartHABootstrap(ctx, member, cluster.Namespace,
-		haBootstrapIdempotencyKey(cluster, database), instancemanager.HABootstrapRequest{Database: database})
+		bootstrapKey("ha-bootstrap", cluster, status, ""), instancemanager.HABootstrapRequest{Database: database})
 	if err != nil {
 		// The member is not up yet, or not reachable: ask again later.
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
@@ -109,9 +140,7 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 		r.event(cluster, corev1.EventTypeNormal, "DatabaseCreated", "database "+database+" created on "+member)
 		r.reconcileSeeding(ctx, cluster, status, member)
 	case instancemanager.OpFailed:
-		status.Phase = databasePhaseFailed
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "DatabaseCreationFailed", op.FailureReason)
-		r.event(cluster, corev1.EventTypeWarning, "DatabaseCreationFailed", op.FailureReason)
+		r.bootstrapStepFailed(cluster, status, "DatabaseCreationFailed", "on "+member+": "+op.FailureReason)
 	default:
 		status.Phase = databasePhaseCreating
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "DatabaseCreationInProgress",
@@ -149,15 +178,10 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 				"; spec.objectStorage with a bucket is needed to copy it to the other members")
 		return
 	}
-	failed := func(reason, msg string) {
-		status.Phase = databasePhaseFailed
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
-		r.event(cluster, corev1.EventTypeWarning, reason, msg)
-	}
 	bucket, prefix := seedLocation(cluster, database)
 	uid := string(cluster.UID)
 
-	backup, err := r.Backup.StartBackup(ctx, source, cluster.Namespace, "seed-backup-"+uid+"-"+database,
+	backup, err := r.Backup.StartBackup(ctx, source, cluster.Namespace, bootstrapKey("seed-backup", cluster, status, ""),
 		instancemanager.BackupRequest{
 			Database:    database,
 			Destination: path.Join(backupStagingRoot, "seed-"+uid),
@@ -173,7 +197,7 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 	switch backup.State {
 	case instancemanager.OpCompleted:
 	case instancemanager.OpFailed:
-		failed("SeedBackupFailed", backup.FailureReason)
+		r.bootstrapStepFailed(cluster, status, "SeedBackupFailed", "on "+source+": "+backup.FailureReason)
 		return
 	default:
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedBackupInProgress",
@@ -182,7 +206,11 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 	}
 
 	for _, peer := range memberNames(cluster, cluster.Spec.Topology.PromotableMembers)[1:] {
-		restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, "seed-restore-"+uid+"-"+database+"-"+peer,
+		// A member that holds the database is never restored over.
+		if slices.Contains(status.SeededMembers, peer) {
+			continue
+		}
+		restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, bootstrapKey("seed-restore", cluster, status, peer),
 			instancemanager.RestoreRequest{
 				Database: database, Bucket: bucket, Prefix: prefix,
 				ExpectedCubridVersion: cluster.Spec.Version,
@@ -195,9 +223,10 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 		}
 		switch restore.State {
 		case instancemanager.OpCompleted:
+			status.SeededMembers = append(status.SeededMembers, peer)
 			continue
 		case instancemanager.OpFailed:
-			failed("SeedRestoreFailed", peer+": "+restore.FailureReason)
+			r.bootstrapStepFailed(cluster, status, "SeedRestoreFailed", "on "+peer+": "+restore.FailureReason)
 			return
 		default:
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedRestoreInProgress",

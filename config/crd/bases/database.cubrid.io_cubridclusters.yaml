@@ -458,6 +458,12 @@ spec:
                 items:
                   description: DatabaseStatus reports coarse per-database state (ADR-0010).
                   properties:
+                    bootstrapAttempts:
+                      description: |-
+                        bootstrapAttempts counts the bootstrap steps that failed and were
+                        started again. The bootstrap stops as Failed when it reaches the limit.
+                      format: int32
+                      type: integer
                     haConfigured:
                       description: haConfigured indicates the DB is in ha_db_list
                         on all nodes.
@@ -477,6 +483,14 @@ spec:
                     primaryCreated:
                       description: primaryCreated indicates the DB exists on the master.
                       type: boolean
+                    seededMembers:
+                      description: |-
+                        seededMembers lists the members the database was copied to during the
+                        HA bootstrap. A member in this list is never seeded again.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
                   required:
                   - name
                   type: object
