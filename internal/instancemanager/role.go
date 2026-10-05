@@ -106,7 +106,40 @@ func ParseHAStatus(out string) HAStatus {
 		// authoritative roles.
 		s.Reason = "current node state '" + currentState + "' is not an authoritative role"
 	}
+	if s.Role != RoleUnknown {
+		// The header alone is not enough: the node list has to carry the local
+		// node exactly once, in the same state. Anything else is an answer
+		// that contradicts itself or is incomplete, and no role is taken from
+		// it (ADR-0005).
+		if reason := localNodeMismatch(s.Current, currentState, s.Nodes); reason != "" {
+			s.Role = RoleUnknown
+			s.Reason = reason
+		}
+	}
 	return s
+}
+
+// localNodeMismatch returns why the node list does not confirm the header's
+// state of the local node, or "" when it lists that node exactly once in that
+// state.
+func localNodeMismatch(current, state string, nodes []NodeState) string {
+	count := 0
+	listed := ""
+	for _, n := range nodes {
+		if n.Name == current {
+			count++
+			listed = n.State
+		}
+	}
+	switch {
+	case count == 0:
+		return "the node list does not contain the current node '" + current + "'"
+	case count > 1:
+		return "the node list contains the current node '" + current + "' more than once"
+	case listed != state:
+		return "the node list gives the current node '" + current + "' state '" + listed + "', the header '" + state + "'"
+	}
+	return ""
 }
 
 func atoiSafe(s string) int {

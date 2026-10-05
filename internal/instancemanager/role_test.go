@@ -100,3 +100,50 @@ func TestParseHAStatus_TopologyPriorities(t *testing.T) {
 		t.Errorf("cub-1 = %+v, want priority 2 / slave", byName["cub-1"])
 	}
 }
+
+// The role is taken only from an answer that is consistent in itself: the
+// local node appears exactly once in the node list, with the state the header
+// gives (#199).
+func TestParseHAStatus_NeedsExactlyOneMatchingLocalNode(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+	}{
+		{"the local node is missing from the list", ` HA-Node Info (current cub-0, state master)
+   Node cub-1 (priority 2, state slave)
+ HA-Process Info (master 91, state master)
+   Server pocdb (pid 272, state registered_and_active)`},
+		{"the local node is listed twice", ` HA-Node Info (current cub-0, state master)
+   Node cub-0 (priority 2, state slave)
+   Node cub-0 (priority 1, state master)
+ HA-Process Info (master 91, state master)
+   Server pocdb (pid 272, state registered_and_active)`},
+		{"the list gives the local node another state", ` HA-Node Info (current cub-0, state master)
+   Node cub-1 (priority 2, state master)
+   Node cub-0 (priority 1, state slave)
+ HA-Process Info (master 91, state master)
+   Server pocdb (pid 272, state registered_and_active)`},
+		{"there is no node list", ` HA-Node Info (current cub-1, state slave)
+ HA-Process Info (master 135, state slave)
+   Server pocdb (pid 144, state registered_and_standby)`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ParseHAStatus(tc.out)
+			if s.Role != RoleUnknown {
+				t.Errorf("role = %q, want unknown for an inconsistent answer", s.Role)
+			}
+			if s.Reason == "" {
+				t.Error("an answer that is not accepted needs a reason")
+			}
+		})
+	}
+
+	// The recorded outputs stay authoritative.
+	if s := ParseHAStatus(masterOut); s.Role != RoleMaster || s.Reason != "" {
+		t.Errorf("recorded master output: role %q, reason %q", s.Role, s.Reason)
+	}
+	if s := ParseHAStatus(slaveOut); s.Role != RoleSlave || s.Reason != "" {
+		t.Errorf("recorded slave output: role %q, reason %q", s.Role, s.Reason)
+	}
+}
