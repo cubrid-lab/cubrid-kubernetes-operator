@@ -19,6 +19,8 @@ package instancemanager
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -117,14 +119,13 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 		}
 	}()
 
+	// Every object is read once, into the staging directory, and checked
+	// against the manifest as it is written: what restoredb reads below is
+	// what was verified, not a second copy (#195).
 	exp := ManifestExpectation{Database: req.Database, CubridVersion: req.ExpectedCubridVersion}
-	manifest, err := VerifyArtifact(ctx, store, req.Bucket, req.Prefix, exp)
+	manifest, err := stageArtifact(ctx, store, req.Bucket, req.Prefix, exp, stagingDir)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("artifact verification failed: %w", err)
-	}
-
-	if err := downloadArtifact(ctx, store, req.Bucket, req.Prefix, manifest, stagingDir); err != nil {
-		return RestoreResult{}, err
 	}
 
 	// restoredb needs the database registered at its target, and -u to place
@@ -316,34 +317,81 @@ func hasExistingDB(targetDir, database string) bool {
 	return false
 }
 
-// downloadArtifact fetches every manifest-listed object into stagingDir,
-// preserving its relative key. Verification already validated checksums.
-func downloadArtifact(ctx context.Context, store ObjectStore, bucket, prefix string, manifest BackupManifest, stagingDir string) error {
+// stageArtifact reads the artifact's manifest, checks it, and downloads each
+// object it lists into stagingDir exactly once, verifying size and SHA-256 of
+// the bytes as they are written. It returns only when every staged file
+// matches the manifest; a file that does not is removed.
+//
+// The manifest comes from the bucket and is not trusted for paths: a key must
+// be a clean path below backup/, and files are created through an os.Root on
+// the staging directory, so neither a key nor a symbolic link inside the
+// directory can place a file outside it.
+func stageArtifact(ctx context.Context, store ObjectStore, bucket, prefix string, exp ManifestExpectation, stagingDir string) (BackupManifest, error) {
+	data, err := readObject(ctx, store, bucket, path.Join(prefix, ManifestObjectName))
+	if err != nil {
+		return BackupManifest{}, fmt.Errorf("read manifest: %w", err)
+	}
+	manifest, err := ParseManifest(data)
+	if err != nil {
+		return BackupManifest{}, err
+	}
+	if err := manifest.Verify(exp); err != nil {
+		return BackupManifest{}, err
+	}
+	// All keys are checked before anything is written.
+	if err := manifest.ValidateObjectKeys(); err != nil {
+		return BackupManifest{}, err
+	}
+
+	if err := os.MkdirAll(stagingDir, 0o750); err != nil {
+		return BackupManifest{}, fmt.Errorf("create the staging directory: %w", err)
+	}
+	root, err := os.OpenRoot(stagingDir)
+	if err != nil {
+		return BackupManifest{}, fmt.Errorf("open the staging directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
 	for _, obj := range manifest.Objects {
-		dst := filepath.Join(stagingDir, filepath.FromSlash(obj.Key))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
-			return fmt.Errorf("stage dir for %s: %w", obj.Key, err)
-		}
-		if err := downloadObject(ctx, store, bucket, path.Join(prefix, obj.Key), dst); err != nil {
-			return err
+		if err := stageObject(ctx, store, bucket, prefix, obj, root); err != nil {
+			return BackupManifest{}, err
 		}
 	}
-	return nil
+	return manifest, nil
 }
 
-func downloadObject(ctx context.Context, store ObjectStore, bucket, key, dst string) error {
-	r, err := store.Get(ctx, bucket, key)
+// stageObject downloads one object into the staging root and checks what was
+// written against the manifest entry.
+func stageObject(ctx context.Context, store ObjectStore, bucket, prefix string, obj ManifestObject, root *os.Root) (err error) {
+	name := filepath.FromSlash(obj.Key)
+	if err := root.MkdirAll(filepath.Dir(name), 0o750); err != nil {
+		return fmt.Errorf("stage directory for %s: %w", obj.Key, err)
+	}
+	r, err := store.Get(ctx, bucket, path.Join(prefix, obj.Key))
 	if err != nil {
-		return fmt.Errorf("download %s: %w", key, err)
+		return fmt.Errorf("download %s: %w", obj.Key, err)
 	}
 	defer func() { _ = r.Close() }()
-	f, err := os.Create(dst) // #nosec G304 -- dst is under a manager-owned staging dir
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return fmt.Errorf("create %s: %w", dst, err)
+		return fmt.Errorf("create staged %s: %w", obj.Key, err)
 	}
-	defer func() { _ = f.Close() }()
-	if _, err := io.Copy(f, r); err != nil {
-		return fmt.Errorf("write %s: %w", dst, err)
+	defer func() {
+		_ = f.Close()
+		if err != nil {
+			_ = root.Remove(name)
+		}
+	}()
+
+	hash := sha256.New()
+	size, err := io.Copy(io.MultiWriter(f, hash), r)
+	if err != nil {
+		return fmt.Errorf("write staged %s: %w", obj.Key, err)
+	}
+	if size != obj.SizeBytes {
+		return fmt.Errorf("object %s size %d does not match manifest %d", obj.Key, size, obj.SizeBytes)
+	}
+	if sum := hex.EncodeToString(hash.Sum(nil)); sum != obj.SHA256 {
+		return fmt.Errorf("object %s checksum mismatch", obj.Key)
 	}
 	return nil
 }

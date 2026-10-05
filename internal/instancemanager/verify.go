@@ -43,6 +43,9 @@ func VerifyArtifact(ctx context.Context, store ObjectStore, bucket, prefix strin
 	if err := m.Verify(exp); err != nil {
 		return BackupManifest{}, err
 	}
+	if err := m.ValidateObjectKeys(); err != nil {
+		return BackupManifest{}, err
+	}
 
 	for _, obj := range m.Objects {
 		key := path.Join(prefix, obj.Key)
