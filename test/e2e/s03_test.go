@@ -35,13 +35,24 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
-// The variants of S03 in docs/testing/scenario-contract.md.
+// The variants of S03 in docs/testing/scenario-contract.md. The two abrupt
+// ones differ in which member is the master when its Pod is deleted: CUBRID
+// was observed to elect the first member of the node list again when that
+// member is back before another one has taken over (docs/poc/RESULTS.md,
+// POC-19).
 const (
-	s03Graceful = "graceful"
-	s03Abrupt   = "abrupt"
+	s03AbruptFirst = "abrupt-first-member"
+	s03Graceful    = "graceful"
+	s03Abrupt      = "abrupt"
 )
 
-var s03Variants = []string{s03Graceful, s03Abrupt}
+// s03Variants is the order in which the variants run. The first runs while
+// the first member is the master; the last after the graceful one moved the
+// master away from it.
+var s03Variants = []string{s03AbruptFirst, s03Graceful, s03Abrupt}
+
+// s03Clients names the workload client of each variant.
+var s03Clients = map[string]string{s03AbruptFirst: "s03f", s03Graceful: "s03g", s03Abrupt: "s03a"}
 
 // The limits of S03 for Kind on a GitHub-hosted runner. The values and the
 // baseline they come from are recorded in docs/testing/scenario-contract.md,
@@ -234,9 +245,14 @@ func (l *roleLog) write(rel string) string {
 // master's Pod is deleted.
 func s03Steps(r *haRun) {
 	for _, variant := range s03Variants {
-		It("S03/"+variant+": a slave takes over when the master Pod is deleted, and no acknowledged write is lost",
-			func() { r.s03(variant) })
+		s03Step(r, variant)
 	}
+}
+
+// s03Step registers one variant of S03.
+func s03Step(r *haRun, variant string) {
+	It("S03/"+variant+": one member is master again after the master Pod is deleted, and no acknowledged write is lost",
+		func() { r.s03(variant) })
 }
 
 func (r *haRun) s03(variant string) {
@@ -245,10 +261,10 @@ func (r *haRun) s03(variant string) {
 	// Reported also when a check below fails.
 	defer func() { r.later = append(r.later, result) }()
 
-	client := "s03" + variant[:1]
+	client := s03Clients[variant]
 
 	By("recording the starting state")
-	master, slaves, err := r.master()
+	master, _, err := r.master()
 	Expect(err).NotTo(HaveOccurred())
 	uid, err := r.kubectl("get", "pod", master, "-o", "jsonpath={.metadata.uid}")
 	Expect(err).NotTo(HaveOccurred())
@@ -265,14 +281,25 @@ func (r *haRun) s03(variant string) {
 	var unresolved, notRouting window
 	roles := &roleLog{}
 	outcome := faults.Run(context.Background(), faults.Scenario{
-		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant == s03Abrupt},
+		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful},
 		Limits: s03FlowLimits,
 		Before: func(context.Context) error {
 			now, _, err := r.master()
-			if err == nil && now != master {
-				err = fmt.Errorf("the master is %s, not %s", now, master)
+			if err != nil {
+				return err
 			}
-			return err
+			if now != master {
+				return fmt.Errorf("the master is %s, not %s", now, master)
+			}
+			// Each abrupt variant is about one position of the master.
+			first := r.members[0]
+			switch {
+			case variant == s03AbruptFirst && master != first:
+				return fmt.Errorf("this variant needs the first member %s as master, and the master is %s", first, master)
+			case variant == s03Abrupt && master == first:
+				return fmt.Errorf("this variant needs a master other than the first member %s", first)
+			}
+			return nil
 		},
 		Check: func(context.Context) (bool, error) {
 			roles.sample(r)
@@ -289,9 +316,11 @@ func (r *haRun) s03(variant string) {
 				unresolved.sample(!resolved)
 				notRouting.sample(!routing)
 			}
-			// CUBRID's election: another member reports itself an active master.
+			// CUBRID's election: a member reports itself an active master.
+			// It is another member, or the deleted one in its new Pod: the
+			// fault is confirmed, so the old Pod no longer answers.
 			if newMaster == "" {
-				if newMaster = r.activeMasterAmong(slaves); newMaster == "" {
+				if newMaster = r.activeMasterAmong(r.members); newMaster == "" {
 					return false, nil
 				}
 				electedAt = time.Now()
@@ -304,9 +333,9 @@ func (r *haRun) s03(variant string) {
 				}
 				noticedAt = time.Now()
 			}
-			// One master and two slaves again, the former master among the
-			// slaves. A master other than the elected one is a second
-			// change of role, which must not happen by itself.
+			// One master and two slaves again. A master other than the
+			// elected one is a second change of role, which must not happen
+			// by itself.
 			now, _, err := r.master()
 			if err != nil {
 				return false, nil
@@ -344,11 +373,13 @@ func (r *haRun) s03(variant string) {
 		"the client was acknowledged without interruption for %s only", stable)
 	recovery := recoveredAt.Sub(outcome.FaultIssuedAt)
 
-	By("checking that the former master did not become master again")
+	By("checking that the master did not change a second time")
 	now, nowSlaves, err := r.master()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(now).To(Equal(newMaster), "the master after the stable period")
-	Expect(nowSlaves).To(ContainElement(master), "the former master is a slave")
+	if newMaster != master {
+		Expect(nowSlaves).To(ContainElement(master), "the former master is a slave")
+	}
 	primary, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(primary).To(Equal(newMaster))
@@ -388,6 +419,9 @@ func (r *haRun) s03(variant string) {
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
 		Measurements: map[string]any{
 			"recoveryTime":           recovery.Round(time.Millisecond).String(),
+			"masterBefore":           master,
+			"masterAfter":            newMaster,
+			"sameMemberMasterAgain":  newMaster == master,
 			"stableFor":              stable.Round(time.Millisecond).String(),
 			"electionObservedWithin": since(electedAt),
 			"operatorNoticedWithin":  since(noticedAt),

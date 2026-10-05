@@ -422,19 +422,29 @@ it needs more.
 - **Level:** real database on Kind.
 - **Variants:** `graceful` (the Pod is deleted and its termination grace
   period is respected) and `abrupt` (the container's processes are killed
-  without notice). The two are reported separately.
+  without notice). On Kind the abrupt case runs twice, as `abrupt` when the
+  master is not the first member of the node list and as
+  `abrupt-first-member` when it is, because CUBRID was observed to treat the
+  two differently (POC-19). All are reported separately.
 - **Fault confirmed by:** the Pod's UID or the container's restart count
   changed, and the former master stopped answering SQL. On Kind the `abrupt`
   variant deletes the Pod without a grace period, so its containers are
   killed without the preStop hook and without `SIGTERM`.
-- **CUBRID is expected to** (Manual; POC-3): promote a slave; not fail back
-  when the former master returns.
+- **CUBRID is expected to** (Manual; POC-3, POC-19): end with exactly one
+  master. Normally a slave is promoted, and the former master does not become
+  master again when it returns. When the master is the first member of the
+  node list and its processes are back before another member has taken over,
+  which a Pod deleted without a grace period can be within a second, CUBRID
+  was observed to elect that same member again once its server has recovered
+  (POC-19). No slave is promoted in that case.
 - **The Operator must** (ADR-0005): promote nothing; report
   `PrimaryResolved=True` again only after all three members are observed with
   exactly one master; never make the returned member the master again.
 - **Expected:** writes through the read-write endpoint succeed again within
-  `failover_limit`. How the former master comes back is judged by S09
-  `clean`, which this scenario runs as its second half.
+  `failover_limit`, on whichever member CUBRID made the master, and the master
+  does not change a second time. The run records which member it is. How a
+  former master comes back is judged by S09 `clean`, which this scenario runs
+  as its second half.
 - **Must never happen:** an `acknowledged` operation missing; two masters
   reported as healthy; the Operator deleting or restarting another member to
   force a role.

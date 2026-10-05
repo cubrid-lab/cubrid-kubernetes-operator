@@ -1020,6 +1020,62 @@ comparable leftover after a kill inside a running container (issue #180).
 
 ---
 
+## POC-19 — a master whose Pod is deleted without a grace period and is back at once (ADR-0005, S03) — **observation: no failover**
+
+Found on Kind in CI by scenario S03 of
+[docs/testing/scenario-contract.md](../testing/scenario-contract.md), in the
+runs 37340299767, 37344088869 and 37344081724 of pull request #239
+(GitHub-hosted linux/amd64 runner, CUBRID 11.4.6, three members `hab-0`,
+`hab-1`, `hab-2` in that order in `ha_node_list`, one client writing through
+the read-write Service every 100 milliseconds).
+
+The master's Pod was deleted with `--grace-period=0 --force`. The StatefulSet
+created a Pod of the same name at once and its container started within a
+second, because the image was present and the volume was on the same node.
+
+**When the master was `hab-1`, the second member** (twelve earlier runs of
+S03): `hab-0` reported itself an active master 2.5 to 3.0 seconds after the
+deletion, the client's writes were acknowledged again after 1.1 to 1.5
+seconds, and `hab-1` returned as a slave.
+
+**When the master was `hab-0`, the first member** (three runs, the same in
+each). What every member reported, from `cubrid heartbeat status` in its Pod:
+
+| Time after the deletion | `hab-0` (new Pod) | `hab-1` | `hab-2` |
+|---|---|---|---|
+| 0.8 s | node `master`, server not yet registered | `slave`, `registered_and_standby` | `slave`, `registered_and_standby` |
+| 3.7 s | node `slave`, server `registered_and_standby` | unchanged | unchanged |
+| 12.3 s | node `master`, server `registered_and_active` | unchanged | unchanged |
+| 10 minutes | unchanged | unchanged | unchanged |
+
+No slave was promoted. The client's operations failed with CUBRID's error
+-581, "Attempted to update the database when updates are disabled", from 0.3
+seconds until 11.4 seconds after the deletion (77 and 80 operations in the two
+runs whose history was kept), and were acknowledged again from then on. No
+operation ended with an unknown outcome.
+
+**Findings.**
+
+- A killed master that is back before another member has taken over is not
+  necessarily replaced. With the first member of the node list, CUBRID
+  elected the same member again after its server had recovered. With the
+  second member, the first member took over.
+- The interruption for clients was longer in that case: about eleven seconds
+  against one to two.
+- In both cases the group ended with one master and two slaves.
+
+**Consequence.** "A slave is promoted when the master Pod is killed" is not a
+safe assumption for a test or for the Operator. The contract of S03 now asks
+for exactly one master afterwards and records which member it is.
+
+**Not tested here:** whether the data of the three members agree after the
+first member resumed (the run with the changed scenario checks it); a killed
+master that stays away longer than the others' failure detection but shorter
+than a Pod start; the same on the VM lab, where a Pod does not come back
+within a second.
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
