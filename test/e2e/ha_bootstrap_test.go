@@ -335,10 +335,13 @@ spec:
 			for _, mode := range []string{"rw", "ro"} {
 				_, err := kubectl("rollout", "status", "deployment/"+clusterName+"-broker-"+mode, "--timeout=5m")
 				Expect(err).NotTo(HaveOccurred(), "the %s Brokers did not become available", mode)
-				endpoints, err := kubectl("get", "endpoints", clusterName+"-"+mode,
-					"-o", "jsonpath={.subsets[*].addresses[*].ip}")
-				Expect(err).NotTo(HaveOccurred())
-				Expect(strings.Fields(endpoints)).To(HaveLen(2), "the -%s Service must have both Brokers as endpoints", mode)
+				service := clusterName + "-" + mode
+				Eventually(func(g Gomega) {
+					ready, err := kubectl("get", "endpointslices", "-l", "kubernetes.io/service-name="+service,
+						"-o", "jsonpath={.items[*].endpoints[?(@.conditions.ready==true)].addresses[0]}")
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(strings.Fields(ready)).To(HaveLen(2), "ready endpoints of %s", service)
+				}, 2*time.Minute, 3*time.Second).Should(Succeed())
 			}
 
 			By("running a client with a CUBRID driver against the two Services")
