@@ -193,6 +193,7 @@ consistent, and through each endpoint:
 | No `op_id` appears more than once, and no `(client_id, seq)` appears more than once. | **Applied twice.** |
 | No row has the note `must-not-exist`, and no `failed` operation's row is present. | **Rolled-back change reappeared.** |
 | No row exists whose `op_id` is not in the history. | **Unexpected row.** |
+| A row that is present has the values that were sent, also for an `unknown` operation. | **Wrong values.** |
 | All members expected to be consistent return the same set of rows. | **Members diverge.** |
 
 An `unknown` operation may be present or absent; both are correct. It is
@@ -301,13 +302,22 @@ One JSON object per line, written by the client as it happens and never
 edited afterwards:
 
 ```json
-{"t":"2026-10-12T09:41:07.113Z","client":"c1","seq":412,"op":"insert","opId":"c1-000412","endpoint":"rw","event":"attempted"}
+{"t":"2026-10-12T09:41:07.113Z","client":"c1","seq":412,"op":"insert","opId":"c1-000412","endpoint":"rw","event":"attempted","amount":884,"note":"c1-412"}
 {"t":"2026-10-12T09:41:07.131Z","client":"c1","seq":412,"op":"insert","opId":"c1-000412","endpoint":"rw","event":"acknowledged"}
 ```
 
-`event` is `attempted`, `acknowledged`, `failed` or `unknown`; a `failed` or
-`unknown` line carries `error` with the driver's message. Timestamps are the
-client's clock in UTC.
+`event` is `attempted`, `acknowledged`, `failed` or `unknown`. The `attempted`
+line carries the values that are sent (`amount`, `note`), so that the check
+compares the database with what the client recorded and computes nothing
+itself. A `failed` or `unknown` line carries `error` with the driver's
+message. Timestamps are the client's clock in UTC.
+
+An operation whose `attempted` line has no later line (the client stopped
+before it could record the answer) has an unknown outcome. A history that
+contradicts itself is rejected and gives no verdict: an answer without an
+attempt, two answers for one operation, or an operation ID or a client
+sequence number used twice. The reader and the check of the data rules are
+in `test/workload`.
 
 ### `timeline.jsonl`
 
