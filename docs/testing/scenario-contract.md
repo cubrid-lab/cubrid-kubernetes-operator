@@ -97,10 +97,16 @@ A fault scenario has three checks, each with its own time limit:
 3. **Fault removed:** where the fault is temporary, the run proves that it
    is gone before judging recovery.
 
+These steps are implemented once, in `test/faults`; a scenario supplies its
+fault (how to issue it, how to observe that it took effect, how to remove it)
+and its checks. A starting state that could not be verified, or a fault whose
+injection command failed, also ends as `blocked`.
+
 If check 2 fails, the result is `blocked` with reason `fault_not_confirmed`,
 never `pass`. Every wait has a time limit; a wait without one is a defect of
 the test. The cleanup runs after every result, removes the fault, and records
-whether it succeeded. A failed cleanup marks the environment as unusable for
+whether it succeeded. It never replaces the result or the reason the run
+already has. A failed cleanup marks the environment as unusable for
 the next scenario.
 
 ### Time limits
