@@ -36,6 +36,20 @@ cp "${broker_conf}" "${conf_dir}/cubrid_broker.conf"
 cp "${databases_txt}" "${CUBRID_DATABASES}/databases.txt"
 log "configuration installed (${BROKER_ACCESS_MODE})"
 
+# The handler is installed before the Broker is started. A termination that
+# arrives during the start is then handled when the start returns: without a
+# handler, PID 1 of a container ignores SIGTERM and the Pod is killed at the
+# end of its grace period.
+terminating=0
+sleep_pid=""
+terminate() {
+  terminating=1
+  log "termination requested: stopping the Broker"
+  cubrid broker stop || true
+  [ -z "${sleep_pid}" ] || kill "${sleep_pid}" 2>/dev/null || true
+}
+trap terminate TERM INT
+
 # A Broker that was killed leaves its shared memory behind, and in a Pod that
 # memory outlives the container: the containers of a Pod share one IPC
 # namespace. While it is there "cubrid broker start" refuses with "cubrid
@@ -51,16 +65,6 @@ cubrid broker start
 broker_running() {
   grep -qx cub_broker /proc/[0-9]*/comm 2>/dev/null
 }
-
-terminating=0
-sleep_pid=""
-terminate() {
-  terminating=1
-  log "termination requested: stopping the Broker"
-  cubrid broker stop || true
-  [ -z "${sleep_pid}" ] || kill "${sleep_pid}" 2>/dev/null || true
-}
-trap terminate TERM INT
 
 while [ "${terminating}" = "0" ]; do
   sleep "${BROKER_CHECK_INTERVAL}" &

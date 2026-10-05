@@ -42,6 +42,8 @@ const (
 // and "broker stop" removes it or fails when there is none.
 const brokerStandIn = `#!/bin/bash
 echo "cubrid $*" >> "${CALLS}"
+# BROKER_START_SECONDS makes "broker start" take that long, as the real one does.
+if [ "$*" = "broker start" ] && [ -n "${BROKER_START_SECONDS:-}" ]; then sleep "${BROKER_START_SECONDS}"; fi
 [ -n "${BROKER_SHM:-}" ] || exit 0
 case "$*" in
   "broker start")
@@ -252,5 +254,39 @@ func TestBrokerEntrypoint_TerminationStopsTheBroker(t *testing.T) {
 	}
 	if calls := f.recorded(); len(calls) != 3 || calls[1] != callBrokerUp || calls[2] != callBrokerOff {
 		t.Errorf("calls = %q, want the Broker started and then stopped", calls)
+	}
+}
+
+// A termination that arrives while the Broker is still being started must be
+// handled like any other: the Broker is stopped and the script exits 0. As
+// PID 1 of a container the script would otherwise ignore the signal, and the
+// Pod would be killed at the end of its grace period.
+func TestBrokerEntrypoint_TerminationDuringTheStart(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.env["BROKER_CHECK_INTERVAL"] = "30"
+	f.env["BROKER_START_SECONDS"] = "1"
+	cmd := f.command()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(exitLimit)
+	for index(f.recorded(), callBrokerUp) < 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the Broker was not started:\n%s", out.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// The start is still running: the stand-in sleeps for a second.
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd); err != nil {
+		t.Fatalf("entrypoint after SIGTERM during the start: %v\n%s", err, out.String())
+	}
+	calls := f.recorded()
+	if calls[len(calls)-1] != callBrokerOff || index(calls, callBrokerUp) < 0 {
+		t.Errorf("calls = %q, want the Broker stopped after its start", calls)
 	}
 }
