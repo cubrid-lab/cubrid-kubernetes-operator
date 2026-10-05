@@ -393,18 +393,22 @@ it needs more.
 - **Must never happen:** two members reported as master while `HAReady` or
   `PrimaryResolved` is `True`; a successful write through the read-only
   endpoint.
-- **Data check:** all data rules on all three members.
+- **Data check:** all data rules on all three members, read on each member
+  directly, and through both Services.
 - **Limits:** `formation_limit`.
 
 ### S02: normal replication
 
 - **Level:** real database on Kind.
 - **Action:** on the master, run inserts, a schema change (add a column, add
-  a table with a primary key), and rolled-back transactions.
+  a table with a primary key), and rolled-back transactions. Then replace one
+  slave Pod and write again.
 - **CUBRID is expected to** (Manual; POC-3): apply committed rows and schema
   changes on every slave; never apply a rolled-back change.
 - **Expected:** after `replication_limit`, every member returns the same rows
   and the same schema; the log applier's fail count is zero on every slave.
+  The replaced slave returns as a slave, the master does not change, and the
+  replaced slave holds the rows written before and after its replacement.
 - **Must never happen:** a member reported as a healthy slave whose applier
   has a non-zero fail count or that lacks rows the master holds after
   `replication_limit` (POC-15 and POC-16 show that role and server state
@@ -737,15 +741,16 @@ Neither is mandatory. Until its contract is written here, a run reports it as
 
 ## Time limits
 
-All values are unset until the baseline measurement. This table is the only
-place they are recorded.
+A value is unset until its baseline measurement. This table is the only place
+the values are recorded. A value holds for the environment named with it; the
+VM lab gets its own values from its own baseline.
 
 | Limit | Meaning | Value |
 |---|---|---|
 | `install_limit` | Operator installed and its Pod available | unset |
 | `ready_limit` | Single-member cluster created until SQL succeeds | unset |
-| `formation_limit` | Three-member cluster created until all conditions are `True` | unset |
-| `replication_limit` | Commit on the master until every slave returns the row | unset |
+| `formation_limit` | Three-member cluster created until all conditions are `True` | Kind on a GitHub-hosted runner: 5 minutes. VM lab: unset |
+| `replication_limit` | Commit on the master until every slave returns the row | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset |
 | `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | unset |
 | `stable_period` | How long SQL must keep succeeding before recovery is counted | unset |
 | `rejoin_limit` | Member available again until it holds all rows as a slave | unset |
@@ -759,6 +764,17 @@ place they are recorded.
 | `restore_limit` | Recovery cluster created until `Ready` | unset |
 | `delete_limit` | Cluster deleted until its resources are gone | unset |
 | `drain_limit` | Drain issued until it finishes or is refused | unset |
+
+### Baselines
+
+| Limit | Environment | Measured | How it is measured | Set |
+|---|---|---|---|---|
+| `formation_limit` | Kind on a GitHub-hosted `ubuntu-latest` runner, CUBRID 11.4.6, object storage mocked | 59 s, 71 s, 71 s, 83 s in four runs on 2026-10-05 | From the `creationTimestamp` of the `CubridCluster` to the latest `lastTransitionTime` of `Ready`, `HAReady`, `PrimaryResolved` and `RoutingReady`, all as the API server recorded them | 5 minutes, about four times the slowest run, because a runner's speed and image pulls vary |
+| `replication_limit` | The same | 1.74 s to 1.81 s in the same four runs | From the return of the workload client, after its last commit, until every member returns the same rows and the same catalog. This is an upper bound: it includes the time the checks take, about one second | 30 seconds |
+
+The four runs also measured, without a limit being set from them: a deleted
+slave Pod was a standby slave holding all rows again after 10.1 to 10.4
+seconds.
 
 ## Open questions about engine behavior
 

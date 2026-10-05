@@ -38,12 +38,15 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
-// The time limits of S01 and S02 in docs/testing/scenario-contract.md. Zero
-// means "not set": the scenario then runs as a baseline and is reported as
-// blocked with reason time_limit_unset, never as a pass.
+// The time limits of S01 and S02 for Kind on a GitHub-hosted runner. The
+// values and the baseline they come from are recorded in
+// docs/testing/scenario-contract.md, section "Time limits"; change them there
+// and here together. Zero means "not set": the scenario then runs as a
+// baseline and is reported as blocked with reason time_limit_unset, never as
+// a pass.
 const (
-	formationLimit   time.Duration = 0
-	replicationLimit time.Duration = 0
+	formationLimit   = 5 * time.Minute
+	replicationLimit = 30 * time.Second
 )
 
 // conditionsOfS01 are the conditions the common starting state requires.
