@@ -88,6 +88,9 @@ func (r *haRun) report(ran bool) {
 		for _, variant := range s03Variants {
 			recordScenario(evidence.Scenario{ID: "S03", Variant: variant, Result: evidence.NotRun, Reason: reason})
 		}
+		for _, variant := range s05Variants {
+			recordScenario(evidence.Scenario{ID: "S05", Variant: variant, Result: evidence.NotRun, Reason: reason})
+		}
 		return
 	}
 	recordScenario(r.s01)

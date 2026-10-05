@@ -483,6 +483,7 @@ spec:
 		})
 
 		s01AndS02Steps(scenarios)
+		s05Steps(scenarios)
 		s03Steps(scenarios)
 	})
 }
