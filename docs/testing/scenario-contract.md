@@ -384,8 +384,9 @@ it needs more.
 - **Expected:** after `replication_limit`, every member returns the same rows
   and the same schema; the log applier's fail count is zero on every slave.
 - **Must never happen:** a member reported as a healthy slave whose applier
-  has a non-zero fail count (POC-15 shows that role and server state alone do
-  not reveal this).
+  has a non-zero fail count or that lacks rows the master holds after
+  `replication_limit` (POC-15 and POC-16 show that role and server state
+  alone do not reveal this, and POC-16 that the fail count does not either).
 - **Data check:** all data rules on all three members, plus a comparison of
   the catalog (tables and columns).
 - **Limits:** `replication_limit`.
@@ -745,7 +746,7 @@ is written.
 
 | ID | Question | Blocks | Investigation (at most) |
 |---|---|---|---|
-| Q1 | After a member has joined the group once and is then absent, can the remaining master still accept writes? POC-13 only observed a first formation, where the master waited for every member. | S03, S04, S15 | Half a day: three members, stop one slave, write on the master; then stop the master and observe the last two. |
+| Q1 | After a member has joined the group once and is then absent, can the remaining master still accept writes? | S03, S04, S15 | Answered by POC-16: yes, with one slave absent, with both absent, and on a slave promoted as the only running member. Not yet repeated on a native linux/amd64 host. |
 | Q2 | While the old master cannot be observed, the Operator keeps `PrimaryResolved` not `True`. Do new connections through the read-write Broker still reach the new master, and should they? ADR-0005 leaves this to an experiment ("relaxable if POC proves brokers safe"). | S04, S07 | One day on the VM lab, with issue [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113), "feat(safety): enforce and release managed write quarantine". |
 | Q3 | With `ha_ping_hosts` set, does an isolated master stop accepting writes by itself, and how quickly? The generated configuration does not set it. | S07 | One day, with issue [#114](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/114), "test(faults): add verified network partition and replication-delay controls". |
 | Q4 | When a lagging slave is promoted, what happens to the rows it had not applied, and can a second failure promote a member that lacks them? | S08 | One day on the VM lab. |
@@ -753,6 +754,7 @@ is written.
 | Q6 | How long does an already-open session keep writing to an isolated old master? ADR-0005 names this the stale-write exposure measurement. | S07 | Measured in the S07 run itself; reported, not judged. |
 | Q7 | Does a backup interrupted by a Pod kill leave files that `restoredb` accepts? | S11 | Half a day under Podman. |
 | Q8 | What evidence shows that a former master did not accept writes the others lack, so that it may rejoin without a rebuild? POC-3 saw a stopped master return as a slave on its own; ADR-0006 blocks a former master until it is verified. | S03, S09 | One day, with issue [#116](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/116), "feat(recovery): rejoin retained-PVC members without unsafe failback". |
+| Q9 | Does a slave that was stopped while its master crashed apply the new master's log when it returns? POC-16 saw one that did not, while it reported itself as a healthy slave. Does this happen on a native linux/amd64 host, and in a Pod, where the applier's lock file does not survive a container restart? | S03, S08, S09 | One day on the VM lab or a native host: issue [#226](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/226), "test(ha): reproduce a returning slave that does not apply the new master's log". |
 
 ## What this contract does not promise
 

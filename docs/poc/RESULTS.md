@@ -796,6 +796,106 @@ the Instance Manager on a Kubernetes cluster.
 
 ---
 
+## POC-16 — writes while members are absent, and a slave that returns after a master crash (ADR-0005/0006, scenario contract Q1) — **PASS + critical finding**
+
+`cubrid/cubrid:11.4` (engine 11.4.6), three nodes `h-0`, `h-1`, `h-2` on one
+container network, UID 1000, data on a volume at `/var/lib/cubrid`
+(linux/amd64 emulated under podman; output only, no timing claims).
+`data_buffer_size` was lowered to 64M. All nodes have `ha_mode=on`,
+`ha_node_list=cubrid@h-0:h-1:h-2` and `ha_db_list=appdb`. The group was formed
+as in POC-15 part 1, with `h-0` as master.
+
+This answers question Q1 of
+[docs/testing/scenario-contract.md](../testing/scenario-contract.md): POC-13
+saw a master wait for every member during the *first* formation. Does it also
+stop accepting writes when a member that had joined is absent later?
+
+"Killed" below means `kill -9` on every `cub_master`, `cub_server`,
+`copylogdb` and `applylogdb` process of the node at once. The kill was
+confirmed by the server having a new process ID after the next
+`cubrid heartbeat start`.
+
+| Step | Result |
+|---|---|
+| Row 1 on the master `h-0` | On all three members. |
+| A. `cubrid heartbeat stop` on the slave `h-2`; row 2 on `h-0` | `h-0` stays `master` / `registered_and_active`. The insert commits and reaches `h-1`. |
+| B. The slave `h-1` is killed, so `h-0` is alone; rows 3 and 4 on `h-0`, the second after a further wait | `h-0` stays `master` / `registered_and_active`. Both inserts commit. |
+| C. `cubrid heartbeat start` on `h-1` and `h-2` | Both exit 0, both are `slave` / `registered_and_standby`, all three members hold rows 1 to 4. |
+| D. `cubrid heartbeat stop` on the slave `h-2`, then the master `h-0` is killed; row 5 on `h-1` | `h-1` becomes `master` / `registered_and_active` as the only running member. The insert commits. |
+| E. `cubrid heartbeat start` on `h-0` and `h-2` | Both exit 0 and both are `slave` / `registered_and_standby`. `h-0` holds rows 1 to 5. **`h-2` holds rows 1 to 4 only.** |
+| F. Row 6 on the master `h-1` | On `h-0` and `h-1`. **Not on `h-2`.** |
+| G. `cubrid heartbeat stop` and `start` on `h-2` | Unchanged: `slave` / `registered_and_standby`, rows 1 to 4. |
+
+**What `h-2` showed while it was missing rows 5 and 6.**
+
+- `cubrid heartbeat status`: node `slave`, server `registered_and_standby`,
+  both `Copylogdb` and both `Applylogdb` processes `registered`. This is the
+  output of a healthy slave.
+- `cubrid applyinfo` for the log copied from the master `h-1`:
+  `Insert count : 0`, `Fail count : 0`, copy delay 0 pages, and
+  `Delay in Applying Copied Log: Delayed log page count : 2`. The log was
+  copied and not applied.
+- The error log of the applier for `h-1`'s log, repeated every few seconds:
+
+  ```text
+  Unable to mount disk volume "/home/cubrid/CUBRID/var/APPLYLOGDB/appdb". The database "appdb",
+  to which the disk volume belongs, is in use by user - on process 579 of host - since -.
+  ```
+
+- That file holds one line, `579  appdb /var/lib/cubrid/databases/appdb_h-0`.
+  No process 579 existed any more. The file kept this content while heartbeat
+  was stopped (step G).
+
+**Recovery that worked.** On `h-2`: `cubrid heartbeat stop`, move the file
+`$CUBRID/var/APPLYLOGDB/appdb` away, `cubrid heartbeat start`. The file was
+written again naming `appdb_h-1`, `applyinfo` showed `Insert count : 2`, and
+`h-2` held rows 1 to 6.
+
+**Findings.**
+
+- After the group has formed once, the master keeps accepting writes with one
+  slave absent and with both slaves absent, and a slave is promoted and
+  accepts writes as the only running member. The wait observed in POC-13 is a
+  property of the first formation only. There is no quorum: one member alone
+  accepts writes.
+- A slave that was stopped while the master it followed crashed, and that
+  returns after another member was promoted, did not apply the new master's
+  log. It reported itself as a healthy slave with a fail count of zero and
+  stayed behind for every later write. Restarting its heartbeat did not help.
+- The only signals were the applying delay in `applyinfo`, the applier's error
+  log, and the data itself. Role, server state and fail count showed nothing.
+
+**Reading of the cause (not confirmed in CUBRID's source or manual).** The
+file under `$CUBRID/var/APPLYLOGDB` records which copied log is being applied
+for the database, and an applier for another log is refused while it names a
+different one. `h-2` was stopped while it was applying `h-0`'s log, so the
+file kept naming it. When `h-2` returned, `h-0` was a slave, and the applier
+for `h-0`'s log never saw the change that makes it hand over to the applier
+for the new master.
+
+**Consequences for the Operator** (reproduction tracked in #226).
+
+- "Caught up" cannot be decided from role, server state or fail count
+  (ADR-0006 already requires a lag check; this is a case where only that check
+  would notice). The applying delay or a row comparison is needed.
+- A master that is alone keeps accepting writes. Every write it accepts then
+  exists on one member only. The disruption budget and the write-quarantine
+  rules have to be decided with that in mind (questions Q1 and Q5 of the
+  scenario contract).
+- In a Pod of this Operator `$CUBRID/var` is not on the data volume, so a new
+  container starts without that file. Whether the member then applies the new
+  master's log correctly, and whether skipping the rest of the old master's
+  log is safe, was not tested.
+
+**Not tested here:** the same sequence on a native linux/amd64 host, which is
+needed before this is treated as engine behavior and not as an effect of
+emulation; whether the stuck applier recovers by itself after a longer time;
+the case where the stopped slave returns before the crashed master does; the
+same sequence in Pods, where the file does not survive a container restart;
+writes that arrive while a member is being killed.
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
