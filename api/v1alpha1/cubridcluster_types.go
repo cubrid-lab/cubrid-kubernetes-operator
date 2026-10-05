@@ -295,6 +295,15 @@ type DatabaseStatus struct {
 	// haConfigured indicates the DB is in ha_db_list on all nodes.
 	// +optional
 	HAConfigured bool `json:"haConfigured,omitempty"`
+	// seededMembers lists the members the database was copied to during the
+	// HA bootstrap. A member in this list is never seeded again.
+	// +listType=set
+	// +optional
+	SeededMembers []string `json:"seededMembers,omitempty"`
+	// bootstrapAttempts counts the bootstrap steps that failed and were
+	// started again. The bootstrap stops as Failed when it reaches the limit.
+	// +optional
+	BootstrapAttempts int32 `json:"bootstrapAttempts,omitempty"`
 }
 
 // CubridClusterStatus defines the observed state of CubridCluster.

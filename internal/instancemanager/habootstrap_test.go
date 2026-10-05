@@ -75,6 +75,7 @@ func (c *haCLI) recorded() []string {
 type haFixture struct {
 	t         *testing.T
 	cli       *haCLI
+	store     *OperationStore
 	databases string
 	handler   http.Handler
 }
@@ -97,7 +98,7 @@ func newHAFixture(t *testing.T) *haFixture {
 		WithRestoreRoots(RestoreRoots{Target: databases, Staging: filepath.Join(base, "staging")}).
 		WithHAConfig(HAConfig{ConfPath: conf, VolumeSize: "64M"}).
 		Handler()
-	return &haFixture{t: t, cli: cli, databases: databases, handler: h}
+	return &haFixture{t: t, cli: cli, store: store, databases: databases, handler: h}
 }
 
 func (f *haFixture) post(key string) *httptest.ResponseRecorder {

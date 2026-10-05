@@ -105,7 +105,25 @@ fixed key; `status.databases[].haConfigured` and `BootstrapReady=True`
 and a bucket the bootstrap stops after the first database with
 `SeedStorageNotConfigured`. The source is the member the database was created
 on, not a resolved master, because no primary resolves before a peer has
-joined. A failed step leaves the database `Failed`; retrying is #107.
+joined.
+
+Resuming (#107): the key of every step carries the attempt number, so a
+reconcile after an operator restart addresses the operation that is already
+running. A step whose operation ends `Failed`, which includes a manager that
+restarted in the middle of it, is started again under the next attempt's key,
+up to three attempts for the whole bootstrap
+(`status.databases[].bootstrapAttempts`); then the database is `Failed` and
+waits for a person. A member that was seeded is recorded in
+`status.databases[].seededMembers` and never restored over.
+
+What an interrupted attempt left on a volume is removed only when it can be
+proven to be the manager's own: the Instance Manager writes the operation ID
+into `<db>/.im-operation` before `createdb` or `restoredb` and removes the
+file when the command has succeeded. The next attempt deletes the directory
+and the database's `databases.txt` line only when that file names an
+operation the manager recorded as `Failed`. A directory without the file, with
+an unreadable one, or with one that names an unknown or running operation is
+left untouched and stops the bootstrap.
 
 **`ha_db_list` generation.** Join `spec.databases[*].name` in spec order
 with commas; write identically to every node's `cubrid_ha.conf`. Names

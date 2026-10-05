@@ -59,6 +59,11 @@ type RestoreRoots struct {
 	// the HA member list for an HA member (docs/poc/RESULTS.md, POC-13).
 	// Empty means this member's own host name.
 	Host string
+	// Owner is the ID of the durable operation this restore runs for. The
+	// database directory is marked with it until restoredb has succeeded, so
+	// that a later attempt can tell an interrupted restore of its own from
+	// someone's data. Empty writes no marker.
+	Owner string
 }
 
 // RestoreResult reports a completed restore (ADR-0008).
@@ -126,7 +131,7 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	// the volumes there instead of at the paths recorded in the backup
 	// (docs/poc/RESULTS.md, POC-11). A failed restore takes the registration
 	// and the directory back, so a retry finds an empty target again.
-	unregister, err := registerRestoreTarget(targetDir, req.Database, roots.Host)
+	unregister, err := registerRestoreTarget(targetDir, req.Database, roots.Host, roots.Owner)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -135,6 +140,9 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	if err != nil {
 		unregister()
 		return RestoreResult{}, fmt.Errorf("restoredb failed: %w: %s", err, out)
+	}
+	if err := clearOwned(targetDir, req.Database); err != nil {
+		return RestoreResult{}, err
 	}
 
 	return RestoreResult{
@@ -238,7 +246,7 @@ func registeredInDatabasesTxt(targetDir, database string) (bool, error) {
 // Every file operation goes through an os.Root opened on targetDir, so
 // nothing here can reach outside the manager's database root whatever the
 // database name is.
-func registerRestoreTarget(targetDir, database, host string) (undo func(), err error) {
+func registerRestoreTarget(targetDir, database, host, owner string) (undo func(), err error) {
 	if !databaseNamePattern.MatchString(database) {
 		return nil, fmt.Errorf("database name %q is not a plain identifier", database)
 	}
@@ -261,6 +269,10 @@ func registerRestoreTarget(targetDir, database, host string) (undo func(), err e
 	}
 	if err := root.Mkdir(database, 0o750); err != nil {
 		return nil, fmt.Errorf("create %s in %s: %w", database, targetDir, err)
+	}
+	if err := markOwned(root, database, owner); err != nil {
+		_ = root.RemoveAll(database)
+		return nil, err
 	}
 	// createdb makes the lob directory the entry names; restoredb does not,
 	// and a LOB write fails without it (docs/poc/RESULTS.md, POC-12).

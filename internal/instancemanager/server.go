@@ -426,9 +426,16 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
 			return
 		}
+		// What an interrupted restore of this manager left is removed first;
+		// anything else in the target is refused by the restore's own guard.
+		if err := s.reclaimIncomplete(req.Database); err != nil {
+			fail("restore failed: " + err.Error())
+			return
+		}
 		// An HA member registers the restored database under the member list,
 		// as createdb does on the first member.
 		roots := s.restoreRoots
+		roots.Owner = id
 		haMember := false
 		if s.standaloneDB == "" {
 			if hosts, err := haHosts(s.ha.ConfPath); err == nil {
