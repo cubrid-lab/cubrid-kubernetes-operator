@@ -643,6 +643,76 @@ a real run on linux/amd64 (#108).
 
 ---
 
+## POC-14 — seeding an HA member: restoredb compared with restoreslave (ADR-0006/0010, #217) — **PASS + critical finding**
+
+`cubrid/cubrid:11.4` (engine 11.4.6), three nodes `h-0`, `h-1`, `h-2` on one
+container network, UID 1000, data on a volume at `/var/lib/cubrid`
+(linux/amd64 emulated under podman; output only, no timing claims).
+`data_buffer_size` was lowered to 64M so that three servers fit in the test
+machine. All nodes have `ha_mode=on` and
+`ha_node_list=cubrid@h-0:h-1:h-2`.
+
+**Setup.** `h-0` creates the database and starts heartbeat. `h-1` and `h-2`
+are seeded from a backup of the still empty database with `restoredb -u` and
+start heartbeat (the procedure of POC-13). Then, on the master: rows 1 to 3
+are committed, a full backup is taken
+(`cubrid backupdb -C -D /share/bk1 -l 0 appdb@localhost`), and rows 4 to 6 are
+committed. All three members hold rows 1 to 6.
+
+`h-2` is then stopped, its database directory, copied logs and
+`databases.txt` are moved away, and it is seeded again from the backup `bk1`,
+which does not contain rows 4 to 6, once with each command. In both cases the
+`databases.txt` entry and the directories are prepared as in POC-11, and
+`cubrid heartbeat start` follows.
+
+| | `cubrid restoredb -u -B /share/bk1 appdb` | `cubrid restoreslave -u -s master -m h-0 -B /share/bk1 appdb` |
+|---|---|---|
+| Exit status | 0 | 0 |
+| Replication catalog before heartbeat (`db_ha_apply_info`, read with `csql -S`) | The table does not exist: `Unknown class "dba.db_ha_apply_info"` | One row: copied log path `/var/lib/cubrid/databases/appdb_h-0`, committed LSA `147\|432`, required LSA `145\|10048` |
+| Role after `heartbeat start` | `slave`, server `registered_and_standby` | `slave`, server `registered_and_standby` |
+| First line of the log applier | `change log apply state from 'unregistered' to 'working'. last committed LSA: 147\|8544` | `... from 'unregistered' to 'recovering'. last committed LSA: 145\|15960`, then `'recovering' to 'working'. last committed LSA: 149\|5880` |
+| Rows on `h-2` (master has 1 to 6, later 7) | **1, 2, 3** | 1, 2, 3, 4, 5, 6, 7 |
+| After one more row is committed on the master | 1, 2, 3, 7 (master: 1 to 7) | 1 to 8 (master: 1 to 8) |
+| `cubrid applyinfo`, "Fail count" | 0 | 0 |
+
+**Finding.** A member seeded with `restoredb` starts applying the master's log
+from where the master is when the member joins, not from where the backup was
+taken. Everything committed between the backup and the join is missing on
+that member, permanently: later changes arrive, the missing rows never do.
+Nothing reports it. The member is a `slave` with a standby server,
+`applyinfo` shows no failure, and the Instance Manager would report it ready.
+`restoreslave` writes the replication catalog from the backup, the applier
+starts in `recovering` from the backup's position, and the member ends with
+the master's data.
+
+The bootstrap of a new cluster (POC-13, #106) takes its backup while the
+master accepts no write, so no row can fall into that gap there. Any later
+seeding does have the gap: rebuilding a member that lost its volume, or a
+bootstrap that is retried after the cluster became writable.
+
+**Second finding: the master waits for every listed member.** With three
+members in `ha_node_list`, the master's server stayed
+`registered_and_to_be_active` after `h-1` had joined as a slave, for the 60
+seconds that were waited, and became `registered_and_active` only after `h-2`
+had joined as well. In the two-node run of POC-13 one joining slave was
+enough because it was the only other member. So a new three-member cluster
+does not accept a write until both other members have joined once. What
+happens when a member that had joined before is absent was not tested here.
+
+**Consequence for the Instance Manager** (tracked in #220). A member that is
+seeded from a running master has to be restored with
+`cubrid restoreslave -u -s master -m <master host> -B <staged backup> <db>`.
+`restoredb -u` remains right for a restore into a new cluster, where there is
+no master to follow (POC-11).
+
+**Not tested here:** a backup taken on a slave (`-s slave`); a master that is
+written to while the restore runs, as opposed to before it; whether the
+archive logs the applier needs are still on the master after a long gap
+(`log_max_archives` is 0 in the image's configuration); an interrupted
+`restoreslave`.
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
