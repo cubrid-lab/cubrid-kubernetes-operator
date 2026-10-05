@@ -1,0 +1,11 @@
+{"t":"2026-10-12T09:41:07.113Z","client":"c1","seq":1,"op":"insert","opId":"c1-1","endpoint":"rw","event":"attempted","amount":10,"note":"n1"}
+{"t":"2026-10-12T09:41:07.131Z","client":"c1","seq":1,"op":"insert","opId":"c1-1","endpoint":"rw","event":"acknowledged"}
+{"t":"2026-10-12T09:41:08.113Z","client":"c1","seq":2,"op":"insert","opId":"c1-2","endpoint":"rw","event":"attempted","amount":20,"note":"n2"}
+{"t":"2026-10-12T09:41:08.131Z","client":"c1","seq":2,"op":"insert","opId":"c1-2","endpoint":"rw","event":"acknowledged"}
+{"t":"2026-10-12T09:41:09.113Z","client":"c1","seq":3,"op":"insert","opId":"c1-3","endpoint":"rw","event":"attempted","amount":30,"note":"n3"}
+{"t":"2026-10-12T09:41:09.131Z","client":"c1","seq":3,"op":"insert","opId":"c1-3","endpoint":"rw","event":"failed","error":"connection refused"}
+{"t":"2026-10-12T09:41:10.113Z","client":"c1","seq":4,"op":"insert","opId":"c1-4","endpoint":"rw","event":"attempted","amount":40,"note":"n4"}
+{"t":"2026-10-12T09:41:15.131Z","client":"c1","seq":4,"op":"insert","opId":"c1-4","endpoint":"rw","event":"unknown","error":"timeout"}
+{"t":"2026-10-12T09:41:16.113Z","client":"c1","seq":5,"op":"rollback","opId":"c1-5","endpoint":"rw","event":"attempted","amount":50,"note":"must-not-exist"}
+{"t":"2026-10-12T09:41:16.131Z","client":"c1","seq":5,"op":"rollback","opId":"c1-5","endpoint":"rw","event":"acknowledged"}
+{"t":"2026-10-12T09:41:17.113Z","client":"c1","seq":6,"op":"insert","opId":"c1-6","endpoint":"rw","event":"attempted","amount":60,"note":"n6"}
