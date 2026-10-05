@@ -21,6 +21,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -75,6 +76,64 @@ func (r *haRun) activeMasterAmong(pods []string) string {
 	return ""
 }
 
+// statusSnapshot is the conditions and the primary of the CubridCluster as
+// one read returned them.
+type statusSnapshot struct {
+	primary    string
+	conditions map[string]string
+}
+
+func (r *haRun) status() (statusSnapshot, error) {
+	out, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "json")
+	if err != nil {
+		return statusSnapshot{}, err
+	}
+	var cluster struct {
+		Status struct {
+			CurrentPrimary string `json:"currentPrimary"`
+			Conditions     []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(out), &cluster); err != nil {
+		return statusSnapshot{}, err
+	}
+	s := statusSnapshot{primary: cluster.Status.CurrentPrimary, conditions: map[string]string{}}
+	for _, c := range cluster.Status.Conditions {
+		s.conditions[c.Type] = c.Status
+	}
+	return s, nil
+}
+
+// window is a span of time seen by sampling: from the first sample in which
+// something held to the first later sample in which it no longer did.
+type window struct {
+	from, to time.Time
+}
+
+func (w *window) sample(holds bool) {
+	switch {
+	case holds && w.from.IsZero():
+		w.from = time.Now()
+	case !holds && !w.from.IsZero() && w.to.IsZero():
+		w.to = time.Now()
+	}
+}
+
+// length is the window's duration, or "not observed" when no sample fell in
+// it and "not ended" when it was still open at the last sample.
+func (w window) length() string {
+	switch {
+	case w.from.IsZero():
+		return "not observed"
+	case w.to.IsZero():
+		return "not ended"
+	}
+	return w.to.Sub(w.from).Round(time.Millisecond).String()
+}
+
 // s03Steps registers S03 (primary Pod termination) of the scenario contract,
 // once per variant. Each run continues on the cluster the earlier steps left,
 // with the workload client writing through the read-write Service while the
@@ -118,6 +177,9 @@ func (r *haRun) s03(variant string) {
 	By("deleting the master Pod and waiting for a new master, the operator's status and the client")
 	var newMaster string
 	var electedAt, noticedAt time.Time
+	// How long the operator reported the primary as not resolved and the
+	// routing as not ready, as far as the samples of the wait show.
+	var unresolved, notRouting window
 	outcome := faults.Run(context.Background(), faults.Scenario{
 		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant == s03Abrupt},
 		Limits: s03FlowLimits,
@@ -129,6 +191,19 @@ func (r *haRun) s03(variant string) {
 			return err
 		},
 		Check: func(context.Context) (bool, error) {
+			// The operator's own view, from one read of its status. It must
+			// never offer the write endpoint while the primary is not
+			// resolved (ADR-0005, section 6).
+			if s, err := r.status(); err == nil {
+				resolved := s.conditions["PrimaryResolved"] == "True"
+				routing := s.conditions["RoutingReady"] == "True"
+				if routing && !resolved {
+					return false, fmt.Errorf("RoutingReady is True while PrimaryResolved is %q",
+						s.conditions["PrimaryResolved"])
+				}
+				unresolved.sample(!resolved)
+				notRouting.sample(!routing)
+			}
 			// CUBRID's election: another member reports itself an active master.
 			if newMaster == "" {
 				if newMaster = r.activeMasterAmong(slaves); newMaster == "" {
@@ -222,6 +297,15 @@ func (r *haRun) s03(variant string) {
 		files = append(files, timeline)
 	}
 	since := func(t time.Time) string { return t.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String() }
+	// Writes the client was told are committed while the operator reported
+	// the primary as not resolved: open question Q2 of the contract.
+	acknowledgedWhileUnresolved := 0
+	for _, e := range events {
+		if e.Event == workload.Acknowledged && !unresolved.from.IsZero() && e.T.After(unresolved.from) &&
+			(unresolved.to.IsZero() || e.T.Before(unresolved.to)) {
+			acknowledgedWhileUnresolved++
+		}
+	}
 	judgedResult := judged(evidence.Scenario{
 		ID: "S03", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
@@ -233,6 +317,10 @@ func (r *haRun) s03(variant string) {
 			"allMembersBackWithin":   since(outcome.OutcomeAt),
 			"acknowledgedMissing":    report.AcknowledgedMissing,
 			"outcomeUnknown":         history.Counts[workload.Unknown],
+			// From samples taken every few seconds during the wait.
+			"primaryUnresolvedFor":               unresolved.length(),
+			"routingNotReadyFor":                 notRouting.length(),
+			"acknowledgedWhilePrimaryUnresolved": acknowledgedWhileUnresolved,
 		},
 		Operations: &evidence.Operations{
 			Attempted: history.Counts[workload.Attempted], Acknowledged: history.Counts[workload.Acknowledged],
