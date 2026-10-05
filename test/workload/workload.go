@@ -336,3 +336,51 @@ func ReadRows(r io.Reader) ([]Row, error) {
 	}
 	return rows, scanner.Err()
 }
+
+// ReadEvents parses history.jsonl into its events, in the order they were
+// written. It applies no rule; ReadHistory does.
+func ReadEvents(r io.Reader) ([]Event, error) {
+	events := []Event{}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for line := 1; scanner.Scan(); line++ {
+		text := strings.TrimSpace(scanner.Text())
+		if text == "" {
+			continue
+		}
+		var e Event
+		if err := json.Unmarshal([]byte(text), &e); err != nil {
+			return nil, fmt.Errorf("history line %d: %w", line, err)
+		}
+		events = append(events, e)
+	}
+	return events, scanner.Err()
+}
+
+// Recovery reads from the events of one client when it recovered from a
+// fault issued at faultAt. recoveredAt is the first acknowledged operation
+// after which no operation failed or had an unknown outcome, and stable is
+// how long the client went on being acknowledged after it. ok is false when
+// the last answer the client received after the fault was not an
+// acknowledgement, or when it received none.
+func Recovery(events []Event, faultAt time.Time) (recoveredAt time.Time, stable time.Duration, ok bool) {
+	var lastAcknowledged time.Time
+	for _, e := range events {
+		if !e.T.After(faultAt) {
+			continue
+		}
+		switch e.Event {
+		case Acknowledged:
+			if !ok {
+				recoveredAt, ok = e.T, true
+			}
+			lastAcknowledged = e.T
+		case Failed, Unknown:
+			ok = false
+		}
+	}
+	if !ok {
+		return time.Time{}, 0, false
+	}
+	return recoveredAt, lastAcknowledged.Sub(recoveredAt), true
+}

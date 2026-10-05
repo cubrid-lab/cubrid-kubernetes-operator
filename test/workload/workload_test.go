@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -225,6 +226,71 @@ func TestReadRows(t *testing.T) {
 	} {
 		if _, err := ReadRows(strings.NewReader(text)); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestReadEvents(t *testing.T) {
+	f, err := os.Open(historyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	events, err := ReadEvents(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 11 {
+		t.Fatalf("events = %d, want 11", len(events))
+	}
+	want := time.Date(2026, 10, 12, 9, 41, 7, 113_000_000, time.UTC)
+	if e := events[0]; !e.T.Equal(want) || e.Event != Attempted || e.OpID != firstOp {
+		t.Errorf("first event = %+v", e)
+	}
+	if _, err := ReadEvents(strings.NewReader("not json\n")); err == nil {
+		t.Error("a line that is not JSON was accepted")
+	}
+}
+
+// events builds a history of one event per second from a base time: a for
+// acknowledged, f for failed, u for unknown, - for an attempt.
+func eventsOf(base time.Time, pattern string) []Event {
+	kinds := map[rune]string{'a': Acknowledged, 'f': Failed, 'u': Unknown, '-': Attempted}
+	out := make([]Event, 0, len(pattern))
+	for i, c := range pattern {
+		out = append(out, Event{T: base.Add(time.Duration(i) * time.Second), Event: kinds[c]})
+	}
+	return out
+}
+
+func TestRecovery(t *testing.T) {
+	base := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	fault := base.Add(2500 * time.Millisecond) // between the third and the fourth event
+	tests := map[string]struct {
+		pattern     string
+		ok          bool
+		recoveredAt int // seconds after base
+		stable      time.Duration
+	}{
+		"failures, then acknowledged again":      {"aaaffuaaaa", true, 6, 3 * time.Second},
+		"an unknown outcome late resets it":      {"aaaffaauaa", true, 8, time.Second},
+		"never interrupted":                      {"aaaaaa", true, 3, 2 * time.Second},
+		"attempts do not count as answers":       {"aaaf-a-a", true, 5, 2 * time.Second},
+		"still failing at the end":               {"aaaffaaf", false, 0, 0},
+		"no answer after the fault":              {"aaa---", false, 0, 0},
+		"a failure before the fault is not seen": {"faaaaa", true, 3, 2 * time.Second},
+	}
+	for name, tc := range tests {
+		at, stable, ok := Recovery(eventsOf(base, tc.pattern), fault)
+		if ok != tc.ok {
+			t.Errorf("%s: ok = %v, want %v", name, ok, tc.ok)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if want := base.Add(time.Duration(tc.recoveredAt) * time.Second); !at.Equal(want) || stable != tc.stable {
+			t.Errorf("%s: recovered at +%s, stable %s; want +%ds, %s", name, at.Sub(base), stable, tc.recoveredAt, tc.stable)
 		}
 	}
 }

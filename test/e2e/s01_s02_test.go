@@ -66,6 +66,8 @@ type haRun struct {
 	// s01 and s02 are reported after the steps; until a step sets them they
 	// say that the scenario did not get that far.
 	s01, s02 evidence.Scenario
+	// later holds the results of the scenarios that follow, in their order.
+	later []evidence.Scenario
 }
 
 func newHARun(namespace, clientNamespace, cluster, database string, members []string) *haRun {
@@ -83,10 +85,16 @@ func (r *haRun) report(ran bool) {
 		reason := "needs linux/amd64: the official CUBRID image has no other build"
 		recordScenario(evidence.Scenario{ID: "S01", Result: evidence.NotRun, Reason: reason})
 		recordScenario(evidence.Scenario{ID: "S02", Result: evidence.NotRun, Reason: reason})
+		for _, variant := range s03Variants {
+			recordScenario(evidence.Scenario{ID: "S03", Variant: variant, Result: evidence.NotRun, Reason: reason})
+		}
 		return
 	}
 	recordScenario(r.s01)
 	recordScenario(r.s02)
+	for _, s := range r.later {
+		recordScenario(s)
+	}
 }
 
 func (r *haRun) kubectl(args ...string) (string, error) {

@@ -483,5 +483,6 @@ spec:
 		})
 
 		s01AndS02Steps(scenarios)
+		s03Steps(scenarios)
 	})
 }
