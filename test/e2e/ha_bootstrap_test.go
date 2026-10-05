@@ -75,6 +75,77 @@ spec:
       targetPort: 9090
 `
 
+// brokerClientManifest is a client outside the cluster's namespace that talks
+// to the two Broker Services with pycubrid, the CUBRID driver for Python: a
+// committed write through -rw, the same row read through -ro, and a write
+// through -ro that has to be refused. It prints BROKER-CHECK-OK when all
+// three hold. broker_tester is not used: its statements do not persist
+// (docs/poc/RESULTS.md, POC-8).
+const brokerClientManifest = `apiVersion: v1
+kind: Pod
+metadata:
+  name: broker-client
+  namespace: %[1]s
+spec:
+  restartPolicy: Never
+  containers:
+    - name: client
+      image: docker.io/library/python:3.12-slim
+      env:
+        - {name: RW_HOST, value: "%[2]s-rw.%[3]s.svc"}
+        - {name: RO_HOST, value: "%[2]s-ro.%[3]s.svc"}
+        - {name: DATABASE, value: "%[4]s"}
+        - {name: PIP_DISABLE_PIP_VERSION_CHECK, value: "1"}
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -e
+          pip install --quiet --no-cache-dir pycubrid==1.9.0
+          python - <<'PY'
+          import os, sys, time
+          import pycubrid
+
+          db = os.environ["DATABASE"]
+
+          def connect(host, port):
+              return pycubrid.connect(host=host, port=port, database=db, user="dba", password="")
+
+          rw = connect(os.environ["RW_HOST"], 33000)
+          cur = rw.cursor()
+          cur.execute("CREATE TABLE broker_check (id INT PRIMARY KEY, marker VARCHAR(32))")
+          cur.execute("INSERT INTO broker_check VALUES (1, 'through-rw')")
+          rw.commit()
+          rw.close()
+          print("write through -rw committed")
+
+          rows = None
+          for attempt in range(60):
+              try:
+                  ro = connect(os.environ["RO_HOST"], 33001)
+                  cur = ro.cursor()
+                  cur.execute("SELECT id, marker FROM broker_check")
+                  rows = cur.fetchall()
+                  if rows:
+                      break
+                  ro.close()
+              except Exception as exc:  # the table may not have replicated yet
+                  print("read through -ro, attempt", attempt, ":", exc)
+              time.sleep(2)
+          if not rows or rows[0][1] != "through-rw":
+              sys.exit("the row written through -rw was not read through -ro: %%r" %% (rows,))
+          print("read through -ro:", rows)
+
+          try:
+              cur.execute("INSERT INTO broker_check VALUES (2, 'through-ro')")
+              ro.commit()
+          except Exception as exc:
+              print("write through -ro refused:", exc)
+          else:
+              sys.exit("a write through -ro was accepted")
+          print("BROKER-CHECK-OK")
+          PY
+`
+
 // haBootstrapScenario registers the HA bootstrap on a real engine: of three
 // members exactly one creates the database; the other two are seeded from it
 // through object storage and join as slaves; a row written on the master is
@@ -257,6 +328,43 @@ spec:
 			_, err := runSQL(csqlInPod(haNamespace, peers[0], database),
 				"INSERT INTO "+s00Table+" VALUES (99, 'on-a-slave');")
 			Expect(err).To(HaveOccurred())
+		})
+
+		It("serves SQL through the read-write and the read-only Service", func() {
+			By("waiting for a Broker of each access mode")
+			for _, mode := range []string{"rw", "ro"} {
+				_, err := kubectl("rollout", "status", "deployment/"+clusterName+"-broker-"+mode, "--timeout=5m")
+				Expect(err).NotTo(HaveOccurred(), "the %s Brokers did not become available", mode)
+				service := clusterName + "-" + mode
+				Eventually(func(g Gomega) {
+					ready, err := kubectl("get", "endpointslices", "-l", "kubernetes.io/service-name="+service,
+						"-o", "jsonpath={.items[*].endpoints[?(@.conditions.ready==true)].addresses[0]}")
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(strings.Fields(ready)).To(HaveLen(2), "ready endpoints of %s", service)
+				}, 2*time.Minute, 3*time.Second).Should(Succeed())
+			}
+
+			By("running a client with a CUBRID driver against the two Services")
+			apply(fmt.Sprintf(brokerClientManifest, storeNamespace, clusterName, haNamespace, database))
+			Eventually(func(g Gomega) {
+				phase, err := utils.Run(exec.Command("kubectl", "-n", storeNamespace, "get", "pod", "broker-client",
+					"-o", "jsonpath={.status.phase}"))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(phase).To(Or(Equal("Succeeded"), Equal("Failed")))
+			}, 10*time.Minute, 3*time.Second).Should(Succeed())
+			logs, err := utils.Run(exec.Command("kubectl", "-n", storeNamespace, "logs", "broker-client"))
+			Expect(err).NotTo(HaveOccurred())
+			_, _ = fmt.Fprintf(GinkgoWriter, "broker client output:\n%s\n", logs)
+			Expect(logs).To(ContainSubstring("BROKER-CHECK-OK"), "client output:\n%s", logs)
+
+			By("checking that the operator reports both endpoints")
+			Eventually(func(g Gomega) {
+				for _, conditionType := range []string{"BrokerReady", "WriteEndpointReady", "ReadEndpointReady"} {
+					status, err := clusterField(`{.status.conditions[?(@.type=="` + conditionType + `")].status}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(status).To(Equal("True"), conditionType)
+				}
+			}, 2*time.Minute, 3*time.Second).Should(Succeed())
 		})
 
 		It("reports the cluster Ready with the master as primary", func() {

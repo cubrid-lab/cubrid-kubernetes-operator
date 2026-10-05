@@ -37,14 +37,29 @@ func brokerTestCluster() *databasev1alpha1.CubridCluster {
 	}
 }
 
-func TestGenerateBrokerConf_RWandRO(t *testing.T) {
-	conf := generateBrokerConf()
-	for _, want := range []string{
-		"[%RW]", "ACCESS_MODE             =RW", "BROKER_PORT             =33000",
-		"[%RO]", "ACCESS_MODE             =RO", "BROKER_PORT             =33001",
-	} {
-		if !strings.Contains(conf, want) {
-			t.Errorf("broker conf missing %q\n%s", want, conf)
+// One Broker per configuration: a Pod serves one access mode.
+func TestGenerateBrokerConf_OneAccessModeEach(t *testing.T) {
+	tests := map[string]struct{ want, not []string }{
+		brokerModeRW: {
+			want: []string{"[%RW]", "ACCESS_MODE             =RW", "BROKER_PORT             =33000"},
+			not:  []string{"[%RO]", "=RO"},
+		},
+		brokerModeRO: {
+			want: []string{"[%RO]", "ACCESS_MODE             =RO", "BROKER_PORT             =33001"},
+			not:  []string{"[%RW]", "=RW"},
+		},
+	}
+	for mode, tc := range tests {
+		conf := generateBrokerConf(mode)
+		for _, want := range tc.want {
+			if !strings.Contains(conf, want) {
+				t.Errorf("%s broker conf missing %q\n%s", mode, want, conf)
+			}
+		}
+		for _, not := range tc.not {
+			if strings.Contains(conf, not) {
+				t.Errorf("%s broker conf contains %q\n%s", mode, not, conf)
+			}
 		}
 	}
 }
@@ -94,7 +109,7 @@ func TestSetBrokerConditions_RoutingGatedOnPrimary(t *testing.T) {
 
 	t.Run("resolved primary -> RoutingReady True", func(t *testing.T) {
 		c := brokerTestCluster()
-		r.setBrokerConditions(c, PrimaryResolution{CurrentPrimary: "cc-0", Status: metav1.ConditionTrue, Reason: singlePrimary})
+		r.setBrokerConditions(c, PrimaryResolution{CurrentPrimary: "cc-0", Status: metav1.ConditionTrue, Reason: singlePrimary}, nil)
 		cond := meta.FindStatusCondition(c.Status.Conditions, conditionRoutingReady)
 		if cond == nil || cond.Status != metav1.ConditionTrue {
 			t.Fatalf("RoutingReady = %+v, want True", cond)
@@ -103,7 +118,7 @@ func TestSetBrokerConditions_RoutingGatedOnPrimary(t *testing.T) {
 
 	t.Run("ambiguous primary -> RoutingReady False (never claim write-endpoint safety)", func(t *testing.T) {
 		c := brokerTestCluster()
-		r.setBrokerConditions(c, PrimaryResolution{Status: metav1.ConditionFalse, Reason: "MultiplePrimariesObserved"})
+		r.setBrokerConditions(c, PrimaryResolution{Status: metav1.ConditionFalse, Reason: "MultiplePrimariesObserved"}, nil)
 		cond := meta.FindStatusCondition(c.Status.Conditions, conditionRoutingReady)
 		if cond == nil || cond.Status != metav1.ConditionFalse {
 			t.Fatalf("RoutingReady = %+v, want False", cond)
@@ -115,7 +130,7 @@ func TestSetBrokerConditions_RoutingGatedOnPrimary(t *testing.T) {
 
 	t.Run("no primary -> RoutingReady False", func(t *testing.T) {
 		c := brokerTestCluster()
-		r.setBrokerConditions(c, PrimaryResolution{Status: metav1.ConditionFalse, Reason: "NoPrimaryObserved"})
+		r.setBrokerConditions(c, PrimaryResolution{Status: metav1.ConditionFalse, Reason: "NoPrimaryObserved"}, nil)
 		cond := meta.FindStatusCondition(c.Status.Conditions, conditionRoutingReady)
 		if cond == nil || cond.Status != metav1.ConditionFalse {
 			t.Fatalf("RoutingReady = %+v, want False", cond)

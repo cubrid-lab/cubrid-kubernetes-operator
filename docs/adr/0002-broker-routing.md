@@ -119,6 +119,27 @@ the observed `CubridCluster` generation. This answers "is this broker a
 usable backend?" — distinct from "which DB pod is master?" (status) and
 "can the broker reach the master?" (`RoutingReady`).
 
+### As implemented (#83)
+
+- Two Deployments, `<cluster>-broker-rw` and `<cluster>-broker-ro`, with two
+  replicas each and a preferred anti-affinity on the node name. A Pod runs one
+  Broker of one access mode and carries
+  `database.cubrid.io/broker-access-mode: rw` or `ro`, which the `-rw` and
+  `-ro` Services select; each Service exposes its Broker's port (33000, 33001).
+- The Pods run the same image as the DB Pods, with
+  `/usr/local/bin/broker-entrypoint.sh` as the command, as UID 1000 without
+  capabilities. The entrypoint copies the mounted `cubrid_broker_<mode>.conf`
+  and `databases.txt` into CUBRID's directories, starts the Broker, stays
+  PID 1, stops the Broker on `SIGTERM`, and exits when the Broker is gone so
+  that the container restarts.
+- A Pod is ready when its Broker port accepts a connection. The operator sets
+  `WriteEndpointReady` and `ReadEndpointReady` from the available Pods of each
+  Deployment and `BrokerReady` when both have one; none of them is derived
+  from a Service existing. There is no separate Endpoints reconciler: the
+  EndpointSlices follow Pod readiness, and the check that the generated
+  configuration matches the observed generation is not implemented.
+- The single `<cluster>-broker` Deployment of earlier versions is deleted.
+
 ### Failover write sequence
 
 ```text
