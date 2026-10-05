@@ -3,7 +3,8 @@
 This catalog records which outside tests and documents the validation
 scenarios of this project learn from: what was looked at, at which revision,
 what it checks, how it applies to CUBRID, and under which license it could be
-reused. It is the input for the scenario contract (issue #79) and continues
+reused. It is the input for the
+[scenario contract](scenario-contract.md) and continues
 the provenance record in [third-party-material.md](../third-party-material.md).
 
 It is an engineering record, not legal advice. It does not say which scenario
