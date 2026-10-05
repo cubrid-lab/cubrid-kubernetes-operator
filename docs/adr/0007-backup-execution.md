@@ -153,7 +153,9 @@ spec:
   `secretKey`. The operator passes them to the DB Pods as environment
   (`IM_S3_*`), the credentials as Secret references it never reads, so the
   rule that credentials come only from the manager's environment holds. A
-  backup names only bucket and prefix. Changing the endpoint or the
+  backup names only bucket and prefix; `spec.objectStorage.bucket` and
+  `prefix` are for the artifacts the operator creates for itself, the backup
+  an HA cluster's members are seeded from (ADR-0010). Changing the endpoint or the
   credentials takes effect when the Pods restart. A backup to object storage
   on a cluster without the setting is not started
   (`ObjectStorageNotConfigured`).
