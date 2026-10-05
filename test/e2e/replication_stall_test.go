@@ -116,10 +116,26 @@ func replicationStallStep(r *haRun) {
 		}
 
 		By("checking that the slave is behind, and that the other conditions do not show it")
-		behind, err := r.memberRows(victim)
-		Expect(err).NotTo(HaveOccurred())
-		ahead, err := r.memberRows(newMaster)
-		Expect(err).NotTo(HaveOccurred())
+		// rows reads a member's rows; a failure is cut short, because the
+		// whole output of csql would bury it in the log.
+		rows := func(pod string) []workload.Row {
+			var out []workload.Row
+			Eventually(func() string {
+				var err error
+				if out, err = r.memberRows(pod); err != nil {
+					message := err.Error()
+					if len(message) > 1500 {
+						message = message[:1500] + " ..."
+					}
+					writeScenarioFile("replication-stall/rows-error-"+pod+".txt", []byte(err.Error()))
+					return message
+				}
+				return ""
+			}, time.Minute, 5*time.Second).Should(BeEmpty(), "reading the rows of %s", pod)
+			return out
+		}
+		behind := rows(victim)
+		ahead := rows(newMaster)
 		Expect(len(behind)).To(BeNumerically("<", len(ahead)), "rows on the stalled slave and on the master")
 		haReady, err := r.kubectl("get", "cubridcluster", r.cluster, "-o",
 			`jsonpath={.status.conditions[?(@.type=="HAReady")].status}`)
@@ -138,8 +154,7 @@ func replicationStallStep(r *haRun) {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 		}, 5*time.Minute, 5*time.Second).Should(Succeed())
-		after, err := r.memberRows(victim)
-		Expect(err).NotTo(HaveOccurred())
+		after := rows(victim)
 		record += fmt.Sprintf("rows on the member after its Pod was replaced: %d\nReplicationHealthy: True\n", len(after))
 		writeScenarioFile("replication-stall/result.txt", []byte(strings.TrimSpace(record)+"\n"))
 	})
