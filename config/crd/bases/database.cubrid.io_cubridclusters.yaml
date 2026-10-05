@@ -102,7 +102,9 @@ spec:
                 - name
                 x-kubernetes-list-type: map
               dbaPasswordSecretRef:
-                description: dbaPasswordSecretRef references the DBA password Secret.
+                description: |-
+                  dbaPasswordSecretRef references the DBA password Secret. It is reserved:
+                  nothing applies it yet, so a cluster that sets it is rejected.
                 properties:
                   key:
                     description: The key of the secret to select from.  Must be a
@@ -363,6 +365,10 @@ spec:
                 is created: v1alpha1 has no procedure to switch between a standalone
                 and an HA cluster'
               rule: self.highAvailability.enabled == oldSelf.highAvailability.enabled
+            - message: 'dbaPasswordSecretRef is not implemented in v1alpha1: the database
+                is created with an empty DBA password, so the field is rejected instead
+                of being ignored'
+              rule: '!has(self.dbaPasswordSecretRef)'
             - message: database names are immutable; existing names must be preserved
               rule: oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))
           status:

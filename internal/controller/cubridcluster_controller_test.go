@@ -490,6 +490,18 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(k8sClient.Update(ctx, got)).To(Succeed())
 		})
 
+		// Nothing reads the field: the database is created with an empty
+		// database administrator password whatever it says (#205).
+		It("rejects dbaPasswordSecretRef, which is not implemented", func() {
+			c := haCluster("dba-password")
+			c.Spec.DBAPasswordSecretRef = &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "dba-password"}, Key: "password",
+			}
+			err := k8sClient.Create(ctx, c)
+			Expect(err).To(HaveOccurred(), "a password setting that has no effect was accepted")
+			Expect(err.Error()).To(ContainSubstring("dbaPasswordSecretRef is not implemented"))
+		})
+
 		It("rejects a database name rename (immutability)", func() {
 			c := haCluster("immutable-db")
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())

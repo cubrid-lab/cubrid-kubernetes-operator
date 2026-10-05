@@ -209,6 +209,7 @@ type CubridBootstrap struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.bootstrap) || !has(self.bootstrap.recovery) || has(self.objectStorage)",message="bootstrap.recovery requires objectStorage: the DB Pods read the backup from it"
 // +kubebuilder:validation:XValidation:rule="self.topology.promotableMembers == oldSelf.topology.promotableMembers",message="topology.promotableMembers cannot be changed after the cluster is created: v1alpha1 has no procedure to add or remove members"
 // +kubebuilder:validation:XValidation:rule="self.highAvailability.enabled == oldSelf.highAvailability.enabled",message="highAvailability.enabled cannot be changed after the cluster is created: v1alpha1 has no procedure to switch between a standalone and an HA cluster"
+// +kubebuilder:validation:XValidation:rule="!has(self.dbaPasswordSecretRef)",message="dbaPasswordSecretRef is not implemented in v1alpha1: the database is created with an empty DBA password, so the field is rejected instead of being ignored"
 // +kubebuilder:validation:XValidation:rule="oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))",message="database names are immutable; existing names must be preserved"
 type CubridClusterSpec struct {
 	// version is the desired CUBRID engine compatibility version (e.g. "11.4").
@@ -252,7 +253,8 @@ type CubridClusterSpec struct {
 	// +optional
 	ObjectStorage *CubridObjectStorage `json:"objectStorage,omitempty"`
 
-	// dbaPasswordSecretRef references the DBA password Secret.
+	// dbaPasswordSecretRef references the DBA password Secret. It is reserved:
+	// nothing applies it yet, so a cluster that sets it is rejected.
 	// +optional
 	DBAPasswordSecretRef *corev1.SecretKeySelector `json:"dbaPasswordSecretRef,omitempty"`
 
