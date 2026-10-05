@@ -43,12 +43,18 @@ const (
 
 var s03Variants = []string{s03Graceful, s03Abrupt}
 
-// The limits of S03 for Kind on a GitHub-hosted runner, recorded in
-// docs/testing/scenario-contract.md, section "Time limits". failoverLimit is
-// zero until its baseline exists: S03 is then reported as blocked with
-// reason time_limit_unset.
+// The limits of S03 for Kind on a GitHub-hosted runner. The values and the
+// baseline they come from are recorded in docs/testing/scenario-contract.md,
+// section "Time limits"; change them there and here together. A limit of
+// zero is "not set": S03 is then reported as blocked with reason
+// time_limit_unset.
 const (
-	failoverLimit time.Duration = 0
+	// failoverLimit bounds the time from the fault until the client's
+	// writes are acknowledged again without interruption.
+	failoverLimit = 30 * time.Second
+	// rejoinLimit bounds the time from the fault until all three members
+	// have a role again, the former master as a slave.
+	rejoinLimit = 5 * time.Minute
 	// stablePeriod is how long the client must go on being acknowledged
 	// before its recovery counts.
 	stablePeriod = 30 * time.Second
@@ -329,5 +335,17 @@ func (r *haRun) s03(variant string) {
 		Evidence: files,
 	}, "failover_limit", failoverLimit, recovery)
 	judgedResult.Limits["stable_period"] = stablePeriod.String()
+	rejoin := outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)
+	switch {
+	case rejoinLimit <= 0:
+		judgedResult.Limits["rejoin_limit"] = "unset"
+		judgedResult.Result, judgedResult.Reason = evidence.Blocked, faults.ReasonTimeLimitUnset
+	case judgedResult.Result == evidence.Pass && rejoin > rejoinLimit:
+		judgedResult.Limits["rejoin_limit"] = rejoinLimit.String()
+		judgedResult.Result = evidence.Fail
+		judgedResult.Reason = fmt.Sprintf("rejoin_limit exceeded: %s > %s", rejoin, rejoinLimit)
+	default:
+		judgedResult.Limits["rejoin_limit"] = rejoinLimit.String()
+	}
 	result = judgedResult
 }

@@ -424,7 +424,9 @@ it needs more.
   period is respected) and `abrupt` (the container's processes are killed
   without notice). The two are reported separately.
 - **Fault confirmed by:** the Pod's UID or the container's restart count
-  changed, and the former master stopped answering SQL.
+  changed, and the former master stopped answering SQL. On Kind the `abrupt`
+  variant deletes the Pod without a grace period, so its containers are
+  killed without the preStop hook and without `SIGTERM`.
 - **CUBRID is expected to** (Manual; POC-3): promote a slave; not fail back
   when the former master returns.
 - **The Operator must** (ADR-0005): promote nothing; report
@@ -751,9 +753,9 @@ VM lab gets its own values from its own baseline.
 | `ready_limit` | Single-member cluster created until SQL succeeds | unset |
 | `formation_limit` | Three-member cluster created until all conditions are `True` | Kind on a GitHub-hosted runner: 5 minutes. VM lab: unset |
 | `replication_limit` | Commit on the master until every slave returns the row | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset |
-| `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | unset |
-| `stable_period` | How long SQL must keep succeeding before recovery is counted | unset |
-| `rejoin_limit` | Member available again until it holds all rows as a slave | unset |
+| `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset |
+| `stable_period` | How long SQL must keep succeeding before recovery is counted | 30 seconds |
+| `rejoin_limit` | Member available again until it holds all rows as a slave | Kind on a GitHub-hosted runner: 5 minutes, measured from the start of the fault. VM lab: unset |
 | `vm_return_limit` | VM powered on until its member has rejoined | unset |
 | `broker_recovery_limit` | Broker Pods killed until a new connection succeeds | unset |
 | `operator_resync_limit` | Operator started until status matches fresh observations | unset |
@@ -772,9 +774,21 @@ VM lab gets its own values from its own baseline.
 | `formation_limit` | Kind on a GitHub-hosted `ubuntu-latest` runner, CUBRID 11.4.6, object storage mocked | 59 s, 71 s, 71 s, 83 s in four runs on 2026-10-05 | From the `creationTimestamp` of the `CubridCluster` to the latest `lastTransitionTime` of `Ready`, `HAReady`, `PrimaryResolved` and `RoutingReady`, all as the API server recorded them | 5 minutes, about four times the slowest run, because a runner's speed and image pulls vary |
 | `replication_limit` | The same | 1.74 s to 1.81 s in the same four runs | From the return of the workload client, after its last commit, until every member returns the same rows and the same catalog. This is an upper bound: it includes the time the checks take, about one second | 30 seconds |
 
-The four runs also measured, without a limit being set from them: a deleted
-slave Pod was a standby slave holding all rows again after 10.1 to 10.4
-seconds.
+| `failover_limit` | The same; scenario S03, both variants | 1.1 s to 1.8 s in eight runs (four per variant) on 2026-10-05 | From the moment the deletion of the master Pod was issued to the client's first acknowledged operation after which none failed, taken from the client's history | 30 seconds |
+| `rejoin_limit` | The same | 21.4 s to 26.8 s in the same eight runs | From the moment the deletion was issued until CUBRID reports one master and two slaves on all three members, the former master among the slaves, and the Operator's status agrees. On Kind the Pod is recreated at once, so the time is taken from the fault | 5 minutes |
+
+`stable_period` is a choice, not a measurement: 30 seconds.
+
+The four runs of S01 and S02 also measured, without a limit being set from
+them: a deleted slave Pod was a standby slave holding all rows again after
+10.1 to 10.4 seconds.
+
+The eight runs of S03 also measured, from samples taken every few seconds:
+another member reported itself as an active master 2.5 to 4.6 seconds after
+the fault; `status.currentPrimary` named it after 21 to 24 seconds; and the
+Operator reported `PrimaryResolved` and `RoutingReady` as not `True` for 17
+to 19 seconds. In that window the client got between 164 and 184 writes
+acknowledged through the read-write Service (see Q2).
 
 ## Open questions about engine behavior
 
@@ -785,7 +799,7 @@ is written.
 | ID | Question | Blocks | Investigation (at most) |
 |---|---|---|---|
 | Q1 | After a member has joined the group once and is then absent, can the remaining master still accept writes? | S03, S04, S15 | Answered by POC-16: yes, with one slave absent, with both absent, and on a slave promoted as the only running member. POC-17 saw the promoted slave accept writes alone on a native linux/amd64 host as well. |
-| Q2 | While the old master cannot be observed, the Operator keeps `PrimaryResolved` not `True`. Do new connections through the read-write Broker still reach the new master, and should they? ADR-0005 leaves this to an experiment ("relaxable if POC proves brokers safe"). | S04, S07 | One day on the VM lab, with issue [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113), "feat(safety): enforce and release managed write quarantine". |
+| Q2 | While the old master cannot be observed, the Operator keeps `PrimaryResolved` not `True`. Do new connections through the read-write Broker still reach the new master, and should they? ADR-0005 leaves this to an experiment ("relaxable if POC proves brokers safe"). **Observed in S03 on Kind:** yes, they do. While the Operator reported `PrimaryResolved` and `RoutingReady` as not `True` for 17 to 19 seconds, the client's writes were acknowledged after 1 to 2 seconds and none was lost. Whether that is to be allowed is still to be decided. | S04, S07 | One day on the VM lab, with issue [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113), "feat(safety): enforce and release managed write quarantine". |
 | Q3 | With `ha_ping_hosts` set, does an isolated master stop accepting writes by itself, and how quickly? The generated configuration does not set it. | S07 | One day, with issue [#114](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/114), "test(faults): add verified network partition and replication-delay controls". |
 | Q4 | When a lagging slave is promoted, what happens to the rows it had not applied, and can a second failure promote a member that lacks them? | S08 | One day on the VM lab. |
 | Q5 | Which disruption budget is correct for three members given Q1: one member at a time, or none while a member is already missing? | S15 | Decided after Q1; needs a decision record or an amendment. |
