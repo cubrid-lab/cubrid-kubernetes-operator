@@ -896,6 +896,80 @@ writes that arrive while a member is being killed.
 
 ---
 
+## POC-17 — the slave that stays behind, repeated on a native linux/amd64 host (ADR-0006, #226) — **REPRODUCED**
+
+`cubrid/cubrid:11.4` (engine 11.4.6.1963-0e7d3c1), three containers `h-0`,
+`h-1`, `h-2` on one Docker network (Docker 28.0.4) on a GitHub-hosted
+`ubuntu-latest` runner, `x86_64`, no emulation. UID 1000, data on a volume at
+`/var/lib/cubrid`, `ha_mode=on`, `ha_node_list=cubrid@h-0:h-1:h-2`,
+`ha_db_list=appdb`. The script ran from a temporary branch whose workflow was
+not merged; its steps are the ones described here.
+
+Each case starts from a new group formed as in POC-15 part 1, with `h-0` as
+master and row 1 on all three members. "Killed" is `kill -9` on every CUBRID
+process of the node; each kill reported zero processes left. After the last
+start of each case, rows 6 and 7 are written on the master `h-1`, the second
+one 180 seconds after the first.
+
+| Case | What happens to the slave `h-2` before the master `h-0` is killed | Order of return | Rows on `h-2` at the end | Rows on `h-0` and `h-1` |
+|---|---|---|---|---|
+| 1 (control) | Nothing: it keeps running | `h-0` | 1, 5 | 1, 5 |
+| 2 | `cubrid heartbeat stop` | `h-0`, then `h-2` | **1** | 1, 5, 6, 7 |
+| 3 | `cubrid heartbeat stop` | `h-2` while `h-0` is still down, then `h-0` | **1** | 1, 5, 6, 7 |
+| 4 | Killed | `h-0`, then `h-2` | **1** | 1, 5, 6, 7 |
+| 5 | `cubrid heartbeat stop`, and the file `$CUBRID/var/APPLYLOGDB/appdb` is removed before `h-2` starts | `h-0`, then `h-2` | 1, 5, 6 (row 7 was not written in this case) | 1, 5, 6 |
+
+In every case `h-1` became `master` / `registered_and_active` and accepted
+row 5 as the only running member, and every `cubrid heartbeat start` exited 0.
+
+**In cases 2, 3 and 4, at the end, `h-2` showed:**
+
+- `cubrid heartbeat status`: `slave`, server `registered_and_standby`.
+- `cubrid applyinfo` for the log copied from the master `h-1`:
+  `Insert count : 0`, `Fail count : 0`, copy delay 0 pages, applying delay
+  2 pages.
+- The applier's error log for `h-1`'s log: `Unable to mount disk volume
+  ".../var/APPLYLOGDB/appdb"`, 17 to 28 times shortly after the start and 82 to
+  94 times three minutes later.
+- The file `$CUBRID/var/APPLYLOGDB/appdb` naming the log of the old master:
+  `304  appdb /var/lib/cubrid/databases/appdb_h-0`.
+
+In case 1 the same file on `h-2` named `appdb_h-1` after the failover, and in
+case 5 it was written again naming `appdb_h-1` after the start.
+
+**Findings.**
+
+- POC-16 is engine behavior, not an effect of emulation. A slave that is not
+  running at the moment its master dies does not apply the new master's log
+  when it returns. It does not matter whether the slave was stopped or
+  killed, or whether it returns before or after the old master.
+- It did not recover by itself within three minutes, and it looked like a
+  healthy slave throughout.
+- A slave that is running when the master dies hands over to the new master's
+  log (case 1).
+- Starting without the file avoids the state (case 5).
+
+**Consequences for the Operator.**
+
+- A slave Pod that is restarting while the master fails is an ordinary event
+  (a node drain followed by a crash, a rolling restart). In a Pod of this
+  Operator `$CUBRID/var` is in the container's own file system, so a new
+  container starts as in case 5. That this is what happens in a Pod, and that
+  nothing from the old master's log is lost by it, is still to be shown
+  (#226).
+- A member whose container is *not* replaced, for example when heartbeat is
+  stopped and started inside a running container, can end in this state.
+- The Operator needs a check that notices it: the applying delay reported by
+  `cubrid applyinfo` for the current master's log, or a comparison of data
+  (tracked in #229).
+
+**Not tested here:** the sequence in Pods; a slave that was applying
+unfinished work from the old master's log when it stopped, where removing the
+file might skip it; whether the state clears after much longer than three
+minutes; what the CUBRID manual or source says the file is for.
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
