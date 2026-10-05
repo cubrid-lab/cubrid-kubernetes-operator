@@ -17,7 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"testing"
+	"time"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
@@ -61,4 +67,59 @@ func TestObservationFromStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// answerWith is an HTTP transport that answers every request with the given
+// Instance Manager status, whatever host was asked.
+type answerWith struct{ status instancemanager.HAStatus }
+
+func (a answerWith) RoundTrip(*http.Request) (*http.Response, error) {
+	body, err := json.Marshal(a.status)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}, nil
+}
+
+// The answer is recorded under the name that was asked. If that name leads to
+// another member, through a wrong DNS record or Service, the other member's
+// role must not become the asked member's role (#200).
+func TestProbeRole_AnswerMustNameTheMemberThatWasAsked(t *testing.T) {
+	master := func(current string) instancemanager.HAStatus {
+		return instancemanager.HAStatus{
+			Current: current, Role: instancemanager.RoleMaster, ServerActive: true,
+			Nodes: []instancemanager.NodeState{node(current, "master")},
+		}
+	}
+	probe := func(answer instancemanager.HAStatus) RoleObservation {
+		p := &HTTPRoleProber{Client: &http.Client{Transport: answerWith{answer}}, Now: func() time.Time { return testNow }}
+		return p.ProbeRole(context.Background(), c0, "ns")
+	}
+
+	t.Run("another member answers", func(t *testing.T) {
+		got := probe(master(c1))
+		if !got.Conflicting {
+			t.Errorf("the answer of %s was taken as the role of %s: %+v", c1, c0, got)
+		}
+		res := resolvePrimary([]string{c0}, map[string]RoleObservation{c0: got}, testNow)
+		if res.CurrentPrimary == c0 {
+			t.Errorf("%s became the primary on another member's answer", c0)
+		}
+	})
+	t.Run("the asked member answers", func(t *testing.T) {
+		got := probe(master(c0))
+		if got.Conflicting || got.Role != databasev1alpha1.RoleMaster {
+			t.Errorf("a normal answer was not accepted: %+v", got)
+		}
+	})
+	t.Run("an answer without a role names nobody and stays as it is", func(t *testing.T) {
+		got := probe(instancemanager.HAStatus{Role: instancemanager.RoleUnknown, Reason: "heartbeat not running"})
+		if got.Conflicting || !got.Reachable || got.Role != databasev1alpha1.RoleUnknown {
+			t.Errorf("got %+v", got)
+		}
+	})
 }

@@ -37,8 +37,8 @@ type RoleObservation struct {
 	// older than roleObservationTTL, is not authoritative (ADR-0005).
 	ObservedAt time.Time
 	// Conflicting is set when the Instance Manager's answer contradicts itself
-	// (role vs HA status, ADR-0005 ConflictingLocalHAStatus); the role is then
-	// not trusted.
+	// (role vs HA status, ADR-0005 ConflictingLocalHAStatus) or names a member
+	// other than the one that was asked; the role is then not trusted.
 	Conflicting bool
 	// EngineVersion is the engine's full version as the Instance Manager
 	// reports it ("11.4.6.1963"); empty when it did not report one.
@@ -89,7 +89,14 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: p.now()}
 	}
-	return observationFromStatus(st, p.now())
+	o := observationFromStatus(st, p.now())
+	// The answer is recorded under the name that was asked. An answer that
+	// carries a role but names another member came from somewhere else, a
+	// wrong DNS record or Service for example, and is not this member's role.
+	if st.Current != "" && st.Current != podName {
+		o.Conflicting = true
+	}
+	return o
 }
 
 func (p *HTTPRoleProber) now() time.Time {
