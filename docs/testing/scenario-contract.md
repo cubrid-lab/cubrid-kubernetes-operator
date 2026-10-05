@@ -422,10 +422,11 @@ it needs more.
 - **Level:** real database on Kind.
 - **Variants:** `graceful` (the Pod is deleted and its termination grace
   period is respected) and `abrupt` (the container's processes are killed
-  without notice). On Kind the abrupt case runs twice, as `abrupt` when the
-  master is not the first member of the node list and as
-  `abrupt-first-member` when it is, because CUBRID was observed to treat the
-  two differently (POC-19). All are reported separately.
+  without notice). On Kind the abrupt case runs twice: as
+  `abrupt-first-member` while the master is the first member of the node
+  list, where CUBRID was observed to make the same member master again in
+  most runs (POC-19), and as `abrupt` with whichever member is the master
+  later in the run. All are reported separately.
 - **Fault confirmed by:** the Pod's UID or the container's restart count
   changed, and the former master stopped answering SQL. On Kind the `abrupt`
   variant deletes the Pod without a grace period, so its containers are

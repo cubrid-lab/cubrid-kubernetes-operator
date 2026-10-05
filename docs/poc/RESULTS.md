@@ -1075,6 +1075,13 @@ Services, no rolled-back row existed, and the fail count of both slaves'
 appliers was zero. The client's writes were acknowledged again after 10.9 and
 11.2 seconds.
 
+**Not every time.** In a later run of the same scenario (run 37381504240, pull
+request #244, 2026-10-05) the first member was deleted the same way and
+`hab-1` was an active master four seconds later; the first member returned as
+a slave. Which of the two happens is a race between the returning member and
+the others' failure detection. Of the runs recorded so far the same member
+resumed in ten and a slave was promoted in one.
+
 **Not tested here:** a killed master that stays away longer than the others'
 failure detection but shorter than a Pod start; the same on the VM lab, where
 a Pod does not come back within a second.

@@ -35,11 +35,12 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
-// The variants of S03 in docs/testing/scenario-contract.md. The two abrupt
-// ones differ in which member is the master when its Pod is deleted: CUBRID
-// was observed to elect the first member of the node list again when that
-// member is back before another one has taken over (docs/poc/RESULTS.md,
-// POC-19).
+// The variants of S03 in docs/testing/scenario-contract.md. One abrupt
+// variant runs while the first member of the node list is the master: CUBRID
+// was observed to elect that member again in most runs, when it is back
+// before another one has taken over, and to promote a slave in others
+// (docs/poc/RESULTS.md, POC-19). The other abrupt variant runs with
+// whichever member is the master by then.
 const (
 	s03AbruptFirst = "abrupt-first-member"
 	s03Graceful    = "graceful"
@@ -283,13 +284,11 @@ func (r *haRun) s03(variant string) {
 			if now != master {
 				return fmt.Errorf("the master is %s, not %s", now, master)
 			}
-			// Each abrupt variant is about one position of the master.
-			first := r.members[0]
-			switch {
-			case variant == s03AbruptFirst && master != first:
+			// This variant is about the first member as master. The other
+			// abrupt variant takes whichever member is the master: what the
+			// step before it leaves is CUBRID's choice (POC-19).
+			if first := r.members[0]; variant == s03AbruptFirst && master != first {
 				return fmt.Errorf("this variant needs the first member %s as master, and the master is %s", first, master)
-			case variant == s03Abrupt && master == first:
-				return fmt.Errorf("this variant needs a master other than the first member %s", first)
 			}
 			return nil
 		},
