@@ -21,6 +21,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path"
+	"strings"
 )
 
 // ManifestVersion is the schema version of BackupManifest. It is versioned from
@@ -145,6 +147,41 @@ func (m BackupManifest) Verify(exp ManifestExpectation) error {
 	}
 	if len(m.Objects) == 0 {
 		return fmt.Errorf("manifest lists no backup objects")
+	}
+	return nil
+}
+
+// objectKeyRoot is the directory, relative to an artifact's prefix, that
+// holds its backup objects (UploadBackup writes them there).
+const objectKeyRoot = "backup"
+
+// ValidateObjectKeys checks that every object key is a clean, relative path
+// strictly below backup/ and that no key appears twice. The manifest is read
+// from the bucket: a key decides where a file is written on restore and which
+// object is read, so it must not be able to name anything outside the
+// artifact.
+func (m BackupManifest) ValidateObjectKeys() error {
+	seen := make(map[string]bool, len(m.Objects))
+	for _, obj := range m.Objects {
+		key := obj.Key
+		rest, below := strings.CutPrefix(key, objectKeyRoot+"/")
+		switch {
+		case key == "" || strings.ContainsRune(key, 0) || strings.Contains(key, "\\"):
+			return fmt.Errorf("manifest object key %q is not a usable path", key)
+		case path.IsAbs(key) || path.Clean(key) != key:
+			return fmt.Errorf("manifest object key %q is not a clean relative path", key)
+		case !below || rest == "":
+			return fmt.Errorf("manifest object key %q is not below %s/", key, objectKeyRoot)
+		}
+		for element := range strings.SplitSeq(key, "/") {
+			if element == ".." || element == "." {
+				return fmt.Errorf("manifest object key %q is not a clean relative path", key)
+			}
+		}
+		if seen[key] {
+			return fmt.Errorf("manifest lists object key %q twice", key)
+		}
+		seen[key] = true
 	}
 	return nil
 }

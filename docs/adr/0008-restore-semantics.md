@@ -138,6 +138,16 @@ failed start leaves the restored data in place and the operation `Failed`.
 Deleting the Pod to let the entrypoint start it was rejected: it would make a
 restart the start mechanism. An HA member is started by the HA bootstrap.
 
+What the restore trusts in the artifact (#195): the manifest is read from the
+bucket and decides which objects are read and where they are staged, so its
+object keys are accepted only as clean relative paths below `backup/`, each
+once; anything else rejects the artifact before a byte is written. Each
+object is downloaded once, through a handle confined to the staging
+directory, and its size and SHA-256 are computed from the bytes written; only
+when every staged file matches the manifest does the restore go on, and
+`restoredb` reads those files. The manifest itself is not signed: this binds
+the restored bytes to the manifest, not the manifest to its author.
+
 Resuming an interrupted restore (#120, with the marker of #107): the restore's
 key carries the attempt number, so the operator finds a running restore again
 after its own restart. A restore that ends `Failed`, which includes one cut
