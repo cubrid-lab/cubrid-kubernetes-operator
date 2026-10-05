@@ -35,7 +35,9 @@ import (
 // objectStoreManifest is a throwaway S3-compatible store for the scenario: a
 // mock with one bucket, in its own namespace. It keeps nothing and checks no
 // credentials, so it shows that the transfer works, not that a real object
-// store does.
+// store does. The version matters: the manager's client cannot store an
+// object in s3mock 4.7.0 ("The specified key does not exist"), while 5.2.3
+// accepts the same calls.
 const objectStoreManifest = `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,7 +53,7 @@ spec:
     spec:
       containers:
         - name: s3mock
-          image: docker.io/adobe/s3mock:4.7.0
+          image: docker.io/adobe/s3mock:5.2.3
           env:
             - name: COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS
               value: %[2]s
@@ -209,6 +211,12 @@ spec:
 		It("seeds the other members, which join as slaves", func() {
 			By("waiting for the operator to record the seeding")
 			Eventually(func(g Gomega) {
+				phase, err := clusterField("{.status.databases[0].phase}")
+				g.Expect(err).NotTo(HaveOccurred())
+				if phase == "Failed" {
+					reason, _ := clusterField(`{.status.conditions[?(@.type=="BootstrapReady")].message}`)
+					StopTrying("the bootstrap failed: " + reason).Now()
+				}
 				configured, err := clusterField("{.status.databases[0].haConfigured}")
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(configured).To(Equal("true"))
