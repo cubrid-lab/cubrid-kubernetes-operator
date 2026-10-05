@@ -62,6 +62,16 @@ differs, is missing, or is unverifiable → **block** as
 (no pod deletion). Once a HA cluster is initialized, the desired engine
 version (`spec.version`) is effectively **immutable** for MVP.
 
+What the guard needs to see (#198): the baseline is recorded only when every
+expected member reports an engine version in a fresh observation and all
+report the same one; one or two members out of three record nothing. With a
+baseline, every reconcile checks the members again: a member without a fresh
+version (`UpdateBlockedEngineVersionUnknown`) or with a version of another
+series (`UpdateBlockedMixedEngineVersions`) blocks an update, and so does a
+cluster that has no baseline yet (`UpdateBlockedEngineVersionNotObserved`).
+Another patch of the baseline's series is not a mix: it is what a compatible
+update in progress looks like.
+
 Automatic replacement is switched off (#196). The operator still plans a
 rolling update (slaves first, one at a time, never the master) and reports
 the member it would replace in the `Updating` condition with the reason
