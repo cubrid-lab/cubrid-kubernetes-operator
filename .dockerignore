@@ -21,3 +21,6 @@
 
 # The test-only fake Instance Manager (test/fakeim/Dockerfile)
 !test/fakeim
+
+# The test-only SQL workload client (test/workload/client/Dockerfile)
+!test/workload/client/Workload.java

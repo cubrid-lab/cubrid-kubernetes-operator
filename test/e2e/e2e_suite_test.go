@@ -39,6 +39,11 @@ var (
 	// instanceManagerImage is the real Instance Manager image for the
 	// real-database scenarios: the official CUBRID image plus the manager.
 	instanceManagerImage = "example.com/cubrid-instance-manager:e2e"
+	// workloadImage is the test-only SQL workload client (test/workload/client).
+	workloadImage = "example.com/cubrid-workload-client:e2e"
+	// workloadDriver names the driver that image is built with
+	// (test/workload/client/Dockerfile).
+	workloadDriver = "cubrid-jdbc 11.3.2.0053"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )

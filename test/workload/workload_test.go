@@ -28,6 +28,8 @@ const (
 	memberB = "m-1"
 	// unknownOp is an operation of the history whose outcome is unknown.
 	unknownOp = "c1-4"
+	// firstOp is the first operation of the history.
+	firstOp = "c1-1"
 )
 
 // historyFile is a run of client c1: 1 and 2 acknowledged, 3 failed, 4 with an
@@ -65,7 +67,7 @@ func rules(m MemberCheck) string {
 func TestReadHistory_Outcomes(t *testing.T) {
 	h := mustHistory(t)
 	want := map[string]string{
-		"c1-1": Acknowledged, "c1-2": Acknowledged, "c1-3": Failed,
+		firstOp: Acknowledged, "c1-2": Acknowledged, "c1-3": Failed,
 		unknownOp: Unknown, "c1-5": Acknowledged,
 		// No answer was recorded, so the outcome is not known.
 		"c1-6": Unknown,
@@ -90,7 +92,7 @@ func TestReadHistory_Outcomes(t *testing.T) {
 func TestReadHistory_Rejects(t *testing.T) {
 	// line is one event of operation c1-1, or of another ID when given.
 	line := func(event string, id ...string) string {
-		opID := "c1-1"
+		opID := firstOp
 		if len(id) > 0 {
 			opID = id[0]
 		}
@@ -197,5 +199,32 @@ func TestCheck_Divergence(t *testing.T) {
 func TestCheck_NoMembers(t *testing.T) {
 	if report := Check(mustHistory(t), nil); report.OK {
 		t.Error("a check of no member passed")
+	}
+}
+
+func TestReadRows(t *testing.T) {
+	rows, err := ReadRows(strings.NewReader(
+		`{"opId":"c1-000001","client":"c1","seq":1,"amount":38,"note":"c1-1"}` + "\n\n" +
+			`{"opId":"c1-000002","client":"c1","seq":2,"amount":75,"note":"c1-2"}` + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Row{
+		{OpID: "c1-000001", Client: "c1", Seq: 1, Amount: 38, Note: firstOp},
+		{OpID: "c1-000002", Client: "c1", Seq: 2, Amount: 75, Note: "c1-2"},
+	}
+	if len(rows) != len(want) || rows[0] != want[0] || rows[1] != want[1] {
+		t.Errorf("rows = %+v, want %+v", rows, want)
+	}
+	// Output that is not the rows, such as an error message, must not be
+	// read as an empty table.
+	for name, text := range map[string]string{
+		"an error message":      "ERROR: cannot connect\n",
+		"a history line":        `{"opId":"c1-1","client":"c1","seq":1,"event":"attempted"}`,
+		"a row without its key": `{"client":"c1","seq":1,"amount":1,"note":"n"}`,
+	} {
+		if _, err := ReadRows(strings.NewReader(text)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }

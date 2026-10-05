@@ -168,8 +168,14 @@ Each client runs a numbered sequence of operations, one transaction each:
 - **read**: select the client's own rows and compare them with what the
   client believes was committed.
 
-The first client is the official CUBRID JDBC driver at a version pinned in
-the workload's build file. pycubrid may be added as a second client later.
+The first client is `test/workload/client`, on the official CUBRID JDBC
+driver. The driver's version and checksum are pinned in that directory's
+`Dockerfile`. pycubrid may be added as a second client later.
+
+The client decides an outcome by where the error occurred. An error before the
+commit was sent means nothing was committed: `failed`. An error from the
+commit itself leaves the outcome open, because the server may have committed
+before the answer was lost: `unknown`.
 
 ### Operation outcomes
 

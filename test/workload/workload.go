@@ -311,3 +311,28 @@ func diverged(present map[string]map[string]Row) []Violation {
 	}
 	return out
 }
+
+// ReadRows parses the ledger rows a client printed with "dump": one JSON
+// object per line.
+func ReadRows(r io.Reader) ([]Row, error) {
+	rows := []Row{}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for line := 1; scanner.Scan(); line++ {
+		text := strings.TrimSpace(scanner.Text())
+		if text == "" {
+			continue
+		}
+		var row Row
+		decoder := json.NewDecoder(strings.NewReader(text))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&row); err != nil {
+			return nil, fmt.Errorf("rows line %d: %w", line, err)
+		}
+		if row.OpID == "" {
+			return nil, fmt.Errorf("rows line %d: no operation ID", line)
+		}
+		rows = append(rows, row)
+	}
+	return rows, scanner.Err()
+}
