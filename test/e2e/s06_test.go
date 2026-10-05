@@ -143,13 +143,17 @@ func (r *haRun) memberUIDs() (string, error) {
 	return strings.Join(uids, " "), nil
 }
 
-// s06Steps registers S06 (Operator failure) of the scenario contract, once
-// per variant, on the cluster the earlier steps left.
-func s06Steps(r *haRun) {
-	It("S06/"+s06Restart+": SQL is not interrupted and no member is restarted when the Operator Pod is killed",
-		func() { r.s06Restart() })
-	It("S06/"+s06Absent+": CUBRID fails over without the Operator, which reports the new master when it returns",
-		func() { r.s06Absent() })
+// s06Step registers one variant of S06 (Operator failure) of the scenario
+// contract, on the cluster the earlier steps left.
+func s06Step(r *haRun, variant string) {
+	switch variant {
+	case s06Restart:
+		It("S06/"+variant+": SQL is not interrupted and no member is restarted when the Operator Pod is killed",
+			func() { r.s06Restart() })
+	case s06Absent:
+		It("S06/"+variant+": CUBRID fails over without the Operator, which reports the new master when it returns",
+			func() { r.s06Absent() })
+	}
 }
 
 func (r *haRun) s06Restart() {
