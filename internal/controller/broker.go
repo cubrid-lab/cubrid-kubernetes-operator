@@ -62,7 +62,7 @@ func roServiceName(cluster string) string { return cluster + "-ro" }
 // reconcileBrokerTier reconciles the operator-managed broker tier (ADR-0002): a
 // generated config ConfigMap, a broker Deployment, and the -rw/-ro Services
 // fronting broker pods (never DB pods). It then sets the broker conditions.
-func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, cluster *databasev1alpha1.CubridCluster, res PrimaryResolution) error {
+func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, cluster *databasev1alpha1.CubridCluster, res PrimaryResolution, image string) error {
 	if err := r.reconcileBrokerConfig(ctx, cluster); err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, clust
 	}
 	available := map[string]int32{}
 	for _, mode := range []string{brokerModeRW, brokerModeRO} {
-		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode)
+		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode, image)
 		if err != nil {
 			return err
 		}
@@ -126,7 +126,7 @@ func brokerPodLabels(cluster *databasev1alpha1.CubridCluster, mode string) map[s
 	return labels
 }
 
-func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *databasev1alpha1.CubridCluster, mode string) (*appsv1.Deployment, error) {
+func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *databasev1alpha1.CubridCluster, mode, image string) (*appsv1.Deployment, error) {
 	labels := brokerPodLabels(cluster, mode)
 	replicas := int32(brokerReplicas)
 
@@ -141,14 +141,14 @@ func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context,
 		dep.Spec.Replicas = &replicas
 		dep.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec:       r.brokerPodSpec(cluster, mode),
+			Spec:       r.brokerPodSpec(cluster, mode, image),
 		}
 		return controllerutil.SetControllerReference(cluster, dep, r.Scheme)
 	})
 	return dep, err
 }
 
-func (r *CubridClusterReconciler) brokerPodSpec(cluster *databasev1alpha1.CubridCluster, mode string) corev1.PodSpec {
+func (r *CubridClusterReconciler) brokerPodSpec(cluster *databasev1alpha1.CubridCluster, mode, image string) corev1.PodSpec {
 	runAsNonRoot := true
 	noPrivEscalation := false
 	uid := cubridUID
@@ -174,9 +174,10 @@ func (r *CubridClusterReconciler) brokerPodSpec(cluster *databasev1alpha1.Cubrid
 		}},
 		Containers: []corev1.Container{{
 			Name: componentBroker,
-			// The same image as the DB Pods: it carries CUBRID and the non-root
-			// Broker entrypoint.
-			Image:   r.instanceImage(cluster),
+			// The image the DB Pods run: it carries CUBRID and the non-root
+			// Broker entrypoint, and an image that is not accepted for the
+			// database is not used for its Brokers either.
+			Image:   image,
 			Command: []string{brokerEntrypoint},
 			Env: []corev1.EnvVar{
 				{Name: "BROKER_ACCESS_MODE", Value: mode},
