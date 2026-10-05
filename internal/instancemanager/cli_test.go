@@ -101,7 +101,8 @@ func TestServer_ShutdownRunsUnderItsOwnDeadline(t *testing.T) {
 
 func TestTimeouts_Defaults(t *testing.T) {
 	got := Timeouts{}.withDefaults()
-	if got.Backup != 2*time.Hour || got.Restore != 2*time.Hour || got.Shutdown != 100*time.Second {
+	if got.Backup != 2*time.Hour || got.Restore != 2*time.Hour || got.Shutdown != 100*time.Second ||
+		got.Bootstrap != 15*time.Minute {
 		t.Errorf("defaults = %+v", got)
 	}
 	// The shutdown deadline has to end before the Pod's preStop limit (110s).

@@ -36,6 +36,11 @@ const (
 	errKey    = "error"
 	readyKey  = "ready"
 	reasonKey = "reason"
+
+	// Request errors shared by the operation endpoints.
+	msgUnreadableBody   = "cannot read request body"
+	msgInvalidBody      = "invalid request body"
+	msgNoIdempotencyKey = "Idempotency-Key header is required"
 )
 
 // Server exposes the Instance Manager HTTP/JSON API (ADR-0003). Kubelet probes
@@ -59,6 +64,8 @@ type Server struct {
 	backupStagingRoot string
 	// restoreRoots confine every path a restore request names (#119).
 	restoreRoots RestoreRoots
+	// ha is what the HA bootstrap needs (#106).
+	ha HAConfig
 	// timeouts are the per-operation deadlines.
 	timeouts Timeouts
 }
@@ -77,6 +84,8 @@ type Timeouts struct {
 	// Shutdown covers the ordered stop. Default 100s, below the Pod's
 	// preStop limit so the hook gets an answer.
 	Shutdown time.Duration
+	// Bootstrap covers createdb and the HA start. Default 15m.
+	Bootstrap time.Duration
 }
 
 func (t Timeouts) withDefaults() Timeouts {
@@ -88,6 +97,9 @@ func (t Timeouts) withDefaults() Timeouts {
 	}
 	if t.Shutdown <= 0 {
 		t.Shutdown = 100 * time.Second
+	}
+	if t.Bootstrap <= 0 {
+		t.Bootstrap = 15 * time.Minute
 	}
 	return t
 }
@@ -145,6 +157,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/role", s.auth(s.role))
 	mux.HandleFunc("GET /v1/ha/status", s.auth(s.haStatus))
 	mux.HandleFunc("GET /v1/ha/convergence", s.auth(s.convergence))
+	mux.HandleFunc("POST /v1/ha/bootstrap", s.auth(s.haBootstrap))
 	mux.HandleFunc("POST /v1/backup", s.auth(s.backup))
 	mux.HandleFunc("POST /v1/restore/prepare", s.auth(s.restorePrepare))
 	mux.HandleFunc("GET /v1/operations/{id}", s.auth(s.getOperation))
@@ -218,12 +231,12 @@ func (s *Server) haStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "cannot read request body"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgUnreadableBody})
 		return
 	}
 	var req BackupRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
 		return
 	}
 
@@ -253,7 +266,7 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 
 	key := r.Header.Get("Idempotency-Key")
 	if key == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "Idempotency-Key header is required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
 
@@ -357,17 +370,17 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "cannot read request body"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgUnreadableBody})
 		return
 	}
 	var req RestoreRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
 		return
 	}
 	key := r.Header.Get("Idempotency-Key")
 	if key == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "Idempotency-Key header is required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
 

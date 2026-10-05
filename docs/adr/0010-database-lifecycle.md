@@ -79,6 +79,21 @@ Reconcile order (bootstrap):
 5. start HA with identical ha_db_list on all nodes
 ```
 
+Creation as implemented (#106, POC-13): the operator asks the Instance
+Manager of one member, ordinal 0, to bootstrap (`POST /v1/ha/bootstrap`, an
+idempotent operation keyed by cluster UID and database). That member runs
+`cubrid createdb --server-name=<member list> -F <CUBRID_DATABASES>/<db>` when
+no database is registered, then `cubrid heartbeat start` once. Ordinal 0 is
+only where the database is created; which member is master afterwards is
+CUBRID's decision. An HA member's entrypoint never runs `createdb`: without a
+database it starts nothing and waits, and with one it starts heartbeat. A
+database directory that exists without a registration stops the bootstrap; it
+is never removed automatically. `status.databases[]` records `Creating`,
+`Created` with `primaryCreated`, or `Failed`. The first member
+is master but accepts no write until a peer has joined (POC-13), so
+`primaryCreated` says that the database exists, not that it is writable.
+Seeding the other members is the next step and is not implemented yet.
+
 **`ha_db_list` generation.** Join `spec.databases[*].name` in spec order
 with commas; write identically to every node's `cubrid_ha.conf`. Names
 are never inferred from existing files or status. Duplicate names are

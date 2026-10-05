@@ -57,6 +57,14 @@ func run() error {
 		server = server.WithStandaloneDatabase(envOr("CUBRID_DB", "appdb"))
 	}
 
+	// What an HA member needs to create the cluster's first database; the
+	// endpoint refuses a standalone member.
+	server = server.WithHAConfig(instancemanager.HAConfig{
+		ConfPath:   envOr("CUBRID_HA_CONF", "/etc/cubrid-ha/cubrid_ha.conf"),
+		VolumeSize: os.Getenv("CUBRID_VOLUME_SIZE"),
+		Locale:     os.Getenv("CUBRID_LOCALE"),
+	})
+
 	timeouts, err := timeoutsFromEnv()
 	if err != nil {
 		return err
@@ -128,9 +136,10 @@ func envOr(key, def string) string {
 func timeoutsFromEnv() (instancemanager.Timeouts, error) {
 	var t instancemanager.Timeouts
 	for key, dst := range map[string]*time.Duration{
-		"IM_BACKUP_TIMEOUT":   &t.Backup,
-		"IM_RESTORE_TIMEOUT":  &t.Restore,
-		"IM_SHUTDOWN_TIMEOUT": &t.Shutdown,
+		"IM_BACKUP_TIMEOUT":    &t.Backup,
+		"IM_RESTORE_TIMEOUT":   &t.Restore,
+		"IM_SHUTDOWN_TIMEOUT":  &t.Shutdown,
+		"IM_BOOTSTRAP_TIMEOUT": &t.Bootstrap,
 	} {
 		v := os.Getenv(key)
 		if v == "" {

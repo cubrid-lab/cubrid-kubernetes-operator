@@ -291,6 +291,9 @@ var _ = Describe("Manager", Ordered, func() {
 	// S00: a real database (linux/amd64 only).
 	s00Scenario()
 
+	// The first database of an HA cluster on a real engine (linux/amd64 only).
+	haFirstDatabaseScenario()
+
 	// Wiring only: the DB Pods run test/fakeim, which serves the Instance
 	// Manager API over a scripted CLI. There is no CUBRID in this scenario and
 	// a pass is never real-database, replication or failover evidence.

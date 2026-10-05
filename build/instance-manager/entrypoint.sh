@@ -73,17 +73,27 @@ init_db() {
          --server-name="$(hostname)" "${CUBRID_DB}" "${CUBRID_LOCALE:-en_US}" )
 }
 
+# Put the operator's HA configuration where CUBRID reads it. The ConfigMap
+# mount is read-only and the image's conf directory is not on the data volume,
+# so this is redone at every start (docs/poc/RESULTS.md, POC-13).
+install_ha_conf() {
+  local conf_dir="${CUBRID:-/home/cubrid/CUBRID}/conf"
+  mkdir -p "${conf_dir}"
+  cp "${CUBRID_HA_CONF}" "${conf_dir}/cubrid_ha.conf"
+  grep -qE '^ha_mode[ ]*=[ ]*on' "${conf_dir}/cubrid.conf" 2>/dev/null \
+    || echo "ha_mode=on" >> "${conf_dir}/cubrid.conf"
+  log "HA configuration installed from ${CUBRID_HA_CONF}"
+}
+
 start_cubrid() {
   case "${CUBRID_COMPONENTS}" in
     SERVER)
       [ "${CUBRID_BOOTSTRAP}" = "new" ] && init_db
       cubrid server start "${CUBRID_DB}" ;;
     MASTER|SLAVE|HA)
-      # A MASTER bootstraps via createdb; a SLAVE is seeded by the operator
-      # (backup->restore) before this runs, so init_db is a no-op there.
-      if [ "${CUBRID_COMPONENTS}" = "MASTER" ] && [ "${CUBRID_BOOTSTRAP}" = "new" ]; then
-        init_db
-      fi
+      # An HA member never creates its database here: the first one is created
+      # once, on one member, through the Instance Manager, and the others are
+      # seeded from it (ADR-0010). This only restarts an initialized member.
       cubrid heartbeat start ;;
   esac
 }
@@ -101,7 +111,13 @@ elif [ "${CUBRID_COMPONENTS}" != "SERVER" ] && [ ! -f "${CUBRID_HA_CONF}" ]; the
   # Stay up with the manager only: no database is created and the member
   # reports no role, instead of the container crash-looping.
   log "no HA configuration at ${CUBRID_HA_CONF}: heartbeat is not started; the member reports no role"
+elif [ "${CUBRID_COMPONENTS}" != "SERVER" ] && ! database_registered; then
+  # Configured but not initialized: the operator creates or seeds the database
+  # through the Instance Manager, which then starts heartbeat.
+  install_ha_conf
+  log "no database yet: heartbeat is not started; waiting for the HA bootstrap"
 else
+  [ "${CUBRID_COMPONENTS}" = "SERVER" ] || install_ha_conf
   start_cubrid
   started=1
 fi
@@ -114,7 +130,8 @@ stop_cubrid() {
       { [ "${started}" = "1" ] || database_registered; } || return 0
       cubrid server stop "${CUBRID_DB}" || true ;;
     *)
-      [ "${started}" = "1" ] || return 0
+      # Also when the Instance Manager started heartbeat during the bootstrap.
+      { [ "${started}" = "1" ] || database_registered; } || return 0
       cubrid heartbeat stop || true ;;
   esac
 }
