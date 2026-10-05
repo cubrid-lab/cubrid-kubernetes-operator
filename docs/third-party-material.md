@@ -10,7 +10,7 @@ existing notices.
 | CUBRID runtime base image | `build/instance-manager/Dockerfile`, `cubrid/cubrid:11.4` | Base-image/runtime terms remain separate. Record the distributed digest and review image redistribution requirements. |
 | Go modules and tooling | `go.mod`, `go.sum`, Makefile tool pins | Dependencies keep their own licenses. Inventory the actual release dependency set and retain required notices. |
 | Official Operator reference | `https://github.com/CUBRID/cubrid-operator`, README and design references | A reference is not proof of copied code. Identify any actual copied/adapted material and preserve its notices. |
-| Upstream test scenarios | Issue #78 | Record origin, revision, license and modifications before importing test code or datasets. |
+| Upstream test scenarios | [docs/testing/upstream-scenarios.md](testing/upstream-scenarios.md) | The sources, revisions and licenses are recorded there; all are used as ideas only and nothing is imported. Record origin, revision, license and modifications before importing test code or datasets. |
 
 ## Provenance check (2026-10-04, commit `77b1fcc`)
 
