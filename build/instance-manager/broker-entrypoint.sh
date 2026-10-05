@@ -36,6 +36,16 @@ cp "${broker_conf}" "${conf_dir}/cubrid_broker.conf"
 cp "${databases_txt}" "${CUBRID_DATABASES}/databases.txt"
 log "configuration installed (${BROKER_ACCESS_MODE})"
 
+# A Broker that was killed leaves its shared memory behind, and in a Pod that
+# memory outlives the container: the containers of a Pod share one IPC
+# namespace. While it is there "cubrid broker start" refuses with "cubrid
+# broker is running" (docs/poc/RESULTS.md, POC-18). This container has only
+# just started, so no Broker of it runs yet: "cubrid broker stop" removes what
+# an earlier one left, and fails harmlessly when there is nothing.
+if cubrid broker stop >/dev/null 2>&1; then
+  log "cleared the state an earlier Broker of this Pod left behind"
+fi
+
 cubrid broker start
 
 broker_running() {
