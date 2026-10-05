@@ -72,6 +72,7 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
+	writeRunSummary()
 	teardownCertManager()
 })
 

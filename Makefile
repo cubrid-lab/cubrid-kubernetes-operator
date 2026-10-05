@@ -92,7 +92,8 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 KIND_CLUSTER ?= cubrid-kubernetes-operator-test-e2e
 # E2E_LABEL_FILTER selects scenarios by Ginkgo label, e.g. E2E_LABEL_FILTER=S00
 # for one scenario or E2E_LABEL_FILTER='!db' to leave out the real-database ones.
-# E2E_EVIDENCE_DIR, when set, receives each scenario's result record.
+# E2E_EVIDENCE_DIR, when set, receives the run's evidence: summary.json, junit.xml
+# and each scenario's files (docs/testing/scenario-contract.md).
 E2E_LABEL_FILTER ?=
 
 .PHONY: setup-test-e2e

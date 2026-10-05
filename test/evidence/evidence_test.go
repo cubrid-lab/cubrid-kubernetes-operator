@@ -1,0 +1,323 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package evidence
+
+import (
+	"encoding/json"
+	"encoding/xml"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+const (
+	s00         = "S00"
+	s00Record   = "S00/record.json"
+	s03History  = "S03/history.jsonl"
+	notProven   = "fault_not_confirmed"
+	testRunName = "run-1"
+)
+
+// runDir returns a run directory holding the given evidence files.
+func runDir(t *testing.T, files ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, f := range files {
+		path := filepath.Join(dir, f)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestScenarioName(t *testing.T) {
+	if got := (Scenario{ID: "S03", Variant: "abrupt"}).Name(); got != "S03/abrupt" {
+		t.Errorf("name = %q, want S03/abrupt", got)
+	}
+	if got := (Scenario{ID: s00}).Name(); got != s00 {
+		t.Errorf("name = %q, want S00", got)
+	}
+}
+
+// A pass is only a pass when the fault was confirmed, nothing forbidden was
+// seen and every listed evidence file exists.
+func TestJudge(t *testing.T) {
+	dir := runDir(t, s03History)
+	tests := map[string]struct {
+		in         Scenario
+		want       Result
+		wantReason string
+	}{
+		"pass with a confirmed fault and its evidence": {
+			in:   Scenario{Result: Pass, FaultConfirmed: new(true), Evidence: []string{s03History}},
+			want: Pass,
+		},
+		"pass without a fault to confirm": {
+			in:   Scenario{Result: Pass, Evidence: []string{s03History}},
+			want: Pass,
+		},
+		"pass with an unconfirmed fault": {
+			in:         Scenario{Result: Pass, FaultConfirmed: new(false), Evidence: []string{s03History}},
+			want:       Fail,
+			wantReason: "fault was not confirmed",
+		},
+		"pass with a forbidden outcome": {
+			in: Scenario{Result: Pass, NeverEvents: []string{"two masters reported healthy"},
+				Evidence: []string{s03History}},
+			want:       Fail,
+			wantReason: "two masters reported healthy",
+		},
+		"pass with a missing evidence file": {
+			in:         Scenario{Result: Pass, Evidence: []string{s03History, "S03/timeline.jsonl"}},
+			want:       Fail,
+			wantReason: "S03/timeline.jsonl",
+		},
+		"pass with no evidence listed": {
+			in:         Scenario{Result: Pass},
+			want:       Fail,
+			wantReason: "no evidence",
+		},
+		"pass with evidence outside the run directory": {
+			in:         Scenario{Result: Pass, Evidence: []string{"../outside.json"}},
+			want:       Fail,
+			wantReason: "../outside.json",
+		},
+		"a result that is not one of the five": {
+			in:         Scenario{Result: "passed", Evidence: []string{s03History}},
+			want:       Fail,
+			wantReason: `"passed"`,
+		},
+		"blocked keeps its reason": {
+			in:         Scenario{Result: Blocked, Reason: notProven},
+			want:       Blocked,
+			wantReason: notProven,
+		},
+		"not run without a reason says so": {
+			in:         Scenario{Result: NotRun},
+			want:       NotRun,
+			wantReason: "no reason recorded",
+		},
+	}
+	for name, tc := range tests {
+		got, reason := tc.in.Judge(dir)
+		if got != tc.want {
+			t.Errorf("%s: result = %q, want %q", name, got, tc.want)
+		}
+		if !strings.Contains(reason, tc.wantReason) || (tc.wantReason == "" && reason != "") {
+			t.Errorf("%s: reason = %q, want it to contain %q", name, reason, tc.wantReason)
+		}
+	}
+}
+
+// Only a pass counts toward a required scenario; a scenario that is absent
+// from the summary was not run.
+func TestPassed(t *testing.T) {
+	dir := runDir(t, s00Record)
+	pass := Scenario{ID: s00, Result: Pass, Evidence: []string{s00Record}}
+	for name, tc := range map[string]struct {
+		scenarios []Scenario
+		want      bool
+	}{
+		"required scenario passed":   {[]Scenario{pass}, true},
+		"required scenario skipped":  {[]Scenario{{ID: s00, Result: NotRun, Reason: "arm64"}}, false},
+		"required scenario blocked":  {[]Scenario{{ID: s00, Result: Blocked, Reason: "x"}}, false},
+		"required scenario absent":   {nil, false},
+		"one variant of it failed":   {[]Scenario{pass, {ID: s00, Variant: "b", Result: Fail, Reason: "x"}}, false},
+		"pass that Judge turns down": {[]Scenario{{ID: s00, Result: Pass}}, false},
+	} {
+		if got := (Summary{Scenarios: tc.scenarios}).Passed(dir, s00); got != tc.want {
+			t.Errorf("%s: Passed = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func testSummary() Summary {
+	return Summary{
+		RunID:      testRunName,
+		StartedAt:  time.Date(2026, 10, 12, 9, 30, 0, 0, time.UTC),
+		FinishedAt: time.Date(2026, 10, 12, 10, 5, 12, 0, time.UTC),
+		Environment: Environment{
+			Level: "kind", KubernetesVersion: "v1.37.0", OperatorCommit: "abc1234",
+			OperatorImageDigest: "sha256:aaa", CubridImageDigest: "sha256:bbb", EngineVersion: "11.4.6",
+		},
+		Scenarios: []Scenario{
+			{ID: s00, Result: Pass, Evidence: []string{s00Record},
+				Measurements: map[string]any{"recoveryTime": Unknown, "acknowledgedMissing": 0}},
+			{ID: "S03", Variant: "abrupt", Result: Pass, FaultConfirmed: new(false), Evidence: []string{s00Record}},
+			{ID: "S04", Result: NotApplicable, Reason: "needs the VM lab"},
+			{ID: "S07", Result: Blocked, Reason: notProven},
+			{ID: "S10", Result: NotRun, Reason: "linux/arm64"},
+		},
+	}
+}
+
+func TestWriteSummaryJSON(t *testing.T) {
+	dir := runDir(t, s00Record)
+	if err := testSummary().Write(dir, NewRedactor()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "summary.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Summary
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("summary.json: %v\n%s", err, data)
+	}
+	if got.SchemaVersion != SchemaVersion || got.RunID != testRunName || got.Environment.OperatorCommit != "abc1234" {
+		t.Errorf("summary header = %+v", got)
+	}
+	// What was not recorded is unknown, not empty.
+	if got.Environment.ClientDriver != Unknown {
+		t.Errorf("clientDriver = %q, want %q", got.Environment.ClientDriver, Unknown)
+	}
+	if len(got.Scenarios) != 5 {
+		t.Fatalf("scenarios = %d, want 5", len(got.Scenarios))
+	}
+	if got.Scenarios[0].Result != Pass || got.Scenarios[0].Measurements["recoveryTime"] != Unknown {
+		t.Errorf("S00 = %+v", got.Scenarios[0])
+	}
+	// The file holds the judged result, so a reader cannot take the claim for it.
+	if got.Scenarios[1].Result != Fail || !strings.Contains(got.Scenarios[1].Reason, "fault was not confirmed") {
+		t.Errorf("S03 = %+v, want a fail with its reason", got.Scenarios[1])
+	}
+	if !strings.Contains(string(data), `"neverEvents": []`) {
+		t.Errorf("neverEvents must be written as an empty list:\n%s", data)
+	}
+}
+
+func TestWriteJUnit(t *testing.T) {
+	dir := runDir(t, s00Record)
+	if err := testSummary().Write(dir, NewRedactor()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "junit.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var suite struct {
+		Name     string `xml:"name,attr"`
+		Tests    int    `xml:"tests,attr"`
+		Failures int    `xml:"failures,attr"`
+		Errors   int    `xml:"errors,attr"`
+		Skipped  int    `xml:"skipped,attr"`
+		Cases    []struct {
+			Name    string `xml:"name,attr"`
+			Failure *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"failure"`
+			Error *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"error"`
+			Skipped *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"skipped"`
+		} `xml:"testcase"`
+	}
+	if err := xml.Unmarshal(data, &suite); err != nil {
+		t.Fatalf("junit.xml: %v\n%s", err, data)
+	}
+	if suite.Name != testRunName || suite.Tests != 5 || suite.Failures != 1 || suite.Errors != 1 || suite.Skipped != 2 {
+		t.Errorf("suite = %+v", suite)
+	}
+	c := suite.Cases
+	if len(c) != 5 {
+		t.Fatalf("test cases = %d, want 5", len(c))
+	}
+	if c[0].Name != s00 || c[0].Failure != nil || c[0].Error != nil || c[0].Skipped != nil {
+		t.Errorf("pass must have no child element: %+v", c[0])
+	}
+	if c[1].Name != "S03/abrupt" || c[1].Failure == nil {
+		t.Errorf("fail must be a failure: %+v", c[1])
+	}
+	if c[2].Skipped == nil || c[2].Skipped.Message != "not_applicable: needs the VM lab" {
+		t.Errorf("not applicable must be skipped with its reason: %+v", c[2])
+	}
+	// Blocked is an error, so that an unproven scenario is not shown as green.
+	if c[3].Error == nil || c[3].Error.Message != "blocked: "+notProven || c[3].Skipped != nil {
+		t.Errorf("blocked must be an error: %+v", c[3])
+	}
+	if c[4].Skipped == nil || c[4].Skipped.Message != "not_run: linux/arm64" {
+		t.Errorf("not run must be skipped with its reason: %+v", c[4])
+	}
+}
+
+func TestRedact(t *testing.T) {
+	r := NewRedactor("s3cr3t-token-value", "", "ab")
+	tests := map[string]struct{ in, gone, kept string }{
+		"a value that was registered": {
+			in: "calling with s3cr3t-token-value now", gone: "s3cr3t-token-value", kept: "calling with [REDACTED] now"},
+		"a bearer header": {
+			in: "Authorization: Bearer abc.def-123\nnext", gone: "abc.def-123", kept: "Authorization: Bearer [REDACTED]\nnext"},
+		"an environment variable": {
+			in: "IM_TOKEN=tok123 OTHER=1", gone: "tok123", kept: "OTHER=1"},
+		"a JSON field": {
+			in: `{"password": "hunter2", "name": "cc"}`, gone: "hunter2", kept: `"name": "cc"`},
+		"a YAML field": {
+			in: "secretAccessKey: wJalrXUtnFEMI\nbucket: backups", gone: "wJalrXUtnFEMI", kept: "bucket: backups"},
+		"an access key id anywhere": {
+			in: "used AKIAIOSFODNN7EXAMPLE for upload", gone: "AKIAIOSFODNN7EXAMPLE", kept: "for upload"},
+		"a URL with credentials": {
+			in: "s3 endpoint http://user:pw12345@s3mock:9090/bucket", gone: "pw12345", kept: "@s3mock:9090/bucket"},
+	}
+	for name, tc := range tests {
+		got := string(r.Redact([]byte(tc.in)))
+		if strings.Contains(got, tc.gone) {
+			t.Errorf("%s: %q still contains %q", name, got, tc.gone)
+		}
+		if !strings.Contains(got, tc.kept) {
+			t.Errorf("%s: %q lost %q", name, got, tc.kept)
+		}
+	}
+	// A reference to a Secret is a name, not a secret, and a short registered
+	// value must not blank ordinary text.
+	plain := "credentialsSecretRef:\n  name: backup-credentials\nabout a table\n"
+	if got := string(r.Redact([]byte(plain))); got != plain {
+		t.Errorf("redaction changed text without credentials:\n%s", got)
+	}
+}
+
+func TestWriteRedacts(t *testing.T) {
+	dir := runDir(t, s00Record)
+	r := NewRedactor("s3cr3t-token-value")
+	s := testSummary()
+	s.Scenarios[3].Reason = "request with s3cr3t-token-value was refused"
+	if err := s.Write(dir, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.WriteFile(dir, "S07/logs/manager.log", []byte("token=s3cr3t-token-value\n")); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"summary.json", "junit.xml", "S07/logs/manager.log"} {
+		data, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "s3cr3t-token-value") {
+			t.Errorf("%s contains the secret:\n%s", f, data)
+		}
+	}
+	if err := r.WriteFile(dir, "../escape.log", []byte("x")); err == nil {
+		t.Error("a path outside the run directory was accepted")
+	}
+}
