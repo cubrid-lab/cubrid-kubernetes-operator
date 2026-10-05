@@ -40,6 +40,7 @@ const (
 type brokerFixture struct {
 	t     *testing.T
 	root  string
+	tools string
 	calls string
 	env   map[string]string
 }
@@ -48,9 +49,6 @@ func newBrokerFixture(t *testing.T) *brokerFixture {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the entrypoint is a bash script")
-	}
-	if os.Getuid() == 0 {
-		t.Skip("the Broker entrypoint refuses to run as root")
 	}
 	// Read the script in this process too, so the test cache notices a change.
 	if _, err := os.ReadFile("broker-entrypoint.sh"); err != nil {
@@ -73,7 +71,7 @@ func newBrokerFixture(t *testing.T) *brokerFixture {
 	write(filepath.Join(conf, "cubrid_broker_rw.conf"), brokerConfRW, 0o644)
 	write(filepath.Join(conf, "cubrid_broker_ro.conf"), brokerConfRO, 0o644)
 	write(filepath.Join(conf, "databases.txt"), brokerDBsTxt, 0o644)
-	f := &brokerFixture{t: t, root: root, calls: filepath.Join(root, "calls")}
+	f := &brokerFixture{t: t, root: root, tools: writeTools(t, root, nil), calls: filepath.Join(root, "calls")}
 	f.env = map[string]string{
 		"CUBRID":                filepath.Join(root, "cubrid"),
 		envDatabases:            filepath.Join(root, "databases"),
@@ -86,14 +84,7 @@ func newBrokerFixture(t *testing.T) *brokerFixture {
 }
 
 func (f *brokerFixture) command() *exec.Cmd {
-	cmd := exec.Command("bash", "broker-entrypoint.sh")
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
-	for k, v := range f.env {
-		if v != "" {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
-	}
-	return cmd
+	return scriptCommand(f.t, "broker-entrypoint.sh", f.tools, f.env)
 }
 
 func (f *brokerFixture) recorded() []string {
@@ -169,6 +160,22 @@ func TestBrokerEntrypoint_RejectsBadConfiguration(t *testing.T) {
 				t.Errorf("nothing may be started, got %q", calls)
 			}
 		})
+	}
+}
+
+// A Broker is never started as root: there is no branch that hands over.
+func TestBrokerEntrypoint_RefusesToRunAsRoot(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.env[envFakeUID] = uidRoot
+	out, err := f.command().CombinedOutput()
+	if err == nil {
+		t.Fatalf("the Broker entrypoint ran as root:\n%s", out)
+	}
+	if !strings.Contains(string(out), "must not run as root") {
+		t.Errorf("output does not say why it stopped:\n%s", out)
+	}
+	if calls := f.recorded(); len(calls) != 0 {
+		t.Errorf("nothing may be started, got %q", calls)
 	}
 }
 

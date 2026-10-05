@@ -70,6 +70,7 @@ var haComponents = []string{componentsHA, "MASTER", "SLAVE"}
 type fixture struct {
 	t         *testing.T
 	root      string
+	tools     string
 	databases string
 	calls     string
 	env       map[string]string
@@ -103,6 +104,7 @@ func newFixture(t *testing.T, manager string) *fixture {
 	f := &fixture{
 		t:         t,
 		root:      root,
+		tools:     writeTools(t, root, nil),
 		databases: filepath.Join(root, "data", "databases"),
 		calls:     filepath.Join(root, "calls"),
 	}
@@ -119,14 +121,7 @@ func newFixture(t *testing.T, manager string) *fixture {
 }
 
 func (f *fixture) command() *exec.Cmd {
-	cmd := exec.Command("bash", "entrypoint.sh")
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
-	for k, v := range f.env {
-		if v != "" {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
-	}
-	return cmd
+	return scriptCommand(f.t, "entrypoint.sh", f.tools, f.env)
 }
 
 // run executes the entrypoint to completion and returns its exit code and output.
@@ -406,6 +401,34 @@ func TestEntrypoint_RejectsBadConfiguration(t *testing.T) {
 				t.Errorf("nothing may be started, got %q", calls)
 			}
 		})
+	}
+}
+
+// rootStubs stand in for the two commands only the root branch uses. chown
+// records its call; gosu records the user it switches to and runs the rest as
+// that user, which here means: with the id stand-in answering non-root.
+var rootStubs = map[string]string{
+	"chown": "#!/bin/bash\necho \"chown $*\" >> \"${CALLS}\"\n",
+	"gosu":  "#!/bin/bash\necho \"gosu $1\" >> \"${CALLS}\"\nshift\nexport FAKE_UID=1000\nexec bash \"$@\"\n",
+}
+
+// Started as root (a plain `docker run --user 0`), the entrypoint hands the
+// data directory to cubrid and starts again as that user; everything after
+// that is the non-root path.
+func TestEntrypoint_StartedAsRootHandsOverAndContinuesAsCubrid(t *testing.T) {
+	f := newFixture(t, managerStub)
+	f.tools = writeTools(t, f.root, rootStubs)
+	f.env[envFakeUID] = uidRoot
+	code, out := f.run()
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	wantCalls(t, f.recorded(),
+		"chown -R cubrid:cubrid "+f.databases,
+		"gosu cubrid",
+		"cubrid createdb", "cubrid server start "+dbName, callManagerStart)
+	if !strings.Contains(out, "started as root; continuing as cubrid") {
+		t.Errorf("the log does not say that the user was switched:\n%s", out)
 	}
 }
 
