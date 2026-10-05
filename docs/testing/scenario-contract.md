@@ -274,8 +274,11 @@ reader can tell what to expect.
 - A measurement that was not taken has the string value `"unknown"`.
 - `neverEvents` lists every must-never-happen outcome that was observed. A
   non-empty list means `fail`.
-- A scenario with `result: "pass"` and `faultConfirmed: false`, or with a
-  listed evidence file that does not exist, is invalid and is read as `fail`.
+- `faultConfirmed` is left out for a scenario that injects no fault.
+- A scenario with `result: "pass"` and `faultConfirmed: false`, with no
+  evidence file listed, or with a listed evidence file that does not exist, is
+  invalid and is read as `fail`. The writer in `test/evidence` applies this
+  rule before it writes the file, so `summary.json` holds the judged result.
 
 ### `junit.xml`
 

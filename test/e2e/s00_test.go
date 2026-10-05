@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -33,6 +32,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 )
 
@@ -71,7 +71,9 @@ func s00Scenario() {
 			marker       = "s00-before-pod-delete"
 		)
 		pod := clusterName + "-0"
-		evidence := &s00Evidence{Scenario: "S00", Result: "failed", ProbeFailureEvents: []string{}}
+		record := &s00Evidence{Scenario: "S00", Result: string(evidence.Fail), ProbeFailureEvents: []string{}}
+		// podReplaced is set once the deleted Pod is seen to be gone.
+		podReplaced := false
 
 		kubectl := func(args ...string) (string, error) {
 			return utils.Run(exec.Command("kubectl", append([]string{"-n", s00Namespace}, args...)...))
@@ -91,12 +93,12 @@ func s00Scenario() {
 			if runtime.GOARCH != "amd64" {
 				Skip("S00 needs linux/amd64: the official CUBRID image has no " + runtime.GOARCH + " build. Not run.")
 			}
-			evidence.Host = runtime.GOOS + "/" + runtime.GOARCH
-			evidence.ContainerTool = utils.ContainerTool()
-			evidence.NodeImage = os.Getenv("KIND_NODE_IMAGE")
-			evidence.InstanceManagerRef = instanceManagerImage
+			record.Host = runtime.GOOS + "/" + runtime.GOARCH
+			record.ContainerTool = utils.ContainerTool()
+			record.NodeImage = os.Getenv("KIND_NODE_IMAGE")
+			record.InstanceManagerRef = instanceManagerImage
 			if rev, err := utils.Run(exec.Command("git", "rev-parse", "HEAD")); err == nil {
-				evidence.Revision = strings.TrimSpace(rev)
+				record.Revision = strings.TrimSpace(rev)
 			}
 
 			ensureInstanceManagerImage()
@@ -139,16 +141,19 @@ spec:
 		})
 
 		AfterAll(func() {
-			if evidence.Host == "" {
-				return // skipped: nothing ran
+			if record.Host == "" {
+				// Skipped: nothing ran, and that is not a pass.
+				recordScenario(evidence.Scenario{ID: "S00", Result: evidence.NotRun,
+					Reason: "needs linux/amd64, ran on " + runtime.GOOS + "/" + runtime.GOARCH})
+				return
 			}
 			// What a reader needs to judge the run, pass or fail.
 			if out, err := kubectl("get", "events", "--field-selector", "reason=Unhealthy",
 				"-o", `jsonpath={range .items[*]}{.involvedObject.name}{": "}{.message}{"\n"}{end}`); err == nil {
-				evidence.ProbeFailureEvents = append(evidence.ProbeFailureEvents, utils.GetNonEmptyLines(out)...)
+				record.ProbeFailureEvents = append(record.ProbeFailureEvents, utils.GetNonEmptyLines(out)...)
 			}
 			if out, err := kubectl("get", "pod", pod, "-o", "jsonpath={.status.containerStatuses[0].restartCount}"); err == nil {
-				evidence.ContainerRestarts = out
+				record.ContainerRestarts = out
 			}
 			for _, args := range [][]string{
 				{"get", "cubridcluster", clusterName, "-o", "yaml"},
@@ -160,7 +165,21 @@ spec:
 				out, _ := kubectl(args...)
 				_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
 			}
-			writeEvidence(evidence)
+			result := evidence.Scenario{ID: "S00", Result: evidence.Result(record.Result),
+				FaultConfirmed: &podReplaced,
+				Measurements: map[string]any{
+					"firstStartToReadySeconds": measured(record.FirstStartSeconds),
+					"podDeleteToReadySeconds":  measured(record.RestartSeconds),
+				}}
+			if result.Result != evidence.Pass {
+				result.Reason = "a step of the scenario failed; see the test output"
+			}
+			if file := writeEvidence(record); file != "" {
+				result.Evidence = []string{file}
+			}
+			recordScenario(result)
+			runSummary.Environment.CubridImageDigest = record.InstanceManagerID
+			runSummary.Environment.EngineVersion = record.EngineVersion
 
 			_, _ = kubectl("delete", "cubridcluster", clusterName, "--ignore-not-found", "--timeout=5m")
 			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", s00Namespace, "--ignore-not-found", "--timeout=5m"))
@@ -168,13 +187,13 @@ spec:
 
 		It("becomes Ready as a non-root Pod and answers SQL", func() {
 			By("waiting for the first start: createdb, server start, then the manager")
-			evidence.FirstStartSeconds = waitPodReady(15 * time.Minute).Seconds()
+			record.FirstStartSeconds = waitPodReady(15 * time.Minute).Seconds()
 
 			uid, err := kubectl("get", "pod", pod, "-o", "jsonpath={.metadata.uid}")
 			Expect(err).NotTo(HaveOccurred())
-			evidence.PodUID = uid
+			record.PodUID = uid
 			if id, err := kubectl("get", "pod", pod, "-o", "jsonpath={.status.containerStatuses[0].imageID}"); err == nil {
-				evidence.InstanceManagerID = id
+				record.InstanceManagerID = id
 			}
 
 			By("checking the process user")
@@ -185,7 +204,7 @@ spec:
 			By("recording the engine version")
 			out, err = kubectl("exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid_rel`)
 			Expect(err).NotTo(HaveOccurred())
-			evidence.EngineVersion = strings.TrimSpace(out)
+			record.EngineVersion = strings.TrimSpace(out)
 
 			By("writing and reading a row through csql")
 			sql := csqlInPod(s00Namespace, pod, database)
@@ -215,14 +234,15 @@ spec:
 				uid, err := kubectl("get", "pod", pod, "-o", "jsonpath={.metadata.uid}")
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(uid).NotTo(BeEmpty())
-				g.Expect(uid).NotTo(Equal(evidence.PodUID), "the old Pod is still there")
+				g.Expect(uid).NotTo(Equal(record.PodUID), "the old Pod is still there")
 			}).Should(Succeed())
-			evidence.RestartSeconds = waitPodReady(15 * time.Minute).Seconds()
+			podReplaced = true
+			record.RestartSeconds = waitPodReady(15 * time.Minute).Seconds()
 
 			By("reading the row written before the deletion")
 			Expect(readS00Row(csqlInPod(s00Namespace, pod, database), marker)).To(Succeed())
-			evidence.RowKeptAcrossDelete = true
-			evidence.Result = "passed"
+			record.RowKeptAcrossDelete = true
+			record.Result = string(evidence.Pass)
 		})
 	})
 }
@@ -243,23 +263,23 @@ func ensureInstanceManagerImage() {
 	})
 }
 
-// writeEvidence stores the run's record as JSON in E2E_EVIDENCE_DIR when that
-// is set, and always prints it.
-func writeEvidence(e *s00Evidence) {
+// writeEvidence prints the S00 record and stores it with the run's evidence.
+// It returns the file's path relative to the run directory, or "" when no
+// evidence is kept.
+func writeEvidence(e *s00Evidence) string {
 	data, err := json.MarshalIndent(e, "", "  ")
 	if err != nil {
-		return
+		return ""
 	}
 	_, _ = fmt.Fprintf(GinkgoWriter, "S00 evidence:\n%s\n", data)
-	dir := os.Getenv("E2E_EVIDENCE_DIR")
-	if dir == "" {
-		return
+	return writeScenarioFile("S00/record.json", append(data, '\n'))
+}
+
+// measured returns a duration in seconds, or "unknown" when the step that
+// measures it did not finish: zero would read as a measurement.
+func measured(seconds float64) any {
+	if seconds == 0 {
+		return evidence.Unknown
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "warning: evidence directory: %v\n", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(dir, "s00.json"), data, 0o600); err != nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "warning: evidence file: %v\n", err)
-	}
+	return seconds
 }
