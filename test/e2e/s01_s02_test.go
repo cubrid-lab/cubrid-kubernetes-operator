@@ -144,8 +144,17 @@ func (r *haRun) memberValues(pod, query string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The values follow the line of "=" under the column title. The title
+	// itself is the text of the expression and may be quoted too.
+	_, table, found := strings.Cut(out, "\n==")
+	if !found {
+		if strings.Contains(out, "There are no results.") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("no result table in the output of csql:\n%s", out)
+	}
 	var values []string
-	for _, line := range strings.Split(out, "\n") {
+	for _, line := range strings.Split(table, "\n") {
 		if m := quotedValue.FindStringSubmatch(line); m != nil {
 			values = append(values, m[1])
 		}
@@ -157,7 +166,7 @@ func (r *haRun) memberValues(pod, query string) ([]string, error) {
 func (r *haRun) memberRows(pod string) ([]workload.Row, error) {
 	values, err := r.memberValues(pod, `SELECT '{"opId":"' || op_id || '","client":"' || client_id ||`+
 		` '","seq":' || CAST(seq AS VARCHAR) || ',"amount":' || CAST(amount AS VARCHAR) ||`+
-		` ',"note":"' || note || '"}' FROM ledger ORDER BY client_id, seq;`)
+		` ',"note":"' || note || '"}' AS v FROM ledger ORDER BY client_id, seq;`)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +175,7 @@ func (r *haRun) memberRows(pod string) ([]workload.Row, error) {
 
 // catalog lists the columns of the workload's tables on a member.
 func (r *haRun) catalog(pod string) (string, error) {
-	values, err := r.memberValues(pod, `SELECT class_name || '.' || attr_name || ':' || data_type`+
+	values, err := r.memberValues(pod, `SELECT class_name || '.' || attr_name || ':' || data_type AS v`+
 		` FROM db_attribute WHERE class_name IN ('ledger', 'marker', 's02_added') ORDER BY 1;`)
 	return strings.Join(values, "\n"), err
 }
