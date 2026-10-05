@@ -45,10 +45,12 @@ const (
 
 var s05Variants = []string{s05BrokerProcess, s05OneBrokerPod, s05AllRWBrokers}
 
-// brokerRecoveryLimit is the limit of S05 for Kind on a GitHub-hosted runner,
-// recorded in docs/testing/scenario-contract.md, section "Time limits". Zero
-// is "not set": S05 is then reported as blocked with reason time_limit_unset.
-const brokerRecoveryLimit time.Duration = 0
+// brokerRecoveryLimit is the limit of S05 for Kind on a GitHub-hosted runner.
+// The value and the baseline it comes from are recorded in
+// docs/testing/scenario-contract.md, section "Time limits"; change it there
+// and here together. Zero is "not set": S05 is then reported as blocked with
+// reason time_limit_unset.
+const brokerRecoveryLimit = time.Minute
 
 // s05Clients is how many clients write during the fault, so that sessions
 // are open on more than one Broker Pod.
