@@ -321,14 +321,27 @@ var podDeletionLimits = faults.Limits{
 // podDeletion is the fault "a Pod is deleted". It is confirmed when a Pod of
 // the same name exists with another UID: the exit code of the delete command
 // is not relied on. There is nothing to remove afterwards.
+//
+// With force the Pod gets no termination grace period: its containers are
+// killed without the preStop hook and without SIGTERM.
 type podDeletion struct {
 	namespace, pod, uid string
+	force               bool
 }
 
-func (f podDeletion) Name() string { return "delete Pod " + f.namespace + "/" + f.pod }
+func (f podDeletion) Name() string {
+	if f.force {
+		return "delete Pod " + f.namespace + "/" + f.pod + " without a grace period"
+	}
+	return "delete Pod " + f.namespace + "/" + f.pod
+}
 
 func (f podDeletion) Inject(ctx context.Context) error {
-	_, err := utils.Run(exec.CommandContext(ctx, "kubectl", "-n", f.namespace, "delete", "pod", f.pod, "--wait=false"))
+	args := []string{"-n", f.namespace, "delete", "pod", f.pod, "--wait=false"}
+	if f.force {
+		args = append(args, "--grace-period=0", "--force")
+	}
+	_, err := utils.Run(exec.CommandContext(ctx, "kubectl", args...))
 	return err
 }
 
