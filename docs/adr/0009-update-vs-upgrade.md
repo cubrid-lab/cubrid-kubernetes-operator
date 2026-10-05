@@ -72,6 +72,19 @@ cluster that has no baseline yet (`UpdateBlockedEngineVersionNotObserved`).
 Another patch of the baseline's series is not a mix: it is what a compatible
 update in progress looks like.
 
+Image changes on an existing cluster need acceptance (#197, decided by the
+maintainers on 2026-10-05). The operator cannot know which engine a new image
+carries without running it, and a Pod template that already names the new
+image is used by any Pod that is recreated. So the template keeps the image
+it has when the image the spec asks for, or the operator's default, changes;
+the `Updating` condition says `ImageChangeNotAccepted` with both images. The
+user accepts a new image by naming exactly that image in the annotation
+`database.cubrid.io/accept-image` on the `CubridCluster`; then the template
+takes it over. Other template changes are applied meanwhile, and the Brokers
+stay on the image the database members run. A new cluster starts with the
+image its spec names. Starting the new image to read its engine version, and
+forbidding the change, were considered and not chosen.
+
 Automatic replacement is switched off (#196). The operator still plans a
 rolling update (slaves first, one at a time, never the master) and reports
 the member it would replace in the `Updating` condition with the reason

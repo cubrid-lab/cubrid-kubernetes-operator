@@ -262,7 +262,7 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 		sts.Spec.PersistentVolumeClaimRetentionPolicy = pvcRetentionPolicy(cluster)
 		sts.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec:       r.podSpec(cluster),
+			Spec:       r.podSpec(cluster, r.imageToRun(cluster, sts)),
 		}
 		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
 	})
@@ -315,8 +315,32 @@ func (r *CubridClusterReconciler) instanceImage(cluster *databasev1alpha1.Cubrid
 	return image
 }
 
-func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluster) corev1.PodSpec {
-	image := r.instanceImage(cluster)
+// runningImage is the image in the StatefulSet's Pod template, "" before the
+// StatefulSet exists.
+func runningImage(sts *appsv1.StatefulSet) string {
+	if sts == nil || sts.CreationTimestamp.IsZero() || len(sts.Spec.Template.Spec.Containers) == 0 {
+		return ""
+	}
+	return sts.Spec.Template.Spec.Containers[0].Image
+}
+
+// imageToRun decides which image the Pod template carries. A new cluster gets
+// the image its spec, or the operator's default, names. On an existing
+// cluster a different image is taken over only when the user accepted exactly
+// that image with the accept-image annotation; until then the template keeps
+// the image it has, so a Pod that is recreated does not start one nobody
+// accepted (ADR-0009). The operator cannot tell which engine a new image
+// carries without running it, so the decision is the user's.
+func (r *CubridClusterReconciler) imageToRun(cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) string {
+	desired := r.instanceImage(cluster)
+	running := runningImage(sts)
+	if running == "" || running == desired || cluster.Annotations[acceptImageAnnotation] == desired {
+		return desired
+	}
+	return running
+}
+
+func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluster, image string) corev1.PodSpec {
 	runAsNonRoot := true
 	noPrivEscalation := false
 	gracePeriod := int64(120)
@@ -567,7 +591,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		res := r.reconcileHAStatus(ctx, cluster, desired)
 		// Reconcile the broker tier and set routing conditions from the same
 		// safety-first primary resolution (ADR-0002/0005).
-		if err := r.reconcileBrokerTier(ctx, cluster, res); err != nil {
+		if err := r.reconcileBrokerTier(ctx, cluster, res, r.imageToRun(cluster, sts)); err != nil {
 			logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
 			setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, "BrokerReconcileFailed", err.Error())
 		}
@@ -577,6 +601,14 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		if r.reconcileUpdateGuard(cluster) && !recoveryActive(cluster) {
 			r.reconcileRollingUpdate(ctx, cluster, sts, res)
 		}
+	}
+
+	// An image the spec asks for but nobody accepted is reported last, so that
+	// it is what the Updating condition says.
+	if running, desired := runningImage(sts), r.instanceImage(cluster); running != "" && running != desired {
+		setCondition(cluster, conditionUpdating, metav1.ConditionFalse, "ImageChangeNotAccepted",
+			"the spec asks for image "+desired+"; the Pods keep "+running+" until the new image is accepted with the annotation "+
+				acceptImageAnnotation+": "+desired)
 	}
 
 	if err := r.Status().Update(ctx, cluster); err != nil {

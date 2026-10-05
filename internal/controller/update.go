@@ -258,6 +258,11 @@ func (r *CubridClusterReconciler) buildUpdateMembers(ctx context.Context, cluste
 	return out, nil
 }
 
+// acceptImageAnnotation names, on a CubridCluster, the image its user accepts
+// for the cluster's Pods. An image change on an existing cluster takes effect
+// only when this annotation names exactly the new image (ADR-0009).
+const acceptImageAnnotation = "database.cubrid.io/accept-image"
+
 // agreedEngineVersion returns the engine version when all of the expected
 // members report one and it is the same; otherwise ok is false. A member that
 // reports nothing, or is missing, may run something else, so a subset is not
