@@ -335,7 +335,10 @@ These are findings for the maintainers. This catalog changes no decision.
   *new* group. The record's rule is still the documented way to add a node to
   a group that holds data. Whether a new, empty cluster may use the simpler
   path, which would remove the need for object storage during the bootstrap,
-  is a decision to revisit (issue #218).
+  is a decision to revisit (issue #218). The experiment POC-15 in
+  `docs/poc/RESULTS.md` ran both cases on a real engine: the simpler path
+  forms a working group when it is new and empty, and leaves a member without
+  the earlier data when the group already holds rows.
 - **The command used for seeding.** The operator seeds a member with
   `cubrid restoredb -u`. Fact 5 says the documented command for building a
   slave from a backup is `cubrid restoreslave`, which also sets the
