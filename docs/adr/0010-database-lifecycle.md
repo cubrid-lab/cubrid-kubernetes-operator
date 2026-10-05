@@ -92,7 +92,20 @@ is never removed automatically. `status.databases[]` records `Creating`,
 `Created` with `primaryCreated`, or `Failed`. The first member
 is master but accepts no write until a peer has joined (POC-13), so
 `primaryCreated` says that the database exists, not that it is writable.
-Seeding the other members is the next step and is not implemented yet.
+
+Seeding as implemented (#106): once the database exists, the operator has the
+member that holds it back it up to the cluster's object storage
+(`spec.objectStorage`, with `bucket`; key prefix
+`<prefix>/<cluster UID>/seed/<db>`), then restores that backup on each other
+member, one at a time. A seeded member's Instance Manager registers the
+database under the member list and issues `cubrid heartbeat start` once, so
+the member joins as a slave. Each step is an idempotent operation with a
+fixed key; `status.databases[].haConfigured` and `BootstrapReady=True`
+(`PeersSeeded`) are set when every member is seeded. Without object storage
+and a bucket the bootstrap stops after the first database with
+`SeedStorageNotConfigured`. The source is the member the database was created
+on, not a resolved master, because no primary resolves before a peer has
+joined. A failed step leaves the database `Failed`; retrying is #107.
 
 **`ha_db_list` generation.** Join `spec.databases[*].name` in spec order
 with commas; write identically to every node's `cubrid_ha.conf`. Names

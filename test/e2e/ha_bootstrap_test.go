@@ -32,18 +32,66 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 )
 
-// haFirstDatabaseScenario registers the first step of the HA bootstrap on a
-// real engine: of three members, exactly one creates the database and becomes
-// master; the other two create nothing and wait to be seeded (ADR-0010).
+// objectStoreManifest is a throwaway S3-compatible store for the scenario: a
+// mock with one bucket, in its own namespace. It keeps nothing and checks no
+// credentials, so it shows that the transfer works, not that a real object
+// store does. The version matters: the manager's client cannot store an
+// object in s3mock 4.7.0 ("The specified key does not exist"), while 5.2.3
+// accepts the same calls.
+const objectStoreManifest = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3mock
+  namespace: %[1]s
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: s3mock}
+  template:
+    metadata:
+      labels: {app: s3mock}
+    spec:
+      containers:
+        - name: s3mock
+          image: docker.io/adobe/s3mock:5.2.3
+          env:
+            - name: COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS
+              value: %[2]s
+          ports:
+            - containerPort: 9090
+          readinessProbe:
+            tcpSocket: {port: 9090}
+            periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3mock
+  namespace: %[1]s
+spec:
+  selector: {app: s3mock}
+  ports:
+    - port: 9090
+      targetPort: 9090
+`
+
+// haBootstrapScenario registers the HA bootstrap on a real engine: of three
+// members exactly one creates the database; the other two are seeded from it
+// through object storage and join as slaves; a row written on the master is
+// read on both slaves (ADR-0006, ADR-0010).
 //
-// It is not S01: the peers are not seeded, so there is no replication, the
-// master accepts no write yet, and the cluster is not Ready. Skipped, which is "not run", on anything but amd64.
-func haFirstDatabaseScenario() {
-	Context("HA bootstrap: the first database, with the real CUBRID image", Label("db", "ha-bootstrap"), Ordered, func() {
+// It covers formation and one replicated row. It is not the S01/S02
+// validation: no broker endpoint, no workload history, no failure, one run.
+// Skipped, which is "not run", on anything but amd64.
+func haBootstrapScenario() {
+	Context("HA bootstrap with the real CUBRID image", Label("db", "ha-bootstrap"), Ordered, func() {
 		const (
-			haNamespace = "cubrid-ha-bootstrap"
-			clusterName = "hab"
-			database    = "appdb"
+			haNamespace    = "cubrid-ha-bootstrap"
+			storeNamespace = "cubrid-ha-bootstrap-store"
+			seedBucket     = "seed"
+			clusterName    = "hab"
+			database       = "appdb"
+			marker         = "written-on-the-master"
 		)
 		first := clusterName + "-0"
 		peers := []string{clusterName + "-1", clusterName + "-2"}
@@ -55,6 +103,15 @@ func haFirstDatabaseScenario() {
 		clusterField := func(jsonPath string) (string, error) {
 			return kubectl("get", "cubridcluster", clusterName, "-o", "jsonpath="+jsonPath)
 		}
+		heartbeatStatus := func(pod string) (string, error) {
+			return kubectl("exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
+		}
+		apply := func(manifest string) {
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(manifest)
+			_, err := utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		}
 
 		BeforeAll(func() {
 			if runtime.GOARCH != "amd64" {
@@ -63,17 +120,28 @@ func haFirstDatabaseScenario() {
 			ran = true
 			ensureInstanceManagerImage()
 
+			By("starting a mock object store with the seed bucket")
+			_, err := utils.Run(exec.Command("kubectl", "create", "ns", storeNamespace))
+			Expect(err).NotTo(HaveOccurred())
+			apply(fmt.Sprintf(objectStoreManifest, storeNamespace, seedBucket))
+			_, err = utils.Run(exec.Command("kubectl", "-n", storeNamespace, "rollout", "status",
+				"deployment/s3mock", "--timeout=5m"))
+			Expect(err).NotTo(HaveOccurred(), "the mock object store did not start")
+
 			By("creating a namespace that enforces the restricted security policy")
-			_, err := utils.Run(exec.Command("kubectl", "create", "ns", haNamespace))
+			_, err = utils.Run(exec.Command("kubectl", "create", "ns", haNamespace))
 			Expect(err).NotTo(HaveOccurred())
 			_, err = utils.Run(exec.Command("kubectl", "label", "--overwrite", "ns", haNamespace,
 				"pod-security.kubernetes.io/enforce=restricted"))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = kubectl("create", "secret", "generic", "object-storage",
+				"--from-literal=accessKey=e2e", "--from-literal=secretKey=e2e-secret")
 			Expect(err).NotTo(HaveOccurred())
 
 			By("creating a three-member HA CubridCluster")
 			repository, tag, found := strings.Cut(instanceManagerImage, ":")
 			Expect(found).To(BeTrue(), "instanceManagerImage needs a tag")
-			manifest := fmt.Sprintf(`apiVersion: database.cubrid.io/v1alpha1
+			apply(fmt.Sprintf(`apiVersion: database.cubrid.io/v1alpha1
 kind: CubridCluster
 metadata:
   name: %s
@@ -90,14 +158,16 @@ spec:
     readReplicas: 0
   highAvailability:
     enabled: true
+  objectStorage:
+    endpoint: s3mock.%s.svc:9090
+    insecure: true
+    bucket: %s
+    credentialsSecretRef:
+      name: object-storage
   storage:
     data:
       size: 2Gi
-`, clusterName, haNamespace, repository, tag, database)
-			cmd := exec.Command("kubectl", "apply", "-f", "-")
-			cmd.Stdin = strings.NewReader(manifest)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create the CubridCluster")
+`, clusterName, haNamespace, repository, tag, database, storeNamespace, seedBucket))
 		})
 
 		AfterAll(func() {
@@ -108,17 +178,22 @@ spec:
 				{"get", "cubridcluster", clusterName, "-o", "yaml"},
 				{"get", "pods", "-o", "wide"},
 				{"logs", first, "--tail=100"},
-				{"logs", peers[0], "--tail=50"},
+				{"logs", peers[0], "--tail=100"},
 				{"get", "events", "--sort-by=.lastTimestamp"},
 			} {
 				out, _ := kubectl(args...)
 				_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
 			}
+			for _, pod := range append([]string{first}, peers...) {
+				out, _ := heartbeatStatus(pod)
+				_, _ = fmt.Fprintf(GinkgoWriter, "heartbeat status on %s:\n%s\n", pod, out)
+			}
 			_, _ = kubectl("delete", "cubridcluster", clusterName, "--ignore-not-found", "--timeout=5m")
-			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", haNamespace, "--ignore-not-found", "--timeout=5m"))
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", haNamespace, storeNamespace,
+				"--ignore-not-found", "--timeout=5m"))
 		})
 
-		It("creates the database on one member, which becomes master", func() {
+		It("creates the database on one member only", func() {
 			By("waiting for the operator to record the database")
 			Eventually(func(g Gomega) {
 				created, err := clusterField("{.status.databases[0].primaryCreated}")
@@ -126,53 +201,81 @@ spec:
 				g.Expect(created).To(Equal("true"))
 			}, 15*time.Minute, 3*time.Second).Should(Succeed())
 
-			By("asking CUBRID on the first member for its role")
-			Eventually(func(g Gomega) {
-				out, err := kubectl("exec", first, "--", "bash", "-c",
-					`PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(out).To(ContainSubstring("current " + first + ", state master"))
-				g.Expect(out).To(ContainSubstring("Server " + database))
-			}, 5*time.Minute, 3*time.Second).Should(Succeed())
-
-			// The server of a first member whose peers were never seeded stays
-			// "to-be-active" and accepts no write until a peer joins
-			// (docs/poc/RESULTS.md, POC-13), so only a read is checked here.
-			By("reading from the database on the master")
-			Eventually(func(g Gomega) {
-				out, err := runSQL(csqlInPod(haNamespace, first, database), "SELECT 1 FROM db_root;")
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(out).To(ContainSubstring("1 row selected"))
-			}, 2*time.Minute, 3*time.Second).Should(Succeed())
-
 			By("checking that the host of the database is the member list")
 			out, err := kubectl("exec", first, "--", "cat", "/var/lib/cubrid/databases/databases.txt")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(out).To(ContainSubstring(strings.Join(append([]string{first}, peers...), ":")))
+			members := strings.Join(append([]string{first}, peers...), ":")
+			Expect(out).To(ContainSubstring(members))
 		})
 
-		It("creates no database on the other members and keeps them running", func() {
+		It("seeds the other members, which join as slaves", func() {
+			By("waiting for the operator to record the seeding")
+			Eventually(func(g Gomega) {
+				phase, err := clusterField("{.status.databases[0].phase}")
+				g.Expect(err).NotTo(HaveOccurred())
+				if phase == "Failed" {
+					reason, _ := clusterField(`{.status.conditions[?(@.type=="BootstrapReady")].message}`)
+					StopTrying("the bootstrap failed: " + reason).Now()
+				}
+				configured, err := clusterField("{.status.databases[0].haConfigured}")
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(configured).To(Equal("true"))
+			}, 15*time.Minute, 3*time.Second).Should(Succeed())
+
+			By("asking CUBRID on every member for the roles")
+			Eventually(func(g Gomega) {
+				out, err := heartbeatStatus(first)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(ContainSubstring("current " + first + ", state master"))
+				g.Expect(out).To(ContainSubstring("registered_and_active"))
+				for _, peer := range peers {
+					g.Expect(out).To(ContainSubstring("Node " + peer + " (priority"))
+					g.Expect(out).NotTo(ContainSubstring("Node " + peer + " (priority 2, state unknown)"))
+					g.Expect(out).NotTo(ContainSubstring("Node " + peer + " (priority 3, state unknown)"))
+					status, err := heartbeatStatus(peer)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(status).To(ContainSubstring("current " + peer + ", state slave"))
+					g.Expect(status).To(ContainSubstring("registered_and_standby"))
+				}
+			}, 10*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("replicates a row written on the master to both slaves", func() {
+			By("writing on the master")
+			Eventually(func() error {
+				return writeS00Row(csqlInPod(haNamespace, first, database), marker)
+			}, 3*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("reading on each slave")
 			for _, peer := range peers {
-				phase, err := kubectl("get", "pod", peer, "-o", "jsonpath={.status.phase}")
-				Expect(err).NotTo(HaveOccurred())
-				Expect(phase).To(Equal("Running"), peer)
-				restarts, err := kubectl("get", "pod", peer, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
-				Expect(err).NotTo(HaveOccurred())
-				Expect(restarts).To(Equal("0"), "%s must wait, not crash-loop", peer)
-				_, err = kubectl("exec", peer, "--", "test", "!", "-e", "/var/lib/cubrid/databases/"+database)
-				Expect(err).NotTo(HaveOccurred(), "%s has a database directory", peer)
-				_, err = kubectl("exec", peer, "--", "test", "!", "-e", "/var/lib/cubrid/databases/databases.txt")
-				Expect(err).NotTo(HaveOccurred(), "%s registered a database", peer)
+				Eventually(func() error {
+					return readS00Row(csqlInPod(haNamespace, peer, database), marker)
+				}, 3*time.Minute, 3*time.Second).Should(Succeed(), peer)
 			}
+
+			By("checking that a slave refuses a write")
+			_, err := runSQL(csqlInPod(haNamespace, peers[0], database),
+				"INSERT INTO "+s00Table+" VALUES (99, 'on-a-slave');")
+			Expect(err).To(HaveOccurred())
 		})
 
-		It("does not report the cluster Ready while the peers are not seeded", func() {
-			ready, err := clusterField(`{.status.conditions[?(@.type=="Ready")].status}`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ready).To(Equal("False"))
-			reason, err := clusterField(`{.status.conditions[?(@.type=="BootstrapReady")].reason}`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(reason).To(Equal("PeersNotSeeded"))
+		It("reports the cluster Ready with the master as primary", func() {
+			Eventually(func(g Gomega) {
+				ready, err := clusterField(`{.status.conditions[?(@.type=="Ready")].status}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(ready).To(Equal("True"))
+				primary, err := clusterField("{.status.currentPrimary}")
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(primary).To(Equal(first))
+				boot, err := clusterField(`{.status.conditions[?(@.type=="BootstrapReady")].reason}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(boot).To(Equal("PeersSeeded"))
+			}, 5*time.Minute, 3*time.Second).Should(Succeed())
+			for _, pod := range append([]string{first}, peers...) {
+				restarts, err := kubectl("get", "pod", pod, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(restarts).To(Equal("0"), pod)
+			}
 		})
 	})
 }

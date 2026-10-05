@@ -55,6 +55,10 @@ type RestoreRoots struct {
 	Target string
 	// Staging is the parent of per-restore staging directories.
 	Staging string
+	// Host is the host column of the databases.txt entry a restore writes:
+	// the HA member list for an HA member (docs/poc/RESULTS.md, POC-13).
+	// Empty means this member's own host name.
+	Host string
 }
 
 // RestoreResult reports a completed restore (ADR-0008).
@@ -122,7 +126,7 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	// the volumes there instead of at the paths recorded in the backup
 	// (docs/poc/RESULTS.md, POC-11). A failed restore takes the registration
 	// and the directory back, so a retry finds an empty target again.
-	unregister, err := registerRestoreTarget(targetDir, req.Database)
+	unregister, err := registerRestoreTarget(targetDir, req.Database, roots.Host)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -234,13 +238,15 @@ func registeredInDatabasesTxt(targetDir, database string) (bool, error) {
 // Every file operation goes through an os.Root opened on targetDir, so
 // nothing here can reach outside the manager's database root whatever the
 // database name is.
-func registerRestoreTarget(targetDir, database string) (undo func(), err error) {
+func registerRestoreTarget(targetDir, database, host string) (undo func(), err error) {
 	if !databaseNamePattern.MatchString(database) {
 		return nil, fmt.Errorf("database name %q is not a plain identifier", database)
 	}
-	host, err := os.Hostname()
-	if err != nil {
-		return nil, fmt.Errorf("host name for %s: %w", databasesTxt, err)
+	if host == "" {
+		host, err = os.Hostname()
+		if err != nil {
+			return nil, fmt.Errorf("host name for %s: %w", databasesTxt, err)
+		}
 	}
 	root, err := os.OpenRoot(targetDir)
 	if err != nil {

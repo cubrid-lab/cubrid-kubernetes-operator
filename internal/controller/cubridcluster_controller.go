@@ -84,6 +84,9 @@ type CubridClusterReconciler struct {
 	// HABootstrap is nil-safe: nil leaves the first database of an HA cluster
 	// uncreated.
 	HABootstrap HABootstrapClient
+	// Backup is nil-safe: with Restore it seeds the other members of an HA
+	// cluster from the first one; nil leaves them unseeded.
+	Backup BackupClient
 	// IMToken is the Instance Manager bearer token the operator itself uses. It
 	// is copied into each cluster's <cluster>-im-token Secret for the DB Pods.
 	// Empty means the operator is not configured: no DB Pods are created,
