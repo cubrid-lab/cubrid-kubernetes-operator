@@ -454,6 +454,42 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(k8sClient.Create(ctx, c)).NotTo(Succeed())
 		})
 
+		// With these two rules alone an existing cluster could be switched
+		// between the two valid topologies, which removes or adds members
+		// without any procedure for it (#204).
+		It("rejects a change of the topology of an existing cluster", func() {
+			ha := haCluster("topology-ha")
+			Expect(k8sClient.Create(ctx, ha)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, ha) })
+			single := haCluster("topology-single")
+			single.Spec.HighAvailability.Enabled = false
+			single.Spec.Topology.PromotableMembers = 1
+			Expect(k8sClient.Create(ctx, single)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, single) })
+
+			By("three members with HA to one standalone member")
+			got := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "topology-ha", Namespace: ns}, got)).To(Succeed())
+			got.Spec.HighAvailability.Enabled = false
+			got.Spec.Topology.PromotableMembers = 1
+			err := k8sClient.Update(ctx, got)
+			Expect(err).To(HaveOccurred(), "a formed cluster was reduced to one member")
+			Expect(err.Error()).To(ContainSubstring("cannot be changed"))
+
+			By("one standalone member to three members with HA")
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "topology-single", Namespace: ns}, got)).To(Succeed())
+			got.Spec.HighAvailability.Enabled = true
+			got.Spec.Topology.PromotableMembers = 3
+			err = k8sClient.Update(ctx, got)
+			Expect(err).To(HaveOccurred(), "a standalone cluster was turned into an HA cluster")
+			Expect(err.Error()).To(ContainSubstring("cannot be changed"))
+
+			By("another change to the same cluster is still accepted")
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "topology-ha", Namespace: ns}, got)).To(Succeed())
+			got.Spec.ObjectStorage = testObjectStorage()
+			Expect(k8sClient.Update(ctx, got)).To(Succeed())
+		})
+
 		It("rejects a database name rename (immutability)", func() {
 			c := haCluster("immutable-db")
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())
