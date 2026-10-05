@@ -216,6 +216,9 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 				ExpectedCubridVersion: cluster.Spec.Version,
 				StagingDir:            path.Join(restoreStagingRoot, "seed-"+uid),
 				TargetDir:             restoreTargetRoot,
+				// The member becomes a slave of the member the backup was taken
+				// on, and has to pick up what that member committed since.
+				SeedFromMaster: source,
 			})
 		if err != nil {
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
