@@ -179,6 +179,17 @@ Unresolved: `currentPrimary` unset, roles `unknown`,
 must never report two `master` roles as a healthy steady state (see
 ADR-0005).
 
+### The topology is fixed after creation
+
+The two valid topologies, one standalone member and three members with high
+availability, cannot be exchanged on an existing cluster (#204). The API
+rejects a change of `topology.promotableMembers` and of
+`highAvailability.enabled`. Going from three members to one would delete
+members, possibly the current primary and, with the `Parallel` Pod management
+policy, several at once, and nothing would take the HA configuration back;
+going from one to three has no seeding procedure for a database that already
+holds data. A different topology means a new cluster.
+
 ### Pod management policy
 
 Decided by the maintainers on 2026-10-05 (#156): the StatefulSet is created

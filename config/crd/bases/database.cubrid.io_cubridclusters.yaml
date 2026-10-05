@@ -356,6 +356,13 @@ spec:
             - message: 'bootstrap.recovery requires objectStorage: the DB Pods read
                 the backup from it'
               rule: '!has(self.bootstrap) || !has(self.bootstrap.recovery) || has(self.objectStorage)'
+            - message: 'topology.promotableMembers cannot be changed after the cluster
+                is created: v1alpha1 has no procedure to add or remove members'
+              rule: self.topology.promotableMembers == oldSelf.topology.promotableMembers
+            - message: 'highAvailability.enabled cannot be changed after the cluster
+                is created: v1alpha1 has no procedure to switch between a standalone
+                and an HA cluster'
+              rule: self.highAvailability.enabled == oldSelf.highAvailability.enabled
             - message: database names are immutable; existing names must be preserved
               rule: oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))
           status:
