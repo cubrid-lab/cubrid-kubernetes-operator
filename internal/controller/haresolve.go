@@ -74,9 +74,11 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	now := r.now()
 	res := resolvePrimary(members, obs, now)
 	cluster.Status.CurrentPrimary = res.CurrentPrimary
-	cluster.Status.Instances = instanceStatuses(members, obs, now)
+	cluster.Status.Instances = instanceStatuses(members, obs, now, cluster.Status.Instances)
 
 	setCondition(cluster, conditionPrimaryResolved, res.Status, res.Reason, primaryResolvedMessage(res))
+	replStatus, replReason, replMessage := replicationCondition(cluster.Status.Instances, now)
+	setCondition(cluster, conditionReplicationHealthy, replStatus, replReason, replMessage)
 	if res.Status == metav1.ConditionTrue {
 		setCondition(cluster, conditionHAReady, metav1.ConditionTrue, "HealthyReplication",
 			"single primary resolved: "+res.CurrentPrimary)
@@ -166,8 +168,15 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 }
 
 // instanceStatuses builds the per-instance status list from observations,
-// preserving the ordinal ordering of members.
-func instanceStatuses(members []string, obs map[string]RoleObservation, now time.Time) []databasev1alpha1.InstanceStatus {
+// preserving the ordinal ordering of members. previous is the list of the
+// reconcile before: a slave's replication is judged against what it reported
+// then.
+func instanceStatuses(members []string, obs map[string]RoleObservation, now time.Time,
+	previous []databasev1alpha1.InstanceStatus) []databasev1alpha1.InstanceStatus {
+	before := make(map[string]*databasev1alpha1.InstanceReplication, len(previous))
+	for _, in := range previous {
+		before[in.Name] = in.Replication
+	}
 	out := make([]databasev1alpha1.InstanceStatus, 0, len(members))
 	for i, m := range members {
 		role := databasev1alpha1.RoleUnknown
@@ -182,12 +191,18 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 		if o, ok := obs[m]; ok && fresh(o, now) {
 			version = o.EngineVersion
 		}
+		// Only an authoritative slave's applier is taken into account.
+		var replication *databasev1alpha1.InstanceReplication
+		if role == databasev1alpha1.RoleSlave {
+			replication = nextReplication(before[m], obs[m].Replication, now)
+		}
 		out = append(out, databasev1alpha1.InstanceStatus{
 			Name:                  m,
 			Ordinal:               int32(i), //nolint:gosec // member index is a small StatefulSet ordinal
 			Role:                  role,
 			Ready:                 ready,
 			ObservedEngineVersion: version,
+			Replication:           replication,
 		})
 	}
 	return out

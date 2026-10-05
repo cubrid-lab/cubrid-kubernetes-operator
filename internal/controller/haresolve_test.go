@@ -128,7 +128,7 @@ func TestResolvePrimary(t *testing.T) {
 func TestInstanceStatuses(t *testing.T) {
 	members := []string{c0, c1, c2}
 	obs := map[string]RoleObservation{c0: master(), c1: slave(), c2: unreach()}
-	got := instanceStatuses(members, obs, testNow)
+	got := instanceStatuses(members, obs, testNow, nil)
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3", len(got))
 	}
@@ -149,7 +149,7 @@ func TestInstanceStatuses(t *testing.T) {
 func TestInstanceStatusesTreatStaleAndConflictingAsUnknown(t *testing.T) {
 	members := []string{c0, c1}
 	obs := map[string]RoleObservation{c0: aged(master(), time.Hour), c1: conflicting(slave())}
-	for _, got := range instanceStatuses(members, obs, testNow) {
+	for _, got := range instanceStatuses(members, obs, testNow, nil) {
 		if got.Role != databasev1alpha1.RoleUnknown || got.Ready {
 			t.Errorf("%s = %+v, want unknown and not ready", got.Name, got)
 		}

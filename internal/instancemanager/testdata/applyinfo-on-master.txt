@@ -1,0 +1,38 @@
+
+ *** Applied Info. *** 
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 30
+Fail count                     : 0
+
+ *** Copied Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:46:33.000 PM 10/05/2026 (1791233193)
+Vol creation time              : 08:46:33.000 PM 10/05/2026 (1791233193)
+EOF LSA                        : 148 | 3376
+Append LSA                     : 148 | 3376
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 08:46:33.000 PM 10/05/2026 (1791233193)
+Vol creation time              : 08:46:33.000 PM 10/05/2026 (1791233193)
+EOF LSA                        : 148 | 3376
+Append LSA                     : 148 | 3376
+HA server state                : standby
+HA promotion time              : 12:00:00.000 AM 01/01/1970 (0)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ *** Delay in Copying Active Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)

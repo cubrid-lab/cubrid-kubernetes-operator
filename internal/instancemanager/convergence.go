@@ -18,8 +18,10 @@ package instancemanager
 
 import (
 	"context"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // ApplyConvergence reports the local replication apply-pipeline facts parsed
@@ -34,8 +36,14 @@ type ApplyConvergence struct {
 	InsertCount int `json:"insertCount"`
 	CommitCount int `json:"commitCount"`
 	FailCount   int `json:"failCount"`
+	// AppliedChanges is the sum of the insert, update, delete and schema
+	// counters: it rises whenever the applier applies anything.
+	AppliedChanges int `json:"appliedChanges"`
 	// DelayedPageCount is the copied-log pages not yet applied (0 = caught up).
 	DelayedPageCount int `json:"delayedPageCount"`
+	// Source is the member whose log these facts are about; set by the
+	// caller that chose the log.
+	Source string `json:"source,omitempty"`
 	// Reason explains Available=false or a non-converged verdict.
 	Reason string `json:"reason,omitempty"`
 }
@@ -48,10 +56,18 @@ func (c ApplyConvergence) Converged() bool {
 
 var (
 	reInsertCount  = regexp.MustCompile(`Insert count\s*:\s*(\d+)`)
+	reUpdateCount  = regexp.MustCompile(`Update count\s*:\s*(\d+)`)
+	reDeleteCount  = regexp.MustCompile(`Delete count\s*:\s*(\d+)`)
+	reSchemaCount  = regexp.MustCompile(`Schema count\s*:\s*(\d+)`)
 	reCommitCount  = regexp.MustCompile(`Commit count\s*:\s*(\d+)`)
 	reFailCount    = regexp.MustCompile(`Fail count\s*:\s*(\d+)`)
 	reDelayedPages = regexp.MustCompile(`Delayed log page count\s*:\s*(\d+)`)
 )
+
+// applyDelayHeading starts the part of the output about pages that were
+// copied and are not applied yet. With -r the output has a part of the same
+// form before it, about pages that are not copied yet (POC-20).
+const applyDelayHeading = "Delay in Applying Copied Log"
 
 // ApplyConvergenceStatus runs `cubrid applyinfo -L <copied-log-path> -a <db>`
 // against the copied log of the master and parses the apply-pipeline counters.
@@ -68,16 +84,21 @@ func ApplyConvergenceStatus(ctx context.Context, cli CLI, db, copiedLogPath stri
 
 func parseApplyConvergence(out string) ApplyConvergence {
 	fail := reFailCount.FindStringSubmatch(out)
-	delayed := reDelayedPages.FindStringSubmatch(out)
+	var delayed []string
+	if _, applying, found := strings.Cut(out, applyDelayHeading); found {
+		delayed = reDelayedPages.FindStringSubmatch(applying)
+	}
 	// Fail count + Delayed log page count together mark a parsed Applied-Info
 	// block; without them the apply pipeline info is not present.
 	if fail == nil || delayed == nil {
 		return ApplyConvergence{Available: false, Reason: "no Applied Info block in applyinfo output"}
 	}
 	c := ApplyConvergence{
-		Available:        true,
-		InsertCount:      atoiField(reInsertCount, out),
-		CommitCount:      atoiField(reCommitCount, out),
+		Available:   true,
+		InsertCount: atoiField(reInsertCount, out),
+		CommitCount: atoiField(reCommitCount, out),
+		AppliedChanges: atoiField(reInsertCount, out) + atoiField(reUpdateCount, out) +
+			atoiField(reDeleteCount, out) + atoiField(reSchemaCount, out),
 		FailCount:        mustAtoi(fail[1]),
 		DelayedPageCount: mustAtoi(delayed[1]),
 	}
@@ -97,4 +118,32 @@ func atoiField(re *regexp.Regexp, out string) int {
 func mustAtoi(s string) int {
 	n, _ := strconv.Atoi(s)
 	return n
+}
+
+// replicationOf returns what a slave's applier reports for the log of the
+// master its node list names, or nil when st is not a slave's status or the
+// member was not told its database. A node list without exactly one master
+// gives no log to ask about, and says so.
+func replicationOf(ctx context.Context, cli CLI, st HAStatus, database, databasesDir string) *ApplyConvergence {
+	if st.Role != RoleSlave || database == "" || databasesDir == "" {
+		return nil
+	}
+	master := ""
+	masters := 0
+	for _, n := range st.Nodes {
+		if n.State == string(RoleMaster) {
+			masters++
+			master = n.Name
+		}
+	}
+	if masters != 1 {
+		return &ApplyConvergence{Reason: "the node list names " + strconv.Itoa(masters) + " masters, not one"}
+	}
+	// The name becomes part of a path: accept only a host label.
+	if !hostLabelPattern.MatchString(master) {
+		return &ApplyConvergence{Reason: "the master's name in the node list is not a host label"}
+	}
+	c := ApplyConvergenceStatus(ctx, cli, database, filepath.Join(databasesDir, database+"_"+master))
+	c.Source = master
+	return &c
 }

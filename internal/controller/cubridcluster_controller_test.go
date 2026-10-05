@@ -85,6 +85,25 @@ func (p *memberProber) ProbeRole(_ context.Context, podName, _ string) RoleObser
 	return RoleObservation{Reachable: true, Role: role, ObservedAt: time.Now()}
 }
 
+// applierProber reports one master and slaves with the given appliers, at the
+// test's clock.
+type applierProber struct {
+	master   string
+	clock    *time.Time
+	appliers map[string]ReplicationObservation
+}
+
+func (p *applierProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
+	if podName == p.master {
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: *p.clock}
+	}
+	o := RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: *p.clock}
+	if applier, ok := p.appliers[podName]; ok {
+		o.Replication = &applier
+	}
+	return o
+}
+
 // haCluster returns a valid HA CubridCluster (1 master + 2 slaves) per ADR-0001.
 func haCluster(name string) *databasev1alpha1.CubridCluster {
 	return &databasev1alpha1.CubridCluster{
@@ -265,6 +284,68 @@ var _ = Describe("CubridCluster Controller", func() {
 			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("ClusterReady")))
+		})
+	})
+
+	Context("Replication of the slaves (#229)", func() {
+		const (
+			stallMaster = "stall-0"
+			stallSlaveA = "stall-1"
+			stallSlaveB = "stall-2"
+		)
+		ctx := context.Background()
+
+		It("reports a slave that has log pages waiting and applies nothing", func() {
+			key := types.NamespacedName{Name: "stall", Namespace: metav1.NamespaceDefault}
+			Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+			DeferCleanup(func() {
+				c := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+			})
+			clock := time.Now()
+			prober := &applierProber{master: stallMaster, clock: &clock, appliers: map[string]ReplicationObservation{
+				stallSlaveA: {Source: stallMaster, AppliedChanges: 100},
+				stallSlaveB: {Source: stallMaster, AppliedChanges: 100, DelayedPages: 9},
+			}}
+			r := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
+				IMToken: testIMToken, Prober: prober, Clock: func() time.Time { return clock },
+			}
+			condition := func() *metav1.Condition {
+				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+				got := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+				return meta.FindStatusCondition(got.Status.Conditions, conditionReplicationHealthy)
+			}
+
+			By("the first observation: nothing to compare with")
+			Expect(condition().Status).To(Equal(metav1.ConditionTrue))
+
+			By("the same counters ten seconds later: stalled, but not for the window")
+			clock = clock.Add(10 * time.Second)
+			c := condition()
+			Expect(c.Status).To(Equal(metav1.ConditionTrue))
+
+			By("still the same after the window")
+			clock = clock.Add(replicationStallWindow)
+			c = condition()
+			Expect(c.Status).To(Equal(metav1.ConditionFalse))
+			Expect(c.Reason).To(Equal(reasonReplicationStalled))
+			Expect(c.Message).To(ContainSubstring(stallSlaveB))
+			Expect(c.Message).NotTo(ContainSubstring(stallSlaveA))
+
+			By("the primary is still resolved: the condition reports and changes nothing else")
+			got := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+			Expect(got.Status.CurrentPrimary).To(Equal(stallMaster))
+			Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionHAReady)).To(BeTrue())
+
+			By("the applier applies again")
+			prober.appliers[stallSlaveB] = ReplicationObservation{Source: stallMaster, AppliedChanges: 140, DelayedPages: 1}
+			clock = clock.Add(10 * time.Second)
+			Expect(condition().Status).To(Equal(metav1.ConditionTrue))
 		})
 	})
 

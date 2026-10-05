@@ -49,6 +49,10 @@ type HAStatus struct {
 	// EngineVersion is the local engine's full version ("11.4.6.1963"),
 	// independent of the HA role; empty when it could not be read.
 	EngineVersion string `json:"engineVersion,omitempty"`
+	// Replication is what a slave's log applier reports for the master's
+	// log (docs/poc/RESULTS.md, POC-20); absent for any other role and for a
+	// member that was not told its database.
+	Replication *ApplyConvergence `json:"replication,omitempty"`
 }
 
 // NodeState is one node's line in the HA-Node Info block.
