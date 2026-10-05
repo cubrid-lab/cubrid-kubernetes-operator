@@ -36,8 +36,8 @@ import (
 // real engine: of three members, exactly one creates the database and becomes
 // master; the other two create nothing and wait to be seeded (ADR-0010).
 //
-// It is not S01: the peers are not seeded, so there is no replication and the
-// cluster is not Ready. Skipped, which is "not run", on anything but amd64.
+// It is not S01: the peers are not seeded, so there is no replication, the
+// master accepts no write yet, and the cluster is not Ready. Skipped, which is "not run", on anything but amd64.
 func haFirstDatabaseScenario() {
 	Context("HA bootstrap: the first database, with the real CUBRID image", Label("db", "ha-bootstrap"), Ordered, func() {
 		const (
@@ -132,13 +132,18 @@ spec:
 					`PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(ContainSubstring("current " + first + ", state master"))
-				g.Expect(out).To(ContainSubstring("registered_and_active"))
+				g.Expect(out).To(ContainSubstring("Server " + database))
 			}, 5*time.Minute, 3*time.Second).Should(Succeed())
 
-			By("writing and reading a row on the master")
-			sql := csqlInPod(haNamespace, first, database)
-			Expect(writeS00Row(sql, "ha-first-database")).To(Succeed())
-			Expect(readS00Row(sql, "ha-first-database")).To(Succeed())
+			// The server of a first member whose peers were never seeded stays
+			// "to-be-active" and accepts no write until a peer joins
+			// (docs/poc/RESULTS.md, POC-13), so only a read is checked here.
+			By("reading from the database on the master")
+			Eventually(func(g Gomega) {
+				out, err := runSQL(csqlInPod(haNamespace, first, database), "SELECT 1 FROM db_root;")
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(ContainSubstring("1 row selected"))
+			}, 2*time.Minute, 3*time.Second).Should(Succeed())
 
 			By("checking that the host of the database is the member list")
 			out, err := kubectl("exec", first, "--", "cat", "/var/lib/cubrid/databases/databases.txt")

@@ -622,9 +622,24 @@ Also observed:
   restart on the same volume the entrypoint starts heartbeat and the member
   is master again.
 
-**Not tested here:** three members, a member that is seeded while the master
-is being written to, replication lag, and any failure. Those need a real run
-on linux/amd64 (#108).
+- **A first member that is alone accepts no write.** With a three-member
+  `ha_node_list` and no peer ever started, the first member is `master` but
+  its server stays `registered_and_to_be_active`: `cub_master` keeps sending
+  the change to active and the server keeps answering to-be-active, while the
+  member's `applylogdb` for each peer reports `Unable to mount log disk
+  volume/file ".../appdb_<peer>/appdb_lgat"`, the copied log that does not
+  exist until `copylogdb` has reached that peer once. Observed for five
+  minutes here, and for five minutes on linux/amd64 in the first CI run of the
+  #106 scenario (Kind, three Pods, two of them without a database). In the
+  two-node run above the same server became `registered_and_active` after the
+  slave had joined. A read (`SELECT 1 FROM db_root`) and `backupdb` work in
+  that state; a write fails with `Attempted to update the database when
+  updates are disabled`. Whether a longer wait or a setting ends that state
+  was not explored.
+
+**Not tested here:** three members with data, a member that is seeded while
+the master is being written to, replication lag, and any failure. Those need
+a real run on linux/amd64 (#108).
 
 ---
 
