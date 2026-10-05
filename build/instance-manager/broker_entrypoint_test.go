@@ -36,6 +36,23 @@ const (
 	callBrokerOff = "cubrid broker stop"
 )
 
+// brokerStandIn records its calls. With BROKER_SHM set it also behaves like
+// the real command around a Broker's shared memory, which that file stands
+// for (docs/poc/RESULTS.md, POC-18): "broker start" refuses while it exists,
+// and "broker stop" removes it or fails when there is none.
+const brokerStandIn = `#!/bin/bash
+echo "cubrid $*" >> "${CALLS}"
+[ -n "${BROKER_SHM:-}" ] || exit 0
+case "$*" in
+  "broker start")
+    if [ -e "${BROKER_SHM}" ]; then echo "++ cubrid broker is running."; exit 1; fi
+    : > "${BROKER_SHM}" ;;
+  "broker stop")
+    if [ ! -e "${BROKER_SHM}" ]; then echo "++ cubrid broker is not running."; exit 1; fi
+    rm -f "${BROKER_SHM}" ;;
+esac
+`
+
 // brokerFixture runs broker-entrypoint.sh with a stand-in for the cubrid CLI.
 type brokerFixture struct {
 	t     *testing.T
@@ -67,7 +84,7 @@ func newBrokerFixture(t *testing.T) *brokerFixture {
 			t.Fatal(err)
 		}
 	}
-	write(filepath.Join(bin, "cubrid"), "#!/bin/bash\necho \"cubrid $*\" >> \"${CALLS}\"\n", 0o755)
+	write(filepath.Join(bin, "cubrid"), brokerStandIn, 0o755)
 	write(filepath.Join(conf, "cubrid_broker_rw.conf"), brokerConfRW, 0o644)
 	write(filepath.Join(conf, "cubrid_broker_ro.conf"), brokerConfRO, 0o644)
 	write(filepath.Join(conf, "databases.txt"), brokerDBsTxt, 0o644)
@@ -126,8 +143,38 @@ func TestBrokerEntrypoint_InstallsItsModeAndExitsWhenTheBrokerIsGone(t *testing.
 			if got := f.read("databases", "databases.txt"); got != brokerDBsTxt {
 				t.Errorf("installed databases.txt = %q", got)
 			}
-			if calls := f.recorded(); len(calls) != 1 || calls[0] != callBrokerUp {
-				t.Errorf("calls = %q, want one %q", calls, callBrokerUp)
+			if calls := f.recorded(); len(calls) != 2 || calls[0] != callBrokerOff || calls[1] != callBrokerUp {
+				t.Errorf("calls = %q, want %q then %q", calls, callBrokerOff, callBrokerUp)
+			}
+		})
+	}
+}
+
+// A Broker that was killed leaves its shared memory behind, and in a Pod the
+// memory outlives the container. The next container must start the Broker
+// all the same, also when there is nothing to clear.
+func TestBrokerEntrypoint_StartsWhateverAnEarlierBrokerLeft(t *testing.T) {
+	for name, stale := range map[string]bool{"after a killed Broker": true, "on a clean start": false} {
+		t.Run(name, func(t *testing.T) {
+			f := newBrokerFixture(t)
+			shm := filepath.Join(f.root, "broker-shm")
+			f.env["BROKER_SHM"] = shm
+			if stale {
+				if err := os.WriteFile(shm, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, _ := f.command().CombinedOutput()
+			// The stand-in runs no process, so the script ends at its first
+			// check. Before that it must have started the Broker.
+			if !strings.Contains(string(out), "not running any more") {
+				t.Errorf("the script did not get as far as watching the Broker:\n%s", out)
+			}
+			if _, err := os.Stat(shm); err != nil {
+				t.Errorf("the Broker was not started:\n%s", out)
+			}
+			if calls := f.recorded(); index(calls, callBrokerUp) < 0 || calls[len(calls)-1] != callBrokerUp {
+				t.Errorf("calls = %q, want them to end with %q", calls, callBrokerUp)
 			}
 		})
 	}
@@ -203,7 +250,7 @@ func TestBrokerEntrypoint_TerminationStopsTheBroker(t *testing.T) {
 	if err := waitExit(cmd); err != nil {
 		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
 	}
-	if calls := f.recorded(); len(calls) != 2 || calls[1] != callBrokerOff {
-		t.Errorf("calls = %q, want start then stop", calls)
+	if calls := f.recorded(); len(calls) != 3 || calls[1] != callBrokerUp || calls[2] != callBrokerOff {
+		t.Errorf("calls = %q, want the Broker started and then stopped", calls)
 	}
 }

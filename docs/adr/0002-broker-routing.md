@@ -131,7 +131,10 @@ usable backend?" — distinct from "which DB pod is master?" (status) and
   capabilities. The entrypoint copies the mounted `cubrid_broker_<mode>.conf`
   and `databases.txt` into CUBRID's directories, starts the Broker, stays
   PID 1, stops the Broker on `SIGTERM`, and exits when the Broker is gone so
-  that the container restarts.
+  that the container restarts. Before it starts the Broker it runs
+  `cubrid broker stop`, which removes the shared memory a killed Broker of
+  the same Pod left behind; without that the restarted container could not
+  start a Broker (POC-18).
 - A Pod is ready when its Broker port accepts a connection. The operator sets
   `WriteEndpointReady` and `ReadEndpointReady` from the available Pods of each
   Deployment and `BrokerReady` when both have one; none of them is derived

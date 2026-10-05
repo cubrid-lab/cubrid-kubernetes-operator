@@ -970,6 +970,56 @@ minutes; what the CUBRID manual or source says the file is for.
 
 ---
 
+## POC-18 — starting a Broker again after its process was killed (ADR-0002, #236) — **FAIL as found, PASS with one more command**
+
+Found on Kind in CI by scenario S05 of
+[docs/testing/scenario-contract.md](../testing/scenario-contract.md), then
+reproduced by hand.
+
+**On Kind** (GitHub-hosted linux/amd64 runner, CUBRID 11.4.6, two runs of
+pull request #235). The `cub_broker` process of one read-write Broker Pod was
+killed with `kill -9`. The entrypoint saw that the Broker was gone and exited,
+and the container restarted two seconds later, as intended. From then on it
+failed at every start: twelve minutes later the Pod was in `CrashLoopBackOff`
+with six restarts, and the Deployment had one available Pod of two.
+
+**By hand.** `cubrid/cubrid:11.4` in one container whose first process stays
+alive, UID 1000 (linux/amd64 emulated under podman; output only). The
+container's namespaces stand for a Pod's: in a Pod the containers share one
+IPC namespace, so System V shared memory outlives a container.
+
+| Step | Result |
+|---|---|
+| `cubrid broker start` | exit 0. `ipcs -m` lists three segments owned by `cubrid`, with attached processes. |
+| `kill -9` on `cub_broker` and on every `cub_cas`, which is what the end of the container does to them | No CUBRID process is left. `ipcs -m` still lists the three segments, now with no process attached. |
+| `cubrid broker start` | **exit 1**: `++ cubrid broker is running.` No Broker is started. |
+| `cubrid broker stop` on that state | exit 0: `++ cubrid broker stop: success`. `ipcs -m` lists no segment of `cubrid`. |
+| `cubrid broker start` | exit 0: `++ cubrid broker start: success`. Both Brokers of the default configuration are listed by `cubrid broker status`. |
+| In a new container: `cubrid broker stop` with nothing to stop | exit 1: `++ cubrid broker is not running.` A following `cubrid broker start` exits 0. |
+
+Removing the unattached segments with `ipcrm -m` before the start works too.
+
+**Findings.**
+
+- `cubrid broker start` decides that a Broker is running from the shared
+  memory, not from a process. After a kill it is wrong and refuses to start.
+- `cubrid broker stop` removes the leftover memory and reports success, also
+  when no Broker process exists.
+- A Broker that is stopped normally removes the memory itself, and a Pod that
+  is deleted gets a new IPC namespace. Only a restart of the container inside
+  the same Pod meets the leftover memory.
+
+**Consequence for the Broker entrypoint** (fixed in #236). It runs
+`cubrid broker stop` before `cubrid broker start`. At that point the
+container has only just started, so no Broker of it can be running, and the
+command's failure on a clean start is ignored.
+
+**Not tested here:** a Broker that is killed while clients are connected,
+beyond what scenario S05 measures; whether CUBRID's database processes have a
+comparable leftover after a kill inside a running container (issue #180).
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
