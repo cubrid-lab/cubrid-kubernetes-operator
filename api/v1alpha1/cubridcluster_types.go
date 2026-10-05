@@ -405,6 +405,10 @@ type BootstrapStatus struct {
 	// targetMember is the initial master pod being restored into.
 	// +optional
 	TargetMember string `json:"targetMember,omitempty"`
+	// attempts counts the restores that failed and were started again. The
+	// recovery stops as Failed when it reaches the limit.
+	// +optional
+	Attempts int32 `json:"attempts,omitempty"`
 }
 
 // +kubebuilder:object:root=true

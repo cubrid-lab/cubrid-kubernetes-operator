@@ -138,6 +138,17 @@ failed start leaves the restored data in place and the operation `Failed`.
 Deleting the Pod to let the entrypoint start it was rejected: it would make a
 restart the start mechanism. An HA member is started by the HA bootstrap.
 
+Resuming an interrupted restore (#120, with the marker of #107): the restore's
+key carries the attempt number, so the operator finds a running restore again
+after its own restart. A restore that ends `Failed`, which includes one cut
+off by a manager restart, is started again under the next key, three attempts
+in all (`status.bootstrap.attempts`), then the recovery is `Failed`. Before it
+restores again the Instance Manager removes the directory and the
+`databases.txt` line of its own failed restore, which it recognises by the
+operation ID it wrote into `<db>/.im-operation`; a target without that proof
+is never touched and the restore is refused. The cluster is not Ready at any
+point before the restore has completed.
+
 ### Validation gate (before Ready)
 
 The cluster is **not Ready** until ALL hold: manifest trust checks pass;

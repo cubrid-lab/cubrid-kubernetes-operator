@@ -366,6 +366,12 @@ spec:
                   bootstrap reports recovery-bootstrap progress (ADR-0008). Set only while a
                   cluster is being restored from a backup manifest.
                 properties:
+                  attempts:
+                    description: |-
+                      attempts counts the restores that failed and were started again. The
+                      recovery stops as Failed when it reaches the limit.
+                    format: int32
+                    type: integer
                   manifestUri:
                     description: manifestUri is the artifact being restored (provenance).
                     type: string
