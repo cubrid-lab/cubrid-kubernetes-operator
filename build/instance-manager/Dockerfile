@@ -21,6 +21,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/instance-manager ./cm
 FROM --platform=linux/amd64 ${CUBRID_IMAGE}
 COPY --from=build /out/instance-manager /usr/local/bin/instance-manager
 COPY build/instance-manager/entrypoint.sh /usr/local/bin/im-entrypoint.sh
+COPY build/instance-manager/broker-entrypoint.sh /usr/local/bin/broker-entrypoint.sh
 # nss-myhostname must not answer for the node's own short name: it returns
 # loopback, which breaks HA (docs/poc/RESULTS.md). A non-root entrypoint cannot
 # edit this file, so it is fixed here.

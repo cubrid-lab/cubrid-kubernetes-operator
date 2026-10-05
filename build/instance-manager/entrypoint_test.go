@@ -36,6 +36,7 @@ import (
 const (
 	dbName = "appdb"
 
+	envDatabases      = "CUBRID_DATABASES"
 	componentsServer  = "SERVER"
 	componentsHA      = "HA"
 	bootstrapRecovery = "recovery"
@@ -108,7 +109,7 @@ func newFixture(t *testing.T, manager string) *fixture {
 	f.env = map[string]string{
 		"CUBRID":            filepath.Join(root, "cubrid"),
 		"CUBRID_DB":         dbName,
-		"CUBRID_DATABASES":  f.databases,
+		envDatabases:        f.databases,
 		"CUBRID_COMPONENTS": componentsServer,
 		"CUBRID_BOOTSTRAP":  "new",
 		"IM_BIN":            im,
@@ -388,7 +389,7 @@ func TestEntrypoint_RejectsBadConfiguration(t *testing.T) {
 	}{
 		{"unknown components", "CUBRID_COMPONENTS", "BROKER", "unknown CUBRID_COMPONENTS 'BROKER'"},
 		{"unknown bootstrap", "CUBRID_BOOTSTRAP", "clone", "unknown CUBRID_BOOTSTRAP 'clone'"},
-		{"no database root", "CUBRID_DATABASES", "", "CUBRID_DATABASES is not set"},
+		{"no database root", envDatabases, "", "CUBRID_DATABASES is not set"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -418,7 +419,7 @@ func TestEntrypoint_UnwritableDataVolumeFailsClearly(t *testing.T) {
 	if err := os.Mkdir(locked, 0o555); err != nil {
 		t.Fatal(err)
 	}
-	f.env["CUBRID_DATABASES"] = filepath.Join(locked, "databases")
+	f.env[envDatabases] = filepath.Join(locked, "databases")
 	code, out := f.run()
 	if code == 0 {
 		t.Fatalf("expected a failure:\n%s", out)

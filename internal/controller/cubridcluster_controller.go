@@ -295,7 +295,9 @@ func (r *CubridClusterReconciler) dataPVCTemplate(cluster *databasev1alpha1.Cubr
 	}
 }
 
-func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluster) corev1.PodSpec {
+// instanceImage is the image of the DB Pods and of the Broker Pods: spec.image
+// if set, else the operator's default Instance Manager image (ADR-0003).
+func (r *CubridClusterReconciler) instanceImage(cluster *databasev1alpha1.CubridCluster) string {
 	image := r.DefaultImage
 	if image == "" {
 		image = DefaultInstanceManagerImage
@@ -306,6 +308,11 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			image = fmt.Sprintf("%s:%s", cluster.Spec.Image.Repository, cluster.Spec.Image.Tag)
 		}
 	}
+	return image
+}
+
+func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluster) corev1.PodSpec {
+	image := r.instanceImage(cluster)
 	runAsNonRoot := true
 	noPrivEscalation := false
 	gracePeriod := int64(120)

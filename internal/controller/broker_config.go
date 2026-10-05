@@ -57,16 +57,34 @@ func memberDNSNames(cluster *databasev1alpha1.CubridCluster) []string {
 	return out
 }
 
-// generateBrokerConf renders cubrid_broker.conf with an RW broker
-// (ACCESS_MODE=RW) and an RO broker (ACCESS_MODE=RO), matching the topology
-// proven in POC-8 (ADR-0002).
-func generateBrokerConf() string {
+// Access modes of a Broker: the value of the access-mode label, of
+// BROKER_ACCESS_MODE and of the configuration key.
+const (
+	brokerModeRW = "rw"
+	brokerModeRO = "ro"
+)
+
+// brokerPort is the port the Broker of an access mode listens on.
+func brokerPort(mode string) int32 {
+	if mode == brokerModeRO {
+		return brokerROPort
+	}
+	return brokerRWPort
+}
+
+// brokerConfKey is the ConfigMap key of an access mode's cubrid_broker.conf;
+// the Broker entrypoint installs the one of its own mode.
+func brokerConfKey(mode string) string { return "cubrid_broker_" + mode + ".conf" }
+
+// generateBrokerConf renders cubrid_broker.conf for one access mode: a single
+// Broker, ACCESS_MODE=RW or RO, as in POC-8 (ADR-0002). A Pod runs one mode,
+// so that the -rw and -ro Services each select Pods that serve it.
+func generateBrokerConf(mode string) string {
 	var b strings.Builder
 	b.WriteString("[broker]\n")
 	b.WriteString("MASTER_SHM_ID           =30001\n")
 	b.WriteString("ADMIN_LOG_FILE          =log/broker/cubrid_broker.log\n\n")
-	writeBrokerSection(&b, "RW", brokerRWPort, "RW")
-	writeBrokerSection(&b, "RO", brokerROPort, "RO")
+	writeBrokerSection(&b, strings.ToUpper(mode), int(brokerPort(mode)), strings.ToUpper(mode))
 	return b.String()
 }
 
