@@ -577,6 +577,57 @@ claims).
 
 ---
 
+## POC-13 — HA formation with the commands the Instance Manager runs (ADR-0006/0010, #106) — **PASS**
+
+`cubrid/cubrid:11.4` (engine 11.4.6), two nodes `h-0` and `h-1` on one
+container network, UID 1000, data on a volume at `/var/lib/cubrid`
+(linux/amd64 emulated under podman; output only, no timing or failover
+claims). It repeats POC-3 with the exact steps the operator needs.
+
+On both nodes: `ha_mode=on` appended to `$CUBRID/conf/cubrid.conf`, and
+`cubrid_ha.conf` with `ha_node_list=cubrid@h-0:h-1`, `ha_db_list=appdb`,
+`ha_port_id=59901`.
+
+1. **First member (`h-0`).**
+   `cubrid createdb --db-volume-size=64M --server-name=h-0:h-1 -F /var/lib/cubrid/databases/appdb appdb en_US`
+   run from another directory, with no `databases.txt` beforehand: exit 0. It
+   creates `databases.txt` itself and registers
+   `appdb  /var/lib/cubrid/databases/appdb  h-0:h-1  ...  file:.../appdb/lob`.
+   `cubrid heartbeat start`: exit 0 (`++ cubrid heartbeat start: success`).
+   `cubrid heartbeat status` then shows `current h-0, state master`, the peer
+   as `unknown`, and the server as `registered_and_to_be_active` for some tens
+   of seconds before `registered_and_active`. A write during that window fails
+   with `Attempted to update the database when updates are disabled`.
+2. **Seeding (`h-1`).** `cubrid backupdb -C -D <dir> -l 0 appdb@localhost` on
+   `h-0`; on `h-1` the database directory with `lob`, a `databases.txt` entry
+   with the same host list `h-0:h-1`, `cubrid restoredb -u -B <dir> appdb`
+   (exit 0), then `cubrid heartbeat start` (exit 0). Within five seconds
+   `h-1` reports `state slave`.
+3. **Result.** Both nodes agree: `h-0` master with `registered_and_active`,
+   `h-1` slave with `registered_and_standby`, `copylogdb` and `applylogdb`
+   registered on both. A row committed on `h-0` is read on `h-1`; a write on
+   `h-1` fails with `Attempted to update the database when updates are
+   disabled`.
+
+Also observed:
+
+- The host column of `databases.txt` is the member list in HA. `csql
+  appdb@localhost` works on each node through a shell with `$CUBRID/bin` on
+  the path.
+- With the Instance Manager image built from the #106 branch, started as the
+  Pod starts it with `CUBRID_COMPONENTS=HA`: before the bootstrap the member
+  runs only the manager and `/readyz` is 503; `POST /v1/ha/bootstrap` ends
+  `Completed`, `/v1/role` reports `master` and `/readyz` 200; the same request
+  again returns the same operation and runs nothing; after a container
+  restart on the same volume the entrypoint starts heartbeat and the member
+  is master again.
+
+**Not tested here:** three members, a member that is seeded while the master
+is being written to, replication lag, and any failure. Those need a real run
+on linux/amd64 (#108).
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed

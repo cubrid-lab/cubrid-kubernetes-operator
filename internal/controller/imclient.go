@@ -113,6 +113,33 @@ func (c *HTTPBackupClient) StartRestore(ctx context.Context, podName, namespace,
 	return decodeOperation(resp)
 }
 
+// StartHABootstrap asks one member to create the cluster's first database and
+// start HA (ADR-0010).
+func (c *HTTPBackupClient) StartHABootstrap(ctx context.Context, podName, namespace, idempotencyKey string, req instancemanager.HABootstrapRequest) (instancemanager.Operation, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return instancemanager.Operation{}, err
+	}
+	url := c.baseURL(podName, namespace) + "/v1/ha/bootstrap"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return instancemanager.Operation{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Idempotency-Key", idempotencyKey)
+	c.authorize(httpReq)
+
+	resp, err := c.Client.Do(httpReq)
+	if err != nil {
+		return instancemanager.Operation{}, fmt.Errorf("start HA bootstrap on %s: %w", podName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		return instancemanager.Operation{}, fmt.Errorf("start HA bootstrap on %s: unexpected status %d", podName, resp.StatusCode)
+	}
+	return decodeOperation(resp)
+}
+
 func (c *HTTPBackupClient) GetOperation(ctx context.Context, podName, namespace, id string) (instancemanager.Operation, error) {
 	url := fmt.Sprintf("%s/v1/operations/%s", c.baseURL(podName, namespace), id)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

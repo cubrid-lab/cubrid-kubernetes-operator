@@ -26,6 +26,9 @@ const (
 	OpBackup OperationKind = "backup"
 	// OpRestore is a verify + download + `cubrid restoredb` operation (ADR-0008).
 	OpRestore OperationKind = "restore"
+	// OpHABootstrap creates the cluster's first database on one HA member and
+	// starts heartbeat (ADR-0010).
+	OpHABootstrap OperationKind = "ha-bootstrap"
 )
 
 // OperationState is the durable lifecycle state of an Operation (ADR-0003).
@@ -39,6 +42,8 @@ const (
 	OpUploading     OperationState = "Uploading"
 	OpDownloading   OperationState = "Downloading"
 	OpRestoring     OperationState = "Restoring"
+	// OpCreating: `cubrid createdb` is running (HA bootstrap).
+	OpCreating OperationState = "Creating"
 	// OpStarting: the restored standalone server is being started.
 	OpStarting   OperationState = "Starting"
 	OpCompleted  OperationState = "Completed"

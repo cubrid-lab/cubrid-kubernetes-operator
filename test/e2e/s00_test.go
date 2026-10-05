@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -98,16 +99,10 @@ func s00Scenario() {
 				evidence.Revision = strings.TrimSpace(rev)
 			}
 
-			By("building the Instance Manager image on the official CUBRID image")
-			_, err := utils.Run(exec.Command("make", "docker-build-instance-manager",
-				fmt.Sprintf("IM_IMG=%s", instanceManagerImage)))
-			Expect(err).NotTo(HaveOccurred(), "Failed to build the Instance Manager image")
-
-			By("loading the Instance Manager image on Kind")
-			Expect(utils.LoadImageToKindClusterWithName(instanceManagerImage)).To(Succeed())
+			ensureInstanceManagerImage()
 
 			By("creating a namespace that enforces the restricted security policy")
-			_, err = utils.Run(exec.Command("kubectl", "create", "ns", s00Namespace))
+			_, err := utils.Run(exec.Command("kubectl", "create", "ns", s00Namespace))
 			Expect(err).NotTo(HaveOccurred())
 			_, err = utils.Run(exec.Command("kubectl", "label", "--overwrite", "ns", s00Namespace,
 				"pod-security.kubernetes.io/enforce=restricted"))
@@ -229,6 +224,22 @@ spec:
 			evidence.RowKeptAcrossDelete = true
 			evidence.Result = "passed"
 		})
+	})
+}
+
+// instanceManagerImageOnce builds and loads the real Instance Manager image
+// once for all real-database scenarios of a run.
+var instanceManagerImageOnce sync.Once
+
+func ensureInstanceManagerImage() {
+	instanceManagerImageOnce.Do(func() {
+		By("building the Instance Manager image on the official CUBRID image")
+		_, err := utils.Run(exec.Command("make", "docker-build-instance-manager",
+			fmt.Sprintf("IM_IMG=%s", instanceManagerImage)))
+		Expect(err).NotTo(HaveOccurred(), "Failed to build the Instance Manager image")
+
+		By("loading the Instance Manager image on Kind")
+		Expect(utils.LoadImageToKindClusterWithName(instanceManagerImage)).To(Succeed())
 	})
 }
 

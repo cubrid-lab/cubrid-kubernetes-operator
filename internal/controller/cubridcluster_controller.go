@@ -81,6 +81,9 @@ type CubridClusterReconciler struct {
 	// Restore is nil-safe: nil skips recovery-bootstrap orchestration
 	// (BootstrapReady=False/RestoreClientNotConfigured).
 	Restore RestoreClient
+	// HABootstrap is nil-safe: nil leaves the first database of an HA cluster
+	// uncreated.
+	HABootstrap HABootstrapClient
 	// IMToken is the Instance Manager bearer token the operator itself uses. It
 	// is copied into each cluster's <cluster>-im-token Secret for the DB Pods.
 	// Empty means the operator is not configured: no DB Pods are created,
@@ -305,7 +308,15 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 	gracePeriod := int64(120)
 	uid := cubridUID
 	fsGroupPolicy := corev1.FSGroupChangeOnRootMismatch
+	mounts := []corev1.VolumeMount{{Name: "data", MountPath: dataMountPath}}
+	var volumes []corev1.Volume
+	if cluster.Spec.HighAvailability.Enabled {
+		// The same cubrid_ha.conf for every member (ADR-0004).
+		volumes = append(volumes, haConfVolume(cluster))
+		mounts = append(mounts, haConfMount())
+	}
 	return corev1.PodSpec{
+		Volumes: volumes,
 		// terminationGracePeriodSeconds >= 120s for ordered HA shutdown (ADR-0003).
 		TerminationGracePeriodSeconds: &gracePeriod,
 		SecurityContext: &corev1.PodSecurityContext{
@@ -357,9 +368,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 				TimeoutSeconds:   5,
 				FailureThreshold: 3,
 			},
-			VolumeMounts: []corev1.VolumeMount{
-				{Name: "data", MountPath: dataMountPath},
-			},
+			VolumeMounts: mounts,
 			// Pod Security Standards "restricted" (#18).
 			SecurityContext: &corev1.SecurityContext{
 				RunAsNonRoot:             &runAsNonRoot,
@@ -406,6 +415,9 @@ func instanceManagerEnv(cluster *databasev1alpha1.CubridCluster) []corev1.EnvVar
 		// ones the operator builds its requests with.
 		{Name: "IM_BACKUP_STAGING_ROOT", Value: backupStagingRoot},
 		{Name: "IM_RESTORE_STAGING_ROOT", Value: restoreStagingRoot},
+		// Where the entrypoint and the manager find cubrid_ha.conf. The file is
+		// there only for an HA cluster.
+		{Name: "CUBRID_HA_CONF", Value: haConfMountPath + "/" + haConfFileName},
 	}, objectStorageEnv(cluster.Spec.ObjectStorage)...)
 }
 
@@ -536,6 +548,8 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		setCondition(cluster, conditionHAReady, metav1.ConditionUnknown, "RoleDiscoveryDisabled",
 			"no role prober configured")
 	} else {
+		// The first database is created once, on one member (ADR-0010).
+		r.reconcileHABootstrap(ctx, cluster)
 		res := r.reconcileHAStatus(ctx, cluster, desired)
 		// Reconcile the broker tier and set routing conditions from the same
 		// safety-first primary resolution (ADR-0002/0005).

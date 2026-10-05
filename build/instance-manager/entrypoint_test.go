@@ -37,6 +37,7 @@ const (
 	dbName = "appdb"
 
 	componentsServer  = "SERVER"
+	componentsHA      = "HA"
 	bootstrapRecovery = "recovery"
 	callManagerStart  = "manager start"
 	callHeartbeat     = "cubrid heartbeat start"
@@ -61,6 +62,9 @@ trap 'echo "manager term" >> "${CALLS}"; exit 0' TERM
 while :; do sleep 0.05; done
 `
 )
+
+// haComponents are the CUBRID_COMPONENTS values of an HA member.
+var haComponents = []string{componentsHA, "MASTER", "SLAVE"}
 
 type fixture struct {
 	t         *testing.T
@@ -156,6 +160,24 @@ func (f *fixture) configureHA() {
 	f.env["CUBRID_HA_CONF"] = conf
 }
 
+// wantHAConfInstalled checks that the mounted configuration was copied into
+// CUBRID's conf directory and HA mode switched on.
+func (f *fixture) wantHAConfInstalled() {
+	f.t.Helper()
+	conf := filepath.Join(f.root, "cubrid", "conf")
+	installed, err := os.ReadFile(filepath.Join(conf, "cubrid_ha.conf"))
+	if err != nil {
+		f.t.Fatalf("cubrid_ha.conf was not installed: %v", err)
+	}
+	if !strings.Contains(string(installed), "ha_node_list=cubrid@a:b") {
+		f.t.Errorf("installed cubrid_ha.conf = %q", installed)
+	}
+	main, err := os.ReadFile(filepath.Join(conf, "cubrid.conf"))
+	if err != nil || !strings.Contains(string(main), "ha_mode=on") {
+		f.t.Errorf("cubrid.conf does not switch HA mode on (err=%v): %q", err, main)
+	}
+}
+
 // registerDatabase makes the database look already created on the volume.
 func (f *fixture) registerDatabase() {
 	f.t.Helper()
@@ -232,27 +254,88 @@ func TestEntrypoint_RecoveryStartsRestoredDatabase(t *testing.T) {
 	wantCalls(t, f.recorded(), "cubrid server start "+dbName, callManagerStart)
 }
 
-func TestEntrypoint_HAComponents(t *testing.T) {
-	tests := []struct {
-		components string
-		want       []string
-	}{
-		{"HA", []string{callHeartbeat, callManagerStart}},
-		{"SLAVE", []string{callHeartbeat, callManagerStart}},
-		{"MASTER", []string{"cubrid createdb", callHeartbeat, callManagerStart}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.components, func(t *testing.T) {
+// An initialized HA member (configuration mounted, database on the volume)
+// is restarted with heartbeat; the entrypoint never creates its database.
+func TestEntrypoint_HAMemberWithDatabaseStartsHeartbeat(t *testing.T) {
+	for _, components := range haComponents {
+		t.Run(components, func(t *testing.T) {
 			f := newFixture(t, managerStub)
-			f.env["CUBRID_COMPONENTS"] = tc.components
+			f.env["CUBRID_COMPONENTS"] = components
+			f.configureHA()
+			f.registerDatabase()
+			code, out := f.run()
+			if code != 0 {
+				t.Fatalf("exit %d:\n%s", code, out)
+			}
+			wantCalls(t, f.recorded(), callHeartbeat, callManagerStart)
+			f.wantHAConfInstalled()
+		})
+	}
+}
+
+// A configured HA member without a database waits: the first database is
+// created once, on one member, through the Instance Manager, and the others
+// are seeded from it (ADR-0010). The configuration is installed so that the
+// manager's commands find it.
+func TestEntrypoint_HAMemberWithoutDatabaseWaitsForTheBootstrap(t *testing.T) {
+	for _, components := range haComponents {
+		t.Run(components, func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			f.env["CUBRID_COMPONENTS"] = components
 			f.configureHA()
 			code, out := f.run()
 			if code != 0 {
 				t.Fatalf("exit %d:\n%s", code, out)
 			}
-			wantCalls(t, f.recorded(), tc.want...)
+			wantCalls(t, f.recorded(), callManagerStart)
+			f.wantHAConfInstalled()
+			if _, err := os.Stat(filepath.Join(f.databases, "databases.txt")); !os.IsNotExist(err) {
+				t.Errorf("an HA member created or registered a database (err=%v)", err)
+			}
 		})
 	}
+}
+
+// ha_mode is appended once, also when the member restarts on the same files.
+func TestEntrypoint_HAModeIsNotAppendedTwice(t *testing.T) {
+	f := newFixture(t, managerStub)
+	f.env["CUBRID_COMPONENTS"] = componentsHA
+	f.configureHA()
+	for range 2 {
+		if code, out := f.run(); code != 0 {
+			t.Fatalf("exit %d:\n%s", code, out)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(f.root, "cubrid", "conf", "cubrid.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), "ha_mode=on"); n != 1 {
+		t.Errorf("ha_mode=on appears %d times:\n%s", n, data)
+	}
+}
+
+// After the bootstrap the Instance Manager has started heartbeat while this
+// script runs, so termination has to stop it.
+func TestEntrypoint_TerminationAfterHABootstrapStopsHeartbeat(t *testing.T) {
+	f := newFixture(t, blockingManagerStub)
+	f.env["CUBRID_COMPONENTS"] = componentsHA
+	f.configureHA()
+	cmd := f.command()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return managerStarted(f.recorded()) }, &out)
+	f.registerDatabase() // what the bootstrap does
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd); err != nil {
+		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
+	}
+	wantCalls(t, f.recorded(), callManagerStart, "cubrid heartbeat stop", "manager term")
 }
 
 // `cubrid heartbeat start` exits 1 on a member without HA configuration
@@ -260,7 +343,7 @@ func TestEntrypoint_HAComponents(t *testing.T) {
 // bootstrap supplies the configuration the member stays up with the manager
 // only, creates nothing and reports no role.
 func TestEntrypoint_HAWithoutConfigurationStartsOnlyTheManager(t *testing.T) {
-	for _, components := range []string{"HA", "MASTER", "SLAVE"} {
+	for _, components := range haComponents {
 		t.Run(components, func(t *testing.T) {
 			f := newFixture(t, managerStub)
 			f.env["CUBRID_COMPONENTS"] = components
@@ -279,7 +362,7 @@ func TestEntrypoint_HAWithoutConfigurationStartsOnlyTheManager(t *testing.T) {
 // Nothing was started for an unconfigured HA member, so nothing is stopped.
 func TestEntrypoint_TerminationOfUnconfiguredHAMemberStopsOnlyTheManager(t *testing.T) {
 	f := newFixture(t, blockingManagerStub)
-	f.env["CUBRID_COMPONENTS"] = "HA"
+	f.env["CUBRID_COMPONENTS"] = componentsHA
 	cmd := f.command()
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
