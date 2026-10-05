@@ -81,7 +81,7 @@ POC history, not live support certification.
 |---|---|---|
 | Foundation | Kubebuilder scaffold, v1alpha1 APIs, generated resources, unit/envtest and manager E2E skeleton | S00 runs in CI on Kind (linux/amd64): a standalone cluster on the real 11.4 image becomes Ready, answers SQL through `csql` and keeps a row across a Pod deletion. One member only; no HA, broker, backup or failure scenario |
 | Runtime | Instance Manager handlers and derivative image definition; non-root entrypoint checked with the real 11.4 image under podman, which was linux/amd64 under emulation: command output only, no timing evidence (start, stop, restart, recovery start) | Runs as a non-root Pod under the restricted Pod Security Standard on Kind (S00). The Pod gets the operation store, staging roots and the cluster's object-storage settings (envtest only) |
-| HA and Broker | Role discovery, primary resolution, Broker resource/config generation, the generated `cubrid_ha.conf` member list and the per-member alias Services (unit/envtest); manual engine POCs | The HA bootstrap runs on Kind in CI with the real image: one member creates the database, the other two are seeded through object storage (a mock in CI) and join as slaves, one row replicates to both, and the cluster reports Ready with one primary. No failure, restart, broker endpoint or workload history is covered. Automatic cluster bootstrap, replication and RW/RO SQL require #106–#108 and #83 |
+| HA and Broker | Role discovery, primary resolution, Broker resource/config generation, the generated `cubrid_ha.conf` member list and the per-member alias Services (unit/envtest); manual engine POCs | The HA bootstrap runs on Kind in CI with the real image: one member creates the database, the other two are seeded through object storage (a mock in CI) and join as slaves, one row replicates to both, and the cluster reports Ready with one primary. Two read-write and two read-only Brokers run as non-root Pods; a client with a CUBRID driver commits through `-rw`, reads the row through `-ro` and is refused a write there. No failure, restart, Broker loss or workload history is covered. Automatic cluster bootstrap, replication and RW/RO SQL require #106–#108 and #83 |
 | Recovery and safety | State/role decision code; manual failover and split-brain POCs | Enforced SQL quarantine, rejoin and rebuild require #112–#118 |
 | Backup and restore | CubridBackup API/controller, Instance Manager artifact/restore paths; manual engine POCs | Real workflow, interrupted recovery and dataset checks require #88 and #119–#121 |
 | Hardening | Update sequencing, auth, metrics and Events code | Placement/retention/PDB, security and operational accuracy require #90–#92; updates conditional (#96) |
@@ -161,8 +161,8 @@ deletion) runs on Kind in CI. Nothing beyond one member is validated.
 are merged; manual CUBRID POCs are recorded in `docs/poc/RESULTS.md`.
 **Live validation:** Operator-driven formation of three members and the
 replication of one row run on Kind in CI. Interrupted bootstrap (#107), the
-S01/S02 validation with a workload (#108) and working RW/RO access (#83)
-remain unverified.
+S01/S02 validation with a workload (#108) and Broker loss (S05) remain
+unverified. RW/RO access through the Broker Services works on Kind in CI.
 
 - 1 master + 2 slaves
 - HA configuration

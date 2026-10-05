@@ -354,6 +354,7 @@ spec:
 			}, 10*time.Minute, 3*time.Second).Should(Succeed())
 			logs, err := utils.Run(exec.Command("kubectl", "-n", storeNamespace, "logs", "broker-client"))
 			Expect(err).NotTo(HaveOccurred())
+			_, _ = fmt.Fprintf(GinkgoWriter, "broker client output:\n%s\n", logs)
 			Expect(logs).To(ContainSubstring("BROKER-CHECK-OK"), "client output:\n%s", logs)
 
 			By("checking that the operator reports both endpoints")
