@@ -137,7 +137,7 @@ func TestHABootstrap_CreatesTheDatabaseThenStartsHeartbeat(t *testing.T) {
 	want := []string{
 		"cubrid createdb --db-volume-size=64M --server-name=demo-0:demo-1:demo-2 -F " +
 			filepath.Join(f.databases, dbName) + " " + dbName + " en_US",
-		"cubrid heartbeat start",
+		callHeartbeatStart,
 	}
 	if got := f.cli.recorded(); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("commands = %q\nwant       %q", got, want)

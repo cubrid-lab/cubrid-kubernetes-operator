@@ -52,6 +52,34 @@ func (f *fakeHABootstrapClient) StartHABootstrap(_ context.Context, podName, _, 
 	return instancemanager.Operation{ID: "op-ha", State: f.state, FailureReason: f.reason}, nil
 }
 
+// fakeSeedClient stands in for the backup and restore side of seeding. It
+// answers each member with the state set for it.
+type fakeSeedClient struct {
+	backupOn    []string
+	backupReq   instancemanager.BackupRequest
+	restoreOn   []string
+	restoreReq  instancemanager.RestoreRequest
+	backupState instancemanager.OperationState
+	restore     map[string]instancemanager.OperationState
+	reason      string
+}
+
+func (f *fakeSeedClient) StartBackup(_ context.Context, podName, _, _ string, req instancemanager.BackupRequest) (instancemanager.Operation, error) {
+	f.backupOn = append(f.backupOn, podName)
+	f.backupReq = req
+	return instancemanager.Operation{ID: "op-seed-backup", State: f.backupState, FailureReason: f.reason}, nil
+}
+
+func (f *fakeSeedClient) StartRestore(_ context.Context, podName, _, _ string, req instancemanager.RestoreRequest) (instancemanager.Operation, error) {
+	f.restoreOn = append(f.restoreOn, podName)
+	f.restoreReq = req
+	return instancemanager.Operation{ID: "op-seed-" + podName, State: f.restore[podName], FailureReason: f.reason}, nil
+}
+
+func (f *fakeSeedClient) GetOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, error) {
+	return instancemanager.Operation{}, errors.New("not used by seeding")
+}
+
 var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 	ctx := context.Background()
 
@@ -158,6 +186,106 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 		Expect(got.Status.Databases[0].Phase).To(Equal("Pending"))
 		reconcileOnce(r, key)
 		Expect(boot.members).To(HaveLen(2))
+	})
+
+	Context("seeding the other members", func() {
+		seededCluster := func(name string) *databasev1alpha1.CubridCluster {
+			c := haCluster(name)
+			c.Spec.ObjectStorage = testObjectStorage()
+			c.Spec.ObjectStorage.Bucket = "cluster-artifacts"
+			c.Spec.ObjectStorage.Prefix = "prod"
+			return c
+		}
+		reconcilerFor := func(seed *fakeSeedClient) *CubridClusterReconciler {
+			r := reconcilerWith(&fakeHABootstrapClient{state: instancemanager.OpCompleted})
+			r.Backup, r.Restore = seed, seed
+			return r
+		}
+		bootstrapCondition := func(c *databasev1alpha1.CubridCluster) (string, string) {
+			cond := meta.FindStatusCondition(c.Status.Conditions, conditionBootstrapReady)
+			Expect(cond).NotTo(BeNil())
+			return string(cond.Status), cond.Reason
+		}
+
+		It("needs the cluster's object storage with a bucket", func() {
+			seed := &fakeSeedClient{}
+			key := create(haCluster("seed-nostore"))
+			got := reconcileOnce(reconcilerFor(seed), key)
+			_, reason := bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedStorageNotConfigured"))
+			Expect(seed.backupOn).To(BeEmpty())
+			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
+		})
+
+		It("backs up the first member, then restores the peers one at a time", func() {
+			seed := &fakeSeedClient{
+				backupState: instancemanager.OpRunningBackup,
+				restore:     map[string]instancemanager.OperationState{},
+			}
+			c := seededCluster("seed-order")
+			key := create(c)
+			r := reconcilerFor(seed)
+
+			By("waiting for the seed backup before any restore")
+			got := reconcileOnce(r, key)
+			_, reason := bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedBackupInProgress"))
+			Expect(seed.backupOn).To(HaveEach("seed-order-0"))
+			Expect(seed.restoreOn).To(BeEmpty())
+			Expect(seed.backupReq.Upload).NotTo(BeNil())
+			Expect(seed.backupReq.Upload.Bucket).To(Equal("cluster-artifacts"))
+			Expect(seed.backupReq.Upload.Prefix).To(Equal("prod/" + string(got.UID) + "/seed/appdb"))
+			Expect(seed.backupReq.Destination).To(HavePrefix(backupStagingRoot + "/"))
+
+			By("restoring the first peer only, while it is in progress")
+			seed.backupState = instancemanager.OpCompleted
+			seed.restore["seed-order-1"] = instancemanager.OpRestoring
+			got = reconcileOnce(r, key)
+			_, reason = bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedRestoreInProgress"))
+			Expect(seed.restoreOn).To(HaveEach("seed-order-1"))
+			Expect(seed.restoreReq.Bucket).To(Equal("cluster-artifacts"))
+			Expect(seed.restoreReq.Prefix).To(Equal(seed.backupReq.Upload.Prefix))
+			Expect(seed.restoreReq.TargetDir).To(Equal(restoreTargetRoot))
+			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
+
+			By("moving to the second peer when the first is done")
+			seed.restore["seed-order-1"] = instancemanager.OpCompleted
+			seed.restore["seed-order-2"] = instancemanager.OpRestoring
+			seed.restoreOn = nil
+			got = reconcileOnce(r, key)
+			Expect(seed.restoreOn).To(Equal([]string{"seed-order-1", "seed-order-2"}))
+			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
+
+			By("recording the bootstrap as complete when every peer is seeded")
+			seed.restore["seed-order-2"] = instancemanager.OpCompleted
+			got = reconcileOnce(r, key)
+			Expect(got.Status.Databases[0].HAConfigured).To(BeTrue())
+			status, reason := bootstrapCondition(got)
+			Expect(status).To(Equal("True"))
+			Expect(reason).To(Equal("PeersSeeded"))
+
+			By("asking for nothing more afterwards")
+			seed.backupOn, seed.restoreOn = nil, nil
+			reconcileOnce(r, key)
+			Expect(seed.backupOn).To(BeEmpty())
+			Expect(seed.restoreOn).To(BeEmpty())
+		})
+
+		It("stops and reports a failed restore", func() {
+			seed := &fakeSeedClient{
+				backupState: instancemanager.OpCompleted,
+				restore:     map[string]instancemanager.OperationState{"seed-failed-1": instancemanager.OpFailed},
+				reason:      "restoredb failed: exit status 1",
+			}
+			key := create(seededCluster("seed-failed"))
+			got := reconcileOnce(reconcilerFor(seed), key)
+			Expect(got.Status.Databases[0].Phase).To(Equal("Failed"))
+			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
+			_, reason := bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedRestoreFailed"))
+			Expect(seed.restoreOn).To(Equal([]string{"seed-failed-1"}), "the second peer is not touched")
+		})
 	})
 
 	It("leaves a recovery bootstrap to the restore", func() {

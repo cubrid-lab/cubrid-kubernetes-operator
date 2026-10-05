@@ -426,7 +426,17 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
 			return
 		}
-		res, err := Restore(ctx, s.cli, s.objects, s.restoreRoots, req)
+		// An HA member registers the restored database under the member list,
+		// as createdb does on the first member.
+		roots := s.restoreRoots
+		haMember := false
+		if s.standaloneDB == "" {
+			if hosts, err := haHosts(s.ha.ConfPath); err == nil {
+				roots.Host = hosts
+				haMember = true
+			}
+		}
+		res, err := Restore(ctx, s.cli, s.objects, roots, req)
 		if err != nil {
 			fail("restore failed: " + err.Error())
 			return
@@ -441,6 +451,18 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			}
 			if out, err := s.cli.Run(ctx, "cubrid", "server", "start", req.Database); err != nil {
 				fail("server start failed: " + err.Error() + ": " + out)
+				return
+			}
+		}
+		// A configured HA member joins HA with the restored database: the
+		// entrypoint started nothing for it either. Issued once, and only when
+		// heartbeat is not already running (docs/poc/RESULTS.md, POC-3/POC-13).
+		if haMember && HeartbeatStatus(ctx, s.cli).Role == RoleUnknown {
+			if _, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting }); err != nil {
+				return
+			}
+			if out, err := s.cli.Run(ctx, "cubrid", "heartbeat", "start"); err != nil {
+				fail("heartbeat start failed: " + err.Error() + ": " + out)
 				return
 			}
 		}

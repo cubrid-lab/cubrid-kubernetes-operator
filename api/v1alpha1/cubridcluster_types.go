@@ -173,6 +173,17 @@ type CubridObjectStorage struct {
 	// +optional
 	Insecure bool `json:"insecure,omitempty"`
 
+	// bucket holds the artifacts the operator creates for itself: the backup
+	// the other members of an HA cluster are seeded from. A CubridBackup
+	// names its own bucket. Required for an HA cluster to finish its
+	// bootstrap.
+	// +optional
+	Bucket string `json:"bucket,omitempty"`
+
+	// prefix is the key prefix under bucket for those artifacts.
+	// +optional
+	Prefix string `json:"prefix,omitempty"`
+
 	// credentialsSecretRef names a Secret in the cluster's namespace with the
 	// keys accessKey and secretKey. The operator does not read it; the DB Pods
 	// receive the two keys as environment variables.

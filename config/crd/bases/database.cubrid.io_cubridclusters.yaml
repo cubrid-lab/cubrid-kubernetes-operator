@@ -162,6 +162,13 @@ spec:
                   and restore. Required for a recovery bootstrap and for a CubridBackup
                   with an ObjectStorage destination.
                 properties:
+                  bucket:
+                    description: |-
+                      bucket holds the artifacts the operator creates for itself: the backup
+                      the other members of an HA cluster are seeded from. A CubridBackup
+                      names its own bucket. Required for an HA cluster to finish its
+                      bootstrap.
+                    type: string
                   credentialsSecretRef:
                     description: |-
                       credentialsSecretRef names a Secret in the cluster's namespace with the
@@ -190,6 +197,9 @@ spec:
                       insecure makes the DB Pods use plain HTTP instead of TLS. For
                       development object stores only.
                     type: boolean
+                  prefix:
+                    description: prefix is the key prefix under bucket for those artifacts.
+                    type: string
                   region:
                     description: region is the bucket region, when the service needs
                       one.

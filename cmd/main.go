@@ -193,6 +193,7 @@ func main() {
 		Prober:       controller.NewHTTPRoleProber(os.Getenv("IM_TOKEN")),
 		Restore:      controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
 		HABootstrap:  controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
+		Backup:       controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
 		IMToken:      os.Getenv("IM_TOKEN"),
 		DefaultImage: instanceManagerImage,
 	}).SetupWithManager(mgr); err != nil {

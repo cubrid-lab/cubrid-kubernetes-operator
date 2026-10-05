@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"path"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -85,11 +86,15 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 	}
 	database := cluster.Spec.Databases[0].Name
 	status := databaseStatus(cluster, database)
-	if status.PrimaryCreated || status.Phase == databasePhaseFailed {
+	if status.Phase == databasePhaseFailed || status.HAConfigured {
+		return
+	}
+	member := memberNames(cluster, 1)[0]
+	if status.PrimaryCreated {
+		r.reconcileSeeding(ctx, cluster, status, member)
 		return
 	}
 
-	member := memberNames(cluster, 1)[0]
 	op, err := r.HABootstrap.StartHABootstrap(ctx, member, cluster.Namespace,
 		haBootstrapIdempotencyKey(cluster, database), instancemanager.HABootstrapRequest{Database: database})
 	if err != nil {
@@ -101,9 +106,8 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 	case instancemanager.OpCompleted:
 		status.Phase = databasePhaseCreated
 		status.PrimaryCreated = true
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "PeersNotSeeded",
-			"database "+database+" was created on "+member+"; the other members are not seeded yet")
 		r.event(cluster, corev1.EventTypeNormal, "DatabaseCreated", "database "+database+" created on "+member)
+		r.reconcileSeeding(ctx, cluster, status, member)
 	case instancemanager.OpFailed:
 		status.Phase = databasePhaseFailed
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "DatabaseCreationFailed", op.FailureReason)
@@ -113,6 +117,99 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "DatabaseCreationInProgress",
 			"creating database "+database+" on "+member)
 	}
+}
+
+// seedLocation is where the seed backup of database lives in object storage.
+func seedLocation(cluster *databasev1alpha1.CubridCluster, database string) (bucket, prefix string) {
+	storage := cluster.Spec.ObjectStorage
+	return storage.Bucket, path.Join(storage.Prefix, string(cluster.UID), "seed", database)
+}
+
+// reconcileSeeding copies the first database to the other members (ADR-0006,
+// ADR-0010): one backup of the member that holds it, uploaded to the
+// cluster's object storage, then a restore on each other member, one at a
+// time. The Instance Manager of a seeded member starts heartbeat itself, so
+// the member joins as a slave. Every step is an idempotent operation with a
+// fixed key, so a reconcile after any interruption asks for the same step.
+//
+// The source is the member the database was created on, not a resolved
+// master: until a peer has joined, that member's server is not active and no
+// primary resolves (docs/poc/RESULTS.md, POC-13).
+func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, source string) {
+	database := status.Name
+	if r.Backup == nil || r.Restore == nil {
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "PeersNotSeeded",
+			"database "+database+" was created on "+source+"; no backup and restore clients are configured to seed the other members")
+		return
+	}
+	if cluster.Spec.ObjectStorage == nil || cluster.Spec.ObjectStorage.Bucket == "" {
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedStorageNotConfigured",
+			"database "+database+" was created on "+source+
+				"; spec.objectStorage with a bucket is needed to copy it to the other members")
+		return
+	}
+	failed := func(reason, msg string) {
+		status.Phase = databasePhaseFailed
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
+		r.event(cluster, corev1.EventTypeWarning, reason, msg)
+	}
+	bucket, prefix := seedLocation(cluster, database)
+	uid := string(cluster.UID)
+
+	backup, err := r.Backup.StartBackup(ctx, source, cluster.Namespace, "seed-backup-"+uid+"-"+database,
+		instancemanager.BackupRequest{
+			Database:    database,
+			Destination: path.Join(backupStagingRoot, "seed-"+uid),
+			Upload: &instancemanager.BackupUpload{
+				Bucket: bucket, Prefix: prefix, ClusterUID: uid, CubridVersion: cluster.Spec.Version,
+				SourceInstance: source, SourceRole: string(databasev1alpha1.RoleMaster),
+			},
+		})
+	if err != nil {
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
+		return
+	}
+	switch backup.State {
+	case instancemanager.OpCompleted:
+	case instancemanager.OpFailed:
+		failed("SeedBackupFailed", backup.FailureReason)
+		return
+	default:
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedBackupInProgress",
+			"backing up database "+database+" on "+source)
+		return
+	}
+
+	for _, peer := range memberNames(cluster, cluster.Spec.Topology.PromotableMembers)[1:] {
+		restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, "seed-restore-"+uid+"-"+database+"-"+peer,
+			instancemanager.RestoreRequest{
+				Database: database, Bucket: bucket, Prefix: prefix,
+				ExpectedCubridVersion: cluster.Spec.Version,
+				StagingDir:            path.Join(restoreStagingRoot, "seed-"+uid),
+				TargetDir:             restoreTargetRoot,
+			})
+		if err != nil {
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
+			return
+		}
+		switch restore.State {
+		case instancemanager.OpCompleted:
+			continue
+		case instancemanager.OpFailed:
+			failed("SeedRestoreFailed", peer+": "+restore.FailureReason)
+			return
+		default:
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedRestoreInProgress",
+				"restoring database "+database+" on "+peer)
+			return
+		}
+	}
+
+	status.HAConfigured = true
+	setCondition(cluster, conditionBootstrapReady, metav1.ConditionTrue, "PeersSeeded",
+		"database "+database+" was created on "+source+" and copied to the other members")
+	r.event(cluster, corev1.EventTypeNormal, "PeersSeeded", "database "+database+" copied to the other members")
 }
 
 // haConfVolume and haConfMount give an HA member the cluster's cubrid_ha.conf.
