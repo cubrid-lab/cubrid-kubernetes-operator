@@ -140,6 +140,57 @@ func (w window) length() string {
 	return w.to.Sub(w.from).Round(time.Millisecond).String()
 }
 
+// startClient starts a workload client that keeps writing through the
+// read-write Service until it is stopped, and waits until ten of its
+// operations were acknowledged.
+func (r *haRun) startClient(id string) {
+	file := "/tmp/" + id
+	_, err := r.client(fmt.Sprintf("CLIENT_ID=%s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7"+
+		" nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", id, file))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	EventuallyWithOffset(1, func(g Gomega) {
+		out, err := r.client(fmt.Sprintf("grep -c '\"acknowledged\"' %s.jsonl", file))
+		g.Expect(err).NotTo(HaveOccurred())
+		acknowledged, err := strconv.Atoi(strings.TrimSpace(out))
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(acknowledged).To(BeNumerically(">=", 10))
+	}, time.Minute, time.Second).Should(Succeed(), "client %s did not get ten operations acknowledged", id)
+}
+
+// killClient stops a client started with startClient. It is safe to call
+// more than once.
+func (r *haRun) killClient(id string) {
+	_, _ = r.client(fmt.Sprintf("kill $(cat /tmp/%s.pid) 2>/dev/null; true", id))
+}
+
+// lastAnswerAcknowledged reports whether the latest answer a running client
+// received is an acknowledgement.
+func (r *haRun) lastAnswerAcknowledged(id string) bool {
+	last, err := r.client(fmt.Sprintf("grep -v '\"attempted\"' /tmp/%s.jsonl | tail -n 1", id))
+	return err == nil && strings.Contains(last, `"event":"acknowledged"`)
+}
+
+// stopClient stops a client, adds its history to the run's and returns its
+// events and its operations by outcome.
+func (r *haRun) stopClient(id string) ([]workload.Event, workload.History) {
+	r.killClient(id)
+	text, err := r.client(fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	// A client that is stopped while it writes a line leaves that line unfinished.
+	if cut := strings.LastIndex(text, "\n"); cut >= 0 {
+		text = text[:cut+1]
+	}
+	events, err := workload.ReadEvents(strings.NewReader(text))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	history, err := workload.ReadHistory(strings.NewReader(text))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	r.history += text
+	if errors, err := r.client(fmt.Sprintf("tail -n 5 /tmp/%s.err", id)); err == nil && strings.TrimSpace(errors) != "" {
+		_, _ = fmt.Fprintf(GinkgoWriter, "client %s stderr:\n%s\n", id, errors)
+	}
+	return events, history
+}
+
 // s03Steps registers S03 (primary Pod termination) of the scenario contract,
 // once per variant. Each run continues on the cluster the earlier steps left,
 // with the workload client writing through the read-write Service while the
@@ -158,7 +209,6 @@ func (r *haRun) s03(variant string) {
 	defer func() { r.later = append(r.later, result) }()
 
 	client := "s03" + variant[:1]
-	file := "/tmp/" + client
 
 	By("recording the starting state")
 	master, slaves, err := r.master()
@@ -167,18 +217,8 @@ func (r *haRun) s03(variant string) {
 	Expect(err).NotTo(HaveOccurred())
 
 	By("starting a client that keeps writing through the read-write Service")
-	_, err = r.client(fmt.Sprintf("CLIENT_ID=%s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7"+
-		" nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", client, file))
-	Expect(err).NotTo(HaveOccurred())
-	stopClient := func() { _, _ = r.client(fmt.Sprintf("kill $(cat %s.pid) 2>/dev/null; true", file)) }
-	defer stopClient()
-	Eventually(func(g Gomega) {
-		out, err := r.client(fmt.Sprintf("grep -c '\"acknowledged\"' %s.jsonl", file))
-		g.Expect(err).NotTo(HaveOccurred())
-		acknowledged, err := strconv.Atoi(strings.TrimSpace(out))
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(acknowledged).To(BeNumerically(">=", 10))
-	}, time.Minute, time.Second).Should(Succeed(), "the client did not get ten operations acknowledged")
+	r.startClient(client)
+	defer r.killClient(client)
 
 	By("deleting the master Pod and waiting for a new master, the operator's status and the client")
 	var newMaster string
@@ -239,8 +279,7 @@ func (r *haRun) s03(variant string) {
 				return false, nil // a condition of the starting state is not True yet
 			}
 			// The client recovered: its latest answer is an acknowledgement.
-			last, err := r.client(fmt.Sprintf("grep -v '\"attempted\"' %s.jsonl | tail -n 1", file))
-			return err == nil && strings.Contains(last, `"event":"acknowledged"`), nil
+			return r.lastAnswerAcknowledged(client), nil
 		},
 	})
 	timeline := writeTimeline("S03/"+variant+"/timeline.jsonl", outcome.Timeline)
@@ -253,21 +292,7 @@ func (r *haRun) s03(variant string) {
 
 	By("letting the client run for the stable period, then stopping it")
 	time.Sleep(stablePeriod + 2*time.Second)
-	stopClient()
-	text, err := r.client(fmt.Sprintf("sleep 1; cat %s.jsonl", file))
-	Expect(err).NotTo(HaveOccurred())
-	// A client that is stopped while it writes a line leaves that line unfinished.
-	if cut := strings.LastIndex(text, "\n"); cut >= 0 {
-		text = text[:cut+1]
-	}
-	events, err := workload.ReadEvents(strings.NewReader(text))
-	Expect(err).NotTo(HaveOccurred())
-	history, err := workload.ReadHistory(strings.NewReader(text))
-	Expect(err).NotTo(HaveOccurred())
-	r.history += text
-	if errors, err := r.client(fmt.Sprintf("tail -n 5 %s.err", file)); err == nil && strings.TrimSpace(errors) != "" {
-		_, _ = fmt.Fprintf(GinkgoWriter, "client %s stderr:\n%s\n", client, errors)
-	}
+	events, history := r.stopClient(client)
 
 	recoveredAt, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
 	Expect(recovered).To(BeTrue(), "the client's last answer after the fault is not an acknowledgement")

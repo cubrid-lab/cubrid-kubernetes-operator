@@ -469,9 +469,12 @@ it needs more.
 ### S05: Broker failure
 
 - **Level:** real database on Kind.
-- **Variants:** `one-broker-pod` (one of the read-write Broker Pods is
-  killed) and `all-rw-brokers` (all read-write Broker Pods are killed).
-- **Fault confirmed by:** the Broker Pod's UID changed.
+- **Variants:** `broker-process` (the Broker process of one read-write Broker
+  Pod is killed, and its container restarts), `one-broker-pod` (one of the
+  read-write Broker Pods is deleted without a grace period) and
+  `all-rw-brokers` (all read-write Broker Pods are deleted that way).
+- **Fault confirmed by:** the container's restart count rose
+  (`broker-process`), or no Pod with the deleted Pod's UID exists any more.
 - **CUBRID is expected to** (POC-8): let a restarted read-write Broker find
   the master through its host list.
 - **The Operator must** (ADR-0002): restore the Broker Pods; never route the
@@ -481,7 +484,10 @@ it needs more.
   is back, then succeed within `broker_recovery_limit`.
 - **Expected, already-open connections:** a session on a killed Broker Pod
   ends with an error and its in-flight commit is `failed` or `unknown`; a
-  session on a surviving Broker Pod continues.
+  session on a surviving Broker Pod continues. The JDBC driver opens a new
+  connection by itself when a session ends between two transactions, so a
+  client can come through the loss of its Broker Pod without a failed
+  operation; the run records how many clients saw one.
 - **Must never happen:** an `acknowledged` operation missing; a database
   failover caused by the Broker failure.
 - **Data check:** all data rules on all three members.
@@ -757,7 +763,7 @@ VM lab gets its own values from its own baseline.
 | `stable_period` | How long SQL must keep succeeding before recovery is counted | 30 seconds |
 | `rejoin_limit` | Member available again until it holds all rows as a slave | Kind on a GitHub-hosted runner: 5 minutes, measured from the start of the fault. VM lab: unset |
 | `vm_return_limit` | VM powered on until its member has rejoined | unset |
-| `broker_recovery_limit` | Broker Pods killed until a new connection succeeds | unset |
+| `broker_recovery_limit` | Broker Pods killed until a new connection succeeds | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset |
 | `operator_resync_limit` | Operator started until status matches fresh observations | unset |
 | `quarantine_limit` | Ambiguous observation until new read-write connections stop succeeding | unset |
 | `partition_duration` | How long the partition is held | unset |
@@ -776,6 +782,8 @@ VM lab gets its own values from its own baseline.
 
 | `failover_limit` | The same; scenario S03, both variants | 1.1 s to 1.8 s in eight runs (four per variant) on 2026-10-05 | From the moment the deletion of the master Pod was issued to the client's first acknowledged operation after which none failed, taken from the client's history | 30 seconds |
 | `rejoin_limit` | The same | 21.4 s to 26.8 s in the same eight runs | From the moment the deletion was issued until CUBRID reports one master and two slaves on all three members, the former master among the slaves, and the Operator's status agrees. On Kind the Pod is recreated at once, so the time is taken from the fault | 5 minutes |
+
+| `broker_recovery_limit` | The same; scenario S05, three variants | Slowest of four clients per run, in two runs on 2026-10-05: 1.4 s and 2.4 s (Broker process killed), 0.1 s and 0.2 s (one Broker Pod deleted), 7.7 s and 15.8 s (all read-write Broker Pods deleted) | From the moment the fault was issued to the client's first acknowledged operation after which none failed, taken from each client's history | 1 minute, about four times the slowest run |
 
 `stable_period` is a choice, not a measurement: 30 seconds.
 
