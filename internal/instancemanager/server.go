@@ -66,6 +66,9 @@ type Server struct {
 	restoreRoots RestoreRoots
 	// ha is what the HA bootstrap needs (#106).
 	ha HAConfig
+	// replicationDB and databasesDir locate the logs a slave copies (#229).
+	replicationDB string
+	databasesDir  string
 	// timeouts are the per-operation deadlines.
 	timeouts Timeouts
 }
@@ -115,6 +118,14 @@ func (s *Server) WithTimeouts(t Timeouts) *Server {
 // output. Returns the server for chaining.
 func (s *Server) WithBackupStagingRoot(root string) *Server {
 	s.backupStagingRoot = root
+	return s
+}
+
+// WithReplication tells an HA member its database and where the logs it
+// copies from the other members are, so that a slave can report how its
+// applier is doing. Without it the role answer carries no replication facts.
+func (s *Server) WithReplication(database, databasesDir string) *Server {
+	s.replicationDB, s.databasesDir = database, databasesDir
 	return s
 }
 
@@ -198,6 +209,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) role(w http.ResponseWriter, r *http.Request) {
 	st := HeartbeatStatus(r.Context(), s.cli)
 	st.EngineVersion = s.engineVersion(r.Context())
+	st.Replication = replicationOf(r.Context(), s.cli, st, s.replicationDB, s.databasesDir)
 	writeJSON(w, http.StatusOK, st)
 }
 

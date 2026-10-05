@@ -43,6 +43,9 @@ type RoleObservation struct {
 	// EngineVersion is the engine's full version as the Instance Manager
 	// reports it ("11.4.6.1963"); empty when it did not report one.
 	EngineVersion string
+	// Replication is what a slave's Instance Manager read from its log
+	// applier; nil for another role and when the applier could not be read.
+	Replication *ReplicationObservation
 }
 
 // RoleProber polls one instance's Instance Manager /v1/role endpoint.
@@ -117,6 +120,14 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 	}
 	if st.Role != instancemanager.RoleMaster && st.Role != instancemanager.RoleSlave {
 		return o
+	}
+	if r := st.Replication; st.Role == instancemanager.RoleSlave && r != nil && r.Available {
+		o.Replication = &ReplicationObservation{
+			Source:         r.Source,
+			AppliedChanges: int64(r.AppliedChanges),
+			FailCount:      int64(r.FailCount),
+			DelayedPages:   int64(r.DelayedPageCount),
+		}
 	}
 	if st.Role == instancemanager.RoleMaster && !st.ServerActive {
 		o.Conflicting = true

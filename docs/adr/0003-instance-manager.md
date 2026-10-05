@@ -105,6 +105,10 @@ a local CUBRID control plane, not a second controller.
   "reason": "human-readable" }
 ```
 
+As implemented, a slave's answer also carries `replication`: what its log
+applier reports for the master's log (`cubrid applyinfo`), or the reason it
+could not be read. ADR-0006 describes its use.
+
 Algorithm: run `cubrid heartbeat status` and `cubrid changemode <db>`
 (exact form POC-validated) with bounded timeout; read `cubrid_ha.conf` /
 `databases.txt` as supporting evidence; map local hostname to the HA

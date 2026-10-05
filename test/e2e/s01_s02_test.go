@@ -408,6 +408,24 @@ func s01AndS02Steps(r *haRun) {
 			Expect(count).To(BeZero(), "fail count of the applier on %s", slave)
 		}
 
+		By("checking what the operator reports about each slave's applier")
+		Eventually(func(g Gomega) {
+			healthy, err := r.kubectl("get", "cubridcluster", r.cluster,
+				"-o", `jsonpath={.status.conditions[?(@.type=="ReplicationHealthy")].status}`)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(healthy).To(Equal("True"), "the ReplicationHealthy condition")
+			for _, slave := range slaves {
+				source, err := r.kubectl("get", "cubridcluster", r.cluster,
+					"-o", `jsonpath={.status.instances[?(@.name=="`+slave+`")].replication.source}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(source).To(Equal(master), "the log %s applies, as the operator's status reports it", slave)
+				stalled, err := r.kubectl("get", "cubridcluster", r.cluster,
+					"-o", `jsonpath={.status.instances[?(@.name=="`+slave+`")].replication.stalledSince}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(stalled).To(BeEmpty(), "%s is reported as stalled", slave)
+			}
+		}, time.Minute, 3*time.Second).Should(Succeed())
+
 		By("replacing a slave Pod and checking that it holds everything again")
 		replaced := slaves[0]
 		uid, err := r.kubectl("get", "pod", replaced, "-o", "jsonpath={.metadata.uid}")

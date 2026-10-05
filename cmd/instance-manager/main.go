@@ -55,6 +55,11 @@ func run() error {
 	// status. The operator sets CUBRID_COMPONENTS=SERVER for one member.
 	if os.Getenv("CUBRID_COMPONENTS") == "SERVER" {
 		server = server.WithStandaloneDatabase(envOr("CUBRID_DB", "appdb"))
+	} else {
+		// An HA member reports, as a slave, how its applier is doing for the
+		// master's log, which it copies next to its own database.
+		server = server.WithReplication(envOr("CUBRID_DB", "appdb"),
+			envOr("CUBRID_DATABASES", "/var/lib/cubrid/databases"))
 	}
 
 	// What an HA member needs to create the cluster's first database; the

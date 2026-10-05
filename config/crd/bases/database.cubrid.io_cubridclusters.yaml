@@ -544,6 +544,42 @@ spec:
                       description: ready indicates the instance passed its per-instance
                         readiness (ADR-0006 catch-up).
                       type: boolean
+                    replication:
+                      description: |-
+                        replication is what this member's log applier last reported for the
+                        master's log. It is set for a slave only, and absent when the applier
+                        could not be read.
+                      properties:
+                        appliedChanges:
+                          description: |-
+                            appliedChanges is the number of changes the applier has applied since
+                            it was started.
+                          format: int64
+                          type: integer
+                        delayedPages:
+                          description: delayedPages is the number of copied log pages
+                            that are not applied yet.
+                          format: int64
+                          type: integer
+                        failCount:
+                          description: failCount is the number of changes the applier
+                            could not apply.
+                          format: int64
+                          type: integer
+                        source:
+                          description: 'source is the member whose log is applied:
+                            the master this slave sees.'
+                          type: string
+                        stalledSince:
+                          description: |-
+                            stalledSince is when the operator first saw log pages waiting while the
+                            applier had applied nothing since the observation before. It is cleared
+                            as soon as the applier applies something or no page waits.
+                          format: date-time
+                          type: string
+                      required:
+                      - source
+                      type: object
                     role:
                       description: role is the CUBRID runtime role; unknown when not
                         authoritatively observed.

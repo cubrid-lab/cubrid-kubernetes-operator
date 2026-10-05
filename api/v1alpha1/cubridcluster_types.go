@@ -283,6 +283,34 @@ type InstanceStatus struct {
 	// imageID is the resolved container image ID/digest of this member.
 	// +optional
 	ImageID string `json:"imageID,omitempty"`
+	// replication is what this member's log applier last reported for the
+	// master's log. It is set for a slave only, and absent when the applier
+	// could not be read.
+	// +optional
+	Replication *InstanceReplication `json:"replication,omitempty"`
+}
+
+// InstanceReplication reports how a slave's log applier is doing (ADR-0006).
+// The values are the applier's own counters; the operator derives
+// stalledSince from two observations in a row.
+type InstanceReplication struct {
+	// source is the member whose log is applied: the master this slave sees.
+	Source string `json:"source"`
+	// appliedChanges is the number of changes the applier has applied since
+	// it was started.
+	// +optional
+	AppliedChanges int64 `json:"appliedChanges,omitempty"`
+	// failCount is the number of changes the applier could not apply.
+	// +optional
+	FailCount int64 `json:"failCount,omitempty"`
+	// delayedPages is the number of copied log pages that are not applied yet.
+	// +optional
+	DelayedPages int64 `json:"delayedPages,omitempty"`
+	// stalledSince is when the operator first saw log pages waiting while the
+	// applier had applied nothing since the observation before. It is cleared
+	// as soon as the applier applies something or no page waits.
+	// +optional
+	StalledSince *metav1.Time `json:"stalledSince,omitempty"`
 }
 
 // DatabaseStatus reports coarse per-database state (ADR-0010).

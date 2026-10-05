@@ -267,6 +267,36 @@ blocked/catching-up members are excluded from read endpoints.
     `Degraded/ScaleDownUnsupported`; no PVC deletion / `ha_node_list`
     shrink.
 
+## As implemented: what a slave's applier reports
+
+The check that "replication lag is within threshold for a stable window" is
+implemented as a report, not yet as a gate.
+
+- **Instance Manager.** For a slave, `GET /v1/role` carries `replication`:
+  the applier's counters and the number of copied log pages that are not
+  applied yet, read with `cubrid applyinfo` for the log of the master the
+  member's node list names. A master's answer has none.
+- **Status.** `status.instances[].replication` holds the last report of each
+  slave: `source`, `appliedChanges`, `failCount`, `delayedPages`, and
+  `stalledSince`, which the operator sets when log pages wait in two
+  observations in a row and the applier applied nothing in between. It is
+  cleared as soon as the applier applies something or no page waits.
+- **Condition.** `ReplicationHealthy` is `False` with reason `ApplyFailures`
+  when a slave's fail count is above zero, and with reason
+  `ReplicationStalled` when a slave has been stalled for 60 seconds. It is
+  `Unknown` when no slave was observed or a slave's applier could not be
+  read.
+
+Why two observations and not the number of waiting pages alone: a healthy
+slave under load has pages waiting too, but its counters rise (POC-20).
+
+What it does not do. Nothing acts on the condition: `HAReady`, `Ready` and
+the endpoints do not depend on it. A transaction that stays open on the
+master for longer than the window is applied only when it commits, so its
+slaves are reported as stalled until then; whether that is acceptable is to
+be decided before the condition gates anything. A slave is not judged while
+the master writes nothing, because then nothing waits.
+
 ## Revisit When
 
 - CUBRID exposes a reliable slave-as-source freshness proof → allow

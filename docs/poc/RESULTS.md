@@ -1081,6 +1081,73 @@ a Pod does not come back within a second.
 
 ---
 
+## POC-20 — what `cubrid applyinfo` reports on a healthy slave and on one that is not applying (ADR-0006, #229) — **PASS**
+
+`cubrid/cubrid:11.4` (engine 11.4.6), three nodes `h-0`, `h-1`, `h-2` on one
+container network, formed as in POC-15 part 1 with `h-0` as master
+(linux/amd64 emulated under podman; output only, and the rates below are
+those of an emulated machine). The workload is the JDBC client of
+`test/workload/client`, through a Broker on the master.
+
+On a slave, once a second:
+
+```sh
+cubrid applyinfo -L $CUBRID_DATABASES/appdb_<master> -r <master> -a appdb
+```
+
+The values read from its output: `Insert count` and `Fail count` of the
+applier, and `Delayed log page count` under "Delay in Copying Active Log" and
+under "Delay in Applying Copied Log".
+
+**A healthy slave.**
+
+| State | Insert count | Fail count | Pages waiting to be copied | Pages waiting to be applied |
+|---|---|---|---|---|
+| Idle | constant | 0 | 0 | 0 |
+| One client, 1500 inserts in 11 s | rises with every sample: 9, 180, 360, 533, 714, 923, 1134, 1321, 1497, 1500 | 0 | 0 | 0, 1 or 2 |
+| Three clients, 4500 inserts in 16 s | rises with every sample, from 1508 to 6000 | 0 | 0, once 1 | 0 to 3 |
+| After each load | constant | 0 | 0 | 0 from the second sample on |
+
+**A slave that is not applying.** The state of POC-17, case 2: `h-2` was
+stopped when the master `h-0` was killed, `h-1` became master, both returned.
+The values are those of `h-2`'s applier for the log of the new master `h-1`.
+
+| State | Insert count | Fail count | Pages waiting to be copied | Pages waiting to be applied |
+|---|---|---|---|---|
+| Idle, after it returned | 0 | 0 | 0 | 0 |
+| While a client writes 600 rows on the master | 0 | 0 | 0 | rises: 0, 9, 24, 39, 42 |
+| 30 s after the load | 0 | 0 | 0 | 43, not falling |
+
+The other slave, `h-0`, showed `Insert count : 600` and 0 pages waiting at the
+same moment.
+
+`Estimated Delay` was `- second(s)` in every sample of both slaves.
+
+**Findings.**
+
+- "Pages waiting to be applied" alone does not tell a busy slave from a stuck
+  one at a single moment: a healthy slave shows 1 to 3 under load.
+- Taken together with the applier's counters it does. A healthy slave's
+  counters rise from one sample to the next while pages wait; a stuck slave
+  has pages waiting and counters that do not move.
+- A stuck slave shows nothing while the master is idle. That is correct: with
+  nothing to apply it is not behind.
+- `Estimated Delay` gave no value and cannot be used.
+- The fail count stayed 0 in the stuck state. It is a second, separate sign:
+  it was 1 for the member that was created empty in POC-15.
+
+**Consequence for the Operator** (tracked in #229). A slave is to be reported
+as not healthy when, for longer than a set time, log pages wait to be applied
+and the applier's counters have not advanced, or when its fail count rises.
+
+**Not tested here:** the same on a native host under a sustained load, where
+a healthy slave may fall further behind than three pages; a long transaction,
+which is applied only when it commits and may leave the counters unchanged
+for its whole length; `Commit count` as the counter, which the
+implementation uses and which is expected to behave like `Insert count`.
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed

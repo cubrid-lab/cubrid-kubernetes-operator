@@ -171,7 +171,7 @@ func TestUpdateGuard_UsesReportedEngineVersion(t *testing.T) {
 		}
 		obs[m] = RoleObservation{Reachable: true, Role: role, ObservedAt: now, EngineVersion: fullEngineVersion}
 	}
-	instances := instanceStatuses(members, obs, now)
+	instances := instanceStatuses(members, obs, now, nil)
 	for _, in := range instances {
 		if in.ObservedEngineVersion != fullEngineVersion {
 			t.Fatalf("instance %s observedEngineVersion = %q", in.Name, in.ObservedEngineVersion)
@@ -206,7 +206,7 @@ func TestInstanceStatuses_VersionNeedsAFreshAnswer(t *testing.T) {
 		c0: {Reachable: false, ObservedAt: now, EngineVersion: fullEngineVersion},
 		c1: {Reachable: true, ObservedAt: now.Add(-time.Hour), EngineVersion: fullEngineVersion},
 	}
-	for _, in := range instanceStatuses([]string{c0, c1}, obs, now) {
+	for _, in := range instanceStatuses([]string{c0, c1}, obs, now, nil) {
 		if in.ObservedEngineVersion != "" {
 			t.Errorf("instance %s reports %q from an unusable observation", in.Name, in.ObservedEngineVersion)
 		}
