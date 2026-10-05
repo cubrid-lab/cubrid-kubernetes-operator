@@ -1068,11 +1068,16 @@ operation ended with an unknown outcome.
 safe assumption for a test or for the Operator. The contract of S03 now asks
 for exactly one master afterwards and records which member it is.
 
-**Not tested here:** whether the data of the three members agree after the
-first member resumed (the run with the changed scenario checks it); a killed
-master that stays away longer than the others' failure detection but shorter
-than a Pod start; the same on the VM lab, where a Pod does not come back
-within a second.
+**Checked afterwards, with the changed scenario** (runs 37347819703 and
+37347811425 of pull request #240): after the first member resumed, every
+acknowledged operation of the client was on all three members and through both
+Services, no rolled-back row existed, and the fail count of both slaves'
+appliers was zero. The client's writes were acknowledged again after 10.9 and
+11.2 seconds.
+
+**Not tested here:** a killed master that stays away longer than the others'
+failure detection but shorter than a Pod start; the same on the VM lab, where
+a Pod does not come back within a second.
 
 ---
 
