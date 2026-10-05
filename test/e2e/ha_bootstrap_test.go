@@ -184,8 +184,8 @@ spec:
 // through object storage and join as slaves; a row written on the master is
 // read on both slaves (ADR-0006, ADR-0010).
 //
-// It covers formation and one replicated row. It is not the S01/S02
-// validation: no broker endpoint, no workload history, no failure, one run.
+// Its last steps are S01 and S02 of the scenario contract
+// (s01AndS02Steps), which continue on the cluster these steps formed.
 // Skipped, which is "not run", on anything but amd64.
 func haBootstrapScenario() {
 	Context("HA bootstrap with the real CUBRID image", Label("db", "ha-bootstrap"), Ordered, func() {
@@ -200,6 +200,8 @@ func haBootstrapScenario() {
 		first := clusterName + "-0"
 		peers := []string{clusterName + "-1", clusterName + "-2"}
 		ran := false
+		// S01 and S02 of the scenario contract continue on this cluster.
+		scenarios := newHARun(haNamespace, storeNamespace, clusterName, database, append([]string{first}, peers...))
 
 		kubectl := func(args ...string) (string, error) {
 			return utils.Run(exec.Command("kubectl", append([]string{"-n", haNamespace}, args...)...))
@@ -275,6 +277,7 @@ spec:
 		})
 
 		AfterAll(func() {
+			scenarios.report(ran)
 			if !ran {
 				return
 			}
@@ -453,6 +456,7 @@ spec:
 			Expect(report.Members["ro"].Rows).To(Equal(48))
 
 			runSummary.Environment.ClientDriver = workloadDriver
+			scenarios.history = text
 			writeScenarioFile("ha-bootstrap/history.jsonl", []byte(text))
 			if data, err := json.MarshalIndent(report, "", "  "); err == nil {
 				writeScenarioFile("ha-bootstrap/data-check.json", append(data, '\n'))
@@ -477,5 +481,7 @@ spec:
 				Expect(restarts).To(Equal("0"), pod)
 			}
 		})
+
+		s01AndS02Steps(scenarios)
 	})
 }
