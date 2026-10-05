@@ -62,6 +62,15 @@ differs, is missing, or is unverifiable → **block** as
 (no pod deletion). Once a HA cluster is initialized, the desired engine
 version (`spec.version`) is effectively **immutable** for MVP.
 
+Automatic replacement is switched off (#196). The operator still plans a
+rolling update (slaves first, one at a time, never the master) and reports
+the member it would replace in the `Updating` condition with the reason
+`AutomaticReplacementDisabled`, but it deletes no Pod: "converged" is taken
+from readiness, not from replication, and the engine guard accepts incomplete
+observations (#197, #198). A changed Pod template therefore takes effect only
+when a Pod is replaced by hand or recreated after a failure. Switching the
+deletion on again is part of #96.
+
 As implemented (#158): the Instance Manager reads the full version from
 `cubrid_rel` (`11.4.6.1963`) and reports it with the role; status stores the
 full version. `spec.version` names a series (`11.4`), so the guard compares

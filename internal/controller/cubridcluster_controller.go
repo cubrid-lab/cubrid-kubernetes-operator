@@ -87,6 +87,10 @@ type CubridClusterReconciler struct {
 	// Backup is nil-safe: with Restore it seeds the other members of an HA
 	// cluster from the first one; nil leaves them unseeded.
 	Backup BackupClient
+	// AutomaticReplacement lets the operator delete outdated slave Pods for a
+	// rolling update. It is off: the conditions that would make a replacement
+	// safe are not complete (ADR-0009, #96). The planning runs either way.
+	AutomaticReplacement bool
 	// IMToken is the Instance Manager bearer token the operator itself uses. It
 	// is copied into each cluster's <cluster>-im-token Secret for the DB Pods.
 	// Empty means the operator is not configured: no DB Pods are created,
