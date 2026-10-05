@@ -18,6 +18,7 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -25,10 +26,10 @@ import (
 )
 
 func obsSlave() RoleObservation {
-	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave}
+	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow}
 }
 func obsMaster() RoleObservation {
-	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster}
+	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: testNow}
 }
 func obsUnknown() RoleObservation {
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown}
@@ -120,7 +121,7 @@ func TestSelectBackupTarget(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := selectBackupTarget(tc.members, tc.obs, tc.res, tc.pref, tc.single)
+			got := selectBackupTarget(tc.members, tc.obs, tc.res, tc.pref, tc.single, testNow)
 			if got.Selected != tc.wantSelected {
 				t.Fatalf("Selected = %v, want %v (reason %q)", got.Selected, tc.wantSelected, got.Reason)
 			}
@@ -151,4 +152,52 @@ func TestIdempotencyKey_Deterministic(t *testing.T) {
 	if got := idempotencyKey(b); got != want {
 		t.Errorf("idempotencyKey = %q, want %q", got, want)
 	}
+}
+
+// A backup target is chosen by the same rule as the primary: only an
+// observation that is fresh and does not contradict itself counts (#201).
+func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
+	members := []string{c0, c1, c2}
+	slaveBut := func(change func(*RoleObservation)) RoleObservation {
+		o := obsSlave()
+		change(&o)
+		return o
+	}
+	tests := []struct {
+		name string
+		c1   RoleObservation
+	}{
+		{"its answer contradicts itself", slaveBut(func(o *RoleObservation) { o.Conflicting = true })},
+		{"it was observed too long ago", slaveBut(func(o *RoleObservation) { o.ObservedAt = testNow.Add(-2 * roleObservationTTL) })},
+		{"its observation has no time", slaveBut(func(o *RoleObservation) { o.ObservedAt = time.Time{} })},
+		{"its observation is from the future", slaveBut(func(o *RoleObservation) { o.ObservedAt = testNow.Add(2 * roleObservationTTL) })},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := map[string]RoleObservation{c0: obsMaster(), c1: tc.c1, c2: obsDown()}
+
+			got := selectBackupTarget(members, obs, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
+			if got.Selected {
+				t.Errorf("StandbyOnly selected %s on an observation that is not authoritative", got.Instance)
+			}
+			if got.Reason != "NoHealthyStandby" {
+				t.Errorf("reason = %q, want NoHealthyStandby", got.Reason)
+			}
+
+			// PreferStandby must not take that slave either; with a resolved
+			// primary it falls back to the master, as documented.
+			got = selectBackupTarget(members, obs, resolvedPrimary(), databasev1alpha1.PreferStandby, false, testNow)
+			if got.Instance == c1 {
+				t.Errorf("PreferStandby selected %s on an observation that is not authoritative", c1)
+			}
+		})
+	}
+
+	t.Run("a fresh, consistent slave is selected", func(t *testing.T) {
+		obs := map[string]RoleObservation{c0: obsMaster(), c1: obsSlave(), c2: obsDown()}
+		got := selectBackupTarget(members, obs, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
+		if !got.Selected || got.Instance != c1 {
+			t.Errorf("got %+v, want %s selected", got, c1)
+		}
+	})
 }

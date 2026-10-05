@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -50,8 +52,9 @@ func selectBackupTarget(
 	res PrimaryResolution,
 	pref databasev1alpha1.TargetPreference,
 	single bool,
+	now time.Time,
 ) TargetSelection {
-	standbys := eligibleStandbys(members, obs)
+	standbys := eligibleStandbys(members, obs, now)
 	primaryResolved := res.Status == metav1.ConditionTrue && res.CurrentPrimary != ""
 
 	switch pref {
@@ -87,12 +90,14 @@ func selectBackupTarget(
 	}
 }
 
-// eligibleStandbys returns members authoritatively observed as slaves, in
-// ordinal order. Unreachable/unknown members are never eligible (ADR-0005).
-func eligibleStandbys(members []string, obs map[string]RoleObservation) []string {
+// eligibleStandbys returns the members authoritatively observed as slaves at
+// now, in ordinal order: reachable, a fresh observation, and an answer that
+// does not contradict itself, the same rule the primary resolution applies
+// (ADR-0005). Whether a slave has caught up with the master is not judged here.
+func eligibleStandbys(members []string, obs map[string]RoleObservation, now time.Time) []string {
 	var out []string
 	for _, m := range members {
-		if o, ok := obs[m]; ok && o.Reachable && o.Role == databasev1alpha1.RoleSlave {
+		if o, ok := obs[m]; ok && o.Role == databasev1alpha1.RoleSlave && authoritative(o, now) {
 			out = append(out, m)
 		}
 	}
