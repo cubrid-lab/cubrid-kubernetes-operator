@@ -35,8 +35,9 @@ import (
 var _ = Describe("Image changes on an existing cluster (ADR-0009, #197)", func() {
 	const (
 		imageNamespace = "default"
-		firstImage     = "registry.example/cubrid-instance-manager:1"
-		secondImage    = "registry.example/cubrid-instance-manager:2"
+		repository     = "registry.example/cubrid-instance-manager"
+		firstImage     = repository + ":1"
+		secondImage    = repository + ":2"
 	)
 	ctx := context.Background()
 
@@ -71,7 +72,7 @@ var _ = Describe("Image changes on an existing cluster (ADR-0009, #197)", func()
 	setImage := func(key types.NamespacedName, tag string, annotations map[string]string) {
 		c := &databasev1alpha1.CubridCluster{}
 		Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
-		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: "registry.example/cubrid-instance-manager", Tag: tag}
+		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: repository, Tag: tag}
 		c.Annotations = annotations
 		Expect(k8sClient.Update(ctx, c)).To(Succeed())
 	}
@@ -99,7 +100,7 @@ var _ = Describe("Image changes on an existing cluster (ADR-0009, #197)", func()
 		key := createAndReconcile(haCluster("image-accepted"), r)
 
 		By("an acceptance of another image does not count")
-		setImage(key, "2", map[string]string{acceptImageAnnotation: "registry.example/cubrid-instance-manager:3"})
+		setImage(key, "2", map[string]string{acceptImageAnnotation: repository + ":3"})
 		reconcileAgain(r, key)
 		Expect(stsImage(key)).To(Equal(firstImage))
 
@@ -127,7 +128,7 @@ var _ = Describe("Image changes on an existing cluster (ADR-0009, #197)", func()
 
 		c := &databasev1alpha1.CubridCluster{}
 		Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
-		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: "registry.example/cubrid-instance-manager", Tag: "2"}
+		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: repository, Tag: "2"}
 		c.Spec.ObjectStorage = testObjectStorage()
 		Expect(k8sClient.Update(ctx, c)).To(Succeed())
 		reconcileAgain(r, key)
@@ -158,7 +159,7 @@ var _ = Describe("Image changes on an existing cluster (ADR-0009, #197)", func()
 
 	It("creates a new cluster with the image its spec names", func() {
 		c := haCluster("image-new")
-		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: "registry.example/cubrid-instance-manager", Tag: "2"}
+		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: repository, Tag: "2"}
 		key := createAndReconcile(c, reconcilerWith(firstImage))
 		Expect(stsImage(key)).To(Equal(secondImage))
 	})
