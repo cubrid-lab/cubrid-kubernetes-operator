@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -103,12 +104,26 @@ func isDecimal(s string) bool {
 // once they agree; it is immutable once set. It returns true when the change is
 // engine-compatible (safe to proceed to slaves-first rolling replacement).
 func (r *CubridClusterReconciler) reconcileUpdateGuard(cluster *databasev1alpha1.CubridCluster) bool {
+	expected := int(cluster.Spec.Topology.PromotableMembers)
 	observed := cluster.Status.ObservedEngineVersion
 	if observed == "" {
-		if v, ok := agreedEngineVersion(cluster.Status.Instances); ok {
-			observed = v
-			cluster.Status.ObservedEngineVersion = v
+		// The baseline is what every member reports, never that of a subset:
+		// a member that has not answered may run something else.
+		v, ok := agreedEngineVersion(cluster.Status.Instances, expected)
+		if !ok {
+			setCondition(cluster, conditionUpdating, metav1.ConditionFalse, "UpdateBlockedEngineVersionNotObserved",
+				"not every member has reported the same engine version yet; no update is carried out")
+			return false
 		}
+		observed = v
+		cluster.Status.ObservedEngineVersion = v
+	}
+
+	// A recorded baseline does not end the checking: every member has to show
+	// a fresh version of the baseline's series now.
+	if reason, msg, ok := membersMatchBaseline(cluster.Status.Instances, expected, observed); !ok {
+		setCondition(cluster, conditionUpdating, metav1.ConditionFalse, reason, msg+" (no pod deletion)")
+		return false
 	}
 
 	switch classifyEngineChange(cluster.Spec.Version, observed) {
@@ -124,6 +139,31 @@ func (r *CubridClusterReconciler) reconcileUpdateGuard(cluster *databasev1alpha1
 	default:
 		return true
 	}
+}
+
+// membersMatchBaseline checks the members as observed now against the
+// recorded baseline: each of the expected members must report a version, and
+// one of the baseline's series. Another patch of that series is not a mix; it
+// is what a compatible update in progress looks like (ADR-0009).
+func membersMatchBaseline(instances []databasev1alpha1.InstanceStatus, expected int, baseline string) (reason, msg string, ok bool) {
+	series := engineSeries(baseline)
+	reported := 0
+	for _, in := range instances {
+		if in.ObservedEngineVersion == "" {
+			return "UpdateBlockedEngineVersionUnknown",
+				"member " + in.Name + " has not reported its engine version in a fresh observation", false
+		}
+		if engineSeries(in.ObservedEngineVersion) != series {
+			return "UpdateBlockedMixedEngineVersions",
+				"member " + in.Name + " runs engine " + in.ObservedEngineVersion + ", the cluster's baseline is " + baseline, false
+		}
+		reported++
+	}
+	if reported < expected {
+		return "UpdateBlockedEngineVersionUnknown",
+			fmt.Sprintf("%d of %d members have reported an engine version", reported, expected), false
+	}
+	return "", "", true
 }
 
 // minHealthyHA is the minimum number of healthy members that must remain after
@@ -218,13 +258,18 @@ func (r *CubridClusterReconciler) buildUpdateMembers(ctx context.Context, cluste
 	return out, nil
 }
 
-// agreedEngineVersion returns the engine version when every instance that
-// reports one agrees; otherwise ok is false (an ambiguous mix is not a baseline).
-func agreedEngineVersion(instances []databasev1alpha1.InstanceStatus) (string, bool) {
+// agreedEngineVersion returns the engine version when all of the expected
+// members report one and it is the same; otherwise ok is false. A member that
+// reports nothing, or is missing, may run something else, so a subset is not
+// a baseline, and neither is a mix.
+func agreedEngineVersion(instances []databasev1alpha1.InstanceStatus, expected int) (string, bool) {
+	if expected <= 0 || len(instances) < expected {
+		return "", false
+	}
 	version := ""
 	for _, in := range instances {
 		if in.ObservedEngineVersion == "" {
-			continue
+			return "", false
 		}
 		if version == "" {
 			version = in.ObservedEngineVersion
@@ -233,9 +278,6 @@ func agreedEngineVersion(instances []databasev1alpha1.InstanceStatus) (string, b
 		if version != in.ObservedEngineVersion {
 			return "", false
 		}
-	}
-	if version == "" {
-		return "", false
 	}
 	return version, true
 }

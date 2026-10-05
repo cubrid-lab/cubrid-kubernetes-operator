@@ -56,7 +56,7 @@ func TestAgreedEngineVersion(t *testing.T) {
 	t.Run("all agree", func(t *testing.T) {
 		v, ok := agreedEngineVersion([]databasev1alpha1.InstanceStatus{
 			{ObservedEngineVersion: cubridVersion}, {ObservedEngineVersion: cubridVersion},
-		})
+		}, 2)
 		if !ok || v != cubridVersion {
 			t.Errorf("= %q,%v want 11.4,true", v, ok)
 		}
@@ -64,13 +64,20 @@ func TestAgreedEngineVersion(t *testing.T) {
 	t.Run("mixed -> not agreed", func(t *testing.T) {
 		if _, ok := agreedEngineVersion([]databasev1alpha1.InstanceStatus{
 			{ObservedEngineVersion: cubridVersion}, {ObservedEngineVersion: "11.5"},
-		}); ok {
+		}, 2); ok {
 			t.Error("mixed versions must not agree")
 		}
 	})
 	t.Run("none reported -> not agreed", func(t *testing.T) {
-		if _, ok := agreedEngineVersion([]databasev1alpha1.InstanceStatus{{}, {}}); ok {
+		if _, ok := agreedEngineVersion([]databasev1alpha1.InstanceStatus{{}, {}}, 2); ok {
 			t.Error("no reported versions must not agree")
+		}
+	})
+	t.Run("fewer members than expected -> not agreed", func(t *testing.T) {
+		if _, ok := agreedEngineVersion([]databasev1alpha1.InstanceStatus{
+			{ObservedEngineVersion: cubridVersion}, {ObservedEngineVersion: cubridVersion},
+		}, 3); ok {
+			t.Error("two of three members must not set the baseline")
 		}
 	})
 }
@@ -122,6 +129,7 @@ func TestReconcileUpdateGuard_UpToDate(t *testing.T) {
 func TestReconcileUpdateGuard_RecordsBaselineFromInstances(t *testing.T) {
 	r := &CubridClusterReconciler{}
 	c := guardCluster(cubridVersion, "")
+	c.Spec.Topology.PromotableMembers = 2
 	c.Status.Instances = []databasev1alpha1.InstanceStatus{
 		{Name: "c-0", ObservedEngineVersion: cubridVersion},
 		{Name: c1, ObservedEngineVersion: cubridVersion},
@@ -173,6 +181,7 @@ func TestUpdateGuard_UsesReportedEngineVersion(t *testing.T) {
 	r := &CubridClusterReconciler{}
 	same := &databasev1alpha1.CubridCluster{}
 	same.Spec.Version = cubridVersion
+	same.Spec.Topology.PromotableMembers = 3
 	same.Status.Instances = instances
 	if !r.reconcileUpdateGuard(same) {
 		t.Errorf("spec %q on engine %q must not be blocked", cubridVersion, fullEngineVersion)
@@ -183,6 +192,7 @@ func TestUpdateGuard_UsesReportedEngineVersion(t *testing.T) {
 
 	other := &databasev1alpha1.CubridCluster{}
 	other.Spec.Version = otherSeries
+	other.Spec.Topology.PromotableMembers = 3
 	other.Status.Instances = instances
 	if r.reconcileUpdateGuard(other) {
 		t.Errorf("spec 11.5 on engine %q must be blocked", fullEngineVersion)
@@ -210,4 +220,108 @@ func TestObservationFromStatus_CarriesEngineVersion(t *testing.T) {
 			t.Errorf("role %s: EngineVersion = %q", role, o.EngineVersion)
 		}
 	}
+}
+
+// threeInstances builds status.instances for a three-member cluster from the
+// versions given; "" is a member without a fresh version.
+func threeInstances(versions ...string) []databasev1alpha1.InstanceStatus {
+	out := make([]databasev1alpha1.InstanceStatus, 0, len(versions))
+	for i, v := range versions {
+		out = append(out, databasev1alpha1.InstanceStatus{
+			Name: []string{c0, c1, c2}[i], Ordinal: int32(i), ObservedEngineVersion: v, //nolint:gosec // a small test index
+		})
+	}
+	return out
+}
+
+func haGuardCluster(baseline string, versions ...string) *databasev1alpha1.CubridCluster {
+	c := guardCluster(cubridVersion, baseline)
+	c.Spec.Topology.PromotableMembers = 3
+	c.Status.Instances = threeInstances(versions...)
+	return c
+}
+
+func updatingReason(c *databasev1alpha1.CubridCluster) string {
+	if cond := meta.FindStatusCondition(c.Status.Conditions, conditionUpdating); cond != nil {
+		return cond.Reason
+	}
+	return ""
+}
+
+// The baseline is the version every member reported, not that of a subset (#198).
+func TestUpdateGuard_BaselineNeedsEveryMember(t *testing.T) {
+	r := &CubridClusterReconciler{}
+	tests := []struct {
+		name     string
+		versions []string
+	}{
+		{"one of three reports", []string{fullEngineVersion, "", ""}},
+		{"two of three report", []string{fullEngineVersion, fullEngineVersion, ""}},
+		{"none reports", []string{"", "", ""}},
+		{"they disagree", []string{fullEngineVersion, fullEngineVersion, "11.4.5.1000"}},
+		{"a member is missing from status", []string{fullEngineVersion, fullEngineVersion}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := haGuardCluster("", tc.versions...)
+			if r.reconcileUpdateGuard(c) {
+				t.Error("the guard let an update through without a verified engine version")
+			}
+			if c.Status.ObservedEngineVersion != "" {
+				t.Errorf("baseline recorded as %q from incomplete observations", c.Status.ObservedEngineVersion)
+			}
+			if got := updatingReason(c); got != "UpdateBlockedEngineVersionNotObserved" {
+				t.Errorf("Updating reason = %q", got)
+			}
+		})
+	}
+
+	t.Run("every member reports the same version", func(t *testing.T) {
+		c := haGuardCluster("", fullEngineVersion, fullEngineVersion, fullEngineVersion)
+		if !r.reconcileUpdateGuard(c) {
+			t.Errorf("a complete, agreeing observation must not block: %s", updatingReason(c))
+		}
+		if c.Status.ObservedEngineVersion != fullEngineVersion {
+			t.Errorf("baseline = %q", c.Status.ObservedEngineVersion)
+		}
+	})
+}
+
+// A recorded baseline does not end the checking: a member whose version is
+// unknown now, or belongs to another series, blocks an update (#198).
+func TestUpdateGuard_ChecksMembersAgainstTheBaseline(t *testing.T) {
+	r := &CubridClusterReconciler{}
+	tests := []struct {
+		name     string
+		versions []string
+		reason   string
+	}{
+		{"a member's version is unknown", []string{fullEngineVersion, "", fullEngineVersion},
+			"UpdateBlockedEngineVersionUnknown"},
+		{"a member is missing from status", []string{fullEngineVersion, fullEngineVersion},
+			"UpdateBlockedEngineVersionUnknown"},
+		{"a member runs another series", []string{fullEngineVersion, "11.5.0.0001", fullEngineVersion},
+			"UpdateBlockedMixedEngineVersions"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := haGuardCluster(fullEngineVersion, tc.versions...)
+			if r.reconcileUpdateGuard(c) {
+				t.Error("the guard let an update through")
+			}
+			if got := updatingReason(c); got != tc.reason {
+				t.Errorf("Updating reason = %q, want %q", got, tc.reason)
+			}
+			if c.Status.ObservedEngineVersion != fullEngineVersion {
+				t.Errorf("the baseline changed to %q", c.Status.ObservedEngineVersion)
+			}
+		})
+	}
+
+	t.Run("another patch of the same series is not a mix", func(t *testing.T) {
+		c := haGuardCluster(fullEngineVersion, fullEngineVersion, "11.4.7.2000", fullEngineVersion)
+		if !r.reconcileUpdateGuard(c) {
+			t.Errorf("a compatible patch update in progress must not block itself: %s", updatingReason(c))
+		}
+	})
 }
