@@ -171,6 +171,12 @@ FAKE_IM_IMG ?= example.com/cubrid-fake-instance-manager:e2e
 docker-build-fake-im: container-tool ## Build the test-only fake Instance Manager image (no CUBRID).
 	$(CONTAINER_TOOL) build -f test/fakeim/Dockerfile -t ${FAKE_IM_IMG} .
 
+# A test-only image: the SQL workload client on the official CUBRID JDBC driver.
+WORKLOAD_IMG ?= example.com/cubrid-workload-client:e2e
+.PHONY: docker-build-workload
+docker-build-workload: container-tool ## Build the test-only SQL workload client image.
+	$(CONTAINER_TOOL) build -f test/workload/client/Dockerfile -t ${WORKLOAD_IMG} .
+
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
 # - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/

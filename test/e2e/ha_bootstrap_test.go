@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -30,6 +31,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
 // objectStoreManifest is a throwaway S3-compatible store for the scenario: a
@@ -144,6 +146,37 @@ spec:
               sys.exit("a write through -ro was accepted")
           print("BROKER-CHECK-OK")
           PY
+`
+
+// workloadClientManifest is the SQL workload client of the scenario contract,
+// outside the cluster's namespace. It creates the tables and runs its
+// operations through the read-write Service, keeps the history in a file, and
+// then stays up so that the test can read the history and dump the rows
+// through either Service.
+const workloadClientManifest = `apiVersion: v1
+kind: Pod
+metadata:
+  name: workload-client
+  namespace: %[1]s
+spec:
+  restartPolicy: Never
+  containers:
+    - name: client
+      image: %[5]s
+      imagePullPolicy: Never
+      env:
+        - {name: JDBC_URL, value: "jdbc:cubrid:%[2]s-rw.%[3]s.svc:33000:%[4]s:::?connectTimeout=10&queryTimeout=30"}
+        - {name: RO_JDBC_URL, value: "jdbc:cubrid:%[2]s-ro.%[3]s.svc:33001:%[4]s:::?connectTimeout=10&queryTimeout=30"}
+        - {name: CLIENT_ID, value: "c1"}
+        - {name: OPS, value: "60"}
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -e
+          workload init
+          workload run > /tmp/history.jsonl
+          echo WORKLOAD-DONE
+          sleep 3600
 `
 
 // haBootstrapScenario registers the HA bootstrap on a real engine: of three
@@ -365,6 +398,65 @@ spec:
 					g.Expect(status).To(Equal("True"), conditionType)
 				}
 			}, 2*time.Minute, 3*time.Second).Should(Succeed())
+		})
+
+		It("holds what a recorded workload was told, on both Services", func() {
+			By("building and loading the workload client image")
+			_, err := utils.Run(exec.Command("make", "docker-build-workload",
+				fmt.Sprintf("WORKLOAD_IMG=%s", workloadImage)))
+			Expect(err).NotTo(HaveOccurred(), "Failed to build the workload client image")
+			Expect(utils.LoadImageToKindClusterWithName(workloadImage)).To(Succeed())
+
+			By("running the workload through the read-write Service")
+			apply(fmt.Sprintf(workloadClientManifest, storeNamespace, clusterName, haNamespace, database, workloadImage))
+			client := func(args ...string) (string, error) {
+				return utils.Run(exec.Command("kubectl", append(
+					[]string{"-n", storeNamespace, "exec", "workload-client", "--"}, args...)...))
+			}
+			Eventually(func(g Gomega) {
+				phase, err := utils.Run(exec.Command("kubectl", "-n", storeNamespace, "get", "pod", "workload-client",
+					"-o", "jsonpath={.status.phase}"))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(phase).NotTo(Equal("Failed"), "the workload client failed")
+				logs, err := utils.Run(exec.Command("kubectl", "-n", storeNamespace, "logs", "workload-client"))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(logs).To(ContainSubstring("WORKLOAD-DONE"), "client output:\n%s", logs)
+			}, 10*time.Minute, 3*time.Second).Should(Succeed())
+
+			By("reading the history the client kept")
+			text, err := client("cat", "/tmp/history.jsonl")
+			Expect(err).NotTo(HaveOccurred())
+			history, err := workload.ReadHistory(strings.NewReader(text))
+			Expect(err).NotTo(HaveOccurred(), "history:\n%s", text)
+			Expect(history.Counts[workload.Attempted]).To(Equal(60))
+			Expect(history.Counts[workload.Acknowledged]).To(Equal(60),
+				"with no fault every operation is acknowledged: %v", history.Counts)
+
+			By("checking the rows read through each Service against the history")
+			var report workload.Report
+			Eventually(func(g Gomega) {
+				members := map[string][]workload.Row{}
+				for name, dump := range map[string]string{
+					"rw": "workload dump",
+					"ro": `JDBC_URL="$RO_JDBC_URL" workload dump`,
+				} {
+					out, err := client("sh", "-c", dump)
+					g.Expect(err).NotTo(HaveOccurred())
+					members[name], err = workload.ReadRows(strings.NewReader(out))
+					g.Expect(err).NotTo(HaveOccurred(), "rows through -%s:\n%s", name, out)
+				}
+				report = workload.Check(history, members)
+				g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
+			}, 2*time.Minute, 3*time.Second).Should(Succeed())
+			// 60 operations, every fifth rolled back.
+			Expect(report.Members["rw"].Rows).To(Equal(48))
+			Expect(report.Members["ro"].Rows).To(Equal(48))
+
+			runSummary.Environment.ClientDriver = workloadDriver
+			writeScenarioFile("ha-bootstrap/history.jsonl", []byte(text))
+			if data, err := json.MarshalIndent(report, "", "  "); err == nil {
+				writeScenarioFile("ha-bootstrap/data-check.json", append(data, '\n'))
+			}
 		})
 
 		It("reports the cluster Ready with the master as primary", func() {
