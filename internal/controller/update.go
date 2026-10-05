@@ -158,6 +158,14 @@ func (r *CubridClusterReconciler) reconcileRollingUpdate(ctx context.Context, cl
 
 	switch plan.Action {
 	case RollDeletePod:
+		if !r.AutomaticReplacement {
+			// Planned, not carried out: "converged" is still taken from
+			// readiness and the engine guard accepts incomplete observations.
+			setCondition(cluster, conditionUpdating, metav1.ConditionFalse, "AutomaticReplacementDisabled",
+				"member "+plan.Target+" runs an outdated revision; the operator does not replace Pods by itself yet (#96), "+
+					"so the change takes effect when a Pod is replaced by hand")
+			return
+		}
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: plan.Target, Namespace: cluster.Namespace}}
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			setCondition(cluster, conditionUpdating, metav1.ConditionTrue, "MemberUpdateInProgress",
