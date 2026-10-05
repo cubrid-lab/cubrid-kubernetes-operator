@@ -518,6 +518,11 @@ it needs more.
 - **Expected:** SQL through both endpoints is not interrupted by the Operator
   restart alone; in the second variant CUBRID's failover completes while the
   Operator is absent, and after its start the status names the new master.
+  Neither a restarted nor a returning Operator restarts a member.
+- **Limit while the Operator is absent, observed on Kind:** nobody updates
+  `status`. After the failover it went on naming the former master as
+  `currentPrimary` with `PrimaryResolved=True` until the Operator was back.
+  Nothing in the status says how old an observation is.
 - **Must never happen:** the Operator restoring the old master's role; a
   planned shutdown issued from stale status.
 - **Data check:** all data rules on all three members.
@@ -774,7 +779,7 @@ VM lab gets its own values from its own baseline.
 | `rejoin_limit` | Member available again until it holds all rows as a slave | Kind on a GitHub-hosted runner: 5 minutes, measured from the start of the fault. VM lab: unset |
 | `vm_return_limit` | VM powered on until its member has rejoined | unset |
 | `broker_recovery_limit` | Broker Pods killed until a new connection succeeds | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset |
-| `operator_resync_limit` | Operator started until status matches fresh observations | unset |
+| `operator_resync_limit` | Operator started until status matches fresh observations | Kind on a GitHub-hosted runner: 2 minutes. VM lab: unset |
 | `quarantine_limit` | Ambiguous observation until new read-write connections stop succeeding | unset |
 | `partition_duration` | How long the partition is held | unset |
 | `rebuild_limit` | Rebuild requested until the member holds all rows | unset |
@@ -794,6 +799,8 @@ VM lab gets its own values from its own baseline.
 | `rejoin_limit` | The same | 21.4 s to 26.8 s in the same eight runs | From the moment the deletion was issued until CUBRID reports one master and two slaves on all three members, the former master among the slaves, and the Operator's status agrees. On Kind the Pod is recreated at once, so the time is taken from the fault | 5 minutes |
 
 | `broker_recovery_limit` | The same; scenario S05, three variants | Slowest of four clients per run, in two runs on 2026-10-05: 1.4 s and 2.4 s (Broker process killed), 0.1 s and 0.2 s (one Broker Pod deleted), 7.7 s and 15.8 s (all read-write Broker Pods deleted) | From the moment the fault was issued to the client's first acknowledged operation after which none failed, taken from each client's history | 1 minute, about four times the slowest run |
+
+| `operator_resync_limit` | The same; scenario S06, both variants | In five runs on 2026-10-05 and 2026-10-06: 12.3 s to 13.5 s (`restart`), 17.5 s to 20.3 s (`absent-during-failover`) | `restart`: from the moment the Operator Pod's deletion was issued until another Operator Pod is available and the status names the master with every condition `True`. `absent-during-failover`: from the moment the Operator's Deployment was scaled back to one until the status names the new master with every condition `True` | 2 minutes |
 
 `stable_period` is a choice, not a measurement: 30 seconds.
 
