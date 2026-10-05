@@ -126,9 +126,10 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 	count := cluster.Spec.Topology.PromotableMembers
 	members := memberNames(cluster, count)
 	obs := r.probeAll(ctx, members, cluster.Namespace)
-	res := resolvePrimary(members, obs, time.Now())
+	observedAt := time.Now()
+	res := resolvePrimary(members, obs, observedAt)
 
-	sel := selectBackupTarget(members, obs, res, backup.Spec.Target.Preference, count <= 1)
+	sel := selectBackupTarget(members, obs, res, backup.Spec.Target.Preference, count <= 1, observedAt)
 	if !sel.Selected {
 		// Not terminal: HA may resolve later. Surface why and requeue.
 		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason,
