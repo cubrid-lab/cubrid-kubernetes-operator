@@ -191,6 +191,43 @@ func (r *haRun) stopClient(id string) ([]workload.Event, workload.History) {
 	return events, history
 }
 
+// roleLog records what CUBRID reports on every member, each time it changes.
+// It is evidence for a run that does not end as expected.
+type roleLog struct {
+	lines []string
+	last  string
+}
+
+// sample asks every member for its node and server state.
+func (l *roleLog) sample(r *haRun) {
+	states := make([]string, 0, len(r.members))
+	for _, pod := range r.members {
+		out, err := r.kubectl("exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
+		state := "unreachable"
+		if err == nil {
+			state = "no state"
+			for _, line := range strings.Split(out, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "HA-Node Info") || strings.HasPrefix(line, "Server ") {
+					state = strings.TrimPrefix(state+" | "+line, "no state | ")
+				}
+			}
+		}
+		states = append(states, pod+": "+state)
+	}
+	now := strings.Join(states, "; ")
+	if now == l.last {
+		return
+	}
+	l.last = now
+	line, _ := json.Marshal(map[string]string{"t": time.Now().UTC().Format(time.RFC3339Nano), "roles": now})
+	l.lines = append(l.lines, string(line))
+}
+
+func (l *roleLog) write(rel string) string {
+	return writeScenarioFile(rel, []byte(strings.Join(l.lines, "\n")+"\n"))
+}
+
 // s03Steps registers S03 (primary Pod termination) of the scenario contract,
 // once per variant. Each run continues on the cluster the earlier steps left,
 // with the workload client writing through the read-write Service while the
@@ -226,6 +263,7 @@ func (r *haRun) s03(variant string) {
 	// How long the operator reported the primary as not resolved and the
 	// routing as not ready, as far as the samples of the wait show.
 	var unresolved, notRouting window
+	roles := &roleLog{}
 	outcome := faults.Run(context.Background(), faults.Scenario{
 		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant == s03Abrupt},
 		Limits: s03FlowLimits,
@@ -237,6 +275,7 @@ func (r *haRun) s03(variant string) {
 			return err
 		},
 		Check: func(context.Context) (bool, error) {
+			roles.sample(r)
 			// The operator's own view, from one read of its status. It must
 			// never offer the write endpoint while the primary is not
 			// resolved (ADR-0005, section 6).
@@ -283,10 +322,15 @@ func (r *haRun) s03(variant string) {
 		},
 	})
 	timeline := writeTimeline("S03/"+variant+"/timeline.jsonl", outcome.Timeline)
+	rolesFile := roles.write("S03/" + variant + "/roles.jsonl")
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
 	if outcome.Result != evidence.Pass {
 		result.Result, result.Reason = outcome.Result, outcome.Reason
+		// Keep what the client saw: the scenario ends here.
+		if text, err := r.client(fmt.Sprintf("cat /tmp/%s.jsonl", client)); err == nil {
+			writeScenarioFile("S03/"+variant+"/client-history.jsonl", []byte(text))
+		}
 	}
 	Expect(outcome.Result).To(Equal(evidence.Pass), "S03/%s: %s", variant, outcome.Reason)
 
@@ -324,8 +368,10 @@ func (r *haRun) s03(variant string) {
 	}
 
 	files := r.evidenceFiles("S03/"+variant, report)
-	if timeline != "" {
-		files = append(files, timeline)
+	for _, f := range []string{timeline, rolesFile} {
+		if f != "" {
+			files = append(files, f)
+		}
 	}
 	since := func(t time.Time) string { return t.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String() }
 	// Writes the client was told are committed while the operator reported
