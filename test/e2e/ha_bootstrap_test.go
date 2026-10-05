@@ -483,7 +483,16 @@ spec:
 		})
 
 		s01AndS02Steps(scenarios)
+		// The order matters: each step starts from the master the one
+		// before it left, and the two abrupt variants of S03 each need a
+		// particular member as master. The Broker failures and the Operator
+		// restart move no role, so the first member is still the master
+		// when its Pod is deleted without a grace period.
 		s05Steps(scenarios)
-		s03Steps(scenarios)
+		s06Step(scenarios, s06Restart)
+		s03Step(scenarios, s03AbruptFirst) // the first member, which CUBRID makes master again
+		s06Step(scenarios, s06Absent)      // the first member's Pod is deleted: the second takes over
+		s03Step(scenarios, s03Abrupt)      // the second member: the first takes over
+		s03Step(scenarios, s03Graceful)
 	})
 }

@@ -46,10 +46,9 @@ const (
 	s03Abrupt      = "abrupt"
 )
 
-// s03Variants is the order in which the variants run. The first runs while
-// the first member is the master; the last after the graceful one moved the
-// master away from it.
-var s03Variants = []string{s03AbruptFirst, s03Graceful, s03Abrupt}
+// s03Variants lists the variants. The order in which they run is set where
+// the steps are registered (ha_bootstrap_test.go).
+var s03Variants = []string{s03AbruptFirst, s03Abrupt, s03Graceful}
 
 // s03Clients names the workload client of each variant.
 var s03Clients = map[string]string{s03AbruptFirst: "s03f", s03Graceful: "s03g", s03Abrupt: "s03a"}
@@ -239,17 +238,10 @@ func (l *roleLog) write(rel string) string {
 	return writeScenarioFile(rel, []byte(strings.Join(l.lines, "\n")+"\n"))
 }
 
-// s03Steps registers S03 (primary Pod termination) of the scenario contract,
-// once per variant. Each run continues on the cluster the earlier steps left,
+// s03Step registers one variant of S03 (primary Pod termination) of the
+// scenario contract. The run continues on the cluster the earlier steps left,
 // with the workload client writing through the read-write Service while the
 // master's Pod is deleted.
-func s03Steps(r *haRun) {
-	for _, variant := range s03Variants {
-		s03Step(r, variant)
-	}
-}
-
-// s03Step registers one variant of S03.
 func s03Step(r *haRun, variant string) {
 	It("S03/"+variant+": one member is master again after the master Pod is deleted, and no acknowledged write is lost",
 		func() { r.s03(variant) })
