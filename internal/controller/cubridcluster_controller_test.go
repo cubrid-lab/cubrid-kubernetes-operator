@@ -44,18 +44,30 @@ import (
 type fakeRestoreClient struct {
 	started        bool
 	completed      bool
+	failed         bool
 	idempotencyKey string
+	keys           []string
 }
 
-const opRestore = "op-restore"
+const (
+	opRestore       = "op-restore"
+	testManifestURI = "s3://bucket/prod/uid/manifest.json"
+)
 
 func (f *fakeRestoreClient) StartRestore(_ context.Context, _, _, key string, _ instancemanager.RestoreRequest) (instancemanager.Operation, error) {
 	f.started = true
 	f.idempotencyKey = key
+	f.keys = append(f.keys, key)
 	return instancemanager.Operation{ID: opRestore, State: instancemanager.OpRestoring}, nil
 }
 
 func (f *fakeRestoreClient) GetOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, error) {
+	if f.failed {
+		return instancemanager.Operation{
+			ID: opRestore, State: instancemanager.OpFailed,
+			FailureReason: "manager restarted while operation was in progress",
+		}, nil
+	}
 	if f.completed {
 		return instancemanager.Operation{ID: opRestore, State: instancemanager.OpCompleted}, nil
 	}
@@ -485,10 +497,76 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(updated.Status.Bootstrap.TargetMember).To(Equal("recovery-bootstrap-0"))
 		})
 
+		It("starts an interrupted restore again, a limited number of times, and is never Ready meanwhile (#120)", func() {
+			newCluster := func(name string) types.NamespacedName {
+				c := haCluster(name)
+				c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+					Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
+				}
+				c.Spec.ObjectStorage = testObjectStorage()
+				Expect(k8sClient.Create(ctx, c)).To(Succeed())
+				DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+				return types.NamespacedName{Name: name, Namespace: ns}
+			}
+			reconcileOnce := func(r *CubridClusterReconciler, key types.NamespacedName) *databasev1alpha1.CubridCluster {
+				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+				got := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+				Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionReady)).To(BeFalse(),
+					"a cluster whose restore has not completed must not be Ready")
+				return got
+			}
+
+			By("an interrupted restore is started again under a new key and then completes")
+			restore := &fakeRestoreClient{}
+			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore, IMToken: testIMToken}
+			key := newCluster("recovery-resume")
+			reconcileOnce(r, key) // starts
+			restore.failed = true
+			got := reconcileOnce(r, key) // sees the failure
+			Expect(got.Status.Bootstrap.Phase).NotTo(Equal(databasev1alpha1.BootstrapFailed))
+			Expect(got.Status.Bootstrap.Attempts).To(BeEquivalentTo(1))
+			Expect(got.Status.Bootstrap.OperationID).To(BeEmpty())
+			Expect(got.Status.Bootstrap.ManifestURI).To(Equal(testManifestURI))
+			Expect(got.Status.Bootstrap.TargetMember).To(Equal("recovery-resume-0"))
+			cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
+			Expect(cond.Reason).To(Equal("RestoreFailedRetrying"))
+
+			restore.failed = false
+			reconcileOnce(r, key) // starts the second attempt
+			Expect(restore.keys).To(HaveLen(2))
+			Expect(restore.keys[1]).NotTo(Equal(restore.keys[0]))
+			restore.completed = true
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			done := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, done)).To(Succeed())
+			Expect(done.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapComplete))
+
+			By("a restore that keeps failing ends as Failed")
+			failing := &fakeRestoreClient{}
+			rf := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: failing, IMToken: testIMToken}
+			keyFailing := newCluster("recovery-giveup")
+			var last *databasev1alpha1.CubridCluster
+			for range maxBootstrapAttempts {
+				failing.failed = false
+				reconcileOnce(rf, keyFailing) // start
+				failing.failed = true
+				last = reconcileOnce(rf, keyFailing) // fail
+			}
+			Expect(last.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapFailed))
+			cond = meta.FindStatusCondition(last.Status.Conditions, conditionBootstrapReady)
+			Expect(cond.Reason).To(Equal("RestoreFailed"))
+			Expect(failing.keys).To(HaveLen(maxBootstrapAttempts))
+			reconcileOnce(rf, keyFailing)
+			Expect(failing.keys).To(HaveLen(maxBootstrapAttempts), "no further attempt after giving up")
+		})
+
 		It("rejects a recovery bootstrap without objectStorage (#99)", func() {
 			c := haCluster("recovery-no-storage")
 			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
-				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: "s3://bucket/prod/uid/manifest.json"},
+				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
 			}
 			err := k8sClient.Create(ctx, c)
 			Expect(err).To(HaveOccurred(), "the DB Pods would have no object storage to read the backup from")
@@ -498,7 +576,7 @@ var _ = Describe("CubridCluster Controller", func() {
 		It("drives recovery bootstrap and gates Ready until restore completes (ADR-0008)", func() {
 			c := haCluster("recovery-run")
 			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
-				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: "s3://bucket/prod/uid/manifest.json"},
+				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
 			}
 			c.Spec.ObjectStorage = testObjectStorage()
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -112,7 +113,21 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionTrue, "RecoveryComplete", "restore completed on "+target)
 		return ctrl.Result{}, false
 	case instancemanager.OpFailed:
-		r.recoveryFailed(cluster, "RestoreFailed", op.FailureReason)
+		// A failed restore, which includes one cut off by a manager restart, is
+		// started again under the next attempt's key. The Instance Manager
+		// removes what its own failed restore left before it restores again,
+		// and nothing else (ADR-0008).
+		boot := cluster.Status.Bootstrap
+		if boot.Attempts+1 < maxBootstrapAttempts {
+			boot.Attempts++
+			boot.OperationID = ""
+			msg := fmt.Sprintf("on %s: %s; starting attempt %d of %d", target, op.FailureReason, boot.Attempts+1, maxBootstrapAttempts)
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreFailedRetrying", msg)
+			r.event(cluster, corev1.EventTypeWarning, "RestoreFailedRetrying", msg)
+			return ctrl.Result{RequeueAfter: restorePollAfter}, true
+		}
+		r.recoveryFailed(cluster, "RestoreFailed",
+			fmt.Sprintf("on %s: %s; giving up after %d attempts", target, op.FailureReason, maxBootstrapAttempts))
 		return ctrl.Result{}, true
 	default:
 		cluster.Status.Bootstrap.Phase = databasev1alpha1.BootstrapRestoring
@@ -128,10 +143,16 @@ func (r *CubridClusterReconciler) recoveryFailed(cluster *databasev1alpha1.Cubri
 	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
 }
 
-// recoveryIdempotencyKey is deterministic per cluster+manifest+member so a
-// retry never starts a second restore (ADR-0008).
+// recoveryIdempotencyKey is deterministic per cluster, manifest, member and
+// attempt, so a reconcile after an operator restart finds the restore that is
+// running instead of starting a second one (ADR-0008). Only a restore that
+// failed is followed by one under the next attempt's key.
 func recoveryIdempotencyKey(cluster *databasev1alpha1.CubridCluster, member string) string {
-	return fmt.Sprintf("restore:%s:%s:%s", cluster.UID, cluster.Spec.Bootstrap.Recovery.ManifestURI, member)
+	key := fmt.Sprintf("restore:%s:%s:%s", cluster.UID, cluster.Spec.Bootstrap.Recovery.ManifestURI, member)
+	if boot := cluster.Status.Bootstrap; boot != nil && boot.Attempts > 0 {
+		key += fmt.Sprintf(":a%d", boot.Attempts)
+	}
+	return key
 }
 
 // parseManifestURI splits an s3://bucket/prefix/manifest.json URI into the
