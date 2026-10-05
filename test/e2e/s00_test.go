@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -33,6 +34,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 )
 
@@ -74,6 +76,8 @@ func s00Scenario() {
 		record := &s00Evidence{Scenario: "S00", Result: string(evidence.Fail), ProbeFailureEvents: []string{}}
 		// podReplaced is set once the deleted Pod is seen to be gone.
 		podReplaced := false
+		// podDeletionOutcome is the run of the Pod deletion, once it happened.
+		var podDeletionOutcome *faults.Outcome
 
 		kubectl := func(args ...string) (string, error) {
 			return utils.Run(exec.Command("kubectl", append([]string{"-n", s00Namespace}, args...)...))
@@ -177,6 +181,18 @@ spec:
 			if file := writeEvidence(record); file != "" {
 				result.Evidence = []string{file}
 			}
+			// The fault's own verdict wins over the default: a deletion that
+			// was not confirmed is blocked, not failed.
+			if o := podDeletionOutcome; o != nil {
+				flow := o.Scenario("S00", "", podDeletionLimits)
+				result.Limits, result.CleanupSucceeded = flow.Limits, flow.CleanupSucceeded
+				if o.Result != evidence.Pass {
+					result.Result, result.Reason = o.Result, o.Reason
+				}
+				if file := writeTimeline("S00/timeline.jsonl", o.Timeline); file != "" {
+					result.Evidence = append(result.Evidence, file)
+				}
+			}
 			recordScenario(result)
 			runSummary.Environment.CubridImageDigest = record.InstanceManagerID
 			runSummary.Environment.EngineVersion = record.EngineVersion
@@ -227,20 +243,29 @@ spec:
 		})
 
 		It("keeps the data when the Pod is deleted", func() {
-			By("deleting the Pod and waiting for its replacement")
-			_, err := kubectl("delete", "pod", pod, "--wait=true", "--timeout=5m")
-			Expect(err).NotTo(HaveOccurred())
-			Eventually(func(g Gomega) {
-				uid, err := kubectl("get", "pod", pod, "-o", "jsonpath={.metadata.uid}")
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(uid).NotTo(BeEmpty())
-				g.Expect(uid).NotTo(Equal(record.PodUID), "the old Pod is still there")
-			}).Should(Succeed())
-			podReplaced = true
-			record.RestartSeconds = waitPodReady(15 * time.Minute).Seconds()
+			sql := csqlInPod(s00Namespace, pod, database)
+			podReady := func() bool {
+				out, err := kubectl("get", "pod", pod,
+					"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+				return err == nil && out == "True"
+			}
 
-			By("reading the row written before the deletion")
-			Expect(readS00Row(csqlInPod(s00Namespace, pod, database), marker)).To(Succeed())
+			By("deleting the Pod, confirming its replacement and reading the row again")
+			outcome := faults.Run(context.Background(), faults.Scenario{
+				Fault:  podDeletion{namespace: s00Namespace, pod: pod, uid: record.PodUID},
+				Limits: podDeletionLimits,
+				Before: func(context.Context) error { return readS00Row(sql, marker) },
+				// The row written before the deletion is read from the new Pod.
+				Check: func(context.Context) (bool, error) {
+					return podReady() && readS00Row(sql, marker) == nil, nil
+				},
+			})
+			podDeletionOutcome = &outcome
+			podReplaced = outcome.FaultConfirmed
+			if !outcome.OutcomeAt.IsZero() {
+				record.RestartSeconds = outcome.OutcomeAt.Sub(outcome.FaultIssuedAt).Seconds()
+			}
+			Expect(outcome.Result).To(Equal(evidence.Pass), "pod deletion: %s", outcome.Reason)
 			record.RowKeptAcrossDelete = true
 			record.Result = string(evidence.Pass)
 		})
@@ -282,4 +307,52 @@ func measured(seconds float64) any {
 		return evidence.Unknown
 	}
 	return seconds
+}
+
+// podDeletionLimits bound the deletion of a DB Pod in S00. They are the waits
+// the scenario used before it had named limits, not measured values.
+var podDeletionLimits = faults.Limits{
+	Confirm: 5 * time.Minute,
+	Outcome: 15 * time.Minute,
+	Cleanup: time.Minute,
+	Poll:    2 * time.Second,
+}
+
+// podDeletion is the fault "a Pod is deleted". It is confirmed when a Pod of
+// the same name exists with another UID: the exit code of the delete command
+// is not relied on. There is nothing to remove afterwards.
+type podDeletion struct {
+	namespace, pod, uid string
+}
+
+func (f podDeletion) Name() string { return "delete Pod " + f.namespace + "/" + f.pod }
+
+func (f podDeletion) Inject(ctx context.Context) error {
+	_, err := utils.Run(exec.CommandContext(ctx, "kubectl", "-n", f.namespace, "delete", "pod", f.pod, "--wait=false"))
+	return err
+}
+
+func (f podDeletion) Confirm(ctx context.Context) (bool, error) {
+	uid, err := utils.Run(exec.CommandContext(ctx, "kubectl", "-n", f.namespace, "get", "pod", f.pod,
+		"-o", "jsonpath={.metadata.uid}"))
+	if err != nil {
+		return false, err
+	}
+	return uid != "" && uid != f.uid, nil
+}
+
+func (f podDeletion) Remove(context.Context) error { return nil }
+
+// writeTimeline stores a run's timeline as JSON lines with the run's evidence.
+func writeTimeline(rel string, steps []faults.Step) string {
+	var b strings.Builder
+	for _, step := range steps {
+		line, err := json.Marshal(step)
+		if err != nil {
+			return ""
+		}
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	return writeScenarioFile(rel, []byte(b.String()))
 }
