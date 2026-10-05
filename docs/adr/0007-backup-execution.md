@@ -99,7 +99,9 @@ master when role discovery is broken).
   sends (`<root>/<backup-uid>`), and removes that directory when the backup
   fails. It creates that directory, and the staging root when the volume
   does not have it yet, before `backupdb` runs: the command does not create
-  its destination (POC-12). The per-attempt level above is not implemented.
+  its destination (POC-12). Only regular files in that directory are
+  uploaded; a symbolic link, named pipe or device fails the backup (#203).
+  The per-attempt level above is not implemented.
 - **Stage then upload** (not pure streaming) is the safe baseline;
   preflight free-space check, per-attempt directory, refuse concurrent
   backups per pod, delete staging only after upload+checksum+manifest

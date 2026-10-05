@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // UploadSpec describes where a staged backup lives locally and where its objects
@@ -64,18 +65,25 @@ func UploadBackup(ctx context.Context, store ObjectStore, spec UploadSpec) (Uplo
 		return UploadResult{}, fmt.Errorf("no backup files staged in %s", spec.StagingDir)
 	}
 
+	// Every file is opened through a handle on the staging directory, so
+	// nothing outside it can be read.
+	root, err := os.OpenRoot(spec.StagingDir)
+	if err != nil {
+		return UploadResult{}, fmt.Errorf("open the staging directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
 	manifest := spec.Manifest
 	manifest.ManifestVersion = ManifestVersion
 	manifest.Objects = make([]ManifestObject, 0, len(files))
 
 	for _, rel := range files {
-		full := filepath.Join(spec.StagingDir, rel)
-		sum, size, err := hashFile(full)
+		sum, size, err := hashFile(root, rel)
 		if err != nil {
 			return UploadResult{}, err
 		}
-		key := path.Join(spec.Prefix, "backup", rel)
-		if err := putFile(ctx, store, spec.Bucket, key, full, size); err != nil {
+		key := path.Join(spec.Prefix, "backup", filepath.ToSlash(rel))
+		if err := putFile(ctx, store, spec.Bucket, key, root, rel, size); err != nil {
 			return UploadResult{}, err
 		}
 		// Verify the object landed with the expected size (ADR-0007 stage-then-
@@ -84,7 +92,7 @@ func UploadBackup(ctx context.Context, store ObjectStore, spec UploadSpec) (Uplo
 			return UploadResult{}, fmt.Errorf("upload verification failed for %s (size got=%d want=%d err=%v)", key, got, size, err)
 		}
 		manifest.Objects = append(manifest.Objects, ManifestObject{
-			Key:       path.Join("backup", rel),
+			Key:       path.Join("backup", filepath.ToSlash(rel)),
 			SizeBytes: size,
 			SHA256:    sum,
 		})
@@ -125,6 +133,12 @@ func stagedFiles(dir string) ([]string, error) {
 		if err != nil {
 			return err
 		}
+		// A backup consists of ordinary files. A symbolic link would upload
+		// whatever it points at, a named pipe would wait for a writer, and a
+		// device is never backup output: each fails the backup.
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("%s is not a regular file (%s); a backup uploads regular files only", rel, describeFileType(d.Type()))
+		}
 		out = append(out, rel)
 		return nil
 	})
@@ -135,24 +149,56 @@ func stagedFiles(dir string) ([]string, error) {
 	return out, nil
 }
 
-func hashFile(p string) (string, int64, error) {
-	f, err := os.Open(p) // #nosec G304 -- p is a staged backup file under a manager-owned dir
+func describeFileType(mode os.FileMode) string {
+	switch {
+	case mode&os.ModeSymlink != 0:
+		return "symbolic link"
+	case mode&os.ModeNamedPipe != 0:
+		return "named pipe"
+	case mode&os.ModeDevice != 0:
+		return "device"
+	case mode&os.ModeSocket != 0:
+		return "socket"
+	default:
+		return "special file"
+	}
+}
+
+// openStaged opens one staged file for reading through the staging root. The
+// entry was a regular file when the directory was listed; it is checked again
+// on the open file, and the open does not block, so an entry swapped for a
+// link or a pipe in between is refused rather than followed or waited on.
+func openStaged(root *os.Root, rel string) (*os.File, error) {
+	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", 0, fmt.Errorf("open %s: %w", p, err)
+		return nil, fmt.Errorf("open %s: %w", rel, err)
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("%s is not a regular file; a backup uploads regular files only", rel)
+	}
+	return f, nil
+}
+
+func hashFile(root *os.Root, rel string) (string, int64, error) {
+	f, err := openStaged(root, rel)
+	if err != nil {
+		return "", 0, err
 	}
 	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	n, err := io.Copy(h, f)
 	if err != nil {
-		return "", 0, fmt.Errorf("hash %s: %w", p, err)
+		return "", 0, fmt.Errorf("hash %s: %w", rel, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
-func putFile(ctx context.Context, store ObjectStore, bucket, key, p string, size int64) error {
-	f, err := os.Open(p) // #nosec G304 -- p is a staged backup file under a manager-owned dir
+func putFile(ctx context.Context, store ObjectStore, bucket, key string, root *os.Root, rel string, size int64) error {
+	f, err := openStaged(root, rel)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", p, err)
+		return err
 	}
 	defer func() { _ = f.Close() }()
 	if _, err := store.Put(ctx, bucket, key, f, size, "application/octet-stream"); err != nil {
