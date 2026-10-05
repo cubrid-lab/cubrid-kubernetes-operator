@@ -1148,6 +1148,80 @@ implementation uses and which is expected to behave like `Insert count`.
 
 ---
 
+## POC-21 — the slave that stays behind, in Pods of the Operator (ADR-0006, #226) — **REPRODUCED in a running container; not after a Pod restart**
+
+On Kind (GitHub-hosted linux/amd64 runner, CUBRID 11.4.6), on a
+three-member cluster the Operator formed: `hab-0` master, `hab-1` and `hab-2`
+slaves, 96 rows on each. The steps ran from a temporary branch, run
+37367231551, after the suite's S01 and S02 steps; the branch was not merged.
+Rows are counted on each member with `csql`. "Lock file" is
+`$CUBRID/var/APPLYLOGDB/appdb`, which in a Pod is in the container's own file
+system.
+
+**Part 1: a slave and the master are deleted together, without a grace
+period.** Both Pods were back within three seconds. No slave was promoted:
+`hab-0`, the first member, was master again nine seconds later (as in
+POC-19). Then ten rows were written.
+
+| Member | Rows 10 s, 20 s, 30 s after the writes | 40 s after | Lock file |
+|---|---|---|---|
+| `hab-0` (master, new Pod) | 106 | 106 | none |
+| `hab-2` (slave, new Pod) | 106 | 106 | written again, names `appdb_hab-0` |
+| `hab-1` (slave, never restarted) | **96** | 106 | empty until it caught up, then names `appdb_hab-0` |
+
+The slave that was never restarted lagged for 30 to 40 seconds after the
+master's crash and then caught up by itself. Ten more rows reached all three
+members within 20 seconds.
+
+**Part 2: heartbeat is stopped inside a slave's running container, then the
+master's Pod is deleted.** `cubrid heartbeat stop` on `hab-1`; the container
+kept running (restart count 0), the member reported the state `unknown`, and
+nothing started it again. The master `hab-0` was deleted; `hab-2` became
+master and `hab-0` returned as a slave. Ten rows were written (126 on `hab-0`
+and `hab-2`). Then `cubrid heartbeat start` on `hab-1`, which exited 0.
+
+| After the start on `hab-1` | `hab-0` | `hab-2` (master) | `hab-1` |
+|---|---|---|---|
+| 30 s | 126 | 126 | **116**, `slave` / `registered_and_standby` |
+| 90 s, after 10 more rows | 136 | 136 | **116** |
+| 4 min, after 5 more rows | 141 | 141 | **116** |
+
+On `hab-1` at the end: the lock file still named the old master's log
+(`301 appdb appdb_hab-0`); `cubrid applyinfo` for the new master's log showed
+`Insert count : 0`, `Fail count : 0` and 3 pages waiting to be applied; and
+its applier's error log held 82 lines "Unable to mount disk volume". This is
+the state of POC-17, in a Pod.
+
+**Part 3: that member's Pod is deleted.** 45 seconds later the new Pod's
+`hab-1` was a slave with all 141 rows and a lock file naming the new master's
+log. Five more rows reached all three members within 30 seconds.
+
+**Findings.**
+
+- The stuck state of POC-17 occurs in a Pod when the member's container
+  keeps running across the master's failure: here because heartbeat was
+  stopped and started by hand inside it.
+- A Pod that is deleted and recreated does not end in that state, in part 1
+  and in part 3: the new container has no lock file, and the member applied
+  the new master's log and held every row.
+- A slave that stays up while the master crashes and returns can lag for
+  tens of seconds before it catches up. That is close to the 60 seconds
+  after which the Operator reports a slave as stalled.
+- A member whose heartbeat is stopped inside its container stays down: the
+  container does not exit and nothing restarts the processes (issue #180).
+
+**Consequence for the Operator.** Deleting the Pod is a recovery for a slave
+in this state, and it is what the ordinary Pod life cycle does anyway. The
+state needs the check of #229 to be noticed, because the member looks like a
+healthy slave.
+
+**Not tested here:** whether a slave that had unapplied work from the old
+master's log loses it when it starts without the lock file; the Operator's
+`ReplicationHealthy` condition during part 2, which ran before that condition
+existed; what CUBRID's manual or source says the lock file is for.
+
+---
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
