@@ -80,6 +80,7 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	if p.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+p.Token)
 	}
+	setRequestID(req)
 	resp, err := p.Client.Do(req)
 	if err != nil {
 		return RoleObservation{Reachable: false, ObservedAt: p.now()}
