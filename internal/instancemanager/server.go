@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -69,12 +70,17 @@ type Server struct {
 	// replicationDB and databasesDir locate the logs a slave copies (#229).
 	replicationDB string
 	databasesDir  string
+	// logger writes the structured log; nil discards it.
+	logger *slog.Logger
+	// pollStatus is the last status answered on each polled path.
+	pollMu     sync.Mutex
+	pollStatus map[string]int
 	// timeouts are the per-operation deadlines.
 	timeouts Timeouts
 }
 
 func NewServer(cli CLI, token string) *Server {
-	return &Server{cli: cli, token: token, timeouts: Timeouts{}.withDefaults()}
+	return &Server{cli: cli, token: token, timeouts: Timeouts{}.withDefaults(), pollStatus: map[string]int{}}
 }
 
 // Timeouts bound each long-running operation as a whole. Their commands
@@ -142,6 +148,9 @@ func (s *Server) WithStandaloneDatabase(database string) *Server {
 // chaining.
 func (s *Server) WithOperationStore(store *OperationStore) *Server {
 	s.store = store
+	if s.logger != nil {
+		store.SetLogger(s.logger)
+	}
 	return s
 }
 
@@ -173,7 +182,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/restore/prepare", s.auth(s.restorePrepare))
 	mux.HandleFunc("GET /v1/operations/{id}", s.auth(s.getOperation))
 	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdown))
-	return mux
+	return s.logRequests(mux)
 }
 
 // livez reports that the manager process is alive.
@@ -546,7 +555,12 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		if r.Header.Get("Authorization") != "Bearer "+s.token {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+s.token {
+			reason := reasonWrongToken
+			if got == "" {
+				reason = reasonNoToken
+			}
+			s.logRefused(w, r, reason)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{errKey: "unauthorized"})
 			return
 		}

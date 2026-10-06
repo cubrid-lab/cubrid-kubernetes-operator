@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -49,12 +50,37 @@ var ErrOperationNotFound = errors.New("operation not found")
 type OperationStore struct {
 	dir string
 	mu  sync.Mutex
+	// logger records state changes; nil records nothing.
+	logger *slog.Logger
 }
 
 // NewOperationStore opens (creating if needed) a durable store under dir and
 // reconciles any non-terminal records left by a previous process: an operation
 // that was mid-flight when the manager died is marked Failed, never silently
 // Completed and never blindly restarted (ADR-0003).
+// SetLogger makes the store log every operation it creates and every change
+// of an operation's state.
+func (s *OperationStore) SetLogger(logger *slog.Logger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logger = logger
+}
+
+// logState records one change of an operation's state. A failure is a
+// warning and carries its reason.
+func (s *OperationStore) logState(op *Operation, previous OperationState) {
+	if s.logger == nil {
+		return
+	}
+	attrs := []any{"event", eventOperationState, "operationID", op.ID, "kind", string(op.Kind),
+		"state", string(op.State), "previousState", string(previous)}
+	if op.State == OpFailed {
+		s.logger.Warn("Operation failed", append(attrs, "reason", op.FailureReason)...)
+		return
+	}
+	s.logger.Info("Operation changed state", attrs...)
+}
+
 func NewOperationStore(dir string) (*OperationStore, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create operation store dir: %w", err)
@@ -122,6 +148,7 @@ func (s *OperationStore) FindOrCreate(kind OperationKind, idempotencyKey, reques
 	if err := s.writeLocked(op); err != nil {
 		return nil, false, err
 	}
+	s.logState(op, "")
 	return op, false, nil
 }
 
@@ -143,10 +170,14 @@ func (s *OperationStore) Update(id string, mutate func(*Operation)) (*Operation,
 	if err != nil {
 		return nil, err
 	}
+	previous := op.State
 	mutate(op)
 	op.UpdatedAt = time.Now().UTC()
 	if err := s.writeLocked(op); err != nil {
 		return nil, err
+	}
+	if op.State != previous {
+		s.logState(op, previous)
 	}
 	return op, nil
 }

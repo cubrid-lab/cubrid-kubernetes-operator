@@ -170,6 +170,22 @@ func s14Step(r *haRun) {
 			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 		}, 2*time.Minute, 3*time.Second).Should(Succeed())
 
+		By("reading the refusals from the Instance Manager's own log")
+		for _, member := range []string{master, slaves[0]} {
+			log, err := r.kubectl("logs", member, "--tail=-1")
+			Expect(err).NotTo(HaveOccurred())
+			refusals := 0
+			for _, line := range strings.Split(log, "\n") {
+				if strings.Contains(line, `"event":"request_refused"`) && strings.Contains(line, `"component":"instance-manager"`) {
+					refusals++
+				}
+			}
+			Expect(refusals).To(BeNumerically(">=", len(calls)*len(refused)),
+				"refused requests in the log of %s", member)
+			Expect(log).To(ContainSubstring(`"reason":"NoToken"`), "log of %s", member)
+			Expect(log).To(ContainSubstring(`"reason":"WrongToken"`), "log of %s", member)
+		}
+
 		By("looking for the token where it must not be")
 		places := map[string][]string{
 			"the CubridCluster":           {"-n", r.namespace, "get", "cubridcluster", r.cluster, "-o", "yaml"},
