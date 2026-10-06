@@ -136,6 +136,10 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// via owner references.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// What changed in the status during this reconcile is logged once, when
+	// it ends, whichever way it ends (docs/observability.md).
+	before := cluster.Status.DeepCopy()
+	defer func() { r.reportTransitions(ctx, &cluster, before) }()
 
 	// Reconcile the governing headless Service (ADR-0004: stable per-pod DNS).
 	if err := r.reconcileHeadlessService(ctx, &cluster); err != nil {
