@@ -488,6 +488,7 @@ spec:
 		// first member is still the master for the variant of S03 that needs
 		// it. After that the master is whichever member CUBRID chose, and no
 		// later step depends on which one it is.
+		s14Step(scenarios)
 		s05Steps(scenarios)
 		s06Step(scenarios, s06Restart)
 		s03Step(scenarios, s03AbruptFirst)

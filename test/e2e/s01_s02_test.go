@@ -85,6 +85,7 @@ func (r *haRun) report(ran bool) {
 		reason := "needs linux/amd64: the official CUBRID image has no other build"
 		recordScenario(evidence.Scenario{ID: "S01", Result: evidence.NotRun, Reason: reason})
 		recordScenario(evidence.Scenario{ID: "S02", Result: evidence.NotRun, Reason: reason})
+		recordScenario(evidence.Scenario{ID: "S14", Result: evidence.NotRun, Reason: reason})
 		for _, variant := range s03Variants {
 			recordScenario(evidence.Scenario{ID: "S03", Variant: variant, Result: evidence.NotRun, Reason: reason})
 		}
