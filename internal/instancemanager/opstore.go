@@ -58,6 +58,23 @@ type OperationStore struct {
 // reconciles any non-terminal records left by a previous process: an operation
 // that was mid-flight when the manager died is marked Failed, never silently
 // Completed and never blindly restarted (ADR-0003).
+// AnyInProgress reports whether an operation is not finished yet. A store
+// that cannot be read counts as busy: the caller must not act on a guess.
+func (s *OperationStore) AnyInProgress() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ops, err := s.listLocked()
+	if err != nil {
+		return true
+	}
+	for _, op := range ops {
+		if !op.State.IsTerminal() {
+			return true
+		}
+	}
+	return false
+}
+
 // SetLogger makes the store log every operation it creates and every change
 // of an operation's state.
 func (s *OperationStore) SetLogger(logger *slog.Logger) {

@@ -105,6 +105,18 @@ a local CUBRID control plane, not a second controller.
   "reason": "human-readable" }
 ```
 
+As implemented, the manager watches the CUBRID processes the member needs
+(`cub_master` and `cub_server`; `cub_server` alone for a standalone member).
+Once it has seen them running, it ends itself with an error when one of them
+has been missing for longer than a grace of 30 seconds (`IM_PROCESS_GRACE`),
+unless a shutdown was requested through it or one of its operations is in
+progress. The manager is a child of the container's entrypoint, which exits
+with it, so Kubernetes restarts the container and the member starts in the
+ordinary way. Nothing restarts a CUBRID process in place: a repeated
+`cubrid heartbeat start` can leave a node unusable (POC-7), and a new
+container starts without the applier's lock file, which lets a returning
+slave catch up (POC-21). `/livez` stays a check of the manager alone.
+
 As implemented, the manager writes a structured log to stdout: JSON lines
 that each carry `component` (`instance-manager`), `member` and `database`
 (docs/observability.md). It logs each request with a request ID, which is
@@ -247,6 +259,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
 | `IM_OPERATIONS_DIR` | `/var/lib/cubrid/operations`, on the PVC: the durable operation records. Without it the manager serves no asynchronous backup or restore |
 | `IM_LOG_LEVEL` | optional: `debug`, `info`, `warn` or `error`; `info` when unset |
+| `IM_PROCESS_GRACE` | optional: how long a CUBRID process may be missing before the manager ends itself; `30s` when unset |
 | `IM_BACKUP_STAGING_ROOT`, `IM_RESTORE_STAGING_ROOT` | `/var/lib/cubrid/backup-staging` and `/var/lib/cubrid/restore-staging`: the roots the operator builds its requests with |
 | `IM_S3_ENDPOINT`, `IM_S3_REGION`, `IM_S3_INSECURE`, `IM_S3_ACCESS_KEY`, `IM_S3_SECRET_KEY` | from `spec.objectStorage` when set; the two keys are references to the Secret it names (`accessKey`, `secretKey`) |
 | `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the preStop limit (110s). The operator does not set them |
