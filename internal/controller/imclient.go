@@ -19,6 +19,8 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -83,7 +85,7 @@ func (c *HTTPBackupClient) StartBackup(ctx context.Context, podName, namespace, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: unexpected status %d", podName, resp.StatusCode)
+		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: unexpected status %d%s", podName, resp.StatusCode, requestRef(resp))
 	}
 	return decodeOperation(resp)
 }
@@ -108,7 +110,7 @@ func (c *HTTPBackupClient) StartRestore(ctx context.Context, podName, namespace,
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: unexpected status %d", podName, resp.StatusCode)
+		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: unexpected status %d%s", podName, resp.StatusCode, requestRef(resp))
 	}
 	return decodeOperation(resp)
 }
@@ -135,7 +137,7 @@ func (c *HTTPBackupClient) StartHABootstrap(ctx context.Context, podName, namesp
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return instancemanager.Operation{}, fmt.Errorf("start HA bootstrap on %s: unexpected status %d", podName, resp.StatusCode)
+		return instancemanager.Operation{}, fmt.Errorf("start HA bootstrap on %s: unexpected status %d%s", podName, resp.StatusCode, requestRef(resp))
 	}
 	return decodeOperation(resp)
 }
@@ -154,7 +156,7 @@ func (c *HTTPBackupClient) GetOperation(ctx context.Context, podName, namespace,
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return instancemanager.Operation{}, fmt.Errorf("get operation %s on %s: unexpected status %d", id, podName, resp.StatusCode)
+		return instancemanager.Operation{}, fmt.Errorf("get operation %s on %s: unexpected status %d%s", id, podName, resp.StatusCode, requestRef(resp))
 	}
 	return decodeOperation(resp)
 }
@@ -167,6 +169,29 @@ func (c *HTTPBackupClient) authorize(req *http.Request) {
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
+	setRequestID(req)
+}
+
+// requestIDHeader names one call to an Instance Manager, which writes the
+// same ID into its log (docs/observability.md).
+const requestIDHeader = "X-Request-ID"
+
+// setRequestID gives the call an ID of its own.
+func setRequestID(req *http.Request) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return
+	}
+	req.Header.Set(requestIDHeader, hex.EncodeToString(b))
+}
+
+// requestRef names the call in an error, so that it can be found in the
+// Instance Manager's log.
+func requestRef(resp *http.Response) string {
+	if id := resp.Header.Get(requestIDHeader); id != "" {
+		return " (request " + id + ")"
+	}
+	return ""
 }
 
 func decodeOperation(resp *http.Response) (instancemanager.Operation, error) {

@@ -1362,7 +1362,7 @@ registry (exposed on the manager's metrics endpoint) —
 `cubrid_cluster_ready`, `cubrid_cluster_instances`,
 `cubrid_cluster_instances_ready` (labels: `namespace`, `cluster`). The
 reconciler emits Kubernetes Events via an `EventRecorder`
-(`ClusterReady` Normal; reconcile-failure Warnings). Role/HA/failover and
+(`ClusterReady` Normal; reconcile-failure Warnings), and logs each change of the status once per reconcile, with an Event for a change of the primary and of replication health (docs/observability.md, section "Transitions"). The manager logs JSON at info level by default. Role/HA/failover and
 backup/restore observation are implemented in the reconciler and Instance
 Manager (ADR-0003/0005/0006/0007/0008); richer per-operation metrics remain
 an incremental extension.

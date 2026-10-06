@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -357,6 +359,23 @@ func (r *haRun) s03(variant string) {
 	primary, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(primary).To(Equal(newMaster))
+
+	// The Operator saw the primary become unresolved and resolved again; that
+	// is in its Events and, under the same names, in its log
+	// (docs/observability.md, section "Transitions").
+	By("reading the change of the primary from the operator's Events and log")
+	Eventually(func(g Gomega) {
+		recorded, err := r.kubectl("get", "events", "--field-selector", "involvedObject.name="+r.cluster,
+			"-o", `jsonpath={range .items[*]}{.reason}{"\n"}{end}`)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(recorded).To(ContainSubstring("PrimaryUnresolved"))
+		g.Expect(recorded).To(ContainSubstring("PrimaryResolved"))
+		operatorLog, err := utils.Run(exec.Command("kubectl", "-n", namespace, "logs", "-l", operatorSelector, "--tail=-1"))
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(operatorLog).To(ContainSubstring(`"event":"primary_unresolved"`))
+		g.Expect(operatorLog).To(ContainSubstring(`"event":"primary_resolved"`))
+		g.Expect(operatorLog).To(ContainSubstring(`"component":"operator"`))
+	}, time.Minute, 3*time.Second).Should(Succeed())
 
 	By("applying the data rules to every member and to both Services")
 	var report workload.Report

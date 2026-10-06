@@ -104,6 +104,19 @@ func (p *applierProber) ProbeRole(_ context.Context, podName, _ string) RoleObse
 	return o
 }
 
+// drain returns the Events recorded so far and empties the recorder.
+func drain(recorder *record.FakeRecorder) []string {
+	var events []string
+	for {
+		select {
+		case e := <-recorder.Events:
+			events = append(events, e)
+		default:
+			return events
+		}
+	}
+}
+
 // haCluster returns a valid HA CubridCluster (1 master + 2 slaves) per ADR-0001.
 func haCluster(name string) *databasev1alpha1.CubridCluster {
 	return &databasev1alpha1.CubridCluster{
@@ -241,18 +254,6 @@ var _ = Describe("CubridCluster Controller", func() {
 		ctx := context.Background()
 		key := types.NamespacedName{Name: "ready-event", Namespace: "default"}
 
-		drain := func(recorder *record.FakeRecorder) []string {
-			var events []string
-			for {
-				select {
-				case e := <-recorder.Events:
-					events = append(events, e)
-				default:
-					return events
-				}
-			}
-		}
-
 		It("is emitted once, on the transition to Ready", func() {
 			Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
 			DeferCleanup(func() {
@@ -381,6 +382,43 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
 			Expect(got.Status.CurrentPrimary).To(Equal("resync-1"))
+		})
+
+		It("reports a change of the primary once, as an Event", func() {
+			key := types.NamespacedName{Name: "transit", Namespace: resyncNamespace}
+			Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+			DeferCleanup(func() {
+				c := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+			})
+			prober := &memberProber{master: "transit-0"}
+			recorder := record.NewFakeRecorder(50)
+			r := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder,
+				IMToken: testIMToken, Prober: prober,
+			}
+			reconcileOnce := func() []string {
+				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+				return drain(recorder)
+			}
+
+			By("the first observation resolves the primary")
+			Expect(reconcileOnce()).To(ContainElement(ContainSubstring("PrimaryResolved")))
+
+			By("the same observation again says nothing")
+			Expect(reconcileOnce()).NotTo(ContainElement(Or(
+				ContainSubstring("PrimaryResolved"), ContainSubstring("PrimaryChanged"))))
+
+			By("another member is the master")
+			prober.master = "transit-1"
+			changed := reconcileOnce()
+			Expect(changed).To(ContainElement(And(ContainSubstring("PrimaryChanged"),
+				ContainSubstring("transit-0"), ContainSubstring("transit-1"))))
+
+			By("and again nothing")
+			Expect(reconcileOnce()).NotTo(ContainElement(ContainSubstring("PrimaryChanged")))
 		})
 
 		It("does not requeue a standalone cluster for role observation", func() {

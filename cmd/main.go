@@ -85,13 +85,16 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	// The default is what a deployment needs: JSON at info level. A
+	// developer gets the console format and debug level with --zap-devel.
 	opts := zap.Options{
-		Development: true,
+		Development: false,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	// Every line names the component that wrote it (docs/observability.md).
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)).WithValues("component", "operator"))
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
