@@ -809,6 +809,10 @@ identities are required, the broker tier becomes a StatefulSet.
 
 Pod readiness and cluster health are separate concepts.
 
+The states that are told apart, where each is observed and where it is
+published are listed in [docs/observability.md](docs/observability.md),
+section "Health model". The lists below are the original proposal.
+
 ### Pod readiness
 
 ```text
@@ -1340,39 +1344,16 @@ for classification, conditions, and the POC checklist.
 
 ## 18. Observability
 
-The operator exposes both controller and database metrics.
+What every signal means is fixed in
+[docs/observability.md](docs/observability.md): the health model, the
+Conditions and their reasons, how old an observation is, the names of
+transitions shared by Events and logs, the log fields of each component, and
+the metrics with their labels.
 
-### Metrics
-
-```text
-cubrid_cluster_ready
-cubrid_cluster_instances
-cubrid_instance_ready
-cubrid_instance_role
-cubrid_ha_state
-cubrid_replication_lag_seconds
-cubrid_failover_total
-cubrid_backup_last_success_timestamp
-cubrid_backup_duration_seconds
-cubrid_restore_duration_seconds
-```
-
-### Events
-
-```text
-PrimaryChanged
-InstanceRebuilding
-ReplicaCaughtUp
-BackupStarted
-BackupCompleted
-RecoveryStarted
-RecoveryCompleted
-AmbiguousPrimaryDetected
-```
-
-Events are generated for important lifecycle transitions and conditions
-changes, so that failover, rebuild, and recovery are auditable through
-`kubectl describe` alone.
+Its rules in short: a Kubernetes object existing is not database health; one
+observation feeds status, Events, metrics and logs; an unknown or stale value
+is never shown as healthy or as zero; the same change has the same name
+everywhere; and a reconcile that changes nothing says nothing.
 
 ### Implementation status (#23)
 
