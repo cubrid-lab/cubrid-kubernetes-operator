@@ -286,3 +286,30 @@ func TestOutcome_Scenario(t *testing.T) {
 		t.Errorf("recoveryTime = %v, want %q", got, evidence.Unknown)
 	}
 }
+
+// When the limit passes while an observation is still running, the reason is
+// what the observations before it reported, not only that time ran out.
+func TestRun_NotConfirmedKeepsTheObservationsError(t *testing.T) {
+	calls := 0
+	f := &slowConfirm{confirm: func(ctx context.Context) (bool, error) {
+		calls++
+		if calls == 1 {
+			return false, errors.New("connection refused")
+		}
+		<-ctx.Done() // the second observation runs into the limit
+		return false, ctx.Err()
+	}}
+	o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok, Check: holds})
+	if o.Result != evidence.Blocked || !strings.Contains(o.Reason, "connection refused") {
+		t.Errorf("outcome = %s %q, want blocked with the observation's error", o.Result, o.Reason)
+	}
+}
+
+type slowConfirm struct {
+	confirm func(context.Context) (bool, error)
+}
+
+func (f *slowConfirm) Name() string                              { return "slow confirm" }
+func (f *slowConfirm) Inject(context.Context) error              { return nil }
+func (f *slowConfirm) Confirm(ctx context.Context) (bool, error) { return f.confirm(ctx) }
+func (f *slowConfirm) Remove(context.Context) error              { return nil }
