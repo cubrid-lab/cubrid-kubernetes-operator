@@ -42,12 +42,39 @@ body:
       required: true
 
   - type: textarea
+    id: verification
+    attributes:
+      label: How to Verify
+      description: How completion will be shown, and at which test level.
+      placeholder: |
+        Examples:
+        - unit test
+        - envtest
+        - real database on Kind
+        - VM lab
+        - documentation review
+        - make test / make lint
+    validations:
+      required: true
+
+  - type: textarea
     id: expected-outcome
     attributes:
       label: Expected Outcome
       description: What should be the result when this is complete?
     validations:
       required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Only what must be finished before this task can start.
+      placeholder: |
+        - Depends on #...
+        - None
+    validations:
+      required: false
 
   - type: textarea
     id: references

@@ -19,13 +19,33 @@ body:
       required: true
 
   - type: textarea
+    id: outcome
+    attributes:
+      label: Desired Outcome
+      description: The result you need, as someone using or operating a cluster would see it.
+      placeholder: What should a user or an operator be able to do or observe?
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: Concrete conditions that would make this request complete.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
     id: solution
     attributes:
       label: Proposed Solution
-      description: Describe how you would like this feature to be implemented
-      placeholder: What should the feature do and how should it work?
+      description: How it could be implemented, if you have an idea. The design may change in review.
+      placeholder: What should the feature do and how could it work?
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: alternatives

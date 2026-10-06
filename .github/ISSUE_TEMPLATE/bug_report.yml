@@ -1,32 +1,77 @@
 name: Bug Report
-description: Report a bug in the CUBRID Kubernetes Operator
+description: Report incorrect or unexpected behavior in the CUBRID Kubernetes Operator
 title: "fix: "
-labels: ["bug"]
+labels: ["bug", "status: needs triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Keep the `fix:` title prefix. You do not need to apply labels;
-        maintainers assign priority and size after triage.
+        Keep the `fix:` title prefix and name the observed problem.
+
+        Before filing:
+        - Search the existing issues for the same behavior.
+        - Leave out passwords, tokens, kubeconfigs, customer data,
+          object-storage credentials and unredacted Secrets.
+        - You do not need to apply labels; maintainers assign priority, size
+          and phase after triage.
 
   - type: textarea
     id: description
     attributes:
-      label: Description
-      description: Provide a clear and concise description of the bug
-      placeholder: What is the bug about?
+      label: Problem
+      description: Describe the incorrect or unexpected behavior.
+      placeholder: |
+        What went wrong?
+        Which component or operation was affected?
     validations:
       required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Observed Impact
+      description: Describe the effect you saw. Report what was observed; do not rate its severity.
+      placeholder: |
+        Examples:
+        - writes were unavailable for about 10 seconds
+        - a slave stayed behind while the cluster reported healthy
+        - the first SQL transaction failed after the Pod became Ready
+        - no data loss was observed
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      description: How often has the behavior been observed?
+      options:
+        - Always
+        - Intermittent
+        - Observed once
+        - Not reproduced yet
+    validations:
+      required: true
+
+  - type: input
+    id: frequency
+    attributes:
+      label: Reproduction Frequency
+      description: The measured frequency, when known.
+      placeholder: "Example: 1 of about 45 runs"
+    validations:
+      required: false
 
   - type: textarea
     id: steps
     attributes:
       label: Steps to Reproduce
-      description: Provide step-by-step instructions to reproduce the bug
+      description: The smallest known sequence that produces the problem.
       placeholder: |
-        1. First step
-        2. Second step
-        3. ...
+        1. Create ...
+        2. Wait until ...
+        3. Delete / stop / change ...
+        4. Observe ...
     validations:
       required: true
 
@@ -34,17 +79,35 @@ body:
     id: expected
     attributes:
       label: Expected Behavior
-      description: Describe what you expected to happen
-      placeholder: What should have happened?
+      description: Describe what should happen.
+      placeholder: What should the Operator, the Instance Manager, the Broker or the CUBRID cluster do instead?
     validations:
       required: true
+
+  - type: textarea
+    id: expected-basis
+    attributes:
+      label: Basis for the Expected Behavior
+      description: Where the expectation comes from, when known. External reporters may leave this blank.
+      placeholder: |
+        Examples:
+        - docs/adr/0005-failover-split-brain.md
+        - docs/testing/scenario-contract.md, scenario S03
+        - the CUBRID 11.4 manual
+        - an experiment in docs/poc/RESULTS.md
+    validations:
+      required: false
 
   - type: textarea
     id: actual
     attributes:
       label: Actual Behavior
-      description: Describe what actually happened
-      placeholder: What actually happened instead?
+      description: Describe what happened, with the important times when you have them.
+      placeholder: |
+        Example:
+        - 15:34:40 the Pod became Ready
+        - 15:34:41 the first SQL connection succeeded
+        - 15:34:41 the transaction returned error ...
     validations:
       required: true
 
@@ -52,22 +115,79 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Provide details about your environment
+      description: Where the problem was observed.
       placeholder: |
         - Operator version or commit:
-        - Go version (only when built from source): go1.26
-        - CUBRID engine image (tag/digest): cubrid/cubrid:11.4
-        - Kubernetes distribution and version: Kind v1.33
+        - CUBRID engine version:
+        - CUBRID image (tag/digest):
+        - Kubernetes distribution and version:
+        - Architecture:
+        - Container runtime:
         - CSI / StorageClass:
-        - Topology (promotable members, Brokers):
+        - Topology (standalone or HA, promotable members, Brokers):
+        - Go version (only when built from source):
     validations:
       required: true
 
   - type: textarea
-    id: context
+    id: evidence
     attributes:
-      label: Additional Context
-      description: Add any other context about the bug here
-      placeholder: CubridCluster manifest, status Conditions, Events, Operator and Instance Manager logs, etc.
+      label: Diagnostic Evidence
+      description: |
+        The evidence you have. Write "not collected" where you have none.
+        Remove credentials and sensitive data. The kinds of evidence are those
+        of docs/observability.md.
+      placeholder: |
+        - CubridCluster status / Conditions:
+        - Kubernetes Events:
+        - Pod / container state:
+        - Operator log:
+        - Instance Manager log:
+        - CUBRID log files:
+        - SQL result:
+        - Metrics:
+        - Scenario / workflow run link:
+    validations:
+      required: true
+
+  - type: textarea
+    id: known-facts
+    attributes:
+      label: Confirmed Facts
+      description: Only what the evidence above shows directly.
+      placeholder: |
+        Examples:
+        - the Pod was Ready before the SQL error
+        - ReplicationHealthy was False with reason ReplicationStalled
+        - no committed row was missing
     validations:
       required: false
+
+  - type: textarea
+    id: unknowns
+    attributes:
+      label: Not Yet Verified
+      description: Questions that are still open, including a suspected cause. Say so here; do not state a guess as a fact.
+      placeholder: |
+        Examples:
+        - whether the database server restarted
+        - whether the transaction was committed
+        - whether this happens on a native amd64 host
+    validations:
+      required: false
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround
+      description: A known temporary workaround, or "none".
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Sensitive Information
+      options:
+        - label: I removed credentials, tokens, kubeconfigs, customer data and unredacted Secrets from the information above.
+          required: true
