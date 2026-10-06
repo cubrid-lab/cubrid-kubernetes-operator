@@ -200,7 +200,14 @@ func poll(ctx context.Context, limit, every time.Duration, stopOnError bool,
 		switch {
 		case err == nil && done:
 			return true, nil
-		case err != nil && (stopOnError || errors.Is(err, errStepTimeout)):
+		case errors.Is(err, errStepTimeout):
+			// The limit passed during this call. What an earlier call
+			// reported says more than "it timed out".
+			if lastErr != nil {
+				return false, lastErr
+			}
+			return false, err
+		case err != nil && stopOnError:
 			return false, err
 		case err != nil:
 			lastErr = err
