@@ -67,6 +67,19 @@ func s14Step(r *haRun) {
 			Reason: "a check of S14 failed; see the test output"}
 		defer func() { r.later = append(r.later, result) }()
 
+		// A member has a role before its Pod is Ready: CUBRID is started
+		// before the Instance Manager listens. The step before this one
+		// replaces a Pod, so wait for all of them.
+		By("waiting for every member's Pod to be Ready")
+		Eventually(func(g Gomega) {
+			for _, member := range r.members {
+				ready, err := r.kubectl("get", "pod", member,
+					"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(ready).To(Equal("True"), "Pod %s", member)
+			}
+		}, 5*time.Minute, 3*time.Second).Should(Succeed())
+
 		By("recording the starting state")
 		master, slaves, err := r.master()
 		Expect(err).NotTo(HaveOccurred())
@@ -176,9 +189,12 @@ func s14Step(r *haRun) {
 			Expect(strings.Contains(out, instanceManagerToken)).To(BeFalse(), "the token is shown in %s", where)
 		}
 
+		// Worded so that the redactor, which removes what follows the word
+		// "token" and a colon, leaves the figures.
 		summary := fmt.Sprintf("refused requests: %d (6 endpoints, 7 kinds of caller, 2 members), all answered 401\n"+
-			"requests with the valid token: 2, answered 200\nmaster before and after: %s\n"+
-			"DB Pods restarted: 0\nplaces searched for the token: %d, found in: 0\n", requests, master, len(places))
+			"accepted requests, with the valid credential: 2, answered 200\nmaster before and after: %s\n"+
+			"DB Pods restarted: 0\nplaces searched: %d\nplaces that showed the credential: 0\n",
+			requests, master, len(places))
 		files := r.evidenceFiles("S14", report)
 		if f := writeScenarioFile("S14/result.txt", []byte(summary)); f != "" {
 			files = append(files, f)
