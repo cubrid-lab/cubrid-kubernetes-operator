@@ -66,7 +66,6 @@ func s14Step(r *haRun) {
 		result := evidence.Scenario{ID: "S14", Result: evidence.Fail,
 			Reason: "a check of S14 failed; see the test output"}
 		defer func() { r.later = append(r.later, result) }()
-		redactor = evidence.NewRedactor(instanceManagerToken)
 
 		By("recording the starting state")
 		master, slaves, err := r.master()

@@ -40,8 +40,9 @@ var runSummary = evidence.Summary{
 	Environment: evidence.Environment{Level: "kind"},
 }
 
-// redactor removes credentials from every evidence file of the run.
-var redactor = evidence.NewRedactor()
+// redactor removes credentials from every evidence file of the run, among
+// them the Instance Manager token the suite itself sets.
+var redactor = evidence.NewRedactor(instanceManagerToken)
 
 // evidenceDir is where the run's evidence goes; empty when none is kept.
 func evidenceDir() string { return os.Getenv("E2E_EVIDENCE_DIR") }
