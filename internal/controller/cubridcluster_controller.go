@@ -220,6 +220,10 @@ func (r *CubridClusterReconciler) reconcileHeadlessService(ctx context.Context, 
 	return err
 }
 
+// instanceManagerBinary is the Instance Manager in the image
+// (build/instance-manager/Dockerfile).
+const instanceManagerBinary = "/usr/local/bin/instance-manager"
+
 func imTokenSecretName(cluster string) string { return cluster + "-im-token" }
 
 // reconcileIMTokenSecret keeps <cluster>-im-token equal to the operator's token,
@@ -517,17 +521,14 @@ func httpGet(path string) corev1.ProbeHandler {
 	}
 }
 
-func preStopShutdown(cluster *databasev1alpha1.CubridCluster) *corev1.Lifecycle {
-	db := ""
-	if len(cluster.Spec.Databases) > 0 {
-		db = cluster.Spec.Databases[0].Name
-	}
-	url := fmt.Sprintf("http://127.0.0.1:%d/v1/shutdown?database=%s", instanceManagerPort, db)
+// preStopShutdown runs the one command that stops a member, the same the
+// entrypoint runs on a termination signal (ADR-0003). The command asks the
+// local Instance Manager, which stops CUBRID once however often it is asked.
+func preStopShutdown(_ *databasev1alpha1.CubridCluster) *corev1.Lifecycle {
 	return &corev1.Lifecycle{
 		PreStop: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{
-				Command: []string{"/bin/sh", "-c",
-					fmt.Sprintf("curl -fsS -m 110 -X POST '%s' || true", url)},
+				Command: []string{"/bin/sh", "-c", instanceManagerBinary + " shutdown || true"},
 			},
 		},
 	}

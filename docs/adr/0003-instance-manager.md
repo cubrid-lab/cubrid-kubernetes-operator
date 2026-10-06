@@ -159,6 +159,27 @@ while remote `/v1/shutdown` stays authenticated:
 6. if past deadline → fail; let terminationGracePeriodSeconds finalize
 ```
 
+As implemented, the stop of a member exists in one place: the manager's stop
+procedure (step 3, then step 4). Every trigger runs the same command,
+`instance-manager shutdown`:
+
+- the `preStop` hook;
+- the container's entrypoint when it receives `SIGTERM` or `SIGINT`, before
+  it ends the manager. The entrypoint stops nothing itself, and it installs
+  its handler before it creates or starts anything, so a termination during
+  `createdb` or a start is handled when that step returns.
+
+The command asks the manager of the Pod over loopback, so that the manager
+knows the stop is intended and its process watch does not treat it as a
+failure. When no manager listens yet, the command runs the same procedure
+itself. A stop that succeeded is not run again, however often it is asked for,
+so the hook followed by the signal stops CUBRID once. Steps 1, 2 and 5 are not
+implemented.
+
+Time budget: the stop may take 100 seconds (`IM_SHUTDOWN_TIMEOUT`), and the
+Pod's `terminationGracePeriodSeconds` is 120, which leaves 20 seconds for the
+manager and the container to end. Both are fixed values today.
+
 `terminationGracePeriodSeconds` is generous (≥120s, POC-tuned). For
 StatefulSet rolling updates the operator updates one DB pod at a time,
 observes role via the manager, waits for `PrimaryResolved`, and does not
