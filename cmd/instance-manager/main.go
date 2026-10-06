@@ -140,7 +140,32 @@ func run(logger *slog.Logger) error {
 	go func() { errCh <- srv.ListenAndServe() }()
 	logger.Info("Started listening", "address", addr, "authenticated", token != "")
 
+	// A CUBRID process that is gone without a request ends this process, and
+	// with it the container, which Kubernetes then starts again (ADR-0003).
+	grace, err := processGrace()
+	if err != nil {
+		return err
+	}
+	required := []string{"cub_master", "cub_server"}
+	if os.Getenv("CUBRID_COMPONENTS") == "SERVER" {
+		required = []string{"cub_server"}
+	}
+	watchdog := &instancemanager.Watchdog{
+		Required: required, Running: instancemanager.RunningProcesses, Busy: server.StopIntended,
+		Grace: grace, Logger: logger,
+	}
+	goneCh := make(chan error, 1)
+	go func() { goneCh <- watchdog.Run(ctx) }()
+
 	select {
+	case err := <-goneCh:
+		if err == nil {
+			return nil // ctx ended first
+		}
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+		return err
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -182,4 +207,18 @@ func timeoutsFromEnv() (instancemanager.Timeouts, error) {
 		*dst = d
 	}
 	return t, nil
+}
+
+// processGrace is how long a CUBRID process may be missing before the
+// manager ends itself: IM_PROCESS_GRACE, a duration, 30s when unset.
+func processGrace() (time.Duration, error) {
+	value := os.Getenv("IM_PROCESS_GRACE")
+	if value == "" {
+		return 30 * time.Second, nil
+	}
+	grace, err := time.ParseDuration(value)
+	if err != nil || grace <= 0 {
+		return 0, fmt.Errorf("IM_PROCESS_GRACE=%q is not a positive duration such as 30s", value)
+	}
+	return grace, nil
 }

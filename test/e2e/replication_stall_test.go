@@ -78,22 +78,32 @@ func replicationStallStep(r *haRun) {
 		Eventually(func(g Gomega) {
 			newMaster = r.activeMasterAmong(others)
 			g.Expect(newMaster).NotTo(BeEmpty())
-		}, 3*time.Minute, 3*time.Second).Should(Succeed())
+		}, 3*time.Minute, time.Second).Should(Succeed())
 
-		By("writing on the new master while the slave is stopped")
+		// At once: the Instance Manager ends a member whose CUBRID processes
+		// stay away for longer than its grace (30 s), and a new container
+		// would not be in this state. No pipe after a command that starts
+		// daemons: they would keep it open.
+		By("starting heartbeat again in the same container")
+		restartsBefore, err := r.kubectl("get", "pod", victim, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+		Expect(err).NotTo(HaveOccurred())
+		_, err = inPod(victim, `cubrid heartbeat start >/tmp/hb-start.log 2>&1`)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("writing on the new master")
 		Eventually(func() error {
 			_, err := r.runWorkload("CLIENT_ID=st1 OPS=20 ROLLBACK_EVERY=0")
 			return err
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
-
-		// No pipe after a command that starts daemons: they would keep it open.
-		By("starting heartbeat again in the same container")
-		_, err = inPod(victim, `cubrid heartbeat start >/tmp/hb-start.log 2>&1`)
-		Expect(err).NotTo(HaveOccurred())
 		Eventually(func(g Gomega) {
 			_, _, err := r.master()
 			g.Expect(err).NotTo(HaveOccurred())
 		}, 3*time.Minute, 3*time.Second).Should(Succeed(), "one master and two slaves, the stopped member among them")
+
+		restartsAfter, err := r.kubectl("get", "pod", victim, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(restartsAfter).To(Equal(restartsBefore),
+			"the container of %s was restarted, so the member is not in the state this step is about", victim)
 
 		By("writing more, so that log pages wait on the slave")
 		h, err := r.runWorkload("CLIENT_ID=st2 OPS=40 ROLLBACK_EVERY=0")
@@ -157,5 +167,47 @@ func replicationStallStep(r *haRun) {
 		after := rows(victim)
 		record += fmt.Sprintf("rows on the member after its Pod was replaced: %d\nReplicationHealthy: True\n", len(after))
 		writeScenarioFile("replication-stall/result.txt", []byte(strings.TrimSpace(record)+"\n"))
+	})
+
+	// A member whose CUBRID processes are stopped and stay stopped is not
+	// left that way: its Instance Manager ends, the container is restarted,
+	// and the member comes back by the ordinary start (#180).
+	It("restarts the container of a member whose CUBRID processes were stopped", func() {
+		_, slaves, err := r.master()
+		Expect(err).NotTo(HaveOccurred())
+		victim := slaves[0]
+		restarts := func() string {
+			out, _ := r.kubectl("get", "pod", victim, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+			return out
+		}
+		before := restarts()
+
+		By("stopping heartbeat inside the running container of " + victim + " and leaving it stopped")
+		stopped := time.Now()
+		_, err = r.kubectl("exec", victim, "--", "bash", "-c",
+			`export PATH="${CUBRID}/bin:${PATH}"; cubrid heartbeat stop >/tmp/hb-stop.log 2>&1`)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("waiting for the container to be restarted")
+		Eventually(restarts, 3*time.Minute, 2*time.Second).ShouldNot(Equal(before))
+		restartedAfter := time.Since(stopped)
+
+		By("reading why from the log of the container that ended")
+		previous, err := r.kubectl("logs", victim, "--previous", "--tail=-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(previous).To(ContainSubstring(`"event":"process_gone"`))
+
+		By("waiting for the member to be a slave again that holds everything")
+		Eventually(func(g Gomega) {
+			_, nowSlaves, err := r.master()
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(nowSlaves).To(ContainElement(victim))
+			report, err := r.dataCheck()
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
+		}, 5*time.Minute, 5*time.Second).Should(Succeed())
+		writeScenarioFile("process-watchdog/result.txt", []byte(fmt.Sprintf(
+			"member: %s\ncontainer restarted after: %s\nrestart count: %s -> %s\n",
+			victim, restartedAfter.Round(time.Second), before, restarts())))
 	})
 }
