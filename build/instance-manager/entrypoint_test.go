@@ -41,23 +41,31 @@ const (
 	componentsHA      = "HA"
 	bootstrapRecovery = "recovery"
 	callManagerStart  = "manager start"
-	callHeartbeat     = "cubrid heartbeat start"
+	// callShutdown is the one command that stops a member; the manager
+	// decides what there is to stop.
+	callShutdown    = "manager shutdown"
+	callManagerTerm = "manager term"
+	callHeartbeat   = "cubrid heartbeat start"
 
 	// cubridStub records its arguments; `createdb` registers the database the
 	// way the real command does.
 	cubridStub = `#!/bin/bash
 echo "cubrid $*" >> "${CALLS}"
+# CUBRID_START_SECONDS makes a start take that long, as the real one does.
+if [ "$2" = "start" ] && [ -n "${CUBRID_START_SECONDS:-}" ]; then sleep "${CUBRID_START_SECONDS}"; fi
 if [ "$1" = "createdb" ]; then
   printf '%s\t%s\tlocalhost\n' "${CUBRID_DB}" "${PWD}" >> "${CUBRID_DATABASES}/databases.txt"
 fi
 `
 	// managerStub exits at once, with ${IM_EXIT} when set.
 	managerStub = `#!/bin/bash
+if [ "${1:-}" = "shutdown" ]; then echo "manager shutdown" >> "${CALLS}"; exit 0; fi
 echo "manager start" >> "${CALLS}"
 exit "${IM_EXIT:-0}"
 `
 	// blockingManagerStub runs until it is told to stop, like the real one.
 	blockingManagerStub = `#!/bin/bash
+if [ "${1:-}" = "shutdown" ]; then echo "manager shutdown" >> "${CALLS}"; exit 0; fi
 echo "manager start" >> "${CALLS}"
 trap 'echo "manager term" >> "${CALLS}"; exit 0' TERM
 while :; do sleep 0.05; done
@@ -331,7 +339,7 @@ func TestEntrypoint_TerminationAfterHABootstrapStopsHeartbeat(t *testing.T) {
 	if err := waitExit(cmd); err != nil {
 		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
 	}
-	wantCalls(t, f.recorded(), callManagerStart, "cubrid heartbeat stop", "manager term")
+	wantCalls(t, f.recorded(), callManagerStart, callShutdown, callManagerTerm)
 }
 
 // `cubrid heartbeat start` exits 1 on a member without HA configuration
@@ -372,7 +380,7 @@ func TestEntrypoint_TerminationOfUnconfiguredHAMemberStopsOnlyTheManager(t *test
 	if err := waitExit(cmd); err != nil {
 		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
 	}
-	wantCalls(t, f.recorded(), callManagerStart, "manager term")
+	wantCalls(t, f.recorded(), callManagerStart, callShutdown, callManagerTerm)
 }
 
 func TestEntrypoint_RejectsBadConfiguration(t *testing.T) {
@@ -465,19 +473,15 @@ func TestEntrypoint_ExitStatusIsTheManagers(t *testing.T) {
 
 // On SIGTERM the shell stops CUBRID first, then the manager, and exits with
 // the manager's status.
-func TestEntrypoint_TerminationStopsCubridThenManager(t *testing.T) {
-	tests := []struct {
-		components string
-		stop       string
-	}{
-		{componentsServer, "cubrid server stop " + dbName},
-		{"HA", "cubrid heartbeat stop"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.components, func(t *testing.T) {
+// On SIGTERM the entrypoint runs the one shutdown command and then ends the
+// manager, in that order, whatever kind of member it is. It stops nothing
+// itself.
+func TestEntrypoint_TerminationRunsTheShutdownCommandThenEndsTheManager(t *testing.T) {
+	for _, components := range []string{componentsServer, componentsHA} {
+		t.Run(components, func(t *testing.T) {
 			f := newFixture(t, blockingManagerStub)
-			f.env["CUBRID_COMPONENTS"] = tc.components
-			if tc.components != componentsServer {
+			f.env["CUBRID_COMPONENTS"] = components
+			if components != componentsServer {
 				f.configureHA()
 			}
 			f.registerDatabase()
@@ -495,11 +499,46 @@ func TestEntrypoint_TerminationStopsCubridThenManager(t *testing.T) {
 				t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
 			}
 			calls := f.recorded()
-			stop, term := index(calls, tc.stop), index(calls, "manager term")
+			stop, term := index(calls, callShutdown), index(calls, callManagerTerm)
 			if stop < 0 || term < 0 || stop > term {
-				t.Errorf("want %q before %q, got %q", tc.stop, "manager term", calls)
+				t.Errorf("want %q before %q, got %q", callShutdown, callManagerTerm, calls)
+			}
+			for _, call := range calls {
+				if strings.HasSuffix(call, " stop") || strings.Contains(call, " stop ") {
+					t.Errorf("the entrypoint stopped CUBRID itself: %q", call)
+				}
 			}
 		})
+	}
+}
+
+// A termination that arrives while CUBRID is still being started is handled
+// when the start returns: the shutdown command runs, the manager is not
+// started, and the script exits 0. As PID 1 of a container the script would
+// otherwise ignore the signal.
+func TestEntrypoint_TerminationDuringTheStart(t *testing.T) {
+	f := newFixture(t, blockingManagerStub)
+	f.registerDatabase()
+	f.env["CUBRID_START_SECONDS"] = "1"
+	cmd := f.command()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return index(f.recorded(), "cubrid server start "+dbName) >= 0 }, &out)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd); err != nil {
+		t.Fatalf("entrypoint after SIGTERM during the start: %v\n%s", err, out.String())
+	}
+	calls := f.recorded()
+	if index(calls, callShutdown) < 0 {
+		t.Errorf("the shutdown command was not run: %q", calls)
+	}
+	if managerStarted(calls) {
+		t.Errorf("the manager was started after the termination: %q", calls)
 	}
 }
 
@@ -520,7 +559,7 @@ func TestEntrypoint_TerminationBeforeRestoreStopsOnlyTheManager(t *testing.T) {
 	if err := waitExit(cmd); err != nil {
 		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
 	}
-	wantCalls(t, f.recorded(), callManagerStart, "manager term")
+	wantCalls(t, f.recorded(), callManagerStart, callShutdown, callManagerTerm)
 }
 
 // A restore registers the database and the Instance Manager starts its server
@@ -542,7 +581,7 @@ func TestEntrypoint_TerminationAfterRestoreStopsTheRestoredServer(t *testing.T) 
 	if err := waitExit(cmd); err != nil {
 		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
 	}
-	wantCalls(t, f.recorded(), callManagerStart, "cubrid server stop "+dbName, "manager term")
+	wantCalls(t, f.recorded(), callManagerStart, callShutdown, callManagerTerm)
 }
 
 func waitFor(t *testing.T, done func() bool, out *bytes.Buffer) {

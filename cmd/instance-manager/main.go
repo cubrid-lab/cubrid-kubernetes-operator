@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,10 +37,37 @@ func main() {
 		fmt.Fprintln(os.Stderr, "instance-manager:", err)
 		os.Exit(1)
 	}
+	// "instance-manager shutdown" is the one trigger of a stop: the preStop
+	// hook and the entrypoint both run it (ADR-0003).
+	if len(os.Args) > 1 && os.Args[1] == "shutdown" {
+		if err := shutdown(logger); err != nil {
+			logger.Error("Shutdown failed", "event", "shutdown_failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(logger); err != nil {
 		logger.Error("Instance Manager stopped", "err", err)
 		os.Exit(1)
 	}
+}
+
+// shutdown asks the manager of this Pod to stop CUBRID, or stops it itself
+// when no manager listens.
+func shutdown(logger *slog.Logger) error {
+	timeouts, err := timeoutsFromEnv()
+	if err != nil {
+		return err
+	}
+	budget := instancemanager.ShutdownBudget(timeouts)
+	_, port, err := net.SplitHostPort(envOr("IM_ADDR", fmt.Sprintf(":%d", instancemanager.DefaultPort)))
+	if err != nil {
+		return fmt.Errorf("IM_ADDR: %w", err)
+	}
+	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: budget}, Logger: logger}
+	logger.Info("Shutdown requested", "event", "shutdown_requested")
+	return instancemanager.RequestShutdown(context.Background(), "http://127.0.0.1:"+port,
+		envOr("CUBRID_DB", "appdb"), cli, budget)
 }
 
 // newLogger builds the structured log on stdout. IM_LOG_LEVEL sets its level

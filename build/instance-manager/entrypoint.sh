@@ -59,6 +59,21 @@ database_registered() {
   grep -qwe "^${CUBRID_DB}" "${CUBRID_DATABASES}/databases.txt" 2>/dev/null
 }
 
+# One way to stop the member, for every trigger: "instance-manager shutdown"
+# (ADR-0003). It asks the running manager, or stops CUBRID itself when no
+# manager runs yet. The handler is installed before anything is started, so a
+# termination that arrives during createdb or a start is handled when that
+# step returns: without a handler, PID 1 of a container ignores SIGTERM.
+terminating=0
+im_pid=""
+terminate() {
+  terminating=1
+  log "termination requested: stopping CUBRID, then the Instance Manager"
+  "${IM_BIN}" shutdown || true
+  [ -z "${im_pid}" ] || kill -TERM "${im_pid}" 2>/dev/null || true
+}
+trap terminate TERM INT
+
 # Create the database only if absent; createdb registers databases.txt.
 init_db() {
   if database_registered; then
@@ -122,32 +137,14 @@ else
   started=1
 fi
 
-stop_cubrid() {
-  case "${CUBRID_COMPONENTS}" in
-    SERVER)
-      # Also when this script started nothing: after a recovery bootstrap the
-      # Instance Manager starts the restored server.
-      { [ "${started}" = "1" ] || database_registered; } || return 0
-      cubrid server stop "${CUBRID_DB}" || true ;;
-    *)
-      # Also when the Instance Manager started heartbeat during the bootstrap.
-      { [ "${started}" = "1" ] || database_registered; } || return 0
-      cubrid heartbeat stop || true ;;
-  esac
-}
-
-terminating=0
-terminate() {
-  terminating=1
-  log "termination requested: stopping CUBRID, then the Instance Manager"
-  stop_cubrid
-  kill -TERM "${im_pid}" 2>/dev/null || true
-}
+if [ "${terminating}" = "1" ]; then
+  log "terminated before the Instance Manager was started"
+  exit 0
+fi
 
 log "starting Instance Manager (CUBRID_COMPONENTS=${CUBRID_COMPONENTS}, CUBRID_BOOTSTRAP=${CUBRID_BOOTSTRAP})"
 "${IM_BIN}" &
 im_pid=$!
-trap terminate TERM INT
 
 set +e
 wait "${im_pid}"

@@ -20,7 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 )
 
 // BackupRequest asks the manager to run `cubrid backupdb` locally (ADR-0007).
@@ -102,4 +106,48 @@ func Shutdown(ctx context.Context, cli CLI, database string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Stop stops CUBRID on this member: the one implementation behind every
+// trigger of a stop (the preStop hook, a termination signal, a request of the
+// operator). It marks the stop as intended before it does anything, and a
+// stop that succeeded is not run a second time.
+func (s *Server) Stop(ctx context.Context, database string) error {
+	s.stopRequested.Store(true)
+	s.stopMu.Lock()
+	defer s.stopMu.Unlock()
+	if s.stopped {
+		return nil
+	}
+	if err := Shutdown(ctx, s.cli, database); err != nil {
+		return err
+	}
+	s.stopped = true
+	return nil
+}
+
+// RequestShutdown is what "instance-manager shutdown" does. It asks the
+// manager that listens at managerURL to stop CUBRID, so that the manager
+// knows the stop is intended. When no manager answers, for example because
+// the container is terminated before the manager was started, it stops
+// CUBRID itself with the same procedure.
+func RequestShutdown(ctx context.Context, managerURL, database string, cli CLI, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	target := managerURL + "/v1/shutdown?database=" + url.QueryEscape(database)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		// Nobody listens: this process is the only one that can stop CUBRID.
+		return Shutdown(ctx, cli, database)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("the manager answered the shutdown with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
 }

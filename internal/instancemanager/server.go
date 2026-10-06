@@ -74,6 +74,9 @@ type Server struct {
 	// stopRequested is set once a shutdown was asked for: from then on the
 	// absence of CUBRID's processes is intended.
 	stopRequested atomic.Bool
+	// stopMu and stopped make the stop run once.
+	stopMu  sync.Mutex
+	stopped bool
 	// logger writes the structured log; nil discards it.
 	logger *slog.Logger
 	// pollStatus is the last status answered on each polled path.
@@ -116,6 +119,10 @@ func (t Timeouts) withDefaults() Timeouts {
 	}
 	return t
 }
+
+// ShutdownBudget is how long the stop of a member may take, with the
+// defaults applied. The Pod's termination grace period has to be longer.
+func ShutdownBudget(t Timeouts) time.Duration { return t.withDefaults().Shutdown }
 
 // WithTimeouts sets the operation deadlines; zero values keep the defaults.
 // Returns the server for chaining.
@@ -542,10 +549,9 @@ func (s *Server) convergence(w http.ResponseWriter, r *http.Request) {
 
 // shutdown performs the ADR-0003 ordered graceful shutdown (withdraw HA, stop server).
 func (s *Server) shutdown(w http.ResponseWriter, r *http.Request) {
-	s.stopRequested.Store(true)
 	ctx, cancel := context.WithTimeout(r.Context(), s.timeouts.Shutdown)
 	defer cancel()
-	if err := Shutdown(ctx, s.cli, r.URL.Query().Get("database")); err != nil {
+	if err := s.Stop(ctx, r.URL.Query().Get("database")); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
 		return
 	}

@@ -32,7 +32,8 @@ func TestPreStopShutdown(t *testing.T) {
 		t.Fatalf("preStopShutdown = %+v, want an exec PreStop hook", lc)
 	}
 	cmd := strings.Join(lc.PreStop.Exec.Command, " ")
-	for _, want := range []string{"127.0.0.1:9090", "/v1/shutdown", "database=appdb", "-X POST"} {
+	// The hook runs the one shutdown command, not a procedure of its own.
+	for _, want := range []string{"/usr/local/bin/instance-manager shutdown"} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("preStop command %q missing %q", cmd, want)
 		}
@@ -44,7 +45,9 @@ func TestPreStopShutdown_NoDatabase(t *testing.T) {
 	if lc == nil || lc.PreStop == nil || lc.PreStop.Exec == nil {
 		t.Fatalf("preStopShutdown = %+v, want an exec PreStop hook even with no database", lc)
 	}
-	if !strings.Contains(strings.Join(lc.PreStop.Exec.Command, " "), "database=") {
-		t.Error("preStop command should still target /v1/shutdown with an empty database")
+	// The database is the member's own business: the command reads it from
+	// the Pod's environment, so the hook is the same for every cluster.
+	if !strings.Contains(strings.Join(lc.PreStop.Exec.Command, " "), "instance-manager shutdown") {
+		t.Error("preStop does not run the shutdown command")
 	}
 }
