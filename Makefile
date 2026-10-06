@@ -94,6 +94,9 @@ KIND_CLUSTER ?= cubrid-kubernetes-operator-test-e2e
 # for one scenario or E2E_LABEL_FILTER='!db' to leave out the real-database ones.
 # E2E_EVIDENCE_DIR, when set, receives the run's evidence: summary.json, junit.xml
 # and each scenario's files (docs/testing/scenario-contract.md).
+# The scenarios' time limits have defaults for Kind on a GitHub runner and can be
+# set through E2E_FORMATION_LIMIT, E2E_FAILOVER_LIMIT and the others listed in
+# docs/testing/scenario-contract.md, section "Time limits", e.g. E2E_FAILOVER_LIMIT=2m.
 E2E_LABEL_FILTER ?=
 
 .PHONY: setup-test-e2e
