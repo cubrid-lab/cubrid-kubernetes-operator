@@ -105,6 +105,16 @@ a local CUBRID control plane, not a second controller.
   "reason": "human-readable" }
 ```
 
+As implemented, the manager writes a structured log to stdout: JSON lines
+that each carry `component` (`instance-manager`), `member` and `database`
+(docs/observability.md). It logs each request with a request ID, which is
+the caller's `X-Request-ID` or one it makes and returns; each refused caller
+with the reason; each CUBRID command with its exit code and duration, and
+the end of its output when it failed; and each change of an operation's
+state. What is asked at every probe is logged below info unless its answer
+changes. The token and the object-storage keys are removed from everything
+that is written.
+
 As implemented, a slave's answer also carries `replication`: what its log
 applier reports for the master's log (`cubrid applyinfo`), or the reason it
 could not be read. ADR-0006 describes its use.
@@ -236,6 +246,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
 | `IM_OPERATIONS_DIR` | `/var/lib/cubrid/operations`, on the PVC: the durable operation records. Without it the manager serves no asynchronous backup or restore |
+| `IM_LOG_LEVEL` | optional: `debug`, `info`, `warn` or `error`; `info` when unset |
 | `IM_BACKUP_STAGING_ROOT`, `IM_RESTORE_STAGING_ROOT` | `/var/lib/cubrid/backup-staging` and `/var/lib/cubrid/restore-staging`: the roots the operator builds its requests with |
 | `IM_S3_ENDPOINT`, `IM_S3_REGION`, `IM_S3_INSECURE`, `IM_S3_ACCESS_KEY`, `IM_S3_SECRET_KEY` | from `spec.objectStorage` when set; the two keys are references to the Secret it names (`accessKey`, `secretKey`) |
 | `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the preStop limit (110s). The operator does not set them |

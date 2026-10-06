@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,17 +31,41 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	logger, err := newLogger()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "instance-manager:", err)
+		os.Exit(1)
+	}
+	if err := run(logger); err != nil {
+		logger.Error("Instance Manager stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+// newLogger builds the structured log on stdout. IM_LOG_LEVEL sets its level
+// (debug, info, warn, error; info when unset). The token and the
+// object-storage keys are registered so that they are never written.
+func newLogger() (*slog.Logger, error) {
+	level, err := instancemanager.ParseLogLevel(os.Getenv("IM_LOG_LEVEL"))
+	if err != nil {
+		return nil, fmt.Errorf("IM_LOG_LEVEL: %w", err)
+	}
+	member, _ := os.Hostname()
+	return instancemanager.NewLogger(os.Stdout, instancemanager.LogSettings{
+		Level:    level,
+		Member:   member,
+		Database: envOr("CUBRID_DB", "appdb"),
+		Secrets:  []string{os.Getenv("IM_TOKEN"), os.Getenv("IM_S3_ACCESS_KEY"), os.Getenv("IM_S3_SECRET_KEY")},
+	}), nil
+}
+
+func run(logger *slog.Logger) error {
 	addr := envOr("IM_ADDR", fmt.Sprintf(":%d", instancemanager.DefaultPort))
 	token := os.Getenv("IM_TOKEN")
 
-	server := instancemanager.NewServer(instancemanager.ExecCLI{Timeout: 10 * time.Second}, token).
+	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second}, Logger: logger}
+	server := instancemanager.NewServer(cli, token).
+		WithLogger(logger).
 		// A backup may stage only below this root; it is also what a failed
 		// backup removes. It matches the operator's backup staging path.
 		WithBackupStagingRoot(envOr("IM_BACKUP_STAGING_ROOT", "/var/lib/cubrid/backup-staging")).
@@ -113,7 +138,7 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	fmt.Println("instance-manager listening on", addr)
+	logger.Info("Started listening", "address", addr, "authenticated", token != "")
 
 	select {
 	case err := <-errCh:
