@@ -260,6 +260,12 @@ prefilled title prefix; for a custom issue, pick the type from
 [Pull request and commit titles](#pull-request-and-commit-titles), for example
 `fix(broker): ...`. Write issues, PRs and comments in English.
 
+A bug report is also a record of evidence. Say how often the behavior was
+seen, attach what you have (status and Conditions, Events, logs, SQL results;
+"not collected" is a valid answer), and keep what the evidence shows apart
+from what is only suspected: a cause that has not been verified goes under
+"Not Yet Verified", not into the title or the description as a fact.
+
 Reporters describe impact and reproduction; they do **not** need permission
 to apply GitHub labels. Maintainers assign a type label, one
 `priority: <value>` and one `size: <value>` label (plus a `phase:` label).
