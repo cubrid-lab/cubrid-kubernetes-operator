@@ -54,23 +54,6 @@ var s03Variants = []string{s03AbruptFirst, s03Abrupt, s03Graceful}
 // s03Clients names the workload client of each variant.
 var s03Clients = map[string]string{s03AbruptFirst: "s03f", s03Graceful: "s03g", s03Abrupt: "s03a"}
 
-// The limits of S03 for Kind on a GitHub-hosted runner. The values and the
-// baseline they come from are recorded in docs/testing/scenario-contract.md,
-// section "Time limits"; change them there and here together. A limit of
-// zero is "not set": S03 is then reported as blocked with reason
-// time_limit_unset.
-const (
-	// failoverLimit bounds the time from the fault until the client's
-	// writes are acknowledged again without interruption.
-	failoverLimit = 30 * time.Second
-	// rejoinLimit bounds the time from the fault until all three members
-	// have a role again, the former master as a slave.
-	rejoinLimit = 5 * time.Minute
-	// stablePeriod is how long the client must go on being acknowledged
-	// before its recovery counts.
-	stablePeriod = 30 * time.Second
-)
-
 // s03FlowLimits bound the steps of the fault flow. They are generous waits
 // for the test to end, not the limits the scenario is judged by.
 var s03FlowLimits = faults.Limits{

@@ -769,6 +769,17 @@ A value is unset until its baseline measurement. This table is the only place
 the values are recorded. A value holds for the environment named with it; the
 VM lab gets its own values from its own baseline.
 
+The values below are the defaults of the Kind suite. Each can be set for
+another environment without changing the code, through an environment
+variable that holds a duration such as `45s` or `2m`:
+`E2E_FORMATION_LIMIT`, `E2E_REPLICATION_LIMIT`, `E2E_FAILOVER_LIMIT`,
+`E2E_REJOIN_LIMIT`, `E2E_STABLE_PERIOD`, `E2E_BROKER_RECOVERY_LIMIT` and
+`E2E_OPERATOR_RESYNC_LIMIT`. The value `0` or `unset` runs the scenario as a
+baseline, which is reported as `blocked`. A value that is not a duration
+stops the suite before it starts. The limit a scenario was judged by is in
+its entry of `summary.json`, so a run with other limits cannot be mistaken
+for one with the defaults.
+
 | Limit | Meaning | Value |
 |---|---|---|
 | `install_limit` | Operator installed and its Pod available | unset |

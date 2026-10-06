@@ -43,13 +43,6 @@ const (
 
 var s06Variants = []string{s06Restart, s06Absent}
 
-// operatorResyncLimit is the limit of S06 for Kind on a GitHub-hosted
-// runner. The value and the baseline it comes from are recorded in
-// docs/testing/scenario-contract.md, section "Time limits"; change it there
-// and here together. Zero is "not set": S06 is then reported as blocked with
-// reason time_limit_unset.
-const operatorResyncLimit = 2 * time.Minute
-
 const (
 	operatorDeployment = "deployment/cubrid-kubernetes-operator-controller-manager"
 	operatorSelector   = "control-plane=controller-manager"
