@@ -112,7 +112,8 @@ written. Without a run directory nothing can be kept, so no run passes.
 
 A run that selects specs, for example with `E2E_LABEL_FILTER`, is a filtered
 local baseline and does not validate the `kind` lane. It is judged as the
-lane `kind-filtered`: every scenario it recorded must pass, and its
+lane `kind-filtered`: every scenario it recorded must pass, a run that
+recorded none does not pass, and its
 `summary.json` names that lane so it cannot be mistaken for a full run.
 
 ### Confirming the fault

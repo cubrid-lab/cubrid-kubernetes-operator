@@ -91,8 +91,8 @@ func kindRequired() []evidence.Requirement {
 
 // runLane returns the lane this run is judged against. A run that selects
 // specs with a label filter or focus is a local baseline, not a validation of
-// the Kind lane: it must pass every scenario it recorded, and its summary
-// names it "kind-filtered".
+// the Kind lane: it must record at least one scenario and pass every one it
+// recorded, and its summary names it "kind-filtered".
 func runLane() evidence.Lane {
 	suite, _ := GinkgoConfiguration()
 	if suite.LabelFilter == "" && len(suite.FocusStrings) == 0 && len(suite.SkipStrings) == 0 &&

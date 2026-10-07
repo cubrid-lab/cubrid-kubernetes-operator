@@ -183,6 +183,7 @@ func TestGate(t *testing.T) {
 			with(Scenario{ID: s00, Result: "passed", Evidence: []string{s00Record}}), `S00: fail: result "passed"`},
 		"one of two results of a variant failed": {lane,
 			append(passing, Scenario{ID: s03, Variant: abrupt, Result: Fail, Reason: "x"}), "S03/abrupt: fail: x"},
+		"a lane that requires nothing": {Lane{Name: "kind-filtered"}, nil, "no scenario recorded"},
 		"a scenario the lane does not require failed": {lane,
 			append(passing, Scenario{ID: "S07", Result: Fail, Reason: "x"}), "S07: fail: x"},
 	}

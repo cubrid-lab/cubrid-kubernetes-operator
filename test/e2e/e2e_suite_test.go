@@ -76,6 +76,8 @@ var _ = BeforeSuite(func() {
 	setupCertManager()
 })
 
+// The gate judges the scenarios this process recorded, so it assumes one
+// Ginkgo process: with -p each process would judge only its own scenarios.
 var _ = AfterSuite(func() {
 	err := concludeRun()
 	teardownCertManager()

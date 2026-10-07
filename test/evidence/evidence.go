@@ -166,9 +166,13 @@ type Lane struct {
 // or nothing when it passes. A required scenario passes when it has at least
 // one result and every result of it is judged a pass, or not_applicable where
 // the lane allows that. A scenario judged a fail is a problem even when the
-// lane does not require it.
+// lane does not require it. A lane that requires nothing never passes: such
+// a run proved nothing.
 func (l Lane) Gate(s Summary, dir string) []string {
 	var problems []string
+	if len(l.Required) == 0 {
+		problems = append(problems, "no scenario recorded: the lane requires nothing, so the run proved nothing")
+	}
 	for _, req := range l.Required {
 		name := Scenario{ID: req.ID, Variant: req.Variant}.Name()
 		seen := false
