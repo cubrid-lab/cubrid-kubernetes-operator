@@ -25,7 +25,11 @@ import (
 	"time"
 )
 
-const testLoopbackAddr = "127.0.0.1:6000"
+const (
+	testLoopbackAddr = "127.0.0.1:6000"
+	// emptyBearer is the scheme with no token after it.
+	emptyBearer = "Bearer "
+)
 
 // Every route below /v1, with a body that would start work if it were let in.
 var v1Routes = []struct{ method, path, body string }{
@@ -59,7 +63,7 @@ func TestAuth_EveryV1RouteNeedsTheToken(t *testing.T) {
 		"a prefix of it":      "Bearer to",
 		"it with a suffix":    "Bearer tokk",
 		"it without a scheme": "tok",
-		"an empty bearer":     "Bearer ",
+		"an empty bearer":     emptyBearer,
 	}
 	for _, origin := range []string{testRemoteAddr, testLoopbackAddr, "[::1]:6000"} {
 		for name, authorization := range refused {
@@ -95,7 +99,7 @@ func TestAuth_TheTokenIsAcceptedFromEveryOrigin(t *testing.T) {
 // caller could send that it accepts. The probes do not need a token.
 func TestAuth_AnEmptyTokenRefusesEveryV1Request(t *testing.T) {
 	for _, origin := range []string{testRemoteAddr, testLoopbackAddr} {
-		for _, authorization := range []string{"", "Bearer ", "Bearer tok"} {
+		for _, authorization := range []string{"", emptyBearer, "Bearer tok"} {
 			for _, route := range v1Routes {
 				cli := &countingCLI{}
 				s := NewServer(cli, "").WithBackupStagingRoot(testStagingRoot)
@@ -107,6 +111,20 @@ func TestAuth_AnEmptyTokenRefusesEveryV1Request(t *testing.T) {
 					t.Errorf("%s %s from %s with %q ran %q", route.method, route.path, origin, authorization, got)
 				}
 			}
+		}
+	}
+	// A token of white space only is no token: Go trims header values, so
+	// no request could ever carry it.
+	for _, blank := range []string{" ", "\n", " \t\n"} {
+		cli := &countingCLI{}
+		h := NewServer(cli, blank).Handler()
+		for _, authorization := range []string{"", emptyBearer, emptyBearer + blank} {
+			if rr := sendV1(h, http.MethodPost, "/v1/shutdown?database=appdb", "", authorization, testLoopbackAddr); rr.Code != http.StatusUnauthorized {
+				t.Errorf("/v1/shutdown with server token %q and %q = %d, want 401", blank, authorization, rr.Code)
+			}
+		}
+		if got := cli.recorded(); len(got) != 0 {
+			t.Errorf("a manager with token %q ran %q", blank, got)
 		}
 	}
 	h := NewServer(fakeCLI{out: masterOut}, "").Handler()
@@ -153,5 +171,24 @@ func TestRequestShutdown_Authorization(t *testing.T) {
 				t.Error("a refused shutdown is recorded as intended")
 			}
 		})
+	}
+}
+
+// The log says whether a request came from the Pod itself. The address forms
+// net/http reports are all recognized, the bracketed IPv6 one included.
+func TestIsLoopback(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:6000":  true,
+		"127.0.0.2:6000":  true,
+		"[::1]:6000":      true,
+		"localhost:6000":  true,
+		"10.0.0.1:5000":   false,
+		"[2001:db8::1]:1": false,
+		"":                false,
+		"not-an-address":  false,
+	} {
+		if got := isLoopback(addr); got != want {
+			t.Errorf("isLoopback(%q) = %v, want %v", addr, got, want)
+		}
 	}
 }

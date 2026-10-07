@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -276,7 +277,8 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 		}
 		rotatedAt := secret.Annotations[imTokenRotatedAtAnnotation]
 		switch {
-		case len(secret.Data[imTokenKey]) == 0:
+		// White space alone is no token: the manager refuses to start with it.
+		case len(bytes.TrimSpace(secret.Data[imTokenKey])) == 0:
 			generated = true
 		case len(secret.Data[imPreviousTokenKey]) > 0:
 			since, err := time.Parse(time.RFC3339, rotatedAt)

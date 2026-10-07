@@ -18,12 +18,14 @@ package instancemanager
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -735,18 +737,21 @@ func (s *Server) shutdown(w http.ResponseWriter, r *http.Request) {
 // auth wraps /v1 handlers with bearer-token authentication (ADR-0003). Every
 // caller needs the token, the "instance-manager shutdown" command of the same
 // Pod included; a request from loopback is not an exception. A manager that
-// was given no token refuses every request, so that an unset token can never
-// mean "open". The token is compared in constant time.
+// was given no token, or only white space, refuses every request, so that an
+// unset token can never mean "open". The SHA-256 digests of the two values
+// are compared in constant time, which hides the token's length as well.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
-	want := []byte("Bearer " + s.token)
+	tokenSet := strings.TrimSpace(s.token) != ""
+	want := sha256.Sum256([]byte("Bearer " + s.token))
 	return func(w http.ResponseWriter, r *http.Request) {
-		got := r.Header.Get(authHeader)
-		if s.token == "" || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
+		header := r.Header.Get(authHeader)
+		got := sha256.Sum256([]byte(header))
+		if !tokenSet || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 			reason := reasonWrongToken
 			switch {
-			case s.token == "":
+			case !tokenSet:
 				reason = reasonTokenNotSet
-			case got == "":
+			case header == "":
 				reason = reasonNoToken
 			}
 			s.logRefused(w, r, reason)
@@ -757,23 +762,18 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// isLoopback reports whether a request's RemoteAddr is the Pod itself. It is
+// written to the log only; it gives no access.
 func isLoopback(remoteAddr string) bool {
-	host := remoteAddr
-	if i := indexByte(remoteAddr, ':'); i >= 0 {
-		host = remoteAddr[:i]
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false
 	}
-	return host == "127.0.0.1" || host == "::1" || host == "localhost"
-}
-
-func indexByte(s string, b byte) int {
-	// last colon splits host:port; use the last so IPv6 hosts without a port
-	// are not mis-split. RemoteAddr always has host:port from net/http.
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == b {
-			return i
-		}
+	if host == "localhost" {
+		return true
 	}
-	return -1
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

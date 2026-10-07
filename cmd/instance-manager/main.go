@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -92,7 +93,8 @@ func run(logger *slog.Logger) error {
 	token := os.Getenv("IM_TOKEN")
 	// The operator always supplies a token (ADR-0003). Without one the manager
 	// could accept nobody, so it does not start and says why.
-	if token == "" {
+	// White space alone counts as none: no request could ever carry it.
+	if strings.TrimSpace(token) == "" {
 		return errors.New("IM_TOKEN is empty: the Instance Manager does not start without a token")
 	}
 
