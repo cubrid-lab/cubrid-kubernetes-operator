@@ -98,6 +98,20 @@ func (f *lostResponseBackupClient) GetOperation(_ context.Context, _, _, _ strin
 	return instancemanager.Operation{ID: opFake, State: instancemanager.OpRunningBackup}, nil
 }
 
+// failingStatusClient fails every status update, as a lost write to the API
+// server would.
+type failingStatusClient struct{ client.Client }
+
+func (c failingStatusClient) Status() client.SubResourceWriter {
+	return failingStatusWriter{c.Client.Status()}
+}
+
+type failingStatusWriter struct{ client.SubResourceWriter }
+
+func (failingStatusWriter) Update(context.Context, client.Object, ...client.SubResourceUpdateOption) error {
+	return errors.New("the API server is unavailable")
+}
+
 var _ = Describe("CubridBackup Controller", func() {
 	const namespace = "default"
 
@@ -328,6 +342,38 @@ var _ = Describe("CubridBackup Controller", func() {
 			Expect(running.Status.TargetInstance).To(Equal(standby))
 		})
 
+		It("does not start a backup whose target could not be recorded", func() {
+			cluster := newHACluster("bk-nowrite")
+			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+
+			backup := newBackup("bk-nowrite", "bk-nowrite")
+			Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+
+			fake := &lostResponseBackupClient{}
+			prober := &memberProber{master: "bk-nowrite-0"}
+			key := client.ObjectKeyFromObject(backup)
+
+			By("failing the status write that records the target")
+			r := &CubridBackupReconciler{
+				Client: failingStatusClient{k8sClient}, Scheme: k8sClient.Scheme(), Prober: prober, Backup: fake,
+			}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).To(HaveOccurred())
+			Expect(fake.instances).To(BeEmpty(), "no backup may be started before its target is recorded")
+
+			unrecorded := &databasev1alpha1.CubridBackup{}
+			Expect(k8sClient.Get(ctx, key, unrecorded)).To(Succeed())
+			Expect(unrecorded.Status.TargetInstance).To(BeEmpty())
+
+			By("recording the target and starting the backup once the write succeeds")
+			r.Client = k8sClient
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fake.instances).To(Equal([]string{"bk-nowrite-1"}))
+		})
+
 		It("waits instead of dispatching anywhere when the recorded target is no longer eligible", func() {
 			cluster := newHACluster("bk-moved")
 			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
@@ -360,7 +406,7 @@ var _ = Describe("CubridBackup Controller", func() {
 			Expect(held.Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending))
 			ready := meta.FindStatusCondition(held.Status.Conditions, conditionBackupReady)
 			Expect(ready).NotTo(BeNil())
-			Expect(ready.Reason).To(Equal("RecordedTargetNotEligible"))
+			Expect(ready.Reason).To(Equal(reasonRecordedTargetNotEligible))
 		})
 	})
 })

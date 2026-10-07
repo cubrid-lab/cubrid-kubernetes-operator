@@ -40,6 +40,11 @@ const (
 	conditionAccepted    = "Accepted"
 	conditionBackupReady = "Ready"
 
+	// reasonRecordedTargetSelected / reasonRecordedTargetNotEligible are the
+	// Ready reasons while a backup start is retried on its recorded target.
+	reasonRecordedTargetSelected    = "RecordedTargetSelected"
+	reasonRecordedTargetNotEligible = "RecordedTargetNotEligible"
+
 	backupStagingRoot = "/var/lib/cubrid/backup-staging"
 	backupPollAfter   = 10 * time.Second
 )
@@ -122,7 +127,9 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // in status, and only then starts the Instance Manager backup operation with a
 // deterministic idempotency key. A dispatch whose response is lost may still
 // have started the backup, so once a target is recorded only that target is
-// ever dispatched to; it is never replaced by a fresh selection.
+// ever dispatched to; it is never replaced by a fresh selection. For the same
+// reason spec.target.preference is read only for that first selection: a later
+// change does not move a backup whose target is already recorded.
 func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -140,13 +147,13 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 			Role:         databasev1alpha1.CubridRole(backup.Status.TargetRole),
 			FallbackUsed: backup.Status.FallbackUsed,
 			Selected:     true,
-			Reason:       "RecordedTargetSelected",
+			Reason:       reasonRecordedTargetSelected,
 		}
 		if !recordedTargetEligible(sel, members, obs, res, single, observedAt) {
 			// Not terminal: the target may become eligible again. Another member
 			// is never started, since the earlier dispatch may be running.
-			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "RecordedTargetNotEligible",
-				"recorded target "+sel.Instance+" is no longer an eligible "+backup.Status.TargetRole+"; waiting")
+			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reasonRecordedTargetNotEligible,
+				"recorded target "+sel.Instance+" is no longer eligible for its recorded role "+backup.Status.TargetRole+"; waiting")
 			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
 		}
 	} else {
