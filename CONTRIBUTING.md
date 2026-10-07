@@ -108,6 +108,11 @@ The run fails unless every scenario the lane requires passed
 ([Required scenarios](./docs/testing/scenario-contract.md#required-scenarios)).
 A filtered run is a local baseline, not a validation of the Kind lane.
 
+In GitHub Actions, Lint, Tests and E2E run once per pull request push and on
+pushes to `main`; a newer push to the same pull request cancels the superseded
+run. To run one of them on a branch without a pull request, use
+`gh workflow run <lint.yml|test.yml|test-e2e.yml> --ref <branch>`.
+
 Path filters and the VM-lab entry points for this lane are tracked in #122.
 
 `make install`, `make deploy` and `make run` use the selected kubecontext.
