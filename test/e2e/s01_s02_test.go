@@ -52,44 +52,28 @@ type haRun struct {
 
 	// history is everything the workload client recorded so far.
 	history string
-	// s01 and s02 are reported after the steps; until a step sets them they
-	// say that the scenario did not get that far.
-	s01, s02 evidence.Scenario
-	// later holds the results of the scenarios that follow, in their order.
-	later []evidence.Scenario
 }
 
 func newHARun(namespace, clientNamespace, cluster, database string, members []string) *haRun {
-	unreached := "an earlier step failed; see the test output"
 	return &haRun{
 		namespace: namespace, clientNamespace: clientNamespace, cluster: cluster, database: database, members: members,
-		s01: evidence.Scenario{ID: "S01", Result: evidence.Fail, Reason: unreached},
-		s02: evidence.Scenario{ID: "S02", Result: evidence.Fail, Reason: unreached},
 	}
 }
 
-// report adds S01 and S02 to the run's summary.
-func (r *haRun) report(ran bool) {
-	if !ran {
-		reason := "needs linux/amd64: the official CUBRID image has no other build"
-		recordScenario(evidence.Scenario{ID: "S01", Result: evidence.NotRun, Reason: reason})
-		recordScenario(evidence.Scenario{ID: "S02", Result: evidence.NotRun, Reason: reason})
-		recordScenario(evidence.Scenario{ID: "S14", Result: evidence.NotRun, Reason: reason})
-		for _, variant := range s03Variants {
-			recordScenario(evidence.Scenario{ID: "S03", Variant: variant, Result: evidence.NotRun, Reason: reason})
-		}
-		for _, variant := range s05Variants {
-			recordScenario(evidence.Scenario{ID: "S05", Variant: variant, Result: evidence.NotRun, Reason: reason})
-		}
-		for _, variant := range s06Variants {
-			recordScenario(evidence.Scenario{ID: "S06", Variant: variant, Result: evidence.NotRun, Reason: reason})
-		}
-		return
+// reportNotRun records every scenario of the group as not_run with the
+// reason, for a run in which the group's setup was skipped.
+func (r *haRun) reportNotRun(reason string) {
+	recordScenario(evidence.Scenario{ID: "S01", Result: evidence.NotRun, Reason: reason})
+	recordScenario(evidence.Scenario{ID: "S02", Result: evidence.NotRun, Reason: reason})
+	recordScenario(evidence.Scenario{ID: "S14", Result: evidence.NotRun, Reason: reason})
+	for _, variant := range s03Variants {
+		recordScenario(evidence.Scenario{ID: "S03", Variant: variant, Result: evidence.NotRun, Reason: reason})
 	}
-	recordScenario(r.s01)
-	recordScenario(r.s02)
-	for _, s := range r.later {
-		recordScenario(s)
+	for _, variant := range s05Variants {
+		recordScenario(evidence.Scenario{ID: "S05", Variant: variant, Result: evidence.NotRun, Reason: reason})
+	}
+	for _, variant := range s06Variants {
+		recordScenario(evidence.Scenario{ID: "S06", Variant: variant, Result: evidence.NotRun, Reason: reason})
 	}
 }
 
@@ -308,8 +292,10 @@ func (r *haRun) evidenceFiles(id string, report workload.Report) []string {
 // They continue on the cluster the HA bootstrap steps formed, after the
 // workload client has run through the read-write Service.
 func s01AndS02Steps(r *haRun) {
-	It("S01: has one master and two slaves, and accepts writes only through the read-write Service", func() {
-		r.s01.Reason = "a check of S01 failed; see the test output"
+	It("S01: has one master and two slaves, and accepts writes only through the read-write Service", Label("S01"), func() {
+		result := evidence.Scenario{ID: "S01", Result: evidence.Fail, Reason: "a check of S01 failed; see the test output"}
+		// Recorded also when a check below fails.
+		defer func() { recordScenario(result) }()
 
 		By("asking CUBRID for the roles and comparing them with the operator's status")
 		master, _, err := r.master()
@@ -338,7 +324,7 @@ func s01AndS02Steps(r *haRun) {
 
 		history, err := workload.ReadHistory(strings.NewReader(r.history))
 		Expect(err).NotTo(HaveOccurred())
-		r.s01 = judged(evidence.Scenario{
+		result = judged(evidence.Scenario{
 			ID:           "S01",
 			Measurements: map[string]any{"formationTime": formation.String(), "acknowledgedMissing": report.AcknowledgedMissing},
 			Operations: &evidence.Operations{
@@ -349,8 +335,11 @@ func s01AndS02Steps(r *haRun) {
 		}, "formation_limit", formationLimit, formation)
 	})
 
-	It("S02: replicates rows, schema changes and rollbacks, also to a replaced slave", func() {
-		r.s02.Reason = "a check of S02 failed; see the test output"
+	It("S02: replicates rows, schema changes and rollbacks, also to a replaced slave", Label("S02"), func() {
+		result := evidence.Scenario{ID: "S02", Result: evidence.Fail, Reason: "a check of S02 failed; see the test output"}
+		// Recorded also when a check below fails.
+		defer func() { recordScenario(result) }()
+
 		master, slaves, err := r.master()
 		Expect(err).NotTo(HaveOccurred())
 
@@ -456,7 +445,7 @@ func s01AndS02Steps(r *haRun) {
 		if timeline != "" {
 			files = append(files, timeline)
 		}
-		r.s02 = judged(evidence.Scenario{
+		result = judged(evidence.Scenario{
 			ID: "S02",
 			Measurements: map[string]any{
 				"replicationObservedWithin": replication.Round(time.Millisecond).String(),

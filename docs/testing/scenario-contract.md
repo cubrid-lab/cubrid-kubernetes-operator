@@ -110,11 +110,44 @@ The suite writes `summary.json` and `junit.xml`, with the lane's verdict, to
 only then fails when the run did not pass its lane or the files could not be
 written. Without a run directory nothing can be kept, so no run passes.
 
+Before anything is set up, the suite records every scenario and variant of
+the `kind` lane as `not_run`. The result a step records takes its place; a
+scenario none of whose steps recorded a result keeps one that says why:
+
+| What happened to its step | Result and reason |
+|---|---|
+| The run's filter did not select it | `not_run`, not selected by the run's focus or label filter |
+| It was skipped, for example on a platform the scenario does not run on | `not_run`, with the reason for the skip |
+| The setup of its group (`BeforeAll`, `BeforeEach`) failed, so it did not start | `blocked`, with the setup's failure |
+| An earlier step of its Ordered group failed, so it did not start | `blocked`, naming that step |
+| The suite's setup failed, or the run stopped before it | `not_run`, with that reason |
+| It failed before it recorded a result | `fail` |
+
+A scenario therefore never disappears from `summary.json`, and a step that
+never ran is never recorded as `fail`. A required scenario whose label no
+step of the suite carries can never get a result of its own, so the run
+reports it as a problem and does not pass. The groups of the suite (the manager,
+S00, the HA group with S01–S03, S05, S06 and S14, and the wiring check with a
+fake Instance Manager) are independent: each sets up what it needs, and a
+failure in one does not keep another from running. Within the HA group the
+scenarios run in order on one cluster, so a failed step blocks the ones after
+it.
+
+Each scenario step carries a Ginkgo label: its ID (`S01`), and for a variant
+also the ID and the variant (`S03-graceful`). The steps that form the HA
+cluster carry `ha-setup`. The group's `BeforeAll` only creates the cluster;
+the `ha-setup` steps wait until it is formed. A filter that selects an HA
+scenario must therefore also select `ha-setup`, for example
+`E2E_LABEL_FILTER='ha-setup || S03-graceful'`. Without it (for example
+`-ginkgo.focus=S03` or `E2E_LABEL_FILTER=S03`) the scenario runs on a cluster
+that is not formed yet, and its result says nothing about the scenario.
+
 A run that selects specs, for example with `E2E_LABEL_FILTER`, is a filtered
 local baseline and does not validate the `kind` lane. It is judged as the
-lane `kind-filtered`: every scenario it recorded must pass, a run that
-recorded none does not pass, and its
-`summary.json` names that lane so it cannot be mistaken for a full run.
+lane `kind-filtered`: every scenario it selected a step of must pass, a run
+that selected none does not pass, and its `summary.json` names that lane so
+it cannot be mistaken for a full run. The scenarios it did not select are
+listed as `not_run`.
 
 ### Confirming the fault
 

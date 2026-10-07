@@ -62,10 +62,11 @@ type s14Call struct {
 // s14Step registers S14 (authentication and Secrets) of the scenario
 // contract on the cluster the earlier steps formed.
 func s14Step(r *haRun) {
-	It("S14: the Instance Manager refuses a caller without the token, and the token is not shown anywhere", func() {
+	const text = "S14: the Instance Manager refuses a caller without the token, and the token is not shown anywhere"
+	It(text, Label("S14"), func() {
 		result := evidence.Scenario{ID: "S14", Result: evidence.Fail,
 			Reason: "a check of S14 failed; see the test output"}
-		defer func() { r.later = append(r.later, result) }()
+		defer func() { recordScenario(result) }()
 
 		// A member has a role before its Pod is Ready: CUBRID is started
 		// before the Instance Manager listens. The step before this one

@@ -179,6 +179,9 @@ spec:
           sleep 3600
 `
 
+// haSetup labels the steps that form the HA cluster the scenario steps use.
+const haSetup = "ha-setup"
+
 // haBootstrapScenario registers the HA bootstrap on a real engine: of three
 // members exactly one creates the database; the other two are seeded from it
 // through object storage and join as slaves; a row written on the master is
@@ -187,6 +190,10 @@ spec:
 // Its last steps are S01 and S02 of the scenario contract
 // (s01AndS02Steps), which continue on the cluster these steps formed.
 // Skipped, which is "not run", on anything but amd64.
+//
+// The steps that form the cluster carry the label haSetup and each scenario
+// step the label of its scenario, so that one scenario runs on a formed
+// cluster with E2E_LABEL_FILTER='ha-setup || S03-graceful'.
 func haBootstrapScenario() {
 	Context("HA bootstrap with the real CUBRID image", Label("db", "ha-bootstrap"), Ordered, func() {
 		const (
@@ -277,8 +284,8 @@ spec:
 		})
 
 		AfterAll(func() {
-			scenarios.report(ran)
 			if !ran {
+				scenarios.reportNotRun("needs linux/amd64: the official CUBRID image has no other build")
 				return
 			}
 			for _, args := range [][]string{
@@ -300,7 +307,7 @@ spec:
 				"--ignore-not-found", "--timeout=5m"))
 		})
 
-		It("creates the database on one member only", func() {
+		It("creates the database on one member only", Label(haSetup), func() {
 			By("waiting for the operator to record the database")
 			Eventually(func(g Gomega) {
 				created, err := clusterField("{.status.databases[0].primaryCreated}")
@@ -315,7 +322,7 @@ spec:
 			Expect(out).To(ContainSubstring(members))
 		})
 
-		It("seeds the other members, which join as slaves", func() {
+		It("seeds the other members, which join as slaves", Label(haSetup), func() {
 			By("waiting for the operator to record the seeding")
 			Eventually(func(g Gomega) {
 				phase, err := clusterField("{.status.databases[0].phase}")
@@ -347,7 +354,7 @@ spec:
 			}, 10*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
-		It("replicates a row written on the master to both slaves", func() {
+		It("replicates a row written on the master to both slaves", Label(haSetup), func() {
 			By("writing on the master")
 			Eventually(func() error {
 				return writeS00Row(csqlInPod(haNamespace, first, database), marker)
@@ -366,7 +373,7 @@ spec:
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("serves SQL through the read-write and the read-only Service", func() {
+		It("serves SQL through the read-write and the read-only Service", Label(haSetup), func() {
 			By("waiting for a Broker of each access mode")
 			for _, mode := range []string{"rw", "ro"} {
 				_, err := kubectl("rollout", "status", "deployment/"+clusterName+"-broker-"+mode, "--timeout=5m")
@@ -403,7 +410,7 @@ spec:
 			}, 2*time.Minute, 3*time.Second).Should(Succeed())
 		})
 
-		It("holds what a recorded workload was told, on both Services", func() {
+		It("holds what a recorded workload was told, on both Services", Label(haSetup), func() {
 			By("building and loading the workload client image")
 			_, err := utils.Run(exec.Command("make", "docker-build-workload",
 				fmt.Sprintf("WORKLOAD_IMG=%s", workloadImage)))
@@ -463,7 +470,7 @@ spec:
 			}
 		})
 
-		It("reports the cluster Ready with the master as primary", func() {
+		It("reports the cluster Ready with the master as primary", Label(haSetup), func() {
 			Eventually(func(g Gomega) {
 				ready, err := clusterField(`{.status.conditions[?(@.type=="Ready")].status}`)
 				g.Expect(err).NotTo(HaveOccurred())

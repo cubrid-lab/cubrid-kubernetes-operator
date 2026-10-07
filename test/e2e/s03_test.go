@@ -230,14 +230,14 @@ func (l *roleLog) write(rel string) string {
 // master's Pod is deleted.
 func s03Step(r *haRun, variant string) {
 	It("S03/"+variant+": one member is master again after the master Pod is deleted, and no acknowledged write is lost",
-		func() { r.s03(variant) })
+		Label("S03", evidence.Requirement{ID: "S03", Variant: variant}.Label()), func() { r.s03(variant) })
 }
 
 func (r *haRun) s03(variant string) {
 	result := evidence.Scenario{ID: "S03", Variant: variant, Result: evidence.Fail,
 		Reason: "a check of S03 failed; see the test output"}
 	// Reported also when a check below fails.
-	defer func() { r.later = append(r.later, result) }()
+	defer func() { recordScenario(result) }()
 
 	client := s03Clients[variant]
 

@@ -86,15 +86,20 @@ make cleanup-test-e2e KIND_CLUSTER=cubrid-contributor-e2e
 
 The target builds the manager image, creates/reuses the named Kind cluster,
 and deletes that cluster after a successful run. Never reuse a valuable
-cluster name. The suite has three kinds of scenario: the manager itself, the wiring
+cluster name. The suite has independent groups: the manager itself, the wiring
 scenario with a fake Instance Manager (label `fake-instance-manager`, no
-CUBRID), and S00 with the real CUBRID image (labels `db` and `S00`), which
-runs on linux/amd64 only and is skipped elsewhere. A skipped scenario was not
-run. S00 covers one standalone member; a passing run does not establish HA,
-failover, backup or restore.
+CUBRID), S00 with the real CUBRID image (labels `db` and `S00`), and the HA
+group on the real image (labels `db` and `ha-bootstrap`; each scenario step is
+labelled with its ID, and a variant also with `<ID>-<variant>`). The real-image
+groups run on linux/amd64 only and are skipped elsewhere. A failure in one
+group does not stop the others. A skipped, filtered-out or blocked scenario
+is recorded as `not_run` or `blocked` with the reason, never as a pass. S00
+covers one standalone member; a Kind run does not establish backup, restore
+or behavior on real VM failures.
 
 ```bash
 make test-e2e E2E_LABEL_FILTER=S00        # one scenario by its ID
+make test-e2e E2E_LABEL_FILTER='ha-setup || S03-graceful'  # one HA variant; always select ha-setup with it
 make test-e2e E2E_LABEL_FILTER='!db'      # without the real-database scenarios
 make test-e2e E2E_EVIDENCE_DIR=$PWD/artifacts/e2e   # keep the evidence elsewhere than e2e-evidence/
 ```
