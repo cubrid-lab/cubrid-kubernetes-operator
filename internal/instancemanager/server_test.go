@@ -100,11 +100,14 @@ func TestServer_Role_RequiresToken(t *testing.T) {
 	}
 }
 
-func TestServer_Role_LoopbackExempt(t *testing.T) {
+func TestServer_Role_LoopbackNeedsTheToken(t *testing.T) {
 	h := NewServer(fakeCLI{out: masterOut}, "tok").Handler()
-	// loopback without token -> allowed (preStop path, ADR-0003)
-	if rr := doReq(t, h, "/v1/role", "", "127.0.0.1:6000"); rr.Code != http.StatusOK {
-		t.Errorf("/v1/role loopback no-token = %d, want 200", rr.Code)
+	// loopback without token -> 401: the origin does not replace the token (#271)
+	if rr := doReq(t, h, "/v1/role", "", testLoopbackAddr); rr.Code != http.StatusUnauthorized {
+		t.Errorf("/v1/role loopback no-token = %d, want 401", rr.Code)
+	}
+	if rr := doReq(t, h, "/v1/role", "tok", testLoopbackAddr); rr.Code != http.StatusOK {
+		t.Errorf("/v1/role loopback with-token = %d, want 200", rr.Code)
 	}
 }
 
@@ -140,14 +143,15 @@ func TestServer_Backup_RequiresToken(t *testing.T) {
 	}
 }
 
-func TestServer_Shutdown_LoopbackExempt(t *testing.T) {
+func TestServer_Shutdown_WithToken(t *testing.T) {
 	h := NewServer(fakeCLI{out: "ok"}, "tok").Handler()
 	req := httptest.NewRequest("POST", "/v1/shutdown?database=appdb", nil)
+	req.Header.Set("Authorization", "Bearer tok")
 	req.RemoteAddr = "127.0.0.1:6000"
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
-		t.Errorf("/v1/shutdown loopback = %d, want 200", rr.Code)
+		t.Errorf("/v1/shutdown with the token = %d, want 200", rr.Code)
 	}
 }
 

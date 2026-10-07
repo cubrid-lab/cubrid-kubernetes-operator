@@ -47,6 +47,8 @@ const (
 
 	reasonNoToken    = "NoToken"
 	reasonWrongToken = "WrongToken"
+	// The manager itself has no token, so it can accept nobody.
+	reasonTokenNotSet = "TokenNotSet"
 
 	// keyStatus is the log key of an HTTP status; a CUBRID command with
 	// this word as its second argument only reads state.

@@ -181,7 +181,7 @@ func s14Step(r *haRun) {
 			{"POST", "/v1/shutdown?database=" + r.database, "stops the member's database"},
 		}
 		// Callers that must be refused. The last ones claim to come from the
-		// Pod itself, which is the one caller that needs no token.
+		// Pod itself; that origin does not replace the token either.
 		refused := map[string][]string{
 			"no token":                     nil,
 			"a wrong token":                {"Authorization: Bearer not-the-token"},

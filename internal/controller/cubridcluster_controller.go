@@ -565,7 +565,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			Env:       instanceManagerEnv(cluster),
 			Resources: cluster.Spec.Resources,
 			// preStop triggers the ADR-0003 ordered graceful shutdown via the
-			// local Instance Manager (loopback is token-exempt).
+			// local Instance Manager; the command sends the Pod's IM_TOKEN.
 			Lifecycle: preStopShutdown(cluster),
 			Ports: []corev1.ContainerPort{
 				{Name: "cubrid", ContainerPort: cubridServerPort},

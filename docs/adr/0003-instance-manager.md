@@ -150,9 +150,13 @@ status). No transient pseudo-roles (`starting`/`stopping`) — those are
 
 Both `preStop` (calls `POST http://127.0.0.1:9090/v1/shutdown`) and the
 `SIGTERM` handler run the same path. `POST /v1/shutdown` is bearer-token
-authenticated for remote callers, but the manager allows an unauthenticated
-**loopback-only** shutdown (`127.0.0.1`) so the preStop hook needs no token
-while remote `/v1/shutdown` stays authenticated:
+authenticated for every caller. A request from loopback (`127.0.0.1`) is not
+an exception: the `instance-manager shutdown` command runs in the same
+container as the manager, reads the same `IM_TOKEN` and sends it (#271). The
+first version of this ADR let a loopback shutdown in without a token; the
+manager cannot tell which process of the Pod's network namespace is calling,
+so that exemption was removed. A manager without a token does not start, and
+its handler refuses every `/v1` request, so an unset token never means "open":
 
 ```text
 1. flip /readyz false
@@ -173,10 +177,11 @@ procedure (step 3, then step 4). Every trigger runs the same command,
   its handler before it creates or starts anything, so a termination during
   `createdb` or a start is handled when that step returns.
 
-The command asks the manager of the Pod over loopback, so that the manager
-knows the stop is intended and its process watch does not treat it as a
-failure. When no manager listens yet, the command runs the same procedure
-itself. A stop that succeeded is not run again, however often it is asked for,
+The command asks the manager of the Pod over loopback, with the Pod's token,
+so that the manager knows the stop is intended and its process watch does not
+treat it as a failure. When no manager listens yet, the command runs the same
+procedure itself. When the manager answers and refuses the request, the
+command reports the refusal and stops nothing itself. A stop that succeeded is not run again, however often it is asked for,
 so the hook followed by the signal stops CUBRID once. Steps 1, 2 and 5 are not
 implemented.
 

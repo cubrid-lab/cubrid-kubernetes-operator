@@ -18,6 +18,7 @@ package instancemanager
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,9 +37,10 @@ import (
 const DefaultPort = 9090
 
 const (
-	errKey    = "error"
-	readyKey  = "ready"
-	reasonKey = "reason"
+	authHeader = "Authorization"
+	errKey     = "error"
+	readyKey   = "ready"
+	reasonKey  = "reason"
 
 	// Request errors shared by the operation endpoints.
 	msgUnreadableBody   = "cannot read request body"
@@ -730,17 +732,21 @@ func (s *Server) shutdown(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "shutdown"})
 }
 
-// auth wraps /v1 handlers with bearer-token authentication (loopback is exempt
-// so preStop can call locally without a token; ADR-0003).
+// auth wraps /v1 handlers with bearer-token authentication (ADR-0003). Every
+// caller needs the token, the "instance-manager shutdown" command of the same
+// Pod included; a request from loopback is not an exception. A manager that
+// was given no token refuses every request, so that an unset token can never
+// mean "open". The token is compared in constant time.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
+	want := []byte("Bearer " + s.token)
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.token == "" || isLoopback(r.RemoteAddr) {
-			next(w, r)
-			return
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer "+s.token {
+		got := r.Header.Get(authHeader)
+		if s.token == "" || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
 			reason := reasonWrongToken
-			if got == "" {
+			switch {
+			case s.token == "":
+				reason = reasonTokenNotSet
+			case got == "":
 				reason = reasonNoToken
 			}
 			s.logRefused(w, r, reason)

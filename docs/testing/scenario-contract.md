@@ -860,7 +860,8 @@ it needs more.
 - **The Operator must** (ADR-0003, #272): keep a NetworkPolicy that admits
   only the operator to the Instance Manager port and only the cluster's own
   Pods to the database ports; reject every `/v1` request without the valid
-  token, except a shutdown that really comes from loopback inside the Pod.
+  token, wherever it comes from. The shutdown command inside the Pod sends
+  the token as well.
 - **Expected:** the direct connections time out (Kind's network plugin
   enforces NetworkPolicy; a plugin that does not would admit them); the
   unauthorized requests are rejected and cause no backup, no restore and no

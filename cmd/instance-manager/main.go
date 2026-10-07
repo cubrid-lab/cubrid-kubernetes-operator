@@ -67,7 +67,7 @@ func shutdown(logger *slog.Logger) error {
 	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: budget}, Logger: logger}
 	logger.Info("Shutdown requested", "event", "shutdown_requested")
 	return instancemanager.RequestShutdown(context.Background(), "http://127.0.0.1:"+port,
-		envOr("CUBRID_DB", "appdb"), cli, budget)
+		os.Getenv("IM_TOKEN"), envOr("CUBRID_DB", "appdb"), cli, budget)
 }
 
 // newLogger builds the structured log on stdout. IM_LOG_LEVEL sets its level
@@ -90,6 +90,11 @@ func newLogger() (*slog.Logger, error) {
 func run(logger *slog.Logger) error {
 	addr := envOr("IM_ADDR", fmt.Sprintf(":%d", instancemanager.DefaultPort))
 	token := os.Getenv("IM_TOKEN")
+	// The operator always supplies a token (ADR-0003). Without one the manager
+	// could accept nobody, so it does not start and says why.
+	if token == "" {
+		return errors.New("IM_TOKEN is empty: the Instance Manager does not start without a token")
+	}
 
 	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second}, Logger: logger}
 	server := instancemanager.NewServer(cli, token).
@@ -172,7 +177,7 @@ func run(logger *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	logger.Info("Started listening", "address", addr, "authenticated", token != "")
+	logger.Info("Started listening", "address", addr)
 
 	// A CUBRID process that is gone without a request ends this process, and
 	// with it the container, which Kubernetes then starts again (ADR-0003).

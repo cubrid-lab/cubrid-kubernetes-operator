@@ -62,6 +62,7 @@ func TestServer_Stop_IsIdempotent(t *testing.T) {
 	}
 	// Also through the API, as the preStop hook asks.
 	req := httptest.NewRequest(http.MethodPost, "/v1/shutdown?database=appdb", nil)
+	req.Header.Set("Authorization", "Bearer tok")
 	req.RemoteAddr = "127.0.0.1:4000"
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, req)
@@ -83,10 +84,10 @@ func TestRequestShutdown(t *testing.T) {
 	t.Run("a manager is listening", func(t *testing.T) {
 		serverCLI, localCLI := &countingCLI{}, &countingCLI{}
 		s := NewServer(serverCLI, "tok")
-		// The request comes from loopback and needs no token.
+		// The command sends the token of its Pod, also over loopback.
 		ts := httptest.NewServer(s.Handler())
 		defer ts.Close()
-		if err := RequestShutdown(context.Background(), ts.URL, "appdb", localCLI, 5*time.Second); err != nil {
+		if err := RequestShutdown(context.Background(), ts.URL, "tok", "appdb", localCLI, 5*time.Second); err != nil {
 			t.Fatal(err)
 		}
 		if len(serverCLI.recorded()) != 2 || len(localCLI.recorded()) != 0 {
@@ -102,7 +103,7 @@ func TestRequestShutdown(t *testing.T) {
 		ts := httptest.NewServer(http.NotFoundHandler())
 		url := ts.URL
 		ts.Close()
-		if err := RequestShutdown(context.Background(), url, "appdb", localCLI, 5*time.Second); err != nil {
+		if err := RequestShutdown(context.Background(), url, "tok", "appdb", localCLI, 5*time.Second); err != nil {
 			t.Fatal(err)
 		}
 		if got := strings.Join(localCLI.recorded(), "; "); got != stopHeartbeat+"; "+stopServer {
