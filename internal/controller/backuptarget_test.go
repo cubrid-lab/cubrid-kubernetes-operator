@@ -201,3 +201,57 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 		}
 	})
 }
+
+func TestRecordedTargetEligible(t *testing.T) {
+	m3 := []string{c0, c1, c2}
+	healthy := map[string]RoleObservation{c0: obsMaster(), c1: obsSlave(), c2: obsSlave()}
+
+	tests := []struct {
+		name    string
+		sel     TargetSelection
+		members []string
+		obs     map[string]RoleObservation
+		res     PrimaryResolution
+		single  bool
+		want    bool
+	}{
+		{
+			name: "a standby that is still an eligible standby", members: m3, obs: healthy, res: resolvedPrimary(),
+			sel: TargetSelection{Instance: c1, Role: databasev1alpha1.RoleSlave}, want: true,
+		},
+		{
+			name: "a standby that became the master", members: m3, res: resolvedPrimary(),
+			obs: map[string]RoleObservation{c0: obsSlave(), c1: obsMaster(), c2: obsSlave()},
+			sel: TargetSelection{Instance: c1, Role: databasev1alpha1.RoleSlave}, want: false,
+		},
+		{
+			name: "a standby that is unreachable", members: m3, res: resolvedPrimary(),
+			obs: map[string]RoleObservation{c0: obsMaster(), c1: obsDown(), c2: obsSlave()},
+			sel: TargetSelection{Instance: c1, Role: databasev1alpha1.RoleSlave}, want: false,
+		},
+		{
+			name: "a master that is still the resolved primary", members: m3, obs: healthy, res: resolvedPrimary(),
+			sel: TargetSelection{Instance: c0, Role: databasev1alpha1.RoleMaster}, want: true,
+		},
+		{
+			name: "a master while the primary is ambiguous", members: m3, obs: healthy, res: ambiguousPrimary(),
+			sel: TargetSelection{Instance: c0, Role: databasev1alpha1.RoleMaster}, want: false,
+		},
+		{
+			name: "an unknown-role target of a single-instance cluster", members: []string{c0}, single: true,
+			obs: map[string]RoleObservation{c0: obsUnknown()}, res: ambiguousPrimary(),
+			sel: TargetSelection{Instance: c0, Role: databasev1alpha1.RoleUnknown}, want: true,
+		},
+		{
+			name: "an unknown-role target of an HA cluster", members: m3, obs: healthy, res: resolvedPrimary(),
+			sel: TargetSelection{Instance: c0, Role: databasev1alpha1.RoleUnknown}, want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := recordedTargetEligible(tt.sel, tt.members, tt.obs, tt.res, tt.single, testNow); got != tt.want {
+				t.Fatalf("recordedTargetEligible() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

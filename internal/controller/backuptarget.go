@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -102,6 +103,31 @@ func eligibleStandbys(members []string, obs map[string]RoleObservation, now time
 		}
 	}
 	return out
+}
+
+// recordedTargetEligible reports whether a target recorded by an earlier
+// selection may still be dispatched to in the role it was selected for: a
+// standby must still be an eligible standby, a master the resolved primary,
+// and an unknown-role target the only member of a single-instance cluster.
+func recordedTargetEligible(
+	sel TargetSelection,
+	members []string,
+	obs map[string]RoleObservation,
+	res PrimaryResolution,
+	single bool,
+	now time.Time,
+) bool {
+	switch sel.Role {
+	case databasev1alpha1.RoleSlave:
+		return slices.Contains(eligibleStandbys(members, obs, now), sel.Instance)
+	case databasev1alpha1.RoleMaster:
+		return res.Status == metav1.ConditionTrue && res.CurrentPrimary == sel.Instance
+	case databasev1alpha1.RoleUnknown:
+		only, ok := onlyMember(members)
+		return single && ok && only == sel.Instance
+	default:
+		return false
+	}
 }
 
 func onlyMember(members []string) (string, bool) {
