@@ -146,14 +146,19 @@ func (s *Server) adoptRestored(id, database string) (*OperationArtifact, error) 
 	defer func() { _ = root.Close() }()
 
 	data, err := root.ReadFile(markerPath(database))
-	if err != nil {
-		// No readable marker: nothing to take over.
+	if os.IsNotExist(err) {
 		return nil, nil
 	}
-	previous, err := s.store.Get(strings.TrimSpace(string(data)))
 	if err != nil {
-		// Not an operation of this manager: nothing to take over.
+		return nil, fmt.Errorf("read the ownership marker of %s: %w", database, err)
+	}
+	previous, err := s.store.Get(strings.TrimSpace(string(data)))
+	if errors.Is(err, ErrOperationNotFound) {
+		// An unknown or unreadable marker is reclaimIncomplete's to refuse.
 		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	current, err := s.store.Get(id)
 	if err != nil {

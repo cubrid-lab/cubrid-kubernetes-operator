@@ -164,6 +164,12 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	// The database of a completed restore whose ownership marker was left is
+	// started before any request is served (ADR-0008).
+	if err := server.ResumeCompletedRestores(ctx); err != nil {
+		logger.Error("Could not start the database of a completed restore", "err", err)
+	}
+
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 	logger.Info("Started listening", "address", addr, "authenticated", token != "")

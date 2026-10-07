@@ -61,6 +61,7 @@ type resumeFixture struct {
 	req       RestoreRequest
 	storeDir  string
 	databases string
+	server    *Server
 	handler   http.Handler
 }
 
@@ -78,8 +79,9 @@ func (f *resumeFixture) start(cli CLI) {
 	if err != nil {
 		f.t.Fatalf("NewOperationStore: %v", err)
 	}
-	f.handler = NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(f.objects).
-		WithRestoreRoots(rootsFor(f.req)).WithStandaloneDatabase(dbName).Handler()
+	f.server = NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(f.objects).
+		WithRestoreRoots(rootsFor(f.req)).WithStandaloneDatabase(dbName)
+	f.handler = f.server.Handler()
 }
 
 // post submits the fixture's restore request under key and returns the
@@ -273,4 +275,112 @@ func TestServer_Restore_DoesNotStartWhatItCouldNotRecord(t *testing.T) {
 	if count(first.recorded(), callServerStart) != 0 {
 		t.Errorf("the first attempt started the server: %q", first.recorded())
 	}
+}
+
+// A manager that stopped inside a takeover, after the new operation recorded
+// the restored data but before it rewrote the marker, leaves the data owned
+// by the earlier operation; the next attempt still takes it over (#267).
+func TestServer_Restore_RetryAfterAStopInsideTheTakeover(t *testing.T) {
+	f := newResumeFixture(t)
+	f.start(&volumeCLI{stepCLI: stepCLI{failing: map[string]bool{stepServerStart: true}}, databases: f.databases})
+	failed := f.run("restore-1")
+	if failed.State != OpFailed || failed.Restored == nil {
+		t.Fatalf("first attempt = %s (restored %v), want Failed with the data recorded", failed.State, failed.Restored)
+	}
+	// The interrupted takeover: recorded, marker not rewritten, then Failed
+	// by the restart.
+	store, err := NewOperationStore(f.storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taking, _, err := store.FindOrCreate(OpRestore, "restore-2", failed.RequestHash, dbName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Update(taking.ID, func(op *Operation) {
+		op.State = OpStarting
+		op.Restored = failed.Restored
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	retry := &volumeCLI{databases: f.databases}
+	f.start(retry)
+	final := f.run("restore-3")
+	if final.State != OpCompleted {
+		t.Fatalf("retry = %s (%s), want Completed", final.State, final.FailureReason)
+	}
+	if calls := retry.recorded(); len(calls) != 1 || calls[0] != callServerStart {
+		t.Errorf("retry calls = %q, want only %q", calls, callServerStart)
+	}
+	f.wantRestoredDataKept()
+	if got := f.marker(); got != "" {
+		t.Errorf("marker after the completed retry = %q, want none", got)
+	}
+}
+
+// A completed restore whose marker was left has a database the entrypoint
+// does not start: the manager starts it when it starts, then clears the
+// marker (#267).
+func TestResumeCompletedRestores_StartsTheDatabaseAndClearsTheMarker(t *testing.T) {
+	f := newResumeFixture(t)
+	f.start(&volumeCLI{databases: f.databases})
+	done := f.run("restore-1")
+	if done.State != OpCompleted {
+		t.Fatalf("restore = %s (%s), want Completed", done.State, done.FailureReason)
+	}
+	marker := filepath.Join(f.databases, dbName, ownershipMarker)
+	if err := os.WriteFile(marker, []byte(done.ID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := &volumeCLI{databases: f.databases}
+	f.start(restarted)
+	if err := f.server.ResumeCompletedRestores(t.Context()); err != nil {
+		t.Fatalf("ResumeCompletedRestores: %v", err)
+	}
+	if calls := restarted.recorded(); len(calls) != 1 || calls[0] != callServerStart {
+		t.Errorf("calls = %q, want only %q", calls, callServerStart)
+	}
+	if got := f.marker(); got != "" {
+		t.Errorf("marker = %q, want it cleared", got)
+	}
+	f.wantRestoredDataKept()
+}
+
+// A start that fails keeps the marker, so the next start of the manager tries
+// again; the marker of an operation that did not complete is left alone.
+func TestResumeCompletedRestores_LeavesWhatItCannotFinish(t *testing.T) {
+	t.Run("start fails", func(t *testing.T) {
+		f := newResumeFixture(t)
+		f.start(&volumeCLI{databases: f.databases})
+		done := f.run("restore-1")
+		marker := filepath.Join(f.databases, dbName, ownershipMarker)
+		if err := os.WriteFile(marker, []byte(done.ID+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f.start(&volumeCLI{stepCLI: stepCLI{failing: map[string]bool{stepServerStart: true}}, databases: f.databases})
+		if err := f.server.ResumeCompletedRestores(t.Context()); err == nil {
+			t.Error("ResumeCompletedRestores reported no error for a failed start")
+		}
+		if got := f.marker(); got != done.ID {
+			t.Errorf("marker = %q, want it kept as %q", got, done.ID)
+		}
+	})
+	t.Run("failed operation", func(t *testing.T) {
+		f := newResumeFixture(t)
+		f.start(&volumeCLI{stepCLI: stepCLI{failing: map[string]bool{stepServerStart: true}}, databases: f.databases})
+		failed := f.run("restore-1")
+		restarted := &volumeCLI{databases: f.databases}
+		f.start(restarted)
+		if err := f.server.ResumeCompletedRestores(t.Context()); err != nil {
+			t.Fatalf("ResumeCompletedRestores: %v", err)
+		}
+		if calls := restarted.recorded(); len(calls) != 0 {
+			t.Errorf("commands ran for a failed restore: %q", calls)
+		}
+		if got := f.marker(); got != failed.ID {
+			t.Errorf("marker = %q, want it kept as %q", got, failed.ID)
+		}
+	})
 }
