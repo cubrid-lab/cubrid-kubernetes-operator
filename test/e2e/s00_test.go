@@ -273,19 +273,28 @@ spec:
 }
 
 // instanceManagerImageOnce builds and loads the real Instance Manager image
-// once for all real-database scenarios of a run.
-var instanceManagerImageOnce sync.Once
+// once for all real-database scenarios of a run; instanceManagerImageErr is
+// the outcome, which every group that needs the image checks.
+var (
+	instanceManagerImageOnce sync.Once
+	instanceManagerImageErr  error
+)
 
 func ensureInstanceManagerImage() {
 	instanceManagerImageOnce.Do(func() {
 		By("building the Instance Manager image on the official CUBRID image")
-		_, err := utils.Run(exec.Command("make", "docker-build-instance-manager",
-			fmt.Sprintf("IM_IMG=%s", instanceManagerImage)))
-		Expect(err).NotTo(HaveOccurred(), "Failed to build the Instance Manager image")
+		if _, err := utils.Run(exec.Command("make", "docker-build-instance-manager",
+			fmt.Sprintf("IM_IMG=%s", instanceManagerImage))); err != nil {
+			instanceManagerImageErr = fmt.Errorf("could not build the Instance Manager image: %w", err)
+			return
+		}
 
 		By("loading the Instance Manager image on Kind")
-		Expect(utils.LoadImageToKindClusterWithName(instanceManagerImage)).To(Succeed())
+		if err := utils.LoadImageToKindClusterWithName(instanceManagerImage); err != nil {
+			instanceManagerImageErr = fmt.Errorf("could not load the Instance Manager image on Kind: %w", err)
+		}
 	})
+	ExpectWithOffset(1, instanceManagerImageErr).NotTo(HaveOccurred())
 }
 
 // writeEvidence prints the S00 record and stores it with the run's evidence.

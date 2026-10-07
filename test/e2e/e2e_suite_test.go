@@ -57,10 +57,15 @@ var (
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting cubrid-kubernetes-operator e2e test suite\n")
-	RunSpecs(t, "e2e suite")
+	RunSpecs(t, suiteDescription)
 }
 
+// The suite sets up what every group of scenarios shares: the manager image
+// and, below, the deployed manager. A failure here leaves every planned
+// scenario not_run. Each group sets up its own cluster in its BeforeAll.
 var _ = BeforeSuite(func() {
+	planRun()
+
 	By("building the manager image")
 	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
 	_, err := utils.Run(cmd)
@@ -74,15 +79,67 @@ var _ = BeforeSuite(func() {
 
 	configureKubectlKubeRC()
 	setupCertManager()
+	deployManager()
 })
 
 // The gate judges the scenarios this process recorded, so it assumes one
 // Ginkgo process: with -p each process would judge only its own scenarios.
 var _ = AfterSuite(func() {
 	err := concludeRun()
+	undeployManager()
 	teardownCertManager()
 	Expect(err).NotTo(HaveOccurred(), "The run did not pass its required scenarios")
 })
+
+// deployManager creates the manager's namespace with the restricted security
+// policy, installs the CRDs and deploys the controller.
+func deployManager() {
+	By("creating manager namespace")
+	cmd := exec.Command("kubectl", "create", "ns", namespace)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
+
+	By("labeling the namespace to enforce the restricted security policy")
+	cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+		"pod-security.kubernetes.io/enforce=restricted")
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+
+	By("installing CRDs")
+	cmd = exec.Command("make", "install")
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
+	By("creating the Instance Manager token Secret the manager reads at start")
+	cmd = exec.Command("kubectl", "-n", namespace, "create", "secret", "generic", "instance-manager-token",
+		"--from-literal=token="+instanceManagerToken)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create the Instance Manager token Secret")
+
+	By("deploying the controller-manager")
+	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+}
+
+// undeployManager removes what deployManager and the metrics check created.
+func undeployManager() {
+	By("cleaning up the curl pod for metrics")
+	cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+	_, _ = utils.Run(cmd)
+
+	By("undeploying the controller-manager")
+	cmd = exec.Command("make", "undeploy")
+	_, _ = utils.Run(cmd)
+
+	By("uninstalling CRDs")
+	cmd = exec.Command("make", "uninstall")
+	_, _ = utils.Run(cmd)
+
+	By("removing manager namespace")
+	cmd = exec.Command("kubectl", "delete", "ns", namespace)
+	_, _ = utils.Run(cmd)
+}
 
 // Disable kubectl kuberc by default for test isolation.
 // This prevents local kubectl configurations from affecting test behavior.

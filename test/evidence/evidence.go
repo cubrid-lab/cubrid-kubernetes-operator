@@ -101,6 +101,10 @@ type Summary struct {
 	Passed    bool       `json:"passed"`
 	Problems  []string   `json:"problems"`
 	Scenarios []Scenario `json:"scenarios"`
+
+	// planned maps each scenario and variant that still holds the placeholder
+	// Plan recorded to its index in Scenarios.
+	planned map[Requirement]int
 }
 
 // Name is the scenario's name in reports: "S03/abrupt", or "S00" without a

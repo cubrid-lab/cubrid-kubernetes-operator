@@ -29,6 +29,7 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
+	"github.com/onsi/ginkgo/v2/types"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
@@ -49,10 +50,57 @@ var redactor = evidence.NewRedactor(instanceManagerToken)
 // then no scenario can pass.
 func evidenceDir() string { return os.Getenv("E2E_EVIDENCE_DIR") }
 
-// recordScenario adds a scenario's result to the run's summary.
+// recordScenario adds a scenario's result to the run's summary, in place of
+// the placeholder planRun left for it.
 func recordScenario(s evidence.Scenario) {
-	runSummary.Scenarios = append(runSummary.Scenarios, s)
+	runSummary.Record(s)
 }
+
+// suiteDescription is the description the suite runs with; Ginkgo matches
+// focus and skip expressions against it and the text of each spec.
+const suiteDescription = "e2e suite"
+
+var (
+	// selectedSteps holds each scenario and variant the run's filters
+	// selected at least one step of.
+	selectedSteps = map[evidence.Requirement]bool{}
+	// lastFailedStep names the step whose failure the run saw last.
+	lastFailedStep string
+)
+
+// planRun records every scenario and variant of the Kind lane as not_run
+// before the suite sets anything up. A step's result takes the place of its
+// scenario's placeholder; a scenario none of whose steps recorded a result
+// keeps the reason the ReportAfterEach below gives it, or this one.
+func planRun() {
+	runSummary.Plan(kindLane.Required,
+		"no step of the scenario started: the suite's setup failed or the run stopped before it")
+}
+
+// The steps of a scenario carry its requirement's label (evidence.Requirement
+// Label): "S00", "S03-abrupt". After each spec, whether it ran or not, a
+// scenario whose step recorded nothing is given the result that says why.
+var _ = ReportAfterEach(func(report SpecReport) {
+	suite, _ := GinkgoConfiguration()
+	selected := evidence.Selected(report, suite, suiteDescription)
+	for _, req := range kindLane.Required {
+		if !slices.Contains(report.Labels(), req.Label()) {
+			continue
+		}
+		if selected {
+			selectedSteps[req] = true
+		}
+		if result, reason, ok := evidence.StepOutcome(report, selected, lastFailedStep); ok {
+			runSummary.Settle(req, result, reason)
+		}
+	}
+	if report.Failed() {
+		lastFailedStep = report.LeafNodeText
+		if report.Failure.FailureNodeType == types.NodeTypeBeforeAll {
+			lastFailedStep += " (in the group's setup)"
+		}
+	}
+})
 
 // writeScenarioFile stores one evidence file of a scenario and returns its
 // path relative to the run directory, or "" when no evidence is kept or the
@@ -91,8 +139,10 @@ func kindRequired() []evidence.Requirement {
 
 // runLane returns the lane this run is judged against. A run that selects
 // specs with a label filter or focus is a local baseline, not a validation of
-// the Kind lane: it must record at least one scenario and pass every one it
-// recorded, and its summary names it "kind-filtered".
+// the Kind lane: it must select a step of at least one scenario and pass
+// every scenario it selected a step of, and its summary names it
+// "kind-filtered". The scenarios it did not select stay in the summary as
+// not_run.
 func runLane() evidence.Lane {
 	suite, _ := GinkgoConfiguration()
 	if suite.LabelFilter == "" && len(suite.FocusStrings) == 0 && len(suite.SkipStrings) == 0 &&
@@ -100,8 +150,8 @@ func runLane() evidence.Lane {
 		return kindLane
 	}
 	lane := evidence.Lane{Name: "kind-filtered"}
-	for _, sc := range runSummary.Scenarios {
-		if req := (evidence.Requirement{ID: sc.ID, Variant: sc.Variant}); !slices.Contains(lane.Required, req) {
+	for _, req := range kindLane.Required {
+		if selectedSteps[req] {
 			lane.Required = append(lane.Required, req)
 		}
 	}

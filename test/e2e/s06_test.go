@@ -140,20 +140,21 @@ func (r *haRun) memberUIDs() (string, error) {
 // s06Step registers one variant of S06 (Operator failure) of the scenario
 // contract, on the cluster the earlier steps left.
 func s06Step(r *haRun, variant string) {
+	labels := Label("S06", evidence.Requirement{ID: "S06", Variant: variant}.Label())
 	switch variant {
 	case s06Restart:
 		It("S06/"+variant+": SQL is not interrupted and no member is restarted when the Operator Pod is killed",
-			func() { r.s06Restart() })
+			labels, func() { r.s06Restart() })
 	case s06Absent:
 		It("S06/"+variant+": CUBRID fails over without the Operator, which reports the new master when it returns",
-			func() { r.s06Absent() })
+			labels, func() { r.s06Absent() })
 	}
 }
 
 func (r *haRun) s06Restart() {
 	result := evidence.Scenario{ID: "S06", Variant: s06Restart, Result: evidence.Fail,
 		Reason: "a check of S06 failed; see the test output"}
-	defer func() { r.later = append(r.later, result) }()
+	defer func() { recordScenario(result) }()
 
 	By("recording the starting state")
 	master, _, err := r.master()
@@ -273,7 +274,7 @@ func (r *haRun) s06Restart() {
 func (r *haRun) s06Absent() {
 	result := evidence.Scenario{ID: "S06", Variant: s06Absent, Result: evidence.Fail,
 		Reason: "a check of S06 failed; see the test output"}
-	defer func() { r.later = append(r.later, result) }()
+	defer func() { recordScenario(result) }()
 
 	const client = "s06a1"
 

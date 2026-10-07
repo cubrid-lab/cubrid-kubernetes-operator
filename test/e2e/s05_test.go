@@ -158,7 +158,7 @@ func (f brokerProcessKill) Remove(context.Context) error { return nil }
 func s05Steps(r *haRun) {
 	for _, variant := range s05Variants {
 		It("S05/"+variant+": clients recover from a Broker failure, and it causes no database failover",
-			func() { r.s05(variant) })
+			Label("S05", evidence.Requirement{ID: "S05", Variant: variant}.Label()), func() { r.s05(variant) })
 	}
 }
 
@@ -166,7 +166,7 @@ func (r *haRun) s05(variant string) {
 	result := evidence.Scenario{ID: "S05", Variant: variant, Result: evidence.Fail,
 		Reason: "a check of S05 failed; see the test output"}
 	// Reported also when a check below fails.
-	defer func() { r.later = append(r.later, result) }()
+	defer func() { recordScenario(result) }()
 
 	By("recording the starting state")
 	master, _, err := r.master()
