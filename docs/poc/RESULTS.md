@@ -1227,6 +1227,20 @@ master's log loses it when it starts without the lock file; the Operator's
 `ReplicationHealthy` condition during part 2, which ran before that condition
 existed; what CUBRID's manual or source says the lock file is for.
 
+**Later observation, in the e2e step that repeats part 2 (#342).** The
+Instance Manager now ends a member whose CUBRID processes stay away for
+longer than 30 seconds (#180), so part 2 has to reach the failover within
+that time. It usually does: in passing runs the remaining member was master
+about 5 seconds after the master's Pod was deleted. In one run (job
+112755211446, attempt 1) it did not: `hab-0`'s heartbeat was stopped,
+the master `hab-1`'s Pod was deleted with its grace period and took about
+60 seconds to be replaced, `hab-2` was not master within three minutes,
+`hab-0`'s container was restarted by its Instance Manager about 30 seconds
+after the stop, and `hab-0` became master. Why `hab-2` was not promoted is
+not known: the run kept no heartbeat status of the members during the wait.
+The step now waits 20 seconds for the failover, records what each member
+reports when it does not come, and starts again with a new attempt.
+
 ---
 
 ## Net assessment
