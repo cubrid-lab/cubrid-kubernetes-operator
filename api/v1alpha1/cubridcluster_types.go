@@ -318,8 +318,10 @@ type InstanceStatus struct {
 }
 
 // InstanceReplication reports how a slave's log applier is doing (ADR-0006).
-// The values are the applier's own counters; the operator derives
-// stalledSince from two observations in a row.
+// The values are the applier's own counters as last read; the operator
+// derives stalledSince from two readings in a row. A reconcile that could not
+// read the applier keeps the last reading, for a bounded time, without
+// changing it.
 type InstanceReplication struct {
 	// source is the member whose log is applied: the master this slave sees.
 	Source string `json:"source"`
@@ -334,10 +336,13 @@ type InstanceReplication struct {
 	// +optional
 	DelayedPages int64 `json:"delayedPages,omitempty"`
 	// stalledSince is when the operator first saw log pages waiting while the
-	// applier had applied nothing since the observation before. It is cleared
+	// applier had applied nothing since the reading before. It is cleared
 	// as soon as the applier applies something or no page waits.
 	// +optional
 	StalledSince *metav1.Time `json:"stalledSince,omitempty"`
+	// observedAt is when the operator last read these counters.
+	// +optional
+	ObservedAt *metav1.Time `json:"observedAt,omitempty"`
 }
 
 // DatabaseStatus reports coarse per-database state (ADR-0010).
