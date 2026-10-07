@@ -121,7 +121,8 @@ start_cubrid() {
 CUBRID_HA_CONF="${CUBRID_HA_CONF:-/etc/cubrid-ha/cubrid_ha.conf}"
 
 started=0
-if [ -e "${CUBRID_DATABASES}/${CUBRID_DB}/.im-operation" ]; then
+marker="${CUBRID_DATABASES}/${CUBRID_DB}/.im-operation"
+if [ -e "${marker}" ] || [ -L "${marker}" ]; then
   # The Instance Manager's createdb or restoredb of this database did not
   # finish (its ownership marker, ADR-0008/ADR-0010). The database is neither
   # created over nor started; the manager decides what to do with it, and the
@@ -129,7 +130,7 @@ if [ -e "${CUBRID_DATABASES}/${CUBRID_DB}/.im-operation" ]; then
   if [ "${CUBRID_COMPONENTS}" != "SERVER" ] && [ -f "${CUBRID_HA_CONF}" ]; then
     install_ha_conf
   fi
-  log "database '${CUBRID_DB}' is unfinished (${CUBRID_DB}/.im-operation): it is not started; waiting for the Instance Manager"
+  log "database '${CUBRID_DB}' is unfinished (${marker}): it is not started; waiting for the Instance Manager"
 elif [ "${CUBRID_BOOTSTRAP}" = "recovery" ] && ! database_registered; then
   # Nothing to start yet: the restore creates and registers the database.
   log "recovery bootstrap: no database is created; waiting for a restore"

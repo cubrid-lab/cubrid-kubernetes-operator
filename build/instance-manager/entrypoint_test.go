@@ -39,6 +39,7 @@ const (
 	envDatabases      = "CUBRID_DATABASES"
 	componentsServer  = "SERVER"
 	componentsHA      = "HA"
+	bootstrapNew      = "new"
 	bootstrapRecovery = "recovery"
 	callManagerStart  = "manager start"
 	// callShutdown is the one command that stops a member; the manager
@@ -123,7 +124,7 @@ func newFixture(t *testing.T, manager string) *fixture {
 		"CUBRID_DB":         dbName,
 		envDatabases:        f.databases,
 		"CUBRID_COMPONENTS": componentsServer,
-		"CUBRID_BOOTSTRAP":  "new",
+		"CUBRID_BOOTSTRAP":  bootstrapNew,
 		"IM_BIN":            im,
 		"CALLS":             f.calls,
 	}
@@ -181,6 +182,16 @@ func (f *fixture) wantHAConfInstalled() {
 	main, err := os.ReadFile(filepath.Join(conf, "cubrid.conf"))
 	if err != nil || !strings.Contains(string(main), "ha_mode=on") {
 		f.t.Errorf("cubrid.conf does not switch HA mode on (err=%v): %q", err, main)
+	}
+}
+
+// wantHAConfNotInstalled checks that nothing was copied into CUBRID's conf
+// directory.
+func (f *fixture) wantHAConfNotInstalled() {
+	f.t.Helper()
+	conf := filepath.Join(f.root, "cubrid", "conf", "cubrid_ha.conf")
+	if _, err := os.Stat(conf); !os.IsNotExist(err) {
+		f.t.Errorf("cubrid_ha.conf was installed (err=%v)", err)
 	}
 }
 
@@ -294,51 +305,81 @@ func TestEntrypoint_HAMemberWithDatabaseStartsHeartbeat(t *testing.T) {
 	}
 }
 
-// A database whose createdb or restoredb was interrupted stays registered
-// with the manager's ownership marker. Starting it fails, so the entrypoint
-// starts only the manager, which owns the cleanup, and leaves the marker and
-// the data as they are. An HA member still gets its configuration.
+// A database whose createdb or restoredb was interrupted carries the
+// manager's ownership marker, registered or not. Starting it fails, so the
+// entrypoint creates and starts nothing, starts only the manager, which owns
+// the cleanup, and leaves the marker and the data as they are. An HA member
+// still gets its configuration when it is mounted.
 func TestEntrypoint_UnfinishedDatabaseStartsOnlyTheManager(t *testing.T) {
-	for _, components := range []string{componentsServer, componentsHA} {
-		for _, bootstrap := range []string{"new", bootstrapRecovery} {
-			t.Run(components+"/"+bootstrap, func(t *testing.T) {
-				f := newFixture(t, managerStub)
-				f.env["CUBRID_COMPONENTS"] = components
-				f.env["CUBRID_BOOTSTRAP"] = bootstrap
-				f.env["CUBRID_START_EXIT"] = "1"
-				if components != componentsServer {
-					f.configureHA()
-				}
+	tests := []struct {
+		components string
+		bootstrap  string
+		haConf     bool
+		registered bool
+	}{
+		{componentsServer, bootstrapNew, false, true},
+		{componentsServer, bootstrapRecovery, false, true},
+		{componentsServer, bootstrapNew, false, false},
+		{componentsHA, bootstrapNew, true, true},
+		{componentsHA, bootstrapRecovery, true, true},
+		{componentsHA, bootstrapNew, true, false},
+		{componentsHA, bootstrapNew, false, true},
+	}
+	for _, tc := range tests {
+		name := fmt.Sprintf("%s/%s/haConf=%t/registered=%t", tc.components, tc.bootstrap, tc.haConf, tc.registered)
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			f.env["CUBRID_COMPONENTS"] = tc.components
+			f.env["CUBRID_BOOTSTRAP"] = tc.bootstrap
+			f.env["CUBRID_START_EXIT"] = "1"
+			if tc.haConf {
+				f.configureHA()
+			}
+			if tc.registered {
 				f.registerDatabase()
-				marker := f.markUnfinished()
-				code, out := f.run()
-				if code != 0 {
-					t.Fatalf("exit %d:\n%s", code, out)
-				}
-				wantCalls(t, f.recorded(), callManagerStart)
-				if data, err := os.ReadFile(marker); err != nil || string(data) != "op-1\n" {
-					t.Errorf("the ownership marker was not kept as it was (err=%v): %q", err, data)
-				}
-				if components != componentsServer {
-					f.wantHAConfInstalled()
-				}
-				if !strings.Contains(out, "unfinished") {
-					t.Errorf("the log does not say why nothing was started:\n%s", out)
-				}
-			})
-		}
+			}
+			marker := f.markUnfinished()
+			code, out := f.run()
+			if code != 0 {
+				t.Fatalf("exit %d:\n%s", code, out)
+			}
+			wantCalls(t, f.recorded(), callManagerStart)
+			if data, err := os.ReadFile(marker); err != nil || string(data) != "op-1\n" {
+				t.Errorf("the ownership marker was not kept as it was (err=%v): %q", err, data)
+			}
+			if tc.haConf {
+				f.wantHAConfInstalled()
+			} else {
+				f.wantHAConfNotInstalled()
+			}
+			if !strings.Contains(out, "is unfinished ("+marker+")") {
+				t.Errorf("the log does not say why nothing was started:\n%s", out)
+			}
+		})
 	}
 }
 
-// An unfinished database is never created over, also before it is registered.
-func TestEntrypoint_UnregisteredUnfinishedDatabaseIsNotCreated(t *testing.T) {
+// A marker that is a dangling symbolic link still marks the database as
+// unfinished; the entrypoint does not decide what it means.
+func TestEntrypoint_DanglingMarkerKeepsTheDatabaseStopped(t *testing.T) {
 	f := newFixture(t, managerStub)
-	f.markUnfinished()
+	f.registerDatabase()
+	dir := filepath.Join(f.databases, dbName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dir, ".im-operation")
+	if err := os.Symlink(filepath.Join(f.root, "missing"), marker); err != nil {
+		t.Fatal(err)
+	}
 	code, out := f.run()
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	wantCalls(t, f.recorded(), callManagerStart)
+	if _, err := os.Lstat(marker); err != nil {
+		t.Errorf("the marker was removed: %v", err)
+	}
 }
 
 // A configured HA member without a database waits: the first database is
