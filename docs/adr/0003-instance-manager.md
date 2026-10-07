@@ -309,7 +309,8 @@ about a second. The entrypoint needs no root: it does not call `gosu` or
 `chown`, and the image sets `hosts: files dns` in `/etc/nsswitch.conf` at build
 time because a non-root process cannot edit that file. In a recovery bootstrap
 the entrypoint creates no database and starts no server until a restore has
-registered one. A database whose directory carries the manager's ownership
+registered one; it installs an HA member's mounted configuration, because the
+restore starts heartbeat (#350). A database whose directory carries the manager's ownership
 marker (`<db>/.im-operation`, an interrupted `createdb` or `restoredb`) is
 neither created over nor started: the entrypoint runs only the manager, after
 installing an HA member's configuration, and leaves the marker in place.

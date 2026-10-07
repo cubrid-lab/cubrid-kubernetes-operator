@@ -132,7 +132,11 @@ if [ -e "${marker}" ] || [ -L "${marker}" ]; then
   fi
   log "database '${CUBRID_DB}' is unfinished (${marker}): it is not started; waiting for the Instance Manager"
 elif [ "${CUBRID_BOOTSTRAP}" = "recovery" ] && ! database_registered; then
-  # Nothing to start yet: the restore creates and registers the database.
+  # Nothing to start yet: the restore creates and registers the database. An
+  # HA member's restore starts heartbeat, which needs the configuration.
+  if [ "${CUBRID_COMPONENTS}" != "SERVER" ] && [ -f "${CUBRID_HA_CONF}" ]; then
+    install_ha_conf
+  fi
   log "recovery bootstrap: no database is created; waiting for a restore"
 elif [ "${CUBRID_COMPONENTS}" != "SERVER" ] && [ ! -f "${CUBRID_HA_CONF}" ]; then
   # Stay up with the manager only: no database is created and the member
