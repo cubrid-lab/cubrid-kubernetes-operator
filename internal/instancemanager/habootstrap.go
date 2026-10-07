@@ -177,8 +177,14 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 		}
 
 		// `cubrid heartbeat start` is issued once: repeating it while HA is
-		// activating flips it off again (docs/poc/RESULTS.md, POC-3).
-		if HeartbeatStatus(ctx, s.cli).Role == RoleUnknown {
+		// activating flips it off again (docs/poc/RESULTS.md, POC-3). A
+		// status that did not answer fails the bootstrap without a start.
+		startable, running, reason := heartbeatStartable(ctx, s.cli)
+		if !startable && !running {
+			fail(reason + "; heartbeat start was not issued")
+			return
+		}
+		if startable {
 			if _, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting }); err != nil {
 				return
 			}

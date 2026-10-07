@@ -40,6 +40,10 @@ type haCLI struct {
 	databases string
 	failing   string // first word after "cubrid" of the command that fails
 	running   bool   // heartbeat already running
+	// status and statusErr, when either is set, are what heartbeat status
+	// answers before heartbeat was started.
+	status    string
+	statusErr error
 }
 
 func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, error) {
@@ -49,6 +53,9 @@ func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, err
 	if len(args) > 1 && args[0] == "heartbeat" && args[1] == "status" {
 		if c.running {
 			return masterOut, nil
+		}
+		if c.status != "" || c.statusErr != nil {
+			return c.status, c.statusErr
 		}
 		return "++ cubrid heartbeat status: fail", errors.New("exit status 1")
 	}
@@ -243,5 +250,38 @@ func TestHAHosts(t *testing.T) {
 	}
 	if _, err := haHosts(filepath.Join(dir, "missing")); err == nil {
 		t.Error("a missing file must be an error")
+	}
+}
+
+// Heartbeat that reports the local node in a transition is running: the
+// bootstrap does not start it again, which would flip the activation off
+// (docs/poc/RESULTS.md, POC-3 and POC-7).
+func TestHABootstrap_DoesNotStartHeartbeatInTransition(t *testing.T) {
+	f := newHAFixture(t)
+	f.cli.status = transitionOut
+	final := f.run("boot-1")
+	if final.State != OpCompleted {
+		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
+	}
+	for _, call := range f.cli.recorded() {
+		if call == callHeartbeatStart {
+			t.Errorf("heartbeat was started although it reported a transition: %q", f.cli.recorded())
+		}
+	}
+}
+
+// A heartbeat status that did not answer says nothing about heartbeat: the
+// bootstrap starts nothing and fails, so that the operator asks again.
+func TestHABootstrap_DoesNotStartHeartbeatWhenStatusDidNotAnswer(t *testing.T) {
+	f := newHAFixture(t)
+	f.cli.statusErr = context.DeadlineExceeded
+	final := f.run("boot-1")
+	if final.State != OpFailed || !strings.Contains(final.FailureReason, "heartbeat status") {
+		t.Fatalf("final = %s (%s), want Failed naming heartbeat status", final.State, final.FailureReason)
+	}
+	for _, call := range f.cli.recorded() {
+		if call == callHeartbeatStart {
+			t.Errorf("heartbeat was started although its status did not answer: %q", f.cli.recorded())
+		}
 	}
 }

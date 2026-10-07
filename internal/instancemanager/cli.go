@@ -18,6 +18,7 @@ package instancemanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -79,6 +80,32 @@ func HeartbeatStatus(ctx context.Context, cli CLI) HAStatus {
 		return HAStatus{Role: RoleUnknown, Source: "heartbeat", Reason: "heartbeat status failed: " + err.Error()}
 	}
 	return ParseHAStatus(out)
+}
+
+// heartbeatHeader matches the HA-Node Info line in any state, including the
+// hyphenated transitions such as "to-be-master" that reCurrent does not take.
+var heartbeatHeader = regexp.MustCompile(`HA-Node Info \(current [^,]+, state ([^)]+)\)`)
+
+// heartbeatStartable runs `cubrid heartbeat status` and reports whether
+// `cubrid heartbeat start` may be issued. An unknown role is not enough:
+// output with an HA-Node Info line, in any state, means heartbeat runs, and a
+// second start while it activates flips it off again (docs/poc/RESULTS.md,
+// POC-3/POC-7). A status that was cut off by a timeout, a cancellation or a
+// signal answered nothing, and nothing is started on it (ADR-0005). Only a
+// status that ran to its end without an HA-Node Info line lets heartbeat be
+// started. When it may not be started, running says whether heartbeat
+// reported itself, and reason says what was seen.
+func heartbeatStartable(ctx context.Context, cli CLI) (startable, running bool, reason string) {
+	out, err := cli.Run(ctx, "cubrid", "heartbeat", "status")
+	if m := heartbeatHeader.FindStringSubmatch(out); m != nil {
+		return false, true, "heartbeat reports the current node in state '" + m[1] + "'"
+	}
+	var exitErr *exec.ExitError
+	if err != nil && (ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		(errors.As(err, &exitErr) && !exitErr.Exited())) {
+		return false, false, "heartbeat status did not answer: " + err.Error()
+	}
+	return true, false, ""
 }
 
 // engineVersionPattern matches the full version in cubrid_rel output:

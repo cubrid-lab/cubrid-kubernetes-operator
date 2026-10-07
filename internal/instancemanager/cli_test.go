@@ -18,6 +18,7 @@ package instancemanager
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -126,5 +127,39 @@ func TestExecCLI_DoesNotWaitForADaemonHoldingTheOutput(t *testing.T) {
 	}
 	if out != "started\n" {
 		t.Errorf("output = %q, want the command's own output", out)
+	}
+}
+
+// sleepingCLI answers every command with a sleep that ExecCLI's default
+// timeout cuts off, as a heartbeat status that hangs would be.
+type sleepingCLI struct{}
+
+func (sleepingCLI) Run(ctx context.Context, _ string, _ ...string) (string, error) {
+	return ExecCLI{Timeout: 50 * time.Millisecond}.Run(ctx, "sleep", "5")
+}
+
+// Heartbeat may be started only on a status that ran to its end without
+// reporting the node; a reported state, in any form, and a status that did
+// not answer start nothing.
+func TestHeartbeatStartable(t *testing.T) {
+	cases := []struct {
+		name               string
+		cli                CLI
+		startable, running bool
+	}{
+		{"a master", fakeCLI{out: masterOut}, false, true},
+		{"transition", fakeCLI{out: transitionOut}, false, true},
+		{"state with an exit error", fakeCLI{out: transitionOut, err: errors.New("exit status 1")}, false, true},
+		{"no node reported", fakeCLI{out: "++ cubrid heartbeat status: fail", err: errors.New("exit status 1")}, true, false},
+		{"deadline", fakeCLI{err: context.DeadlineExceeded}, false, false},
+		{"killed by the timeout", sleepingCLI{}, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			startable, running, reason := heartbeatStartable(context.Background(), c.cli)
+			if startable != c.startable || running != c.running {
+				t.Errorf("startable, running = %v, %v (%s), want %v, %v", startable, running, reason, c.startable, c.running)
+			}
+		})
 	}
 }

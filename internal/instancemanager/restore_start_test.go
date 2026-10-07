@@ -108,9 +108,10 @@ func runRestoreOperation(t *testing.T, cli CLI, member restoreMember) Operation 
 
 const (
 	// stepServerStart is how stepCLI names a server start.
-	stepServerStart    = "server start"
-	callServerStart    = "cubrid " + stepServerStart + " " + dbName
-	callHeartbeatStart = "cubrid heartbeat start"
+	stepServerStart     = "server start"
+	stepHeartbeatStatus = "heartbeat status"
+	callServerStart     = "cubrid " + stepServerStart + " " + dbName
+	callHeartbeatStart  = "cubrid heartbeat start"
 )
 
 // In a recovery bootstrap the entrypoint starts no database and runs only
@@ -161,7 +162,7 @@ func TestServer_Restore_SeededHAMemberJoinsHA(t *testing.T) {
 	if err := os.WriteFile(conf, []byte(testHAConf), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cli := &stepCLI{failing: map[string]bool{"heartbeat status": true}}
+	cli := &stepCLI{failing: map[string]bool{stepHeartbeatStatus: true}}
 	member := restoreMember{haConf: conf}
 	final := runRestoreOperation(t, cli, member)
 	if final.State != OpCompleted {
@@ -188,11 +189,30 @@ func TestServer_Restore_DoesNotRestartRunningHeartbeat(t *testing.T) {
 	if err := os.WriteFile(conf, []byte(testHAConf), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cli := &stepCLI{output: map[string]string{"heartbeat status": slaveOut}}
+	cli := &stepCLI{output: map[string]string{stepHeartbeatStatus: slaveOut}}
 	runRestoreOperation(t, cli, restoreMember{haConf: conf})
 	for _, call := range cli.recorded() {
 		if call == callHeartbeatStart {
 			t.Errorf("heartbeat was started although it reported a role: %q", cli.recorded())
+		}
+	}
+}
+
+// Heartbeat that reports the local node in a transition is running, and is
+// not started a second time (docs/poc/RESULTS.md, POC-3 and POC-7).
+func TestServer_Restore_DoesNotStartHeartbeatInTransition(t *testing.T) {
+	conf := filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(conf, []byte(testHAConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cli := &stepCLI{output: map[string]string{stepHeartbeatStatus: transitionOut}}
+	final := runRestoreOperation(t, cli, restoreMember{haConf: conf})
+	if final.State != OpCompleted {
+		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
+	}
+	for _, call := range cli.recorded() {
+		if call == callHeartbeatStart {
+			t.Errorf("heartbeat was started although it reported a transition: %q", cli.recorded())
 		}
 	}
 }
