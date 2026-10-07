@@ -430,6 +430,17 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
 			Expect(seed.backupOn).To(HaveEach("rseed-first-0"), "the seed backup is taken on the restored member")
 			Expect(peerRestores(seed, "rseed-first-0")).To(BeEmpty())
+			ready := meta.FindStatusCondition(got.Status.Conditions, conditionReady)
+			Expect(ready.Reason).To(Equal("RecoverySeedingReplicas"))
+			Expect(ready.Message).NotTo(ContainSubstring("restoring from backup"))
+			Expect(r.Recorder.(*record.FakeRecorder).Events).To(Receive(ContainSubstring("DatabaseRestored")))
+
+			By("saying that the database was restored, not created, on the source")
+			r.Backup = nil
+			got = notReady(r, key)
+			cond = meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
+			Expect(cond.Reason).To(Equal("PeersNotSeeded"))
+			Expect(cond.Message).To(ContainSubstring("was restored on rseed-first-0"))
 		})
 
 		It("seeds both peers once from the restored member, also across an operator restart", func() {
@@ -469,6 +480,8 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			Expect(got.Status.Databases[0].SeededMembers).To(Equal([]string{peer1, peer2}))
 			Expect(got.Status.Databases[0].HAConfigured).To(BeTrue())
 			Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionBootstrapReady)).To(BeTrue())
+			Expect(meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady).Message).
+				To(ContainSubstring("was restored on " + restored))
 
 			By("asking for nothing more afterwards")
 			again.backupOn, again.restoreOn = nil, nil

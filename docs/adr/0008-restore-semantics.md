@@ -180,7 +180,17 @@ artifact. The target member is the source because it is the only member that
 holds the restored data, not because it stays the master, which CUBRID decides
 (ADR-0005). `BootstrapReady` and `Ready` stay False until every member is
 seeded; the phase is then `Complete`, or `Failed` when the seeding gave up. A
-standalone cluster is complete when its restore has completed.
+standalone cluster is complete when its restore has completed. While the
+peers are seeded, `Ready` and `Progressing` carry the reason
+`RecoverySeedingReplicas`, and the `DatabaseRestored` event marks the end of
+the restore.
+
+Upgrade note: an Operator version without #268 recorded an HA recovery as
+`Complete` after the restore of the target member alone, without seeding the
+other members. For an HA cluster recovered by such a version, check
+`status.databases[].haConfigured`: when it is not `true`, the other members do
+not hold the restored data, and the cluster must not be treated as a
+recovered HA cluster.
 
 ### Backup selection
 

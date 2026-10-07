@@ -170,6 +170,8 @@ func (r *CubridClusterReconciler) reconcileRecoverySeeding(ctx context.Context, 
 	if !status.PrimaryCreated {
 		status.Phase = databasePhaseCreated
 		status.PrimaryCreated = true
+		r.event(cluster, corev1.EventTypeNormal, "DatabaseRestored", "database "+database+" restored on "+boot.TargetMember+
+			"; copying it to the other members")
 	}
 	if status.Phase != databasePhaseFailed {
 		boot.Phase = databasev1alpha1.BootstrapSeedingReplicas

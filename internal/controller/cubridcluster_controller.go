@@ -546,10 +546,12 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	if recoveryActive(cluster) {
 		res, active := r.reconcileRecovery(ctx, cluster)
 		if active {
-			setCondition(cluster, conditionReady, metav1.ConditionFalse, "BootstrapRecoveryInProgress",
-				"restoring from backup; cluster not ready")
-			setCondition(cluster, conditionProgressing, metav1.ConditionTrue, "BootstrapRecoveryInProgress",
-				"restoring from backup")
+			reason, msg := "BootstrapRecoveryInProgress", "restoring from backup"
+			if cluster.Status.Bootstrap.Phase == databasev1alpha1.BootstrapSeedingReplicas {
+				reason, msg = "RecoverySeedingReplicas", "copying the restored database to the other members"
+			}
+			setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, msg+"; cluster not ready")
+			setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, msg)
 			if err := r.Status().Update(ctx, cluster); err != nil {
 				if apierrors.IsConflict(err) {
 					return ctrl.Result{RequeueAfter: time.Second}, nil
