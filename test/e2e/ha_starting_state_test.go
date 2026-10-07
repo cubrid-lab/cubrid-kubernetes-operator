@@ -107,8 +107,9 @@ func (r *haRun) restoreStartingState() error {
 // verifyStartingState returns what of the common starting state of S01 does
 // not hold: every member's Pod Ready, one active master and standby slaves,
 // the conditions of S01 True with the master as primary, the Operator and
-// every Broker available, and the data rules holding on every member and
-// through both Services, which also shows that both endpoints answer.
+// every Broker available, the workload client running, and the data rules
+// holding on every member and through both Services, which also shows that
+// both endpoints answer.
 func (r *haRun) verifyStartingState() error {
 	for _, member := range r.members {
 		ready, err := r.kubectl("get", "pod", member, "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
@@ -146,6 +147,15 @@ func (r *haRun) verifyStartingState() error {
 		if len(f) != 3 || f[0] == "0" || f[1] != f[0] || f[2] != f[0] {
 			return fmt.Errorf("the %s Brokers are not all available (replicas, updated, available: %s)", mode, out)
 		}
+	}
+	// A client Pod that is being deleted still answers for a while.
+	client, err := utils.Run(exec.Command("kubectl", "-n", r.clientNamespace, "get", "pod", "workload-client",
+		"-o", "jsonpath={.status.phase}{.metadata.deletionTimestamp}"))
+	if err != nil {
+		return err
+	}
+	if client != "Running" {
+		return fmt.Errorf("the workload client Pod is not running, or is being deleted: %q", client)
 	}
 	report, err := r.dataCheck()
 	if err != nil {

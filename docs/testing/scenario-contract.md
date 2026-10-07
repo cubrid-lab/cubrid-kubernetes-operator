@@ -138,8 +138,9 @@ step does not stop the group. Each step after S01 starts only from the
 common starting state of S01, restored and verified within 10 minutes: every
 member's Pod `Ready`, one active master and standby slaves, `Ready`,
 `HAReady`, `PrimaryResolved` and `RoutingReady` `True` with the master as
-`status.currentPrimary`, the Operator and every Broker available, and the
-data rules holding on every member and through both Services. What the test
+`status.currentPrimary`, the Operator and every Broker available, the
+workload client Pod running and not being deleted, and the data rules
+holding on every member and through both Services. What the test
 restores is limited to what is safe: it stops the workload clients an earlier
 step left writing and adds what they recorded to the history, and it scales
 the Operator back to one replica; Pods and Brokers come back through their
