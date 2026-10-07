@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"time"
 
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
@@ -79,6 +81,9 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	}
 	token, err := memberToken(ctx, p.Tokens, podName, namespace)
 	if err != nil {
+		// The error names the Pod and the Secret, never a token value.
+		logf.FromContext(ctx).V(1).Info("Could not resolve Instance Manager token; member not probed",
+			"pod", podName, "namespace", namespace, "reason", err.Error())
 		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
 	req.Header.Set("Authorization", "Bearer "+token)

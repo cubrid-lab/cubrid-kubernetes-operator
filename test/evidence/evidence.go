@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -337,8 +338,9 @@ var (
 )
 
 // Redactor removes credentials from text: the values it was given, and text
-// that has the form of a credential.
+// that has the form of a credential. It is safe for concurrent use.
 type Redactor struct {
+	mu      sync.Mutex
 	secrets []string
 }
 
@@ -353,6 +355,8 @@ func NewRedactor(secrets ...string) *Redactor {
 // Add registers further secret values, such as one generated during the run.
 // Values shorter than four characters are ignored.
 func (r *Redactor) Add(secrets ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, s := range secrets {
 		if len(s) >= minSecretLength {
 			r.secrets = append(r.secrets, s)
@@ -366,9 +370,11 @@ func (r *Redactor) Add(secrets ...string) {
 func (r *Redactor) Redact(data []byte) []byte {
 	text := string(data)
 	if r != nil {
+		r.mu.Lock()
 		for _, s := range r.secrets {
 			text = strings.ReplaceAll(text, s, redacted)
 		}
+		r.mu.Unlock()
 	}
 	text = bearerPattern.ReplaceAllString(text, "${1}"+redacted)
 	text = fieldPattern.ReplaceAllString(text, "${1}"+redacted)

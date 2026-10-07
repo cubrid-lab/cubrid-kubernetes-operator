@@ -313,7 +313,10 @@ The operator never changes an existing token. A Pod reads the token when it
 starts, and the StatefulSet uses `OnDelete`, so a changed token reaches a
 running Pod only when that Pod is replaced; a changed Secret would lock the
 operator out of every member that still holds the old one. Only a missing or
-empty token is generated anew. A cluster created by an operator version that
+empty token is generated anew. When that happens while the cluster's
+StatefulSet exists, the operator records a Warning Event,
+`InstanceManagerTokenRegenerated` (without the token): the running Pods
+refuse the operator until they are replaced. A cluster created by an operator version that
 copied one shared token keeps that token until it is rotated. Rotation
 without an overlap is a restart procedure: delete `<cluster>-im-token`, let the
 operator generate a new one, then delete the cluster's Pods one at a time,
@@ -321,6 +324,14 @@ slaves first and the master last, each after the one before is Ready again.
 Until a member is replaced the operator cannot read its role, which it treats
 as no evidence (ADR-0005), not as a failure. An overlap in which a manager
 accepts the old and the new token is not provided.
+
+Rolling the operator back to a version that copied one shared token is not
+safe for running clusters. That version overwrites every `<cluster>-im-token`
+with its own `IM_TOKEN`, while running Pods keep the generated token they
+started with, so the old operator is refused (401) by every member until each
+Pod is replaced. If its `instance-manager-token` Secret was deleted, it has no
+token and reports `Ready=False`, reason `InstanceManagerTokenMissing`, and
+creates no DB Pods.
 
 The token is sent over plain HTTP inside the cluster network and is not
 encrypted in transit; a NetworkPolicy limits who can reach the port, not who

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -268,15 +269,20 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		created := string(secret.Data[imTokenKey])
 		Expect(created).NotTo(BeEmpty())
 
+		var recorder *record.FakeRecorder
 		reconcileAgain := func() {
-			_, err := newReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{
+			r := newReconciler()
+			recorder = r.Recorder.(*record.FakeRecorder)
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{
 				Name: cluster.Name, Namespace: cluster.Namespace,
 			}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Get(ctx, key, secret)).To(Succeed())
 		}
+		regenerated := func() bool { return receivedEvent(recorder, "InstanceManagerTokenRegenerated") }
 		reconcileAgain()
 		Expect(string(secret.Data[imTokenKey])).To(Equal(created))
+		Expect(regenerated()).To(BeFalse(), "a kept token was reported as regenerated")
 
 		// A token put there by hand is the one Pods started since then hold.
 		secret.Data[imTokenKey] = []byte("a-token-set-by-hand")
@@ -285,10 +291,19 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		Expect(string(secret.Data[imTokenKey])).To(Equal("a-token-set-by-hand"))
 
 		// An empty one would switch the Instance Manager's authentication off.
+		// Pods already exist and hold the old token, which is worth a warning.
 		delete(secret.Data, imTokenKey)
 		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
 		reconcileAgain()
-		Expect(string(secret.Data[imTokenKey])).To(MatchRegexp("^[0-9a-f]{64}$"))
+		regeneratedToken := string(secret.Data[imTokenKey])
+		Expect(regeneratedToken).To(MatchRegexp("^[0-9a-f]{64}$"))
+		Expect(regenerated()).To(BeTrue(), "no Warning Event for a token generated under existing Pods")
+	})
+
+	It("does not warn about the token of a new cluster", func() {
+		r := newReconciler()
+		reconcileCluster(r, standaloneCluster("wiring-token-new"))
+		Expect(receivedEvent(r.Recorder.(*record.FakeRecorder), "InstanceManagerTokenRegenerated")).To(BeFalse())
 	})
 
 	It("runs as the image's cubrid user with a data volume that user can write", func() {
@@ -301,3 +316,17 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		Expect(*pod.SecurityContext.RunAsNonRoot).To(BeTrue())
 	})
 })
+
+// receivedEvent drains the recorder and reports whether an event with the
+// reason was among the events recorded so far.
+func receivedEvent(recorder *record.FakeRecorder, reason string) bool {
+	found := false
+	for {
+		select {
+		case e := <-recorder.Events:
+			found = found || strings.Contains(e, " "+reason+" ")
+		default:
+			return found
+		}
+	}
+}

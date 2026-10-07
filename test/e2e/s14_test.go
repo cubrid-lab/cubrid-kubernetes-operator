@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -99,8 +100,10 @@ func s14Step(r *haRun) {
 		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
 		Expect(err).NotTo(HaveOccurred())
 		instanceManagerToken := string(decoded)
-		Expect(instanceManagerToken).To(MatchRegexp("^[0-9a-f]{64}$"), "the cluster's generated token")
 		redactor.Add(instanceManagerToken)
+		// Asserted as a boolean, so that a failure does not print the token.
+		Expect(regexp.MustCompile("^[0-9a-f]{64}$").MatchString(instanceManagerToken)).To(BeTrue(),
+			"the cluster's token is not a generated 256-bit hex token")
 
 		// call returns the HTTP status of one request to a member. The headers
 		// go to curl on its standard input, so that a token never appears in a

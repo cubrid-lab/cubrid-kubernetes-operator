@@ -228,6 +228,7 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: imTokenSecretName(cluster.Name), Namespace: cluster.Namespace},
 	}
+	generated := false
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 		secret.Labels = labelsFor(cluster)
 		secret.Type = corev1.SecretTypeOpaque
@@ -240,10 +241,26 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 				secret.Data = map[string][]byte{}
 			}
 			secret.Data[imTokenKey] = []byte(token)
+			generated = true
 		}
 		return controllerutil.SetControllerReference(cluster, secret, r.Scheme)
 	})
-	return err
+	if err != nil || !generated {
+		return err
+	}
+	// A new token under an existing StatefulSet: its running Pods still hold
+	// the old one and refuse the operator until each of them is replaced.
+	err = r.Get(ctx, client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}, &appsv1.StatefulSet{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	r.event(cluster, corev1.EventTypeWarning, "InstanceManagerTokenRegenerated",
+		fmt.Sprintf("generated a new Instance Manager token in Secret %s; running Pods keep the old one and refuse the operator until they are replaced",
+			secret.Name))
+	return nil
 }
 
 // newIMToken returns 256 random bits, hex-encoded.

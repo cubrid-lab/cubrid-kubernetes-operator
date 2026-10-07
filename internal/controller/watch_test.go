@@ -117,7 +117,7 @@ var _ = Describe("Events that start a CubridCluster reconcile (#269)", func() {
 		const namespace = "watch-counters"
 		prober := &countingProber{master: "loop-0"}
 		startManager(namespace, &CubridClusterReconciler{
-			Recorder: record.NewFakeRecorder(100), IMToken: testIMToken, Prober: prober,
+			Recorder: record.NewFakeRecorder(100), Prober: prober,
 		})
 		Expect(k8sClient.Create(ctx, inNamespace(haCluster("loop"), namespace))).To(Succeed())
 		key := types.NamespacedName{Name: "loop", Namespace: namespace}
@@ -139,8 +139,8 @@ var _ = Describe("Events that start a CubridCluster reconcile (#269)", func() {
 	It("reconciles an image acceptance that changes only an annotation", func() {
 		const namespace = "watch-annotation"
 		startManager(namespace, &CubridClusterReconciler{
-			Recorder: record.NewFakeRecorder(100), IMToken: testIMToken,
-			Prober: &memberProber{master: "accept-0"}, DefaultImage: firstImage,
+			Recorder: record.NewFakeRecorder(100),
+			Prober:   &memberProber{master: "accept-0"}, DefaultImage: firstImage,
 		})
 		Expect(k8sClient.Create(ctx, inNamespace(haCluster("accept"), namespace))).To(Succeed())
 		key := types.NamespacedName{Name: "accept", Namespace: namespace}
@@ -178,7 +178,7 @@ var _ = Describe("Events that start a CubridCluster reconcile (#269)", func() {
 	It("reconciles when the StatefulSet's readiness changes", func() {
 		const namespace = "watch-child"
 		startManager(namespace, &CubridClusterReconciler{
-			Recorder: record.NewFakeRecorder(100), IMToken: testIMToken,
+			Recorder: record.NewFakeRecorder(100),
 		})
 		c := inNamespace(haCluster("child"), namespace)
 		Expect(k8sClient.Create(ctx, c)).To(Succeed())
@@ -207,8 +207,8 @@ var _ = Describe("Events that start a CubridCluster reconcile (#269)", func() {
 		const name = "updating-once"
 		r := &CubridClusterReconciler{
 			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(100),
-			IMToken: testIMToken, DefaultImage: firstImage,
-			Prober: &versionProber{master: name + "-0", version: "11.4.6.1963"},
+			DefaultImage: firstImage,
+			Prober:       &versionProber{master: name + "-0", version: "11.4.6.1963"},
 		}
 		c := haCluster(name)
 		Expect(k8sClient.Create(ctx, c)).To(Succeed())
