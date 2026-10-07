@@ -91,6 +91,9 @@ func (r *haRun) reportNotRun(reason string) {
 	for _, variant := range s06Variants {
 		recordScenario(evidence.Scenario{ID: "S06", Variant: variant, Result: evidence.NotRun, Reason: reason})
 	}
+	for _, variant := range s14TokenVariants {
+		recordScenario(evidence.Scenario{ID: "S14", Variant: variant, Result: evidence.NotRun, Reason: reason})
+	}
 }
 
 func (r *haRun) kubectl(args ...string) (string, error) {
