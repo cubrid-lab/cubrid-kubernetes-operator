@@ -334,28 +334,32 @@ Each label answers a different question; do not use one to express another.
 | Release target | Whether a release includes it | Release section of the issue |
 
 Release scope is decided in [ROADMAP.md](./ROADMAP.md#v01-scope). An issue
-that needs it states its target in a short section:
+states its target in one line near the top:
 
 ```markdown
-### Release
-
-- **Target:** Required for v0.1
-- **Minimum acceptance:** <the smallest result this issue must show for the release>
+**Release:** v0.1 required
 ```
 
-Omit **Minimum acceptance** when it is the same as the issue's "Done when"
-(or "Acceptance Criteria"). A minimum acceptance may not be narrower than the
-completion evidence `ROADMAP.md` lists for its capability; narrowing it needs
-the same maintainer decision as narrowing the release. Not every issue needs a
-Release section.
+Add one more line only when it says something the rest of the issue does not:
+
+- `**Minimum acceptance:**` when the release needs less than the whole
+  "Done when" (or "Acceptance Criteria"). It may not be narrower than the
+  completion evidence `ROADMAP.md` lists for its capability; narrowing it
+  needs the same maintainer decision as narrowing the release.
+- `**Condition:**` for a conditional target: when it is included, and what
+  holds otherwise.
+- `**Reason:**` for a post-v0.1 target: why it does not block the release,
+  and what still does.
+
+Not every issue needs a release line.
 
 | Target | Meaning |
 |--------|---------|
-| Required for v0.1 | The minimum acceptance must be verified on the pinned candidate. Other engine versions, platforms or deployment modes are not part of it. |
-| Required investigation for v0.1 | The question is answered with pinned-image evidence and a recorded disposition before the candidate is accepted. A confirmed defect gets its minimal fix in a separate issue, which inherits *Required for v0.1* unless the maintainers record otherwise in `ROADMAP.md`; a disproved hypothesis is closed with the evidence. |
-| Conditional for v0.1 | Included only when the condition stated in the issue is met; otherwise it stays outside the v0.1 support claim. |
-| Post-v0.1 | Follow-up work; it does not block v0.1. |
-| Tracking only | Tracks and coordinates other issues; it has no deliverable of its own. |
+| `v0.1 required` | The minimum acceptance, or the whole "Done when" when none is given, must be verified on the pinned candidate. Other engine versions, platforms or deployment modes are not part of it. |
+| `v0.1 required investigation` | The question is answered with pinned-image evidence and a recorded disposition before the candidate is accepted. A confirmed defect gets its minimal fix in a separate issue, which inherits `v0.1 required` unless the maintainers record otherwise in `ROADMAP.md`; a disproved hypothesis is closed with the evidence. |
+| `v0.1 conditional` | Included only when the condition stated in the issue is met; otherwise it stays outside the v0.1 support claim. |
+| `post-v0.1` | Follow-up work; it does not block v0.1. |
+| `tracking only` | Tracks and coordinates other issues; it has no deliverable of its own. |
 
 A release target records intended scope, not implementation or validation
 status, which lives only in `ROADMAP.md`. Deferring an issue does not remove a
