@@ -94,7 +94,7 @@ For each `CubridCluster` the operator keeps two ingress NetworkPolicies:
 
 | Policy | Selects | Admits |
 |---|---|---|
-| `<cluster>-database` | the DB Pods | the operator's Pods to the Instance Manager port 9090/TCP; the cluster's own DB Pods to the CUBRID server port 1523/TCP and the HA heartbeat port 59901/UDP; the cluster's own Broker Pods to 1523/TCP |
+| `<cluster>-database` | the DB Pods | the operator's Pods to the Instance Manager port 9090/TCP; the cluster's own DB and Broker Pods to the CUBRID server port 1523/TCP; any source to the HA heartbeat port 59901/UDP |
 | `<cluster>-broker` | the Broker Pods | clients to the Broker ports 33000/TCP (read-write) and 33001/TCP (read-only): the Pods of the cluster's namespace, or the peers listed in `spec.networkPolicy.clients` instead |
 
 ```yaml
@@ -117,6 +117,12 @@ spec:
   caller. The database is created with an empty DBA password
   (`dbaPasswordSecretRef` is rejected in `v1alpha1`), so every client the
   Broker policy admits can connect as `dba`.
+- **The HA heartbeat port 59901/UDP is open to any source.** A plugin admits
+  a Pod by its labels only after it has learned the Pod's address. When the
+  heartbeat port was limited to the cluster's DB Pods, a member whose Pod had
+  just been recreated lost its first heartbeats on Kind. In most such runs
+  the slaves then stopped applying the master's log. Any Pod that can reach
+  the DB Pods can therefore send them heartbeat packets.
 - Egress is not restricted: the DB Pods need DNS, their peers and object
   storage. NetworkPolicies are additive, so another policy that selects the
   same Pods can admit more.

@@ -102,10 +102,17 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 }
 
 // databaseNetworkPolicy admits to the DB Pods: the operator to the Instance
-// Manager; the cluster's DB Pods to the server and heartbeat ports, for HA
-// replication; and the cluster's Brokers to the server port. The kubelet's
-// probes come from the node, which NetworkPolicy implementations commonly
-// admit; it is not part of the policy.
+// Manager; the cluster's DB Pods and Brokers to the server port; and any
+// source to the HA heartbeat port. The kubelet's probes come from the node,
+// which NetworkPolicy implementations commonly admit; it is not part of the
+// policy.
+//
+// The heartbeat port is not limited to the cluster's DB Pods: a plugin admits
+// a Pod by its labels only once it has learned the Pod's address, so a member
+// whose Pod was just recreated would lose its first heartbeats. On Kind that
+// left the slaves applying nothing after the deleted master came back as the
+// master again (#272, S03 abrupt-first-member), which never happened with
+// the port open.
 func (r *CubridClusterReconciler) databaseNetworkPolicy(cluster *databasev1alpha1.CubridCluster) networkingv1.NetworkPolicySpec {
 	peers := networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{MatchLabels: labelsFor(cluster)}}
 	brokers := networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{MatchLabels: brokerLabelsFor(cluster)}}
@@ -113,9 +120,7 @@ func (r *CubridClusterReconciler) databaseNetworkPolicy(cluster *databasev1alpha
 		{From: []networkingv1.NetworkPolicyPeer{peers, brokers}, Ports: []networkingv1.NetworkPolicyPort{
 			npPort(corev1.ProtocolTCP, cubridServerPort),
 		}},
-		{From: []networkingv1.NetworkPolicyPeer{peers}, Ports: []networkingv1.NetworkPolicyPort{
-			npPort(corev1.ProtocolUDP, haHeartbeatPort),
-		}},
+		{Ports: []networkingv1.NetworkPolicyPort{npPort(corev1.ProtocolUDP, haHeartbeatPort)}},
 	}
 	// Without the operator's namespace no Pod is admitted to the Instance
 	// Manager, rather than every namespace.

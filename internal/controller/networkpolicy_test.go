@@ -117,7 +117,7 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 	reconcileAs := func(c *databasev1alpha1.CubridCluster, operatorNamespace string) error {
 		r := &CubridClusterReconciler{
 			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-			Prober: &memberProber{master: c.Name + "-0"},
+			Prober:     &memberProber{master: c.Name + "-0"},
 			OperatorNS: operatorNamespace,
 		}
 		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name, Namespace: ns}})
@@ -188,7 +188,8 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 			for _, port := range []int32{1523, 9090} {
 				Expect(npAdmits(nps, db, src, port, tcp)).To(BeFalse(), "%s reaches TCP %d", who, port)
 			}
-			Expect(npAdmits(nps, db, src, 59901, udp)).To(BeFalse(), "%s reaches the heartbeat port", who)
+			Expect(npAdmits(nps, db, src, 59901, udp)).To(BeTrue(),
+				"%s: the heartbeat port admits a source the plugin cannot name yet", who)
 		}
 	})
 

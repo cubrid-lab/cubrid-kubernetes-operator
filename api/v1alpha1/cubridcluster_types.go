@@ -198,9 +198,9 @@ type CubridObjectStorage struct {
 // authenticate database users.
 type CubridNetworkPolicy struct {
 	// enabled makes the operator keep the policies: the DB Pods accept the
-	// Instance Manager port from the operator only, and the server and HA
-	// ports from the cluster's own DB and Broker Pods; the Broker Pods accept
-	// their ports from clients. When false, the policies the operator created
+	// Instance Manager port from the operator only, the server port from the
+	// cluster's own DB and Broker Pods, and the HA heartbeat port from any
+	// source; the Broker Pods accept their ports from clients. When false, the policies the operator created
 	// are removed.
 	// +kubebuilder:default=true
 	// +optional
