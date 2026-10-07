@@ -40,6 +40,7 @@ import (
 // It is not a scenario of the contract and reports nothing into the summary.
 func replicationStallStep(r *haRun) {
 	It("reports a slave that looks healthy and applies nothing, and no longer after its Pod is replaced", func() {
+		r.enter(nil)
 		inPod := func(pod, script string) (string, error) {
 			return r.kubectl("exec", pod, "--", "bash", "-c", `export PATH="${CUBRID}/bin:${PATH}"; `+script)
 		}
@@ -173,6 +174,7 @@ func replicationStallStep(r *haRun) {
 	// left that way: its Instance Manager ends, the container is restarted,
 	// and the member comes back by the ordinary start (#180).
 	It("restarts the container of a member whose CUBRID processes were stopped", func() {
+		r.enter(nil)
 		_, slaves, err := r.master()
 		Expect(err).NotTo(HaveOccurred())
 		victim := slaves[0]

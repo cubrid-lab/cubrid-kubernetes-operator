@@ -144,6 +144,9 @@ func (r *haRun) startClient(id string) {
 	_, err := r.client(fmt.Sprintf("CLIENT_ID=%s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7"+
 		" nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", id, file))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	r.mu.Lock()
+	r.running[id] = true
+	r.mu.Unlock()
 	EventuallyWithOffset(1, func(g Gomega) {
 		out, err := r.client(fmt.Sprintf("grep -c '\"acknowledged\"' %s.jsonl", file))
 		g.Expect(err).NotTo(HaveOccurred())
@@ -169,22 +172,35 @@ func (r *haRun) lastAnswerAcknowledged(id string) bool {
 // stopClient stops a client, adds its history to the run's and returns its
 // events and its operations by outcome.
 func (r *haRun) stopClient(id string) ([]workload.Event, workload.History) {
-	r.killClient(id)
-	text, err := r.client(fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
+	text, err := r.collectClient(id)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
-	// A client that is stopped while it writes a line leaves that line unfinished.
-	if cut := strings.LastIndex(text, "\n"); cut >= 0 {
-		text = text[:cut+1]
-	}
 	events, err := workload.ReadEvents(strings.NewReader(text))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	history, err := workload.ReadHistory(strings.NewReader(text))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
-	r.history += text
+	r.addHistory(text)
 	if errors, err := r.client(fmt.Sprintf("tail -n 5 /tmp/%s.err", id)); err == nil && strings.TrimSpace(errors) != "" {
 		_, _ = fmt.Fprintf(GinkgoWriter, "client %s stderr:\n%s\n", id, errors)
 	}
 	return events, history
+}
+
+// collectClient stops a client and returns the complete lines of what it
+// recorded. The client is no longer running once they were read.
+func (r *haRun) collectClient(id string) (string, error) {
+	r.killClient(id)
+	text, err := r.client(fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
+	if err != nil {
+		return "", err
+	}
+	r.mu.Lock()
+	delete(r.running, id)
+	r.mu.Unlock()
+	// A client that is stopped while it writes a line leaves that line unfinished.
+	if cut := strings.LastIndex(text, "\n"); cut >= 0 {
+		text = text[:cut+1]
+	}
+	return text, nil
 }
 
 // roleLog records what CUBRID reports on every member, each time it changes.
@@ -230,7 +246,14 @@ func (l *roleLog) write(rel string) string {
 // master's Pod is deleted.
 func s03Step(r *haRun, variant string) {
 	It("S03/"+variant+": one member is master again after the master Pod is deleted, and no acknowledged write is lost",
-		Label("S03", evidence.Requirement{ID: "S03", Variant: variant}.Label()), func() { r.s03(variant) })
+		Label("S03", evidence.Requirement{ID: "S03", Variant: variant}.Label()), func() {
+			var needs func(context.Context) error
+			if variant == s03AbruptFirst {
+				needs = r.needsFirstMemberAsMaster
+			}
+			r.enter(needs)
+			r.s03(variant)
+		})
 }
 
 func (r *haRun) s03(variant string) {

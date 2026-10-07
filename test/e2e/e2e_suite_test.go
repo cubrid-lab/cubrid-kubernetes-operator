@@ -65,6 +65,7 @@ func TestE2E(t *testing.T) {
 // scenario not_run. Each group sets up its own cluster in its BeforeAll.
 var _ = BeforeSuite(func() {
 	planRun()
+	Expect(checkBreakSettings()).To(Succeed())
 
 	By("building the manager image")
 	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -194,8 +195,14 @@ const haSetup = "ha-setup"
 // The steps that form the cluster carry the label haSetup and each scenario
 // step the label of its scenario, so that one scenario runs on a formed
 // cluster with E2E_LABEL_FILTER='ha-setup || S03-graceful'.
+//
+// A failed step does not stop the group: each step after S01 starts only
+// from the restored and verified starting state of S01 (haRun.enter), so a
+// failure is not carried into the next step. Once a step that forms the
+// cluster failed, or the starting state could not be restored, every later
+// step is blocked without being started.
 func haBootstrapScenario() {
-	Context("HA bootstrap with the real CUBRID image", Label("db", "ha-bootstrap"), Ordered, func() {
+	Context("HA bootstrap with the real CUBRID image", Label("db", "ha-bootstrap"), Ordered, ContinueOnFailure, func() {
 		const (
 			haNamespace    = "cubrid-ha-bootstrap"
 			storeNamespace = "cubrid-ha-bootstrap-store"
@@ -305,6 +312,23 @@ spec:
 			_, _ = kubectl("delete", "cubridcluster", clusterName, "--ignore-not-found", "--timeout=5m")
 			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", haNamespace, storeNamespace,
 				"--ignore-not-found", "--timeout=5m"))
+		})
+
+		BeforeEach(func() {
+			if reason := scenarios.gate.Blocked(); reason != "" {
+				blockStep(reason)
+			}
+		})
+
+		AfterEach(func() {
+			report := CurrentSpecReport()
+			switch {
+			case !report.Failed():
+			case slices.Contains(report.Labels(), haSetup):
+				scenarios.gate.Block("the HA cluster was not formed: the step \"" + report.LeafNodeText + "\" failed")
+			case slices.Contains(report.Labels(), "S01"):
+				scenarios.gate.Block("the common starting state was not reached: S01 failed")
+			}
 		})
 
 		It("creates the database on one member only", Label(haSetup), func() {
@@ -463,7 +487,7 @@ spec:
 			Expect(report.Members["ro"].Rows).To(Equal(48))
 
 			runSummary.Environment.ClientDriver = workloadDriver
-			scenarios.history = text
+			scenarios.addHistory(text)
 			writeScenarioFile("ha-bootstrap/history.jsonl", []byte(text))
 			if data, err := json.MarshalIndent(report, "", "  "); err == nil {
 				writeScenarioFile("ha-bootstrap/data-check.json", append(data, '\n'))
@@ -493,8 +517,9 @@ spec:
 		// Each step starts from the master the one before it left. The
 		// Broker failures and the Operator restart move no role, so the
 		// first member is still the master for the variant of S03 that needs
-		// it. After that the master is whichever member CUBRID chose, and no
-		// later step depends on which one it is.
+		// it; that variant is blocked when it is not. After that the master
+		// is whichever member CUBRID chose, and no later step depends on
+		// which one it is.
 		s14Step(scenarios)
 		s05Steps(scenarios)
 		s06Step(scenarios, s06Restart)

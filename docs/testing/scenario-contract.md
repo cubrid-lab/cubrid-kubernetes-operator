@@ -120,6 +120,8 @@ scenario none of whose steps recorded a result keeps one that says why:
 | It was skipped, for example on a platform the scenario does not run on | `not_run`, with the reason for the skip |
 | The setup of its group (`BeforeAll`, `BeforeEach`) failed, so it did not start | `blocked`, with the setup's failure |
 | An earlier step of its Ordered group failed, so it did not start | `blocked`, naming that step |
+| In the HA group: a step that forms the cluster or S01 failed, or the starting state could not be restored before it or an earlier step | `blocked`, with that reason |
+| In the HA group: its own order dependency did not hold | `blocked`, `order_dependency_broken` with what was found |
 | The suite's setup failed, or the run stopped before it | `not_run`, with that reason |
 | It failed before it recorded a result | `fail` |
 
@@ -129,9 +131,48 @@ step of the suite carries can never get a result of its own, so the run
 reports it as a problem and does not pass. The groups of the suite (the manager,
 S00, the HA group with S01–S03, S05, S06 and S14, and the wiring check with a
 fake Instance Manager) are independent: each sets up what it needs, and a
-failure in one does not keep another from running. Within the HA group the
-scenarios run in order on one cluster, so a failed step blocks the ones after
-it.
+failure in one does not keep another from running.
+
+Within the HA group the scenarios run in order on one cluster, and a failed
+step does not stop the group. Each step after S01 starts only from the
+common starting state of S01, restored and verified within 10 minutes: every
+member's Pod `Ready` and not being deleted, one active master and standby
+slaves, `Ready`, `HAReady`, `PrimaryResolved` and `RoutingReady` `True` with
+the master as `status.currentPrimary`, the Operator and every Broker
+available with no Broker Pod being deleted, the workload client Pod running
+and not being deleted, a marker written through the read-write Service
+present on every member within a minute (a slave whose applier stalled does
+not pass), and the data rules holding on every member and through both
+Services. The state must hold twice, 15 seconds apart, so that a Pod about
+to go away is not taken as back. All these waits together are bounded at 15
+minutes per run, so that the run ends within its time limit and writes its
+summary.
+
+What the test restores is limited to what is safe: it stops the workload
+clients an earlier step left writing and adds what they recorded to the
+history, and it scales the Operator back to one replica; Pods and Brokers
+come back through their controllers, and the database is never touched. A
+step whose starting state holds then records its own result, whatever an
+earlier step did. When the starting state cannot be restored within the
+limit or the run's budget, that step and every later one are `blocked` with
+the reason (`starting_state_not_restored`, naming the step and what did not
+hold, also when restoring failed), and none of them starts; the same holds
+after a step that forms the cluster (`ha-setup`) or S01 failed. An order
+dependency is checked explicitly: S03 `abrupt-first-member` needs the first
+member as master, and is `blocked` with `order_dependency_broken` when it is
+not, without blocking the steps after it. Every decision, with the time the
+restore took and the UID and restart count of each member's Pod, is kept in
+`ha-bootstrap/starting-state.jsonl`.
+
+To see this on Kind, `E2E_BREAK_STEP=<label>` (the label of an HA step
+after S01, for example `S05-one-broker-pod`) makes that step fail on purpose
+once its starting state holds, leaving a client writing, a read-write Broker
+Pod deleted and the Operator scaled to zero; with
+`E2E_BREAK_STEP_UNRESTORABLE=true` it also deletes the workload client,
+without which the starting state cannot be verified. The suite refuses to
+start when `E2E_BREAK_STEP` names no such step, or when
+`E2E_BREAK_STEP_UNRESTORABLE` is set without it. A run that sets either does
+not pass its lane.
 
 Each scenario step carries a Ginkgo label: its ID (`S01`), and for a variant
 also the ID and the variant (`S03-graceful`). The steps that form the HA

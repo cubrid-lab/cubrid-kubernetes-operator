@@ -144,10 +144,16 @@ func s06Step(r *haRun, variant string) {
 	switch variant {
 	case s06Restart:
 		It("S06/"+variant+": SQL is not interrupted and no member is restarted when the Operator Pod is killed",
-			labels, func() { r.s06Restart() })
+			labels, func() {
+				r.enter(nil)
+				r.s06Restart()
+			})
 	case s06Absent:
 		It("S06/"+variant+": CUBRID fails over without the Operator, which reports the new master when it returns",
-			labels, func() { r.s06Absent() })
+			labels, func() {
+				r.enter(nil)
+				r.s06Absent()
+			})
 	}
 }
 
