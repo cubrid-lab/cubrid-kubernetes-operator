@@ -976,8 +976,9 @@ authority**:
 - **Detection:** `PrimaryResolved=True` only when **all** promotable
   members are freshly, authoritatively observed and exactly one is
   master; otherwise `NoPrimaryObserved` / `MultiplePrimariesObserved` /
-  `PrimaryObservationIncomplete` / `AmbiguousPrimaryObservation`. An
-  unreachable manager means "no evidence", never "node is down".
+  `PrimaryObservationIncomplete` / `AmbiguousPrimaryObservation` /
+  `InstanceManagerTokenRefused`. An unreachable manager, or one that refused
+  the cluster's token, means "no evidence", never "node is down".
 - **Conditions:** `PrimaryResolved`, `HAReady`, `RoutingReady`,
   `Degraded`, `FencingRequired`, `FailingOver` (open-ended reasons).
 - A reserved `spec.highAvailability.fencingPolicy`

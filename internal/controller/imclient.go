@@ -23,6 +23,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -58,6 +59,42 @@ type RestoreClient interface {
 	StartRestore(ctx context.Context, podName, namespace, idempotencyKey string, req instancemanager.RestoreRequest) (instancemanager.Operation, error)
 	// GetOperation polls /v1/operations/{id}.
 	GetOperation(ctx context.Context, podName, namespace, id string) (instancemanager.Operation, error)
+}
+
+// reasonTokenRefused is the condition and Event reason for a member whose
+// Instance Manager refused the cluster's token.
+const reasonTokenRefused = "InstanceManagerTokenRefused"
+
+// errTokenRefused is wrapped by a call that the member answered 401 or 403.
+// It never carries the token.
+var errTokenRefused = errors.New("the member refused the cluster's Instance Manager token")
+
+// tokenRefused reports whether an Instance Manager answer refuses the
+// operator's token (401) or the call made with it (403). It only names the
+// cause of a failed call: a 403 is not retried with the previous token and
+// counts as accepted in acceptedTokens.send and AcceptsToken, which look at
+// 401 alone. The Instance Manager does not answer 403 on any path.
+func tokenRefused(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
+}
+
+// unexpectedStatus describes an answer the call did not expect; a refused
+// token wraps errTokenRefused.
+func unexpectedStatus(resp *http.Response) error {
+	if tokenRefused(resp.StatusCode) {
+		return fmt.Errorf("%w (status %d)%s", errTokenRefused, resp.StatusCode, requestRef(resp))
+	}
+	return fmt.Errorf("unexpected status %d%s", resp.StatusCode, requestRef(resp))
+}
+
+// instanceManagerFailureReason is the condition reason for a failed call to
+// an Instance Manager: a refused token is told apart from an unavailable
+// manager.
+func instanceManagerFailureReason(err error) string {
+	if errors.Is(err, errTokenRefused) {
+		return reasonTokenRefused
+	}
+	return "InstanceManagerUnavailable"
 }
 
 // TokenSource returns the bearer tokens a member's Instance Manager may hold,
@@ -129,7 +166,7 @@ func (c *HTTPBackupClient) StartBackup(ctx context.Context, podName, namespace, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: unexpected status %d%s", podName, resp.StatusCode, requestRef(resp))
+		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w", podName, unexpectedStatus(resp))
 	}
 	return decodeOperation(resp)
 }
@@ -152,7 +189,7 @@ func (c *HTTPBackupClient) StartRestore(ctx context.Context, podName, namespace,
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: unexpected status %d%s", podName, resp.StatusCode, requestRef(resp))
+		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: %w", podName, unexpectedStatus(resp))
 	}
 	return decodeOperation(resp)
 }
@@ -177,7 +214,7 @@ func (c *HTTPBackupClient) StartHABootstrap(ctx context.Context, podName, namesp
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return instancemanager.Operation{}, fmt.Errorf("start HA bootstrap on %s: unexpected status %d%s", podName, resp.StatusCode, requestRef(resp))
+		return instancemanager.Operation{}, fmt.Errorf("start HA bootstrap on %s: %w", podName, unexpectedStatus(resp))
 	}
 	return decodeOperation(resp)
 }
@@ -194,7 +231,7 @@ func (c *HTTPBackupClient) GetOperation(ctx context.Context, podName, namespace,
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return instancemanager.Operation{}, fmt.Errorf("get operation %s on %s: unexpected status %d%s", id, podName, resp.StatusCode, requestRef(resp))
+		return instancemanager.Operation{}, fmt.Errorf("get operation %s on %s: %w", id, podName, unexpectedStatus(resp))
 	}
 	return decodeOperation(resp)
 }

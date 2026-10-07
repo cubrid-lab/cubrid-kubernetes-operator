@@ -204,6 +204,7 @@ sizeBytes, cubridVersion, database, level}`, `conditions`
 `MasterFallbackSelected`, `NoHealthyStandby`, `BackupRunning`,
 `UploadRunning`, `BackupCompleted`, `BackupFailed`, `ChecksumMismatch`,
 `InsufficientStagingSpace`, `InstanceManagerUnavailable`,
+`InstanceManagerTokenRefused`,
 `ObjectStorageUnavailable`). Cluster-level: `BackupReady`
 (True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary.
 **Backup state must not be conflated with cluster/HA readiness.**

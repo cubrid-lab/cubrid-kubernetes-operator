@@ -30,8 +30,9 @@ import (
 
 // Log keys of a transition (docs/observability.md, section "Logs").
 const (
-	logKeyReason = "reason"
-	logKeyMember = "member"
+	logKeyReason    = "reason"
+	logKeyMember    = "member"
+	logKeyOldReason = "oldReason"
 )
 
 // transition is one change of the observed state between two reconciles: a
@@ -73,7 +74,7 @@ func transitions(before, after *databasev1alpha1.CubridClusterStatus) []transiti
 		out = append(out, transition{
 			Event:   "condition_changed",
 			Message: fmt.Sprintf("Condition %s changed to %s (%s)", now.Type, now.Status, now.Reason),
-			Fields: []any{"condition", now.Type, "oldStatus", oldStatus, "oldReason", oldReason,
+			Fields: []any{"condition", now.Type, "oldStatus", oldStatus, logKeyOldReason, oldReason,
 				"newStatus", string(now.Status), logKeyReason, now.Reason},
 		})
 	}
@@ -92,6 +93,18 @@ func primaryTransitions(before, after *databasev1alpha1.CubridClusterStatus) []t
 		return nil
 	}
 	is := now.Status == metav1.ConditionTrue
+	old := meta.FindStatusCondition(before.Conditions, conditionPrimaryResolved)
+	oldReason := ""
+	if old != nil {
+		oldReason = old.Reason
+	}
+	// Entering InstanceManagerTokenRefused is reported under its own name,
+	// whether the primary was resolved before or not.
+	refused := transition{
+		Event: "instance_manager_token_refused", Reason: reasonTokenRefused, Warning: true,
+		Message: "Primary is not resolved: " + now.Message,
+		Fields:  []any{logKeyOldReason, oldReason, logKeyReason, now.Reason},
+	}
 	switch {
 	case was && is && before.CurrentPrimary != after.CurrentPrimary:
 		return []transition{{
@@ -100,11 +113,15 @@ func primaryTransitions(before, after *databasev1alpha1.CubridClusterStatus) []t
 			Fields:  []any{"oldPrimary", before.CurrentPrimary, "newPrimary", after.CurrentPrimary},
 		}}
 	case was && !is:
-		return []transition{{
+		out := []transition{{
 			Event: "primary_unresolved", Reason: "PrimaryUnresolved", Warning: true,
 			Message: fmt.Sprintf("Primary is no longer resolved (%s); it was %s", now.Reason, before.CurrentPrimary),
 			Fields:  []any{"oldPrimary", before.CurrentPrimary, logKeyReason, now.Reason},
 		}}
+		if now.Reason == reasonTokenRefused {
+			out = append(out, refused)
+		}
+		return out
 	case !was && is:
 		return []transition{{
 			Event: "primary_resolved", Reason: "PrimaryResolved",
@@ -113,16 +130,14 @@ func primaryTransitions(before, after *databasev1alpha1.CubridClusterStatus) []t
 		}}
 	}
 	// Still unresolved: a change of the reason is a change of the condition.
-	old := meta.FindStatusCondition(before.Conditions, conditionPrimaryResolved)
 	if !is && (old == nil || old.Reason != now.Reason || old.Status != now.Status) {
-		oldReason := ""
-		if old != nil {
-			oldReason = old.Reason
+		if now.Reason == reasonTokenRefused {
+			return []transition{refused}
 		}
 		return []transition{{
 			Event:   "condition_changed",
 			Message: fmt.Sprintf("Condition %s changed to %s (%s)", now.Type, now.Status, now.Reason),
-			Fields:  []any{"condition", now.Type, "oldReason", oldReason, "newStatus", string(now.Status), logKeyReason, now.Reason},
+			Fields:  []any{"condition", now.Type, logKeyOldReason, oldReason, "newStatus", string(now.Status), logKeyReason, now.Reason},
 		}}
 	}
 	return nil

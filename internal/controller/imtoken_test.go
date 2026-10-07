@@ -182,8 +182,8 @@ func TestClusterTokens_OverlapReachesMembersHoldingEitherToken(t *testing.T) {
 	backup.Client = &http.Client{Transport: h}
 
 	for _, member := range []string{"db-0", "db-1"} {
-		if o := prober.ProbeRole(context.Background(), member, "ns"); !o.Reachable {
-			t.Errorf("%s was not reached during the overlap", member)
+		if o := prober.ProbeRole(context.Background(), member, "ns"); !o.Reachable || o.TokenRefused {
+			t.Errorf("%s was not reached during the overlap, or was reported as refusing the token", member)
 		}
 	}
 	if got := h.sent[holderOfCurrent]; len(got) != 1 || got[0] != "Bearer "+currentTok {
@@ -231,8 +231,8 @@ func TestClusterTokens_PreviousTokenNotSentAfterOverlap(t *testing.T) {
 	prober := NewHTTPRoleProber(ClusterTokens(reader))
 	prober.Client = &http.Client{Transport: h}
 
-	if o := prober.ProbeRole(context.Background(), "db-0", "ns"); o.Reachable {
-		t.Error("a member holding only the dropped token was reported reachable")
+	if o := prober.ProbeRole(context.Background(), "db-0", "ns"); o.Reachable || !o.TokenRefused {
+		t.Error("a member holding only the dropped token was reported reachable, or not as refusing the token")
 	}
 	for _, auth := range h.sent[holderOfPrevious] {
 		if auth != "Bearer "+currentTok {

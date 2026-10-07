@@ -184,7 +184,7 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 	op, err := r.Backup.StartBackup(ctx, sel.Instance, backup.Namespace, idempotencyKey(backup), req)
 	if err != nil {
 		log.Error(err, "Failed to start backup", "instance", sel.Instance)
-		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
+		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 		return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
 	}
 
@@ -203,7 +203,7 @@ func (r *CubridBackupReconciler) pollBackup(ctx context.Context, backup *databas
 	}
 	op, err := r.Backup.GetOperation(ctx, backup.Status.TargetInstance, backup.Namespace, backup.Status.OperationRef)
 	if err != nil {
-		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
+		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 		return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
 	}
 

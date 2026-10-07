@@ -34,7 +34,11 @@ import (
 // (ADR-0005): an unreachable manager must not be treated as a role assertion.
 type RoleObservation struct {
 	Reachable bool
-	Role      databasev1alpha1.CubridRole
+	// TokenRefused is set when the Instance Manager answered 401 or 403 to
+	// the cluster's token. The member is then not reachable for the operator
+	// and its role stays unknown, as for an unreachable one.
+	TokenRefused bool
+	Role         databasev1alpha1.CubridRole
 	// ObservedAt is when the answer was received. An observation without it, or
 	// older than roleObservationTTL, is not authoritative (ADR-0005).
 	ObservedAt time.Time
@@ -94,7 +98,7 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return RoleObservation{Reachable: false, ObservedAt: p.now()}
+		return RoleObservation{Reachable: false, TokenRefused: tokenRefused(resp.StatusCode), ObservedAt: p.now()}
 	}
 	var st instancemanager.HAStatus
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
@@ -117,7 +121,8 @@ type TokenChecker interface {
 
 // AcceptsToken sends GET /v1/role with the token alone. Only the manager's
 // authentication answers 401, so any other answer means the member holds the
-// token. A failed request is an error, not a refusal.
+// token. A failed request is an error, not a refusal. A 403, which
+// tokenRefused reports as a refusal, is not one here.
 func (p *HTTPRoleProber) AcceptsToken(ctx context.Context, podName, namespace, token string) (bool, error) {
 	url := fmt.Sprintf("http://%s.%s.svc:%d/v1/role", podName, namespace, instancemanager.DefaultPort)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

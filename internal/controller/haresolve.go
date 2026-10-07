@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -92,6 +93,14 @@ func primaryResolvedMessage(res PrimaryResolution) string {
 	if res.CurrentPrimary != "" {
 		return "current primary: " + res.CurrentPrimary
 	}
+	if res.Reason == reasonTokenRefused {
+		managers := "the Instance Manager of "
+		if len(res.TokenRefused) > 1 {
+			managers = "the Instance Managers of "
+		}
+		return "no single authoritative primary observed: " + managers +
+			strings.Join(res.TokenRefused, ", ") + " refused the cluster's token"
+	}
 	return "no single authoritative primary observed"
 }
 
@@ -102,6 +111,9 @@ type PrimaryResolution struct {
 	CurrentPrimary string
 	Status         metav1.ConditionStatus
 	Reason         string
+	// TokenRefused names the members whose Instance Manager refused the
+	// cluster's token, when the reason is reasonTokenRefused.
+	TokenRefused []string
 }
 
 // authoritative reports whether an observation may stand for the member's role
@@ -131,12 +143,15 @@ func fresh(o RoleObservation, now time.Time) bool {
 // stale or self-contradicting, or when more than one master is seen, and never
 // picks a winner (ADR-0005). Reasons, most severe first:
 // MultiplePrimariesObserved, AmbiguousPrimaryObservation,
-// PrimaryObservationIncomplete, NoPrimaryObserved.
+// InstanceManagerTokenRefused, PrimaryObservationIncomplete,
+// NoPrimaryObserved. A member that refused the cluster's token is no evidence,
+// like an unreachable one; the reason only names the cause.
 func resolvePrimary(members []string, obs map[string]RoleObservation, now time.Time) PrimaryResolution {
 	masters := 0
 	primary := ""
 	incomplete := false
 	ambiguous := false
+	var refused []string
 	for _, m := range members {
 		o, ok := obs[m]
 		if ok && o.Reachable && o.Conflicting {
@@ -145,6 +160,9 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 		}
 		if !ok || !authoritative(o, now) {
 			incomplete = true
+			if ok && o.TokenRefused {
+				refused = append(refused, m)
+			}
 			continue
 		}
 		if o.Role == databasev1alpha1.RoleMaster {
@@ -158,6 +176,8 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "MultiplePrimariesObserved"}
 	case ambiguous:
 		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "AmbiguousPrimaryObservation"}
+	case len(refused) > 0:
+		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: reasonTokenRefused, TokenRefused: refused}
 	case incomplete:
 		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "PrimaryObservationIncomplete"}
 	case masters == 0:
