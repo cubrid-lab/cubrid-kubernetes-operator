@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -84,7 +85,9 @@ type imTokenSecret struct {
 }
 
 // imTokens reads the cluster's token Secret and registers its tokens with the
-// evidence redactor. A token is only ever compared, never printed.
+// evidence redactor. A token is only ever compared, never printed: the
+// redactor cleans the evidence files only, not the test output, so a token
+// must never reach an assertion message or GinkgoWriter.
 func (r *haRun) imTokens() (imTokenSecret, error) {
 	out, err := r.kubectl("get", "secret", r.cluster+"-im-token", "-o", "json")
 	if err != nil {
@@ -319,11 +322,11 @@ func (r *haRun) s14Token(variant string) {
 	}
 
 	By("checking that, before any Pod is replaced, the operator keeps the primary resolved")
-	refusalsAt := func() map[string]int {
+	refusalsAt := func(g Gomega) map[string]int {
 		n := map[string]int{}
 		for _, member := range r.members {
 			c, err := r.refusals(member)
-			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			g.ExpectWithOffset(1, err).NotTo(HaveOccurred())
 			n[member] = c
 		}
 		return n
@@ -335,11 +338,19 @@ func (r *haRun) s14Token(variant string) {
 		g.Expect(p).To(Equal(master))
 		g.Expect(at).To(Equal(since), "PrimaryResolved changed since the rotation")
 	}
-	refusedFirst := refusalsAt()
+	refusedFirst := refusalsAt(Default)
 	Consistently(resolved, overlapQuiet/3, 3*time.Second).Should(Succeed())
-	refusedSettled := refusalsAt()
+	// A slow first reconcile may still send the new token; the quiet window
+	// starts once the members' refusal counts stop growing.
+	refusedSettled := refusalsAt(Default)
+	Eventually(func(g Gomega) {
+		n := refusalsAt(g)
+		same := maps.Equal(n, refusedSettled)
+		refusedSettled = n
+		g.Expect(same).To(BeTrue(), "the members are still refusing requests")
+	}, 2*time.Minute, 10*time.Second).Should(Succeed())
 	Consistently(resolved, overlapQuiet-overlapQuiet/3, 3*time.Second).Should(Succeed())
-	refusedLast := refusalsAt()
+	refusedLast := refusalsAt(Default)
 	settling, later := 0, 0
 	for _, member := range r.members {
 		settling += refusedSettled[member] - refusedFirst[member]
@@ -377,6 +388,9 @@ func (r *haRun) s14Token(variant string) {
 			g.Expect(err).NotTo(HaveOccurred())
 			now = m
 		}, 10*time.Minute, 5*time.Second).Should(Succeed())
+		if i < len(order)-1 {
+			Expect(now).To(Equal(master), "the master moved while the slave %s was replaced", member)
+		}
 		replaced++
 
 		By("checking that the replaced member holds the new token and the operator resolves the primary")
@@ -427,6 +441,21 @@ func (r *haRun) s14Token(variant string) {
 	}
 	note("old token refused (401) by %d members, new token accepted (200) by %d members", len(r.members), len(r.members))
 
+	By("checking that, after the overlap, no member refuses the operator's requests")
+	// The probes above logged refusals of their own; count from here.
+	refusedAfter := refusalsAt(Default)
+	Consistently(func(g Gomega) {
+		s, reason, _, _, err := r.primaryResolved()
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(s + " " + reason).To(Equal("True SinglePrimaryObserved"))
+	}, overlapQuiet/2, 3*time.Second).Should(Succeed())
+	afterOverlap := 0
+	for member, n := range refusalsAt(Default) {
+		afterOverlap += n - refusedAfter[member]
+	}
+	Expect(afterOverlap).To(BeZero(), "requests the members refused after the overlap ended")
+	note("after the overlap: PrimaryResolved stayed True for %s, requests refused by the members: 0", overlapQuiet/2)
+
 	By("checking that no member was reported as refusing the operator")
 	for _, reason := range []string{"InstanceManagerTokenRegenerated", "InstanceManagerTokenRefused"} {
 		n, err := r.eventCount(reason)
@@ -464,16 +493,17 @@ func (r *haRun) s14Token(variant string) {
 	result = evidence.Scenario{
 		ID: "S14", Variant: variant, Result: evidence.Pass,
 		Measurements: map[string]any{
-			"membersReplaced":            replaced,
-			"overlapEndedAfter":          overlap.Round(time.Second).String(),
-			"requestsRefusedWhileSettle": settling,
-			"requestsRefusedAfterSettle": later,
-			"oldTokenRefusedBy":          len(r.members),
-			"newTokenAcceptedBy":         len(r.members),
-			"tokenRefusedEvents":         0,
-			"placesSearched":             len(places),
-			"tokenFound":                 0,
-			"acknowledgedMissing":        report.AcknowledgedMissing,
+			"membersReplaced":             replaced,
+			"overlapEndedAfter":           overlap.Round(time.Second).String(),
+			"requestsRefusedWhileSettle":  settling,
+			"requestsRefusedAfterSettle":  later,
+			"oldTokenRefusedBy":           len(r.members),
+			"newTokenAcceptedBy":          len(r.members),
+			"tokenRefusedEvents":          0,
+			"requestsRefusedAfterOverlap": afterOverlap,
+			"placesSearched":              len(places),
+			"tokenFound":                  0,
+			"acknowledgedMissing":         report.AcknowledgedMissing,
 		},
 		Evidence: files,
 	}
