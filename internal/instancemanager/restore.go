@@ -66,9 +66,10 @@ type RestoreRoots struct {
 	// Empty means this member's own host name.
 	Host string
 	// Owner is the ID of the durable operation this restore runs for. The
-	// database directory is marked with it until restoredb has succeeded, so
-	// that a later attempt can tell an interrupted restore of its own from
-	// someone's data. Empty writes no marker.
+	// database directory is marked with it, and the mark is left for the
+	// operation to clear once it has durably completed, so that a later
+	// attempt can tell an unfinished restore of its own from someone's data.
+	// Empty writes no marker.
 	Owner string
 }
 
@@ -159,9 +160,6 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	if err != nil {
 		unregister()
 		return RestoreResult{}, fmt.Errorf("%s failed: %w: %s", command[0], err, out)
-	}
-	if err := clearOwned(targetDir, req.Database); err != nil {
-		return RestoreResult{}, err
 	}
 
 	return RestoreResult{

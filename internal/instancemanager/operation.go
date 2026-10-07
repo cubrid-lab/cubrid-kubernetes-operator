@@ -80,6 +80,12 @@ type Operation struct {
 	FailureReason string `json:"failureReason,omitempty"`
 	// Artifact holds the completed backup facts (set only on Completed).
 	Artifact *OperationArtifact `json:"artifact,omitempty"`
+	// Restored is set on a restore once restoredb has succeeded and before
+	// the database is started, and stays when the operation fails afterwards:
+	// the database directory then holds whole restored data that may have
+	// been started, which is never removed, only started by a retry of the
+	// same request (#267).
+	Restored *OperationArtifact `json:"restored,omitempty"`
 	// CreatedAt / UpdatedAt are RFC3339 timestamps.
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

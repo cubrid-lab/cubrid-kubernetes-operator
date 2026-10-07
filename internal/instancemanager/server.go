@@ -439,8 +439,15 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 
 // runRestore executes the restore in the background and records the durable
 // state transitions. It reaches Completed only after restoredb succeeds against
-// a verified artifact; any failure (trust, download, wrong-target, restoredb)
-// terminates Failed with an explicit reason (ADR-0003/0008).
+// a verified artifact and the database is started; any failure (trust,
+// download, wrong-target, restoredb, start) terminates Failed with an explicit
+// reason (ADR-0003/0008).
+//
+// The database directory keeps this operation's ownership marker until
+// Completed is recorded. Once restoredb has succeeded the restored artifact is
+// recorded before anything is started, and a later attempt of the same
+// request starts that data again instead of restoring over it; data whose
+// restore was not recorded was never started, and may be removed (#267).
 func (s *Server) runRestore(id string, req RestoreRequest) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.Restore)
@@ -458,12 +465,6 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
 			return
 		}
-		// What an interrupted restore of this manager left is removed first;
-		// anything else in the target is refused by the restore's own guard.
-		if err := s.reclaimIncomplete(req.Database); err != nil {
-			fail("restore failed: " + err.Error())
-			return
-		}
 		// An HA member registers the restored database under the member list,
 		// as createdb does on the first member.
 		roots := s.restoreRoots
@@ -475,10 +476,36 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 				haMember = true
 			}
 		}
-		res, err := Restore(ctx, s.cli, s.objects, roots, req)
+		// Data that a failed attempt of this same request restored is taken
+		// over and started, never restored over.
+		restored, err := s.adoptRestored(id, req.Database)
 		if err != nil {
 			fail("restore failed: " + err.Error())
 			return
+		}
+		if restored == nil {
+			// What an interrupted restore of this manager left is removed first;
+			// anything else in the target is refused by the restore's own guard.
+			if err := s.reclaimIncomplete(req.Database); err != nil {
+				fail("restore failed: " + err.Error())
+				return
+			}
+			res, err := Restore(ctx, s.cli, s.objects, roots, req)
+			if err != nil {
+				fail("restore failed: " + err.Error())
+				return
+			}
+			restored = &OperationArtifact{
+				ManifestURI:   res.ManifestURI,
+				Database:      res.Database,
+				CubridVersion: res.CubridVersion,
+			}
+			// Nothing is started unless the restore is on record: data that
+			// was never started is what a later attempt may remove.
+			if _, err := s.store.Update(id, func(op *Operation) { op.Restored = restored }); err != nil {
+				fail("record the restored database: " + err.Error())
+				return
+			}
 		}
 		// In a recovery bootstrap the entrypoint started nothing and runs only
 		// once, so a standalone member's server is started here: the operation
@@ -505,14 +532,15 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 				return
 			}
 		}
-		_, _ = s.store.Update(id, func(op *Operation) {
+		if _, err := s.store.Update(id, func(op *Operation) {
 			op.State = OpCompleted
-			op.Artifact = &OperationArtifact{
-				ManifestURI:   res.ManifestURI,
-				Database:      res.Database,
-				CubridVersion: res.CubridVersion,
-			}
-		})
+			op.Artifact = restored
+		}); err != nil {
+			return
+		}
+		// A marker left by a failure here belongs to a Completed operation and
+		// is cleared by the next operation on this database.
+		_ = clearOwned(s.restoreRoots.Target, req.Database)
 	}()
 }
 

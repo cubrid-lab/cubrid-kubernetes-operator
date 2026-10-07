@@ -161,6 +161,19 @@ the marker is present does not start the database: the entrypoint runs only
 the Instance Manager and leaves the marker in place. The cluster is not Ready
 at any point before the restore has completed.
 
+The marker stays until the restore is recorded `Completed`, not only until
+`restoredb` has succeeded (#267). Once `restoredb` has succeeded, the restore
+records the restored artifact on its operation (`restored`) before it starts
+the server or heartbeat; when that record cannot be written nothing is
+started. A restore that failed after that record holds whole data that may
+have been started and served clients, so it is never removed: the next attempt
+of the same request takes the data over (it records the artifact, then
+rewrites the marker with its own ID) and only starts the database again,
+without a second `restoredb`. Any other request for that target, and an HA
+bootstrap, is refused and the data is left for a person. Only a restore that
+failed before its data was recorded, and so was never started, is removed and
+restored again.
+
 ### Validation gate (before Ready)
 
 The cluster is **not Ready** until ALL hold: manifest trust checks pass;
