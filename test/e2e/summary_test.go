@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,7 +45,8 @@ var runSummary = evidence.Summary{
 // them the Instance Manager token the suite itself sets.
 var redactor = evidence.NewRedactor(instanceManagerToken)
 
-// evidenceDir is where the run's evidence goes; empty when none is kept.
+// evidenceDir is where the run's evidence goes; empty when none is kept, and
+// then no scenario can pass.
 func evidenceDir() string { return os.Getenv("E2E_EVIDENCE_DIR") }
 
 // recordScenario adds a scenario's result to the run's summary.
@@ -67,13 +69,50 @@ func writeScenarioFile(rel string, data []byte) string {
 	return rel
 }
 
-// writeRunSummary stores summary.json and junit.xml when E2E_EVIDENCE_DIR is
-// set. It needs the Kind cluster, so it runs before the suite's cleanup.
-func writeRunSummary() {
-	dir := evidenceDir()
-	if dir == "" {
-		return
+// kindLane is what a full run of this suite on Kind must pass: every scenario
+// and variant it records. No result is allowed to be not_applicable: the
+// lane runs on linux/amd64, where each of them applies. The list is kept in
+// docs/testing/scenario-contract.md, section "Required scenarios"; change it
+// there and here together.
+var kindLane = evidence.Lane{Name: "kind", Required: kindRequired()}
+
+func kindRequired() []evidence.Requirement {
+	required := []evidence.Requirement{{ID: "S00"}, {ID: "S01"}, {ID: "S02"}, {ID: "S14"}}
+	for _, scenario := range []struct {
+		id       string
+		variants []string
+	}{{"S03", s03Variants}, {"S05", s05Variants}, {"S06", s06Variants}} {
+		for _, v := range scenario.variants {
+			required = append(required, evidence.Requirement{ID: scenario.id, Variant: v})
+		}
 	}
+	return required
+}
+
+// runLane returns the lane this run is judged against. A run that selects
+// specs with a label filter or focus is a local baseline, not a validation of
+// the Kind lane: it must record at least one scenario and pass every one it
+// recorded, and its summary names it "kind-filtered".
+func runLane() evidence.Lane {
+	suite, _ := GinkgoConfiguration()
+	if suite.LabelFilter == "" && len(suite.FocusStrings) == 0 && len(suite.SkipStrings) == 0 &&
+		len(suite.FocusFiles) == 0 && len(suite.SkipFiles) == 0 {
+		return kindLane
+	}
+	lane := evidence.Lane{Name: "kind-filtered"}
+	for _, sc := range runSummary.Scenarios {
+		if req := (evidence.Requirement{ID: sc.ID, Variant: sc.Variant}); !slices.Contains(lane.Required, req) {
+			lane.Required = append(lane.Required, req)
+		}
+	}
+	return lane
+}
+
+// concludeRun writes summary.json and junit.xml to E2E_EVIDENCE_DIR and
+// returns an error when the run did not pass its lane or the files could not
+// be written. It needs the Kind cluster, so it runs before the suite's
+// cleanup.
+func concludeRun() error {
 	runSummary.FinishedAt = time.Now().UTC()
 	runSummary.RunID = runSummary.StartedAt.Format("2006-01-02T15-04-05Z")
 	env := &runSummary.Environment
@@ -94,7 +133,5 @@ func writeRunSummary() {
 		"--format", "{{.Id}}", managerImage)); err == nil {
 		env.OperatorImageDigest = strings.TrimSpace(out)
 	}
-	if err := runSummary.Write(dir, redactor); err != nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "warning: run summary: %v\n", err)
-	}
+	return runSummary.Conclude(evidenceDir(), redactor, runLane())
 }

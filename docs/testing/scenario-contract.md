@@ -84,6 +84,38 @@ has incomplete evidence, or whose fault injection failed is never `pass`.
 A summary that lists a required scenario as anything other than `pass` makes
 the whole run not passed.
 
+### Required scenarios
+
+Each lane names the scenarios, and the variants of each, that a run of it
+must pass. A run passes its lane only when every required scenario and
+variant has at least one result and every result of it is `pass`. A required
+scenario or variant that is missing, `not_run`, `blocked` or `fail`, a result
+that is not one of the five, and a claimed `pass` without its evidence all
+make the run not passed. A scenario that the lane does not require but that
+ends as `fail` also makes the run not passed. `not_applicable` satisfies a
+requirement only where the lane allows it for that scenario, because the
+lane's environment rules the scenario out; work that was skipped is
+`not_run`, never `not_applicable`.
+
+| Lane | Where it runs | Required scenarios and variants | `not_applicable` allowed |
+|---|---|---|---|
+| `kind` | `make test-e2e` with no filter; the E2E workflow on a GitHub-hosted `ubuntu-latest` (linux/amd64) runner | S00, S01, S02, S03 (`abrupt-first-member`, `abrupt`, `graceful`), S05 (`broker-process`, `one-broker-pod`, `all-rw-brokers`), S06 (`restart`, `absent-during-failover`), S14 | none |
+
+The list for `kind` is kept in `test/e2e/summary_test.go` (`kindLane`);
+change it there and here together. The check itself is `Lane.Gate` in
+`test/evidence`.
+
+The suite writes `summary.json` and `junit.xml`, with the lane's verdict, to
+`E2E_EVIDENCE_DIR` (`e2e-evidence/` by default under `make test-e2e`), and
+only then fails when the run did not pass its lane or the files could not be
+written. Without a run directory nothing can be kept, so no run passes.
+
+A run that selects specs, for example with `E2E_LABEL_FILTER`, is a filtered
+local baseline and does not validate the `kind` lane. It is judged as the
+lane `kind-filtered`: every scenario it recorded must pass, a run that
+recorded none does not pass, and its
+`summary.json` names that lane so it cannot be mistaken for a full run.
+
 ### Confirming the fault
 
 A fault scenario has three checks, each with its own time limit:
@@ -258,6 +290,9 @@ reader can tell what to expect.
     "engineVersion": "11.4.6",
     "clientDriver": "cubrid-jdbc <pinned version>"
   },
+  "lane": "kind",
+  "passed": true,
+  "problems": [],
   "scenarios": [
     {
       "id": "S03",
@@ -282,6 +317,9 @@ reader can tell what to expect.
 ```
 
 - `level` is `unit`, `envtest`, `kind` or `vm-lab`.
+- `lane` names the [required scenarios](#required-scenarios) the run was
+  judged against, `passed` says whether it passed them, and `problems` lists
+  why not, one line per problem.
 - `result` is one of the five results above; `reason` is required for every
   result except `pass`.
 - A measurement that was not taken has the string value `"unknown"`.

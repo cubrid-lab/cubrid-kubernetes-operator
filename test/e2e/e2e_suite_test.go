@@ -76,9 +76,12 @@ var _ = BeforeSuite(func() {
 	setupCertManager()
 })
 
+// The gate judges the scenarios this process recorded, so it assumes one
+// Ginkgo process: with -p each process would judge only its own scenarios.
 var _ = AfterSuite(func() {
-	writeRunSummary()
+	err := concludeRun()
 	teardownCertManager()
+	Expect(err).NotTo(HaveOccurred(), "The run did not pass its required scenarios")
 })
 
 // Disable kubectl kuberc by default for test isolation.

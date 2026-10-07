@@ -92,12 +92,15 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 KIND_CLUSTER ?= cubrid-kubernetes-operator-test-e2e
 # E2E_LABEL_FILTER selects scenarios by Ginkgo label, e.g. E2E_LABEL_FILTER=S00
 # for one scenario or E2E_LABEL_FILTER='!db' to leave out the real-database ones.
-# E2E_EVIDENCE_DIR, when set, receives the run's evidence: summary.json, junit.xml
-# and each scenario's files (docs/testing/scenario-contract.md).
+# E2E_EVIDENCE_DIR receives the run's evidence: summary.json, junit.xml and each
+# scenario's files (docs/testing/scenario-contract.md). The run fails unless every
+# required scenario passed; with E2E_LABEL_FILTER it is a filtered baseline that
+# does not validate the Kind lane (section "Required scenarios").
 # The scenarios' time limits have defaults for Kind on a GitHub runner and can be
 # set through E2E_FORMATION_LIMIT, E2E_FAILOVER_LIMIT and the others listed in
 # docs/testing/scenario-contract.md, section "Time limits", e.g. E2E_FAILOVER_LIMIT=2m.
 E2E_LABEL_FILTER ?=
+E2E_EVIDENCE_DIR ?= $(CURDIR)/e2e-evidence
 
 .PHONY: setup-test-e2e
 setup-test-e2e: container-tool kind ## Set up a Kind cluster for e2e tests if it does not exist
@@ -112,7 +115,7 @@ setup-test-e2e: container-tool kind ## Set up a Kind cluster for e2e tests if it
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL) \
-		go test -tags=e2e ./test/e2e/ -v -timeout 60m -ginkgo.v $(if $(E2E_LABEL_FILTER),-ginkgo.label-filter='$(E2E_LABEL_FILTER)')
+		E2E_EVIDENCE_DIR='$(E2E_EVIDENCE_DIR)' go test -tags=e2e ./test/e2e/ -v -timeout 60m -ginkgo.v $(if $(E2E_LABEL_FILTER),-ginkgo.label-filter='$(E2E_LABEL_FILTER)')
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e

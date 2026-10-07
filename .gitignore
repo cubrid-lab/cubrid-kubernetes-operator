@@ -23,6 +23,7 @@ cover.out
 # Test artifacts
 testbin/
 artifacts/
+e2e-evidence/
 tmp/
 
 # Agent / tool state

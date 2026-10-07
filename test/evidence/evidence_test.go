@@ -28,6 +28,11 @@ import (
 
 const (
 	s00         = "S00"
+	s03         = "S03"
+	graceful    = "graceful"
+	abrupt      = "abrupt"
+	kind        = "kind"
+	vmLab       = "needs the VM lab"
 	s00Record   = "S00/record.json"
 	s03History  = "S03/history.jsonl"
 	notProven   = "fault_not_confirmed"
@@ -51,7 +56,7 @@ func runDir(t *testing.T, files ...string) string {
 }
 
 func TestScenarioName(t *testing.T) {
-	if got := (Scenario{ID: "S03", Variant: "abrupt"}).Name(); got != "S03/abrupt" {
+	if got := (Scenario{ID: s03, Variant: abrupt}).Name(); got != "S03/abrupt" {
 		t.Errorf("name = %q, want S03/abrupt", got)
 	}
 	if got := (Scenario{ID: s00}).Name(); got != s00 {
@@ -129,25 +134,119 @@ func TestJudge(t *testing.T) {
 	}
 }
 
-// Only a pass counts toward a required scenario; a scenario that is absent
-// from the summary was not run.
-func TestPassed(t *testing.T) {
-	dir := runDir(t, s00Record)
-	pass := Scenario{ID: s00, Result: Pass, Evidence: []string{s00Record}}
-	for name, tc := range map[string]struct {
-		scenarios []Scenario
-		want      bool
-	}{
-		"required scenario passed":   {[]Scenario{pass}, true},
-		"required scenario skipped":  {[]Scenario{{ID: s00, Result: NotRun, Reason: "arm64"}}, false},
-		"required scenario blocked":  {[]Scenario{{ID: s00, Result: Blocked, Reason: "x"}}, false},
-		"required scenario absent":   {nil, false},
-		"one variant of it failed":   {[]Scenario{pass, {ID: s00, Variant: "b", Result: Fail, Reason: "x"}}, false},
-		"pass that Judge turns down": {[]Scenario{{ID: s00, Result: Pass}}, false},
-	} {
-		if got := (Summary{Scenarios: tc.scenarios}).Passed(dir, s00); got != tc.want {
-			t.Errorf("%s: Passed = %v, want %v", name, got, tc.want)
+// A lane passes only when each required scenario and variant has a result
+// and every result of it is judged a pass. A spec that ends without a Gomega
+// failure can still record any of these verdicts.
+func TestGate(t *testing.T) {
+	dir := runDir(t, s00Record, s03History)
+	abruptReq := Requirement{ID: s03, Variant: abrupt}
+	gracefulReq := Requirement{ID: s03, Variant: graceful}
+	lane := Lane{Name: kind, Required: []Requirement{{ID: s00}, abruptReq, gracefulReq}}
+	pass := func(id, variant string) Scenario {
+		return Scenario{ID: id, Variant: variant, Result: Pass, Evidence: []string{s00Record}}
+	}
+	passing := []Scenario{pass(s00, ""), pass(s03, abrupt), pass(s03, graceful)}
+	// with returns the passing scenarios with the one of the same name replaced.
+	with := func(sc Scenario) []Scenario {
+		out := []Scenario{sc}
+		for _, p := range passing {
+			if p.Name() != sc.Name() {
+				out = append(out, p)
+			}
 		}
+		return out
+	}
+	tests := map[string]struct {
+		lane      Lane
+		scenarios []Scenario
+		// want is part of the single problem expected; "" means the lane passes.
+		want string
+	}{
+		"every required scenario and variant passed": {lane, passing, ""},
+		"over the time limit": {lane, with(Scenario{ID: s03, Variant: abrupt, Result: Fail,
+			Reason: "failover_limit exceeded: 41s > 30s", Evidence: []string{s03History}}), "failover_limit exceeded"},
+		"time limit unset": {lane, with(Scenario{ID: s03, Variant: abrupt, Result: Blocked,
+			Reason: "time_limit_unset"}), "S03/abrupt: blocked: time_limit_unset"},
+		"a required variant missing": {lane, passing[:2], "S03/graceful: missing"},
+		"a required scenario absent": {lane, passing[1:], "S00: missing"},
+		"a variant recorded in place of the scenario": {Lane{Required: []Requirement{{ID: s03}}},
+			passing[1:], "S03: missing"},
+		"not run": {lane, with(Scenario{ID: s00, Result: NotRun, Reason: "linux/arm64"}),
+			"S00: not_run: linux/arm64"},
+		"not applicable where the lane does not allow it": {lane,
+			with(Scenario{ID: s00, Result: NotApplicable, Reason: vmLab}), "S00: not_applicable"},
+		"not applicable where the lane allows it": {
+			Lane{Required: []Requirement{{ID: s00, NotApplicable: true}, abruptReq, gracefulReq}},
+			with(Scenario{ID: s00, Result: NotApplicable, Reason: vmLab}), ""},
+		"a pass without its evidence": {lane, with(Scenario{ID: s00, Result: Pass}), "S00: fail: claimed a pass"},
+		"a result that is not one of the five": {lane,
+			with(Scenario{ID: s00, Result: "passed", Evidence: []string{s00Record}}), `S00: fail: result "passed"`},
+		"one of two results of a variant failed": {lane,
+			append(passing, Scenario{ID: s03, Variant: abrupt, Result: Fail, Reason: "x"}), "S03/abrupt: fail: x"},
+		"a lane that requires nothing": {Lane{Name: "kind-filtered"}, nil, "no scenario recorded"},
+		"a scenario the lane does not require failed": {lane,
+			append(passing, Scenario{ID: "S07", Result: Fail, Reason: "x"}), "S07: fail: x"},
+	}
+	for name, tc := range tests {
+		problems := tc.lane.Gate(Summary{Scenarios: tc.scenarios}, dir)
+		switch {
+		case tc.want == "" && len(problems) != 0:
+			t.Errorf("%s: problems = %q, want none", name, problems)
+		case tc.want != "" && (len(problems) != 1 || !strings.Contains(problems[0], tc.want)):
+			t.Errorf("%s: problems = %q, want one containing %q", name, problems, tc.want)
+		}
+	}
+}
+
+// Conclude writes the verdict before it reports it, and a summary that could
+// not be written fails the run.
+func TestConclude(t *testing.T) {
+	lane := Lane{Name: kind, Required: []Requirement{{ID: s00}, {ID: s03, Variant: graceful}}}
+	passing := Summary{Scenarios: []Scenario{
+		{ID: s00, Result: Pass, Evidence: []string{s00Record}},
+		{ID: s03, Variant: graceful, Result: Pass, Evidence: []string{s00Record}},
+	}}
+	read := func(dir string) Summary {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, "summary.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got Summary
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	dir := runDir(t, s00Record)
+	if err := passing.Conclude(dir, NewRedactor(), lane); err != nil {
+		t.Errorf("a passing run: %v", err)
+	}
+	if got := read(dir); got.Lane != kind || !got.Passed || len(got.Problems) != 0 {
+		t.Errorf("a passing run wrote lane=%q passed=%v problems=%q", got.Lane, got.Passed, got.Problems)
+	}
+
+	dir = runDir(t, s00Record)
+	failing := Summary{Scenarios: passing.Scenarios[:1]}
+	err := failing.Conclude(dir, NewRedactor(), lane)
+	if err == nil || !strings.Contains(err.Error(), "S03/graceful: missing") {
+		t.Errorf("a run missing a required variant: err = %v", err)
+	}
+	if got := read(dir); got.Passed || len(got.Problems) != 1 {
+		t.Errorf("a failing run wrote passed=%v problems=%q, want its problem", got.Passed, got.Problems)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "junit.xml")); err != nil {
+		t.Errorf("a failing run must keep junit.xml: %v", err)
+	}
+
+	// A regular file where the run directory should be cannot hold the summary.
+	unwritable := filepath.Join(runDir(t, s00Record), s00Record)
+	if err := passing.Conclude(unwritable, NewRedactor(), lane); err == nil {
+		t.Error("a summary that could not be written passed the run")
+	}
+	if err := passing.Conclude("", NewRedactor(), lane); err == nil {
+		t.Error("a run without a run directory passed")
 	}
 }
 
@@ -157,14 +256,14 @@ func testSummary() Summary {
 		StartedAt:  time.Date(2026, 10, 12, 9, 30, 0, 0, time.UTC),
 		FinishedAt: time.Date(2026, 10, 12, 10, 5, 12, 0, time.UTC),
 		Environment: Environment{
-			Level: "kind", KubernetesVersion: "v1.37.0", OperatorCommit: "abc1234",
+			Level: kind, KubernetesVersion: "v1.37.0", OperatorCommit: "abc1234",
 			OperatorImageDigest: "sha256:aaa", CubridImageDigest: "sha256:bbb", EngineVersion: "11.4.6",
 		},
 		Scenarios: []Scenario{
 			{ID: s00, Result: Pass, Evidence: []string{s00Record},
 				Measurements: map[string]any{"recoveryTime": Unknown, "acknowledgedMissing": 0}},
-			{ID: "S03", Variant: "abrupt", Result: Pass, FaultConfirmed: new(false), Evidence: []string{s00Record}},
-			{ID: "S04", Result: NotApplicable, Reason: "needs the VM lab"},
+			{ID: s03, Variant: abrupt, Result: Pass, FaultConfirmed: new(false), Evidence: []string{s00Record}},
+			{ID: "S04", Result: NotApplicable, Reason: vmLab},
 			{ID: "S07", Result: Blocked, Reason: notProven},
 			{ID: "S10", Result: NotRun, Reason: "linux/arm64"},
 		},

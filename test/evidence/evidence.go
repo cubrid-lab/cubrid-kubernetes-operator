@@ -22,6 +22,7 @@ package evidence
 import (
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -94,7 +95,12 @@ type Summary struct {
 	StartedAt     time.Time   `json:"startedAt"`
 	FinishedAt    time.Time   `json:"finishedAt"`
 	Environment   Environment `json:"environment"`
-	Scenarios     []Scenario  `json:"scenarios"`
+	// Lane names the set of required scenarios the run was judged against;
+	// Passed says whether it passed them, and Problems why not.
+	Lane      string     `json:"lane"`
+	Passed    bool       `json:"passed"`
+	Problems  []string   `json:"problems"`
+	Scenarios []Scenario `json:"scenarios"`
 }
 
 // Name is the scenario's name in reports: "S03/abrupt", or "S00" without a
@@ -140,25 +146,86 @@ func (s Scenario) Judge(dir string) (Result, string) {
 	return Pass, ""
 }
 
-// Passed reports whether every required scenario has a pass: at least one
-// result for it, and no result of it that is anything else.
-func (s Summary) Passed(dir string, required ...string) bool {
-	for _, id := range required {
+// Requirement is one scenario, or one variant of it, that a lane requires.
+type Requirement struct {
+	ID      string
+	Variant string
+	// NotApplicable lets a not_applicable result satisfy the requirement. A
+	// lane sets it only where its environment rules the scenario out, never
+	// for work that was skipped.
+	NotApplicable bool
+}
+
+// Lane is the set of scenarios a run must pass to validate one environment.
+type Lane struct {
+	Name     string
+	Required []Requirement
+}
+
+// Gate returns why the summary does not pass the lane, one line per problem,
+// or nothing when it passes. A required scenario passes when it has at least
+// one result and every result of it is judged a pass, or not_applicable where
+// the lane allows that. A scenario judged a fail is a problem even when the
+// lane does not require it. A lane that requires nothing never passes: such
+// a run proved nothing.
+func (l Lane) Gate(s Summary, dir string) []string {
+	var problems []string
+	if len(l.Required) == 0 {
+		problems = append(problems, "no scenario recorded: the lane requires nothing, so the run proved nothing")
+	}
+	for _, req := range l.Required {
+		name := Scenario{ID: req.ID, Variant: req.Variant}.Name()
 		seen := false
 		for _, sc := range s.Scenarios {
-			if sc.ID != id {
+			if sc.ID != req.ID || sc.Variant != req.Variant {
 				continue
 			}
-			if result, _ := sc.Judge(dir); result != Pass {
-				return false
-			}
 			seen = true
+			result, reason := sc.Judge(dir)
+			if result == Pass || (result == NotApplicable && req.NotApplicable) {
+				continue
+			}
+			problems = append(problems, fmt.Sprintf("%s: %s: %s", name, result, reason))
 		}
 		if !seen {
-			return false
+			problems = append(problems, name+": missing: no result was recorded")
 		}
 	}
-	return true
+	for _, sc := range s.Scenarios {
+		if l.requires(sc) {
+			continue
+		}
+		if result, reason := sc.Judge(dir); result == Fail {
+			problems = append(problems, fmt.Sprintf("%s: %s: %s", sc.Name(), result, reason))
+		}
+	}
+	return problems
+}
+
+func (l Lane) requires(sc Scenario) bool {
+	return slices.ContainsFunc(l.Required, func(req Requirement) bool {
+		return req.ID == sc.ID && req.Variant == sc.Variant
+	})
+}
+
+// Conclude judges the run against the lane, writes summary.json and
+// junit.xml with that verdict into dir, and returns an error when the run did
+// not pass or the files could not be written. The files are written before
+// the verdict is returned, so that a failed run keeps them.
+func (s Summary) Conclude(dir string, r *Redactor, lane Lane) error {
+	if dir == "" {
+		return errors.New("no run directory is set: the evidence of a pass cannot be kept")
+	}
+	problems := lane.Gate(s, dir)
+	s.Lane, s.Passed, s.Problems = lane.Name, len(problems) == 0, problems
+	var errs []error
+	if err := s.Write(dir, r); err != nil {
+		errs = append(errs, fmt.Errorf("could not write the run summary: %w", err))
+	}
+	if len(problems) > 0 {
+		errs = append(errs, fmt.Errorf("the run did not pass lane %s:\n%s", lane.Name, strings.Join(problems, "\n")))
+	}
+	return errors.Join(errs...)
 }
 
 // Write stores summary.json and junit.xml in dir. Both hold the judged result
@@ -185,6 +252,9 @@ func (s Summary) Write(dir string, r *Redactor) error {
 			sc.Evidence = []string{}
 		}
 		out.Scenarios[i] = sc
+	}
+	if out.Problems == nil {
+		out.Problems = []string{}
 	}
 
 	data, err := json.MarshalIndent(out, "", "  ")

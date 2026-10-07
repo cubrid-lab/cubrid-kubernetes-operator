@@ -96,8 +96,12 @@ failover, backup or restore.
 ```bash
 make test-e2e E2E_LABEL_FILTER=S00        # one scenario by its ID
 make test-e2e E2E_LABEL_FILTER='!db'      # without the real-database scenarios
-make test-e2e E2E_EVIDENCE_DIR=$PWD/artifacts/e2e   # keep each scenario's result record
+make test-e2e E2E_EVIDENCE_DIR=$PWD/artifacts/e2e   # keep the evidence elsewhere than e2e-evidence/
 ```
+
+The run fails unless every scenario the lane requires passed
+([Required scenarios](./docs/testing/scenario-contract.md#required-scenarios)).
+A filtered run is a local baseline, not a validation of the Kind lane.
 
 Path filters and the VM-lab entry points for this lane are tracked in #122.
 
