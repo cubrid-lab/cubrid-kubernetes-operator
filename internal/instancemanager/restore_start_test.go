@@ -107,7 +107,9 @@ func runRestoreOperation(t *testing.T, cli CLI, member restoreMember) Operation 
 }
 
 const (
-	callServerStart    = "cubrid server start " + dbName
+	// stepServerStart is how stepCLI names a server start.
+	stepServerStart    = "server start"
+	callServerStart    = "cubrid " + stepServerStart + " " + dbName
 	callHeartbeatStart = "cubrid heartbeat start"
 )
 
@@ -123,11 +125,14 @@ func TestServer_Restore_StartsTheStandaloneServerBeforeCompleting(t *testing.T) 
 	if len(calls) != 2 || !strings.HasPrefix(calls[0], "cubrid restoredb ") || calls[1] != callServerStart {
 		t.Errorf("calls = %q, want restoredb then %q", calls, callServerStart)
 	}
+	if _, err := os.Stat(filepath.Join(lastRestoreTarget, dbName, ownershipMarker)); !os.IsNotExist(err) {
+		t.Errorf("the marker is still there after the restore completed (err=%v)", err)
+	}
 }
 
 // A restore whose server does not start is not a completed restore.
 func TestServer_Restore_FailedServerStartFailsTheOperation(t *testing.T) {
-	cli := &stepCLI{failing: map[string]bool{"server start": true}}
+	cli := &stepCLI{failing: map[string]bool{stepServerStart: true}}
 	final := runRestoreOperation(t, cli, restoreMember{standalone: true})
 	if final.State != OpFailed {
 		t.Fatalf("final state = %s, want Failed", final.State)

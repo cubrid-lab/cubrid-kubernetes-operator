@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -439,8 +440,15 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 
 // runRestore executes the restore in the background and records the durable
 // state transitions. It reaches Completed only after restoredb succeeds against
-// a verified artifact; any failure (trust, download, wrong-target, restoredb)
-// terminates Failed with an explicit reason (ADR-0003/0008).
+// a verified artifact and the database is started; any failure (trust,
+// download, wrong-target, restoredb, start) terminates Failed with an explicit
+// reason (ADR-0003/0008).
+//
+// The database directory keeps this operation's ownership marker until
+// Completed is recorded. Once restoredb has succeeded the restored artifact is
+// recorded before anything is started, and a later attempt of the same
+// request starts that data again instead of restoring over it; data whose
+// restore was not recorded was never started, and may be removed (#267).
 func (s *Server) runRestore(id string, req RestoreRequest) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.Restore)
@@ -458,12 +466,6 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
 			return
 		}
-		// What an interrupted restore of this manager left is removed first;
-		// anything else in the target is refused by the restore's own guard.
-		if err := s.reclaimIncomplete(req.Database); err != nil {
-			fail("restore failed: " + err.Error())
-			return
-		}
 		// An HA member registers the restored database under the member list,
 		// as createdb does on the first member.
 		roots := s.restoreRoots
@@ -475,45 +477,146 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 				haMember = true
 			}
 		}
-		res, err := Restore(ctx, s.cli, s.objects, roots, req)
+		// Data that a failed attempt of this same request restored is taken
+		// over and started, never restored over.
+		restored, err := s.adoptRestored(id, req.Database)
 		if err != nil {
 			fail("restore failed: " + err.Error())
 			return
 		}
-		// In a recovery bootstrap the entrypoint started nothing and runs only
-		// once, so a standalone member's server is started here: the operation
-		// is not complete until it runs. An HA member is started by the HA
-		// bootstrap. The restored data is kept when the start fails.
-		if s.standaloneDB != "" && s.standaloneDB == req.Database {
-			if _, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting }); err != nil {
+		if restored == nil {
+			// What an interrupted restore of this manager left is removed first;
+			// anything else in the target is refused by the restore's own guard.
+			if err := s.reclaimIncomplete(req.Database); err != nil {
+				fail("restore failed: " + err.Error())
 				return
 			}
-			if out, err := s.cli.Run(ctx, "cubrid", "server", "start", req.Database); err != nil {
-				fail("server start failed: " + err.Error() + ": " + out)
+			res, err := Restore(ctx, s.cli, s.objects, roots, req)
+			if err != nil {
+				fail("restore failed: " + err.Error())
 				return
 			}
-		}
-		// A configured HA member joins HA with the restored database: the
-		// entrypoint started nothing for it either. Issued once, and only when
-		// heartbeat is not already running (docs/poc/RESULTS.md, POC-3/POC-13).
-		if haMember && HeartbeatStatus(ctx, s.cli).Role == RoleUnknown {
-			if _, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting }); err != nil {
-				return
-			}
-			if out, err := s.cli.Run(ctx, "cubrid", "heartbeat", "start"); err != nil {
-				fail("heartbeat start failed: " + err.Error() + ": " + out)
-				return
-			}
-		}
-		_, _ = s.store.Update(id, func(op *Operation) {
-			op.State = OpCompleted
-			op.Artifact = &OperationArtifact{
+			restored = &OperationArtifact{
 				ManifestURI:   res.ManifestURI,
 				Database:      res.Database,
 				CubridVersion: res.CubridVersion,
 			}
+			// Nothing is started unless the restore is on record: data that
+			// was never started is what a later attempt may remove.
+			if _, err := s.store.Update(id, func(op *Operation) { op.Restored = restored }); err != nil {
+				fail("record the restored database: " + err.Error())
+				return
+			}
+		}
+		// The restored data is kept when the start fails.
+		storeFailed := false
+		err = s.startRestoredDatabase(ctx, req.Database, haMember, func() error {
+			_, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting })
+			storeFailed = err != nil
+			return err
 		})
+		if err != nil {
+			if !storeFailed {
+				fail(err.Error())
+			}
+			return
+		}
+		if _, err := s.store.Update(id, func(op *Operation) {
+			op.State = OpCompleted
+			op.Artifact = restored
+		}); err != nil {
+			return
+		}
+		// A marker left by a failure here belongs to a Completed operation:
+		// ResumeCompletedRestores or the next operation on this database
+		// clears it.
+		if err := clearOwned(s.restoreRoots.Target, req.Database); err != nil {
+			s.log().Warn("Could not clear the ownership marker of a completed restore",
+				"operationID", id, "database", req.Database, "err", err)
+		}
 	}()
+}
+
+// startRestoredDatabase starts a restored database, which the entrypoint left
+// stopped: in a recovery bootstrap it started nothing and runs only once, and
+// it starts no database that carries an ownership marker. A standalone
+// member's server is started; a configured HA member joins HA, with
+// `cubrid heartbeat start` issued only when heartbeat is not already running
+// (docs/poc/RESULTS.md, POC-3/POC-13). before runs ahead of each start
+// command, and an error from it stops before that command; nil runs nothing.
+func (s *Server) startRestoredDatabase(ctx context.Context, database string, haMember bool, before func() error) error {
+	if before == nil {
+		before = func() error { return nil }
+	}
+	if s.standaloneDB != "" && s.standaloneDB == database {
+		if err := before(); err != nil {
+			return err
+		}
+		if out, err := s.cli.Run(ctx, "cubrid", "server", "start", database); err != nil {
+			return fmt.Errorf("server start failed: %w: %s", err, out)
+		}
+	}
+	if haMember && HeartbeatStatus(ctx, s.cli).Role == RoleUnknown {
+		if err := before(); err != nil {
+			return err
+		}
+		if out, err := s.cli.Run(ctx, "cubrid", "heartbeat", "start"); err != nil {
+			return fmt.Errorf("heartbeat start failed: %w: %s", err, out)
+		}
+	}
+	return nil
+}
+
+// ResumeCompletedRestores runs once when the manager starts. A database whose
+// directory still carries the ownership marker of a restore recorded as
+// Completed is whole, but the entrypoint did not start it because of that
+// marker, and no operation will come for it. It is started the way the
+// restore started it, and the marker is cleared afterwards, so that a start
+// that fails is tried again at the next start of the manager. A marker of any
+// other operation is left for the next operation on that database to judge.
+func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
+	if s.store == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.timeouts.Bootstrap)
+	defer cancel()
+	target := s.restoreRoots.Target
+	entries, err := os.ReadDir(target)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read the database root: %w", err)
+	}
+	haMember := false
+	if s.standaloneDB == "" {
+		_, err := haHosts(s.ha.ConfPath)
+		haMember = err == nil
+	}
+	var errs []error
+	for _, e := range entries {
+		database := e.Name()
+		if !e.IsDir() || !databaseNamePattern.MatchString(database) {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(target, markerPath(database))) // #nosec G304 -- a plain name below the database root
+		if err != nil {
+			continue
+		}
+		op, err := s.store.Get(strings.TrimSpace(string(data)))
+		if err != nil || op.Kind != OpRestore || op.State != OpCompleted || op.Restored == nil || op.Database != database {
+			continue
+		}
+		s.log().Info("Starting the database of a completed restore", "operationID", op.ID, "database", database)
+		if err := s.startRestoredDatabase(ctx, database, haMember, nil); err != nil {
+			errs = append(errs, fmt.Errorf("start %s of completed restore %s: %w", database, op.ID, err))
+			continue
+		}
+		if err := clearOwned(target, database); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // getOperation returns a durable operation by ID (ADR-0003 poll endpoint).

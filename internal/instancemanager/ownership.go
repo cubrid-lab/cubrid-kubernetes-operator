@@ -27,13 +27,15 @@ import (
 
 // ownershipMarker is a file in a database directory that names the operation
 // which is creating that database. It is written before `createdb` or
-// `restoredb` and removed when the command has succeeded, so its presence
-// means "this directory is the unfinished work of that operation".
+// `restoredb` and removed when `createdb` has succeeded, or when a restore
+// has been recorded as Completed, so its presence means "this directory is
+// the unfinished work of that operation".
 //
 // It is what lets a later attempt remove a half-made database: only a
 // directory that carries the marker of an operation this manager recorded as
-// Failed is ever removed. A directory without the marker is someone's data
-// and is never touched (ADR-0006, ADR-0008).
+// Failed, before it recorded the data as restored, is ever removed. A
+// directory without the marker is someone's data and is never touched
+// (ADR-0006, ADR-0008).
 const ownershipMarker = ".im-operation"
 
 func markerPath(database string) string { return filepath.Join(database, ownershipMarker) }
@@ -70,7 +72,9 @@ func clearOwned(targetDir, database string) error {
 //
 // It refuses, and leaves everything in place, when the marker cannot be tied
 // to a Failed operation in the store: an unreadable marker, an unknown
-// operation, or one that is still running.
+// operation, or one that is still running. It also refuses for a restore that
+// recorded its data as restored: that database may have been started and
+// served clients, so it is only ever started again (adoptRestored).
 func (s *Server) reclaimIncomplete(database string) error {
 	if !databaseNamePattern.MatchString(database) {
 		return fmt.Errorf("database name %q is not a plain identifier", database)
@@ -109,6 +113,9 @@ func (s *Server) reclaimIncomplete(database string) error {
 		// The command succeeded and only the marker was left: the data is whole.
 		return clearOwned(target, database)
 	case OpFailed:
+		if op.Restored != nil {
+			return fmt.Errorf("%s holds the data operation %s restored, which may have been started; refusing to remove it", where, id)
+		}
 	default:
 		return fmt.Errorf("%s belongs to operation %s, which is %s; refusing to touch it", where, id, op.State)
 	}
@@ -117,6 +124,58 @@ func (s *Server) reclaimIncomplete(database string) error {
 		return fmt.Errorf("remove the unfinished %s: %w", where, err)
 	}
 	return unregisterDatabase(root, database)
+}
+
+// adoptRestored takes over, for the restore operation id, the data a failed
+// restore of the same request left after restoredb had succeeded: id records
+// the same restored artifact and then marks the directory as its own, in that
+// order, so that the data is never without a durable owner. It returns the
+// restored artifact, or nil when there is nothing to take over; anything that
+// is in the way is then reclaimIncomplete's to judge.
+func (s *Server) adoptRestored(id, database string) (*OperationArtifact, error) {
+	if !databaseNamePattern.MatchString(database) {
+		return nil, fmt.Errorf("database name %q is not a plain identifier", database)
+	}
+	root, err := os.OpenRoot(s.restoreRoots.Target)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open the database root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	data, err := root.ReadFile(markerPath(database))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the ownership marker of %s: %w", database, err)
+	}
+	previous, err := s.store.Get(strings.TrimSpace(string(data)))
+	if errors.Is(err, ErrOperationNotFound) {
+		// An unknown or unreadable marker is reclaimIncomplete's to refuse.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	current, err := s.store.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if previous.Kind != OpRestore || previous.State != OpFailed || previous.Restored == nil ||
+		previous.RequestHash != current.RequestHash {
+		return nil, nil
+	}
+	restored := *previous.Restored
+	if _, err := s.store.Update(id, func(op *Operation) { op.Restored = &restored }); err != nil {
+		return nil, err
+	}
+	if err := markOwned(root, database, id); err != nil {
+		return nil, err
+	}
+	return &restored, nil
 }
 
 // unregisterDatabase removes database's line from databases.txt and leaves

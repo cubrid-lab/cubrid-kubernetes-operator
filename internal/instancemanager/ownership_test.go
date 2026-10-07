@@ -189,8 +189,8 @@ func TestReclaimIncomplete_KeepsCompleteAndUnmarkedData(t *testing.T) {
 	})
 }
 
-// A restore marks its target while restoredb runs and clears the mark when it
-// has succeeded.
+// A restore marks its target while restoredb runs and leaves the mark after
+// it has succeeded: the operation clears it once it has completed (#267).
 func TestRestore_MarksItsTargetWhileRestoredbRuns(t *testing.T) {
 	store, bucket, prefix := stageUploadedArtifact(t)
 	req := baseRestoreRequest(t, bucket, prefix)
@@ -209,7 +209,7 @@ func TestRestore_MarksItsTargetWhileRestoredbRuns(t *testing.T) {
 	if during != roots.Owner {
 		t.Errorf("marker while restoredb ran = %q, want %q", during, roots.Owner)
 	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Errorf("the marker is still there after a successful restore (err=%v)", err)
+	if data, _ := os.ReadFile(marker); strings.TrimSpace(string(data)) != roots.Owner {
+		t.Errorf("marker after restoredb = %q, want it kept as %q", data, roots.Owner)
 	}
 }

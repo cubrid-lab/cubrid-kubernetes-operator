@@ -161,6 +161,39 @@ the marker is present does not start the database: the entrypoint runs only
 the Instance Manager and leaves the marker in place. The cluster is not Ready
 at any point before the restore has completed.
 
+The marker stays until the restore is recorded `Completed`, not only until
+`restoredb` has succeeded (#267). Once `restoredb` has succeeded, the restore
+records the restored artifact on its operation (`restored`) before it starts
+the server or heartbeat; when that record cannot be written nothing is
+started. A restore that failed after that record holds whole data that may
+have been started and served clients, so it is never removed: the next attempt
+of the same request takes the data over (it records the artifact, then
+rewrites the marker with its own ID) and only starts the database again,
+without a second `restoredb`. Any other request for that target, and an HA
+bootstrap, is refused and the data is left for a person. Only a restore that
+failed before its data was recorded, and so was never started, is removed and
+restored again. A seeding retry that takes a new seed backup from the master
+is a different request, so it is refused in the same way while the restored
+data of the earlier attempt is in place.
+
+When the marker of a restore recorded `Completed` is still there (the
+operation was recorded, then the marker could not be removed), the entrypoint
+leaves that database stopped and no further operation comes for it. The
+Instance Manager therefore looks for such markers once when it starts, before
+it serves any request: the database is started as the restore started it
+(`cubrid server start` on a standalone member, `cubrid heartbeat start` on an
+HA member whose heartbeat is not running), and only then is the marker
+removed, so a start that fails is tried again at the next start of the
+manager. A marker of any other operation is left for the next operation.
+
+Runbook for restored data left for a person: read the operation the marker
+names (`GET /v1/operations/<id>`: `failureReason`, `restored`). To keep the
+data, start the database by hand and then remove `<db>/.im-operation`. To
+discard it, first stop the database and make sure no CUBRID process of it is
+left (`cubrid heartbeat stop` or `cubrid server stop <db>`, then no
+`cub_server` for it), then remove the `<db>` directory and its
+`databases.txt` line; the next attempt restores into the empty target.
+
 ### Validation gate (before Ready)
 
 The cluster is **not Ready** until ALL hold: manifest trust checks pass;
