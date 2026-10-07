@@ -53,10 +53,12 @@ func (c *volumeCLI) Run(ctx context.Context, name string, args ...string) (strin
 	return out, err
 }
 
-// resumeFixture is a standalone member whose manager can be restarted on the
-// same operation store and database root.
+// resumeFixture is a standalone member, or an HA member when haConf is set,
+// whose manager can be restarted on the same operation store and database
+// root.
 type resumeFixture struct {
 	t         *testing.T
+	haConf    string
 	objects   ObjectStore
 	req       RestoreRequest
 	storeDir  string
@@ -80,7 +82,12 @@ func (f *resumeFixture) start(cli CLI) {
 		f.t.Fatalf("NewOperationStore: %v", err)
 	}
 	f.server = NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(f.objects).
-		WithRestoreRoots(rootsFor(f.req)).WithStandaloneDatabase(dbName)
+		WithRestoreRoots(rootsFor(f.req))
+	if f.haConf != "" {
+		f.server = f.server.WithHAConfig(HAConfig{ConfPath: f.haConf})
+	} else {
+		f.server = f.server.WithStandaloneDatabase(dbName)
+	}
 	f.handler = f.server.Handler()
 }
 
@@ -383,4 +390,37 @@ func TestResumeCompletedRestores_LeavesWhatItCannotFinish(t *testing.T) {
 			t.Errorf("marker = %q, want it kept as %q", got, failed.ID)
 		}
 	})
+}
+
+// On an HA member, a heartbeat status that did not answer starts nothing when
+// the manager resumes a completed restore: the error is returned and the
+// marker kept, so the next start of the manager tries again.
+func TestResumeCompletedRestores_DoesNotStartHeartbeatWhenStatusDidNotAnswer(t *testing.T) {
+	f := newResumeFixture(t)
+	f.haConf = filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(f.haConf, []byte(testHAConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.start(&volumeCLI{stepCLI: stepCLI{failing: map[string]bool{stepHeartbeatStatus: true}}, databases: f.databases})
+	done := f.run("restore-1")
+	if done.State != OpCompleted {
+		t.Fatalf("restore = %s (%s), want Completed", done.State, done.FailureReason)
+	}
+	marker := filepath.Join(f.databases, dbName, ownershipMarker)
+	if err := os.WriteFile(marker, []byte(done.ID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := &volumeCLI{stepCLI: stepCLI{errs: map[string]error{stepHeartbeatStatus: context.DeadlineExceeded}}, databases: f.databases}
+	f.start(restarted)
+	if err := f.server.ResumeCompletedRestores(t.Context()); err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Errorf("ResumeCompletedRestores = %v, want an error because heartbeat status did not answer", err)
+	}
+	if calls := restarted.recorded(); count(calls, callHeartbeatStart) != 0 {
+		t.Errorf("heartbeat was started although its status did not answer: %q", calls)
+	}
+	if got := f.marker(); got != done.ID {
+		t.Errorf("marker = %q, want it kept as %q", got, done.ID)
+	}
+	f.wantRestoredDataKept()
 }

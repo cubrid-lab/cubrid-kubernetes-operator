@@ -187,7 +187,9 @@ leaves that database stopped and no further operation comes for it. The
 Instance Manager therefore looks for such markers once when it starts, before
 it serves any request: the database is started as the restore started it
 (`cubrid server start` on a standalone member, `cubrid heartbeat start` on an
-HA member whose heartbeat is not running), and only then is the marker
+HA member whose `cubrid heartbeat status` exited by itself without HA node
+information; a status that did not answer starts nothing and counts as a
+failed start, ADR-0010), and only then is the marker
 removed, so a start that fails is tried again at the next start of the
 manager. A marker of any other operation is left for the next operation.
 

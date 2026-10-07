@@ -40,6 +40,12 @@ type haCLI struct {
 	databases string
 	failing   string // first word after "cubrid" of the command that fails
 	running   bool   // heartbeat already running
+	// status and statusErr, when either is set, are what heartbeat status
+	// answers before heartbeat was started.
+	status    string
+	statusErr error
+	// exit is the error of a command that ran to its end and exited 1.
+	exit error
 }
 
 func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, error) {
@@ -50,7 +56,12 @@ func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, err
 		if c.running {
 			return masterOut, nil
 		}
-		return "++ cubrid heartbeat status: fail", errors.New("exit status 1")
+		if c.status != "" || c.statusErr != nil {
+			return c.status, c.statusErr
+		}
+		// Assumed output of inactive heartbeat; not recorded (#345).
+		return noNodeOut, c.exit
+
 	}
 	c.calls = append(c.calls, command)
 	if len(args) > 0 && args[0] == c.failing {
@@ -92,7 +103,7 @@ func newHAFixture(t *testing.T) *haFixture {
 	if err != nil {
 		t.Fatalf("NewOperationStore: %v", err)
 	}
-	cli := &haCLI{databases: databases}
+	cli := &haCLI{databases: databases, exit: exitStatus1(t)}
 	h := NewServer(cli, "tok").
 		WithOperationStore(store).
 		WithRestoreRoots(RestoreRoots{Target: databases, Staging: filepath.Join(base, "staging")}).
@@ -243,5 +254,59 @@ func TestHAHosts(t *testing.T) {
 	}
 	if _, err := haHosts(filepath.Join(dir, "missing")); err == nil {
 		t.Error("a missing file must be an error")
+	}
+}
+
+// Heartbeat that reports the local node in a transition, or in any other
+// state that is not a confirmed role, is running: the bootstrap does not start
+// it again, which would flip the activation off (docs/poc/RESULTS.md, POC-3
+// and POC-7), and does not report Completed either.
+func TestHABootstrap_DoesNotStartHeartbeatInTransition(t *testing.T) {
+	for _, state := range []string{"to-be-master", "unknown"} {
+		t.Run(state, func(t *testing.T) {
+			f := newHAFixture(t)
+			f.cli.status = strings.Replace(transitionOut, "state to-be-master", "state "+state, 1)
+			final := f.run("boot-1")
+			if final.State != OpFailed || !strings.Contains(final.FailureReason, "'"+state+"'") {
+				t.Fatalf("final = %s (%s), want Failed naming state %q", final.State, final.FailureReason, state)
+			}
+			for _, call := range f.cli.recorded() {
+				if call == callHeartbeatStart {
+					t.Errorf("heartbeat was started although it reported state %s: %q", state, f.cli.recorded())
+				}
+			}
+		})
+	}
+}
+
+// Heartbeat that already reports a confirmed role completes the bootstrap
+// without a second start.
+func TestHABootstrap_CompletesOnRunningHeartbeat(t *testing.T) {
+	f := newHAFixture(t)
+	f.cli.status = masterOut
+	final := f.run("boot-1")
+	if final.State != OpCompleted {
+		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
+	}
+	for _, call := range f.cli.recorded() {
+		if call == callHeartbeatStart {
+			t.Errorf("heartbeat was started although it reported a transition: %q", f.cli.recorded())
+		}
+	}
+}
+
+// A heartbeat status that did not answer says nothing about heartbeat: the
+// bootstrap starts nothing and fails, so that the operator asks again.
+func TestHABootstrap_DoesNotStartHeartbeatWhenStatusDidNotAnswer(t *testing.T) {
+	f := newHAFixture(t)
+	f.cli.statusErr = context.DeadlineExceeded
+	final := f.run("boot-1")
+	if final.State != OpFailed || !strings.Contains(final.FailureReason, "heartbeat status") {
+		t.Fatalf("final = %s (%s), want Failed naming heartbeat status", final.State, final.FailureReason)
+	}
+	for _, call := range f.cli.recorded() {
+		if call == callHeartbeatStart {
+			t.Errorf("heartbeat was started although its status did not answer: %q", f.cli.recorded())
+		}
 	}
 }

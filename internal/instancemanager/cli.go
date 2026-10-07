@@ -18,6 +18,7 @@ package instancemanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,6 +32,10 @@ import (
 type CLI interface {
 	Run(ctx context.Context, name string, args ...string) (string, error)
 }
+
+// ErrOutputUnread marks a command whose output could not be read. ExecCLI
+// returns it whatever the command's exit status was.
+var ErrOutputUnread = errors.New("the command's output could not be read")
 
 // ExecCLI runs commands via os/exec with a bounded timeout.
 type ExecCLI struct {
@@ -64,8 +69,9 @@ func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, 
 	cmd.Stdout, cmd.Stderr = output, output
 	runErr := cmd.Run()
 	out, readErr := os.ReadFile(output.Name())
-	if runErr == nil && readErr != nil {
-		return "", fmt.Errorf("read the output of %s: %w", name, readErr)
+	if readErr != nil {
+		// What the command printed is unknown, whatever its exit status.
+		return "", errors.Join(fmt.Errorf("%w: %s: %w", ErrOutputUnread, name, readErr), runErr)
 	}
 	return string(out), runErr
 }
@@ -79,6 +85,68 @@ func HeartbeatStatus(ctx context.Context, cli CLI) HAStatus {
 		return HAStatus{Role: RoleUnknown, Source: "heartbeat", Reason: "heartbeat status failed: " + err.Error()}
 	}
 	return ParseHAStatus(out)
+}
+
+// heartbeatReport matches any sign of HA node information in heartbeat status
+// output: the HA-Node Info header or a node line. It is looser than the
+// parser on purpose, so that output whose form differs from what the parser
+// expects counts as running heartbeat and starts nothing.
+var heartbeatReport = regexp.MustCompile(`(?m)HA-Node Info|^\s*Node \S+ \(priority`)
+
+// heartbeatHeader takes the current node's state from the HA-Node Info line in
+// any state, including hyphenated transitions such as "to-be-master" that
+// reCurrent does not take.
+var heartbeatHeader = regexp.MustCompile(`HA-Node Info \(current [^,]+, state ([^)]+)\)`)
+
+// heartbeatObservation is what one `cubrid heartbeat status` says about
+// whether `cubrid heartbeat start` may be issued.
+type heartbeatObservation struct {
+	// startable is set when the command ran to its end, its output was read
+	// and the output carries no HA node information.
+	startable bool
+	// running is set when the output carries HA node information in any form.
+	running bool
+	// status is the parsed output when running is set.
+	status HAStatus
+	// reason says what was seen when startable is not set.
+	reason string
+}
+
+// observeHeartbeat runs `cubrid heartbeat status` once. An unknown role is
+// not enough to start heartbeat: output with HA node information, in any
+// state, means heartbeat runs, and a second start while it activates flips it
+// off again (docs/poc/RESULTS.md, POC-3/POC-7). A status that did not run to
+// its end, by itself and with its output read, answered nothing, and nothing
+// is started on it (ADR-0005): a timeout, a cancellation, a signal, a command
+// that could not be run, or output that could not be read.
+//
+// That a status which ran to its end without HA node information means
+// inactive heartbeat is an assumption: the output of an HA member whose
+// heartbeat is not active is not recorded in docs/poc (#345).
+func observeHeartbeat(ctx context.Context, cli CLI) heartbeatObservation {
+	out, err := cli.Run(ctx, "cubrid", "heartbeat", "status")
+	if heartbeatReport.MatchString(out) {
+		obs := heartbeatObservation{running: true, status: ParseHAStatus(out),
+			reason: "heartbeat prints HA node information without a readable state of the current node"}
+		if m := heartbeatHeader.FindStringSubmatch(out); m != nil {
+			obs.reason = "heartbeat reports the current node in state '" + m[1] + "'"
+		}
+		if obs.status.Role == RoleUnknown && reCurrent.MatchString(out) {
+			obs.reason += " (" + obs.status.Reason + ")"
+		}
+		return obs
+	}
+	var exitErr *exec.ExitError
+	answered := err == nil ||
+		(!errors.Is(err, ErrOutputUnread) && errors.As(err, &exitErr) && exitErr.Exited())
+	if !answered || ctx.Err() != nil {
+		why := err
+		if why == nil {
+			why = ctx.Err()
+		}
+		return heartbeatObservation{reason: "heartbeat status did not answer: " + why.Error()}
+	}
+	return heartbeatObservation{startable: true}
 }
 
 // engineVersionPattern matches the full version in cubrid_rel output:
