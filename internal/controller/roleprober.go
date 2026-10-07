@@ -62,6 +62,8 @@ type HTTPRoleProber struct {
 	Tokens TokenSource
 	// Now stamps each observation; nil means time.Now.
 	Now func() time.Time
+
+	accepted acceptedTokens
 }
 
 func NewHTTPRoleProber(tokens TokenSource) *HTTPRoleProber {
@@ -79,16 +81,14 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	if err != nil {
 		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
-	token, err := memberToken(ctx, p.Tokens, podName, namespace)
+	tokens, err := memberTokens(ctx, p.Tokens, podName, namespace)
 	if err != nil {
 		// The error names the Pod and the Secret, never a token value.
 		logf.FromContext(ctx).V(1).Info("Could not resolve Instance Manager token; member not probed",
 			"pod", podName, "namespace", namespace, "reason", err.Error())
 		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	setRequestID(req)
-	resp, err := p.Client.Do(req)
+	resp, err := p.accepted.send(p.Client, req, namespace+"/"+podName, tokens)
 	if err != nil {
 		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
@@ -108,6 +108,30 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 		o.Conflicting = true
 	}
 	return o
+}
+
+// TokenChecker asks one member's Instance Manager whether it accepts a token.
+type TokenChecker interface {
+	AcceptsToken(ctx context.Context, podName, namespace, token string) (bool, error)
+}
+
+// AcceptsToken sends GET /v1/role with the token alone. Only the manager's
+// authentication answers 401, so any other answer means the member holds the
+// token. A failed request is an error, not a refusal.
+func (p *HTTPRoleProber) AcceptsToken(ctx context.Context, podName, namespace, token string) (bool, error) {
+	url := fmt.Sprintf("http://%s.%s.svc:%d/v1/role", podName, namespace, instancemanager.DefaultPort)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	setRequestID(req)
+	resp, err := p.Client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("ask %s about its token: %w", podName, err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode != http.StatusUnauthorized, nil
 }
 
 func (p *HTTPRoleProber) now() time.Time {

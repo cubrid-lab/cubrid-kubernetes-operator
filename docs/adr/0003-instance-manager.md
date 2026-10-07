@@ -323,21 +323,63 @@ one namespace therefore authorizes nothing in a cluster of another namespace;
 the operator never falls back to an unauthenticated call or to another
 cluster's token. The operator itself needs no token setting.
 
-The operator never changes an existing token. A Pod reads the token when it
-starts, and the StatefulSet uses `OnDelete`, so a changed token reaches a
-running Pod only when that Pod is replaced; a changed Secret would lock the
-operator out of every member that still holds the old one. Only a missing or
-empty token is generated anew. When that happens while the cluster's
-StatefulSet exists, the operator records a Warning Event,
+A Pod's container reads the token when it starts, and the StatefulSet uses
+`OnDelete`, so a changed token reaches a running Pod only when that Pod is
+replaced (or its container restarts); a changed Secret alone would lock the
+operator out of every member that still holds the old one. The operator
+therefore replaces a token only with an overlap (#324), and the overlap is on
+the operator's side: each Instance Manager holds one token, and the operator
+calls a member with the current token and, when the member refuses it (401,
+returned before the manager acts on the request), again with the previous
+one. It remembers which token each member accepted and tries that one first,
+so a member that still holds the previous token is not sent a refused request
+on every call.
+
+A rotation keeps the current token under the key `previousToken` of
+`<cluster>-im-token`, writes a new one under `token`, then records the time
+of that write in the Secret's annotation
+`database.cubrid.io/im-token-rotated-at` and a Normal Event
+`InstanceManagerTokenRotated`. Pods started from then on hold the new token.
+The operator drops `previousToken` only when both hold for every member:
+its container is running and was started after the rotation time, and its
+Instance Manager accepts the current token when asked with that token alone
+(`GET /v1/role`; only the manager's authentication answers 401). The start
+time is a cheap precondition; the question to the member is what ends the
+overlap, so a node clock ahead of the operator's or a kubelet that read a
+stale Secret cannot end it while a member still holds the previous token. A
+member that is missing, not running, started earlier, refuses the current
+token or cannot be asked keeps the overlap open. When it ends the operator
+records a Normal Event `InstanceManagerTokenOverlapEnded`; from then on the
+previous token is neither sent nor accepted by any member. No second
+rotation starts while `previousToken` is kept, since it would drop the token
+running Pods hold; a request made during an overlap is reported with a
+Normal Event `InstanceManagerTokenRotationDeferred` and carried out after it.
+A rotation starts:
+
+- when `<cluster>-im-token` has a token but no rotation time. An operator
+  version that copied one shared token into every cluster wrote it so, and
+  so did the first version with per-cluster tokens (#326), whose clusters get
+  one rotation they did not need, which does no harm. Such a cluster is moved
+  onto a token of its own on the operator's first reconcile, without a member
+  left refusing the operator;
+- when the `CubridCluster` annotation `database.cubrid.io/rotate-im-token` has
+  a value that was not handled yet (the value handled last is recorded under
+  the same annotation on the Secret). Any new value asks for one rotation.
+
+The operator does not replace the Pods. To finish a rotation or the move off
+a shared token, delete the cluster's Pods one at a time, slaves first and the
+master last, each after the one before is Ready again. A missing or empty
+token is generated anew without an overlap. When that happens while the
+cluster's StatefulSet exists, the operator records a Warning Event,
 `InstanceManagerTokenRegenerated` (without the token): the running Pods
-refuse the operator until they are replaced. A cluster created by an operator version that
-copied one shared token keeps that token until it is rotated. Rotation
-without an overlap is a restart procedure: delete `<cluster>-im-token`, let the
-operator generate a new one, then delete the cluster's Pods one at a time,
-slaves first and the master last, each after the one before is Ready again.
-Until a member is replaced the operator cannot read its role, which it treats
-as no evidence (ADR-0005), not as a failure. An overlap in which a manager
-accepts the old and the new token is not provided.
+refuse the operator until they are replaced, which it treats as no evidence
+(ADR-0005), not as a failure. The operator remembers per member only a
+SHA-256 fingerprint of the token the member accepted last, never the token.
+The manager compares the token it is sent in constant time once #271 lands.
+
+An operator version that reads only `token` (#326) and runs during an overlap
+calls every member with the new token: members that still hold the previous
+one refuse it until they are replaced.
 
 Rolling the operator back to a version that copied one shared token is not
 safe for running clusters. That version overwrites every `<cluster>-im-token`

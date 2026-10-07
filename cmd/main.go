@@ -190,12 +190,14 @@ func main() {
 
 	// Each cluster's Instance Managers are called with that cluster's own token.
 	tokens := controller.ClusterTokens(mgr.GetClient())
+	clusterProber := controller.NewHTTPRoleProber(tokens)
 	if err := (&controller.CubridClusterReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		//nolint:staticcheck // v0.25 GetEventRecorder returns an events/v1 interface incompatible with record.EventRecorder.
 		Recorder:     mgr.GetEventRecorderFor("cubridcluster-controller"),
-		Prober:       controller.NewHTTPRoleProber(tokens),
+		Prober:       clusterProber,
+		TokenChecker: clusterProber,
 		Restore:      controller.NewHTTPBackupClient(tokens),
 		HABootstrap:  controller.NewHTTPBackupClient(tokens),
 		Backup:       controller.NewHTTPBackupClient(tokens),

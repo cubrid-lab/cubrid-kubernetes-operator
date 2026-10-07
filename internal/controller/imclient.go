@@ -20,12 +20,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -57,28 +60,38 @@ type RestoreClient interface {
 	GetOperation(ctx context.Context, podName, namespace, id string) (instancemanager.Operation, error)
 }
 
-// TokenSource returns the bearer token of one member's Instance Manager.
-type TokenSource func(ctx context.Context, podName, namespace string) (string, error)
+// TokenSource returns the bearer tokens a member's Instance Manager may hold,
+// the current one first. During a token rotation the second is the previous
+// token, which Pods started before the rotation hold.
+type TokenSource func(ctx context.Context, podName, namespace string) ([]string, error)
 
-// ClusterTokens reads a member's token from its own cluster's
+// ClusterTokens reads a member's tokens from its own cluster's
 // <cluster>-im-token Secret in the member's namespace, so that each cluster is
-// called with its own credential and no other. A member is a StatefulSet Pod
-// named <cluster>-<ordinal>.
+// called with its own credentials and no other. A member is a StatefulSet Pod
+// named <cluster>-<ordinal>. A Secret without a current token yields none.
 func ClusterTokens(c client.Reader) TokenSource {
-	return func(ctx context.Context, podName, namespace string) (string, error) {
+	return func(ctx context.Context, podName, namespace string) ([]string, error) {
 		i := strings.LastIndexByte(podName, '-')
 		if i <= 0 {
-			return "", fmt.Errorf("%s is not the name of a cluster member", podName)
+			return nil, fmt.Errorf("%s is not the name of a cluster member", podName)
 		}
 		if _, err := strconv.ParseUint(podName[i+1:], 10, 32); err != nil {
-			return "", fmt.Errorf("%s is not the name of a cluster member", podName)
+			return nil, fmt.Errorf("%s is not the name of a cluster member", podName)
 		}
 		secret := &corev1.Secret{}
 		key := types.NamespacedName{Name: imTokenSecretName(podName[:i]), Namespace: namespace}
 		if err := c.Get(ctx, key, secret); err != nil {
-			return "", fmt.Errorf("read the Instance Manager token of %s: %w", podName, err)
+			return nil, fmt.Errorf("read the Instance Manager token of %s: %w", podName, err)
 		}
-		return string(secret.Data[imTokenKey]), nil
+		current := string(secret.Data[imTokenKey])
+		if current == "" {
+			return nil, nil
+		}
+		tokens := []string{current}
+		if previous := string(secret.Data[imPreviousTokenKey]); previous != "" && previous != current {
+			tokens = append(tokens, previous)
+		}
+		return tokens, nil
 	}
 }
 
@@ -87,6 +100,8 @@ func ClusterTokens(c client.Reader) TokenSource {
 type HTTPBackupClient struct {
 	Client *http.Client
 	Tokens TokenSource
+
+	accepted acceptedTokens
 }
 
 func NewHTTPBackupClient(tokens TokenSource) *HTTPBackupClient {
@@ -108,11 +123,7 @@ func (c *HTTPBackupClient) StartBackup(ctx context.Context, podName, namespace, 
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Idempotency-Key", idempotencyKey)
-	if err := c.authorize(ctx, httpReq, podName, namespace); err != nil {
-		return instancemanager.Operation{}, err
-	}
-
-	resp, err := c.Client.Do(httpReq)
+	resp, err := c.do(ctx, httpReq, podName, namespace)
 	if err != nil {
 		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w", podName, err)
 	}
@@ -135,11 +146,7 @@ func (c *HTTPBackupClient) StartRestore(ctx context.Context, podName, namespace,
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Idempotency-Key", idempotencyKey)
-	if err := c.authorize(ctx, httpReq, podName, namespace); err != nil {
-		return instancemanager.Operation{}, err
-	}
-
-	resp, err := c.Client.Do(httpReq)
+	resp, err := c.do(ctx, httpReq, podName, namespace)
 	if err != nil {
 		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: %w", podName, err)
 	}
@@ -164,11 +171,7 @@ func (c *HTTPBackupClient) StartHABootstrap(ctx context.Context, podName, namesp
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Idempotency-Key", idempotencyKey)
-	if err := c.authorize(ctx, httpReq, podName, namespace); err != nil {
-		return instancemanager.Operation{}, err
-	}
-
-	resp, err := c.Client.Do(httpReq)
+	resp, err := c.do(ctx, httpReq, podName, namespace)
 	if err != nil {
 		return instancemanager.Operation{}, fmt.Errorf("start HA bootstrap on %s: %w", podName, err)
 	}
@@ -185,11 +188,7 @@ func (c *HTTPBackupClient) GetOperation(ctx context.Context, podName, namespace,
 	if err != nil {
 		return instancemanager.Operation{}, err
 	}
-	if err := c.authorize(ctx, httpReq, podName, namespace); err != nil {
-		return instancemanager.Operation{}, err
-	}
-
-	resp, err := c.Client.Do(httpReq)
+	resp, err := c.do(ctx, httpReq, podName, namespace)
 	if err != nil {
 		return instancemanager.Operation{}, fmt.Errorf("get operation %s on %s: %w", id, podName, err)
 	}
@@ -204,30 +203,83 @@ func (c *HTTPBackupClient) baseURL(podName, namespace string) string {
 	return fmt.Sprintf("http://%s.%s.svc:%d", podName, namespace, instancemanager.DefaultPort)
 }
 
-func (c *HTTPBackupClient) authorize(ctx context.Context, req *http.Request, podName, namespace string) error {
-	token, err := memberToken(ctx, c.Tokens, podName, namespace)
+// do sends the request to the member with its cluster's tokens.
+func (c *HTTPBackupClient) do(ctx context.Context, req *http.Request, podName, namespace string) (*http.Response, error) {
+	tokens, err := memberTokens(ctx, c.Tokens, podName, namespace)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	setRequestID(req)
-	return nil
+	return c.accepted.send(c.Client, req, namespace+"/"+podName, tokens)
 }
 
-// memberToken resolves the member's token. A member is never called without
+// memberTokens resolves the member's tokens. A member is never called without
 // one: a missing or empty token is an error, not an unauthenticated call.
-func memberToken(ctx context.Context, tokens TokenSource, podName, namespace string) (string, error) {
+func memberTokens(ctx context.Context, tokens TokenSource, podName, namespace string) ([]string, error) {
 	if tokens == nil {
-		return "", fmt.Errorf("no Instance Manager token source for %s", podName)
+		return nil, fmt.Errorf("no Instance Manager token source for %s", podName)
 	}
-	token, err := tokens(ctx, podName, namespace)
+	candidates, err := tokens(ctx, podName, namespace)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if token == "" {
-		return "", fmt.Errorf("no Instance Manager token for %s", podName)
+	if slices.Contains(candidates, "") {
+		return nil, fmt.Errorf("no Instance Manager token for %s", podName)
 	}
-	return token, nil
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no Instance Manager token for %s", podName)
+	}
+	return candidates, nil
+}
+
+// acceptedTokens remembers, per member, a SHA-256 fingerprint of the token
+// the member last accepted, never the token itself.
+type acceptedTokens struct{ byMember sync.Map }
+
+func tokenFingerprint(token string) [sha256.Size]byte { return sha256.Sum256([]byte(token)) }
+
+// send sends the request with the first of the member's tokens and, while the
+// member refuses with 401, again with the next one. An Instance Manager
+// refuses a token it does not hold before it acts on the request, so a
+// refused request has had no effect; only its authentication answers 401, so
+// any other answer counts as accepted. The token the member accepted last
+// time is tried first, so that a member that holds the previous token during
+// a rotation is not sent a request it refuses on every call. The response of
+// the last attempt is returned.
+func (a *acceptedTokens) send(c *http.Client, req *http.Request, member string, tokens []string) (*http.Response, error) {
+	if last, ok := a.byMember.Load(member); ok {
+		i := slices.IndexFunc(tokens, func(t string) bool { return tokenFingerprint(t) == last.([sha256.Size]byte) })
+		if i > 0 {
+			tokens = append([]string{tokens[i]}, slices.Delete(slices.Clone(tokens), i, i+1)...)
+		}
+	}
+	setRequestID(req)
+	var resp *http.Response
+	for i, token := range tokens {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		attempt := req
+		if i > 0 {
+			attempt = req.Clone(req.Context())
+			if req.GetBody != nil {
+				body, err := req.GetBody()
+				if err != nil {
+					return nil, err
+				}
+				attempt.Body = body
+			}
+		}
+		attempt.Header.Set("Authorization", "Bearer "+token)
+		var err error
+		if resp, err = c.Do(attempt); err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusUnauthorized {
+			a.byMember.Store(member, tokenFingerprint(token))
+			break
+		}
+	}
+	return resp, nil
 }
 
 // requestIDHeader names one call to an Instance Manager, which writes the

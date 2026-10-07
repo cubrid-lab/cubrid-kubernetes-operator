@@ -67,6 +67,19 @@ const (
 	cubridUID int64 = 1000
 	// imTokenKey is the key of the Instance Manager token in <cluster>-im-token.
 	imTokenKey = "token"
+	// imPreviousTokenKey holds the token replaced by a rotation, which Pods
+	// started before the rotation still hold, until every member was
+	// started after it.
+	imPreviousTokenKey = "previousToken"
+	// imTokenRotatedAtAnnotation records on <cluster>-im-token when the
+	// current token was written. A Secret without it was written by an
+	// operator that copied one token into every cluster, or by the first one
+	// with per-cluster tokens, and is rotated once.
+	imTokenRotatedAtAnnotation = "database.cubrid.io/im-token-rotated-at"
+	// rotateIMTokenAnnotation on a CubridCluster asks for a new token. Each
+	// new value is one rotation; the value handled last is recorded on the
+	// Secret under the same name.
+	rotateIMTokenAnnotation = "database.cubrid.io/rotate-im-token"
 
 	// Condition types (ADR-0005/0006).
 	conditionReady       = "Ready"
@@ -83,6 +96,10 @@ type CubridClusterReconciler struct {
 	Recorder record.EventRecorder
 	// Prober is nil-safe: nil skips HA role discovery (HAReady=Unknown).
 	Prober RoleProber
+	// TokenChecker confirms that every member accepts the current Instance
+	// Manager token before the previous one is dropped. Nil keeps the
+	// previous token: no member is then known to hold the current one.
+	TokenChecker TokenChecker
 	// Restore is nil-safe: nil skips recovery-bootstrap orchestration
 	// (BootstrapReady=False/RestoreClientNotConfigured).
 	Restore RestoreClient
@@ -221,32 +238,100 @@ func imTokenSecretName(cluster string) string { return cluster + "-im-token" }
 
 // reconcileIMTokenSecret gives the cluster a random token of its own in
 // <cluster>-im-token, which its DB Pods serve with and the operator calls them
-// with (ClusterTokens). An existing token is kept: a Pod reads the token when
-// it starts, so a changed one would lock the operator out of every running
-// Pod until it is replaced. Only a missing or empty token is generated anew.
+// with (ClusterTokens). A Pod's container reads the token when it starts, so a
+// running Pod keeps the token it started with. A missing or empty token is
+// generated anew. Otherwise a token is only replaced with an overlap: when the
+// Secret has no rotation time, or when rotateIMTokenAnnotation asks for a new
+// token, the current token is kept as the previous one, which the operator
+// still calls members with, and a new one is generated. The previous token is
+// dropped once every member was started after the rotation and accepts the
+// current token (membersHoldToken). No rotation starts while a previous token
+// is kept: it would drop the token running Pods hold.
 func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cluster *databasev1alpha1.CubridCluster) error {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: imTokenSecretName(cluster.Name), Namespace: cluster.Namespace},
 	}
-	generated := false
+	request := cluster.Annotations[rotateIMTokenAnnotation]
+	var generated, rotated, overlapEnded bool
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 		secret.Labels = labelsFor(cluster)
 		secret.Type = corev1.SecretTypeOpaque
-		if len(secret.Data[imTokenKey]) == 0 {
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+		if secret.Annotations == nil {
+			secret.Annotations = map[string]string{}
+		}
+		rotatedAt := secret.Annotations[imTokenRotatedAtAnnotation]
+		switch {
+		case len(secret.Data[imTokenKey]) == 0:
+			generated = true
+		case len(secret.Data[imPreviousTokenKey]) > 0:
+			since, err := time.Parse(time.RFC3339, rotatedAt)
+			if err != nil {
+				// Without a readable rotation time no member is known to hold
+				// the current token; members started from now on do.
+				secret.Annotations[imTokenRotatedAtAnnotation] = r.now().UTC().Format(time.RFC3339)
+				break
+			}
+			ended, err := r.membersHoldToken(ctx, cluster, since, string(secret.Data[imTokenKey]))
+			if err != nil {
+				return err
+			}
+			if ended {
+				delete(secret.Data, imPreviousTokenKey)
+				overlapEnded = true
+			}
+		case rotatedAt == "", request != "" && request != secret.Annotations[rotateIMTokenAnnotation]:
+			rotated = true
+		}
+		if generated || rotated {
 			token, err := newIMToken()
 			if err != nil {
 				return err
 			}
-			if secret.Data == nil {
-				secret.Data = map[string][]byte{}
+			if rotated {
+				secret.Data[imPreviousTokenKey] = secret.Data[imTokenKey]
 			}
 			secret.Data[imTokenKey] = []byte(token)
-			generated = true
+			if request != "" {
+				secret.Annotations[rotateIMTokenAnnotation] = request
+			}
 		}
 		return controllerutil.SetControllerReference(cluster, secret, r.Scheme)
 	})
-	if err != nil || !generated {
+	if err != nil {
 		return err
+	}
+	if generated || rotated {
+		// The rotation time is taken once the Secret holds the new token, so
+		// that no container started before the write counts as started after.
+		if secret.Annotations == nil {
+			secret.Annotations = map[string]string{}
+		}
+		secret.Annotations[imTokenRotatedAtAnnotation] = r.now().UTC().Format(time.RFC3339)
+		if err := r.Update(ctx, secret); err != nil {
+			return err
+		}
+	}
+	switch {
+	case rotated:
+		r.event(cluster, corev1.EventTypeNormal, "InstanceManagerTokenRotated",
+			fmt.Sprintf("generated a new Instance Manager token in Secret %s and kept the previous one, which running Pods hold, for calls to them; replace the cluster's Pods one at a time, and the previous token is dropped once every member was started with the new one",
+				secret.Name))
+		return nil
+	case overlapEnded:
+		r.event(cluster, corev1.EventTypeNormal, "InstanceManagerTokenOverlapEnded",
+			fmt.Sprintf("every member was started after the Instance Manager token was rotated and accepts the new one; dropped the previous token from Secret %s",
+				secret.Name))
+		return nil
+	case !generated:
+		if len(secret.Data[imPreviousTokenKey]) > 0 && request != "" && request != secret.Annotations[rotateIMTokenAnnotation] {
+			r.event(cluster, corev1.EventTypeNormal, "InstanceManagerTokenRotationDeferred",
+				fmt.Sprintf("the requested Instance Manager token rotation waits until every member holds the current token of Secret %s",
+					secret.Name))
+		}
+		return nil
 	}
 	// A new token under an existing StatefulSet: its running Pods still hold
 	// the old one and refuse the operator until each of them is replaced.
@@ -261,6 +346,50 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 		fmt.Sprintf("generated a new Instance Manager token in Secret %s; running Pods keep the old one and refuse the operator until they are replaced",
 			secret.Name))
 	return nil
+}
+
+// membersHoldToken reports whether every member of the cluster holds the
+// token. A member that is missing, not running, or running since before the
+// rotation may hold the previous token and is not asked. Every other member
+// must accept the token itself (TokenChecker): the start time alone could
+// mislead when the node's clock is ahead of the operator's or the kubelet
+// read a stale Secret. A member that refuses the token or cannot be asked
+// keeps the previous one in use.
+func (r *CubridClusterReconciler) membersHoldToken(ctx context.Context, cluster *databasev1alpha1.CubridCluster, since time.Time, token string) (bool, error) {
+	if r.TokenChecker == nil {
+		return false, nil
+	}
+	names := memberNames(cluster, cluster.Spec.Topology.PromotableMembers)
+	for _, name := range names {
+		var pod corev1.Pod
+		if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: cluster.Namespace}, &pod); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		started := false
+		for _, s := range pod.Status.ContainerStatuses {
+			if s.Name == appName && s.State.Running != nil {
+				started = s.State.Running.StartedAt.After(since)
+			}
+		}
+		if !started {
+			return false, nil
+		}
+	}
+	for _, name := range names {
+		accepted, err := r.TokenChecker.AcceptsToken(ctx, name, cluster.Namespace, token)
+		if err != nil {
+			logf.FromContext(ctx).V(1).Info("Could not ask member about the current Instance Manager token; previous token kept",
+				"pod", name, "reason", err.Error())
+			return false, nil
+		}
+		if !accepted {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // newIMToken returns 256 random bits, hex-encoded.
