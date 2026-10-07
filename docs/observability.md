@@ -84,6 +84,29 @@ the fixed names below; free text belongs in `message`.
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
 available; they do not say that a client can run SQL.
 
+### What `RoutingReady=False` does not do
+
+`RoutingReady=False` reports that the Operator does not claim the write
+endpoint is safe. Setting it changes nothing else: the `-rw` Service and the
+read-write Brokers stay as they are, and the Brokers keep following the master
+that CUBRID reports. When and how the managed write path is closed is issue
+[#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113),
+"feat(safety): enforce and release managed write quarantine". Whatever that
+issue decides, these limits apply:
+
+- **Only the managed write path.** A client that reaches a member's database
+  server without a Broker of the `-rw` Service, for example `csql` run inside
+  a database Pod, is outside that path, and nothing done to the path stops
+  its writes.
+- **Only new connections.** The Operator does not end sessions that are
+  already open through a Broker; an open session may keep writing
+  (ADR-0005, "Consequences").
+- **Nothing while the Operator is away.** A stopped Operator, or one that
+  cannot reach the API server, changes nothing: the Brokers
+  keep their configuration and CUBRID keeps failing over by itself
+  (ADR-0005 section 7). The Conditions keep their last value; compare
+  `status.lastObservationTime` with the current time to see how old they are.
+
 ## Freshness
 
 - `status.lastObservationTime` is when the Operator last finished observing
