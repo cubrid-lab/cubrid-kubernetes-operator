@@ -176,6 +176,20 @@ itself. A stop that succeeded is not run again, however often it is asked for,
 so the hook followed by the signal stops CUBRID once. Steps 1, 2 and 5 are not
 implemented.
 
+Operations and the stop are serialized. Once a stop is asked for, the manager
+admits no new backup, restore or HA bootstrap (`503`), cancels the commands
+of the running ones, and refuses any `cubrid server start` or
+`cubrid heartbeat start` they would issue next; such an operation ends
+`Failed` with the reason that the member is stopping. The start of a
+completed restore's database when the manager starts (ADR-0008) is held to
+the same rule. The stop waits for the
+running operations to end before it withdraws HA and stops the server, so no
+operation starts CUBRID after the final shutdown. The wait never takes the
+last 30 seconds of the stop's budget (half of a budget shorter than 60
+seconds), which stay for the ordered shutdown: when the operations have not
+ended by then, the shutdown still runs, the stop reports the error, and the
+next stop runs again. A cancelled operation never removes data it restored.
+
 Time budget: the stop may take 100 seconds (`IM_SHUTDOWN_TIMEOUT`), and the
 Pod's `terminationGracePeriodSeconds` is 120, which leaves 20 seconds for the
 manager and the container to end. Both are fixed values today.

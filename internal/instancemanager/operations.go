@@ -108,22 +108,102 @@ func Shutdown(ctx context.Context, cli CLI, database string) error {
 	return errors.Join(errs...)
 }
 
+// shutdownReserve is the part of a stop's deadline kept for the ordered
+// shutdown: waiting for running operations never takes it. A shorter budget
+// keeps half of itself instead.
+const shutdownReserve = 30 * time.Second
+
+// errStopping is why a mutating operation is refused, or does not start
+// CUBRID, once the member is stopping.
+var errStopping = errors.New("the member is stopping")
+
 // Stop stops CUBRID on this member: the one implementation behind every
 // trigger of a stop (the preStop hook, a termination signal, a request of the
-// operator). It marks the stop as intended before it does anything, and a
-// stop that succeeded is not run a second time.
+// operator). It marks the stop as intended before it does anything. From then
+// on no mutating operation is admitted and none starts CUBRID; the running
+// ones are cancelled, and the shutdown waits for them to end, so that none of
+// them starts CUBRID after it. The wait ends early enough to leave the
+// shutdown shutdownReserve of ctx's deadline. A stop that succeeded is not
+// run a second time; one whose wait ran out still runs the shutdown and
+// reports the operations it did not see end, and the next stop runs again.
 func (s *Server) Stop(ctx context.Context, database string) error {
 	s.stopRequested.Store(true)
+	s.lifeMu.Lock()
+	s.stopping = true
+	s.lifeMu.Unlock()
+	s.endOps()
+
 	s.stopMu.Lock()
 	defer s.stopMu.Unlock()
 	if s.stopped {
 		return nil
 	}
-	if err := Shutdown(ctx, s.cli, database); err != nil {
-		return err
+	waitCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		reserve := min(shutdownReserve, time.Until(deadline)/2)
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithDeadline(ctx, deadline.Add(-reserve))
+		defer cancel()
+	}
+	waitErr := s.awaitOperations(waitCtx)
+	if err := Shutdown(ctx, s.cli, database); err != nil || waitErr != nil {
+		return errors.Join(waitErr, err)
 	}
 	s.stopped = true
 	return nil
+}
+
+// admit counts a new mutating operation as running, or refuses it once the
+// member is stopping. An admitted operation calls s.ops.Done when it ends.
+func (s *Server) admit() bool {
+	s.lifeMu.Lock()
+	defer s.lifeMu.Unlock()
+	if s.stopping {
+		return false
+	}
+	s.ops.Add(1)
+	return true
+}
+
+// awaitOperations waits until every admitted operation has ended, or ctx
+// ends.
+func (s *Server) awaitOperations(ctx context.Context) error {
+	done := make(chan struct{})
+	// When ctx ends first this goroutine stays parked until the operations
+	// end; the member is stopping, so nothing accumulates.
+	go func() {
+		s.ops.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("operations were still running when the stop proceeded: %w", ctx.Err())
+	}
+}
+
+// stoppingReason prefixes the failure reason of an operation that ended
+// while the member is stopping, so that the reason says so.
+func (s *Server) stoppingReason(reason string) string {
+	if s.opsCtx.Err() == nil || strings.Contains(reason, errStopping.Error()) {
+		return reason
+	}
+	return errStopping.Error() + ": " + reason
+}
+
+// activate runs a `cubrid` command that starts CUBRID (server start,
+// heartbeat start) for an admitted operation, unless the member is stopping.
+// A stop that begins after the check cancels the command and waits for the
+// operation, so the start is over before the shutdown runs.
+func (s *Server) activate(ctx context.Context, args ...string) (string, error) {
+	s.lifeMu.Lock()
+	stopping := s.stopping
+	s.lifeMu.Unlock()
+	if stopping {
+		return "", errStopping
+	}
+	return s.cli.Run(ctx, "cubrid", args...)
 }
 
 // RequestShutdown is what "instance-manager shutdown" does. It asks the

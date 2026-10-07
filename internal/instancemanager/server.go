@@ -78,6 +78,16 @@ type Server struct {
 	// stopMu and stopped make the stop run once.
 	stopMu  sync.Mutex
 	stopped bool
+	// lifeMu guards stopping and the admission into ops. Once stopping is
+	// set no operation is admitted and none starts CUBRID.
+	lifeMu   sync.Mutex
+	stopping bool
+	// ops counts the admitted mutating operations until they have ended.
+	ops sync.WaitGroup
+	// opsCtx is the parent of every operation's context; endOps cancels it
+	// when the member stops.
+	opsCtx context.Context
+	endOps context.CancelFunc
 	// logger writes the structured log; nil discards it.
 	logger *slog.Logger
 	// pollStatus is the last status answered on each polled path.
@@ -88,7 +98,11 @@ type Server struct {
 }
 
 func NewServer(cli CLI, token string) *Server {
-	return &Server{cli: cli, token: token, timeouts: Timeouts{}.withDefaults(), pollStatus: map[string]int{}}
+	opsCtx, endOps := context.WithCancel(context.Background())
+	return &Server{
+		cli: cli, token: token, timeouts: Timeouts{}.withDefaults(), pollStatus: map[string]int{},
+		opsCtx: opsCtx, endOps: endOps,
+	}
 }
 
 // Timeouts bound each long-running operation as a whole. Their commands
@@ -281,9 +295,15 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Destination = destination
 
+	if !s.admit() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
+		return
+	}
 	if s.store == nil {
+		defer s.ops.Done()
 		ctx, cancel := context.WithTimeout(r.Context(), s.timeouts.Backup)
 		defer cancel()
+		defer context.AfterFunc(s.opsCtx, cancel)()
 		if err := s.createBackupStaging(req.Destination); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
 			return
@@ -299,11 +319,15 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 
 	key := r.Header.Get("Idempotency-Key")
 	if key == "" {
+		s.ops.Done()
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
 
 	op, existed, err := s.store.FindOrCreate(OpBackup, key, HashRequest(body), req.Database)
+	if err != nil || existed {
+		s.ops.Done()
+	}
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
@@ -331,9 +355,11 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 // Failed and removes the staging directory (ADR-0003/0007).
 func (s *Server) runBackup(id string, req BackupRequest) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.Backup)
+		defer s.ops.Done()
+		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Backup)
 		defer cancel()
 		fail := func(reason string) {
+			reason = s.stoppingReason(reason)
 			s.removeBackupStaging(req.Destination)
 			_, _ = s.store.Update(id, func(op *Operation) {
 				op.State = OpFailed
@@ -416,8 +442,15 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
+	if !s.admit() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
+		return
+	}
 
 	op, existed, err := s.store.FindOrCreate(OpRestore, key, HashRequest(body), req.Database)
+	if err != nil || existed {
+		s.ops.Done()
+	}
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
@@ -451,9 +484,11 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 // restore was not recorded was never started, and may be removed (#267).
 func (s *Server) runRestore(id string, req RestoreRequest) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.Restore)
+		defer s.ops.Done()
+		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Restore)
 		defer cancel()
 		fail := func(reason string) {
+			reason = s.stoppingReason(reason)
 			_, _ = s.store.Update(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
@@ -552,7 +587,7 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 		if err := before(); err != nil {
 			return err
 		}
-		if out, err := s.cli.Run(ctx, "cubrid", "server", "start", database); err != nil {
+		if out, err := s.activate(ctx, "server", "start", database); err != nil {
 			return fmt.Errorf("server start failed: %w: %s", err, out)
 		}
 	}
@@ -560,7 +595,7 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 		if err := before(); err != nil {
 			return err
 		}
-		if out, err := s.cli.Run(ctx, "cubrid", "heartbeat", "start"); err != nil {
+		if out, err := s.activate(ctx, "heartbeat", "start"); err != nil {
 			return fmt.Errorf("heartbeat start failed: %w: %s", err, out)
 		}
 	}
@@ -574,12 +609,19 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 // restore started it, and the marker is cleared afterwards, so that a start
 // that fails is tried again at the next start of the manager. A marker of any
 // other operation is left for the next operation on that database to judge.
+// It counts as a running operation: once the member is stopping it starts
+// nothing, and a stop waits for it.
 func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 	if s.store == nil {
 		return nil
 	}
+	if !s.admit() {
+		return errStopping
+	}
+	defer s.ops.Done()
 	ctx, cancel := context.WithTimeout(ctx, s.timeouts.Bootstrap)
 	defer cancel()
+	defer context.AfterFunc(s.opsCtx, cancel)()
 	target := s.restoreRoots.Target
 	entries, err := os.ReadDir(target)
 	if os.IsNotExist(err) {
