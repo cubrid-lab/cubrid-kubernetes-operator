@@ -30,9 +30,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -540,6 +543,9 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	ready := sts.Status.ReadyReplicas
 
 	cluster.Status.ObservedGeneration = cluster.Generation
+	// Several steps below set Updating; only the value it ends with is compared
+	// with the one it had, so a value held in between is no transition.
+	updatingBefore := meta.FindStatusCondition(cluster.Status.Conditions, conditionUpdating).DeepCopy()
 
 	// Recovery bootstrap gates Ready: while restoring, the operator must never
 	// advertise a half-restored DB as healthy (ADR-0008).
@@ -615,6 +621,10 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			"the spec asks for image "+desired+"; the Pods keep "+running+" until the new image is accepted with the annotation "+
 				acceptImageAnnotation+": "+desired)
 	}
+	if updating := meta.FindStatusCondition(cluster.Status.Conditions, conditionUpdating); updating != nil &&
+		updatingBefore != nil && updating.Status == updatingBefore.Status {
+		updating.LastTransitionTime = updatingBefore.LastTransitionTime
+	}
 
 	if err := r.Status().Update(ctx, cluster); err != nil {
 		if apierrors.IsConflict(err) {
@@ -652,10 +662,26 @@ func setCondition(cluster *databasev1alpha1.CubridCluster, condType string, stat
 
 func intOrString(port int32) intstr.IntOrString { return intstr.FromInt32(port) }
 
+// clusterEvents passes the changes of a CubridCluster that a reconcile has to
+// act on: its creation and deletion, a spec change (a new generation), an
+// annotation change such as the image acceptance, which leaves the generation
+// as it is, and the start of its deletion. A change of the status alone is
+// not passed: the reconcile writes the status itself, and the counters it
+// records differ on every write, so each write would start the next pass at
+// once. An HA cluster is observed again every haResyncInterval instead, and
+// the owned objects' own events still start a reconcile.
+var clusterEvents = predicate.Or[client.Object](
+	predicate.GenerationChangedPredicate{},
+	predicate.AnnotationChangedPredicate{},
+	predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+		return (e.ObjectOld.GetDeletionTimestamp() == nil) != (e.ObjectNew.GetDeletionTimestamp() == nil)
+	}},
+)
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&databasev1alpha1.CubridCluster{}).
+		For(&databasev1alpha1.CubridCluster{}, builder.WithPredicates(clusterEvents)).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
