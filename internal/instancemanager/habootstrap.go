@@ -117,8 +117,15 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
+	if !s.admit() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
+		return
+	}
 
 	op, existed, err := s.store.FindOrCreate(OpHABootstrap, key, HashRequest(body), req.Database)
+	if err != nil || existed {
+		s.ops.Done()
+	}
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict), errors.Is(err, ErrOperationInProgress):
 		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
@@ -137,7 +144,8 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 // heartbeat when it is not running, recording each step durably.
 func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.Bootstrap)
+		defer s.ops.Done()
+		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Bootstrap)
 		defer cancel()
 		fail := func(reason string) {
 			_, _ = s.store.Update(id, func(op *Operation) {
@@ -173,7 +181,7 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 			if _, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting }); err != nil {
 				return
 			}
-			if out, err := s.cli.Run(ctx, "cubrid", "heartbeat", "start"); err != nil {
+			if out, err := s.activate(ctx, "heartbeat", "start"); err != nil {
 				fail("heartbeat start failed: " + err.Error() + ": " + out)
 				return
 			}
