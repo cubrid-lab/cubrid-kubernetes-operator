@@ -473,9 +473,9 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 
 // runRestore executes the restore in the background and records the durable
 // state transitions. It reaches Completed only after restoredb succeeds against
-// a verified artifact and the database is started; any failure (trust,
-// download, wrong-target, restoredb, start) terminates Failed with an explicit
-// reason (ADR-0003/0008).
+// a verified artifact and the database is started; any failure (HA
+// configuration, trust, download, wrong-target, restoredb, start) terminates
+// Failed with an explicit reason (ADR-0003/0008).
 //
 // The database directory keeps this operation's ownership marker until
 // Completed is recorded. Once restoredb has succeeded the restored artifact is
@@ -495,22 +495,26 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			})
 		}
 
+		// An HA member registers the restored database under the member list,
+		// as createdb does on the first member. A member that is not
+		// standalone and has no usable HA configuration restores nothing:
+		// the result could neither be registered for HA nor join it.
+		roots := s.restoreRoots
+		roots.Owner = id
+		haMember := s.standaloneDB == ""
+		if haMember {
+			hosts, err := haHosts(s.ha.ConfPath)
+			if err != nil {
+				fail("restore refused: this member is not standalone and has no usable HA configuration: " + err.Error())
+				return
+			}
+			roots.Host = hosts
+		}
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpDownloading }); err != nil {
 			return
 		}
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
 			return
-		}
-		// An HA member registers the restored database under the member list,
-		// as createdb does on the first member.
-		roots := s.restoreRoots
-		roots.Owner = id
-		haMember := false
-		if s.standaloneDB == "" {
-			if hosts, err := haHosts(s.ha.ConfPath); err == nil {
-				roots.Host = hosts
-				haMember = true
-			}
 		}
 		// Data that a failed attempt of this same request restored is taken
 		// over and started, never restored over.

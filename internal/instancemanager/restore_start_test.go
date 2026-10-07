@@ -142,15 +142,36 @@ func TestServer_Restore_FailedServerStartFailsTheOperation(t *testing.T) {
 	}
 }
 
-// A member that is neither standalone nor configured for HA starts nothing.
-func TestServer_Restore_StartsNothingWithoutHAConfiguration(t *testing.T) {
-	cli := &stepCLI{}
-	final := runRestoreOperation(t, cli, restoreMember{})
-	if final.State != OpCompleted {
-		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
+// A member that is not standalone restores only with a usable HA
+// configuration: without one the restore fails before any command runs and
+// before anything is written below the database root, so that it never
+// completes without HA registration and heartbeat.
+func TestServer_Restore_RefusesAMemberWithoutValidHAConfiguration(t *testing.T) {
+	noNodeList := filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(noNodeList, []byte("[common]\nha_db_list=appdb\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if calls := cli.recorded(); len(calls) != 1 || !strings.HasPrefix(calls[0], "cubrid restoredb ") {
-		t.Errorf("calls = %q, want only restoredb", calls)
+	for name, member := range map[string]restoreMember{
+		"no configuration path":  {},
+		"missing configuration":  {haConf: filepath.Join(t.TempDir(), "absent.conf")},
+		"configuration unusable": {haConf: noNodeList},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cli := &stepCLI{}
+			final := runRestoreOperation(t, cli, member)
+			if final.State != OpFailed {
+				t.Fatalf("final state = %s, want Failed", final.State)
+			}
+			if !strings.Contains(final.FailureReason, "HA configuration") {
+				t.Errorf("failure reason = %q, want it to name the HA configuration", final.FailureReason)
+			}
+			if calls := cli.recorded(); len(calls) != 0 {
+				t.Errorf("calls = %q, want none", calls)
+			}
+			if entries, err := os.ReadDir(lastRestoreTarget); err != nil || len(entries) != 0 {
+				t.Errorf("database root = %v (err=%v), want it untouched", entries, err)
+			}
+		})
 	}
 }
 
