@@ -144,7 +144,9 @@ func (r *haRun) startClient(id string) {
 	_, err := r.client(fmt.Sprintf("CLIENT_ID=%s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7"+
 		" nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", id, file))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	r.mu.Lock()
 	r.running[id] = true
+	r.mu.Unlock()
 	EventuallyWithOffset(1, func(g Gomega) {
 		out, err := r.client(fmt.Sprintf("grep -c '\"acknowledged\"' %s.jsonl", file))
 		g.Expect(err).NotTo(HaveOccurred())
@@ -176,7 +178,7 @@ func (r *haRun) stopClient(id string) ([]workload.Event, workload.History) {
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	history, err := workload.ReadHistory(strings.NewReader(text))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
-	r.history += text
+	r.addHistory(text)
 	if errors, err := r.client(fmt.Sprintf("tail -n 5 /tmp/%s.err", id)); err == nil && strings.TrimSpace(errors) != "" {
 		_, _ = fmt.Fprintf(GinkgoWriter, "client %s stderr:\n%s\n", id, errors)
 	}
@@ -191,7 +193,9 @@ func (r *haRun) collectClient(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	r.mu.Lock()
 	delete(r.running, id)
+	r.mu.Unlock()
 	// A client that is stopped while it writes a line leaves that line unfinished.
 	if cut := strings.LastIndex(text, "\n"); cut >= 0 {
 		text = text[:cut+1]

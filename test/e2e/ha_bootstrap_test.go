@@ -322,8 +322,12 @@ spec:
 
 		AfterEach(func() {
 			report := CurrentSpecReport()
-			if report.Failed() && slices.Contains(report.Labels(), haSetup) {
+			switch {
+			case !report.Failed():
+			case slices.Contains(report.Labels(), haSetup):
 				scenarios.gate.Block("the HA cluster was not formed: the step \"" + report.LeafNodeText + "\" failed")
+			case slices.Contains(report.Labels(), "S01"):
+				scenarios.gate.Block("the common starting state was not reached: S01 failed")
 			}
 		})
 
@@ -483,7 +487,7 @@ spec:
 			Expect(report.Members["ro"].Rows).To(Equal(48))
 
 			runSummary.Environment.ClientDriver = workloadDriver
-			scenarios.history = text
+			scenarios.addHistory(text)
 			writeScenarioFile("ha-bootstrap/history.jsonl", []byte(text))
 			if data, err := json.MarshalIndent(report, "", "  "); err == nil {
 				writeScenarioFile("ha-bootstrap/data-check.json", append(data, '\n'))

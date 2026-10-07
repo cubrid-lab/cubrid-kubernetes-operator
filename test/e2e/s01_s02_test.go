@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -50,10 +51,15 @@ type haRun struct {
 	database        string
 	members         []string
 
+	// mu guards history, running and markers: the gate's checks run in
+	// a goroutine of their own.
+	mu sync.Mutex
 	// history is everything the workload client recorded so far.
 	history string
 	// running holds the clients started and not stopped yet.
 	running map[string]bool
+	// markers counts the marker writes of the gate's checks.
+	markers int
 
 	// gate restores and verifies the starting state before each step after
 	// S01; entries are its decisions.
@@ -107,8 +113,22 @@ func (r *haRun) runWorkload(settings string) (workload.History, error) {
 	if err != nil {
 		return workload.History{}, fmt.Errorf("history: %w\n%s", err, out)
 	}
-	r.history += out
+	r.addHistory(out)
 	return h, nil
+}
+
+// addHistory adds what a client recorded to the run's history.
+func (r *haRun) addHistory(text string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.history += text
+}
+
+// historyText returns everything the clients recorded so far.
+func (r *haRun) historyText() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.history
 }
 
 // master asks CUBRID on every member for its role and returns the one master
@@ -183,7 +203,7 @@ func (r *haRun) catalog(pod string) (string, error) {
 
 // dataCheck applies the data rules to every member and to both Services.
 func (r *haRun) dataCheck() (workload.Report, error) {
-	history, err := workload.ReadHistory(strings.NewReader(r.history))
+	history, err := workload.ReadHistory(strings.NewReader(r.historyText()))
 	if err != nil {
 		return workload.Report{}, err
 	}
@@ -286,7 +306,7 @@ func judged(s evidence.Scenario, limitName string, limit, measured time.Duration
 // returns the files that were written.
 func (r *haRun) evidenceFiles(id string, report workload.Report) []string {
 	var files []string
-	if f := writeScenarioFile(id+"/history.jsonl", []byte(r.history)); f != "" {
+	if f := writeScenarioFile(id+"/history.jsonl", []byte(r.historyText())); f != "" {
 		files = append(files, f)
 	}
 	if data, err := json.MarshalIndent(report, "", "  "); err == nil {
@@ -332,7 +352,7 @@ func s01AndS02Steps(r *haRun) {
 		}, 2*time.Minute, 3*time.Second).Should(Succeed())
 		Expect(report.Members).To(HaveLen(len(r.members) + 2))
 
-		history, err := workload.ReadHistory(strings.NewReader(r.history))
+		history, err := workload.ReadHistory(strings.NewReader(r.historyText()))
 		Expect(err).NotTo(HaveOccurred())
 		result = judged(evidence.Scenario{
 			ID:           "S01",
@@ -450,7 +470,7 @@ func s01AndS02Steps(r *haRun) {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero(), "fail count of the applier on the replaced slave %s", replaced)
 
-		history, err := workload.ReadHistory(strings.NewReader(r.history))
+		history, err := workload.ReadHistory(strings.NewReader(r.historyText()))
 		Expect(err).NotTo(HaveOccurred())
 		files := r.evidenceFiles("S02", report)
 		if timeline != "" {
