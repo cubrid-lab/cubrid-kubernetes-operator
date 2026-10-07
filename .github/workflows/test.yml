@@ -1,8 +1,16 @@
 name: Tests
 
+# Pull requests run on pull_request (which also covers fork PRs) and main on
+# push; a push to a PR branch would otherwise run every job twice. A newer
+# push to the same PR cancels the superseded run.
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
 
