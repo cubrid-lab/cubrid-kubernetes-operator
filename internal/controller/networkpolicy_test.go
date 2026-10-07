@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -188,8 +189,7 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 			for _, port := range []int32{1523, 9090} {
 				Expect(npAdmits(nps, db, src, port, tcp)).To(BeFalse(), "%s reaches TCP %d", who, port)
 			}
-			Expect(npAdmits(nps, db, src, 59901, udp)).To(BeTrue(),
-				"%s: the heartbeat port admits a source the plugin cannot name yet", who)
+			Expect(npAdmits(nps, db, src, 59901, udp)).To(BeFalse(), "%s reaches the heartbeat port", who)
 		}
 	})
 
@@ -309,5 +309,39 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 		Expect(reconcileAs(c, operatorNS)).To(Succeed())
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: foreign.Name, Namespace: ns}, got)).To(Succeed(),
 			"disabling removes only the cluster's own policies")
+	})
+
+	It("starts CUBRID in an HA member only once a peer's server port admits the Pod", func() {
+		c := haCluster("np-wait")
+		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: "registry.example/cubrid", Tag: "wait"}
+		create(c)
+		sts := &appsv1.StatefulSet{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "np-wait", Namespace: ns}, sts)).To(Succeed())
+		spec := sts.Spec.Template.Spec
+		Expect(spec.InitContainers).To(HaveLen(1))
+		wait := spec.InitContainers[0]
+		Expect(wait.Image).To(Equal(spec.Containers[0].Image), "the DB image carries the shell it needs")
+		script := strings.Join(append(append([]string{}, wait.Command...), wait.Args...), " ")
+		Expect(script).To(ContainSubstring("/dev/tcp/"))
+		Expect(script).To(ContainSubstring("1523"))
+		for _, peer := range []string{"np-wait-0", "np-wait-1", "np-wait-2"} {
+			Expect(wait.Args).To(ContainElement(peer))
+		}
+		Expect(wait.SecurityContext).NotTo(BeNil())
+		Expect(*wait.SecurityContext.AllowPrivilegeEscalation).To(BeFalse())
+		Expect(wait.SecurityContext.Capabilities.Drop).To(ContainElement(corev1.Capability("ALL")))
+
+		standalone := standaloneCluster("np-wait-standalone")
+		standalone.Namespace = ns
+		create(standalone)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "np-wait-standalone", Namespace: ns}, sts)).To(Succeed())
+		Expect(sts.Spec.Template.Spec.InitContainers).To(BeEmpty(), "a standalone member has no peer to wait for")
+
+		disabled := haCluster("np-wait-off")
+		off := false
+		disabled.Spec.NetworkPolicy = &databasev1alpha1.CubridNetworkPolicy{Enabled: &off}
+		create(disabled)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "np-wait-off", Namespace: ns}, sts)).To(Succeed())
+		Expect(sts.Spec.Template.Spec.InitContainers).To(BeEmpty(), "nothing to wait for without the policies")
 	})
 })

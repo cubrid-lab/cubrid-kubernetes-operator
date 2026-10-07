@@ -835,7 +835,7 @@ it needs more.
   headers that claim a loopback origin.
 - **The Operator must** (ADR-0003, #272): keep a NetworkPolicy that admits
   only the operator to the Instance Manager port and only the cluster's own
-  Pods to the database server port; reject every `/v1` request without the valid
+  Pods to the database ports; reject every `/v1` request without the valid
   token, except a shutdown that really comes from loopback inside the Pod.
 - **Expected:** the direct connections time out (Kind's network plugin
   enforces NetworkPolicy; a plugin that does not would admit them); the

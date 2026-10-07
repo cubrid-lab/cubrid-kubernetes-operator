@@ -102,17 +102,11 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 }
 
 // databaseNetworkPolicy admits to the DB Pods: the operator to the Instance
-// Manager; the cluster's DB Pods and Brokers to the server port; and any
-// source to the HA heartbeat port. The kubelet's probes come from the node,
-// which NetworkPolicy implementations commonly admit; it is not part of the
-// policy.
-//
-// The heartbeat port is not limited to the cluster's DB Pods: a plugin admits
-// a Pod by its labels only once it has learned the Pod's address, so a member
-// whose Pod was just recreated would lose its first heartbeats. On Kind that
-// left the slaves applying nothing after the deleted master came back as the
-// master again (#272, S03 abrupt-first-member), which never happened with
-// the port open.
+// Manager; the cluster's DB Pods to the server and heartbeat ports, for HA
+// replication; and the cluster's Brokers to the server port. The kubelet's
+// probes come from the node, which NetworkPolicy implementations commonly
+// admit; it is not part of the policy. A recreated member waits until its
+// peers admit it before it starts CUBRID (peerWaitContainer).
 func (r *CubridClusterReconciler) databaseNetworkPolicy(cluster *databasev1alpha1.CubridCluster) networkingv1.NetworkPolicySpec {
 	peers := networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{MatchLabels: labelsFor(cluster)}}
 	brokers := networkingv1.NetworkPolicyPeer{PodSelector: &metav1.LabelSelector{MatchLabels: brokerLabelsFor(cluster)}}
@@ -120,7 +114,9 @@ func (r *CubridClusterReconciler) databaseNetworkPolicy(cluster *databasev1alpha
 		{From: []networkingv1.NetworkPolicyPeer{peers, brokers}, Ports: []networkingv1.NetworkPolicyPort{
 			npPort(corev1.ProtocolTCP, cubridServerPort),
 		}},
-		{Ports: []networkingv1.NetworkPolicyPort{npPort(corev1.ProtocolUDP, haHeartbeatPort)}},
+		{From: []networkingv1.NetworkPolicyPeer{peers}, Ports: []networkingv1.NetworkPolicyPort{
+			npPort(corev1.ProtocolUDP, haHeartbeatPort),
+		}},
 	}
 	// Without the operator's namespace no Pod is admitted to the Instance
 	// Manager, rather than every namespace.
@@ -164,4 +160,36 @@ func brokerNetworkPolicy(cluster *databasev1alpha1.CubridCluster) networkingv1.N
 func npPort(protocol corev1.Protocol, port int32) networkingv1.NetworkPolicyPort {
 	p := intOrString(port)
 	return networkingv1.NetworkPolicyPort{Protocol: &protocol, Port: &p}
+}
+
+// peerWaitScript tries the server port of each other member ($@) until a
+// peer answers: with a connection, or with a refusal, which also shows that
+// the packets pass. A connection attempt that times out was dropped. After a
+// minute it gives up and lets the member start, for a member none of whose
+// peers has an address yet.
+const peerWaitScript = `while [ "$SECONDS" -lt 60 ]; do
+  for peer in "$@"; do
+    [ "$peer" = "$HOSTNAME" ] && continue
+    getent hosts "$peer" >/dev/null || continue
+    timeout 2 bash -c "</dev/tcp/$peer/1523" 2>/dev/null
+    if [ $? -ne 124 ]; then echo "$peer answered"; exit 0; fi
+  done
+  sleep 1
+done
+echo "no peer answered; starting without one"`
+
+// peerWaitContainer holds back the CUBRID processes of an HA member until a
+// peer's server port admits the Pod. A plugin admits a Pod by its labels only
+// once it has learned the Pod's address, so a member whose Pod was just
+// recreated would otherwise lose its first packets to its peers. On Kind the
+// slaves then stopped applying the master's log after the deleted master came
+// back as the master (#272, S03 abrupt-first-member).
+func peerWaitContainer(cluster *databasev1alpha1.CubridCluster, image string, security *corev1.SecurityContext) corev1.Container {
+	return corev1.Container{
+		Name:            "wait-for-peer",
+		Image:           image,
+		Command:         []string{"bash", "-c", peerWaitScript, "wait-for-peer"},
+		Args:            memberNames(cluster, cluster.Spec.Topology.PromotableMembers),
+		SecurityContext: security,
+	}
 }

@@ -1403,8 +1403,7 @@ Secrets are referenced (`dbaPasswordSecretRef`,
 ADR-0003), and object-storage credentials come from the manager's env,
 never a request body. Per-cluster ingress NetworkPolicies admit only the
 operator to the Instance Manager port, only the cluster's own DB and Broker
-Pods to the database server port, any source to the HA heartbeat port, and
-the configured clients to the Broker ports
+Pods to the database ports, and the configured clients to the Broker ports
 (README, "Network access"); they take effect only under a network plugin
 that enforces NetworkPolicy and do not encrypt traffic. mTLS and
 finer-grained least-privilege credentials remain incremental hardening

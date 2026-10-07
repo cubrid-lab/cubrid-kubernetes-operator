@@ -531,8 +531,20 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 		volumes = append(volumes, haConfVolume(cluster))
 		mounts = append(mounts, haConfMount())
 	}
+	// Pod Security Standards "restricted" (#18).
+	security := &corev1.SecurityContext{
+		RunAsNonRoot:             &runAsNonRoot,
+		AllowPrivilegeEscalation: &noPrivEscalation,
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+	var initContainers []corev1.Container
+	if cluster.Spec.HighAvailability.Enabled && networkPolicyEnabled(cluster) {
+		initContainers = append(initContainers, peerWaitContainer(cluster, image, security))
+	}
 	return corev1.PodSpec{
-		Volumes: volumes,
+		Volumes:        volumes,
+		InitContainers: initContainers,
 		// terminationGracePeriodSeconds >= 120s for ordered HA shutdown (ADR-0003).
 		TerminationGracePeriodSeconds: &gracePeriod,
 		SecurityContext: &corev1.PodSecurityContext{
@@ -584,14 +596,8 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 				TimeoutSeconds:   5,
 				FailureThreshold: 3,
 			},
-			VolumeMounts: mounts,
-			// Pod Security Standards "restricted" (#18).
-			SecurityContext: &corev1.SecurityContext{
-				RunAsNonRoot:             &runAsNonRoot,
-				AllowPrivilegeEscalation: &noPrivEscalation,
-				SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-				Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-			},
+			VolumeMounts:    mounts,
+			SecurityContext: security,
 		}},
 	}
 }
