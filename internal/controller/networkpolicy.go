@@ -170,26 +170,31 @@ func npPort(protocol corev1.Protocol, port int32) networkingv1.NetworkPolicyPort
 const peerWaitScript = `while [ "$SECONDS" -lt 60 ]; do
   for peer in "$@"; do
     [ "$peer" = "$HOSTNAME" ] && continue
-    getent hosts "$peer" >/dev/null || continue
+    timeout 2 getent hosts "$peer" >/dev/null || continue
     timeout 2 bash -c "</dev/tcp/$peer/1523" 2>/dev/null
-    if [ $? -ne 124 ]; then echo "$peer answered"; exit 0; fi
+    rc=$?
+    if [ $rc -ne 124 ]; then echo "$peer answered (exit code $rc)"; exit 0; fi
   done
   sleep 1
 done
 echo "no peer answered; starting without one"`
 
 // peerWaitContainer holds back the CUBRID processes of an HA member until a
-// peer's server port admits the Pod. A plugin admits a Pod by its labels only
-// once it has learned the Pod's address, so a member whose Pod was just
-// recreated would otherwise lose its first packets to its peers. On Kind the
-// slaves then stopped applying the master's log after the deleted master came
-// back as the master (#272, S03 abrupt-first-member).
+// peer's server port admits the Pod. It is a mitigation: a Pod may start
+// before the NetworkPolicies that apply to it are in effect (Kubernetes
+// NetworkPolicy documentation, "Pod lifecycle"), so a member whose Pod was
+// just recreated could lose its first packets to its peers. Under kindnet in
+// the pinned Kind the slaves then stopped applying the master's log after the
+// deleted master came back as the master (S03 abrupt-first-member). Why the
+// engine does not recover from that is open (#357). It gets the DB
+// container's resources so that a ResourceQuota admits the Pod.
 func peerWaitContainer(cluster *databasev1alpha1.CubridCluster, image string, security *corev1.SecurityContext) corev1.Container {
 	return corev1.Container{
 		Name:            "wait-for-peer",
 		Image:           image,
 		Command:         []string{"bash", "-c", peerWaitScript, "wait-for-peer"},
 		Args:            memberNames(cluster, cluster.Spec.Topology.PromotableMembers),
+		Resources:       cluster.Spec.Resources,
 		SecurityContext: security,
 	}
 }

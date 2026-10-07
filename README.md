@@ -117,12 +117,17 @@ spec:
   caller. The database is created with an empty DBA password
   (`dbaPasswordSecretRef` is rejected in `v1alpha1`), so every client the
   Broker policy admits can connect as `dba`.
-- A plugin admits a Pod by its labels only after it has learned the Pod's
-  address. So that a recreated HA member does not lose its first packets to
-  its peers, its init container `wait-for-peer` holds back CUBRID until a
-  peer's server port answers, for at most a minute. Without it, on Kind, the
-  slaves stopped applying the master's log after the deleted master came
-  back as the master.
+- A Pod may start before the NetworkPolicies that apply to it are in effect
+  (Kubernetes NetworkPolicy documentation, "Pod lifecycle"). As a mitigation,
+  the init container `wait-for-peer` of an HA member holds back CUBRID until
+  a peer's server port answers, for at most a minute. It gets the DB
+  container's resources. Without it, under kindnet in the pinned Kind, a
+  recreated member lost its first packets to its peers. After the deleted
+  master came back as the master, the slaves stopped applying its log. This
+  was measured only there; the engine side is open in #357.
+- Toggling `spec.networkPolicy.enabled` adds or removes that init container
+  in the StatefulSet template. Because Pods are replaced only on delete,
+  existing Pods keep their old template until they are recreated.
 - Egress is not restricted: the DB Pods need DNS, their peers and object
   storage. NetworkPolicies are additive, so another policy that selects the
   same Pods can admit more.

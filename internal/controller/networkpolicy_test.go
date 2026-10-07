@@ -27,6 +27,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -314,6 +315,10 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 	It("starts CUBRID in an HA member only once a peer's server port admits the Pod", func() {
 		c := haCluster("np-wait")
 		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: "registry.example/cubrid", Tag: "wait"}
+		c.Spec.Resources = corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m")},
+			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+		}
 		create(c)
 		sts := &appsv1.StatefulSet{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "np-wait", Namespace: ns}, sts)).To(Succeed())
@@ -327,6 +332,8 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 		for _, peer := range []string{"np-wait-0", "np-wait-1", "np-wait-2"} {
 			Expect(wait.Args).To(ContainElement(peer))
 		}
+		Expect(wait.Resources).To(Equal(spec.Containers[0].Resources),
+			"a namespace with a ResourceQuota admits only Pods whose every container has requests and limits")
 		Expect(wait.SecurityContext).NotTo(BeNil())
 		Expect(*wait.SecurityContext.AllowPrivilegeEscalation).To(BeFalse())
 		Expect(wait.SecurityContext.Capabilities.Drop).To(ContainElement(corev1.Capability("ALL")))
