@@ -129,7 +129,7 @@ underscores.
 |---|---|---|---|
 | `status.currentPrimary` changes from one member to another | `PrimaryChanged` | Normal | `primary_changed` |
 | `PrimaryResolved` becomes `False` | `PrimaryUnresolved`, with the Condition's reason in the message | Warning | `primary_unresolved` |
-| `PrimaryResolved`, still `False`, takes the reason `InstanceManagerTokenRefused` | `InstanceManagerTokenRefused`, naming the members, never the token | Warning | `instance_manager_token_refused` |
+| `PrimaryResolved` takes the reason `InstanceManagerTokenRefused` (when it was `True`, also `PrimaryUnresolved`) | `InstanceManagerTokenRefused`, naming the members, never the token | Warning | `instance_manager_token_refused` |
 | `PrimaryResolved` becomes `True` again | `PrimaryResolved` | Normal | `primary_resolved` |
 | `ReplicationHealthy` becomes `False` | `ReplicationStalled` or `ApplyFailures` | Warning | `replication_stalled`, `apply_failures` |
 | `ReplicationHealthy` becomes `True` again | `ReplicationRecovered` | Normal | `replication_recovered` |

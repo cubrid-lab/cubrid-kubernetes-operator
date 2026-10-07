@@ -166,7 +166,7 @@ func TestReconcileHAStatus_ReportsRefusedToken(t *testing.T) {
 	events := reconcile()
 	c := meta.FindStatusCondition(cluster.Status.Conditions, conditionPrimaryResolved)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != reasonTokenRefused ||
-		!strings.Contains(c.Message, "refused-0") || !strings.Contains(c.Message, "refused-1") {
+		!strings.Contains(c.Message, "Instance Managers of refused-0, refused-1 refused") {
 		t.Fatalf("PrimaryResolved = %+v, want False/%s naming both members", c, reasonTokenRefused)
 	}
 	if len(events) != 1 || !strings.HasPrefix(events[0], "Warning "+reasonTokenRefused+" ") {

@@ -70,7 +70,10 @@ const reasonTokenRefused = "InstanceManagerTokenRefused"
 var errTokenRefused = errors.New("the member refused the cluster's Instance Manager token")
 
 // tokenRefused reports whether an Instance Manager answer refuses the
-// operator's token (401) or the call made with it (403).
+// operator's token (401) or the call made with it (403). It only names the
+// cause of a failed call: a 403 is not retried with the previous token and
+// counts as accepted in acceptedTokens.send and AcceptsToken, which look at
+// 401 alone. The Instance Manager does not answer 403 on any path.
 func tokenRefused(status int) bool {
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }

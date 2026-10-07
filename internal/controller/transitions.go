@@ -93,6 +93,18 @@ func primaryTransitions(before, after *databasev1alpha1.CubridClusterStatus) []t
 		return nil
 	}
 	is := now.Status == metav1.ConditionTrue
+	old := meta.FindStatusCondition(before.Conditions, conditionPrimaryResolved)
+	oldReason := ""
+	if old != nil {
+		oldReason = old.Reason
+	}
+	// Entering InstanceManagerTokenRefused is reported under its own name,
+	// whether the primary was resolved before or not.
+	refused := transition{
+		Event: "instance_manager_token_refused", Reason: reasonTokenRefused, Warning: true,
+		Message: "Primary is not resolved: " + now.Message,
+		Fields:  []any{logKeyOldReason, oldReason, logKeyReason, now.Reason},
+	}
 	switch {
 	case was && is && before.CurrentPrimary != after.CurrentPrimary:
 		return []transition{{
@@ -101,11 +113,15 @@ func primaryTransitions(before, after *databasev1alpha1.CubridClusterStatus) []t
 			Fields:  []any{"oldPrimary", before.CurrentPrimary, "newPrimary", after.CurrentPrimary},
 		}}
 	case was && !is:
-		return []transition{{
+		out := []transition{{
 			Event: "primary_unresolved", Reason: "PrimaryUnresolved", Warning: true,
 			Message: fmt.Sprintf("Primary is no longer resolved (%s); it was %s", now.Reason, before.CurrentPrimary),
 			Fields:  []any{"oldPrimary", before.CurrentPrimary, logKeyReason, now.Reason},
 		}}
+		if now.Reason == reasonTokenRefused {
+			out = append(out, refused)
+		}
+		return out
 	case !was && is:
 		return []transition{{
 			Event: "primary_resolved", Reason: "PrimaryResolved",
@@ -114,18 +130,9 @@ func primaryTransitions(before, after *databasev1alpha1.CubridClusterStatus) []t
 		}}
 	}
 	// Still unresolved: a change of the reason is a change of the condition.
-	old := meta.FindStatusCondition(before.Conditions, conditionPrimaryResolved)
 	if !is && (old == nil || old.Reason != now.Reason || old.Status != now.Status) {
-		oldReason := ""
-		if old != nil {
-			oldReason = old.Reason
-		}
 		if now.Reason == reasonTokenRefused {
-			return []transition{{
-				Event: "instance_manager_token_refused", Reason: reasonTokenRefused, Warning: true,
-				Message: "Primary is not resolved: " + now.Message,
-				Fields:  []any{logKeyOldReason, oldReason, logKeyReason, now.Reason},
-			}}
+			return []transition{refused}
 		}
 		return []transition{{
 			Event:   "condition_changed",

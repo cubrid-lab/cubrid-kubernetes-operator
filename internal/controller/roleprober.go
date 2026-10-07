@@ -121,7 +121,8 @@ type TokenChecker interface {
 
 // AcceptsToken sends GET /v1/role with the token alone. Only the manager's
 // authentication answers 401, so any other answer means the member holds the
-// token. A failed request is an error, not a refusal.
+// token. A failed request is an error, not a refusal. A 403, which
+// tokenRefused reports as a refusal, is not one here.
 func (p *HTTPRoleProber) AcceptsToken(ctx context.Context, podName, namespace, token string) (bool, error) {
 	url := fmt.Sprintf("http://%s.%s.svc:%d/v1/role", podName, namespace, instancemanager.DefaultPort)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

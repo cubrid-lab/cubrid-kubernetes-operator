@@ -94,7 +94,11 @@ func primaryResolvedMessage(res PrimaryResolution) string {
 		return "current primary: " + res.CurrentPrimary
 	}
 	if res.Reason == reasonTokenRefused {
-		return "no single authoritative primary observed: the Instance Manager of " +
+		managers := "the Instance Manager of "
+		if len(res.TokenRefused) > 1 {
+			managers = "the Instance Managers of "
+		}
+		return "no single authoritative primary observed: " + managers +
 			strings.Join(res.TokenRefused, ", ") + " refused the cluster's token"
 	}
 	return "no single authoritative primary observed"
