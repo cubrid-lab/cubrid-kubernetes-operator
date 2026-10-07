@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,6 +38,8 @@ type stepCLI struct {
 	failing map[string]bool
 	// output is what a command whose first two words are the key prints.
 	output map[string]string
+	// errs is the error of a command whose first two words are the key.
+	errs map[string]error
 }
 
 func (c *stepCLI) Run(_ context.Context, name string, args ...string) (string, error) {
@@ -44,7 +47,14 @@ func (c *stepCLI) Run(_ context.Context, name string, args ...string) (string, e
 	defer c.mu.Unlock()
 	c.calls = append(c.calls, name+" "+strings.Join(args, " "))
 	if len(args) > 1 && c.failing[args[0]+" "+args[1]] {
-		return "++ cubrid " + args[0] + " " + args[1] + ": fail", errors.New("exit status 1")
+		// A command that ran to its end and exited 1. For heartbeat status
+		// this is the assumed answer of inactive heartbeat (#345).
+		return "++ cubrid " + args[0] + " " + args[1] + ": fail", exec.Command("sh", "-c", "exit 1").Run()
+	}
+	if len(args) > 1 {
+		if err, ok := c.errs[args[0]+" "+args[1]]; ok {
+			return "", err
+		}
 	}
 	if len(args) > 1 {
 		if out, ok := c.output[args[0]+" "+args[1]]; ok {
@@ -214,5 +224,28 @@ func TestServer_Restore_DoesNotStartHeartbeatInTransition(t *testing.T) {
 		if call == callHeartbeatStart {
 			t.Errorf("heartbeat was started although it reported a transition: %q", cli.recorded())
 		}
+	}
+}
+
+// A heartbeat status that did not answer starts nothing: the restore of an HA
+// member fails with the reason and keeps the restored data and its marker.
+func TestServer_Restore_DoesNotStartHeartbeatWhenStatusDidNotAnswer(t *testing.T) {
+	conf := filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(conf, []byte(testHAConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cli := &stepCLI{errs: map[string]error{stepHeartbeatStatus: errors.New(`exec: "cubrid": executable file not found in $PATH`)}}
+	final := runRestoreOperation(t, cli, restoreMember{haConf: conf})
+	if final.State != OpFailed || !strings.Contains(final.FailureReason, "did not answer") {
+		t.Fatalf("final = %s (%s), want Failed because heartbeat status did not answer", final.State, final.FailureReason)
+	}
+	for _, call := range cli.recorded() {
+		if call == callHeartbeatStart {
+			t.Errorf("heartbeat was started although its status did not answer: %q", cli.recorded())
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(lastRestoreTarget, dbName, ownershipMarker))
+	if err != nil || strings.TrimSpace(string(data)) != final.ID {
+		t.Errorf("marker = %q (%v), want it kept as %q", data, err, final.ID)
 	}
 }

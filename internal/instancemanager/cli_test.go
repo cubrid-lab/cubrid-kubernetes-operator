@@ -19,8 +19,10 @@ package instancemanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -138,28 +140,58 @@ func (sleepingCLI) Run(ctx context.Context, _ string, _ ...string) (string, erro
 	return ExecCLI{Timeout: 50 * time.Millisecond}.Run(ctx, "sleep", "5")
 }
 
-// Heartbeat may be started only on a status that ran to its end without
-// reporting the node; a reported state, in any form, and a status that did
-// not answer start nothing.
-func TestHeartbeatStartable(t *testing.T) {
+// noNodeOut is what heartbeat status is assumed to print on an HA member
+// whose heartbeat is not active. The real output is not recorded in docs/poc
+// (#345); it stands for any output without HA node information.
+const noNodeOut = "++ cubrid heartbeat status: fail"
+
+// Heartbeat may be started only on a status that ran to its end by itself,
+// with its output read, without HA node information; a reported state, in any
+// form, and a status that did not answer start nothing.
+func TestObserveHeartbeat(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
 	cases := []struct {
 		name               string
+		ctx                context.Context
 		cli                CLI
 		startable, running bool
 	}{
-		{"a master", fakeCLI{out: masterOut}, false, true},
-		{"transition", fakeCLI{out: transitionOut}, false, true},
-		{"state with an exit error", fakeCLI{out: transitionOut, err: errors.New("exit status 1")}, false, true},
-		{"no node reported", fakeCLI{out: "++ cubrid heartbeat status: fail", err: errors.New("exit status 1")}, true, false},
-		{"deadline", fakeCLI{err: context.DeadlineExceeded}, false, false},
-		{"killed by the timeout", sleepingCLI{}, false, false},
+		{"a master", nil, fakeCLI{out: masterOut}, false, true},
+		{"transition", nil, fakeCLI{out: transitionOut}, false, true},
+		{"state with an exit error", nil, fakeCLI{out: transitionOut, err: exitStatus1(t)}, false, true},
+		{"node lines without a header", nil, fakeCLI{out: "   Node cub-1 (priority 2, state slave)"}, false, true},
+		{"a header in another form", nil, fakeCLI{out: " HA-Node Info (current: cub-0)"}, false, true},
+		{"no node reported, exit 1", nil, fakeCLI{out: noNodeOut, err: exitStatus1(t)}, true, false},
+		{"no node reported, exit 0", nil, fakeCLI{out: noNodeOut}, true, false},
+		{"deadline", nil, fakeCLI{err: context.DeadlineExceeded}, false, false},
+		{"killed by the timeout", nil, sleepingCLI{}, false, false},
+		{"not an exit", nil, fakeCLI{err: errors.New(`exec: "cubrid": executable file not found in $PATH`)}, false, false},
+		{"output unread", nil, fakeCLI{err: fmt.Errorf("%w: cubrid: read failed", ErrOutputUnread)}, false, false},
+		{"output unread after an exit", nil, fakeCLI{err: errors.Join(ErrOutputUnread, exitStatus1(t))}, false, false},
+		{"cancelled caller", cancelled, fakeCLI{out: noNodeOut, err: exitStatus1(t)}, false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			startable, running, reason := heartbeatStartable(context.Background(), c.cli)
-			if startable != c.startable || running != c.running {
-				t.Errorf("startable, running = %v, %v (%s), want %v, %v", startable, running, reason, c.startable, c.running)
+			ctx := c.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			hb := observeHeartbeat(ctx, c.cli)
+			if hb.startable != c.startable || hb.running != c.running {
+				t.Errorf("startable, running = %v, %v (%s), want %v, %v", hb.startable, hb.running, hb.reason, c.startable, c.running)
 			}
 		})
 	}
+}
+
+// exitStatus1 returns the error of a command that ran to its end and exited
+// 1, as ExecCLI reports it.
+func exitStatus1(t *testing.T) error {
+	t.Helper()
+	err := exec.Command("sh", "-c", "exit 1").Run()
+	if err == nil {
+		t.Fatal("sh -c 'exit 1' succeeded")
+	}
+	return err
 }

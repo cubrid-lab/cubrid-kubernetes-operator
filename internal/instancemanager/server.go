@@ -576,9 +576,9 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 // stopped: in a recovery bootstrap it started nothing and runs only once, and
 // it starts no database that carries an ownership marker. A standalone
 // member's server is started; a configured HA member joins HA, with
-// `cubrid heartbeat start` issued only when heartbeat status ran to its end
-// without reporting the node; a status that did not answer starts nothing
-// and is an error (docs/poc/RESULTS.md, POC-3/POC-13). before runs ahead of
+// `cubrid heartbeat start` issued only when heartbeat status exited by itself
+// without HA node information (observeHeartbeat); a status that did not
+// answer starts nothing and is an error. before runs ahead of
 // each start command, and an error from it stops before that command; nil
 // runs nothing.
 func (s *Server) startRestoredDatabase(ctx context.Context, database string, haMember bool, before func() error) error {
@@ -596,11 +596,11 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 	if !haMember {
 		return nil
 	}
-	startable, running, reason := heartbeatStartable(ctx, s.cli)
-	if !startable && !running {
-		return errors.New(reason + "; heartbeat start was not issued")
+	hb := observeHeartbeat(ctx, s.cli)
+	if !hb.startable && !hb.running {
+		return errors.New(hb.reason + "; heartbeat start was not issued")
 	}
-	if startable {
+	if hb.startable {
 		if err := before(); err != nil {
 			return err
 		}

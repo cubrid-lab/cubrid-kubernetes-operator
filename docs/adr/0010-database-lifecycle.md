@@ -84,12 +84,18 @@ Manager of one member, ordinal 0, to bootstrap (`POST /v1/ha/bootstrap`, an
 idempotent operation keyed by cluster UID and database). That member runs
 `cubrid createdb --server-name=<member list> -F <CUBRID_DATABASES>/<db>` when
 no database is registered, then `cubrid heartbeat start` once. The start is
-issued only when `cubrid heartbeat status` ran to its end without an
-`HA-Node Info` line: that line in any state, transitions included, means
-heartbeat runs and nothing is started; a status cut off by a timeout, a
-cancellation or a signal fails the bootstrap without a start (#274). That a
-status without the line means inactive heartbeat is not yet recorded on the
-engine (#345). Ordinal 0 is
+issued only when `cubrid heartbeat status` exited by itself, its output was
+read, and the output carries no HA node information (no `HA-Node Info`
+header and no `Node <name> (priority ...` line). HA node information in any
+form means heartbeat runs and nothing is started: the bootstrap completes
+when it reports the member as master or slave, and fails with the observed
+state otherwise (a transition such as `to-be-master`, or `unknown` after a
+failed start). A status that did not answer (a timeout, a cancellation, a
+signal, a command that could not be run, or output that could not be read)
+fails the bootstrap without a start. A failed bootstrap is asked again
+within the operator's attempt limit (#274). That a status without HA node
+information means inactive heartbeat is an assumption: that output is not
+recorded on the engine (#345). Ordinal 0 is
 only where the database is created; which member is master afterwards is
 CUBRID's decision. An HA member's entrypoint never runs `createdb`: without a
 database it starts nothing and waits, and with one it starts heartbeat. A
