@@ -169,6 +169,19 @@ Failed/partial restore → `Ready=False` + blocked/degraded condition;
 **never report a half-restored DB as healthy** and never advertise DB
 service from a partially restored pod.
 
+Seeding after the restore (#268): in an HA cluster the restore on the target
+member does not complete the recovery. When it has completed,
+`status.bootstrap.phase` becomes `SeedingReplicas`, the database is recorded in
+`status.databases[]` as held by the target member (`primaryCreated`), and the
+other members are seeded from the target member with the steps, keys, attempts
+and object-storage location of the seeding of a created database (ADR-0010):
+the peers receive a backup of the restored database, not the original
+artifact. The target member is the source because it is the only member that
+holds the restored data, not because it stays the master, which CUBRID decides
+(ADR-0005). `BootstrapReady` and `Ready` stay False until every member is
+seeded; the phase is then `Complete`, or `Failed` when the seeding gave up. A
+standalone cluster is complete when its restore has completed.
+
 ### Backup selection
 
 v1alpha1 restores a **specific `manifestUri` only**. "Latest successful
