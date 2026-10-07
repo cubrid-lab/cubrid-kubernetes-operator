@@ -9,7 +9,9 @@ body:
         Keep the `fix:` title prefix and name the observed problem.
 
         Before filing:
-        - Search the existing issues for the same behavior.
+        - Search open and recently closed issues for the same behavior.
+        - A bug you could not reproduce can still be filed; say so under
+          Reproducibility. You do not need to know the cause.
         - Leave out passwords, tokens, kubeconfigs, customer data,
           object-storage credentials and unredacted Secrets.
         - You do not need to apply labels; maintainers assign priority, size
@@ -27,16 +29,63 @@ body:
       required: true
 
   - type: textarea
-    id: impact
+    id: expected
     attributes:
-      label: Observed Impact
-      description: Describe the effect you saw. Report what was observed; do not rate its severity.
+      label: Expected Behavior
+      description: Describe what should happen.
+      placeholder: What should the Operator, the Instance Manager, the Broker or the CUBRID cluster do instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: Describe what happened, with the important times when you have them.
       placeholder: |
-        Examples:
-        - writes were unavailable for about 10 seconds
-        - a slave stayed behind while the cluster reported healthy
-        - the first SQL transaction failed after the Pod became Ready
-        - no data loss was observed
+        Example:
+        - 15:34:40 the Pod became Ready
+        - 15:34:41 the first SQL connection succeeded
+        - 15:34:41 the transaction returned error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Diagnostic Evidence
+      description: |
+        The evidence you have. Write "not collected" where you have none.
+        Remove credentials and sensitive data. The kinds of evidence are those
+        of docs/observability.md.
+      placeholder: |
+        - CubridCluster status / Conditions:
+        - Kubernetes Events:
+        - Pod / container state:
+        - Operator log:
+        - Instance Manager log:
+        - CUBRID log files:
+        - SQL result:
+        - Metrics:
+        - Scenario / workflow run link:
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Where the problem was observed.
+      placeholder: |
+        - Operator version or commit:
+        - CUBRID engine version:
+        - CUBRID image (tag/digest):
+        - Kubernetes distribution and version:
+        - Architecture:
+        - Container runtime:
+        - CSI / StorageClass:
+        - Topology (standalone or HA, promotable members, Brokers):
+        - Go version (only when built from source):
     validations:
       required: true
 
@@ -66,23 +115,28 @@ body:
     id: steps
     attributes:
       label: Steps to Reproduce
-      description: The smallest known sequence that produces the problem.
+      description: The smallest known sequence that produces the problem, if known.
       placeholder: |
         1. Create ...
         2. Wait until ...
         3. Delete / stop / change ...
         4. Observe ...
     validations:
-      required: true
+      required: false
 
   - type: textarea
-    id: expected
+    id: impact
     attributes:
-      label: Expected Behavior
-      description: Describe what should happen.
-      placeholder: What should the Operator, the Instance Manager, the Broker or the CUBRID cluster do instead?
+      label: Observed Impact
+      description: Describe the effect you saw. Report what was observed; do not rate its severity.
+      placeholder: |
+        Examples:
+        - writes were unavailable for about 10 seconds
+        - a slave stayed behind while the cluster reported healthy
+        - the first SQL transaction failed after the Pod became Ready
+        - no data loss was observed
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: expected-basis
@@ -97,58 +151,6 @@ body:
         - an experiment in docs/poc/RESULTS.md
     validations:
       required: false
-
-  - type: textarea
-    id: actual
-    attributes:
-      label: Actual Behavior
-      description: Describe what happened, with the important times when you have them.
-      placeholder: |
-        Example:
-        - 15:34:40 the Pod became Ready
-        - 15:34:41 the first SQL connection succeeded
-        - 15:34:41 the transaction returned error ...
-    validations:
-      required: true
-
-  - type: textarea
-    id: environment
-    attributes:
-      label: Environment
-      description: Where the problem was observed.
-      placeholder: |
-        - Operator version or commit:
-        - CUBRID engine version:
-        - CUBRID image (tag/digest):
-        - Kubernetes distribution and version:
-        - Architecture:
-        - Container runtime:
-        - CSI / StorageClass:
-        - Topology (standalone or HA, promotable members, Brokers):
-        - Go version (only when built from source):
-    validations:
-      required: true
-
-  - type: textarea
-    id: evidence
-    attributes:
-      label: Diagnostic Evidence
-      description: |
-        The evidence you have. Write "not collected" where you have none.
-        Remove credentials and sensitive data. The kinds of evidence are those
-        of docs/observability.md.
-      placeholder: |
-        - CubridCluster status / Conditions:
-        - Kubernetes Events:
-        - Pod / container state:
-        - Operator log:
-        - Instance Manager log:
-        - CUBRID log files:
-        - SQL result:
-        - Metrics:
-        - Scenario / workflow run link:
-    validations:
-      required: true
 
   - type: textarea
     id: known-facts
@@ -166,8 +168,8 @@ body:
   - type: textarea
     id: unknowns
     attributes:
-      label: Not Yet Verified
-      description: Questions that are still open, including a suspected cause. Say so here; do not state a guess as a fact.
+      label: Suspected Cause and Open Questions
+      description: A suspected cause and other open questions. Write them here as hypotheses, not as facts.
       placeholder: |
         Examples:
         - whether the database server restarted
@@ -181,6 +183,15 @@ body:
     attributes:
       label: Workaround
       description: A known temporary workaround, or "none".
+    validations:
+      required: false
+
+  - type: textarea
+    id: related
+    attributes:
+      label: Related Issues
+      description: Related issues or PRs, if any.
+      placeholder: "#123"
     validations:
       required: false
 

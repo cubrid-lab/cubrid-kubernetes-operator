@@ -155,9 +155,10 @@ the implementation.
 
 - Each maintainer has one implementation issue in progress by default.
   Reviewing a finished PR comes before starting another issue.
-- Estimate S as hours and M as one to two days, including implementation,
-  tests, documentation and review follow-up. Split work exceeding two days at
-  independently verifiable boundaries. L/XL issues track smaller issues.
+- Size issues as in [Size](#size). Split work exceeding two days at
+  independently verifiable boundaries.
+- Before starting, check open PRs and in-progress issues for large changes to
+  the same files, and do not start an issue whose dependency is not met.
 - Agree an owner for shared test infrastructure. Feature authors still write
   their own tests; do not hand tests and implementation to different people.
 - The other maintainer reviews the scenario, expected results and failure
@@ -189,11 +190,13 @@ the implementation.
   change.
 - Reference the issue in the PR body (`Closes #123` / `Refs #123`), not in the
   title.
-- Close a sub-issue from its PR with `Closes #123`, and refer to its tracking
-  issue with `Refs #45`. A tracking issue is closed by a maintainer after its
+- Close a sub-issue from its PR with `Closes #123` only when the PR meets the
+  issue's completion condition; otherwise use `Refs #123`. Refer to its
+  tracking issue with `Refs #45`. A tracking issue is closed by a maintainer after its
   sub-issues are done and the integrated validation is confirmed.
 - Fill in the "Validation Evidence" section of the PR template. Keep what was
   implemented separate from what was validated on a real cluster.
+- Resolve or answer every review comment before merging.
 - Preserve contributor authorship; add tool attribution only when that tool
   actually produced a commit.
 
@@ -262,10 +265,130 @@ Maintainers merge with **squash merge only** and keep the pull request title as
 the commit title. Branch commits are squashed into the commit body, so keep
 their messages meaningful and keep any `Co-authored-by:` trailers intact.
 
-## Reporting issues
+## Issues
 
-Search for an existing issue first, then use the closest issue form. Keep its
-prefilled title prefix; for a custom issue, pick the type from
+### Before opening an issue
+
+Search open issues, recently closed issues and open PRs, and check whether the
+latest `main` already resolves the problem. If the problem is already tracked,
+add the new evidence to that issue instead of opening another one. Open a new
+issue only for an independent problem with a completion condition that can be
+checked. A review remark, an already fixed problem or a duplicate of tracked
+work is not a new issue.
+
+Use the closest issue form: **Bug Report**, **Feature Request**,
+**Investigation** (unknown CUBRID or Kubernetes behavior, or an unconfirmed
+failure cause) or **Task** (documentation and maintenance). A blank issue is
+fine when no form fits.
+
+### Writing an issue
+
+These sections are recommended; use only the ones the issue needs:
+
+| Section | Content |
+|---------|---------|
+| Problem | What goes wrong or is missing |
+| Evidence | What was observed, and what is still unknown |
+| Scope | What this work changes |
+| Out of scope | What it deliberately leaves out |
+| Done when | Results that can be checked, with the test level |
+| Where to look | Files and components |
+| Depends on | Only results that must exist before the work can start |
+| Related work | Related issues and PRs |
+
+- Explain the problem in words. An internal review identifier (`R3`,
+  `CTL-4`, `IM-7`) may be added for traceability but never replaces the
+  description or the title.
+- Keep observations apart from hypotheses. An unverified cause is written as
+  a hypothesis, not as a confirmed defect.
+- "Done when: tests pass" is not a completion condition; name the behavior
+  and the test level that shows it.
+- Do not prescribe a solution that has not been checked, and do not attach
+  unrelated refactoring.
+- Do not repeat project-wide rules (labels, release policy, evidence levels)
+  in the issue body; they live in this file.
+
+### Scope terms
+
+| Term | Meaning | Where |
+|------|---------|-------|
+| Component scope | The component or area the work touches (`controller`, `ha`, `backup`) | The `(scope)` of the title |
+| Work scope | What this issue changes and what it leaves out | The Scope / Out of scope sections |
+| Release scope | Whether the work is part of a release | The Release section |
+
+Do not use one for another: a title scope names a component, not a release,
+and a release target does not widen or narrow the work scope. A small issue
+does not need a Scope section at all.
+
+### Labels and release target
+
+Each label answers a different question; do not use one to express another.
+
+| Field | Answers | Examples |
+|-------|---------|----------|
+| Type label | What kind of work | `bug`, `enhancement`, `documentation`, `testing` |
+| `priority:` | How urgent | `priority: high` |
+| `size:` | Expected effort | `size: S` |
+| `phase:` | Which roadmap area | `phase: 2-ha` |
+| `status: needs triage` | Metadata still needs a maintainer | — |
+| Release target | Whether a release includes it | Release section of the issue |
+
+Release scope is decided in [ROADMAP.md](./ROADMAP.md#v01-scope). An issue
+that needs it states its target in a short section:
+
+```markdown
+### Release
+
+- **Target:** Required for v0.1
+- **Minimum acceptance:** <the smallest result this issue must show for the release>
+```
+
+Omit **Minimum acceptance** when it is the same as the issue's "Done when"
+(or "Acceptance Criteria"). A minimum acceptance may not be narrower than the
+completion evidence `ROADMAP.md` lists for its capability; narrowing it needs
+the same maintainer decision as narrowing the release. Not every issue needs a
+Release section.
+
+| Target | Meaning |
+|--------|---------|
+| Required for v0.1 | The minimum acceptance must be verified on the pinned candidate. Other engine versions, platforms or deployment modes are not part of it. |
+| Required investigation for v0.1 | The question is answered with pinned-image evidence and a recorded disposition before the candidate is accepted. A confirmed defect gets its minimal fix in a separate issue, which inherits *Required for v0.1* unless the maintainers record otherwise in `ROADMAP.md`; a disproved hypothesis is closed with the evidence. |
+| Conditional for v0.1 | Included only when the condition stated in the issue is met; otherwise it stays outside the v0.1 support claim. |
+| Post-v0.1 | Follow-up work; it does not block v0.1. |
+| Tracking only | Tracks and coordinates other issues; it has no deliverable of its own. |
+
+A release target records intended scope, not implementation or validation
+status, which lives only in `ROADMAP.md`. Deferring an issue does not remove a
+required S00–S15 capability; narrowing a release claim, a mandatory safety
+requirement or a release acceptance condition needs an explicit decision by
+the maintainers recorded in `ROADMAP.md`. Follow-up work may stay open once
+the stated minimum has verified evidence.
+
+### Size
+
+Sizes are defined in
+[AGENTS.md](./AGENTS.md#issue-labeling-cubrid-lab-org-standard): `S` is hours
+of work, `M` one to two days, and `L`/`XL` issues track smaller ones. An issue aims at one verifiable result. Count implementation, tests,
+documentation and review follow-up, but not time spent waiting for a test
+run. Split independent changes into separate issues and PRs, but do not split
+a change that must land atomically to stay safe. Do not split work only to
+create more issues.
+
+### Tracking issues and sub-issues
+
+- A tracking issue follows the outcome of several sub-issues. Each sub-issue
+  has its own work scope and completion condition.
+- Keep the tracking issue's checklist in step with the actual state of its
+  sub-issues.
+- Closing every sub-issue does not close the tracking issue automatically; a
+  maintainer closes it after confirming the integrated result.
+- Release acceptance and tracking-issue closure are separate. A tracking issue
+  states which of its items the release needs; an open tracking issue, or an
+  open item the release does not need, does not by itself block a release.
+
+### Reporting a bug
+
+Keep the issue form's prefilled title prefix; for a custom issue, pick the type from
 [Pull request and commit titles](#pull-request-and-commit-titles), for example
 `fix(broker): ...`. Write issues, PRs and comments in English.
 
@@ -273,22 +396,13 @@ A bug report is also a record of evidence. Say how often the behavior was
 seen, attach what you have (status and Conditions, Events, logs, SQL results;
 "not collected" is a valid answer), and keep what the evidence shows apart
 from what is only suspected: a cause that has not been verified goes under
-"Not Yet Verified", not into the title or the description as a fact.
+"Suspected Cause and Open Questions", not into the title or the description as a fact.
 
-Reporters describe impact and reproduction; they do **not** need permission
-to apply GitHub labels. Maintainers assign a type label, one
-`priority: <value>` and one `size: <value>` label (plus a `phase:` label).
-Topical labels such as `testing` may also be present. Issues with incomplete
-metadata receive `status: needs triage`; the maintainer corrects the metadata
-and removes that label. See [AGENTS.md](./AGENTS.md) for the exact label names.
+Reporters do not need to apply labels. Maintainers assign them (see
+[Labels and release target](#labels-and-release-target)) and remove
+`status: needs triage` once the metadata is complete.
 
-When filing a bug, include:
-
-- Operator version or commit (and `go version` when built from source), and
-  the CUBRID engine image
-- Kubernetes distribution/version and StorageClass
-- The `CubridCluster` manifest and its status Conditions
-- Operator and Instance Manager logs, and relevant Events
+The Bug Report form lists the environment details and evidence to include.
 
 ## Testing expectations
 
@@ -301,6 +415,10 @@ which level was used.
 | envtest | API validation and the Kubernetes resources the controller creates | Pod execution, scheduling or database recovery |
 | Real database on Kind | Installation, SQL, replication, backup and restore working together | What happens when a real VM fails |
 | VM lab | The supported topology, VM failures and controlled network faults | Resilience across physical zones or a whole provider |
+| POC | What one engine build did under the recorded conditions | A general CUBRID guarantee |
+
+Code inspection alone is a reading of the code, not a test result; say so when
+it is the only evidence.
 
 - API/validation changes: add envtest assertions (including CEL-rejection
   cases where relevant).

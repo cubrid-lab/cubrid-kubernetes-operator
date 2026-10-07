@@ -78,8 +78,8 @@ missing, create it with the exact name above before filing the issue.
 | Label | Meaning | Rough guide |
 |-------|---------|-------------|
 | `size: XS` | Trivial change | < ~10 lines; single-file typo/config/one-liner |
-| `size: S` | Small change | One Go file or one focused function; a single test or doc page |
-| `size: M` | Medium change | A few files in one package; a new `_test.go` suite, a bug fix with a regression test, a CI job |
+| `size: S` | Small change (hours) | One Go file or one focused function; a single test or doc page |
+| `size: M` | Medium change (one to two days) | A few files in one package; a new `_test.go` suite, a bug fix with a regression test, a CI job |
 | `size: L` | Large change | Cross-cutting change across packages (API types + controller + Instance Manager); split into independently reviewable PRs |
 | `size: XL` | Very large | Consider splitting into smaller issues before starting |
 
@@ -119,8 +119,8 @@ Follow [CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-work
 In short:
 
 1. Pick a sub-issue sized `size: S` or `size: M`. A `size: L` issue is a
-   tracking issue: do not implement it directly. Read the issue's "Depends on"
-   and "Where to look" sections first, and check for an open PR on the same
+   tracking issue: do not implement it directly. Read the issue's dependencies
+   and file pointers ("Depends on", "Where to look", "Related work") first, and check for an open PR on the same
    issue. Confirm availability and set the actual implementer as the GitHub
    Assignee before implementation. A claim comment is not an assignment. If
    assignment permission is missing, ask a maintainer and wait for assignment.
@@ -148,7 +148,8 @@ be verified on its own.
 issue and scenario IDs, the expected behavior and its source, the test level
 (unit / envtest / real database on Kind / VM lab), the failing-test evidence,
 the passing-test evidence, the environment, and what remains unverified. Use
-`Closes #N` for the sub-issue and `Refs #M` for its tracking issue. Never
+`Closes #N` for the sub-issue only when the PR meets its completion condition
+(otherwise `Refs #N`), and `Refs #M` for its tracking issue. Never
 close a tracking issue from a PR.
 
 **Report honestly.** Say which checks were not run and why. A scenario that
@@ -160,6 +161,38 @@ measurement is never reported as zero.
 Operator never promotes a member on incomplete observations, never treats
 ordinal 0 as the permanent master, and never picks a winner between diverged
 data sets.
+
+## Issue Management
+
+Issue structure, scope terms, release targets and tracking-issue rules are in
+[CONTRIBUTING.md - Issues](CONTRIBUTING.md#issues). In addition:
+
+- **Before creating an issue**, check the latest `main`, open and recently
+  closed issues and open PRs; update an existing issue when the problem is
+  already tracked. Never file review remarks, already fixed problems or
+  duplicates automatically.
+- **Assignment.** If assigning the implementer fails for lack of permission,
+  say so; never report an issue as assigned when it is not.
+- **Scope changes.** Update the issue when the work scope changes, and decide
+  whether a newly found defect belongs to this issue or a new one.
+- **Finishing.** Check every "Done when" item, update the affected documents,
+  then close the sub-issue or file the remaining work separately and link it.
+  A merged PR is not real-environment validation. Leave tracking-issue closure
+  to a maintainer.
+- **Release scope.** Never narrow a mandatory safety requirement or a release
+  acceptance condition, or move work out of a release, without an explicit
+  maintainer decision.
+- **Evidence wording.** envtest is not evidence of scheduling or networking,
+  Kind is not evidence of VM failure behavior, and one POC is not a general
+  CUBRID guarantee. An unconfirmed cause stays a hypothesis. After a fix,
+  check the regression under the same failure condition that exposed it.
+- **PR titles** never use internal review identifiers (`R3`, `CTL-4`). Do not
+  merge while a review comment is unresolved or unanswered.
+- **CI and agent cost.** Choose tests by the changed files and their risk;
+  documentation-only changes do not need product test runs. Never skip a
+  required safety check to save cost. Avoid re-running CI on an unchanged
+  commit. Do not re-run a flaky test until it passes: record the failure and
+  file or update an issue for it. State which checks were skipped and why.
 
 ## Incubation Coordination
 
