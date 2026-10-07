@@ -20,6 +20,8 @@ jobs:
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
+    # A hung module download would otherwise hold the runner for the default 6 hours.
+    timeout-minutes: 10
     steps:
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
