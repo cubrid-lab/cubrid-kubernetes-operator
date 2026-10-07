@@ -117,7 +117,7 @@ var _ = Describe("NetworkPolicies of the cluster's Pods (#272)", func() {
 	reconcileAs := func(c *databasev1alpha1.CubridCluster, operatorNamespace string) error {
 		r := &CubridClusterReconciler{
 			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-			IMToken: testIMToken, Prober: &memberProber{master: c.Name + "-0"},
+			Prober: &memberProber{master: c.Name + "-0"},
 			OperatorNS: operatorNamespace,
 		}
 		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name, Namespace: ns}})
