@@ -342,10 +342,11 @@ func (r *haRun) s14Token(variant string) {
 	Consistently(resolved, overlapQuiet/3, 3*time.Second).Should(Succeed())
 	// A slow first reconcile may still send the new token; the quiet window
 	// starts once the members' refusal counts stop growing.
-	refusedSettled := refusalsAt(Default)
+	// Each poll compares with the sample of the poll before, 10 s earlier.
+	var refusedSettled map[string]int
 	Eventually(func(g Gomega) {
 		n := refusalsAt(g)
-		same := maps.Equal(n, refusedSettled)
+		same := refusedSettled != nil && maps.Equal(n, refusedSettled)
 		refusedSettled = n
 		g.Expect(same).To(BeTrue(), "the members are still refusing requests")
 	}, 2*time.Minute, 10*time.Second).Should(Succeed())
