@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -39,6 +40,9 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
+
+// serviceAccountNamespaceFile holds the namespace of a Pod's service account.
+const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
 var (
 	scheme   = runtime.NewScheme()
@@ -61,6 +65,7 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var instanceManagerImage string
+	var operatorNamespace string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
@@ -69,6 +74,9 @@ func main() {
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.StringVar(&instanceManagerImage, "instance-manager-image", controller.DefaultInstanceManagerImage,
 		"The DB Pod image (CUBRID with the Instance Manager) when a CubridCluster does not set spec.image.")
+	flag.StringVar(&operatorNamespace, "operator-namespace", "",
+		"The namespace of the operator's Pods, which the DB Pods' NetworkPolicy admits to the Instance Manager. "+
+			"Defaults to the namespace of the operator's service account.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -95,6 +103,16 @@ func main() {
 
 	// Every line names the component that wrote it (docs/observability.md).
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)).WithValues("component", "operator"))
+
+	if operatorNamespace == "" {
+		if ns, err := os.ReadFile(serviceAccountNamespaceFile); err == nil {
+			operatorNamespace = strings.TrimSpace(string(ns))
+		}
+	}
+	if operatorNamespace == "" {
+		setupLog.Info("Could not determine the operator namespace; DB Pods admit no Pod to the Instance Manager",
+			"flag", "--operator-namespace")
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -202,6 +220,7 @@ func main() {
 		HABootstrap:  controller.NewHTTPBackupClient(tokens),
 		Backup:       controller.NewHTTPBackupClient(tokens),
 		DefaultImage: instanceManagerImage,
+		OperatorNS:   operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "cubridcluster")
 		os.Exit(1)

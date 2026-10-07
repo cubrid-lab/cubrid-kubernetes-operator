@@ -50,6 +50,37 @@ spec:
       command: ["sleep", "3600"]
 `
 
+// imCallerPolicyManifest admits the Pods of the im-caller's namespace to the
+// Instance Manager port of the cluster's DB Pods, in addition to the
+// operator's own policy.
+const imCallerPolicyManifest = `apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: s14-im-caller
+  namespace: %s
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: %s
+      app.kubernetes.io/component: database
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: %s
+      ports:
+        - {port: 9090, protocol: TCP}
+`
+
+// connectProbe connects to the URL in $0 and prints the connect time, the
+// HTTP status and curl's exit code. A connection a NetworkPolicy drops prints
+// "0.000000 000 28": no connection, then the connect timeout. This assumes the
+// network plugin drops denied packets, as Kind's kindnet does; a plugin that
+// rejects them would make curl fail at once with another exit code.
+const connectProbe = `curl -s -o /dev/null -w "%{time_connect} %{http_code}" ` +
+	`--connect-timeout 5 --max-time 10 "$0"; echo " $?"`
+
 // s14Call is one request to a member's Instance Manager.
 type s14Call struct {
 	method, path string
@@ -143,6 +174,43 @@ func s14Step(r *haRun) {
 			"no token, Host localhost":     {"Host: localhost:9090"},
 		}
 
+		// The cluster's NetworkPolicy drops connections from outside the
+		// cluster to the DB Pods. Kind's network plugin enforces it; another
+		// plugin may not.
+		By("checking that a Pod in another namespace cannot connect to the Instance Manager or the database")
+		dropped := 0
+		for _, member := range []string{master, slaves[0]} {
+			for _, port := range []int{9090, 1523} {
+				out, err := utils.Run(exec.Command("kubectl", "-n", r.clientNamespace, "exec", "im-caller", "--",
+					"sh", "-c", connectProbe, fmt.Sprintf("http://%s.%s.svc:%d/", member, r.namespace, port)))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.TrimSpace(out)).To(Equal("0.000000 000 28"),
+					"port %d of %s: a connection timeout, never a connection", port, member)
+				dropped++
+			}
+		}
+
+		// The token is checked behind the policy too: a policy of the user's
+		// that admits a Pod must not admit its requests.
+		By("admitting the calling Pod's namespace to the Instance Manager port with a NetworkPolicy of its own")
+		cmd = exec.Command("kubectl", "apply", "-f", "-")
+		cmd.Stdin = strings.NewReader(fmt.Sprintf(imCallerPolicyManifest, r.namespace, r.cluster, r.clientNamespace))
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_, _ = utils.Run(exec.Command("kubectl", "-n", r.namespace, "delete", "networkpolicy", "s14-im-caller",
+				"--ignore-not-found"))
+		})
+		Eventually(func(g Gomega) {
+			for _, member := range []string{master, slaves[0]} {
+				out, err := utils.Run(exec.Command("kubectl", "-n", r.clientNamespace, "exec", "im-caller", "--",
+					"curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5",
+					fmt.Sprintf("http://%s.%s.svc:9090/v1/role", member, r.namespace)))
+				g.Expect(err).NotTo(HaveOccurred(), "%s through the added policy", member)
+				g.Expect(strings.TrimSpace(out)).To(Equal("401"), "%s through the added policy", member)
+			}
+		}, time.Minute, 3*time.Second).Should(Succeed())
+
 		By("calling every protected endpoint of the master and of a slave without a valid token")
 		requests := 0
 		for _, member := range []string{master, slaves[0]} {
@@ -223,6 +291,8 @@ func s14Step(r *haRun) {
 			"accepted requests, with the valid credential: 2, answered 200\nmaster before and after: %s\n"+
 			"DB Pods restarted: 0\nplaces searched: %d\nplaces that showed the credential: 0\n",
 			requests, master, len(places))
+		summary = fmt.Sprintf("connections from another namespace dropped: %d (ports 9090 and 1523, 2 members)\n",
+			dropped) + summary
 		files := r.evidenceFiles("S14", report)
 		if f := writeScenarioFile("S14/result.txt", []byte(summary)); f != "" {
 			files = append(files, f)
@@ -230,6 +300,7 @@ func s14Step(r *haRun) {
 		result = evidence.Scenario{
 			ID: "S14", Result: evidence.Pass,
 			Measurements: map[string]any{
+				"connectionsDropped":  dropped,
 				"requestsRefused":     requests,
 				"requestsAccepted":    2,
 				"placesSearched":      len(places),

@@ -297,6 +297,16 @@ func replicationStallStep(r *haRun) {
 		}
 		before := restarts()
 
+		// The watchdog cares only after it has once seen every process
+		// running, about five seconds after the Instance Manager listens. The
+		// victim may be the member whose Pod the step before replaced.
+		By("waiting until the Instance Manager of " + victim + " watches the CUBRID processes")
+		Eventually(func(g Gomega) {
+			log, err := r.kubectl("logs", victim, "-c", "cubrid", "--tail=-1")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(log).To(ContainSubstring(`"event":"process_watch_started"`))
+		}, 2*time.Minute, 2*time.Second).Should(Succeed())
+
 		By("stopping heartbeat inside the running container of " + victim + " and leaving it stopped")
 		stopped := time.Now()
 		_, err = r.kubectl("exec", victim, "--", "bash", "-c",
