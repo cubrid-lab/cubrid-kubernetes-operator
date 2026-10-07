@@ -233,9 +233,9 @@ func (r *CubridClusterReconciler) reconcileHeadlessService(ctx context.Context, 
 		svc.Spec.PublishNotReadyAddresses = true
 		svc.Spec.Selector = labelsFor(cluster)
 		svc.Spec.Ports = []corev1.ServicePort{
-			{Name: portNameCubrid, Port: cubridServerPort, TargetPort: intOrString(cubridServerPort)},
-			{Name: "broker", Port: cubridBrokerPort, TargetPort: intOrString(cubridBrokerPort)},
-			{Name: portNameManager, Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
+			{Name: portNameCubrid, Protocol: corev1.ProtocolTCP, Port: cubridServerPort, TargetPort: intOrString(cubridServerPort)},
+			{Name: "broker", Protocol: corev1.ProtocolTCP, Port: cubridBrokerPort, TargetPort: intOrString(cubridBrokerPort)},
+			{Name: portNameManager, Protocol: corev1.ProtocolTCP, Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
 		}
 		return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
 	})
@@ -438,9 +438,11 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 		// OnDelete: the operator owns pod replacement sequencing (ADR-0003/0009).
 		sts.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
 		sts.Spec.PersistentVolumeClaimRetentionPolicy = pvcRetentionPolicy(cluster)
-		sts.Spec.Template = corev1.PodTemplateSpec{
+		if err := setPodTemplate(sts, &sts.Spec.Template, corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec:       r.podSpec(cluster, r.imageToRun(cluster, sts)),
+		}); err != nil {
+			return err
 		}
 		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
 	})
@@ -777,7 +779,11 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		res := r.reconcileHAStatus(ctx, cluster, desired)
 		// Reconcile the broker tier and set routing conditions from the same
 		// safety-first primary resolution (ADR-0002/0005).
-		if err := r.reconcileBrokerTier(ctx, cluster, res, r.imageToRun(cluster, sts)); err != nil {
+		// A conflicting write leaves the broker conditions as they are; the
+		// next reconcile writes again.
+		if err := r.reconcileBrokerTier(ctx, cluster, res, r.imageToRun(cluster, sts)); apierrors.IsConflict(err) {
+			logf.FromContext(ctx).V(1).Info("Retrying broker tier after a conflicting write", "error", err.Error())
+		} else if err != nil {
 			logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
 			setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, "BrokerReconcileFailed", err.Error())
 		}
@@ -815,8 +821,15 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	return ctrl.Result{}, nil
 }
 
-// failed records a failure condition and returns the error for requeue.
+// failed records a failure condition and returns the error for requeue. A
+// conflict means the object was read before someone else changed it, which
+// says nothing about the cluster: it is retried with the conditions and
+// Events left as they are.
 func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev1alpha1.CubridCluster, reason string, cause error) (ctrl.Result, error) {
+	if apierrors.IsConflict(cause) {
+		logf.FromContext(ctx).V(1).Info("Retrying after a conflicting write", "reason", reason, "error", cause.Error())
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, cause.Error())
 	setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, cause.Error())
 	r.event(cluster, corev1.EventTypeWarning, reason, cause.Error())

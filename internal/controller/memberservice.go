@@ -83,8 +83,8 @@ func (r *CubridClusterReconciler) reconcileMemberServices(ctx context.Context, c
 			svc.Spec.PublishNotReadyAddresses = true
 			svc.Spec.Selector = map[string]string{podNameLabel: name}
 			svc.Spec.Ports = []corev1.ServicePort{
-				{Name: portNameCubrid, Port: cubridServerPort, TargetPort: intOrString(cubridServerPort)},
-				{Name: portNameManager, Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
+				{Name: portNameCubrid, Protocol: corev1.ProtocolTCP, Port: cubridServerPort, TargetPort: intOrString(cubridServerPort)},
+				{Name: portNameManager, Protocol: corev1.ProtocolTCP, Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
 				{
 					Name: "heartbeat", Protocol: corev1.ProtocolUDP,
 					Port: haHeartbeatPort, TargetPort: intOrString(haHeartbeatPort),
