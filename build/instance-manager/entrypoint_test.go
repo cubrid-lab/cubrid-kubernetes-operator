@@ -53,6 +53,8 @@ const (
 echo "cubrid $*" >> "${CALLS}"
 # CUBRID_START_SECONDS makes a start take that long, as the real one does.
 if [ "$2" = "start" ] && [ -n "${CUBRID_START_SECONDS:-}" ]; then sleep "${CUBRID_START_SECONDS}"; fi
+# CUBRID_START_EXIT makes a start fail, as it does on an unfinished database.
+if [ "$2" = "start" ] && [ -n "${CUBRID_START_EXIT:-}" ]; then exit "${CUBRID_START_EXIT}"; fi
 if [ "$1" = "createdb" ]; then
   printf '%s\t%s\tlocalhost\n' "${CUBRID_DB}" "${PWD}" >> "${CUBRID_DATABASES}/databases.txt"
 fi
@@ -194,6 +196,21 @@ func (f *fixture) registerDatabase() {
 	}
 }
 
+// markUnfinished leaves the ownership marker an interrupted createdb or
+// restoredb of the Instance Manager leaves in the database directory.
+func (f *fixture) markUnfinished() string {
+	f.t.Helper()
+	dir := filepath.Join(f.databases, dbName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	marker := filepath.Join(dir, ".im-operation")
+	if err := os.WriteFile(marker, []byte("op-1\n"), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+	return marker
+}
+
 func wantCalls(t *testing.T, got []string, wantPrefixes ...string) {
 	t.Helper()
 	if len(got) != len(wantPrefixes) {
@@ -275,6 +292,53 @@ func TestEntrypoint_HAMemberWithDatabaseStartsHeartbeat(t *testing.T) {
 			f.wantHAConfInstalled()
 		})
 	}
+}
+
+// A database whose createdb or restoredb was interrupted stays registered
+// with the manager's ownership marker. Starting it fails, so the entrypoint
+// starts only the manager, which owns the cleanup, and leaves the marker and
+// the data as they are. An HA member still gets its configuration.
+func TestEntrypoint_UnfinishedDatabaseStartsOnlyTheManager(t *testing.T) {
+	for _, components := range []string{componentsServer, componentsHA} {
+		for _, bootstrap := range []string{"new", bootstrapRecovery} {
+			t.Run(components+"/"+bootstrap, func(t *testing.T) {
+				f := newFixture(t, managerStub)
+				f.env["CUBRID_COMPONENTS"] = components
+				f.env["CUBRID_BOOTSTRAP"] = bootstrap
+				f.env["CUBRID_START_EXIT"] = "1"
+				if components != componentsServer {
+					f.configureHA()
+				}
+				f.registerDatabase()
+				marker := f.markUnfinished()
+				code, out := f.run()
+				if code != 0 {
+					t.Fatalf("exit %d:\n%s", code, out)
+				}
+				wantCalls(t, f.recorded(), callManagerStart)
+				if data, err := os.ReadFile(marker); err != nil || string(data) != "op-1\n" {
+					t.Errorf("the ownership marker was not kept as it was (err=%v): %q", err, data)
+				}
+				if components != componentsServer {
+					f.wantHAConfInstalled()
+				}
+				if !strings.Contains(out, "unfinished") {
+					t.Errorf("the log does not say why nothing was started:\n%s", out)
+				}
+			})
+		}
+	}
+}
+
+// An unfinished database is never created over, also before it is registered.
+func TestEntrypoint_UnregisteredUnfinishedDatabaseIsNotCreated(t *testing.T) {
+	f := newFixture(t, managerStub)
+	f.markUnfinished()
+	code, out := f.run()
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	wantCalls(t, f.recorded(), callManagerStart)
 }
 
 // A configured HA member without a database waits: the first database is

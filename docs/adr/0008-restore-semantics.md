@@ -156,8 +156,10 @@ in all (`status.bootstrap.attempts`), then the recovery is `Failed`. Before it
 restores again the Instance Manager removes the directory and the
 `databases.txt` line of its own failed restore, which it recognises by the
 operation ID it wrote into `<db>/.im-operation`; a target without that proof
-is never touched and the restore is refused. The cluster is not Ready at any
-point before the restore has completed.
+is never touched and the restore is refused. A container that starts while
+the marker is present does not start the database: the entrypoint runs only
+the Instance Manager and leaves the marker in place. The cluster is not Ready
+at any point before the restore has completed.
 
 ### Validation gate (before Ready)
 

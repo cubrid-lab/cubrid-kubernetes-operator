@@ -295,7 +295,10 @@ about a second. The entrypoint needs no root: it does not call `gosu` or
 `chown`, and the image sets `hosts: files dns` in `/etc/nsswitch.conf` at build
 time because a non-root process cannot edit that file. In a recovery bootstrap
 the entrypoint creates no database and starts no server until a restore has
-registered one.
+registered one. A database whose directory carries the manager's ownership
+marker (`<db>/.im-operation`, an interrupted `createdb` or `restoredb`) is
+neither created over nor started: the entrypoint runs only the manager, after
+installing an HA member's configuration, and leaves the marker in place.
 
 The operator reads its own token from `IM_TOKEN`, set from the Secret
 `instance-manager-token` in its namespace, and copies it into each cluster's
