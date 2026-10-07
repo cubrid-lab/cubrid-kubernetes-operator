@@ -153,9 +153,12 @@ var _ = Describe("Events that start a CubridCluster reconcile (#269)", func() {
 		}
 		Eventually(stsImage).WithTimeout(10 * time.Second).Should(Equal(firstImage))
 
+		// A merge patch, not an update: the running manager writes the
+		// status of the same object, and an update would race with it.
 		c := getCluster(key)
+		specPatch := client.MergeFrom(c.DeepCopy())
 		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: repository, Tag: "2"}
-		Expect(k8sClient.Update(ctx, c)).To(Succeed())
+		Expect(k8sClient.Patch(ctx, c, specPatch)).To(Succeed())
 		Eventually(func() string {
 			cond := meta.FindStatusCondition(getCluster(key).Status.Conditions, conditionUpdating)
 			if cond == nil {
