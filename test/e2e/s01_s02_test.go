@@ -52,12 +52,22 @@ type haRun struct {
 
 	// history is everything the workload client recorded so far.
 	history string
+	// running holds the clients started and not stopped yet.
+	running map[string]bool
+
+	// gate restores and verifies the starting state before each step after
+	// S01; entries are its decisions.
+	gate    *faults.Gate
+	entries []faults.Entry
 }
 
 func newHARun(namespace, clientNamespace, cluster, database string, members []string) *haRun {
-	return &haRun{
+	r := &haRun{
 		namespace: namespace, clientNamespace: clientNamespace, cluster: cluster, database: database, members: members,
+		running: map[string]bool{},
 	}
+	r.gate = r.newGate()
+	return r
 }
 
 // reportNotRun records every scenario of the group as not_run with the
@@ -336,6 +346,7 @@ func s01AndS02Steps(r *haRun) {
 	})
 
 	It("S02: replicates rows, schema changes and rollbacks, also to a replaced slave", Label("S02"), func() {
+		r.enter(nil)
 		result := evidence.Scenario{ID: "S02", Result: evidence.Fail, Reason: "a check of S02 failed; see the test output"}
 		// Recorded also when a check below fails.
 		defer func() { recordScenario(result) }()

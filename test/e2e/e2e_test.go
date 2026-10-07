@@ -50,7 +50,8 @@ const metricsRoleBindingName = "cubrid-kubernetes-operator-metrics-binding"
 // needs, and a failure in one does not keep another from running. The
 // manager they share is deployed by BeforeSuite. Within an Ordered group, a
 // failed step blocks the steps after it, which then report their scenarios as
-// blocked.
+// blocked; the HA group instead restores its starting state before each step
+// (haBootstrapScenario).
 var _ = Describe("Manager", func() {
 	var controllerPodName string
 
