@@ -71,7 +71,7 @@ make build        # compile
 make test         # unit + envtest (downloads envtest binaries on first run)
 make lint         # golangci-lint
 make manifests generate   # regenerate CRDs/RBAC/DeepCopy after API changes
-make verify      # fail if generated files, formatting or go.mod/go.sum are not committed (CI runs this)
+make verify       # fail if generated files, formatting or go.mod/go.sum are not committed (CI runs this)
 make run          # run the operator against your current kubecontext
 make test-e2e     # Kind-based e2e (isolated cluster)
 ```

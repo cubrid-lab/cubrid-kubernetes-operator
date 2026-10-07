@@ -63,7 +63,7 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: verify
-verify: manifests generate fmt ## Fail if generated files, formatting or go.mod/go.sum differ from what is committed.
+verify: manifests generate fmt ## Fail if generated files, formatting or go.mod/go.sum differ from what is committed. It does not run vet: 'make test' and 'make lint' do.
 	go mod tidy
 	@# Regenerating rewrites the boilerplate year (YEAR defaults to the current
 	@# year), so a header that differs only in its copyright year is ignored;
