@@ -20,9 +20,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 const convergedApplyinfo = ` *** Applied Info. ***
@@ -208,5 +210,133 @@ func TestServer_Role_NoReplicationWithoutAnApplier(t *testing.T) {
 		if tc.wantNil != (cli.applyArgs == nil) && tc.wantReason == "" {
 			t.Errorf("%s: applyinfo run = %v", name, cli.applyArgs)
 		}
+	}
+}
+
+// The first argument of the commands a stallingCLI can hold back.
+const (
+	applyinfoCmd = "applyinfo"
+	heartbeatCmd = "heartbeat"
+)
+
+// stallingCLI answers like roleCLI, except that the command named stall does
+// not answer until its context ends, or until hang passes, and heartbeat
+// status answers only after heartbeatDelay. hang stands in for the
+// ten-second default ExecCLI gives a command whose context has no deadline
+// (ExecCLI.Run in cli.go).
+type stallingCLI struct {
+	roleCLI
+	stall          string
+	hang           time.Duration
+	heartbeatDelay time.Duration
+}
+
+func (c *stallingCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == c.stall {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(c.hang):
+			return "", context.DeadlineExceeded
+		}
+	}
+	if len(args) > 0 && args[0] == heartbeatCmd {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(c.heartbeatDelay):
+		}
+	}
+	return c.roleCLI.Run(ctx, name, args...)
+}
+
+// probeTimeout is how long the operator waits for a role answer
+// (NewHTTPRoleProber in internal/controller).
+const probeTimeout = 5 * time.Second
+
+// roleWithin asks for the role and fails unless the answer came before the
+// operator would have given up on it.
+func roleWithin(t *testing.T, ctx context.Context, h http.Handler) HAStatus {
+	t.Helper()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/v1/role", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	req.RemoteAddr = testRemoteAddr
+	rr := httptest.NewRecorder()
+	start := time.Now()
+	h.ServeHTTP(rr, req)
+	if took := time.Since(start); took >= probeTimeout {
+		t.Fatalf("/v1/role took %s, the operator gives up after %s", took, probeTimeout)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/v1/role = %d", rr.Code)
+	}
+	var st HAStatus
+	if err := json.Unmarshal(rr.Body.Bytes(), &st); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// An applier that does not answer leaves the replication unknown; the role
+// read before it still arrives in time (#278).
+func TestServer_Role_SlowApplyinfoLeavesReplicationUnknown(t *testing.T) {
+	t.Parallel()
+	cli := &stallingCLI{roleCLI: roleCLI{heartbeat: slaveHeartbeat}, stall: applyinfoCmd, hang: 2 * probeTimeout}
+	h := NewServer(cli, "tok").WithReplication("appdb", "/var/lib/cubrid/databases").Handler()
+	st := roleWithin(t, context.Background(), h)
+	if st.Role != RoleSlave {
+		t.Fatalf("role = %q (%s), want slave", st.Role, st.Reason)
+	}
+	r := st.Replication
+	if r == nil || r.Available || r.Converged() || !strings.Contains(r.Reason, "did not answer in time") {
+		t.Errorf("replication = %+v, want it unknown because applyinfo did not answer in time", r)
+	}
+}
+
+// A heartbeat status that answers slowly leaves applyinfo only what remains
+// of the role budget: the answer still arrives within that budget.
+func TestServer_Role_SlowHeartbeatAndStuckApplyinfoAnswerWithinBudget(t *testing.T) {
+	t.Parallel()
+	cli := &stallingCLI{roleCLI: roleCLI{heartbeat: slaveHeartbeat}, stall: applyinfoCmd,
+		hang: 2 * probeTimeout, heartbeatDelay: 3 * time.Second}
+	h := NewServer(cli, "tok").WithReplication("appdb", "/var/lib/cubrid/databases").Handler()
+	start := time.Now()
+	st := roleWithin(t, context.Background(), h)
+	if took := time.Since(start); took > roleBudget+250*time.Millisecond {
+		t.Errorf("/v1/role took %s, its budget is %s", took, roleBudget)
+	}
+	if st.Role != RoleSlave {
+		t.Fatalf("role = %q (%s), want slave", st.Role, st.Reason)
+	}
+	if r := st.Replication; r == nil || r.Available || !strings.Contains(r.Reason, "did not answer in time") {
+		t.Errorf("replication = %+v, want it unknown because applyinfo did not answer in time", r)
+	}
+}
+
+// A heartbeat status that does not answer gives an unknown role, in time.
+func TestServer_Role_SlowHeartbeatAnswersInTime(t *testing.T) {
+	t.Parallel()
+	cli := &stallingCLI{roleCLI: roleCLI{heartbeat: slaveHeartbeat}, stall: heartbeatCmd, hang: 2 * probeTimeout}
+	h := NewServer(cli, "tok").WithReplication("appdb", "/var/lib/cubrid/databases").Handler()
+	st := roleWithin(t, context.Background(), h)
+	if st.Role != RoleUnknown || st.Replication != nil {
+		t.Errorf("status = %+v, want an unknown role and no replication", st)
+	}
+}
+
+// A request whose caller went away ends the commands it started.
+func TestServer_Role_CanceledRequestEndsTheCommands(t *testing.T) {
+	t.Parallel()
+	cli := &stallingCLI{roleCLI: roleCLI{heartbeat: slaveHeartbeat}, stall: applyinfoCmd, hang: 2 * probeTimeout}
+	h := NewServer(cli, "tok").WithReplication("appdb", "/var/lib/cubrid/databases").Handler()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	st := roleWithin(t, ctx, h)
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("/v1/role took %s after its request was canceled", took)
+	}
+	if r := st.Replication; r == nil || r.Available || !strings.Contains(r.Reason, "request was canceled") {
+		t.Errorf("replication = %+v, want it unknown because the request was canceled", r)
 	}
 }

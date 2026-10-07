@@ -240,11 +240,25 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{readyKey: false, reasonKey: st.Reason})
 }
 
+const (
+	// roleBudget bounds a role answer as a whole. The operator gives up on
+	// it after five seconds (NewHTTPRoleProber), and a request it canceled
+	// carries no deadline here, so the answer sets its own.
+	roleBudget = 4 * time.Second
+	// replicationBudget bounds applyinfo within the role answer, so a slow
+	// applier leaves the replication unknown instead of losing the role.
+	replicationBudget = 2 * time.Second
+)
+
 // role returns the local node's authoritative CUBRID role.
 func (s *Server) role(w http.ResponseWriter, r *http.Request) {
-	st := HeartbeatStatus(r.Context(), s.cli)
-	st.EngineVersion = s.engineVersion(r.Context())
-	st.Replication = replicationOf(r.Context(), s.cli, st, s.replicationDB, s.databasesDir)
+	ctx, cancel := context.WithTimeout(r.Context(), roleBudget)
+	defer cancel()
+	st := HeartbeatStatus(ctx, s.cli)
+	st.EngineVersion = s.engineVersion(ctx)
+	replCtx, cancelRepl := context.WithTimeout(ctx, replicationBudget)
+	defer cancelRepl()
+	st.Replication = replicationOf(replCtx, s.cli, st, s.replicationDB, s.databasesDir)
 	writeJSON(w, http.StatusOK, st)
 }
 
