@@ -314,7 +314,7 @@ These sections are recommended; use only the ones the issue needs:
 |------|---------|-------|
 | Component scope | The component or area the work touches (`controller`, `ha`, `backup`) | The `(scope)` of the title |
 | Work scope | What this issue changes and what it leaves out | The Scope / Out of scope sections |
-| Release scope | Whether the work is part of a release | The Release section |
+| Release scope | Whether the work is part of a release | The `**Release:**` line |
 
 Do not use one for another: a title scope names a component, not a release,
 and a release target does not widen or narrow the work scope. A small issue
@@ -331,7 +331,7 @@ Each label answers a different question; do not use one to express another.
 | `size:` | Expected effort | `size: S` |
 | `phase:` | Which roadmap area | `phase: 2-ha` |
 | `status: needs triage` | Metadata still needs a maintainer | — |
-| Release target | Whether a release includes it | Release section of the issue |
+| Release target | Whether a release includes it | The `**Release:**` line of the issue |
 
 Release scope is decided in [ROADMAP.md](./ROADMAP.md#v01-scope). An issue
 states its target in one line near the top:

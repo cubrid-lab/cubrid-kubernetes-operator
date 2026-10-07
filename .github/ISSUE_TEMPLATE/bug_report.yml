@@ -59,6 +59,7 @@ body:
         Remove credentials and sensitive data. The kinds of evidence are those
         of docs/observability.md.
       placeholder: |
+        - CubridCluster manifest (redacted):
         - CubridCluster status / Conditions:
         - Kubernetes Events:
         - Pod / container state:

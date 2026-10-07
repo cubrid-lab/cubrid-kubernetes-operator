@@ -120,8 +120,8 @@ In short:
 
 1. Pick a sub-issue sized `size: S` or `size: M`. A `size: L` issue is a
    tracking issue: do not implement it directly. Read the issue's dependencies
-   and file pointers ("Depends on", "Where to look", "Related work") first, and check for an open PR on the same
-   issue. Confirm availability and set the actual implementer as the GitHub
+   and file pointers ("Depends on", "Where to look", "Related work") first,
+   and check for an open PR on the same issue. Confirm availability and set the actual implementer as the GitHub
    Assignee before implementation. A claim comment is not an assignment. If
    assignment permission is missing, ask a maintainer and wait for assignment.
    Do not take an assigned issue without an agreed handoff; update Assignees
