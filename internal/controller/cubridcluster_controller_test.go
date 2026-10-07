@@ -387,8 +387,8 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(rep.StalledSince).NotTo(BeNil())
 			since := rep.StalledSince.Time
 
-			By("every other reading times out until the window has passed")
-			for clock.Sub(since) < replicationStallWindow {
+			By("every other reading times out; the readings that come back report the stall once the window has passed")
+			for clock.Sub(since) < replicationStallWindow+30*time.Second {
 				clock = clock.Add(10 * time.Second)
 				c, rep := reconcileAt(false)
 				Expect(c.Status).To(Equal(metav1.ConditionUnknown))
@@ -400,15 +400,13 @@ var _ = Describe("CubridCluster Controller", func() {
 				clock = clock.Add(10 * time.Second)
 				c, _ = reconcileAt(true)
 				if clock.Sub(since) < replicationStallWindow {
-					Expect(c.Status).To(Equal(metav1.ConditionTrue))
+					Expect(c.Status).To(Equal(metav1.ConditionTrue), "a reading within the window")
+					continue
 				}
+				Expect(c.Status).To(Equal(metav1.ConditionFalse), "a reading after the window")
+				Expect(c.Reason).To(Equal(reasonReplicationStalled))
+				Expect(c.Message).To(ContainSubstring(slave))
 			}
-
-			By("the reading after the window reports the stall")
-			c, _ := reconcileAt(true)
-			Expect(c.Status).To(Equal(metav1.ConditionFalse))
-			Expect(c.Reason).To(Equal(reasonReplicationStalled))
-			Expect(c.Message).To(ContainSubstring(slave))
 		})
 	})
 

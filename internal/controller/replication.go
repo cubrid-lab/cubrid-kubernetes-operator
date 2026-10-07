@@ -72,11 +72,18 @@ type ReplicationObservation struct {
 // restarted, are not comparable and start a new series.
 //
 // Without a reading (obs nil) the status before is kept unchanged, neither
-// progress nor a stall, until it is older than replicationHistoryTTL.
+// progress nor a stall, until it is older than replicationHistoryTTL. A status
+// before stamped more than roleObservationTTL in the future, as after the
+// clock went back or another Operator instance took over, is no history
+// either.
 func nextReplication(prev *databasev1alpha1.InstanceReplication, obs *ReplicationObservation,
 	now time.Time) *databasev1alpha1.InstanceReplication {
-	if prev != nil && (prev.ObservedAt == nil || now.Sub(prev.ObservedAt.Time) > replicationHistoryTTL) {
-		prev = nil
+	if prev != nil {
+		if prev.ObservedAt == nil {
+			prev = nil
+		} else if age := now.Sub(prev.ObservedAt.Time); age > replicationHistoryTTL || age < -roleObservationTTL {
+			prev = nil
+		}
 	}
 	if obs == nil {
 		return prev.DeepCopy()

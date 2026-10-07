@@ -84,6 +84,17 @@ the fixed names below; free text belongs in `message`.
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
 available; they do not say that a client can run SQL.
 
+`ReplicationHealthy` judges only the slaves whose applier was read in the
+current observation. When a read times out
+([#278](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/278)),
+the Condition is `Unknown` for that observation, while
+`status.instances[].replication` keeps the last reading so that the stall
+window goes on counting. Under intermittent read timeouts the Condition
+therefore alternates between `Unknown` and `True` or `False`, and its
+`lastTransitionTime` moves with it: an alert must not rely on a continuous
+`False` duration. `stalledSince` carries the start of a stall across such
+gaps.
+
 ### What `RoutingReady=False` does not do
 
 `RoutingReady=False` reports that the Operator does not claim the write
@@ -203,7 +214,7 @@ otherwise.
 | `cubrid_instance_role` | `namespace`, `cluster`, `member`, `role` | 1 for the member's role, 0 for the others; `role` is `master`, `slave`, `replica` or `unknown` |
 | `cubrid_instance_replication_observation_available` | `namespace`, `cluster`, `member` | 1 when the slave's applier could be read |
 | `cubrid_instance_replication_delayed_pages` | `namespace`, `cluster`, `member` | copied log pages not applied yet; no sample when not available |
-| `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set |
+| `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set and the applier was read in this observation; no sample when not read |
 | `cubrid_instance_last_observation_timestamp_seconds` | `namespace`, `cluster`, `member` | time of the member's last answer |
 
 - A value that is not available has no sample. It is never exported as 0.

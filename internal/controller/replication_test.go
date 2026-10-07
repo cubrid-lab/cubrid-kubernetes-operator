@@ -66,16 +66,24 @@ func TestNextReplication(t *testing.T) {
 		"the history has expired":       {readAgo(repl(10, 9, 40*time.Second), replicationHistoryTTL+time.Second), nil, true, -1},
 		"a reading without a time is no history": {&databasev1alpha1.InstanceReplication{Source: replMaster, AppliedChanges: 10, DelayedPages: 4},
 			obs(10, 9), false, -1},
-		"pages wait across an expired history":  {readAgo(repl(10, 9, 40*time.Second), replicationHistoryTTL+time.Second), obs(10, 9), false, -1},
-		"pages wait across a missed reading":    {readAgo(repl(10, 9, 40*time.Second), 2*haResyncInterval), obs(10, 9), false, 40 * time.Second},
-		"the first observation, pages waiting":  {nil, obs(10, 5), false, -1},
-		"caught up":                             {repl(10, 0, -1), obs(10, 0), false, -1},
-		"busy: pages wait, the counter rose":    {repl(10, 2, -1), obs(40, 3), false, -1},
-		"pages just arrived":                    {repl(10, 0, -1), obs(10, 4), false, -1},
-		"pages wait and nothing was applied":    {repl(10, 4, -1), obs(10, 9), false, 0},
-		"still stalled: the first time is kept": {repl(10, 9, 40*time.Second), obs(10, 43), false, 40 * time.Second},
-		"stalled, then it applied something":    {repl(7, 43, 40*time.Second), obs(8, 42), false, -1},
-		"stalled, then no page waits":           {repl(10, 43, 40*time.Second), obs(10, 0), false, -1},
+		"pages wait across an expired history": {readAgo(repl(10, 9, 40*time.Second), replicationHistoryTTL+time.Second), obs(10, 9), false, -1},
+		"pages wait across a missed reading":   {readAgo(repl(10, 9, 40*time.Second), 2*haResyncInterval), obs(10, 9), false, 40 * time.Second},
+		// 120s is twice the stall window: a gap of a whole window is kept.
+		"kept 119s without a reading":    {readAgo(repl(10, 9, 150*time.Second), 119*time.Second), nil, false, 150 * time.Second},
+		"dropped 121s without a reading": {readAgo(repl(10, 9, 150*time.Second), 121*time.Second), nil, true, -1},
+		"pages wait after a 121s gap":    {readAgo(repl(10, 9, 150*time.Second), 121*time.Second), obs(10, 9), false, -1},
+		// The clock went back, or another Operator instance took over.
+		"a reading stamped in the future, within the skew": {readAgo(repl(10, 9, 0), -roleObservationTTL), nil, false, 0},
+		"a reading stamped in the future, beyond the skew": {readAgo(repl(10, 9, 0), -roleObservationTTL-time.Second), nil, true, -1},
+		"pages wait after a reading stamped in the future": {readAgo(repl(10, 9, 0), -time.Minute), obs(10, 9), false, -1},
+		"the first observation, pages waiting":             {nil, obs(10, 5), false, -1},
+		"caught up":                                        {repl(10, 0, -1), obs(10, 0), false, -1},
+		"busy: pages wait, the counter rose":               {repl(10, 2, -1), obs(40, 3), false, -1},
+		"pages just arrived":                               {repl(10, 0, -1), obs(10, 4), false, -1},
+		"pages wait and nothing was applied":               {repl(10, 4, -1), obs(10, 9), false, 0},
+		"still stalled: the first time is kept":            {repl(10, 9, 40*time.Second), obs(10, 43), false, 40 * time.Second},
+		"stalled, then it applied something":               {repl(7, 43, 40*time.Second), obs(8, 42), false, -1},
+		"stalled, then no page waits":                      {repl(10, 43, 40*time.Second), obs(10, 0), false, -1},
 		"another master: the counters are not comparable": {
 			&databasev1alpha1.InstanceReplication{Source: replSlaveB, AppliedChanges: 10, DelayedPages: 4},
 			obs(10, 9), false, -1},
@@ -97,8 +105,13 @@ func TestNextReplication(t *testing.T) {
 			t.Errorf("%s: got nil", name)
 			continue
 		}
-		if got.Source != tc.obs.Source || got.AppliedChanges != tc.obs.AppliedChanges || got.DelayedPages != tc.obs.DelayedPages {
-			t.Errorf("%s: values = %+v, want the observation's", name, got)
+		want := tc.obs
+		if want == nil {
+			want = &ReplicationObservation{Source: tc.prev.Source, AppliedChanges: tc.prev.AppliedChanges,
+				DelayedPages: tc.prev.DelayedPages}
+		}
+		if got.Source != want.Source || got.AppliedChanges != want.AppliedChanges || got.DelayedPages != want.DelayedPages {
+			t.Errorf("%s: values = %+v, want %+v", name, got, *want)
 		}
 		switch {
 		case tc.wantStalled < 0 && got.StalledSince != nil:
@@ -235,9 +248,9 @@ func TestObservationFromStatus_Replication(t *testing.T) {
 	}
 }
 
-// A stall interrupted by readings that time out, or by a role that could not
-// be read, still reaches the window: a missed reading keeps the history and
-// leaves the condition Unknown.
+// A stall interrupted by readings that time out still reaches the window: a
+// missed reading of a slave keeps the history and leaves the condition
+// Unknown.
 func TestInstanceStatuses_ReplicationAcrossMissedReadings(t *testing.T) {
 	members := []string{replMaster, replSlaveA}
 	stuck := &ReplicationObservation{Source: replMaster, AppliedChanges: 10, DelayedPages: 9}
@@ -250,8 +263,7 @@ func TestInstanceStatuses_ReplicationAcrossMissedReadings(t *testing.T) {
 	}
 	read := RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, Replication: stuck}
 	timedOut := RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave}
-	unreachable := RoleObservation{}
-	steps := []RoleObservation{read, read, timedOut, read, unreachable, read, timedOut, read, timedOut, read}
+	steps := []RoleObservation{read, read, timedOut, read, timedOut, timedOut, read, timedOut, read, timedOut, read}
 	stalledSince := testNow.Add(haResyncInterval)
 	var status []databasev1alpha1.InstanceStatus
 	for i, slave := range steps {
@@ -297,16 +309,27 @@ func TestInstanceStatuses_ReplicationHistoryExpires(t *testing.T) {
 	}
 }
 
-// A member observed with another role than slave carries no history.
-func TestInstanceStatuses_ReplicationDroppedForAnotherRole(t *testing.T) {
+// Only a slave whose applier could not be read keeps its history. A member
+// whose role could not be read may be a Pod that was replaced or is
+// restarting, and one observed in another role is no slave: neither keeps it.
+func TestInstanceStatuses_ReplicationKeptOnlyForAReadSlave(t *testing.T) {
 	members := []string{replMaster, replSlaveA}
 	prev := []databasev1alpha1.InstanceStatus{{Name: replMaster}, {Name: replSlaveA, Role: databasev1alpha1.RoleSlave,
 		Replication: repl(10, 9, 40*time.Second)}}
-	obs := map[string]RoleObservation{
-		replMaster: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow},
-		replSlaveA: {Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: testNow},
-	}
-	if r := instanceStatuses(members, obs, testNow, prev)[1].Replication; r != nil {
-		t.Errorf("replication of a member that is now a master = %+v, want none", r)
+	master := RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: testNow}
+	for name, tc := range map[string]struct {
+		member RoleObservation
+		kept   bool
+	}{
+		"a slave whose applier was not read": {RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow}, true},
+		"a member that could not be reached": {RoleObservation{}, false},
+		"a member whose role is unknown":     {RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: testNow}, false},
+		"a member whose answer is stale":     {RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow.Add(-time.Minute)}, false},
+		"a member that is now a master":      {master, false},
+	} {
+		obs := map[string]RoleObservation{replMaster: master, replSlaveA: tc.member}
+		if r := instanceStatuses(members, obs, testNow, prev)[1].Replication; (r != nil) != tc.kept {
+			t.Errorf("%s: replication = %+v, want kept %t", name, r, tc.kept)
+		}
 	}
 }
