@@ -137,6 +137,11 @@ state `Starting`; the operation is `Completed` only when that succeeded, and a
 failed start leaves the restored data in place and the operation `Failed`.
 Deleting the Pod to let the entrypoint start it was rejected: it would make a
 restart the start mechanism. An HA member is started by the HA bootstrap.
+A member that is not standalone restores only when its HA configuration
+(`cubrid_ha.conf` with a usable `ha_node_list`) can be read, because the
+restored database is registered under that member list and joins HA; without
+it the operation ends `Failed` with a configuration reason before any command
+runs or anything is written below the database root (#300).
 
 What the restore trusts in the artifact (#195): the manifest is read from the
 bucket and decides which objects are read and where they are staged, so its
