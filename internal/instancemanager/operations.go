@@ -208,16 +208,20 @@ func (s *Server) activate(ctx context.Context, args ...string) (string, error) {
 
 // RequestShutdown is what "instance-manager shutdown" does. It asks the
 // manager that listens at managerURL to stop CUBRID, so that the manager
-// knows the stop is intended. When no manager answers, for example because
-// the container is terminated before the manager was started, it stops
-// CUBRID itself with the same procedure.
-func RequestShutdown(ctx context.Context, managerURL, database string, cli CLI, timeout time.Duration) error {
+// knows the stop is intended; the request carries the manager's token. When
+// no manager answers, for example because the container is terminated before
+// the manager was started, it stops CUBRID itself with the same procedure. A
+// manager that answers, also with a refusal, is not bypassed.
+func RequestShutdown(ctx context.Context, managerURL, token, database string, cli CLI, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	target := managerURL + "/v1/shutdown?database=" + url.QueryEscape(database)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
 	if err != nil {
 		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -100,11 +100,89 @@ func TestServer_Role_RequiresToken(t *testing.T) {
 	}
 }
 
-func TestServer_Role_LoopbackExempt(t *testing.T) {
+// loopbackAddr is a caller inside the Pod, as the preStop hook is.
+const loopbackAddr = "127.0.0.1:6000"
+
+// A call from loopback needs the token like any other: another container of
+// the Pod, or a process that reaches the port through loopback, is not
+// trusted for its address (#271).
+func TestServer_Role_LoopbackNeedsToken(t *testing.T) {
 	h := NewServer(fakeCLI{out: masterOut}, "tok").Handler()
-	// loopback without token -> allowed (preStop path, ADR-0003)
-	if rr := doReq(t, h, "/v1/role", "", "127.0.0.1:6000"); rr.Code != http.StatusOK {
-		t.Errorf("/v1/role loopback no-token = %d, want 200", rr.Code)
+	if rr := doReq(t, h, "/v1/role", "", loopbackAddr); rr.Code != http.StatusUnauthorized {
+		t.Errorf("/v1/role loopback no-token = %d, want 401", rr.Code)
+	}
+	if rr := doReq(t, h, "/v1/role", "tok", loopbackAddr); rr.Code != http.StatusOK {
+		t.Errorf("/v1/role loopback with-token = %d, want 200", rr.Code)
+	}
+}
+
+// Every /v1 route refuses a caller without the valid token, from any address,
+// and a refused call runs no command (#271).
+func TestServer_V1_RefusesMissingOrWrongTokenFromEveryAddress(t *testing.T) {
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/v1/role"},
+		{http.MethodGet, "/v1/ha/status"},
+		{http.MethodGet, "/v1/ha/convergence"},
+		{http.MethodPost, "/v1/ha/bootstrap"},
+		{http.MethodPost, "/v1/backup"},
+		{http.MethodPost, "/v1/restore/prepare"},
+		{http.MethodGet, "/v1/operations/op-1"},
+		{http.MethodPost, "/v1/shutdown?database=appdb"},
+	}
+	headers := map[string]string{
+		"no header":           "",
+		"wrong token":         "Bearer not-the-token",
+		"token prefix":        "Bearer to",
+		"token with a suffix": "Bearer tokx",
+		"no scheme":           "tok",
+		"empty bearer":        "Bearer ",
+	}
+	for _, addr := range []string{testRemoteAddr, loopbackAddr, "[::1]:6000"} {
+		for _, rt := range routes {
+			for name, header := range headers {
+				cli := &countingCLI{}
+				s := NewServer(cli, "tok")
+				req := httptest.NewRequest(rt.method, rt.path, strings.NewReader(`{}`))
+				req.RemoteAddr = addr
+				req.Header.Set("Idempotency-Key", "k")
+				if header != "" {
+					req.Header.Set("Authorization", header)
+				}
+				rr := httptest.NewRecorder()
+				s.Handler().ServeHTTP(rr, req)
+				if rr.Code != http.StatusUnauthorized {
+					t.Errorf("%s %s from %s, %s = %d, want 401", rt.method, rt.path, addr, name, rr.Code)
+				}
+				if got := cli.recorded(); len(got) != 0 || s.StopIntended() {
+					t.Errorf("%s %s from %s, %s ran %q (stop intended %v), want nothing",
+						rt.method, rt.path, addr, name, got, s.StopIntended())
+				}
+			}
+		}
+	}
+}
+
+// A manager configured without a token refuses every /v1 call instead of
+// serving it unauthenticated (#271).
+func TestServer_EmptyToken_FailsClosed(t *testing.T) {
+	cli := &countingCLI{}
+	s := NewServer(cli, "")
+	for _, addr := range []string{testRemoteAddr, loopbackAddr} {
+		for _, header := range []string{"", "Bearer ", "Bearer"} {
+			req := httptest.NewRequest(http.MethodPost, "/v1/shutdown?database=appdb", nil)
+			req.RemoteAddr = addr
+			if header != "" {
+				req.Header.Set("Authorization", header)
+			}
+			rr := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rr, req)
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("/v1/shutdown from %s with %q = %d, want 401", addr, header, rr.Code)
+			}
+		}
+	}
+	if got := cli.recorded(); len(got) != 0 || s.StopIntended() {
+		t.Errorf("refused calls ran %q (stop intended %v), want nothing", got, s.StopIntended())
 	}
 }
 
@@ -140,10 +218,11 @@ func TestServer_Backup_RequiresToken(t *testing.T) {
 	}
 }
 
-func TestServer_Shutdown_LoopbackExempt(t *testing.T) {
+func TestServer_Shutdown_LoopbackWithToken(t *testing.T) {
 	h := NewServer(fakeCLI{out: "ok"}, "tok").Handler()
 	req := httptest.NewRequest("POST", "/v1/shutdown?database=appdb", nil)
-	req.RemoteAddr = "127.0.0.1:6000"
+	req.RemoteAddr = loopbackAddr
+	req.Header.Set("Authorization", "Bearer tok")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {

@@ -183,6 +183,7 @@ func TestServer_StopIntended(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/shutdown?database=appdb", nil)
 	req.RemoteAddr = "127.0.0.1:4000"
+	req.Header.Set("Authorization", "Bearer tok")
 	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 	if !s.StopIntended() {
 		t.Error("not intended after a shutdown was requested")

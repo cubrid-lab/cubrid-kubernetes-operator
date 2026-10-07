@@ -81,8 +81,9 @@ func (d *deadlineCLI) get(key string) (time.Duration, bool) {
 
 func TestServer_ShutdownRunsUnderItsOwnDeadline(t *testing.T) {
 	cli := &deadlineCLI{}
-	srv := NewServer(cli, "").WithTimeouts(Timeouts{Shutdown: 90 * time.Second})
+	srv := NewServer(cli, "tok").WithTimeouts(Timeouts{Shutdown: 90 * time.Second})
 	req := httptest.NewRequest(http.MethodPost, "/v1/shutdown?database=appdb", nil)
+	req.Header.Set("Authorization", "Bearer tok")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

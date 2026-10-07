@@ -18,6 +18,7 @@ package instancemanager
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -703,15 +704,13 @@ func (s *Server) shutdown(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "shutdown"})
 }
 
-// auth wraps /v1 handlers with bearer-token authentication (loopback is exempt
-// so preStop can call locally without a token; ADR-0003).
+// auth wraps /v1 handlers with bearer-token authentication (ADR-0003). Every
+// caller needs the token, loopback included; a server without a token refuses
+// every call. The comparison takes the same time wherever the values differ.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.token == "" || isLoopback(r.RemoteAddr) {
-			next(w, r)
-			return
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer "+s.token {
+		got := r.Header.Get("Authorization")
+		if s.token == "" || subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+s.token)) != 1 {
 			reason := reasonWrongToken
 			if got == "" {
 				reason = reasonNoToken

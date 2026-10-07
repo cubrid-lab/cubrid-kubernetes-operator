@@ -248,5 +248,5 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 func (s *Server) logRefused(w http.ResponseWriter, r *http.Request, reason string) {
 	s.log().Warn("Refused request",
 		"event", eventRequestRefused, "reason", reason, "requestID", w.Header().Get(requestIDHeader),
-		"method", r.Method, "path", r.URL.Path, keyStatus, http.StatusUnauthorized, "loopback", false)
+		"method", r.Method, "path", r.URL.Path, keyStatus, http.StatusUnauthorized, "loopback", isLoopback(r.RemoteAddr))
 }

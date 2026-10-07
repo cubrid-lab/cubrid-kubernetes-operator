@@ -63,6 +63,7 @@ func TestServer_Stop_IsIdempotent(t *testing.T) {
 	// Also through the API, as the preStop hook asks.
 	req := httptest.NewRequest(http.MethodPost, "/v1/shutdown?database=appdb", nil)
 	req.RemoteAddr = "127.0.0.1:4000"
+	req.Header.Set("Authorization", "Bearer tok")
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -83,10 +84,10 @@ func TestRequestShutdown(t *testing.T) {
 	t.Run("a manager is listening", func(t *testing.T) {
 		serverCLI, localCLI := &countingCLI{}, &countingCLI{}
 		s := NewServer(serverCLI, "tok")
-		// The request comes from loopback and needs no token.
+		// The request comes from loopback and carries the token.
 		ts := httptest.NewServer(s.Handler())
 		defer ts.Close()
-		if err := RequestShutdown(context.Background(), ts.URL, "appdb", localCLI, 5*time.Second); err != nil {
+		if err := RequestShutdown(context.Background(), ts.URL, "tok", "appdb", localCLI, 5*time.Second); err != nil {
 			t.Fatal(err)
 		}
 		if len(serverCLI.recorded()) != 2 || len(localCLI.recorded()) != 0 {
@@ -96,13 +97,29 @@ func TestRequestShutdown(t *testing.T) {
 			t.Error("the manager does not know that the stop is intended")
 		}
 	})
+	// A refusal is an answer: the command does not stop CUBRID behind the
+	// manager's back.
+	t.Run("the manager refuses the token", func(t *testing.T) {
+		serverCLI, localCLI := &countingCLI{}, &countingCLI{}
+		s := NewServer(serverCLI, "tok")
+		ts := httptest.NewServer(s.Handler())
+		defer ts.Close()
+		for _, token := range []string{"", "not-the-token"} {
+			if err := RequestShutdown(context.Background(), ts.URL, token, "appdb", localCLI, 5*time.Second); err == nil {
+				t.Errorf("token %q: shutdown succeeded, want the refusal", token)
+			}
+		}
+		if len(serverCLI.recorded()) != 0 || len(localCLI.recorded()) != 0 || s.StopIntended() {
+			t.Errorf("manager ran %q, the command itself ran %q, want nothing", serverCLI.recorded(), localCLI.recorded())
+		}
+	})
 	t.Run("no manager is listening", func(t *testing.T) {
 		localCLI := &countingCLI{}
 		// A port nothing listens on.
 		ts := httptest.NewServer(http.NotFoundHandler())
 		url := ts.URL
 		ts.Close()
-		if err := RequestShutdown(context.Background(), url, "appdb", localCLI, 5*time.Second); err != nil {
+		if err := RequestShutdown(context.Background(), url, "tok", "appdb", localCLI, 5*time.Second); err != nil {
 			t.Fatal(err)
 		}
 		if got := strings.Join(localCLI.recorded(), "; "); got != stopHeartbeat+"; "+stopServer {
