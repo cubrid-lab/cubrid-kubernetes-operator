@@ -587,7 +587,7 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 		if err := before(); err != nil {
 			return err
 		}
-		if out, err := s.cli.Run(ctx, "cubrid", "server", "start", database); err != nil {
+		if out, err := s.activate(ctx, "server", "start", database); err != nil {
 			return fmt.Errorf("server start failed: %w: %s", err, out)
 		}
 	}
@@ -595,7 +595,7 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 		if err := before(); err != nil {
 			return err
 		}
-		if out, err := s.cli.Run(ctx, "cubrid", "heartbeat", "start"); err != nil {
+		if out, err := s.activate(ctx, "heartbeat", "start"); err != nil {
 			return fmt.Errorf("heartbeat start failed: %w: %s", err, out)
 		}
 	}
@@ -609,12 +609,19 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 // restore started it, and the marker is cleared afterwards, so that a start
 // that fails is tried again at the next start of the manager. A marker of any
 // other operation is left for the next operation on that database to judge.
+// It counts as a running operation: once the member is stopping it starts
+// nothing, and a stop waits for it.
 func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 	if s.store == nil {
 		return nil
 	}
+	if !s.admit() {
+		return errStopping
+	}
+	defer s.ops.Done()
 	ctx, cancel := context.WithTimeout(ctx, s.timeouts.Bootstrap)
 	defer cancel()
+	defer context.AfterFunc(s.opsCtx, cancel)()
 	target := s.restoreRoots.Target
 	entries, err := os.ReadDir(target)
 	if os.IsNotExist(err) {

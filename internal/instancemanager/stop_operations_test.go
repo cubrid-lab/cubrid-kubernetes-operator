@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -312,4 +314,70 @@ func TestServer_Stop_CancelledOperationSaysTheMemberIsStopping(t *testing.T) {
 	if final.State != OpFailed || !strings.HasPrefix(final.FailureReason, errStopping.Error()) {
 		t.Errorf("operation = %s (%q), want Failed because the member is stopping", final.State, final.FailureReason)
 	}
+}
+
+// completedRestoreWithMarker leaves a completed restore whose ownership marker
+// was left, which ResumeCompletedRestores starts.
+func completedRestoreWithMarker(t *testing.T) *resumeFixture {
+	t.Helper()
+	f := newResumeFixture(t)
+	f.start(&volumeCLI{databases: f.databases})
+	done := f.run("restore-1")
+	if done.State != OpCompleted {
+		t.Fatalf("restore = %s (%s), want Completed", done.State, done.FailureReason)
+	}
+	if err := os.WriteFile(filepath.Join(f.databases, dbName, ownershipMarker), []byte(done.ID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// Once the member is stopping, the database of a completed restore is not
+// started, and its marker stays for the next start of the manager.
+func TestResumeCompletedRestores_StartsNothingOnceStopping(t *testing.T) {
+	f := completedRestoreWithMarker(t)
+	marker := f.marker()
+	cli := &stepCLI{}
+	f.start(cli)
+	if err := f.server.Stop(t.Context(), dbName); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.server.ResumeCompletedRestores(t.Context()); err == nil {
+		t.Error("ResumeCompletedRestores reported no error while the member is stopping")
+	}
+	if slices.Contains(cli.recorded(), callServerStart) {
+		t.Errorf("calls = %q, the database was started while the member stopped", cli.recorded())
+	}
+	if got := f.marker(); got != marker {
+		t.Errorf("marker = %q, want it kept as %q", got, marker)
+	}
+}
+
+// A stop that comes while ResumeCompletedRestores starts a database waits for
+// that start, so the server is stopped after it.
+func TestResumeCompletedRestores_StopWaitsForItsStart(t *testing.T) {
+	f := completedRestoreWithMarker(t)
+	cli := newHeldCLI("server start")
+	f.start(cli)
+	resumed := make(chan error, 1)
+	go func() { resumed <- f.server.ResumeCompletedRestores(context.Background()) }()
+	select {
+	case <-cli.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the database was not started")
+	}
+
+	time.AfterFunc(50*time.Millisecond, func() { close(cli.release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := f.server.Stop(ctx, dbName); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	<-resumed
+	calls := cli.recorded()
+	start, stop := slices.Index(calls, callServerStart), slices.Index(calls, stopServer)
+	if start < 0 || stop < start {
+		t.Errorf("calls = %q, want the server stopped after its start returned", calls)
+	}
+	wantNothingStartedAfterTheStop(t, calls)
 }
