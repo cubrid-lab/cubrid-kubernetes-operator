@@ -139,9 +139,11 @@ func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context,
 			dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		}
 		dep.Spec.Replicas = &replicas
-		dep.Spec.Template = corev1.PodTemplateSpec{
+		if err := setPodTemplate(dep, &dep.Spec.Template, corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec:       r.brokerPodSpec(cluster, mode, image),
+		}); err != nil {
+			return err
 		}
 		return controllerutil.SetControllerReference(cluster, dep, r.Scheme)
 	})
@@ -226,7 +228,7 @@ func (r *CubridClusterReconciler) reconcileBrokerService(ctx context.Context, cl
 		svc.Labels = brokerLabelsFor(cluster)
 		svc.Spec.Selector = selector
 		svc.Spec.Ports = []corev1.ServicePort{
-			{Name: componentBroker, Port: port, TargetPort: intOrString(port)},
+			{Name: componentBroker, Protocol: corev1.ProtocolTCP, Port: port, TargetPort: intOrString(port)},
 		}
 		return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
 	})

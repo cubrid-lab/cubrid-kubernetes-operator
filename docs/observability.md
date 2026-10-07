@@ -79,6 +79,13 @@ the fixed names below; free text belongs in `message`.
 | `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped |
 | `Updating` | A member is being replaced for a new image | why nothing is being replaced |
 
+When the Operator cannot write one of the cluster's objects, `Ready` turns
+`False` with the reason of that step, such as `StatefulSetReconcileFailed`,
+and a Warning Event is recorded. A write rejected as a conflict, because the
+object changed after the Operator read it, is not such a failure: it is
+retried and changes no Condition and records no Event. The same holds for
+`BrokerReconcileFailed`.
+
 `HAReady` does not depend on `ReplicationHealthy` yet; that is issue
 [#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249).
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
