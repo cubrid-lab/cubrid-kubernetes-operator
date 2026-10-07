@@ -129,7 +129,11 @@ that is written.
 
 As implemented, a slave's answer also carries `replication`: what its log
 applier reports for the master's log (`cubrid applyinfo`), or the reason it
-could not be read. ADR-0006 describes its use.
+could not be read. ADR-0006 describes its use. The answer as a whole is
+bounded at four seconds, below the operator's five-second probe timeout,
+and `applyinfo` at two seconds within it: an applier that does not answer
+in time leaves `replication` unavailable with that reason, and the role is
+still returned.
 
 Algorithm: run `cubrid heartbeat status` and `cubrid changemode <db>`
 (exact form POC-validated) with bounded timeout; read `cubrid_ha.conf` /

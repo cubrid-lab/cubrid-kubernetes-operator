@@ -144,6 +144,9 @@ func replicationOf(ctx context.Context, cli CLI, st HAStatus, database, database
 		return &ApplyConvergence{Reason: "the master's name in the node list is not a host label"}
 	}
 	c := ApplyConvergenceStatus(ctx, cli, database, filepath.Join(databasesDir, database+"_"+master))
+	if !c.Available && ctx.Err() != nil {
+		c.Reason = "applyinfo did not answer in time: " + ctx.Err().Error()
+	}
 	c.Source = master
 	return &c
 }
