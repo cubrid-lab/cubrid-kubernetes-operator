@@ -130,7 +130,7 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 		bootstrapKey("ha-bootstrap", cluster, status, ""), instancemanager.HABootstrapRequest{Database: database})
 	if err != nil {
 		// The member is not up yet, or not reachable: ask again later.
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 		return
 	}
 	switch op.State {
@@ -197,7 +197,7 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 			},
 		})
 	if err != nil {
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 		return
 	}
 	switch backup.State {
@@ -227,7 +227,7 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 				SeedFromMaster: source,
 			})
 		if err != nil {
-			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 			return
 		}
 		switch restore.State {

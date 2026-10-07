@@ -378,7 +378,12 @@ token is generated anew without an overlap. When that happens while the
 cluster's StatefulSet exists, the operator records a Warning Event,
 `InstanceManagerTokenRegenerated` (without the token): the running Pods
 refuse the operator until they are replaced, which it treats as no evidence
-(ADR-0005), not as a failure. The operator remembers per member only a
+(ADR-0005), not as a failure. A member that refuses every token the operator
+holds (401) or forbids the call (403) is reported apart from an unreachable
+one, without the token: `PrimaryResolved` takes the reason
+`InstanceManagerTokenRefused` and names the members, with a Warning Event of
+that name, and a refused backup, restore or bootstrap call sets that reason
+on its condition. The operator remembers per member only a
 SHA-256 fingerprint of the token the member accepted last, never the token.
 The manager compares the token it is sent in constant time once #271 lands.
 

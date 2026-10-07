@@ -30,8 +30,9 @@ import (
 
 // Log keys of a transition (docs/observability.md, section "Logs").
 const (
-	logKeyReason = "reason"
-	logKeyMember = "member"
+	logKeyReason    = "reason"
+	logKeyMember    = "member"
+	logKeyOldReason = "oldReason"
 )
 
 // transition is one change of the observed state between two reconciles: a
@@ -73,7 +74,7 @@ func transitions(before, after *databasev1alpha1.CubridClusterStatus) []transiti
 		out = append(out, transition{
 			Event:   "condition_changed",
 			Message: fmt.Sprintf("Condition %s changed to %s (%s)", now.Type, now.Status, now.Reason),
-			Fields: []any{"condition", now.Type, "oldStatus", oldStatus, "oldReason", oldReason,
+			Fields: []any{"condition", now.Type, "oldStatus", oldStatus, logKeyOldReason, oldReason,
 				"newStatus", string(now.Status), logKeyReason, now.Reason},
 		})
 	}
@@ -119,10 +120,17 @@ func primaryTransitions(before, after *databasev1alpha1.CubridClusterStatus) []t
 		if old != nil {
 			oldReason = old.Reason
 		}
+		if now.Reason == reasonTokenRefused {
+			return []transition{{
+				Event: "instance_manager_token_refused", Reason: reasonTokenRefused, Warning: true,
+				Message: "Primary is not resolved: " + now.Message,
+				Fields:  []any{logKeyOldReason, oldReason, logKeyReason, now.Reason},
+			}}
+		}
 		return []transition{{
 			Event:   "condition_changed",
 			Message: fmt.Sprintf("Condition %s changed to %s (%s)", now.Type, now.Status, now.Reason),
-			Fields:  []any{"condition", now.Type, "oldReason", oldReason, "newStatus", string(now.Status), logKeyReason, now.Reason},
+			Fields:  []any{"condition", now.Type, logKeyOldReason, oldReason, "newStatus", string(now.Status), logKeyReason, now.Reason},
 		}}
 	}
 	return nil

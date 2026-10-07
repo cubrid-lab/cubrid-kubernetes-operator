@@ -111,7 +111,7 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 	// Poll the running operation.
 	op, err := r.Restore.GetOperation(ctx, target, cluster.Namespace, cluster.Status.Bootstrap.OperationID)
 	if err != nil {
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "InstanceManagerUnavailable", err.Error())
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 		return ctrl.Result{RequeueAfter: restorePollAfter}, true
 	}
 	switch op.State {

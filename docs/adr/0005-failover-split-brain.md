@@ -120,6 +120,7 @@ Cluster classification → `PrimaryResolved`:
 | exactly one authoritative master, all others authoritative non-master | set | `SinglePrimaryObserved` (True) | RW may be ready |
 | all observed authoritative, zero masters | unset | `NoPrimaryObserved` | RW not ready |
 | >1 authoritative master | unset | `MultiplePrimariesObserved` | RW quarantined |
+| any member's Instance Manager refused the cluster's token (401/403); the member is no evidence, as an unreachable one | unset | `InstanceManagerTokenRefused` | as `PrimaryObservationIncomplete` |
 | any member unknown/unreachable/stale | unset | `PrimaryObservationIncomplete` | RW quarantined/degraded (POC) |
 | conflicting role vs ha/status | unset | `AmbiguousPrimaryObservation` | RW quarantined |
 
@@ -148,7 +149,8 @@ without breaking. Key set:
 
 - **PrimaryResolved**: `SinglePrimaryObserved` (True) /
   `NoPrimaryObserved` / `MultiplePrimariesObserved` /
-  `PrimaryObservationIncomplete` / `AmbiguousPrimaryObservation`.
+  `PrimaryObservationIncomplete` / `AmbiguousPrimaryObservation` /
+  `InstanceManagerTokenRefused`.
 - **HAReady**: `HealthyReplication` / `NativeFailoverInProgress` /
   `PrimaryUnresolved` / `AmbiguousPrimary` / `ReplicationDegraded` /
   `ObservationIncomplete` (Unknown).

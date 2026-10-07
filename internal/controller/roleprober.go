@@ -34,7 +34,11 @@ import (
 // (ADR-0005): an unreachable manager must not be treated as a role assertion.
 type RoleObservation struct {
 	Reachable bool
-	Role      databasev1alpha1.CubridRole
+	// TokenRefused is set when the Instance Manager answered 401 or 403 to
+	// the cluster's token. The member is then not reachable for the operator
+	// and its role stays unknown, as for an unreachable one.
+	TokenRefused bool
+	Role         databasev1alpha1.CubridRole
 	// ObservedAt is when the answer was received. An observation without it, or
 	// older than roleObservationTTL, is not authoritative (ADR-0005).
 	ObservedAt time.Time
@@ -94,7 +98,7 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return RoleObservation{Reachable: false, ObservedAt: p.now()}
+		return RoleObservation{Reachable: false, TokenRefused: tokenRefused(resp.StatusCode), ObservedAt: p.now()}
 	}
 	var st instancemanager.HAStatus
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
