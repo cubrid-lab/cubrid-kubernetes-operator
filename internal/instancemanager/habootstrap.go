@@ -148,6 +148,7 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Bootstrap)
 		defer cancel()
 		fail := func(reason string) {
+			reason = s.stoppingReason(reason)
 			_, _ = s.store.Update(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason

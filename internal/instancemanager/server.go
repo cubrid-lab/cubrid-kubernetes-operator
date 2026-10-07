@@ -359,6 +359,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Backup)
 		defer cancel()
 		fail := func(reason string) {
+			reason = s.stoppingReason(reason)
 			s.removeBackupStaging(req.Destination)
 			_, _ = s.store.Update(id, func(op *Operation) {
 				op.State = OpFailed
@@ -487,6 +488,7 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Restore)
 		defer cancel()
 		fail := func(reason string) {
+			reason = s.stoppingReason(reason)
 			_, _ = s.store.Update(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason

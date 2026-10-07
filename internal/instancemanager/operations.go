@@ -108,6 +108,11 @@ func Shutdown(ctx context.Context, cli CLI, database string) error {
 	return errors.Join(errs...)
 }
 
+// shutdownReserve is the part of a stop's deadline kept for the ordered
+// shutdown: waiting for running operations never takes it. A shorter budget
+// keeps half of itself instead.
+const shutdownReserve = 30 * time.Second
+
 // errStopping is why a mutating operation is refused, or does not start
 // CUBRID, once the member is stopping.
 var errStopping = errors.New("the member is stopping")
@@ -116,9 +121,10 @@ var errStopping = errors.New("the member is stopping")
 // trigger of a stop (the preStop hook, a termination signal, a request of the
 // operator). It marks the stop as intended before it does anything. From then
 // on no mutating operation is admitted and none starts CUBRID; the running
-// ones are cancelled, and the shutdown waits for them to end, as long as ctx
-// allows, so that none of them starts CUBRID after it. A stop that succeeded
-// is not run a second time; one whose wait ran out runs the shutdown and
+// ones are cancelled, and the shutdown waits for them to end, so that none of
+// them starts CUBRID after it. The wait ends early enough to leave the
+// shutdown shutdownReserve of ctx's deadline. A stop that succeeded is not
+// run a second time; one whose wait ran out still runs the shutdown and
 // reports the operations it did not see end, and the next stop runs again.
 func (s *Server) Stop(ctx context.Context, database string) error {
 	s.stopRequested.Store(true)
@@ -132,7 +138,14 @@ func (s *Server) Stop(ctx context.Context, database string) error {
 	if s.stopped {
 		return nil
 	}
-	waitErr := s.awaitOperations(ctx)
+	waitCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		reserve := min(shutdownReserve, time.Until(deadline)/2)
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithDeadline(ctx, deadline.Add(-reserve))
+		defer cancel()
+	}
+	waitErr := s.awaitOperations(waitCtx)
 	if err := Shutdown(ctx, s.cli, database); err != nil || waitErr != nil {
 		return errors.Join(waitErr, err)
 	}
@@ -156,6 +169,8 @@ func (s *Server) admit() bool {
 // ends.
 func (s *Server) awaitOperations(ctx context.Context) error {
 	done := make(chan struct{})
+	// When ctx ends first this goroutine stays parked until the operations
+	// end; the member is stopping, so nothing accumulates.
 	go func() {
 		s.ops.Wait()
 		close(done)
@@ -166,6 +181,15 @@ func (s *Server) awaitOperations(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("operations were still running when the stop proceeded: %w", ctx.Err())
 	}
+}
+
+// stoppingReason prefixes the failure reason of an operation that ended
+// while the member is stopping, so that the reason says so.
+func (s *Server) stoppingReason(reason string) string {
+	if s.opsCtx.Err() == nil || strings.Contains(reason, errStopping.Error()) {
+		return reason
+	}
+	return errStopping.Error() + ": " + reason
 }
 
 // activate runs a `cubrid` command that starts CUBRID (server start,

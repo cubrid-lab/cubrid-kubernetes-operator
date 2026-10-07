@@ -28,23 +28,32 @@ import (
 	"time"
 )
 
-// heldRestoreCLI holds restoredb until release is closed, whatever its
-// context says, as a command that does not answer a cancellation would.
+// heldRestoreCLI holds the command whose words begin with hold until release
+// is closed, whatever its context says, as a command that does not answer a
+// cancellation would. Like a process that is never started, any other command
+// whose context has already ended fails and is not recorded.
 type heldRestoreCLI struct {
 	stepCLI
+	hold        string
 	entered     chan struct{}
 	enteredOnce sync.Once
 	release     chan struct{}
 }
 
-func newHeldRestoreCLI() *heldRestoreCLI {
-	return &heldRestoreCLI{entered: make(chan struct{}), release: make(chan struct{})}
+func newHeldRestoreCLI() *heldRestoreCLI { return newHeldCLI("restoredb") }
+
+func newHeldCLI(hold string) *heldRestoreCLI {
+	return &heldRestoreCLI{hold: hold, entered: make(chan struct{}), release: make(chan struct{})}
 }
 
 func (c *heldRestoreCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
-	if len(args) > 0 && args[0] == "restoredb" {
+	if strings.HasPrefix(strings.Join(args, " "), c.hold) {
 		c.enteredOnce.Do(func() { close(c.entered) })
 		<-c.release
+		return c.stepCLI.Run(ctx, name, args...)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	return c.stepCLI.Run(ctx, name, args...)
 }
@@ -153,6 +162,10 @@ func TestServer_Stop_WaitForOperationsIsBounded(t *testing.T) {
 	if err := srv.Stop(short, dbName); err == nil {
 		t.Error("Stop reported success while an operation was still running")
 	}
+	// The wait left the shutdown part of the deadline.
+	if !slices.Contains(cli.recorded(), stopServer) {
+		t.Errorf("calls = %q, the stop whose wait ran out did not stop the server", cli.recorded())
+	}
 	close(cli.release)
 	final := pollUntilTerminal(t, h, id)
 	if final.State != OpFailed {
@@ -195,5 +208,108 @@ func TestServer_Stop_RejectsNewOperations(t *testing.T) {
 	}
 	if store.AnyInProgress() {
 		t.Error("an operation was recorded while the member was stopping")
+	}
+}
+
+// A start that is already running when the member is stopped is over before
+// the server is stopped: the stop does not race it (#273).
+func TestServer_Stop_WaitsForARunningStart(t *testing.T) {
+	cli := newHeldCLI("server start")
+	srv, h, id := startHeldRestore(t, cli)
+
+	time.AfterFunc(50*time.Millisecond, func() { close(cli.release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Stop(ctx, dbName); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	pollUntilTerminal(t, h, id)
+	calls := cli.recorded()
+	start, stop := slices.Index(calls, callServerStart), slices.Index(calls, stopServer)
+	if start < 0 || stop < start {
+		t.Errorf("calls = %q, want the server stopped after its start returned", calls)
+	}
+	wantNothingStartedAfterTheStop(t, calls)
+}
+
+// A repeated request for an operation that exists is not counted as running,
+// so the stop does not wait for it.
+func TestServer_Stop_RepeatedRequestIsNotWaitedFor(t *testing.T) {
+	objects, bucket, prefix := stageUploadedArtifact(t)
+	req := baseRestoreRequest(t, bucket, prefix)
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(&stepCLI{}, "tok").WithOperationStore(store).WithObjectStore(objects).
+		WithRestoreRoots(rootsFor(req)).WithStandaloneDatabase(dbName)
+	h := srv.Handler()
+	body, _ := json.Marshal(req)
+	rr := postOperation(h, "/v1/restore/prepare", string(body), "restore-1")
+	var op Operation
+	if err := json.Unmarshal(rr.Body.Bytes(), &op); err != nil {
+		t.Fatal(err)
+	}
+	if final := pollUntilTerminal(t, h, op.ID); final.State != OpCompleted {
+		t.Fatalf("operation = %s (%s), want Completed", final.State, final.FailureReason)
+	}
+	if rr := postOperation(h, "/v1/restore/prepare", string(body), "restore-1"); rr.Code != http.StatusAccepted {
+		t.Fatalf("repeated request = %d: %s", rr.Code, rr.Body.String())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	began := time.Now()
+	if err := srv.Stop(ctx, dbName); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if took := time.Since(began); took > time.Second {
+		t.Errorf("Stop took %s, it waited for an operation that was not running", took)
+	}
+}
+
+// cancelledRestoreCLI runs restoredb until its context ends, as a command
+// that the stop's cancellation ends.
+type cancelledRestoreCLI struct {
+	stepCLI
+	entered chan struct{}
+}
+
+func (c *cancelledRestoreCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "restoredb" {
+		close(c.entered)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	return c.stepCLI.Run(ctx, name, args...)
+}
+
+// An operation whose command the stop cancelled says that the member is
+// stopping.
+func TestServer_Stop_CancelledOperationSaysTheMemberIsStopping(t *testing.T) {
+	objects, bucket, prefix := stageUploadedArtifact(t)
+	req := baseRestoreRequest(t, bucket, prefix)
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := &cancelledRestoreCLI{entered: make(chan struct{})}
+	srv := NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(objects).
+		WithRestoreRoots(rootsFor(req)).WithStandaloneDatabase(dbName)
+	h := srv.Handler()
+	body, _ := json.Marshal(req)
+	var op Operation
+	if err := json.Unmarshal(postOperation(h, "/v1/restore/prepare", string(body), "restore-1").Body.Bytes(), &op); err != nil {
+		t.Fatal(err)
+	}
+	<-cli.entered
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Stop(ctx, dbName); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	final := pollUntilTerminal(t, h, op.ID)
+	if final.State != OpFailed || !strings.HasPrefix(final.FailureReason, errStopping.Error()) {
+		t.Errorf("operation = %s (%q), want Failed because the member is stopping", final.State, final.FailureReason)
 	}
 }
