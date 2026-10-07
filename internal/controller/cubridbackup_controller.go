@@ -118,8 +118,11 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return r.startBackup(ctx, &backup, &cluster)
 }
 
-// startBackup resolves the cluster HA state, selects a safe target, and starts
-// the Instance Manager backup operation with a deterministic idempotency key.
+// startBackup resolves the cluster HA state, selects a safe target, records it
+// in status, and only then starts the Instance Manager backup operation with a
+// deterministic idempotency key. A dispatch whose response is lost may still
+// have started the backup, so once a target is recorded only that target is
+// ever dispatched to; it is never replaced by a fresh selection.
 func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -128,13 +131,46 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 	obs := r.probeAll(ctx, members, cluster.Namespace)
 	observedAt := time.Now()
 	res := resolvePrimary(members, obs, observedAt)
+	single := count <= 1
 
-	sel := selectBackupTarget(members, obs, res, backup.Spec.Target.Preference, count <= 1, observedAt)
-	if !sel.Selected {
-		// Not terminal: HA may resolve later. Surface why and requeue.
-		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason,
-			"no safe backup target yet; waiting for a healthy target")
-		return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+	var sel TargetSelection
+	if backup.Status.TargetInstance != "" {
+		sel = TargetSelection{
+			Instance:     backup.Status.TargetInstance,
+			Role:         databasev1alpha1.CubridRole(backup.Status.TargetRole),
+			FallbackUsed: backup.Status.FallbackUsed,
+			Selected:     true,
+			Reason:       "RecordedTargetSelected",
+		}
+		if !recordedTargetEligible(sel, members, obs, res, single, observedAt) {
+			// Not terminal: the target may become eligible again. Another member
+			// is never started, since the earlier dispatch may be running.
+			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "RecordedTargetNotEligible",
+				"recorded target "+sel.Instance+" is no longer an eligible "+backup.Status.TargetRole+"; waiting")
+			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+		}
+	} else {
+		sel = selectBackupTarget(members, obs, res, backup.Spec.Target.Preference, single, observedAt)
+		if !sel.Selected {
+			// Not terminal: HA may resolve later. Surface why and requeue.
+			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason,
+				"no safe backup target yet; waiting for a healthy target")
+			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+		}
+		if backup.Status.Phase == "" {
+			backup.Status.Phase = databasev1alpha1.BackupPhasePending
+		}
+		backup.Status.TargetInstance = sel.Instance
+		backup.Status.TargetRole = string(sel.Role)
+		backup.Status.FallbackUsed = sel.FallbackUsed
+		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, "starting the backup on "+sel.Instance)
+		backup.Status.ObservedGeneration = backup.Generation
+		if err := r.Status().Update(ctx, backup); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			return ctrl.Result{}, err
+		}
 	}
 
 	req := r.buildBackupRequest(backup, cluster, sel)
@@ -148,9 +184,6 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 	now := metav1.Now()
 	backup.Status.Phase = databasev1alpha1.BackupPhaseRunning
 	backup.Status.OperationRef = op.ID
-	backup.Status.TargetInstance = sel.Instance
-	backup.Status.TargetRole = string(sel.Role)
-	backup.Status.FallbackUsed = sel.FallbackUsed
 	backup.Status.StartedAt = &now
 	setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, "backup started on "+sel.Instance)
 	return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})

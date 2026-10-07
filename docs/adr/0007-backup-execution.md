@@ -87,6 +87,16 @@ instance → allow with reason `RoleUnknownSingleInstanceFallback`; HA
 cluster → fail for `PreferStandby` (avoid accidentally loading the true
 master when role discovery is broken).
 
+As implemented, the operator writes the selected `targetInstance`,
+`targetRole` and `fallbackUsed` to status before it calls `/v1/backup`, and
+does not call it when that write fails. A call whose response is lost may
+still have started the backup, so a recorded target is never replaced by a
+new selection, even when `target.preference` changes: the call is retried
+only on that target, with the same idempotency key, and only while the
+target is still eligible for its recorded role (an eligible standby, the
+resolved primary, or the only member of a single-instance cluster).
+Otherwise the backup waits with reason `RecordedTargetNotEligible` (#288).
+
 ### Artifact and upload model
 
 - `backupdb` writes to a **dedicated backup-staging directory**
