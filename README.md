@@ -124,9 +124,18 @@ spec:
   operator's service account (`--operator-namespace` overrides it), and the
   labels `control-plane: controller-manager` and
   `app.kubernetes.io/name: cubrid-kubernetes-operator` of
-  `config/manager/manager.yaml`.
+  `config/manager/manager.yaml`. Without a known namespace no Pod is
+  admitted to the Instance Manager port.
+- **The namespace is the trust boundary.** Any Pod that can be created in
+  the cluster's namespace with the DB or Broker labels, or in the operator's
+  namespace with the operator's labels, gets the access of that role; so
+  does every Pod of the cluster's namespace for the Brokers by default.
+  Restrict who can create Pods in those namespaces.
+- `clients` omitted or empty (`clients: []`) means the namespace default.
 - `spec.networkPolicy.enabled: false` removes the two policies, for clusters
-  whose access is managed by other means.
+  whose access is managed by other means. A NetworkPolicy of the same name
+  that the cluster does not own is never taken over or removed; the cluster
+  reports a reconcile failure instead.
 
 ## Scope and validation
 

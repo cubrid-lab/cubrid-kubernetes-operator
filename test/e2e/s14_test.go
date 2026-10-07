@@ -75,7 +75,9 @@ spec:
 
 // connectProbe connects to the URL in $0 and prints the connect time, the
 // HTTP status and curl's exit code. A connection a NetworkPolicy drops prints
-// "0.000000 000 28": no connection, then the connect timeout.
+// "0.000000 000 28": no connection, then the connect timeout. This assumes the
+// network plugin drops denied packets, as Kind's kindnet does; a plugin that
+// rejects them would make curl fail at once with another exit code.
 const connectProbe = `curl -s -o /dev/null -w "%{time_connect} %{http_code}" ` +
 	`--connect-timeout 5 --max-time 10 "$0"; echo " $?"`
 

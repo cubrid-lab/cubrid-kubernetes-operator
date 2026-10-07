@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -65,23 +66,30 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 		brokerNetworkPolicyName(cluster.Name):   brokerNetworkPolicy(cluster),
 	}
 	for name, spec := range policies {
-		np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace}}
-		if !networkPolicyEnabled(cluster) {
-			err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, np)
-			if err != nil {
-				if client.IgnoreNotFound(err) != nil {
-					return fmt.Errorf("get NetworkPolicy %s: %w", name, err)
-				}
+		existing := &networkingv1.NetworkPolicy{}
+		err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, existing)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get NetworkPolicy %s: %w", name, err)
+		}
+		found := err == nil
+		// A policy of that name which this cluster does not control is never
+		// taken over or removed: it is someone else's.
+		if found && !metav1.IsControlledBy(existing, cluster) {
+			if !networkPolicyEnabled(cluster) {
 				continue
 			}
-			if metav1.IsControlledBy(np, cluster) {
-				if err := client.IgnoreNotFound(r.Delete(ctx, np)); err != nil {
+			return fmt.Errorf("a NetworkPolicy named %q exists and is not owned by this cluster", name)
+		}
+		if !networkPolicyEnabled(cluster) {
+			if found {
+				if err := client.IgnoreNotFound(r.Delete(ctx, existing)); err != nil {
 					return fmt.Errorf("delete NetworkPolicy %s: %w", name, err)
 				}
 			}
 			continue
 		}
-		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
+		np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace}}
+		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 			np.Labels = labelsFor(cluster)
 			np.Spec = spec
 			return controllerutil.SetControllerReference(cluster, np, r.Scheme)

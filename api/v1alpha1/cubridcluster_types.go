@@ -207,8 +207,8 @@ type CubridNetworkPolicy struct {
 	Enabled *bool `json:"enabled,omitempty"`
 
 	// clients are the peers allowed to connect to the Broker ports. When
-	// empty, only Pods in the cluster's namespace are. Clients never reach
-	// the DB Pods directly.
+	// omitted or empty (clients: []), only Pods in the cluster's namespace
+	// are. Clients never reach the DB Pods directly.
 	// +optional
 	Clients []networkingv1.NetworkPolicyPeer `json:"clients,omitempty"`
 }

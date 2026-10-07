@@ -166,8 +166,8 @@ spec:
                   clients:
                     description: |-
                       clients are the peers allowed to connect to the Broker ports. When
-                      empty, only Pods in the cluster's namespace are. Clients never reach
-                      the DB Pods directly.
+                      omitted or empty (clients: []), only Pods in the cluster's namespace
+                      are. Clients never reach the DB Pods directly.
                     items:
                       description: |-
                         NetworkPolicyPeer describes a peer to allow traffic to/from. Only certain combinations of
