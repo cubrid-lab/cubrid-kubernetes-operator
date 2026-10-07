@@ -99,7 +99,7 @@ or behavior on real VM failures.
 
 ```bash
 make test-e2e E2E_LABEL_FILTER=S00        # one scenario by its ID
-make test-e2e E2E_LABEL_FILTER='ha-setup || S03-graceful'  # one HA variant, on a formed cluster
+make test-e2e E2E_LABEL_FILTER='ha-setup || S03-graceful'  # one HA variant; always select ha-setup with it
 make test-e2e E2E_LABEL_FILTER='!db'      # without the real-database scenarios
 make test-e2e E2E_EVIDENCE_DIR=$PWD/artifacts/e2e   # keep the evidence elsewhere than e2e-evidence/
 ```

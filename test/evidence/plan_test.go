@@ -23,11 +23,14 @@ import (
 	"github.com/onsi/ginkgo/v2/types"
 )
 
+// s03AbruptLabel is the label of the steps of S03/abrupt.
+const s03AbruptLabel = "S03-abrupt"
+
 func TestRequirementLabel(t *testing.T) {
 	if got := (Requirement{ID: s00}).Label(); got != s00 {
 		t.Errorf("Label() = %q, want %q", got, s00)
 	}
-	if got := (Requirement{ID: s03, Variant: abrupt}).Label(); got != "S03-abrupt" {
+	if got := (Requirement{ID: s03, Variant: abrupt}).Label(); got != s03AbruptLabel {
 		t.Errorf("Label() = %q, want S03-abrupt", got)
 	}
 }
@@ -82,7 +85,8 @@ func spec(leaf string, labels ...string) types.SpecReport {
 }
 
 func TestSelected(t *testing.T) {
-	s03Step := spec("S03/abrupt: one member is master again", "S03", "S03-abrupt")
+	s03Step := spec("S03/abrupt: one member is master again", "S03", s03AbruptLabel)
+	s03Step.LeafNodeSemVerConstraints = []string{">= 2.0.0"}
 	s01Step := spec("S01: has one master", "S01")
 	tests := map[string]struct {
 		suite    types.SuiteConfig
@@ -95,6 +99,7 @@ func TestSelected(t *testing.T) {
 		"focus":                         {types.SuiteConfig{FocusStrings: []string{"S03"}}, true, false},
 		"focus on the suite and spec":   {types.SuiteConfig{FocusStrings: []string{"^e2e suite Manager HA"}}, true, true},
 		"skip":                          {types.SuiteConfig{SkipStrings: []string{"S01"}}, true, false},
+		"semantic version filter":       {types.SuiteConfig{SemVerFilter: "1.0.0"}, false, true},
 		"focus file of another file":    {types.SuiteConfig{FocusFiles: []string{"s00_test.go"}}, false, false},
 	}
 	for name, tc := range tests {
@@ -117,6 +122,9 @@ func TestStepOutcome(t *testing.T) {
 	}
 	failed := spec("S01: has one master", "S01")
 	failed.State, failed.Failure.Message = types.SpecStateFailed, "Expected true"
+	setupFailed := spec("S01: has one master", "S01")
+	setupFailed.State, setupFailed.Failure.Message = types.SpecStateFailed, "image build failed"
+	setupFailed.Failure.FailureNodeType = types.NodeTypeBeforeAll
 	passed := spec("S01: has one master", "S01")
 	passed.State = types.SpecStatePassed
 	const earlier = "seeds the other members, which join as slaves"
@@ -138,6 +146,8 @@ func TestStepOutcome(t *testing.T) {
 		"the run stopped first": {skipped(""), true, NotRun, "the run stopped before this step started"},
 		"failed before it recorded": {failed, true, Fail,
 			"the step failed before it recorded a result: Expected true"},
+		"the group's setup failed in this step": {setupFailed, true, Blocked,
+			"the group's setup failed: image build failed"},
 	}
 	for name, tc := range tests {
 		result, reason, ok := StepOutcome(tc.report, tc.selected, earlier)
@@ -147,5 +157,14 @@ func TestStepOutcome(t *testing.T) {
 	}
 	if result, reason, ok := StepOutcome(passed, true, ""); ok {
 		t.Errorf("a step that passed gave a result of its own: %q, %q", result, reason)
+	}
+}
+
+func TestUnlabelledSteps(t *testing.T) {
+	reqs := []Requirement{{ID: s00}, {ID: s03, Variant: abrupt}, {ID: s03, Variant: graceful}}
+	got := UnlabelledSteps(reqs, map[string]bool{s00: true, s03AbruptLabel: true, "S03": true})
+	want := "S03/graceful: no step of the suite carries the label S03-graceful"
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("UnlabelledSteps = %q, want [%q]", got, want)
 	}
 }

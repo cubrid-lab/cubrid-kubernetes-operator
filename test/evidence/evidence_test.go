@@ -240,6 +240,15 @@ func TestConclude(t *testing.T) {
 		t.Errorf("a failing run must keep junit.xml: %v", err)
 	}
 
+	dir = runDir(t, s00Record)
+	err = passing.Conclude(dir, NewRedactor(), lane, "S03/abrupt: no step of the suite carries the label S03-abrupt")
+	if err == nil || !strings.Contains(err.Error(), "S03-abrupt") {
+		t.Errorf("a run with another problem: err = %v", err)
+	}
+	if got := read(dir); got.Passed || len(got.Problems) != 1 {
+		t.Errorf("a run with another problem wrote passed=%v problems=%q", got.Passed, got.Problems)
+	}
+
 	// A regular file where the run directory should be cannot hold the summary.
 	unwritable := filepath.Join(runDir(t, s00Record), s00Record)
 	if err := passing.Conclude(unwritable, NewRedactor(), lane); err == nil {

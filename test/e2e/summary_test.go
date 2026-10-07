@@ -66,6 +66,9 @@ var (
 	selectedSteps = map[evidence.Requirement]bool{}
 	// lastFailedStep names the step whose failure the run saw last.
 	lastFailedStep string
+	// reportedLabels holds the labels of every step the run reported,
+	// whether it ran or not.
+	reportedLabels = map[string]bool{}
 )
 
 // planRun records every scenario and variant of the Kind lane as not_run
@@ -83,6 +86,9 @@ func planRun() {
 var _ = ReportAfterEach(func(report SpecReport) {
 	suite, _ := GinkgoConfiguration()
 	selected := evidence.Selected(report, suite, suiteDescription)
+	for _, label := range report.Labels() {
+		reportedLabels[label] = true
+	}
 	for _, req := range kindLane.Required {
 		if !slices.Contains(report.Labels(), req.Label()) {
 			continue
@@ -145,8 +151,8 @@ func kindRequired() []evidence.Requirement {
 // not_run.
 func runLane() evidence.Lane {
 	suite, _ := GinkgoConfiguration()
-	if suite.LabelFilter == "" && len(suite.FocusStrings) == 0 && len(suite.SkipStrings) == 0 &&
-		len(suite.FocusFiles) == 0 && len(suite.SkipFiles) == 0 {
+	if suite.LabelFilter == "" && suite.SemVerFilter == "" && len(suite.FocusStrings) == 0 &&
+		len(suite.SkipStrings) == 0 && len(suite.FocusFiles) == 0 && len(suite.SkipFiles) == 0 {
 		return kindLane
 	}
 	lane := evidence.Lane{Name: "kind-filtered"}
@@ -183,5 +189,12 @@ func concludeRun() error {
 		"--format", "{{.Id}}", managerImage)); err == nil {
 		env.OperatorImageDigest = strings.TrimSpace(out)
 	}
-	return runSummary.Conclude(evidenceDir(), redactor, runLane())
+	// A required scenario no step carries the label of can never record a
+	// result. When no step was reported at all, the suite's setup failed and
+	// the placeholders say so.
+	var unlabelled []string
+	if len(reportedLabels) > 0 {
+		unlabelled = evidence.UnlabelledSteps(kindLane.Required, reportedLabels)
+	}
+	return runSummary.Conclude(evidenceDir(), redactor, runLane(), unlabelled...)
 }

@@ -75,12 +75,18 @@ func (s *Summary) Settle(req Requirement, result Result, reason string) bool {
 	return true
 }
 
-// Selected reports whether the run's label filter, focus, skip and file
-// filters select the spec, the way Ginkgo applies them to a suite with the
-// given description.
+// Selected reports whether the run's label, semantic version, focus, skip
+// and file filters select the spec, the way Ginkgo applies them to a suite
+// with the given description. Programmatic focus (FIt, FDescribe) is not
+// taken into account; the suite does not use it.
 func Selected(report types.SpecReport, suite types.SuiteConfig, description string) bool {
 	if suite.LabelFilter != "" {
 		if ok, err := report.MatchesLabelFilter(suite.LabelFilter); err != nil || !ok {
+			return false
+		}
+	}
+	if suite.SemVerFilter != "" {
+		if ok, err := report.MatchesSemVerFilter(suite.SemVerFilter); err != nil || !ok {
 			return false
 		}
 	}
@@ -115,8 +121,8 @@ const (
 // without recording one, and false when the step passed: then the result is
 // the step's to record. earlierFailure names the step whose failure the run
 // saw last. A step that was not selected, or skipped, is not_run; one that
-// did not start because an earlier step of its ordered group failed is
-// blocked.
+// did not start because the setup of its group or an earlier step of its
+// ordered group failed is blocked.
 func StepOutcome(report types.SpecReport, selected bool, earlierFailure string) (Result, string, bool) {
 	message := report.Failure.Message
 	switch {
@@ -129,8 +135,25 @@ func StepOutcome(report types.SpecReport, selected bool, earlierFailure string) 
 		return NotRun, "the run stopped before this step started", true
 	case report.State.Is(types.SpecStateSkipped):
 		return NotRun, "skipped: " + message, true
+	case report.State.Is(types.SpecStateFailureStates) &&
+		report.Failure.FailureNodeType.Is(types.NodeTypeBeforeAll|types.NodeTypeBeforeEach|types.NodeTypeJustBeforeEach):
+		return Blocked, "the group's setup failed: " + message, true
 	case report.State.Is(types.SpecStateFailureStates):
 		return Fail, "the step failed before it recorded a result: " + message, true
 	}
 	return "", "", false
+}
+
+// UnlabelledSteps returns a problem for each requirement no step of the suite
+// carries the label of, given the labels of every step the run reported,
+// whether it ran or not. Such a scenario can never get a result of its own.
+func UnlabelledSteps(reqs []Requirement, labels map[string]bool) []string {
+	var problems []string
+	for _, req := range reqs {
+		if !labels[req.Label()] {
+			name := Scenario{ID: req.ID, Variant: req.Variant}.Name()
+			problems = append(problems, name+": no step of the suite carries the label "+req.Label())
+		}
+	}
+	return problems
 }

@@ -215,12 +215,13 @@ func (l Lane) requires(sc Scenario) bool {
 // Conclude judges the run against the lane, writes summary.json and
 // junit.xml with that verdict into dir, and returns an error when the run did
 // not pass or the files could not be written. The files are written before
-// the verdict is returned, so that a failed run keeps them.
-func (s Summary) Conclude(dir string, r *Redactor, lane Lane) error {
+// the verdict is returned, so that a failed run keeps them. Other problems
+// the run found, such as UnlabelledSteps, also fail it.
+func (s Summary) Conclude(dir string, r *Redactor, lane Lane, other ...string) error {
 	if dir == "" {
 		return errors.New("no run directory is set: the evidence of a pass cannot be kept")
 	}
-	problems := lane.Gate(s, dir)
+	problems := append(lane.Gate(s, dir), other...)
 	s.Lane, s.Passed, s.Problems = lane.Name, len(problems) == 0, problems
 	var errs []error
 	if err := s.Write(dir, r); err != nil {
