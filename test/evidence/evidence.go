@@ -102,6 +102,9 @@ type Summary struct {
 	Passed    bool       `json:"passed"`
 	Problems  []string   `json:"problems"`
 	Scenarios []Scenario `json:"scenarios"`
+	// Notes are what a reader should know of steps outside the scenarios,
+	// such as an attempt of a step that did not reach its precondition.
+	Notes []string `json:"notes,omitempty"`
 
 	// planned maps each scenario and variant that still holds the placeholder
 	// Plan recorded to its index in Scenarios.

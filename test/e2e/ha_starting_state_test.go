@@ -286,6 +286,18 @@ func blockStep(reason string) {
 // ha-bootstrap/starting-state.jsonl.
 func (r *haRun) enter(needs func(context.Context) error) {
 	name := stepName(CurrentSpecReport())
+	if e := r.admit(name, needs); e.Reason != "" {
+		blockStep(e.Reason)
+	}
+	if os.Getenv(breakStepEnv) == name {
+		r.breakOnPurpose(name)
+	}
+}
+
+// admit restores and verifies the common starting state before the step or
+// the part of a step that name stands for, keeps the decision in
+// ha-bootstrap/starting-state.jsonl, and returns it.
+func (r *haRun) admit(name string, needs func(context.Context) error) faults.Entry {
 	By("restoring and verifying the common starting state")
 	e := r.gate.Enter(context.Background(), name, needs)
 	r.entries = append(r.entries, e)
@@ -298,12 +310,7 @@ func (r *haRun) enter(needs func(context.Context) error) {
 	writeScenarioFile("ha-bootstrap/starting-state.jsonl", []byte(strings.Join(lines, "\n")+"\n"))
 	_, _ = fmt.Fprintf(GinkgoWriter, "starting state for %s: verified=%t after %s %s\n",
 		name, e.Verified, e.Waited, e.Reason)
-	if e.Reason != "" {
-		blockStep(e.Reason)
-	}
-	if os.Getenv(breakStepEnv) == name {
-		r.breakOnPurpose(name)
-	}
+	return e
 }
 
 // breakOnPurpose damages the cluster as a failed variant could, and fails the

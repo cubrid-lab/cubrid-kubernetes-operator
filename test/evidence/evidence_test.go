@@ -281,7 +281,9 @@ func testSummary() Summary {
 
 func TestWriteSummaryJSON(t *testing.T) {
 	dir := runDir(t, s00Record)
-	if err := testSummary().Write(dir, NewRedactor()); err != nil {
+	summary := testSummary()
+	summary.Notes = []string{"a step needed a second attempt"}
+	if err := summary.Write(dir, NewRedactor()); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "summary.json"))
@@ -311,6 +313,9 @@ func TestWriteSummaryJSON(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"neverEvents": []`) {
 		t.Errorf("neverEvents must be written as an empty list:\n%s", data)
+	}
+	if len(got.Notes) != 1 || got.Notes[0] != summary.Notes[0] {
+		t.Errorf("notes = %q, want %q", got.Notes, summary.Notes)
 	}
 }
 

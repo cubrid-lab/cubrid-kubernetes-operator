@@ -402,6 +402,9 @@ reader can tell what to expect.
 - `neverEvents` lists every must-never-happen outcome that was observed. A
   non-empty list means `fail`.
 - `faultConfirmed` is left out for a scenario that injects no fault.
+- `notes`, left out when empty, lists what a reader should know of steps
+  outside the scenarios: for example, an attempt of the replication-stall step
+  that did not reach its precondition and was started again.
 - A scenario with `result: "pass"` and `faultConfirmed: false`, with no
   evidence file listed, or with a listed evidence file that does not exist, is
   invalid and is read as `fail`. The writer in `test/evidence` applies this
