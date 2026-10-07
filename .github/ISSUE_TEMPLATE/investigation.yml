@@ -1,0 +1,72 @@
+name: Investigation
+description: Find out unknown CUBRID or Kubernetes behavior, or the cause of an unexplained failure
+title: "test: "
+labels: ["poc", "status: needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when the behavior or the cause is not known yet. An
+        investigation does not mean a defect is confirmed. If the answer
+        shows that a change is needed, the change is filed as a separate
+        issue; a disproved hypothesis is closed with its evidence.
+
+        Keep the `test:` title prefix and phrase the title as what will be
+        found out. Leave out credentials, kubeconfigs and unredacted Secrets.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: The single question this investigation answers.
+      placeholder: Does CUBRID 11.4 promote the remaining member when ...?
+    validations:
+      required: true
+
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: Why the answer matters and where the question came from.
+    validations:
+      required: true
+
+  - type: textarea
+    id: known-facts
+    attributes:
+      label: Known Facts
+      description: What has been observed, with links to logs, runs or POC records.
+    validations:
+      required: true
+
+  - type: textarea
+    id: unknowns
+    attributes:
+      label: Unknowns
+      description: Open questions and hypotheses, written as hypotheses.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Proposed Verification
+      description: The experiment and its environment. Unknown CUBRID behavior needs a POC on a pinned image, Kind or the VM lab, not a mock; unit tests and envtest only answer Operator-side questions. Record the engine version and image.
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Done When
+      description: The evidence that answers the question, and where it is recorded (for example `docs/poc/`).
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Sensitive Information
+      options:
+        - label: I removed credentials, tokens, kubeconfigs, customer data and unredacted Secrets from the information above.
+          required: true
