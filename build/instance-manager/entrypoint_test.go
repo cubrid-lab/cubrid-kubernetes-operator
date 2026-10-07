@@ -273,6 +273,40 @@ func TestEntrypoint_RecoveryStartsNothingBeforeRestore(t *testing.T) {
 	}
 }
 
+// An HA member in a recovery bootstrap starts nothing before its restore, but
+// gets its mounted configuration installed: the restore then starts heartbeat,
+// which fails without it (docs/poc/RESULTS.md POC-12). Without a mounted
+// configuration nothing is installed.
+func TestEntrypoint_RecoveryInstallsHAConfBeforeRestore(t *testing.T) {
+	for _, components := range haComponents {
+		for _, haConf := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/haConf=%t", components, haConf), func(t *testing.T) {
+				f := newFixture(t, managerStub)
+				f.env["CUBRID_COMPONENTS"] = components
+				f.env["CUBRID_BOOTSTRAP"] = bootstrapRecovery
+				if haConf {
+					f.configureHA()
+				} else {
+					f.env["CUBRID_HA_CONF"] = filepath.Join(f.root, "missing", "cubrid_ha.conf")
+				}
+				code, out := f.run()
+				if code != 0 {
+					t.Fatalf("exit %d:\n%s", code, out)
+				}
+				wantCalls(t, f.recorded(), callManagerStart)
+				if haConf {
+					f.wantHAConfInstalled()
+				} else {
+					f.wantHAConfNotInstalled()
+				}
+				if _, err := os.Stat(filepath.Join(f.databases, "databases.txt")); !os.IsNotExist(err) {
+					t.Errorf("recovery start wrote databases.txt (err=%v)", err)
+				}
+			})
+		}
+	}
+}
+
 // After the restore registered the database, a restart starts it and still
 // never runs createdb.
 func TestEntrypoint_RecoveryStartsRestoredDatabase(t *testing.T) {
