@@ -347,6 +347,69 @@ var _ = Describe("CubridCluster Controller", func() {
 			clock = clock.Add(10 * time.Second)
 			Expect(condition().Status).To(Equal(metav1.ConditionTrue))
 		})
+
+		It("reports a stall interrupted by readings that timed out (#279)", func() {
+			key := types.NamespacedName{Name: "stall-missed", Namespace: metav1.NamespaceDefault}
+			Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+			DeferCleanup(func() {
+				c := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+			})
+			slave := key.Name + "-1"
+			stuck := ReplicationObservation{Source: key.Name + "-0", AppliedChanges: 100, DelayedPages: 9}
+			clock := time.Now()
+			prober := &applierProber{master: key.Name + "-0", clock: &clock, appliers: map[string]ReplicationObservation{
+				slave: stuck, key.Name + "-2": {Source: key.Name + "-0", AppliedChanges: 100},
+			}}
+			r := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(50),
+				Prober: prober, Clock: func() time.Time { return clock },
+			}
+			reconcileAt := func(read bool) (*metav1.Condition, *databasev1alpha1.InstanceReplication) {
+				if read {
+					prober.appliers[slave] = stuck
+				} else {
+					delete(prober.appliers, slave)
+				}
+				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+				got := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+				return meta.FindStatusCondition(got.Status.Conditions, conditionReplicationHealthy),
+					got.Status.Instances[1].Replication
+			}
+
+			By("two readings with nothing applied: stalled since the second")
+			reconcileAt(true)
+			clock = clock.Add(10 * time.Second)
+			_, rep := reconcileAt(true)
+			Expect(rep.StalledSince).NotTo(BeNil())
+			since := rep.StalledSince.Time
+
+			By("every other reading times out until the window has passed")
+			for clock.Sub(since) < replicationStallWindow {
+				clock = clock.Add(10 * time.Second)
+				c, rep := reconcileAt(false)
+				Expect(c.Status).To(Equal(metav1.ConditionUnknown))
+				Expect(c.Reason).To(Equal(reasonReplicationNotObserved))
+				Expect(rep).NotTo(BeNil())
+				Expect(rep.StalledSince).NotTo(BeNil())
+				Expect(rep.StalledSince.Time).To(BeTemporally("==", since))
+
+				clock = clock.Add(10 * time.Second)
+				c, _ = reconcileAt(true)
+				if clock.Sub(since) < replicationStallWindow {
+					Expect(c.Status).To(Equal(metav1.ConditionTrue))
+				}
+			}
+
+			By("the reading after the window reports the stall")
+			c, _ := reconcileAt(true)
+			Expect(c.Status).To(Equal(metav1.ConditionFalse))
+			Expect(c.Reason).To(Equal(reasonReplicationStalled))
+			Expect(c.Message).To(ContainSubstring(slave))
+		})
 	})
 
 	Context("Periodic role observation (#155)", func() {

@@ -281,11 +281,20 @@ implemented as a report, not yet as a gate.
   `stalledSince`, which the operator sets when log pages wait in two
   observations in a row and the applier applied nothing in between. It is
   cleared as soon as the applier applies something or no page waits.
+  `observedAt` is when the counters were read.
+- **Missed readings.** A reconcile that could not read a slave's applier
+  (`applyinfo` timed out or failed) or its role keeps the last reading as it
+  is: a missed reading is neither progress nor a stall. The next reading is
+  compared with the one kept, so a stall interrupted by missed readings still
+  reaches the 60-second window. A reading older than 120 seconds is dropped,
+  and the next one starts a new series. A member observed in a role other
+  than slave keeps none.
 - **Condition.** `ReplicationHealthy` is `False` with reason `ApplyFailures`
   when a slave's fail count is above zero, and with reason
   `ReplicationStalled` when a slave has been stalled for 60 seconds. It is
   `Unknown` when no slave was observed or a slave's applier could not be
-  read.
+  read in this reconcile, also while its last reading is kept: a kept reading
+  is history and says nothing about now (ADR-0005).
 
 Why two observations and not the number of waiting pages alone: a healthy
 slave under load has pages waiting too, but its counters rise (POC-20).

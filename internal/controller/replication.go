@@ -38,6 +38,14 @@ const conditionReplicationHealthy = "ReplicationHealthy"
 // POC-20).
 const replicationStallWindow = 60 * time.Second
 
+// replicationHistoryTTL is how long the last reading of a slave's applier is
+// kept while the applier cannot be read, for example because applyinfo timed
+// out. A reading that came back within it is compared with the one kept, so
+// a stall interrupted by missed readings still reaches replicationStallWindow,
+// also when no reading came back for a whole window; after it, the next
+// reading starts a new series.
+const replicationHistoryTTL = 2 * replicationStallWindow
+
 // Reasons of the ReplicationHealthy condition.
 const (
 	reasonAppliersProgressing    = "AppliersProgressing"
@@ -56,19 +64,27 @@ type ReplicationObservation struct {
 	DelayedPages   int64
 }
 
-// nextReplication turns an observation into the status of a slave's
-// replication, given the status of the observation before. The slave is
-// stalled when log pages wait now, waited before, and the applier applied
-// nothing in between; the time it was first seen so is kept until it applies
-// something or no page waits. Counters of another source, or of an applier
-// that was restarted, are not comparable and start a new series.
+// nextReplication turns a reading of a slave's applier into the status of its
+// replication, given the status before. The slave is stalled when log pages
+// wait now, waited at the reading before, and the applier applied nothing in
+// between; the time it was first seen so is kept until it applies something
+// or no page waits. Counters of another source, or of an applier that was
+// restarted, are not comparable and start a new series.
+//
+// Without a reading (obs nil) the status before is kept unchanged, neither
+// progress nor a stall, until it is older than replicationHistoryTTL.
 func nextReplication(prev *databasev1alpha1.InstanceReplication, obs *ReplicationObservation,
 	now time.Time) *databasev1alpha1.InstanceReplication {
-	if obs == nil {
-		return nil
+	if prev != nil && (prev.ObservedAt == nil || now.Sub(prev.ObservedAt.Time) > replicationHistoryTTL) {
+		prev = nil
 	}
+	if obs == nil {
+		return prev.DeepCopy()
+	}
+	observedAt := metav1.NewTime(now)
 	next := &databasev1alpha1.InstanceReplication{
 		Source: obs.Source, AppliedChanges: obs.AppliedChanges, FailCount: obs.FailCount, DelayedPages: obs.DelayedPages,
+		ObservedAt: &observedAt,
 	}
 	stalled := prev != nil && prev.Source == obs.Source &&
 		prev.DelayedPages > 0 && obs.DelayedPages > 0 && prev.AppliedChanges == obs.AppliedChanges
@@ -84,11 +100,13 @@ func nextReplication(prev *databasev1alpha1.InstanceReplication, obs *Replicatio
 	return next
 }
 
-// replicationCondition judges the slaves among instances: a slave whose
-// applier failed to apply a change, then one that has been stalled for
-// replicationStallWindow, make the condition False; a slave whose applier
-// could not be read, or no slave at all, leaves it Unknown.
-func replicationCondition(instances []databasev1alpha1.InstanceStatus, now time.Time) (metav1.ConditionStatus, string, string) {
+// replicationCondition judges the slaves among instances whose applier was
+// read in this reconcile's observations obs: a slave whose applier failed to
+// apply a change, then one that has been stalled for replicationStallWindow,
+// make the condition False; a slave whose applier was not read, even with
+// its last reading kept, or no slave at all, leaves it Unknown.
+func replicationCondition(instances []databasev1alpha1.InstanceStatus, obs map[string]RoleObservation,
+	now time.Time) (metav1.ConditionStatus, string, string) {
 	var failing, stalled, unread []string
 	slaves := 0
 	for _, in := range instances {
@@ -97,7 +115,7 @@ func replicationCondition(instances []databasev1alpha1.InstanceStatus, now time.
 		}
 		slaves++
 		switch r := in.Replication; {
-		case r == nil:
+		case r == nil || obs[in.Name].Replication == nil:
 			unread = append(unread, in.Name)
 		case r.FailCount > 0:
 			failing = append(failing, in.Name)

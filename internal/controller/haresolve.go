@@ -77,7 +77,7 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	cluster.Status.Instances = instanceStatuses(members, obs, now, cluster.Status.Instances)
 
 	setCondition(cluster, conditionPrimaryResolved, res.Status, res.Reason, primaryResolvedMessage(res))
-	replStatus, replReason, replMessage := replicationCondition(cluster.Status.Instances, now)
+	replStatus, replReason, replMessage := replicationCondition(cluster.Status.Instances, obs, now)
 	setCondition(cluster, conditionReplicationHealthy, replStatus, replReason, replMessage)
 	if res.Status == metav1.ConditionTrue {
 		setCondition(cluster, conditionHAReady, metav1.ConditionTrue, "HealthyReplication",
@@ -191,10 +191,16 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 		if o, ok := obs[m]; ok && fresh(o, now) {
 			version = o.EngineVersion
 		}
-		// Only an authoritative slave's applier is taken into account.
+		// Only an authoritative slave's applier is taken into account. A
+		// member whose role could not be read keeps its last reading, as a
+		// slave whose applier could not be read does; one observed in another
+		// role has none.
 		var replication *databasev1alpha1.InstanceReplication
-		if role == databasev1alpha1.RoleSlave {
+		switch role {
+		case databasev1alpha1.RoleSlave:
 			replication = nextReplication(before[m], obs[m].Replication, now)
+		case databasev1alpha1.RoleUnknown:
+			replication = nextReplication(before[m], nil, now)
 		}
 		out = append(out, databasev1alpha1.InstanceStatus{
 			Name:                  m,

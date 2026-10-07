@@ -566,6 +566,11 @@ spec:
                             could not apply.
                           format: int64
                           type: integer
+                        observedAt:
+                          description: observedAt is when the operator last read these
+                            counters.
+                          format: date-time
+                          type: string
                         source:
                           description: 'source is the member whose log is applied:
                             the master this slave sees.'
@@ -573,7 +578,7 @@ spec:
                         stalledSince:
                           description: |-
                             stalledSince is when the operator first saw log pages waiting while the
-                            applier had applied nothing since the observation before. It is cleared
+                            applier had applied nothing since the reading before. It is cleared
                             as soon as the applier applies something or no page waits.
                           format: date-time
                           type: string
