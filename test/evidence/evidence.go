@@ -346,6 +346,13 @@ type Redactor struct {
 // Values shorter than four characters are ignored.
 func NewRedactor(secrets ...string) *Redactor {
 	r := &Redactor{}
+	r.Add(secrets...)
+	return r
+}
+
+// Add registers further secret values, such as one generated during the run.
+// Values shorter than four characters are ignored.
+func (r *Redactor) Add(secrets ...string) {
 	for _, s := range secrets {
 		if len(s) >= minSecretLength {
 			r.secrets = append(r.secrets, s)
@@ -353,7 +360,6 @@ func NewRedactor(secrets ...string) *Redactor {
 	}
 	// Longest first, so that a value containing another is removed whole.
 	slices.SortFunc(r.secrets, func(a, b string) int { return len(b) - len(a) })
-	return r
 }
 
 // Redact returns data with credentials replaced by "[REDACTED]".

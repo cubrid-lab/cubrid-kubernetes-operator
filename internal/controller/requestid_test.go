@@ -43,7 +43,7 @@ func (a *answer) RoundTrip(req *http.Request) (*http.Response, error) {
 // that is answered with an error names that ID.
 func TestInstanceManagerCalls_CarryARequestID(t *testing.T) {
 	transport := &answer{status: http.StatusOK}
-	prober := NewHTTPRoleProber("tok")
+	prober := NewHTTPRoleProber(staticToken("tok"))
 	prober.Client = &http.Client{Transport: transport}
 	prober.ProbeRole(context.Background(), "demo-0", "ns")
 	prober.ProbeRole(context.Background(), "demo-0", "ns")
@@ -52,7 +52,7 @@ func TestInstanceManagerCalls_CarryARequestID(t *testing.T) {
 	}
 
 	failing := &answer{status: http.StatusInternalServerError}
-	client := NewHTTPBackupClient("tok")
+	client := NewHTTPBackupClient(staticToken("tok"))
 	client.Client = &http.Client{Transport: failing}
 	_, err := client.GetOperation(context.Background(), "demo-0", "ns", "op-1")
 	if err == nil || len(failing.ids) != 1 || failing.ids[0] == "" || !strings.Contains(err.Error(), failing.ids[0]) {

@@ -24,7 +24,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
@@ -51,17 +57,42 @@ type RestoreClient interface {
 	GetOperation(ctx context.Context, podName, namespace, id string) (instancemanager.Operation, error)
 }
 
-// HTTPBackupClient talks to the per-member Instance Manager over the pod's
-// stable DNS (ADR-0004), port 9090 (ADR-0003), with the shared bearer token.
-type HTTPBackupClient struct {
-	Client *http.Client
-	Token  string
+// TokenSource returns the bearer token of one member's Instance Manager.
+type TokenSource func(ctx context.Context, podName, namespace string) (string, error)
+
+// ClusterTokens reads a member's token from its own cluster's
+// <cluster>-im-token Secret in the member's namespace, so that each cluster is
+// called with its own credential and no other. A member is a StatefulSet Pod
+// named <cluster>-<ordinal>.
+func ClusterTokens(c client.Reader) TokenSource {
+	return func(ctx context.Context, podName, namespace string) (string, error) {
+		i := strings.LastIndexByte(podName, '-')
+		if i <= 0 {
+			return "", fmt.Errorf("%s is not the name of a cluster member", podName)
+		}
+		if _, err := strconv.ParseUint(podName[i+1:], 10, 32); err != nil {
+			return "", fmt.Errorf("%s is not the name of a cluster member", podName)
+		}
+		secret := &corev1.Secret{}
+		key := types.NamespacedName{Name: imTokenSecretName(podName[:i]), Namespace: namespace}
+		if err := c.Get(ctx, key, secret); err != nil {
+			return "", fmt.Errorf("read the Instance Manager token of %s: %w", podName, err)
+		}
+		return string(secret.Data[imTokenKey]), nil
+	}
 }
 
-func NewHTTPBackupClient(token string) *HTTPBackupClient {
+// HTTPBackupClient talks to the per-member Instance Manager over the pod's
+// stable DNS (ADR-0004), port 9090 (ADR-0003), with the member's cluster token.
+type HTTPBackupClient struct {
+	Client *http.Client
+	Tokens TokenSource
+}
+
+func NewHTTPBackupClient(tokens TokenSource) *HTTPBackupClient {
 	return &HTTPBackupClient{
 		Client: &http.Client{Timeout: 30 * time.Second},
-		Token:  token,
+		Tokens: tokens,
 	}
 }
 
@@ -77,7 +108,9 @@ func (c *HTTPBackupClient) StartBackup(ctx context.Context, podName, namespace, 
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Idempotency-Key", idempotencyKey)
-	c.authorize(httpReq)
+	if err := c.authorize(ctx, httpReq, podName, namespace); err != nil {
+		return instancemanager.Operation{}, err
+	}
 
 	resp, err := c.Client.Do(httpReq)
 	if err != nil {
@@ -102,7 +135,9 @@ func (c *HTTPBackupClient) StartRestore(ctx context.Context, podName, namespace,
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Idempotency-Key", idempotencyKey)
-	c.authorize(httpReq)
+	if err := c.authorize(ctx, httpReq, podName, namespace); err != nil {
+		return instancemanager.Operation{}, err
+	}
 
 	resp, err := c.Client.Do(httpReq)
 	if err != nil {
@@ -129,7 +164,9 @@ func (c *HTTPBackupClient) StartHABootstrap(ctx context.Context, podName, namesp
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Idempotency-Key", idempotencyKey)
-	c.authorize(httpReq)
+	if err := c.authorize(ctx, httpReq, podName, namespace); err != nil {
+		return instancemanager.Operation{}, err
+	}
 
 	resp, err := c.Client.Do(httpReq)
 	if err != nil {
@@ -148,7 +185,9 @@ func (c *HTTPBackupClient) GetOperation(ctx context.Context, podName, namespace,
 	if err != nil {
 		return instancemanager.Operation{}, err
 	}
-	c.authorize(httpReq)
+	if err := c.authorize(ctx, httpReq, podName, namespace); err != nil {
+		return instancemanager.Operation{}, err
+	}
 
 	resp, err := c.Client.Do(httpReq)
 	if err != nil {
@@ -165,11 +204,30 @@ func (c *HTTPBackupClient) baseURL(podName, namespace string) string {
 	return fmt.Sprintf("http://%s.%s.svc:%d", podName, namespace, instancemanager.DefaultPort)
 }
 
-func (c *HTTPBackupClient) authorize(req *http.Request) {
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+func (c *HTTPBackupClient) authorize(ctx context.Context, req *http.Request, podName, namespace string) error {
+	token, err := memberToken(ctx, c.Tokens, podName, namespace)
+	if err != nil {
+		return err
 	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	setRequestID(req)
+	return nil
+}
+
+// memberToken resolves the member's token. A member is never called without
+// one: a missing or empty token is an error, not an unauthenticated call.
+func memberToken(ctx context.Context, tokens TokenSource, podName, namespace string) (string, error) {
+	if tokens == nil {
+		return "", fmt.Errorf("no Instance Manager token source for %s", podName)
+	}
+	token, err := tokens(ctx, podName, namespace)
+	if err != nil {
+		return "", err
+	}
+	if token == "" {
+		return "", fmt.Errorf("no Instance Manager token for %s", podName)
+	}
+	return token, nil
 }
 
 // requestIDHeader names one call to an Instance Manager, which writes the

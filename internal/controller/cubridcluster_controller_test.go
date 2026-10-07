@@ -171,7 +171,6 @@ var _ = Describe("CubridCluster Controller", func() {
 				Client:   k8sClient,
 				Scheme:   k8sClient.Scheme(),
 				Recorder: record.NewFakeRecorder(10),
-				IMToken:  testIMToken,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -263,7 +262,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			})
 			recorder := record.NewFakeRecorder(20)
 			r := &CubridClusterReconciler{
-				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder, IMToken: testIMToken,
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder,
 			}
 
 			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
@@ -311,7 +310,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			}}
 			r := &CubridClusterReconciler{
 				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-				IMToken: testIMToken, Prober: prober, Clock: func() time.Time { return clock },
+				Prober: prober, Clock: func() time.Time { return clock },
 			}
 			condition := func() *metav1.Condition {
 				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
@@ -365,7 +364,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			prober := &memberProber{master: "resync-0"}
 			r := &CubridClusterReconciler{
 				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-				IMToken: testIMToken, Prober: prober,
+				Prober: prober,
 			}
 
 			res, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
@@ -396,7 +395,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			recorder := record.NewFakeRecorder(50)
 			r := &CubridClusterReconciler{
 				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder,
-				IMToken: testIMToken, Prober: prober,
+				Prober: prober,
 			}
 			reconcileOnce := func() []string {
 				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
@@ -434,7 +433,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			})
 			r := &CubridClusterReconciler{
 				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-				IMToken: testIMToken, Prober: &memberProber{},
+				Prober: &memberProber{},
 			}
 			res, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
@@ -447,7 +446,7 @@ var _ = Describe("CubridCluster Controller", func() {
 		ctx := context.Background()
 		newReconciler := func() *CubridClusterReconciler {
 			return &CubridClusterReconciler{
-				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20), IMToken: testIMToken,
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
 			}
 		}
 		create := func(name string) types.NamespacedName {
@@ -687,7 +686,7 @@ var _ = Describe("CubridCluster Controller", func() {
 
 			By("an interrupted restore is started again under a new key and then completes")
 			restore := &fakeRestoreClient{}
-			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore, IMToken: testIMToken}
+			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore}
 			key := newCluster("recovery-resume")
 			reconcileOnce(r, key) // starts
 			restore.failed = true
@@ -714,7 +713,7 @@ var _ = Describe("CubridCluster Controller", func() {
 
 			By("a restore that keeps failing ends as Failed")
 			failing := &fakeRestoreClient{}
-			rf := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: failing, IMToken: testIMToken}
+			rf := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: failing}
 			keyFailing := newCluster("recovery-giveup")
 			var last *databasev1alpha1.CubridCluster
 			for range maxBootstrapAttempts {
@@ -751,7 +750,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 
 			restore := &fakeRestoreClient{}
-			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore, IMToken: testIMToken}
+			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore}
 			key := types.NamespacedName{Name: "recovery-run", Namespace: ns}
 
 			By("starting the restore on the initial master and gating Ready")
@@ -796,7 +795,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 
 			restore := &fakeRestoreClient{}
-			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore, IMToken: testIMToken}
+			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore}
 			key := types.NamespacedName{Name: c.Name, Namespace: ns}
 			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())

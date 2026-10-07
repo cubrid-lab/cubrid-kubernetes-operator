@@ -96,7 +96,7 @@ func TestProbeRole_AnswerMustNameTheMemberThatWasAsked(t *testing.T) {
 		}
 	}
 	probe := func(answer instancemanager.HAStatus) RoleObservation {
-		p := &HTTPRoleProber{Client: &http.Client{Transport: answerWith{answer}}, Now: func() time.Time { return testNow }}
+		p := &HTTPRoleProber{Client: &http.Client{Transport: answerWith{answer}}, Tokens: staticToken("tok"), Now: func() time.Time { return testNow }}
 		return p.ProbeRole(context.Background(), c0, "ns")
 	}
 

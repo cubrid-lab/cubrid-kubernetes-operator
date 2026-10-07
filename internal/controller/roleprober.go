@@ -57,15 +57,15 @@ type RoleProber interface {
 // stable DNS (ADR-0004 per-member alias Service), port 9090 (ADR-0003).
 type HTTPRoleProber struct {
 	Client *http.Client
-	Token  string
+	Tokens TokenSource
 	// Now stamps each observation; nil means time.Now.
 	Now func() time.Time
 }
 
-func NewHTTPRoleProber(token string) *HTTPRoleProber {
+func NewHTTPRoleProber(tokens TokenSource) *HTTPRoleProber {
 	return &HTTPRoleProber{
 		Client: &http.Client{Timeout: 5 * time.Second},
-		Token:  token,
+		Tokens: tokens,
 	}
 }
 
@@ -77,9 +77,11 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	if err != nil {
 		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
-	if p.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+p.Token)
+	token, err := memberToken(ctx, p.Tokens, podName, namespace)
+	if err != nil {
+		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	setRequestID(req)
 	resp, err := p.Client.Do(req)
 	if err != nil {

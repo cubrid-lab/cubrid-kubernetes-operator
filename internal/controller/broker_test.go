@@ -45,7 +45,7 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, c))).To(Succeed()) })
 		r := &CubridClusterReconciler{
 			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-			IMToken: testIMToken, Prober: &memberProber{master: name + "-0"},
+			Prober:       &memberProber{master: name + "-0"},
 			DefaultImage: "registry.example/cubrid-instance-manager:test",
 		}
 		key := types.NamespacedName{Name: name, Namespace: brokerNamespace}
@@ -151,7 +151,7 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 
 		r := &CubridClusterReconciler{
 			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-			IMToken: testIMToken, Prober: &memberProber{master: "broker-legacy-0"},
+			Prober: &memberProber{master: "broker-legacy-0"},
 		}
 		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: c.Name, Namespace: c.Namespace}})
 		Expect(err).NotTo(HaveOccurred())
