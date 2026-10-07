@@ -62,6 +62,8 @@ type HTTPRoleProber struct {
 	Tokens TokenSource
 	// Now stamps each observation; nil means time.Now.
 	Now func() time.Time
+
+	accepted acceptedTokens
 }
 
 func NewHTTPRoleProber(tokens TokenSource) *HTTPRoleProber {
@@ -79,16 +81,14 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	if err != nil {
 		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
-	token, err := memberToken(ctx, p.Tokens, podName, namespace)
+	tokens, err := memberTokens(ctx, p.Tokens, podName, namespace)
 	if err != nil {
 		// The error names the Pod and the Secret, never a token value.
 		logf.FromContext(ctx).V(1).Info("Could not resolve Instance Manager token; member not probed",
 			"pod", podName, "namespace", namespace, "reason", err.Error())
 		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	setRequestID(req)
-	resp, err := p.Client.Do(req)
+	resp, err := p.accepted.send(p.Client, req, namespace+"/"+podName, tokens)
 	if err != nil {
 		return RoleObservation{Reachable: false, ObservedAt: p.now()}
 	}
