@@ -2,14 +2,17 @@ name: Tests
 
 # Pull requests run on pull_request (which also covers fork PRs) and main on
 # push; a push to a PR branch would otherwise run every job twice. A newer
-# push to the same PR cancels the superseded run.
+# push to the same PR cancels the superseded run. Run a branch without a
+# PR with `gh workflow run test.yml --ref <branch>`.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Only pull request runs share a group; every main or manual run is kept.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
