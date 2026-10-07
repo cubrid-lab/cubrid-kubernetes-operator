@@ -12,7 +12,9 @@
 #      a backup through the Instance Manager (ADR-0008).
 #   3. `cubrid heartbeat start` is issued exactly once, and only when the HA
 #      configuration is in place (CUBRID_HA_CONF).
-#   4. This shell stays PID 1 and runs the Instance Manager as a child. The
+#   4. A database carrying the Instance Manager's ownership marker
+#      (<db>/.im-operation) is never created over or started.
+#   5. This shell stays PID 1 and runs the Instance Manager as a child. The
 #      CUBRID daemons are orphans adopted by PID 1, and a `cubrid server stop`
 #      waits for the server process to disappear, so PID 1 has to reap them;
 #      the Instance Manager does not. On SIGTERM/SIGINT the shell stops CUBRID
@@ -119,7 +121,17 @@ start_cubrid() {
 CUBRID_HA_CONF="${CUBRID_HA_CONF:-/etc/cubrid-ha/cubrid_ha.conf}"
 
 started=0
-if [ "${CUBRID_BOOTSTRAP}" = "recovery" ] && ! database_registered; then
+marker="${CUBRID_DATABASES}/${CUBRID_DB}/.im-operation"
+if [ -e "${marker}" ] || [ -L "${marker}" ]; then
+  # The Instance Manager's createdb or restoredb of this database did not
+  # finish (its ownership marker, ADR-0008/ADR-0010). The database is neither
+  # created over nor started; the manager decides what to do with it, and the
+  # marker and the data are left as they are.
+  if [ "${CUBRID_COMPONENTS}" != "SERVER" ] && [ -f "${CUBRID_HA_CONF}" ]; then
+    install_ha_conf
+  fi
+  log "database '${CUBRID_DB}' is unfinished (${marker}): it is not started; waiting for the Instance Manager"
+elif [ "${CUBRID_BOOTSTRAP}" = "recovery" ] && ! database_registered; then
   # Nothing to start yet: the restore creates and registers the database.
   log "recovery bootstrap: no database is created; waiting for a restore"
 elif [ "${CUBRID_COMPONENTS}" != "SERVER" ] && [ ! -f "${CUBRID_HA_CONF}" ]; then
