@@ -25,6 +25,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -118,6 +119,10 @@ type CubridClusterReconciler struct {
 	DefaultImage string
 	// Clock judges observation freshness; nil means time.Now.
 	Clock func() time.Time
+	// OperatorNS is the namespace of the operator's Pods, the only Pods the
+	// NetworkPolicy of the DB Pods admits to the Instance Manager port. Empty
+	// admits none.
+	OperatorNS string
 }
 
 func (r *CubridClusterReconciler) now() time.Time {
@@ -138,6 +143,7 @@ func (r *CubridClusterReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile drives the CubridCluster toward its desired state: a headless
 // governing Service and a StatefulSet with a data PVC template; HA role
@@ -181,6 +187,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err := r.reconcileHAConfig(ctx, &cluster); err != nil {
 		log.Error(err, "Failed to reconcile HA ConfigMap")
 		return r.failed(ctx, &cluster, "HAConfigReconcileFailed", err)
+	}
+
+	// The ingress NetworkPolicies exist before the first DB Pod does.
+	if err := r.reconcileNetworkPolicies(ctx, &cluster); err != nil {
+		log.Error(err, "Failed to reconcile NetworkPolicies")
+		return r.failed(ctx, &cluster, "NetworkPolicyReconcileFailed", err)
 	}
 
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
@@ -844,6 +856,7 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Named("cubridcluster").
 		Complete(r)
 }

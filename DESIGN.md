@@ -1401,8 +1401,13 @@ Secrets are referenced (`dbaPasswordSecretRef`,
 `objectStorage.credentialsSecretRef`), never inlined. The Instance Manager authenticates
 `/v1` endpoints with a bearer token (loopback-exempt for the preStop path,
 ADR-0003), and object-storage credentials come from the manager's env,
-never a request body. mTLS, NetworkPolicy, and finer-grained least-privilege
-credentials remain incremental hardening (ADR-0003/0007).
+never a request body. Per-cluster ingress NetworkPolicies admit only the
+operator to the Instance Manager port, only the cluster's own DB and Broker
+Pods to the database ports, and the configured clients to the Broker ports
+(README, "Network access"); they take effect only under a network plugin
+that enforces NetworkPolicy and do not encrypt traffic. mTLS and
+finer-grained least-privilege credentials remain incremental hardening
+(ADR-0003/0007).
 
 Decision: #18.
 

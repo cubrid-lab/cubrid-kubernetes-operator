@@ -827,14 +827,20 @@ it needs more.
 ### S14: authentication and Secrets
 
 - **Level:** real database on Kind.
-- **Action:** call the Instance Manager's backup, restore-preparation and
-  shutdown endpoints with no token, with a wrong token and with the valid
-  token; repeat from another Pod with headers that claim a loopback origin.
-- **The Operator must** (ADR-0003): reject every `/v1` request without the
-  valid token, except a shutdown that really comes from loopback inside the
-  Pod.
-- **Expected:** the unauthorized requests are rejected and cause no backup,
-  no restore and no shutdown; the valid request succeeds.
+- **Action:** from a Pod in another namespace, connect to the Instance
+  Manager port and the database server port of the master and a slave; then
+  admit that namespace to the Instance Manager port with a NetworkPolicy of
+  its own and call the backup, restore-preparation and shutdown endpoints
+  with no token, with a wrong token and with the valid token, also with
+  headers that claim a loopback origin.
+- **The Operator must** (ADR-0003, #272): keep a NetworkPolicy that admits
+  only the operator to the Instance Manager port and only the cluster's own
+  Pods to the database ports; reject every `/v1` request without the valid
+  token, except a shutdown that really comes from loopback inside the Pod.
+- **Expected:** the direct connections time out (Kind's network plugin
+  enforces NetworkPolicy; a plugin that does not would admit them); the
+  unauthorized requests are rejected and cause no backup, no restore and no
+  shutdown; the valid request succeeds.
 - **Must never happen:** a side effect from a rejected request; a token, a
   database password or an object-storage credential in a log, in `status`, in
   an event or in an evidence file.

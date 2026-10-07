@@ -88,6 +88,46 @@ with:
 
 CUBRID engine version migration is not included in the initial MVP.
 
+## Network access
+
+For each `CubridCluster` the operator keeps two ingress NetworkPolicies:
+
+| Policy | Selects | Admits |
+|---|---|---|
+| `<cluster>-database` | the DB Pods | the operator's Pods to the Instance Manager port 9090/TCP; the cluster's own DB Pods to the CUBRID server port 1523/TCP and the HA heartbeat port 59901/UDP; the cluster's own Broker Pods to 1523/TCP |
+| `<cluster>-broker` | the Broker Pods | clients to the Broker ports 33000/TCP (read-write) and 33001/TCP (read-only): the Pods of the cluster's namespace, or the peers listed in `spec.networkPolicy.clients` instead |
+
+```yaml
+spec:
+  networkPolicy:
+    clients:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: my-app
+```
+
+- **Enforcement depends on the network plugin.** Only a plugin that
+  implements NetworkPolicy drops what the policies do not admit; with one
+  that does not, the policies are stored and nothing is blocked. Check your
+  cluster's plugin before you rely on them. Kubelet probes come from the
+  node, which plugins commonly admit.
+- **They are not encryption or database authentication.** Traffic between
+  clients, Brokers, DB Pods and the operator is not encrypted. The Instance
+  Manager requires its bearer token whether or not a policy admits the
+  caller. The database is created with an empty DBA password
+  (`dbaPasswordSecretRef` is rejected in `v1alpha1`), so every client the
+  Broker policy admits can connect as `dba`.
+- Egress is not restricted: the DB Pods need DNS, their peers and object
+  storage. NetworkPolicies are additive, so another policy that selects the
+  same Pods can admit more.
+- The operator's Pods are identified by their namespace, taken from the
+  operator's service account (`--operator-namespace` overrides it), and the
+  labels `control-plane: controller-manager` and
+  `app.kubernetes.io/name: cubrid-kubernetes-operator` of
+  `config/manager/manager.yaml`.
+- `spec.networkPolicy.enabled: false` removes the two policies, for clusters
+  whose access is managed by other means.
+
 ## Scope and validation
 
 See [ROADMAP.md](./ROADMAP.md) for the v0.1 required, conditional and future

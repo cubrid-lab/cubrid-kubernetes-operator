@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -191,6 +192,27 @@ type CubridObjectStorage struct {
 	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
 }
 
+// CubridNetworkPolicy configures the NetworkPolicies the operator keeps for
+// the cluster's Pods. They restrict ingress only, and only where the cluster's
+// network plugin enforces NetworkPolicy; they do not encrypt traffic or
+// authenticate database users.
+type CubridNetworkPolicy struct {
+	// enabled makes the operator keep the policies: the DB Pods accept the
+	// Instance Manager port from the operator only, and the server and HA
+	// ports from the cluster's own DB and Broker Pods; the Broker Pods accept
+	// their ports from clients. When false, the policies the operator created
+	// are removed.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// clients are the peers allowed to connect to the Broker ports. When
+	// empty, only Pods in the cluster's namespace are. Clients never reach
+	// the DB Pods directly.
+	// +optional
+	Clients []networkingv1.NetworkPolicyPeer `json:"clients,omitempty"`
+}
+
 // CubridBootstrap selects how a new cluster is initialized (ADR-0008/0010).
 type CubridBootstrap struct {
 	// recovery, when set, restores the initial master from a backup manifest
@@ -261,6 +283,11 @@ type CubridClusterSpec struct {
 	// resources sets container resource requirements for the DB pods.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// networkPolicy configures the NetworkPolicies of the cluster's Pods.
+	// Omitted, they are kept with their defaults.
+	// +optional
+	NetworkPolicy *CubridNetworkPolicy `json:"networkPolicy,omitempty"`
 }
 
 // InstanceStatus reports the observed state of one CUBRID instance (ADR-0001).

@@ -287,7 +287,13 @@ spec:
   storage:
     data:
       size: 2Gi
-`, clusterName, haNamespace, repository, tag, database, storeNamespace, seedBucket))
+  # The workload clients run in the store namespace.
+  networkPolicy:
+    clients:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: %s
+`, clusterName, haNamespace, repository, tag, database, storeNamespace, seedBucket, storeNamespace))
 		})
 
 		AfterAll(func() {
