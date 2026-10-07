@@ -50,7 +50,9 @@ func recoveryActive(cluster *databasev1alpha1.CubridCluster) bool {
 
 // reconcileRecovery drives the ADR-0008 restore-as-bootstrap on the initial
 // master. It starts the restore operation once (idempotently), polls it, and
-// records status.bootstrap. It returns a requeue result while in progress; the
+// records status.bootstrap. In an HA cluster the other members are then seeded
+// from the restored one, and the recovery is complete only when every member
+// holds the restored data. It returns a requeue result while in progress; the
 // caller gates Ready on BootstrapReady until Complete.
 func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (ctrl.Result, bool) {
 	rec := cluster.Spec.Bootstrap.Recovery
@@ -73,6 +75,11 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreClientNotConfigured",
 			"no restore client configured on the controller")
 		return ctrl.Result{}, true
+	}
+
+	// Once the restore has completed, what remains is seeding the other members.
+	if cluster.Spec.HighAvailability.Enabled && restoredOnTarget(cluster, db) {
+		return r.reconcileRecoverySeeding(ctx, cluster, db)
 	}
 
 	// Start once: begin the restore when no operation is recorded yet.
@@ -109,6 +116,9 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 	}
 	switch op.State {
 	case instancemanager.OpCompleted:
+		if cluster.Spec.HighAvailability.Enabled {
+			return r.reconcileRecoverySeeding(ctx, cluster, db)
+		}
 		cluster.Status.Bootstrap.Phase = databasev1alpha1.BootstrapComplete
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionTrue, "RecoveryComplete", "restore completed on "+target)
 		return ctrl.Result{}, false
@@ -132,6 +142,49 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 	default:
 		cluster.Status.Bootstrap.Phase = databasev1alpha1.BootstrapRestoring
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreInProgress", "restore in progress on "+target)
+		return ctrl.Result{RequeueAfter: restorePollAfter}, true
+	}
+}
+
+// restoredOnTarget reports whether the recovery restore of database was
+// recorded as complete on the target member.
+func restoredOnTarget(cluster *databasev1alpha1.CubridCluster, database string) bool {
+	for _, status := range cluster.Status.Databases {
+		if status.Name == database {
+			return status.PrimaryCreated
+		}
+	}
+	return false
+}
+
+// reconcileRecoverySeeding copies the restored database from the member it was
+// restored on to the other members, with the same seeding as the HA bootstrap
+// of a created database (ADR-0008/0010). The source is the member the backup
+// was restored on because it is the only member that holds the data, not
+// because it stays the master: CUBRID decides that (ADR-0005). The recovery is
+// complete when every member is seeded, and Failed when seeding gave up.
+func (r *CubridClusterReconciler) reconcileRecoverySeeding(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	database string) (ctrl.Result, bool) {
+	boot := cluster.Status.Bootstrap
+	status := databaseStatus(cluster, database)
+	if !status.PrimaryCreated {
+		status.Phase = databasePhaseCreated
+		status.PrimaryCreated = true
+		r.event(cluster, corev1.EventTypeNormal, "DatabaseRestored", "database "+database+" restored on "+boot.TargetMember+
+			"; copying it to the other members")
+	}
+	if status.Phase != databasePhaseFailed {
+		boot.Phase = databasev1alpha1.BootstrapSeedingReplicas
+		r.reconcileSeeding(ctx, cluster, status, boot.TargetMember)
+	}
+	switch {
+	case status.HAConfigured:
+		boot.Phase = databasev1alpha1.BootstrapComplete
+		return ctrl.Result{}, false
+	case status.Phase == databasePhaseFailed:
+		boot.Phase = databasev1alpha1.BootstrapFailed
+		return ctrl.Result{}, true
+	default:
 		return ctrl.Result{RequeueAfter: restorePollAfter}, true
 	}
 }

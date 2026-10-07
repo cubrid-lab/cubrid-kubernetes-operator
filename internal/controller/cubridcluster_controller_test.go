@@ -709,7 +709,8 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			done := &databasev1alpha1.CubridCluster{}
 			Expect(k8sClient.Get(ctx, key, done)).To(Succeed())
-			Expect(done.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapComplete))
+			Expect(done.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapSeedingReplicas),
+				"the restore completed; the other members are seeded next (#268)")
 
 			By("a restore that keeps failing ends as Failed")
 			failing := &fakeRestoreClient{}
@@ -769,7 +770,36 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
 			Expect(ready.Reason).To(Equal("BootstrapRecoveryInProgress"))
 
-			By("completing recovery once the restore operation finishes")
+			By("not completing an HA recovery when only the restored member holds the data (#268)")
+			restore.completed = true
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			seeding := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, seeding)).To(Succeed())
+			Expect(seeding.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapSeedingReplicas))
+			bootstrapReady := meta.FindStatusCondition(seeding.Status.Conditions, conditionBootstrapReady)
+			Expect(bootstrapReady).NotTo(BeNil())
+			Expect(bootstrapReady.Status).To(Equal(metav1.ConditionFalse))
+			Expect(bootstrapReady.Reason).To(Equal("PeersNotSeeded"), "no backup client is configured to seed the peers")
+			Expect(meta.IsStatusConditionTrue(seeding.Status.Conditions, conditionReady)).To(BeFalse())
+		})
+
+		It("completes a standalone recovery once the restore operation finishes (ADR-0008)", func() {
+			c := standaloneCluster("recovery-standalone")
+			c.Namespace = ns
+			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
+			}
+			c.Spec.ObjectStorage = testObjectStorage()
+			Expect(k8sClient.Create(ctx, c)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+
+			restore := &fakeRestoreClient{}
+			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore, IMToken: testIMToken}
+			key := types.NamespacedName{Name: c.Name, Namespace: ns}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
 			restore.completed = true
 			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
@@ -780,6 +810,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			bootstrapReady := meta.FindStatusCondition(done.Status.Conditions, conditionBootstrapReady)
 			Expect(bootstrapReady).NotTo(BeNil())
 			Expect(bootstrapReady.Status).To(Equal(metav1.ConditionTrue))
+			Expect(bootstrapReady.Reason).To(Equal("RecoveryComplete"))
 		})
 	})
 })

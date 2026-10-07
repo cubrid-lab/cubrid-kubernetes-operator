@@ -167,14 +167,20 @@ func seedLocation(cluster *databasev1alpha1.CubridCluster, database string) (buc
 func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	status *databasev1alpha1.DatabaseStatus, source string) {
 	database := status.Name
+	// A recovery bootstrap restored the database on the source; otherwise it
+	// was created there.
+	origin := "database " + database + " was created on " + source
+	if cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Recovery != nil {
+		origin = "database " + database + " was restored on " + source
+	}
 	if r.Backup == nil || r.Restore == nil {
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "PeersNotSeeded",
-			"database "+database+" was created on "+source+"; no backup and restore clients are configured to seed the other members")
+			origin+"; no backup and restore clients are configured to seed the other members")
 		return
 	}
 	if cluster.Spec.ObjectStorage == nil || cluster.Spec.ObjectStorage.Bucket == "" {
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedStorageNotConfigured",
-			"database "+database+" was created on "+source+
+			origin+
 				"; spec.objectStorage with a bucket is needed to copy it to the other members")
 		return
 	}
@@ -240,7 +246,7 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 
 	status.HAConfigured = true
 	setCondition(cluster, conditionBootstrapReady, metav1.ConditionTrue, "PeersSeeded",
-		"database "+database+" was created on "+source+" and copied to the other members")
+		origin+" and copied to the other members")
 	r.event(cluster, corev1.EventTypeNormal, "PeersSeeded", "database "+database+" copied to the other members")
 }
 

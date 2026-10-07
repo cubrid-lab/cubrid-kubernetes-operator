@@ -85,6 +85,21 @@ func (f *fakeSeedClient) GetOperation(_ context.Context, _, _, _ string) (instan
 	return instancemanager.Operation{}, errors.New("not used by seeding")
 }
 
+// recoverySeedClient is a fakeSeedClient that also answers the poll of the
+// recovery restore on the first member.
+type recoverySeedClient struct {
+	*fakeSeedClient
+	recovered instancemanager.OperationState
+}
+
+func newRecoverySeedClient() *recoverySeedClient {
+	return &recoverySeedClient{fakeSeedClient: &fakeSeedClient{restore: map[string]instancemanager.OperationState{}}}
+}
+
+func (f *recoverySeedClient) GetOperation(_ context.Context, _, _, id string) (instancemanager.Operation, error) {
+	return instancemanager.Operation{ID: id, State: f.recovered}, nil
+}
+
 var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 	ctx := context.Background()
 
@@ -359,6 +374,145 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			_, reason := bootstrapCondition(got)
 			Expect(reason).To(Equal("SeedRestoreFailed"))
 			Expect(seed.restoreOn).To(HaveEach("seed-failed-1"), "the second peer is not touched")
+		})
+	})
+
+	Context("seeding after a recovery bootstrap (#268)", func() {
+		recoveryCluster := func(name string) types.NamespacedName {
+			c := haCluster(name)
+			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
+			}
+			c.Spec.ObjectStorage = testObjectStorage()
+			c.Spec.ObjectStorage.Bucket = "cluster-artifacts"
+			return create(c)
+		}
+		reconcilerFor := func(seed *recoverySeedClient) *CubridClusterReconciler {
+			r := reconcilerWith(&fakeHABootstrapClient{state: instancemanager.OpCompleted})
+			r.Backup, r.Restore = seed, seed
+			return r
+		}
+		notReady := func(r *CubridClusterReconciler, key types.NamespacedName) *databasev1alpha1.CubridCluster {
+			got := reconcileOnce(r, key)
+			Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionReady)).To(BeFalse(),
+				"a recovery whose peers are not seeded must not be Ready")
+			Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionBootstrapReady)).To(BeFalse())
+			return got
+		}
+		peerRestores := func(seed *recoverySeedClient, restored string) []string {
+			var peers []string
+			for _, m := range seed.restoreOn {
+				if m != restored {
+					peers = append(peers, m)
+				}
+			}
+			return peers
+		}
+
+		It("does not complete the recovery when only the restored member holds the data", func() {
+			seed := newRecoverySeedClient()
+			key := recoveryCluster("rseed-first")
+			r := reconcilerFor(seed)
+
+			notReady(r, key) // starts the restore
+			Expect(seed.restoreOn).To(Equal([]string{"rseed-first-0"}))
+			Expect(seed.restoreReq.SeedFromMaster).To(BeEmpty())
+
+			By("the restore completes; the peers are still empty")
+			seed.recovered = instancemanager.OpCompleted
+			seed.backupState = instancemanager.OpRunningBackup
+			got := notReady(r, key)
+			Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapSeedingReplicas))
+			cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
+			Expect(cond.Reason).To(Equal("SeedBackupInProgress"))
+			Expect(got.Status.Databases).To(HaveLen(1))
+			Expect(got.Status.Databases[0].PrimaryCreated).To(BeTrue())
+			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
+			Expect(seed.backupOn).To(HaveEach("rseed-first-0"), "the seed backup is taken on the restored member")
+			Expect(peerRestores(seed, "rseed-first-0")).To(BeEmpty())
+			ready := meta.FindStatusCondition(got.Status.Conditions, conditionReady)
+			Expect(ready.Reason).To(Equal("RecoverySeedingReplicas"))
+			Expect(ready.Message).NotTo(ContainSubstring("restoring from backup"))
+			Expect(r.Recorder.(*record.FakeRecorder).Events).To(Receive(ContainSubstring("DatabaseRestored")))
+
+			By("saying that the database was restored, not created, on the source")
+			r.Backup = nil
+			got = notReady(r, key)
+			cond = meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
+			Expect(cond.Reason).To(Equal("PeersNotSeeded"))
+			Expect(cond.Message).To(ContainSubstring("was restored on rseed-first-0"))
+		})
+
+		It("seeds both peers once from the restored member, also across an operator restart", func() {
+			const restored, peer1, peer2 = "rseed-both-0", "rseed-both-1", "rseed-both-2"
+			seed := newRecoverySeedClient()
+			seed.recovered = instancemanager.OpCompleted
+			seed.backupState = instancemanager.OpCompleted
+			seed.restore[peer1] = instancemanager.OpRestoring
+			key := recoveryCluster("rseed-both")
+			r := reconcilerFor(seed)
+
+			notReady(r, key) // starts the restore
+			got := notReady(r, key)
+			Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapSeedingReplicas))
+			Expect(peerRestores(seed, restored)).To(Equal([]string{peer1}))
+			Expect(seed.restoreReq.SeedFromMaster).To(Equal(restored))
+			firstKey := seed.restoreKeys[peer1]
+
+			By("a new reconciler, as after an operator restart, finds the same seeding step")
+			again := newRecoverySeedClient()
+			again.recovered, again.backupState = instancemanager.OpCompleted, instancemanager.OpCompleted
+			again.restore[peer1] = instancemanager.OpCompleted
+			again.restore[peer2] = instancemanager.OpRestoring
+			r2 := reconcilerFor(again)
+			got = notReady(r2, key)
+			Expect(again.restoreOn).To(Equal([]string{peer1, peer2}),
+				"the restored member is not restored again")
+			Expect(again.restoreKeys[peer1]).To(Equal(firstKey))
+			Expect(got.Status.Databases[0].SeededMembers).To(Equal([]string{peer1}))
+
+			By("completing the recovery once every member holds the data")
+			again.restore[peer2] = instancemanager.OpCompleted
+			again.restoreOn = nil
+			got = reconcileOnce(r2, key)
+			Expect(again.restoreOn).To(Equal([]string{peer2}), "a seeded member is never restored over")
+			Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapComplete))
+			Expect(got.Status.Databases[0].SeededMembers).To(Equal([]string{peer1, peer2}))
+			Expect(got.Status.Databases[0].HAConfigured).To(BeTrue())
+			Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionBootstrapReady)).To(BeTrue())
+			Expect(meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady).Message).
+				To(ContainSubstring("was restored on " + restored))
+
+			By("asking for nothing more afterwards")
+			again.backupOn, again.restoreOn = nil, nil
+			reconcileOnce(r2, key)
+			Expect(again.backupOn).To(BeEmpty())
+			Expect(again.restoreOn).To(BeEmpty())
+		})
+
+		It("ends the recovery as Failed when seeding a peer keeps failing", func() {
+			seed := newRecoverySeedClient()
+			seed.recovered, seed.backupState = instancemanager.OpCompleted, instancemanager.OpCompleted
+			seed.restore["rseed-fail-1"] = instancemanager.OpFailed
+			seed.reason = "restoreslave failed: exit status 1"
+			key := recoveryCluster("rseed-fail")
+			r := reconcilerFor(seed)
+
+			notReady(r, key) // starts the restore
+			var got *databasev1alpha1.CubridCluster
+			for range maxBootstrapAttempts {
+				got = notReady(r, key)
+			}
+			Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapFailed))
+			cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
+			Expect(cond.Reason).To(Equal("SeedRestoreFailed"))
+
+			By("starting nothing more afterwards")
+			seed.backupOn, seed.restoreOn = nil, nil
+			got = notReady(r, key)
+			Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapFailed))
+			Expect(seed.backupOn).To(BeEmpty())
+			Expect(seed.restoreOn).To(BeEmpty())
 		})
 	})
 

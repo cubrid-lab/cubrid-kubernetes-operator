@@ -108,7 +108,8 @@ fixed key; `status.databases[].haConfigured` and `BootstrapReady=True`
 and a bucket the bootstrap stops after the first database with
 `SeedStorageNotConfigured`. The source is the member the database was created
 on, not a resolved master, because no primary resolves before a peer has
-joined.
+joined. A recovery bootstrap seeds the other members the same way from the
+member its backup was restored on (ADR-0008, #268).
 
 Resuming (#107): the key of every step carries the attempt number, so a
 reconcile after an operator restart addresses the operation that is already
