@@ -62,7 +62,8 @@ const (
 const overlapQuiet = 60 * time.Second
 
 // tokenCallerManifest is a Pod outside the cluster's namespace from which the
-// Instance Manager is called with a given token.
+// Instance Manager is called with a given token. sleep, as PID 1, ignores
+// SIGTERM, so a short grace period keeps a deleted Pod from lingering.
 const tokenCallerManifest = `apiVersion: v1
 kind: Pod
 metadata:
@@ -70,6 +71,7 @@ metadata:
   namespace: %s
 spec:
   restartPolicy: Never
+  terminationGracePeriodSeconds: 1
   containers:
     - name: curl
       image: docker.io/curlimages/curl:8.10.1
@@ -217,9 +219,15 @@ func (r *haRun) s14Token(variant string) {
 	}
 
 	By("starting a Pod to call the Instance Manager from, and admitting its namespace to the port")
+	// The previous variant deletes its Pod without waiting. Applying the
+	// manifest to a Pod that is still terminating creates nothing, and that
+	// Pod still reports Ready until it is gone, so wait for it first.
+	_, err := utils.Run(exec.Command("kubectl", "-n", r.clientNamespace, "delete", "pod", "token-caller",
+		"--ignore-not-found", "--wait=true", "--timeout=2m"))
+	Expect(err).NotTo(HaveOccurred())
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(fmt.Sprintf(tokenCallerManifest, r.clientNamespace))
-	_, err := utils.Run(cmd)
+	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(func() {
 		_, _ = utils.Run(exec.Command("kubectl", "-n", r.clientNamespace, "delete", "pod", "token-caller",
