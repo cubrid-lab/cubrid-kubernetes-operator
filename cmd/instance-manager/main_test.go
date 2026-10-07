@@ -23,15 +23,23 @@ import (
 	"testing"
 )
 
-// A manager without a token does not start: it would otherwise serve its
-// management API to anybody or to nobody (#271).
+// A manager without a token does not start: it would serve its management
+// API to nobody (#271).
+func TestValidateToken(t *testing.T) {
+	for _, token := range []string{"", " ", " \n\t"} {
+		if err := validateToken(token); err == nil || !strings.Contains(err.Error(), "IM_TOKEN") {
+			t.Errorf("validateToken(%q) = %v, want a refusal that names IM_TOKEN", token, err)
+		}
+	}
+	if err := validateToken("0123abcd"); err != nil {
+		t.Errorf("validateToken of a token = %v, want nil", err)
+	}
+}
+
+// run checks the token before it listens or opens anything.
 func TestRun_RefusesEmptyToken(t *testing.T) {
 	t.Setenv("IM_TOKEN", "")
 	t.Setenv("IM_ADDR", "127.0.0.1:0")
-	t.Setenv("IM_OPERATIONS_DIR", "")
-	t.Setenv("IM_S3_ENDPOINT", "")
-	// Ends run at its latest step should it get that far.
-	t.Setenv("IM_PROCESS_GRACE", "not-a-duration")
 	err := run(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err == nil || !strings.Contains(err.Error(), "IM_TOKEN") {
 		t.Fatalf("run = %v, want a refusal that names IM_TOKEN", err)

@@ -293,7 +293,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_HA_CONF` | `/etc/cubrid-ha/cubrid_ha.conf`, the read-only mount of the `<cluster>-ha-config` ConfigMap in an HA cluster. The entrypoint copies it into `$CUBRID/conf` and sets `ha_mode=on` at every start. An HA member starts heartbeat only when its database is on the volume; without one it runs only the manager and waits for the HA bootstrap. An HA member whose file is absent starts nothing either |
 | `IM_BOOTSTRAP_TIMEOUT` | optional; the deadline of the HA bootstrap operation (`createdb` and the HA start), default 15m. The operator does not set it |
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
-| `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token`. Required: the manager does not start with an empty token, and it compares the token in constant time |
+| `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token`. Required: the manager does not start with an empty or whitespace-only token, and it compares SHA-256 digests of the token in constant time |
 | `IM_OPERATIONS_DIR` | `/var/lib/cubrid/operations`, on the PVC: the durable operation records. Without it the manager serves no asynchronous backup or restore |
 | `IM_LOG_LEVEL` | optional: `debug`, `info`, `warn` or `error`; `info` when unset |
 | `IM_PROCESS_GRACE` | optional: how long a CUBRID process may be missing before the manager ends itself; `30s` when unset |
@@ -329,7 +329,7 @@ The operator never changes an existing token. A Pod reads the token when it
 starts, and the StatefulSet uses `OnDelete`, so a changed token reaches a
 running Pod only when that Pod is replaced; a changed Secret would lock the
 operator out of every member that still holds the old one. Only a missing or
-empty token is generated anew. When that happens while the cluster's
+empty (or whitespace-only) token is generated anew. When that happens while the cluster's
 StatefulSet exists, the operator records a Warning Event,
 `InstanceManagerTokenRegenerated` (without the token): the running Pods
 refuse the operator until they are replaced. A cluster created by an operator version that

@@ -100,6 +100,17 @@ func TestServer_Role_RequiresToken(t *testing.T) {
 	}
 }
 
+func TestIsLoopback(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:6000": true, "127.0.0.2:6000": true, "[::1]:6000": true,
+		testRemoteAddr: false, "[2001:db8::1]:6000": false, "localhost:6000": false, "garbage": false,
+	} {
+		if got := isLoopback(addr); got != want {
+			t.Errorf("isLoopback(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
 // loopbackAddr is a caller inside the Pod, as the preStop hook is.
 const loopbackAddr = "127.0.0.1:6000"
 

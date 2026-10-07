@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -223,7 +224,8 @@ func imTokenSecretName(cluster string) string { return cluster + "-im-token" }
 // <cluster>-im-token, which its DB Pods serve with and the operator calls them
 // with (ClusterTokens). An existing token is kept: a Pod reads the token when
 // it starts, so a changed one would lock the operator out of every running
-// Pod until it is replaced. Only a missing or empty token is generated anew.
+// Pod until it is replaced. Only a missing, empty or whitespace-only token is
+// generated anew.
 func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cluster *databasev1alpha1.CubridCluster) error {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: imTokenSecretName(cluster.Name), Namespace: cluster.Namespace},
@@ -232,7 +234,7 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 		secret.Labels = labelsFor(cluster)
 		secret.Type = corev1.SecretTypeOpaque
-		if len(secret.Data[imTokenKey]) == 0 {
+		if strings.TrimSpace(string(secret.Data[imTokenKey])) == "" {
 			token, err := newIMToken()
 			if err != nil {
 				return err
@@ -410,7 +412,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			Env:       instanceManagerEnv(cluster),
 			Resources: cluster.Spec.Resources,
 			// preStop triggers the ADR-0003 ordered graceful shutdown via the
-			// local Instance Manager (loopback is token-exempt).
+			// local Instance Manager, with the container's IM_TOKEN.
 			Lifecycle: preStopShutdown(cluster),
 			Ports: []corev1.ContainerPort{
 				{Name: "cubrid", ContainerPort: cubridServerPort},

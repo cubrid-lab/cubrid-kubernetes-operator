@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -90,10 +91,8 @@ func newLogger() (*slog.Logger, error) {
 func run(logger *slog.Logger) error {
 	addr := envOr("IM_ADDR", fmt.Sprintf(":%d", instancemanager.DefaultPort))
 	token := os.Getenv("IM_TOKEN")
-	// Without a token the management API would answer nobody; the operator
-	// sets IM_TOKEN from the cluster's <cluster>-im-token Secret.
-	if token == "" {
-		return errors.New("IM_TOKEN is empty: the Instance Manager does not start without a token")
+	if err := validateToken(token); err != nil {
+		return err
 	}
 
 	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second}, Logger: logger}
@@ -215,6 +214,16 @@ func run(logger *slog.Logger) error {
 		defer cancel()
 		return srv.Shutdown(shutCtx)
 	}
+}
+
+// validateToken refuses an IM_TOKEN that is empty or only whitespace: the
+// manager would answer nobody with it. The operator sets IM_TOKEN from the
+// cluster's <cluster>-im-token Secret.
+func validateToken(token string) error {
+	if strings.TrimSpace(token) == "" {
+		return errors.New("IM_TOKEN is empty: the Instance Manager does not start without a token")
+	}
+	return nil
 }
 
 func envOr(key, def string) string {

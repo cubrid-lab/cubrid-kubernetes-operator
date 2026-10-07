@@ -298,6 +298,14 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		regeneratedToken := string(secret.Data[imTokenKey])
 		Expect(regeneratedToken).To(MatchRegexp("^[0-9a-f]{64}$"))
 		Expect(regenerated()).To(BeTrue(), "no Warning Event for a token generated under existing Pods")
+
+		// A token of only whitespace is no token: the Instance Manager refuses
+		// to start with it (#271).
+		secret.Data[imTokenKey] = []byte(" \n\t")
+		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+		reconcileAgain()
+		Expect(string(secret.Data[imTokenKey])).To(MatchRegexp("^[0-9a-f]{64}$"))
+		Expect(regenerated()).To(BeTrue(), "no Warning Event for a whitespace token generated anew")
 	})
 
 	It("does not warn about the token of a new cluster", func() {

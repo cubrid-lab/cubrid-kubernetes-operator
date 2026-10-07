@@ -18,12 +18,14 @@ package instancemanager
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -706,11 +708,14 @@ func (s *Server) shutdown(w http.ResponseWriter, r *http.Request) {
 
 // auth wraps /v1 handlers with bearer-token authentication (ADR-0003). Every
 // caller needs the token, loopback included; a server without a token refuses
-// every call. The comparison takes the same time wherever the values differ.
+// every call. The SHA-256 digests are compared in constant time, so neither
+// the content nor the length of the token shows in the answer's timing.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
+	want := sha256.Sum256([]byte("Bearer " + s.token))
 	return func(w http.ResponseWriter, r *http.Request) {
 		got := r.Header.Get("Authorization")
-		if s.token == "" || subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+s.token)) != 1 {
+		gotSum := sha256.Sum256([]byte(got))
+		if s.token == "" || subtle.ConstantTimeCompare(gotSum[:], want[:]) != 1 {
 			reason := reasonWrongToken
 			if got == "" {
 				reason = reasonNoToken
@@ -723,23 +728,15 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// isLoopback reports whether a request's RemoteAddr (host:port, as net/http
+// sets it) is a loopback IP. It is logged only; it grants nothing.
 func isLoopback(remoteAddr string) bool {
-	host := remoteAddr
-	if i := indexByte(remoteAddr, ':'); i >= 0 {
-		host = remoteAddr[:i]
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false
 	}
-	return host == "127.0.0.1" || host == "::1" || host == "localhost"
-}
-
-func indexByte(s string, b byte) int {
-	// last colon splits host:port; use the last so IPv6 hosts without a port
-	// are not mis-split. RemoteAddr always has host:port from net/http.
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
