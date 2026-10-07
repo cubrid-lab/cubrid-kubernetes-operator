@@ -44,7 +44,7 @@ var _ = Describe("Image changes on an existing cluster (ADR-0009, #197)", func()
 	reconcilerWith := func(defaultImage string) *CubridClusterReconciler {
 		return &CubridClusterReconciler{
 			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-			IMToken: testIMToken, Prober: &memberProber{}, DefaultImage: defaultImage,
+			Prober: &memberProber{}, DefaultImage: defaultImage,
 		}
 	}
 	createAndReconcile := func(c *databasev1alpha1.CubridCluster, r *CubridClusterReconciler) types.NamespacedName {

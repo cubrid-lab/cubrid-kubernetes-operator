@@ -110,12 +110,6 @@ func deployManager() {
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
-	By("creating the Instance Manager token Secret the manager reads at start")
-	cmd = exec.Command("kubectl", "-n", namespace, "create", "secret", "generic", "instance-manager-token",
-		"--from-literal=token="+instanceManagerToken)
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to create the Instance Manager token Secret")
-
 	By("deploying the controller-manager")
 	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
 	_, err = utils.Run(cmd)

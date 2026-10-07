@@ -43,8 +43,8 @@ var runSummary = evidence.Summary{
 }
 
 // redactor removes credentials from every evidence file of the run, among
-// them the Instance Manager token the suite itself sets.
-var redactor = evidence.NewRedactor(instanceManagerToken)
+// them the cluster Instance Manager tokens the suite reads (S14).
+var redactor = evidence.NewRedactor()
 
 // evidenceDir is where the run's evidence goes; empty when none is kept, and
 // then no scenario can pass.

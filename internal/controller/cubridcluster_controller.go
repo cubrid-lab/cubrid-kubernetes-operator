@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -94,11 +96,6 @@ type CubridClusterReconciler struct {
 	// rolling update. It is off: the conditions that would make a replacement
 	// safe are not complete (ADR-0009, #96). The planning runs either way.
 	AutomaticReplacement bool
-	// IMToken is the Instance Manager bearer token the operator itself uses. It
-	// is copied into each cluster's <cluster>-im-token Secret for the DB Pods.
-	// Empty means the operator is not configured: no DB Pods are created,
-	// because an Instance Manager without a token accepts any caller.
-	IMToken string
 	// DefaultImage is the DB Pod image when spec.image is not set; empty falls
 	// back to DefaultInstanceManagerImage.
 	DefaultImage string
@@ -156,15 +153,8 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.failed(ctx, &cluster, "MemberServiceReconcileFailed", err)
 	}
 
-	// The DB Pods authenticate the operator with a shared token (ADR-0003).
-	// Without one the Instance Manager would accept any caller, so refuse to
-	// create DB Pods until the operator is configured.
-	if r.IMToken == "" {
-		msg := "the operator has no Instance Manager token (IM_TOKEN); DB Pods are not created"
-		setCondition(&cluster, conditionReady, metav1.ConditionFalse, "InstanceManagerTokenMissing", msg)
-		r.event(&cluster, corev1.EventTypeWarning, "InstanceManagerTokenMissing", msg)
-		return ctrl.Result{}, r.Status().Update(ctx, &cluster)
-	}
+	// The DB Pods authenticate the operator with the cluster's own token
+	// (ADR-0003), which exists before the first Pod does.
 	if err := r.reconcileIMTokenSecret(ctx, &cluster); err != nil {
 		log.Error(err, "Failed to reconcile Instance Manager token Secret")
 		return r.failed(ctx, &cluster, "SecretReconcileFailed", err)
@@ -229,21 +219,57 @@ const instanceManagerBinary = "/usr/local/bin/instance-manager"
 
 func imTokenSecretName(cluster string) string { return cluster + "-im-token" }
 
-// reconcileIMTokenSecret keeps <cluster>-im-token equal to the operator's token,
-// so the cluster's DB Pods and the operator authenticate with the same value.
-// A Pod reads the token when it starts; a changed token reaches running Pods
-// only when they are replaced.
+// reconcileIMTokenSecret gives the cluster a random token of its own in
+// <cluster>-im-token, which its DB Pods serve with and the operator calls them
+// with (ClusterTokens). An existing token is kept: a Pod reads the token when
+// it starts, so a changed one would lock the operator out of every running
+// Pod until it is replaced. Only a missing or empty token is generated anew.
 func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cluster *databasev1alpha1.CubridCluster) error {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: imTokenSecretName(cluster.Name), Namespace: cluster.Namespace},
 	}
+	generated := false
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 		secret.Labels = labelsFor(cluster)
 		secret.Type = corev1.SecretTypeOpaque
-		secret.Data = map[string][]byte{imTokenKey: []byte(r.IMToken)}
+		if len(secret.Data[imTokenKey]) == 0 {
+			token, err := newIMToken()
+			if err != nil {
+				return err
+			}
+			if secret.Data == nil {
+				secret.Data = map[string][]byte{}
+			}
+			secret.Data[imTokenKey] = []byte(token)
+			generated = true
+		}
 		return controllerutil.SetControllerReference(cluster, secret, r.Scheme)
 	})
-	return err
+	if err != nil || !generated {
+		return err
+	}
+	// A new token under an existing StatefulSet: its running Pods still hold
+	// the old one and refuse the operator until each of them is replaced.
+	err = r.Get(ctx, client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}, &appsv1.StatefulSet{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	r.event(cluster, corev1.EventTypeWarning, "InstanceManagerTokenRegenerated",
+		fmt.Sprintf("generated a new Instance Manager token in Secret %s; running Pods keep the old one and refuse the operator until they are replaced",
+			secret.Name))
+	return nil
+}
+
+// newIMToken returns 256 random bits, hex-encoded.
+func newIMToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate Instance Manager token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (*appsv1.StatefulSet, error) {

@@ -18,13 +18,12 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,7 +35,6 @@ import (
 )
 
 const (
-	testIMToken   = "test-im-token"
 	testDatabase  = "appdb"
 	testNamespace = "default"
 
@@ -93,12 +91,11 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		Expect(err).NotTo(HaveOccurred())
 	}
 
-	newReconciler := func(token string) *CubridClusterReconciler {
+	newReconciler := func() *CubridClusterReconciler {
 		return &CubridClusterReconciler{
 			Client:       k8sClient,
 			Scheme:       k8sClient.Scheme(),
 			Recorder:     record.NewFakeRecorder(10),
-			IMToken:      token,
 			DefaultImage: "registry.example/cubrid-instance-manager:test",
 		}
 	}
@@ -110,20 +107,20 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 	}
 
 	It("runs the Instance Manager image by default and honours spec.image", func() {
-		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-image"))
+		reconcileCluster(newReconciler(), standaloneCluster("wiring-image"))
 		c := statefulSet("wiring-image").Spec.Template.Spec.Containers[0]
 		Expect(c.Image).To(Equal("registry.example/cubrid-instance-manager:test"))
 
 		custom := standaloneCluster("wiring-image-custom")
 		custom.Spec.Image = &databasev1alpha1.CubridImage{Repository: "my.registry/im", Tag: "1.2.3"}
-		reconcileCluster(newReconciler(testIMToken), custom)
+		reconcileCluster(newReconciler(), custom)
 		Expect(statefulSet("wiring-image-custom").Spec.Template.Spec.Containers[0].Image).To(Equal("my.registry/im:1.2.3"))
 	})
 
 	// The entrypoint creates and starts the database before the manager
 	// listens, and /readyz runs a CUBRID command (#174).
 	It("lets the first start finish before liveness applies and gives readiness time to answer", func() {
-		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-probes"))
+		reconcileCluster(newReconciler(), standaloneCluster("wiring-probes"))
 		c := statefulSet("wiring-probes").Spec.Template.Spec.Containers[0]
 
 		Expect(c.StartupProbe).NotTo(BeNil(), "liveness would restart a container that is still creating its database")
@@ -141,12 +138,12 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 	// With OrderedReady a full restart would start member 0 alone, whatever
 	// its role was; the field cannot be changed after creation (#156).
 	It("creates all members in parallel", func() {
-		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-parallel"))
+		reconcileCluster(newReconciler(), standaloneCluster("wiring-parallel"))
 		Expect(statefulSet("wiring-parallel").Spec.PodManagementPolicy).To(Equal(appsv1.ParallelPodManagement))
 	})
 
 	It("passes the database, its path on the data volume and the start mode", func() {
-		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-env"))
+		reconcileCluster(newReconciler(), standaloneCluster("wiring-env"))
 		c := statefulSet("wiring-env").Spec.Template.Spec.Containers[0]
 
 		db, ok := envValue(c, "CUBRID_DB")
@@ -171,7 +168,7 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 	// synchronously and refuses /v1/restore/prepare, while the operator
 	// expects 202 from both (#99).
 	It("gives the manager its operation store and the staging roots the operator uses", func() {
-		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-operations"))
+		reconcileCluster(newReconciler(), standaloneCluster("wiring-operations"))
 		c := statefulSet("wiring-operations").Spec.Template.Spec.Containers[0]
 
 		ops, ok := envValue(c, "IM_OPERATIONS_DIR")
@@ -198,7 +195,7 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 	It("passes the cluster's object storage, with credentials only as Secret references", func() {
 		cluster := standaloneCluster("wiring-storage")
 		cluster.Spec.ObjectStorage = testObjectStorage()
-		reconcileCluster(newReconciler(testIMToken), cluster)
+		reconcileCluster(newReconciler(), cluster)
 		c := statefulSet("wiring-storage").Spec.Template.Spec.Containers[0]
 
 		for name, want := range map[string]string{
@@ -227,20 +224,32 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 			Recovery: &databasev1alpha1.RecoverySource{ManifestURI: "s3://bucket/backups/appdb/manifest.json"},
 		}
 		cluster.Spec.ObjectStorage = testObjectStorage()
-		reconcileCluster(newReconciler(testIMToken), cluster)
+		reconcileCluster(newReconciler(), cluster)
 		mode, ok := envValue(statefulSet("wiring-recovery").Spec.Template.Spec.Containers[0], "CUBRID_BOOTSTRAP")
 		Expect(ok).To(BeTrue())
 		Expect(mode.Value).To(Equal("recovery"))
 	})
 
-	It("gives the DB Pod the operator's token through a Secret it owns", func() {
-		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-token"))
+	It("gives each cluster a token of its own through a Secret it owns", func() {
+		// The same cluster name in another namespace: only the namespace
+		// separates the two, as it separates their users.
+		other := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "wiring-token-other"}}
+		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, other))).To(Succeed())
+		second := standaloneCluster("wiring-token")
+		second.Namespace = other.Name
+		reconcileCluster(newReconciler(), standaloneCluster("wiring-token"))
+		reconcileCluster(newReconciler(), second)
 
-		secret := &corev1.Secret{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "wiring-token-im-token", Namespace: testNamespace}, secret)).To(Succeed())
-		Expect(string(secret.Data[imTokenKey])).To(Equal(testIMToken))
-		Expect(secret.OwnerReferences).To(HaveLen(1))
-		Expect(secret.OwnerReferences[0].Kind).To(Equal("CubridCluster"))
+		tokens := map[string]string{}
+		for _, ns := range []string{testNamespace, other.Name} {
+			secret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "wiring-token-im-token", Namespace: ns}, secret)).To(Succeed())
+			Expect(secret.OwnerReferences).To(HaveLen(1))
+			Expect(secret.OwnerReferences[0].Kind).To(Equal("CubridCluster"))
+			tokens[ns] = string(secret.Data[imTokenKey])
+			Expect(tokens[ns]).To(MatchRegexp("^[0-9a-f]{64}$"), "a random 256-bit token in %s", ns)
+		}
+		Expect(tokens[testNamespace]).NotTo(Equal(tokens[other.Name]), "two clusters share a token")
 
 		token, ok := envValue(statefulSet("wiring-token").Spec.Template.Spec.Containers[0], "IM_TOKEN")
 		Expect(ok).To(BeTrue())
@@ -251,25 +260,54 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		Expect(token.ValueFrom.SecretKeyRef.Key).To(Equal(imTokenKey))
 	})
 
-	It("brings a changed Secret back to the operator's token", func() {
-		cluster := standaloneCluster("wiring-token-drift")
-		reconcileCluster(newReconciler(testIMToken), cluster)
+	It("keeps a cluster's token, which its running Pods hold, across reconciles", func() {
+		cluster := standaloneCluster("wiring-token-kept")
+		reconcileCluster(newReconciler(), cluster)
 		secret := &corev1.Secret{}
-		key := types.NamespacedName{Name: "wiring-token-drift-im-token", Namespace: testNamespace}
+		key := types.NamespacedName{Name: "wiring-token-kept-im-token", Namespace: testNamespace}
 		Expect(k8sClient.Get(ctx, key, secret)).To(Succeed())
-		secret.Data[imTokenKey] = []byte("tampered")
-		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+		created := string(secret.Data[imTokenKey])
+		Expect(created).NotTo(BeEmpty())
 
-		_, err := newReconciler(testIMToken).Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{
-			Name: cluster.Name, Namespace: cluster.Namespace,
-		}})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(k8sClient.Get(ctx, key, secret)).To(Succeed())
-		Expect(string(secret.Data[imTokenKey])).To(Equal(testIMToken))
+		var recorder *record.FakeRecorder
+		reconcileAgain := func() {
+			r := newReconciler()
+			recorder = r.Recorder.(*record.FakeRecorder)
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{
+				Name: cluster.Name, Namespace: cluster.Namespace,
+			}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, key, secret)).To(Succeed())
+		}
+		regenerated := func() bool { return receivedEvent(recorder, "InstanceManagerTokenRegenerated") }
+		reconcileAgain()
+		Expect(string(secret.Data[imTokenKey])).To(Equal(created))
+		Expect(regenerated()).To(BeFalse(), "a kept token was reported as regenerated")
+
+		// A token put there by hand is the one Pods started since then hold.
+		secret.Data[imTokenKey] = []byte("a-token-set-by-hand")
+		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+		reconcileAgain()
+		Expect(string(secret.Data[imTokenKey])).To(Equal("a-token-set-by-hand"))
+
+		// An empty one would switch the Instance Manager's authentication off.
+		// Pods already exist and hold the old token, which is worth a warning.
+		delete(secret.Data, imTokenKey)
+		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+		reconcileAgain()
+		regeneratedToken := string(secret.Data[imTokenKey])
+		Expect(regeneratedToken).To(MatchRegexp("^[0-9a-f]{64}$"))
+		Expect(regenerated()).To(BeTrue(), "no Warning Event for a token generated under existing Pods")
+	})
+
+	It("does not warn about the token of a new cluster", func() {
+		r := newReconciler()
+		reconcileCluster(r, standaloneCluster("wiring-token-new"))
+		Expect(receivedEvent(r.Recorder.(*record.FakeRecorder), "InstanceManagerTokenRegenerated")).To(BeFalse())
 	})
 
 	It("runs as the image's cubrid user with a data volume that user can write", func() {
-		reconcileCluster(newReconciler(testIMToken), standaloneCluster("wiring-user"))
+		reconcileCluster(newReconciler(), standaloneCluster("wiring-user"))
 		pod := statefulSet("wiring-user").Spec.Template.Spec
 		Expect(pod.SecurityContext.RunAsUser).NotTo(BeNil())
 		Expect(*pod.SecurityContext.RunAsUser).To(Equal(cubridUID))
@@ -277,19 +315,18 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		Expect(*pod.SecurityContext.FSGroup).To(Equal(cubridUID))
 		Expect(*pod.SecurityContext.RunAsNonRoot).To(BeTrue())
 	})
-
-	It("does not create DB Pods when the operator has no Instance Manager token", func() {
-		cluster := standaloneCluster("wiring-no-token")
-		reconcileCluster(newReconciler(""), cluster)
-
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: cluster.Name, Namespace: testNamespace}, &appsv1.StatefulSet{})
-		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "an empty token would switch Instance Manager auth off")
-
-		updated := &databasev1alpha1.CubridCluster{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cluster.Name, Namespace: testNamespace}, updated)).To(Succeed())
-		ready := meta.FindStatusCondition(updated.Status.Conditions, conditionReady)
-		Expect(ready).NotTo(BeNil())
-		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-		Expect(ready.Reason).To(Equal("InstanceManagerTokenMissing"))
-	})
 })
+
+// receivedEvent drains the recorder and reports whether an event with the
+// reason was among the events recorded so far.
+func receivedEvent(recorder *record.FakeRecorder, reason string) bool {
+	found := false
+	for {
+		select {
+		case e := <-recorder.Events:
+			found = found || strings.Contains(e, " "+reason+" ")
+		default:
+			return found
+		}
+	}
+}

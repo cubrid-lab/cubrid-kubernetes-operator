@@ -111,7 +111,7 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 	reconcilerWith := func(boot HABootstrapClient) *CubridClusterReconciler {
 		return &CubridClusterReconciler{
 			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-			IMToken: testIMToken, Prober: &memberProber{}, HABootstrap: boot,
+			Prober: &memberProber{}, HABootstrap: boot,
 		}
 	}
 	reconcileOnce := func(r *CubridClusterReconciler, key types.NamespacedName) *databasev1alpha1.CubridCluster {

@@ -314,14 +314,42 @@ marker (`<db>/.im-operation`, an interrupted `createdb` or `restoredb`) is
 neither created over nor started: the entrypoint runs only the manager, after
 installing an HA member's configuration, and leaves the marker in place.
 
-The operator reads its own token from `IM_TOKEN`, set from the Secret
-`instance-manager-token` in its namespace, and copies it into each cluster's
-`<cluster>-im-token` Secret (owned by the cluster). Operator and DB Pods may
-live in different namespaces, so one Secret cannot be mounted into both. With
-no operator token the Instance Manager would accept any caller, so the operator
-creates no DB Pods and reports `Ready=False`, reason `InstanceManagerTokenMissing`.
-A Pod reads the token when it starts; a changed token reaches running Pods only
-when they are replaced.
+Each cluster has a token of its own (#270). Before it creates the cluster's
+first Pod, the operator generates 256 random bits (hex) into the
+`<cluster>-im-token` Secret (owned by the cluster), and calls each member with
+the token it reads from the Secret of that member's cluster
+(`<cluster>-<ordinal>` in the member's namespace). A token that can be read in
+one namespace therefore authorizes nothing in a cluster of another namespace;
+the operator never falls back to an unauthenticated call or to another
+cluster's token. The operator itself needs no token setting.
+
+The operator never changes an existing token. A Pod reads the token when it
+starts, and the StatefulSet uses `OnDelete`, so a changed token reaches a
+running Pod only when that Pod is replaced; a changed Secret would lock the
+operator out of every member that still holds the old one. Only a missing or
+empty token is generated anew. When that happens while the cluster's
+StatefulSet exists, the operator records a Warning Event,
+`InstanceManagerTokenRegenerated` (without the token): the running Pods
+refuse the operator until they are replaced. A cluster created by an operator version that
+copied one shared token keeps that token until it is rotated. Rotation
+without an overlap is a restart procedure: delete `<cluster>-im-token`, let the
+operator generate a new one, then delete the cluster's Pods one at a time,
+slaves first and the master last, each after the one before is Ready again.
+Until a member is replaced the operator cannot read its role, which it treats
+as no evidence (ADR-0005), not as a failure. An overlap in which a manager
+accepts the old and the new token is not provided.
+
+Rolling the operator back to a version that copied one shared token is not
+safe for running clusters. That version overwrites every `<cluster>-im-token`
+with its own `IM_TOKEN`, while running Pods keep the generated token they
+started with, so the old operator is refused (401) by every member until each
+Pod is replaced. If its `instance-manager-token` Secret was deleted, it has no
+token and reports `Ready=False`, reason `InstanceManagerTokenMissing`, and
+creates no DB Pods.
+
+The token is sent over plain HTTP inside the cluster network and is not
+encrypted in transit; a NetworkPolicy limits who can reach the port, not who
+can observe the traffic.
 
 The concrete `/v1/` request/response, operation-status enum, and error
 schemas are **not yet defined** and are **POC-gated**: they are drafted

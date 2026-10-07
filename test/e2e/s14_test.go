@@ -20,8 +20,10 @@ limitations under the License.
 package e2e
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,10 +34,6 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
-
-// instanceManagerToken is the token the suite gives the operator
-// (e2e_test.go); the operator copies it to each cluster.
-const instanceManagerToken = "e2e-wiring-token"
 
 // curlPodManifest is a Pod outside the cluster's namespace from which the
 // Instance Manager is called as any other workload on the Pod network would.
@@ -96,18 +94,30 @@ func s14Step(r *haRun) {
 			"pod/im-caller", "--timeout=3m"))
 		Expect(err).NotTo(HaveOccurred())
 
-		// call returns the HTTP status of one request to a member.
+		By("reading the cluster's own Instance Manager token")
+		encoded, err := r.kubectl("get", "secret", r.cluster+"-im-token", "-o", "jsonpath={.data.token}")
+		Expect(err).NotTo(HaveOccurred())
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+		Expect(err).NotTo(HaveOccurred())
+		instanceManagerToken := string(decoded)
+		redactor.Add(instanceManagerToken)
+		// Asserted as a boolean, so that a failure does not print the token.
+		Expect(regexp.MustCompile("^[0-9a-f]{64}$").MatchString(instanceManagerToken)).To(BeTrue(),
+			"the cluster's token is not a generated 256-bit hex token")
+
+		// call returns the HTTP status of one request to a member. The headers
+		// go to curl on its standard input, so that a token never appears in a
+		// command line the suite logs.
 		call := func(member string, c s14Call, headers ...string) string {
-			args := []string{"-n", r.clientNamespace, "exec", "im-caller", "--", "curl", "-s", "-o", "/dev/null",
-				"-w", "%{http_code}", "--max-time", "20", "-X", c.method}
-			for _, h := range headers {
-				args = append(args, "-H", h)
-			}
+			args := []string{"-n", r.clientNamespace, "exec", "-i", "im-caller", "--", "curl", "-s", "-o", "/dev/null",
+				"-w", "%{http_code}", "--max-time", "20", "-X", c.method, "-H", "@-"}
 			if c.method == "POST" {
 				args = append(args, "-H", "Content-Type: application/json", "-d", "{}")
 			}
 			args = append(args, fmt.Sprintf("http://%s.%s.svc:9090%s", member, r.namespace, c.path))
-			out, err := utils.Run(exec.Command("kubectl", args...))
+			cmd := exec.Command("kubectl", args...)
+			cmd.Stdin = strings.NewReader(strings.Join(headers, "\n") + "\n")
+			out, err := utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred(), "%s %s on %s", c.method, c.path, member)
 			return strings.TrimSpace(out)
 		}

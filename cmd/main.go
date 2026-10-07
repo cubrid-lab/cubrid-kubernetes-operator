@@ -188,16 +188,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Each cluster's Instance Managers are called with that cluster's own token.
+	tokens := controller.ClusterTokens(mgr.GetClient())
 	if err := (&controller.CubridClusterReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		//nolint:staticcheck // v0.25 GetEventRecorder returns an events/v1 interface incompatible with record.EventRecorder.
 		Recorder:     mgr.GetEventRecorderFor("cubridcluster-controller"),
-		Prober:       controller.NewHTTPRoleProber(os.Getenv("IM_TOKEN")),
-		Restore:      controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
-		HABootstrap:  controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
-		Backup:       controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
-		IMToken:      os.Getenv("IM_TOKEN"),
+		Prober:       controller.NewHTTPRoleProber(tokens),
+		Restore:      controller.NewHTTPBackupClient(tokens),
+		HABootstrap:  controller.NewHTTPBackupClient(tokens),
+		Backup:       controller.NewHTTPBackupClient(tokens),
 		DefaultImage: instanceManagerImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "cubridcluster")
@@ -206,8 +207,8 @@ func main() {
 	if err := (&controller.CubridBackupReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-		Prober: controller.NewHTTPRoleProber(os.Getenv("IM_TOKEN")),
-		Backup: controller.NewHTTPBackupClient(os.Getenv("IM_TOKEN")),
+		Prober: controller.NewHTTPRoleProber(tokens),
+		Backup: controller.NewHTTPBackupClient(tokens),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "cubridbackup")
 		os.Exit(1)

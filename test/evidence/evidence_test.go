@@ -405,6 +405,17 @@ func TestRedact(t *testing.T) {
 	}
 }
 
+// A value learned during the run, a cluster's generated token for example, is
+// removed from everything written after it was added.
+func TestRedactAdded(t *testing.T) {
+	r := NewRedactor()
+	r.Add("generated-cluster-token", "ab")
+	got := string(r.Redact([]byte("calling with generated-cluster-token, about a table")))
+	if got != "calling with [REDACTED], about a table" {
+		t.Errorf("got %q", got)
+	}
+}
+
 func TestWriteRedacts(t *testing.T) {
 	dir := runDir(t, s00Record)
 	r := NewRedactor("s3cr3t-token-value")
