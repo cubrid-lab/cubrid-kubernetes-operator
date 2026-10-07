@@ -84,18 +84,39 @@ the fixed names below; free text belongs in `message`.
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
 available; they do not say that a client can run SQL.
 
+### What `RoutingReady=False` does not do
+
+`RoutingReady=False` reports that the Operator does not claim the write
+endpoint is safe. Setting it changes nothing else: the `-rw` Service and the
+read-write Brokers stay as they are, and the Brokers keep following the master
+that CUBRID reports. When and how the managed write path is closed is issue
+[#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113),
+"feat(safety): enforce and release managed write quarantine". Whatever that
+issue decides, these limits apply:
+
+- **Only the managed write path.** A client that reaches a member's database
+  server without a Broker of the `-rw` Service, for example `csql` run inside
+  a database Pod, is outside that path, and nothing done to the path stops
+  its writes.
+- **Only new connections.** The Operator does not end sessions that are
+  already open through a Broker; an open session may keep writing
+  (ADR-0005, "Consequences").
+- **Nothing while the Operator is away.** A stopped Operator, or one that
+  cannot reach the API server, changes nothing: the Brokers
+  keep their configuration and CUBRID keeps failing over by itself
+  (ADR-0005 section 7). The Conditions keep their last value, and nothing in
+  the status says how old that value is (see [Freshness](#freshness)).
+
 ## Freshness
 
-- `status.lastObservationTime` is when the Operator last finished observing
-  the members. `status.instances[].lastObservationTime` is when that member
-  last answered.
-- A reader judges staleness by comparing these with the current time. No
-  Condition says "stale", because nobody would be there to set it.
-- Values that only move forward, that is these times and a slave's applier
-  counters, are written to the status at most once in a set interval, so that
-  a reconcile that found nothing new does not write the object. A change of
-  role, of a Condition or of `stalledSince` is written at once.
-- The same times are exported as metrics, in seconds since the epoch.
+- The status has no field that says when the Operator last observed the
+  members or when a member last answered, and no metric exports such a time.
+  A reader cannot tell from the status alone how old it is. Making freshness
+  observable is issue
+  [#92](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/92).
+- A Condition's `lastTransitionTime` is when its status last changed, not when
+  it was last confirmed.
+- No Condition says "stale", because nobody would be there to set it.
 
 ## Transitions
 

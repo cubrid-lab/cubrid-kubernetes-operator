@@ -190,7 +190,9 @@ These are different things and are never reported as one another:
 1. **Removing endpoints from the managed write path.** The Operator stops
    offering the read-write endpoint: new connections through the `-rw`
    Service fail or are refused. This is the only one the Operator does on
-   its own (write quarantine, ADR-0005 section 2).
+   its own (write quarantine, ADR-0005 section 2). Reporting
+   `RoutingReady=False` is not this: a scenario checks it with new
+   connections through `-rw`, never with the Condition.
 2. **Closing existing connections.** Sessions that were open before the
    quarantine are ended. ADR-0005 states that the Operator does *not* do
    this: an open session may keep writing.
