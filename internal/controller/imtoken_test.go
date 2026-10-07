@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -238,4 +239,33 @@ func TestClusterTokens_PreviousTokenNotSentAfterOverlap(t *testing.T) {
 			t.Errorf("a token other than the current one was sent: %q", auth)
 		}
 	}
+}
+
+// AcceptsToken asks with the given token alone: a member holding another token
+// refuses it, and one that cannot be reached is an error, not an acceptance.
+func TestHTTPRoleProber_AcceptsToken(t *testing.T) {
+	h := newHolders(map[string]string{holderOfPrevious: previousTok, holderOfCurrent: currentTok})
+	prober := NewHTTPRoleProber(nil)
+	prober.Client = &http.Client{Transport: h}
+
+	if ok, err := prober.AcceptsToken(context.Background(), "db-1", "ns", currentTok); err != nil || !ok {
+		t.Errorf("the member holding the token: accepted=%v err=%v", ok, err)
+	}
+	if ok, err := prober.AcceptsToken(context.Background(), "db-0", "ns", currentTok); err != nil || ok {
+		t.Errorf("the member holding the previous token: accepted=%v err=%v", ok, err)
+	}
+	if got := h.sent[holderOfPrevious]; len(got) != 1 || got[0] != "Bearer "+currentTok {
+		t.Errorf("the member was sent %v, want the asked token only", got)
+	}
+
+	prober.Client = &http.Client{Transport: unreachable{}}
+	if ok, err := prober.AcceptsToken(context.Background(), "db-1", "ns", currentTok); err == nil || ok {
+		t.Errorf("an unreachable member: accepted=%v err=%v", ok, err)
+	}
+}
+
+type unreachable struct{}
+
+func (unreachable) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("connection refused")
 }

@@ -110,6 +110,30 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	return o
 }
 
+// TokenChecker asks one member's Instance Manager whether it accepts a token.
+type TokenChecker interface {
+	AcceptsToken(ctx context.Context, podName, namespace, token string) (bool, error)
+}
+
+// AcceptsToken sends GET /v1/role with the token alone. Only the manager's
+// authentication answers 401, so any other answer means the member holds the
+// token. A failed request is an error, not a refusal.
+func (p *HTTPRoleProber) AcceptsToken(ctx context.Context, podName, namespace, token string) (bool, error) {
+	url := fmt.Sprintf("http://%s.%s.svc:%d/v1/role", podName, namespace, instancemanager.DefaultPort)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	setRequestID(req)
+	resp, err := p.Client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("ask %s about its token: %w", podName, err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode != http.StatusUnauthorized, nil
+}
+
 func (p *HTTPRoleProber) now() time.Time {
 	if p.Now != nil {
 		return p.Now()

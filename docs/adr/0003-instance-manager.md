@@ -336,21 +336,32 @@ so a member that still holds the previous token is not sent a refused request
 on every call.
 
 A rotation keeps the current token under the key `previousToken` of
-`<cluster>-im-token`, writes a new one under `token`, records the time in the
-Secret's annotation `database.cubrid.io/im-token-rotated-at` and records a
-Normal Event `InstanceManagerTokenRotated`. Pods started from then on hold the
-new token. The operator drops `previousToken` once every member's container
-is running and was started after that time, and records a Normal Event
-`InstanceManagerTokenOverlapEnded`; a member that is missing, not running or
-started earlier keeps the overlap open. From then on the previous token is
-neither sent nor accepted by any member. No second rotation starts while
-`previousToken` is kept, since it would drop the token running Pods hold; a
-request made during an overlap is carried out after it. A rotation starts:
+`<cluster>-im-token`, writes a new one under `token`, then records the time
+of that write in the Secret's annotation
+`database.cubrid.io/im-token-rotated-at` and a Normal Event
+`InstanceManagerTokenRotated`. Pods started from then on hold the new token.
+The operator drops `previousToken` only when both hold for every member:
+its container is running and was started after the rotation time, and its
+Instance Manager accepts the current token when asked with that token alone
+(`GET /v1/role`; only the manager's authentication answers 401). The start
+time is a cheap precondition; the question to the member is what ends the
+overlap, so a node clock ahead of the operator's or a kubelet that read a
+stale Secret cannot end it while a member still holds the previous token. A
+member that is missing, not running, started earlier, refuses the current
+token or cannot be asked keeps the overlap open. When it ends the operator
+records a Normal Event `InstanceManagerTokenOverlapEnded`; from then on the
+previous token is neither sent nor accepted by any member. No second
+rotation starts while `previousToken` is kept, since it would drop the token
+running Pods hold; a request made during an overlap is reported with a
+Normal Event `InstanceManagerTokenRotationDeferred` and carried out after it.
+A rotation starts:
 
-- when `<cluster>-im-token` has a token but no rotation time: it was written
-  by an operator version that copied one shared token into every cluster.
-  Such a cluster is moved onto a token of its own on the operator's first
-  reconcile, without a member left refusing the operator;
+- when `<cluster>-im-token` has a token but no rotation time. An operator
+  version that copied one shared token into every cluster wrote it so, and
+  so did the first version with per-cluster tokens (#326), whose clusters get
+  one rotation they did not need, which does no harm. Such a cluster is moved
+  onto a token of its own on the operator's first reconcile, without a member
+  left refusing the operator;
 - when the `CubridCluster` annotation `database.cubrid.io/rotate-im-token` has
   a value that was not handled yet (the value handled last is recorded under
   the same annotation on the Secret). Any new value asks for one rotation.
@@ -362,11 +373,9 @@ token is generated anew without an overlap. When that happens while the
 cluster's StatefulSet exists, the operator records a Warning Event,
 `InstanceManagerTokenRegenerated` (without the token): the running Pods
 refuse the operator until they are replaced, which it treats as no evidence
-(ADR-0005), not as a failure. That a started container holds the Secret's
-token at its start time is the kubelet's behavior: a stale kubelet Secret
-cache, or a node clock ahead of the operator's, could end an overlap while a
-member still holds the previous token. That member then refuses the operator,
-which has no evidence for it until it is replaced again.
+(ADR-0005), not as a failure. The operator remembers per member only a
+SHA-256 fingerprint of the token the member accepted last, never the token.
+The manager compares the token it is sent in constant time once #271 lands.
 
 An operator version that reads only `token` (#326) and runs during an overlap
 calls every member with the new token: members that still hold the previous

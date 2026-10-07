@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -230,19 +231,24 @@ func memberTokens(ctx context.Context, tokens TokenSource, podName, namespace st
 	return candidates, nil
 }
 
-// acceptedTokens remembers, per member, the token the member last accepted.
+// acceptedTokens remembers, per member, a SHA-256 fingerprint of the token
+// the member last accepted, never the token itself.
 type acceptedTokens struct{ byMember sync.Map }
+
+func tokenFingerprint(token string) [sha256.Size]byte { return sha256.Sum256([]byte(token)) }
 
 // send sends the request with the first of the member's tokens and, while the
 // member refuses with 401, again with the next one. An Instance Manager
 // refuses a token it does not hold before it acts on the request, so a
-// refused request has had no effect. The token the member accepted last time
-// is tried first, so that a member that holds the previous token during a
-// rotation is not sent a request it refuses on every call. The response of
+// refused request has had no effect; only its authentication answers 401, so
+// any other answer counts as accepted. The token the member accepted last
+// time is tried first, so that a member that holds the previous token during
+// a rotation is not sent a request it refuses on every call. The response of
 // the last attempt is returned.
 func (a *acceptedTokens) send(c *http.Client, req *http.Request, member string, tokens []string) (*http.Response, error) {
 	if last, ok := a.byMember.Load(member); ok {
-		if i := slices.Index(tokens, last.(string)); i > 0 {
+		i := slices.IndexFunc(tokens, func(t string) bool { return tokenFingerprint(t) == last.([sha256.Size]byte) })
+		if i > 0 {
 			tokens = append([]string{tokens[i]}, slices.Delete(slices.Clone(tokens), i, i+1)...)
 		}
 	}
@@ -269,7 +275,7 @@ func (a *acceptedTokens) send(c *http.Client, req *http.Request, member string, 
 			return nil, err
 		}
 		if resp.StatusCode != http.StatusUnauthorized {
-			a.byMember.Store(member, token)
+			a.byMember.Store(member, tokenFingerprint(token))
 			break
 		}
 	}
