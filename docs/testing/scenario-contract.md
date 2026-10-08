@@ -84,6 +84,25 @@ has incomplete evidence, or whose fault injection failed is never `pass`.
 A summary that lists a required scenario as anything other than `pass` makes
 the whole run not passed.
 
+### Oracle correctness
+
+Each scenario's oracle states what demonstrates success and what must cause
+a failure (its "Must never happen" list). Besides an unconfirmed fault
+([Confirming the fault](#confirming-the-fault)) and a scenario that did not
+run ([Results](#results)), an oracle never turns one of these into `pass`:
+
+- a connection that failed, in place of an operation the server rejected;
+- a timeout, in place of a rejection;
+- a missing, stale or unavailable observation;
+- the failure of a component the scenario does not test.
+
+Such an outcome ends as `fail`, or as `blocked` with its reason when the
+cause is outside the product.
+
+Where the judging logic can run without a cluster, it is unit-tested with
+deliberately wrong inputs, including each "Must never happen" case, and the
+real system is exercised by the scenario itself.
+
 ### Required scenarios
 
 Each lane names the scenarios, and the variants of each, that a run of it
@@ -99,7 +118,7 @@ lane's environment rules the scenario out; work that was skipped is
 
 | Lane | Where it runs | Required scenarios and variants | `not_applicable` allowed |
 |---|---|---|---|
-| `kind` | `make test-e2e` with no filter; the E2E workflow on a GitHub-hosted `ubuntu-latest` (linux/amd64) runner | S00, S01, S02, S03 (`abrupt-first-member`, `abrupt`, `graceful`), S05 (`broker-process`, `one-broker-pod`, `all-rw-brokers`), S06 (`restart`, `absent-during-failover`), S14 | none |
+| `kind` | `make test-e2e` with no filter; the E2E workflow on a GitHub-hosted `ubuntu-latest` (linux/amd64) runner | S00, S01, S02, S03 (`abrupt-first-member`, `abrupt`, `graceful`), S05 (`broker-process`, `one-broker-pod`, `all-rw-brokers`), S06 (`restart`, `absent-during-failover`), S14, S14 (`token-rotation`, `token-migration`) | none |
 
 The list for `kind` is kept in `test/e2e/summary_test.go` (`kindLane`);
 change it there and here together. The check itself is `Lane.Gate` in
@@ -505,8 +524,11 @@ it needs more.
   every other member reports a non-master role; never choose the master
   itself and never assume the first member is the master.
 - **Expected:** a write through the read-write endpoint succeeds; a write
-  through the read-only endpoint is rejected with an error; a read through
-  the read-only endpoint succeeds.
+  through the read-only endpoint is rejected by the read-only Broker with
+  the error for an update while updates are disabled (`-581`, POC-22); a
+  read through the read-only endpoint succeeds. A write that fails because
+  the endpoint could not be reached, or with any other error, is not a
+  rejection and fails the scenario.
 - **Must never happen:** two members reported as master while `HAReady` or
   `PrimaryResolved` is `True`; a successful write through the read-only
   endpoint.
@@ -564,8 +586,10 @@ it needs more.
   former master comes back is judged by S09 `clean`, which this scenario runs
   as its second half.
 - **Must never happen:** an `acknowledged` operation missing; two masters
-  reported as healthy; the Operator deleting or restarting another member to
-  force a role.
+  reported as healthy, or two members reporting themselves active masters in
+  two consecutive sweeps of all members; the Operator deleting or restarting another member
+  to force a role, or any member other than the deleted one getting a new Pod
+  or a container restart.
 - **Data check:** all data rules on all three members after the former master
   has rejoined.
 - **Limits:** `failover_limit`, `rejoin_limit`, `stable_period`.
@@ -848,6 +872,37 @@ it needs more.
 - **Limits:** none beyond the request timeout.
 - **Source note:** no outside test was read; the contract comes from
   ADR-0003.
+
+The variants `token-rotation` and `token-migration` replace the Instance
+Manager token of the running cluster. They run after the other HA steps,
+because they move the master.
+
+- **Level:** real database on Kind.
+- **Action:** `token-rotation` sets a new value of the annotation
+  `database.cubrid.io/rotate-im-token` on the `CubridCluster`;
+  `token-migration` removes `database.cubrid.io/im-token-rotated-at` from
+  `<cluster>-im-token`, whose token every member was started with, as an
+  operator before #326 left it. Then the DB Pods are deleted one at a time,
+  slaves first and the master last, each after the one before is `Ready`
+  again and CUBRID reports one master and two slaves.
+- **The Operator must** (ADR-0003, #324): keep the token the
+  members hold as `previousToken` and keep calling them with it; drop it only
+  once every member was started after the rotation and accepts the new token.
+- **Expected:** before any Pod is replaced, every member accepts the previous
+  token and refuses the new one, and `PrimaryResolved` stays `True` with the
+  same master and the same transition time for 60 seconds; once the operator
+  has found the token each member holds, the members refuse none of its
+  requests. After each replacement but the last, the replaced member
+  accepts only the new token, the operator resolves the primary again, and
+  the Secret still keeps `previousToken`. After the last one, `previousToken`
+  is dropped and the Normal Event `InstanceManagerTokenOverlapEnded` is
+  recorded; every member refuses the old token (401) and accepts the new one.
+- **Must never happen:** the overlap ending while a member holds the previous
+  token; an Event `InstanceManagerTokenRegenerated` or
+  `InstanceManagerTokenRefused`; either token in a log, in `status`, in an
+  event, in a description or in an evidence file.
+- **Data check:** the data rules hold after the last replacement.
+- **Limits:** none; each wait is bounded by the test only.
 
 ### S15: node drain and PodDisruptionBudget
 

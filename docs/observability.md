@@ -69,7 +69,7 @@ the fixed names below; free text belongs in `message`.
 
 | Condition | `True` means | `False` or `Unknown` reasons |
 |---|---|---|
-| `Ready` | The expected members are ready and no bootstrap is in progress | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas` |
+| `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `MultiplePrimariesObserved` |
 | `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`; `Unknown` with `RolesNotObserved` |
 | `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` or `RolesNotObserved` |
 | `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
@@ -101,7 +101,14 @@ cluster without a role prober is not changed.
 `HAReady` does not depend on `ReplicationHealthy` yet; that is issue
 [#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249).
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
-available; they do not say that a client can run SQL.
+available; they do not say that a client can run SQL. For an HA cluster,
+`Ready` is also `False` (`MultiplePrimariesObserved`) while more than one
+member reports itself master, since two masters are never a healthy cluster
+(ADR-0001); members that are not ready still give `InstancesNotReady`
+first. A primary that is only unresolved, as during a failover or while
+a member is unreachable, leaves `Ready` to the members' readiness, so that it
+does not change on every failover; `PrimaryResolved`, `HAReady` and
+`RoutingReady` report that state.
 
 `ReplicationHealthy` judges only the slaves whose applier was read in the
 current observation. When a read times out
@@ -221,7 +228,7 @@ otherwise.
 
 | Metric | Labels | Value |
 |---|---|---|
-| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 or 0 |
+| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when `Ready` is `True`, else 0 |
 | `cubrid_cluster_instances` | `namespace`, `cluster` | members the cluster should have |
 | `cubrid_cluster_instances_ready` | `namespace`, `cluster` | members that are ready |
 | `cubrid_cluster_ha_ready` | `namespace`, `cluster` | 1 or 0 |

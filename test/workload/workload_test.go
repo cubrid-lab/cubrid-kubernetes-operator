@@ -294,3 +294,53 @@ func TestRecovery(t *testing.T) {
 		}
 	}
 }
+
+// readOnlyHistory is a history of one write through the read-only Service
+// with the given outcome and error.
+func readOnlyHistory(t *testing.T, outcome, errText string) History {
+	t.Helper()
+	text := `{"client":"ro","seq":1,"op":"insert","opId":"ro-000001","endpoint":"ro",` +
+		`"event":"attempted","amount":38,"note":"ro-1"}` + "\n"
+	if outcome != "" {
+		text += fmt.Sprintf(`{"client":"ro","seq":1,"op":"insert","opId":"ro-000001","endpoint":"ro","event":%q,"error":%q}`,
+			outcome, errText) + "\n"
+	}
+	h, err := ReadHistory(strings.NewReader(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// The read-only Broker answers a write with the error CUBRID returns while
+// updates are disabled; the message is the one the JDBC client recorded on
+// the pinned image (docs/poc/RESULTS.md, POC-22). Every other outcome of the
+// write, including a failure to reach the Broker at all, is not a refusal.
+func TestCheckReadOnlyRefusal(t *testing.T) {
+	const refusal = "code -581: Attempted to update the database when updates are disabled. [CAS INFO-hab-ro:33001,1,24]"
+	if err := CheckReadOnlyRefusal(readOnlyHistory(t, Failed, refusal)); err != nil {
+		t.Errorf("a write refused by the read-only Broker: %v", err)
+	}
+	for name, h := range map[string]History{
+		// Any other code, as a connection that failed or a timeout would
+		// give; the values stand for "not the refusal" and are not CUBRID's.
+		"another code":       readOnlyHistory(t, Failed, "code -1: the Broker could not be reached"),
+		"another code again": readOnlyHistory(t, Failed, "code -2: the request timed out"),
+		"no error recorded":  readOnlyHistory(t, Failed, ""),
+		"code as a prefix":   readOnlyHistory(t, Failed, "code -5810: something else"),
+		"write accepted":     readOnlyHistory(t, Acknowledged, ""),
+		"outcome unknown":    readOnlyHistory(t, Unknown, refusal),
+		"never answered":     readOnlyHistory(t, "", ""),
+	} {
+		if err := CheckReadOnlyRefusal(h); err == nil {
+			t.Errorf("%s: judged as a refusal by the read-only Broker", name)
+		}
+	}
+	two := readOnlyHistory(t, Failed, refusal)
+	two.Operations["ro-000002"] = Operation{OpID: "ro-000002", Outcome: Failed, Error: refusal}
+	two.Counts[Attempted]++
+	two.Counts[Failed]++
+	if err := CheckReadOnlyRefusal(two); err == nil {
+		t.Error("two writes: judged as one refusal")
+	}
+}

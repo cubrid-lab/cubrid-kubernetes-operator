@@ -875,6 +875,68 @@ var _ = Describe("CubridCluster Controller", func() {
 	})
 })
 
+// mastersProber reports the given members as masters and every other as slave.
+type mastersProber struct{ masters map[string]bool }
+
+func (p *mastersProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
+	role := databasev1alpha1.RoleSlave
+	if p.masters[podName] {
+		role = databasev1alpha1.RoleMaster
+	}
+	return RoleObservation{Reachable: true, Role: role, ObservedAt: time.Now()}
+}
+
+var _ = Describe("Ready of an HA cluster (#339)", func() {
+	ctx := context.Background()
+
+	It("is not True while more than one master is observed, even with every Pod ready", func() {
+		key := types.NamespacedName{Name: "two-masters", Namespace: metav1.NamespaceDefault}
+		Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+		DeferCleanup(func() {
+			c := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+		})
+		prober := &mastersProber{masters: map[string]bool{key.Name + "-0": true}}
+		recorder := record.NewFakeRecorder(50)
+		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder, Prober: prober}
+		reconcileReady := func() *metav1.Condition {
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			got := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+			return meta.FindStatusCondition(got.Status.Conditions, conditionReady)
+		}
+		clusterReady := func() float64 {
+			return testutil.ToFloat64(metricspkg.ClusterReady.WithLabelValues(key.Namespace, key.Name))
+		}
+
+		_ = reconcileReady()
+		sts := &appsv1.StatefulSet{}
+		Expect(k8sClient.Get(ctx, key, sts)).To(Succeed())
+		sts.Status.Replicas, sts.Status.ReadyReplicas = 3, 3
+		Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
+
+		By("one master and every Pod ready")
+		Expect(reconcileReady().Status).To(Equal(metav1.ConditionTrue))
+		Expect(clusterReady()).To(Equal(float64(1)))
+		drain(recorder)
+
+		By("two members answering master")
+		prober.masters[key.Name+"-1"] = true
+		ready := reconcileReady()
+		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+		Expect(ready.Reason).To(Equal("MultiplePrimariesObserved"))
+		Expect(clusterReady()).To(Equal(float64(0)))
+		Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("ClusterReady")))
+
+		By("one master again")
+		delete(prober.masters, key.Name+"-1")
+		Expect(reconcileReady().Status).To(Equal(metav1.ConditionTrue))
+		Expect(clusterReady()).To(Equal(float64(1)))
+	})
+})
+
 // expectRolesNotObserved asserts the HA status of a reconcile that did not
 // observe the roles.
 func expectRolesNotObserved(s databasev1alpha1.CubridClusterStatus) {
