@@ -564,8 +564,10 @@ it needs more.
   former master comes back is judged by S09 `clean`, which this scenario runs
   as its second half.
 - **Must never happen:** an `acknowledged` operation missing; two masters
-  reported as healthy; the Operator deleting or restarting another member to
-  force a role.
+  reported as healthy, or two members reporting themselves active masters in
+  two consecutive samples; the Operator deleting or restarting another member
+  to force a role, or any member other than the deleted one getting a new Pod
+  or a container restart.
 - **Data check:** all data rules on all three members after the former master
   has rejoined.
 - **Limits:** `failover_limit`, `rejoin_limit`, `stable_period`.
