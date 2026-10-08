@@ -128,9 +128,8 @@ In short:
    on handoff and unassign when returning unfinished work to the queue.
 2. State the expected result and what must never happen before changing code.
    For safety-relevant areas, review the failure paths first
-   ([CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow)).
-   Include a negative case the test must fail on, and confirm it fails for the
-   intended reason; a test that passes on the wrong behavior is a defect.
+   ([CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow)),
+   and include a negative case the test must fail on.
 3. Write the smallest failing test, and confirm it fails for the intended
    reason. A compile error, a missing dependency or a broken environment is
    not a valid failing test.
@@ -192,9 +191,9 @@ Issue structure, scope terms, release targets and tracking-issue rules are in
   check the regression under the same failure condition that exposed it.
 - **PR titles** never use internal review identifiers (`R3`, `CTL-4`). Do not
   merge while a review comment is unresolved or unanswered, or while a
-  validation the change requires has not passed. Never write a closing
-  keyword with an issue number, even negated ("does not close #N"), unless
-  the PR closes it.
+  validation the change requires has not passed. Never write any form of
+  close, fix or resolve next to an issue number, even negated ("does not
+  close #N"), unless the PR closes it.
 - **Regressions.** For a confirmed defect, record why the existing tests
   missed it and check related paths for the same pattern. A cause not yet
   known is recorded as unknown, never invented. Update existing tracking work

@@ -86,16 +86,18 @@ the whole run not passed.
 
 ### Oracle correctness
 
-Each scenario's oracle states what demonstrates success, what must cause a
-failure (its "Must never happen" list), what cannot be judged, and the
-evidence for each. An oracle never turns one of these into `pass`:
+Each scenario's oracle states what demonstrates success and what must cause
+a failure (its "Must never happen" list). Besides an unconfirmed fault
+([Confirming the fault](#confirming-the-fault)) and a scenario that did not
+run ([Results](#results)), an oracle never turns one of these into `pass`:
 
 - a connection that failed, in place of an operation the server rejected;
 - a timeout, in place of a rejection;
 - a missing, stale or unavailable observation;
-- a fault injection command that succeeded without the fault taking effect;
-- the failure of a component the scenario does not test;
-- a required scenario or variant that did not run.
+- the failure of a component the scenario does not test.
+
+Such an outcome ends as `fail`, or as `blocked` with its reason when the
+cause is outside the product.
 
 Where the judging logic can run without a cluster, it is unit-tested with
 deliberately wrong inputs, including each "Must never happen" case, and the

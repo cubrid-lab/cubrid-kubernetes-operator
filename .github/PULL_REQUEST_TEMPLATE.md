@@ -59,7 +59,7 @@ Checks not run, with reasons:
 
 Behavior that remains unverified, with a linked follow-up:
 
-Safety invariants and failure paths reviewed (timeout, restart, retry, concurrency, partial completion, stale observation; only those that apply):
+Safety invariants and failure paths reviewed (timeout, restart, retry, concurrency, partial completion, stale observation; only those that apply; n/a for documentation-only):
 
 Negative test: the wrong behavior that was shown to fail, and the test that shows it:
 

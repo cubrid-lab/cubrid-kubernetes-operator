@@ -134,8 +134,8 @@ For a change in behavior, follow this order:
    never happen. For a failure or recovery scenario, use the scenario contract
    (scenario IDs `S00` to `S17`). For a change to HA, replication, write
    routing, backup, restore, the database lifecycle, Instance Manager
-   operations, authentication, persisted state or status transitions, also
-   review its failure paths: name the safety invariants, the points where the
+   operations, authentication, the operation store, or how HA or operation
+   state is decided and reported, also review its failure paths: name the safety invariants, the points where the
    work can be interrupted, and the expected outcome at each. Consider only
    the ones that apply: timeout or cancellation, Pod or process termination,
    Operator restart, concurrent operations, duplicate requests and retries,
@@ -208,22 +208,23 @@ the implementation.
 - Reference the issue in the PR body (`Closes #123` / `Refs #123`), not in the
   title.
 - Close a sub-issue from its PR with `Closes #123` only when the PR meets the
-  issue's completion condition; otherwise use `Refs #123`. Refer to its
+  issue's completion condition; otherwise use `Refs #123`. A behavior change
+  meets it when its acceptance criteria and safety invariants hold, its
+  success path and relevant failure paths are tested, its negative tests
+  cannot pass on the wrong behavior, and what was implemented is kept apart
+  from what was validated, with the remaining limits written down. Refer to its
   tracking issue with `Refs #45`. A tracking issue is closed by a maintainer after its
   sub-issues are done and the integrated validation is confirmed.
 - Fill in the "Validation Evidence" section of the PR template. Keep what was
   implemented separate from what was validated on a real cluster.
 - Resolve or answer every review comment before merging.
-- Do not merge while a validation the change requires has not passed. A
-  behavior change is done when its acceptance criteria hold, its safety
-  invariants still hold, its success path and relevant failure paths are
-  tested, its negative tests cannot pass on the wrong behavior, and what was
-  implemented is kept apart from what was validated, with the remaining
-  limits written down.
-- Never write a closing keyword with an issue number (`close`, `fix` or
-  `resolve`, as in "does not close #123") in a PR title, description or
-  commit message unless the PR closes that issue; GitHub closes it on merge
-  even in a negated sentence.
+- Do not merge before the evidence that
+  [Testing expectations](#testing-expectations) lists for the kind of change
+  has passed, in addition to the checks above.
+- Never write any form of close, fix or resolve next to an issue number (as
+  in "does not close #123") in a PR description or commit message unless the
+  PR closes that issue; GitHub closes it on merge even in a negated
+  sentence.
 - Preserve contributor authorship; add tool attribution only when that tool
   actually produced a commit.
 
@@ -330,8 +331,7 @@ These sections are recommended; use only the ones the issue needs:
   a hypothesis, not as a confirmed defect.
 - Say in Evidence where the problem came from: reproduced in a run, found by
   code review, a test that passes or fails wrongly, a flaky test, or unknown
-  CUBRID or Kubernetes behavior. These are counted separately when judging
-  quality, so a review finding is not reported as a regression.
+  CUBRID or Kubernetes behavior. A review finding is not a regression.
 - "Done when: tests pass" is not a completion condition; name the behavior
   and the test level that shows it.
 - Do not prescribe a solution that has not been checked, and do not attach
@@ -471,13 +471,14 @@ it is the only evidence.
   where possible (see the [scenario contract](./docs/testing/scenario-contract.md#oracle-correctness)).
   A test that passes when its required behavior is violated is a defect in
   the test. Do not weaken an assertion to stop a flaky failure.
-- Which checks a change needs before merge:
+- Evidence a change needs before merge, beyond the build, unit, lint, verify
+  and E2E checks CI runs on every pull request:
 
-  | Change | Checks |
+  | Change | Additional evidence |
   |--------|--------|
-  | Documentation only | Review; no product test run |
-  | Go logic with no state or API change | Related unit tests, `make lint` |
-  | CRD or API | Unit, envtest, `make verify` |
+  | Documentation only | Review |
+  | Go logic with no state or API change | A unit test of the changed logic |
+  | CRD or API | envtest assertions, including rejected inputs |
   | Controller status or reconciliation | Unit, envtest, and the affected Kind scenario when its oracle depends on it |
   | HA, replication, backup, restore, authentication | Regression tests plus the affected Kind scenarios with the real engine |
   | VM failure behavior | Kind where it applies, plus the VM-lab scenario before the support claim |
