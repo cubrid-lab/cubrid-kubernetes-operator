@@ -82,7 +82,8 @@ type Operation struct {
 	Amount  int
 	Note    string
 	Outcome string
-	// Error is what the client recorded with a failed or unknown outcome.
+	// Error is what the client recorded with the outcome; it is empty for an
+	// acknowledged one.
 	Error string
 }
 
@@ -196,7 +197,8 @@ func ReadHistory(r io.Reader) (History, error) {
 // ReadOnlyRefusal is how the client records the error CUBRID returns for a
 // write while updates are disabled, as the read-only Broker does
 // (docs/poc/RESULTS.md, POC-8 and POC-22). The error comes from the Broker's
-// CAS, so the client had reached the read-only Broker.
+// CAS, so the client had reached the read-only Broker. The "code N:" form is
+// the one Workload.describe in client/Workload.java writes.
 const ReadOnlyRefusal = "code -581:"
 
 // CheckReadOnlyRefusal judges a write sent through the read-only Service: the
