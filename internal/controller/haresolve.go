@@ -132,6 +132,9 @@ func fresh(o RoleObservation, now time.Time) bool {
 // picks a winner (ADR-0005). Reasons, most severe first:
 // MultiplePrimariesObserved, AmbiguousPrimaryObservation,
 // PrimaryObservationIncomplete, NoPrimaryObserved.
+// reasonMultiplePrimaries is the verdict for more than one observed master.
+const reasonMultiplePrimaries = "MultiplePrimariesObserved"
+
 func resolvePrimary(members []string, obs map[string]RoleObservation, now time.Time) PrimaryResolution {
 	masters := 0
 	primary := ""
@@ -155,7 +158,7 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 
 	switch {
 	case masters > 1:
-		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "MultiplePrimariesObserved"}
+		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: reasonMultiplePrimaries}
 	case ambiguous:
 		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "AmbiguousPrimaryObservation"}
 	case incomplete:
