@@ -82,6 +82,8 @@ type Operation struct {
 	Amount  int
 	Note    string
 	Outcome string
+	// Error is what the client recorded with a failed or unknown outcome.
+	Error string
 }
 
 // History is the client operations of a run, by operation ID.
@@ -174,6 +176,7 @@ func ReadHistory(r io.Reader) (History, error) {
 			}
 			answered[e.OpID] = true
 			op.Outcome = e.Event
+			op.Error = e.Error
 			h.Operations[e.OpID] = op
 		default:
 			return History{}, fmt.Errorf("history line %d: event %q is not attempted, acknowledged, failed or unknown",
@@ -188,6 +191,32 @@ func ReadHistory(r io.Reader) (History, error) {
 		h.Counts[op.Outcome]++
 	}
 	return h, nil
+}
+
+// ReadOnlyRefusal is how the client records the error CUBRID returns for a
+// write while updates are disabled, as the read-only Broker does
+// (docs/poc/RESULTS.md, POC-8 and POC-22). The error comes from the Broker's
+// CAS, so the client had reached the read-only Broker.
+const ReadOnlyRefusal = "code -581:"
+
+// CheckReadOnlyRefusal judges a write sent through the read-only Service: the
+// history holds exactly one operation, and it failed with ReadOnlyRefusal.
+// Any other outcome, including a failure to reach the Broker at all, is not a
+// refusal by the read-only Broker.
+func CheckReadOnlyRefusal(h History) error {
+	if len(h.Operations) != 1 {
+		return fmt.Errorf("want one write through the read-only Service, got %d", len(h.Operations))
+	}
+	for _, op := range h.Operations {
+		if op.Outcome != Failed {
+			return fmt.Errorf("write %s through the read-only Service: outcome %s, want %s", op.OpID, op.Outcome, Failed)
+		}
+		if !strings.HasPrefix(op.Error, ReadOnlyRefusal) {
+			return fmt.Errorf("write %s through the read-only Service failed with %q, not the read-only refusal %q",
+				op.OpID, op.Error, ReadOnlyRefusal)
+		}
+	}
+	return nil
 }
 
 // Check applies the data rules to the ledger rows read from each member or

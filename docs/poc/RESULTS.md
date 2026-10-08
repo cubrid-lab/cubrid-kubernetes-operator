@@ -1244,6 +1244,31 @@ come, and starts again with a new attempt.
 
 ---
 
+## POC-22 — the error a JDBC client gets for a write through the read-only Broker (ADR-0002, #366) — **observation**
+
+**Environment:** the `E2E Tests` workflow, run 37704412847 (2026-10-07), Kind
+on a GitHub-hosted `ubuntu-latest` runner, the pinned CUBRID 11.4 image, the
+workload client of `test/workload/client` (CUBRID JDBC driver), S01 of the
+HA group.
+
+**Observed:** one `INSERT` sent through the `-ro` Service failed before its
+commit with
+
+```
+code -581: Attempted to update the database when updates are disabled. [CAS INFO-hab-ro.cubrid-ha-bootstrap.svc:33001,1,24],[SESSION-22],[URL-jdbc:cubrid:hab-ro…]
+```
+
+The code is the one `broker_tester` showed in POC-8 (`FAIL(-581)`). The `CAS
+INFO` and `SESSION` parts show that the client had a session on the read-only
+Broker's CAS when the write was refused.
+
+**Consequence:** the S01 oracle accepts only this code for the refused write
+(`workload.CheckReadOnlyRefusal`); a write that fails with any other error,
+for example because the Broker could not be reached, fails S01. Only the code
+is relied on, not the message text. One run on one image; another engine
+version may report the refusal differently, and the oracle would then fail
+rather than pass.
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed

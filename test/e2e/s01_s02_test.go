@@ -339,8 +339,9 @@ func s01AndS02Steps(r *haRun) {
 		By("attempting a write through the read-only Service")
 		refused, err := r.runWorkload(`JDBC_URL="$RO_JDBC_URL" ENDPOINT=ro CLIENT_ID=ro OPS=1 ROLLBACK_EVERY=0`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(refused.Counts[workload.Failed]).To(Equal(1),
-			"a write through the read-only Service must be answered with an error: %v", refused.Counts)
+		// Refused by the read-only Broker itself; a Broker that could not be
+		// reached is not a refusal.
+		Expect(workload.CheckReadOnlyRefusal(refused)).To(Succeed())
 
 		By("applying the data rules to every member and to both Services")
 		var report workload.Report

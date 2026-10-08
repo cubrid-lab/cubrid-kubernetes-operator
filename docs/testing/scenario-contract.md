@@ -505,8 +505,11 @@ it needs more.
   every other member reports a non-master role; never choose the master
   itself and never assume the first member is the master.
 - **Expected:** a write through the read-write endpoint succeeds; a write
-  through the read-only endpoint is rejected with an error; a read through
-  the read-only endpoint succeeds.
+  through the read-only endpoint is rejected by the read-only Broker with
+  the error for an update while updates are disabled (`-581`, POC-22); a
+  read through the read-only endpoint succeeds. A write that fails because
+  the endpoint could not be reached, or with any other error, is not a
+  rejection and fails the scenario.
 - **Must never happen:** two members reported as master while `HAReady` or
   `PrimaryResolved` is `True`; a successful write through the read-only
   endpoint.
