@@ -471,8 +471,8 @@ it is the only evidence.
   where possible (see the [scenario contract](./docs/testing/scenario-contract.md#oracle-correctness)).
   A test that passes when its required behavior is violated is a defect in
   the test. Do not weaken an assertion to stop a flaky failure.
-- Evidence a change needs before merge, beyond the build, unit, lint, verify
-  and E2E checks CI runs on every pull request:
+- Evidence a change needs before merge, beyond the unit and envtest, lint,
+  verify and E2E checks CI runs on every pull request:
 
   | Change | Additional evidence |
   |--------|--------|
