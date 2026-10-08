@@ -23,7 +23,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +78,33 @@ func (r *haRun) activeMasterAmong(pods []string) string {
 		}
 	}
 	return ""
+}
+
+// activeMasters returns the members that CUBRID reports as an active master,
+// asked one after another. A member that does not answer is not counted.
+func (r *haRun) activeMasters() []string {
+	var masters []string
+	for _, pod := range r.members {
+		if r.activeMasterAmong([]string{pod}) != "" {
+			masters = append(masters, pod)
+		}
+	}
+	return masters
+}
+
+// identities returns the Pod UID and container restart count of each of the
+// given members, or faults.UnknownIdentity where it could not be read.
+func (r *haRun) identities(members []string) map[string]string {
+	ids := make(map[string]string, len(members))
+	for _, member := range members {
+		out, err := r.kubectl("get", "pod", member,
+			"-o", "jsonpath={.metadata.uid}/{.status.containerStatuses[0].restartCount}")
+		if err != nil || strings.HasPrefix(out, "/") || strings.HasSuffix(out, "/") {
+			out = faults.UnknownIdentity
+		}
+		ids[member] = out
+	}
+	return ids
 }
 
 // statusSnapshot is the conditions and the primary of the CubridCluster as
@@ -269,6 +298,9 @@ func (r *haRun) s03(variant string) {
 	Expect(err).NotTo(HaveOccurred())
 	uid, err := r.kubectl("get", "pod", master, "-o", "jsonpath={.metadata.uid}")
 	Expect(err).NotTo(HaveOccurred())
+	// The fault deletes the master's Pod only: the other members keep their
+	// Pods and containers.
+	untouched := r.identities(slices.DeleteFunc(slices.Clone(r.members), func(m string) bool { return m == master }))
 
 	By("starting a client that keeps writing through the read-write Service")
 	r.startClient(client)
@@ -315,13 +347,24 @@ func (r *haRun) s03(variant string) {
 				unresolved.sample(!resolved)
 				notRouting.sample(!routing)
 			}
+			// Two members that are active masters at once must never happen.
+			// One sweep asks the members one after another and can see both
+			// sides of a handover, so a second sweep confirms it.
+			masters := r.activeMasters()
+			if len(masters) > 1 {
+				if err := faults.CheckOneMaster(masters, r.activeMasters()); err != nil {
+					return false, err
+				}
+				return false, nil // a handover seen mid-sweep
+			}
 			// CUBRID's election: a member reports itself an active master.
 			// It is another member, or the deleted one in its new Pod: the
 			// fault is confirmed, so the old Pod no longer answers.
 			if newMaster == "" {
-				if newMaster = r.activeMasterAmong(r.members); newMaster == "" {
+				if len(masters) == 0 {
 					return false, nil
 				}
+				newMaster = masters[0]
 				electedAt = time.Now()
 			}
 			// The Operator noticing it.
@@ -362,8 +405,14 @@ func (r *haRun) s03(variant string) {
 	}
 	Expect(outcome.Result).To(Equal(evidence.Pass), "S03/%s: %s", variant, outcome.Reason)
 
-	By("letting the client run for the stable period, then stopping it")
-	time.Sleep(stablePeriod + 2*time.Second)
+	By("letting the client run for the stable period, with one active master throughout, then stopping it")
+	Consistently(func() error {
+		masters := r.activeMasters()
+		if len(masters) < 2 {
+			return nil
+		}
+		return faults.CheckOneMaster(masters, r.activeMasters())
+	}, stablePeriod+2*time.Second, 3*time.Second).Should(Succeed())
 	events, history := r.stopClient(client)
 
 	recoveredAt, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
@@ -382,6 +431,15 @@ func (r *haRun) s03(variant string) {
 	primary, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(primary).To(Equal(newMaster))
+
+	By("checking that the members the fault did not touch kept their Pods and containers")
+	// A read that fails is retried; one that keeps failing counts as changed.
+	var after map[string]string
+	Eventually(func() bool {
+		after = r.identities(slices.Collect(maps.Keys(untouched)))
+		return !slices.Contains(slices.Collect(maps.Values(after)), faults.UnknownIdentity)
+	}, time.Minute, 3*time.Second).Should(BeTrue())
+	Expect(faults.CheckUnchanged(untouched, after)).To(Succeed())
 
 	// The Operator saw the primary become unresolved and resolved again; that
 	// is in its Events and, under the same names, in its log
