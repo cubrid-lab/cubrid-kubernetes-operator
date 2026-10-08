@@ -745,6 +745,9 @@ func waitExit(cmd *exec.Cmd) error {
 		return err
 	case <-time.After(exitLimit):
 		_ = cmd.Process.Kill()
+		// Wait copies the output until the process is gone; the caller
+		// reads it next.
+		<-done
 		return fmt.Errorf("did not exit within %s", exitLimit)
 	}
 }

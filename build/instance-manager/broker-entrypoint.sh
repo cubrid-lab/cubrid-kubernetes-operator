@@ -74,7 +74,11 @@ while [ "${terminating}" = "0" ]; do
   # interval. One handled from here on finds sleep_pid set.
   [ "${terminating}" = "0" ] || kill "${sleep_pid}" 2>/dev/null || true
   wait "${sleep_pid}" || true
-  if [ "${terminating}" = "0" ] && ! broker_running; then
+  # The sleep is reaped: its PID may be reused and must not be killed later.
+  sleep_pid=""
+  # A termination handled during the check stops the Broker: it is not a
+  # Broker that went away by itself.
+  if [ "${terminating}" = "0" ] && ! broker_running && [ "${terminating}" = "0" ]; then
     die "the Broker is not running any more"
   fi
 done
