@@ -88,6 +88,24 @@ type s14Call struct {
 	effect string
 }
 
+// tokenPlaces are the kubectl commands whose output must never show an
+// Instance Manager token, by what they show.
+func (r *haRun) tokenPlaces() map[string][]string {
+	places := map[string][]string{
+		"the CubridCluster":           {"-n", r.namespace, "get", "cubridcluster", r.cluster, "-o", "yaml"},
+		"the events of the namespace": {"-n", r.namespace, "get", "events", "-o", "yaml"},
+		"the description of the Pods": {"-n", r.namespace, "describe", "pods"},
+		"the ConfigMaps":              {"-n", r.namespace, "get", "configmaps", "-o", "yaml"},
+		"the operator's log":          {"-n", namespace, "logs", "-l", operatorSelector, "--tail=-1"},
+		"the events of the operator":  {"-n", namespace, "get", "events", "-o", "yaml"},
+		"the operator's description":  {"-n", namespace, "describe", "pods"},
+	}
+	for _, member := range r.members {
+		places["the log of "+member] = []string{"-n", r.namespace, "logs", member, "--tail=-1"}
+	}
+	return places
+}
+
 // s14Step registers S14 (authentication and Secrets) of the scenario
 // contract on the cluster the earlier steps formed.
 func s14Step(r *haRun) {
@@ -267,18 +285,7 @@ func s14Step(r *haRun) {
 		}
 
 		By("looking for the token where it must not be")
-		places := map[string][]string{
-			"the CubridCluster":           {"-n", r.namespace, "get", "cubridcluster", r.cluster, "-o", "yaml"},
-			"the events of the namespace": {"-n", r.namespace, "get", "events", "-o", "yaml"},
-			"the description of the Pods": {"-n", r.namespace, "describe", "pods"},
-			"the ConfigMaps":              {"-n", r.namespace, "get", "configmaps", "-o", "yaml"},
-			"the operator's log":          {"-n", namespace, "logs", "-l", operatorSelector, "--tail=-1"},
-			"the events of the operator":  {"-n", namespace, "get", "events", "-o", "yaml"},
-			"the operator's description":  {"-n", namespace, "describe", "pods"},
-		}
-		for _, member := range r.members {
-			places["the log of "+member] = []string{"-n", r.namespace, "logs", member, "--tail=-1"}
-		}
+		places := r.tokenPlaces()
 		for where, args := range places {
 			out, err := utils.Run(exec.Command("kubectl", args...))
 			Expect(err).NotTo(HaveOccurred(), where)
