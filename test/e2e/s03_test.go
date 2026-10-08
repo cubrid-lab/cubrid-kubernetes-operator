@@ -405,8 +405,14 @@ func (r *haRun) s03(variant string) {
 	}
 	Expect(outcome.Result).To(Equal(evidence.Pass), "S03/%s: %s", variant, outcome.Reason)
 
-	By("letting the client run for the stable period, then stopping it")
-	time.Sleep(stablePeriod + 2*time.Second)
+	By("letting the client run for the stable period, with one active master throughout, then stopping it")
+	Consistently(func() error {
+		masters := r.activeMasters()
+		if len(masters) < 2 {
+			return nil
+		}
+		return faults.CheckOneMaster(masters, r.activeMasters())
+	}, stablePeriod+2*time.Second, 3*time.Second).Should(Succeed())
 	events, history := r.stopClient(client)
 
 	recoveredAt, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
@@ -427,7 +433,13 @@ func (r *haRun) s03(variant string) {
 	Expect(primary).To(Equal(newMaster))
 
 	By("checking that the members the fault did not touch kept their Pods and containers")
-	Expect(faults.CheckUnchanged(untouched, r.identities(slices.Collect(maps.Keys(untouched))))).To(Succeed())
+	// A read that fails is retried; one that keeps failing counts as changed.
+	var after map[string]string
+	Eventually(func() bool {
+		after = r.identities(slices.Collect(maps.Keys(untouched)))
+		return !slices.Contains(slices.Collect(maps.Values(after)), faults.UnknownIdentity)
+	}, time.Minute, 3*time.Second).Should(BeTrue())
+	Expect(faults.CheckUnchanged(untouched, after)).To(Succeed())
 
 	// The Operator saw the primary become unresolved and resolved again; that
 	// is in its Events and, under the same names, in its log

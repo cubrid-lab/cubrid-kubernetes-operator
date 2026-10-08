@@ -565,7 +565,7 @@ it needs more.
   as its second half.
 - **Must never happen:** an `acknowledged` operation missing; two masters
   reported as healthy, or two members reporting themselves active masters in
-  two consecutive samples; the Operator deleting or restarting another member
+  two consecutive sweeps of all members; the Operator deleting or restarting another member
   to force a role, or any member other than the deleted one getting a new Pod
   or a container restart.
 - **Data check:** all data rules on all three members after the former master

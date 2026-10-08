@@ -26,12 +26,12 @@ import (
 // counts as changed.
 const UnknownIdentity = "unknown"
 
-// ConfirmedMasters returns the members that two consecutive sweeps both
+// confirmedMasters returns the members that two consecutive sweeps both
 // report as an active master. The members of one sweep are asked one after
 // another, so a single sweep can see the old master before and the new one
 // after a handover; a member reported in both sweeps is not such an artifact.
 // More than one confirmed master is two masters at once.
-func ConfirmedMasters(first, second []string) []string {
+func confirmedMasters(first, second []string) []string {
 	var both []string
 	for _, m := range first {
 		if slices.Contains(second, m) && !slices.Contains(both, m) {
@@ -44,7 +44,7 @@ func ConfirmedMasters(first, second []string) []string {
 // CheckOneMaster fails when two consecutive sweeps confirm more than one
 // active master.
 func CheckOneMaster(first, second []string) error {
-	if both := ConfirmedMasters(first, second); len(both) > 1 {
+	if both := confirmedMasters(first, second); len(both) > 1 {
 		return fmt.Errorf("more than one active master in two consecutive sweeps: %v", both)
 	}
 	return nil
