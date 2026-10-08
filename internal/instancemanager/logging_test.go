@@ -36,7 +36,6 @@ const (
 	levelWarn  = "WARN"
 	levelDebug = "DEBUG"
 	levelInfo  = "INFO"
-	authHeader = "Authorization"
 	givenID    = "op-42"
 )
 

@@ -1406,8 +1406,8 @@ RuntimeDefault` (pod + container), and all Linux capabilities dropped
 and DB-local ops go through the Instance Manager, ADR-0003).
 Secrets are referenced (`dbaPasswordSecretRef`,
 `objectStorage.credentialsSecretRef`), never inlined. The Instance Manager authenticates
-`/v1` endpoints with a bearer token (loopback-exempt for the preStop path,
-ADR-0003), and object-storage credentials come from the manager's env,
+`/v1` endpoints with a bearer token (the preStop path sends it too; loopback
+is not exempt, ADR-0003), and object-storage credentials come from the manager's env,
 never a request body. Per-cluster ingress NetworkPolicies admit only the
 operator to the Instance Manager port, only the cluster's own DB and Broker
 Pods to the database ports, and the configured clients to the Broker ports

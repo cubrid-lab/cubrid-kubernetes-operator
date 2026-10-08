@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -276,7 +277,8 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 		}
 		rotatedAt := secret.Annotations[imTokenRotatedAtAnnotation]
 		switch {
-		case len(secret.Data[imTokenKey]) == 0:
+		// White space alone is no token: the manager refuses to start with it.
+		case len(bytes.TrimSpace(secret.Data[imTokenKey])) == 0:
 			generated = true
 		case len(secret.Data[imPreviousTokenKey]) > 0:
 			since, err := time.Parse(time.RFC3339, rotatedAt)
@@ -565,7 +567,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			Env:       instanceManagerEnv(cluster),
 			Resources: cluster.Spec.Resources,
 			// preStop triggers the ADR-0003 ordered graceful shutdown via the
-			// local Instance Manager (loopback is token-exempt).
+			// local Instance Manager; the command sends the Pod's IM_TOKEN.
 			Lifecycle: preStopShutdown(cluster),
 			Ports: []corev1.ContainerPort{
 				{Name: "cubrid", ContainerPort: cubridServerPort},

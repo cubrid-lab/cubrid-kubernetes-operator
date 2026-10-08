@@ -182,6 +182,7 @@ func TestServer_StopIntended(t *testing.T) {
 		t.Error("still intended after the operation completed")
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/shutdown?database=appdb", nil)
+	req.Header.Set("Authorization", "Bearer tok")
 	req.RemoteAddr = "127.0.0.1:4000"
 	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 	if !s.StopIntended() {
