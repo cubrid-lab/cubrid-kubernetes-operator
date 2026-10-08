@@ -69,6 +69,10 @@ broker_running() {
 while [ "${terminating}" = "0" ]; do
   sleep "${BROKER_CHECK_INTERVAL}" &
   sleep_pid=$!
+  # A termination handled after the loop condition but before sleep_pid was
+  # set had no sleep to kill; without this check the wait would last a whole
+  # interval. One handled from here on finds sleep_pid set.
+  [ "${terminating}" = "0" ] || kill "${sleep_pid}" 2>/dev/null || true
   wait "${sleep_pid}" || true
   if [ "${terminating}" = "0" ] && ! broker_running; then
     die "the Broker is not running any more"
