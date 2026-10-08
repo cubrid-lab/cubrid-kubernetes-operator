@@ -135,8 +135,9 @@ For a change in behavior, follow this order:
    (scenario IDs `S00` to `S17`). For a change to HA, replication, write
    routing, backup, restore, the database lifecycle, Instance Manager
    operations, authentication, the operation store, or how HA or operation
-   state is decided and reported, also review its failure paths: name the safety invariants, the points where the
-   work can be interrupted, and the expected outcome at each. Consider only
+   state is decided and reported, also review its failure paths: name the
+   safety invariants, the points where the work can be interrupted, and the
+   expected outcome at each. Consider only
    the ones that apply: timeout or cancellation, Pod or process termination,
    Operator restart, concurrent operations, duplicate requests and retries,
    partial completion, a lost response, a failed write of persisted state,
