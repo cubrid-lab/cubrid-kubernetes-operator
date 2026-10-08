@@ -92,7 +92,8 @@ retried and changes no Condition and records no Event. The same holds for
 available; they do not say that a client can run SQL. For an HA cluster,
 `Ready` is also `False` (`MultiplePrimariesObserved`) while more than one
 member reports itself master, since two masters are never a healthy cluster
-(ADR-0001). A primary that is only unresolved, as during a failover or while
+(ADR-0001); members that are not ready still give `InstancesNotReady`
+first. A primary that is only unresolved, as during a failover or while
 a member is unreachable, leaves `Ready` to the members' readiness, so that it
 does not change on every failover; `PrimaryResolved`, `HAReady` and
 `RoutingReady` report that state.

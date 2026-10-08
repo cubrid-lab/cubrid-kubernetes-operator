@@ -123,6 +123,9 @@ func fresh(o RoleObservation, now time.Time) bool {
 	return age <= roleObservationTTL && age >= -roleObservationTTL
 }
 
+// reasonMultiplePrimaries is the verdict for more than one observed master.
+const reasonMultiplePrimaries = "MultiplePrimariesObserved"
+
 // resolvePrimary computes the primary-resolution verdict from the observations
 // of all expected promotable members at `now`. observations is keyed by pod name
 // and must contain an entry for every member (missing = unreachable).
@@ -132,9 +135,6 @@ func fresh(o RoleObservation, now time.Time) bool {
 // picks a winner (ADR-0005). Reasons, most severe first:
 // MultiplePrimariesObserved, AmbiguousPrimaryObservation,
 // PrimaryObservationIncomplete, NoPrimaryObserved.
-// reasonMultiplePrimaries is the verdict for more than one observed master.
-const reasonMultiplePrimaries = "MultiplePrimariesObserved"
-
 func resolvePrimary(members []string, obs map[string]RoleObservation, now time.Time) PrimaryResolution {
 	masters := 0
 	primary := ""

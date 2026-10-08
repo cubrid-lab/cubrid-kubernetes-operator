@@ -817,7 +817,8 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 	case instancesReady && multiplePrimaries:
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMultiplePrimaries,
 			fmt.Sprintf("%d/%d instances ready, but more than one member reports itself master", ready, desired))
-		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled", "cluster reconciled")
+		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled",
+			"cluster reconciled; the operator does not choose between masters, see PrimaryResolved")
 	case instancesReady:
 		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",
 			fmt.Sprintf("%d/%d instances ready", ready, desired))
