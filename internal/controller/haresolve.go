@@ -94,14 +94,19 @@ const reasonRolesNotObserved = "RolesNotObserved"
 
 // markRolesNotObserved is for a reconcile of an HA cluster that ends before
 // the roles are observed. What an earlier reconcile observed may have expired
-// meanwhile (ADR-0005), so the status no longer names a primary, and the
-// conditions that rest on the roles are Unknown until roles are observed
-// again. Nothing is invented: Unknown is not a failover.
-func markRolesNotObserved(cluster *databasev1alpha1.CubridCluster, why string) {
-	if !cluster.Spec.HighAvailability.Enabled {
+// meanwhile (ADR-0005), so the status no longer names a primary, no member's
+// role is known, and the conditions that rest on the roles are Unknown until
+// roles are observed again. Nothing is invented: Unknown is not a failover.
+// Without a role prober the roles are never observed, and these conditions
+// are not the ones that reconcile reports.
+func (r *CubridClusterReconciler) markRolesNotObserved(cluster *databasev1alpha1.CubridCluster, why string) {
+	if !cluster.Spec.HighAvailability.Enabled || r.Prober == nil {
 		return
 	}
 	cluster.Status.CurrentPrimary = ""
+	for i := range cluster.Status.Instances {
+		cluster.Status.Instances[i].Role = databasev1alpha1.RoleUnknown
+	}
 	msg := "roles were not observed in this reconcile: " + why
 	for _, condition := range []string{conditionPrimaryResolved, conditionHAReady, conditionRoutingReady,
 		conditionReplicationHealthy} {

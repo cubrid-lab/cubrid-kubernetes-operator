@@ -90,9 +90,13 @@ A reconcile of an HA cluster that ends before the roles are observed, after
 such a failure or while a recovery bootstrap runs, does not keep what an
 earlier reconcile observed: `status.currentPrimary` is cleared, and
 `PrimaryResolved`, `HAReady`, `RoutingReady` and `ReplicationHealthy` are
-`Unknown` with reason `RolesNotObserved` until the roles are observed again.
-An observation from an earlier reconcile may have expired meanwhile
-(ADR-0005).
+`Unknown` with reason `RolesNotObserved` until the roles are observed again;
+every member's role in `status.instances` is `unknown` and the `Primary`
+column of `kubectl get` is empty. An observation from an earlier reconcile
+may have expired meanwhile (ADR-0005). When `PrimaryResolved` was `True`,
+this records the `PrimaryUnresolved` transition with the reason
+`RolesNotObserved`, next to the Warning Event of the failure itself. A
+cluster without a role prober is not changed.
 
 `HAReady` does not depend on `ReplicationHealthy` yet; that is issue
 [#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249).

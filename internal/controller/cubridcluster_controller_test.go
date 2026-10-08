@@ -875,6 +875,22 @@ var _ = Describe("CubridCluster Controller", func() {
 	})
 })
 
+// expectRolesNotObserved asserts the HA status of a reconcile that did not
+// observe the roles.
+func expectRolesNotObserved(s databasev1alpha1.CubridClusterStatus) {
+	GinkgoHelper()
+	for _, condition := range []string{conditionPrimaryResolved, conditionHAReady, conditionRoutingReady,
+		conditionReplicationHealthy} {
+		c := meta.FindStatusCondition(s.Conditions, condition)
+		Expect(c).NotTo(BeNil(), condition)
+		Expect(c.Status).To(Equal(metav1.ConditionUnknown), condition)
+		Expect(c.Reason).To(Equal(reasonRolesNotObserved), condition)
+	}
+	for _, instance := range s.Instances {
+		Expect(instance.Role).To(Equal(databasev1alpha1.RoleUnknown), instance.Name)
+	}
+}
+
 var _ = Describe("HA status of a reconcile that ends before the roles are observed (#340)", func() {
 	ctx := context.Background()
 
@@ -917,11 +933,8 @@ var _ = Describe("HA status of a reconcile that ends before the roles are observ
 		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 		Expect(err).To(MatchError(ContainSubstring(member.Name)))
 		s := status()
-		Expect(s.CurrentPrimary).NotTo(Equal(key.Name+"-0"), "the old primary is still reported")
-		for _, condition := range []string{conditionPrimaryResolved, conditionHAReady, conditionRoutingReady} {
-			Expect(meta.IsStatusConditionTrue(s.Conditions, condition)).To(BeFalse(),
-				"%s is True on an observation of an earlier reconcile", condition)
-		}
+		Expect(s.CurrentPrimary).To(BeEmpty(), "the old primary is still reported")
+		expectRolesNotObserved(s)
 
 		By("the Service is the operator's to create again")
 		Expect(k8sClient.Delete(ctx, foreign)).To(Succeed())
@@ -929,5 +942,41 @@ var _ = Describe("HA status of a reconcile that ends before the roles are observ
 		Expect(err).NotTo(HaveOccurred())
 		Expect(status().CurrentPrimary).To(Equal(key.Name + "-1"))
 		Expect(meta.IsStatusConditionTrue(status().Conditions, conditionPrimaryResolved)).To(BeTrue())
+	})
+
+	It("is not kept from an earlier reconcile while a recovery bootstrap runs", func() {
+		c := haCluster("unobserved-recovery")
+		c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+			Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
+		}
+		c.Spec.ObjectStorage = testObjectStorage()
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+		key := types.NamespacedName{Name: c.Name, Namespace: c.Namespace}
+
+		By("a status that names a primary, as an earlier reconcile left it")
+		Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+		c.Status.CurrentPrimary = c.Name + "-0"
+		c.Status.Instances = []databasev1alpha1.InstanceStatus{{Name: c.Name + "-0", Role: databasev1alpha1.RoleMaster}}
+		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{Type: conditionPrimaryResolved,
+			Status: metav1.ConditionTrue, Reason: "SinglePrimaryObserved", Message: "earlier"})
+		Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+
+		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: &fakeRestoreClient{},
+			Prober: &memberProber{master: c.Name + "-0"}, Recorder: record.NewFakeRecorder(50)}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		got := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		Expect(meta.FindStatusCondition(got.Status.Conditions, conditionReady).Reason).To(Equal("BootstrapRecoveryInProgress"))
+		Expect(got.Status.CurrentPrimary).To(BeEmpty())
+		expectRolesNotObserved(got.Status)
+	})
+
+	It("leaves a cluster without a role prober as it is", func() {
+		cluster := haCluster("unobserved-noprober")
+		r := &CubridClusterReconciler{}
+		r.markRolesNotObserved(cluster, "test")
+		Expect(cluster.Status.Conditions).To(BeEmpty())
 	})
 })
