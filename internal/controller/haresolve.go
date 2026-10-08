@@ -88,6 +88,27 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	return res
 }
 
+// reasonRolesNotObserved marks the HA status of a reconcile that ended before
+// the roles were observed.
+const reasonRolesNotObserved = "RolesNotObserved"
+
+// markRolesNotObserved is for a reconcile of an HA cluster that ends before
+// the roles are observed. What an earlier reconcile observed may have expired
+// meanwhile (ADR-0005), so the status no longer names a primary, and the
+// conditions that rest on the roles are Unknown until roles are observed
+// again. Nothing is invented: Unknown is not a failover.
+func markRolesNotObserved(cluster *databasev1alpha1.CubridCluster, why string) {
+	if !cluster.Spec.HighAvailability.Enabled {
+		return
+	}
+	cluster.Status.CurrentPrimary = ""
+	msg := "roles were not observed in this reconcile: " + why
+	for _, condition := range []string{conditionPrimaryResolved, conditionHAReady, conditionRoutingReady,
+		conditionReplicationHealthy} {
+		setCondition(cluster, condition, metav1.ConditionUnknown, reasonRolesNotObserved, msg)
+	}
+}
+
 func primaryResolvedMessage(res PrimaryResolution) string {
 	if res.CurrentPrimary != "" {
 		return "current primary: " + res.CurrentPrimary

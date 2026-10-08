@@ -70,12 +70,12 @@ the fixed names below; free text belongs in `message`.
 | Condition | `True` means | `False` or `Unknown` reasons |
 |---|---|---|
 | `Ready` | The expected members are ready and no bootstrap is in progress | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas` |
-| `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation` |
-| `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` |
-| `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` |
+| `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`; `Unknown` with `RolesNotObserved` |
+| `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` or `RolesNotObserved` |
+| `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
 | `BrokerReady` | A Broker of each access mode is available | `BrokersNotAvailable`, `BrokerReconcileFailed` |
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable` |
-| `RoutingReady` | Brokers are ready and the primary is resolved | the reason of `PrimaryResolved`, or of the Brokers |
+| `RoutingReady` | Brokers are ready and the primary is resolved | the reason of `PrimaryResolved`, or of the Brokers; `Unknown` with `RolesNotObserved` |
 | `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped |
 | `Updating` | A member is being replaced for a new image | why nothing is being replaced |
 
@@ -85,6 +85,14 @@ and a Warning Event is recorded. A write rejected as a conflict, because the
 object changed after the Operator read it, is not such a failure: it is
 retried and changes no Condition and records no Event. The same holds for
 `BrokerReconcileFailed`.
+
+A reconcile of an HA cluster that ends before the roles are observed, after
+such a failure or while a recovery bootstrap runs, does not keep what an
+earlier reconcile observed: `status.currentPrimary` is cleared, and
+`PrimaryResolved`, `HAReady`, `RoutingReady` and `ReplicationHealthy` are
+`Unknown` with reason `RolesNotObserved` until the roles are observed again.
+An observation from an earlier reconcile may have expired meanwhile
+(ADR-0005).
 
 `HAReady` does not depend on `ReplicationHealthy` yet; that is issue
 [#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249).

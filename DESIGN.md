@@ -872,7 +872,10 @@ never wired into Pod readiness. HA role discovery is implemented (the
 reconciler polls each member's `/v1/role` and aggregates safety-first,
 ADR-0005): when a role prober is configured `HAReady` reflects the resolved
 primary; when none is configured it is `Unknown` (reason
-`RoleDiscoveryDisabled`).
+`RoleDiscoveryDisabled`). A reconcile that ends before the roles are observed
+clears `currentPrimary` and sets the role-based conditions to `Unknown`
+(`RolesNotObserved`, #340), rather than observing the roles on that path:
+nothing in the status rests on an observation of an earlier reconcile.
 
 ---
 
