@@ -299,7 +299,8 @@ func TestRecovery(t *testing.T) {
 // with the given outcome and error.
 func readOnlyHistory(t *testing.T, outcome, errText string) History {
 	t.Helper()
-	text := `{"client":"ro","seq":1,"op":"insert","opId":"ro-000001","endpoint":"ro","event":"attempted","amount":38,"note":"ro-1"}` + "\n"
+	text := `{"client":"ro","seq":1,"op":"insert","opId":"ro-000001","endpoint":"ro",` +
+		`"event":"attempted","amount":38,"note":"ro-1"}` + "\n"
 	if outcome != "" {
 		text += fmt.Sprintf(`{"client":"ro","seq":1,"op":"insert","opId":"ro-000001","endpoint":"ro","event":%q,"error":%q}`,
 			outcome, errText) + "\n"
