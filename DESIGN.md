@@ -875,7 +875,11 @@ primary; when none is configured it is `Unknown` (reason
 `RoleDiscoveryDisabled`). The cluster's `Ready` follows the members'
 readiness, except that more than one observed master keeps it `False`
 (`MultiplePrimariesObserved`, #339); an only unresolved primary does not
-change it (see [observability.md](docs/observability.md)).
+change it (see [observability.md](docs/observability.md)). A reconcile that
+ends before the roles are observed clears `currentPrimary` and sets the
+role-based conditions to `Unknown` (`RolesNotObserved`, #340), rather than
+observing the roles on that path: nothing in the status rests on an
+observation of an earlier reconcile.
 
 ---
 

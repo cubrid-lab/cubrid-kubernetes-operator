@@ -733,6 +733,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			}
 			setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, msg+"; cluster not ready")
 			setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, msg)
+			r.markRolesNotObserved(cluster, reason)
 			if err := r.Status().Update(ctx, cluster); err != nil {
 				if apierrors.IsConflict(err) {
 					return ctrl.Result{RequeueAfter: time.Second}, nil
@@ -851,6 +852,7 @@ func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev
 	}
 	setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, cause.Error())
 	setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, cause.Error())
+	r.markRolesNotObserved(cluster, reason)
 	r.event(cluster, corev1.EventTypeWarning, reason, cause.Error())
 	// Best-effort status update; return the original cause for requeue.
 	_ = r.Status().Update(ctx, cluster)
