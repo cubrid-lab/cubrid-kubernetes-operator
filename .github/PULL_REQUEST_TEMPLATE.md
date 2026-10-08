@@ -59,6 +59,12 @@ Checks not run, with reasons:
 
 Behavior that remains unverified, with a linked follow-up:
 
+Safety invariants and failure paths reviewed (timeout, restart, retry, concurrency, partial completion, stale observation; only those that apply):
+
+Negative test: the wrong behavior that was shown to fail, and the test that shows it:
+
+For a fix, why existing tests or review did not catch it:
+
 Reason the test was not written first, if that applies:
 
 Optional AI review (tool/findings; separate from executed tests):

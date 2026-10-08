@@ -127,6 +127,10 @@ In short:
    Do not take an assigned issue without an agreed handoff; update Assignees
    on handoff and unassign when returning unfinished work to the queue.
 2. State the expected result and what must never happen before changing code.
+   For safety-relevant areas, review the failure paths first
+   ([CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow)).
+   Include a negative case the test must fail on, and confirm it fails for the
+   intended reason; a test that passes on the wrong behavior is a defect.
 3. Write the smallest failing test, and confirm it fails for the intended
    reason. A compile error, a missing dependency or a broken environment is
    not a valid failing test.
@@ -187,7 +191,14 @@ Issue structure, scope terms, release targets and tracking-issue rules are in
   CUBRID guarantee. An unconfirmed cause stays a hypothesis. After a fix,
   check the regression under the same failure condition that exposed it.
 - **PR titles** never use internal review identifiers (`R3`, `CTL-4`). Do not
-  merge while a review comment is unresolved or unanswered.
+  merge while a review comment is unresolved or unanswered, or while a
+  validation the change requires has not passed. Never write a closing
+  keyword with an issue number, even negated ("does not close #N"), unless
+  the PR closes it.
+- **Regressions.** For a confirmed defect, record why the existing tests
+  missed it and check related paths for the same pattern. A cause not yet
+  known is recorded as unknown, never invented. Update existing tracking work
+  instead of opening a process issue per defect.
 - **CI and agent cost.** Choose tests by the changed files and their risk;
   documentation-only changes do not need product test runs. Never skip a
   required safety check to save cost. Avoid re-running CI on an unchanged

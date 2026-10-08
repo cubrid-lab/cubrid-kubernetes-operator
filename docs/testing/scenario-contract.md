@@ -84,6 +84,23 @@ has incomplete evidence, or whose fault injection failed is never `pass`.
 A summary that lists a required scenario as anything other than `pass` makes
 the whole run not passed.
 
+### Oracle correctness
+
+Each scenario's oracle states what demonstrates success, what must cause a
+failure (its "Must never happen" list), what cannot be judged, and the
+evidence for each. An oracle never turns one of these into `pass`:
+
+- a connection that failed, in place of an operation the server rejected;
+- a timeout, in place of a rejection;
+- a missing, stale or unavailable observation;
+- a fault injection command that succeeded without the fault taking effect;
+- the failure of a component the scenario does not test;
+- a required scenario or variant that did not run.
+
+Where the judging logic can run without a cluster, it is unit-tested with
+deliberately wrong inputs, including each "Must never happen" case, and the
+real system is exercised by the scenario itself.
+
 ### Required scenarios
 
 Each lane names the scenarios, and the variants of each, that a run of it
