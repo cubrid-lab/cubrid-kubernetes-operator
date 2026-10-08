@@ -743,30 +743,11 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		}
 	}
 
-	// Read before the condition is set below, so the event marks the transition.
-	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
-	if ready >= desired && desired > 0 {
-		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",
-			fmt.Sprintf("%d/%d instances ready", ready, desired))
-		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled", "cluster reconciled")
-		if !wasReady {
-			r.event(cluster, corev1.EventTypeNormal, "ClusterReady",
-				fmt.Sprintf("all %d instances ready", desired))
-		}
-	} else {
-		setCondition(cluster, conditionReady, metav1.ConditionFalse, "InstancesNotReady",
-			fmt.Sprintf("%d/%d instances ready", ready, desired))
-		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, "InstancesStarting",
-			fmt.Sprintf("waiting for %d/%d instances", ready, desired))
-	}
-
-	labels := prometheus.Labels{"namespace": cluster.Namespace, "cluster": cluster.Name}
-	metrics.ClusterInstances.With(labels).Set(float64(desired))
-	metrics.InstanceReady.With(labels).Set(float64(ready))
-	metrics.ClusterReady.With(labels).Set(boolToFloat(ready >= desired && desired > 0))
-
 	// HAReady is separate from Ready and from Pod readiness (#14). Role
 	// discovery polls each member's Instance Manager /v1/role (ADR-0003/0005).
+	// Ready is decided after it, because two observed masters keep Ready from
+	// True.
+	multiplePrimaries := false
 	if !cluster.Spec.HighAvailability.Enabled {
 		setCondition(cluster, conditionHAReady, metav1.ConditionFalse, "HADisabled",
 			"highAvailability.enabled is false")
@@ -777,6 +758,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		// The first database is created once, on one member (ADR-0010).
 		r.reconcileHABootstrap(ctx, cluster)
 		res := r.reconcileHAStatus(ctx, cluster, desired)
+		multiplePrimaries = res.Reason == reasonMultiplePrimaries
 		// Reconcile the broker tier and set routing conditions from the same
 		// safety-first primary resolution (ADR-0002/0005).
 		// A conflicting write leaves the broker conditions as they are; the
@@ -794,6 +776,8 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			r.reconcileRollingUpdate(ctx, cluster, sts, res)
 		}
 	}
+
+	r.setReady(cluster, ready, desired, multiplePrimaries)
 
 	// An image the spec asks for but nobody accepted is reported last, so that
 	// it is what the Updating condition says.
@@ -819,6 +803,41 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		return ctrl.Result{RequeueAfter: haResyncInterval}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// setReady sets Ready and its metrics. Every instance ready makes the cluster
+// Ready, except while more than one master is observed: two masters are never
+// reported as a healthy cluster (ADR-0001). A primary that is only unresolved,
+// as during a failover or while a member is unreachable, leaves Ready to the
+// instances; HAReady and RoutingReady report it.
+func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridCluster, ready, desired int32, multiplePrimaries bool) {
+	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
+	instancesReady := ready >= desired && desired > 0
+	switch {
+	case instancesReady && multiplePrimaries:
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMultiplePrimaries,
+			fmt.Sprintf("%d/%d instances ready, but more than one member reports itself master", ready, desired))
+		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled",
+			"cluster reconciled; the operator does not choose between masters, see PrimaryResolved")
+	case instancesReady:
+		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",
+			fmt.Sprintf("%d/%d instances ready", ready, desired))
+		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled", "cluster reconciled")
+		if !wasReady {
+			r.event(cluster, corev1.EventTypeNormal, "ClusterReady",
+				fmt.Sprintf("all %d instances ready", desired))
+		}
+	default:
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, "InstancesNotReady",
+			fmt.Sprintf("%d/%d instances ready", ready, desired))
+		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, "InstancesStarting",
+			fmt.Sprintf("waiting for %d/%d instances", ready, desired))
+	}
+
+	labels := prometheus.Labels{"namespace": cluster.Namespace, "cluster": cluster.Name}
+	metrics.ClusterInstances.With(labels).Set(float64(desired))
+	metrics.InstanceReady.With(labels).Set(float64(ready))
+	metrics.ClusterReady.With(labels).Set(boolToFloat(instancesReady && !multiplePrimaries))
 }
 
 // failed records a failure condition and returns the error for requeue. A

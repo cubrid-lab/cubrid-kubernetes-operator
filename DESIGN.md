@@ -872,7 +872,10 @@ never wired into Pod readiness. HA role discovery is implemented (the
 reconciler polls each member's `/v1/role` and aggregates safety-first,
 ADR-0005): when a role prober is configured `HAReady` reflects the resolved
 primary; when none is configured it is `Unknown` (reason
-`RoleDiscoveryDisabled`).
+`RoleDiscoveryDisabled`). The cluster's `Ready` follows the members'
+readiness, except that more than one observed master keeps it `False`
+(`MultiplePrimariesObserved`, #339); an only unresolved primary does not
+change it (see [observability.md](docs/observability.md)).
 
 ---
 

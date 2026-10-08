@@ -123,6 +123,9 @@ func fresh(o RoleObservation, now time.Time) bool {
 	return age <= roleObservationTTL && age >= -roleObservationTTL
 }
 
+// reasonMultiplePrimaries is the verdict for more than one observed master.
+const reasonMultiplePrimaries = "MultiplePrimariesObserved"
+
 // resolvePrimary computes the primary-resolution verdict from the observations
 // of all expected promotable members at `now`. observations is keyed by pod name
 // and must contain an entry for every member (missing = unreachable).
@@ -155,7 +158,7 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 
 	switch {
 	case masters > 1:
-		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "MultiplePrimariesObserved"}
+		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: reasonMultiplePrimaries}
 	case ambiguous:
 		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "AmbiguousPrimaryObservation"}
 	case incomplete:
