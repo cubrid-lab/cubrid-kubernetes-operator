@@ -1,85 +1,43 @@
 name: Task
-description: A general task or chore (refactoring, maintenance, etc.)
+description: Documentation, maintenance, refactoring or another focused task
 title: "chore: "
-labels: ["chore"]
+labels: ["chore", "status: needs triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Use this template for maintenance tasks, refactoring, or other chores.
-        Keep the `chore:` title prefix. You do not need to apply labels;
-        maintainers assign priority and size after triage.
+        Keep a title prefix that matches the work, for example `chore:`,
+        `docs:`, `refactor:` or `ci:`. You do not need to apply labels;
+        maintainers assign priority, size and phase after triage.
 
   - type: textarea
     id: problem
     attributes:
       label: Problem
       description: Why is this task needed?
-      placeholder: Describe the motivation for this task
     validations:
       required: true
 
   - type: textarea
-    id: current-state
+    id: scope
     attributes:
-      label: Current State
-      description: What is the current situation?
-      placeholder: |
-        - Current code/config state
-        - Any issues or limitations
+      label: Scope
+      description: What will change, and what is left out.
     validations:
       required: true
 
   - type: textarea
-    id: tasks
+    id: done
     attributes:
-      label: Tasks
-      description: Break down the work into actionable items
-      placeholder: |
-        - [ ] Task 1
-        - [ ] Task 2
+      label: Done When
+      description: How completion is shown, and at which level (documentation review, make test, envtest, Kind, VM lab).
     validations:
       required: true
 
   - type: textarea
-    id: verification
+    id: related
     attributes:
-      label: How to Verify
-      description: How completion will be shown, and at which test level.
-      placeholder: |
-        Examples:
-        - unit test
-        - envtest
-        - real database on Kind
-        - VM lab
-        - documentation review
-        - make test / make lint
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected-outcome
-    attributes:
-      label: Expected Outcome
-      description: What should be the result when this is complete?
-    validations:
-      required: true
-
-  - type: textarea
-    id: dependencies
-    attributes:
-      label: Dependencies
-      description: Only what must be finished before this task can start.
-      placeholder: |
-        - Depends on #...
-        - None
-    validations:
-      required: false
-
-  - type: textarea
-    id: references
-    attributes:
-      label: References
-      description: Any related files, documentation, or resources
+      label: Related Work
+      description: Dependencies, related issues, PRs or files, if any.
     validations:
       required: false

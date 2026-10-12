@@ -347,6 +347,67 @@ var _ = Describe("CubridCluster Controller", func() {
 			clock = clock.Add(10 * time.Second)
 			Expect(condition().Status).To(Equal(metav1.ConditionTrue))
 		})
+
+		It("reports a stall interrupted by readings that timed out (#279)", func() {
+			key := types.NamespacedName{Name: "stall-missed", Namespace: metav1.NamespaceDefault}
+			Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+			DeferCleanup(func() {
+				c := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+			})
+			slave := key.Name + "-1"
+			stuck := ReplicationObservation{Source: key.Name + "-0", AppliedChanges: 100, DelayedPages: 9}
+			clock := time.Now()
+			prober := &applierProber{master: key.Name + "-0", clock: &clock, appliers: map[string]ReplicationObservation{
+				slave: stuck, key.Name + "-2": {Source: key.Name + "-0", AppliedChanges: 100},
+			}}
+			r := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(50),
+				Prober: prober, Clock: func() time.Time { return clock },
+			}
+			reconcileAt := func(read bool) (*metav1.Condition, *databasev1alpha1.InstanceReplication) {
+				if read {
+					prober.appliers[slave] = stuck
+				} else {
+					delete(prober.appliers, slave)
+				}
+				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+				got := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+				return meta.FindStatusCondition(got.Status.Conditions, conditionReplicationHealthy),
+					got.Status.Instances[1].Replication
+			}
+
+			By("two readings with nothing applied: stalled since the second")
+			reconcileAt(true)
+			clock = clock.Add(10 * time.Second)
+			_, rep := reconcileAt(true)
+			Expect(rep.StalledSince).NotTo(BeNil())
+			since := rep.StalledSince.Time
+
+			By("every other reading times out; the readings that come back report the stall once the window has passed")
+			for clock.Sub(since) < replicationStallWindow+30*time.Second {
+				clock = clock.Add(10 * time.Second)
+				c, rep := reconcileAt(false)
+				Expect(c.Status).To(Equal(metav1.ConditionUnknown))
+				Expect(c.Reason).To(Equal(reasonReplicationNotObserved))
+				Expect(rep).NotTo(BeNil())
+				Expect(rep.StalledSince).NotTo(BeNil())
+				Expect(rep.StalledSince.Time).To(BeTemporally("==", since))
+
+				clock = clock.Add(10 * time.Second)
+				c, _ = reconcileAt(true)
+				if clock.Sub(since) < replicationStallWindow {
+					Expect(c.Status).To(Equal(metav1.ConditionTrue), "a reading within the window")
+					continue
+				}
+				Expect(c.Status).To(Equal(metav1.ConditionFalse), "a reading after the window")
+				Expect(c.Reason).To(Equal(reasonReplicationStalled))
+				Expect(c.Message).To(ContainSubstring(slave))
+			}
+		})
 	})
 
 	Context("Periodic role observation (#155)", func() {
@@ -811,5 +872,173 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(bootstrapReady.Status).To(Equal(metav1.ConditionTrue))
 			Expect(bootstrapReady.Reason).To(Equal("RecoveryComplete"))
 		})
+	})
+})
+
+// mastersProber reports the given members as masters and every other as slave.
+type mastersProber struct{ masters map[string]bool }
+
+func (p *mastersProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
+	role := databasev1alpha1.RoleSlave
+	if p.masters[podName] {
+		role = databasev1alpha1.RoleMaster
+	}
+	return RoleObservation{Reachable: true, Role: role, ObservedAt: time.Now()}
+}
+
+var _ = Describe("Ready of an HA cluster (#339)", func() {
+	ctx := context.Background()
+
+	It("is not True while more than one master is observed, even with every Pod ready", func() {
+		key := types.NamespacedName{Name: "two-masters", Namespace: metav1.NamespaceDefault}
+		Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+		DeferCleanup(func() {
+			c := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+		})
+		prober := &mastersProber{masters: map[string]bool{key.Name + "-0": true}}
+		recorder := record.NewFakeRecorder(50)
+		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder, Prober: prober}
+		reconcileReady := func() *metav1.Condition {
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			got := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+			return meta.FindStatusCondition(got.Status.Conditions, conditionReady)
+		}
+		clusterReady := func() float64 {
+			return testutil.ToFloat64(metricspkg.ClusterReady.WithLabelValues(key.Namespace, key.Name))
+		}
+
+		_ = reconcileReady()
+		sts := &appsv1.StatefulSet{}
+		Expect(k8sClient.Get(ctx, key, sts)).To(Succeed())
+		sts.Status.Replicas, sts.Status.ReadyReplicas = 3, 3
+		Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
+
+		By("one master and every Pod ready")
+		Expect(reconcileReady().Status).To(Equal(metav1.ConditionTrue))
+		Expect(clusterReady()).To(Equal(float64(1)))
+		drain(recorder)
+
+		By("two members answering master")
+		prober.masters[key.Name+"-1"] = true
+		ready := reconcileReady()
+		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+		Expect(ready.Reason).To(Equal("MultiplePrimariesObserved"))
+		Expect(clusterReady()).To(Equal(float64(0)))
+		Expect(drain(recorder)).NotTo(ContainElement(ContainSubstring("ClusterReady")))
+
+		By("one master again")
+		delete(prober.masters, key.Name+"-1")
+		Expect(reconcileReady().Status).To(Equal(metav1.ConditionTrue))
+		Expect(clusterReady()).To(Equal(float64(1)))
+	})
+})
+
+// expectRolesNotObserved asserts the HA status of a reconcile that did not
+// observe the roles.
+func expectRolesNotObserved(s databasev1alpha1.CubridClusterStatus) {
+	GinkgoHelper()
+	for _, condition := range []string{conditionPrimaryResolved, conditionHAReady, conditionRoutingReady,
+		conditionReplicationHealthy} {
+		c := meta.FindStatusCondition(s.Conditions, condition)
+		Expect(c).NotTo(BeNil(), condition)
+		Expect(c.Status).To(Equal(metav1.ConditionUnknown), condition)
+		Expect(c.Reason).To(Equal(reasonRolesNotObserved), condition)
+	}
+	for _, instance := range s.Instances {
+		Expect(instance.Role).To(Equal(databasev1alpha1.RoleUnknown), instance.Name)
+	}
+}
+
+var _ = Describe("HA status of a reconcile that ends before the roles are observed (#340)", func() {
+	ctx := context.Background()
+
+	It("does not keep reporting the last primary as resolved", func() {
+		key := types.NamespacedName{Name: "unobserved", Namespace: metav1.NamespaceDefault}
+		Expect(k8sClient.Create(ctx, haCluster(key.Name))).To(Succeed())
+		DeferCleanup(func() {
+			c := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+		})
+		prober := &memberProber{master: key.Name + "-0"}
+		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(),
+			Recorder: record.NewFakeRecorder(100), Prober: prober}
+		status := func() databasev1alpha1.CubridClusterStatus {
+			got := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+			return got.Status
+		}
+
+		By("a healthy pass")
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status().CurrentPrimary).To(Equal(key.Name + "-0"))
+		Expect(meta.IsStatusConditionTrue(status().Conditions, conditionPrimaryResolved)).To(BeTrue())
+
+		By("a member Service the operator does not own, and a failover meanwhile")
+		member := types.NamespacedName{Name: key.Name + "-1", Namespace: key.Namespace}
+		owned := &corev1.Service{}
+		Expect(k8sClient.Get(ctx, member, owned)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, owned)).To(Succeed())
+		foreign := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: member.Name, Namespace: member.Namespace},
+			Spec: corev1.ServiceSpec{
+				Selector: map[string]string{"owner": "another-tool"}, Ports: []corev1.ServicePort{{Port: 80}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+		prober.master = key.Name + "-1"
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).To(MatchError(ContainSubstring(member.Name)))
+		s := status()
+		Expect(s.CurrentPrimary).To(BeEmpty(), "the old primary is still reported")
+		expectRolesNotObserved(s)
+
+		By("the Service is the operator's to create again")
+		Expect(k8sClient.Delete(ctx, foreign)).To(Succeed())
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status().CurrentPrimary).To(Equal(key.Name + "-1"))
+		Expect(meta.IsStatusConditionTrue(status().Conditions, conditionPrimaryResolved)).To(BeTrue())
+	})
+
+	It("is not kept from an earlier reconcile while a recovery bootstrap runs", func() {
+		c := haCluster("unobserved-recovery")
+		c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+			Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
+		}
+		c.Spec.ObjectStorage = testObjectStorage()
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+		key := types.NamespacedName{Name: c.Name, Namespace: c.Namespace}
+
+		By("a status that names a primary, as an earlier reconcile left it")
+		Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+		c.Status.CurrentPrimary = c.Name + "-0"
+		c.Status.Instances = []databasev1alpha1.InstanceStatus{{Name: c.Name + "-0", Role: databasev1alpha1.RoleMaster}}
+		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{Type: conditionPrimaryResolved,
+			Status: metav1.ConditionTrue, Reason: "SinglePrimaryObserved", Message: "earlier"})
+		Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+
+		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: &fakeRestoreClient{},
+			Prober: &memberProber{master: c.Name + "-0"}, Recorder: record.NewFakeRecorder(50)}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		got := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+		Expect(meta.FindStatusCondition(got.Status.Conditions, conditionReady).Reason).To(Equal("BootstrapRecoveryInProgress"))
+		Expect(got.Status.CurrentPrimary).To(BeEmpty())
+		expectRolesNotObserved(got.Status)
+	})
+
+	It("leaves a cluster without a role prober as it is", func() {
+		cluster := haCluster("unobserved-noprober")
+		r := &CubridClusterReconciler{}
+		r.markRolesNotObserved(cluster, "test")
+		Expect(cluster.Status.Conditions).To(BeEmpty())
 	})
 })

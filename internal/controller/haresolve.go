@@ -78,7 +78,7 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	cluster.Status.Instances = instanceStatuses(members, obs, now, cluster.Status.Instances)
 
 	setCondition(cluster, conditionPrimaryResolved, res.Status, res.Reason, primaryResolvedMessage(res))
-	replStatus, replReason, replMessage := replicationCondition(cluster.Status.Instances, now)
+	replStatus, replReason, replMessage := replicationCondition(cluster.Status.Instances, obs, now)
 	setCondition(cluster, conditionReplicationHealthy, replStatus, replReason, replMessage)
 	if res.Status == metav1.ConditionTrue {
 		setCondition(cluster, conditionHAReady, metav1.ConditionTrue, "HealthyReplication",
@@ -87,6 +87,32 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 		setCondition(cluster, conditionHAReady, metav1.ConditionFalse, res.Reason, primaryResolvedMessage(res))
 	}
 	return res
+}
+
+// reasonRolesNotObserved marks the HA status of a reconcile that ended before
+// the roles were observed.
+const reasonRolesNotObserved = "RolesNotObserved"
+
+// markRolesNotObserved is for a reconcile of an HA cluster that ends before
+// the roles are observed. What an earlier reconcile observed may have expired
+// meanwhile (ADR-0005), so the status no longer names a primary, no member's
+// role is known, and the conditions that rest on the roles are Unknown until
+// roles are observed again. Nothing is invented: Unknown is not a failover.
+// Without a role prober the roles are never observed, and these conditions
+// are not the ones that reconcile reports.
+func (r *CubridClusterReconciler) markRolesNotObserved(cluster *databasev1alpha1.CubridCluster, why string) {
+	if !cluster.Spec.HighAvailability.Enabled || r.Prober == nil {
+		return
+	}
+	cluster.Status.CurrentPrimary = ""
+	for i := range cluster.Status.Instances {
+		cluster.Status.Instances[i].Role = databasev1alpha1.RoleUnknown
+	}
+	msg := "roles were not observed in this reconcile: " + why
+	for _, condition := range []string{conditionPrimaryResolved, conditionHAReady, conditionRoutingReady,
+		conditionReplicationHealthy} {
+		setCondition(cluster, condition, metav1.ConditionUnknown, reasonRolesNotObserved, msg)
+	}
 }
 
 func primaryResolvedMessage(res PrimaryResolution) string {
@@ -135,6 +161,9 @@ func fresh(o RoleObservation, now time.Time) bool {
 	return age <= roleObservationTTL && age >= -roleObservationTTL
 }
 
+// reasonMultiplePrimaries is the verdict for more than one observed master.
+const reasonMultiplePrimaries = "MultiplePrimariesObserved"
+
 // resolvePrimary computes the primary-resolution verdict from the observations
 // of all expected promotable members at `now`. observations is keyed by pod name
 // and must contain an entry for every member (missing = unreachable).
@@ -173,7 +202,7 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 
 	switch {
 	case masters > 1:
-		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "MultiplePrimariesObserved"}
+		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: reasonMultiplePrimaries}
 	case ambiguous:
 		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "AmbiguousPrimaryObservation"}
 	case len(refused) > 0:
@@ -211,7 +240,10 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 		if o, ok := obs[m]; ok && fresh(o, now) {
 			version = o.EngineVersion
 		}
-		// Only an authoritative slave's applier is taken into account.
+		// Only an authoritative slave's applier is taken into account. A
+		// slave whose applier could not be read keeps its last reading; a
+		// member whose role could not be read, which may be a Pod replaced or
+		// restarting, or one observed in another role, has none.
 		var replication *databasev1alpha1.InstanceReplication
 		if role == databasev1alpha1.RoleSlave {
 			replication = nextReplication(before[m], obs[m].Replication, now)

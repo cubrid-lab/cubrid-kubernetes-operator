@@ -106,14 +106,10 @@ func checkBreakSettings() error {
 
 // memberIdentities is the UID and the restart count of each member's Pod.
 func (r *haRun) memberIdentities() string {
+	byMember := r.identities(r.members)
 	ids := make([]string, 0, len(r.members))
 	for _, member := range r.members {
-		out, err := r.kubectl("get", "pod", member,
-			"-o", "jsonpath={.metadata.uid}/{.status.containerStatuses[0].restartCount}")
-		if err != nil {
-			out = "unknown"
-		}
-		ids = append(ids, member+"="+out)
+		ids = append(ids, member+"="+byMember[member])
 	}
 	return strings.Join(ids, " ")
 }

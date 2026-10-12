@@ -233,9 +233,9 @@ func (r *CubridClusterReconciler) reconcileHeadlessService(ctx context.Context, 
 		svc.Spec.PublishNotReadyAddresses = true
 		svc.Spec.Selector = labelsFor(cluster)
 		svc.Spec.Ports = []corev1.ServicePort{
-			{Name: portNameCubrid, Port: cubridServerPort, TargetPort: intOrString(cubridServerPort)},
-			{Name: "broker", Port: cubridBrokerPort, TargetPort: intOrString(cubridBrokerPort)},
-			{Name: portNameManager, Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
+			{Name: portNameCubrid, Protocol: corev1.ProtocolTCP, Port: cubridServerPort, TargetPort: intOrString(cubridServerPort)},
+			{Name: "broker", Protocol: corev1.ProtocolTCP, Port: cubridBrokerPort, TargetPort: intOrString(cubridBrokerPort)},
+			{Name: portNameManager, Protocol: corev1.ProtocolTCP, Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
 		}
 		return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
 	})
@@ -438,9 +438,11 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 		// OnDelete: the operator owns pod replacement sequencing (ADR-0003/0009).
 		sts.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
 		sts.Spec.PersistentVolumeClaimRetentionPolicy = pvcRetentionPolicy(cluster)
-		sts.Spec.Template = corev1.PodTemplateSpec{
+		if err := setPodTemplate(sts, &sts.Spec.Template, corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec:       r.podSpec(cluster, r.imageToRun(cluster, sts)),
+		}); err != nil {
+			return err
 		}
 		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
 	})
@@ -731,6 +733,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			}
 			setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, msg+"; cluster not ready")
 			setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, msg)
+			r.markRolesNotObserved(cluster, reason)
 			if err := r.Status().Update(ctx, cluster); err != nil {
 				if apierrors.IsConflict(err) {
 					return ctrl.Result{RequeueAfter: time.Second}, nil
@@ -741,30 +744,11 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		}
 	}
 
-	// Read before the condition is set below, so the event marks the transition.
-	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
-	if ready >= desired && desired > 0 {
-		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",
-			fmt.Sprintf("%d/%d instances ready", ready, desired))
-		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled", "cluster reconciled")
-		if !wasReady {
-			r.event(cluster, corev1.EventTypeNormal, "ClusterReady",
-				fmt.Sprintf("all %d instances ready", desired))
-		}
-	} else {
-		setCondition(cluster, conditionReady, metav1.ConditionFalse, "InstancesNotReady",
-			fmt.Sprintf("%d/%d instances ready", ready, desired))
-		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, "InstancesStarting",
-			fmt.Sprintf("waiting for %d/%d instances", ready, desired))
-	}
-
-	labels := prometheus.Labels{"namespace": cluster.Namespace, "cluster": cluster.Name}
-	metrics.ClusterInstances.With(labels).Set(float64(desired))
-	metrics.InstanceReady.With(labels).Set(float64(ready))
-	metrics.ClusterReady.With(labels).Set(boolToFloat(ready >= desired && desired > 0))
-
 	// HAReady is separate from Ready and from Pod readiness (#14). Role
 	// discovery polls each member's Instance Manager /v1/role (ADR-0003/0005).
+	// Ready is decided after it, because two observed masters keep Ready from
+	// True.
+	multiplePrimaries := false
 	if !cluster.Spec.HighAvailability.Enabled {
 		setCondition(cluster, conditionHAReady, metav1.ConditionFalse, "HADisabled",
 			"highAvailability.enabled is false")
@@ -775,9 +759,14 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		// The first database is created once, on one member (ADR-0010).
 		r.reconcileHABootstrap(ctx, cluster)
 		res := r.reconcileHAStatus(ctx, cluster, desired)
+		multiplePrimaries = res.Reason == reasonMultiplePrimaries
 		// Reconcile the broker tier and set routing conditions from the same
 		// safety-first primary resolution (ADR-0002/0005).
-		if err := r.reconcileBrokerTier(ctx, cluster, res, r.imageToRun(cluster, sts)); err != nil {
+		// A conflicting write leaves the broker conditions as they are; the
+		// next reconcile writes again.
+		if err := r.reconcileBrokerTier(ctx, cluster, res, r.imageToRun(cluster, sts)); apierrors.IsConflict(err) {
+			logf.FromContext(ctx).V(1).Info("Retrying broker tier after a conflicting write", "error", err.Error())
+		} else if err != nil {
 			logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
 			setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, "BrokerReconcileFailed", err.Error())
 		}
@@ -788,6 +777,8 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			r.reconcileRollingUpdate(ctx, cluster, sts, res)
 		}
 	}
+
+	r.setReady(cluster, ready, desired, multiplePrimaries)
 
 	// An image the spec asks for but nobody accepted is reported last, so that
 	// it is what the Updating condition says.
@@ -815,10 +806,53 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	return ctrl.Result{}, nil
 }
 
-// failed records a failure condition and returns the error for requeue.
+// setReady sets Ready and its metrics. Every instance ready makes the cluster
+// Ready, except while more than one master is observed: two masters are never
+// reported as a healthy cluster (ADR-0001). A primary that is only unresolved,
+// as during a failover or while a member is unreachable, leaves Ready to the
+// instances; HAReady and RoutingReady report it.
+func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridCluster, ready, desired int32, multiplePrimaries bool) {
+	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
+	instancesReady := ready >= desired && desired > 0
+	switch {
+	case instancesReady && multiplePrimaries:
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMultiplePrimaries,
+			fmt.Sprintf("%d/%d instances ready, but more than one member reports itself master", ready, desired))
+		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled",
+			"cluster reconciled; the operator does not choose between masters, see PrimaryResolved")
+	case instancesReady:
+		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",
+			fmt.Sprintf("%d/%d instances ready", ready, desired))
+		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled", "cluster reconciled")
+		if !wasReady {
+			r.event(cluster, corev1.EventTypeNormal, "ClusterReady",
+				fmt.Sprintf("all %d instances ready", desired))
+		}
+	default:
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, "InstancesNotReady",
+			fmt.Sprintf("%d/%d instances ready", ready, desired))
+		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, "InstancesStarting",
+			fmt.Sprintf("waiting for %d/%d instances", ready, desired))
+	}
+
+	labels := prometheus.Labels{"namespace": cluster.Namespace, "cluster": cluster.Name}
+	metrics.ClusterInstances.With(labels).Set(float64(desired))
+	metrics.InstanceReady.With(labels).Set(float64(ready))
+	metrics.ClusterReady.With(labels).Set(boolToFloat(instancesReady && !multiplePrimaries))
+}
+
+// failed records a failure condition and returns the error for requeue. A
+// conflict means the object was read before someone else changed it, which
+// says nothing about the cluster: it is retried with the conditions and
+// Events left as they are.
 func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev1alpha1.CubridCluster, reason string, cause error) (ctrl.Result, error) {
+	if apierrors.IsConflict(cause) {
+		logf.FromContext(ctx).V(1).Info("Retrying after a conflicting write", "reason", reason, "error", cause.Error())
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, cause.Error())
 	setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, cause.Error())
+	r.markRolesNotObserved(cluster, reason)
 	r.event(cluster, corev1.EventTypeWarning, reason, cause.Error())
 	// Best-effort status update; return the original cause for requeue.
 	_ = r.Status().Update(ctx, cluster)

@@ -257,6 +257,64 @@ func TestBrokerEntrypoint_TerminationStopsTheBroker(t *testing.T) {
 	}
 }
 
+// A termination handled between the start of the liveness sleep and the
+// recording of its PID finds no sleep to kill. The script must still exit at
+// once instead of waiting out the interval (#347). The window lasts a few
+// builtins, so the test runs a copy of the script that holds it open: it
+// records "window" and spins on builtins, during which bash runs the trap,
+// until the test releases it.
+func TestBrokerEntrypoint_TerminationBeforeTheSleepIsRecorded(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.env["BROKER_CHECK_INTERVAL"] = "30"
+	release := filepath.Join(f.root, "release")
+	script, err := os.ReadFile("broker-entrypoint.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sleepLine = "  sleep \"${BROKER_CHECK_INTERVAL}\" &\n"
+	if strings.Count(string(script), sleepLine) != 1 {
+		t.Fatalf("broker-entrypoint.sh has no single line %q to hold the window after", sleepLine)
+	}
+	held := strings.Replace(string(script), sleepLine, sleepLine+
+		`  echo window >> "${CALLS}"; while [ ! -e "`+release+`" ]; do :; done`+"\n", 1)
+	path := filepath.Join(f.root, "broker-entrypoint-held.sh")
+	if err := os.WriteFile(path, []byte(held), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := scriptCommand(t, path, f.tools, f.env)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor := func(what string, ok func([]string) bool) {
+		t.Helper()
+		deadline := time.Now().Add(exitLimit)
+		for !ok(f.recorded()) {
+			if time.Now().After(deadline) {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				t.Fatalf("%s:\n%s", what, out.String())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitFor("the script did not reach the window", func(c []string) bool { return index(c, "window") >= 0 })
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	// The trap stops the Broker; only then is the window released.
+	waitFor("the termination was not handled in the window", func(c []string) bool {
+		return index(c, "window") < len(c)-1 && c[len(c)-1] == callBrokerOff
+	})
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd); err != nil {
+		t.Fatalf("entrypoint after SIGTERM before the sleep was recorded: %v\n%s", err, out.String())
+	}
+}
+
 // A termination that arrives while the Broker is still being started must be
 // handled like any other: the Broker is stopped and the script exits 0. As
 // PID 1 of a container the script would otherwise ignore the signal, and the

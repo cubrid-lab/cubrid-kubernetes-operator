@@ -69,20 +69,57 @@ the fixed names below; free text belongs in `message`.
 
 | Condition | `True` means | `False` or `Unknown` reasons |
 |---|---|---|
-| `Ready` | The expected members are ready and no bootstrap is in progress | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas` |
-| `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member) |
-| `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` |
-| `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` |
+| `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `MultiplePrimariesObserved` |
+| `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member); `Unknown` with `RolesNotObserved` |
+| `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` or `RolesNotObserved` |
+| `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
 | `BrokerReady` | A Broker of each access mode is available | `BrokersNotAvailable`, `BrokerReconcileFailed` |
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable` |
-| `RoutingReady` | Brokers are ready and the primary is resolved | the reason of `PrimaryResolved`, or of the Brokers |
+| `RoutingReady` | Brokers are ready and the primary is resolved | the reason of `PrimaryResolved`, or of the Brokers; `Unknown` with `RolesNotObserved` |
 | `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped |
 | `Updating` | A member is being replaced for a new image | why nothing is being replaced |
+
+When the Operator cannot write one of the cluster's objects, `Ready` turns
+`False` with the reason of that step, such as `StatefulSetReconcileFailed`,
+and a Warning Event is recorded. A write rejected as a conflict, because the
+object changed after the Operator read it, is not such a failure: it is
+retried and changes no Condition and records no Event. The same holds for
+`BrokerReconcileFailed`.
+
+A reconcile of an HA cluster that ends before the roles are observed, after
+such a failure or while a recovery bootstrap runs, does not keep what an
+earlier reconcile observed: `status.currentPrimary` is cleared, and
+`PrimaryResolved`, `HAReady`, `RoutingReady` and `ReplicationHealthy` are
+`Unknown` with reason `RolesNotObserved` until the roles are observed again;
+every member's role in `status.instances` is `unknown` and the `Primary`
+column of `kubectl get` is empty. An observation from an earlier reconcile
+may have expired meanwhile (ADR-0005). When `PrimaryResolved` was `True`,
+this records the `PrimaryUnresolved` transition with the reason
+`RolesNotObserved`, next to the Warning Event of the failure itself. A
+cluster without a role prober is not changed.
 
 `HAReady` does not depend on `ReplicationHealthy` yet; that is issue
 [#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249).
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
-available; they do not say that a client can run SQL.
+available; they do not say that a client can run SQL. For an HA cluster,
+`Ready` is also `False` (`MultiplePrimariesObserved`) while more than one
+member reports itself master, since two masters are never a healthy cluster
+(ADR-0001); members that are not ready still give `InstancesNotReady`
+first. A primary that is only unresolved, as during a failover or while
+a member is unreachable, leaves `Ready` to the members' readiness, so that it
+does not change on every failover; `PrimaryResolved`, `HAReady` and
+`RoutingReady` report that state.
+
+`ReplicationHealthy` judges only the slaves whose applier was read in the
+current observation. When a read times out
+([#278](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/278)),
+the Condition is `Unknown` for that observation, while
+`status.instances[].replication` keeps the last reading so that the stall
+window goes on counting. Under intermittent read timeouts the Condition
+therefore alternates between `Unknown` and `True` or `False`, and its
+`lastTransitionTime` moves with it: an alert must not rely on a continuous
+`False` duration. `stalledSince` carries the start of a stall across such
+gaps.
 
 ### What `RoutingReady=False` does not do
 
@@ -192,7 +229,7 @@ otherwise.
 
 | Metric | Labels | Value |
 |---|---|---|
-| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 or 0 |
+| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when `Ready` is `True`, else 0 |
 | `cubrid_cluster_instances` | `namespace`, `cluster` | members the cluster should have |
 | `cubrid_cluster_instances_ready` | `namespace`, `cluster` | members that are ready |
 | `cubrid_cluster_ha_ready` | `namespace`, `cluster` | 1 or 0 |
@@ -204,7 +241,7 @@ otherwise.
 | `cubrid_instance_role` | `namespace`, `cluster`, `member`, `role` | 1 for the member's role, 0 for the others; `role` is `master`, `slave`, `replica` or `unknown` |
 | `cubrid_instance_replication_observation_available` | `namespace`, `cluster`, `member` | 1 when the slave's applier could be read |
 | `cubrid_instance_replication_delayed_pages` | `namespace`, `cluster`, `member` | copied log pages not applied yet; no sample when not available |
-| `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set |
+| `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set and the applier was read in this observation; no sample when not read |
 | `cubrid_instance_last_observation_timestamp_seconds` | `namespace`, `cluster`, `member` | time of the member's last answer |
 
 - A value that is not available has no sample. It is never exported as 0.
