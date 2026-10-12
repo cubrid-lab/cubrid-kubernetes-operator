@@ -290,6 +290,18 @@ func (r *haRun) enter(needs func(context.Context) error) {
 	}
 }
 
+// runFault runs one fault of the HA group through the shared flow. A step of
+// it that did not stop after it was cancelled is still running against the
+// cluster, so no later step is started next to it: the gate blocks them all.
+func (r *haRun) runFault(s faults.Scenario) faults.Outcome {
+	outcome := faults.Run(context.Background(), s)
+	if len(outcome.StillRunning) > 0 {
+		r.gate.Block(fmt.Sprintf("%s: %s of the fault %q did not stop after it was cancelled",
+			faults.ReasonStepStillRunning, strings.Join(outcome.StillRunning, ", "), s.Fault.Name()))
+	}
+	return outcome
+}
+
 // admit restores and verifies the common starting state before the step or
 // the part of a step that name stands for, keeps the decision in
 // ha-bootstrap/starting-state.jsonl, and returns it.

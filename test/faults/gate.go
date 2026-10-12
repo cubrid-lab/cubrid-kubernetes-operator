@@ -47,6 +47,10 @@ type Gate struct {
 	// starting state, so that the waits fit in the run's own time limit.
 	// Zero is no budget.
 	Budget time.Duration
+	// Stop bounds the wait for a restore or a verification to return after
+	// the limit has passed and its context was cancelled. Zero means
+	// DefaultStop.
+	Stop time.Duration
 	// Restore puts back, where that is safe, what an earlier variant may
 	// have left behind. It is called before each Verify and may be nil.
 	Restore func(ctx context.Context) error
@@ -101,8 +105,20 @@ func (g *Gate) Enter(ctx context.Context, variant string, needs func(ctx context
 		}
 	}
 
-	held, err := poll(ctx, limit, g.Poll, false, g.attempt)
+	stop := g.Stop
+	if stop <= 0 {
+		stop = DefaultStop
+	}
+	held, err := poll(ctx, limit, g.Poll, stop, false, g.attempt)
 	g.spent += time.Since(start)
+	if errors.Is(err, errStepStillRunning) {
+		// Something of the restore or the verification is still running
+		// against the system: no variant may start next to it.
+		g.Block(fmt.Sprintf("%s before %s: restoring or verifying the starting state did not stop after %s",
+			ReasonStepStillRunning, variant, limit.Round(time.Millisecond)))
+		e.Reason = g.blocked
+		return e
+	}
 	if !held {
 		g.Block(fmt.Sprintf("%s before %s within %s%s: %v",
 			ReasonStartingStateNotRestored, variant, limit.Round(time.Millisecond), budgetNote, err))
@@ -114,7 +130,12 @@ func (g *Gate) Enter(ctx context.Context, variant string, needs func(ctx context
 		e.State = g.Describe(ctx)
 	}
 	if needs != nil {
-		if err := bounded(ctx, g.Limit, needs); err != nil {
+		switch err := bounded(ctx, g.Limit, stop, needs); {
+		case errors.Is(err, errStepStillRunning):
+			g.Block(fmt.Sprintf("%s before %s: checking the variant's precondition did not stop",
+				ReasonStepStillRunning, variant))
+			e.Reason = g.blocked
+		case err != nil:
 			e.Reason = ReasonOrderDependency + ": " + err.Error()
 		}
 	}

@@ -444,7 +444,7 @@ func s01AndS02Steps(r *haRun) {
 		replaced := slaves[0]
 		uid, err := r.kubectl("get", "pod", replaced, "-o", "jsonpath={.metadata.uid}")
 		Expect(err).NotTo(HaveOccurred())
-		outcome := faults.Run(context.Background(), faults.Scenario{
+		outcome := r.runFault(faults.Scenario{
 			Fault:  podDeletion{namespace: r.namespace, pod: replaced, uid: uid},
 			Limits: podDeletionLimits,
 			Before: func(context.Context) error { _, _, err := r.master(); return err },

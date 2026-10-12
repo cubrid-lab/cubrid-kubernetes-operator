@@ -179,7 +179,7 @@ func (r *haRun) s06Restart() {
 	}
 
 	By("killing the Operator Pod and waiting for its replacement")
-	outcome := faults.Run(context.Background(), faults.Scenario{
+	outcome := r.runFault(faults.Scenario{
 		Fault:  operatorPodKill{pod: pods[0]},
 		Limits: s03FlowLimits,
 		Before: func(context.Context) error {
@@ -303,7 +303,7 @@ func (r *haRun) s06Absent() {
 	absence := &operatorAbsence{}
 	var newMaster, staleStatus, membersBeforeReturn string
 	var masterDeletedAt time.Time
-	outcome := faults.Run(context.Background(), faults.Scenario{
+	outcome := r.runFault(faults.Scenario{
 		Fault:  absence,
 		Limits: s03FlowLimits,
 		Before: func(context.Context) error {

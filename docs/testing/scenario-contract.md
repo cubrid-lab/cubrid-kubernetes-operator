@@ -243,6 +243,13 @@ a failed run to obtain a pass: a change needs its own reviewed commit with the
 measurements that justify it. A run against a limit that is not set yet is a
 baseline run and ends as `blocked` with reason `time_limit_unset`.
 
+A step of a scenario that reaches its limit is cancelled, and the run waits
+for it to return before it goes on, so that a step neither runs a command nor
+changes anything after the scenario has moved on. A step that does not stop
+within a short further wait is still running against the system: the run
+ends as `blocked` with reason `step_still_running`, the fault is still
+removed, and no later variant of the same system is started.
+
 ### The three ways writes can be stopped
 
 These are different things and are never reported as one another:

@@ -200,7 +200,7 @@ func (r *haRun) s05(variant string) {
 
 	By("failing the Broker and waiting for two available Brokers and for every client")
 	newConnection := "not tried"
-	outcome := faults.Run(context.Background(), faults.Scenario{
+	outcome := r.runFault(faults.Scenario{
 		Fault:  fault,
 		Limits: s03FlowLimits,
 		Before: func(context.Context) error {

@@ -203,15 +203,22 @@ func TestGate_AFailedSetupBlocksEveryVariant(t *testing.T) {
 	}
 }
 
+// A verification that ignores its cancelled context is still running against
+// the system: the gate returns, and no later variant starts next to it.
 func TestGate_NeverHangs(t *testing.T) {
 	s := &fakeSystem{hang: true}
+	g := s.gate()
+	g.Stop = 50 * time.Millisecond
 	start := time.Now()
-	e := s.gate().Enter(context.Background(), "S14", nil)
+	e := g.Enter(context.Background(), "S14", nil)
 	if time.Since(start) > time.Second {
 		t.Fatalf("Enter did not return within its limit")
 	}
-	if e.Verified || !strings.HasPrefix(e.Reason, ReasonStartingStateNotRestored) {
-		t.Errorf("want %s, got %+v", ReasonStartingStateNotRestored, e)
+	if e.Verified || !strings.HasPrefix(e.Reason, ReasonStepStillRunning) {
+		t.Errorf("want %s, got %+v", ReasonStepStillRunning, e)
+	}
+	if later := g.Enter(context.Background(), "S15", nil); later.Verified || later.Reason != e.Reason {
+		t.Errorf("a later variant was not blocked for the same reason: %+v", later)
 	}
 }
 

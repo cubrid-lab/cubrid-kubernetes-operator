@@ -19,7 +19,9 @@ package faults
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,7 +76,7 @@ const (
 )
 
 var short = Limits{Confirm: 150 * time.Millisecond, Outcome: 150 * time.Millisecond,
-	Cleanup: 150 * time.Millisecond, Poll: 5 * time.Millisecond}
+	Cleanup: 150 * time.Millisecond, Poll: 5 * time.Millisecond, Stop: 200 * time.Millisecond}
 
 func holds(context.Context) (bool, error)  { return true, nil }
 func notYet(context.Context) (bool, error) { return false, nil }
@@ -313,3 +315,103 @@ func (f *slowConfirm) Name() string                              { return "slow 
 func (f *slowConfirm) Inject(context.Context) error              { return nil }
 func (f *slowConfirm) Confirm(ctx context.Context) (bool, error) { return f.confirm(ctx) }
 func (f *slowConfirm) Remove(context.Context) error              { return nil }
+
+// commandFault issues its fault with an external command that blocks, as a
+// kubectl call that hangs would, and then writes to state the test shares.
+type commandFault struct {
+	fakeFault
+	cmd      *exec.Cmd
+	finished atomic.Bool
+}
+
+func (f *commandFault) Inject(ctx context.Context) error {
+	f.injected++
+	f.cmd = exec.CommandContext(ctx, "sleep", "30")
+	err := f.cmd.Run()
+	// What a step does after its command, for example recording when the
+	// fault was issued.
+	time.Sleep(50 * time.Millisecond)
+	f.finished.Store(true)
+	return err
+}
+
+// A step whose command blocks is cancelled at its limit, and the run waits
+// until the step has returned: its command is gone and it writes nothing more
+// once the run has moved on (#307).
+func TestRun_CancelsACommandThatBlocksAndWaitsForItsStep(t *testing.T) {
+	f := &commandFault{}
+	o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok, Check: holds})
+	if !f.finished.Load() {
+		t.Fatal("the run went on while the step that issues the fault was still running")
+	}
+	if f.cmd.ProcessState == nil {
+		t.Error("the blocked command was not reaped")
+	}
+	if o.Result != evidence.Blocked || !strings.HasPrefix(o.Reason, ReasonInjectionFailed) {
+		t.Errorf("result = %q (%s), want blocked: the fault could not be issued", o.Result, o.Reason)
+	}
+	if len(o.StillRunning) != 0 {
+		t.Errorf("steps reported as still running: %v", o.StillRunning)
+	}
+	if f.removed != 1 || !o.CleanupSucceeded {
+		t.Errorf("the cleanup did not run: removed %d, succeeded %t", f.removed, o.CleanupSucceeded)
+	}
+}
+
+// The same holds for the observations: a check that is cancelled at the limit
+// has returned before the run ends, so it changes nothing afterwards.
+func TestRun_NoObservationRunsOnAfterTheRun(t *testing.T) {
+	var calls atomic.Int32
+	check := func(ctx context.Context) (bool, error) {
+		<-ctx.Done()
+		time.Sleep(30 * time.Millisecond)
+		calls.Add(1)
+		return false, nil
+	}
+	f := &fakeFault{confirmAfter: 1}
+	o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok, Check: check})
+	atEnd := calls.Load()
+	time.Sleep(100 * time.Millisecond)
+	if later := calls.Load(); later != atEnd || atEnd == 0 {
+		t.Errorf("the check finished %d time(s) by the end of the run and %d later, want all of them by the end",
+			atEnd, later-atEnd)
+	}
+	if o.Result != evidence.Fail || len(o.StillRunning) != 0 {
+		t.Errorf("result = %q (%s), still running %v; want a fail with nothing left running",
+			o.Result, o.Reason, o.StillRunning)
+	}
+}
+
+// A step that ignores its cancelled context cannot be stopped. The run still
+// returns, says which step is left running, and removes the fault; the caller
+// must not start another fault next to it.
+func TestRun_ReportsAStepThatDoesNotStop(t *testing.T) {
+	for step, want := range map[string]evidence.Result{
+		stepInject:  evidence.Blocked,
+		stepConfirm: evidence.Blocked,
+		stepRemove:  evidence.Pass,
+	} {
+		f := &fakeFault{confirmAfter: 1, hangIn: step}
+		o := Run(context.Background(), Scenario{Fault: f, Limits: short, Before: ok, Check: holds})
+		if len(o.StillRunning) != 1 || o.StillRunning[0] != step {
+			t.Errorf("hang in %s: still running = %v, want [%s]", step, o.StillRunning, step)
+		}
+		if o.Result != want {
+			t.Errorf("hang in %s: result = %q (%s), want %q", step, o.Result, o.Reason, want)
+		}
+		if step != stepRemove && !strings.HasPrefix(o.Reason, ReasonStepStillRunning) {
+			t.Errorf("hang in %s: reason = %q, want %s", step, o.Reason, ReasonStepStillRunning)
+		}
+		// The step left running may still touch the fake, so the removal is
+		// read from the timeline, which only the run writes.
+		removal := 0
+		for _, entry := range o.Timeline {
+			if entry.Kind == "fault_removed" || entry.Kind == "cleanup_failed" {
+				removal++
+			}
+		}
+		if removal != 1 {
+			t.Errorf("hang in %s: the removal of the fault ran %d times, want once: %+v", step, removal, o.Timeline)
+		}
+	}
+}

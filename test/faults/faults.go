@@ -35,6 +35,7 @@ const (
 	ReasonStartingState     = "starting_state_not_verified"
 	ReasonInjectionFailed   = "fault_injection_failed"
 	ReasonFaultNotConfirmed = "fault_not_confirmed"
+	ReasonStepStillRunning  = "step_still_running"
 )
 
 // Fault is what a scenario plugs in.
@@ -61,7 +62,14 @@ type Limits struct {
 	Cleanup time.Duration
 	// Poll is the pause between two observations.
 	Poll time.Duration
+	// Stop bounds the wait for a step to return after its limit has passed
+	// and its context was cancelled. Zero means DefaultStop.
+	Stop time.Duration
 }
+
+// DefaultStop is how long a cancelled step is waited for when Limits.Stop is
+// not set: enough for a killed command to be reaped and its caller to return.
+const DefaultStop = 10 * time.Second
 
 // Scenario is what a scenario supplies besides its fault.
 type Scenario struct {
@@ -91,16 +99,42 @@ type Outcome struct {
 	FaultIssuedAt time.Time
 	// OutcomeAt is when Check first held; zero when it never did.
 	OutcomeAt time.Time
-	Timeline  []Step
+	// StillRunning names the steps that did not return after their limit
+	// had passed and their context was cancelled.
+	StillRunning []string
+	Timeline     []Step
 }
 
-// errStepTimeout is returned for a step that did not finish within its limit.
+// errStepTimeout is returned for a step that did not finish within its limit
+// and returned once its context was cancelled.
 var errStepTimeout = errors.New("the step did not return within its time limit")
 
+// errStepStillRunning is returned for a step that did not return after its
+// limit had passed and its context was cancelled. It wraps errStepTimeout.
+var errStepStillRunning = fmt.Errorf("%w, and did not stop when it was cancelled", errStepTimeout)
+
+// Names of the steps, as Outcome.StillRunning reports them.
+const (
+	stepNameBefore  = "before"
+	stepNameInject  = "inject"
+	stepNameConfirm = "confirm"
+	stepNameCheck   = "check"
+	stepNameRemove  = "remove"
+)
+
 // Run executes the scenario. It always returns: no step waits longer than its
-// limit, also when a function of the scenario ignores its context. The fault
-// is removed after every run in which it was issued, also when ctx is
-// cancelled, and a failed removal never replaces what the run found first.
+// limit and the time a cancelled step is given to stop, also when a function
+// of the scenario ignores its context.
+//
+// A step that reaches its limit is cancelled, and the run goes on only when
+// the step has returned, so a step neither runs a command nor writes to
+// shared state after the run has moved on. A step that does not return is
+// named in Outcome.StillRunning and ends the run as blocked: nothing more is
+// started next to it except the removal of the fault. The caller must not
+// start another fault while a step is still running.
+//
+// The fault is removed after every run in which it was issued, also when ctx
+// is cancelled, and a failed removal never replaces what the run found first.
 func Run(ctx context.Context, s Scenario) (o Outcome) {
 	note := func(kind, detail string) {
 		o.Timeline = append(o.Timeline, Step{T: time.Now().UTC(), Kind: kind, Detail: detail})
@@ -109,14 +143,30 @@ func Run(ctx context.Context, s Scenario) (o Outcome) {
 		o.Result, o.Reason = result, reason
 		note(kind, reason)
 	}
+	// stillRunning records a step that did not stop and reports whether err
+	// says so.
+	stillRunning := func(step string, err error) bool {
+		if !errors.Is(err, errStepStillRunning) {
+			return false
+		}
+		o.StillRunning = append(o.StillRunning, step)
+		return true
+	}
 
 	l := s.Limits
 	if l.Confirm <= 0 || l.Outcome <= 0 || l.Cleanup <= 0 || l.Poll <= 0 {
 		end(evidence.Blocked, ReasonTimeLimitUnset, ReasonTimeLimitUnset)
 		return o
 	}
+	if l.Stop <= 0 {
+		l.Stop = DefaultStop
+	}
 
-	if err := bounded(ctx, l.Confirm, s.Before); err != nil {
+	if err := bounded(ctx, l.Confirm, l.Stop, s.Before); err != nil {
+		if stillRunning(stepNameBefore, err) {
+			end(evidence.Blocked, ReasonStepStillRunning, ReasonStepStillRunning+": "+stepNameBefore)
+			return o
+		}
 		end(evidence.Blocked, ReasonStartingState, ReasonStartingState+": "+err.Error())
 		return o
 	}
@@ -126,7 +176,8 @@ func Run(ctx context.Context, s Scenario) (o Outcome) {
 	note("fault_issued", s.Fault.Name())
 	defer func() {
 		// Not derived from a cancelled ctx: the fault must not outlive the run.
-		if err := bounded(context.WithoutCancel(ctx), l.Cleanup, s.Fault.Remove); err != nil {
+		if err := bounded(context.WithoutCancel(ctx), l.Cleanup, l.Stop, s.Fault.Remove); err != nil {
+			stillRunning(stepNameRemove, err)
 			note("cleanup_failed", err.Error())
 			return
 		}
@@ -134,12 +185,20 @@ func Run(ctx context.Context, s Scenario) (o Outcome) {
 		note("fault_removed", "")
 	}()
 
-	if err := bounded(ctx, l.Confirm, s.Fault.Inject); err != nil {
+	if err := bounded(ctx, l.Confirm, l.Stop, s.Fault.Inject); err != nil {
+		if stillRunning(stepNameInject, err) {
+			end(evidence.Blocked, ReasonStepStillRunning, ReasonStepStillRunning+": "+stepNameInject)
+			return o
+		}
 		end(evidence.Blocked, ReasonInjectionFailed, ReasonInjectionFailed+": "+err.Error())
 		return o
 	}
 
-	confirmed, lastErr := poll(ctx, l.Confirm, l.Poll, false, s.Fault.Confirm)
+	confirmed, lastErr := poll(ctx, l.Confirm, l.Poll, l.Stop, false, s.Fault.Confirm)
+	if stillRunning(stepNameConfirm, lastErr) {
+		end(evidence.Blocked, ReasonStepStillRunning, ReasonStepStillRunning+": "+stepNameConfirm)
+		return o
+	}
 	if !confirmed {
 		reason := ReasonFaultNotConfirmed
 		if lastErr != nil {
@@ -151,11 +210,13 @@ func Run(ctx context.Context, s Scenario) (o Outcome) {
 	o.FaultConfirmed = true
 	note("fault_confirmed", "")
 
-	reached, err := poll(ctx, l.Outcome, l.Poll, true, s.Check)
+	reached, err := poll(ctx, l.Outcome, l.Poll, l.Stop, true, s.Check)
 	switch {
 	case reached:
 		o.OutcomeAt = time.Now().UTC()
 		end(evidence.Pass, "outcome_reached", "")
+	case stillRunning(stepNameCheck, err):
+		end(evidence.Blocked, ReasonStepStillRunning, ReasonStepStillRunning+": "+stepNameCheck)
 	case err != nil && !errors.Is(err, errStepTimeout):
 		end(evidence.Fail, "expectation_broken", err.Error())
 	case ctx.Err() != nil:
@@ -167,39 +228,61 @@ func Run(ctx context.Context, s Scenario) (o Outcome) {
 	return o
 }
 
-// bounded calls fn and returns when it does or when the limit passes,
-// whichever is first. A fn that ignores its context is left behind.
-func bounded(ctx context.Context, limit time.Duration, fn func(context.Context) error) error {
+// observed is what one call of a step returned.
+type observed struct {
+	done bool
+	err  error
+}
+
+// observe calls fn and returns what it returned, or errStepTimeout when the
+// limit passes first. In that case fn's context is cancelled and fn is waited
+// for, at most stop: a fn that has returned by then leaves nothing behind,
+// and one that has not is reported with errStepStillRunning. What fn returns
+// travels through a channel, so a fn that is left behind writes to nothing
+// the caller reads.
+func observe(ctx context.Context, limit, stop time.Duration, fn func(context.Context) (bool, error)) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- fn(ctx) }()
+	result := make(chan observed, 1)
+	go func() {
+		done, err := fn(ctx)
+		result <- observed{done, err}
+	}()
 	select {
-	case err := <-done:
-		return err
+	case r := <-result:
+		return r.done, r.err
 	case <-ctx.Done():
-		return errStepTimeout
 	}
+	select {
+	case <-result:
+		return false, errStepTimeout
+	case <-time.After(stop):
+		return false, errStepStillRunning
+	}
+}
+
+// bounded is observe for a step that only succeeds or fails.
+func bounded(ctx context.Context, limit, stop time.Duration, fn func(context.Context) error) error {
+	_, err := observe(ctx, limit, stop, func(ctx context.Context) (bool, error) { return false, fn(ctx) })
+	return err
 }
 
 // poll calls fn until it returns true or the limit passes. With stopOnError
 // an error ends the wait; without it the error is remembered and fn is asked
-// again. It returns the last error.
-func poll(ctx context.Context, limit, every time.Duration, stopOnError bool,
+// again. It returns the last error, and errStepStillRunning for a call that
+// did not stop.
+func poll(ctx context.Context, limit, every, stop time.Duration, stopOnError bool,
 	fn func(context.Context) (bool, error)) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	var lastErr error
 	for {
-		done := false
-		err := bounded(ctx, limit, func(ctx context.Context) error {
-			var err error
-			done, err = fn(ctx)
-			return err
-		})
+		done, err := observe(ctx, limit, stop, fn)
 		switch {
 		case err == nil && done:
 			return true, nil
+		case errors.Is(err, errStepStillRunning):
+			return false, err
 		case errors.Is(err, errStepTimeout):
 			// The limit passed during this call. What an earlier call
 			// reported says more than "it timed out".

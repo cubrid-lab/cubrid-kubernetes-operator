@@ -313,7 +313,7 @@ func (r *haRun) s03(variant string) {
 	// routing as not ready, as far as the samples of the wait show.
 	var unresolved, notRouting window
 	roles := &roleLog{}
-	outcome := faults.Run(context.Background(), faults.Scenario{
+	outcome := r.runFault(faults.Scenario{
 		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful},
 		Limits: s03FlowLimits,
 		Before: func(context.Context) error {
