@@ -176,6 +176,13 @@ underscores.
 | A backup starts, completes, fails | `BackupStarted`, `BackupCompleted`, `BackupFailed` | Normal, Normal, Warning | `backup_started`, `backup_completed`, `backup_failed` |
 | A restore starts, completes, fails | `RestoreStarted`, `RestoreCompleted`, `RestoreFailed` | Normal, Normal, Warning | `restore_started`, `restore_completed`, `restore_failed` |
 
+An Event is a notice, not the record. The Operator sends at most 100 Events
+about one object in a row, and the allowance comes back at one Event in ten
+seconds; an Event beyond it is dropped, and nothing reports the drop. Kubernetes
+also merges Events that repeat and, by default, removes them after an hour. The
+transition log line is written in every case, so the log is where a missing
+Event is looked up.
+
 Reserved for the rejoin and rebuild work (issue
 [#116](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/116)):
 `MemberRejoined` and `MemberRebuildRequired`.

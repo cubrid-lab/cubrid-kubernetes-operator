@@ -189,6 +189,11 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "91d4fe35.cubrid.io",
+		// The default broadcaster drops a cluster's Events after the first 25.
+		// The manager lives as long as this process, so the goroutines the
+		// deprecation warns about are not left behind.
+		//nolint:staticcheck // v0.25 has no other way to set the limit of the record.EventRecorder in use.
+		EventBroadcaster: controller.NewEventBroadcaster(),
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
