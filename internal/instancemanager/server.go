@@ -28,6 +28,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,6 +38,10 @@ import (
 
 // DefaultPort is the Instance Manager API port (ADR-0003).
 const DefaultPort = 9090
+
+// maxRequestBody is the largest request body the manager reads. The
+// operator's requests are a few hundred bytes of JSON.
+const maxRequestBody = 16 << 10
 
 const (
 	authHeader = "Authorization"
@@ -349,14 +354,19 @@ func (s *Server) haStatus(w http.ResponseWriter, r *http.Request) {
 // a repeat with a different body is a 409, and a concurrent op on the same
 // database is a 409. Without a store it stays the original synchronous path.
 func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgUnreadableBody})
+	body, ok := readBody(w, r)
+	if !ok {
 		return
 	}
 	var req BackupRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+		return
+	}
+	// Nothing is done for a request this manager does not support: no
+	// directory, no operation and no command.
+	if err := validateBackupRequest(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
 		return
 	}
 
@@ -567,9 +577,8 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: "restore is not enabled (no operation/object store)"})
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgUnreadableBody})
+	body, ok := readBody(w, r)
+	if !ok {
 		return
 	}
 	var req RestoreRequest
@@ -855,12 +864,92 @@ func (s *Server) getOperation(w http.ResponseWriter, r *http.Request) {
 // the master's copy-log directory to inspect.
 func (s *Server) convergence(w http.ResponseWriter, r *http.Request) {
 	db := r.URL.Query().Get("database")
-	path := r.URL.Query().Get("copiedLogPath")
-	if db == "" || path == "" {
+	requested := r.URL.Query().Get("copiedLogPath")
+	if db == "" || requested == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "database and copiedLogPath are required"})
 		return
 	}
-	writeJSON(w, http.StatusOK, ApplyConvergenceStatus(r.Context(), s.cli, db, path))
+	copied, err := confineCopiedLogPath(db, requested, s.databasesDir)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ApplyConvergenceStatus(r.Context(), s.cli, db, copied))
+}
+
+// confineCopiedLogPath maps the copied-log path of a convergence request onto
+// the manager's databases directory and returns a path built from that
+// directory: `<databases>/<database>_<host>`, where a slave keeps the log it
+// copies from the member <host> (docs/poc/RESULTS.md, POC-14). Any other path
+// is refused, so the request cannot make applyinfo read elsewhere.
+func confineCopiedLogPath(database, copiedLogPath, databasesDir string) (string, error) {
+	if databasesDir == "" || !filepath.IsAbs(databasesDir) || filepath.Clean(databasesDir) != databasesDir {
+		return "", fmt.Errorf("the databases directory %q is not configured as a clean absolute path", databasesDir)
+	}
+	if !databaseNamePattern.MatchString(database) {
+		return "", fmt.Errorf("database name %q is not a plain identifier", database)
+	}
+	host, isCopiedLog := strings.CutPrefix(filepath.Base(copiedLogPath), database+"_")
+	if filepath.Clean(copiedLogPath) != copiedLogPath || filepath.Dir(copiedLogPath) != databasesDir ||
+		!isCopiedLog || !hostLabelPattern.MatchString(host) {
+		return "", fmt.Errorf("copiedLogPath %q is not a copied log of %s directly below %q", copiedLogPath, database, databasesDir)
+	}
+	return filepath.Join(databasesDir, database+"_"+host), nil
+}
+
+// readBody reads a request body of at most maxRequestBody bytes. It answers
+// a larger or unreadable one itself and reports false.
+func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	var tooLarge *http.MaxBytesError
+	switch {
+	case errors.As(err, &tooLarge):
+		writeJSON(w, http.StatusRequestEntityTooLarge,
+			map[string]string{errKey: fmt.Sprintf("the request body is larger than %d bytes", maxRequestBody)})
+		return nil, false
+	case err != nil:
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgUnreadableBody})
+		return nil, false
+	}
+	return body, true
+}
+
+// validateBackupRequest rejects a backup request this manager does not carry
+// out as asked (#301). The database name becomes a command argument and part
+// of file names, so it is a plain identifier. Only a full backup is
+// supported: an incremental one needs the levels before it, which nothing
+// here keeps track of. An upload names where the artifact goes and what its
+// manifest says, so each of its fields is present and of the expected form;
+// the prefix stays below the place it names.
+func validateBackupRequest(req BackupRequest) error {
+	if req.Database == "" || req.Destination == "" {
+		return errors.New("database and destination are required")
+	}
+	if !databaseNamePattern.MatchString(req.Database) {
+		return fmt.Errorf("database name %q is not a plain identifier", req.Database)
+	}
+	if req.Level != 0 {
+		return fmt.Errorf("backup level %d is not supported: only a full backup (level 0) is", req.Level)
+	}
+	up := req.Upload
+	if up == nil {
+		return nil
+	}
+	if up.Bucket == "" || up.Prefix == "" || up.ClusterUID == "" || up.CubridVersion == "" || up.SourceInstance == "" {
+		return errors.New("upload needs bucket, prefix, clusterUID, cubridVersion and sourceInstance")
+	}
+	if path.IsAbs(up.Prefix) || path.Clean(up.Prefix) != up.Prefix || up.Prefix == ".." || strings.HasPrefix(up.Prefix, "../") {
+		return fmt.Errorf("upload prefix %q must be a clean relative key prefix", up.Prefix)
+	}
+	if !hostLabelPattern.MatchString(up.SourceInstance) {
+		return fmt.Errorf("upload sourceInstance %q is not a host name (a DNS label)", up.SourceInstance)
+	}
+	switch Role(up.SourceRole) {
+	case "", RoleMaster, RoleSlave, RoleReplica:
+	default:
+		return fmt.Errorf("upload sourceRole %q is not master, slave or replica", up.SourceRole)
+	}
+	return nil
 }
 
 // shutdown performs the ADR-0003 ordered graceful shutdown (withdraw HA, stop server).

@@ -125,8 +125,9 @@ func sha256Hex(s string) string {
 }
 
 func backupBodyOf(database, destination, prefix string) string {
-	body, _ := json.Marshal(BackupRequest{Database: database, Destination: destination,
-		Upload: &BackupUpload{Bucket: testUpload.Bucket, Prefix: prefix}})
+	upload := *testUpload
+	upload.Prefix = prefix
+	body, _ := json.Marshal(BackupRequest{Database: database, Destination: destination, Upload: &upload})
 	return string(body)
 }
 

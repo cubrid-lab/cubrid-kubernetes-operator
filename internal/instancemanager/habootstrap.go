@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -98,9 +97,8 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, CodeNotAnHAMember, "this member is a standalone server, not an HA member")
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgUnreadableBody})
+	body, ok := readBody(w, r)
+	if !ok {
 		return
 	}
 	var req HABootstrapRequest
