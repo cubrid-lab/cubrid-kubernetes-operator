@@ -28,6 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 )
 
@@ -64,6 +65,11 @@ func TestE2E(t *testing.T) {
 // and, below, the deployed manager. A failure here leaves every planned
 // scenario not_run. Each group sets up its own cluster in its BeforeAll.
 var _ = BeforeSuite(func() {
+	// Before anything is built: a run whose evidence would be mixed with an
+	// earlier run's is not started (#310).
+	if dir := evidenceDir(); dir != "" {
+		Expect(evidence.RequireEmptyDir(dir)).To(Succeed())
+	}
 	planRun()
 	Expect(checkBreakSettings()).To(Succeed())
 

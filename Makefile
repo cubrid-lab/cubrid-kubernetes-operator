@@ -99,6 +99,9 @@ KIND_CLUSTER ?= cubrid-kubernetes-operator-test-e2e
 # The scenarios' time limits have defaults for Kind on a GitHub runner and can be
 # set through E2E_FORMATION_LIMIT, E2E_FAILOVER_LIMIT and the others listed in
 # docs/testing/scenario-contract.md, section "Time limits", e.g. E2E_FAILOVER_LIMIT=2m.
+# A run starts with an empty evidence directory. The default directory is
+# emptied by `make test-e2e`; a directory that E2E_EVIDENCE_DIR names is left to
+# its owner, and the suite does not start while it holds anything.
 E2E_LABEL_FILTER ?=
 E2E_EVIDENCE_DIR ?= $(CURDIR)/e2e-evidence
 
@@ -114,6 +117,7 @@ setup-test-e2e: container-tool kind ## Set up a Kind cluster for e2e tests if it
 
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
+	$(if $(filter file,$(origin E2E_EVIDENCE_DIR)),rm -rf '$(E2E_EVIDENCE_DIR)')
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL) \
 		E2E_EVIDENCE_DIR='$(E2E_EVIDENCE_DIR)' go test -tags=e2e ./test/e2e/ -v -timeout 60m -ginkgo.v $(if $(E2E_LABEL_FILTER),-ginkgo.label-filter='$(E2E_LABEL_FILTER)')
 	$(MAKE) cleanup-test-e2e

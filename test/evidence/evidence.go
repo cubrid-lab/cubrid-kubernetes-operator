@@ -398,3 +398,31 @@ func (r *Redactor) WriteFile(dir, rel string, data []byte) error {
 	}
 	return os.WriteFile(path, r.Redact(data), 0o600)
 }
+
+// RequireEmptyDir reports an error when dir holds anything, naming what it
+// holds. A directory that does not exist yet is as good as an empty one, and
+// nothing is created or removed: the evidence of an earlier run is the
+// caller's to keep or to delete.
+func RequireEmptyDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	switch {
+	case os.IsNotExist(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("the evidence directory %s cannot be read: %w", dir, err)
+	case len(entries) == 0:
+		return nil
+	}
+	const shown = 5
+	names := make([]string, 0, shown)
+	for _, entry := range entries[:min(shown, len(entries))] {
+		names = append(names, entry.Name())
+	}
+	more := ""
+	if len(entries) > shown {
+		more = fmt.Sprintf(" and %d more", len(entries)-shown)
+	}
+	return fmt.Errorf("the evidence directory %s holds the files of an earlier run (%s%s): "+
+		"remove it, or set E2E_EVIDENCE_DIR to a directory of this run's own",
+		dir, strings.Join(names, ", "), more)
+}

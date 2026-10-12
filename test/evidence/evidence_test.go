@@ -445,3 +445,49 @@ func TestWriteRedacts(t *testing.T) {
 		t.Error("a path outside the run directory was accepted")
 	}
 }
+
+// A run's evidence directory holds only that run's files. One that holds
+// files already is refused, so that the files of an earlier run cannot be
+// read as this run's (#310).
+func TestRequireEmptyDir(t *testing.T) {
+	base := t.TempDir()
+	missing := filepath.Join(base, "not-created-yet")
+	if err := RequireEmptyDir(missing); err != nil {
+		t.Errorf("a directory that does not exist yet: %v", err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("the check created the directory")
+	}
+
+	empty := filepath.Join(base, "empty")
+	if err := os.Mkdir(empty, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequireEmptyDir(empty); err != nil {
+		t.Errorf("an empty directory: %v", err)
+	}
+
+	used := filepath.Join(base, "used")
+	if err := os.MkdirAll(filepath.Join(used, s03, "abrupt"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(used, "summary.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := RequireEmptyDir(used)
+	if err == nil {
+		t.Fatal("a directory with the files of an earlier run was accepted")
+	}
+	for _, want := range []string{used, "summary.json", s03} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not name %s: %v", want, err)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(used, "summary.json")); statErr != nil {
+		t.Errorf("the check removed a file: %v", statErr)
+	}
+
+	if err := RequireEmptyDir(filepath.Join(used, "summary.json")); err == nil {
+		t.Error("a file was accepted as the evidence directory")
+	}
+}
