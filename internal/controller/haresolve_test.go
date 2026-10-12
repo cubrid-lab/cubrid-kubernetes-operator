@@ -186,7 +186,8 @@ func TestWriteRoutingEntersAndLeavesQuarantine(t *testing.T) {
 	}
 	for _, step := range steps {
 		res := resolvePrimary(members, step.obs, testNow)
-		r.setBrokerConditions(cluster, res, nil)
+		// A read-write Broker is available throughout: this is about the primary.
+		r.setBrokerConditions(cluster, res, map[string]int32{brokerModeRW: 1})
 		got := findCondition(cluster, conditionRoutingReady)
 		if got == nil || got.Status != step.ready || got.Reason != step.reason {
 			t.Fatalf("%s: RoutingReady = %+v, want %s/%s", step.name, got, step.ready, step.reason)

@@ -18,17 +18,20 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -183,6 +186,110 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 		Expect(condition(conditionWriteEndpointReady).Status).To(BeEquivalentTo("True"))
 		Expect(condition(conditionReadEndpointReady).Status).To(BeEquivalentTo("False"))
 		Expect(condition(conditionBrokerReady).Status).To(BeEquivalentTo("False"))
+	})
+
+	// conditionOf reads one condition of the stored cluster.
+	conditionOf := func(key types.NamespacedName, conditionType string) *metav1.Condition {
+		c := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+		cond := meta.FindStatusCondition(c.Status.Conditions, conditionType)
+		Expect(cond).NotTo(BeNil(), conditionType)
+		return cond
+	}
+	// setAvailable sets how many Broker Pods of one mode are available, as
+	// the Deployment controller would.
+	setAvailable := func(cluster, mode string, n int32) {
+		dep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: brokerDeploymentName(cluster, mode), Namespace: brokerNamespace}, dep)).
+			To(Succeed())
+		dep.Status.Replicas, dep.Status.ReadyReplicas, dep.Status.AvailableReplicas = n, n, n
+		Expect(k8sClient.Status().Update(ctx, dep)).To(Succeed())
+	}
+	reconcileAgain := func(r *CubridClusterReconciler, key types.NamespacedName) {
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	// Writes reach the master through a read-write Broker. A resolved master
+	// without one is no route (#287).
+	It("reports write routing ready only with a resolved primary and an available read-write Broker", func() {
+		const name = "routing-rw"
+		r, key := reconcileHA(name)
+		Expect(conditionOf(key, conditionPrimaryResolved).Status).To(BeEquivalentTo("True"))
+
+		By("no read-write Broker being available")
+		routing := conditionOf(key, conditionRoutingReady)
+		Expect(routing.Status).To(BeEquivalentTo("False"), "write routing is claimed with no read-write Broker running")
+		Expect(routing.Reason).To(Equal("NoBrokerAvailable"))
+
+		By("only the read-only Brokers being available")
+		setAvailable(name, brokerModeRO, 2)
+		reconcileAgain(r, key)
+		Expect(conditionOf(key, conditionRoutingReady).Status).To(BeEquivalentTo("False"))
+
+		By("a read-write Broker being available")
+		setAvailable(name, brokerModeRW, 1)
+		reconcileAgain(r, key)
+		routing = conditionOf(key, conditionRoutingReady)
+		Expect(routing.Status).To(BeEquivalentTo("True"))
+		Expect(routing.Message).To(ContainSubstring(name + "-0"))
+
+		By("the primary no longer being resolved")
+		r.Prober = &memberProber{}
+		reconcileAgain(r, key)
+		routing = conditionOf(key, conditionRoutingReady)
+		Expect(routing.Status).To(BeEquivalentTo("False"))
+		Expect(routing.Reason).To(Equal(conditionOf(key, conditionPrimaryResolved).Reason),
+			"an unresolved primary is the reason, also while Brokers are available")
+	})
+
+	// What an earlier reconcile saw of the Brokers says nothing once the
+	// tier could not be reconciled.
+	It("does not keep endpoint and routing conditions when the Broker tier cannot be reconciled", func() {
+		const name = "routing-stale"
+		r, key := reconcileHA(name)
+		setAvailable(name, brokerModeRW, 2)
+		setAvailable(name, brokerModeRO, 2)
+		reconcileAgain(r, key)
+		for _, conditionType := range []string{conditionBrokerReady, conditionWriteEndpointReady,
+			conditionReadEndpointReady, conditionRoutingReady} {
+			Expect(conditionOf(key, conditionType).Status).To(BeEquivalentTo("True"), conditionType)
+		}
+
+		By("the Broker configuration not being readable")
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		r.Client = interceptor.NewClient(base, interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.ConfigMap); ok && key.Name == brokerConfigMapName(name) {
+					return apierrors.NewInternalError(errors.New("etcd is unavailable"))
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		reconcileAgain(r, key)
+		Expect(conditionOf(key, conditionBrokerReady).Reason).To(Equal("BrokerReconcileFailed"))
+		for _, conditionType := range []string{conditionWriteEndpointReady, conditionReadEndpointReady, conditionRoutingReady} {
+			cond := conditionOf(key, conditionType)
+			Expect(cond.Status).To(BeEquivalentTo("Unknown"), "%s still says what an earlier reconcile saw", conditionType)
+			Expect(cond.Reason).To(Equal("BrokerReconcileFailed"), conditionType)
+		}
+
+		By("an unresolved primary still being reported as such")
+		r.Prober = &memberProber{}
+		reconcileAgain(r, key)
+		routing := conditionOf(key, conditionRoutingReady)
+		Expect(routing.Status).To(BeEquivalentTo("False"))
+		Expect(routing.Reason).To(Equal(conditionOf(key, conditionPrimaryResolved).Reason))
+
+		By("the tier being reconciled again")
+		r.Client = k8sClient
+		r.Prober = &memberProber{master: name + "-0"}
+		reconcileAgain(r, key)
+		for _, conditionType := range []string{conditionBrokerReady, conditionWriteEndpointReady,
+			conditionReadEndpointReady, conditionRoutingReady} {
+			Expect(conditionOf(key, conditionType).Status).To(BeEquivalentTo("True"), conditionType)
+		}
 	})
 })
 

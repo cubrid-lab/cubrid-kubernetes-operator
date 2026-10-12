@@ -241,7 +241,8 @@ func (r *CubridClusterReconciler) reconcileBrokerService(ctx context.Context, cl
 // says nothing. Routing is never claimed safe while the primary is
 // ambiguous/unresolved (ADR-0005): an unresolved primary yields
 // RoutingReady=False, so the write endpoint is not advertised as safe during
-// a split-brain.
+// a split-brain. With a resolved primary, routing is ready when a read-write
+// Broker is available to carry writes to it.
 func (r *CubridClusterReconciler) setBrokerConditions(cluster *databasev1alpha1.CubridCluster, res PrimaryResolution, available map[string]int32) {
 	endpoint := func(conditionType, mode, service string) bool {
 		n := available[mode]
@@ -264,15 +265,46 @@ func (r *CubridClusterReconciler) setBrokerConditions(cluster *databasev1alpha1.
 			"not every access mode has an available Broker Pod")
 	}
 
-	if res.Status == metav1.ConditionTrue && res.CurrentPrimary != "" {
+	switch {
+	case !setRoutingUnresolved(cluster, res):
+	case !rw:
+		// A resolved master without a Broker in front of it is no route.
+		setCondition(cluster, conditionRoutingReady, metav1.ConditionFalse, "NoBrokerAvailable",
+			"the primary is "+res.CurrentPrimary+", but no rw Broker Pod is available to route writes to it")
+	default:
 		setCondition(cluster, conditionRoutingReady, metav1.ConditionTrue, "PrimaryResolved",
 			"RW routing target resolved: "+res.CurrentPrimary)
-	} else {
-		reason := "AmbiguousPrimary"
-		if res.Reason != "" {
-			reason = res.Reason
-		}
-		setCondition(cluster, conditionRoutingReady, metav1.ConditionFalse, reason,
-			"write-endpoint safety not claimed until a single primary is resolved")
+	}
+}
+
+// setRoutingUnresolved reports whether a single primary is resolved. When
+// none is, it sets RoutingReady=False with the primary's reason: that is
+// known whatever is known about the Brokers.
+func setRoutingUnresolved(cluster *databasev1alpha1.CubridCluster, res PrimaryResolution) bool {
+	if res.Status == metav1.ConditionTrue && res.CurrentPrimary != "" {
+		return true
+	}
+	reason := "AmbiguousPrimary"
+	if res.Reason != "" {
+		reason = res.Reason
+	}
+	setCondition(cluster, conditionRoutingReady, metav1.ConditionFalse, reason,
+		"write-endpoint safety not claimed until a single primary is resolved")
+	return false
+}
+
+// setBrokerConditionsUnobserved is for a reconcile in which the Broker tier
+// could not be reconciled, so the Brokers were not observed. What an earlier
+// reconcile saw of them is not kept: the endpoints are Unknown, and so is the
+// routing unless the primary is unresolved, which is reported either way.
+// Nothing is invented: Unknown says that the Brokers were not looked at.
+func setBrokerConditionsUnobserved(cluster *databasev1alpha1.CubridCluster, res PrimaryResolution, cause error) {
+	const reason = "BrokerReconcileFailed"
+	msg := "the Brokers were not observed in this reconcile: " + cause.Error()
+	setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, reason, cause.Error())
+	setCondition(cluster, conditionWriteEndpointReady, metav1.ConditionUnknown, reason, msg)
+	setCondition(cluster, conditionReadEndpointReady, metav1.ConditionUnknown, reason, msg)
+	if setRoutingUnresolved(cluster, res) {
+		setCondition(cluster, conditionRoutingReady, metav1.ConditionUnknown, reason, msg)
 	}
 }

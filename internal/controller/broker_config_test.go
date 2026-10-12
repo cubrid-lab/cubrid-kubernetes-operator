@@ -109,10 +109,21 @@ func TestSetBrokerConditions_RoutingGatedOnPrimary(t *testing.T) {
 
 	t.Run("resolved primary -> RoutingReady True", func(t *testing.T) {
 		c := brokerTestCluster()
-		r.setBrokerConditions(c, PrimaryResolution{CurrentPrimary: "cc-0", Status: metav1.ConditionTrue, Reason: singlePrimary}, nil)
+		r.setBrokerConditions(c, PrimaryResolution{CurrentPrimary: "cc-0", Status: metav1.ConditionTrue, Reason: singlePrimary},
+			map[string]int32{brokerModeRW: 1})
 		cond := meta.FindStatusCondition(c.Status.Conditions, conditionRoutingReady)
 		if cond == nil || cond.Status != metav1.ConditionTrue {
 			t.Fatalf("RoutingReady = %+v, want True", cond)
+		}
+	})
+
+	t.Run("resolved primary without a read-write Broker -> RoutingReady False", func(t *testing.T) {
+		c := brokerTestCluster()
+		r.setBrokerConditions(c, PrimaryResolution{CurrentPrimary: "cc-0", Status: metav1.ConditionTrue, Reason: singlePrimary},
+			map[string]int32{brokerModeRO: 2})
+		cond := meta.FindStatusCondition(c.Status.Conditions, conditionRoutingReady)
+		if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "NoBrokerAvailable" {
+			t.Fatalf("RoutingReady = %+v, want False/NoBrokerAvailable", cond)
 		}
 	})
 

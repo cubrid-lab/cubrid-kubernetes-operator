@@ -862,7 +862,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			logf.FromContext(ctx).V(1).Info("Retrying broker tier after a conflicting write", "error", err.Error())
 		} else if err != nil {
 			logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
-			setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, "BrokerReconcileFailed", err.Error())
+			setBrokerConditionsUnobserved(cluster, res, err)
 		}
 		// Rolling update (ADR-0009): only when the engine-version guard permits
 		// (no blocked upgrade / unverifiable version), roll outdated slaves one at

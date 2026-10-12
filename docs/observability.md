@@ -62,7 +62,7 @@ observation comes from; "Published as" says where a reader finds it.
 | Role known | The member reports one role that does not contradict itself | `/v1/role` | `status.instances[].role` |
 | Primary resolved | Every member was observed freshly and exactly one is master | all members' roles in one reconcile | `PrimaryResolved`, `status.currentPrimary` |
 | Replication healthy | Every observed slave applies the master's log | `replication` in a slave's `/v1/role` | `ReplicationHealthy`, `status.instances[].replication` |
-| Routing ready | Brokers of each access mode are available and the primary is resolved | Broker Deployments, `PrimaryResolved` | `BrokerReady`, `WriteEndpointReady`, `ReadEndpointReady`, `RoutingReady` |
+| Routing ready | The primary is resolved and a read-write Broker is available; each access mode has its own endpoint condition | Broker Deployments, `PrimaryResolved` | `BrokerReady`, `WriteEndpointReady`, `ReadEndpointReady`, `RoutingReady` |
 | Client ready | A client can run SQL through the Services | only a client can observe it | not published by the Operator; checked by the scenarios |
 
 "Client ready" is listed on purpose: nothing the Operator publishes proves it.
@@ -80,8 +80,8 @@ the fixed names below; free text belongs in `message`.
 | `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` or `RolesNotObserved` |
 | `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
 | `BrokerReady` | A Broker of each access mode is available | `BrokersNotAvailable`, `BrokerReconcileFailed` |
-| `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable` |
-| `RoutingReady` | Brokers are ready and the primary is resolved | the reason of `PrimaryResolved`, or of the Brokers; `Unknown` with `RolesNotObserved` |
+| `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
+| `RoutingReady` | The primary is resolved and a read-write Broker is available | the reason of `PrimaryResolved`, which comes first; `NoBrokerAvailable`; `Unknown` with `RolesNotObserved` or `BrokerReconcileFailed` |
 | `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped |
 | `Updating` | A member is being replaced for a new image | why nothing is being replaced |
 
@@ -91,7 +91,10 @@ and a Warning Event is recorded, once for a failure that stays the same
 however often the step is retried. A write rejected as a conflict, because the
 object changed after the Operator read it, is not such a failure: it is
 retried and changes no Condition and records no Event. The same holds for
-`BrokerReconcileFailed`.
+`BrokerReconcileFailed`. In a reconcile that could not reconcile the Brokers
+they were not observed, so what an earlier reconcile saw is not kept:
+`WriteEndpointReady` and `ReadEndpointReady` are `Unknown`, and so is
+`RoutingReady` unless the primary is unresolved, which is reported either way.
 
 A reconcile of an HA cluster that ends before the roles are observed, after
 such a failure or while a recovery bootstrap runs, does not keep what an
