@@ -161,6 +161,12 @@ fi
 log "starting Instance Manager (CUBRID_COMPONENTS=${CUBRID_COMPONENTS}, CUBRID_BOOTSTRAP=${CUBRID_BOOTSTRAP})"
 "${IM_BIN}" &
 im_pid=$!
+# A termination that was handled before the PID was recorded, or between the
+# check above and the start, found no manager to signal: the manager would run
+# on, and this script would wait for it until the Pod is killed.
+if [ "${terminating}" = "1" ]; then
+  kill -TERM "${im_pid}" 2>/dev/null || true
+fi
 
 set +e
 wait "${im_pid}"

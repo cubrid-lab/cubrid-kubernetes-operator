@@ -22,6 +22,7 @@ package image
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -761,4 +762,67 @@ func index(calls []string, want string) int {
 		}
 	}
 	return -1
+}
+
+// A termination handled around the start of the Instance Manager finds no
+// manager to signal: its PID is recorded in the command after the start. The
+// script must still end the manager and exit, instead of waiting for a
+// manager that nobody told to stop until the Pod's grace period ends (#377).
+// Each window is a few builtins wide, so the test runs a copy of the script
+// that holds it open: it records "window" and spins on builtins, during which
+// bash runs the trap, until the test releases it.
+func TestEntrypoint_TerminationAroundTheStartOfTheManager(t *testing.T) {
+	const startLine = "\"${IM_BIN}\" &\n"
+	for name, hold := range map[string]func(window string) string{
+		// The manager runs, and its PID is not recorded yet.
+		"after the start, before its PID is recorded": func(window string) string { return startLine + window },
+		// The last check for a termination has passed, and the manager is
+		// started next.
+		"after the last check, before the start": func(window string) string { return window + startLine },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, blockingManagerStub)
+			f.registerDatabase()
+			release := filepath.Join(f.root, "release")
+			script, err := os.ReadFile("entrypoint.sh")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(string(script), startLine) != 1 {
+				t.Fatalf("entrypoint.sh has no single line %q to hold the window at", startLine)
+			}
+			window := `echo window >> "${CALLS}"; while [ ! -e "` + release + `" ]; do :; done` + "\n"
+			path := filepath.Join(f.root, "entrypoint-held.sh")
+			held := strings.Replace(string(script), startLine, hold(window), 1)
+			if err := os.WriteFile(path, []byte(held), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := scriptCommand(t, path, f.tools, f.env)
+			var out bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &out
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, func() bool { return index(f.recorded(), "window") >= 0 }, &out)
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+			// The trap runs the shutdown command in the window; only then is
+			// the window released.
+			waitFor(t, func() bool {
+				calls := f.recorded()
+				return index(calls, callShutdown) > index(calls, "window")
+			}, &out)
+			if err := os.WriteFile(release, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// The manager may be ended before it could install its own
+			// handler, so the script's status may be that of a signal. What
+			// matters is that the script exits.
+			var exit *exec.ExitError
+			if err := waitExit(cmd); err != nil && !errors.As(err, &exit) {
+				t.Fatalf("entrypoint after a termination %s: %v\n%s", name, err, out.String())
+			}
+		})
+	}
 }
