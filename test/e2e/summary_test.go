@@ -156,7 +156,7 @@ var _ = ReportAfterEach(func(report SpecReport) {
 	// No step sets its own timeout: a timed-out step was stopped by the
 	// suite's deadline.
 	if report.State == types.SpecStateTimedout && timedOutStep == "" {
-		timedOutStep = report.LeafNodeText
+		timedOutStep = fmt.Sprintf("%q (in its %s node)", report.LeafNodeText, report.Failure.FailureNodeType)
 	}
 })
 
@@ -257,7 +257,7 @@ func concludeRun() error {
 	}
 	if timedOutStep != "" {
 		problems = append(problems, fmt.Sprintf(
-			"the suite's deadline passed during %q: the steps after it did not run", timedOutStep))
+			"the suite's deadline passed during %s: the steps after it did not run", timedOutStep))
 	}
 	return runSummary.Conclude(evidenceDir(), redactor, runLane(), problems...)
 }

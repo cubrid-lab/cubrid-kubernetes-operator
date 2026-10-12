@@ -308,7 +308,9 @@ spec:
 				{"logs", peers[0], "--tail=100"},
 				{"get", "events", "--sort-by=.lastTimestamp"},
 			} {
-				out, _ := kubectl(args...)
+				// Bounded, so that a hung API server leaves time for the
+				// cleanup after the suite's deadline.
+				out, _ := kubectl(append(args, "--request-timeout=10s")...)
 				_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
 			}
 			for _, pod := range append([]string{first}, peers...) {

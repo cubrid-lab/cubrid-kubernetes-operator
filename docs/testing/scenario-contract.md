@@ -452,14 +452,14 @@ the one inside it may still do:
 
 | Deadline | Default | What happens |
 |---|---|---|
-| Suite (`E2E_SUITE_TIMEOUT`) | 50 minutes | Ginkgo abandons the current step, which keeps running in the background, and skips the remaining steps. Each cleanup node that still runs, and then the suite's own cleanup that concludes `summary.json`, gets up to `E2E_GRACE_PERIOD` (1 minute). The HA group, whose `AfterAll` Ginkgo then skips, shows its diagnostics after the abandoned step instead |
+| Suite (`E2E_SUITE_TIMEOUT`) | 50 minutes | Ginkgo abandons the current step, which keeps running in the background, and skips the remaining steps. Each cleanup node that starts after the deadline, and then the suite's own cleanup that concludes `summary.json`, gets up to `E2E_GRACE_PERIOD` (1 minute); a node already running at the deadline gets none. The HA group, whose `AfterAll` Ginkgo then skips, shows its diagnostics after the abandoned step instead |
 | Test process (`E2E_GO_TIMEOUT`) | 58 minutes | Go kills the process with no cleanup at all. Only the provisional summary remains |
 | CI step | 70 minutes | Also covers creating the Kind cluster and building before the run. The evidence is still uploaded |
 | CI job | 80 minutes | Last resort. Nothing after it is guaranteed |
 
 A run the suite's deadline stopped does not pass: its summary names the
 abandoned step as a problem, and a result the abandoned step records after
-the deadline is not kept. A full run took about 33 minutes on a GitHub-hosted
+its step has been reported is not kept. A full run took about 33 minutes on a GitHub-hosted
 runner in October 2026. The defaults are starting values with headroom over
 that measurement, not measured budgets.
 
