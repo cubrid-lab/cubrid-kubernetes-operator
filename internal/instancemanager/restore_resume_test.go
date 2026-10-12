@@ -114,7 +114,7 @@ func (f *resumeFixture) post(key string) Operation {
 
 func (f *resumeFixture) run(key string) Operation {
 	f.t.Helper()
-	return pollUntilTerminal(f.t, f.handler, f.post(key).ID)
+	return pollUntilSettled(f.t, f.server, f.handler, f.post(key).ID)
 }
 
 func (f *resumeFixture) marker() string {

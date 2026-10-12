@@ -113,7 +113,7 @@ func runRestoreOperation(t *testing.T, cli CLI, member restoreMember) Operation 
 	if err := json.Unmarshal(rr.Body.Bytes(), &op); err != nil {
 		t.Fatal(err)
 	}
-	return pollUntilTerminal(t, h, op.ID)
+	return pollUntilSettled(t, srv, h, op.ID)
 }
 
 const (

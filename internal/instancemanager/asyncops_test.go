@@ -251,6 +251,17 @@ func pollUntilTerminal(t *testing.T, h http.Handler, id string) Operation {
 	return Operation{}
 }
 
+// pollUntilSettled is pollUntilTerminal for a test that goes on to read or
+// write what the operation leaves behind. A restore records Completed before
+// it clears its ownership marker (#316), so the terminal state alone does not
+// say that its goroutine is done: this also waits for the goroutine to end.
+func pollUntilSettled(t *testing.T, srv *Server, h http.Handler, id string) Operation {
+	t.Helper()
+	op := pollUntilTerminal(t, h, id)
+	srv.ops.Wait()
+	return op
+}
+
 // testStagingRoot is the backup staging root of the handler tests. The
 // manager creates request directories below it, so it has to be writable.
 var testStagingRoot = filepath.Join(os.TempDir(), "im-test-staging")
