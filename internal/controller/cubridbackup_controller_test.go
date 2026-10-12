@@ -83,6 +83,8 @@ type lostResponseBackupClient struct {
 	lose      int
 	instances []string
 	keys      []string
+	// polls counts the operations that were asked for.
+	polls int
 }
 
 func (f *lostResponseBackupClient) StartBackup(_ context.Context, podName, _, key string, _ instancemanager.BackupRequest) (instancemanager.Operation, error) {
@@ -95,6 +97,7 @@ func (f *lostResponseBackupClient) StartBackup(_ context.Context, podName, _, ke
 }
 
 func (f *lostResponseBackupClient) GetOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, error) {
+	f.polls++
 	return instancemanager.Operation{ID: opFake, State: instancemanager.OpRunningBackup}, nil
 }
 
@@ -268,21 +271,142 @@ var _ = Describe("CubridBackup Controller", func() {
 		Expect(ready.Reason).To(Equal("ObjectStorageNotConfigured"))
 	})
 
-	It("fails a backup whose referenced cluster does not exist", func() {
-		backup := newBackup("bk-nocluster", "missing-cluster")
-		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
-		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+	// A backup can be created a moment before its cluster, and the operator
+	// can read from a cache that does not hold the cluster yet. Not finding
+	// the cluster is therefore a reason to wait, for a bounded time, and a
+	// cluster that is gone or replaced after the backup was started on it is
+	// the end of that backup (#289).
+	Context("when the referenced cluster is not there", func() {
+		newHACluster := func(name string) *databasev1alpha1.CubridCluster {
+			cluster := haCluster(name)
+			cluster.Spec.Databases = []databasev1alpha1.CubridDatabase{{Name: demoDB}}
+			return cluster
+		}
+		stored := func(backup *databasev1alpha1.CubridBackup) *databasev1alpha1.CubridBackup {
+			got := &databasev1alpha1.CubridBackup{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(backup), got)).To(Succeed())
+			return got
+		}
+		reasonOf := func(backup *databasev1alpha1.CubridBackup, conditionType string) string {
+			cond := meta.FindStatusCondition(stored(backup).Status.Conditions, conditionType)
+			Expect(cond).NotTo(BeNil(), conditionType)
+			return cond.Reason
+		}
+		reconcile := func(r *CubridBackupReconciler, backup *databasev1alpha1.CubridBackup) {
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(backup)})
+			Expect(err).NotTo(HaveOccurred())
+		}
 
-		reconcileOnce("bk-nocluster")
+		It("waits for a cluster that does not exist yet, and goes on when it does", func() {
+			backup := newBackup("bk-early", "bk-early")
+			Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+			fake := &lostResponseBackupClient{}
+			r := &CubridBackupReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(),
+				Prober: &memberProber{master: "bk-early-0"}, Backup: fake,
+			}
 
-		updated := &databasev1alpha1.CubridBackup{}
-		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(backup), updated)).To(Succeed())
-		Expect(updated.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+			for range 2 {
+				reconcile(r, backup)
+				got := stored(backup)
+				Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending), "a backup that only waits is not failed")
+				Expect(got.Status.CompletedAt).To(BeNil())
+				Expect(reasonOf(backup, conditionAccepted)).To(Equal("ClusterNotFound"))
+			}
+			Expect(fake.instances).To(BeEmpty())
 
-		accepted := meta.FindStatusCondition(updated.Status.Conditions, conditionAccepted)
-		Expect(accepted).NotTo(BeNil())
-		Expect(accepted.Status).To(Equal(metav1.ConditionFalse))
-		Expect(accepted.Reason).To(Equal("ClusterNotFound"))
+			By("the cluster appearing")
+			cluster := newHACluster("bk-early")
+			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+			reconcile(r, backup)
+			got := stored(backup)
+			Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+			Expect(reasonOf(backup, conditionAccepted)).To(Equal("BackupAccepted"))
+			Expect(fake.instances).To(HaveLen(1))
+			Expect(got.Status.ClusterUID).To(Equal(cluster.UID), "the cluster the backup was started on is not recorded")
+		})
+
+		It("gives up on a cluster that does not appear, and says when", func() {
+			backup := newBackup("bk-never", "bk-never")
+			Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+			now := time.Now()
+			r := &CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Clock: func() time.Time { return now }}
+
+			now = now.Add(backupClusterWait - time.Minute)
+			reconcile(r, backup)
+			Expect(stored(backup).Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending))
+
+			now = now.Add(2 * time.Minute)
+			reconcile(r, backup)
+			got := stored(backup)
+			Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+			Expect(got.Status.CompletedAt).NotTo(BeNil(), "a backup that ended has no completion time")
+			Expect(reasonOf(backup, conditionAccepted)).To(Equal("ClusterNotFound"))
+		})
+
+		// started runs a backup on a new cluster until its operation is recorded.
+		started := func(name string) (*CubridBackupReconciler, *lostResponseBackupClient,
+			*databasev1alpha1.CubridCluster, *databasev1alpha1.CubridBackup) {
+			cluster := newHACluster(name)
+			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+			backup := newBackup(name, name)
+			Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+			fake := &lostResponseBackupClient{}
+			r := &CubridBackupReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(),
+				Prober: &memberProber{master: name + "-0"}, Backup: fake,
+			}
+			reconcile(r, backup)
+			Expect(stored(backup).Status.OperationRef).To(Equal(opFake))
+			return r, fake, cluster, backup
+		}
+
+		It("ends a started backup whose cluster was deleted", func() {
+			r, fake, cluster, backup := started("bk-gone")
+			calls := len(fake.instances) + fake.polls
+			Expect(k8sClient.Delete(ctx, cluster)).To(Succeed())
+
+			reconcile(r, backup)
+			got := stored(backup)
+			Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+			Expect(got.Status.CompletedAt).NotTo(BeNil())
+			Expect(reasonOf(backup, conditionBackupReady)).To(Equal("ClusterDeleted"))
+			Expect(len(fake.instances)+fake.polls).To(Equal(calls), "a member of a deleted cluster was called")
+		})
+
+		It("does not go on with a cluster of the same name that replaced the one it was started on", func() {
+			r, fake, cluster, backup := started("bk-replaced")
+			calls := len(fake.instances) + fake.polls
+			Expect(k8sClient.Delete(ctx, cluster)).To(Succeed())
+			replacement := newHACluster("bk-replaced")
+			Expect(k8sClient.Create(ctx, replacement)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, replacement) })
+			Expect(replacement.UID).NotTo(Equal(cluster.UID))
+
+			reconcile(r, backup)
+			got := stored(backup)
+			Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+			Expect(got.Status.CompletedAt).NotTo(BeNil())
+			Expect(reasonOf(backup, conditionBackupReady)).To(Equal("ClusterReplaced"))
+			Expect(len(fake.instances)+fake.polls).To(Equal(calls), "a member of the replacement was called for the old backup")
+		})
+
+		It("records when a backup was refused", func() {
+			backup := newBackup("bk-refused", "bk-refused")
+			backup.Spec.Destination.ObjectStorage = nil
+			backup.Spec.Destination.Type = databasev1alpha1.DestinationObjectStorage
+			Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+			reconcile(&CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}, backup)
+			got := stored(backup)
+			Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+			Expect(got.Status.CompletedAt).NotTo(BeNil(), "a backup that was refused has no completion time")
+		})
 	})
 
 	// #288: a dispatch whose response is lost may have started the backup, so

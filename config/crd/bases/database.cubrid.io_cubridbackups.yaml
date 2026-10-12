@@ -162,6 +162,12 @@ spec:
                       marker).
                     type: string
                 type: object
+              clusterUID:
+                description: |-
+                  clusterUID is the UID of the CubridCluster the backup was started on. A
+                  cluster of the same name with another UID is another cluster, and the
+                  backup does not go on with it.
+                type: string
               completedAt:
                 description: completedAt is when the backup reached a terminal phase.
                 format: date-time

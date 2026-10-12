@@ -106,6 +106,18 @@ resolved primary, and `unknown` the only member of a single-instance cluster.
 Otherwise the backup stays `Pending` with reason `RecordedTargetNotEligible`
 and no other member is started (#288).
 
+The cluster a backup names (#289). A backup whose cluster is not found is not
+failed at once: the cluster may be created a moment after the backup, or the
+operator may read from a cache that does not hold it yet. The backup stays
+`Pending` with reason `ClusterNotFound` for at most ten minutes from its
+creation, and starts when the cluster is there; after that it is refused
+with the same reason. With the target the operator records the cluster's UID
+in `status.clusterUID`, before anything is started. From then on a cluster
+that is gone ends the backup as `Failed` with reason `ClusterDeleted`, and a
+cluster of the same name with another UID ends it with `ClusterReplaced`: no
+member of the new cluster is asked about the old backup. Every backup that
+ends, also one that was refused, has `status.completedAt`.
+
 ### Artifact and upload model
 
 - `backupdb` writes to a **dedicated backup-staging directory**

@@ -59,7 +59,13 @@ type CubridBackupReconciler struct {
 	// reason rather than a false Running/Completed (used by envtest).
 	Prober RoleProber
 	Backup BackupClient
+	// Clock tells the time; nil means time.Now.
+	Clock func() time.Time
 }
+
+// backupClusterWait is how long a backup waits for a cluster that does not
+// exist, counted from the backup's creation.
+const backupClusterWait = 10 * time.Minute
 
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups/status,verbs=get;update;patch
@@ -84,10 +90,16 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	clusterKey := types.NamespacedName{Namespace: backup.Namespace, Name: backup.Spec.ClusterRef.Name}
 	if err := r.Get(ctx, clusterKey, &cluster); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.rejected(ctx, &backup, "ClusterNotFound",
-				"referenced CubridCluster "+backup.Spec.ClusterRef.Name+" not found")
+			return r.clusterMissing(ctx, &backup)
 		}
 		return ctrl.Result{}, err
+	}
+	// The backup was started on one cluster. A cluster of the same name that
+	// was created since is another one: its members hold another database
+	// and know nothing of this backup's operation.
+	if backup.Status.ClusterUID != "" && backup.Status.ClusterUID != cluster.UID {
+		return r.ended(ctx, &backup, "ClusterReplaced", "CubridCluster "+cluster.Name+
+			" was deleted and created again after this backup was started; the backup is not continued on the new cluster")
 	}
 
 	setBackupCondition(&backup, conditionAccepted, metav1.ConditionTrue, "BackupAccepted",
@@ -170,6 +182,8 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		backup.Status.TargetInstance = sel.Instance
 		backup.Status.TargetRole = string(sel.Role)
 		backup.Status.FallbackUsed = sel.FallbackUsed
+		// Recorded with the target, before anything is started on it.
+		backup.Status.ClusterUID = cluster.UID
 		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, "starting the backup on "+sel.Instance)
 		backup.Status.ObservedGeneration = backup.Generation
 		if err := r.Status().Update(ctx, backup); err != nil {
@@ -314,11 +328,55 @@ func validateBackupSpec(backup *databasev1alpha1.CubridBackup) (reason, msg stri
 	return "", "", true
 }
 
+// rejected ends a backup that is not accepted. It is Failed, with the time
+// it ended.
 func (r *CubridBackupReconciler) rejected(ctx context.Context, backup *databasev1alpha1.CubridBackup, reason, msg string) (ctrl.Result, error) {
-	backup.Status.Phase = databasev1alpha1.BackupPhaseFailed
 	setBackupCondition(backup, conditionAccepted, metav1.ConditionFalse, reason, msg)
+	return r.ended(ctx, backup, reason, msg)
+}
+
+// ended makes a backup Failed for good, with the reason and the time.
+func (r *CubridBackupReconciler) ended(ctx context.Context, backup *databasev1alpha1.CubridBackup, reason, msg string) (ctrl.Result, error) {
+	now := metav1.NewTime(r.now())
+	backup.Status.Phase = databasev1alpha1.BackupPhaseFailed
+	backup.Status.CompletedAt = &now
 	setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reason, msg)
 	return r.commit(ctx, backup, ctrl.Result{})
+}
+
+// clusterMissing decides what a backup does whose cluster is not found.
+//
+// A backup that was started on a cluster ends: the members that ran it are
+// gone with the cluster. A backup that was not started waits. The cluster may
+// be created a moment after the backup, or the operator may read from a cache
+// that does not hold it yet, so not finding it is no failure; the wait is
+// bounded by backupClusterWait from the backup's creation, after which the
+// backup is refused.
+func (r *CubridBackupReconciler) clusterMissing(ctx context.Context, backup *databasev1alpha1.CubridBackup) (ctrl.Result, error) {
+	name := backup.Spec.ClusterRef.Name
+	if backup.Status.ClusterUID != "" {
+		return r.ended(ctx, backup, "ClusterDeleted",
+			"CubridCluster "+name+" was deleted after this backup was started on it")
+	}
+	if waited := r.now().Sub(backup.CreationTimestamp.Time); waited > backupClusterWait {
+		return r.rejected(ctx, backup, "ClusterNotFound",
+			fmt.Sprintf("referenced CubridCluster %s was not found within %s of the backup's creation", name, backupClusterWait))
+	}
+	if backup.Status.Phase == "" {
+		backup.Status.Phase = databasev1alpha1.BackupPhasePending
+	}
+	msg := fmt.Sprintf("referenced CubridCluster %s is not found; waiting for it for at most %s from the backup's creation",
+		name, backupClusterWait)
+	setBackupCondition(backup, conditionAccepted, metav1.ConditionFalse, "ClusterNotFound", msg)
+	setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "ClusterNotFound", msg)
+	return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+}
+
+func (r *CubridBackupReconciler) now() time.Time {
+	if r.Clock != nil {
+		return r.Clock()
+	}
+	return time.Now()
 }
 
 func setBackupCondition(backup *databasev1alpha1.CubridBackup, condType string, status metav1.ConditionStatus, reason, msg string) {

@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -205,6 +206,12 @@ type CubridBackupStatus struct {
 	// fallbackUsed is true when a standby-preferred backup fell back to master.
 	// +optional
 	FallbackUsed bool `json:"fallbackUsed,omitempty"`
+
+	// clusterUID is the UID of the CubridCluster the backup was started on. A
+	// cluster of the same name with another UID is another cluster, and the
+	// backup does not go on with it.
+	// +optional
+	ClusterUID types.UID `json:"clusterUID,omitempty"`
 
 	// startedAt is when the backup started.
 	// +optional
