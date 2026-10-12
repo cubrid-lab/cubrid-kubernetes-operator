@@ -81,13 +81,13 @@ func (r *CubridClusterReconciler) bootstrapStepFailed(cluster *databasev1alpha1.
 		status.BootstrapAttempts++
 		msg = fmt.Sprintf("%s; starting attempt %d of %d", msg, status.BootstrapAttempts+1, maxBootstrapAttempts)
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason+"Retrying", msg)
-		r.event(cluster, corev1.EventTypeWarning, reason+"Retrying", msg)
+		r.statusEvent(cluster, corev1.EventTypeWarning, reason+"Retrying", msg)
 		return
 	}
 	status.Phase = databasePhaseFailed
 	msg = fmt.Sprintf("%s; giving up after %d attempts", msg, maxBootstrapAttempts)
 	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
-	r.event(cluster, corev1.EventTypeWarning, reason, msg)
+	r.statusEvent(cluster, corev1.EventTypeWarning, reason, msg)
 }
 
 // databaseStatus returns the status entry of database, adding it when absent.
@@ -139,7 +139,7 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 	case instancemanager.OpCompleted:
 		status.Phase = databasePhaseCreated
 		status.PrimaryCreated = true
-		r.event(cluster, corev1.EventTypeNormal, "DatabaseCreated", "database "+database+" created on "+member)
+		r.statusEvent(cluster, corev1.EventTypeNormal, "DatabaseCreated", "database "+database+" created on "+member)
 		r.reconcileSeeding(ctx, cluster, status, member)
 	case instancemanager.OpFailed:
 		r.bootstrapStepFailed(cluster, status, "DatabaseCreationFailed", "on "+member+": "+op.FailureReason)
@@ -266,7 +266,7 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 	status.HAConfigured = true
 	setCondition(cluster, conditionBootstrapReady, metav1.ConditionTrue, "PeersSeeded",
 		origin+" and copied to the other members")
-	r.event(cluster, corev1.EventTypeNormal, "PeersSeeded", "database "+database+" copied to the other members")
+	r.statusEvent(cluster, corev1.EventTypeNormal, "PeersSeeded", "database "+database+" copied to the other members")
 }
 
 // seedMember takes the copy of the database to peer one step further and
@@ -312,7 +312,7 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 				sourceRecorded = false
 			}
 			if !sourceRecorded && observed != holder {
-				r.event(cluster, corev1.EventTypeNormal, "SeedSourceChanged",
+				r.statusEvent(cluster, corev1.EventTypeNormal, "SeedSourceChanged",
 					"database "+database+" will be copied to "+peer+" from "+observed+", the master; "+holder+" is no longer the master")
 			}
 		}

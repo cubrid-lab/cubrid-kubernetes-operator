@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -82,6 +83,9 @@ const (
 	// new value is one rotation; the value handled last is recorded on the
 	// Secret under the same name.
 	rotateIMTokenAnnotation = "database.cubrid.io/rotate-im-token"
+	// imTokenRotationDeferredAnnotation on the Secret is the requested
+	// rotation that was last reported as waiting, so that it is reported once.
+	imTokenRotationDeferredAnnotation = "database.cubrid.io/im-token-rotation-deferred"
 
 	// Condition types (ADR-0005/0006).
 	conditionReady       = "Ready"
@@ -124,6 +128,74 @@ type CubridClusterReconciler struct {
 	// NetworkPolicy of the DB Pods admits to the Instance Manager port. Empty
 	// admits none.
 	OperatorNS string
+
+	// reports holds, per cluster, the report of the reconcile that is running
+	// for it (reconcileReport).
+	reports sync.Map
+}
+
+// reconcileReport is what one reconcile of one cluster has to tell about a
+// change of the cluster's state. A change of state is a change of the status,
+// so its Events are kept here and recorded only when that status was written:
+// an Event for a status that was not written would be recorded again by the
+// reconcile that writes it (docs/observability.md).
+type reconcileReport struct {
+	// statusWritten says that the last write of the status succeeded.
+	statusWritten bool
+	events        []pendingEvent
+}
+
+type pendingEvent struct{ eventType, reason, message string }
+
+// beginReport starts the report of a reconcile of cluster. One reconcile runs
+// per cluster at a time.
+func (r *CubridClusterReconciler) beginReport(cluster *databasev1alpha1.CubridCluster) *reconcileReport {
+	report := &reconcileReport{}
+	r.reports.Store(client.ObjectKeyFromObject(cluster), report)
+	return report
+}
+
+// endReport records what the reconcile found, when the status that carries
+// it was written: the Events that were kept, then the transitions between the
+// status before and now. Otherwise nothing is recorded or logged as a
+// transition; the next reconcile starts from the status that is stored and
+// finds the same change.
+func (r *CubridClusterReconciler) endReport(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	before *databasev1alpha1.CubridClusterStatus, report *reconcileReport) {
+	r.reports.Delete(client.ObjectKeyFromObject(cluster))
+	if !report.statusWritten {
+		if pending := len(report.events) + len(transitions(before, &cluster.Status)); pending > 0 {
+			logf.FromContext(ctx).V(1).Info("Left changes of state unreported because the status was not written",
+				"namespace", cluster.Namespace, "cluster", cluster.Name, "changes", pending)
+		}
+		return
+	}
+	for _, e := range report.events {
+		r.event(cluster, e.eventType, e.reason, e.message)
+	}
+	r.reportTransitions(ctx, cluster, before)
+}
+
+// statusEvent is event for a change that the status carries: it is recorded
+// when the reconcile ends, if the status was written. Outside a reconcile it
+// is recorded at once.
+func (r *CubridClusterReconciler) statusEvent(cluster *databasev1alpha1.CubridCluster, eventType, reason, msg string) {
+	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
+		report := report.(*reconcileReport)
+		report.events = append(report.events, pendingEvent{eventType, reason, msg})
+		return
+	}
+	r.event(cluster, eventType, reason, msg)
+}
+
+// writeStatus writes the cluster's status and notes for the reconcile's
+// report whether it was written.
+func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster) error {
+	err := r.Status().Update(ctx, cluster)
+	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
+		report.(*reconcileReport).statusWritten = err == nil
+	}
+	return err
 }
 
 func (r *CubridClusterReconciler) now() time.Time {
@@ -160,10 +232,11 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// via owner references.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	// What changed in the status during this reconcile is logged once, when
-	// it ends, whichever way it ends (docs/observability.md).
+	// What changed in the status during this reconcile is reported once, when
+	// it ends, if the status was written (docs/observability.md).
 	before := cluster.Status.DeepCopy()
-	defer func() { r.reportTransitions(ctx, &cluster, before) }()
+	report := r.beginReport(&cluster)
+	defer func() { r.endReport(ctx, &cluster, before, report) }()
 
 	// Reconcile the governing headless Service (ADR-0004: stable per-pod DNS).
 	if err := r.reconcileHeadlessService(ctx, &cluster); err != nil {
@@ -340,7 +413,17 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 				secret.Name))
 		return nil
 	case !generated:
-		if len(secret.Data[imPreviousTokenKey]) > 0 && request != "" && request != secret.Annotations[rotateIMTokenAnnotation] {
+		if len(secret.Data[imPreviousTokenKey]) > 0 && request != "" && request != secret.Annotations[rotateIMTokenAnnotation] &&
+			request != secret.Annotations[imTokenRotationDeferredAnnotation] {
+			// The request stays deferred over many reconciles; it is noted on
+			// the Secret first, so that it is reported once.
+			if secret.Annotations == nil {
+				secret.Annotations = map[string]string{}
+			}
+			secret.Annotations[imTokenRotationDeferredAnnotation] = request
+			if err := r.Update(ctx, secret); err != nil {
+				return err
+			}
 			r.event(cluster, corev1.EventTypeNormal, "InstanceManagerTokenRotationDeferred",
 				fmt.Sprintf("the requested Instance Manager token rotation waits until every member holds the current token of Secret %s",
 					secret.Name))
@@ -736,7 +819,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, msg+"; cluster not ready")
 			setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, msg)
 			r.markRolesNotObserved(cluster, reason)
-			if err := r.Status().Update(ctx, cluster); err != nil {
+			if err := r.writeStatus(ctx, cluster); err != nil {
 				if apierrors.IsConflict(err) {
 					return ctrl.Result{RequeueAfter: time.Second}, nil
 				}
@@ -794,7 +877,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		updating.LastTransitionTime = updatingBefore.LastTransitionTime
 	}
 
-	if err := r.Status().Update(ctx, cluster); err != nil {
+	if err := r.writeStatus(ctx, cluster); err != nil {
 		if apierrors.IsConflict(err) {
 			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
@@ -827,7 +910,7 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 			fmt.Sprintf("%d/%d instances ready", ready, desired))
 		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled", "cluster reconciled")
 		if !wasReady {
-			r.event(cluster, corev1.EventTypeNormal, "ClusterReady",
+			r.statusEvent(cluster, corev1.EventTypeNormal, "ClusterReady",
 				fmt.Sprintf("all %d instances ready", desired))
 		}
 	default:
@@ -852,12 +935,17 @@ func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev
 		logf.FromContext(ctx).V(1).Info("Retrying after a conflicting write", "reason", reason, "error", cause.Error())
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
+	// A failure that stays the same is retried many times and reported once.
+	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionReady)
+	same := was != nil && was.Status == metav1.ConditionFalse && was.Reason == reason && was.Message == cause.Error()
 	setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, cause.Error())
 	setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, cause.Error())
 	r.markRolesNotObserved(cluster, reason)
-	r.event(cluster, corev1.EventTypeWarning, reason, cause.Error())
+	if !same {
+		r.statusEvent(cluster, corev1.EventTypeWarning, reason, cause.Error())
+	}
 	// Best-effort status update; return the original cause for requeue.
-	_ = r.Status().Update(ctx, cluster)
+	_ = r.writeStatus(ctx, cluster)
 	return ctrl.Result{}, cause
 }
 

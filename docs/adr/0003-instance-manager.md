@@ -368,8 +368,10 @@ token or cannot be asked keeps the overlap open. When it ends the operator
 records a Normal Event `InstanceManagerTokenOverlapEnded`; from then on the
 previous token is neither sent nor accepted by any member. No second
 rotation starts while `previousToken` is kept, since it would drop the token
-running Pods hold; a request made during an overlap is reported with a
-Normal Event `InstanceManagerTokenRotationDeferred` and carried out after it.
+running Pods hold; a request made during an overlap is reported once with a
+Normal Event `InstanceManagerTokenRotationDeferred` (the reported request is
+noted on the Secret as `database.cubrid.io/im-token-rotation-deferred`) and
+carried out after it.
 A rotation starts:
 
 - when `<cluster>-im-token` has a token but no rotation time. An operator

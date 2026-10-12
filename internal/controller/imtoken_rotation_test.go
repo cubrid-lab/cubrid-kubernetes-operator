@@ -183,6 +183,9 @@ var _ = Describe("Instance Manager token rotation (#324)", func() {
 		secret = tokenSecretOf(cluster.Name)
 		Expect(string(secret.Data["token"])).To(Equal(second))
 		Expect(string(secret.Data["previousToken"])).To(Equal(first))
+		Expect(receivedEvent(reconcileAt(rotation.Add(2*time.Minute+30*time.Second), cluster.Name), "InstanceManagerTokenRotationDeferred")).
+			To(BeFalse(), "the same deferred request was reported again (#371)")
+		Expect(string(tokenSecretOf(cluster.Name).Data["token"])).To(Equal(second))
 
 		memberStartedAt(cluster, 0, rotation.Add(time.Minute))
 		reconcileAt(rotation.Add(3*time.Minute), cluster.Name) // ends the overlap

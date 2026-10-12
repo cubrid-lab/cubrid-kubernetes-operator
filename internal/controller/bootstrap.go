@@ -133,7 +133,7 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 			boot.OperationID = ""
 			msg := fmt.Sprintf("on %s: %s; starting attempt %d of %d", target, op.FailureReason, boot.Attempts+1, maxBootstrapAttempts)
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreFailedRetrying", msg)
-			r.event(cluster, corev1.EventTypeWarning, "RestoreFailedRetrying", msg)
+			r.statusEvent(cluster, corev1.EventTypeWarning, "RestoreFailedRetrying", msg)
 			return ctrl.Result{RequeueAfter: restorePollAfter}, true
 		}
 		r.recoveryFailed(cluster, "RestoreFailed",
@@ -172,7 +172,7 @@ func (r *CubridClusterReconciler) reconcileRecoverySeeding(ctx context.Context, 
 	if !status.PrimaryCreated {
 		status.Phase = databasePhaseCreated
 		status.PrimaryCreated = true
-		r.event(cluster, corev1.EventTypeNormal, "DatabaseRestored", "database "+database+" restored on "+boot.TargetMember+
+		r.statusEvent(cluster, corev1.EventTypeNormal, "DatabaseRestored", "database "+database+" restored on "+boot.TargetMember+
 			"; copying it to the other members")
 	}
 	if status.Phase != databasePhaseFailed {

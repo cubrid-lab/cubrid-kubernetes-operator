@@ -41,7 +41,13 @@ failed, and it was hard to say what had happened inside.
 5. **One name per change.** A Condition reason, an Event and a log line about
    the same change use the names of this document.
 6. **Nothing is said twice.** A reconcile that changes nothing produces no
-   Event and no transition log line.
+   Event and no transition log line. A change of state is a change of the
+   status, so its Event and its transition log line are produced only by the
+   reconcile that wrote that status: when the write is rejected, nothing is
+   reported, and the next reconcile finds the same change and reports it. An
+   Event about something the Operator did to another object, such as
+   replacing a member's Pod or writing a new token into the Secret, is
+   recorded when that was done.
 
 ## Health model
 
@@ -81,7 +87,8 @@ the fixed names below; free text belongs in `message`.
 
 When the Operator cannot write one of the cluster's objects, `Ready` turns
 `False` with the reason of that step, such as `StatefulSetReconcileFailed`,
-and a Warning Event is recorded. A write rejected as a conflict, because the
+and a Warning Event is recorded, once for a failure that stays the same
+however often the step is retried. A write rejected as a conflict, because the
 object changed after the Operator read it, is not such a failure: it is
 retried and changes no Condition and records no Event. The same holds for
 `BrokerReconcileFailed`.
