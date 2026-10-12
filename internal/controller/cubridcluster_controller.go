@@ -279,6 +279,27 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return r.updateStatus(ctx, &cluster, sts)
 }
 
+// reportDeferredRotation records that a requested token rotation waits for
+// the overlap to end. The request stays deferred over many reconciles, so it
+// is noted on the Secret first and reported once.
+func (r *CubridClusterReconciler) reportDeferredRotation(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	secret *corev1.Secret, request string) error {
+	if request == secret.Annotations[imTokenRotationDeferredAnnotation] {
+		return nil
+	}
+	if secret.Annotations == nil {
+		secret.Annotations = map[string]string{}
+	}
+	secret.Annotations[imTokenRotationDeferredAnnotation] = request
+	if err := r.Update(ctx, secret); err != nil {
+		return err
+	}
+	r.event(cluster, corev1.EventTypeNormal, "InstanceManagerTokenRotationDeferred",
+		fmt.Sprintf("the requested Instance Manager token rotation waits until every member holds the current token of Secret %s",
+			secret.Name))
+	return nil
+}
+
 // instancesServiceName is the governing headless Service (<cluster>-instances).
 func instancesServiceName(name string) string { return name + "-instances" }
 
@@ -413,20 +434,8 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 				secret.Name))
 		return nil
 	case !generated:
-		if len(secret.Data[imPreviousTokenKey]) > 0 && request != "" && request != secret.Annotations[rotateIMTokenAnnotation] &&
-			request != secret.Annotations[imTokenRotationDeferredAnnotation] {
-			// The request stays deferred over many reconciles; it is noted on
-			// the Secret first, so that it is reported once.
-			if secret.Annotations == nil {
-				secret.Annotations = map[string]string{}
-			}
-			secret.Annotations[imTokenRotationDeferredAnnotation] = request
-			if err := r.Update(ctx, secret); err != nil {
-				return err
-			}
-			r.event(cluster, corev1.EventTypeNormal, "InstanceManagerTokenRotationDeferred",
-				fmt.Sprintf("the requested Instance Manager token rotation waits until every member holds the current token of Secret %s",
-					secret.Name))
+		if len(secret.Data[imPreviousTokenKey]) > 0 && request != "" && request != secret.Annotations[rotateIMTokenAnnotation] {
+			return r.reportDeferredRotation(ctx, cluster, secret, request)
 		}
 		return nil
 	}
