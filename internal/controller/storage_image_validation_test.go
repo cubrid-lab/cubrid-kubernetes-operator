@@ -91,6 +91,11 @@ var _ = Describe("Storage and image settings that cannot be applied (#305)", fun
 			c.Spec.Storage.Data.StorageClassName = nil
 		})).To(MatchError(ContainSubstring("storageClassName")))
 
+		By("taking another spelling of the same size as no change")
+		Expect(change(key, func(c *databasev1alpha1.CubridCluster) {
+			c.Spec.Storage.Data.Size = resource.MustParse("1024Mi")
+		})).To(Succeed())
+
 		By("leaving the rest of the cluster changeable")
 		Expect(change(key, func(c *databasev1alpha1.CubridCluster) {
 			c.Labels = map[string]string{"team": "storage"}
