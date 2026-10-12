@@ -1272,6 +1272,76 @@ is relied on, not the message text. One run on one image; another engine
 version may report the refusal differently, and the oracle would then fail
 rather than pass.
 
+## POC-23 — seeding the last member of a new HA group after the first seeded peer became master (ADR-0006/0010, #281) — **PASS + critical finding**
+
+**Environment:** a GitHub-hosted `ubuntu-latest` runner (linux/amd64, native,
+Docker 28.0.4), `cubrid/cubrid:11.4`
+(`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
+engine 11.4.6.1963), three containers `h-0`, `h-1`, `h-2` on one network,
+user `cubrid`, the image's own paths. `data_buffer_size=64M`, `ha_mode=on`,
+`ha_node_list=cubrid@h-0:h-1:h-2`, `ha_db_list=appdb`. The commands are the
+ones the Instance Manager runs (POC-13, POC-14). One run on 2026-10-12; the
+same script gave the same results the same day on linux/amd64 emulated under
+podman. A member is "replaced by an empty member" by removing its container
+and creating it again from the image.
+
+**Question.** The HA bootstrap copies the first database to the other members
+one at a time, always from the member the database was created on, with one
+backup taken before the first copy (`restoreslave -m <that member>`). What
+happens when the first seeded peer has become the master before the last
+member is seeded?
+
+**Steps and observations.**
+
+| Step | Observed |
+|---|---|
+| 1. `h-0` creates `appdb` and starts heartbeat | `h-0` is `master`, its server `registered_and_to_be_active` |
+| 2. Backup `bk0` on `h-0`; `h-1` is seeded with `restoreslave -u -s master -m h-0 -B bk0` and starts heartbeat | `h-1` is `slave` / `registered_and_standby`. `h-0` stays `registered_and_to_be_active`, and a write on it fails with `Attempted to update the database when updates are disabled` (`h-2` has never joined; POC-14, second finding) |
+| 3. The container of `h-0` is killed | `h-1` reports `master` after about 10 seconds. Its server stays `registered_and_to_be_active` for the 120 seconds that were waited, and a write on it fails with the same error |
+| 4. Case A: `h-2` is seeded as the Operator does it today, from `bk0` with `-m h-0`, while `h-0` is down and `h-1` is master | Exit 0. Catalog row: copied log path `.../appdb_h-0`. `h-2` is `slave`; the server of `h-1` becomes `registered_and_active` at once. The applier's only line: `from 'unregistered' to 'working'`. Rows 1 to 4, written on `h-1` afterwards, are all on `h-2`; `applyinfo` for the log of `h-1`: 4 inserts, 0 failures |
+| 5. Case B: `h-2` is replaced by an empty member. Backup `bk1` on the master `h-1`, then rows 5 and 6, then `restoreslave -m h-1 -B bk1` | Catalog row: copied log path `.../appdb_h-1`. Applier: `'unregistered' to 'recovering'`, then `'recovering' to 'working'`. `h-2` holds rows 1 to 6, and row 7 written afterwards |
+| 6. `h-0` is started again | `h-0` is `slave`, `h-1` stays `master`. All three hold rows 1 to 7 |
+| 7. Case A2: `h-2` is replaced by an empty member again and seeded from the old backup `bk0` with `-m h-0`, while `h-1` is master and `h-0` a slave. Row 8 was written before, row 9 after | Exit 0. `h-2` is `slave` / `registered_and_standby`. Catalog row: copied log path `.../appdb_h-0`, page 145. Applier lines: `'unregistered' to 'recovering'` at LSA `145\|12400`, then `'recovering' to 'done'` five times, and `'unregistered' to 'working'` at LSA `149\|4936` (the script did not record which of the two appliers wrote which line). **Table `t` does not exist on `h-2`** (`Unknown class "dba.t"`), also after row 9. `applyinfo` for the log of `h-1`: 0 inserts, **1 failure**. `h-0` and `h-1` hold rows 1 to 9 |
+
+**Findings.**
+
+1. **A backup taken on a member that is no longer the master, with that
+   member named as the master, gives a member that silently lacks data**
+   (case A2). The catalog that `restoreslave` writes is about the log of the
+   member named with `-m`. What the real master committed between the backup
+   and the join is missing on the new member: here the table itself, so that
+   later rows cannot be applied either. This fits an applier that starts on
+   the real master's log where the master is when the member joins, as after
+   `restoredb` in POC-14; the applier lines above do not prove it. The member
+   is a `slave` with a standby server. Only the applier's failure count shows
+   that something is wrong.
+2. **A backup taken on the current master, with that master named, is
+   right** also when the master is not the member the database was created on
+   (case B): the rows committed between the backup and the join arrive.
+3. **In a group whose members have not all joined once, no member accepts a
+   write, whichever is master** (steps 2 and 3). That is why case A lost
+   nothing: between `bk0` and the join of `h-2` no write could be committed,
+   on `h-0` or on `h-1`. The data of a new cluster's bootstrap is therefore
+   not at risk from a change of master during the bootstrap, as far as this
+   run shows. It is one run, and it is not a guarantee of the engine.
+4. A member takes over as `master` while the last member has never joined
+   (step 3), so the member the database was created on does not stay the
+   master during the bootstrap.
+
+**Consequence for the Operator** (#281). The seeding source has to be the
+member that is master when a member is seeded, with a backup taken on that
+member, once a peer has joined; the member the database was created on is the
+source only while it is alone. Case A shows that today's sequence loses
+nothing in the first bootstrap, but it rests on finding 3. A member that is
+seeded again later (a rebuild, #117) from an old backup or with a former
+master's name is the case that loses data.
+
+**Not tested here:** a change of master while `restoreslave` runs; a backup
+taken on a slave (`-s slave`); more than three members; a master that is
+written to while the backup of case B is taken; a group that was written to
+before the last member's first join (finding 3 says it cannot be, in this
+run).
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
