@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -52,6 +53,36 @@ const metricsRoleBindingName = "cubrid-kubernetes-operator-metrics-binding"
 // failed step blocks the steps after it, which then report their scenarios as
 // blocked; the HA group instead restores its starting state before each step
 // (haBootstrapScenario).
+// printOperatorLogs prints the log of every controller manager Pod that
+// exists now, and of its container before the last restart when there was
+// one. The HA steps replace the Operator's Pod on purpose (S06), so the Pod is
+// looked up when a step has failed and not remembered from the start of the
+// suite (#353).
+func printOperatorLogs() {
+	pods, err := operatorPods(context.Background())
+	if err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Failed to list the controller manager Pods: %s\n", err)
+		return
+	}
+	if len(pods) == 0 {
+		_, _ = fmt.Fprintf(GinkgoWriter, "No controller manager Pod exists in %s\n", namespace)
+		return
+	}
+	for _, pod := range pods {
+		name := strings.Fields(pod)[0]
+		logs, err := utils.Run(exec.Command("kubectl", "logs", name, "-n", namespace))
+		if err != nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Controller logs of %s: %s\n", name, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs of %s:\n %s\n", name, logs)
+		// An error here means that the container was not restarted.
+		if previous, err := utils.Run(exec.Command("kubectl", "logs", name, "-n", namespace, "--previous")); err == nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs of %s before its container restarted:\n %s\n", name, previous)
+		}
+	}
+}
+
 var _ = Describe("Manager", func() {
 	var controllerPodName string
 
@@ -61,16 +92,10 @@ var _ = Describe("Manager", func() {
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
 			By("Fetching controller manager pod logs")
-			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-			controllerLogs, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Controller logs: %s", err)
-			}
+			printOperatorLogs()
 
 			By("Fetching Kubernetes events")
-			cmd = exec.Command("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
+			cmd := exec.Command("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
 			eventsOutput, err := utils.Run(cmd)
 			if err == nil {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
@@ -88,7 +113,7 @@ var _ = Describe("Manager", func() {
 			}
 
 			By("Fetching controller manager pod description")
-			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", namespace)
+			cmd = exec.Command("kubectl", "describe", "pods", "-l", operatorSelector, "-n", namespace)
 			podDescription, err := utils.Run(cmd)
 			if err == nil {
 				fmt.Println("Pod description:\n", podDescription)
