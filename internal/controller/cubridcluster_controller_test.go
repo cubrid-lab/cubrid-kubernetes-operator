@@ -129,8 +129,18 @@ func haCluster(name string) *databasev1alpha1.CubridCluster {
 			Storage: databasev1alpha1.CubridStorage{
 				Data: databasev1alpha1.CubridStorageSpec{Size: resource.MustParse("1Gi")},
 			},
+			// An HA cluster is admitted only with the object storage its
+			// members are seeded through (#285).
+			ObjectStorage: haObjectStorage(),
 		},
 	}
+}
+
+// haObjectStorage is the object storage of the HA clusters of the tests.
+func haObjectStorage() *databasev1alpha1.CubridObjectStorage {
+	storage := testObjectStorage()
+	storage.Bucket = "ha-seed"
+	return storage
 }
 
 var _ = Describe("CubridCluster Controller", func() {
@@ -665,7 +675,8 @@ var _ = Describe("CubridCluster Controller", func() {
 
 			By("another change to the same cluster is still accepted")
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "topology-ha", Namespace: ns}, got)).To(Succeed())
-			got.Spec.ObjectStorage = testObjectStorage()
+			got.Spec.ObjectStorage = haObjectStorage()
+			got.Spec.ObjectStorage.Endpoint = "other-minio.storage.svc:9000"
 			Expect(k8sClient.Update(ctx, got)).To(Succeed())
 		})
 
@@ -698,7 +709,7 @@ var _ = Describe("CubridCluster Controller", func() {
 					ManifestURI: "s3://bucket/prefix/manifest.json",
 				},
 			}
-			c.Spec.ObjectStorage = testObjectStorage()
+			c.Spec.ObjectStorage = haObjectStorage()
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 
@@ -730,7 +741,7 @@ var _ = Describe("CubridCluster Controller", func() {
 				c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 					Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
 				}
-				c.Spec.ObjectStorage = testObjectStorage()
+				c.Spec.ObjectStorage = haObjectStorage()
 				Expect(k8sClient.Create(ctx, c)).To(Succeed())
 				DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 				return types.NamespacedName{Name: name, Namespace: ns}
@@ -793,6 +804,7 @@ var _ = Describe("CubridCluster Controller", func() {
 
 		It("rejects a recovery bootstrap without objectStorage (#99)", func() {
 			c := haCluster("recovery-no-storage")
+			c.Spec.ObjectStorage = nil
 			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
 			}
@@ -806,7 +818,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
 			}
-			c.Spec.ObjectStorage = testObjectStorage()
+			c.Spec.ObjectStorage = haObjectStorage()
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 
@@ -851,7 +863,7 @@ var _ = Describe("CubridCluster Controller", func() {
 			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
 			}
-			c.Spec.ObjectStorage = testObjectStorage()
+			c.Spec.ObjectStorage = haObjectStorage()
 			Expect(k8sClient.Create(ctx, c)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 
@@ -1011,7 +1023,7 @@ var _ = Describe("HA status of a reconcile that ends before the roles are observ
 		c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 			Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
 		}
-		c.Spec.ObjectStorage = testObjectStorage()
+		c.Spec.ObjectStorage = haObjectStorage()
 		Expect(k8sClient.Create(ctx, c)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 		key := types.NamespacedName{Name: c.Name, Namespace: c.Namespace}

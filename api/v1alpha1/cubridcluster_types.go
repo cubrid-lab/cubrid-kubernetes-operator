@@ -176,8 +176,8 @@ type CubridObjectStorage struct {
 
 	// bucket holds the artifacts the operator creates for itself: the backup
 	// the other members of an HA cluster are seeded from. A CubridBackup
-	// names its own bucket. Required for an HA cluster to finish its
-	// bootstrap.
+	// names its own bucket. Required for an HA cluster: this is what the
+	// current way of seeding the members needs (ADR-0010).
 	// +optional
 	Bucket string `json:"bucket,omitempty"`
 
@@ -189,6 +189,7 @@ type CubridObjectStorage struct {
 	// keys accessKey and secretKey. The operator does not read it; the DB Pods
 	// receive the two keys as environment variables.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="has(self.name) && self.name.size() > 0",message="credentialsSecretRef.name is required"
 	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
 }
 
@@ -229,6 +230,7 @@ type CubridBootstrap struct {
 // +kubebuilder:validation:XValidation:rule="self.highAvailability.enabled ? self.topology.promotableMembers == 3 : true",message="when highAvailability.enabled is true, v1alpha1 requires exactly 3 promotable members"
 // +kubebuilder:validation:XValidation:rule="self.highAvailability.fencingPolicy != 'Automatic'",message="fencingPolicy Automatic is not supported in v1alpha1"
 // +kubebuilder:validation:XValidation:rule="!has(self.bootstrap) || !has(self.bootstrap.recovery) || has(self.objectStorage)",message="bootstrap.recovery requires objectStorage: the DB Pods read the backup from it"
+// +kubebuilder:validation:XValidation:rule="!self.highAvailability.enabled || (has(self.objectStorage) && has(self.objectStorage.bucket) && self.objectStorage.bucket.size() > 0)",message="an HA cluster needs objectStorage with a bucket: its first database is copied to the other members through it"
 // +kubebuilder:validation:XValidation:rule="self.topology.promotableMembers == oldSelf.topology.promotableMembers",message="topology.promotableMembers cannot be changed after the cluster is created: v1alpha1 has no procedure to add or remove members"
 // +kubebuilder:validation:XValidation:rule="self.highAvailability.enabled == oldSelf.highAvailability.enabled",message="highAvailability.enabled cannot be changed after the cluster is created: v1alpha1 has no procedure to switch between a standalone and an HA cluster"
 // +kubebuilder:validation:XValidation:rule="!has(self.dbaPasswordSecretRef)",message="dbaPasswordSecretRef is not implemented in v1alpha1: the database is created with an empty DBA password, so the field is rejected instead of being ignored"

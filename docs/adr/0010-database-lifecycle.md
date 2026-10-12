@@ -116,9 +116,11 @@ was committed in between (POC-14). A seeded member's Instance Manager registers 
 database under the member list and issues `cubrid heartbeat start` once, so
 the member joins as a slave. Each step is an idempotent operation with a
 fixed key; `status.databases[].haConfigured` and `BootstrapReady=True`
-(`PeersSeeded`) are set when every member is seeded. Without object storage
-and a bucket the bootstrap stops after the first database with
-`SeedStorageNotConfigured`. A recovery bootstrap seeds the other members the
+(`PeersSeeded`) are set when every member is seeded. The API refuses an HA
+cluster without `spec.objectStorage`, a bucket and a named credentials Secret
+(#285), because this way of seeding needs them; it is a rule of the current
+transport, not of HA (#256). A cluster that an earlier version admitted
+without them stops after the first database with `SeedStorageNotConfigured`. A recovery bootstrap seeds the other members the
 same way, starting from the member its backup was restored on (ADR-0008,
 #268).
 

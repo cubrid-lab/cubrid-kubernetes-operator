@@ -300,14 +300,19 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			return string(cond.Status), cond.Reason
 		}
 
+		// The API refuses an HA cluster without a bucket (#285). A cluster
+		// that an earlier version admitted can still be without one; it is
+		// not stored here, because the API server would refuse it too.
 		It("needs the cluster's object storage with a bucket", func() {
 			seed := &fakeSeedClient{}
-			key := create(haCluster("seed-nostore"))
-			got := reconcileOnce(reconcilerFor(seed), key)
-			_, reason := bootstrapCondition(got)
+			admittedEarlier := haCluster("seed-nostore")
+			admittedEarlier.Spec.ObjectStorage = nil
+			status := databaseStatus(admittedEarlier, "appdb")
+			reconcilerFor(seed).reconcileSeeding(ctx, admittedEarlier, status, "seed-nostore-0")
+			_, reason := bootstrapCondition(admittedEarlier)
 			Expect(reason).To(Equal("SeedStorageNotConfigured"))
 			Expect(seed.backupOn).To(BeEmpty())
-			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
+			Expect(status.HAConfigured).To(BeFalse())
 		})
 
 		It("backs up the first member, then restores the peers one at a time", func() {
@@ -577,7 +582,7 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 		c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 			Recovery: &databasev1alpha1.RecoverySource{ManifestURI: "s3://bucket/p/manifest.json"},
 		}
-		c.Spec.ObjectStorage = testObjectStorage()
+		c.Spec.ObjectStorage = haObjectStorage()
 		key := create(c)
 		reconcileOnce(reconcilerWith(boot), key)
 		Expect(boot.members).To(BeEmpty())

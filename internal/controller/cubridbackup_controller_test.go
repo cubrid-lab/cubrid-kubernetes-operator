@@ -292,7 +292,7 @@ var _ = Describe("CubridBackup Controller", func() {
 		newHACluster := func(name string) *databasev1alpha1.CubridCluster {
 			cluster := haCluster(name)
 			cluster.Spec.Databases = []databasev1alpha1.CubridDatabase{{Name: demoDB}}
-			cluster.Spec.ObjectStorage = testObjectStorage()
+			cluster.Spec.ObjectStorage = haObjectStorage()
 			return cluster
 		}
 

@@ -129,7 +129,8 @@ var _ = Describe("Image changes on an existing cluster (ADR-0009, #197)", func()
 		c := &databasev1alpha1.CubridCluster{}
 		Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
 		c.Spec.Image = &databasev1alpha1.CubridImage{Repository: repository, Tag: "2"}
-		c.Spec.ObjectStorage = testObjectStorage()
+		c.Spec.ObjectStorage = haObjectStorage()
+		c.Spec.ObjectStorage.Endpoint = "other-minio.storage.svc:9000"
 		Expect(k8sClient.Update(ctx, c)).To(Succeed())
 		reconcileAgain(r, key)
 

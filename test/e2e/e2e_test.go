@@ -309,6 +309,14 @@ var _ = Describe("Manager", func() {
 				"pod-security.kubernetes.io/enforce=restricted"))
 			Expect(err).NotTo(HaveOccurred())
 
+			// An HA cluster is admitted only with the object storage its members
+			// are seeded through (#285). The fake never reaches the store; the
+			// Secret has to exist because the Pods take their environment from it.
+			By("creating the Secret the cluster's object storage names")
+			_, err = utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "create", "secret", "generic", "object-storage",
+				"--from-literal=accessKey=fake", "--from-literal=secretKey=fake"))
+			Expect(err).NotTo(HaveOccurred())
+
 			By("creating a three-member HA CubridCluster that runs the fake image")
 			repository, tag, found := strings.Cut(fakeIMImage, ":")
 			Expect(found).To(BeTrue(), "fakeIMImage needs a tag")
@@ -329,6 +337,11 @@ spec:
     readReplicas: 0
   highAvailability:
     enabled: true
+  objectStorage:
+    endpoint: object-store.invalid:9000
+    bucket: seed
+    credentialsSecretRef:
+      name: object-storage
   storage:
     data:
       size: 100Mi

@@ -321,8 +321,8 @@ spec:
                     description: |-
                       bucket holds the artifacts the operator creates for itself: the backup
                       the other members of an HA cluster are seeded from. A CubridBackup
-                      names its own bucket. Required for an HA cluster to finish its
-                      bootstrap.
+                      names its own bucket. Required for an HA cluster: this is what the
+                      current way of seeding the members needs (ADR-0010).
                     type: string
                   credentialsSecretRef:
                     description: |-
@@ -341,6 +341,9 @@ spec:
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
+                    x-kubernetes-validations:
+                    - message: credentialsSecretRef.name is required
+                      rule: has(self.name) && self.name.size() > 0
                   endpoint:
                     description: endpoint is the service address as host[:port], without
                       a scheme.
@@ -511,6 +514,11 @@ spec:
             - message: 'bootstrap.recovery requires objectStorage: the DB Pods read
                 the backup from it'
               rule: '!has(self.bootstrap) || !has(self.bootstrap.recovery) || has(self.objectStorage)'
+            - message: 'an HA cluster needs objectStorage with a bucket: its first
+                database is copied to the other members through it'
+              rule: '!self.highAvailability.enabled || (has(self.objectStorage) &&
+                has(self.objectStorage.bucket) && self.objectStorage.bucket.size()
+                > 0)'
             - message: 'topology.promotableMembers cannot be changed after the cluster
                 is created: v1alpha1 has no procedure to add or remove members'
               rule: self.topology.promotableMembers == oldSelf.topology.promotableMembers

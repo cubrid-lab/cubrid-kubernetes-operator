@@ -100,6 +100,14 @@ spec:
     promotableMembers: 3   # nodes in ha_node_list (ha_mode=on); master is runtime-decided
     readReplicas: 0        # ha_replica_list (ha_mode=replica); must be 0 in v1alpha1
 
+  # An HA cluster needs object storage with a bucket: its first database is
+  # copied to the other members through it.
+  objectStorage:
+    endpoint: s3.example.com
+    bucket: cubrid-production
+    credentialsSecretRef:
+      name: object-storage
+
   storage:
     data:
       size: 100Gi
