@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,50 @@ const (
 	defaultKindCluster   = "kind"
 )
 
+// redact, when set, removes credentials from text before it is logged.
+var redact func(string) string
+
+// SetRedaction makes the commands Run logs, the errors it returns and
+// everything written to GinkgoWriter pass through f first. The output Run
+// returns is left as it is, since callers read values from it. Call it once,
+// before the specs run.
+func SetRedaction(f func(string) string) {
+	redact = f
+	GinkgoWriter = redactingWriter{inner: GinkgoWriter, redact: f}
+}
+
+// redacted returns text passed through the redaction, if one is set.
+func redacted(text string) string {
+	if redact == nil {
+		return text
+	}
+	return redact(text)
+}
+
+// redactingWriter redacts each write before it reaches GinkgoWriter. A
+// credential split across two writes is not recognized.
+type redactingWriter struct {
+	inner  GinkgoWriterInterface
+	redact func(string) string
+}
+
+func (w redactingWriter) Write(p []byte) (int, error) {
+	if _, err := w.inner.Write([]byte(w.redact(string(p)))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func (w redactingWriter) Print(a ...any) { _, _ = fmt.Fprint(w, a...) }
+
+func (w redactingWriter) Printf(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+
+func (w redactingWriter) Println(a ...any) { _, _ = fmt.Fprintln(w, a...) }
+
+func (w redactingWriter) TeeTo(writer io.Writer) { w.inner.TeeTo(writer) }
+
+func (w redactingWriter) ClearTeeWriters() { w.inner.ClearTeeWriters() }
+
 func warnError(err error) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "warning: %v\n", err)
 }
@@ -52,11 +97,11 @@ func Run(cmd *exec.Cmd) (string, error) {
 	}
 
 	cmd.Env = append(os.Environ(), "GO111MODULE=on")
-	command := strings.Join(cmd.Args, " ")
+	command := redacted(strings.Join(cmd.Args, " "))
 	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(output), fmt.Errorf("%q failed with error %q: %w", command, string(output), err)
+		return string(output), fmt.Errorf("%q failed with error %q: %w", command, redacted(string(output)), err)
 	}
 
 	return string(output), nil

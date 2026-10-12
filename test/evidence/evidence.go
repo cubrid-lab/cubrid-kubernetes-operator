@@ -20,10 +20,12 @@ limitations under the License.
 package evidence
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -333,11 +335,17 @@ const minSecretLength = 4
 
 var (
 	bearerPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`)
-	// A credential written as name=value or name: value, quoted or not.
-	fieldPattern = regexp.MustCompile(
-		`(?i)((?:password|passwd|token|secret|secret[_-]?access[_-]?key|access[_-]?key(?:[_-]?id)?)"?\s*[=:]\s*"?)[^\s"',}]+`)
+	basicPattern  = regexp.MustCompile(`(?i)(authorization:\s*basic\s+)[A-Za-z0-9+/=]+`)
+	// A private key in PEM form, also with its line breaks escaped in JSON.
+	pemPattern = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`)
+	// A credential written as name=value or name: value, quoted or not, also
+	// inside escaped JSON. The value ends where a URL query parameter ends.
+	fieldPattern = regexp.MustCompile(`(?i)((?:password|passwd|token|secret[_-]?access[_-]?key|secret[_-]?key|secret|` +
+		`access[_-]?key(?:[_-]?id)?|api[_-]?key|private[_-]?key)(?:\\?["'])?\s*[=:]\s*(?:\\?["'])?)[^\s"'\\,;&}]+`)
 	accessKeyPattern = regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)
 	urlUserPattern   = regexp.MustCompile(`(://[^/\s:@]+:)[^@\s/]+@`)
+	// A CUBRID JDBC URL: jdbc:cubrid:host:port:database:user:password:.
+	jdbcPattern = regexp.MustCompile(`(?i)(jdbc:cubrid:[^:\s]*:[^:\s]*:[^:\s]*:[^:\s]*:)[^:\s]+`)
 )
 
 // Redactor removes credentials from text: the values it was given, and text
@@ -356,13 +364,31 @@ func NewRedactor(secrets ...string) *Redactor {
 }
 
 // Add registers further secret values, such as one generated during the run.
-// Values shorter than four characters are ignored.
+// Values shorter than four characters are ignored. Each value is also
+// removed in the encodings it is commonly shown in: base64, as a Secret's
+// data holds it, URL encoding and JSON escaping. Base64 is matched only as
+// the encoding of the value alone, not inside the encoding of a longer text.
 func (r *Redactor) Add(secrets ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range secrets {
-		if len(s) >= minSecretLength {
-			r.secrets = append(r.secrets, s)
+		if len(s) < minSecretLength {
+			continue
+		}
+		quoted, _ := json.Marshal(s)
+		for _, v := range []string{
+			s,
+			base64.StdEncoding.EncodeToString([]byte(s)),
+			base64.RawStdEncoding.EncodeToString([]byte(s)),
+			base64.URLEncoding.EncodeToString([]byte(s)),
+			base64.RawURLEncoding.EncodeToString([]byte(s)),
+			url.QueryEscape(s),
+			url.PathEscape(s),
+			strings.Trim(string(quoted), `"`),
+		} {
+			if !slices.Contains(r.secrets, v) {
+				r.secrets = append(r.secrets, v)
+			}
 		}
 	}
 	// Longest first, so that a value containing another is removed whole.
@@ -379,7 +405,10 @@ func (r *Redactor) Redact(data []byte) []byte {
 		}
 		r.mu.Unlock()
 	}
+	text = pemPattern.ReplaceAllString(text, redacted)
 	text = bearerPattern.ReplaceAllString(text, "${1}"+redacted)
+	text = basicPattern.ReplaceAllString(text, "${1}"+redacted)
+	text = jdbcPattern.ReplaceAllString(text, "${1}"+redacted)
 	text = fieldPattern.ReplaceAllString(text, "${1}"+redacted)
 	text = accessKeyPattern.ReplaceAllString(text, redacted)
 	text = urlUserPattern.ReplaceAllString(text, "${1}"+redacted+"@")

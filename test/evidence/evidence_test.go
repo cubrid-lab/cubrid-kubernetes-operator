@@ -376,6 +376,7 @@ func TestWriteJUnit(t *testing.T) {
 }
 
 func TestRedact(t *testing.T) {
+	const hunter2 = "hunter2"
 	r := NewRedactor("s3cr3t-token-value", "", "ab")
 	tests := map[string]struct{ in, gone, kept string }{
 		"a value that was registered": {
@@ -385,13 +386,40 @@ func TestRedact(t *testing.T) {
 		"an environment variable": {
 			in: "IM_TOKEN=tok123 OTHER=1", gone: "tok123", kept: "OTHER=1"},
 		"a JSON field": {
-			in: `{"password": "hunter2", "name": "cc"}`, gone: "hunter2", kept: `"name": "cc"`},
+			in: `{"password": "hunter2", "name": "cc"}`, gone: hunter2, kept: `"name": "cc"`},
 		"a YAML field": {
 			in: "secretAccessKey: wJalrXUtnFEMI\nbucket: backups", gone: "wJalrXUtnFEMI", kept: "bucket: backups"},
 		"an access key id anywhere": {
 			in: "used AKIAIOSFODNN7EXAMPLE for upload", gone: "AKIAIOSFODNN7EXAMPLE", kept: "for upload"},
 		"a URL with credentials": {
 			in: "s3 endpoint http://user:pw12345@s3mock:9090/bucket", gone: "pw12345", kept: "@s3mock:9090/bucket"},
+		"an escaped JSON field": {
+			in: `{\"password\":\"hunter2\",\"name\":\"cc\"}`, gone: hunter2, kept: `\"name\":\"cc\"`},
+		"a single-quoted field": {
+			in: "password='hunter2' user='dba'", gone: hunter2, kept: "user='dba'"},
+		"a secretKey field": {
+			in: `{"secretKey": "wJalrXUtnFEMI", "bucket": "b"}`, gone: "wJalrXUtnFEMI", kept: `"bucket": "b"`},
+		"an apiKey field": {
+			in: "apiKey=k3y-value-1 next", gone: "k3y-value-1", kept: "next"},
+		"an api_key field": {
+			in: "api_key: k3y-value-2\nnext: 1", gone: "k3y-value-2", kept: "next: 1"},
+		"a private key in PEM form": {
+			in:   "private_key: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----\nnext: 1",
+			gone: "MIIEvQIBADANBg", kept: "next: 1"},
+		"an escaped PEM private key in JSON": {
+			in: `{"private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBg` +
+				`\n-----END RSA PRIVATE KEY-----\n", "id": "x"}`,
+			gone: "MIIEvQIBADANBg", kept: `"id": "x"`},
+		"a basic authorization header": {
+			in:   "Authorization: Basic dXNlcjpwYXNzd29yZA==\nnext",
+			gone: "dXNlcjpwYXNzd29yZA", kept: "Authorization: Basic [REDACTED]\nnext"},
+		"a CUBRID JDBC URL with a password": {
+			in:   "jdbc:cubrid:cubrid-rw:33000:demodb:dba:s3cretpw:?charset=utf-8",
+			gone: "s3cretpw", kept: "jdbc:cubrid:cubrid-rw:33000:demodb:dba:[REDACTED]:?charset=utf-8"},
+		"a password in a URL query": {
+			in: "http://h:8080/x?password=abc123&db=demodb", gone: "abc123", kept: "&db=demodb"},
+		"a token in a URL query ended by a semicolon": {
+			in: "url?token=abc123;next=1", gone: "abc123", kept: ";next=1"},
 	}
 	for name, tc := range tests {
 		got := string(r.Redact([]byte(tc.in)))
@@ -404,7 +432,10 @@ func TestRedact(t *testing.T) {
 	}
 	// A reference to a Secret is a name, not a secret, and a short registered
 	// value must not blank ordinary text.
-	plain := "credentialsSecretRef:\n  name: backup-credentials\nabout a table\n"
+	plain := "credentialsSecretRef:\n  name: backup-credentials\nabout a table\n" +
+		"valueFrom:\n  secretKeyRef:\n    name: c-im-token\n    key: token\n" +
+		`"tokenFound": 0, "secretRef": "s"` + "\na basic check passed\n" +
+		"jdbc:cubrid:cubrid-rw:33000:demodb:dba::?charset=utf-8\n"
 	if got := string(r.Redact([]byte(plain))); got != plain {
 		t.Errorf("redaction changed text without credentials:\n%s", got)
 	}
@@ -412,6 +443,32 @@ func TestRedact(t *testing.T) {
 
 // A value learned during the run, a cluster's generated token for example, is
 // removed from everything written after it was added.
+// A registered value is also removed where it appears encoded: in base64,
+// as a Secret's data shows it, in URL encoding and escaped in JSON.
+func TestRedactEncoded(t *testing.T) {
+	const secret = `p@ss w0rd/+"x\`
+	r := NewRedactor(secret)
+	for name, encoded := range map[string]string{
+		"base64":              "cEBzcyB3MHJkLysieFw=",
+		"base64 without pads": "cEBzcyB3MHJkLysieFw",
+		"query encoding":      "p%40ss+w0rd%2F%2B%22x%5C",
+		"path encoding":       "p@ss%20w0rd%2F+%22x%5C",
+		"JSON":                `p@ss w0rd/+\"x\\`,
+	} {
+		in := "value " + encoded + " end"
+		got := string(r.Redact([]byte(in)))
+		if strings.Contains(got, encoded) || !strings.Contains(got, " end") {
+			t.Errorf("%s: %q redacted to %q", name, in, got)
+		}
+	}
+	// The base64 for URLs differs from standard base64 for this one.
+	urlSafe := NewRedactor("??>>")
+	if got := string(urlSafe.Redact([]byte("v Pz8-Pg== Pz8+Pg== end"))); strings.Contains(got, "Pz8-Pg") ||
+		strings.Contains(got, "Pz8+Pg") {
+		t.Errorf("base64 variants of ??>> remain in %q", got)
+	}
+}
+
 func TestRedactAdded(t *testing.T) {
 	r := NewRedactor()
 	r.Add("generated-cluster-token", "ab")

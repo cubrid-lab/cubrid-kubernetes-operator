@@ -483,10 +483,33 @@ computed from this file and `history.jsonl`, so a reader can recompute it.
 
 ### Secrets
 
-No evidence file may contain a password, a token or an object-storage
-credential. The redaction rules and their test belong to issue
-[#103](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/103),
-"test(evidence): emit versioned results and redact sensitive output".
+No evidence file and no line the suite prints may contain a password, a
+token or an object-storage credential. The same redaction (`Redactor` in
+`test/evidence`) applies to every evidence file, to everything written to
+`GinkgoWriter`, and to the command line and error of every command the
+suite runs through `utils.Run`. The output such a command returns to the
+test is not redacted, so a step can still read a value from it; a step must
+not print a credential it reads, except through that redaction.
+
+The redaction removes:
+
+- every value the run registers, such as the cluster's Instance Manager
+  token, also in base64 (as a Secret's `data` holds it), URL encoding and
+  JSON escaping;
+- a value named `password`, `passwd`, `token`, `secret`, `secretKey`,
+  `secretAccessKey`, `accessKey`, `accessKeyId`, `apiKey` or `privateKey`
+  (with `_` or `-` also accepted between the words), written as `name=value`
+  or `name: value`, quoted, unquoted or in escaped JSON, and ending at a URL
+  query boundary;
+- `Authorization: Bearer` and `Authorization: Basic` credentials, PEM private
+  keys, AWS access key IDs, the password of a URL's user part and the
+  password field of a CUBRID JDBC URL
+  (`jdbc:cubrid:host:port:database:user:password:`).
+
+A registered value is matched in base64 only as the encoding of the value
+alone, and a credential split across two writes to `GinkgoWriter` is not
+recognized. Output Ginkgo itself prints, such as a failed assertion's
+message, is not redacted: a step's assertion does not print a credential.
 
 ## Scenarios
 

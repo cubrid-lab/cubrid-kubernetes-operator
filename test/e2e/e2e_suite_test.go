@@ -57,6 +57,9 @@ var (
 // To skip CertManager installation, set: CERT_MANAGER_INSTALL_SKIP=true
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
+	// What the suite prints and what a failed command reports pass through
+	// the same redaction as the evidence files.
+	utils.SetRedaction(func(text string) string { return string(redactor.Redact([]byte(text))) })
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting cubrid-kubernetes-operator e2e test suite\n")
 	RunSpecs(t, suiteDescription)
 }
