@@ -110,6 +110,17 @@ func TestProbeRole_AnswerMustNameTheMemberThatWasAsked(t *testing.T) {
 			t.Errorf("%s became the primary on another member's answer", c0)
 		}
 	})
+	t.Run("another member answers as a master whose server is not active yet", func(t *testing.T) {
+		answer := master(c1)
+		answer.ServerActive = false
+		got := probe(answer)
+		if !got.Conflicting || got.MasterNotYetActive {
+			t.Errorf("the answer of %s was taken as the role of %s: %+v", c1, c0, got)
+		}
+		if source, _ := seedSourceAmong([]string{c0}, map[string]RoleObservation{c0: got}, testNow); source != "" {
+			t.Errorf("%s became the seeding source on another member's answer", source)
+		}
+	})
 	t.Run("the asked member answers", func(t *testing.T) {
 		got := probe(master(c0))
 		if got.Conflicting || got.Role != databasev1alpha1.RoleMaster {

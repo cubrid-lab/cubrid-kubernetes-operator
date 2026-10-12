@@ -46,6 +46,13 @@ type RoleObservation struct {
 	// (role vs HA status, ADR-0005 ConflictingLocalHAStatus) or names a member
 	// other than the one that was asked; the role is then not trusted.
 	Conflicting bool
+	// MasterNotYetActive is set when the answer contradicts itself in one way
+	// only: the member reports itself master while its server is not
+	// registered_and_active. That is the state of the master of a group
+	// whose members have not all joined once (docs/poc/RESULTS.md, POC-13 and
+	// POC-23). Conflicting is set as well, so the role stays untrusted for
+	// everything but the HA bootstrap's choice of a seeding source.
+	MasterNotYetActive bool
 	// EngineVersion is the engine's full version as the Instance Manager
 	// reports it ("11.4.6.1963"); empty when it did not report one.
 	EngineVersion string
@@ -110,6 +117,7 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	// wrong DNS record or Service for example, and is not this member's role.
 	if st.Current != "" && st.Current != podName {
 		o.Conflicting = true
+		o.MasterNotYetActive = false
 	}
 	return o
 }
@@ -166,16 +174,17 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 			DelayedPages:   int64(r.DelayedPageCount),
 		}
 	}
-	if st.Role == instancemanager.RoleMaster && !st.ServerActive {
-		o.Conflicting = true
-	}
+	notYetActive := st.Role == instancemanager.RoleMaster && !st.ServerActive
+	contradictsNodeList := false
 	for _, n := range st.Nodes {
 		if n.Name == st.Current && n.State != string(st.Role) {
-			o.Conflicting = true
+			contradictsNodeList = true
 		}
 		if n.Name != st.Current && st.Role == instancemanager.RoleMaster && n.State == string(instancemanager.RoleMaster) {
-			o.Conflicting = true
+			contradictsNodeList = true
 		}
 	}
+	o.Conflicting = notYetActive || contradictsNodeList
+	o.MasterNotYetActive = notYetActive && !contradictsNodeList
 	return o
 }

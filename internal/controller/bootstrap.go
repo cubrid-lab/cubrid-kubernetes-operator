@@ -159,10 +159,12 @@ func restoredOnTarget(cluster *databasev1alpha1.CubridCluster, database string) 
 
 // reconcileRecoverySeeding copies the restored database from the member it was
 // restored on to the other members, with the same seeding as the HA bootstrap
-// of a created database (ADR-0008/0010). The source is the member the backup
-// was restored on because it is the only member that holds the data, not
-// because it stays the master: CUBRID decides that (ADR-0005). The recovery is
-// complete when every member is seeded, and Failed when seeding gave up.
+// of a created database (ADR-0008/0010). The first peer is copied from the
+// member the backup was restored on because it is the only member that holds
+// the data, not because it stays the master: CUBRID decides that (ADR-0005),
+// and every later member is copied from the member observed as the master.
+// The recovery is complete when every member is seeded, and Failed when
+// seeding gave up.
 func (r *CubridClusterReconciler) reconcileRecoverySeeding(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	database string) (ctrl.Result, bool) {
 	boot := cluster.Status.Bootstrap

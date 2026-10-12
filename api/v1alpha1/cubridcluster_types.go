@@ -364,10 +364,34 @@ type DatabaseStatus struct {
 	// +listType=set
 	// +optional
 	SeededMembers []string `json:"seededMembers,omitempty"`
+	// seeding is the copy to one member that the HA bootstrap is making after
+	// the first peer has joined. Its source is recorded before the restore on
+	// that member is started, so that a restore in progress keeps its source
+	// when the master changes meanwhile.
+	// +optional
+	Seeding *DatabaseSeeding `json:"seeding,omitempty"`
 	// bootstrapAttempts counts the bootstrap steps that failed and were
 	// started again. The bootstrap stops as Failed when it reaches the limit.
 	// +optional
 	BootstrapAttempts int32 `json:"bootstrapAttempts,omitempty"`
+}
+
+// DatabaseSeeding is one copy of the database to a member during the HA
+// bootstrap.
+type DatabaseSeeding struct {
+	// member is the member the database is copied to.
+	Member string `json:"member"`
+	// source is the member it is copied from: the member that was last
+	// observed as the master among the members that hold the database.
+	Source string `json:"source"`
+	// round counts how often the source changed before the restore was
+	// started. Every round has a backup of its own.
+	// +optional
+	Round int32 `json:"round,omitempty"`
+	// restoreOperationID is the restore on the member, once it was started.
+	// From then on the source is kept.
+	// +optional
+	RestoreOperationID string `json:"restoreOperationID,omitempty"`
 }
 
 // CubridClusterStatus defines the observed state of CubridCluster.

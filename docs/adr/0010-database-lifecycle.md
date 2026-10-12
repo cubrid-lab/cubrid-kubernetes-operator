@@ -105,23 +105,57 @@ is never removed automatically. `status.databases[]` records `Creating`,
 is master but accepts no write until a peer has joined (POC-13), so
 `primaryCreated` says that the database exists, not that it is writable.
 
-Seeding as implemented (#106): once the database exists, the operator has the
-member that holds it back it up to the cluster's object storage
-(`spec.objectStorage`, with `bucket`; key prefix
-`<prefix>/<cluster UID>/seed/<db>`), then restores that backup on each other
-member, one at a time, with `cubrid restoreslave -u -s master -m <source
-member>` (#220): unlike `restoredb`, it writes the replication catalog from
-the backup, so the member applies the source's log from the backup's position
-and does not miss what was committed in between (POC-14). A seeded member's Instance Manager registers the
+Seeding as implemented (#106): once the database exists, the operator copies
+it to the other members one at a time. For each member it has the source back
+the database up to the cluster's object storage (`spec.objectStorage`, with
+`bucket`), then restores that backup on the member with
+`cubrid restoreslave -u -s master -m <source member>` (#220): unlike
+`restoredb`, it writes the replication catalog from the backup, so the member
+applies the source's log from the backup's position and does not miss what
+was committed in between (POC-14). A seeded member's Instance Manager registers the
 database under the member list and issues `cubrid heartbeat start` once, so
 the member joins as a slave. Each step is an idempotent operation with a
 fixed key; `status.databases[].haConfigured` and `BootstrapReady=True`
 (`PeersSeeded`) are set when every member is seeded. Without object storage
 and a bucket the bootstrap stops after the first database with
-`SeedStorageNotConfigured`. The source is the member the database was created
-on, not a resolved master, because no primary resolves before a peer has
-joined. A recovery bootstrap seeds the other members the same way from the
-member its backup was restored on (ADR-0008, #268).
+`SeedStorageNotConfigured`. A recovery bootstrap seeds the other members the
+same way, starting from the member its backup was restored on (ADR-0008,
+#268).
+
+The source of a copy (#281). The first peer is copied from the member that
+holds the database (key prefix `<prefix>/<cluster UID>/seed/<db>`), not from
+a resolved master: no primary resolves before a peer has joined. Once a peer
+has joined, CUBRID may make any member that holds the database the master,
+also before the last member is seeded, and a member that is copied from a
+former master, or from a backup taken on one, lacks what the master committed
+since and does not show it (POC-23). For every later member the operator
+therefore asks the members that hold the database for their roles and copies
+from the one that reports itself master while all others report themselves
+slaves, with a backup taken on it for this member (key prefix
+`<prefix>/<cluster UID>/seed-<member>-from-<source>/<db>`, with `-r<round>`
+after a change of source). The master's server is not active before every
+member has joined once (POC-23); that master counts here, although its role
+is not relied on for anything else. A holder that does not answer, no master,
+two masters or a contradictory answer mean waiting (`BootstrapReady=False`,
+`SeedSourceNotResolved`); nothing is started and no attempt is used up, also
+while a member that holds the database is down.
+
+The roles are asked for at every reconcile until the restore on the member is
+started. A master that changes before that is followed, and every change of
+source takes a backup of its own, also when a member is master again after
+another one was: its earlier backup is not used again. The source is recorded
+in `status.databases[].seeding`, and the restore is started only by a
+reconcile that found the source it observes already recorded, so the roles
+are checked in the same reconcile that starts the restore. Once the restore's
+operation is recorded, the copy keeps its source and its backup whatever the
+roles become, and the source is not asked again.
+
+What this does not cover: a master that changes while `restoreslave` runs,
+which is not detected and has not been tried on the engine; and a copy that
+failed after it had restored the data, when the master has changed since: the
+next attempt copies from the new master, the Instance Manager refuses to
+restore over data that another request restored (ADR-0008), and the bootstrap
+ends `Failed` and waits for a person.
 
 Resuming (#107): the key of every step carries the attempt number, so a
 reconcile after an operator restart addresses the operation that is already

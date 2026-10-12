@@ -173,6 +173,7 @@ underscores.
 | A member's role changes | none | | `member_role_changed` |
 | Any other Condition changes its status or reason | none | | `condition_changed` |
 | The bootstrap reaches its next phase | `DatabaseCreated`, `DatabaseRestored` (a recovery restore completed and seeding starts), `PeersSeeded` | Normal | `bootstrap_phase_changed` |
+| A member is copied from another member than the one the database was created or restored on, because that member is no longer the master | `SeedSourceChanged` | Normal | `condition_changed` (`BootstrapReady`, reason `SeedSourceSelected`) |
 | A member is replaced for a new image | `RollingUpdate` | Normal | `rolling_update` |
 | A backup starts, completes, fails | `BackupStarted`, `BackupCompleted`, `BackupFailed` | Normal, Normal, Warning | `backup_started`, `backup_completed`, `backup_failed` |
 | A restore starts, completes, fails | `RestoreStarted`, `RestoreCompleted`, `RestoreFailed` | Normal, Normal, Warning | `restore_started`, `restore_completed`, `restore_failed` |

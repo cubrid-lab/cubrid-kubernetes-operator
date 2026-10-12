@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"path"
 	"slices"
+	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -148,30 +150,95 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 	}
 }
 
-// seedLocation is where the seed backup of database lives in object storage.
-func seedLocation(cluster *databasev1alpha1.CubridCluster, database string) (bucket, prefix string) {
+// seedSourceAmong names the member a new member is copied from, among the
+// members that hold the database: the one that reports itself master while
+// every other holder reports itself a slave. Every holder has to answer, and
+// freshly; with no master, with two, or with a holder whose answer is missing
+// or not understood there is no source, and why says what was seen. A master
+// whose server is not active yet counts: no master's server is active before
+// every member has joined once (docs/poc/RESULTS.md, POC-23).
+func seedSourceAmong(holders []string, obs map[string]RoleObservation, now time.Time) (source, why string) {
+	var masters []string
+	for _, m := range holders {
+		o, ok := obs[m]
+		switch {
+		case !ok || !fresh(o, now):
+			return "", m + " did not answer"
+		case o.Role == databasev1alpha1.RoleMaster && (!o.Conflicting || o.MasterNotYetActive):
+			masters = append(masters, m)
+		case o.Role == databasev1alpha1.RoleSlave && !o.Conflicting:
+		default:
+			return "", m + " reports no role that can be relied on"
+		}
+	}
+	switch len(masters) {
+	case 0:
+		return "", "none of " + strings.Join(holders, ", ") + " reports itself master"
+	case 1:
+		return masters[0], ""
+	default:
+		return "", strings.Join(masters, " and ") + " both report themselves master"
+	}
+}
+
+// seedLocation is where a seed backup of database lives in object storage:
+// the backup the first peer is copied from, or, with artifact, the one taken
+// for a later member on its source, which has a place of its own.
+func seedLocation(cluster *databasev1alpha1.CubridCluster, database, artifact string) (bucket, prefix string) {
 	storage := cluster.Spec.ObjectStorage
-	return storage.Bucket, path.Join(storage.Prefix, string(cluster.UID), "seed", database)
+	dir := "seed"
+	if artifact != "" {
+		dir += "-" + artifact
+	}
+	return storage.Bucket, path.Join(storage.Prefix, string(cluster.UID), dir, database)
+}
+
+// selectSeedSource decides which member peer is copied from, or says why it
+// cannot be decided yet.
+//
+// While no peer has joined, it is the member that holds the database: its
+// server is not active and no primary resolves (docs/poc/RESULTS.md, POC-13),
+// so there is nobody to ask and nobody else to copy from. Once a peer has
+// joined, CUBRID may have made any holder the master, and a member copied
+// from a member that is not the master, or from a backup taken on one, lacks
+// what the master committed without showing it (POC-23). The source is then
+// the holder that is observed as the master, and never a guess: an unanswered
+// or contradictory observation means waiting (ADR-0005).
+func (r *CubridClusterReconciler) selectSeedSource(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, holder string) (source, why string) {
+	if len(status.SeededMembers) == 0 {
+		return holder, ""
+	}
+	if r.Prober == nil {
+		return "", "no role prober is configured"
+	}
+	holders := append([]string{holder}, status.SeededMembers...)
+	obs := make(map[string]RoleObservation, len(holders))
+	for _, m := range holders {
+		obs[m] = r.Prober.ProbeRole(ctx, m, cluster.Namespace)
+	}
+	return seedSourceAmong(holders, obs, r.now())
 }
 
 // reconcileSeeding copies the first database to the other members (ADR-0006,
-// ADR-0010): one backup of the member that holds it, uploaded to the
-// cluster's object storage, then a restore on each other member, one at a
-// time. The Instance Manager of a seeded member starts heartbeat itself, so
-// the member joins as a slave. Every step is an idempotent operation with a
-// fixed key, so a reconcile after any interruption asks for the same step.
+// ADR-0010), one at a time: a backup of the source, uploaded to the cluster's
+// object storage, then a restore on the member. The Instance Manager of a
+// seeded member starts heartbeat itself, so the member joins as a slave. Every
+// step is an idempotent operation with a fixed key, so a reconcile after any
+// interruption asks for the same step.
 //
-// The source is the member the database was created on, not a resolved
-// master: until a peer has joined, that member's server is not active and no
-// primary resolves (docs/poc/RESULTS.md, POC-13).
+// holder is the member the database was created or restored on. It is the
+// source of the first peer. The source of every later member is the member
+// that is observed as the master (selectSeedSource, seedMember). A member
+// that holds the database is never restored over.
 func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	status *databasev1alpha1.DatabaseStatus, source string) {
+	status *databasev1alpha1.DatabaseStatus, holder string) {
 	database := status.Name
-	// A recovery bootstrap restored the database on the source; otherwise it
+	// A recovery bootstrap restored the database on the holder; otherwise it
 	// was created there.
-	origin := "database " + database + " was created on " + source
+	origin := "database " + database + " was created on " + holder
 	if cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Recovery != nil {
-		origin = "database " + database + " was restored on " + source
+		origin = "database " + database + " was restored on " + holder
 	}
 	if r.Backup == nil || r.Restore == nil {
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "PeersNotSeeded",
@@ -184,70 +251,151 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 				"; spec.objectStorage with a bucket is needed to copy it to the other members")
 		return
 	}
-	bucket, prefix := seedLocation(cluster, database)
-	uid := string(cluster.UID)
 
-	backup, err := r.Backup.StartBackup(ctx, source, cluster.Namespace, bootstrapKey("seed-backup", cluster, status, ""),
-		instancemanager.BackupRequest{
-			Database:    database,
-			Destination: path.Join(backupStagingRoot, "seed-"+uid),
-			Upload: &instancemanager.BackupUpload{
-				Bucket: bucket, Prefix: prefix, ClusterUID: uid, CubridVersion: cluster.Spec.Version,
-				SourceInstance: source, SourceRole: string(databasev1alpha1.RoleMaster),
-			},
-		})
-	if err != nil {
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
-		return
-	}
-	switch backup.State {
-	case instancemanager.OpCompleted:
-	case instancemanager.OpFailed:
-		r.bootstrapStepFailed(cluster, status, "SeedBackupFailed", "on "+source+": "+backup.FailureReason)
-		return
-	default:
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedBackupInProgress",
-			"backing up database "+database+" on "+source)
-		return
-	}
-
-	for _, peer := range memberNames(cluster, cluster.Spec.Topology.PromotableMembers)[1:] {
+	for _, peer := range memberNames(cluster, cluster.Spec.Topology.PromotableMembers) {
 		// A member that holds the database is never restored over.
-		if slices.Contains(status.SeededMembers, peer) {
+		if peer == holder || slices.Contains(status.SeededMembers, peer) {
 			continue
 		}
-		restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, bootstrapKey("seed-restore", cluster, status, peer),
-			instancemanager.RestoreRequest{
-				Database: database, Bucket: bucket, Prefix: prefix,
-				ExpectedCubridVersion: cluster.Spec.Version,
-				StagingDir:            path.Join(restoreStagingRoot, "seed-"+uid),
-				TargetDir:             restoreTargetRoot,
-				// The member becomes a slave of the member the backup was taken
-				// on, and has to pick up what that member committed since.
-				SeedFromMaster: source,
-			})
-		if err != nil {
-			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
-			return
-		}
-		switch restore.State {
-		case instancemanager.OpCompleted:
-			status.SeededMembers = append(status.SeededMembers, peer)
-			continue
-		case instancemanager.OpFailed:
-			r.bootstrapStepFailed(cluster, status, "SeedRestoreFailed", "on "+peer+": "+restore.FailureReason)
-			return
-		default:
-			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedRestoreInProgress",
-				"restoring database "+database+" on "+peer)
+		if !r.seedMember(ctx, cluster, status, holder, peer) {
 			return
 		}
 	}
 
+	status.Seeding = nil
 	status.HAConfigured = true
 	setCondition(cluster, conditionBootstrapReady, metav1.ConditionTrue, "PeersSeeded",
 		origin+" and copied to the other members")
 	r.event(cluster, corev1.EventTypeNormal, "PeersSeeded", "database "+database+" copied to the other members")
+}
+
+// seedMember takes the copy of the database to peer one step further and
+// reports whether peer holds it now. The condition says what it waits for
+// otherwise.
+//
+// The first peer is copied from holder, under the key and at the place its
+// backup always had. For a later member the master among the holders is asked
+// for at every reconcile until its restore is started: a master that changes
+// meanwhile is followed, with a backup of its own for every change (a round).
+// The restore is started only by a reconcile that found the source it
+// observes already recorded in the status, so a status that was not written
+// cannot leave a restore running that nobody remembers the source of. Once
+// the restore's operation is recorded, the source is kept whatever the roles
+// become.
+func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, holder, peer string) bool {
+	database := status.Name
+	source, artifact := holder, ""
+	// sourceRecorded says that the source in use was already in the status
+	// when this reconcile read it; restoreStarted that its restore is known
+	// to run or to have ended.
+	sourceRecorded, restoreStarted := true, false
+	if len(status.SeededMembers) > 0 {
+		seeding := status.Seeding
+		if seeding != nil && seeding.Member != peer {
+			seeding = nil
+		}
+		restoreStarted = seeding != nil && seeding.RestoreOperationID != ""
+		if !restoreStarted {
+			observed, why := r.selectSeedSource(ctx, cluster, status, holder)
+			if observed == "" {
+				setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedSourceNotResolved",
+					"waiting to copy database "+database+" to "+peer+": the master among the members that hold it is not known ("+why+")")
+				return false
+			}
+			switch {
+			case seeding == nil:
+				seeding = &databasev1alpha1.DatabaseSeeding{Member: peer, Source: observed}
+				sourceRecorded = false
+			case seeding.Source != observed:
+				seeding = &databasev1alpha1.DatabaseSeeding{Member: peer, Source: observed, Round: seeding.Round + 1}
+				sourceRecorded = false
+			}
+			if !sourceRecorded && observed != holder {
+				r.event(cluster, corev1.EventTypeNormal, "SeedSourceChanged",
+					"database "+database+" will be copied to "+peer+" from "+observed+", the master; "+holder+" is no longer the master")
+			}
+		}
+		status.Seeding = seeding
+		source = seeding.Source
+		artifact = peer + "-from-" + source
+		if seeding.Round > 0 {
+			artifact += fmt.Sprintf("-r%d", seeding.Round)
+		}
+	}
+
+	bucket, prefix := seedLocation(cluster, database, artifact)
+	uid := string(cluster.UID)
+	// A restore that was started has its backup; the source is not asked
+	// again, so that it need not be reachable while the member is restored.
+	if !restoreStarted {
+		staging := "seed-" + uid
+		if artifact != "" {
+			staging += "-" + peer
+		}
+		backup, err := r.Backup.StartBackup(ctx, source, cluster.Namespace, bootstrapKey("seed-backup", cluster, status, artifact),
+			instancemanager.BackupRequest{
+				Database:    database,
+				Destination: path.Join(backupStagingRoot, staging),
+				Upload: &instancemanager.BackupUpload{
+					Bucket: bucket, Prefix: prefix, ClusterUID: uid, CubridVersion: cluster.Spec.Version,
+					SourceInstance: source, SourceRole: string(databasev1alpha1.RoleMaster),
+				},
+			})
+		if err != nil {
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
+			return false
+		}
+		switch backup.State {
+		case instancemanager.OpCompleted:
+		case instancemanager.OpFailed:
+			status.Seeding = nil
+			r.bootstrapStepFailed(cluster, status, "SeedBackupFailed", "on "+source+": "+backup.FailureReason)
+			return false
+		default:
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedBackupInProgress",
+				"backing up database "+database+" on "+source)
+			return false
+		}
+		if !sourceRecorded {
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedSourceSelected",
+				"database "+database+" will be copied to "+peer+" from "+source+", the master")
+			return false
+		}
+	}
+
+	restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, bootstrapKey("seed-restore", cluster, status, peer),
+		instancemanager.RestoreRequest{
+			Database: database, Bucket: bucket, Prefix: prefix,
+			ExpectedCubridVersion: cluster.Spec.Version,
+			StagingDir:            path.Join(restoreStagingRoot, "seed-"+uid),
+			TargetDir:             restoreTargetRoot,
+			// The member becomes a slave of the member the backup was taken
+			// on, and has to pick up what that member committed since.
+			SeedFromMaster: source,
+		})
+	if err != nil {
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
+		return false
+	}
+	if status.Seeding != nil {
+		status.Seeding.RestoreOperationID = restore.ID
+	}
+	switch restore.State {
+	case instancemanager.OpCompleted:
+		status.SeededMembers = append(status.SeededMembers, peer)
+		status.Seeding = nil
+		return true
+	case instancemanager.OpFailed:
+		// The next attempt chooses its source again.
+		status.Seeding = nil
+		r.bootstrapStepFailed(cluster, status, "SeedRestoreFailed", "on "+peer+": "+restore.FailureReason)
+		return false
+	default:
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedRestoreInProgress",
+			"restoring database "+database+" on "+peer)
+		return false
+	}
 }
 
 // haConfVolume and haConfMount give an HA member the cluster's cubrid_ha.conf.
