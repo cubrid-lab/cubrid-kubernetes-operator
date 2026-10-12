@@ -28,6 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -181,8 +182,9 @@ func replicationStallStep(r *haRun) {
 			writeScenarioFile("replication-stall/attempts.txt", []byte(strings.Join(tries, "\n\n")+"\n"))
 			writeScenarioFile(fmt.Sprintf("replication-stall/attempt-%d-master-%s.log", attempt, master), []byte(masterLog))
 			AddReportEntry("replication-stall attempt without the failover", try)
-			runSummary.Notes = append(runSummary.Notes, fmt.Sprintf(
-				"%s: attempt %d of %d did not reach its precondition: %s", name, attempt, attempts, why))
+			note := fmt.Sprintf("%s: attempt %d of %d did not reach its precondition: %s",
+				name, attempt, attempts, why)
+			updateSummary(func(s *evidence.Summary) { s.Notes = append(s.Notes, note) })
 			_, _ = fmt.Fprintln(GinkgoWriter, try)
 			if attempt == attempts {
 				Fail("the failover this step needs did not come in any attempt:\n" + strings.Join(tries, "\n\n"))

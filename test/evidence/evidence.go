@@ -106,6 +106,10 @@ type Summary struct {
 	// such as an attempt of a step that did not reach its precondition.
 	Notes []string `json:"notes,omitempty"`
 
+	// provisional marks a summary Checkpoint writes: its junit.xml carries
+	// an error, so that CI tooling does not show an unfinished run as green.
+	provisional bool
+
 	// planned maps each scenario and variant that still holds the placeholder
 	// Plan recorded to its index in Scenarios.
 	planned map[Requirement]int
@@ -245,7 +249,7 @@ func (s Summary) Checkpoint(dir string, r *Redactor, lane string, at time.Time) 
 	if dir == "" {
 		return errors.New("no run directory is set: the checkpoint cannot be kept")
 	}
-	s.Lane, s.Passed, s.FinishedAt = lane, false, time.Time{}
+	s.Lane, s.Passed, s.FinishedAt, s.provisional = lane, false, time.Time{}, true
 	s.Problems = []string{fmt.Sprintf("the run did not finish: this is what it recorded by %s",
 		at.UTC().Format(time.RFC3339))}
 	return s.Write(dir, r)
@@ -253,6 +257,8 @@ func (s Summary) Checkpoint(dir string, r *Redactor, lane string, at time.Time) 
 
 // Write stores summary.json and junit.xml in dir. Both hold the judged result
 // of each scenario, and what the environment does not record as "unknown".
+// junit.xml is written first, so that a process killed between the two
+// leaves a summary.json no newer than junit.xml.
 func (s Summary) Write(dir string, r *Redactor) error {
 	out := s
 	out.SchemaVersion = SchemaVersion
@@ -280,18 +286,18 @@ func (s Summary) Write(dir string, r *Redactor) error {
 		out.Problems = []string{}
 	}
 
-	data, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := r.WriteFile(dir, "summary.json", append(data, '\n')); err != nil {
-		return err
-	}
 	report, err := xml.MarshalIndent(out.junit(), "", "  ")
 	if err != nil {
 		return err
 	}
-	return r.WriteFile(dir, "junit.xml", append([]byte(xml.Header), append(report, '\n')...))
+	if err := r.WriteFile(dir, "junit.xml", append([]byte(xml.Header), append(report, '\n')...)); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	return r.WriteFile(dir, "summary.json", append(data, '\n'))
 }
 
 type junitSuite struct {
@@ -335,6 +341,12 @@ func (s Summary) junit() junitSuite {
 			suite.Skipped++
 		}
 		suite.Cases = append(suite.Cases, c)
+	}
+	if s.provisional {
+		suite.Tests++
+		suite.Errors++
+		suite.Cases = append(suite.Cases, junitCase{Name: "run", Classname: "run",
+			Error: &junitMessage{Message: strings.Join(s.Problems, "; ")}})
 	}
 	return suite
 }

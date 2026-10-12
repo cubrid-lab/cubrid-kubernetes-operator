@@ -29,8 +29,10 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
+	"github.com/onsi/ginkgo/v2/types"
 	. "github.com/onsi/gomega"
 
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
@@ -296,11 +298,9 @@ spec:
 `, clusterName, haNamespace, repository, tag, database, storeNamespace, seedBucket, storeNamespace))
 		})
 
-		AfterAll(func() {
-			if !ran {
-				scenarios.reportNotRun("needs linux/amd64: the official CUBRID image has no other build")
-				return
-			}
+		// printDiagnostics shows what a reader needs to judge the group's
+		// cluster, pass or fail.
+		printDiagnostics := func() {
 			for _, args := range [][]string{
 				{"get", "cubridcluster", clusterName, "-o", "yaml"},
 				{"get", "pods", "-o", "wide"},
@@ -315,6 +315,14 @@ spec:
 				out, _ := heartbeatStatus(pod)
 				_, _ = fmt.Fprintf(GinkgoWriter, "heartbeat status on %s:\n%s\n", pod, out)
 			}
+		}
+
+		AfterAll(func() {
+			if !ran {
+				scenarios.reportNotRun("needs linux/amd64: the official CUBRID image has no other build")
+				return
+			}
+			printDiagnostics()
 			_, _ = kubectl("delete", "cubridcluster", clusterName, "--ignore-not-found", "--timeout=5m")
 			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", haNamespace, storeNamespace,
 				"--ignore-not-found", "--timeout=5m"))
@@ -328,6 +336,12 @@ spec:
 
 		AfterEach(func() {
 			report := CurrentSpecReport()
+			// After the suite's deadline Ginkgo skips the remaining steps,
+			// and in a ContinueOnFailure group it then never runs AfterAll:
+			// the diagnostics are shown here instead.
+			if report.State == types.SpecStateTimedout {
+				printDiagnostics()
+			}
 			switch {
 			case !report.Failed():
 			case slices.Contains(report.Labels(), haSetup):
@@ -492,7 +506,7 @@ spec:
 			Expect(report.Members["rw"].Rows).To(Equal(48))
 			Expect(report.Members["ro"].Rows).To(Equal(48))
 
-			runSummary.Environment.ClientDriver = workloadDriver
+			updateSummary(func(s *evidence.Summary) { s.Environment.ClientDriver = workloadDriver })
 			scenarios.addHistory(text)
 			writeScenarioFile("ha-bootstrap/history.jsonl", []byte(text))
 			if data, err := json.MarshalIndent(report, "", "  "); err == nil {

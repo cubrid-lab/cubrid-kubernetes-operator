@@ -293,8 +293,25 @@ func TestCheckpoint(t *testing.T) {
 	if !got.FinishedAt.IsZero() {
 		t.Errorf("a checkpoint wrote finishedAt=%v, want it unset", got.FinishedAt)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "junit.xml")); err != nil {
-		t.Errorf("a checkpoint must write junit.xml too: %v", err)
+	report, err := os.ReadFile(filepath.Join(dir, "junit.xml"))
+	if err != nil {
+		t.Fatalf("a checkpoint must write junit.xml too: %v", err)
+	}
+	var suite struct {
+		Errors int `xml:"errors,attr"`
+		Cases  []struct {
+			Name  string `xml:"name,attr"`
+			Error *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"error"`
+		} `xml:"testcase"`
+	}
+	if err := xml.Unmarshal(report, &suite); err != nil {
+		t.Fatal(err)
+	}
+	if last := suite.Cases[len(suite.Cases)-1]; suite.Errors != 1 || last.Name != "run" ||
+		last.Error == nil || !strings.Contains(last.Error.Message, "did not finish") {
+		t.Errorf("a checkpoint's junit.xml = %s, want an error saying the run did not finish", report)
 	}
 
 	// The concluded summary takes the checkpoint's place.
@@ -345,8 +362,11 @@ func TestWriteFileReplaces(t *testing.T) {
 		t.Errorf("the run directory holds %q, want only summary.json", names)
 	}
 	info, err := os.Stat(filepath.Join(dir, "summary.json"))
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Errorf("summary.json mode = %v, %v; want 0600", info.Mode().Perm(), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("summary.json mode = %v, want 0600", info.Mode().Perm())
 	}
 }
 

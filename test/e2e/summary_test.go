@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -42,6 +43,23 @@ var runSummary = evidence.Summary{
 	Environment: evidence.Environment{Level: "kind"},
 }
 
+// summaryMu guards runSummary and the state below. A step Ginkgo abandons at
+// the suite's deadline keeps running and may still record its result while
+// the cleanup nodes and AfterSuite read the summary.
+var summaryMu sync.Mutex
+
+// timedOutStep names the step the suite's deadline stopped, or is empty.
+// After it, no step's result is recorded: an abandoned step's late result is
+// not evidence.
+var timedOutStep string
+
+// updateSummary changes the run's summary under summaryMu.
+func updateSummary(change func(s *evidence.Summary)) {
+	summaryMu.Lock()
+	defer summaryMu.Unlock()
+	change(&runSummary)
+}
+
 // redactor removes credentials from every evidence file of the run, among
 // them the cluster Instance Manager tokens the suite reads (S14).
 var redactor = evidence.NewRedactor()
@@ -53,6 +71,13 @@ func evidenceDir() string { return os.Getenv("E2E_EVIDENCE_DIR") }
 // recordScenario adds a scenario's result to the run's summary, in place of
 // the placeholder planRun left for it.
 func recordScenario(s evidence.Scenario) {
+	summaryMu.Lock()
+	defer summaryMu.Unlock()
+	if timedOutStep != "" {
+		_, _ = fmt.Fprintf(GinkgoWriter, "warning: %s recorded %s after the suite's deadline; not kept\n",
+			s.Name(), s.Result)
+		return
+	}
 	runSummary.Record(s)
 }
 
@@ -76,8 +101,11 @@ var (
 // scenario's placeholder; a scenario none of whose steps recorded a result
 // keeps the reason the ReportAfterEach below gives it, or this one.
 func planRun() {
+	summaryMu.Lock()
+	runSummary.RunID = runSummary.StartedAt.Format("2006-01-02T15-04-05Z")
 	runSummary.Plan(kindLane.Required,
 		"no step of the scenario started: the suite's setup failed or the run stopped before it")
+	summaryMu.Unlock()
 	checkpointRun()
 }
 
@@ -85,6 +113,8 @@ func planRun() {
 // does not pass, so that a run killed before concludeRun still leaves its
 // plan and results. concludeRun replaces it.
 func checkpointRun() {
+	summaryMu.Lock()
+	defer summaryMu.Unlock()
 	dir := evidenceDir()
 	if dir == "" {
 		return
@@ -98,6 +128,9 @@ func checkpointRun() {
 // Label): "S00", "S03-abrupt". After each spec, whether it ran or not, a
 // scenario whose step recorded nothing is given the result that says why.
 var _ = ReportAfterEach(func(report SpecReport) {
+	defer checkpointRun()
+	summaryMu.Lock()
+	defer summaryMu.Unlock()
 	suite, _ := GinkgoConfiguration()
 	selected := evidence.Selected(report, suite, suiteDescription)
 	for _, label := range report.Labels() {
@@ -120,7 +153,11 @@ var _ = ReportAfterEach(func(report SpecReport) {
 			lastFailedStep += " (in the group's setup)"
 		}
 	}
-	checkpointRun()
+	// No step sets its own timeout: a timed-out step was stopped by the
+	// suite's deadline.
+	if report.State == types.SpecStateTimedout && timedOutStep == "" {
+		timedOutStep = report.LeafNodeText
+	}
 })
 
 // writeScenarioFile stores one evidence file of a scenario and returns its
@@ -184,32 +221,43 @@ func runLane() evidence.Lane {
 // be written. It needs the Kind cluster, so it runs before the suite's
 // cleanup.
 func concludeRun() error {
-	runSummary.FinishedAt = time.Now().UTC()
-	runSummary.RunID = runSummary.StartedAt.Format("2006-01-02T15-04-05Z")
-	env := &runSummary.Environment
+	// Queried before the lock: a step abandoned at the deadline may still
+	// record, and kubectl is bounded so that a hung API server leaves time
+	// to write the summary within the grace period.
+	commit, kubeVersion, imageID := "", "", ""
 	if rev, err := utils.Run(exec.Command("git", "rev-parse", "HEAD")); err == nil {
-		env.OperatorCommit = strings.TrimSpace(rev)
+		commit = strings.TrimSpace(rev)
 	}
-	if out, err := utils.Run(exec.Command("kubectl", "version", "-o", "json")); err == nil {
+	if out, err := utils.Run(exec.Command("kubectl", "version", "-o", "json", "--request-timeout=10s")); err == nil {
 		var v struct {
 			ServerVersion struct {
 				GitVersion string `json:"gitVersion"`
 			} `json:"serverVersion"`
 		}
 		if json.Unmarshal([]byte(out), &v) == nil {
-			env.KubernetesVersion = v.ServerVersion.GitVersion
+			kubeVersion = v.ServerVersion.GitVersion
 		}
 	}
 	if out, err := utils.Run(exec.Command(utils.ContainerTool(), "image", "inspect",
 		"--format", "{{.Id}}", managerImage)); err == nil {
-		env.OperatorImageDigest = strings.TrimSpace(out)
+		imageID = strings.TrimSpace(out)
 	}
+
+	summaryMu.Lock()
+	defer summaryMu.Unlock()
+	runSummary.FinishedAt = time.Now().UTC()
+	env := &runSummary.Environment
+	env.OperatorCommit, env.KubernetesVersion, env.OperatorImageDigest = commit, kubeVersion, imageID
 	// A required scenario no step carries the label of can never record a
 	// result. When no step was reported at all, the suite's setup failed and
 	// the placeholders say so.
-	var unlabelled []string
+	var problems []string
 	if len(reportedLabels) > 0 {
-		unlabelled = evidence.UnlabelledSteps(kindLane.Required, reportedLabels)
+		problems = evidence.UnlabelledSteps(kindLane.Required, reportedLabels)
 	}
-	return runSummary.Conclude(evidenceDir(), redactor, runLane(), unlabelled...)
+	if timedOutStep != "" {
+		problems = append(problems, fmt.Sprintf(
+			"the suite's deadline passed during %q: the steps after it did not run", timedOutStep))
+	}
+	return runSummary.Conclude(evidenceDir(), redactor, runLane(), problems...)
 }
