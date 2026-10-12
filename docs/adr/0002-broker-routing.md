@@ -141,6 +141,16 @@ usable backend?" — distinct from "which DB pod is master?" (status) and
   from a Service existing. There is no separate Endpoints reconciler: the
   EndpointSlices follow Pod readiness, and the check that the generated
   configuration matches the observed generation is not implemented.
+- A Broker reads its configuration once, when its container starts. The
+  hash of what a mode's Brokers read (their `cubrid_broker_<mode>.conf` and
+  `databases.txt`) is the annotation `database.cubrid.io/broker-config-hash`
+  of that mode's Pod template, so a changed configuration replaces that
+  mode's Brokers and an unchanged one replaces nothing (#304). They are
+  replaced one at a time, and a new Broker is available before an old one is
+  stopped (`maxUnavailable: 0`, `maxSurge: 1`), so each mode keeps the
+  number of Brokers it is meant to have. Connections of the Broker that is
+  stopped are closed; whether a client rides through that depends on its
+  driver and has not been measured.
 - The single `<cluster>-broker` Deployment of earlier versions is deleted.
 
 ### Failover write sequence

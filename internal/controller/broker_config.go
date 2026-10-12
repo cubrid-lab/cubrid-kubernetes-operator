@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -75,6 +77,38 @@ func brokerPort(mode string) int32 {
 // brokerConfKey is the ConfigMap key of an access mode's cubrid_broker.conf;
 // the Broker entrypoint installs the one of its own mode.
 func brokerConfKey(mode string) string { return "cubrid_broker_" + mode + ".conf" }
+
+// brokerDatabasesKey is the databases.txt every Broker reads.
+const brokerDatabasesKey = "databases.txt"
+
+// brokerConfigHashAnnotation on a Broker Pod template is the hash of the
+// configuration the Pod's Broker reads when it starts.
+const brokerConfigHashAnnotation = "database.cubrid.io/broker-config-hash"
+
+// brokerConfigData is the content of the Broker ConfigMap: one
+// cubrid_broker.conf per access mode and the databases.txt that says where
+// the database's members are.
+func brokerConfigData(cluster *databasev1alpha1.CubridCluster) map[string]string {
+	return map[string]string{
+		brokerConfKey(brokerModeRW): generateBrokerConf(brokerModeRW),
+		brokerConfKey(brokerModeRO): generateBrokerConf(brokerModeRO),
+		brokerDatabasesKey:          generateBrokerDatabasesTxt(cluster),
+	}
+}
+
+// brokerConfigHash is the hash of what a Broker of mode reads from data: its
+// own cubrid_broker.conf and databases.txt. The other mode's file is not part
+// of it, so a change there does not replace this mode's Brokers. Each file is
+// hashed with its name and its length, so that text moving from one file to
+// the other is a change.
+func brokerConfigHash(data map[string]string, mode string) string {
+	var read strings.Builder
+	for _, key := range []string{brokerConfKey(mode), brokerDatabasesKey} {
+		fmt.Fprintf(&read, "%s\n%d\n%s\n", key, len(data[key]), data[key])
+	}
+	sum := sha256.Sum256([]byte(read.String()))
+	return hex.EncodeToString(sum[:])
+}
 
 // generateBrokerConf renders cubrid_broker.conf for one access mode: a single
 // Broker, ACCESS_MODE=RW or RO, as in POC-8 (ADR-0002). A Pod runs one mode,

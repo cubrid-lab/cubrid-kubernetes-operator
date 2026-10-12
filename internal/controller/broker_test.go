@@ -210,6 +210,58 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 		Expect(err).NotTo(HaveOccurred())
 	}
 
+	// A Broker reads its configuration when its container starts, so a
+	// changed configuration reaches a Broker only when its Pod is replaced
+	// (#304).
+	It("replaces a mode's Brokers when their configuration changed, one at a time, and not otherwise", func() {
+		const name = "broker-config"
+		r, key := reconcileHA(name)
+		deployment := func(mode string) *appsv1.Deployment {
+			dep := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: brokerDeploymentName(name, mode), Namespace: brokerNamespace}, dep)).
+				To(Succeed())
+			return dep
+		}
+		config := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: brokerConfigMapName(name), Namespace: brokerNamespace}, config)).
+			To(Succeed())
+
+		By("the Pod template naming the configuration its Brokers read")
+		generations := map[string]int64{}
+		for _, mode := range []string{brokerModeRW, brokerModeRO} {
+			dep := deployment(mode)
+			Expect(dep.Spec.Template.Annotations).To(HaveKeyWithValue(brokerConfigHashAnnotation, brokerConfigHash(config.Data, mode)))
+			generations[mode] = dep.Generation
+
+			By("a replacement that never leaves fewer Brokers than asked for (" + mode + ")")
+			Expect(dep.Spec.Strategy.Type).To(Equal(appsv1.RollingUpdateDeploymentStrategyType))
+			Expect(dep.Spec.Strategy.RollingUpdate).NotTo(BeNil())
+			Expect(dep.Spec.Strategy.RollingUpdate.MaxUnavailable.IntValue()).To(BeZero())
+			Expect(dep.Spec.Strategy.RollingUpdate.MaxSurge.IntValue()).To(Equal(1))
+		}
+
+		By("reconciles with the same configuration changing no template")
+		reconcileAgain(r, key)
+		reconcileAgain(r, key)
+		for mode, generation := range generations {
+			Expect(deployment(mode).Generation).To(Equal(generation), "the %s Brokers were replaced without a change", mode)
+		}
+
+		By("Brokers that were started with an earlier configuration being replaced once")
+		rw := deployment(brokerModeRW)
+		rw.Spec.Template.Annotations[brokerConfigHashAnnotation] = "the-hash-of-an-earlier-configuration"
+		Expect(k8sClient.Update(ctx, rw)).To(Succeed())
+		started := deployment(brokerModeRW).Generation
+		reconcileAgain(r, key)
+		replaced := deployment(brokerModeRW)
+		Expect(replaced.Spec.Template.Annotations).To(HaveKeyWithValue(brokerConfigHashAnnotation, brokerConfigHash(config.Data, brokerModeRW)))
+		Expect(replaced.Generation).To(Equal(started + 1))
+		reconcileAgain(r, key)
+		Expect(deployment(brokerModeRW).Generation).To(Equal(started+1), "the read-write Brokers were replaced twice for one change")
+		Expect(deployment(brokerModeRO).Generation).To(Equal(generations[brokerModeRO]),
+			"the read-only Brokers were replaced for a change of the read-write ones")
+	})
+
 	// Writes reach the master through a read-write Broker. A resolved master
 	// without one is no route (#287).
 	It("reports write routing ready only with a resolved primary and an available read-write Broker", func() {

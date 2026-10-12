@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -63,7 +64,8 @@ func roServiceName(cluster string) string { return cluster + "-ro" }
 // generated config ConfigMap, a broker Deployment, and the -rw/-ro Services
 // fronting broker pods (never DB pods). It then sets the broker conditions.
 func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, cluster *databasev1alpha1.CubridCluster, res PrimaryResolution, image string) error {
-	if err := r.reconcileBrokerConfig(ctx, cluster); err != nil {
+	config := brokerConfigData(cluster)
+	if err := r.reconcileBrokerConfig(ctx, cluster, config); err != nil {
 		return err
 	}
 	if err := r.deleteLegacyBrokerDeployment(ctx, cluster); err != nil {
@@ -71,7 +73,7 @@ func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, clust
 	}
 	available := map[string]int32{}
 	for _, mode := range []string{brokerModeRW, brokerModeRO} {
-		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode, image)
+		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode, image, brokerConfigHash(config, mode))
 		if err != nil {
 			return err
 		}
@@ -87,17 +89,14 @@ func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, clust
 	return nil
 }
 
-func (r *CubridClusterReconciler) reconcileBrokerConfig(ctx context.Context, cluster *databasev1alpha1.CubridCluster) error {
+func (r *CubridClusterReconciler) reconcileBrokerConfig(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	data map[string]string) error {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: brokerConfigMapName(cluster.Name), Namespace: cluster.Namespace},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
 		cm.Labels = brokerLabelsFor(cluster)
-		cm.Data = map[string]string{
-			brokerConfKey(brokerModeRW): generateBrokerConf(brokerModeRW),
-			brokerConfKey(brokerModeRO): generateBrokerConf(brokerModeRO),
-			"databases.txt":             generateBrokerDatabasesTxt(cluster),
-		}
+		cm.Data = data
 		return controllerutil.SetControllerReference(cluster, cm, r.Scheme)
 	})
 	return err
@@ -126,9 +125,20 @@ func brokerPodLabels(cluster *databasev1alpha1.CubridCluster, mode string) map[s
 	return labels
 }
 
-func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *databasev1alpha1.CubridCluster, mode, image string) (*appsv1.Deployment, error) {
+// reconcileBrokerDeployment keeps the Deployment of one access mode's Brokers.
+//
+// A Broker reads its configuration once, when its container starts: the
+// entrypoint copies it from the mounted ConfigMap. The hash of what this
+// mode's Brokers read is therefore an annotation of the Pod template, so that
+// a change of it replaces them and an unchanged configuration replaces
+// nothing. They are replaced one at a time, a new Broker being available
+// before an old one is stopped, so the mode never has fewer Brokers than
+// asked for.
+func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	mode, image, configHash string) (*appsv1.Deployment, error) {
 	labels := brokerPodLabels(cluster, mode)
 	replicas := int32(brokerReplicas)
+	noneUnavailable, oneMore := intstr.FromInt32(0), intstr.FromInt32(1)
 
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: brokerDeploymentName(cluster.Name, mode), Namespace: cluster.Namespace},
@@ -139,9 +149,18 @@ func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context,
 			dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		}
 		dep.Spec.Replicas = &replicas
+		dep.Spec.Strategy = appsv1.DeploymentStrategy{
+			Type: appsv1.RollingUpdateDeploymentStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateDeployment{
+				MaxUnavailable: &noneUnavailable, MaxSurge: &oneMore,
+			},
+		}
 		if err := setPodTemplate(dep, &dep.Spec.Template, corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
-			Spec:       r.brokerPodSpec(cluster, mode, image),
+			ObjectMeta: metav1.ObjectMeta{
+				Labels:      labels,
+				Annotations: map[string]string{brokerConfigHashAnnotation: configHash},
+			},
+			Spec: r.brokerPodSpec(cluster, mode, image),
 		}); err != nil {
 			return err
 		}

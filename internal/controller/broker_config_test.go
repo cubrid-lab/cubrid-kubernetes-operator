@@ -148,3 +148,44 @@ func TestSetBrokerConditions_RoutingGatedOnPrimary(t *testing.T) {
 		}
 	})
 }
+
+// A Broker reads its configuration once, when its container starts. The hash
+// of what a mode's Brokers read is part of their Pod template, so that a
+// change of it replaces them and nothing else does (#304).
+func TestBrokerConfigHash(t *testing.T) {
+	data := func() map[string]string {
+		return map[string]string{
+			brokerConfKey(brokerModeRW): "rw settings",
+			brokerConfKey(brokerModeRO): "ro settings",
+			brokerDatabasesKey:          "appdb hosts",
+		}
+	}
+	rw, ro := brokerConfigHash(data(), brokerModeRW), brokerConfigHash(data(), brokerModeRO)
+	if rw == "" || rw == ro {
+		t.Fatalf("hashes of the two modes: %q and %q, want two different ones", rw, ro)
+	}
+	if again := brokerConfigHash(data(), brokerModeRW); again != rw {
+		t.Errorf("the same configuration hashed to %q and %q", rw, again)
+	}
+
+	changed := data()
+	changed[brokerConfKey(brokerModeRO)] = "other ro settings"
+	if got := brokerConfigHash(changed, brokerModeRW); got != rw {
+		t.Error("a change of the read-only settings changed the hash of the read-write Brokers, which do not read them")
+	}
+	if got := brokerConfigHash(changed, brokerModeRO); got == ro {
+		t.Error("a change of the read-only settings did not change the hash of the read-only Brokers")
+	}
+
+	hosts := data()
+	hosts[brokerDatabasesKey] = "appdb other hosts"
+	if brokerConfigHash(hosts, brokerModeRW) == rw || brokerConfigHash(hosts, brokerModeRO) == ro {
+		t.Error("a change of databases.txt, which every Broker reads, did not change both hashes")
+	}
+
+	// Moving text from one file to the other is a change.
+	moved := map[string]string{brokerConfKey(brokerModeRW): "rw settingsappdb", brokerDatabasesKey: " hosts"}
+	if brokerConfigHash(moved, brokerModeRW) == rw {
+		t.Error("two different configurations have the same hash")
+	}
+}
