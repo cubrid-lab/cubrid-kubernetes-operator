@@ -79,6 +79,15 @@ primary API — cross-namespace / cross-cluster / migration recovery often
 happens without the original CR. A same-namespace `backupRef` convenience
 may be added later without breaking the URI contract.
 
+Time limit. The Instance Manager ends a restore, the download and
+`restoredb` together, after two hours and reports it `Failed`; the operator
+then starts it again within its attempt limit. The limit can be changed for
+all clusters of an operator with its flag
+`--instance-manager-restore-timeout`, passed to the DB Pods as
+`IM_RESTORE_TIMEOUT` (#341). A member uses a changed limit once its Pod was
+replaced, so for a recovery bootstrap it has to be set before the cluster is
+created.
+
 Whether a cluster has `spec.bootstrap.recovery`, and which manifest it names,
 is fixed when the cluster is created (#283): the API refuses to add, remove
 or change it afterwards. Removing it would take the gate off a restore that

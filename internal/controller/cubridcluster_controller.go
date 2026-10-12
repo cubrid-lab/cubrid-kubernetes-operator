@@ -124,6 +124,11 @@ type CubridClusterReconciler struct {
 	DefaultImage string
 	// Clock judges observation freshness; nil means time.Now.
 	Clock func() time.Time
+	// BackupTimeout and RestoreTimeout are how long the Instance Manager lets
+	// a backup (backupdb and the upload) and a restore (the download and
+	// restoredb) run before it ends them. Zero leaves the manager's own
+	// default, two hours each.
+	BackupTimeout, RestoreTimeout time.Duration
 	// OperatorNS is the namespace of the operator's Pods, the only Pods the
 	// NetworkPolicy of the DB Pods admits to the Instance Manager port. Empty
 	// admits none.
@@ -656,7 +661,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 		Containers: []corev1.Container{{
 			Name:      appName,
 			Image:     image,
-			Env:       instanceManagerEnv(cluster),
+			Env:       append(instanceManagerEnv(cluster), r.timeLimitEnv()...),
 			Resources: cluster.Spec.Resources,
 			// preStop triggers the ADR-0003 ordered graceful shutdown via the
 			// local Instance Manager; the command sends the Pod's IM_TOKEN.
@@ -737,6 +742,22 @@ func instanceManagerEnv(cluster *databasev1alpha1.CubridCluster) []corev1.EnvVar
 		// there only for an HA cluster.
 		{Name: "CUBRID_HA_CONF", Value: haConfMountPath + "/" + haConfFileName},
 	}, objectStorageEnv(cluster.Spec.ObjectStorage)...)
+}
+
+// timeLimitEnv tells the Instance Manager how long a backup and a restore may
+// run, when the operator was given such limits. An unset one adds nothing, so
+// the manager keeps its default and the Pod template of a cluster stays as it
+// is. A limit is part of the Pod template: a running Pod keeps the one it
+// started with until it is replaced.
+func (r *CubridClusterReconciler) timeLimitEnv() []corev1.EnvVar {
+	var env []corev1.EnvVar
+	if r.BackupTimeout > 0 {
+		env = append(env, corev1.EnvVar{Name: "IM_BACKUP_TIMEOUT", Value: r.BackupTimeout.String()})
+	}
+	if r.RestoreTimeout > 0 {
+		env = append(env, corev1.EnvVar{Name: "IM_RESTORE_TIMEOUT", Value: r.RestoreTimeout.String()})
+	}
+	return env
 }
 
 // Keys of the Secret that spec.objectStorage.credentialsSecretRef names.

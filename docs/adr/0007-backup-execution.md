@@ -50,6 +50,15 @@ Grounded in CUBRID 11.4 + prior ADRs:
 Selected: **Option B.** CUBRID backups in v1alpha1 are **Instance
 Manager-executed, object-storage-backed, single-shot full backups.**
 
+Time limit. The Instance Manager ends a backup, `backupdb` and the upload
+together, after two hours and reports it `Failed`. The limit can be changed
+for all clusters of an operator with its flag
+`--instance-manager-backup-timeout` (a duration such as `6h`), which the
+operator passes to the DB Pods as `IM_BACKUP_TIMEOUT` (#341). It is part of
+the Pod template, and the StatefulSet replaces no Pod by itself: a member
+uses a changed limit once its Pod was replaced. How long a backup of a given
+size takes on the reference environment has not been measured.
+
 Single-shot also means that the spec of a `CubridBackup` cannot be changed
 once it exists (#283): the operator addresses the backup by one idempotency
 key, so a changed database, cluster, target or destination would be a

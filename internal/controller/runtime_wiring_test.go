@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -115,6 +116,43 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		custom.Spec.Image = &databasev1alpha1.CubridImage{Repository: "my.registry/im", Tag: "1.2.3"}
 		reconcileCluster(newReconciler(), custom)
 		Expect(statefulSet("wiring-image-custom").Spec.Template.Spec.Containers[0].Image).To(Equal("my.registry/im:1.2.3"))
+	})
+
+	// The Instance Manager ends a backup or a restore after a fixed time, two
+	// hours each unless it is told otherwise. The operator can tell it (#341).
+	It("gives the Instance Manager the backup and restore time limits the operator was started with", func() {
+		By("leaving the manager's own defaults when no limit is set")
+		reconcileCluster(newReconciler(), standaloneCluster("wiring-limits-default"))
+		c := statefulSet("wiring-limits-default").Spec.Template.Spec.Containers[0]
+		for _, name := range []string{"IM_BACKUP_TIMEOUT", "IM_RESTORE_TIMEOUT"} {
+			_, set := envValue(c, name)
+			Expect(set).To(BeFalse(), "%s is set although no limit was configured", name)
+		}
+
+		By("passing on the limits that are set")
+		r := newReconciler()
+		r.BackupTimeout, r.RestoreTimeout = 6*time.Hour, 90*time.Minute
+		reconcileCluster(r, standaloneCluster("wiring-limits"))
+		c = statefulSet("wiring-limits").Spec.Template.Spec.Containers[0]
+		for name, want := range map[string]time.Duration{"IM_BACKUP_TIMEOUT": 6 * time.Hour, "IM_RESTORE_TIMEOUT": 90 * time.Minute} {
+			got, set := envValue(c, name)
+			Expect(set).To(BeTrue(), name)
+			// The manager reads the value as a Go duration.
+			parsed, err := time.ParseDuration(got.Value)
+			Expect(err).NotTo(HaveOccurred(), "%s=%q", name, got.Value)
+			Expect(parsed).To(Equal(want), name)
+		}
+
+		By("setting only one of them")
+		only := newReconciler()
+		only.RestoreTimeout = 4 * time.Hour
+		reconcileCluster(only, standaloneCluster("wiring-limits-one"))
+		c = statefulSet("wiring-limits-one").Spec.Template.Spec.Containers[0]
+		_, set := envValue(c, "IM_BACKUP_TIMEOUT")
+		Expect(set).To(BeFalse())
+		restore, set := envValue(c, "IM_RESTORE_TIMEOUT")
+		Expect(set).To(BeTrue())
+		Expect(restore.Value).To(Equal("4h0m0s"))
 	})
 
 	// The entrypoint creates and starts the database before the manager

@@ -21,6 +21,7 @@ import (
 	"flag"
 	"os"
 	"strings"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -66,6 +67,7 @@ func main() {
 	var probeAddr string
 	var instanceManagerImage string
 	var operatorNamespace string
+	var backupTimeout, restoreTimeout time.Duration
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
@@ -74,6 +76,12 @@ func main() {
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.StringVar(&instanceManagerImage, "instance-manager-image", controller.DefaultInstanceManagerImage,
 		"The DB Pod image (CUBRID with the Instance Manager) when a CubridCluster does not set spec.image.")
+	flag.DurationVar(&backupTimeout, "instance-manager-backup-timeout", 0,
+		"How long the Instance Manager lets one backup run (backupdb and the upload) before it ends it, as a duration "+
+			"such as 6h. 0 keeps the manager's default of 2h. A Pod takes a changed value when it is replaced.")
+	flag.DurationVar(&restoreTimeout, "instance-manager-restore-timeout", 0,
+		"How long the Instance Manager lets one restore run (the download and restoredb) before it ends it, as a "+
+			"duration such as 6h. 0 keeps the manager's default of 2h. A Pod takes a changed value when it is replaced.")
 	flag.StringVar(&operatorNamespace, "operator-namespace", "",
 		"The namespace of the operator's Pods, which the DB Pods' NetworkPolicy admits to the Instance Manager. "+
 			"Defaults to the namespace of the operator's service account.")
@@ -103,6 +111,13 @@ func main() {
 
 	// Every line names the component that wrote it (docs/observability.md).
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)).WithValues("component", "operator"))
+
+	// A negative limit would be passed to no member and so look like "unset".
+	if backupTimeout < 0 || restoreTimeout < 0 {
+		setupLog.Error(nil, "The Instance Manager's backup and restore time limits cannot be negative",
+			"backupTimeout", backupTimeout.String(), "restoreTimeout", restoreTimeout.String())
+		os.Exit(1)
+	}
 
 	if operatorNamespace == "" {
 		if ns, err := os.ReadFile(serviceAccountNamespaceFile); err == nil {
@@ -226,6 +241,9 @@ func main() {
 		Backup:       controller.NewHTTPBackupClient(tokens),
 		DefaultImage: instanceManagerImage,
 		OperatorNS:   operatorNamespace,
+		// Checked above: neither is negative.
+		BackupTimeout:  backupTimeout,
+		RestoreTimeout: restoreTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "cubridcluster")
 		os.Exit(1)
