@@ -78,6 +78,20 @@ var (
 func planRun() {
 	runSummary.Plan(kindLane.Required,
 		"no step of the scenario started: the suite's setup failed or the run stopped before it")
+	checkpointRun()
+}
+
+// checkpointRun writes the results recorded so far as a summary.json that
+// does not pass, so that a run killed before concludeRun still leaves its
+// plan and results. concludeRun replaces it.
+func checkpointRun() {
+	dir := evidenceDir()
+	if dir == "" {
+		return
+	}
+	if err := runSummary.Checkpoint(dir, redactor, runLane().Name, time.Now()); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "warning: run checkpoint: %v\n", err)
+	}
 }
 
 // The steps of a scenario carry its requirement's label (evidence.Requirement
@@ -106,6 +120,7 @@ var _ = ReportAfterEach(func(report SpecReport) {
 			lastFailedStep += " (in the group's setup)"
 		}
 	}
+	checkpointRun()
 })
 
 // writeScenarioFile stores one evidence file of a scenario and returns its
