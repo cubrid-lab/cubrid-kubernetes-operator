@@ -79,6 +79,13 @@ primary API — cross-namespace / cross-cluster / migration recovery often
 happens without the original CR. A same-namespace `backupRef` convenience
 may be added later without breaking the URI contract.
 
+Whether a cluster has `spec.bootstrap.recovery`, and which manifest it names,
+is fixed when the cluster is created (#283): the API refuses to add, remove
+or change it afterwards. Removing it would take the gate off a restore that
+is running or has failed and let the cluster go on as if it had been created
+empty; changing it would point the same restore operation at another backup.
+A cluster that should start from another backup is another cluster.
+
 Cross-namespace / cross-cluster restore **is supported**: it depends only
 on the `manifestUri` + the **new** cluster's object-storage credentials,
 never on the source namespace's secrets or CR.

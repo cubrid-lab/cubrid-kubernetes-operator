@@ -296,7 +296,7 @@ var _ = Describe("CubridBackup Controller", func() {
 			return cluster
 		}
 
-		It("retries only the recorded target after the preference changes", func() {
+		It("retries only the recorded target after the roles change", func() {
 			cluster := newHACluster("bk-lost")
 			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
@@ -324,10 +324,11 @@ var _ = Describe("CubridBackup Controller", func() {
 			Expect(recorded.Status.TargetRole).To(Equal(string(databasev1alpha1.RoleSlave)))
 			Expect(recorded.Status.OperationRef).To(BeEmpty())
 
-			By("changing the preference so that a fresh selection would pick the master")
-			patch := client.MergeFrom(recorded.DeepCopy())
-			recorded.Spec.Target.Preference = databasev1alpha1.PrimaryOnly
-			Expect(k8sClient.Patch(ctx, recorded, patch)).To(Succeed())
+			// The spec of a backup cannot change (#283); the roles can. With the
+			// last member as master the first one is a standby too, and a fresh
+			// selection would take it before the recorded one.
+			By("the roles changing so that a fresh selection would pick another standby")
+			r.Prober = &memberProber{master: "bk-lost-2"}
 
 			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())

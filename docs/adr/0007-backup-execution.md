@@ -50,6 +50,12 @@ Grounded in CUBRID 11.4 + prior ADRs:
 Selected: **Option B.** CUBRID backups in v1alpha1 are **Instance
 Manager-executed, object-storage-backed, single-shot full backups.**
 
+Single-shot also means that the spec of a `CubridBackup` cannot be changed
+once it exists (#283): the operator addresses the backup by one idempotency
+key, so a changed database, cluster, target or destination would be a
+different request under the same key. Another backup is another
+`CubridBackup`. Labels, annotations and the status stay writable.
+
 The operator creates/reconciles a `CubridBackup`, **selects a target DB
 pod** (preferring a healthy caught-up standby), and invokes that pod's
 Instance Manager `POST /v1/backup` via the ADR-0003 idempotent operation

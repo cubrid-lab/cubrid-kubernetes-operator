@@ -56,8 +56,10 @@ spec:
             description: spec defines the desired state of CubridCluster
             properties:
               bootstrap:
-                description: bootstrap selects cluster initialization (fresh vs recovery;
-                  ADR-0008).
+                description: |-
+                  bootstrap selects cluster initialization (fresh vs recovery; ADR-0008).
+                  Whether it names a recovery, and which backup, is fixed when the
+                  cluster is created.
                 properties:
                   recovery:
                     description: |-
@@ -526,6 +528,12 @@ spec:
                 is created: v1alpha1 has no procedure to switch between a standalone
                 and an HA cluster'
               rule: self.highAvailability.enabled == oldSelf.highAvailability.enabled
+            - message: 'bootstrap.recovery cannot be added, removed or changed after
+                the cluster is created: it decides whether the first database is restored
+                from a backup or created empty'
+              rule: (has(self.bootstrap) && has(self.bootstrap.recovery)) == (has(oldSelf.bootstrap)
+                && has(oldSelf.bootstrap.recovery)) && (!(has(self.bootstrap) && has(self.bootstrap.recovery))
+                || self.bootstrap.recovery.manifestUri == oldSelf.bootstrap.recovery.manifestUri)
             - message: 'dbaPasswordSecretRef is not implemented in v1alpha1: the database
                 is created with an empty DBA password, so the field is rejected instead
                 of being ignored'

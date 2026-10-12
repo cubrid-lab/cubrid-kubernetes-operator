@@ -26,6 +26,12 @@ import (
 
 // CubridBackupSpec defines the desired state of CubridBackup (ADR-0007).
 // v1alpha1 backups are Instance Manager-executed, single-shot, full backups.
+//
+// A CubridBackup is one request: the operator addresses its backup by one
+// idempotency key, so what it asks for cannot change once it exists. Another
+// backup is another CubridBackup.
+//
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="the spec of a CubridBackup cannot be changed after it is created: create another CubridBackup"
 type CubridBackupSpec struct {
 	// clusterRef selects the CubridCluster to back up (same namespace).
 	// +kubebuilder:validation:Required

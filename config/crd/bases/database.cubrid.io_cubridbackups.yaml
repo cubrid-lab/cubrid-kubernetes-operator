@@ -130,6 +130,10 @@ spec:
             - database
             - destination
             type: object
+            x-kubernetes-validations:
+            - message: 'the spec of a CubridBackup cannot be changed after it is created:
+                create another CubridBackup'
+              rule: self == oldSelf
           status:
             description: status defines the observed state of CubridBackup
             properties:

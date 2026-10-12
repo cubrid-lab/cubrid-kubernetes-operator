@@ -233,6 +233,7 @@ type CubridBootstrap struct {
 // +kubebuilder:validation:XValidation:rule="!self.highAvailability.enabled || (has(self.objectStorage) && has(self.objectStorage.bucket) && self.objectStorage.bucket.size() > 0)",message="an HA cluster needs objectStorage with a bucket: its first database is copied to the other members through it"
 // +kubebuilder:validation:XValidation:rule="self.topology.promotableMembers == oldSelf.topology.promotableMembers",message="topology.promotableMembers cannot be changed after the cluster is created: v1alpha1 has no procedure to add or remove members"
 // +kubebuilder:validation:XValidation:rule="self.highAvailability.enabled == oldSelf.highAvailability.enabled",message="highAvailability.enabled cannot be changed after the cluster is created: v1alpha1 has no procedure to switch between a standalone and an HA cluster"
+// +kubebuilder:validation:XValidation:rule="(has(self.bootstrap) && has(self.bootstrap.recovery)) == (has(oldSelf.bootstrap) && has(oldSelf.bootstrap.recovery)) && (!(has(self.bootstrap) && has(self.bootstrap.recovery)) || self.bootstrap.recovery.manifestUri == oldSelf.bootstrap.recovery.manifestUri)",message="bootstrap.recovery cannot be added, removed or changed after the cluster is created: it decides whether the first database is restored from a backup or created empty"
 // +kubebuilder:validation:XValidation:rule="!has(self.dbaPasswordSecretRef)",message="dbaPasswordSecretRef is not implemented in v1alpha1: the database is created with an empty DBA password, so the field is rejected instead of being ignored"
 // +kubebuilder:validation:XValidation:rule="oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))",message="database names are immutable; existing names must be preserved"
 type CubridClusterSpec struct {
@@ -268,6 +269,8 @@ type CubridClusterSpec struct {
 	Storage CubridStorage `json:"storage"`
 
 	// bootstrap selects cluster initialization (fresh vs recovery; ADR-0008).
+	// Whether it names a recovery, and which backup, is fixed when the
+	// cluster is created.
 	// +optional
 	Bootstrap *CubridBootstrap `json:"bootstrap,omitempty"`
 
