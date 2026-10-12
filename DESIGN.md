@@ -693,7 +693,9 @@ visibility, not the env/filesystem/helper-script contract).
 
 - **HTTP/JSON** on port `instance-manager: 9090`, cluster-internal only.
 - Kubelet (unauthenticated): `GET /livez`, `GET /readyz` (not-ready
-  during startup/shutdown/restore/ambiguous HA).
+  during startup/shutdown/restore/ambiguous HA). Their bodies say only
+  that the manager is alive and whether the member is ready, not the role
+  and not why.
 - Operator (bearer-token, `/v1/`): `GET /v1/role`, `GET /v1/ha/status`,
   `GET /v1/config`, `POST /v1/shutdown`, `POST /v1/backup`,
   `POST /v1/restore/prepare`, `GET /v1/operations/{id}`.

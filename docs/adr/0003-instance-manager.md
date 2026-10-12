@@ -80,6 +80,12 @@ Kubelet endpoints (unauthenticated — probes are awkward with strong auth):
   startup, shutdown, restore prep, ambiguous HA state, or local CUBRID
   unavailability.
 
+Because anyone who reaches the port can ask them, their bodies carry nothing
+but the answer: `{"status":"ok"}` for `/livez`, `{"ready":true}` or
+`{"ready":false}` for `/readyz`. The member's role, which `/v1/role` gives
+only with the token, and the text of a failed command are not in them; why a
+member is not ready is written to the manager's log (#333).
+
 Operator endpoints (bearer-token authenticated, `/v1/`):
 
 - `GET /v1/role`, `GET /v1/ha/status`, `GET /v1/config`

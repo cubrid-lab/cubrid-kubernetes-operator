@@ -224,8 +224,13 @@ present where it applies, and has the same meaning in every component.
 | `operationID` | A backup, restore, bootstrap or shutdown, from its start to its end |
 | `requestID` | One call from the Operator to an Instance Manager, the same on both sides |
 
-A health probe is logged below info level unless its answer changes. A
-credential is never logged: no token, no `Authorization` header, no
+A health probe is logged below info level unless its answer changes. The
+probes are answered without a token, so `/readyz` says only whether the
+member is ready, and `/livez` only that the manager is alive. Why a member is
+not ready is in the Instance Manager's log (`event` `not_ready`, with the
+`reason`), at info level when the reason is new and below it while it stays
+the same; the member's role is what `/v1/role` answers to a caller with the
+token. A credential is never logged: no token, no `Authorization` header, no
 object-storage key, also not inside a failed command's output.
 
 ## Metrics

@@ -44,6 +44,7 @@ const (
 	eventRequestRefused = "request_refused"
 	eventCommand        = "command"
 	eventOperationState = "operation_state_changed"
+	eventNotReady       = "not_ready"
 
 	reasonNoToken    = "NoToken"
 	reasonWrongToken = "WrongToken"

@@ -97,6 +97,9 @@ type Server struct {
 	// pollStatus is the last status answered on each polled path.
 	pollMu     sync.Mutex
 	pollStatus map[string]int
+	// notReady is why /readyz last answered that the member is not ready;
+	// empty when it answered that it is. Guarded by pollMu.
+	notReady string
 	// timeouts are the per-operation deadlines.
 	timeouts Timeouts
 }
@@ -221,27 +224,61 @@ func (s *Server) livez(w http.ResponseWriter, _ *http.Request) {
 }
 
 // readyz reports DB-instance readiness only (NOT cluster HA health, #14). The
-// instance is ready when it holds an authoritative master/slave role.
+// instance is ready when it holds an authoritative master/slave role, or,
+// standalone, when its server runs.
+//
+// The kubelet asks without a token, and so can anyone who reaches the port.
+// The answer therefore says only whether the member is ready: the role is
+// what /v1/role gives to a caller with the token, and why a member is not
+// ready goes to the manager's log (#333).
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	reason := s.notReadyReason(r.Context())
+	s.logReadiness(r.Context(), reason)
+	if reason != "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]bool{readyKey: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{readyKey: true})
+}
+
+// notReadyReason says why the member is not ready; it is empty for a member
+// that is.
+func (s *Server) notReadyReason(ctx context.Context) string {
 	if s.standaloneDB != "" {
-		running, err := ServerRunning(r.Context(), s.cli, s.standaloneDB)
+		running, err := ServerRunning(ctx, s.cli, s.standaloneDB)
 		switch {
 		case err != nil:
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{readyKey: false, reasonKey: err.Error()})
+			return err.Error()
 		case !running:
-			writeJSON(w, http.StatusServiceUnavailable,
-				map[string]any{readyKey: false, reasonKey: "server " + s.standaloneDB + " is not running"})
-		default:
-			writeJSON(w, http.StatusOK, map[string]any{readyKey: true, "mode": "standalone"})
+			return "server " + s.standaloneDB + " is not running"
 		}
-		return
+		return ""
 	}
-	st := HeartbeatStatus(r.Context(), s.cli)
+	st := HeartbeatStatus(ctx, s.cli)
 	if st.Role == RoleMaster || st.Role == RoleSlave || st.Role == RoleReplica {
-		writeJSON(w, http.StatusOK, map[string]any{readyKey: true, "role": st.Role})
+		return ""
+	}
+	if st.Reason == "" {
+		return "the member has no HA role"
+	}
+	return st.Reason
+}
+
+// logReadiness writes why the member is not ready. The kubelet asks every few
+// seconds, so the same reason is logged below info after the first time.
+func (s *Server) logReadiness(ctx context.Context, reason string) {
+	s.pollMu.Lock()
+	changed := reason != s.notReady
+	s.notReady = reason
+	s.pollMu.Unlock()
+	if reason == "" {
 		return
 	}
-	writeJSON(w, http.StatusServiceUnavailable, map[string]any{readyKey: false, reasonKey: st.Reason})
+	level := slog.LevelDebug
+	if changed {
+		level = slog.LevelInfo
+	}
+	s.log().Log(ctx, level, "Reported the member not ready", "event", eventNotReady, reasonKey, reason)
 }
 
 const (
