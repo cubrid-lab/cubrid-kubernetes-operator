@@ -112,8 +112,16 @@ type CubridHighAvailability struct {
 }
 
 // CubridImage selects the operator-compatible CUBRID image (ADR-0003).
+//
+// The image is repository, repository:tag, or a repository pinned by digest
+// (repository@sha256:...). A tag without a repository names no image, and a
+// tag next to a digest is refused, since it is the digest that is pulled.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.tag) || self.tag.size() == 0 || (has(self.repository) && self.repository.size() > 0)",message="image.tag needs image.repository: a tag alone names no image"
+// +kubebuilder:validation:XValidation:rule="!has(self.tag) || self.tag.size() == 0 || !has(self.repository) || !self.repository.contains('@')",message="image.repository is pinned by digest and cannot be combined with image.tag"
 type CubridImage struct {
-	// repository is the container image repository.
+	// repository is the container image repository, optionally pinned by
+	// digest (repository@sha256:...).
 	// +optional
 	Repository string `json:"repository,omitempty"`
 	// tag is the container image tag. Prefer pinning by digest via repository@sha256.
@@ -122,11 +130,21 @@ type CubridImage struct {
 }
 
 // CubridStorageSpec configures the per-instance data volume (ADR-0004, storage #17).
+//
+// The volumes are made when the cluster is created. The operator neither
+// resizes nor moves them, so a later change of the size or the class would
+// be accepted and never applied; it is refused instead.
+//
+// +kubebuilder:validation:XValidation:rule="quantity(string(self.size)).isGreaterThan(quantity('0'))",message="storage.data.size must be greater than zero"
+// +kubebuilder:validation:XValidation:rule="quantity(string(self.size)).compareTo(quantity(string(oldSelf.size))) == 0",message="storage.data.size cannot be changed after the cluster is created: the operator does not resize volumes"
+// +kubebuilder:validation:XValidation:rule="has(self.storageClassName) == has(oldSelf.storageClassName) && (!has(self.storageClassName) || self.storageClassName == oldSelf.storageClassName)",message="storage.data.storageClassName cannot be changed after the cluster is created: the operator does not move volumes"
 type CubridStorageSpec struct {
-	// size is the requested data volume size.
+	// size is the requested data volume size. It is fixed when the cluster is
+	// created.
 	// +kubebuilder:validation:Required
 	Size resource.Quantity `json:"size"`
-	// storageClassName selects the StorageClass for the data volume.
+	// storageClassName selects the StorageClass for the data volume. It is
+	// fixed when the cluster is created.
 	// +optional
 	StorageClassName *string `json:"storageClassName,omitempty"`
 }

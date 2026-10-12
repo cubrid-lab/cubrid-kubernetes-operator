@@ -297,7 +297,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 
 | Item | Value |
 |---|---|
-| Image | `spec.image` if set, else the operator's `--instance-manager-image` (default `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev`). On an existing cluster a change takes effect only after it is accepted with the `database.cubrid.io/accept-image` annotation (ADR-0009) |
+| Image | `spec.image` if set, else the operator's `--instance-manager-image` (default `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:dev`). `spec.image` is `repository`, `repository` with `tag`, or a `repository` pinned by digest (`repository@sha256:...`); the API refuses a `tag` without a `repository` and a `tag` next to a digest (#305). On an existing cluster a change takes effect only after it is accepted with the `database.cubrid.io/accept-image` annotation (ADR-0009) |
 | User | UID/GID 1000 (the official image's `cubrid` user), `fsGroup` 1000 so the data PVC is writable |
 | Data volume | the `data` PVC at `/var/lib/cubrid` |
 | `CUBRID_DATABASES` | `/var/lib/cubrid/databases`, on the PVC (the image's own default is an anonymous volume) |

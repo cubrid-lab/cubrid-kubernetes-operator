@@ -1198,6 +1198,12 @@ scale-down. Separated volumes (active/archive logs, HA replication logs,
 backup staging) remain an internal design target; controller volume naming
 already isolates `data` so they can be split later without an API break.
 
+The size and the class of the data volume are fixed when the cluster is
+created: the operator does not resize or move volumes, and a StatefulSet's
+claim templates cannot be changed. The API refuses a later change of
+`spec.storage.data.size` or `storageClassName`, and a size that is not
+greater than zero (#305). Online resizing is not implemented.
+
 ---
 
 ## 15. Backup Architecture
