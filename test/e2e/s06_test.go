@@ -63,6 +63,25 @@ func operatorPods(ctx context.Context) ([]string, error) {
 	return utils.GetNonEmptyLines(out), nil
 }
 
+// operatorStartedAt returns when the container of the Operator Pod other
+// than old started running, or the zero time while there is none.
+func operatorStartedAt(ctx context.Context, old string) (time.Time, error) {
+	out, err := utils.Run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "get", "pods", "-l", operatorSelector,
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{" "}{.metadata.uid}{"|"}`+
+			`{.status.containerStatuses[0].state.running.startedAt}{"\n"}{end}`))
+	if err != nil {
+		return time.Time{}, err
+	}
+	for _, line := range utils.GetNonEmptyLines(out) {
+		pod, started, _ := strings.Cut(line, "|")
+		if pod == old || started == "" {
+			continue
+		}
+		return time.Parse(time.RFC3339, started)
+	}
+	return time.Time{}, nil
+}
+
 // operatorAvailable reports whether the Operator's Deployment has its Pod
 // available.
 func operatorAvailable() bool {
@@ -128,19 +147,6 @@ func (f *operatorAbsence) Remove(ctx context.Context) error {
 	return err
 }
 
-// memberUIDs returns the UIDs of the DB Pods, in the order of the members.
-func (r *haRun) memberUIDs() (string, error) {
-	uids := make([]string, 0, len(r.members))
-	for _, pod := range r.members {
-		uid, err := r.kubectl("get", "pod", pod, "-o", "jsonpath={.metadata.uid}")
-		if err != nil {
-			return "", err
-		}
-		uids = append(uids, pod+"="+uid)
-	}
-	return strings.Join(uids, " "), nil
-}
-
 // s06Step registers one variant of S06 (Operator failure) of the scenario
 // contract, on the cluster the earlier steps left.
 func s06Step(r *haRun, variant string) {
@@ -169,8 +175,7 @@ func (r *haRun) s06Restart() {
 	By("recording the starting state")
 	master, _, err := r.master()
 	Expect(err).NotTo(HaveOccurred())
-	membersBefore, err := r.memberUIDs()
-	Expect(err).NotTo(HaveOccurred())
+	membersBefore := r.identities(r.members)
 	pods, err := operatorPods(context.Background())
 	Expect(err).NotTo(HaveOccurred())
 	Expect(pods).To(HaveLen(1), "Operator Pods")
@@ -182,7 +187,10 @@ func (r *haRun) s06Restart() {
 		defer r.killClient(id)
 	}
 
-	By("killing the Operator Pod and waiting for its replacement")
+	By("killing the Operator Pod and waiting for its replacement to write a fresh observation")
+	// goneAt is when the outcome was first checked: after the old Pod was
+	// confirmed gone.
+	var goneAt time.Time
 	outcome := r.runFault(faults.Scenario{
 		Fault:  operatorPodKill{pod: pods[0]},
 		Limits: s03FlowLimits,
@@ -193,7 +201,15 @@ func (r *haRun) s06Restart() {
 			_, err := r.formationTime()
 			return err
 		},
-		Check: func(context.Context) (bool, error) {
+		// The status must come from the replacement: its observation time
+		// is after the old Pod was gone and after the replacement's
+		// container started, since the killed process can outlive its Pod
+		// object for a moment. The API server stores the time to the
+		// second, so "after" is strict.
+		Check: func(ctx context.Context) (bool, error) {
+			if goneAt.IsZero() {
+				goneAt = time.Now()
+			}
 			now, _, err := r.master()
 			if err != nil {
 				return false, nil
@@ -204,7 +220,12 @@ func (r *haRun) s06Restart() {
 			if !operatorAvailable() {
 				return false, nil
 			}
-			if s, err := r.status(); err != nil || s.primary != master {
+			started, err := operatorStartedAt(ctx, pods[0])
+			if err != nil || started.IsZero() {
+				return false, nil
+			}
+			s, err := r.status()
+			if err != nil || s.primary != master || !s.lastObserved.After(goneAt) || !s.lastObserved.After(started) {
 				return false, nil
 			}
 			_, err = r.formationTime()
@@ -241,9 +262,8 @@ func (r *haRun) s06Restart() {
 	now, slaves, err := r.master()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(now).To(Equal(master))
-	membersAfter, err := r.memberUIDs()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(membersAfter).To(Equal(membersBefore), "the DB Pods after the Operator was restarted")
+	Expect(faults.CheckUnchanged(membersBefore, r.identities(r.members))).To(Succeed(),
+		"the DB Pods and their containers after the Operator was restarted")
 
 	By("applying the data rules to every member and to both Services")
 	var report workload.Report
@@ -269,7 +289,11 @@ func (r *haRun) s06Restart() {
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
 		Measurements: map[string]any{
 			// The Operator Pod killed until another one is available and
-			// the status names the master with every condition True.
+			// the status names the master with every condition True, from
+			// an observation the replacement made. With an unchanged
+			// cluster that observation is written within
+			// observationWriteInterval of the replacement's first
+			// reconcile, so this is an upper bound of the resync.
 			"operatorBackWithin":        back.Round(time.Millisecond).String(),
 			"operationsNotAcknowledged": notAcknowledged,
 			"membersRestarted":          0,
@@ -305,7 +329,8 @@ func (r *haRun) s06Absent() {
 
 	By("removing the Operator, then deleting the master Pod while it is absent")
 	absence := &operatorAbsence{}
-	var newMaster, staleStatus, membersBeforeReturn string
+	var newMaster, staleStatus string
+	var membersBeforeReturn map[string]string
 	var masterDeletedAt, lastObservedDuringAbsence time.Time
 	var ageBeforeAbsence time.Duration
 	outcome := r.runFault(faults.Scenario{
@@ -388,8 +413,8 @@ func (r *haRun) s06Absent() {
 			}
 			staleStatus = fmt.Sprintf("currentPrimary=%s PrimaryResolved=%s lastObservedTime=%s age=%s",
 				s.primary, s.conditions["PrimaryResolved"], s.lastObserved.Format(time.RFC3339), age.Round(time.Second))
-			membersBeforeReturn, err = r.memberUIDs()
-			return err == nil, nil
+			membersBeforeReturn = r.identities(r.members)
+			return true, nil
 		},
 	})
 	timeline := writeTimeline("S06/"+s06Absent+"/timeline.jsonl", outcome.Timeline)
@@ -430,9 +455,8 @@ func (r *haRun) s06Absent() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(now).To(Equal(newMaster), "the master after the Operator returned")
 	Expect(nowSlaves).To(ContainElement(master), "the former master is a slave")
-	membersAfter, err := r.memberUIDs()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(membersAfter).To(Equal(membersBeforeReturn), "the DB Pods after the Operator returned")
+	Expect(faults.CheckUnchanged(membersBeforeReturn, r.identities(r.members))).To(Succeed(),
+		"the DB Pods and their containers after the Operator returned")
 
 	By("applying the data rules to every member and to both Services")
 	var report workload.Report

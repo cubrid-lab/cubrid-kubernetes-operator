@@ -31,6 +31,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
@@ -132,8 +133,7 @@ func s14Step(r *haRun) {
 		By("recording the starting state")
 		master, slaves, err := r.master()
 		Expect(err).NotTo(HaveOccurred())
-		membersBefore, err := r.memberUIDs()
-		Expect(err).NotTo(HaveOccurred())
+		membersBefore := r.identities(r.members)
 
 		By("starting a Pod to call from")
 		cmd := exec.Command("kubectl", "apply", "-f", "-")
@@ -249,9 +249,8 @@ func s14Step(r *haRun) {
 		now, _, err := r.master()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(now).To(Equal(master), "the master after the refused requests")
-		membersAfter, err := r.memberUIDs()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(membersAfter).To(Equal(membersBefore), "the DB Pods after the refused requests")
+		Expect(faults.CheckUnchanged(membersBefore, r.identities(r.members))).To(Succeed(),
+			"the DB Pods and their containers after the refused requests")
 		for _, member := range r.members {
 			restarts, err := r.kubectl("get", "pod", member, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
 			Expect(err).NotTo(HaveOccurred())

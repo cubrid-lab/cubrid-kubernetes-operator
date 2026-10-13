@@ -729,7 +729,16 @@ it needs more.
 - **Expected:** SQL through both endpoints is not interrupted by the Operator
   restart alone; in the second variant CUBRID's failover completes while the
   Operator is absent, and after its start the status names the new master.
-  Neither a restarted nor a returning Operator restarts a member.
+  Neither a restarted nor a returning Operator restarts a member: each
+  member keeps its Pod UID and its container restart count.
+- **Fresh status after a restart:** in the `restart` variant the outcome
+  needs a status the replacement Operator wrote: `status.lastObservedTime`
+  later than the moment the old Pod was confirmed gone and later than the
+  start of the replacement's container (a killed process can outlive its Pod
+  object for a moment). Status the killed Operator wrote cannot satisfy it.
+  With an unchanged cluster the replacement writes that time within 30
+  seconds (`observationWriteInterval`) of its first reconcile, so
+  `operatorBackWithin` is an upper bound of the resync by that much.
 - **Limit while the Operator is absent, observed on Kind:** nobody updates
   `status`. After the failover it went on naming the former master as
   `currentPrimary` with `PrimaryResolved=True` until the Operator was back.
