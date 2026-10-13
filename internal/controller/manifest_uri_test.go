@@ -87,9 +87,8 @@ func uploadedManifestURI(t *testing.T, bucket, prefix string) string {
 }
 
 // destinationCase is a bucket and prefix a backup is written under: whether
-// the API server admits them on a CubridBackup destination and on a
-// CubridCluster spec.objectStorage, and whether the operator runs a backup
-// to them that an earlier release stored.
+// the API server admits them on a CubridBackup destination, and whether the
+// operator runs a backup to them.
 type destinationCase struct {
 	name     string
 	bucket   string
@@ -108,17 +107,21 @@ var destinationCases = []destinationCase{
 	{"one segment", destinationBucket, destinationPrefix, true, true},
 	{"two segments", destinationBucket, "team-a/nightly", true, true},
 	{"dotted bucket and segments", "my.backups", "v1.2/.x/a..b", true, true},
-	{"longest prefix", destinationBucket, strings.Repeat("p", 512), true, true},
+	{"trailing slash", destinationBucket, "backups/", true, true},
+	{"512-character prefix", destinationBucket, strings.Repeat("p", 512), true, true},
+	// Admitted, but the URI the artifact would have is longer than a
+	// manifestUri may be: the operator runs no backup.
+	{"longest prefix", destinationBucket, strings.Repeat("p", 1024), true, false},
 
 	// Refused at admission. The operator still runs a backup an earlier
 	// release stored when the key it writes is the one its URI names:
-	// path.Join removes a trailing or doubled slash and resolves ".".
-	{"trailing slash", destinationBucket, "backups/", false, true},
+	// path.Join removes a doubled slash and resolves ".".
+	{"two trailing slashes", destinationBucket, "backups//", false, true},
 	{"empty segment", destinationBucket, "a//b", false, true},
 	{"current segment", destinationBucket, ".", false, true},
 	{"current segment first", destinationBucket, "./a", false, true},
 	{"parent segment resolved", destinationBucket, "a/../b", false, true},
-	{"prefix over the length limit", destinationBucket, strings.Repeat("p", 513), false, true},
+	{"prefix over the length limit", destinationBucket, strings.Repeat("p", 1025), false, false},
 	// Refused at admission, and the operator runs no backup: the URI of the
 	// artifact would be refused as a recovery source.
 	{"leading slash", destinationBucket, "/backups", false, false},
@@ -252,6 +255,7 @@ var (
 	manifestURISchemaPath        = schemaPath("spec", "bootstrap", "recovery", "manifestUri")
 	clusterBucketSchemaPath      = schemaPath("spec", "objectStorage", "bucket")
 	clusterPrefixSchemaPath      = schemaPath("spec", "objectStorage", "prefix")
+	clusterSchemaUnrestricted    = []string(nil)
 	destinationBucketSchemaPath  = schemaPath("spec", "destination", "objectStorage", "bucket")
 	destinationPrefixSchemaPath  = schemaPath("spec", "destination", "objectStorage", "prefix")
 	bucketRule                   = "self == '' || (self.matches('" + databasev1alpha1.S3BucketNamePattern + "') && !self.matches('" + databasev1alpha1.S3BucketAdjacentDotsPattern + "'))"
@@ -272,8 +276,10 @@ func TestStorageRulesInCRDsMatchTheOperator(t *testing.T) {
 			"self.matches('" + databasev1alpha1.ManifestURIPattern + "')",
 			"!self.matches('" + databasev1alpha1.ManifestURIBucketAdjacentDotsPattern + "')",
 		}},
-		{clustersCRDFile, clusterBucketSchemaPath, 63, []string{bucketRule}},
-		{clustersCRDFile, clusterPrefixSchemaPath, databasev1alpha1.S3KeyPrefixMaxLength, []string{prefixRule}},
+		// spec.objectStorage of a cluster places the seed backups of an HA
+		// cluster, which are never read through a manifestUri: unrestricted.
+		{clustersCRDFile, clusterBucketSchemaPath, 0, clusterSchemaUnrestricted},
+		{clustersCRDFile, clusterPrefixSchemaPath, 0, clusterSchemaUnrestricted},
 		{backupsFile, destinationBucketSchemaPath, 63, []string{bucketRule}},
 		{backupsFile, destinationPrefixSchemaPath, databasev1alpha1.S3KeyPrefixMaxLength, []string{prefixRule}},
 	}
@@ -294,7 +300,7 @@ func TestStorageRulesInCRDsMatchTheOperator(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("%s: schema %v not found: %v", tc.file, tc.path, err)
 		}
-		if got := field["maxLength"]; got != float64(tc.maxLength) {
+		if got, want := field["maxLength"], any(float64(tc.maxLength)); tc.maxLength == 0 && got != nil || tc.maxLength > 0 && got != want {
 			t.Errorf("%s %v: maxLength = %v, want %d", tc.file, tc.path, got, tc.maxLength)
 		}
 		validations, _, _ := unstructured.NestedSlice(field, "x-kubernetes-validations")
@@ -514,7 +520,7 @@ var _ = Describe("The object-storage location of a backup (#437)", Serial, func(
 	ctx := context.Background()
 	backupCRD := installedSchemas{ctx: ctx, name: "cubridbackups.database.cubrid.io"}
 
-	It("is admitted on a CubridBackup and a CubridCluster only when a recovery accepts the artifact URI", func() {
+	It("is admitted on a CubridBackup only in the form a recovery accepts, and on a CubridCluster as before", func() {
 		for i, tc := range destinationCases {
 			backup := destinationBackup(fmt.Sprintf("destination-%d", i), "no-cluster", tc.bucket, tc.prefix)
 			backup.UID = ""
@@ -530,16 +536,12 @@ var _ = Describe("The object-storage location of a backup (#437)", Serial, func(
 			cluster.Spec.ObjectStorage.Bucket = tc.bucket
 			cluster.Spec.ObjectStorage.Prefix = tc.prefix
 			err = k8sClient.Create(ctx, cluster)
-			Expect(err == nil).To(Equal(tc.admitted), "%s: CubridCluster admission: %v", tc.name, err)
-			if err == nil {
-				Expect(k8sClient.Delete(ctx, cluster)).To(Succeed())
-			} else {
-				Expect(apierrors.IsInvalid(err)).To(BeTrue(), "%s: %v", tc.name, err)
-			}
+			Expect(err).NotTo(HaveOccurred(), "%s: the object storage of a cluster is not restricted", tc.name)
+			Expect(k8sClient.Delete(ctx, cluster)).To(Succeed())
 
 			if tc.admitted {
-				Expect(backupDestinationRefusal(destinationBackup("b", "c", tc.bucket, tc.prefix), sourceCluster())).
-					To(BeEmpty(), "%s: an admitted destination is refused by the operator", tc.name)
+				runs := backupDestinationRefusal(destinationBackup("b", "c", tc.bucket, tc.prefix), sourceCluster()) == ""
+				Expect(runs).To(Equal(tc.runs), "%s: the operator runs an admitted backup", tc.name)
 			}
 		}
 

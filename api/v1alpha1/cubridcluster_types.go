@@ -163,8 +163,8 @@ type CubridStorage struct {
 }
 
 // The accepted form of spec.bootstrap.recovery.manifestUri, and of the
-// bucket and prefix the operator writes backups under (ADR-0008). The
-// XValidation markers on RecoverySource.ManifestURI, CubridObjectStorage and
+// bucket and prefix a CubridBackup is written under (ADR-0008). The
+// XValidation markers on RecoverySource.ManifestURI and
 // ObjectStorageDestination carry these expressions verbatim, and the operator
 // applies the same ones before it restores or backs up, so the API server and
 // the operator accept the same URIs.
@@ -193,12 +193,15 @@ const (
 
 	// S3BucketNamePattern must match a bucket field.
 	S3BucketNamePattern = `^` + S3BucketPattern + `$`
-	// S3KeyPrefixPattern must match a non-empty prefix field: segments
-	// separated by single slashes, without a leading or trailing slash.
-	S3KeyPrefixPattern = `^` + S3KeySegmentPattern + `(/` + S3KeySegmentPattern + `)*$`
-	// S3KeyPrefixMaxLength is the longest prefix field. The operator adds
-	// the cluster UID, the database and the backup UID or seed name below it.
-	S3KeyPrefixMaxLength = 512
+	// S3KeyPrefixPattern must match a non-empty CubridBackup destination
+	// prefix: segments separated by single slashes, without a leading slash,
+	// and with at most one trailing slash, which the key written leaves out.
+	S3KeyPrefixPattern = `^` + S3KeySegmentPattern + `(/` + S3KeySegmentPattern + `)*/?$`
+	// S3KeyPrefixMaxLength is the longest CubridBackup destination prefix.
+	// The operator adds the cluster UID, the database and the backup UID
+	// below it, and runs no backup whose artifact URI is longer than
+	// ManifestURIMaxLength.
+	S3KeyPrefixMaxLength = 1024
 )
 
 // RecoverySource points restore-as-bootstrap at an object-storage backup
@@ -247,19 +250,14 @@ type CubridObjectStorage struct {
 	// bucket holds the artifacts the operator creates for itself: the backup
 	// the other members of an HA cluster are seeded from. A CubridBackup
 	// names its own bucket. Required for an HA cluster: this is what the
-	// current way of seeding the members needs (ADR-0010). It follows the
-	// bucket rules of manifestUri (ADR-0008).
+	// current way of seeding the members needs (ADR-0010). The seed backups
+	// are never read through a manifestUri, so bucket and prefix are not
+	// held to its rules (ADR-0008).
 	// +optional
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:XValidation:rule="self == '' || (self.matches('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$') && !self.matches('[.][.]'))",message="bucket must be an S3 bucket name: 3 to 63 lower-case letters, digits, dots and hyphens, starting and ending with a letter or digit, without two adjacent dots"
 	Bucket string `json:"bucket,omitempty"`
 
-	// prefix is the key prefix under bucket for those artifacts. It follows
-	// the prefix rules of manifestUri, without a leading or trailing slash
-	// (ADR-0008).
+	// prefix is the key prefix under bucket for those artifacts.
 	// +optional
-	// +kubebuilder:validation:MaxLength=512
-	// +kubebuilder:validation:XValidation:rule="self == '' || self.matches('^([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]])(/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))*$')",message="prefix must be segments separated by single slashes, without a leading or trailing slash, and no segment may be empty, '.' or '..' or have '?', '#', '%' or an ASCII whitespace or control character: a recovery accepts no other manifestUri"
 	Prefix string `json:"prefix,omitempty"`
 
 	// credentialsSecretRef names a Secret in the cluster's namespace with the

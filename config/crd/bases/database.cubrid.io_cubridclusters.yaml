@@ -357,16 +357,10 @@ spec:
                       bucket holds the artifacts the operator creates for itself: the backup
                       the other members of an HA cluster are seeded from. A CubridBackup
                       names its own bucket. Required for an HA cluster: this is what the
-                      current way of seeding the members needs (ADR-0010). It follows the
-                      bucket rules of manifestUri (ADR-0008).
-                    maxLength: 63
+                      current way of seeding the members needs (ADR-0010). The seed backups
+                      are never read through a manifestUri, so bucket and prefix are not
+                      held to its rules (ADR-0008).
                     type: string
-                    x-kubernetes-validations:
-                    - message: 'bucket must be an S3 bucket name: 3 to 63 lower-case
-                        letters, digits, dots and hyphens, starting and ending with
-                        a letter or digit, without two adjacent dots'
-                      rule: self == '' || (self.matches('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$')
-                        && !self.matches('[.][.]'))
                   credentialsSecretRef:
                     description: |-
                       credentialsSecretRef names a Secret in the cluster's namespace with the
@@ -399,19 +393,8 @@ spec:
                       development object stores only.
                     type: boolean
                   prefix:
-                    description: |-
-                      prefix is the key prefix under bucket for those artifacts. It follows
-                      the prefix rules of manifestUri, without a leading or trailing slash
-                      (ADR-0008).
-                    maxLength: 512
+                    description: prefix is the key prefix under bucket for those artifacts.
                     type: string
-                    x-kubernetes-validations:
-                    - message: 'prefix must be segments separated by single slashes,
-                        without a leading or trailing slash, and no segment may be
-                        empty, ''.'' or ''..'' or have ''?'', ''#'', ''%'' or an ASCII
-                        whitespace or control character: a recovery accepts no other
-                        manifestUri'
-                      rule: self == '' || self.matches('^([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]])(/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))*$')
                   region:
                     description: region is the bucket region, when the service needs
                       one.

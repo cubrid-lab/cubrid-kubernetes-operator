@@ -120,7 +120,10 @@ fixed key; `status.databases[].haConfigured` and `BootstrapReady=True`
 cluster without `spec.objectStorage`, a bucket and a named credentials Secret
 (#285), because this way of seeding needs them; it is a rule of the current
 transport, not of HA (#256). A cluster that an earlier version admitted
-without them stops after the first database with `SeedStorageNotConfigured`. A recovery bootstrap seeds the other members the
+without them stops after the first database with `SeedStorageNotConfigured`. The
+bucket and prefix of `spec.objectStorage` are not held to the `manifestUri`
+rules of ADR-0008 (#320, #437): a seed backup is restored by its bucket and
+prefix, never through a `manifestUri`. A recovery bootstrap seeds the other members the
 same way, starting from the member its backup was restored on (ADR-0008,
 #268).
 

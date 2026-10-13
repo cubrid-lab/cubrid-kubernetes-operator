@@ -146,11 +146,12 @@ type ObjectStorageDestination struct {
 	Bucket string `json:"bucket"`
 
 	// prefix is the key prefix under the bucket. It follows the prefix rules
-	// of a CubridCluster manifestUri, without a leading or trailing slash
-	// (ADR-0008).
+	// of a CubridCluster manifestUri, without a leading slash; one trailing
+	// slash is left out of the key (ADR-0008). A backup whose artifact URI
+	// would be longer than a manifestUri may be is not run.
 	// +optional
-	// +kubebuilder:validation:MaxLength=512
-	// +kubebuilder:validation:XValidation:rule="self == '' || self.matches('^([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]])(/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))*$')",message="prefix must be segments separated by single slashes, without a leading or trailing slash, and no segment may be empty, '.' or '..' or have '?', '#', '%' or an ASCII whitespace or control character: a recovery accepts no other manifestUri"
+	// +kubebuilder:validation:MaxLength=1024
+	// +kubebuilder:validation:XValidation:rule="self == '' || self.matches('^([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]])(/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))*/?$')",message="prefix must be segments separated by single slashes, without a leading slash or more than one trailing slash, and no segment may be empty, '.' or '..' or have '?', '#', '%' or an ASCII whitespace or control character: a recovery accepts no other manifestUri"
 	Prefix string `json:"prefix,omitempty"`
 }
 
