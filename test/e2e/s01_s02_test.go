@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -382,14 +383,34 @@ func s01AndS02Steps(r *haRun) {
 		_, err = runSQL(csqlInPod(r.namespace, master, r.database),
 			"ALTER TABLE ledger ADD COLUMN extra VARCHAR(16);"+
 				" CREATE TABLE s02_added (id INT PRIMARY KEY, v VARCHAR(16));"+
-				" INSERT INTO s02_added VALUES (1, 'added'); COMMIT;")
+				" INSERT INTO s02_added VALUES (1, 'added');"+
+				" CREATE TABLE s02_marker (id INT PRIMARY KEY, v VARCHAR(40)); COMMIT;")
 		Expect(err).NotTo(HaveOccurred())
 
 		By("running inserts and rolled-back transactions through the read-write Service")
 		run, err := r.runWorkload("CLIENT_ID=c2 OPS=40")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(run.Counts[workload.Acknowledged]).To(Equal(40), "with no fault every operation is acknowledged")
+
+		// replication_limit is timed on one row, committed after everything
+		// above, until each slave returns it. The clock starts before the
+		// commit is sent, so the time is an upper bound; the full check below
+		// is not part of it.
+		By("committing a marker row on the master and timing until every slave returns it")
+		marker := fmt.Sprintf("marker-%d", time.Now().UnixNano())
 		committed := time.Now()
+		_, err = runSQL(csqlInPod(r.namespace, master, r.database),
+			"INSERT INTO s02_marker VALUES (1, '"+marker+"'); COMMIT;")
+		Expect(err).NotTo(HaveOccurred())
+		visibleCtx, cancelVisible := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancelVisible()
+		seen, err := workload.WaitVisible(visibleCtx, committed, slaves, 200*time.Millisecond,
+			func(_ context.Context, slave string) (bool, error) {
+				values, err := r.memberValues(slave, "SELECT v FROM s02_marker WHERE id = 1;")
+				return slices.Equal(values, []string{marker}), err
+			})
+		Expect(err).NotTo(HaveOccurred())
+		_, replication := workload.Slowest(seen)
 
 		By("waiting until every member holds the same rows and the same schema")
 		var report workload.Report
@@ -412,8 +433,8 @@ func s01AndS02Steps(r *haRun) {
 			}
 		}
 		Eventually(converged, 2*time.Minute, time.Second).Should(Succeed())
-		// An upper bound: it includes the time the checks themselves take.
-		replication := time.Since(committed)
+		// Recorded, not judged: it includes the time the checks take.
+		fullCheck := time.Since(committed)
 
 		By("reading the fail count of each slave's applier")
 		for _, slave := range slaves {
@@ -484,6 +505,7 @@ func s01AndS02Steps(r *haRun) {
 			ID: "S02",
 			Measurements: map[string]any{
 				"replicationObservedWithin": replication.Round(time.Millisecond).String(),
+				"fullCheckPassedWithin":     fullCheck.Round(time.Millisecond).String(),
 				"slaveReplacementTime":      outcome.OutcomeAt.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String(),
 				"acknowledgedMissing":       report.AcknowledgedMissing,
 			},

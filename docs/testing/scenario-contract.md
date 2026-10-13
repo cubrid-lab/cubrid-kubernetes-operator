@@ -578,8 +578,14 @@ it needs more.
   slave Pod and write again.
 - **CUBRID is expected to** (Manual; POC-3): apply committed rows and schema
   changes on every slave; never apply a rolled-back change.
-- **Expected:** after `replication_limit`, every member returns the same rows
-  and the same schema; the log applier's fail count is zero on every slave.
+- **Expected:** a marker row committed on the master after the writes and
+  the schema change is returned by every slave within `replication_limit`;
+  then every member returns the same rows and the same schema, and the log
+  applier's fail count is zero on every slave. Only the marker is timed: the
+  clock starts before its commit is sent and stops when the last slave
+  returns it, so the slower full check is not part of the time. The full
+  check must pass within 2 minutes of the marker's commit, and its time is
+  recorded as `fullCheckPassedWithin`.
   The replaced slave returns as a slave, the master does not change, and the
   replaced slave holds the rows written before and after its replacement.
 - **Must never happen:** a member reported as a healthy slave whose applier
