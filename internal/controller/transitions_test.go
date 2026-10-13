@@ -136,6 +136,9 @@ func TestTransitions_Members(t *testing.T) {
 		"a stall ended":            {member(slave, repl(10, 9, 0)), member(slave, repl(11, 0, -1)), "member_replication_resumed/"},
 		"only the counters moved":  {member(slave, repl(10, 0, -1)), member(slave, repl(40, 2, -1)), ""},
 		"a member seen first time": {&databasev1alpha1.CubridClusterStatus{}, member(slave, nil), "member_role_changed/"},
+		// A standalone member is listed with the role unknown: no role changed.
+		"a member seen first time without a role": {&databasev1alpha1.CubridClusterStatus{},
+			member(databasev1alpha1.RoleUnknown, nil), ""},
 	} {
 		got := transitions(tc.before, tc.after)
 		if events(got) != tc.want {

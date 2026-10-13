@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +37,10 @@ const conditionUpdating = "Updating"
 // reasonImageChangeNotAccepted is the Updating reason while the Pod template
 // keeps an image because the one the spec asks for is not accepted.
 const reasonImageChangeNotAccepted = "ImageChangeNotAccepted"
+
+// standaloneVersionRetryInterval is how soon the member of a standalone
+// cluster is asked again while its engine version is not known.
+const standaloneVersionRetryInterval = 30 * time.Second
 
 // revisionHashLabel names, on a StatefulSet Pod, the revision it was made from.
 const revisionHashLabel = "controller-revision-hash"
@@ -300,12 +305,17 @@ func agreedEngineVersion(instances []databasev1alpha1.InstanceStatus, expected i
 // answer says, and no primary is derived from it. The engine version does
 // not depend on the role and is taken from any reachable, fresh answer, as
 // for an HA member. Ready is the Pod's readiness, which is the member's
-// /readyz.
-func (r *CubridClusterReconciler) reconcileStandaloneStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, count int32) {
+// /readyz. It returns the members whose Instance Manager refused the
+// cluster's token.
+func (r *CubridClusterReconciler) reconcileStandaloneStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, count int32) []string {
 	members := memberNames(cluster, count)
 	obs := make(map[string]RoleObservation, len(members))
+	var refused []string
 	for _, m := range members {
 		obs[m] = r.Prober.ProbeRole(ctx, m, cluster.Namespace)
+		if obs[m].TokenRefused {
+			refused = append(refused, m)
+		}
 	}
 	instances := instanceStatuses(members, obs, r.now(), cluster.Status.Instances)
 	for i := range instances {
@@ -318,6 +328,40 @@ func (r *CubridClusterReconciler) reconcileStandaloneStatus(ctx context.Context,
 		}
 	}
 	cluster.Status.Instances = instances
+	return refused
+}
+
+// reconcileStandaloneUpdate observes the member of a standalone cluster and
+// applies the same engine guard as for an HA cluster (ADR-0009). When the
+// guard passes, Updating tells whether the member runs the desired revision.
+func (r *CubridClusterReconciler) reconcileStandaloneUpdate(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	sts *appsv1.StatefulSet, count int32) {
+	refused := r.reconcileStandaloneStatus(ctx, cluster, count)
+	if r.reconcileUpdateGuard(cluster) {
+		if !recoveryActive(cluster) {
+			r.reportStandaloneRevision(ctx, cluster, sts)
+		}
+		return
+	}
+	// A version missing because the member refused the token: the guard's
+	// message says that as well.
+	if updating := meta.FindStatusCondition(cluster.Status.Conditions, conditionUpdating); len(refused) > 0 && updating != nil {
+		updating.Message += "; the Instance Manager of " + strings.Join(refused, ", ") + " refused the cluster's token"
+	}
+}
+
+// standaloneVersionPending reports whether the member of a standalone
+// cluster has to be asked again because its engine version is not known.
+func (r *CubridClusterReconciler) standaloneVersionPending(cluster *databasev1alpha1.CubridCluster) bool {
+	if cluster.Spec.HighAvailability.Enabled || r.Prober == nil || recoveryActive(cluster) {
+		return false
+	}
+	for _, in := range cluster.Status.Instances {
+		if in.ObservedEngineVersion == "" {
+			return true
+		}
+	}
+	return len(cluster.Status.Instances) == 0
 }
 
 func podReady(pod *corev1.Pod) bool {
@@ -332,9 +376,16 @@ func podReady(pod *corev1.Pod) bool {
 // reportStandaloneRevision sets the Updating condition of a standalone
 // cluster whose engine guard passed. The operator never replaces the Pod of
 // a standalone cluster: a changed Pod template takes effect when the Pod is
-// replaced by hand.
+// replaced by hand. status.update is recorded as for an HA cluster.
 func (r *CubridClusterReconciler) reportStandaloneRevision(ctx context.Context, cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) {
 	desiredRev := sts.Status.UpdateRevision
+	if desiredRev != "" {
+		cluster.Status.Update = &databasev1alpha1.UpdateStatus{
+			DesiredRevision: desiredRev,
+			CurrentRevision: sts.Status.CurrentRevision,
+			EngineVersion:   cluster.Status.ObservedEngineVersion,
+		}
+	}
 	name := memberNames(cluster, 1)[0]
 	var pod corev1.Pod
 	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, &pod)

@@ -178,7 +178,10 @@ func memberTransitions(before, after *databasev1alpha1.CubridClusterStatus) []tr
 	var out []transition
 	for _, in := range after.Instances {
 		was, seen := old[in.Name]
-		if !seen || was.Role != in.Role {
+		// A member first listed without a known role, as a standalone
+		// member always is, has changed no role.
+		firstUnknown := !seen && in.Role == databasev1alpha1.RoleUnknown
+		if (!seen || was.Role != in.Role) && !firstUnknown {
 			out = append(out, transition{
 				Event:   "member_role_changed",
 				Message: fmt.Sprintf("Member %s changed role from %q to %q", in.Name, was.Role, in.Role),

@@ -89,8 +89,41 @@ const (
 	metricMemberRole  = "cubrid_instance_role"
 )
 
+// metricCluster is an HA cluster: only its members have roles and observation
+// times to export.
 func metricCluster(name string) *databasev1alpha1.CubridCluster {
-	return &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "metrics-ns"}}
+	return &databasev1alpha1.CubridCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "metrics-ns"},
+		Spec:       databasev1alpha1.CubridClusterSpec{HighAvailability: databasev1alpha1.CubridHighAvailability{Enabled: true}},
+	}
+}
+
+// A standalone member has no HA role and is not observed periodically, so it
+// exports neither a role nor an observation time; an alert on an unknown role
+// or a stale observation would fire for it all the time (#181).
+func TestPublishClusterMetrics_Standalone(t *testing.T) {
+	const name = "publish-standalone-0"
+	answered := metav1.NewTime(time.Unix(1_760_000_030, 0))
+	c := metricCluster("publish-standalone")
+	c.Spec.HighAvailability.Enabled = false
+	c.Status.Instances = []databasev1alpha1.InstanceStatus{{
+		Name: name, Role: databasev1alpha1.RoleUnknown, Ready: true,
+		ObservedEngineVersion: fullEngineVersion, LastObservedTime: &answered,
+	}}
+	publishClusterMetrics(c)
+
+	member := map[string]string{serviceRoleMember: name}
+	if got, ok := sample(t, metricMemberReady, c, member); !ok || got != 1 {
+		t.Errorf("%s = %v (sample: %v), want 1", metricMemberReady, got, ok)
+	}
+	for _, role := range []string{"master", "slave", "replica", "unknown"} {
+		if got, ok := sample(t, metricMemberRole, c, map[string]string{serviceRoleMember: name, "role": role}); ok {
+			t.Errorf("%s{role=%q} = %v, want no sample", metricMemberRole, role, got)
+		}
+	}
+	if got, ok := sample(t, "cubrid_instance_last_observation_timestamp_seconds", c, member); ok {
+		t.Errorf("cubrid_instance_last_observation_timestamp_seconds = %v, want no sample", got)
+	}
 }
 
 // The metrics are the status in numbers: what a Condition says is what its

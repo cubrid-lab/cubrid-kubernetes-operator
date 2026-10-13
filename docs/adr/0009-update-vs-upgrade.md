@@ -117,13 +117,25 @@ mismatch are decided in #321, and the standalone guard follows whatever that
 decides for an HA cluster. When the guard passes, `Updating` says whether the
 member runs the StatefulSet's update revision (`UpToDate`) or not
 (`AutomaticReplacementDisabled`); the operator never replaces the Pod of a
-standalone cluster, whatever `AutomaticReplacement` says. A standalone member
-is not observed periodically, only when a reconcile runs.
+standalone cluster, whatever `AutomaticReplacement` says. `status.update`
+(`desiredRevision`, `currentRevision`, `engineVersion`) is recorded as for an
+HA cluster. A single standalone member that is replaced by a Pod of another
+engine series reports `UpdateBlockedMixedEngineVersions`: the reason names
+a member that differs from the baseline, also when it is the only one. A
+standalone member is not observed periodically (#155), only when a reconcile
+runs, except that it is asked again every 30 seconds while its engine
+version is not known. When its Instance Manager refuses the cluster's token,
+the blocking message says so.
 
 `ImageChangeNotAccepted` describes a pending image. Once the Pod template
 carries the image the spec asks for, the condition is removed when no other
-step of the reconcile has replaced it, as for a cluster without a role
-prober; it is not left standing after the acceptance (#181).
+step of the reconcile has replaced it; it is not left standing after the
+acceptance (#181). Its removal means only that the template carries the
+accepted image. Under `OnDelete` the Pods may still run the old one: with a
+role prober, `Updating` then says so (`AutomaticReplacementDisabled` names
+the outdated member, on an HA and on a standalone cluster); a cluster
+without a role prober has no step that compares the Pods' revisions, so it
+reports nothing about them.
 
 Status records: `observedEngineVersion` (cluster + per member),
 per-member `imageID`/digest, `update.desiredRevision`,

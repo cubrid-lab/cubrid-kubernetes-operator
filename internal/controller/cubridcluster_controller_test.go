@@ -515,7 +515,9 @@ var _ = Describe("CubridCluster Controller", func() {
 			})
 			r := &CubridClusterReconciler{
 				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
-				Prober: &memberProber{},
+				// A member that reported its engine version: one that did
+				// not is asked again until it does (#181).
+				Prober: &standaloneProber{version: fullEngineVersion},
 			}
 			res, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())

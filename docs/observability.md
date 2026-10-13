@@ -164,10 +164,14 @@ issue decides, these limits apply:
 A standalone cluster's member is asked for its engine version in every
 reconcile, but it is not observed periodically: a reconcile runs on a change
 of the cluster or of its objects, such as its Pod's readiness, not every 10
-seconds. `status.lastObservedTime` stays unset for it, and
-`status.instances[].lastObservedTime` is the time of the reconcile in which
-the member last answered, so its age tells how old the standalone
-observation is. The 60-second rule below is for an HA cluster only.
+seconds. Only while the member's engine version is not known is it asked
+again every 30 seconds (`standaloneVersionRetryInterval`), so that an idle
+cluster does not stay blocked until an unrelated event. Each such reconcile
+waits up to 5 seconds for the member's answer. `status.lastObservedTime`
+stays unset for it, and `status.instances[].lastObservedTime` is the time of
+the reconcile in which the member last answered, so its age tells how old
+the standalone observation is. The 60-second rule below is for an HA cluster
+only, and the member's time is not exported as a metric.
 
 An HA cluster with role discovery publishes when its HA status was observed:
 
@@ -211,16 +215,21 @@ An HA cluster with role discovery publishes when its HA status was observed:
   an Instance Manager may take up to 30 seconds), the end of an Instance
   Manager token overlap (each member is asked about the token one after
   another, up to 5 seconds each), and a member that refuses the first of two
-  tokens (the role query is sent twice). A reader that sees a stale status
+  tokens (the role query is sent twice). A standalone cluster's reconcile
+  also asks its member, up to 5 seconds, but it publishes no cluster time
+  this rule applies to. A reader that sees a stale status
   during these phases sees it correctly as "not observed recently", not as
   a stopped Operator; the Operator's log and Events tell which it is.
 - A member whose `lastObservedTime` is older than the cluster's did not answer
   in the observation the cluster's time comes from; its role is then
   `unknown`.
-- The fields are not set for a cluster without HA or without role discovery,
-  whose roles are never observed. The metrics
-  `cubrid_cluster_last_observation_timestamp_seconds` and
-  `cubrid_instance_last_observation_timestamp_seconds` export these times.
+- `status.lastObservedTime` is not set for a cluster without HA or without
+  role discovery, whose roles are never observed. Without role discovery
+  `status.instances[].lastObservedTime` is not set either; a standalone
+  cluster with role discovery sets it for its member, as described above.
+  The metrics `cubrid_cluster_last_observation_timestamp_seconds` and
+  `cubrid_instance_last_observation_timestamp_seconds` export these times,
+  the latter for the members of an HA cluster only.
 - A Condition's `lastTransitionTime` is when its status last changed, not when
   it was last confirmed.
 - No Condition says "stale", because nobody would be there to set it; the age
@@ -241,7 +250,7 @@ underscores.
 | `PrimaryResolved` becomes `True` again | `PrimaryResolved` | Normal | `primary_resolved` |
 | `ReplicationHealthy` becomes `False` | `ReplicationStalled` or `ApplyFailures` | Warning | `replication_stalled`, `apply_failures` |
 | `ReplicationHealthy` becomes `True` again | `ReplicationRecovered` | Normal | `replication_recovered` |
-| A member's role changes | none | | `member_role_changed` |
+| A member's role changes; a member first listed with the role `unknown`, as a standalone member always is, is no change | none | | `member_role_changed` |
 | Any other Condition changes its status or reason | none | | `condition_changed` |
 | The bootstrap reaches its next phase | `DatabaseCreated`, `DatabaseRestored` (a recovery restore completed and seeding starts), `PeersSeeded` | Normal | `bootstrap_phase_changed` |
 | A member is copied from another member than the one the database was created or restored on, because that member is no longer the master | `SeedSourceChanged` | Normal | `condition_changed` (`BootstrapReady`, reason `SeedSourceSelected`) |
@@ -335,11 +344,11 @@ otherwise.
 | `cubrid_cluster_replication_healthy` | `namespace`, `cluster` | 1 or 0; no sample while the Condition is `Unknown` |
 | `cubrid_cluster_last_observation_timestamp_seconds` | `namespace`, `cluster` | time of the last finished observation |
 | `cubrid_instance_ready` | `namespace`, `cluster`, `member` | 1 or 0 |
-| `cubrid_instance_role` | `namespace`, `cluster`, `member`, `role` | 1 for the member's role, 0 for the others; `role` is `master`, `slave`, `replica` or `unknown` |
+| `cubrid_instance_role` | `namespace`, `cluster`, `member`, `role` | 1 for the member's role, 0 for the others; `role` is `master`, `slave`, `replica` or `unknown`; no sample for the member of a standalone cluster, which has no HA role |
 | `cubrid_instance_replication_observation_available` | `namespace`, `cluster`, `member` | for a slave: 1 while the status holds a reading of its applier (`instances[].replication`), else 0; no sample for a member that is no slave |
 | `cubrid_instance_replication_delayed_pages` | `namespace`, `cluster`, `member` | copied log pages not applied yet; no sample without a reading |
 | `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set, 0 while it is not; no sample without a reading |
-| `cubrid_instance_last_observation_timestamp_seconds` | `namespace`, `cluster`, `member` | time of the member's last answer; no sample for a member that never answered |
+| `cubrid_instance_last_observation_timestamp_seconds` | `namespace`, `cluster`, `member` | time of the member's last answer; no sample for a member that never answered, nor for the member of a standalone cluster, which is not observed periodically |
 
 Every metric is taken from the cluster's status when that status was written,
 so a metric and the Condition or status field it mirrors come from the same

@@ -42,12 +42,21 @@ type standaloneProber struct {
 	mu      sync.Mutex
 	version string
 	asked   []string
+	// down makes the member unreachable; refused makes its Instance
+	// Manager refuse the cluster's token.
+	down, refused bool
 }
 
 func (p *standaloneProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.asked = append(p.asked, podName)
+	switch {
+	case p.refused:
+		return RoleObservation{Reachable: false, TokenRefused: true, ObservedAt: time.Now()}
+	case p.down:
+		return RoleObservation{Reachable: false, ObservedAt: time.Now()}
+	}
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: time.Now(), EngineVersion: p.version}
 }
 
@@ -76,9 +85,10 @@ var _ = Describe("Engine version of a standalone member (ADR-0009, #181)", func(
 		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, c))).To(Succeed()) })
 		return types.NamespacedName{Name: c.Name, Namespace: ns}
 	}
-	reconcileOnce := func(r *CubridClusterReconciler, key types.NamespacedName) {
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+	reconcileOnce := func(r *CubridClusterReconciler, key types.NamespacedName) reconcile.Result {
+		res, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
+		return res
 	}
 	get := func(key types.NamespacedName) *databasev1alpha1.CubridCluster {
 		c := &databasev1alpha1.CubridCluster{}
@@ -139,6 +149,35 @@ var _ = Describe("Engine version of a standalone member (ADR-0009, #181)", func(
 		cond := updating(key)
 		Expect(cond).NotTo(BeNil())
 		Expect(cond.Reason).To(Equal("UpToDate"))
+		Expect(get(key).Status.Update).To(Equal(&databasev1alpha1.UpdateStatus{
+			DesiredRevision: "rev-1", CurrentRevision: "rev-1", EngineVersion: fullEngineVersion,
+		}), "status.update as for an HA cluster")
+	})
+
+	It("asks again while the version is not known, and not once it is (#155)", func() {
+		prober := &standaloneProber{down: true}
+		r := reconcilerWith(prober)
+		key := create(standaloneCluster("sa-retry"))
+
+		res := reconcileOnce(r, key)
+		Expect(updating(key).Reason).To(Equal("UpdateBlockedEngineVersionNotObserved"))
+		Expect(res.RequeueAfter).To(Equal(standaloneVersionRetryInterval), "a failed probe is retried")
+
+		prober.mu.Lock()
+		prober.down, prober.version = false, fullEngineVersion
+		prober.mu.Unlock()
+		res = reconcileOnce(r, key)
+		Expect(get(key).Status.ObservedEngineVersion).To(Equal(fullEngineVersion))
+		Expect(res.RequeueAfter).To(BeZero(), "a standalone cluster is not observed periodically")
+	})
+
+	It("says that the member refused the token when no version could be read", func() {
+		r := reconcilerWith(&standaloneProber{refused: true})
+		key := create(standaloneCluster("sa-refused"))
+		reconcileOnce(r, key)
+		cond := updating(key)
+		Expect(cond.Reason).To(Equal("UpdateBlockedEngineVersionNotObserved"))
+		Expect(cond.Message).To(ContainSubstring("refused the cluster's token"))
 	})
 
 	It("blocks a spec.version change with the same guard as an HA cluster", func() {
@@ -214,8 +253,9 @@ var _ = Describe("Engine version of a standalone member (ADR-0009, #181)", func(
 			c.Annotations = map[string]string{acceptImageAnnotation: repository + ":2"}
 			Expect(k8sClient.Update(ctx, c)).To(Succeed())
 		}
-		holdThenAccept := func(r *CubridClusterReconciler, key types.NamespacedName) {
+		holdThenAccept := func(r *CubridClusterReconciler, key types.NamespacedName, afterCreate func()) {
 			reconcileOnce(r, key)
+			afterCreate()
 			c := get(key)
 			c.Spec.Image = &databasev1alpha1.CubridImage{Repository: repository, Tag: "2"}
 			Expect(k8sClient.Update(ctx, c)).To(Succeed())
@@ -231,15 +271,21 @@ var _ = Describe("Engine version of a standalone member (ADR-0009, #181)", func(
 		It("is cleared on a standalone cluster once the accepted image is in the Pod template", func() {
 			r := reconcilerWith(&standaloneProber{version: fullEngineVersion})
 			key := create(standaloneCluster("sa-stale"))
-			holdThenAccept(r, key)
+			holdThenAccept(r, key, func() {
+				// The Pod still runs the revision from before the acceptance.
+				createMember("sa-stale-0", "rev-1", true)
+				setStsRevision(key, "rev-2")
+			})
 			cond := updating(key)
-			Expect(cond == nil || cond.Reason != reasonImageChangeNotAccepted).To(BeTrue(), "stale: %v", cond)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Reason).To(Equal("AutomaticReplacementDisabled"), "the Pod does not run the accepted image yet")
+			Expect(cond.Message).To(ContainSubstring("sa-stale-0"))
 		})
 
 		It("is cleared on an HA cluster without a role prober", func() {
 			r := reconcilerWith(nil)
 			key := create(haCluster("ha-stale-noprober"))
-			holdThenAccept(r, key)
+			holdThenAccept(r, key, func() {})
 			cond := updating(key)
 			Expect(cond == nil || cond.Reason != reasonImageChangeNotAccepted).To(BeTrue(), "stale: %v", cond)
 		})
@@ -247,7 +293,7 @@ var _ = Describe("Engine version of a standalone member (ADR-0009, #181)", func(
 		It("is cleared on a standalone cluster without a role prober", func() {
 			r := reconcilerWith(nil)
 			key := create(standaloneCluster("sa-stale-noprober"))
-			holdThenAccept(r, key)
+			holdThenAccept(r, key, func() {})
 			cond := updating(key)
 			Expect(cond == nil || cond.Reason != reasonImageChangeNotAccepted).To(BeTrue(), "stale: %v", cond)
 		})

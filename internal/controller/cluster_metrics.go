@@ -54,15 +54,22 @@ func publishClusterMetrics(cluster *databasev1alpha1.CubridCluster) {
 		names = append(names, in.Name)
 		member := metrics.MemberLabels(cluster.Namespace, cluster.Name, in.Name)
 		metrics.MemberReady.With(member).Set(boolToFloat(in.Ready))
-		setTime(metrics.MemberLastObservation, member, in.LastObservedTime)
+		// A standalone member has no HA role and is not observed
+		// periodically: it exports neither a role nor an observation time.
+		ha := cluster.Spec.HighAvailability.Enabled
+		lastObserved := in.LastObservedTime
+		if !ha {
+			lastObserved = nil
+		}
+		setTime(metrics.MemberLastObservation, member, lastObserved)
 
 		observed := string(in.Role)
 		if observed == "" {
 			observed = string(databasev1alpha1.RoleUnknown)
 		}
 		for _, role := range metrics.Roles {
-			metrics.MemberRole.With(metrics.RoleLabels(cluster.Namespace, cluster.Name, in.Name, role)).
-				Set(boolToFloat(role == observed))
+			metrics.SetOrDelete(metrics.MemberRole, metrics.RoleLabels(cluster.Namespace, cluster.Name, in.Name, role),
+				boolToFloat(role == observed), ha)
 		}
 
 		read := in.Replication != nil
