@@ -196,19 +196,28 @@ is left for a person. The same holds for the restore of a recovery bootstrap
 on. An operation that cannot be found keeps the step waiting with the reason
 `InstanceManagerRequestConflict`; a member busy with another operation keeps
 it waiting with `InstanceManagerOperationInProgress`. Neither uses up an
-attempt. A start the member refuses as a request (400 and the other 4xx of
+attempt. A start the member refuses as a request (400, 413 or 422,
 ADR-0003) is a failed attempt of the step.
 
-Upgrade note: an Operator version before #302 keyed the seed restore of
-every member by the member alone. A restore of a member after the first that
-such a version started and that is still running when this version takes
-over is not addressed by the new key: the member answers the new key as busy
-(`InstanceManagerOperationInProgress`) until it ends. By the target guards
-of ADR-0008 the member is then expected to refuse a second restore over the
-data the first one restored, so that the seeding of that member uses up its
-attempts and ends as `SeedRestoreFailed`, waiting for a person; this path
-is not tested. Upgrading the operator while a member is seeded is decided
-in #322.
+Version transition (known limitation, left for #322): an Operator version
+before #302 keyed the seed restore of every member by the member alone
+(`seed-restore-<uid>-<db>-a<N>-<peer>`). When the operator is upgraded while
+the seed restore of a member after the first runs under that key, the
+upgraded operator sends the restore under the new key, which also names the
+source and round. The member answers it as busy
+(`InstanceManagerOperationInProgress`) while the earlier operation runs.
+Once that operation has ended, the new request is a second restore onto a
+database that is already restored, and the member refuses it as a failed
+operation; the step is started again under the next attempts and fails the
+same way, so the seeding ends as `SeedRestoreFailed` (`status.databases[]`
+phase `Failed`), although the member may hold the data the earlier restore
+completed. Nothing is adopted wrongly: the operation under the old key is
+never followed and the member is not recorded as seeded. There is no
+fallback to the old key in this version; the way to continue, and whether a
+seeding may span an operator upgrade at all, is decided in #322. Until then,
+do not upgrade the operator while `status.databases[].seeding` names a
+member after the first. This outcome follows from the code and the target
+guards of ADR-0008; it is not tested.
 
 What an interrupted attempt left on a volume is removed only when it can be
 proven to be the manager's own: the Instance Manager writes the operation ID

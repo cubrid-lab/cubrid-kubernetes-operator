@@ -181,8 +181,10 @@ request is answered by that operation, which is recorded and polled
 (ADR-0010, #302). That operation may have been started with a request built
 from an earlier spec, for example another `spec.version`; this is accepted:
 the key fixes the manifest, the target and the attempt, and the restore runs
-as it was started. A start the member refuses as a request (400 and the
-other 4xx of ADR-0003) counts as a failed attempt. Before it
+as it was started. A start the member refuses as a request (400, 413 or
+422, ADR-0003) counts as a failed attempt; a member that could not be asked
+(for example 404 from an earlier image without the route) is waited on and
+uses up no attempt. Before it
 restores again the Instance Manager removes the directory and the
 `databases.txt` line of its own failed restore, which it recognises by the
 operation ID it wrote into `<db>/.im-operation`; a target without that proof

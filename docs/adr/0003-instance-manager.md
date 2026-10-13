@@ -123,7 +123,8 @@ each:
 | 409 | `IdempotencyConflict` | the manager holds an operation of this kind under the `Idempotency-Key` for another request body | terminal for the key: the request is never sent in its place; the operation the key names is read with `GET /v1/operations?idempotencyKey=` and followed |
 | 409 | `NotAnHAMember` | an HA request reached a standalone member | terminal for the member until its Pod runs as an HA member: the operator does not look the key up, reports `InstanceManagerNotAnHAMember` and asks again later without using up an attempt |
 | 412 | `ObjectStorageNotApplied` | the manager was started without object storage (#290) | terminal until the Pod is restarted with it; the operator waits, bounded (ADR-0007) |
-| 400, 404, 413 and any other 4xx | none | the request is malformed or invalid (400), too large (413), or names an endpoint the manager does not have (404) | terminal for the request: the same request is refused again, so the operator counts a refused start as a failed attempt (`InstanceManagerRequestRefused` for a `CubridBackup`, which ends unless the target holds an operation of it) |
+| 400, 413, 422 | none | the request is malformed or invalid (400), too large (413) or cannot be processed (422) | terminal for the request: the same request is refused again, so the operator counts a refused start as a failed attempt (`InstanceManagerRequestRefused` for a `CubridBackup`, which ends unless the target holds an operation of it) |
+| 404, 405, 408, 429 and any other 4xx | none | the manager could not be asked: an earlier image without the route (404 or 405 from its mux), a timeout (408), load shedding (429) | retryable, like an unavailable manager: the operator waits and uses up no attempt (`InstanceManagerUnavailable`, `RestoreStartFailed` at a recovery start) |
 
 An operation recorded under a key conflicts with every other request body
 under that key, also once the operation has ended (`Completed` or `Failed`).
@@ -134,7 +135,8 @@ to 256 characters, without control characters) and never as an
 instruction, and acts on the status and `code` alone. A `code` it does not
 know, or an answer without one, as an earlier manager sends it, is judged by
 the status as before codes existed: 401 and 403 refuse the token, 412 means
-no object storage, another 4xx refuses the request, and any other 409 is a
+no object storage, 400, 413 and 422 refuse the request, another 4xx is
+waited on like an unavailable manager, and any other 409 is a
 conflict of no named cause (`InstanceManagerConflict`) after which the key
 is looked up. The rules for
 running an operator and Instance Managers of different versions together are

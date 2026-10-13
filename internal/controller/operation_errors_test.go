@@ -115,8 +115,18 @@ func TestHTTPBackupClient_ErrorAnswersAreClassified(t *testing.T) {
 			[]error{errRequestRefused}, []error{errStartConflict, errTokenRefused}, reasonRequestRefused, "not a plain identifier"},
 		{"a request body that is too large", http.StatusRequestEntityTooLarge, `{"error":"the request body is larger than 16384 bytes"}`,
 			[]error{errRequestRefused}, []error{errStartConflict, errTokenRefused}, reasonRequestRefused, "larger than"},
-		{"an endpoint the member does not have", http.StatusNotFound, `404 page not found`,
-			[]error{errRequestRefused}, []error{errStartConflict, errTokenRefused}, reasonRequestRefused, ""},
+		{"a request the member cannot process", http.StatusUnprocessableEntity, `{"error":"unprocessable"}`,
+			[]error{errRequestRefused}, []error{errStartConflict, errTokenRefused}, reasonRequestRefused, "unprocessable"},
+		// An earlier manager without the route, or one that cannot take the
+		// request now, could not be asked: the start waits.
+		{"an endpoint an earlier member does not have", http.StatusNotFound, `404 page not found`,
+			nil, []error{errRequestRefused, errStartConflict, errTokenRefused}, reasonInstanceManagerUnavailable, ""},
+		{"a method an earlier member does not have", http.StatusMethodNotAllowed, `Method Not Allowed`,
+			nil, []error{errRequestRefused, errStartConflict}, reasonInstanceManagerUnavailable, ""},
+		{"a request that timed out", http.StatusRequestTimeout, ``,
+			nil, []error{errRequestRefused, errStartConflict}, reasonInstanceManagerUnavailable, ""},
+		{"too many requests", http.StatusTooManyRequests, `{"error":"slow down"}`,
+			nil, []error{errRequestRefused, errStartConflict}, reasonInstanceManagerUnavailable, "slow down"},
 	} {
 		c := NewHTTPBackupClient(staticToken("tok"))
 		c.Client = &http.Client{Transport: &answerBody{status: tc.status, body: tc.body}}
@@ -415,6 +425,25 @@ var _ = Describe("Terminal and retryable answers of a recovery restore (#302)", 
 		Expect(cond.Message).To(ContainSubstring("holds no restore operation under the key"))
 		Expect(got.Status.Bootstrap.OperationID).To(BeEmpty())
 		Expect(got.Status.Bootstrap.Phase).NotTo(Equal(databasev1alpha1.BootstrapFailed))
+	})
+
+	// An Instance Manager image without the route answers 404 from its mux:
+	// it could not be asked, which uses up no attempt.
+	It("waits on a member that has no restore endpoint, without using up an attempt", func() {
+		restore := &fakeRestoreClient{startErr: imAnswer(http.StatusNotFound, "404 page not found")}
+		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore}
+		key := newRecovery("recovery-no-route")
+		var got *databasev1alpha1.CubridCluster
+		var res reconcile.Result
+		for range maxBootstrapAttempts + 1 {
+			res, got = reconcileOnce(r, key)
+		}
+		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(got.Status.Bootstrap.Phase).NotTo(Equal(databasev1alpha1.BootstrapFailed))
+		Expect(got.Status.Bootstrap.Attempts).To(BeZero())
+		Expect(bootstrapReady(got)).To(Equal("RestoreStartFailed"))
+		Expect(restore.keys).To(HaveLen(maxBootstrapAttempts + 1))
+		Expect(restore.keys).To(HaveEach(restore.keys[0]))
 	})
 
 	It("counts a restore the member refuses as invalid as a failed attempt, and ends", func() {

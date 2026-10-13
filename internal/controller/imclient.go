@@ -129,8 +129,8 @@ const (
 var errNotAnHAMember = errors.New("the member is a standalone server, not an HA member")
 
 // errRequestRefused is wrapped by a start that the member refused as a
-// request it does not carry out (any 4xx other than 401, 403, 409 and 412):
-// the same request is refused again, so it is a failed attempt, not a wait.
+// request it does not carry out (400, 413, 422): the same request is refused
+// again, so it is a failed attempt, not a wait.
 var errRequestRefused = errors.New("the member refused the request")
 
 // Condition reasons of a start the member refused (4xx).
@@ -190,17 +190,19 @@ func unexpectedStatus(resp *http.Response) error {
 }
 
 // startError describes an answer to a start that the call did not expect,
-// like unexpectedStatus. A 4xx that is no refused token (401, 403), conflict
-// (409) or missing object storage (412) refuses the request itself, for
-// example as invalid (400) or too large (413), or names an endpoint the
-// member does not have (404): the same request is refused again.
+// like unexpectedStatus. Only an answer that refuses the request itself, as
+// invalid (400), too large (413) or not processable (422), is refused again
+// for the same request and wraps errRequestRefused. Any other 4xx means that
+// the member could not be asked, for example an earlier Instance Manager
+// without the route (404 or 405 from its mux), a timeout (408) or a member
+// that sheds load (429), and is waited on like an unavailable member.
 func startError(resp *http.Response) error {
 	err := unexpectedStatus(resp)
-	switch s := resp.StatusCode; {
-	case s < 400 || s >= 500, tokenRefused(s), s == http.StatusConflict, s == http.StatusPreconditionFailed:
-		return err
+	switch resp.StatusCode {
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return fmt.Errorf("%w: %w", errRequestRefused, err)
 	}
-	return fmt.Errorf("%w: %w", errRequestRefused, err)
+	return err
 }
 
 // readErrorAnswer reads the code and the message of an error answer
