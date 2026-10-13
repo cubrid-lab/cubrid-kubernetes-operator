@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -54,6 +56,9 @@ type fakeBackupClient struct {
 	started        bool
 	completed      bool
 	idempotencyKey string
+	// state, when set, is what an operation that is not completed reports.
+	state         instancemanager.OperationState
+	failureReason string
 }
 
 func (f *fakeBackupClient) StartBackup(_ context.Context, _, _, key string, _ instancemanager.BackupRequest) (instancemanager.Operation, error) {
@@ -72,6 +77,9 @@ func (f *fakeBackupClient) GetOperation(_ context.Context, _, _, _ string) (inst
 				Database:    demoDB,
 			},
 		}, nil
+	}
+	if f.state != "" {
+		return instancemanager.Operation{ID: opFake, State: f.state, FailureReason: f.failureReason}, nil
 	}
 	return instancemanager.Operation{ID: opFake, State: instancemanager.OpRunningBackup}, nil
 }
@@ -228,6 +236,86 @@ var _ = Describe("CubridBackup Controller", func() {
 		Expect(done.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseCompleted))
 		Expect(done.Status.Artifact).NotTo(BeNil())
 		Expect(done.Status.Artifact.URI).To(Equal("s3://cubrid-backups/p/manifest.json"))
+	})
+
+	// Each phase a backup reaches is recorded as one Event, when the status
+	// that carries it was written, and not again while the phase stays (#372).
+	It("records one Event for each phase a backup reaches", func() {
+		singleCluster := func(name string) *databasev1alpha1.CubridCluster {
+			return &databasev1alpha1.CubridCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Spec: databasev1alpha1.CubridClusterSpec{
+					Version:       cubridVersion,
+					Topology:      databasev1alpha1.CubridTopology{PromotableMembers: 1},
+					Databases:     []databasev1alpha1.CubridDatabase{{Name: demoDB}},
+					ObjectStorage: testObjectStorage(),
+					Storage: databasev1alpha1.CubridStorage{
+						Data: databasev1alpha1.CubridStorageSpec{Size: resource.MustParse("1Gi")},
+					},
+				},
+			}
+		}
+		reasons := func(recorder *record.FakeRecorder) []string {
+			events := drain(recorder)
+			out := make([]string, 0, len(events))
+			for _, e := range events {
+				// "<type> <reason> <message>"
+				parts := strings.SplitN(e, " ", 3)
+				out = append(out, parts[0]+" "+parts[1])
+			}
+			return out
+		}
+		prober := &fakeProber{obs: RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown}}
+
+		cluster := singleCluster("bk-events-cluster")
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+		backup := newBackup("bk-events", cluster.Name)
+		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+
+		recorder := record.NewFakeRecorder(100)
+		backupClient := &fakeBackupClient{}
+		r := &CubridBackupReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: prober, Backup: backupClient, Recorder: recorder,
+		}
+		request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(backup)}
+		reconcileOnce := func() {
+			_, err := r.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		By("the target being recorded and the backup started")
+		reconcileOnce()
+		Expect(reasons(recorder)).To(Equal([]string{"Normal BackupPending", "Normal BackupStarted"}))
+
+		By("the backup still running")
+		reconcileOnce()
+		Expect(drain(recorder)).To(BeEmpty())
+
+		By("the upload starting")
+		backupClient.state = instancemanager.OpUploading
+		reconcileOnce()
+		reconcileOnce()
+		Expect(reasons(recorder)).To(Equal([]string{"Normal BackupUploading"}))
+
+		By("the backup completing")
+		backupClient.completed = true
+		reconcileOnce()
+		reconcileOnce()
+		Expect(reasons(recorder)).To(Equal([]string{"Normal BackupCompleted"}))
+
+		By("another backup failing")
+		failing := newBackup("bk-events-failing", cluster.Name)
+		Expect(k8sClient.Create(ctx, failing)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, failing) })
+		r.Backup = &fakeBackupClient{state: instancemanager.OpFailed, failureReason: "backupdb exited 1"}
+		request = reconcile.Request{NamespacedName: client.ObjectKeyFromObject(failing)}
+		reconcileOnce()
+		reconcileOnce()
+		events := drain(recorder)
+		Expect(events).To(HaveLen(3))
+		Expect(events[2]).To(Equal("Warning BackupFailed backupdb exited 1"))
 	})
 
 	// The DB Pods take object-storage settings from the cluster at Pod start;

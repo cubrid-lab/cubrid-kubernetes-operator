@@ -103,8 +103,7 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 			return ctrl.Result{RequeueAfter: restorePollAfter}, true
 		}
 		cluster.Status.Bootstrap.OperationID = op.ID
-		cluster.Status.Bootstrap.Phase = databasev1alpha1.BootstrapRestoring
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreInProgress", "restore started on "+target)
+		setRestoreProgress(cluster, op.State, target)
 		return ctrl.Result{RequeueAfter: restorePollAfter}, true
 	}
 
@@ -140,10 +139,25 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 			fmt.Sprintf("on %s: %s; giving up after %d attempts", target, op.FailureReason, maxBootstrapAttempts))
 		return ctrl.Result{}, true
 	default:
-		cluster.Status.Bootstrap.Phase = databasev1alpha1.BootstrapRestoring
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreInProgress", "restore in progress on "+target)
+		setRestoreProgress(cluster, op.State, target)
 		return ctrl.Result{RequeueAfter: restorePollAfter}, true
 	}
+}
+
+// setRestoreProgress reports a restore operation that has not ended, by what
+// the Instance Manager says it does. The phase is Restoring only while
+// restoredb runs or the restored database is started; before that the
+// operation verifies and downloads the backup, and the phase stays Preparing.
+func setRestoreProgress(cluster *databasev1alpha1.CubridCluster, state instancemanager.OperationState, target string) {
+	phase, doing := databasev1alpha1.BootstrapPreparing, "the backup is being verified and downloaded on "
+	switch state {
+	case instancemanager.OpRestoring:
+		phase, doing = databasev1alpha1.BootstrapRestoring, "restoredb is running on "
+	case instancemanager.OpStarting:
+		phase, doing = databasev1alpha1.BootstrapRestoring, "the restored database is being started on "
+	}
+	cluster.Status.Bootstrap.Phase = phase
+	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreInProgress", doing+target)
 }
 
 // restoredOnTarget reports whether the recovery restore of database was

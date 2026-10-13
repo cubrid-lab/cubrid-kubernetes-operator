@@ -23,11 +23,13 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -59,8 +61,15 @@ type CubridBackupReconciler struct {
 	// reason rather than a false Running/Completed (used by envtest).
 	Prober RoleProber
 	Backup BackupClient
+	// Recorder records an Event for each phase a backup reaches; nil records
+	// none.
+	Recorder record.EventRecorder
 	// Clock tells the time; nil means time.Now.
 	Clock func() time.Time
+
+	// phases holds, per backup that is being reconciled, the phase its
+	// stored status has (writeStatus).
+	phases sync.Map
 }
 
 // backupClusterWait is how long a backup waits for a cluster that does not
@@ -77,6 +86,8 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err := r.Get(ctx, req.NamespacedName, &backup); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	r.phases.Store(backup.UID, backup.Status.Phase)
+	defer r.phases.Delete(backup.UID)
 	if backup.Status.Phase == databasev1alpha1.BackupPhaseCompleted ||
 		backup.Status.Phase == databasev1alpha1.BackupPhaseFailed {
 		return ctrl.Result{}, nil
@@ -186,7 +197,7 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		backup.Status.ClusterUID = cluster.UID
 		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, "starting the backup on "+sel.Instance)
 		backup.Status.ObservedGeneration = backup.Generation
-		if err := r.Status().Update(ctx, backup); err != nil {
+		if err := r.writeStatus(ctx, backup); err != nil {
 			if apierrors.IsConflict(err) {
 				return ctrl.Result{RequeueAfter: time.Second}, nil
 			}
@@ -309,13 +320,53 @@ func idempotencyKey(backup *databasev1alpha1.CubridBackup) string {
 
 func (r *CubridBackupReconciler) commit(ctx context.Context, backup *databasev1alpha1.CubridBackup, result ctrl.Result) (ctrl.Result, error) {
 	backup.Status.ObservedGeneration = backup.Generation
-	if err := r.Status().Update(ctx, backup); err != nil {
+	if err := r.writeStatus(ctx, backup); err != nil {
 		if apierrors.IsConflict(err) {
 			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 		return ctrl.Result{}, err
 	}
 	return result, nil
+}
+
+// backupPhaseEvents names the Event and the log event of each phase a backup
+// reaches (docs/observability.md).
+var backupPhaseEvents = map[databasev1alpha1.CubridBackupPhase]struct{ reason, logEvent string }{
+	databasev1alpha1.BackupPhasePending:   {"BackupPending", "backup_pending"},
+	databasev1alpha1.BackupPhaseRunning:   {"BackupStarted", "backup_started"},
+	databasev1alpha1.BackupPhaseUploading: {"BackupUploading", "backup_uploading"},
+	databasev1alpha1.BackupPhaseCompleted: {"BackupCompleted", "backup_completed"},
+	databasev1alpha1.BackupPhaseFailed:    {"BackupFailed", "backup_failed"},
+}
+
+// writeStatus writes the backup's status. When the write brought the stored
+// status to another phase, it records one Event and one log line for it, with
+// the message of the Ready condition. A phase whose write failed is reported
+// by the reconcile that writes it.
+func (r *CubridBackupReconciler) writeStatus(ctx context.Context, backup *databasev1alpha1.CubridBackup) error {
+	if err := r.Status().Update(ctx, backup); err != nil {
+		return err
+	}
+	phase := backup.Status.Phase
+	stored, known := r.phases.Swap(backup.UID, phase)
+	named, ok := backupPhaseEvents[phase]
+	if !known || stored == phase || !ok {
+		return nil
+	}
+	msg := string(phase)
+	if ready := meta.FindStatusCondition(backup.Status.Conditions, conditionBackupReady); ready != nil {
+		msg = ready.Message
+	}
+	logf.FromContext(ctx).Info("Backup reached phase "+string(phase), "event", named.logEvent,
+		"target", backup.Status.TargetInstance, "operationID", backup.Status.OperationRef, "message", msg)
+	if r.Recorder != nil {
+		eventType := corev1.EventTypeNormal
+		if phase == databasev1alpha1.BackupPhaseFailed {
+			eventType = corev1.EventTypeWarning
+		}
+		r.Recorder.Event(backup, eventType, named.reason, msg)
+	}
+	return nil
 }
 
 // validateBackupSpec enforces the ADR-0007 destination invariants that CRD

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -47,6 +48,9 @@ type fakeRestoreClient struct {
 	failed         bool
 	idempotencyKey string
 	keys           []string
+	// state, when set, is what a restore that is neither failed nor
+	// completed reports.
+	state instancemanager.OperationState
 }
 
 const (
@@ -58,7 +62,14 @@ func (f *fakeRestoreClient) StartRestore(_ context.Context, _, _, key string, _ 
 	f.started = true
 	f.idempotencyKey = key
 	f.keys = append(f.keys, key)
-	return instancemanager.Operation{ID: opRestore, State: instancemanager.OpRestoring}, nil
+	return instancemanager.Operation{ID: opRestore, State: f.running()}, nil
+}
+
+func (f *fakeRestoreClient) running() instancemanager.OperationState {
+	if f.state != "" {
+		return f.state
+	}
+	return instancemanager.OpRestoring
 }
 
 func (f *fakeRestoreClient) GetOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, error) {
@@ -71,7 +82,7 @@ func (f *fakeRestoreClient) GetOperation(_ context.Context, _, _, _ string) (ins
 	if f.completed {
 		return instancemanager.Operation{ID: opRestore, State: instancemanager.OpCompleted}, nil
 	}
-	return instancemanager.Operation{ID: opRestore, State: instancemanager.OpRestoring}, nil
+	return instancemanager.Operation{ID: opRestore, State: f.running()}, nil
 }
 
 // memberProber reports one member as master and every other as slave.
@@ -883,6 +894,60 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(bootstrapReady).NotTo(BeNil())
 			Expect(bootstrapReady.Status).To(Equal(metav1.ConditionTrue))
 			Expect(bootstrapReady.Reason).To(Equal("RecoveryComplete"))
+		})
+
+		// The phase says what the Instance Manager's operation does: Restoring
+		// only while restoredb runs or the restored database is started, not
+		// while the backup is downloaded. Each step is one Event (#372).
+		It("reports the phase of the restore operation and one Event for each step (#372)", func() {
+			c := standaloneCluster("recovery-phases")
+			c.Namespace = ns
+			c.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+				Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
+			}
+			c.Spec.ObjectStorage = haObjectStorage()
+			Expect(k8sClient.Create(ctx, c)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+
+			recorder := record.NewFakeRecorder(100)
+			restore := &fakeRestoreClient{state: instancemanager.OpDownloading}
+			r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore, Recorder: recorder}
+			key := types.NamespacedName{Name: c.Name, Namespace: ns}
+			phaseAfterReconcile := func() databasev1alpha1.BootstrapPhase {
+				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+				got := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
+				return got.Status.Bootstrap.Phase
+			}
+			restoreEvents := func() []string {
+				var out []string
+				for _, e := range drain(recorder) {
+					parts := strings.SplitN(e, " ", 3)
+					if strings.HasPrefix(parts[1], "Restore") {
+						out = append(out, parts[0]+" "+parts[1])
+					}
+				}
+				return out
+			}
+
+			By("the operation being started and downloading the backup")
+			Expect(phaseAfterReconcile()).To(Equal(databasev1alpha1.BootstrapPreparing))
+			Expect(restoreEvents()).To(Equal([]string{"Normal RestoreStarted"}))
+			Expect(phaseAfterReconcile()).To(Equal(databasev1alpha1.BootstrapPreparing))
+			Expect(restoreEvents()).To(BeEmpty())
+
+			By("restoredb running, then the restored database being started")
+			restore.state = instancemanager.OpRestoring
+			Expect(phaseAfterReconcile()).To(Equal(databasev1alpha1.BootstrapRestoring))
+			restore.state = instancemanager.OpStarting
+			Expect(phaseAfterReconcile()).To(Equal(databasev1alpha1.BootstrapRestoring))
+			Expect(restoreEvents()).To(Equal([]string{"Normal RestoreRunning"}))
+
+			By("the operation completing")
+			restore.completed = true
+			Expect(phaseAfterReconcile()).To(Equal(databasev1alpha1.BootstrapComplete))
+			Expect(restoreEvents()).To(Equal([]string{"Normal RestoreCompleted"}))
 		})
 	})
 })

@@ -232,8 +232,8 @@ underscores.
 | The bootstrap reaches its next phase | `DatabaseCreated`, `DatabaseRestored` (a recovery restore completed and seeding starts), `PeersSeeded` | Normal | `bootstrap_phase_changed` |
 | A member is copied from another member than the one the database was created or restored on, because that member is no longer the master | `SeedSourceChanged` | Normal | `condition_changed` (`BootstrapReady`, reason `SeedSourceSelected`) |
 | A member is replaced for a new image | `RollingUpdate` | Normal | `rolling_update` |
-| A backup starts, completes, fails | `BackupStarted`, `BackupCompleted`, `BackupFailed` | Normal, Normal, Warning | `backup_started`, `backup_completed`, `backup_failed` |
-| A restore starts, completes, fails | `RestoreStarted`, `RestoreCompleted`, `RestoreFailed` | Normal, Normal, Warning | `restore_started`, `restore_completed`, `restore_failed` |
+| A CubridBackup reaches a phase: `Pending`, `Running`, `Uploading`, `Completed`, `Failed` | on the CubridBackup: `BackupPending`, `BackupStarted`, `BackupUploading`, `BackupCompleted`, `BackupFailed` | Normal; `BackupFailed` is a Warning | `backup_pending`, `backup_started`, `backup_uploading`, `backup_completed`, `backup_failed` |
+| A recovery bootstrap takes a step: a restore operation is started (once for each attempt), restoredb begins after the download, the recovery ends | `RestoreStarted`, `RestoreRunning`, `RestoreCompleted`, `RestoreFailed` | Normal; `RestoreFailed` is a Warning | `restore_started`, `restore_running`, `restore_completed`, `restore_failed` |
 
 An Event is a notice, not the record. The Operator sends at most 100 Events
 about one object in a row, and the allowance comes back at one Event in ten
