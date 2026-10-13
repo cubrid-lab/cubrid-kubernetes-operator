@@ -31,6 +31,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -781,6 +782,13 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapFailed))
 			cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
 			Expect(cond.Reason).To(Equal("SeedRestoreFailed"))
+			for _, t := range []string{conditionReady, conditionProgressing} {
+				c := meta.FindStatusCondition(got.Status.Conditions, t)
+				Expect(c).NotTo(BeNil(), t)
+				Expect(c.Status).To(Equal(metav1.ConditionFalse), "%s of a failed recovery (#434)", t)
+				Expect(c.Reason).To(Equal(reasonBootstrapRecoveryFailed), t)
+				Expect(c.Message).To(ContainSubstring(cond.Message), t)
+			}
 
 			By("starting nothing more afterwards")
 			seed.backupOn, seed.restoreOn = nil, nil

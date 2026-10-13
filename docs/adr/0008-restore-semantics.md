@@ -319,7 +319,7 @@ status:
   conditions:
     - { type: BootstrapReady, status: "False", reason: RestoreInProgress }
     - { type: RecoveryValidated, status: "False", reason: WaitingForDatabaseOpen }
-    - { type: Ready, status: "False", reason: BootstrapRecoveryInProgress }
+    - { type: Ready, status: "False", reason: BootstrapRecoveryInProgress }  # BootstrapRecoveryFailed when state is Failed
 ```
 
 Open-ended reasons, consistent with prior ADRs.

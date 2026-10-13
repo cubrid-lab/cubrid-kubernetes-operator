@@ -37,15 +37,14 @@ const (
 	restorePollAfter        = 10 * time.Second
 	restoreStagingRoot      = "/var/lib/cubrid/restore-staging"
 	restoreTargetRoot       = "/var/lib/cubrid/databases"
+	// reasonBootstrapRecoveryFailed is the Ready and Progressing reason of a
+	// cluster whose recovery bootstrap ended as Failed.
+	reasonBootstrapRecoveryFailed = "BootstrapRecoveryFailed"
 )
 
 // recoveryActive reports whether this cluster is a recovery-bootstrap that has
 // not yet completed. While active, the operator must not report Ready
 // (ADR-0008: never advertise a half-restored DB as healthy).
-// reasonBootstrapRecoveryFailed is the Ready and Progressing reason of a
-// cluster whose recovery bootstrap ended as Failed.
-const reasonBootstrapRecoveryFailed = "BootstrapRecoveryFailed"
-
 func recoveryActive(cluster *databasev1alpha1.CubridCluster) bool {
 	if cluster.Spec.Bootstrap == nil || cluster.Spec.Bootstrap.Recovery == nil {
 		return false
