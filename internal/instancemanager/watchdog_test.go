@@ -19,6 +19,7 @@ package instancemanager
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -198,9 +199,11 @@ func TestServer_StopIntended(t *testing.T) {
 			t.Fatal(err)
 		}
 		held := newHeldCLI("backupdb")
-		s := NewServer(held, "tok").WithOperationStore(store).WithBackupStagingRoot(testStagingRoot)
+		s := NewServer(held, "tok").WithOperationStore(store).WithObjectStore(newFakeStore()).
+			WithBackupStagingRoot(testStagingRoot)
 		t.Cleanup(func() { _ = os.RemoveAll(testStagingRoot) })
-		rr := postBackup(t, s.Handler(), "backup-1", `{"database":"appdb","destination":"`+testStagingRoot+`/bk"}`)
+		body, _ := json.Marshal(BackupRequest{Database: dbName, Destination: testStagingRoot + "/bk", Upload: testUpload})
+		rr := postBackup(t, s.Handler(), "backup-1", string(body))
 		if rr.Code != http.StatusAccepted {
 			t.Fatalf("/v1/backup = %d: %s", rr.Code, rr.Body.String())
 		}
