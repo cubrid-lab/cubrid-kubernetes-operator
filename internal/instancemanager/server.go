@@ -82,10 +82,12 @@ type Server struct {
 	// stopMu and stopped make the stop run once.
 	stopMu  sync.Mutex
 	stopped bool
-	// lifeMu guards stopping and the admission into ops. Once stopping is
-	// set no operation is admitted and none starts CUBRID.
+	// lifeMu guards stopping, starting and the admission into ops. Once
+	// stopping is set no operation is admitted and none starts CUBRID. While
+	// starting is set only the resume of completed restores is admitted.
 	lifeMu   sync.Mutex
 	stopping bool
+	starting bool
 	// ops counts the admitted mutating operations until they have ended.
 	ops sync.WaitGroup
 	// disruptive counts those of them that stop and start CUBRID themselves
@@ -354,8 +356,8 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Destination = destination
 
-	if !s.admit() {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
+	if err := s.admit(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: err.Error()})
 		return
 	}
 	if s.store == nil {
@@ -501,8 +503,8 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
-	if !s.admitDisruptive() {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
+	if err := s.admitDisruptive(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: err.Error()})
 		return
 	}
 
@@ -687,8 +689,8 @@ func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 	if s.store == nil {
 		return nil
 	}
-	if !s.admit() {
-		return errStopping
+	if err := s.admitResume(); err != nil {
+		return err
 	}
 	defer s.ops.Done()
 	ctx, cancel := context.WithTimeout(ctx, s.timeouts.Bootstrap)

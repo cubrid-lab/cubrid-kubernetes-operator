@@ -199,7 +199,10 @@ of the running ones, and refuses any `cubrid server start` or
 `cubrid heartbeat start` they would issue next; such an operation ends
 `Failed` with the reason that the member is stopping. The start of a
 completed restore's database when the manager starts (ADR-0008) is held to
-the same rule. The stop waits for the
+the same rule: the manager listens before it starts that database, so a
+stop asked for meanwhile reaches the manager and not the command's own
+fallback, and until that start has ended the manager refuses every other
+backup, restore or HA bootstrap (`503`, "the manager is starting"). The stop waits for the
 running operations to end before it withdraws HA and stops the server, so no
 operation starts CUBRID after the final shutdown. The wait never takes the
 last 30 seconds of the stop's budget (half of a budget shorter than 60

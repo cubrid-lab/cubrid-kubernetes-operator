@@ -171,15 +171,22 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// The database of a completed restore whose ownership marker was left is
-	// started before any request is served (ADR-0008).
-	if err := server.ResumeCompletedRestores(ctx); err != nil {
-		logger.Error("Could not start the database of a completed restore", "err", err)
-	}
-
+	// The manager listens before it starts the database of a completed
+	// restore whose ownership marker was left (ADR-0008), so that a shutdown
+	// during that start reaches it (ADR-0003).
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
-	logger.Info("Started listening", "address", addr)
+	serve := func() error {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return err
+		}
+		go func() { errCh <- srv.Serve(listener) }()
+		logger.Info("Started listening", "address", addr)
+		return nil
+	}
+	if err := server.ResumeAndServe(ctx, serve); err != nil {
+		return err
+	}
 
 	// A CUBRID process that is gone without a request ends this process, and
 	// with it the container, which Kubernetes then starts again (ADR-0003).
