@@ -477,6 +477,12 @@ func (s *Server) findOperations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
+// notRecorded is the failure reason of an operation that stops because its
+// next state could not be written: it does nothing that is not on record.
+func notRecorded(state OperationState, err error) string {
+	return "could not record the state " + string(state) + ", so the operation went no further: " + err.Error()
+}
+
 // runBackup executes the backup in the background and records the durable state
 // transitions. A successful `backupdb` is NOT Completed on its own: the staged
 // output must upload and manifest.json (the atomic completion marker) must be
@@ -490,13 +496,14 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		fail := func(reason string) {
 			reason = s.stoppingReason(reason)
 			s.removeBackupStaging(req.Destination)
-			_, _ = s.store.Update(id, func(op *Operation) {
+			_ = s.store.Settle(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
 			})
 		}
 
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRunningBackup }); err != nil {
+			fail(notRecorded(OpRunningBackup, err))
 			return
 		}
 		if err := s.createBackupStaging(req.Destination); err != nil {
@@ -515,6 +522,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		}
 
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpUploading }); err != nil {
+			fail(notRecorded(OpUploading, err))
 			return
 		}
 		res, err := UploadBackup(ctx, s.objects, UploadSpec{
@@ -538,7 +546,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		}
 		// Upload + manifest succeeded: remove staging, then mark Completed.
 		s.removeBackupStaging(req.Destination)
-		_, _ = s.store.Update(id, func(op *Operation) {
+		_ = s.store.Settle(id, func(op *Operation) {
 			op.State = OpCompleted
 			op.Artifact = &OperationArtifact{
 				ManifestURI:    res.ManifestURI,
@@ -621,7 +629,7 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		defer cancel()
 		fail := func(reason string) {
 			reason = s.stoppingReason(reason)
-			_, _ = s.store.Update(id, func(op *Operation) {
+			_ = s.store.Settle(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
 			})
@@ -643,9 +651,11 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			roots.Host = hosts
 		}
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpDownloading }); err != nil {
+			fail(notRecorded(OpDownloading, err))
 			return
 		}
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
+			fail(notRecorded(OpRestoring, err))
 			return
 		}
 		// Data that a failed attempt of this same request restored is taken
@@ -687,12 +697,15 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			return err
 		})
 		if err != nil {
-			if !storeFailed {
-				fail(err.Error())
+			if storeFailed {
+				err = errors.New(notRecorded(OpStarting, err))
 			}
+			fail(err.Error())
 			return
 		}
-		if _, err := s.store.Update(id, func(op *Operation) {
+		// A Completed that cannot be written leaves the ownership marker:
+		// the database runs, and its restore is not on record as complete.
+		if err := s.store.Settle(id, func(op *Operation) {
 			op.State = OpCompleted
 			op.Artifact = restored
 		}); err != nil {

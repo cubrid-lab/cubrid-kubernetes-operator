@@ -40,11 +40,12 @@ const requestIDHeader = "X-Request-ID"
 
 // Events and reasons of the Instance Manager's log.
 const (
-	eventRequest        = "request"
-	eventRequestRefused = "request_refused"
-	eventCommand        = "command"
-	eventOperationState = "operation_state_changed"
-	eventNotReady       = "not_ready"
+	eventRequest          = "request"
+	eventRequestRefused   = "request_refused"
+	eventCommand          = "command"
+	eventOperationState   = "operation_state_changed"
+	eventStoreWriteFailed = "operation_store_write_failed"
+	eventNotReady         = "not_ready"
 
 	reasonNoToken    = "NoToken"
 	reasonWrongToken = "WrongToken"

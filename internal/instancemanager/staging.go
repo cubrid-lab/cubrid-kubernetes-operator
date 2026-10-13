@@ -131,13 +131,20 @@ func (s *Server) recordBackup(key, requestHash string, req BackupRequest) (op *O
 			_ = root.RemoveAll(filepath.Join(name, op.ID))
 		}
 		reason := "claim the backup staging directory: " + err.Error()
-		if failed, uerr := s.store.Update(op.ID, func(o *Operation) {
+		// An end that cannot be written is kept and written later (Settle);
+		// until then the request is answered with the error, not with a
+		// Pending operation that never runs.
+		if serr := s.store.Settle(op.ID, func(o *Operation) {
 			o.State = OpFailed
 			o.FailureReason = reason
-		}); uerr == nil {
-			op = failed
+		}); serr != nil {
+			return nil, "", fmt.Errorf("%s; recording that the operation failed: %w", reason, serr)
 		}
-		return op, "", nil
+		failed, gerr := s.store.Get(op.ID)
+		if gerr != nil {
+			return nil, "", gerr
+		}
+		return failed, "", nil
 	}
 	return op, staging, nil
 }
