@@ -58,6 +58,10 @@ type BackupManifest struct {
 	SourceRole string `json:"sourceRole"`
 	// CreatedAt is the backup completion time (RFC3339).
 	CreatedAt string `json:"createdAt"`
+	// OperationID is the Instance Manager operation that produced the backup;
+	// its record names the staging directory the objects were read from.
+	// Consumers do not check it; it is empty in manifests written before it.
+	OperationID string `json:"operationID,omitempty"`
 	// Objects lists every backup object with its checksum for validation.
 	Objects []ManifestObject `json:"objects"`
 }

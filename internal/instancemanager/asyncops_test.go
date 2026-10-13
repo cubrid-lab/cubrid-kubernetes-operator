@@ -166,13 +166,14 @@ func TestServer_Backup_CompletesAfterUpload(t *testing.T) {
 		t.Fatalf("NewOperationStore: %v", err)
 	}
 	objStore := newFakeStore()
-	// Pre-stage a backup file at the destination, since the fake CLI does not
-	// actually run backupdb.
-	staging := stageBackup(t, map[string]string{stagedFileName: backupContent})
-	h := NewServer(fakeCLI{out: "ok"}, "tok").
+	// The fake backupdb writes a volume into its -D directory. What is in the
+	// destination before the backup starts is not uploaded (#275).
+	root := t.TempDir()
+	staging := filepath.Join(root, "uid-1")
+	h := NewServer(newWritingCLI(), "tok").
 		WithOperationStore(store).
 		WithObjectStore(objStore).
-		WithBackupStagingRoot(filepath.Dir(staging)).
+		WithBackupStagingRoot(root).
 		Handler()
 
 	body := `{"database":"appdb","destination":"` + staging + `","upload":{"bucket":"cubrid-backups","prefix":"prod/uid-1","clusterUID":"cuid","cubridVersion":"11.4.6","sourceInstance":"appdb-1","sourceRole":"slave"}}`
@@ -316,12 +317,15 @@ func TestServer_Backup_CreatesTheStagingDirectory(t *testing.T) {
 		h := srv.Handler()
 		body, _ := json.Marshal(BackupRequest{Database: dbName, Destination: staging, Upload: testUpload})
 		rr := postBackup(t, h, "key-1", string(body))
+		want := staging
 		if async {
+			// An operation stages in its own directory below the destination.
 			var op Operation
 			_ = json.Unmarshal(rr.Body.Bytes(), &op)
 			pollUntilTerminal(t, h, op.ID)
+			want = filepath.Join(staging, op.ID)
 		}
-		if cli.ranWith != staging || !cli.sawDir {
+		if cli.ranWith != want || !cli.sawDir {
 			t.Errorf("async=%v: backupdb ran with -D %q, directory existed: %v", async, cli.ranWith, cli.sawDir)
 		}
 	}

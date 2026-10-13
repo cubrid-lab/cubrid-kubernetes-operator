@@ -81,8 +81,9 @@ var errTokenRefused = errors.New("the member refused the cluster's Instance Mana
 var errObjectStorageNotApplied = errors.New("the member's Instance Manager runs without object storage")
 
 // errStartConflict is wrapped by a backup start that the member answered
-// 409: it holds an operation under the key for another request body, or
-// another operation runs on the database.
+// 409: it holds an operation under the key for another request body,
+// another operation runs on the database, or a running operation of another
+// request owns the staging destination.
 var errStartConflict = errors.New("the member refused the start as a conflict")
 
 // tokenRefused reports whether an Instance Manager answer refuses the

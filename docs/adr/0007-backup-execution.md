@@ -170,12 +170,35 @@ ends, also one that was refused, has `status.completedAt`.
   As implemented, the Instance Manager accepts a destination only when it is
   one directory directly below its staging root (`IM_BACKUP_STAGING_ROOT`,
   default `/var/lib/cubrid/backup-staging`), which is what the operator
-  sends (`<root>/<backup-uid>`), and removes that directory when the backup
-  fails. It creates that directory, and the staging root when the volume
-  does not have it yet, before `backupdb` runs: the command does not create
-  its destination (POC-12). Only regular files in that directory are
-  uploaded; a symbolic link, named pipe or device fails the backup (#203).
-  The per-attempt level above is not implemented.
+  sends (`<root>/<backup-uid>`, or `<root>/seed-<cluster-uid>[-<member>]`
+  for a seed backup). The operation stages in a directory of its own below
+  that destination, named after its operation ID
+  (`<root>/<destination>/<operation-id>/`), which plays the per-attempt
+  role above: every retry is a new operation. The manager creates it empty,
+  together with the destination and the staging root when the volume does
+  not have them yet, before `backupdb` runs: the command does not create
+  its destination (POC-12). `backupdb -D` names that directory, the
+  operation record carries it as `stagingDir`, and the manifest carries the
+  `operationID`. Only regular files in that directory are uploaded; a
+  symbolic link, named pipe or device fails the backup (#203). Nothing else
+  in the destination is uploaded, so a file that an interrupted attempt
+  left never enters a later manifest. The operation removes its directory,
+  and the destination once it is empty, when it fails or completes.
+  Ownership of the staging (#275): an entry of a destination belongs to a
+  live operation when it is named after an operation that the store records
+  as not ended, or whose record cannot be read. A request whose destination
+  holds an entry of a live operation of another request is answered 409
+  with "the backup staging destination is owned by another operation that
+  is still running" (`ErrBackupStagingInUse`), before anything is recorded,
+  run or removed; the operator treats it like any other start conflict and
+  tries again. Before an operation creates its directory it removes the
+  other entries of the destination: directories of operations that have
+  ended or that the store does not know, and files an earlier manager
+  staged directly in the destination. When the manager starts it removes
+  the same from every destination directly below the staging root and
+  then the destinations left empty; a destination with an entry of a live
+  operation, or of one whose record cannot be read, is left untouched.
+  Neither removal follows a link, and neither reaches outside the root.
 - **Stage then upload** (not pure streaming) is the safe baseline;
   preflight free-space check, per-attempt directory, refuse concurrent
   backups per pod, delete staging only after upload+checksum+manifest

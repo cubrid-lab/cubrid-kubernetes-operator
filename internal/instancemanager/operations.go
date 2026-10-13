@@ -202,7 +202,8 @@ func (s *Server) endDisruptive() {
 var errStarting = errors.New("the manager is starting")
 
 // ResumeAndServe brings a starting manager into service. It calls serve,
-// which starts to listen and returns, and then starts the databases of
+// which starts to listen and returns, removes the backup staging that a
+// restart abandoned (reclaimBackupStaging), and then starts the databases of
 // completed restores (ResumeCompletedRestores). The manager listens first so
 // that a shutdown during the resume reaches it and is ordered after the
 // start that is running; were nobody listening, "instance-manager shutdown"
@@ -221,6 +222,9 @@ func (s *Server) ResumeAndServe(ctx context.Context, serve func() error) error {
 	if err := serve(); err != nil {
 		return err
 	}
+	// Backup staging that ended or unknown operations left is removed; that
+	// of a live operation is judged by the store and kept.
+	s.reclaimBackupStaging()
 	if err := s.ResumeCompletedRestores(ctx); err != nil {
 		s.log().Error("Could not start the database of a completed restore", "err", err)
 	}

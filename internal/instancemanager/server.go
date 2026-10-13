@@ -69,6 +69,8 @@ type Server struct {
 	standaloneDB string
 	// backupStagingRoot confines the destination a backup request names.
 	backupStagingRoot string
+	// stagingMu serializes the claim, release and reclaim of backup staging.
+	stagingMu sync.Mutex
 	// restoreRoots confine every path a restore request names (#119).
 	restoreRoots RestoreRoots
 	// ha is what the HA bootstrap needs (#106).
@@ -394,8 +396,9 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	op, existed, err := s.store.FindOrCreate(OpBackup, key, HashRequest(body), req.Database)
-	if err != nil || existed {
+	// The operation stages in a directory of its own below the destination.
+	op, staging, err := s.recordBackup(key, HashRequest(body), req)
+	if err != nil || staging == "" {
 		s.ops.Done()
 	}
 	switch {
@@ -405,15 +408,19 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrOperationInProgress):
 		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
 		return
+	case errors.Is(err, ErrBackupStagingInUse):
+		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		return
 	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
 		return
 	}
-	if existed {
+	if staging == "" {
 		writeJSON(w, http.StatusAccepted, op)
 		return
 	}
 
+	req.Destination = staging
 	s.runBackup(op.ID, req)
 	writeJSON(w, http.StatusAccepted, op)
 }
@@ -513,6 +520,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 				SourceInstance: req.Upload.SourceInstance,
 				SourceRole:     req.Upload.SourceRole,
 				CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+				OperationID:    id,
 			},
 		})
 		if err != nil {
@@ -909,37 +917,43 @@ func confineBackupDestination(destination, root string) (string, error) {
 
 // createBackupStaging creates a backup's staging directory, and the staging
 // root when the data volume does not have it yet: backupdb fails when its
-// destination does not exist (docs/poc/RESULTS.md, POC-12). The directory is
-// created through an os.Root on the staging root, so it cannot land elsewhere.
+// destination does not exist (docs/poc/RESULTS.md, POC-12). destination is a
+// directory below the root: the request's destination, or an operation's
+// own directory below it. It is created through an os.Root on the staging
+// root, so it cannot land elsewhere.
 func (s *Server) createBackupStaging(destination string) error {
-	if err := os.MkdirAll(s.backupStagingRoot, 0o750); err != nil {
-		return fmt.Errorf("create the backup staging root: %w", err)
-	}
-	root, err := os.OpenRoot(s.backupStagingRoot)
+	rel, err := s.stagingRel(destination)
 	if err != nil {
-		return fmt.Errorf("open the backup staging root: %w", err)
+		return err
+	}
+	root, err := s.openStagingRoot()
+	if err != nil {
+		return err
 	}
 	defer func() { _ = root.Close() }()
-	if err := root.Mkdir(filepath.Base(destination), 0o750); err != nil && !os.IsExist(err) {
+	if err := root.MkdirAll(rel, 0o750); err != nil {
 		return fmt.Errorf("create the backup staging directory: %w", err)
 	}
 	return nil
 }
 
-// removeBackupStaging deletes a backup's staging directory. It removes only a
-// directory that it finds by listing the staging root, so the path it deletes
-// is built from the root and a name the file system returned, never from the
-// request's spelling.
+// removeBackupStaging deletes a backup's staging directory, and the
+// destination it is in once that is empty. It removes through an os.Root on
+// the staging root, so it cannot reach outside it, and does not follow links.
 func (s *Server) removeBackupStaging(destination string) {
-	entries, err := os.ReadDir(s.backupStagingRoot)
+	rel, err := s.stagingRel(destination)
 	if err != nil {
 		return
 	}
-	want := filepath.Base(destination)
-	for _, entry := range entries {
-		if entry.Name() == want {
-			_ = os.RemoveAll(filepath.Join(s.backupStagingRoot, entry.Name()))
-			return
-		}
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+	root, err := os.OpenRoot(s.backupStagingRoot)
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	_ = root.RemoveAll(rel)
+	if parent := filepath.Dir(rel); parent != "." {
+		_ = root.Remove(parent)
 	}
 }
