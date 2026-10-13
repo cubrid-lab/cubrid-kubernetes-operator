@@ -74,10 +74,11 @@ spec:
                           read. The bucket has 3 to 63 lower-case letters, digits, dots and
                           hyphens, starts and ends with a letter or digit and has no two adjacent
                           dots. The prefix has one or more segments; a segment is not empty, not
-                          "." or "..", and has no "/", "?", "#", "%", whitespace or control
-                          character, so the URI has no query, fragment or percent escape. The
-                          file name is manifest.json. The URI CubridBackup status.artifact.uri
-                          reports for a backup has this form. Required for recovery bootstrap.
+                          "." or "..", and has no "/", "?", "#", "%", or ASCII whitespace or
+                          control character, so the URI has no query, fragment or percent
+                          escape. The file name is manifest.json. At most 1093 characters. The
+                          URI CubridBackup status.artifact.uri reports for a backup has this
+                          form. Required for recovery bootstrap.
                         maxLength: 1093
                         minLength: 1
                         type: string
@@ -85,8 +86,9 @@ spec:
                         - message: 'manifestUri must be s3://<bucket>/<prefix>/manifest.json:
                             a bucket of 3 to 63 lower-case letters, digits, dots and
                             hyphens, a prefix of one or more segments that are not
-                            empty, ''.'' or ''..'' and have no ''?'', ''#'', ''%'',
-                            whitespace or control character, and the file name manifest.json'
+                            empty, ''.'' or ''..'' and have no ''?'', ''#'', ''%''
+                            or ASCII whitespace or control character, and the file
+                            name manifest.json'
                           rule: self.matches('^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9](/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))+/manifest[.]json$')
                         - message: the bucket of manifestUri must not contain two
                             adjacent dots
@@ -355,8 +357,16 @@ spec:
                       bucket holds the artifacts the operator creates for itself: the backup
                       the other members of an HA cluster are seeded from. A CubridBackup
                       names its own bucket. Required for an HA cluster: this is what the
-                      current way of seeding the members needs (ADR-0010).
+                      current way of seeding the members needs (ADR-0010). It follows the
+                      bucket rules of manifestUri (ADR-0008).
+                    maxLength: 63
                     type: string
+                    x-kubernetes-validations:
+                    - message: 'bucket must be an S3 bucket name: 3 to 63 lower-case
+                        letters, digits, dots and hyphens, starting and ending with
+                        a letter or digit, without two adjacent dots'
+                      rule: self == '' || (self.matches('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$')
+                        && !self.matches('[.][.]'))
                   credentialsSecretRef:
                     description: |-
                       credentialsSecretRef names a Secret in the cluster's namespace with the
@@ -389,8 +399,19 @@ spec:
                       development object stores only.
                     type: boolean
                   prefix:
-                    description: prefix is the key prefix under bucket for those artifacts.
+                    description: |-
+                      prefix is the key prefix under bucket for those artifacts. It follows
+                      the prefix rules of manifestUri, without a leading or trailing slash
+                      (ADR-0008).
+                    maxLength: 512
                     type: string
+                    x-kubernetes-validations:
+                    - message: 'prefix must be segments separated by single slashes,
+                        without a leading or trailing slash, and no segment may be
+                        empty, ''.'' or ''..'' or have ''?'', ''#'', ''%'' or an ASCII
+                        whitespace or control character: a recovery accepts no other
+                        manifestUri'
+                      rule: self == '' || self.matches('^([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]])(/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))*$')
                   region:
                     description: region is the bucket region, when the service needs
                       one.

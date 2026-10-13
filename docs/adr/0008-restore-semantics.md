@@ -89,37 +89,62 @@ Its form is `s3://<bucket>/<prefix>/manifest.json`:
   name alone; the others (no IP-address form, reserved prefixes and
   suffixes) are left to the object store, which refuses such a bucket;
 - the prefix has one or more segments. A segment is not empty, not `.` or
-  `..`, and has no `/`, `?`, `#`, `%`, whitespace or control character, so
-  the URI has no query, fragment or percent escape and the key is the text
-  of the URI as written, never a normalized form of it;
+  `..`, and has no `/`, `?`, `#`, `%`, or ASCII whitespace or control
+  character, so the URI has no query, fragment or percent escape and the key
+  is the text of the URI as written, never a normalized form of it.
+  Non-ASCII characters are accepted as they are;
 - the file name is `manifest.json`;
-- the URI is at most 1093 characters: a 63-character bucket and a key of
-  1024 characters, the S3 key limit.
+- the URI is at most 1093 characters, a 63-character bucket and 1024
+  characters of key. S3 limits a key to 1024 bytes; the store refuses a
+  longer key with non-ASCII characters, which reads nothing.
 
 The API server refuses any other URI when the cluster is created
 (`x-kubernetes-validations` on `manifestUri`), and the operator applies the
-same expressions (`api/v1alpha1`, `ManifestURIPattern`) before it restores,
-so a URI is admitted exactly when the operator would act on it. Before #320
-the operator took the directory of any key and read its `manifest.json`:
-`s3://bucket/a/b/other.json` restored `a/b/manifest.json`, and `..` or `.`
-segments were resolved first.
+same expressions (`api/v1alpha1`, `ManifestURIPattern`) before it starts a
+restore, so a URI is admitted exactly when the operator would start one for
+it. Before #320 the operator took the directory of any key and read its
+`manifest.json`: `s3://bucket/a/b/other.json` restored `a/b/manifest.json`,
+and `..` or `.` segments were resolved first.
 
-The URI a `CubridBackup` reports (`status.artifact.uri`,
+The bucket and prefix a backup is written under follow the same rules, so the
+URI a `CubridBackup` reports (`status.artifact.uri`,
 `s3://<bucket>/<prefix>/<cluster-uid>/<database>/<backup-uid>/manifest.json`)
-and the URIs of the seed backups of an HA cluster have this form. A
-`CubridBackup` destination prefix is not checked against these rules: a
-prefix that starts with `/` or `..`, or has one of the characters above,
-writes the backup under a key that a recovery refuses.
+is one a recovery accepts (#437). The API server checks
+`spec.destination.objectStorage.bucket` and `prefix` of a `CubridBackup` and
+`spec.objectStorage.bucket` and `prefix` of a `CubridCluster`, which places
+the seed backups of an HA cluster: the bucket by the rules above, and a
+non-empty prefix as segments by the rules above, without a leading or
+trailing `/`, at most 512 characters. A key is never rewritten to fit.
 
-Upgrading from a release before #320: a cluster stored with a URI outside
-this form stays updatable, because the API server does not check a field
-that an update leaves unchanged (CRD validation ratcheting, on by default
-since Kubernetes 1.30) and `manifestUri` cannot be changed. The operator does
-not act on such a URI: a recovery that has not completed ends as `Failed`
-with reason `InvalidManifestURI`, also when its restore had already been
-started, since the object read could be another one than the object named.
-As for any failed recovery, the way out is a new cluster with a URI of this
-form.
+Upgrading from a release before #320:
+
+- A cluster or backup stored with a value outside these rules stays
+  updatable where the API server has CRD validation ratcheting, which does
+  not check a field an update leaves unchanged: on by default since
+  Kubernetes 1.30, GA since 1.33 (only 1.37 was exercised, in envtest).
+  Where ratcheting is off, such an object refuses every update, its status
+  included, until it is deleted. `manifestUri` and a backup's spec cannot be
+  changed in any case.
+- A recovery whose restore was not started ends as `Failed` with reason
+  `InvalidManifestURI`, and no restore is started.
+- A recovery whose restore an earlier release started (an operation
+  recorded, a failed attempt counted, or the database restored on the
+  target) is followed as that release read the URI, the `manifest.json` of
+  the directory of its key, while that is the object the URI names: the
+  operation is polled, a failed attempt is started again from the same
+  object, and an HA cluster is seeded. When the URI names another object,
+  through another file name, a trailing slash, a query, or a `.`, `..` or
+  empty segment, the recovery ends as `Failed` with reason
+  `InvalidManifestURI` and the operation is no longer polled. The Instance
+  Manager is not asked to stop it: an operation that was running goes on to
+  its end on the member, which may download the manifest and the backup it
+  read and run `restoredb`, but the cluster does not become Ready, and the
+  way out is the one for any failed recovery: a new cluster with a URI of
+  this form.
+- A backup whose artifact URI a recovery would refuse, and that was not
+  sent to a member yet, ends as `Failed` with reason
+  `InvalidBackupDestination` and is not started. A backup already sent to a
+  member is followed to its end; its artifact may have such a URI.
 
 Time limit. The Instance Manager ends a restore, the download and
 `restoredb` together, after two hours and reports it `Failed`; the operator

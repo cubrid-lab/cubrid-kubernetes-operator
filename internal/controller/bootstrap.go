@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -83,10 +84,13 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 		return ctrl.Result{}, true
 	}
 
-	// A URI outside the accepted form is never acted on, also when it was
-	// admitted by an earlier release and its restore has already started:
-	// the object read could be another one than the object named.
+	// A URI outside the accepted form starts no restore. One an earlier
+	// release admitted and started a restore for is followed, by that
+	// release's reading of it, only while that reads the object it names.
 	bucket, prefix, err := parseManifestURI(rec.ManifestURI)
+	if err != nil && recoveryStarted(cluster, db) {
+		bucket, prefix, err = startedManifestLocation(rec.ManifestURI)
+	}
 	if err != nil {
 		r.recoveryFailed(cluster, "InvalidManifestURI", err.Error())
 		return ctrl.Result{}, true
@@ -260,6 +264,36 @@ func recoveryIdempotencyKey(cluster *databasev1alpha1.CubridCluster, member stri
 		key += fmt.Sprintf(":a%d", boot.Attempts)
 	}
 	return key
+}
+
+// startedManifestLocation is where a restore that an earlier release started
+// for uri reads: the manifest.json of the directory of its key. It is
+// returned only when that is the object uri names; the earlier parser read
+// another one for another file name, a trailing slash, a query, and ".", ".."
+// or empty segments.
+func startedManifestLocation(uri string) (bucket, prefix string, err error) {
+	rest, isS3 := strings.CutPrefix(uri, "s3://")
+	bucket, key, hasKey := strings.Cut(rest, "/")
+	if !isS3 || !hasKey || bucket == "" || key == "" {
+		return "", "", fmt.Errorf("manifestUri %q is not an s3:// URI with a bucket and a key", uri)
+	}
+	// A ".", ".." or empty segment is read literally by some stores and
+	// resolved by others: such a key is never taken to name one object.
+	if slices.ContainsFunc(strings.Split(key, "/"), func(s string) bool { return s == "" || s == "." || s == ".." }) {
+		return "", "", fmt.Errorf("manifestUri %q has an empty, \".\" or \"..\" segment in its key %q", uri, key)
+	}
+	prefix = path.Dir(key)
+	if read := path.Join(prefix, instancemanager.ManifestObjectName); read != key {
+		return "", "", fmt.Errorf("manifestUri %q names the object %q, but the restore started for it reads %q", uri, key, read)
+	}
+	return bucket, prefix, nil
+}
+
+// recoveryStarted reports whether a restore of the recovery was started:
+// one is running or has failed and is started again, or it has completed.
+func recoveryStarted(cluster *databasev1alpha1.CubridCluster, database string) bool {
+	boot := cluster.Status.Bootstrap
+	return boot.OperationID != "" || boot.Attempts > 0 || restoredOnTarget(cluster, database)
 }
 
 var (

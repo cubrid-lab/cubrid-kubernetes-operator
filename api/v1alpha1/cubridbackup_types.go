@@ -136,13 +136,21 @@ type ObjectStorageDestination struct {
 	// +kubebuilder:validation:Enum=S3Compatible
 	Provider string `json:"provider,omitempty"`
 
-	// bucket is the target bucket.
+	// bucket is the target bucket. It follows the bucket rules of a
+	// CubridCluster manifestUri (ADR-0008), so the artifact URI the backup
+	// reports is one a recovery accepts.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="self == '' || (self.matches('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$') && !self.matches('[.][.]'))",message="bucket must be an S3 bucket name: 3 to 63 lower-case letters, digits, dots and hyphens, starting and ending with a letter or digit, without two adjacent dots"
 	Bucket string `json:"bucket"`
 
-	// prefix is the key prefix under the bucket.
+	// prefix is the key prefix under the bucket. It follows the prefix rules
+	// of a CubridCluster manifestUri, without a leading or trailing slash
+	// (ADR-0008).
 	// +optional
+	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:XValidation:rule="self == '' || self.matches('^([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]])(/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))*$')",message="prefix must be segments separated by single slashes, without a leading or trailing slash, and no segment may be empty, '.' or '..' or have '?', '#', '%' or an ASCII whitespace or control character: a recovery accepts no other manifestUri"
 	Prefix string `json:"prefix,omitempty"`
 }
 

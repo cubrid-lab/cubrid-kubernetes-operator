@@ -148,6 +148,14 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			" was deleted and created again after this backup was started; the backup is not continued on the new cluster")
 	}
 
+	// Nothing was sent to a member yet: a backup whose artifact could not be
+	// restored is not started.
+	if backup.Status.OperationRef == "" && backup.Status.TargetInstance == "" {
+		if msg := backupDestinationRefusal(&backup, &cluster); msg != "" {
+			return r.rejected(ctx, &backup, "InvalidBackupDestination", msg)
+		}
+	}
+
 	setBackupCondition(&backup, conditionAccepted, metav1.ConditionTrue, "BackupAccepted",
 		"spec is valid and the referenced cluster exists")
 
@@ -472,7 +480,7 @@ func (r *CubridBackupReconciler) buildBackupRequest(backup *databasev1alpha1.Cub
 	bucket, prefix := "", ""
 	if store != nil {
 		bucket = store.Bucket
-		prefix = path.Join(store.Prefix, string(cluster.UID), backup.Spec.Database, string(backup.UID))
+		prefix = backupArtifactPrefix(backup, cluster)
 	}
 	return instancemanager.BackupRequest{
 		Database:    backup.Spec.Database,
@@ -623,6 +631,29 @@ func validateBackupSpec(backup *databasev1alpha1.CubridBackup) (reason, msg stri
 		return "InvalidDestination", "destination.objectStorage is required when type is ObjectStorage", false
 	}
 	return "", "", true
+}
+
+// backupDestinationRefusal says why backup is not run: the URI its artifact
+// would have is one a recovery refuses (ADR-0008). The API server admits no
+// such destination; a backup stored by an earlier release can have one. It
+// is empty when the backup can run.
+func backupDestinationRefusal(backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster) string {
+	store := backup.Spec.Destination.ObjectStorage
+	if store == nil {
+		return ""
+	}
+	uri := fmt.Sprintf("s3://%s/%s", store.Bucket,
+		path.Join(backupArtifactPrefix(backup, cluster), instancemanager.ManifestObjectName))
+	if _, _, err := parseManifestURI(uri); err != nil {
+		return fmt.Sprintf("destination bucket %q and prefix %q would give the artifact the URI %q, "+
+			"which a recovery does not accept", store.Bucket, store.Prefix, uri)
+	}
+	return ""
+}
+
+// backupArtifactPrefix is the key prefix backup's artifact is written under.
+func backupArtifactPrefix(backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster) string {
+	return path.Join(backup.Spec.Destination.ObjectStorage.Prefix, string(cluster.UID), backup.Spec.Database, string(backup.UID))
 }
 
 // rejected ends a backup that is not accepted. It is Failed, with the time

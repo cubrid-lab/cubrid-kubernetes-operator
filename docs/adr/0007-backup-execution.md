@@ -316,6 +316,13 @@ spec:
   `UnsupportedDestination` although `backupdb` may still run on the target;
   that backup would have failed at the upload either way, and the manager
   removes its staging directory when it fails.
+- The destination bucket and prefix follow the `manifestUri` rules of
+  ADR-0008 (#437), so the artifact URI a backup reports is one a recovery
+  accepts; the API server refuses others. A backup an earlier release stored
+  with another one, and that was not sent to a member yet, is ended before
+  any member is called (`Failed`, `Accepted=False` and `Ready=False` with
+  reason `InvalidBackupDestination`). One already sent to a member is
+  followed to its end.
 
 ### Idempotency & resumability
 
@@ -347,7 +354,8 @@ waits on the recorded target like any refused start),
 422, ADR-0003: the backup ends `Failed` unless the target holds an
 operation of it, and waits within the bound while that cannot be asked),
 `ObjectStorageNotConfigured`,
-`ObjectStorageNotApplied`, `UnsupportedDestination`, `RecordedTargetNotEligible`,
+`ObjectStorageNotApplied`, `UnsupportedDestination`, `InvalidBackupDestination`,
+`RecordedTargetNotEligible`,
 `RecordedTargetNotStarted`, `RecordedTargetUnverified`, `ObjectStorageWaitExpired`,
 `ObjectStorageUnavailable`). Cluster-level: `BackupReady`
 (True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary.
