@@ -117,14 +117,14 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
-	if !s.admit() {
+	if !s.admitDisruptive() {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
 		return
 	}
 
 	op, existed, err := s.store.FindOrCreate(OpHABootstrap, key, HashRequest(body), req.Database)
 	if err != nil || existed {
-		s.ops.Done()
+		s.endDisruptive()
 	}
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict), errors.Is(err, ErrOperationInProgress):
@@ -144,7 +144,7 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 // heartbeat when it is not running, recording each step durably.
 func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 	go func() {
-		defer s.ops.Done()
+		defer s.endDisruptive()
 		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Bootstrap)
 		defer cancel()
 		fail := func(reason string) {

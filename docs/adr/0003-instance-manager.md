@@ -115,8 +115,10 @@ As implemented, the manager watches the CUBRID processes the member needs
 (`cub_master` and `cub_server`; `cub_server` alone for a standalone member).
 Once it has seen them running, it ends itself with an error when one of them
 has been missing for longer than a grace of 30 seconds (`IM_PROCESS_GRACE`),
-unless a shutdown was requested through it or one of its operations is in
-progress. The manager is a child of the container's entrypoint, which exits
+unless a shutdown was requested through it or it is running an operation
+that stops and starts CUBRID itself (a restore, an HA bootstrap). A backup
+is not such an operation: a process that disappears while one runs ends the
+manager like at any other time. The manager is a child of the container's entrypoint, which exits
 with it, so Kubernetes restarts the container and the member starts in the
 ordinary way. Nothing restarts a CUBRID process in place: a repeated
 `cubrid heartbeat start` can leave a node unusable (POC-7), and a new
