@@ -70,10 +70,11 @@ const (
 // multi-database support.
 type CubridDatabase struct {
 	// name is the CUBRID database name. Immutable after creation; the operator
-	// generates ha_db_list from the database names in order.
+	// generates ha_db_list from the database names in order. At most 17
+	// characters: CUBRID 11.4 does not create a database with a longer name.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:MaxLength=17
 	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9_]*$`
 	Name string `json:"name"`
 }

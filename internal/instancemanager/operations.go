@@ -165,6 +165,22 @@ func (s *Server) admit() bool {
 	return true
 }
 
+// admitDisruptive is admit for an operation that stops and starts CUBRID
+// itself. Until it calls endDisruptive, instead of s.ops.Done, the process
+// watch accepts that CUBRID's processes are absent.
+func (s *Server) admitDisruptive() bool {
+	if !s.admit() {
+		return false
+	}
+	s.disruptive.Add(1)
+	return true
+}
+
+func (s *Server) endDisruptive() {
+	s.disruptive.Add(-1)
+	s.ops.Done()
+}
+
 // awaitOperations waits until every admitted operation has ended, or ctx
 // ends.
 func (s *Server) awaitOperations(ctx context.Context) error {

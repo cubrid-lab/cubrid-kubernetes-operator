@@ -39,10 +39,11 @@ type CubridBackupSpec struct {
 	ClusterRef LocalObjectRef `json:"clusterRef"`
 
 	// database is the CUBRID database to back up. Explicit even though
-	// v1alpha1 supports exactly one database per cluster (ADR-0010).
+	// v1alpha1 supports exactly one database per cluster (ADR-0010). At most
+	// 17 characters, like the name in a CubridCluster.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:MaxLength=17
 	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9_]*$`
 	Database string `json:"database"`
 

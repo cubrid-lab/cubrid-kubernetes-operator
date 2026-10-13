@@ -173,8 +173,10 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 const databasesTxt = "databases.txt"
 
 // databaseNamePattern is a database name that cannot carry a path: a letter,
-// then letters, digits or underscores.
-var databaseNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
+// then letters, digits or underscores, 17 characters at most. CUBRID 11.4
+// does not create a database with a longer name (docs/poc/RESULTS.md,
+// POC-24).
+var databaseNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,16}$`)
 
 // hostLabelPattern is a DNS label, the form of an HA member's host name
 // (ADR-0004): lower-case letters, digits and hyphens, at most 63 characters,

@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -210,5 +211,18 @@ func TestRestore_AcceptsTheDatabaseRootAsTarget(t *testing.T) {
 	req := baseRestoreRequest(t, bucket, prefix)
 	if _, err := Restore(context.Background(), &restoreCLI{}, store, rootsFor(req), req); err != nil {
 		t.Fatalf("Restore: %v", err)
+	}
+}
+
+// CUBRID 11.4 creates a database whose name has 17 characters and refuses
+// one of 18 (docs/poc/RESULTS.md, POC-24), so a longer name is no database
+// name for any request (#284).
+func TestDatabaseNamePattern_LengthLimit(t *testing.T) {
+	longest := "d" + strings.Repeat("a", 16)
+	if !databaseNamePattern.MatchString(longest) {
+		t.Errorf("a %d-character name was refused", len(longest))
+	}
+	if tooLong := longest + "a"; databaseNamePattern.MatchString(tooLong) {
+		t.Errorf("a %d-character name was accepted", len(tooLong))
 	}
 }

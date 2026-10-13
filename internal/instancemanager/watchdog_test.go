@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -157,35 +158,102 @@ func TestWatchdog_Run(t *testing.T) {
 	}
 }
 
-// A stop that was asked for, or an operation in progress, makes the absence
-// of CUBRID's processes intended.
+// A stop that was asked for, or a running operation that stops and starts
+// CUBRID itself, makes the absence of CUBRID's processes intended. A backup
+// reads a running database: while it runs, a process that disappears is a
+// failure like at any other time.
 func TestServer_StopIntended(t *testing.T) {
-	store, err := NewOperationStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := NewServer(fakeCLI{out: "ok"}, "tok").WithOperationStore(store)
-	if s.StopIntended() {
-		t.Fatal("intended before anything was asked")
-	}
-	op, _, err := store.FindOrCreate(OpBackup, "k", "h", "appdb")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !s.StopIntended() {
-		t.Error("not intended while an operation is in progress")
-	}
-	if _, err := store.Update(op.ID, func(o *Operation) { o.State = OpCompleted }); err != nil {
-		t.Fatal(err)
-	}
-	if s.StopIntended() {
-		t.Error("still intended after the operation completed")
-	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/shutdown?database=appdb", nil)
-	req.Header.Set("Authorization", "Bearer tok")
-	req.RemoteAddr = "127.0.0.1:4000"
-	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
-	if !s.StopIntended() {
-		t.Error("not intended after a shutdown was requested")
-	}
+	t.Run("a running restore", func(t *testing.T) {
+		cli := newHeldRestoreCLI()
+		s, h, id := startHeldRestore(t, cli)
+		if !s.StopIntended() {
+			t.Error("not intended while a restore is running")
+		}
+		close(cli.release)
+		pollUntilSettled(t, s, h, id)
+		if s.StopIntended() {
+			t.Error("still intended after the restore ended")
+		}
+	})
+	t.Run("a running HA bootstrap", func(t *testing.T) {
+		f := newHAFixture(t)
+		held := newHeldCLI("createdb")
+		f.srv.cli = held
+		if rr := f.post("bootstrap-1"); rr.Code != http.StatusAccepted {
+			t.Fatalf("/v1/ha/bootstrap = %d: %s", rr.Code, rr.Body.String())
+		}
+		<-held.entered
+		if !f.srv.StopIntended() {
+			t.Error("not intended while an HA bootstrap is running")
+		}
+		close(held.release)
+		f.srv.ops.Wait()
+		if f.srv.StopIntended() {
+			t.Error("still intended after the HA bootstrap ended")
+		}
+	})
+	t.Run("a running backup", func(t *testing.T) {
+		store, err := NewOperationStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		held := newHeldCLI("backupdb")
+		s := NewServer(held, "tok").WithOperationStore(store).WithBackupStagingRoot(testStagingRoot)
+		t.Cleanup(func() { _ = os.RemoveAll(testStagingRoot) })
+		rr := postBackup(t, s.Handler(), "backup-1", `{"database":"appdb","destination":"`+testStagingRoot+`/bk"}`)
+		if rr.Code != http.StatusAccepted {
+			t.Fatalf("/v1/backup = %d: %s", rr.Code, rr.Body.String())
+		}
+		<-held.entered
+		if s.StopIntended() {
+			t.Error("intended while a backup is running, although a backup stops nothing")
+		}
+		// So the watch ends the member when the server disappears meanwhile.
+		running := map[string]bool{procMaster: true, procServer: true}
+		w := &Watchdog{
+			Required: []string{procMaster, procServer}, Busy: s.StopIntended, Grace: 30 * time.Second,
+			Running: func() (map[string]bool, error) { return running, nil },
+			Logger:  slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)),
+		}
+		start := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+		w.check(start)
+		running = map[string]bool{procMaster: true}
+		if w.check(start.Add(5 * time.Second)) {
+			t.Error("ended within the grace")
+		}
+		if !w.check(start.Add(36 * time.Second)) {
+			t.Error("a server gone during a backup did not end the member after the grace")
+		}
+		close(held.release)
+		s.ops.Wait()
+	})
+	// The answer does not come from the stored records: a store that cannot
+	// be read must not switch the watch off.
+	t.Run("an operation store that cannot be read", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := NewOperationStore(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := NewServer(fakeCLI{out: "ok"}, "tok").WithOperationStore(store)
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+		if s.StopIntended() {
+			t.Error("intended because the operation store cannot be read")
+		}
+	})
+	t.Run("a requested shutdown", func(t *testing.T) {
+		s := NewServer(fakeCLI{out: "ok"}, "tok")
+		if s.StopIntended() {
+			t.Fatal("intended before anything was asked")
+		}
+		req := httptest.NewRequest(http.MethodPost, "/v1/shutdown?database=appdb", nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		req.RemoteAddr = "127.0.0.1:4000"
+		s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		if !s.StopIntended() {
+			t.Error("not intended after a shutdown was requested")
+		}
+	})
 }

@@ -208,8 +208,11 @@ func TestServer_Stop_RejectsNewOperations(t *testing.T) {
 			t.Errorf("%s while stopping = %d (%s), want 503", path, rr.Code, rr.Body.String())
 		}
 	}
-	if store.AnyInProgress() {
-		t.Error("an operation was recorded while the member was stopping")
+	store.mu.Lock()
+	ops, err := store.listLocked()
+	store.mu.Unlock()
+	if err != nil || len(ops) != 0 {
+		t.Errorf("operations recorded while the member was stopping = %d (%v), want none", len(ops), err)
 	}
 }
 

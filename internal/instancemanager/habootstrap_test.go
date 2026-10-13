@@ -88,6 +88,7 @@ type haFixture struct {
 	cli       *haCLI
 	store     *OperationStore
 	databases string
+	srv       *Server
 	handler   http.Handler
 }
 
@@ -104,12 +105,11 @@ func newHAFixture(t *testing.T) *haFixture {
 		t.Fatalf("NewOperationStore: %v", err)
 	}
 	cli := &haCLI{databases: databases, exit: exitStatus1(t)}
-	h := NewServer(cli, "tok").
+	srv := NewServer(cli, "tok").
 		WithOperationStore(store).
 		WithRestoreRoots(RestoreRoots{Target: databases, Staging: filepath.Join(base, "staging")}).
-		WithHAConfig(HAConfig{ConfPath: conf, VolumeSize: "64M"}).
-		Handler()
-	return &haFixture{t: t, cli: cli, store: store, databases: databases, handler: h}
+		WithHAConfig(HAConfig{ConfPath: conf, VolumeSize: "64M"})
+	return &haFixture{t: t, cli: cli, store: store, databases: databases, srv: srv, handler: srv.Handler()}
 }
 
 func (f *haFixture) post(key string) *httptest.ResponseRecorder {

@@ -88,6 +88,10 @@ type Server struct {
 	stopping bool
 	// ops counts the admitted mutating operations until they have ended.
 	ops sync.WaitGroup
+	// disruptive counts those of them that stop and start CUBRID themselves
+	// (restore, HA bootstrap): while one runs, the absence of CUBRID's
+	// processes is intended.
+	disruptive atomic.Int32
 	// opsCtx is the parent of every operation's context; endOps cancels it
 	// when the member stops.
 	opsCtx context.Context
@@ -522,14 +526,14 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
-	if !s.admit() {
+	if !s.admitDisruptive() {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
 		return
 	}
 
 	op, existed, err := s.store.FindOrCreate(OpRestore, key, HashRequest(body), req.Database)
 	if err != nil || existed {
-		s.ops.Done()
+		s.endDisruptive()
 	}
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):
@@ -564,7 +568,7 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 // restore was not recorded was never started, and may be removed (#267).
 func (s *Server) runRestore(id string, req RestoreRequest) {
 	go func() {
-		defer s.ops.Done()
+		defer s.endDisruptive()
 		ctx, cancel := context.WithTimeout(s.opsCtx, s.timeouts.Restore)
 		defer cancel()
 		fail := func(reason string) {

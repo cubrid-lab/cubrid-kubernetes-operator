@@ -63,8 +63,9 @@ spec:
               database:
                 description: |-
                   database is the CUBRID database to back up. Explicit even though
-                  v1alpha1 supports exactly one database per cluster (ADR-0010).
-                maxLength: 63
+                  v1alpha1 supports exactly one database per cluster (ADR-0010). At most
+                  17 characters, like the name in a CubridCluster.
+                maxLength: 17
                 minLength: 1
                 pattern: ^[a-z][a-z0-9_]*$
                 type: string

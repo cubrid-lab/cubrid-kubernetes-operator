@@ -89,8 +89,9 @@ spec:
                     name:
                       description: |-
                         name is the CUBRID database name. Immutable after creation; the operator
-                        generates ha_db_list from the database names in order.
-                      maxLength: 63
+                        generates ha_db_list from the database names in order. At most 17
+                        characters: CUBRID 11.4 does not create a database with a longer name.
+                      maxLength: 17
                       minLength: 1
                       pattern: ^[a-z][a-z0-9_]*$
                       type: string

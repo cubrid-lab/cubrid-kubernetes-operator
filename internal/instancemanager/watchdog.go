@@ -138,10 +138,11 @@ func RunningProcesses() (map[string]bool, error) {
 }
 
 // StopIntended reports whether CUBRID's processes may be absent now: a stop
-// was requested through this manager, or one of its operations is running.
+// was requested through this manager, or one of its operations that stops
+// and starts CUBRID itself is running. A backup is not one of them. The
+// answer comes from the operations this process runs, not from the stored
+// records: the manager fails the records a previous process left unfinished
+// when it starts, and a store that cannot be read must not end the watch.
 func (s *Server) StopIntended() bool {
-	if s.stopRequested.Load() {
-		return true
-	}
-	return s.store != nil && s.store.AnyInProgress()
+	return s.stopRequested.Load() || s.disruptive.Load() > 0
 }
