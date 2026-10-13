@@ -418,12 +418,12 @@ func (r *haRun) s03(variant string) {
 			return nil
 		}
 		return faults.CheckOneMaster(masters, r.activeMasters())
-	}, stablePeriod+2*time.Second, 3*time.Second).Should(Succeed())
+	}, stablePeriod.Value+2*time.Second, 3*time.Second).Should(Succeed())
 	events, history := r.stopClient(client)
 
 	recoveredAt, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
 	Expect(recovered).To(BeTrue(), "the client's last answer after the fault is not an acknowledgement")
-	Expect(stable).To(BeNumerically(">=", stablePeriod),
+	Expect(stable).To(BeNumerically(">=", stablePeriod.Value),
 		"the client was acknowledged without interruption for %s only", stable)
 	recovery := recoveredAt.Sub(outcome.FaultIssuedAt)
 
@@ -494,7 +494,7 @@ func (r *haRun) s03(variant string) {
 			acknowledgedWhileUnresolved++
 		}
 	}
-	judgedResult := judged(evidence.Scenario{
+	result = judged(evidence.Scenario{
 		ID: "S03", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
 		Measurements: map[string]any{
@@ -518,19 +518,6 @@ func (r *haRun) s03(variant string) {
 			Failed: history.Counts[workload.Failed], Unknown: history.Counts[workload.Unknown],
 		},
 		Evidence: files,
-	}, "failover_limit", failoverLimit, recovery)
-	judgedResult.Limits["stable_period"] = stablePeriod.String()
-	rejoin := outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)
-	switch {
-	case rejoinLimit <= 0:
-		judgedResult.Limits["rejoin_limit"] = "unset"
-		judgedResult.Result, judgedResult.Reason = evidence.Blocked, faults.ReasonTimeLimitUnset
-	case judgedResult.Result == evidence.Pass && rejoin > rejoinLimit:
-		judgedResult.Limits["rejoin_limit"] = rejoinLimit.String()
-		judgedResult.Result = evidence.Fail
-		judgedResult.Reason = fmt.Sprintf("rejoin_limit exceeded: %s > %s", rejoin, rejoinLimit)
-	default:
-		judgedResult.Limits["rejoin_limit"] = rejoinLimit.String()
-	}
-	result = judgedResult
+	}, within(failoverLimit, recovery), stableFor(stable),
+		within(rejoinLimit, outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)))
 }

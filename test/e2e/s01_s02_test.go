@@ -289,23 +289,6 @@ func (r *haRun) formationTime() (time.Duration, error) {
 	return last.Sub(cluster.Metadata.CreationTimestamp), nil
 }
 
-// judged gives a scenario whose checks all held its result: a pass within
-// the limit, a fail beyond it, and blocked when the limit is not set.
-func judged(s evidence.Scenario, limitName string, limit, measured time.Duration) evidence.Scenario {
-	s.Limits = map[string]string{limitName: "unset"}
-	switch {
-	case limit <= 0:
-		s.Result, s.Reason = evidence.Blocked, faults.ReasonTimeLimitUnset
-	case measured > limit:
-		s.Limits[limitName] = limit.String()
-		s.Result, s.Reason = evidence.Fail, fmt.Sprintf("%s exceeded: %s > %s", limitName, measured, limit)
-	default:
-		s.Limits[limitName] = limit.String()
-		s.Result, s.Reason = evidence.Pass, ""
-	}
-	return s
-}
-
 // evidenceFiles stores the history and a data check of a scenario and
 // returns the files that were written.
 func (r *haRun) evidenceFiles(id string, report workload.Report) []string {
@@ -367,7 +350,7 @@ func s01AndS02Steps(r *haRun) {
 				Failed: history.Counts[workload.Failed], Unknown: history.Counts[workload.Unknown],
 			},
 			Evidence: r.evidenceFiles("S01", report),
-		}, "formation_limit", formationLimit, formation)
+		}, within(formationLimit, formation))
 	})
 
 	It("S02: replicates rows, schema changes and rollbacks, also to a replaced slave", Label("S02"), func() {
@@ -522,6 +505,6 @@ func s01AndS02Steps(r *haRun) {
 				Failed: history.Counts[workload.Failed], Unknown: history.Counts[workload.Unknown],
 			},
 			Evidence: files,
-		}, "replication_limit", replicationLimit, replication)
+		}, within(replicationLimit, replication))
 	})
 }

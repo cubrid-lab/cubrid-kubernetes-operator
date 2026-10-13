@@ -20,7 +20,81 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
+
+// ReasonMeasurementMissing is the reason a result is blocked when a limit is
+// set but what it bounds could not be measured.
+const ReasonMeasurementMissing = "measurement_missing"
+
+// Limit is a time limit a scenario is judged by, under the name the scenario
+// contract gives it. A Value of zero means that the limit is not set: a run
+// against it is a baseline.
+type Limit struct {
+	Name  string
+	Value time.Duration
+}
+
+// Set reports whether a run can be scored against the limit.
+func (l Limit) Set() bool { return l.Value > 0 }
+
+// String is the limit as summary.json records it: its value, or "unset".
+func (l Limit) String() string {
+	if !l.Set() {
+		return "unset"
+	}
+	return l.Value.String()
+}
+
+// LimitSpec names a limit, the environment variable that sets it and its
+// default. A zero default means that the limit has no value yet.
+type LimitSpec struct {
+	Name    string
+	Env     string
+	Default time.Duration
+}
+
+// The limits of the Kind suite. Each default is the value for Kind on a
+// GitHub-hosted runner that docs/testing/scenario-contract.md (section "Time
+// limits") records, and zero where it records none; change a default there
+// and here together.
+var (
+	// InstallLimit: the Operator installed until its Pod is available.
+	InstallLimit = LimitSpec{"install_limit", "E2E_INSTALL_LIMIT", 0}
+	// ReadyLimit: a single-member cluster created until SQL succeeds.
+	ReadyLimit = LimitSpec{"ready_limit", "E2E_READY_LIMIT", 0}
+	// FormationLimit: a three-member cluster created until all conditions
+	// are True.
+	FormationLimit = LimitSpec{"formation_limit", "E2E_FORMATION_LIMIT", 5 * time.Minute}
+	// ReplicationLimit: a commit on the master until every slave returns
+	// the row.
+	ReplicationLimit = LimitSpec{"replication_limit", "E2E_REPLICATION_LIMIT", 30 * time.Second}
+	// FailoverLimit: the fault until the client's writes are acknowledged
+	// again without interruption.
+	FailoverLimit = LimitSpec{"failover_limit", "E2E_FAILOVER_LIMIT", 30 * time.Second}
+	// RejoinLimit: the fault until all three members have a role again.
+	RejoinLimit = LimitSpec{"rejoin_limit", "E2E_REJOIN_LIMIT", 5 * time.Minute}
+	// StablePeriod: how long the clients must go on being acknowledged
+	// before their recovery counts.
+	StablePeriod = LimitSpec{"stable_period", "E2E_STABLE_PERIOD", 30 * time.Second}
+	// BrokerRecoveryLimit: Broker Pods killed until every client's writes
+	// are acknowledged again.
+	BrokerRecoveryLimit = LimitSpec{"broker_recovery_limit", "E2E_BROKER_RECOVERY_LIMIT", time.Minute}
+	// OperatorResyncLimit: the Operator started until its status matches
+	// fresh observations.
+	OperatorResyncLimit = LimitSpec{"operator_resync_limit", "E2E_OPERATOR_RESYNC_LIMIT", 2 * time.Minute}
+)
+
+// FromEnv reads the limit from its environment variable, as LimitFromEnv
+// reads it.
+func (s LimitSpec) FromEnv() (Limit, error) {
+	value, err := LimitFromEnv(s.Env, s.Default)
+	if err != nil {
+		return Limit{}, err
+	}
+	return Limit{Name: s.Name, Value: value}, nil
+}
 
 // LimitFromEnv returns the time limit a scenario is judged by: the value of
 // the environment variable name when it is set, and def otherwise. The value
@@ -44,4 +118,70 @@ func LimitFromEnv(name string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s=%q is negative", name, value)
 	}
 	return limit, nil
+}
+
+// Bound is one measurement of a run against its limit.
+type Bound struct {
+	Limit Limit
+	// Measured is what the run measured.
+	Measured time.Duration
+	// Unmeasured is true when the measurement could not be taken; Measured
+	// is then ignored.
+	Unmeasured bool
+	// AtLeast is true when the measurement must reach the limit, as the time
+	// a client was acknowledged without interruption must reach
+	// stable_period; otherwise it must not exceed the limit.
+	AtLeast bool
+}
+
+// Verdict is what its limits make of a run whose checks all held.
+type Verdict struct {
+	Result evidence.Result
+	Reason string
+	// Limits are the limits the run was judged by, as summary.json records
+	// them.
+	Limits map[string]string
+}
+
+// Judge judges a run whose checks all held by its limits:
+//
+//   - a measurement beyond a set limit, or for AtLeast short of it, is a
+//     fail, with the first such limit in the reason; a limit that is not set
+//     does not hide one that was exceeded;
+//   - otherwise a limit that is not set makes the run a baseline, blocked
+//     with time_limit_unset: a run with an unset limit is never a pass;
+//   - otherwise a set limit whose measurement could not be taken makes the
+//     run blocked with measurement_missing;
+//   - otherwise the run passes.
+//
+// A run judged by no limit at all is blocked: nothing scored it.
+func Judge(bounds ...Bound) Verdict {
+	v := Verdict{Limits: map[string]string{}}
+	var unset, unmeasured []string
+	for _, b := range bounds {
+		v.Limits[b.Limit.Name] = b.Limit.String()
+		switch {
+		case !b.Limit.Set():
+			unset = append(unset, b.Limit.Name)
+		case b.Unmeasured:
+			unmeasured = append(unmeasured, b.Limit.Name)
+		case v.Result != "":
+		case !b.AtLeast && b.Measured > b.Limit.Value:
+			v.Result = evidence.Fail
+			v.Reason = fmt.Sprintf("%s exceeded: %s > %s", b.Limit.Name, b.Measured, b.Limit.Value)
+		case b.AtLeast && b.Measured < b.Limit.Value:
+			v.Result = evidence.Fail
+			v.Reason = fmt.Sprintf("%s not reached: %s < %s", b.Limit.Name, b.Measured, b.Limit.Value)
+		}
+	}
+	switch {
+	case v.Result != "":
+	case len(bounds) == 0, len(unset) > 0:
+		v.Result, v.Reason = evidence.Blocked, ReasonTimeLimitUnset
+	case len(unmeasured) > 0:
+		v.Result, v.Reason = evidence.Blocked, fmt.Sprintf("%s: %v", ReasonMeasurementMissing, unmeasured)
+	default:
+		v.Result = evidence.Pass
+	}
+	return v
 }

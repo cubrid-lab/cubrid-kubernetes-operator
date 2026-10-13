@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -102,6 +103,11 @@ var _ = AfterSuite(func() {
 	Expect(err).NotTo(HaveOccurred(), "The run did not pass its required scenarios")
 })
 
+// installTime is how long installing the Operator took, from the start of
+// the CRDs' installation until the Operator's Deployment was Available; zero
+// when it was not measured. S00 is judged by it (install_limit).
+var installTime time.Duration
+
 // deployManager creates the manager's namespace with the restricted security
 // policy, installs the CRDs and deploys the controller.
 func deployManager() {
@@ -117,6 +123,7 @@ func deployManager() {
 	Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
 	By("installing CRDs")
+	installStart := time.Now()
 	cmd = exec.Command("make", "install")
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
@@ -125,6 +132,15 @@ func deployManager() {
 	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+
+	// Measured, not asserted here: the manager's own specs check its Pod,
+	// and a wait that ends without it leaves the time unmeasured.
+	By("measuring the time until the controller-manager is available")
+	cmd = exec.Command("kubectl", "-n", namespace, "wait", "--for=condition=Available",
+		operatorDeployment, "--timeout=5m")
+	if _, err := utils.Run(cmd); err == nil {
+		installTime = time.Since(installStart)
+	}
 }
 
 // undeployManager removes what deployManager and the metrics check created.

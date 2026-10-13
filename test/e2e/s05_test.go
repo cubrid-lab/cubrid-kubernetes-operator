@@ -272,17 +272,22 @@ func (r *haRun) s05(variant string) {
 	Expect(outcome.Result).To(Equal(evidence.Pass), "S05/%s: %s", variant, outcome.Reason)
 
 	By("letting the clients run for the stable period, then stopping them")
-	time.Sleep(stablePeriod + 2*time.Second)
+	time.Sleep(stablePeriod.Value + 2*time.Second)
 	var recovery time.Duration
+	// The shortest time a client was acknowledged without interruption.
+	var minStable time.Duration
 	operations := evidence.Operations{}
 	interrupted := 0
 	for _, id := range clients {
 		events, history := r.stopClient(id)
 		recoveredAt, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
 		Expect(recovered).To(BeTrue(), "the last answer of client %s after the fault is not an acknowledgement", id)
-		Expect(stable).To(BeNumerically(">=", stablePeriod),
+		Expect(stable).To(BeNumerically(">=", stablePeriod.Value),
 			"client %s was acknowledged without interruption for %s only", id, stable)
 		recovery = max(recovery, recoveredAt.Sub(outcome.FaultIssuedAt))
+		if minStable == 0 || stable < minStable {
+			minStable = stable
+		}
 		// A client is interrupted when an operation of it failed, or was
 		// left without a known outcome, after the fault.
 		for _, e := range events {
@@ -320,7 +325,7 @@ func (r *haRun) s05(variant string) {
 	if timeline != "" {
 		files = append(files, timeline)
 	}
-	judgedResult := judged(evidence.Scenario{
+	result = judged(evidence.Scenario{
 		ID: "S05", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
 		Measurements: map[string]any{
@@ -329,6 +334,7 @@ func (r *haRun) s05(variant string) {
 			"recoveryTime":             recovery.Round(time.Millisecond).String(),
 			"brokersAvailableWithin":   outcome.OutcomeAt.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String(),
 			"newConnectionAfterFault":  newConnection,
+			"shortestStableFor":        minStable.Round(time.Millisecond).String(),
 			"clientsInterrupted":       interrupted,
 			"clientsNotInterrupted":    len(clients) - interrupted,
 			"acknowledgedMissing":      report.AcknowledgedMissing,
@@ -337,7 +343,5 @@ func (r *haRun) s05(variant string) {
 		},
 		Operations: &operations,
 		Evidence:   files,
-	}, "broker_recovery_limit", brokerRecoveryLimit, recovery)
-	judgedResult.Limits["stable_period"] = stablePeriod.String()
-	result = judgedResult
+	}, within(brokerRecoveryLimit, recovery), stableFor(minStable))
 }

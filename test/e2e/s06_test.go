@@ -246,7 +246,10 @@ func (r *haRun) s06Restart() {
 	Expect(outcome.Result).To(Equal(evidence.Pass), "S06/%s: %s", s06Restart, outcome.Reason)
 
 	By("letting the clients run for the stable period, then stopping them")
-	time.Sleep(stablePeriod + 2*time.Second)
+	time.Sleep(stablePeriod.Value + 2*time.Second)
+	// The clients went on writing this long after the Operator was back,
+	// with every operation since the fault acknowledged (checked below).
+	observedFor := time.Since(outcome.OutcomeAt)
 	operations := evidence.Operations{}
 	notAcknowledged := 0
 	for _, id := range clients {
@@ -301,13 +304,14 @@ func (r *haRun) s06Restart() {
 			// reconcile, so this is an upper bound of the resync.
 			"operatorBackWithin":        back.Round(time.Millisecond).String(),
 			"operationsNotAcknowledged": notAcknowledged,
+			"observedAfterResyncFor":    observedFor.Round(time.Millisecond).String(),
 			"membersRestarted":          0,
 			"acknowledgedMissing":       report.AcknowledgedMissing,
 			"databaseFailoverObserved":  false,
 		},
 		Operations: &operations,
 		Evidence:   files,
-	}, "operator_resync_limit", operatorResyncLimit, back)
+	}, within(operatorResyncLimit, back), stableFor(observedFor))
 }
 
 func (r *haRun) s06Absent() {
@@ -454,11 +458,11 @@ func (r *haRun) s06Absent() {
 	resync := time.Since(absence.returnedAt)
 
 	By("letting the client run for the stable period, then stopping it")
-	time.Sleep(stablePeriod + 2*time.Second)
+	time.Sleep(stablePeriod.Value + 2*time.Second)
 	events, history := r.stopClient(client)
 	recoveredAt, stable, recovered := workload.Recovery(events, masterDeletedAt)
 	Expect(recovered).To(BeTrue(), "the client's last answer after the master was deleted is not an acknowledgement")
-	Expect(stable).To(BeNumerically(">=", stablePeriod),
+	Expect(stable).To(BeNumerically(">=", stablePeriod.Value),
 		"the client was acknowledged without interruption for %s only", stable)
 	recovery := recoveredAt.Sub(masterDeletedAt)
 
@@ -488,7 +492,7 @@ func (r *haRun) s06Absent() {
 	if timeline != "" {
 		files = append(files, timeline)
 	}
-	judgedResult := judged(evidence.Scenario{
+	result = judged(evidence.Scenario{
 		ID: "S06", Variant: s06Absent,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
 		Measurements: map[string]any{
@@ -511,12 +515,5 @@ func (r *haRun) s06Absent() {
 			Failed: history.Counts[workload.Failed], Unknown: history.Counts[workload.Unknown],
 		},
 		Evidence: files,
-	}, "operator_resync_limit", operatorResyncLimit, resync)
-	judgedResult.Limits["failover_limit"] = failoverLimit.String()
-	judgedResult.Limits["stable_period"] = stablePeriod.String()
-	if judgedResult.Result == evidence.Pass && recovery > failoverLimit {
-		judgedResult.Result = evidence.Fail
-		judgedResult.Reason = fmt.Sprintf("failover_limit exceeded: %s > %s", recovery, failoverLimit)
-	}
-	result = judgedResult
+	}, within(operatorResyncLimit, resync), within(failoverLimit, recovery), stableFor(stable))
 }

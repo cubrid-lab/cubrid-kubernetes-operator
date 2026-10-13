@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"runtime"
@@ -52,6 +53,8 @@ type s00Evidence struct {
 	PodUID              string   `json:"podUID,omitempty"`
 	FirstStartSeconds   float64  `json:"firstStartToReadySeconds,omitempty"`
 	RestartSeconds      float64  `json:"podDeleteToReadySeconds,omitempty"`
+	InstallSeconds      float64  `json:"installSeconds,omitempty"`
+	ReadySeconds        float64  `json:"createdToSQLSeconds,omitempty"`
 	ContainerRestarts   string   `json:"containerRestarts,omitempty"`
 	ProbeFailureEvents  []string `json:"probeFailureEvents"`
 	RowKeptAcrossDelete bool     `json:"rowKeptAcrossPodDelete"`
@@ -78,6 +81,8 @@ func s00Scenario() {
 		podReplaced := false
 		// podDeletionOutcome is the run of the Pod deletion, once it happened.
 		var podDeletionOutcome *faults.Outcome
+		// createdAt is when the CubridCluster was created.
+		var createdAt time.Time
 
 		kubectl := func(args ...string) (string, error) {
 			return utils.Run(exec.Command("kubectl", append([]string{"-n", s00Namespace}, args...)...))
@@ -140,6 +145,7 @@ spec:
 `, clusterName, s00Namespace, repository, tag, database)
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(manifest)
+			createdAt = time.Now()
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create the CubridCluster")
 		})
@@ -169,11 +175,14 @@ spec:
 				out, _ := kubectl(args...)
 				_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
 			}
+			record.InstallSeconds = installTime.Seconds()
 			result := evidence.Scenario{ID: "S00", Result: evidence.Result(record.Result),
 				FaultConfirmed: &podReplaced,
 				Measurements: map[string]any{
 					"firstStartToReadySeconds": measured(record.FirstStartSeconds),
 					"podDeleteToReadySeconds":  measured(record.RestartSeconds),
+					"installSeconds":           measured(record.InstallSeconds),
+					"createdToSQLSeconds":      measured(record.ReadySeconds),
 				}}
 			if result.Result != evidence.Pass {
 				result.Reason = "a step of the scenario failed; see the test output"
@@ -193,6 +202,7 @@ spec:
 					result.Evidence = append(result.Evidence, file)
 				}
 			}
+			result = judgeS00Limits(result, installTime, time.Duration(record.ReadySeconds*float64(time.Second)))
 			recordScenario(result)
 			updateSummary(func(s *evidence.Summary) {
 				s.Environment.CubridImageDigest = record.InstanceManagerID
@@ -228,6 +238,8 @@ spec:
 			sql := csqlInPod(s00Namespace, pod, database)
 			Expect(writeS00Row(sql, marker)).To(Succeed())
 			Expect(readS00Row(sql, marker)).To(Succeed())
+			// An upper bound: it includes the checks above.
+			record.ReadySeconds = time.Since(createdAt).Seconds()
 
 			By("checking that a failing statement fails the check")
 			_, err = runSQL(sql, "SELECT * FROM s00_no_such_table;")
@@ -318,6 +330,36 @@ func measured(seconds float64) any {
 		return evidence.Unknown
 	}
 	return seconds
+}
+
+// judgeS00Limits judges a run of S00 by install_limit and ready_limit; a zero
+// measurement was not taken. The limits are always recorded; only a run
+// whose checks all held is judged by them.
+//
+// Neither limit has a value yet (contract, "Time limits"), and S00 is
+// required in the kind lane. A limit that is set is judged as every other
+// limit is, so a run beyond it fails. A run whose only obstacle is an unset
+// limit keeps its result: blocking it would keep every run from passing the
+// lane, which is not this test's to decide. The verdict the limits give is
+// recorded as timeLimitVerdict, and the limits as unset, so the summary does
+// not read as a run scored against them.
+func judgeS00Limits(result evidence.Scenario, install, ready time.Duration) evidence.Scenario {
+	v := faults.Judge(
+		faults.Bound{Limit: installLimit, Measured: install, Unmeasured: install == 0},
+		faults.Bound{Limit: readyLimit, Measured: ready, Unmeasured: ready == 0},
+	)
+	if result.Limits == nil {
+		result.Limits = map[string]string{}
+	}
+	maps.Copy(result.Limits, v.Limits)
+	if result.Result != evidence.Pass {
+		return result
+	}
+	result.Measurements["timeLimitVerdict"] = strings.TrimSuffix(string(v.Result)+": "+v.Reason, ": ")
+	if v.Result != evidence.Blocked || v.Reason != faults.ReasonTimeLimitUnset {
+		result.Result, result.Reason = v.Result, v.Reason
+	}
+	return result
 }
 
 // podDeletionLimits bound the deletion of a DB Pod in S00. They are the waits
