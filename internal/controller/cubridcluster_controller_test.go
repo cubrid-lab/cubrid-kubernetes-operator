@@ -963,6 +963,34 @@ func (p *mastersProber) ProbeRole(_ context.Context, podName, _ string) RoleObse
 	return RoleObservation{Reachable: true, Role: role, ObservedAt: time.Now()}
 }
 
+// Deleting a cluster removes every series that carries its namespace and
+// name, whichever metric it belongs to (#253).
+var _ = Describe("Metrics of a deleted cluster (#253)", func() {
+	ctx := context.Background()
+
+	It("are removed when the cluster is gone", func() {
+		c := haCluster("metrics-gone")
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		key := types.NamespacedName{Name: c.Name, Namespace: c.Namespace}
+		r := &CubridClusterReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(100),
+			Prober: &memberProber{master: "metrics-gone-0"},
+		}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(seriesOf(key.Namespace, key.Name)).To(ContainElements(
+			"cubrid_cluster_ready", "cubrid_cluster_primary_resolved", metricMemberRole))
+
+		Expect(k8sClient.Delete(ctx, c)).To(Succeed())
+		Eventually(func() bool {
+			return errors.IsNotFound(k8sClient.Get(ctx, key, &databasev1alpha1.CubridCluster{}))
+		}).Should(BeTrue())
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(seriesOf(key.Namespace, key.Name)).To(BeEmpty())
+	})
+})
+
 var _ = Describe("Ready of an HA cluster (#339)", func() {
 	ctx := context.Background()
 

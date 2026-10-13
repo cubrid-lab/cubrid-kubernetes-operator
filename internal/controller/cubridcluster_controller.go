@@ -43,8 +43,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/metrics"
 )
@@ -251,6 +249,10 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 	if ok {
 		report.(*reconcileReport).statusWritten = err == nil
 	}
+	if err == nil {
+		// The metrics say what the stored status says.
+		publishClusterMetrics(cluster)
+	}
 	return err
 }
 
@@ -286,6 +288,9 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// via owner references.
 		r.conflicts.Delete(conflictKey{req.NamespacedName, childWrites})
 		r.conflicts.Delete(conflictKey{req.NamespacedName, brokerWrites})
+		if apierrors.IsNotFound(err) {
+			metrics.DeleteCluster(req.Namespace, req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	// What changed in the status during this reconcile is reported once, when
@@ -997,7 +1002,7 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 			fmt.Sprintf("waiting for %d/%d instances", ready, desired))
 	}
 
-	labels := prometheus.Labels{"namespace": cluster.Namespace, "cluster": cluster.Name}
+	labels := metrics.ClusterLabels(cluster.Namespace, cluster.Name)
 	metrics.ClusterInstances.With(labels).Set(float64(desired))
 	metrics.InstanceReady.With(labels).Set(float64(ready))
 	metrics.ClusterReady.With(labels).Set(boolToFloat(instancesReady && !multiplePrimaries))

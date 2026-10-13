@@ -209,7 +209,9 @@ An HA cluster with role discovery publishes when its HA status was observed:
   in the observation the cluster's time comes from; its role is then
   `unknown`.
 - The fields are not set for a cluster without HA or without role discovery,
-  whose roles are never observed. No metric exports these times.
+  whose roles are never observed. The metrics
+  `cubrid_cluster_last_observation_timestamp_seconds` and
+  `cubrid_instance_last_observation_timestamp_seconds` export these times.
 - A Condition's `lastTransitionTime` is when its status last changed, not when
   it was last confirmed.
 - No Condition says "stale", because nobody would be there to set it; the age
@@ -312,15 +314,24 @@ otherwise.
 | `cubrid_cluster_last_observation_timestamp_seconds` | `namespace`, `cluster` | time of the last finished observation |
 | `cubrid_instance_ready` | `namespace`, `cluster`, `member` | 1 or 0 |
 | `cubrid_instance_role` | `namespace`, `cluster`, `member`, `role` | 1 for the member's role, 0 for the others; `role` is `master`, `slave`, `replica` or `unknown` |
-| `cubrid_instance_replication_observation_available` | `namespace`, `cluster`, `member` | 1 when the slave's applier could be read |
-| `cubrid_instance_replication_delayed_pages` | `namespace`, `cluster`, `member` | copied log pages not applied yet; no sample when not available |
-| `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set and the applier was read in this observation; no sample when not read |
-| `cubrid_instance_last_observation_timestamp_seconds` | `namespace`, `cluster`, `member` | time of the member's last answer |
+| `cubrid_instance_replication_observation_available` | `namespace`, `cluster`, `member` | for a slave: 1 while the status holds a reading of its applier (`instances[].replication`), else 0; no sample for a member that is no slave |
+| `cubrid_instance_replication_delayed_pages` | `namespace`, `cluster`, `member` | copied log pages not applied yet; no sample without a reading |
+| `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set, 0 while it is not; no sample without a reading |
+| `cubrid_instance_last_observation_timestamp_seconds` | `namespace`, `cluster`, `member` | time of the member's last answer; no sample for a member that never answered |
+
+Every metric is taken from the cluster's status when that status was written,
+so a metric and the Condition or status field it mirrors come from the same
+observation. A reading of an applier that could not be renewed stays in the
+status, and so in the metrics, for a bounded time before it is dropped. A
+Condition that the status does not carry has no sample; `cubrid_cluster_ha_ready`,
+`cubrid_cluster_primary_resolved` and `cubrid_cluster_routing_ready` are 0 while
+their Condition is `False` or `Unknown`.
 
 - A value that is not available has no sample. It is never exported as 0.
 - Labels are few and bounded. An operation ID, a request ID, a Pod UID, an
   image digest, a command and an error text are never labels.
-- The series of a cluster are removed when the cluster is deleted.
+- The series of a cluster are removed when the cluster is deleted, and the
+  series of a member when it is no longer in the status.
 - Gauges are set again from the first reconcile after an Operator restart.
   Counters, when one is added, start from zero then; none is defined yet.
 - There is no `replication_lag_seconds`: `cubrid applyinfo` gave no delay in
