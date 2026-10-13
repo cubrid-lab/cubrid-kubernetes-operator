@@ -17,11 +17,13 @@ limitations under the License.
 package instancemanager
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -384,6 +386,99 @@ func TestResumeAndServe_ReclaimsAbandonedBackupStaging(t *testing.T) {
 	}
 	if final, err := store.Get(running.ID); err != nil || final.State.IsTerminal() {
 		t.Errorf("running operation = %+v (err %v), want it untouched", final, err)
+	}
+}
+
+// lockDir takes every permission from dir for the rest of the test, so that
+// it cannot be read; the test is skipped for root, which reads it anyway.
+func lockDir(t *testing.T, dir string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory without permissions")
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+}
+
+// A destination that the cleanup after a restart keeps because it cannot
+// judge it stays blocked until someone repairs it, so the cleanup says so: a
+// warning names the destination, and the operation whose record cannot be
+// read.
+func TestResumeAndServe_WarnsAboutBackupStagingItCannotJudge(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "backup-staging")
+	storeDir := t.TempDir()
+	store, err := NewOperationStore(storeDir)
+	if err != nil {
+		t.Fatalf("NewOperationStore: %v", err)
+	}
+	const unreadable = "op-fedcba9876543210fedcba9876543210"
+	writeFile(t, filepath.Join(storeDir, unreadable+".json"), "{not json")
+	writeFile(t, filepath.Join(root, "uid-4", unreadable, "db_bk0v000"), "x")
+	locked := filepath.Join(root, "uid-5")
+	writeFile(t, filepath.Join(locked, "db_bk0v000"), "x")
+	lockDir(t, locked)
+
+	var buf bytes.Buffer
+	srv := NewServer(fakeCLI{out: "ok"}, "tok").WithOperationStore(store).WithBackupStagingRoot(root).
+		WithLogger(testLogger(&buf, slog.LevelInfo))
+	if err := srv.ResumeAndServe(context.Background(), func() error { return nil }); err != nil {
+		t.Fatalf("ResumeAndServe: %v", err)
+	}
+
+	var record, destination bool
+	for _, l := range logLines(t, &buf) {
+		if l[keyLevel] != levelWarn {
+			continue
+		}
+		record = record || (l["destination"] == "uid-4" && l["operationID"] == unreadable)
+		destination = destination || l["destination"] == "uid-5"
+	}
+	if !record {
+		t.Errorf("no warning names destination uid-4 and operation %s, whose record cannot be read; log:\n%s", unreadable, buf.String())
+	}
+	if !destination {
+		t.Errorf("no warning names destination uid-5, which cannot be read; log:\n%s", buf.String())
+	}
+}
+
+// A destination that cannot be read is not reported as owned by a running
+// operation: the claim fails with the read error and removes nothing, and
+// the API does not answer such a request as a conflict.
+func TestClaimBackupStaging_ReportsAnUnreadableDestinationAsItIs(t *testing.T) {
+	rootDir := filepath.Join(t.TempDir(), "backup-staging")
+	locked := filepath.Join(rootDir, "uid-1")
+	volume := filepath.Join(locked, "db_bk0v000")
+	writeFile(t, volume, "x")
+	lockDir(t, locked)
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOperationStore: %v", err)
+	}
+	srv := NewServer(fakeCLI{out: "ok"}, "tok").WithOperationStore(store).WithObjectStore(newFakeStore()).
+		WithBackupStagingRoot(rootDir)
+	root, err := srv.openStagingRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+
+	_, err = srv.claimBackupStaging(root, "uid-1", "op-0123456789abcdef0123456789abcdef")
+	if err == nil || errors.Is(err, ErrBackupStagingInUse) || !errors.Is(err, os.ErrPermission) {
+		t.Errorf("claim of an unreadable destination = %v, want the permission error, not %v", err, ErrBackupStagingInUse)
+	}
+
+	rr := postBackup(t, srv.Handler(), "key-1", backupBodyOf(dbName, locked, "appdb"))
+	if rr.Code == http.StatusConflict || !strings.Contains(rr.Body.String(), "permission denied") {
+		t.Errorf("/v1/backup to an unreadable destination = %d (body %s), want the read error, not a conflict", rr.Code, rr.Body.String())
+	}
+
+	if err := os.Chmod(locked, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(volume) {
+		t.Error("a file in the unreadable destination was removed")
 	}
 }
 

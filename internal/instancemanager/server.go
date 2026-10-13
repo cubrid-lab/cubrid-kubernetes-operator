@@ -920,7 +920,10 @@ func confineBackupDestination(destination, root string) (string, error) {
 // destination does not exist (docs/poc/RESULTS.md, POC-12). destination is a
 // directory below the root: the request's destination, or an operation's
 // own directory below it. It is created through an os.Root on the staging
-// root, so it cannot land elsewhere.
+// root, so it cannot land elsewhere. For an asynchronous backup the claim
+// (recordBackup) has already created the operation's directory under
+// stagingMu, so this finds it in place and changes nothing; it runs outside
+// stagingMu for that reason.
 func (s *Server) createBackupStaging(destination string) error {
 	rel, err := s.stagingRel(destination)
 	if err != nil {

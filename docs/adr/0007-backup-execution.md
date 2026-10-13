@@ -197,7 +197,11 @@ ends, also one that was refused, has `status.completedAt`.
   staged directly in the destination. When the manager starts it removes
   the same from every destination directly below the staging root and
   then the destinations left empty; a destination with an entry of a live
-  operation, or of one whose record cannot be read, is left untouched.
+  operation, or of one whose record cannot be read, is left untouched. A
+  destination kept because a record or the destination itself cannot be
+  read stays blocked until it is repaired, so it is logged as a warning
+  naming the destination (and the operation ID). A destination that cannot
+  be read fails a request with the read error, never as a 409.
   Neither removal follows a link, and neither reaches outside the root.
 - **Stage then upload** (not pure streaming) is the safe baseline;
   preflight free-space check, per-attempt directory, refuse concurrent

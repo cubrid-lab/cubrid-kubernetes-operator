@@ -45,10 +45,11 @@ import (
 // removed for the refused request.
 var ErrBackupStagingInUse = errors.New("the backup staging destination is owned by another operation that is still running")
 
-// stagingOwnerLive reports whether the entry name of a destination belongs to
-// a live operation. A record that cannot be read counts as live: what it
-// owns cannot be shown to be abandoned.
-func (s *Server) stagingOwnerLive(name string) (*Operation, bool) {
+// stagingOwnerLive reports whether the entry name of the destination belongs
+// to a live operation. A record that cannot be read counts as live: what it
+// owns cannot be shown to be abandoned. That keeps the destination blocked
+// until the record is repaired, so it is logged as a warning.
+func (s *Server) stagingOwnerLive(destination, name string) (*Operation, bool) {
 	if !isValidOperationID(name) {
 		return nil, false
 	}
@@ -57,6 +58,8 @@ func (s *Server) stagingOwnerLive(name string) (*Operation, bool) {
 		return nil, false
 	}
 	if err != nil {
+		s.log().Warn("Could not read the operation record that owns backup staging; the destination is kept",
+			"destination", destination, "operationID", name, "err", err)
 		return &Operation{ID: name}, true
 	}
 	return op, !op.State.IsTerminal()
@@ -79,7 +82,7 @@ func (s *Server) liveStagingOwners(root *os.Root, name string) ([]*Operation, []
 	}
 	var live []*Operation
 	for _, e := range entries {
-		if op, ok := s.stagingOwnerLive(e.Name()); ok {
+		if op, ok := s.stagingOwnerLive(name, e.Name()); ok {
 			live = append(live, op)
 		}
 	}
@@ -155,7 +158,11 @@ func (s *Server) claimBackupStaging(root *os.Root, name, id string) (string, err
 	if !info.IsDir() {
 		return "", fmt.Errorf("the backup staging destination %s is not a directory", name)
 	}
-	if !s.reclaimDestination(root, name) {
+	free, err := s.reclaimDestination(root, name)
+	if err != nil {
+		return "", err
+	}
+	if !free {
 		return "", fmt.Errorf("%w: %s", ErrBackupStagingInUse, name)
 	}
 	if err := root.Mkdir(filepath.Join(name, id), 0o750); err != nil {
@@ -167,18 +174,22 @@ func (s *Server) claimBackupStaging(root *os.Root, name, id string) (string, err
 // reclaimDestination removes every entry of the destination name that no
 // live operation owns, unless one does: a destination with a live owner is
 // left as it is. Links are removed, never followed. It reports whether the
-// destination had no live owner.
-func (s *Server) reclaimDestination(root *os.Root, name string) bool {
+// destination had no live owner; a destination it cannot read is an error,
+// and nothing in it is removed.
+func (s *Server) reclaimDestination(root *os.Root, name string) (bool, error) {
 	live, entries, err := s.liveStagingOwners(root, name)
-	if err != nil || len(live) > 0 {
-		return false
+	if err != nil {
+		return false, err
+	}
+	if len(live) > 0 {
+		return false, nil
 	}
 	for _, e := range entries {
 		if err := root.RemoveAll(filepath.Join(name, e.Name())); err != nil {
 			s.log().Warn("Could not remove abandoned backup staging", "destination", name, "entry", e.Name(), "err", err)
 		}
 	}
-	return true
+	return true, nil
 }
 
 // reclaimBackupStaging removes, when the manager starts, the backup staging
@@ -209,7 +220,12 @@ func (s *Server) reclaimBackupStaging() {
 		if !e.IsDir() || !stagingNamePattern.MatchString(name) {
 			continue
 		}
-		if s.reclaimDestination(root, name) {
+		free, err := s.reclaimDestination(root, name)
+		if err != nil {
+			s.log().Warn("Could not read backup staging; the destination is kept", "destination", name, "err", err)
+			continue
+		}
+		if free {
 			if err := root.Remove(name); err == nil {
 				s.log().Info("Removed abandoned backup staging", "destination", name)
 			}
