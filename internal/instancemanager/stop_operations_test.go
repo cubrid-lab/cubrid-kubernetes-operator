@@ -19,6 +19,7 @@ package instancemanager
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -377,6 +378,67 @@ func TestResumeCompletedRestores_StopWaitsForItsStart(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 	<-resumed
+	calls := cli.recorded()
+	start, stop := slices.Index(calls, callServerStart), slices.Index(calls, stopServer)
+	if start < 0 || stop < start {
+		t.Errorf("calls = %q, want the server stopped after its start returned", calls)
+	}
+	wantNothingStartedAfterTheStop(t, calls)
+}
+
+// A shutdown that arrives while the starting manager resumes completed
+// restores reaches the manager, which waits for the start it is running and
+// stops CUBRID after it. Were the manager not listening yet, "instance-manager
+// shutdown" would stop CUBRID itself, and the resume could start it again
+// afterwards (#323). No other operation is admitted meanwhile.
+func TestResumeAndServe_ShutdownDuringTheResumeReachesTheManager(t *testing.T) {
+	f := completedRestoreWithMarker(t)
+	cli := newHeldCLI("server start")
+	f.start(cli)
+
+	listening := make(chan string, 1)
+	serve := func() error {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		ts := &httptest.Server{Listener: listener, Config: &http.Server{Handler: f.handler, ReadHeaderTimeout: time.Second}}
+		ts.Start()
+		t.Cleanup(ts.Close)
+		listening <- ts.URL
+		return nil
+	}
+	served := make(chan error, 1)
+	go func() { served <- f.server.ResumeAndServe(context.Background(), serve) }()
+	select {
+	case <-cli.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the database was not started")
+	}
+	var managerURL string
+	select {
+	case managerURL = <-listening:
+	default:
+		t.Fatal("the manager starts a database before it listens: a shutdown would not reach it")
+	}
+
+	body, _ := json.Marshal(f.req)
+	rr := postOperation(f.handler, "/v1/restore/prepare", string(body), "restore-2")
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "starting") {
+		t.Errorf("/v1/restore/prepare during the resume = %d (%s), want 503 because the manager is starting", rr.Code, rr.Body.String())
+	}
+
+	time.AfterFunc(50*time.Millisecond, func() { close(cli.release) })
+	fallback := &countingCLI{}
+	if err := RequestShutdown(context.Background(), managerURL, "tok", dbName, fallback, 5*time.Second); err != nil {
+		t.Fatalf("RequestShutdown: %v", err)
+	}
+	if got := fallback.recorded(); len(got) != 0 {
+		t.Errorf("the shutdown command stopped CUBRID itself (%q) although the manager runs", got)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
 	calls := cli.recorded()
 	start, stop := slices.Index(calls, callServerStart), slices.Index(calls, stopServer)
 	if start < 0 || stop < start {

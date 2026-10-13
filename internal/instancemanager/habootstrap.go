@@ -117,8 +117,8 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
-	if !s.admitDisruptive() {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
+	if err := s.admitDisruptive(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: err.Error()})
 		return
 	}
 

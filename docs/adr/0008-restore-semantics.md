@@ -227,6 +227,12 @@ Failed/partial restore → `Ready=False` + blocked/degraded condition;
 **never report a half-restored DB as healthy** and never advertise DB
 service from a partially restored pod.
 
+The phase of a restore that runs (#372): `status.bootstrap.phase` follows what
+the Instance Manager's operation does. It is `Preparing` while the operation
+is started and while it verifies and downloads the backup, and `Restoring`
+only while `restoredb` runs or the restored database is started. Each step is
+recorded as an Event (docs/observability.md).
+
 Seeding after the restore (#268): in an HA cluster the restore on the target
 member does not complete the recovery. When it has completed,
 `status.bootstrap.phase` becomes `SeedingReplicas`, the database is recorded in

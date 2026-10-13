@@ -56,6 +56,7 @@ func transitions(before, after *databasev1alpha1.CubridClusterStatus) []transiti
 	var out []transition
 	out = append(out, primaryTransitions(before, after)...)
 	out = append(out, replicationTransitions(before, after)...)
+	out = append(out, recoveryTransitions(before, after)...)
 	for _, now := range after.Conditions {
 		if now.Type == conditionPrimaryResolved {
 			continue
@@ -200,6 +201,53 @@ func memberTransitions(before, after *databasev1alpha1.CubridClusterStatus) []tr
 				Fields:  []any{logKeyMember, in.Name},
 			})
 		}
+	}
+	return out
+}
+
+// recoveryTransitions reports the steps of a recovery bootstrap: a restore
+// operation that was started, restoredb running, and the end of the recovery.
+// The seeding of the other members has its own Events.
+func recoveryTransitions(before, after *databasev1alpha1.CubridClusterStatus) []transition {
+	now := after.Bootstrap
+	if now == nil {
+		return nil
+	}
+	was := before.Bootstrap
+	if was == nil {
+		was = &databasev1alpha1.BootstrapStatus{}
+	}
+	var out []transition
+	if now.OperationID != "" && now.OperationID != was.OperationID {
+		out = append(out, transition{
+			Event: "restore_started", Reason: "RestoreStarted",
+			Message: fmt.Sprintf("Restore of %s started on %s (attempt %d)", now.ManifestURI, now.TargetMember, now.Attempts+1),
+			Fields:  []any{logKeyMember, now.TargetMember, "operationID", now.OperationID},
+		})
+	}
+	if now.Phase == was.Phase {
+		return out
+	}
+	fields := []any{logKeyMember, now.TargetMember, "operationID", now.OperationID}
+	switch now.Phase {
+	case databasev1alpha1.BootstrapRestoring:
+		out = append(out, transition{
+			Event: "restore_running", Reason: "RestoreRunning",
+			Message: "The backup is downloaded; restoredb is running on " + now.TargetMember, Fields: fields,
+		})
+	case databasev1alpha1.BootstrapComplete:
+		out = append(out, transition{
+			Event: "restore_completed", Reason: "RestoreCompleted",
+			Message: "Recovery from " + now.ManifestURI + " completed", Fields: fields,
+		})
+	case databasev1alpha1.BootstrapFailed:
+		msg := "Recovery from " + now.ManifestURI + " failed"
+		if ready := meta.FindStatusCondition(after.Conditions, conditionBootstrapReady); ready != nil {
+			msg += ": " + ready.Message
+		}
+		out = append(out, transition{
+			Event: "restore_failed", Reason: "RestoreFailed", Warning: true, Message: msg, Fields: fields,
+		})
 	}
 	return out
 }

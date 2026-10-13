@@ -488,7 +488,7 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			ready := meta.FindStatusCondition(got.Status.Conditions, conditionReady)
 			Expect(ready.Reason).To(Equal("RecoverySeedingReplicas"))
 			Expect(ready.Message).NotTo(ContainSubstring("restoring from backup"))
-			Expect(r.Recorder.(*record.FakeRecorder).Events).To(Receive(ContainSubstring("DatabaseRestored")))
+			Expect(drain(r.Recorder.(*record.FakeRecorder))).To(ContainElement(ContainSubstring("DatabaseRestored")))
 
 			By("saying that the database was restored, not created, on the source")
 			r.Backup = nil

@@ -508,9 +508,11 @@ type UpdateStatus struct {
 type BootstrapPhase string
 
 const (
-	// BootstrapPreparing means the restore operation is being started.
+	// BootstrapPreparing means the restore operation is being started, or
+	// it verifies and downloads the backup.
 	BootstrapPreparing BootstrapPhase = "Preparing"
-	// BootstrapRestoring means restoredb is running on the initial master.
+	// BootstrapRestoring means restoredb is running on the initial master,
+	// or the restored database is being started there.
 	BootstrapRestoring BootstrapPhase = "Restoring"
 	// BootstrapValidating means the restored DB is being validated.
 	BootstrapValidating BootstrapPhase = "Validating"

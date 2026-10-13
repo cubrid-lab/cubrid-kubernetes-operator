@@ -153,32 +153,78 @@ func (s *Server) Stop(ctx context.Context, database string) error {
 	return nil
 }
 
-// admit counts a new mutating operation as running, or refuses it once the
-// member is stopping. An admitted operation calls s.ops.Done when it ends.
-func (s *Server) admit() bool {
+// admit counts a new mutating operation as running, or says why it is
+// refused: the member is stopping, or the manager is still starting. An
+// admitted operation calls s.ops.Done when it ends.
+func (s *Server) admit() error {
 	s.lifeMu.Lock()
 	defer s.lifeMu.Unlock()
 	if s.stopping {
-		return false
+		return errStopping
+	}
+	if s.starting {
+		return errStarting
 	}
 	s.ops.Add(1)
-	return true
+	return nil
+}
+
+// admitResume is admit for the resume of completed restores, which is what
+// the starting manager does.
+func (s *Server) admitResume() error {
+	s.lifeMu.Lock()
+	defer s.lifeMu.Unlock()
+	if s.stopping {
+		return errStopping
+	}
+	s.ops.Add(1)
+	return nil
 }
 
 // admitDisruptive is admit for an operation that stops and starts CUBRID
 // itself. Until it calls endDisruptive, instead of s.ops.Done, the process
 // watch accepts that CUBRID's processes are absent.
-func (s *Server) admitDisruptive() bool {
-	if !s.admit() {
-		return false
+func (s *Server) admitDisruptive() error {
+	if err := s.admit(); err != nil {
+		return err
 	}
 	s.disruptive.Add(1)
-	return true
+	return nil
 }
 
 func (s *Server) endDisruptive() {
 	s.disruptive.Add(-1)
 	s.ops.Done()
+}
+
+// errStarting is why a mutating operation is refused while the manager
+// starts: it still resumes completed restores, and no request races that.
+var errStarting = errors.New("the manager is starting")
+
+// ResumeAndServe brings a starting manager into service. It calls serve,
+// which starts to listen and returns, and then starts the databases of
+// completed restores (ResumeCompletedRestores). The manager listens first so
+// that a shutdown during the resume reaches it and is ordered after the
+// start that is running; were nobody listening, "instance-manager shutdown"
+// would stop CUBRID itself and the resume could start it again afterwards.
+// Until the resume has ended every other mutating operation is refused. A
+// resume that fails is logged; the manager serves all the same.
+func (s *Server) ResumeAndServe(ctx context.Context, serve func() error) error {
+	s.lifeMu.Lock()
+	s.starting = true
+	s.lifeMu.Unlock()
+	defer func() {
+		s.lifeMu.Lock()
+		s.starting = false
+		s.lifeMu.Unlock()
+	}()
+	if err := serve(); err != nil {
+		return err
+	}
+	if err := s.ResumeCompletedRestores(ctx); err != nil {
+		s.log().Error("Could not start the database of a completed restore", "err", err)
+	}
+	return nil
 }
 
 // awaitOperations waits until every admitted operation has ended, or ctx

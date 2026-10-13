@@ -253,6 +253,8 @@ func main() {
 		Scheme: mgr.GetScheme(),
 		Prober: controller.NewHTTPRoleProber(tokens),
 		Backup: controller.NewHTTPBackupClient(tokens),
+		//nolint:staticcheck // as for the cluster controller above.
+		Recorder: mgr.GetEventRecorderFor("cubridbackup-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "cubridbackup")
 		os.Exit(1)

@@ -135,6 +135,12 @@ func (f brokerProcessKill) Inject(ctx context.Context) error {
 	_, err := utils.Run(exec.CommandContext(ctx, "kubectl", "-n", f.run.namespace, "exec", f.pod.name, "--",
 		"bash", "-c", `for d in /proc/[0-9]*; do`+
 			` if [ "$(cat "$d/comm" 2>/dev/null)" = cub_broker ]; then kill -9 "${d#/proc/}"; fi; done`))
+	// The Broker's container ends when its Broker is gone, and it can end
+	// before the exec has returned. The exec then ends with code 137 although
+	// the process was killed (#356). Confirm still requires the restart.
+	if utils.EndedBySIGKILL(err) {
+		return nil
+	}
 	return err
 }
 

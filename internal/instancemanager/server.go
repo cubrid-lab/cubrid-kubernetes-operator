@@ -82,10 +82,12 @@ type Server struct {
 	// stopMu and stopped make the stop run once.
 	stopMu  sync.Mutex
 	stopped bool
-	// lifeMu guards stopping and the admission into ops. Once stopping is
-	// set no operation is admitted and none starts CUBRID.
+	// lifeMu guards stopping, starting and the admission into ops. Once
+	// stopping is set no operation is admitted and none starts CUBRID. While
+	// starting is set only the resume of completed restores is admitted.
 	lifeMu   sync.Mutex
 	stopping bool
+	starting bool
 	// ops counts the admitted mutating operations until they have ended.
 	ops sync.WaitGroup
 	// disruptive counts those of them that stop and start CUBRID themselves
@@ -354,8 +356,8 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Destination = destination
 
-	if !s.admit() {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
+	if err := s.admit(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: err.Error()})
 		return
 	}
 	if s.store == nil {
@@ -526,8 +528,8 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
-	if !s.admitDisruptive() {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: errStopping.Error()})
+	if err := s.admitDisruptive(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: err.Error()})
 		return
 	}
 
@@ -706,14 +708,16 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 // restore started it, and the marker is cleared afterwards, so that a start
 // that fails is tried again at the next start of the manager. A marker of any
 // other operation is left for the next operation on that database to judge.
+// A member that is not standalone needs a usable HA configuration for it;
+// without one nothing is started, the marker stays and the error is returned.
 // It counts as a running operation: once the member is stopping it starts
 // nothing, and a stop waits for it.
 func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 	if s.store == nil {
 		return nil
 	}
-	if !s.admit() {
-		return errStopping
+	if err := s.admitResume(); err != nil {
+		return err
 	}
 	defer s.ops.Done()
 	ctx, cancel := context.WithTimeout(ctx, s.timeouts.Bootstrap)
@@ -727,10 +731,12 @@ func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read the database root: %w", err)
 	}
-	haMember := false
-	if s.standaloneDB == "" {
-		_, err := haHosts(s.ha.ConfPath)
-		haMember = err == nil
+	// A member that is not standalone joins HA, which takes its HA
+	// configuration: without a usable one its database is not started.
+	haMember := s.standaloneDB == ""
+	var haErr error
+	if haMember {
+		_, haErr = haHosts(s.ha.ConfPath)
 	}
 	var errs []error
 	for _, e := range entries {
@@ -744,6 +750,10 @@ func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 		}
 		op, err := s.store.Get(strings.TrimSpace(string(data)))
 		if err != nil || op.Kind != OpRestore || op.State != OpCompleted || op.Restored == nil || op.Database != database {
+			continue
+		}
+		if haErr != nil {
+			errs = append(errs, fmt.Errorf("start %s of completed restore %s: the HA configuration is not usable: %w", database, op.ID, haErr))
 			continue
 		}
 		s.log().Info("Starting the database of a completed restore", "operationID", op.ID, "database", database)
