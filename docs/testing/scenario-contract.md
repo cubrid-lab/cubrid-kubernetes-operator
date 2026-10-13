@@ -499,11 +499,13 @@ The redaction removes:
 - a value named `password`, `passwd`, `token`, `secret`, `secretKey`,
   `secretAccessKey`, `accessKey`, `accessKeyId`, `apiKey` or `privateKey`
   (with `_` or `-` also accepted between the words), written as `name=value`
-  or `name: value`: a quoted value up to its closing quote, in plain text or
-  in escaped JSON, and an unquoted one up to a space, a quote, a comma, a
-  brace or a URL query's `&` or `;`;
+  or `name: value`. A value in escaped JSON is removed up to its closing
+  `\"` or the end of the line, and a quoted value up to its closing quote on
+  the same line, escapes included. A value without its closing quote, or
+  unquoted, ends at a space, a quote, a comma, a brace or a URL query's `&`
+  or `;`. An empty value, such as `password=""`, is kept;
 - a `Bearer` credential, a `Basic` credential (a word after "Basic" that
-  decodes to `user:password`), `curl -u user:password`, a PEM private key
+  decodes to `user:password`), the password of `curl -u` or `--user`, a PEM private key
   (to the end of the text when its end marker is missing), an AWS access key
   ID, the password of a URL's user part and the password field of a CUBRID
   JDBC URL (`jdbc:cubrid:host:port:database:user:password:`).

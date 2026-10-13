@@ -429,6 +429,19 @@ func TestRedact(t *testing.T) {
 		"a quoted value in escaped JSON with escapes inside": {
 			in:   `{\"password\":\"Pa\\\\ss\\\"wd\",\"db\":\"demodb\"}`,
 			gone: "wd", kept: `\"db\":\"demodb\"`},
+		"escaped JSON with inner JSON escapes": {
+			in:   `{\"password\":\"Pa\\u0026ss\\nword-tail\",\"db\":\"demodb\"}`,
+			gone: "word-tail", kept: `\"db\":\"demodb\"`},
+		"escaped JSON with an escaped slash": {
+			in: `{\"token\":\"abc\\/def-tail\"}`, gone: "def-tail", kept: `{\"token\":\"[REDACTED]\"}`},
+		"a quote that is not closed": {
+			in: "failed to get token: \"unterminated\nnext line kept", gone: "unterminated", kept: "\nnext line kept"},
+		"a single quote that is not closed": {
+			in: "password='x1y2z3\nmany lines kept", gone: "x1y2z3", kept: "\nmany lines kept"},
+		"basic authorization without padding": {
+			in: "Authorization: Basic dXNlcjpwYXNzd29yZA", gone: basicCred, kept: "Authorization: Basic [REDACTED]"},
+		"a curl --user= password": {
+			in: "curl --user=dba:s3cr3tpw http://h", gone: "s3cr3tpw", kept: " http://h"},
 		"a single-quoted value with a space": {
 			in: "password='Pa ss;wd' next", gone: "ss;wd", kept: "' next"},
 		"basic authorization in a JSON header": {
@@ -457,6 +470,7 @@ func TestRedact(t *testing.T) {
 	plain := "credentialsSecretRef:\n  name: backup-credentials\nabout a table\n" +
 		"valueFrom:\n  secretKeyRef:\n    name: c-im-token\n    key: token\n" +
 		`"tokenFound": 0, "secretRef": "s"` + "\na basic check passed\nbasic authentication is off\n" +
+		"password=\"\" token: \"\" password='' docker run -u 1000:1000 img\n" +
 		"jdbc:cubrid:cubrid-rw:33000:demodb:dba::?charset=utf-8\n"
 	if got := string(r.Redact([]byte(plain))); got != plain {
 		t.Errorf("redaction changed text without credentials:\n%s", got)

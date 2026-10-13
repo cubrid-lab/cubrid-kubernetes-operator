@@ -342,8 +342,8 @@ var (
 	// A word after "Basic" is a credential when it decodes as base64 to
 	// user:password; prose such as "basic authentication" is left alone.
 	basicPattern = regexp.MustCompile(`(?i)(\bbasic\s+)([A-Za-z0-9+/]{4,}={0,2})`)
-	// curl -u user:password and --user user:password.
-	curlUserPattern = regexp.MustCompile(`((?:^|\s)(?:-u|--user)\s+[^\s:]+:)\S+`)
+	// curl -u user:password and --user[=]user:password.
+	curlUserPattern = regexp.MustCompile(`(\bcurl\b[^\n]*?\s(?:-u|--user)(?:=|\s+)[^\s:]+:)\S+`)
 	// A private key in PEM form, also with its line breaks escaped in JSON,
 	// and to the end of the text when the end marker was cut off.
 	pemPattern = regexp.MustCompile(
@@ -354,19 +354,23 @@ var (
 	jdbcPattern = regexp.MustCompile(`(?i)(jdbc:cubrid:[^:\s]*:[^:\s]*:[^:\s]*:[^:\s]*:)[^:\s]+`)
 )
 
-// fieldPatterns find a credential written as name=value or name: value. The
-// value ends where its quoting ends: at the closing quote of escaped JSON
-// (\"), of a double-quoted string, honoring escapes inside, or of a
-// single-quoted one; an unquoted value ends at a space, a quote, a comma, a
-// brace, or a URL query's & or ;.
+// fieldPatterns find a credential written as name=value or name: value. A
+// value in escaped JSON (\"...\") ends at its closing \" or at the end of
+// the line. A double- or single-quoted value ends at its closing quote on the
+// same line, honoring escapes; without one it ends like an unquoted value.
+// An unquoted value ends at a space, a quote, a comma, a brace, or a URL
+// query's & or ;. An empty value is left as it is.
 var fieldPatterns = func() []*regexp.Regexp {
 	const key = `(?i)((?:password|passwd|token|secret[_-]?access[_-]?key|secret[_-]?key|secret|` +
 		`access[_-]?key(?:[_-]?id)?|api[_-]?key|private[_-]?key)(?:\\?["'])?\s*[=:]\s*`
 	return []*regexp.Regexp{
-		regexp.MustCompile(key + `\\")(?:\\\\\\\\|\\\\\\"|\\[^\\"]|[^\\"])*`),
-		regexp.MustCompile(key + `")(?:\\.|[^"\\])*`),
-		regexp.MustCompile(key + `')[^']*`),
-		regexp.MustCompile(key + `)[^\s"'\\,;&}]+`),
+		// Inside escaped JSON: \\ and \" stand for an escaped backslash and
+		// quote of the inner JSON, \ and a letter for its other escapes.
+		regexp.MustCompile(key + `\\")()(?:\\\\\\\\|\\\\\\"|\\\\[^\\"\n]|\\[^\\"\n]|[^\\"\n])+`),
+		regexp.MustCompile(key + `")(?:\\.|[^"\\\n])+(")`),
+		regexp.MustCompile(key + `')[^'\n]+(')`),
+		regexp.MustCompile(key + `["'])()[^\s"']+`),
+		regexp.MustCompile(key + `)()[^\s"'\\,;&}]+`),
 	}
 }()
 
@@ -430,7 +434,7 @@ func (r *Redactor) Redact(data []byte) []byte {
 	text = bearerPattern.ReplaceAllString(text, "${1}"+redacted)
 	text = basicPattern.ReplaceAllStringFunc(text, func(m string) string {
 		parts := basicPattern.FindStringSubmatch(m)
-		decoded, err := base64.StdEncoding.DecodeString(parts[2])
+		decoded, err := base64.RawStdEncoding.DecodeString(strings.TrimRight(parts[2], "="))
 		if err != nil || !strings.Contains(string(decoded), ":") {
 			return m
 		}
@@ -439,7 +443,7 @@ func (r *Redactor) Redact(data []byte) []byte {
 	text = curlUserPattern.ReplaceAllString(text, "${1}"+redacted)
 	text = jdbcPattern.ReplaceAllString(text, "${1}"+redacted)
 	for _, p := range fieldPatterns {
-		text = p.ReplaceAllString(text, "${1}"+redacted)
+		text = p.ReplaceAllString(text, "${1}"+redacted+"${2}")
 	}
 	text = accessKeyPattern.ReplaceAllString(text, redacted)
 	text = urlUserPattern.ReplaceAllString(text, "${1}"+redacted+"@")
