@@ -1342,6 +1342,57 @@ written to while the backup of case B is taken; a group that was written to
 before the last member's first join (finding 3 says it cannot be, in this
 run).
 
+## POC-24 — the longest database name `createdb` accepts (#284) — **observation: 17 characters**
+
+**Environment:** `docker.io/cubrid/cubrid:11.4`
+(`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
+`cubrid_rel`: CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)), one container on podman,
+linux/amd64 emulated on an arm64 Mac, 2026-10-13. A standalone database, no
+HA.
+
+**Procedure:** for names of 16, 17, 18, 32, 63 and 64 lower-case ASCII
+letters, in an empty directory:
+`cubrid createdb --db-volume-size=64M --log-volume-size=64M <name> en_US.utf8`,
+and when that succeeded `cubrid server start <name>`,
+`csql -u dba <name> -c "select 1"`, `cubrid backupdb -D <dir> <name>` and
+`cubrid server stop <name>`.
+
+**Observed:**
+
+| Name length | `createdb` | Server start, query, backup, stop |
+|---|---|---|
+| 16 | exit 0 | all exit 0 |
+| 17 | exit 0 | all exit 0 |
+| 18, 32, 63, 64 | exit 1 | not run: no database |
+
+Every refused name failed the same way. `createdb` printed
+
+```
+*** FATAL ERROR ***
+LOG FATAL ERROR: logpb_initialize_log_names
+```
+
+and its error log said
+
+```
+Length of prefix logname "daaaaaaaaaaaaaaaaa" is too long; the length must be less than 17.
+```
+
+The message says "less than 17", but a name of exactly 17 characters was
+accepted and used. A refused `createdb` left no entry in `databases.txt`; it
+left an empty `lob` directory in the working directory.
+
+**Consequence:** the API and the Instance Manager accept a database name of
+at most 17 characters (`spec.databases[].name` of a CubridCluster,
+`spec.database` of a CubridBackup, and the name in every request to the
+manager). They accepted 63 before, so a longer name was admitted and then
+failed in `createdb` inside the Pod.
+
+**Not covered:** an HA database, where the name also appears in
+`ha_db_list` and in the names of the copied log directories
+(`<name>_<host>`); other engine versions; names with digits, underscores or
+upper-case letters at the boundary. One run on one image.
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
