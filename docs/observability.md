@@ -90,8 +90,11 @@ When the Operator cannot write one of the cluster's objects, `Ready` turns
 and a Warning Event is recorded, once for a failure that stays the same
 however often the step is retried. A write rejected as a conflict, because the
 object changed after the Operator read it, is not such a failure: it is
-retried and changes no Condition and records no Event. The same holds for
-`BrokerReconcileFailed`. In a reconcile that could not reconcile the Brokers
+retried, changes no Condition, records no Event and is not logged as an
+error. Only when such writes have kept conflicting for more than 30 seconds,
+without one that succeeded, is the conflict reported like any other failed
+write, because another writer then keeps the Operator's change from arriving.
+The same holds for `BrokerReconcileFailed`. In a reconcile that could not reconcile the Brokers
 they were not observed, so what an earlier reconcile saw is not kept:
 `WriteEndpointReady` and `ReadEndpointReady` are `Unknown`, and so is
 `RoutingReady` unless the primary is unresolved, which is reported either way.

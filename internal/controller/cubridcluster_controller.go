@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -137,7 +138,45 @@ type CubridClusterReconciler struct {
 	// reports holds, per cluster, the report of the reconcile that is running
 	// for it (reconcileReport).
 	reports sync.Map
+	// conflicts holds, per cluster and group of writes, since when its writes
+	// have been rejected as a conflict without one that succeeded.
+	conflicts sync.Map
 }
+
+// conflictKey names one group of a cluster's writes in conflicts.
+type conflictKey struct {
+	cluster types.NamespacedName
+	writes  string
+}
+
+const (
+	childWrites  = "children"
+	brokerWrites = "brokers"
+)
+
+// lastingConflict tells what to do with the error of a write. A conflict is
+// retried quietly, and the first return value is true, until writes of this
+// group have been rejected for longer than conflictPatience; from then on the
+// second return value is the error to report. Any other error ends the run of
+// conflicts and is returned as it is.
+func (r *CubridClusterReconciler) lastingConflict(cluster *databasev1alpha1.CubridCluster, writes string, err error) (bool, error) {
+	key := conflictKey{client.ObjectKeyFromObject(cluster), writes}
+	if !apierrors.IsConflict(err) {
+		r.conflicts.Delete(key)
+		return false, err
+	}
+	since, _ := r.conflicts.LoadOrStore(key, r.now())
+	if r.now().Sub(since.(time.Time)) <= conflictPatience {
+		return true, nil
+	}
+	return false, fmt.Errorf("the write has been rejected as a conflict for more than %s: %w", conflictPatience, err)
+}
+
+// conflictPatience is how long a write of one of the cluster's objects may
+// keep being rejected as a conflict before it is reported like any other
+// failed write. A conflict that another writer keeps causing would otherwise
+// be retried without end and without a trace in the status (#361).
+const conflictPatience = 30 * time.Second
 
 // reconcileReport is what one reconcile of one cluster has to tell about a
 // change of the cluster's state. A change of state is a change of the status,
@@ -241,12 +280,12 @@ func (r *CubridClusterReconciler) now() time.Time {
 // recovery-bootstrap orchestration (ADR-0008); and the engine-version guard +
 // slaves-first rolling update (ADR-0009).
 func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
 	var cluster databasev1alpha1.CubridCluster
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
 		// Ignore not-found: the object was deleted; owned resources are GC'd
 		// via owner references.
+		r.conflicts.Delete(conflictKey{req.NamespacedName, childWrites})
+		r.conflicts.Delete(conflictKey{req.NamespacedName, brokerWrites})
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	// What changed in the status during this reconcile is reported once, when
@@ -256,41 +295,37 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Reconcile the governing headless Service (ADR-0004: stable per-pod DNS).
 	if err := r.reconcileHeadlessService(ctx, &cluster); err != nil {
-		log.Error(err, "Failed to reconcile headless Service")
 		return r.failed(ctx, &cluster, "ServiceReconcileFailed", err)
 	}
 
 	// One alias Service per member, so its short HA host name resolves.
 	if err := r.reconcileMemberServices(ctx, &cluster); err != nil {
-		log.Error(err, "Failed to reconcile member Services")
 		return r.failed(ctx, &cluster, "MemberServiceReconcileFailed", err)
 	}
 
 	// The DB Pods authenticate the operator with the cluster's own token
 	// (ADR-0003), which exists before the first Pod does.
 	if err := r.reconcileIMTokenSecret(ctx, &cluster); err != nil {
-		log.Error(err, "Failed to reconcile Instance Manager token Secret")
 		return r.failed(ctx, &cluster, "SecretReconcileFailed", err)
 	}
 
 	// The HA member list every member reads (ADR-0004); none when standalone.
 	if err := r.reconcileHAConfig(ctx, &cluster); err != nil {
-		log.Error(err, "Failed to reconcile HA ConfigMap")
 		return r.failed(ctx, &cluster, "HAConfigReconcileFailed", err)
 	}
 
 	// The ingress NetworkPolicies exist before the first DB Pod does.
 	if err := r.reconcileNetworkPolicies(ctx, &cluster); err != nil {
-		log.Error(err, "Failed to reconcile NetworkPolicies")
 		return r.failed(ctx, &cluster, "NetworkPolicyReconcileFailed", err)
 	}
 
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
 	sts, err := r.reconcileStatefulSet(ctx, &cluster)
 	if err != nil {
-		log.Error(err, "Failed to reconcile StatefulSet")
 		return r.failed(ctx, &cluster, "StatefulSetReconcileFailed", err)
 	}
+
+	r.conflicts.Delete(conflictKey{req.NamespacedName, childWrites})
 
 	return r.updateStatus(ctx, &cluster, sts)
 }
@@ -890,8 +925,9 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		// safety-first primary resolution (ADR-0002/0005).
 		// A conflicting write leaves the broker conditions as they are; the
 		// next reconcile writes again.
-		if err := r.reconcileBrokerTier(ctx, cluster, res, r.imageToRun(cluster, sts)); apierrors.IsConflict(err) {
-			logf.FromContext(ctx).V(1).Info("Retrying broker tier after a conflicting write", "error", err.Error())
+		young, err := r.lastingConflict(cluster, brokerWrites, r.reconcileBrokerTier(ctx, cluster, res, r.imageToRun(cluster, sts)))
+		if young {
+			logf.FromContext(ctx).V(1).Info("Retrying broker tier after a conflicting write")
 		} else if err != nil {
 			logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
 			setBrokerConditionsUnobserved(cluster, res, err)
@@ -970,12 +1006,16 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 // failed records a failure condition and returns the error for requeue. A
 // conflict means the object was read before someone else changed it, which
 // says nothing about the cluster: it is retried with the conditions and
-// Events left as they are.
+// Events left as they are, unless the writes have kept conflicting for longer
+// than conflictPatience.
 func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev1alpha1.CubridCluster, reason string, cause error) (ctrl.Result, error) {
-	if apierrors.IsConflict(cause) {
-		logf.FromContext(ctx).V(1).Info("Retrying after a conflicting write", "reason", reason, "error", cause.Error())
+	log := logf.FromContext(ctx)
+	young, cause := r.lastingConflict(cluster, childWrites, cause)
+	if young {
+		log.V(1).Info("Retrying after a conflicting write", "reason", reason)
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
+	log.Error(cause, "Failed to write an object of the cluster", "reason", reason)
 	// A failure that stays the same is retried many times and reported once.
 	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionReady)
 	same := was != nil && was.Status == metav1.ConditionFalse && was.Reason == reason && was.Message == cause.Error()
