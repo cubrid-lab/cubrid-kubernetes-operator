@@ -174,21 +174,41 @@ up to three attempts for the whole bootstrap
 waits for a person. A member that was seeded is recorded in
 `status.databases[].seededMembers` and never restored over.
 
-A key names one request (#302). When the request of a step changes while its
-operation runs, for example because `spec.version` or `spec.objectStorage`
-changed, the member refuses the changed request under the same key (409
-`IdempotencyConflict`, ADR-0003). The operator then looks the key up and
-follows the operation it names, as if the start had returned it, and never
-starts the changed request in its place; the change applies from the next
-step or attempt on, whose key is new. So an incompatible request is sent at
-most once per reconcile and only while the step's operation runs; when that
-operation ends, the step goes on or is started again under the attempt
-limit. The same holds for the restore of a recovery bootstrap (ADR-0008),
-which records the operation it finds and only polls it from then on. An
-operation that cannot be found keeps the step waiting with the reason
+A key names one request (#302). The key of a seed backup and of a seed
+restore carries the step, the attempt and the member; for a member after the
+first it also carries the source and the round
+(`seed-restore-<uid>-<db>-a<N>-<peer>-from-<source>[-r<round>]`), so a key
+never names a restore from another source. When the request of a step
+changes under the same key, for example because `spec.version` or
+`spec.objectStorage` changed, the member refuses the changed request (409
+`IdempotencyConflict`, ADR-0003), also when the operation under the key has
+already ended. The operator then looks the key up and follows the operation
+it names, as if the start had returned it, and never starts the changed
+request in its place; the change applies from the next step or attempt on,
+whose key is new. So an incompatible request is sent at most once per
+reconcile, and the step goes on or is started again under the attempt limit
+according to the state of the operation it follows. A followed seed restore
+that completed seeds the member only when it restored this step's backup
+(`<uid>/seed[-<peer>-from-<source>[-r<round>]]/<db>`); any other is reported
+as `SeedRestoreSourceMismatch`, the member is not recorded as seeded, and it
+is left for a person. The same holds for the restore of a recovery bootstrap
+(ADR-0008), which records the operation it finds and only polls it from then
+on. An operation that cannot be found keeps the step waiting with the reason
 `InstanceManagerRequestConflict`; a member busy with another operation keeps
 it waiting with `InstanceManagerOperationInProgress`. Neither uses up an
-attempt.
+attempt. A start the member refuses as a request (400 and the other 4xx of
+ADR-0003) is a failed attempt of the step.
+
+Upgrade note: an Operator version before #302 keyed the seed restore of
+every member by the member alone. A restore of a member after the first that
+such a version started and that is still running when this version takes
+over is not addressed by the new key: the member answers the new key as busy
+(`InstanceManagerOperationInProgress`) until it ends. By the target guards
+of ADR-0008 the member is then expected to refuse a second restore over the
+data the first one restored, so that the seeding of that member uses up its
+attempts and ends as `SeedRestoreFailed`, waiting for a person; this path
+is not tested. Upgrading the operator while a member is seeded is decided
+in #322.
 
 What an interrupted attempt left on a volume is removed only when it can be
 proven to be the manager's own: the Instance Manager writes the operation ID

@@ -178,7 +178,11 @@ in all (`status.bootstrap.attempts`), then the recovery is `Failed`. A
 the reason it failed with stays in `BootstrapReady` (#302). A start the
 member refuses because it holds an operation under the key for another
 request is answered by that operation, which is recorded and polled
-(ADR-0010, #302). Before it
+(ADR-0010, #302). That operation may have been started with a request built
+from an earlier spec, for example another `spec.version`; this is accepted:
+the key fixes the manifest, the target and the attempt, and the restore runs
+as it was started. A start the member refuses as a request (400 and the
+other 4xx of ADR-0003) counts as a failed attempt. Before it
 restores again the Instance Manager removes the directory and the
 `databases.txt` line of its own failed restore, which it recognises by the
 operation ID it wrote into `<db>/.im-operation`; a target without that proof
@@ -186,6 +190,21 @@ is never touched and the restore is refused. A container that starts while
 the marker is present does not start the database: the entrypoint runs only
 the Instance Manager and leaves the marker in place. The cluster is not Ready
 at any point before the restore has completed.
+
+Leaving a `Failed` recovery (#302): `spec.bootstrap.recovery.manifestUri`
+cannot be changed, and clearing `status.bootstrap` would only send the keys
+of the earlier attempts again, which the member answers with the `Failed`
+operations it holds under them. The way out is to delete the
+`CubridCluster` and create it again, which gives it a new UID and so new
+keys. With `spec.storage.retentionPolicy: Retain`, the default, a cluster
+created again under the same name gets the same PVCs back, with what the
+failed restores left on them and the Instance Manager's operation records.
+The Instance Manager then removes only a directory that carries the marker
+of an operation it recorded as `Failed` before it recorded restored data,
+and refuses to restore over anything else, which is left for a person
+(runbook below). To start from empty volumes, delete the PVCs of the old
+cluster once their data is known not to be needed, or create the cluster
+under another name.
 
 The marker stays until the restore is recorded `Completed`, not only until
 `restoredb` has succeeded (#267). Once `restoredb` has succeeded, the restore

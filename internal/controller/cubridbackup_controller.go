@@ -303,6 +303,21 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		if errors.Is(err, errStartConflict) {
 			return r.holdRecordedTarget(ctx, backup, instanceManagerFailureReason(err), err.Error())
 		}
+		// A request the target refuses as such is refused again. The backup
+		// ends, unless the target holds an operation of it from an earlier
+		// start; when that cannot be asked, it waits within the bound.
+		if errors.Is(err, errRequestRefused) {
+			held, found, lookupErr := r.Backup.FindBackupOperation(ctx, sel.Instance, backup.Namespace, idempotencyKey(backup))
+			switch {
+			case lookupErr == nil && found:
+				return r.adoptBackup(ctx, backup, held)
+			case lookupErr == nil:
+				return r.ended(ctx, backup, reasonRequestRefused, err.Error()+
+					"; the target holds no operation of this backup, nothing was started, and the backup is not continued")
+			}
+			return r.waitOnRecordedTarget(ctx, backup, reasonRequestRefused, fmt.Sprintf(
+				"%s; it could not be asked whether it runs the backup: %v", err.Error(), lookupErr))
+		}
 		return r.waitOnRecordedTarget(ctx, backup, instanceManagerFailureReason(err), err.Error())
 	}
 

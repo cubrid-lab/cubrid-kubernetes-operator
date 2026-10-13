@@ -115,14 +115,28 @@ var errStagingInUse = errors.New("a running operation of another request owns th
 var errRequestConflict = errors.New("the member holds an operation under this key for another request")
 
 // maxErrorBody bounds what is read of an error answer, and maxErrorMessage
-// the length of the message taken from it.
+// the length of the message taken from it. Of a larger answer at most
+// maxErrorDrain bytes more are read and discarded.
 const (
 	maxErrorBody    = 4 << 10
 	maxErrorMessage = 256
+	maxErrorDrain   = 64 << 10
 )
 
-// Condition reasons of a start the member refused as a conflict (409).
+// errNotAnHAMember is wrapped, with errStartConflict, by an HA start that a
+// standalone member refused. Nothing is held under the key; the member is
+// not asked again before its Pod runs as an HA member.
+var errNotAnHAMember = errors.New("the member is a standalone server, not an HA member")
+
+// errRequestRefused is wrapped by a start that the member refused as a
+// request it does not carry out (any 4xx other than 401, 403, 409 and 412):
+// the same request is refused again, so it is a failed attempt, not a wait.
+var errRequestRefused = errors.New("the member refused the request")
+
+// Condition reasons of a start the member refused (4xx).
 const (
+	reasonRequestRefused      = "InstanceManagerRequestRefused"
+	reasonNotAnHAMember       = "InstanceManagerNotAnHAMember"
 	reasonOperationInProgress = "InstanceManagerOperationInProgress"
 	reasonStagingInUse        = "InstanceManagerStagingInUse"
 	reasonRequestConflict     = "InstanceManagerRequestConflict"
@@ -169,8 +183,24 @@ func unexpectedStatus(resp *http.Response) error {
 		return fmt.Errorf("%w: %w (%s)", errStartConflict, errStagingInUse, detail)
 	case instancemanager.CodeIdempotencyConflict:
 		return fmt.Errorf("%w: %w (%s)", errStartConflict, errRequestConflict, detail)
+	case instancemanager.CodeNotAnHAMember:
+		return fmt.Errorf("%w: %w (%s)", errStartConflict, errNotAnHAMember, detail)
 	}
 	return fmt.Errorf("%w (%s)", errStartConflict, detail)
+}
+
+// startError describes an answer to a start that the call did not expect,
+// like unexpectedStatus. A 4xx that is no refused token (401, 403), conflict
+// (409) or missing object storage (412) refuses the request itself, for
+// example as invalid (400) or too large (413), or names an endpoint the
+// member does not have (404): the same request is refused again.
+func startError(resp *http.Response) error {
+	err := unexpectedStatus(resp)
+	switch s := resp.StatusCode; {
+	case s < 400 || s >= 500, tokenRefused(s), s == http.StatusConflict, s == http.StatusPreconditionFailed:
+		return err
+	}
+	return fmt.Errorf("%w: %w", errRequestRefused, err)
 }
 
 // readErrorAnswer reads the code and the message of an error answer
@@ -185,6 +215,9 @@ func readErrorAnswer(resp *http.Response) (code, msg string) {
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody+1))
 	if err != nil || len(raw) > maxErrorBody {
+		// What is left is discarded, up to a bound, so that the connection
+		// can be used again; a larger rest is left to Close.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorDrain))
 		return "", ""
 	}
 	var answer instancemanager.ErrorResponse
@@ -220,6 +253,10 @@ func instanceManagerFailureReason(err error) string {
 		return reasonStagingInUse
 	case errors.Is(err, errRequestConflict):
 		return reasonRequestConflict
+	case errors.Is(err, errNotAnHAMember):
+		return reasonNotAnHAMember
+	case errors.Is(err, errRequestRefused):
+		return reasonRequestRefused
 	case errors.Is(err, errStartConflict):
 		return reasonConflict
 	}
@@ -238,18 +275,21 @@ const reasonInstanceManagerUnavailable = "InstanceManagerUnavailable"
 // so it is followed to its end and the changed request is never started in
 // its place. A refusal for another cause, or from a manager that names none,
 // is looked up the same way unless it says that the database or the staging
-// destination is busy, which holds nothing under the key and is retried. An
+// destination is busy, or that the member is no HA member, which holds
+// nothing under the key and is retried. An
 // operation that cannot be found leaves the refusal, with what the lookup
 // said.
 func operationOfKey(ctx context.Context, err error, kind instancemanager.OperationKind, key string,
 	find func() (instancemanager.Operation, bool, error)) (instancemanager.Operation, error) {
-	if !errors.Is(err, errStartConflict) || errors.Is(err, errOperationInProgress) || errors.Is(err, errStagingInUse) {
+	if !errors.Is(err, errStartConflict) || errors.Is(err, errOperationInProgress) || errors.Is(err, errStagingInUse) ||
+		errors.Is(err, errNotAnHAMember) {
 		return instancemanager.Operation{}, err
 	}
 	op, found, lookupErr := find()
 	switch {
 	case lookupErr != nil:
-		return instancemanager.Operation{}, fmt.Errorf("%w; the %s operation under the key %q could not be looked up: %v",
+		// A lookup refused for the token is reported as the refusal.
+		return instancemanager.Operation{}, fmt.Errorf("%w; the %s operation under the key %q could not be looked up: %w",
 			err, kind, key, lookupErr)
 	case !found:
 		return instancemanager.Operation{}, fmt.Errorf("%w; the member holds no %s operation under the key %q", err, kind, key)
@@ -328,7 +368,7 @@ func (c *HTTPBackupClient) StartBackup(ctx context.Context, podName, namespace, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w", podName, unexpectedStatus(resp))
+		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w", podName, startError(resp))
 	}
 	return decodeOperation(resp)
 }
@@ -351,7 +391,7 @@ func (c *HTTPBackupClient) StartRestore(ctx context.Context, podName, namespace,
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: %w", podName, unexpectedStatus(resp))
+		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: %w", podName, startError(resp))
 	}
 	return decodeOperation(resp)
 }
@@ -376,7 +416,7 @@ func (c *HTTPBackupClient) StartHABootstrap(ctx context.Context, podName, namesp
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
-		return instancemanager.Operation{}, fmt.Errorf("start HA bootstrap on %s: %w", podName, unexpectedStatus(resp))
+		return instancemanager.Operation{}, fmt.Errorf("start HA bootstrap on %s: %w", podName, startError(resp))
 	}
 	return decodeOperation(resp)
 }

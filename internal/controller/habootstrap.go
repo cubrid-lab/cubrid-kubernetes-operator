@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -136,6 +137,11 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 			return r.HABootstrap.FindOperation(ctx, member, cluster.Namespace, instancemanager.OpHABootstrap, key)
 		})
 	}
+	if errors.Is(err, errRequestRefused) {
+		// The member refuses the request itself, and would again.
+		r.bootstrapStepFailed(cluster, status, "DatabaseCreationFailed", err.Error())
+		return
+	}
 	if err != nil {
 		// The member is not up yet, or not reachable: ask again later.
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
@@ -192,11 +198,29 @@ func seedSourceAmong(holders []string, obs map[string]RoleObservation, now time.
 // for a later member on its source, which has a place of its own.
 func seedLocation(cluster *databasev1alpha1.CubridCluster, database, artifact string) (bucket, prefix string) {
 	storage := cluster.Spec.ObjectStorage
-	dir := "seed"
-	if artifact != "" {
-		dir += "-" + artifact
+	return storage.Bucket, path.Join(storage.Prefix, string(cluster.UID), seedLocationDir(artifact), database)
+}
+
+// seedLocationDir is the directory below the cluster's UID that names the
+// seed backup of artifact: its source and round.
+func seedLocationDir(artifact string) string {
+	if artifact == "" {
+		return "seed"
 	}
-	return storage.Bucket, path.Join(storage.Prefix, string(cluster.UID), dir, database)
+	return "seed-" + artifact
+}
+
+// restoredSeed reports whether the restore operation op restored the seed
+// backup of artifact for database of the cluster uid. The bucket and the
+// prefix above the UID are not compared: they follow spec.objectStorage,
+// which may have changed since the restore was started.
+func restoredSeed(op instancemanager.Operation, uid, artifact, database string) bool {
+	restored := op.Restored
+	if restored == nil {
+		restored = op.Artifact
+	}
+	return restored != nil && strings.HasSuffix(restored.ManifestURI,
+		"/"+path.Join(uid, seedLocationDir(artifact), database, instancemanager.ManifestObjectName))
 }
 
 // selectSeedSource decides which member peer is copied from, or says why it
@@ -354,6 +378,11 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 				return r.Backup.FindBackupOperation(ctx, source, cluster.Namespace, backupKey)
 			})
 		}
+		if errors.Is(err, errRequestRefused) {
+			status.Seeding = nil
+			r.bootstrapStepFailed(cluster, status, "SeedBackupFailed", err.Error())
+			return false
+		}
 		if err != nil {
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 			return false
@@ -376,7 +405,14 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		}
 	}
 
+	// The restore of a later member is keyed by its source and round, as
+	// its backup is, so a key never names the restore of another source:
+	// one that a lost status write left running is never taken for a
+	// later round's (ADR-0005).
 	restoreKey := bootstrapKey("seed-restore", cluster, status, peer)
+	if artifact != "" {
+		restoreKey = bootstrapKey("seed-restore", cluster, status, artifact)
+	}
 	restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, restoreKey,
 		instancemanager.RestoreRequest{
 			Database: database, Bucket: bucket, Prefix: prefix,
@@ -387,13 +423,30 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 			// on, and has to pick up what that member committed since.
 			SeedFromMaster: source,
 		})
+	followed := false
 	if err != nil {
 		restore, err = operationOfKey(ctx, err, instancemanager.OpRestore, restoreKey, func() (instancemanager.Operation, bool, error) {
 			return r.Restore.FindOperation(ctx, peer, cluster.Namespace, instancemanager.OpRestore, restoreKey)
 		})
+		followed = err == nil
+	}
+	if errors.Is(err, errRequestRefused) {
+		status.Seeding = nil
+		r.bootstrapStepFailed(cluster, status, "SeedRestoreFailed", err.Error())
+		return false
 	}
 	if err != nil {
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
+		return false
+	}
+	// A followed restore was started with another request than this one.
+	// It seeds the member only when what it restored is this step's backup
+	// of this source and round; anything else is left for a person.
+	if followed && restore.State == instancemanager.OpCompleted && !restoredSeed(restore, string(cluster.UID), artifact, database) {
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedRestoreSourceMismatch",
+			fmt.Sprintf("the restore operation %s under the key %q on %s completed, but it did not restore the backup "+
+				"of this step (%s); %s is not recorded as seeded, and the operation is left for a person",
+				restore.ID, restoreKey, peer, seedLocationDir(artifact), peer))
 		return false
 	}
 	if status.Seeding != nil {

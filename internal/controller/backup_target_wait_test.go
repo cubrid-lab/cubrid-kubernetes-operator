@@ -334,6 +334,20 @@ var _ = Describe("CubridBackup wait on its recorded target", func() {
 		Expect(readyOf(got).Message).To(ContainSubstring("already in progress"))
 	})
 
+	It("ends a backup the recorded target refuses as invalid, when it holds no operation of it (#302)", func() {
+		f := lostStart("bk-invalid")
+		f.fake.lose = 1000
+		f.fake.startErr = fmt.Errorf("start backup on %s: %w", "bk-invalid-1",
+			imAnswer(http.StatusBadRequest, `{"error":"backup level 1 is not supported: only a full backup (level 0) is"}`))
+		reconcileOnce(ctx, f.r, f.backup)
+		got := stored(ctx, f.backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+		Expect(readyOf(got).Reason).To(Equal(reasonRequestRefused))
+		Expect(readyOf(got).Message).To(ContainSubstring("only a full backup"))
+		Expect(f.fake.lookups).To(Equal([]string{"bk-invalid-1"}))
+		Expect(f.fake.instances).To(HaveLen(2))
+	})
+
 	// singleBackup creates a cluster of one member, with the cluster's
 	// object storage when withStorage is set, and a backup of it.
 	singleBackup := func(name string, withStorage bool) (*databasev1alpha1.CubridCluster, *databasev1alpha1.CubridBackup) {

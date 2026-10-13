@@ -37,9 +37,9 @@ import (
 )
 
 // imAnswer is what the client makes of an Instance Manager answer with
-// status and body.
+// status and body to a start.
 func imAnswer(status int, body string) error {
-	return unexpectedStatus(&http.Response{StatusCode: status, Header: http.Header{},
+	return startError(&http.Response{StatusCode: status, Header: http.Header{},
 		Body: io.NopCloser(strings.NewReader(body))})
 }
 
@@ -90,10 +90,14 @@ func TestHTTPBackupClient_ErrorAnswersAreClassified(t *testing.T) {
 			`{"error":"the backup staging destination is owned by another operation that is still running: bk is owned by operation op-1","code":"StagingDestinationInUse"}`,
 			[]error{errStartConflict, errStagingInUse}, []error{errOperationInProgress, errRequestConflict},
 			reasonStagingInUse, "owned by operation op-1"},
-		{"a conflict of a code this operator does not know", http.StatusConflict,
+		{"a member that is no HA member", http.StatusConflict,
 			`{"error":"this member is a standalone server, not an HA member","code":"NotAnHAMember"}`,
-			[]error{errStartConflict}, []error{errOperationInProgress, errRequestConflict, errStagingInUse},
-			reasonConflict, "standalone server"},
+			[]error{errStartConflict, errNotAnHAMember}, []error{errOperationInProgress, errRequestConflict, errStagingInUse},
+			reasonNotAnHAMember, "standalone server"},
+		{"a conflict of a code this operator does not know", http.StatusConflict,
+			`{"error":"a cause named by a later manager","code":"SomethingLater"}`,
+			[]error{errStartConflict}, []error{errOperationInProgress, errRequestConflict, errStagingInUse, errNotAnHAMember},
+			reasonConflict, "a cause named by a later manager"},
 		{"an earlier manager's conflict, without a code", http.StatusConflict,
 			`{"error":"idempotency key reused with a different request"}`,
 			[]error{errStartConflict}, []error{errOperationInProgress, errRequestConflict, errStagingInUse},
@@ -106,7 +110,13 @@ func TestHTTPBackupClient_ErrorAnswersAreClassified(t *testing.T) {
 		{"a refused token", http.StatusUnauthorized, `{"error":"unauthorized","code":"Unauthorized"}`,
 			[]error{errTokenRefused}, []error{errStartConflict}, reasonTokenRefused, "refused the cluster's Instance Manager token"},
 		{"a server error", http.StatusInternalServerError, `{"error":"write operation record: disk full"}`,
-			nil, []error{errStartConflict, errTokenRefused}, "InstanceManagerUnavailable", "disk full"},
+			nil, []error{errStartConflict, errTokenRefused, errRequestRefused}, "InstanceManagerUnavailable", "disk full"},
+		{"a request the member refuses as invalid", http.StatusBadRequest, `{"error":"database name \"a b\" is not a plain identifier"}`,
+			[]error{errRequestRefused}, []error{errStartConflict, errTokenRefused}, reasonRequestRefused, "not a plain identifier"},
+		{"a request body that is too large", http.StatusRequestEntityTooLarge, `{"error":"the request body is larger than 16384 bytes"}`,
+			[]error{errRequestRefused}, []error{errStartConflict, errTokenRefused}, reasonRequestRefused, "larger than"},
+		{"an endpoint the member does not have", http.StatusNotFound, `404 page not found`,
+			[]error{errRequestRefused}, []error{errStartConflict, errTokenRefused}, reasonRequestRefused, ""},
 	} {
 		c := NewHTTPBackupClient(staticToken("tok"))
 		c.Client = &http.Client{Transport: &answerBody{status: tc.status, body: tc.body}}
@@ -132,6 +142,42 @@ func TestHTTPBackupClient_ErrorAnswersAreClassified(t *testing.T) {
 	}
 }
 
+// A poll that the member answers 4xx is not a refused request: only a start
+// is refused as one.
+func TestHTTPBackupClient_PollIsNotARefusedRequest(t *testing.T) {
+	c := NewHTTPBackupClient(staticToken("tok"))
+	c.Client = &http.Client{Transport: &answerBody{status: http.StatusNotFound, body: `{"error":"operation not found"}`}}
+	_, err := c.GetOperation(context.Background(), "db-0", "ns", "op-1")
+	if errors.Is(err, errRequestRefused) || instanceManagerFailureReason(err) != reasonInstanceManagerUnavailable {
+		t.Errorf("a poll answered 404: err = %v (reason %s), want an unavailable manager", err, instanceManagerFailureReason(err))
+	}
+}
+
+// What the lookup after a conflict answers decides the reason when it is a
+// refused token, and a member that is no HA member is not asked for the key.
+func TestOperationOfKey(t *testing.T) {
+	ctx := context.Background()
+	conflict := imAnswer(http.StatusConflict, conflictBody)
+	refused := imAnswer(http.StatusUnauthorized, `{"error":"unauthorized","code":"Unauthorized"}`)
+	_, err := operationOfKey(ctx, conflict, instancemanager.OpRestore, "k", func() (instancemanager.Operation, bool, error) {
+		return instancemanager.Operation{}, false, refused
+	})
+	if got := instanceManagerFailureReason(err); got != reasonTokenRefused {
+		t.Errorf("a lookup the member refused the token for: reason = %q (%v), want %q", got, err, reasonTokenRefused)
+	}
+
+	asked := false
+	notHA := imAnswer(http.StatusConflict, `{"error":"this member is a standalone server, not an HA member","code":"NotAnHAMember"}`)
+	_, err = operationOfKey(ctx, notHA, instancemanager.OpHABootstrap, "k", func() (instancemanager.Operation, bool, error) {
+		asked = true
+		return instancemanager.Operation{}, false, nil
+	})
+	if asked || !errors.Is(err, errNotAnHAMember) || instanceManagerFailureReason(err) != reasonNotAnHAMember {
+		t.Errorf("a member that is no HA member: asked = %v, err = %v (reason %s), want no lookup and %s",
+			asked, err, instanceManagerFailureReason(err), reasonNotAnHAMember)
+	}
+}
+
 // countingBody counts what is read of it.
 type countingBody struct {
 	r    io.Reader
@@ -150,13 +196,13 @@ func (b *countingBody) Close() error { return nil }
 // is read only up to a bound, its message is cut to a length, and it carries
 // no control characters. A body that is no error answer adds nothing.
 func TestHTTPBackupClient_ErrorBodyIsBoundedAndSanitized(t *testing.T) {
-	// A body larger than the bound is read up to the bound only, and the
-	// status decides.
+	// A body larger than the bound is kept only up to the bound and drained
+	// only up to another one, and the status decides.
 	huge := `{"error":"` + strings.Repeat("x", 1<<20) + `","code":"OperationInProgress"}`
 	body := &countingBody{r: strings.NewReader(huge)}
 	err := unexpectedStatus(&http.Response{StatusCode: http.StatusConflict, Header: http.Header{}, Body: body})
-	if body.read > maxErrorBody+512 {
-		t.Errorf("read %d bytes of the body, want at most about %d", body.read, maxErrorBody)
+	if body.read > maxErrorBody+1+maxErrorDrain {
+		t.Errorf("read %d bytes of the body, want at most %d", body.read, maxErrorBody+1+maxErrorDrain)
 	}
 	if !errors.Is(err, errStartConflict) || len(err.Error()) > maxErrorMessage+200 {
 		t.Errorf("an oversized body: err = %.300v, want the conflict of the status", err)
@@ -369,6 +415,24 @@ var _ = Describe("Terminal and retryable answers of a recovery restore (#302)", 
 		Expect(cond.Message).To(ContainSubstring("holds no restore operation under the key"))
 		Expect(got.Status.Bootstrap.OperationID).To(BeEmpty())
 		Expect(got.Status.Bootstrap.Phase).NotTo(Equal(databasev1alpha1.BootstrapFailed))
+	})
+
+	It("counts a restore the member refuses as invalid as a failed attempt, and ends", func() {
+		restore := &fakeRestoreClient{startErr: imAnswer(http.StatusBadRequest, `{"error":"database name is not a plain identifier"}`)}
+		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore}
+		key := newRecovery("recovery-invalid")
+		var got *databasev1alpha1.CubridCluster
+		for range maxBootstrapAttempts {
+			_, got = reconcileOnce(r, key)
+		}
+		Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapFailed))
+		Expect(bootstrapReady(got)).To(Equal("RestoreFailed"))
+		Expect(meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady).Message).To(
+			ContainSubstring("not a plain identifier"))
+		Expect(restore.keys).To(HaveLen(maxBootstrapAttempts))
+		reconcileOnce(r, key)
+		Expect(restore.keys).To(HaveLen(maxBootstrapAttempts), "a refused request was sent again after the recovery ended")
+		Expect(restore.lookups).To(BeZero())
 	})
 
 	It("tells a refused token apart at the start", func() {

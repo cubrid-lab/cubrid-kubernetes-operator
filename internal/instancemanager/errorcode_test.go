@@ -52,6 +52,22 @@ func holdOperation(t *testing.T, store *OperationStore, kind OperationKind, key 
 	})
 }
 
+// completeBackupBody is a backup request with every field a manager checks
+// before it records an operation, so that these answers do not depend on
+// what is validated before them.
+func completeBackupBody(t *testing.T) string {
+	t.Helper()
+	body, err := json.Marshal(BackupRequest{
+		Database: dbName, Destination: testStagingRoot + "/bk",
+		Upload: &BackupUpload{Bucket: testUpload.Bucket, Prefix: testUpload.Prefix, ClusterUID: "uid-1",
+			CubridVersion: "11.4", SourceInstance: "db-0", SourceRole: "slave"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
 func restoreBody(t *testing.T) string {
 	t.Helper()
 	body, err := json.Marshal(RestoreRequest{
@@ -79,13 +95,13 @@ func TestErrorAnswers_CarryACodeAndKeepTheErrorString(t *testing.T) {
 		"backup under a key held for another body": func(t *testing.T) answer {
 			h, store := newLookupServer(t, &recordingCLI{})
 			holdOperation(t, store, OpBackup, "k")
-			return answer{sendOperation(h, "/v1/backup", "k", "tok", backupBody(testStagingRoot+"/bk")),
+			return answer{sendOperation(h, "/v1/backup", "k", "tok", completeBackupBody(t)),
 				http.StatusConflict, CodeIdempotencyConflict, ErrIdempotencyConflict.Error()}
 		},
 		"backup while another operation holds the database": func(t *testing.T) answer {
 			h, store := newLookupServer(t, &recordingCLI{})
 			holdOperation(t, store, OpRestore, "held")
-			return answer{sendOperation(h, "/v1/backup", "k", "tok", backupBody(testStagingRoot+"/bk")),
+			return answer{sendOperation(h, "/v1/backup", "k", "tok", completeBackupBody(t)),
 				http.StatusConflict, CodeOperationInProgress, ErrOperationInProgress.Error()}
 		},
 		"restore under a key held for another body": func(t *testing.T) answer {
@@ -127,14 +143,14 @@ func TestErrorAnswers_CarryACodeAndKeepTheErrorString(t *testing.T) {
 				t.Fatal(err)
 			}
 			h := NewServer(&recordingCLI{}, "tok").WithOperationStore(store).WithBackupStagingRoot(testStagingRoot).Handler()
-			return answer{sendOperation(h, "/v1/backup", "k", "tok", backupBody(testStagingRoot+"/bk")),
+			return answer{sendOperation(h, "/v1/backup", "k", "tok", completeBackupBody(t)),
 				http.StatusPreconditionFailed, CodeObjectStorageNotApplied,
 				"this Instance Manager was started without object storage (IM_S3_ENDPOINT is not set); " +
 					"the Pod has to be restarted with the cluster's spec.objectStorage"}
 		},
 		"a request with the wrong token": func(t *testing.T) answer {
 			h, _ := newLookupServer(t, &recordingCLI{})
-			return answer{sendOperation(h, "/v1/backup", "k", "not-the-token", backupBody(testStagingRoot+"/bk")),
+			return answer{sendOperation(h, "/v1/backup", "k", "not-the-token", completeBackupBody(t)),
 				http.StatusUnauthorized, CodeUnauthorized, "unauthorized"}
 		},
 	}
@@ -165,7 +181,7 @@ func TestErrorAnswers_CarryACodeAndKeepTheErrorString(t *testing.T) {
 // sent: "error" alone, without an empty code.
 func TestErrorAnswers_WithoutACodeKeepTheEarlierBody(t *testing.T) {
 	h, _ := newLookupServer(t, &recordingCLI{})
-	rr := sendOperation(h, "/v1/backup", "", "tok", backupBody(testStagingRoot+"/bk"))
+	rr := sendOperation(h, "/v1/backup", "", "tok", completeBackupBody(t))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
