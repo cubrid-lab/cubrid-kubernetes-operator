@@ -76,7 +76,7 @@ the fixed names below; free text belongs in `message`.
 
 | Condition | `True` means | `False` or `Unknown` reasons |
 |---|---|---|
-| `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `MultiplePrimariesObserved` |
+| `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved` |
 | `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member); `Unknown` with `RolesNotObserved` |
 | `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` or `RolesNotObserved` |
 | `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |

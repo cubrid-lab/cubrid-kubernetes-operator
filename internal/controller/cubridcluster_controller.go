@@ -894,11 +894,19 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		res, active := r.reconcileRecovery(ctx, cluster)
 		if active {
 			reason, msg := "BootstrapRecoveryInProgress", "restoring from backup"
-			if cluster.Status.Bootstrap.Phase == databasev1alpha1.BootstrapSeedingReplicas {
+			progressing := metav1.ConditionTrue
+			switch cluster.Status.Bootstrap.Phase {
+			case databasev1alpha1.BootstrapSeedingReplicas:
 				reason, msg = "RecoverySeedingReplicas", "copying the restored database to the other members"
+			case databasev1alpha1.BootstrapFailed:
+				// Terminal: nothing is in progress, and BootstrapReady says why.
+				reason, msg, progressing = reasonBootstrapRecoveryFailed, "the recovery failed", metav1.ConditionFalse
+				if c := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady); c != nil && c.Message != "" {
+					msg += ": " + c.Message
+				}
 			}
 			setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, msg+"; cluster not ready")
-			setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reason, msg)
+			setCondition(cluster, conditionProgressing, progressing, reason, msg)
 			r.markRolesNotObserved(cluster, reason)
 			if err := r.writeStatus(ctx, cluster); err != nil {
 				if apierrors.IsConflict(err) {

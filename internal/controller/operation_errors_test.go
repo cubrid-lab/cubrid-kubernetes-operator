@@ -29,6 +29,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -363,6 +364,17 @@ var _ = Describe("Terminal and retryable answers of a recovery restore (#302)", 
 		Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapFailed))
 		Expect(bootstrapReady(got)).To(Equal("RestoreFailed"))
 		message := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady).Message
+
+		By("the cluster reporting the recovery as failed, not in progress (#434)")
+		ready := meta.FindStatusCondition(got.Status.Conditions, conditionReady)
+		Expect(ready).NotTo(BeNil())
+		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+		Expect(ready.Reason).To(Equal(reasonBootstrapRecoveryFailed))
+		Expect(ready.Message).To(ContainSubstring(message))
+		progressing := meta.FindStatusCondition(got.Status.Conditions, conditionProgressing)
+		Expect(progressing).NotTo(BeNil())
+		Expect(progressing.Status).To(Equal(metav1.ConditionFalse), "a failed recovery is not in progress")
+		Expect(progressing.Reason).To(Equal(reasonBootstrapRecoveryFailed))
 
 		By("the member becoming unreachable after the recovery failed")
 		polls := restore.polls
