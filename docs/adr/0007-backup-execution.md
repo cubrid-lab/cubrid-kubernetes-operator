@@ -244,7 +244,9 @@ spec:
   and waits with `Ready=False`, reason `ObjectStorageNotApplied`. The wait
   lasts at most 30 minutes from the first reconcile that found it, recorded
   in `status.objectStorageNotAppliedSince`, so a backup that waited for
-  another reason before gets the whole bound; then the backup ends
+  another reason before gets the whole bound. A reconcile that finds no safe
+  target, or a cluster without `spec.objectStorage`, clears the time, so an
+  interrupted wait starts again; then the backup ends
   `Failed` with reason `ObjectStorageWaitExpired`, with nothing started on
   any member (#365). The HA seed backup's wait on its source
   (`BootstrapReady`, ADR-0010) is not bounded by this: it is a step of the

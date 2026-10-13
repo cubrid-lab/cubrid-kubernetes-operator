@@ -168,6 +168,7 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if backup.Status.Phase == "" {
 			backup.Status.Phase = databasev1alpha1.BackupPhasePending
 		}
+		backup.Status.ObjectStorageNotAppliedSince = nil
 		setBackupCondition(&backup, conditionBackupReady, metav1.ConditionFalse, "ObjectStorageNotConfigured",
 			"CubridCluster "+cluster.Name+" has no spec.objectStorage; its DB Pods cannot upload the backup")
 		return r.commit(ctx, &backup, ctrl.Result{RequeueAfter: backupPollAfter})
@@ -230,6 +231,9 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		sel = selectBackupTarget(members, obs, res, backup.Spec.Target.Preference, single, observedAt)
 		if !sel.Selected {
 			// Not terminal: HA may resolve later. Surface why and requeue.
+			// A wait for object storage that this interrupts starts again
+			// when a Pod without the settings is selected next.
+			backup.Status.ObjectStorageNotAppliedSince = nil
 			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason,
 				"no safe backup target yet; waiting for a healthy target")
 			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
@@ -279,6 +283,7 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		backup.Status.ClusterUID = cluster.UID
 		recordedAt := metav1.NewTime(r.now())
 		backup.Status.TargetRecordedAt = &recordedAt
+		backup.Status.ObjectStorageNotAppliedSince = nil
 		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, "starting the backup on "+sel.Instance)
 		backup.Status.ObservedGeneration = backup.Generation
 		if err := r.writeStatus(ctx, backup); err != nil {

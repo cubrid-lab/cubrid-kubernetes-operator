@@ -54,6 +54,19 @@ func (p *downProber) ProbeRole(ctx context.Context, podName, namespace string) R
 	return (&memberProber{master: p.master}).ProbeRole(ctx, podName, namespace)
 }
 
+// silentProber answers like memberProber, or not at all while silent.
+type silentProber struct {
+	master string
+	silent bool
+}
+
+func (p *silentProber) ProbeRole(ctx context.Context, podName, namespace string) RoleObservation {
+	if p.silent {
+		return RoleObservation{Reachable: false, ObservedAt: time.Now()}
+	}
+	return (&memberProber{master: p.master}).ProbeRole(ctx, podName, namespace)
+}
+
 // #365: a backup whose start answer was lost, and whose recorded target can
 // no longer be sent the start again, reaches a defined outcome. It is never
 // started on another member.
@@ -400,6 +413,69 @@ var _ = Describe("CubridBackup wait on its recorded target", func() {
 		reconcileOnce(ctx, r, backup)
 		got := stored(ctx, backup)
 		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending), "the wait ended when it began")
+		Expect(readyOf(got).Reason).To(Equal(reasonObjectStorageNotApplied))
+
+		now = now.Add(backupTargetWait + time.Second)
+		reconcileOnce(ctx, r, backup)
+		got = stored(ctx, backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+		Expect(readyOf(got).Reason).To(Equal("ObjectStorageWaitExpired"))
+		Expect(fake.instances).To(BeEmpty())
+	})
+
+	It("starts the object-storage wait again after it was interrupted", func() {
+		cluster := haCluster("bk-osna-again")
+		cluster.Spec.Databases = []databasev1alpha1.CubridDatabase{{Name: demoDB}}
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+		for _, member := range memberNames(cluster, cluster.Spec.Topology.PromotableMembers) {
+			createMemberPod(ctx, namespace, member, nil)
+		}
+		backup := &databasev1alpha1.CubridBackup{
+			ObjectMeta: metav1.ObjectMeta{Name: "bk-osna-again", Namespace: namespace},
+			Spec: databasev1alpha1.CubridBackupSpec{
+				ClusterRef: databasev1alpha1.LocalObjectRef{Name: "bk-osna-again"},
+				Database:   demoDB,
+				Level:      databasev1alpha1.CubridBackupFull,
+				Destination: databasev1alpha1.CubridBackupDestination{
+					Type:          databasev1alpha1.DestinationObjectStorage,
+					ObjectStorage: &databasev1alpha1.ObjectStorageDestination{Bucket: waitBucket},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+
+		prober := &silentProber{master: "bk-osna-again-0"}
+		fake := &lostResponseBackupClient{}
+		start := time.Now()
+		now := start
+		r := &CubridBackupReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: prober, Backup: fake,
+			Clock: func() time.Time { return now },
+		}
+
+		By("a selected standby without the settings for 20 minutes")
+		reconcileOnce(ctx, r, backup)
+		now = start.Add(20 * time.Minute)
+		reconcileOnce(ctx, r, backup)
+		Expect(readyOf(stored(ctx, backup)).Reason).To(Equal(reasonObjectStorageNotApplied))
+
+		By("no safe target for 40 minutes")
+		prober.silent = true
+		now = start.Add(25 * time.Minute)
+		reconcileOnce(ctx, r, backup)
+		got := stored(ctx, backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending))
+		Expect(readyOf(got).Reason).NotTo(Equal(reasonObjectStorageNotApplied))
+		Expect(got.Status.ObjectStorageNotAppliedSince).To(BeNil(), "the interrupted wait was kept")
+
+		By("a selected standby without the settings again")
+		prober.silent = false
+		now = start.Add(65 * time.Minute)
+		reconcileOnce(ctx, r, backup)
+		got = stored(ctx, backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending), "the new wait ended when it began")
 		Expect(readyOf(got).Reason).To(Equal(reasonObjectStorageNotApplied))
 
 		now = now.Add(backupTargetWait + time.Second)

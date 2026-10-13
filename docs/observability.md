@@ -249,7 +249,7 @@ reasons:
 | Reason | Meaning | What to do |
 |---|---|---|
 | `RecordedTargetNotStarted` | The recorded target answered that it holds no operation of the backup | Nothing runs; create a new CubridBackup |
-| `RecordedTargetUnverified` | The recorded target could not be asked whether it holds the operation | A backup may still run on the member named in the message; check it (`GET /v1/operations?idempotencyKey=`) before relying on the backup's prefix |
+| `RecordedTargetUnverified` | The recorded target could not be asked whether it holds the operation, including when its operation store holds any record it cannot read (the lookup answers 500) | A backup may still run on the member named in the message; check it (`GET /v1/operations?idempotencyKey=`) before relying on the backup's prefix |
 | `ObjectStorageWaitExpired` | No target was recorded: the selected Pod did not run with the cluster's `spec.objectStorage` | Nothing was started; restart the Pod with the cluster's settings and create a new CubridBackup |
 
 An Event is a notice, not the record. The Operator sends at most 100 Events

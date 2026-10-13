@@ -95,7 +95,9 @@ Operator endpoints (bearer-token authenticated, `/v1/`):
   the key, as `{"operations": [...]}`; an empty list means none. It only
   reads the operation store and starts nothing. A manager without a store
   answers 503, and a store with a record it cannot read 500, not an empty
-  list (#365).
+  list (#365). That includes a record of another operation kind or key:
+  the operator then cannot say that none exists and ends the wait as
+  `RecordedTargetUnverified`, the outcome that assumes a backup may run.
 
 Auth for v1alpha1: bearer token on all `/v1/*`, mounted read-only from a
 Secret into both operator and DB pods; NetworkPolicy restricts the
