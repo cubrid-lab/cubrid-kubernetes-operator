@@ -243,8 +243,9 @@ underscores.
 The `BackupFailed` Event carries the message of the CubridBackup's `Ready`
 condition. A backup whose start was not confirmed within 30 minutes
 (ADR-0007: from `status.targetRecordedAt`, or for `ObjectStorageWaitExpired`
-from `status.objectStorageNotAppliedSince`) ends with one of these `Ready`
-reasons:
+from `status.objectStorageNotAppliedSince`, which restarts whenever the
+backup goes back to waiting for a safe target) ends with one of these
+`Ready` reasons:
 
 | Reason | Meaning | What to do |
 |---|---|---|

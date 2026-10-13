@@ -241,14 +241,19 @@ spec:
   the old environment until it is deleted. Before dispatching, the controller
   compares the `IM_S3_*` environment of the selected Pod with the cluster's
   `spec.objectStorage`; on a difference it starts nothing, records no target,
-  and waits with `Ready=False`, reason `ObjectStorageNotApplied`. The wait
-  lasts at most 30 minutes from the first reconcile that found it, recorded
-  in `status.objectStorageNotAppliedSince`, so a backup that waited for
-  another reason before gets the whole bound. A reconcile that finds no safe
-  target, or a cluster without `spec.objectStorage`, clears the time, so an
-  interrupted wait starts again; then the backup ends
-  `Failed` with reason `ObjectStorageWaitExpired`, with nothing started on
-  any member (#365). The HA seed backup's wait on its source
+  and waits with `Ready=False`, reason `ObjectStorageNotApplied`. After 30
+  minutes of this wait without interruption, counted from the first
+  reconcile that found it (`status.objectStorageNotAppliedSince`), the
+  backup ends `Failed` with reason `ObjectStorageWaitExpired`, with nothing
+  started on any member (#365). A backup that waited for another reason
+  before gets the whole 30 minutes. A reconcile that finds no safe target,
+  or a cluster without `spec.objectStorage`, clears the time, and the bound
+  starts again the next time a Pod without the settings is selected. So
+  this bound is not a limit on how long a backup stays `Pending`: a backup
+  that goes back and forth between this wait and the wait for a safe target
+  faster than every 30 minutes stays `Pending`. Nothing is dispatched
+  meanwhile. The wait for a safe target and `ObjectStorageNotConfigured`
+  (with no target recorded) are not bounded; that is outside #365. The HA seed backup's wait on its source
   (`BootstrapReady`, ADR-0010) is not bounded by this: it is a step of the
   cluster's bootstrap, not a `CubridBackup`. To let the backup go on, restart the Pod (one at a
   time, standbys first, while no backup or restore runs on it) so that it is
