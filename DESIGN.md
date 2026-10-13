@@ -1356,7 +1356,8 @@ operation.
   recorded **observed engine version**. Different / missing / unverifiable
   → blocked (`UpdateBlockedEngineUpgrade` /
   `UpdateBlockedUnverifiableEngineVersion`), no pod deletion.
-  `spec.version` is effectively immutable for an initialized HA cluster.
+  `spec.version` is effectively immutable for an initialized cluster, HA
+  or standalone.
 - **Restart sequence:** slaves first; when only the master is outdated,
   **pause with `MasterUpdatePending`**. Updating the master requires
   **explicit planned-failover intent** → fail over to an updated slave →

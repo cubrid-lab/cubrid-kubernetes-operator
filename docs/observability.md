@@ -59,7 +59,8 @@ observation comes from; "Published as" says where a reader finds it.
 | Pod running | Kubernetes started the container | kubelet | Pod status |
 | Process alive | The Instance Manager answers | `/livez` | liveness probe |
 | Instance ready | The member's database server is registered and has a role (HA), or is running (standalone) | `/readyz` | Pod readiness, `status.instances[].ready` |
-| Role known | The member reports one role that does not contradict itself | `/v1/role` | `status.instances[].role` |
+| Role known | The member reports one role that does not contradict itself | `/v1/role` | `status.instances[].role`; always `unknown` for a standalone member, which has no HA role |
+| Engine version known | The member reports the version of its engine, whatever its role | `engineVersion` in `/v1/role` | `status.instances[].observedEngineVersion`, `status.observedEngineVersion` (HA and standalone) |
 | Primary resolved | Every member was observed freshly and exactly one is master | all members' roles in one reconcile | `PrimaryResolved`, `status.currentPrimary` |
 | Replication healthy | Every observed slave applies the master's log | `replication` in a slave's `/v1/role` | `ReplicationHealthy`, `status.instances[].replication` |
 | Routing ready | The primary is resolved and a read-write Broker is available; each access mode has its own endpoint condition | Broker Deployments, `PrimaryResolved` | `BrokerReady`, `WriteEndpointReady`, `ReadEndpointReady`, `RoutingReady` |
@@ -83,7 +84,7 @@ the fixed names below; free text belongs in `message`.
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
 | `RoutingReady` | The primary is resolved and a read-write Broker is available | the reason of `PrimaryResolved`, which comes first; `NoBrokerAvailable`; `Unknown` with `RolesNotObserved` or `BrokerReconcileFailed` |
 | `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped; `ObjectStorageNotApplied` while the seed source's Instance Manager runs without object storage (waits, uses up no attempt) |
-| `Updating` | A member is being replaced for a new image | why nothing is being replaced |
+| `Updating` | A member is being replaced for a new image | why nothing is being replaced, among them `UpdateBlockedEngineVersionNotObserved`, `UpdateBlockedEngineVersionUnknown`, `UpdateBlockedMixedEngineVersions`, `UpdateBlockedEngineUpgrade`, `UpdateBlockedUnverifiableEngineVersion`, `AutomaticReplacementDisabled`, `MasterUpdatePending`, `UpToDate`, `ImageChangeNotAccepted`; `Unknown` with `UpdateStateUnavailable`. The engine-version reasons apply to a standalone cluster as well. `ImageChangeNotAccepted` is removed once the Pod template carries the image the spec asks for, unless another reason replaces it |
 
 When the Operator cannot write one of the cluster's objects, `Ready` turns
 `False` with the reason of that step, such as `StatefulSetReconcileFailed`,
@@ -159,6 +160,14 @@ issue decides, these limits apply:
   that they are stale (see [Freshness](#freshness)).
 
 ## Freshness
+
+A standalone cluster's member is asked for its engine version in every
+reconcile, but it is not observed periodically: a reconcile runs on a change
+of the cluster or of its objects, such as its Pod's readiness, not every 10
+seconds. `status.lastObservedTime` stays unset for it, and
+`status.instances[].lastObservedTime` is the time of the reconcile in which
+the member last answered, so its age tells how old the standalone
+observation is. The 60-second rule below is for an HA cluster only.
 
 An HA cluster with role discovery publishes when its HA status was observed:
 

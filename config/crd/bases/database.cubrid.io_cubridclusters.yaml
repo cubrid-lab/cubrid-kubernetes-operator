@@ -514,7 +514,7 @@ spec:
               version:
                 description: |-
                   version is the desired CUBRID engine compatibility version (e.g. "11.4").
-                  Effectively immutable for an initialized HA cluster (ADR-0009).
+                  Effectively immutable for an initialized cluster, HA or standalone (ADR-0009).
                 minLength: 1
                 type: string
             required:

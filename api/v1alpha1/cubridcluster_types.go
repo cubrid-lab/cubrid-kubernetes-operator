@@ -257,7 +257,7 @@ type CubridBootstrap struct {
 // +kubebuilder:validation:XValidation:rule="oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))",message="database names are immutable; existing names must be preserved"
 type CubridClusterSpec struct {
 	// version is the desired CUBRID engine compatibility version (e.g. "11.4").
-	// Effectively immutable for an initialized HA cluster (ADR-0009).
+	// Effectively immutable for an initialized cluster, HA or standalone (ADR-0009).
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`

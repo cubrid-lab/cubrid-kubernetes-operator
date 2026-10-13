@@ -33,6 +33,13 @@ import (
 
 const conditionUpdating = "Updating"
 
+// reasonImageChangeNotAccepted is the Updating reason while the Pod template
+// keeps an image because the one the spec asks for is not accepted.
+const reasonImageChangeNotAccepted = "ImageChangeNotAccepted"
+
+// revisionHashLabel names, on a StatefulSet Pod, the revision it was made from.
+const revisionHashLabel = "controller-revision-hash"
+
 // UpdateClass classifies a desired change relative to the observed engine
 // baseline (ADR-0009).
 type UpdateClass string
@@ -251,7 +258,7 @@ func (r *CubridClusterReconciler) buildUpdateMembers(ctx context.Context, cluste
 			Name:      name,
 			Role:      in.Role,
 			Ready:     in.Ready,
-			Outdated:  pod.Labels["controller-revision-hash"] != desiredRev,
+			Outdated:  pod.Labels[revisionHashLabel] != desiredRev,
 			Converged: in.Ready,
 		})
 	}
@@ -285,4 +292,61 @@ func agreedEngineVersion(instances []databasev1alpha1.InstanceStatus, expected i
 		}
 	}
 	return version, true
+}
+
+// reconcileStandaloneStatus asks the member of a standalone cluster for its
+// engine version and records it in instances[]. The member runs no
+// heartbeat, so it has no HA role: its role stays unknown, whatever the
+// answer says, and no primary is derived from it. The engine version does
+// not depend on the role and is taken from any reachable, fresh answer, as
+// for an HA member. Ready is the Pod's readiness, which is the member's
+// /readyz.
+func (r *CubridClusterReconciler) reconcileStandaloneStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, count int32) {
+	members := memberNames(cluster, count)
+	obs := make(map[string]RoleObservation, len(members))
+	for _, m := range members {
+		obs[m] = r.Prober.ProbeRole(ctx, m, cluster.Namespace)
+	}
+	instances := instanceStatuses(members, obs, r.now(), cluster.Status.Instances)
+	for i := range instances {
+		instances[i].Role = databasev1alpha1.RoleUnknown
+		instances[i].Ready = false
+		instances[i].Replication = nil
+		var pod corev1.Pod
+		if err := r.Get(ctx, types.NamespacedName{Name: instances[i].Name, Namespace: cluster.Namespace}, &pod); err == nil {
+			instances[i].Ready = podReady(&pod)
+		}
+	}
+	cluster.Status.Instances = instances
+}
+
+func podReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// reportStandaloneRevision sets the Updating condition of a standalone
+// cluster whose engine guard passed. The operator never replaces the Pod of
+// a standalone cluster: a changed Pod template takes effect when the Pod is
+// replaced by hand.
+func (r *CubridClusterReconciler) reportStandaloneRevision(ctx context.Context, cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) {
+	desiredRev := sts.Status.UpdateRevision
+	name := memberNames(cluster, 1)[0]
+	var pod corev1.Pod
+	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, &pod)
+	switch {
+	case desiredRev == "" || err != nil:
+		setCondition(cluster, conditionUpdating, metav1.ConditionUnknown, "UpdateStateUnavailable",
+			"the revision that member "+name+" runs is not known")
+	case pod.Labels[revisionHashLabel] != desiredRev:
+		setCondition(cluster, conditionUpdating, metav1.ConditionFalse, "AutomaticReplacementDisabled",
+			"member "+name+" runs an outdated revision; the operator does not replace the Pod of a standalone cluster, "+
+				"so the change takes effect when the Pod is replaced by hand")
+	default:
+		setCondition(cluster, conditionUpdating, metav1.ConditionFalse, "UpToDate", "all members run the desired revision")
+	}
 }
