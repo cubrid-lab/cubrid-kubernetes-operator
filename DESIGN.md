@@ -711,7 +711,8 @@ visibility, not the env/filesystem/helper-script contract).
   and not why.
 - Operator (bearer-token, `/v1/`): `GET /v1/role`, `GET /v1/ha/status`,
   `GET /v1/config`, `POST /v1/shutdown`, `POST /v1/backup`,
-  `POST /v1/restore/prepare`, `GET /v1/operations/{id}`.
+  `POST /v1/restore/prepare`, `GET /v1/operations/{id}`,
+  `GET /v1/operations?idempotencyKey=<key>` (read-only lookup).
 - Auth: a per-cluster bearer token from the cluster's Secret + NetworkPolicy (not mTLS in
   v1alpha1). The manager holds **no** Kubernetes RBAC.
 

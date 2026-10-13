@@ -216,6 +216,12 @@ type CubridBackupStatus struct {
 	// +optional
 	ClusterUID types.UID `json:"clusterUID,omitempty"`
 
+	// targetRecordedAt is when targetInstance was recorded, before anything
+	// was started on it. The wait for an operation on the recorded target is
+	// bounded from this time (ADR-0007).
+	// +optional
+	TargetRecordedAt *metav1.Time `json:"targetRecordedAt,omitempty"`
+
 	// startedAt is when the backup started.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

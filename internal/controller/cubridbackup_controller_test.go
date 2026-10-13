@@ -84,6 +84,10 @@ func (f *fakeBackupClient) GetOperation(_ context.Context, _, _, _ string) (inst
 	return instancemanager.Operation{ID: opFake, State: instancemanager.OpRunningBackup}, nil
 }
 
+func (f *fakeBackupClient) FindBackupOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, bool, error) {
+	return instancemanager.Operation{}, false, nil
+}
+
 // lostResponseBackupClient records every dispatch and loses the response of
 // the first ones: the Instance Manager may have started the backup, but the
 // controller cannot tell.
@@ -93,12 +97,38 @@ type lostResponseBackupClient struct {
 	keys      []string
 	// polls counts the operations that were asked for.
 	polls int
+
+	// held is the operation the member holds under the idempotency key, as a
+	// lookup finds it and a poll reports it; nil is none.
+	held *instancemanager.Operation
+	// startErr, when set, is the answer of a start that fails.
+	startErr error
+	// lookupErr is the answer of a lookup that cannot be made.
+	lookupErr error
+	// lookups records the members a lookup asked, and lookupKeys its keys.
+	lookups    []string
+	lookupKeys []string
+}
+
+func (f *lostResponseBackupClient) FindBackupOperation(_ context.Context, podName, _, key string) (instancemanager.Operation, bool, error) {
+	f.lookups = append(f.lookups, podName)
+	f.lookupKeys = append(f.lookupKeys, key)
+	if f.lookupErr != nil {
+		return instancemanager.Operation{}, false, f.lookupErr
+	}
+	if f.held == nil {
+		return instancemanager.Operation{}, false, nil
+	}
+	return *f.held, true, nil
 }
 
 func (f *lostResponseBackupClient) StartBackup(_ context.Context, podName, _, key string, _ instancemanager.BackupRequest) (instancemanager.Operation, error) {
 	f.instances = append(f.instances, podName)
 	f.keys = append(f.keys, key)
 	if len(f.instances) <= f.lose {
+		if f.startErr != nil {
+			return instancemanager.Operation{}, f.startErr
+		}
 		return instancemanager.Operation{}, errors.New("connection reset after the request was sent")
 	}
 	return instancemanager.Operation{ID: opFake, State: instancemanager.OpRunningBackup}, nil
@@ -106,6 +136,9 @@ func (f *lostResponseBackupClient) StartBackup(_ context.Context, podName, _, ke
 
 func (f *lostResponseBackupClient) GetOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, error) {
 	f.polls++
+	if f.held != nil {
+		return *f.held, nil
+	}
 	return instancemanager.Operation{ID: opFake, State: instancemanager.OpRunningBackup}, nil
 }
 

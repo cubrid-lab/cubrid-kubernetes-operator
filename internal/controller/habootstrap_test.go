@@ -111,6 +111,10 @@ func (f *fakeSeedClient) GetOperation(_ context.Context, _, _, _ string) (instan
 	return instancemanager.Operation{}, errors.New("not used by seeding")
 }
 
+func (f *fakeSeedClient) FindBackupOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, bool, error) {
+	return instancemanager.Operation{}, false, errors.New("not used by seeding")
+}
+
 // firstMemberMaster answers as the members of a group that is being formed
 // without a failover: the first member is the master, with a server that is
 // not active before every member has joined, and the others are slaves.

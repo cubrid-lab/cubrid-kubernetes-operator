@@ -91,6 +91,12 @@ type Operation struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// OperationList answers a lookup of operations by idempotency key. An empty
+// list says that the store holds none under the key.
+type OperationList struct {
+	Operations []Operation `json:"operations"`
+}
+
 // OperationArtifact records the durable facts that make an operation trustworthy
 // as Completed (ADR-0007). ManifestURI is the object-storage manifest.json (the
 // atomic completion marker), written last; upload itself is a later PR.

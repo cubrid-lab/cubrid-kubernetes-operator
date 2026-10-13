@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -48,6 +49,11 @@ type BackupClient interface {
 	StartBackup(ctx context.Context, podName, namespace, idempotencyKey string, req instancemanager.BackupRequest) (instancemanager.Operation, error)
 	// GetOperation polls /v1/operations/{id}.
 	GetOperation(ctx context.Context, podName, namespace, id string) (instancemanager.Operation, error)
+	// FindBackupOperation asks GET /v1/operations?idempotencyKey= for the
+	// backup operation the member holds under the key. It never starts
+	// anything. found is false only when the member answered that it holds
+	// none; any other answer is an error.
+	FindBackupOperation(ctx context.Context, podName, namespace, idempotencyKey string) (op instancemanager.Operation, found bool, err error)
 }
 
 // RestoreClient drives one instance's Instance Manager restore operation
@@ -245,6 +251,35 @@ func (c *HTTPBackupClient) GetOperation(ctx context.Context, podName, namespace,
 		return instancemanager.Operation{}, fmt.Errorf("get operation %s on %s: %w", id, podName, unexpectedStatus(resp))
 	}
 	return decodeOperation(resp)
+}
+
+// FindBackupOperation reads the member's operations under idempotencyKey. A
+// manager that does not have the lookup answers 404, which is an error here:
+// only an answered empty list says that the member holds no operation.
+func (c *HTTPBackupClient) FindBackupOperation(ctx context.Context, podName, namespace, idempotencyKey string) (instancemanager.Operation, bool, error) {
+	target := c.baseURL(podName, namespace) + "/v1/operations?" + neturl.Values{"idempotencyKey": {idempotencyKey}}.Encode()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return instancemanager.Operation{}, false, err
+	}
+	resp, err := c.do(ctx, httpReq, podName, namespace)
+	if err != nil {
+		return instancemanager.Operation{}, false, fmt.Errorf("look up the backup operation on %s: %w", podName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return instancemanager.Operation{}, false, fmt.Errorf("look up the backup operation on %s: %w", podName, unexpectedStatus(resp))
+	}
+	var list instancemanager.OperationList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil || list.Operations == nil {
+		return instancemanager.Operation{}, false, fmt.Errorf("look up the backup operation on %s: unreadable answer%s", podName, requestRef(resp))
+	}
+	for _, op := range list.Operations {
+		if op.Kind == instancemanager.OpBackup {
+			return op, true, nil
+		}
+	}
+	return instancemanager.Operation{}, false, nil
 }
 
 func (c *HTTPBackupClient) baseURL(podName, namespace string) string {

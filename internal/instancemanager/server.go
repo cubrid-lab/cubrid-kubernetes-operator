@@ -219,6 +219,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/ha/bootstrap", s.auth(s.haBootstrap))
 	mux.HandleFunc("POST /v1/backup", s.auth(s.backup))
 	mux.HandleFunc("POST /v1/restore/prepare", s.auth(s.restorePrepare))
+	mux.HandleFunc("GET /v1/operations", s.auth(s.findOperations))
 	mux.HandleFunc("GET /v1/operations/{id}", s.auth(s.getOperation))
 	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdown))
 	return s.logRequests(mux)
@@ -430,6 +431,34 @@ func (s *Server) backupPreflight(req BackupRequest) (int, error) {
 			"(IM_S3_ENDPOINT is not set); the Pod has to be restarted with the cluster's spec.objectStorage")
 	}
 	return 0, nil
+}
+
+// findOperations returns the operations the store holds under the
+// idempotencyKey query parameter, as an OperationList; an empty list means
+// none. It only reads the store and starts nothing, so the operator can ask a
+// member whether a start whose answer was lost was taken, without sending the
+// start again (ADR-0007, #365). A manager without a store cannot say that no
+// operation exists and answers 503.
+func (s *Server) findOperations(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("idempotencyKey")
+	if key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "idempotencyKey is required"})
+		return
+	}
+	if s.store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: "operations are not enabled"})
+		return
+	}
+	ops, err := s.store.FindByKey(key)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		return
+	}
+	list := OperationList{Operations: make([]Operation, 0, len(ops))}
+	for _, op := range ops {
+		list.Operations = append(list.Operations, *op)
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 // runBackup executes the backup in the background and records the durable state

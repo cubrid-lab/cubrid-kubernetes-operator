@@ -259,6 +259,13 @@ spec:
               targetInstance:
                 description: targetInstance is the pod selected to run the backup.
                 type: string
+              targetRecordedAt:
+                description: |-
+                  targetRecordedAt is when targetInstance was recorded, before anything
+                  was started on it. The wait for an operation on the recorded target is
+                  bounded from this time (ADR-0007).
+                format: date-time
+                type: string
               targetRole:
                 description: targetRole is the ADR-0005 role of the target at backup
                   start.

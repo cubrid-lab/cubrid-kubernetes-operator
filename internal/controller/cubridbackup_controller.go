@@ -56,6 +56,17 @@ const (
 	// run with the cluster's object-storage settings yet.
 	reasonObjectStorageNotApplied = "ObjectStorageNotApplied"
 
+	// The terminal reasons of a backup whose wait for an operation ran out
+	// (backupTargetWait). reasonRecordedTargetNotStarted: the recorded target
+	// answered that it holds no operation for the backup.
+	// reasonRecordedTargetUnverified: the recorded target could not be asked,
+	// so a backup may still run on it. reasonObjectStorageWaitExpired: no
+	// target was recorded, because the selected Pod did not run with the
+	// cluster's object-storage settings; nothing was started.
+	reasonRecordedTargetNotStarted = "RecordedTargetNotStarted"
+	reasonRecordedTargetUnverified = "RecordedTargetUnverified"
+	reasonObjectStorageWaitExpired = "ObjectStorageWaitExpired"
+
 	// objectStorageEnvPrefix starts the names of the manager's object-storage
 	// environment (objectStorageEnv).
 	objectStorageEnvPrefix = "IM_S3_"
@@ -88,6 +99,12 @@ type CubridBackupReconciler struct {
 // backupClusterWait is how long a backup waits for a cluster that does not
 // exist, counted from the backup's creation.
 const backupClusterWait = 10 * time.Minute
+
+// backupTargetWait bounds how long a backup waits for its operation to be
+// started: on its recorded target, counted from status.targetRecordedAt,
+// and for a selected Pod that does not run with the cluster's object-storage
+// settings, counted from the backup's creation.
+const backupTargetWait = 30 * time.Minute
 
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups/status,verbs=get;update;patch
@@ -168,7 +185,7 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // reason spec.target.preference is read only for that first selection: a later
 // change does not move a backup whose target is already recorded. Nothing is
 // dispatched to a target whose Pod does not run with the cluster's
-// object-storage settings.
+// object-storage settings. Both waits are bounded by backupTargetWait.
 func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -188,12 +205,32 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 			Selected:     true,
 			Reason:       reasonRecordedTargetSelected,
 		}
+		// A target recorded by an operator that did not record the time is
+		// given the present time, so that its wait is never cut short.
+		if backup.Status.TargetRecordedAt == nil {
+			recordedAt := metav1.NewTime(r.now())
+			backup.Status.TargetRecordedAt = &recordedAt
+		}
+		// Once the bound has passed the start is not sent again.
+		if r.now().Sub(backup.Status.TargetRecordedAt.Time) > backupTargetWait {
+			return r.endRecordedTargetWait(ctx, backup)
+		}
 		if !recordedTargetEligible(sel, members, obs, res, single, observedAt) {
-			// Not terminal: the target may become eligible again. Another member
-			// is never started, since the earlier dispatch may be running.
-			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reasonRecordedTargetNotEligible,
-				"recorded target "+sel.Instance+" is no longer eligible for its recorded role "+backup.Status.TargetRole+"; waiting")
-			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+			// The start is not sent again to a target that is not eligible,
+			// and never to another member, since the earlier dispatch may be
+			// running. The target is only asked whether it holds the
+			// operation; one it holds is followed from now on.
+			op, found, err := r.Backup.FindBackupOperation(ctx, sel.Instance, backup.Namespace, idempotencyKey(backup))
+			if err == nil && found {
+				return r.adoptBackup(ctx, backup, op)
+			}
+			msg := "recorded target " + sel.Instance + " is no longer eligible for its recorded role " + backup.Status.TargetRole
+			if err != nil {
+				msg += "; it could not be asked whether it runs the backup: " + err.Error()
+			} else {
+				msg += "; it holds no operation of this backup"
+			}
+			return r.waitOnRecordedTarget(ctx, backup, reasonRecordedTargetNotEligible, msg)
 		}
 	} else {
 		sel = selectBackupTarget(members, obs, res, backup.Spec.Target.Preference, single, observedAt)
@@ -217,10 +254,18 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 			return ctrl.Result{}, err
 		}
 		if notApplied != "" {
+			// Nothing was started, so ending the backup leaves nothing
+			// running anywhere.
+			if r.now().Sub(backup.CreationTimestamp.Time) > backupTargetWait {
+				return r.ended(ctx, backup, reasonObjectStorageWaitExpired, fmt.Sprintf(
+					"%s; no selected Pod ran with the cluster's spec.objectStorage within %s of the backup's creation, "+
+						"nothing was started, and the backup is not continued", notApplied, backupTargetWait))
+			}
 			if backup.Status.Phase == "" {
 				backup.Status.Phase = databasev1alpha1.BackupPhasePending
 			}
-			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reasonObjectStorageNotApplied, notApplied)
+			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reasonObjectStorageNotApplied,
+				fmt.Sprintf("%s; waiting for at most %s from the backup's creation", notApplied, backupTargetWait))
 			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
 		}
 
@@ -232,6 +277,8 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		backup.Status.FallbackUsed = sel.FallbackUsed
 		// Recorded with the target, before anything is started on it.
 		backup.Status.ClusterUID = cluster.UID
+		recordedAt := metav1.NewTime(r.now())
+		backup.Status.TargetRecordedAt = &recordedAt
 		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, "starting the backup on "+sel.Instance)
 		backup.Status.ObservedGeneration = backup.Generation
 		if err := r.writeStatus(ctx, backup); err != nil {
@@ -246,8 +293,7 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 	op, err := r.Backup.StartBackup(ctx, sel.Instance, backup.Namespace, idempotencyKey(backup), req)
 	if err != nil {
 		log.Error(err, "Failed to start backup", "instance", sel.Instance)
-		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
-		return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+		return r.waitOnRecordedTarget(ctx, backup, instanceManagerFailureReason(err), err.Error())
 	}
 
 	now := metav1.Now()
@@ -282,6 +328,62 @@ func (r *CubridBackupReconciler) pollBackup(ctx context.Context, backup *databas
 		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "BackupRunning", "backup in progress")
 	}
 	return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+}
+
+// waitOnRecordedTarget holds a backup whose recorded target runs no operation
+// of it that the operator knows of. The next reconcile sends the start to the
+// target again if it is eligible; once backupTargetWait from
+// status.targetRecordedAt has passed, endRecordedTargetWait decides instead.
+func (r *CubridBackupReconciler) waitOnRecordedTarget(ctx context.Context, backup *databasev1alpha1.CubridBackup, reason, msg string) (ctrl.Result, error) {
+	setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reason,
+		fmt.Sprintf("%s; waiting for at most %s from when the target was recorded", msg, backupTargetWait))
+	return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+}
+
+// endRecordedTargetWait ends the wait of a backup on its recorded target
+// once backupTargetWait has passed. The target is asked, without sending the
+// start again, whether it holds the backup's operation. One it holds is
+// followed. When it holds none the backup is Failed: nothing runs. When it
+// cannot be asked the backup is Failed as well, but a backup may still run on
+// the target, and the reason says so. Either way no other member is started.
+func (r *CubridBackupReconciler) endRecordedTargetWait(ctx context.Context, backup *databasev1alpha1.CubridBackup) (ctrl.Result, error) {
+	target := backup.Status.TargetInstance
+	op, found, err := r.Backup.FindBackupOperation(ctx, target, backup.Namespace, idempotencyKey(backup))
+	if err == nil && found {
+		return r.adoptBackup(ctx, backup, op)
+	}
+	last := ""
+	if ready := meta.FindStatusCondition(backup.Status.Conditions, conditionBackupReady); ready != nil {
+		last = fmt.Sprintf(" (last: %s: %s)", ready.Reason, ready.Message)
+	}
+	if err != nil {
+		return r.ended(ctx, backup, reasonRecordedTargetUnverified, fmt.Sprintf(
+			"the backup was not started on its recorded target %s within %s%s, and %s could not be asked whether it "+
+				"holds the backup's operation: %v. A backup may still be running on %s and upload under this backup's "+
+				"prefix; check that member before relying on that prefix. The backup is not started on another member",
+			target, backupTargetWait, last, target, err, target))
+	}
+	return r.ended(ctx, backup, reasonRecordedTargetNotStarted, fmt.Sprintf(
+		"the backup was not started on its recorded target %s within %s%s, and %s holds no operation of it; "+
+			"nothing runs, and the backup is not started on another member", target, backupTargetWait, last, target))
+}
+
+// adoptBackup records the operation that the recorded target holds under the
+// backup's idempotency key, when the answer to its start was lost, and
+// follows it from then on like any started backup.
+func (r *CubridBackupReconciler) adoptBackup(ctx context.Context, backup *databasev1alpha1.CubridBackup, op instancemanager.Operation) (ctrl.Result, error) {
+	logf.FromContext(ctx).Info("Adopted backup operation of the recorded target",
+		"instance", backup.Status.TargetInstance, "operationID", op.ID)
+	backup.Status.Phase = databasev1alpha1.BackupPhaseRunning
+	backup.Status.OperationRef = op.ID
+	if backup.Status.StartedAt == nil {
+		started := metav1.NewTime(r.now())
+		if !op.CreatedAt.IsZero() {
+			started = metav1.NewTime(op.CreatedAt)
+		}
+		backup.Status.StartedAt = &started
+	}
+	return r.pollBackup(ctx, backup)
 }
 
 func (r *CubridBackupReconciler) completed(ctx context.Context, backup *databasev1alpha1.CubridBackup, op instancemanager.Operation) (ctrl.Result, error) {

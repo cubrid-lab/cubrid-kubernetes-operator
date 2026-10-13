@@ -152,6 +152,24 @@ func (s *OperationStore) FindOrCreate(kind OperationKind, idempotencyKey, reques
 	return op, false, nil
 }
 
+// FindByKey returns the operations recorded under idempotencyKey, of any
+// kind. It only reads the store.
+func (s *OperationStore) FindByKey(idempotencyKey string) ([]*Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ops, err := s.listLocked()
+	if err != nil {
+		return nil, err
+	}
+	found := []*Operation{}
+	for _, op := range ops {
+		if op.IdempotencyKey == idempotencyKey {
+			found = append(found, op)
+		}
+	}
+	return found, nil
+}
+
 // Get returns the operation with the given ID.
 func (s *OperationStore) Get(id string) (*Operation, error) {
 	s.mu.Lock()
