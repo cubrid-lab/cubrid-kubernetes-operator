@@ -213,7 +213,12 @@ spec:
   recreated with the cluster's settings. A target that is already recorded is
   not compared: the earlier dispatch to it may have been accepted with its
   answer lost, so the request is sent to it again and returns the operation
-  that runs; only the manager's 412 below holds it. The value of the credentials Secret
+  that runs; only the manager's 412 below holds it. The limit of this: when
+  a target is recorded but the first dispatch never reached the manager (a
+  network error or a 503) and `spec.objectStorage` changed before the retry,
+  the retried request runs `backupdb` with the Pod's old settings, so the
+  backup fails at the upload or lands in the previous store, and the
+  artifact URI does not name the endpoint. The value of the credentials Secret
   is not compared, because the operator does not read it: a Secret whose keys
   changed also needs the Pods restarted, and that is not detected. The
   manager checks again before `backupdb` runs: a request without an upload
