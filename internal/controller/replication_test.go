@@ -387,3 +387,41 @@ func TestInstanceStatuses_ReplicationKeptOnlyForAReadSlave(t *testing.T) {
 		}
 	}
 }
+
+// The applier's counters outlast its process (docs/poc/RESULTS.md, POC-25),
+// so a restarted applier comes back with the counters it had. It is told
+// from one that kept running by its identity: a reading beside another
+// applier process starts a new series and does not inherit the stall (#360).
+func TestNextReplication_RestartedApplierStartsANewSeries(t *testing.T) {
+	const before, after = "pid:277:48213", "pid:329:51377"
+	stalled := func(applier string) *databasev1alpha1.InstanceReplication {
+		r := repl(10, 9, 40*time.Second)
+		r.Applier = applier
+		return r
+	}
+	reading := func(applier string) *ReplicationObservation {
+		return &ReplicationObservation{Source: replMaster, AppliedChanges: 10, DelayedPages: 9, Applier: applier}
+	}
+	for name, tc := range map[string]struct {
+		prev        *databasev1alpha1.InstanceReplication
+		obs         *ReplicationObservation
+		wantStalled bool
+	}{
+		"the same applier is still stalled":              {stalled(before), reading(before), true},
+		"another applier with the same counters":         {stalled(before), reading(after), false},
+		"an applier whose identity was not known before": {stalled(""), reading(after), true},
+		"an applier whose identity could not be read":    {stalled(before), reading(""), true},
+	} {
+		got := nextReplication(tc.prev, tc.obs, testNow)
+		if got.Applier != tc.obs.Applier {
+			t.Errorf("%s: applier = %q, want the one of the reading, %q", name, got.Applier, tc.obs.Applier)
+		}
+		if (got.StalledSince != nil) != tc.wantStalled {
+			t.Errorf("%s: stalledSince = %v, want stalled %v", name, got.StalledSince, tc.wantStalled)
+		}
+	}
+	// A reading that is missed keeps the identity with the rest.
+	if got := nextReplication(stalled(before), nil, testNow); got.Applier != before {
+		t.Errorf("a missed reading: applier = %q, want it kept as %q", got.Applier, before)
+	}
+}

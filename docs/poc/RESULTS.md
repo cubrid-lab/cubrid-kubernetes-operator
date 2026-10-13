@@ -8,11 +8,11 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-29, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-30, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
-> not timing baselines. POC-10 to POC-16, POC-20 and POC-24 ran linux/amd64
+> not timing baselines. POC-10 to POC-16, POC-20, POC-24 and POC-30 ran linux/amd64
 > under emulation (podman on another architecture): their command output is
 > functional evidence, and their timings and rates are not native timings.
 > POC-17, POC-23, POC-25, POC-26, POC-27, POC-28 and POC-29 ran on native
@@ -2111,6 +2111,39 @@ a container ends with it); a three-member group;
 the HA path through the real image (part C ran standalone; part B shows
 the HA locks); more than one run of each step. One image, local Docker; not
 a general CUBRID guarantee.
+
+## POC-30 — the applier's counters after a restart of the applier and of the member (ADR-0006, #360) — **observation: they are kept**
+
+**Environment:** two containers of `docker.io/cubrid/cubrid:11.4`
+(CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)) on one podman network, linux/amd64
+emulated on an arm64 Mac, 2026-10-13. `ha_node_list=cubrid@h-0:h-1`; `h-0`
+created the database and is master, `h-1` was seeded with `restoreslave` and
+is slave. The counters are what the Instance Manager reads:
+`cubrid applyinfo -L <databases>/appdb_h-0 -a appdb` on `h-1`.
+
+**Observed** (Update and Delete count stayed 0, Schema count 1, Fail count 0):
+
+| Step | Applier process on `h-1` | Insert count | Commit count | Rows on `h-1` |
+|---|---|---|---|---|
+| Three rows written on the master | pid 277 | 3 | 15 | 1 2 3 |
+| The applier is killed with SIGKILL; heartbeat starts another within about 5 seconds; nothing written | pid 329 | 3 | 15 | 1 2 3 |
+| Two more rows | pid 329 | 5 | 21 | 1 2 3 4 5 |
+| The container of `h-1` is restarted (every process ends, the data stays) and heartbeat is started; nothing written | pid 283 | 5 | 31 | 1 2 3 4 5 |
+| One more row | pid 283 | 6 | 34 | 1 2 3 4 5 6 |
+
+The counters did not go back to zero in either case: a new applier process
+continued from the values of the process before it. The Commit count rose
+across the member's restart without a row being written.
+
+**Consequence:** a restarted applier cannot be told from one that kept
+running by its counters. The Instance Manager reports the applier's process
+with each reading of the counters (its process ID and the kernel's start
+time of the process), and the Operator starts a new replication series when
+that identity changes, so a restarted applier does not inherit `stalledSince`.
+
+**Not covered:** a real Pod restart on Kubernetes; an applier that restarts
+while changes wait to be applied; timing, which emulation does not show. One
+run on one image.
 
 ## Net assessment
 

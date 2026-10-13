@@ -321,6 +321,16 @@ implemented as a report, not yet as a gate.
 Why two observations and not the number of waiting pages alone: a healthy
 slave under load has pages waiting too, but its counters rise (POC-20).
 
+Which applier the counters belong to (#360): the counters are kept across a
+restart of the applier and of the member (POC-25), so a restarted applier
+comes back with the values it had. The Instance Manager reports the applier
+process with each reading (`replication.applier`: its process ID and the
+kernel's start time of the process), and a reading beside another process
+starts a new series: the restarted applier is not stalled until it, too, has
+applied nothing between two readings. An identity that is missing on one
+side, as from a manager that does not report it yet, decides nothing; the
+counters alone are compared then.
+
 What it does not do. Nothing acts on the condition: `HAReady`, `Ready` and
 the endpoints do not depend on it. A transaction that stays open on the
 master for longer than the window is applied only when it commits, so its

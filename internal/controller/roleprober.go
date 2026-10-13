@@ -197,6 +197,7 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 			AppliedChanges: int64(r.AppliedChanges),
 			FailCount:      int64(r.FailCount),
 			DelayedPages:   int64(r.DelayedPageCount),
+			Applier:        r.Applier,
 		}
 	}
 	notYetActive := st.Role == instancemanager.RoleMaster && !st.ServerActive
