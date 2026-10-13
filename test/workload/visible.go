@@ -31,7 +31,8 @@ import (
 // not part of a member's time, which is an upper bound by the duration of one
 // read. A read that fails is retried. When ctx ends first, the error names
 // each member not seen, with its last error, and the members seen are still
-// returned.
+// returned. read must return once ctx ends: WaitVisible waits for every read.
+// With no members, nothing is seen and an error is returned.
 func WaitVisible(ctx context.Context, start time.Time, members []string, poll time.Duration,
 	read func(ctx context.Context, member string) (bool, error)) (map[string]time.Duration, error) {
 	var (
@@ -40,6 +41,9 @@ func WaitVisible(ctx context.Context, start time.Time, members []string, poll ti
 		seen    = map[string]time.Duration{}
 		missing []string
 	)
+	if len(members) == 0 {
+		return seen, errors.New("no member to read the marker on")
+	}
 	for _, member := range members {
 		wg.Go(func() {
 			var last error

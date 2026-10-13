@@ -579,13 +579,14 @@ it needs more.
 - **CUBRID is expected to** (Manual; POC-3): apply committed rows and schema
   changes on every slave; never apply a rolled-back change.
 - **Expected:** a marker row committed on the master after the writes and
-  the schema change is returned by every slave within `replication_limit`;
-  then every member returns the same rows and the same schema, and the log
-  applier's fail count is zero on every slave. Only the marker is timed: the
-  clock starts before its commit is sent and stops when the last slave
-  returns it, so the slower full check is not part of the time. The full
-  check must pass within 2 minutes of the marker's commit, and its time is
-  recorded as `fullCheckPassedWithin`.
+  the schema change is returned by every slave within `replication_limit`,
+  and each slave then holds as many ledger rows as the master; then every
+  member returns the same rows and the same schema, and the log applier's
+  fail count is zero on every slave. Only the marker and the row count are
+  timed: the clock starts before the marker's commit is sent and stops when
+  the last slave returns both, so the slower full check is not part of the
+  time. The full check must then pass within 2 more minutes, and its time
+  since the marker's commit is recorded as `fullCheckPassedWithin`.
   The replaced slave returns as a slave, the master does not change, and the
   replaced slave holds the rows written before and after its replacement.
 - **Must never happen:** a member reported as a healthy slave whose applier
@@ -1024,7 +1025,7 @@ for one with the defaults.
 | Limit | Environment | Measured | How it is measured | Set |
 |---|---|---|---|---|
 | `formation_limit` | Kind on a GitHub-hosted `ubuntu-latest` runner, CUBRID 11.4.6, object storage mocked | 59 s, 71 s, 71 s, 83 s in four runs on 2026-10-05 | From the `creationTimestamp` of the `CubridCluster` to the latest `lastTransitionTime` of `Ready`, `HAReady`, `PrimaryResolved` and `RoutingReady`, all as the API server recorded them | 5 minutes, about four times the slowest run, because a runner's speed and image pulls vary |
-| `replication_limit` | The same | 1.74 s to 1.81 s in the same four runs | From the return of the workload client, after its last commit, until every member returns the same rows and the same catalog. This is an upper bound: it includes the time the checks take, about one second | 30 seconds |
+| `replication_limit` | The same | 1.74 s to 1.81 s in the same four runs, measured before #367 changed the method | Measured then from the return of the workload client, after its last commit, until every member returned the same rows and the same catalog, including the time the checks take (about one second). It is now measured from just before a marker row's commit until every slave returns the marker and the master's ledger row count, which is also an upper bound; no baseline of the new method is recorded yet | 30 seconds |
 
 | `failover_limit` | The same; scenario S03, both variants | 1.1 s to 1.8 s in eight runs (four per variant) on 2026-10-05 | From the moment the deletion of the master Pod was issued to the client's first acknowledged operation after which none failed, taken from the client's history | 30 seconds |
 | `rejoin_limit` | The same | 21.4 s to 26.8 s in the same eight runs | From the moment the deletion was issued until CUBRID reports one master and two slaves on all three members, the former master among the slaves, and the Operator's status agrees. On Kind the Pod is recreated at once, so the time is taken from the fault | 5 minutes |

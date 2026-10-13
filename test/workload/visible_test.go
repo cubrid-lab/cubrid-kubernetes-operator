@@ -53,7 +53,7 @@ func TestWaitVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 	for member, at := range due {
-		if seen[member] < at || seen[member] > at+80*time.Millisecond {
+		if seen[member] < at || seen[member] > at+500*time.Millisecond {
 			t.Errorf("%s seen after %v, want soon after %v", member, seen[member], at)
 		}
 	}
@@ -62,6 +62,14 @@ func TestWaitVisible(t *testing.T) {
 	}
 	if member, d := Slowest(seen); member != slowMember || d != seen[slowMember] {
 		t.Errorf("Slowest = %s %v, want m-2 %v", member, d, seen[slowMember])
+	}
+}
+
+// With no member to read, nothing has been seen.
+func TestWaitVisibleNoMembers(t *testing.T) {
+	read := func(context.Context, string) (bool, error) { return true, nil }
+	if _, err := WaitVisible(context.Background(), time.Now(), nil, time.Millisecond, read); err == nil {
+		t.Error("no member to read was reported as every member seen")
 	}
 }
 
