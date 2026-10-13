@@ -104,6 +104,13 @@ KIND_CLUSTER ?= cubrid-kubernetes-operator-test-e2e
 # its owner, and the suite does not start while it holds anything.
 E2E_LABEL_FILTER ?=
 E2E_EVIDENCE_DIR ?= $(CURDIR)/e2e-evidence
+# The run's deadlines, innermost first: Ginkgo's suite timeout, the grace each
+# cleanup node gets after it, and Go's process timeout, which kills without any
+# cleanup. The CI step and job limits lie outside them. See
+# docs/testing/scenario-contract.md, section "A run that does not finish".
+E2E_SUITE_TIMEOUT ?= 50m
+E2E_GRACE_PERIOD ?= 1m
+E2E_GO_TIMEOUT ?= 58m
 
 .PHONY: setup-test-e2e
 setup-test-e2e: container-tool kind ## Set up a Kind cluster for e2e tests if it does not exist
@@ -119,7 +126,7 @@ setup-test-e2e: container-tool kind ## Set up a Kind cluster for e2e tests if it
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
 	$(if $(filter file,$(origin E2E_EVIDENCE_DIR)),rm -rf '$(E2E_EVIDENCE_DIR)')
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL) \
-		E2E_EVIDENCE_DIR='$(E2E_EVIDENCE_DIR)' go test -tags=e2e ./test/e2e/ -v -timeout 60m -ginkgo.v $(if $(E2E_LABEL_FILTER),-ginkgo.label-filter='$(E2E_LABEL_FILTER)')
+		E2E_EVIDENCE_DIR='$(E2E_EVIDENCE_DIR)' go test -tags=e2e ./test/e2e/ -v -timeout $(E2E_GO_TIMEOUT) -ginkgo.timeout=$(E2E_SUITE_TIMEOUT) -ginkgo.grace-period=$(E2E_GRACE_PERIOD) -ginkgo.v $(if $(E2E_LABEL_FILTER),-ginkgo.label-filter='$(E2E_LABEL_FILTER)')
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e

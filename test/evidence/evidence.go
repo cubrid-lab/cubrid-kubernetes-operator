@@ -108,6 +108,10 @@ type Summary struct {
 	// such as an attempt of a step that did not reach its precondition.
 	Notes []string `json:"notes,omitempty"`
 
+	// provisional marks a summary Checkpoint writes: its junit.xml carries
+	// an error, so that CI tooling does not show an unfinished run as green.
+	provisional bool
+
 	// planned maps each scenario and variant that still holds the placeholder
 	// Plan recorded to its index in Scenarios.
 	planned map[Requirement]int
@@ -239,8 +243,24 @@ func (s Summary) Conclude(dir string, r *Redactor, lane Lane, other ...string) e
 	return errors.Join(errs...)
 }
 
+// Checkpoint writes summary.json and junit.xml with the results recorded so
+// far, for a run that may be killed before it concludes. The checkpoint never
+// passes: its one problem says the run did not finish and when it was
+// written, and finishedAt is left unset. Conclude replaces it.
+func (s Summary) Checkpoint(dir string, r *Redactor, lane string, at time.Time) error {
+	if dir == "" {
+		return errors.New("no run directory is set: the checkpoint cannot be kept")
+	}
+	s.Lane, s.Passed, s.FinishedAt, s.provisional = lane, false, time.Time{}, true
+	s.Problems = []string{fmt.Sprintf("the run did not finish: this is what it recorded by %s",
+		at.UTC().Format(time.RFC3339))}
+	return s.Write(dir, r)
+}
+
 // Write stores summary.json and junit.xml in dir. Both hold the judged result
 // of each scenario, and what the environment does not record as "unknown".
+// junit.xml is written first, so that a process killed between the two
+// leaves a summary.json no newer than junit.xml.
 func (s Summary) Write(dir string, r *Redactor) error {
 	out := s
 	out.SchemaVersion = SchemaVersion
@@ -268,18 +288,18 @@ func (s Summary) Write(dir string, r *Redactor) error {
 		out.Problems = []string{}
 	}
 
-	data, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := r.WriteFile(dir, "summary.json", append(data, '\n')); err != nil {
-		return err
-	}
 	report, err := xml.MarshalIndent(out.junit(), "", "  ")
 	if err != nil {
 		return err
 	}
-	return r.WriteFile(dir, "junit.xml", append([]byte(xml.Header), append(report, '\n')...))
+	if err := r.WriteFile(dir, "junit.xml", append([]byte(xml.Header), append(report, '\n')...)); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	return r.WriteFile(dir, "summary.json", append(data, '\n'))
 }
 
 type junitSuite struct {
@@ -323,6 +343,12 @@ func (s Summary) junit() junitSuite {
 			suite.Skipped++
 		}
 		suite.Cases = append(suite.Cases, c)
+	}
+	if s.provisional {
+		suite.Tests++
+		suite.Errors++
+		suite.Cases = append(suite.Cases, junitCase{Name: "run", Classname: "run",
+			Error: &junitMessage{Message: strings.Join(s.Problems, "; ")}})
 	}
 	return suite
 }
@@ -451,7 +477,9 @@ func (r *Redactor) Redact(data []byte) []byte {
 }
 
 // WriteFile stores redacted data at the path rel below dir, creating the
-// directories on the way. A path that leaves dir is refused.
+// directories on the way. A path that leaves dir is refused. The file is
+// replaced by a rename, so a process killed during the write leaves the
+// previous content or the new one, never a part of it.
 func (r *Redactor) WriteFile(dir, rel string, data []byte) error {
 	if !filepath.IsLocal(rel) {
 		return fmt.Errorf("evidence path %q is outside the run directory", rel)
@@ -460,7 +488,21 @@ func (r *Redactor) WriteFile(dir, rel string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(path, r.Redact(data), 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	_, err = tmp.Write(r.Redact(data))
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return err
 }
 
 // RequireEmptyDir reports an error when dir holds anything, naming what it

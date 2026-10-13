@@ -436,6 +436,33 @@ reader can tell what to expect.
   invalid and is read as `fail`. The writer in `test/evidence` applies this
   rule before it writes the file, so `summary.json` holds the judged result.
 
+### A run that does not finish
+
+From the start of the run until it concludes, `summary.json` and
+`junit.xml` hold the results recorded so far. The suite writes them before
+anything is set up and again after every step. This provisional summary never
+passes: in `summary.json`, `passed` is `false`, `finishedAt` is unset and its
+one problem says the run did not finish and when it was written; `junit.xml`
+has an extra `run` test case with that problem as an error. The concluded
+summary replaces both. Each file is replaced in one step, `junit.xml` before
+`summary.json`, so a process killed while writing leaves whole files.
+
+The Kind run has deadlines, innermost first. Each one leaves room for what
+the one inside it may still do:
+
+| Deadline | Default | What happens |
+|---|---|---|
+| Suite (`E2E_SUITE_TIMEOUT`) | 50 minutes | Ginkgo abandons the current step, which keeps running in the background, and skips the remaining steps. Each cleanup node that starts after the deadline, and then the suite's own cleanup that concludes `summary.json`, gets up to `E2E_GRACE_PERIOD` (1 minute); a node already running at the deadline gets none. The HA group, whose `AfterAll` Ginkgo then skips, shows its diagnostics after the abandoned step instead |
+| Test process (`E2E_GO_TIMEOUT`) | 58 minutes | Go kills the process with no cleanup at all. Only the provisional summary remains |
+| CI step | 70 minutes | Also covers creating the Kind cluster and building before the run. The evidence is still uploaded |
+| CI job | 80 minutes | Last resort. Nothing after it is guaranteed |
+
+A run the suite's deadline stopped does not pass: its summary names the
+abandoned step as a problem, and a result the abandoned step records after
+its step has been reported is not kept. A full run took about 33 minutes on a GitHub-hosted
+runner in October 2026. The defaults are starting values with headroom over
+that measurement, not measured budgets.
+
 ### `junit.xml`
 
 One `<testsuite>` per run, one `<testcase>` per scenario and variant, named

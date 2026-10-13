@@ -366,9 +366,12 @@ Each label answers a different question; do not use one to express another.
 | Release target | Whether a release includes it | The `**Release:**` line of the issue |
 
 Release scope is decided in [ROADMAP.md](./ROADMAP.md#v01-scope). An issue
-states its target in one line near the top:
+states its target in one line at the end of the body, below a horizontal
+rule, so that the issue opens with its problem:
 
 ```markdown
+---
+
 **Release:** v0.1 required
 ```
 
@@ -377,7 +380,9 @@ Add one more line only when it says something the rest of the issue does not:
 - `**Minimum acceptance:**` when the release needs less than the whole
   "Done when" (or "Acceptance Criteria"). It may not be narrower than the
   completion evidence `ROADMAP.md` lists for its capability; narrowing it
-  needs the same maintainer decision as narrowing the release.
+  needs the same maintainer decision as narrowing the release. Point to it
+  from "Done when" with one sentence, so that a reader of that section does
+  not miss it.
 - `**Condition:**` for a conditional target: when it is included, and what
   holds otherwise.
 - `**Reason:**` for a post-v0.1 target: why it does not block the release,

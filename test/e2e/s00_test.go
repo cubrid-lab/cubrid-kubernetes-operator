@@ -194,8 +194,10 @@ spec:
 				}
 			}
 			recordScenario(result)
-			runSummary.Environment.CubridImageDigest = record.InstanceManagerID
-			runSummary.Environment.EngineVersion = record.EngineVersion
+			updateSummary(func(s *evidence.Summary) {
+				s.Environment.CubridImageDigest = record.InstanceManagerID
+				s.Environment.EngineVersion = record.EngineVersion
+			})
 
 			_, _ = kubectl("delete", "cubridcluster", clusterName, "--ignore-not-found", "--timeout=5m")
 			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", s00Namespace, "--ignore-not-found", "--timeout=5m"))

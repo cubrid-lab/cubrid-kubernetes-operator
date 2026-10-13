@@ -259,6 +259,117 @@ func TestConclude(t *testing.T) {
 	}
 }
 
+// A run killed before it concludes keeps the provisional summary.json the
+// checkpoint wrote, and that summary never passes, even when every scenario
+// recorded so far did.
+func TestCheckpoint(t *testing.T) {
+	passing := Summary{Scenarios: []Scenario{
+		{ID: s00, Result: Pass, Evidence: []string{s00Record}},
+		{ID: s03, Variant: graceful, Result: NotRun, Reason: "no step of the scenario started"},
+	}}
+	dir := runDir(t, s00Record)
+	at := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+	if err := passing.Checkpoint(dir, NewRedactor(), kind, at); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "summary.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Summary
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Passed || got.Lane != kind {
+		t.Errorf("a checkpoint wrote lane=%q passed=%v, want lane %q and no pass", got.Lane, got.Passed, kind)
+	}
+	if len(got.Problems) != 1 || !strings.Contains(got.Problems[0], "did not finish") ||
+		!strings.Contains(got.Problems[0], "2026-10-12T10:00:00Z") {
+		t.Errorf("a checkpoint wrote problems=%q, want one saying the run did not finish and when", got.Problems)
+	}
+	if len(got.Scenarios) != 2 || got.Scenarios[0].Result != Pass || got.Scenarios[1].Result != NotRun {
+		t.Errorf("a checkpoint wrote scenarios %+v, want the results recorded so far", got.Scenarios)
+	}
+	if !got.FinishedAt.IsZero() {
+		t.Errorf("a checkpoint wrote finishedAt=%v, want it unset", got.FinishedAt)
+	}
+	report, err := os.ReadFile(filepath.Join(dir, "junit.xml"))
+	if err != nil {
+		t.Fatalf("a checkpoint must write junit.xml too: %v", err)
+	}
+	var suite struct {
+		Errors int `xml:"errors,attr"`
+		Cases  []struct {
+			Name  string `xml:"name,attr"`
+			Error *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"error"`
+		} `xml:"testcase"`
+	}
+	if err := xml.Unmarshal(report, &suite); err != nil {
+		t.Fatal(err)
+	}
+	if last := suite.Cases[len(suite.Cases)-1]; suite.Errors != 1 || last.Name != "run" ||
+		last.Error == nil || !strings.Contains(last.Error.Message, "did not finish") {
+		t.Errorf("a checkpoint's junit.xml = %s, want an error saying the run did not finish", report)
+	}
+
+	// The concluded summary takes the checkpoint's place.
+	lane := Lane{Name: kind, Required: []Requirement{{ID: s00}}}
+	if err := (Summary{Scenarios: passing.Scenarios[:1]}).Conclude(dir, NewRedactor(), lane); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(filepath.Join(dir, "summary.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = Summary{}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Passed || len(got.Problems) != 0 {
+		t.Errorf("the concluded run wrote passed=%v problems=%q", got.Passed, got.Problems)
+	}
+	if err := passing.Checkpoint("", NewRedactor(), kind, at); err == nil {
+		t.Error("a checkpoint without a run directory reported success")
+	}
+}
+
+// WriteFile replaces a file in one step: a process killed while it writes
+// leaves the previous content or the new one, never a part, and no temporary
+// file remains after a write.
+func TestWriteFileReplaces(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRedactor()
+	for _, content := range []string{"first\n", "second\n"} {
+		if err := r.WriteFile(dir, "summary.json", []byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "summary.json"))
+	if err != nil || string(data) != "second\n" {
+		t.Errorf("summary.json = %q, %v; want the second write", data, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the run directory holds %q, want only summary.json", names)
+	}
+	info, err := os.Stat(filepath.Join(dir, "summary.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("summary.json mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
 func testSummary() Summary {
 	return Summary{
 		RunID:      testRunName,
