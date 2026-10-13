@@ -19,6 +19,7 @@ package utils
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -296,4 +297,12 @@ func UncommentCode(filename, target, prefix string) error {
 	}
 
 	return nil
+}
+
+// EndedBySIGKILL reports whether err is a command that exited with code 137,
+// as a shell does for a process ended by SIGKILL. A "kubectl exec" ends this
+// way when its container is killed while the exec is attached.
+func EndedBySIGKILL(err error) bool {
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 137
 }

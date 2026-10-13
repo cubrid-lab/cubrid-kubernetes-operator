@@ -18,6 +18,7 @@ package utils
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -63,6 +64,29 @@ func TestRunRedacts(t *testing.T) {
 		"println [REDACTED]", "print [REDACTED]"} {
 		if !strings.Contains(got, kept) {
 			t.Errorf("the captured Ginkgo output lost %q:\n%s", kept, got)
+		}
+	}
+}
+
+// A command that ends with exit code 137 was ended by SIGKILL. For a
+// "kubectl exec" it is how the exec ends when its container is killed under
+// it. Any other failure is not that.
+func TestEndedBySIGKILL(t *testing.T) {
+	exit := func(code string) error {
+		return fmt.Errorf("the command failed: %w", exec.Command("sh", "-c", "exit "+code).Run())
+	}
+	if !EndedBySIGKILL(exit("137")) {
+		t.Error("exit code 137 was not recognized")
+	}
+	for name, err := range map[string]error{
+		"no error":              nil,
+		"exit code 1":           exit("1"),
+		"exit code 126":         exit("126"),
+		"a command not started": exec.Command("/no/such/command").Run(),
+		"another error":         errors.New("exit status 137"),
+	} {
+		if EndedBySIGKILL(err) {
+			t.Errorf("%s was taken for a command ended by SIGKILL", name)
 		}
 	}
 }
