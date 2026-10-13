@@ -293,7 +293,9 @@ member is ready, and `/livez` only that the manager is alive. Why a member is
 not ready is in the Instance Manager's log (`event` `not_ready`, with the
 `reason`), at info level when the reason is new and below it while it stays
 the same; the member's role is what `/v1/role` answers to a caller with the
-token. A credential is never logged: no token, no `Authorization` header, no
+token. An operation record that could not be written is logged as an error
+with `event` `operation_store_write_failed`, the `operationID` and the state
+that is therefore not on disk. A credential is never logged: no token, no `Authorization` header, no
 object-storage key, also not inside a failed command's output.
 
 ## Metrics

@@ -234,6 +234,19 @@ RAM. Long operations return `202 Accepted` + operation ID; the operator
 polls `GET /v1/operations/{id}` and never assumes completion from an HTTP
 return/timeout — it reconciles from durable manager-reported state.
 
+As implemented, an operation does nothing that is not on record (#299). When
+the record of its next state cannot be written, the operation goes no
+further and ends `Failed` with that reason: no upload after `backupdb`, no
+start of a database or of heartbeat. When the record of how an operation
+ended cannot be written, the manager keeps the end in memory, logs the failed
+write as an error (`event` `operation_store_write_failed`) and tries again at
+the next poll of the operation or the next request for an operation; until it
+is written, `GET /v1/operations/{id}` answers `500` and not the stored
+record, which still says that the operation runs, and no other operation is
+started on that database. An end that was only in memory does not count: a
+manager that restarts first finds the operation unfinished and records it as
+`Failed`, and the same idempotency key still names that operation.
+
 ### Security
 
 Run DB container + manager as the non-root CUBRID user:

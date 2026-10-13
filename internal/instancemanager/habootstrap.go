@@ -149,7 +149,7 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 		defer cancel()
 		fail := func(reason string) {
 			reason = s.stoppingReason(reason)
-			_, _ = s.store.Update(id, func(op *Operation) {
+			_ = s.store.Settle(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
 			})
@@ -168,6 +168,7 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 		}
 		if !registered {
 			if _, err := s.store.Update(id, func(op *Operation) { op.State = OpCreating }); err != nil {
+				fail(notRecorded(OpCreating, err))
 				return
 			}
 			if err := createHADatabase(ctx, s.cli, s.restoreRoots.Target, s.ha, req.Database, id); err != nil {
@@ -192,6 +193,7 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 		}
 		if hb.startable {
 			if _, err := s.store.Update(id, func(op *Operation) { op.State = OpStarting }); err != nil {
+				fail(notRecorded(OpStarting, err))
 				return
 			}
 			if out, err := s.activate(ctx, "heartbeat", "start"); err != nil {
@@ -199,7 +201,7 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 				return
 			}
 		}
-		_, _ = s.store.Update(id, func(op *Operation) { op.State = OpCompleted })
+		_ = s.store.Settle(id, func(op *Operation) { op.State = OpCompleted })
 	}()
 }
 
