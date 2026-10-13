@@ -241,7 +241,10 @@ kept in one table, [Time limits](#time-limits), and are set after a baseline
 measurement and before the final test campaigns. A limit is not relaxed after
 a failed run to obtain a pass: a change needs its own reviewed commit with the
 measurements that justify it. A run against a limit that is not set yet is a
-baseline run and ends as `blocked` with reason `time_limit_unset`.
+baseline run and ends as `blocked` with reason `time_limit_unset`. How the
+suite treats S00's `install_limit` and `ready_limit`, which have no value
+while S00 is required, is an open question (#292), described under
+[Time limits](#time-limits-1).
 
 A step of a scenario that reaches its limit is cancelled, and the run waits
 for it to return before it goes on, so that a step neither runs a command nor
@@ -425,6 +428,13 @@ reader can tell what to expect.
 - `result` is one of the five results above; `reason` is required for every
   result except `pass`.
 - A measurement that was not taken has the string value `"unknown"`.
+- `limits` lists every limit the scenario was judged by, with `"unset"` for
+  one that has no value ([Time limits](#time-limits-1)).
+- In S00, `measurements.timeLimitVerdict` is the result, with its reason,
+  that `install_limit` and `ready_limit` give under the rules of
+  [Time limits](#time-limits-1), for example `"blocked: time_limit_unset"`
+  or `"pass"`. It is recorded only when S00's checks all held, and is not
+  S00's result: see the open question there.
 - `neverEvents` lists every must-never-happen outcome that was observed. A
   non-empty list means `fail`.
 - `faultConfirmed` is left out for a scenario that injects no fault.
@@ -1061,7 +1071,8 @@ A run whose checks all held is judged by all its limits together
    run a baseline: `blocked` with `time_limit_unset`, never `pass`. A
    `stable_period` of zero would let any recovery count at once.
 3. Otherwise a limit that is set but whose measurement could not be taken
-   makes the run `blocked` with `measurement_missing`.
+   makes the run `blocked` with reason `measurement_missing`; the missing
+   measurement is `"unknown"` in the scenario's `measurements`.
 4. Otherwise the run passes.
 
 The Basis column says where a value comes from: **measured** values were
@@ -1070,8 +1081,8 @@ measured; **unset** limits have neither a value nor a baseline.
 
 | Limit | Meaning | Value | Basis |
 |---|---|---|---|
-| `install_limit` | Operator installed and its Pod available | unset | unset; S00 records the time as `installSeconds` |
-| `ready_limit` | Single-member cluster created until SQL succeeds | unset | unset; S00 records the time as `createdToSQLSeconds` |
+| `install_limit` | Operator installed and its Pod available | unset | unset; S00 records `installSeconds`: from the `creationTimestamp` of the Operator's Deployment to the `lastTransitionTime` of its `Available` condition, as the API server recorded them, in whole seconds; building and applying the manifests is not included |
+| `ready_limit` | Single-member cluster created until SQL succeeds | unset | unset; S00 records `createdToSQLSeconds`: from just before the `CubridCluster` is applied until a row was written and read through csql, an upper bound that includes the checks before that SQL |
 | `formation_limit` | Three-member cluster created until all conditions are `True` | Kind on a GitHub-hosted runner: 5 minutes. VM lab: unset | Kind: measured |
 | `replication_limit` | Commit on the master until every slave returns the row | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured with the earlier method; the current method has no baseline yet |
 | `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured |
@@ -1088,13 +1099,14 @@ measured; **unset** limits have neither a value nor a baseline.
 | `delete_limit` | Cluster deleted until its resources are gone | unset | unset |
 | `drain_limit` | Drain issued until it finishes or is refused | unset | unset |
 
-`install_limit` and `ready_limit` are unset while S00 is required in the
-`kind` lane, so rule 2 would keep every run from passing the lane. Until
-the maintainers decide between setting them from a baseline and another
-change to S00 or the lane, S00 judges a limit that is set as above, and a
-run whose only obstacle is an unset limit keeps its result, with the
-limits recorded as `unset` and the verdict they would give as
-`timeLimitVerdict`.
+**Open question (#292):** `install_limit` and `ready_limit` have no value
+and S00 is required in the `kind` lane, so rule 2 applied to S00 would keep
+every run from passing the lane. Whether to set them from a baseline,
+remove them from S00, or accept a lane that does not pass is a decision for
+the maintainers. The suite (`faults.JudgeS00Limits`) applies rules 1, 3 and
+4 to the S00 limits that are set; a limit that is not set does not change
+S00's result. S00 records both limits, `unset` where they have no value,
+and the verdict all four rules give as the measurement `timeLimitVerdict`.
 
 ### Baselines
 

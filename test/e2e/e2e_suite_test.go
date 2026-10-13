@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,10 +104,16 @@ var _ = AfterSuite(func() {
 	Expect(err).NotTo(HaveOccurred(), "The run did not pass its required scenarios")
 })
 
-// installTime is how long installing the Operator took, from the start of
-// the CRDs' installation until the Operator's Deployment was Available; zero
-// when it was not measured. S00 is judged by it (install_limit).
-var installTime time.Duration
+// installTime is how long the Operator took to become available: from the
+// creationTimestamp of its Deployment to the lastTransitionTime of the
+// Deployment's Available condition, both as the API server recorded them, in
+// whole seconds. Building and applying the manifests is not included.
+// installMeasured is false when it could not be read. S00 is judged by it
+// (install_limit).
+var (
+	installTime     time.Duration
+	installMeasured bool
+)
 
 // deployManager creates the manager's namespace with the restricted security
 // policy, installs the CRDs and deploys the controller.
@@ -123,7 +130,6 @@ func deployManager() {
 	Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
 	By("installing CRDs")
-	installStart := time.Now()
 	cmd = exec.Command("make", "install")
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
@@ -138,8 +144,20 @@ func deployManager() {
 	By("measuring the time until the controller-manager is available")
 	cmd = exec.Command("kubectl", "-n", namespace, "wait", "--for=condition=Available",
 		operatorDeployment, "--timeout=5m")
-	if _, err := utils.Run(cmd); err == nil {
-		installTime = time.Since(installStart)
+	if _, err := utils.Run(cmd); err != nil {
+		return
+	}
+	cmd = exec.Command("kubectl", "-n", namespace, "get", operatorDeployment, "-o",
+		`jsonpath={.metadata.creationTimestamp} {.status.conditions[?(@.type=="Available")].lastTransitionTime}`)
+	out, err := utils.Run(cmd)
+	if err != nil {
+		return
+	}
+	created, available, found := strings.Cut(strings.TrimSpace(out), " ")
+	createdAt, errCreated := time.Parse(time.RFC3339, created)
+	availableAt, errAvailable := time.Parse(time.RFC3339, available)
+	if found && errCreated == nil && errAvailable == nil && !availableAt.Before(createdAt) {
+		installTime, installMeasured = availableAt.Sub(createdAt), true
 	}
 }
 

@@ -29,6 +29,9 @@ import (
 // unset is how summary.json records a limit that is not set.
 const unset = "unset"
 
+// readyExceeded is the reason of a run whose 2m ready time exceeded a 1m ready_limit.
+const readyExceeded = "ready_limit exceeded: 2m0s > 1m0s"
+
 // limitsOf reads "name=value name=value" as the limits a run records.
 func limitsOf(text string) map[string]string {
 	limits := map[string]string{}
@@ -157,13 +160,25 @@ func TestJudge(t *testing.T) {
 			name: "S00: install_limit set, the install time not measured",
 			bounds: []Bound{{Limit: lim(InstallLimit, time.Minute), Unmeasured: true},
 				within(lim(ReadyLimit, 5*time.Minute))},
-			want: evidence.Blocked, wantReason: ReasonMeasurementMissing + ": [install_limit]",
+			want: evidence.Blocked, wantReason: ReasonMeasurementMissing,
+		},
+		{
+			name: "S00: install_limit unmeasured while ready_limit is unset",
+			bounds: []Bound{{Limit: lim(InstallLimit, time.Minute), Unmeasured: true},
+				{Limit: def(ReadyLimit), Measured: time.Minute}},
+			want: evidence.Blocked, wantReason: ReasonTimeLimitUnset,
+		},
+		{
+			name: "an exceeded limit is a fail although another was not measured",
+			bounds: []Bound{{Limit: lim(InstallLimit, time.Minute), Unmeasured: true},
+				{Limit: lim(ReadyLimit, time.Minute), Measured: 2 * time.Minute}},
+			want: evidence.Fail, wantReason: readyExceeded,
 		},
 		{
 			name: "S00: ready_limit exceeded while install_limit is unset",
 			bounds: []Bound{{Limit: def(InstallLimit), Measured: 40 * time.Second},
 				{Limit: lim(ReadyLimit, time.Minute), Measured: 2 * time.Minute}},
-			want: evidence.Fail, wantReason: "ready_limit exceeded: 2m0s > 1m0s",
+			want: evidence.Fail, wantReason: readyExceeded,
 		},
 		{
 			name: "S03: the defaults, within",
@@ -228,6 +243,11 @@ func TestJudge(t *testing.T) {
 			want:   evidence.Blocked, wantReason: ReasonTimeLimitUnset,
 		},
 		{
+			name:   "S05: stable_period not reached by the slowest client",
+			bounds: []Bound{within(def(BrokerRecoveryLimit)), stableFor(def(StablePeriod), 12*time.Second)},
+			want:   evidence.Fail, wantReason: "stable_period not reached: 12s < 30s",
+		},
+		{
 			name:   "S05: broker_recovery_limit zero is a baseline",
 			bounds: []Bound{{Limit: lim(BrokerRecoveryLimit, 0), Measured: time.Second}, stableFor(def(StablePeriod), stable)},
 			want:   evidence.Blocked, wantReason: ReasonTimeLimitUnset,
@@ -237,6 +257,11 @@ func TestJudge(t *testing.T) {
 			bounds:     []Bound{within(def(OperatorResyncLimit)), stableFor(def(StablePeriod), stable)},
 			want:       evidence.Pass,
 			wantLimits: limitsOf("operator_resync_limit=2m0s stable_period=30s"),
+		},
+		{
+			name:   "S06 restart: stable_period not reached",
+			bounds: []Bound{within(def(OperatorResyncLimit)), stableFor(def(StablePeriod), 5*time.Second)},
+			want:   evidence.Fail, wantReason: "stable_period not reached: 5s < 30s",
 		},
 		{
 			name:   "S06 restart: stable_period zero is a baseline",
@@ -293,6 +318,81 @@ func TestJudge(t *testing.T) {
 			}
 			if got.Result == evidence.Pass && slices.Contains(slices.Collect(maps.Values(got.Limits)), unset) {
 				t.Errorf("a pass with an unset limit: %v", got.Limits)
+			}
+		})
+	}
+}
+
+func TestJudgeS00Limits(t *testing.T) {
+	install := func(value, measured time.Duration, unmeasured bool) Bound {
+		return Bound{Limit: Limit{Name: InstallLimit.Name, Value: value}, Measured: measured, Unmeasured: unmeasured}
+	}
+	ready := func(value, measured time.Duration, unmeasured bool) Bound {
+		return Bound{Limit: Limit{Name: ReadyLimit.Name, Value: value}, Measured: measured, Unmeasured: unmeasured}
+	}
+	passed := func() evidence.Scenario {
+		return evidence.Scenario{ID: "S00", Result: evidence.Pass,
+			Limits: map[string]string{"confirm": "5m0s"}, Measurements: map[string]any{}}
+	}
+	tests := []struct {
+		name        string
+		in          evidence.Scenario
+		install     Bound
+		ready       Bound
+		want        evidence.Result
+		wantReason  string
+		wantVerdict any
+		wantLimits  map[string]string
+	}{
+		{
+			name: "both unset: the result is kept, with the verdict they give",
+			in:   passed(), install: install(0, 40*time.Second, false), ready: ready(0, 2*time.Minute, false),
+			want: evidence.Pass, wantVerdict: "blocked: " + ReasonTimeLimitUnset,
+			wantLimits: limitsOf("confirm=5m0s install_limit=unset ready_limit=unset"),
+		},
+		{
+			name:    "both set and within",
+			in:      passed(),
+			install: install(time.Minute, 40*time.Second, false), ready: ready(5*time.Minute, 2*time.Minute, false),
+			want: evidence.Pass, wantVerdict: "pass",
+			wantLimits: limitsOf("confirm=5m0s install_limit=1m0s ready_limit=5m0s"),
+		},
+		{
+			name: "one set and exceeded, the other unset",
+			in:   passed(), install: install(0, 40*time.Second, false), ready: ready(time.Minute, 2*time.Minute, false),
+			want: evidence.Fail, wantReason: readyExceeded,
+			wantVerdict: "fail: " + readyExceeded,
+		},
+		{
+			name: "one set and unmeasured, the other unset",
+			in:   passed(), install: install(time.Minute, 0, true), ready: ready(0, 2*time.Minute, false),
+			want: evidence.Blocked, wantReason: ReasonMeasurementMissing,
+		},
+		{
+			name: "one set and unmeasured, the other set and within",
+			in:   passed(), install: install(time.Minute, 0, true), ready: ready(5*time.Minute, 2*time.Minute, false),
+			want: evidence.Blocked, wantReason: ReasonMeasurementMissing,
+		},
+		{
+			name: "a run that did not pass keeps its result and reason",
+			in: evidence.Scenario{ID: "S00", Result: evidence.Fail, Reason: "a step of the scenario failed",
+				Measurements: map[string]any{}},
+			install: install(time.Minute, 2*time.Minute, false), ready: ready(0, 0, true),
+			want: evidence.Fail, wantReason: "a step of the scenario failed",
+			wantLimits: limitsOf("install_limit=1m0s ready_limit=unset"),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := JudgeS00Limits(tc.in, tc.install, tc.ready)
+			if got.Result != tc.want || got.Reason != tc.wantReason {
+				t.Errorf("got %s %q, want %s %q", got.Result, got.Reason, tc.want, tc.wantReason)
+			}
+			if tc.wantVerdict != nil && got.Measurements["timeLimitVerdict"] != tc.wantVerdict {
+				t.Errorf("timeLimitVerdict: got %v, want %v", got.Measurements["timeLimitVerdict"], tc.wantVerdict)
+			}
+			if tc.wantLimits != nil && !maps.Equal(got.Limits, tc.wantLimits) {
+				t.Errorf("limits: got %v, want %v", got.Limits, tc.wantLimits)
 			}
 		})
 	}

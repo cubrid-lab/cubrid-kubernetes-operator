@@ -18,14 +18,17 @@ package faults
 
 import (
 	"fmt"
+	"maps"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
 
 // ReasonMeasurementMissing is the reason a result is blocked when a limit is
-// set but what it bounds could not be measured.
+// set but what it bounds could not be measured. Which measurement is missing
+// is in the scenario's measurements, as "unknown".
 const ReasonMeasurementMissing = "measurement_missing"
 
 // Limit is a time limit a scenario is judged by, under the name the scenario
@@ -157,14 +160,14 @@ type Verdict struct {
 // A run judged by no limit at all is blocked: nothing scored it.
 func Judge(bounds ...Bound) Verdict {
 	v := Verdict{Limits: map[string]string{}}
-	var unset, unmeasured []string
+	unset, unmeasured := false, false
 	for _, b := range bounds {
 		v.Limits[b.Limit.Name] = b.Limit.String()
 		switch {
 		case !b.Limit.Set():
-			unset = append(unset, b.Limit.Name)
+			unset = true
 		case b.Unmeasured:
-			unmeasured = append(unmeasured, b.Limit.Name)
+			unmeasured = true
 		case v.Result != "":
 		case !b.AtLeast && b.Measured > b.Limit.Value:
 			v.Result = evidence.Fail
@@ -176,12 +179,50 @@ func Judge(bounds ...Bound) Verdict {
 	}
 	switch {
 	case v.Result != "":
-	case len(bounds) == 0, len(unset) > 0:
+	case len(bounds) == 0, unset:
 		v.Result, v.Reason = evidence.Blocked, ReasonTimeLimitUnset
-	case len(unmeasured) > 0:
-		v.Result, v.Reason = evidence.Blocked, fmt.Sprintf("%s: %v", ReasonMeasurementMissing, unmeasured)
+	case unmeasured:
+		v.Result, v.Reason = evidence.Blocked, ReasonMeasurementMissing
 	default:
 		v.Result = evidence.Pass
 	}
 	return v
+}
+
+// JudgeS00Limits judges a run of S00 by install_limit and ready_limit. The
+// limits are always recorded; only a run whose checks all held is judged by
+// them.
+//
+// The limits that are set decide the result as Judge decides it. A limit
+// that is not set does not: S00 is required in the kind lane, and blocking it
+// would keep every run from passing the lane (see the open question on
+// install_limit and ready_limit in docs/testing/scenario-contract.md, "Time
+// limits"). What Judge makes of both limits is recorded as the measurement
+// timeLimitVerdict, so the summary does not read as a run scored against
+// them.
+func JudgeS00Limits(result evidence.Scenario, install, ready Bound) evidence.Scenario {
+	v := Judge(install, ready)
+	if result.Limits == nil {
+		result.Limits = map[string]string{}
+	}
+	maps.Copy(result.Limits, v.Limits)
+	if result.Result != evidence.Pass {
+		return result
+	}
+	if result.Measurements == nil {
+		result.Measurements = map[string]any{}
+	}
+	result.Measurements["timeLimitVerdict"] = strings.TrimSuffix(string(v.Result)+": "+v.Reason, ": ")
+	var set []Bound
+	for _, b := range []Bound{install, ready} {
+		if b.Limit.Set() {
+			set = append(set, b)
+		}
+	}
+	if len(set) > 0 {
+		if scored := Judge(set...); scored.Result != evidence.Pass {
+			result.Result, result.Reason = scored.Result, scored.Reason
+		}
+	}
+	return result
 }

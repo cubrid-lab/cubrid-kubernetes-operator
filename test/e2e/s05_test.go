@@ -276,6 +276,7 @@ func (r *haRun) s05(variant string) {
 	var recovery time.Duration
 	// The shortest time a client was acknowledged without interruption.
 	var minStable time.Duration
+	measuredStable := false
 	operations := evidence.Operations{}
 	interrupted := 0
 	for _, id := range clients {
@@ -285,8 +286,8 @@ func (r *haRun) s05(variant string) {
 		Expect(stable).To(BeNumerically(">=", stablePeriod.Value),
 			"client %s was acknowledged without interruption for %s only", id, stable)
 		recovery = max(recovery, recoveredAt.Sub(outcome.FaultIssuedAt))
-		if minStable == 0 || stable < minStable {
-			minStable = stable
+		if !measuredStable || stable < minStable {
+			minStable, measuredStable = stable, true
 		}
 		// A client is interrupted when an operation of it failed, or was
 		// left without a known outcome, after the fault.
@@ -343,5 +344,6 @@ func (r *haRun) s05(variant string) {
 		},
 		Operations: &operations,
 		Evidence:   files,
-	}, within(brokerRecoveryLimit, recovery), stableFor(minStable))
+	}, within(brokerRecoveryLimit, recovery),
+		faults.Bound{Limit: stablePeriod, Measured: minStable, AtLeast: true, Unmeasured: !measuredStable})
 }

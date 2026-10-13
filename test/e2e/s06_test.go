@@ -247,13 +247,19 @@ func (r *haRun) s06Restart() {
 
 	By("letting the clients run for the stable period, then stopping them")
 	time.Sleep(stablePeriod.Value + 2*time.Second)
-	// The clients went on writing this long after the Operator was back,
-	// with every operation since the fault acknowledged (checked below).
-	observedFor := time.Since(outcome.OutcomeAt)
 	operations := evidence.Operations{}
 	notAcknowledged := 0
+	// The shortest time a client was acknowledged without interruption,
+	// from its first acknowledgement after the fault.
+	var minStable time.Duration
+	measuredStable := false
 	for _, id := range clients {
 		events, history := r.stopClient(id)
+		_, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
+		Expect(recovered).To(BeTrue(), "the last answer of client %s after the fault is not an acknowledgement", id)
+		if !measuredStable || stable < minStable {
+			minStable, measuredStable = stable, true
+		}
 		for _, e := range events {
 			if e.T.After(outcome.FaultIssuedAt) && (e.Event == workload.Failed || e.Event == workload.Unknown) {
 				notAcknowledged++
@@ -304,14 +310,15 @@ func (r *haRun) s06Restart() {
 			// reconcile, so this is an upper bound of the resync.
 			"operatorBackWithin":        back.Round(time.Millisecond).String(),
 			"operationsNotAcknowledged": notAcknowledged,
-			"observedAfterResyncFor":    observedFor.Round(time.Millisecond).String(),
+			"shortestStableFor":         minStable.Round(time.Millisecond).String(),
 			"membersRestarted":          0,
 			"acknowledgedMissing":       report.AcknowledgedMissing,
 			"databaseFailoverObserved":  false,
 		},
 		Operations: &operations,
 		Evidence:   files,
-	}, within(operatorResyncLimit, back), stableFor(observedFor))
+	}, within(operatorResyncLimit, back),
+		faults.Bound{Limit: stablePeriod, Measured: minStable, AtLeast: true, Unmeasured: !measuredStable})
 }
 
 func (r *haRun) s06Absent() {

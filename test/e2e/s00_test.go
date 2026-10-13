@@ -23,7 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"runtime"
@@ -175,7 +174,9 @@ spec:
 				out, _ := kubectl(args...)
 				_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
 			}
-			record.InstallSeconds = installTime.Seconds()
+			if installMeasured {
+				record.InstallSeconds = installTime.Seconds()
+			}
 			result := evidence.Scenario{ID: "S00", Result: evidence.Result(record.Result),
 				FaultConfirmed: &podReplaced,
 				Measurements: map[string]any{
@@ -202,7 +203,10 @@ spec:
 					result.Evidence = append(result.Evidence, file)
 				}
 			}
-			result = judgeS00Limits(result, installTime, time.Duration(record.ReadySeconds*float64(time.Second)))
+			ready := time.Duration(record.ReadySeconds * float64(time.Second))
+			result = faults.JudgeS00Limits(result,
+				faults.Bound{Limit: installLimit, Measured: installTime, Unmeasured: !installMeasured},
+				faults.Bound{Limit: readyLimit, Measured: ready, Unmeasured: record.ReadySeconds == 0})
 			recordScenario(result)
 			updateSummary(func(s *evidence.Summary) {
 				s.Environment.CubridImageDigest = record.InstanceManagerID
@@ -330,36 +334,6 @@ func measured(seconds float64) any {
 		return evidence.Unknown
 	}
 	return seconds
-}
-
-// judgeS00Limits judges a run of S00 by install_limit and ready_limit; a zero
-// measurement was not taken. The limits are always recorded; only a run
-// whose checks all held is judged by them.
-//
-// Neither limit has a value yet (contract, "Time limits"), and S00 is
-// required in the kind lane. A limit that is set is judged as every other
-// limit is, so a run beyond it fails. A run whose only obstacle is an unset
-// limit keeps its result: blocking it would keep every run from passing the
-// lane, which is not this test's to decide. The verdict the limits give is
-// recorded as timeLimitVerdict, and the limits as unset, so the summary does
-// not read as a run scored against them.
-func judgeS00Limits(result evidence.Scenario, install, ready time.Duration) evidence.Scenario {
-	v := faults.Judge(
-		faults.Bound{Limit: installLimit, Measured: install, Unmeasured: install == 0},
-		faults.Bound{Limit: readyLimit, Measured: ready, Unmeasured: ready == 0},
-	)
-	if result.Limits == nil {
-		result.Limits = map[string]string{}
-	}
-	maps.Copy(result.Limits, v.Limits)
-	if result.Result != evidence.Pass {
-		return result
-	}
-	result.Measurements["timeLimitVerdict"] = strings.TrimSuffix(string(v.Result)+": "+v.Reason, ": ")
-	if v.Result != evidence.Blocked || v.Reason != faults.ReasonTimeLimitUnset {
-		result.Result, result.Reason = v.Result, v.Reason
-	}
-	return result
 }
 
 // podDeletionLimits bound the deletion of a DB Pod in S00. They are the waits
