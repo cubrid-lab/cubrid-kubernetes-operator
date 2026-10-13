@@ -240,6 +240,14 @@ spec:
                 description: fallbackUsed is true when a standby-preferred backup
                   fell back to master.
                 type: boolean
+              objectStorageNotAppliedSince:
+                description: |-
+                  objectStorageNotAppliedSince is when the operator first found the
+                  selected Pod running without the cluster's object-storage settings,
+                  while no target was recorded. That wait is bounded from this time
+                  (ADR-0007).
+                format: date-time
+                type: string
               observedGeneration:
                 description: observedGeneration is the spec generation reflected by
                   this status.

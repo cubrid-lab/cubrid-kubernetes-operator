@@ -94,7 +94,8 @@ Operator endpoints (bearer-token authenticated, `/v1/`):
 - `GET /v1/operations?idempotencyKey=<key>`: the operations recorded under
   the key, as `{"operations": [...]}`; an empty list means none. It only
   reads the operation store and starts nothing. A manager without a store
-  answers 503, not an empty list (#365).
+  answers 503, and a store with a record it cannot read 500, not an empty
+  list (#365).
 
 Auth for v1alpha1: bearer token on all `/v1/*`, mounted read-only from a
 Secret into both operator and DB pods; NetworkPolicy restricts the

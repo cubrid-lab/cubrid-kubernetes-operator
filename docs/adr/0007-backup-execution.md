@@ -119,11 +119,14 @@ The wait on a recorded target is bounded (#365). With the target the
 operator records `status.targetRecordedAt`, in the same status write and
 before the call; a target recorded by an earlier operator without it is
 given the time it is first seen, so the wait is never cut short. While the
-recorded target is not eligible, the operator does not send the start to it;
-it asks it, with `GET /v1/operations?idempotencyKey=<key>` (ADR-0003), which
+recorded target is not eligible, or the cluster no longer has
+`spec.objectStorage` (reason `ObjectStorageNotConfigured`), the operator does
+not send the start to it; it asks it, with `GET /v1/operations?idempotencyKey=<key>` (ADR-0003), which
 only reads the operation store, whether it holds the backup's operation. An
 operation it holds is recorded in `status.operationRef` and polled to its
-end like any other. Thirty minutes after `targetRecordedAt` without a known
+end like any other. A start the target answers 409 (its store holds the
+key for another request body, or another operation runs on the database)
+is followed by the same lookup at once. Thirty minutes after `targetRecordedAt` without a known
 operation, whatever kept the start from being taken (an ineligible target,
 an unreachable manager, a 412 or a 409), the start is not sent again and the
 target is asked once more. An operation it holds is followed; when it holds
@@ -133,13 +136,18 @@ without the lookup or without a store), the backup ends `Failed` with reason
 `RecordedTargetUnverified`: a backup may still run on that member and upload
 under this backup's prefix, and the message names the member to check. In
 neither case is another member started, then or later. The bound is not the
-time a backup takes: an adopted operation is limited by the Instance
-Manager's backup time limit (`IM_BACKUP_TIMEOUT`, default 2h). It covers a
+time a backup takes: an adopted operation is polled until it ends. While its
+member is reachable the Instance Manager's backup time limit
+(`IM_BACKUP_TIMEOUT`, default 2h) ends it; while the member does not answer,
+the operator keeps polling until it does. It covers a
 member restart or a failover and its settling, and an operator who restarts
 a Pod to apply `spec.objectStorage`. Limit: a start delayed in the network
 beyond the bound and the lookup could still be taken after the backup ended
 `RecordedTargetNotStarted`; it writes only under this backup's own prefix,
 which no other backup uses (#337 covers a second writer of one prefix).
+The times of both bounds are taken from the operator's clock, stored in
+status and compared with the operator's clock later; operator processes
+whose clocks differ move the bound by that difference.
 
 The cluster a backup names (#289). A backup whose cluster is not found is not
 failed at once: the cluster may be created a moment after the backup, or the
@@ -234,7 +242,9 @@ spec:
   compares the `IM_S3_*` environment of the selected Pod with the cluster's
   `spec.objectStorage`; on a difference it starts nothing, records no target,
   and waits with `Ready=False`, reason `ObjectStorageNotApplied`. The wait
-  lasts at most 30 minutes from the backup's creation; then the backup ends
+  lasts at most 30 minutes from the first reconcile that found it, recorded
+  in `status.objectStorageNotAppliedSince`, so a backup that waited for
+  another reason before gets the whole bound; then the backup ends
   `Failed` with reason `ObjectStorageWaitExpired`, with nothing started on
   any member (#365). The HA seed backup's wait on its source
   (`BootstrapReady`, ADR-0010) is not bounded by this: it is a step of the
@@ -289,7 +299,7 @@ cluster UID/instance/role, timestamps).
 
 `CubridBackup.status`: `phase` (Pending|Running|Uploading|Completed|
 Failed), `operationRef`, `targetInstance`, `targetRole`, `fallbackUsed`,
-`targetRecordedAt`, `startedAt`/`completedAt`, `artifact{uri(→manifest), manifestDigest,
+`targetRecordedAt`, `objectStorageNotAppliedSince`, `startedAt`/`completedAt`, `artifact{uri(→manifest), manifestDigest,
 sizeBytes, cubridVersion, database, level}`, `conditions`
 (`Accepted`/`Ready` with open-ended reasons: `StandbySelected`,
 `MasterFallbackSelected`, `NoHealthyStandby`, `BackupRunning`,

@@ -153,16 +153,29 @@ func (s *OperationStore) FindOrCreate(kind OperationKind, idempotencyKey, reques
 }
 
 // FindByKey returns the operations recorded under idempotencyKey, of any
-// kind. It only reads the store.
+// kind. It only reads the store. Unlike listLocked it fails on a record it
+// cannot read: that record may be the one asked for, so "none" would not be
+// known.
 func (s *OperationStore) FindByKey(idempotencyKey string) ([]*Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ops, err := s.listLocked()
+	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read operation store: %w", err)
 	}
 	found := []*Operation{}
-	for _, op := range ops {
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || filepath.Ext(name) != ".json" {
+			continue
+		}
+		op, err := s.readLocked(name[:len(name)-len(".json")])
+		if errors.Is(err, ErrOperationNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
 		if op.IdempotencyKey == idempotencyKey {
 			found = append(found, op)
 		}

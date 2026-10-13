@@ -37,6 +37,9 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
 
+// errorBody is an Instance Manager's answer to a refused call.
+const errorBody = `{"error":"x"}`
+
 // waitBucket is the bucket of the backups of these tests.
 const waitBucket = "wait-backups"
 
@@ -271,21 +274,60 @@ var _ = Describe("CubridBackup wait on its recorded target", func() {
 		Expect(got.Status.TargetRecordedAt.Time).To(BeTemporally("~", *f.now, time.Second))
 	})
 
-	It("fails a backup whose selected Pod does not pick up object storage within the bound", func() {
-		cluster := haCluster("bk-osna")
+	It("sends the start again with the same key when the recorded target is eligible again", func() {
+		f := lostStart("bk-back")
+		const standby = "bk-back-1"
+		f.prober.master = standby
+		reconcileOnce(ctx, f.r, f.backup)
+		Expect(f.fake.instances).To(Equal([]string{standby}), "a start was sent to an ineligible target")
+
+		By("the standby being a standby again before the bound")
+		f.prober.master = "bk-back-0"
+		reconcileOnce(ctx, f.r, f.backup)
+		got := stored(ctx, f.backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+		Expect(got.Status.OperationRef).To(Equal(opFake))
+		Expect(f.fake.instances).To(Equal([]string{standby, standby}))
+		Expect(f.fake.keys[1]).To(Equal(f.fake.keys[0]))
+
+		reconcileOnce(ctx, f.r, f.backup)
+		Expect(f.fake.instances).To(HaveLen(2), "a start was sent after the operation was known")
+	})
+
+	It("looks the operation up at once when the recorded target answers the start with a conflict", func() {
+		f := lostStart("bk-409")
+		const standby = "bk-409-1"
+		f.fake.lose = 1000
+		f.fake.startErr = fmt.Errorf("start backup on %s: %w (status 409)", standby, errStartConflict)
+		f.fake.held = &instancemanager.Operation{
+			ID: opFake, Kind: instancemanager.OpBackup, State: instancemanager.OpRunningBackup,
+		}
+		reconcileOnce(ctx, f.r, f.backup)
+		got := stored(ctx, f.backup)
+		Expect(got.Status.OperationRef).To(Equal(opFake), "the operation the conflict names was not adopted")
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+		Expect(f.fake.lookups).To(Equal([]string{standby}))
+		Expect(f.fake.instances).To(HaveEach(standby))
+	})
+
+	// singleBackup creates a cluster of one member, with the cluster's
+	// object storage when withStorage is set, and a backup of it.
+	singleBackup := func(name string, withStorage bool) (*databasev1alpha1.CubridCluster, *databasev1alpha1.CubridBackup) {
+		cluster := haCluster(name)
 		cluster.Spec.Topology.PromotableMembers = 1
 		cluster.Spec.HighAvailability.Enabled = false
 		cluster.Spec.Databases = []databasev1alpha1.CubridDatabase{{Name: demoDB}}
-		cluster.Spec.ObjectStorage = haObjectStorage()
+		cluster.Spec.ObjectStorage = nil
+		if withStorage {
+			cluster.Spec.ObjectStorage = haObjectStorage()
+		}
 		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
-		const member = "bk-osna-0"
-		createMemberPod(ctx, namespace, member, nil)
 
 		backup := &databasev1alpha1.CubridBackup{
-			ObjectMeta: metav1.ObjectMeta{Name: "bk-osna", Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 			Spec: databasev1alpha1.CubridBackupSpec{
-				ClusterRef: databasev1alpha1.LocalObjectRef{Name: "bk-osna"},
+				ClusterRef: databasev1alpha1.LocalObjectRef{Name: name},
 				Database:   demoDB,
 				Level:      databasev1alpha1.CubridBackupFull,
 				Destination: databasev1alpha1.CubridBackupDestination{
@@ -296,10 +338,17 @@ var _ = Describe("CubridBackup wait on its recorded target", func() {
 		}
 		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+		return cluster, backup
+	}
+
+	It("fails a backup whose selected Pod does not pick up object storage within the bound", func() {
+		_, backup := singleBackup("bk-osna", true)
+		const member = "bk-osna-0"
+		createMemberPod(ctx, namespace, member, nil)
 		created := stored(ctx, backup).CreationTimestamp.Time
 
 		fake := &lostResponseBackupClient{}
-		now := created.Add(backupTargetWait - time.Second)
+		now := created.Add(time.Second)
 		r := &CubridBackupReconciler{
 			Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: &memberProber{master: member}, Backup: fake,
 			Clock: func() time.Time { return now },
@@ -308,8 +357,14 @@ var _ = Describe("CubridBackup wait on its recorded target", func() {
 		got := stored(ctx, backup)
 		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending))
 		Expect(readyOf(got).Reason).To(Equal(reasonObjectStorageNotApplied))
+		Expect(got.Status.ObjectStorageNotAppliedSince).NotTo(BeNil(), "the start of the wait is not in status")
+		since := got.Status.ObjectStorageNotAppliedSince.Time
 
-		now = created.Add(backupTargetWait + time.Second)
+		now = since.Add(backupTargetWait - time.Second)
+		reconcileOnce(ctx, r, backup)
+		Expect(stored(ctx, backup).Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending))
+
+		now = since.Add(backupTargetWait + time.Second)
 		reconcileOnce(ctx, r, backup)
 		got = stored(ctx, backup)
 		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
@@ -318,6 +373,95 @@ var _ = Describe("CubridBackup wait on its recorded target", func() {
 		Expect(got.Status.TargetInstance).To(BeEmpty())
 		Expect(fake.instances).To(BeEmpty(), "a start was sent")
 		Expect(fake.lookups).To(BeEmpty(), "a member was asked although nothing was sent to it")
+	})
+
+	It("gives the object-storage wait its full bound after a long wait for another reason", func() {
+		cluster, backup := singleBackup("bk-osna-late", false)
+		const member = "bk-osna-late-0"
+		createMemberPod(ctx, namespace, member, nil)
+		created := stored(ctx, backup).CreationTimestamp.Time
+
+		fake := &lostResponseBackupClient{}
+		now := created.Add(35 * time.Minute)
+		r := &CubridBackupReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: &memberProber{master: member}, Backup: fake,
+			Clock: func() time.Time { return now },
+		}
+		By("waiting for longer than the bound for the cluster to have object storage")
+		reconcileOnce(ctx, r, backup)
+		Expect(readyOf(stored(ctx, backup)).Reason).To(Equal("ObjectStorageNotConfigured"))
+
+		By("the cluster getting object storage that its Pod has not picked up")
+		latest := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), latest)).To(Succeed())
+		latest.Spec.ObjectStorage = haObjectStorage()
+		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+		now = created.Add(40 * time.Minute)
+		reconcileOnce(ctx, r, backup)
+		got := stored(ctx, backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending), "the wait ended when it began")
+		Expect(readyOf(got).Reason).To(Equal(reasonObjectStorageNotApplied))
+
+		now = now.Add(backupTargetWait + time.Second)
+		reconcileOnce(ctx, r, backup)
+		got = stored(ctx, backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+		Expect(readyOf(got).Reason).To(Equal("ObjectStorageWaitExpired"))
+		Expect(fake.instances).To(BeEmpty())
+	})
+
+	// recordedThenUnconfigured records the only member of a cluster with its
+	// start answer lost, and then removes the cluster's object storage.
+	recordedThenUnconfigured := func(name string) (*lostResponseBackupClient, *CubridBackupReconciler, *databasev1alpha1.CubridBackup, *time.Time) {
+		cluster, backup := singleBackup(name, true)
+		createAppliedMemberPods(ctx, cluster)
+		fake := &lostResponseBackupClient{lose: 1}
+		now := time.Now()
+		r := &CubridBackupReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: &memberProber{master: name + "-0"}, Backup: fake,
+			Clock: func() time.Time { return now },
+		}
+		reconcileOnce(ctx, r, backup)
+		Expect(fake.instances).To(Equal([]string{name + "-0"}))
+
+		latest := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), latest)).To(Succeed())
+		latest.Spec.ObjectStorage = nil
+		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+		return fake, r, backup, &now
+	}
+
+	It("bounds a recorded target whose cluster loses its object storage", func() {
+		fake, r, backup, now := recordedThenUnconfigured("bk-unconf")
+		const member = "bk-unconf-0"
+		recordedAt := stored(ctx, backup).Status.TargetRecordedAt
+		Expect(recordedAt).NotTo(BeNil())
+
+		*now = recordedAt.Add(backupTargetWait - time.Second)
+		reconcileOnce(ctx, r, backup)
+		got := stored(ctx, backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhasePending))
+		Expect(readyOf(got).Reason).To(Equal("ObjectStorageNotConfigured"))
+
+		*now = recordedAt.Add(backupTargetWait + time.Second)
+		reconcileOnce(ctx, r, backup)
+		got = stored(ctx, backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed), "the wait has no bound")
+		Expect(readyOf(got).Reason).To(Equal("RecordedTargetNotStarted"))
+		Expect(fake.instances).To(Equal([]string{member}), "a start was sent without object storage")
+		Expect(fake.lookups).To(HaveEach(member))
+	})
+
+	It("adopts the operation of a recorded target whose cluster lost its object storage", func() {
+		fake, r, backup, _ := recordedThenUnconfigured("bk-unconf-run")
+		fake.held = &instancemanager.Operation{
+			ID: opFake, Kind: instancemanager.OpBackup, State: instancemanager.OpRunningBackup,
+		}
+		reconcileOnce(ctx, r, backup)
+		got := stored(ctx, backup)
+		Expect(got.Status.OperationRef).To(Equal(opFake), "the running operation was not adopted")
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+		Expect(fake.instances).To(HaveLen(1))
 	})
 })
 
@@ -354,6 +498,17 @@ func (a *answerBody) RoundTrip(req *http.Request) (*http.Response, error) {
 		Body: io.NopCloser(strings.NewReader(a.body)), Request: req}, nil
 }
 
+// A start the member answers 409 is told apart, so that the operation it
+// names is looked up at once.
+func TestHTTPBackupClient_StartConflictIsNamed(t *testing.T) {
+	c := NewHTTPBackupClient(staticToken("tok"))
+	c.Client = &http.Client{Transport: &answerBody{status: http.StatusConflict, body: errorBody}}
+	_, err := c.StartBackup(context.Background(), "db-0", "ns", "k", instancemanager.BackupRequest{})
+	if !errors.Is(err, errStartConflict) {
+		t.Errorf("err = %v, want errStartConflict", err)
+	}
+}
+
 // The lookup tells "the member holds none" from every other answer: only an
 // explicit empty list is none. A manager without the endpoint answers 404,
 // which is not an answer about the operation (#365).
@@ -372,7 +527,8 @@ func TestHTTPBackupClient_FindBackupOperation(t *testing.T) {
 		{name: "only another kind", status: http.StatusOK,
 			body: `{"operations":[{"id":"op-1","kind":"restore","idempotencyKey":"` + key + `","state":"Completed"}]}`},
 		{name: "a manager without the endpoint", status: http.StatusNotFound, body: "404 page not found", wantErr: true},
-		{name: "a manager without a store", status: http.StatusServiceUnavailable, body: `{"error":"x"}`, wantErr: true},
+		{name: "a manager without a store", status: http.StatusServiceUnavailable, body: errorBody, wantErr: true},
+		{name: "a store it cannot read", status: http.StatusInternalServerError, body: errorBody, wantErr: true},
 		{name: "an unreadable answer", status: http.StatusOK, body: `not json`, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

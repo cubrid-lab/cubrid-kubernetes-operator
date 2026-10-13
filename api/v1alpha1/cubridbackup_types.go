@@ -222,6 +222,13 @@ type CubridBackupStatus struct {
 	// +optional
 	TargetRecordedAt *metav1.Time `json:"targetRecordedAt,omitempty"`
 
+	// objectStorageNotAppliedSince is when the operator first found the
+	// selected Pod running without the cluster's object-storage settings,
+	// while no target was recorded. That wait is bounded from this time
+	// (ADR-0007).
+	// +optional
+	ObjectStorageNotAppliedSince *metav1.Time `json:"objectStorageNotAppliedSince,omitempty"`
+
 	// startedAt is when the backup started.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

@@ -241,8 +241,10 @@ underscores.
 | A recovery bootstrap takes a step: a restore operation is started (once for each attempt), restoredb begins after the download, the recovery ends | `RestoreStarted`, `RestoreRunning`, `RestoreCompleted`, `RestoreFailed` | Normal; `RestoreFailed` is a Warning | `restore_started`, `restore_running`, `restore_completed`, `restore_failed` |
 
 The `BackupFailed` Event carries the message of the CubridBackup's `Ready`
-condition. A backup that was not started within 30 minutes (ADR-0007) ends
-with one of these `Ready` reasons:
+condition. A backup whose start was not confirmed within 30 minutes
+(ADR-0007: from `status.targetRecordedAt`, or for `ObjectStorageWaitExpired`
+from `status.objectStorageNotAppliedSince`) ends with one of these `Ready`
+reasons:
 
 | Reason | Meaning | What to do |
 |---|---|---|

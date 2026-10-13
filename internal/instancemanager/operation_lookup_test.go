@@ -22,8 +22,29 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// A record the store cannot read may be the one asked for: the lookup does
+// not answer "none" then, so the operator does not conclude that nothing
+// runs (#365).
+func TestServer_LookupByIdempotencyKey_UnreadableRecordIsAnError(t *testing.T) {
+	cli := &recordingCLI{}
+	h, store := newLookupServer(t, cli)
+	corrupt := filepath.Join(store.dir, "op-"+strings.Repeat("a", 32)+".json")
+	if err := os.WriteFile(corrupt, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rr, ops := lookupOperations(t, h, "cubridbackup:ns:bk:uid-1", "tok")
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("lookup with an unreadable record = %d %v (%s), want 500", rr.Code, ops, rr.Body.String())
+	}
+	if len(cli.calls) != 0 {
+		t.Errorf("a lookup ran commands: %v", cli.calls)
+	}
+}
 
 // lookupOperations asks GET /v1/operations?idempotencyKey=key.
 func lookupOperations(t *testing.T, h http.Handler, key, token string) (*httptest.ResponseRecorder, []Operation) {

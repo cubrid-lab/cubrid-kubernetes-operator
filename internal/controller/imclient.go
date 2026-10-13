@@ -80,6 +80,11 @@ var errTokenRefused = errors.New("the member refused the cluster's Instance Mana
 // no backup until the Pod is restarted with the cluster's settings.
 var errObjectStorageNotApplied = errors.New("the member's Instance Manager runs without object storage")
 
+// errStartConflict is wrapped by a backup start that the member answered
+// 409: it holds an operation under the key for another request body, or
+// another operation runs on the database.
+var errStartConflict = errors.New("the member refused the start as a conflict")
+
 // tokenRefused reports whether an Instance Manager answer refuses the
 // operator's token (401) or the call made with it (403). It only names the
 // cause of a failed call: a 403 is not retried with the previous token and
@@ -181,6 +186,9 @@ func (c *HTTPBackupClient) StartBackup(ctx context.Context, podName, namespace, 
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusPreconditionFailed {
 		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w%s", podName, errObjectStorageNotApplied, requestRef(resp))
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w (status 409)%s", podName, errStartConflict, requestRef(resp))
 	}
 	if resp.StatusCode != http.StatusAccepted {
 		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w", podName, unexpectedStatus(resp))
