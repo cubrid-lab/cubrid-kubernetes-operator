@@ -94,8 +94,9 @@ spec:
                     type: object
                   type:
                     description: |-
-                      type selects the destination backend. ObjectStorage is required for
-                      production; PVC is dev-only (not durable enough for HA rebuild / DR).
+                      type selects the destination backend. ObjectStorage is the only one a
+                      backup is run for. PVC is reserved: a backup to it is not run and ends
+                      as Failed with reason UnsupportedDestination.
                     enum:
                     - ObjectStorage
                     - PVC

@@ -107,14 +107,16 @@ type DestinationType string
 const (
 	// DestinationObjectStorage is S3-compatible object storage (production).
 	DestinationObjectStorage DestinationType = "ObjectStorage"
-	// DestinationPVC is a dev-only PVC destination, not eligible for rebuild/DR.
+	// DestinationPVC is reserved: no backup is run for it. The controller
+	// ends a backup to it as Failed with reason UnsupportedDestination.
 	DestinationPVC DestinationType = "PVC"
 )
 
 // CubridBackupDestination is where the backup artifact is stored.
 type CubridBackupDestination struct {
-	// type selects the destination backend. ObjectStorage is required for
-	// production; PVC is dev-only (not durable enough for HA rebuild / DR).
+	// type selects the destination backend. ObjectStorage is the only one a
+	// backup is run for. PVC is reserved: a backup to it is not run and ends
+	// as Failed with reason UnsupportedDestination.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=ObjectStorage;PVC
 	Type DestinationType `json:"type"`

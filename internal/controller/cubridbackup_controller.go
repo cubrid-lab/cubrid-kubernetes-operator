@@ -20,9 +20,12 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,6 +47,17 @@ const (
 	// Ready reasons while a backup start is retried on its recorded target.
 	reasonRecordedTargetSelected    = "RecordedTargetSelected"
 	reasonRecordedTargetNotEligible = "RecordedTargetNotEligible"
+
+	// reasonUnsupportedDestination ends a backup whose destination type has
+	// no execution path (PVC).
+	reasonUnsupportedDestination = "UnsupportedDestination"
+	// reasonObjectStorageNotApplied holds a backup whose target Pod does not
+	// run with the cluster's object-storage settings yet.
+	reasonObjectStorageNotApplied = "ObjectStorageNotApplied"
+
+	// objectStorageEnvPrefix starts the names of the manager's object-storage
+	// environment (objectStorageEnv).
+	objectStorageEnvPrefix = "IM_S3_"
 
 	backupStagingRoot = "/var/lib/cubrid/backup-staging"
 	backupPollAfter   = 10 * time.Second
@@ -71,6 +85,7 @@ const backupClusterWait = 10 * time.Minute
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
 func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var backup databasev1alpha1.CubridBackup
@@ -109,10 +124,19 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return r.pollBackup(ctx, &backup)
 	}
 
+	// Only object storage has an execution path: the Instance Manager uploads
+	// the staged backup and writes its manifest there. Any other destination
+	// (PVC) is refused before a member is asked for anything. A backup that
+	// was already dispatched is followed to its end above instead.
+	if backup.Spec.Destination.Type != databasev1alpha1.DestinationObjectStorage {
+		return r.rejected(ctx, &backup, reasonUnsupportedDestination, "destination type "+
+			string(backup.Spec.Destination.Type)+" is not supported: a backup is stored in object storage only")
+	}
+
 	// The DB Pods get their object-storage endpoint and credentials from the
 	// cluster at Pod start (ADR-0007); a backup cannot bring its own. Not
 	// terminal: the cluster can be given the setting.
-	if backup.Spec.Destination.Type == databasev1alpha1.DestinationObjectStorage && cluster.Spec.ObjectStorage == nil {
+	if cluster.Spec.ObjectStorage == nil {
 		if backup.Status.Phase == "" {
 			backup.Status.Phase = databasev1alpha1.BackupPhasePending
 		}
@@ -141,7 +165,9 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // have started the backup, so once a target is recorded only that target is
 // ever dispatched to; it is never replaced by a fresh selection. For the same
 // reason spec.target.preference is read only for that first selection: a later
-// change does not move a backup whose target is already recorded.
+// change does not move a backup whose target is already recorded. Nothing is
+// dispatched to a target whose Pod does not run with the cluster's
+// object-storage settings.
 func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -176,6 +202,24 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 				"no safe backup target yet; waiting for a healthy target")
 			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
 		}
+	}
+
+	// Not terminal: the Pod picks the settings up when it is restarted, and
+	// the backup goes on then. A target that is not recorded yet stays
+	// unrecorded, so a later selection may take another member.
+	notApplied, err := r.objectStorageNotApplied(ctx, cluster, sel.Instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if notApplied != "" {
+		if backup.Status.Phase == "" {
+			backup.Status.Phase = databasev1alpha1.BackupPhasePending
+		}
+		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reasonObjectStorageNotApplied, notApplied)
+		return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+	}
+
+	if backup.Status.TargetInstance == "" {
 		if backup.Status.Phase == "" {
 			backup.Status.Phase = databasev1alpha1.BackupPhasePending
 		}
@@ -281,6 +325,47 @@ func (r *CubridBackupReconciler) buildBackupRequest(backup *databasev1alpha1.Cub
 			SourceRole:     string(sel.Role),
 		},
 	}
+}
+
+// objectStorageNotApplied says why the Pod of instance does not run with the
+// object-storage settings of the cluster; it is empty when it does. The
+// manager reads them from its environment when it starts (ADR-0007), and a
+// Pod's environment does not change while the Pod lives: under the OnDelete
+// update strategy a Pod started before spec.objectStorage was set or changed
+// keeps the old settings until it is deleted. The Pod is compared, not the
+// StatefulSet template. What the referenced Secret holds is not compared:
+// the operator does not read it.
+func (r *CubridBackupReconciler) objectStorageNotApplied(ctx context.Context, cluster *databasev1alpha1.CubridCluster, instance string) (string, error) {
+	var pod corev1.Pod
+	if err := r.Get(ctx, types.NamespacedName{Namespace: cluster.Namespace, Name: instance}, &pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "Pod " + instance + " is not found; waiting for it to run with the cluster's spec.objectStorage", nil
+		}
+		return "", err
+	}
+	applied := map[string]corev1.EnvVar{}
+	for _, c := range pod.Spec.Containers {
+		if c.Name != appName {
+			continue
+		}
+		for _, e := range c.Env {
+			if strings.HasPrefix(e.Name, objectStorageEnvPrefix) {
+				applied[e.Name] = e
+			}
+		}
+	}
+	desired := objectStorageEnv(cluster.Spec.ObjectStorage)
+	same := len(applied) == len(desired)
+	for _, e := range desired {
+		if got, ok := applied[e.Name]; !ok || !equality.Semantic.DeepEqual(got, e) {
+			same = false
+		}
+	}
+	if same {
+		return "", nil
+	}
+	return "Pod " + instance + " was started without the cluster's current spec.objectStorage; " +
+		"it picks the settings up when it is restarted (delete the Pod)", nil
 }
 
 func (r *CubridBackupReconciler) probeAll(ctx context.Context, members []string, namespace string) map[string]RoleObservation {

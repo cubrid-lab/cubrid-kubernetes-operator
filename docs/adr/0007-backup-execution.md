@@ -167,8 +167,8 @@ ends, also one that was refused, has `status.completedAt`.
 - **Artifact trust:** restore/rebuild must **reject** any manifest whose
   `database`, `clusterUID`, `cubridVersion`, `level`, or expected
   source-role policy does not match the intended operation, in addition
-  to per-file checksum validation. A `PVC` (dev-only) destination is
-  **not eligible** for ADR-0006 rebuild or disaster recovery.
+  to per-file checksum validation. A `PVC` destination (reserved; not run,
+  see below) is **not eligible** for ADR-0006 rebuild or disaster recovery.
 
 ### `CubridBackup` CR (v1alpha1)
 
@@ -201,13 +201,31 @@ spec:
   credentials takes effect when the Pods restart. A backup to object storage
   on a cluster without the setting is not started
   (`ObjectStorageNotConfigured`).
+- **The target Pod must run with those settings** (#290). The manager reads
+  them from its environment when it starts, and under the `OnDelete` update
+  strategy a Pod started before `spec.objectStorage` was set or changed keeps
+  the old environment until it is deleted. Before dispatching, the controller
+  compares the `IM_S3_*` environment of the selected Pod with the cluster's
+  `spec.objectStorage`; on a difference it starts nothing, records no target,
+  and waits with `Ready=False`, reason `ObjectStorageNotApplied`. To let the
+  backup go on, delete the Pod (one at a time, standbys first) so that it is
+  recreated with the cluster's settings. The value of the credentials Secret
+  is not compared, because the operator does not read it: a Secret whose keys
+  changed also needs the Pods restarted, and that is not detected. The
+  manager checks again before `backupdb` runs: a request without an upload
+  bucket is answered 400 and a manager started without an endpoint 412, with
+  no `backupdb` run and no operation recorded; the controller reports the
+  412 as `ObjectStorageNotApplied` as well.
 - **Full backups only** (`level: Full` → CUBRID level 0); no incremental
   chains in v1alpha1.
 - **Single-shot only**; scheduling is a future separate API
   (`CubridBackupSchedule` / external CronJob creating `CubridBackup`), so
   the execution API stays stable.
-- `destination.type: ObjectStorage` required for production; optional
-  `PVC` is dev-only (not durable enough for HA rebuild / DR).
+- `destination.type: ObjectStorage` is the only destination a backup is run
+  for. `PVC` is reserved: it has no execution path, so a backup to it is
+  ended before any member is called (`Failed`, `Accepted=False` and
+  `Ready=False` with reason `UnsupportedDestination`). It would not be durable
+  enough for HA rebuild / DR either.
 
 ### Idempotency & resumability
 
@@ -231,7 +249,8 @@ sizeBytes, cubridVersion, database, level}`, `conditions`
 `MasterFallbackSelected`, `NoHealthyStandby`, `BackupRunning`,
 `UploadRunning`, `BackupCompleted`, `BackupFailed`, `ChecksumMismatch`,
 `InsufficientStagingSpace`, `InstanceManagerUnavailable`,
-`InstanceManagerTokenRefused`,
+`InstanceManagerTokenRefused`, `ObjectStorageNotConfigured`,
+`ObjectStorageNotApplied`, `UnsupportedDestination`,
 `ObjectStorageUnavailable`). Cluster-level: `BackupReady`
 (True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary.
 **Backup state must not be conflated with cluster/HA readiness.**

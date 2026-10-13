@@ -622,7 +622,7 @@ spec:
   target: { preference: PreferStandby }   # StandbyOnly | PrimaryOnly
   level: Full                             # maps to CUBRID level 0; no 1/2 in v1alpha1
   destination:
-    type: ObjectStorage                   # S3-compatible; PVC is dev-only
+    type: ObjectStorage                   # S3-compatible; PVC is reserved and not run
     objectStorage:
       provider: S3Compatible
       bucket: cubrid-backups

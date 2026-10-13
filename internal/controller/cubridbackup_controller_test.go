@@ -196,6 +196,7 @@ var _ = Describe("CubridBackup Controller", func() {
 		}
 		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+		createAppliedMemberPods(ctx, cluster)
 
 		backup := newBackup("bk-run", "bk-cluster-run")
 		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
@@ -320,6 +321,7 @@ var _ = Describe("CubridBackup Controller", func() {
 			cluster := newHACluster("bk-early")
 			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+			createAppliedMemberPods(ctx, cluster)
 			reconcile(r, backup)
 			got := stored(backup)
 			Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
@@ -353,6 +355,7 @@ var _ = Describe("CubridBackup Controller", func() {
 			cluster := newHACluster(name)
 			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+			createAppliedMemberPods(ctx, cluster)
 			backup := newBackup(name, name)
 			Expect(k8sClient.Create(ctx, backup)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
@@ -424,6 +427,7 @@ var _ = Describe("CubridBackup Controller", func() {
 			cluster := newHACluster("bk-lost")
 			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+			createAppliedMemberPods(ctx, cluster)
 
 			backup := newBackup("bk-lost", "bk-lost")
 			Expect(k8sClient.Create(ctx, backup)).To(Succeed())
@@ -471,6 +475,7 @@ var _ = Describe("CubridBackup Controller", func() {
 			cluster := newHACluster("bk-nowrite")
 			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+			createAppliedMemberPods(ctx, cluster)
 
 			backup := newBackup("bk-nowrite", "bk-nowrite")
 			Expect(k8sClient.Create(ctx, backup)).To(Succeed())
@@ -503,6 +508,7 @@ var _ = Describe("CubridBackup Controller", func() {
 			cluster := newHACluster("bk-moved")
 			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+			createAppliedMemberPods(ctx, cluster)
 
 			backup := newBackup("bk-moved", "bk-moved")
 			Expect(k8sClient.Create(ctx, backup)).To(Succeed())

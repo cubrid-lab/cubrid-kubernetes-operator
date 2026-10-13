@@ -378,6 +378,14 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
 		return
 	}
+	// A backup that cannot be uploaded never completes, so it is refused
+	// before backupdb runs and before an operation is recorded: a repeat
+	// once the manager has object storage starts it afresh (#290).
+	if status, err := s.backupPreflight(req); err != nil {
+		s.ops.Done()
+		writeJSON(w, status, map[string]string{errKey: err.Error()})
+		return
+	}
 
 	op, existed, err := s.store.FindOrCreate(OpBackup, key, HashRequest(body), req.Database)
 	if err != nil || existed {
@@ -401,6 +409,21 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 
 	s.runBackup(op.ID, req)
 	writeJSON(w, http.StatusAccepted, op)
+}
+
+// backupPreflight checks that an asynchronous backup can be uploaded: the
+// request names a bucket, and this process was started with object storage.
+// The second is answered 412, apart from a malformed request, so the
+// operator can tell a Pod that has not picked up the cluster's settings.
+func (s *Server) backupPreflight(req BackupRequest) (int, error) {
+	if req.Upload == nil || req.Upload.Bucket == "" {
+		return http.StatusBadRequest, errors.New("a backup needs an upload with a bucket; it is not run without one")
+	}
+	if s.objects == nil {
+		return http.StatusPreconditionFailed, errors.New("this Instance Manager was started without object storage " +
+			"(IM_S3_ENDPOINT is not set); the Pod has to be restarted with the cluster's spec.objectStorage")
+	}
+	return 0, nil
 }
 
 // runBackup executes the backup in the background and records the durable state
@@ -433,6 +456,8 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			fail("backupdb failed: " + err.Error())
 			return
 		}
+		// backupPreflight refused this before; kept so that the upload below
+		// never runs without its store.
 		if s.objects == nil || req.Upload == nil {
 			fail("backupdb succeeded but no object-storage destination is configured")
 			return
