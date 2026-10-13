@@ -71,6 +71,12 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 		}
 	}
 
+	// A failed recovery is terminal: the member is not asked again, so the
+	// reason it failed with stays.
+	if cluster.Status.Bootstrap.Phase == databasev1alpha1.BootstrapFailed {
+		return ctrl.Result{}, true
+	}
+
 	if r.Restore == nil {
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreClientNotConfigured",
 			"no restore client configured on the controller")
@@ -97,9 +103,21 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 			StagingDir:            path.Join(restoreStagingRoot, string(cluster.UID)),
 			TargetDir:             restoreTargetRoot,
 		}
-		op, err := r.Restore.StartRestore(ctx, target, cluster.Namespace, recoveryIdempotencyKey(cluster, target), req)
+		key := recoveryIdempotencyKey(cluster, target)
+		op, err := r.Restore.StartRestore(ctx, target, cluster.Namespace, key, req)
 		if err != nil {
-			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreStartFailed", err.Error())
+			op, err = operationOfKey(ctx, err, instancemanager.OpRestore, key, func() (instancemanager.Operation, bool, error) {
+				return r.Restore.FindOperation(ctx, target, cluster.Namespace, instancemanager.OpRestore, key)
+			})
+		}
+		if err != nil {
+			// A refused token and each cause of a conflict keep a reason of
+			// their own; any other failure is a failed start.
+			reason := instanceManagerFailureReason(err)
+			if reason == reasonInstanceManagerUnavailable {
+				reason = "RestoreStartFailed"
+			}
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, err.Error())
 			return ctrl.Result{RequeueAfter: restorePollAfter}, true
 		}
 		cluster.Status.Bootstrap.OperationID = op.ID

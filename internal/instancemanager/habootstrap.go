@@ -95,7 +95,7 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.standaloneDB != "" {
-		writeJSON(w, http.StatusConflict, map[string]string{errKey: "this member is a standalone server, not an HA member"})
+		writeError(w, http.StatusConflict, CodeNotAnHAMember, "this member is a standalone server, not an HA member")
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -128,7 +128,7 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict), errors.Is(err, ErrOperationInProgress):
-		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusConflict, err)
 		return
 	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})

@@ -51,6 +51,14 @@ type fakeRestoreClient struct {
 	// state, when set, is what a restore that is neither failed nor
 	// completed reports.
 	state instancemanager.OperationState
+	// startErr, when set, answers every start; pollErr every poll.
+	startErr, pollErr error
+	// polls counts the polls of the restore operation.
+	polls int
+	// held is the operation the member holds under every key; lookups
+	// counts the lookups.
+	held    *instancemanager.Operation
+	lookups int
 }
 
 const (
@@ -62,7 +70,18 @@ func (f *fakeRestoreClient) StartRestore(_ context.Context, _, _, key string, _ 
 	f.started = true
 	f.idempotencyKey = key
 	f.keys = append(f.keys, key)
+	if f.startErr != nil {
+		return instancemanager.Operation{}, f.startErr
+	}
 	return instancemanager.Operation{ID: opRestore, State: f.running()}, nil
+}
+
+func (f *fakeRestoreClient) FindOperation(_ context.Context, _, _ string, kind instancemanager.OperationKind, _ string) (instancemanager.Operation, bool, error) {
+	f.lookups++
+	if f.held == nil || f.held.Kind != kind {
+		return instancemanager.Operation{}, false, nil
+	}
+	return *f.held, true, nil
 }
 
 func (f *fakeRestoreClient) running() instancemanager.OperationState {
@@ -73,6 +92,10 @@ func (f *fakeRestoreClient) running() instancemanager.OperationState {
 }
 
 func (f *fakeRestoreClient) GetOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, error) {
+	f.polls++
+	if f.pollErr != nil {
+		return instancemanager.Operation{}, f.pollErr
+	}
 	if f.failed {
 		return instancemanager.Operation{
 			ID: opRestore, State: instancemanager.OpFailed,

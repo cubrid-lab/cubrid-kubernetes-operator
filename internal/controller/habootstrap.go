@@ -53,6 +53,7 @@ type HABootstrapClient interface {
 	// returns the durable operation. A repeat with the same key returns the
 	// same operation in its current state.
 	StartHABootstrap(ctx context.Context, podName, namespace, idempotencyKey string, req instancemanager.HABootstrapRequest) (instancemanager.Operation, error)
+	OperationFinder
 }
 
 // maxBootstrapAttempts bounds how often a failed bootstrap step is started
@@ -128,8 +129,13 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 		return
 	}
 
-	op, err := r.HABootstrap.StartHABootstrap(ctx, member, cluster.Namespace,
-		bootstrapKey("ha-bootstrap", cluster, status, ""), instancemanager.HABootstrapRequest{Database: database})
+	key := bootstrapKey("ha-bootstrap", cluster, status, "")
+	op, err := r.HABootstrap.StartHABootstrap(ctx, member, cluster.Namespace, key, instancemanager.HABootstrapRequest{Database: database})
+	if err != nil {
+		op, err = operationOfKey(ctx, err, instancemanager.OpHABootstrap, key, func() (instancemanager.Operation, bool, error) {
+			return r.HABootstrap.FindOperation(ctx, member, cluster.Namespace, instancemanager.OpHABootstrap, key)
+		})
+	}
 	if err != nil {
 		// The member is not up yet, or not reachable: ask again later.
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
@@ -333,7 +339,8 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		if artifact != "" {
 			staging += "-" + peer
 		}
-		backup, err := r.Backup.StartBackup(ctx, source, cluster.Namespace, bootstrapKey("seed-backup", cluster, status, artifact),
+		backupKey := bootstrapKey("seed-backup", cluster, status, artifact)
+		backup, err := r.Backup.StartBackup(ctx, source, cluster.Namespace, backupKey,
 			instancemanager.BackupRequest{
 				Database:    database,
 				Destination: path.Join(backupStagingRoot, staging),
@@ -342,6 +349,11 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 					SourceInstance: source, SourceRole: string(databasev1alpha1.RoleMaster),
 				},
 			})
+		if err != nil {
+			backup, err = operationOfKey(ctx, err, instancemanager.OpBackup, backupKey, func() (instancemanager.Operation, bool, error) {
+				return r.Backup.FindBackupOperation(ctx, source, cluster.Namespace, backupKey)
+			})
+		}
 		if err != nil {
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 			return false
@@ -364,7 +376,8 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		}
 	}
 
-	restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, bootstrapKey("seed-restore", cluster, status, peer),
+	restoreKey := bootstrapKey("seed-restore", cluster, status, peer)
+	restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, restoreKey,
 		instancemanager.RestoreRequest{
 			Database: database, Bucket: bucket, Prefix: prefix,
 			ExpectedCubridVersion: cluster.Spec.Version,
@@ -374,6 +387,11 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 			// on, and has to pick up what that member committed since.
 			SeedFromMaster: source,
 		})
+	if err != nil {
+		restore, err = operationOfKey(ctx, err, instancemanager.OpRestore, restoreKey, func() (instancemanager.Operation, bool, error) {
+			return r.Restore.FindOperation(ctx, peer, cluster.Namespace, instancemanager.OpRestore, restoreKey)
+		})
+	}
 	if err != nil {
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 		return false

@@ -107,6 +107,34 @@ endpoint** (not localhost-only — the operator must reach it without
 `pods/exec`). The manager holds **no Kubernetes RBAC credentials**; it is
 a local CUBRID control plane, not a second controller.
 
+Error answers (#302): a refused `/v1` request answers with an HTTP status and
+the JSON body `{"error": "<message>", "code": "<Code>"}`. `error` is the
+message every manager version sends, and its text for a given refusal is not
+changed. `code` is additive and optional: it names the cause where a caller
+acts on it, and is left out where the status says all there is (for example
+a malformed request, 400). The codes and the class a caller derives from
+each:
+
+| Status | `code` | Cause | Class |
+|---|---|---|---|
+| 401 | `Unauthorized` | the bearer token is missing or not the manager's | unauthorized: nothing was done; the operator reports `InstanceManagerTokenRefused` |
+| 409 | `OperationInProgress` | another operation that has not ended holds the database | retryable: the same request is sent again later |
+| 409 | `StagingDestinationInUse` | a running operation of another request owns the backup's staging destination (#275) | retryable |
+| 409 | `IdempotencyConflict` | the manager holds an operation of this kind under the `Idempotency-Key` for another request body | terminal for the key: the request is never sent in its place; the operation the key names is read with `GET /v1/operations?idempotencyKey=` and followed |
+| 409 | `NotAnHAMember` | an HA request reached a standalone member | terminal for the member |
+| 412 | `ObjectStorageNotApplied` | the manager was started without object storage (#290) | terminal until the Pod is restarted with it; the operator waits, bounded (ADR-0007) |
+
+The operator reads at most 4 KiB of an error body, takes `error` only as text
+(cut to 256 characters, without control characters) and never as an
+instruction, and acts on `code` alone. A `code` it does not know, or an
+answer without one, as an earlier manager sends it, is judged by the status
+as before codes existed: 401 and 403 refuse the token, 412 means no object
+storage, and any other 409 is a conflict of no named cause
+(`InstanceManagerConflict`) after which the key is looked up. The rules for
+running an operator and Instance Managers of different versions together are
+decided in #322; this change only adds a field and keeps every earlier
+answer readable.
+
 ### Role discovery
 
 `GET /v1/role` returns:

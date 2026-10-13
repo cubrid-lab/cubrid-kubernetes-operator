@@ -19,6 +19,10 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -54,6 +58,10 @@ func (f *fakeHABootstrapClient) StartHABootstrap(_ context.Context, podName, _, 
 	return instancemanager.Operation{ID: "op-ha", State: f.state, FailureReason: f.reason}, nil
 }
 
+func (f *fakeHABootstrapClient) FindOperation(_ context.Context, _, _ string, _ instancemanager.OperationKind, _ string) (instancemanager.Operation, bool, error) {
+	return instancemanager.Operation{}, false, errors.New("not used by these tests")
+}
+
 // fakeSeedClient stands in for the backup and restore side of seeding. It
 // answers each member with the state set for it.
 type fakeSeedClient struct {
@@ -71,6 +79,12 @@ type fakeSeedClient struct {
 	restores map[string]instancemanager.RestoreRequest
 	// backupStates overrides backupState for the backups of single members.
 	backupStates map[string]instancemanager.OperationState
+	// heldKeys makes the fake answer like an Instance Manager does when a key
+	// is sent again with another request: 409 IdempotencyConflict, and the
+	// operation stays the one first started under the key. lookups counts
+	// the lookups by key.
+	heldKeys bool
+	lookups  int
 }
 
 // seedBackup is one backup the fake was asked for.
@@ -81,10 +95,13 @@ type seedBackup struct {
 
 func (f *fakeSeedClient) StartBackup(_ context.Context, podName, _, key string, req instancemanager.BackupRequest) (instancemanager.Operation, error) {
 	f.backupOn = append(f.backupOn, podName)
-	f.backupReq = req
 	if f.backups == nil {
 		f.backups = map[string]seedBackup{}
 	}
+	if held, ok := f.backups[key]; ok && f.heldKeys && !reflect.DeepEqual(held.req, req) {
+		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w", podName, imIdempotencyConflict())
+	}
+	f.backupReq = req
 	f.backups[key] = seedBackup{member: podName, req: req}
 	state := f.backupState
 	if s, ok := f.backupStates[podName]; ok {
@@ -97,6 +114,9 @@ func (f *fakeSeedClient) StartRestore(_ context.Context, podName, _, key string,
 	f.restoreOn = append(f.restoreOn, podName)
 	if f.restoreKeys == nil {
 		f.restoreKeys = map[string]string{}
+	}
+	if f.heldKeys && f.restoreKeys[podName] == key && !reflect.DeepEqual(f.restores[podName], req) {
+		return instancemanager.Operation{}, fmt.Errorf("start restore on %s: %w", podName, imIdempotencyConflict())
 	}
 	f.restoreKeys[podName] = key
 	f.restoreReq = req
@@ -111,8 +131,32 @@ func (f *fakeSeedClient) GetOperation(_ context.Context, _, _, _ string) (instan
 	return instancemanager.Operation{}, errors.New("not used by seeding")
 }
 
-func (f *fakeSeedClient) FindBackupOperation(_ context.Context, _, _, _ string) (instancemanager.Operation, bool, error) {
-	return instancemanager.Operation{}, false, errors.New("not used by seeding")
+func (f *fakeSeedClient) FindBackupOperation(_ context.Context, _, _, key string) (instancemanager.Operation, bool, error) {
+	f.lookups++
+	held, ok := f.backups[key]
+	if !ok {
+		return instancemanager.Operation{}, false, nil
+	}
+	state := f.backupState
+	if s, ok := f.backupStates[held.member]; ok {
+		state = s
+	}
+	return instancemanager.Operation{ID: "op-seed-backup", Kind: instancemanager.OpBackup, State: state, FailureReason: f.reason}, true, nil
+}
+
+func (f *fakeSeedClient) FindOperation(_ context.Context, podName, _ string, kind instancemanager.OperationKind, key string) (instancemanager.Operation, bool, error) {
+	f.lookups++
+	if kind != instancemanager.OpRestore || f.restoreKeys[podName] != key {
+		return instancemanager.Operation{}, false, nil
+	}
+	return instancemanager.Operation{ID: "op-seed-" + podName, Kind: kind, State: f.restore[podName], FailureReason: f.reason}, true, nil
+}
+
+// imIdempotencyConflict is what the client makes of an Instance Manager's
+// 409 for a key sent again with another request.
+func imIdempotencyConflict() error {
+	return unexpectedStatus(&http.Response{StatusCode: http.StatusConflict, Header: http.Header{},
+		Body: io.NopCloser(strings.NewReader(`{"error":"idempotency key reused with a different request","code":"IdempotencyConflict"}`))})
 }
 
 // firstMemberMaster answers as the members of a group that is being formed
@@ -380,6 +424,47 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			reconcileOnce(r, key)
 			Expect(seed.backupOn).To(BeEmpty())
 			Expect(seed.restoreOn).To(BeEmpty())
+		})
+
+		// A key names one request. When the spec changes while the step of a
+		// key runs, the member refuses the changed request under that key; the
+		// operation the key names is followed instead, and the change applies
+		// from the next step on (#302).
+		It("follows the seed backup its key names when the spec changed meanwhile, and goes on", func() {
+			seed := &fakeSeedClient{
+				backupState: instancemanager.OpRunningBackup,
+				restore:     map[string]instancemanager.OperationState{},
+				heldKeys:    true,
+			}
+			key := create(seededCluster("seed-changed"))
+			r := reconcilerFor(seed)
+			got := reconcileOnce(r, key)
+			_, reason := bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedBackupInProgress"))
+			Expect(seed.backups).To(HaveLen(1))
+
+			By("a spec.version that the running backup was not started with")
+			got.Spec.Version = cubridVersion + ".1"
+			Expect(k8sClient.Update(ctx, got)).To(Succeed())
+			for range 2 {
+				got = reconcileOnce(r, key)
+				_, reason = bootstrapCondition(got)
+				Expect(reason).To(Equal("SeedBackupInProgress"), "the operation the key names is followed")
+			}
+			Expect(seed.lookups).To(Equal(2))
+			Expect(seed.backupOn).To(HaveLen(3), "one start for each reconcile, no more")
+			Expect(seed.backups).To(HaveLen(1))
+			for _, b := range seed.backups {
+				Expect(b.req.Upload.CubridVersion).To(Equal(cubridVersion), "the first request stays the one of its key")
+			}
+
+			By("the backup completing: the restore is started with the changed spec")
+			seed.backupState = instancemanager.OpCompleted
+			seed.restore["seed-changed-1"] = instancemanager.OpRestoring
+			got = reconcileOnce(r, key)
+			_, reason = bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedRestoreInProgress"))
+			Expect(seed.restoreReq.ExpectedCubridVersion).To(Equal(cubridVersion + ".1"))
 		})
 
 		It("starts a failed restore again without touching a seeded member (#107)", func() {

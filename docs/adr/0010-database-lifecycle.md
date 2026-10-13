@@ -174,6 +174,22 @@ up to three attempts for the whole bootstrap
 waits for a person. A member that was seeded is recorded in
 `status.databases[].seededMembers` and never restored over.
 
+A key names one request (#302). When the request of a step changes while its
+operation runs, for example because `spec.version` or `spec.objectStorage`
+changed, the member refuses the changed request under the same key (409
+`IdempotencyConflict`, ADR-0003). The operator then looks the key up and
+follows the operation it names, as if the start had returned it, and never
+starts the changed request in its place; the change applies from the next
+step or attempt on, whose key is new. So an incompatible request is sent at
+most once per reconcile and only while the step's operation runs; when that
+operation ends, the step goes on or is started again under the attempt
+limit. The same holds for the restore of a recovery bootstrap (ADR-0008),
+which records the operation it finds and only polls it from then on. An
+operation that cannot be found keeps the step waiting with the reason
+`InstanceManagerRequestConflict`; a member busy with another operation keeps
+it waiting with `InstanceManagerOperationInProgress`. Neither uses up an
+attempt.
+
 What an interrupted attempt left on a volume is removed only when it can be
 proven to be the manager's own: the Instance Manager writes the operation ID
 into `<db>/.im-operation` before `createdb` or `restoredb` and removes the

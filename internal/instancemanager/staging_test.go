@@ -295,6 +295,9 @@ func TestServer_Backup_RefusesADestinationOwnedByARunningOperation(t *testing.T)
 	if !strings.Contains(answer[errKey], "staging destination") || !strings.Contains(answer[errKey], "running") {
 		t.Errorf("error = %q, want one that names the staging destination owned by a running operation", answer[errKey])
 	}
+	if answer["code"] != CodeStagingDestinationInUse {
+		t.Errorf("code = %q, want %q (#302)", answer["code"], CodeStagingDestinationInUse)
+	}
 	if ops, err := store.FindByKey("key-otherdb"); err != nil || len(ops) != 0 {
 		t.Errorf("operations recorded for the refused request: %d (err %v)", len(ops), err)
 	}

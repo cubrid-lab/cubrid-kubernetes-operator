@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	neturl "net/url"
 	"slices"
@@ -32,10 +33,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
@@ -65,6 +68,16 @@ type RestoreClient interface {
 	StartRestore(ctx context.Context, podName, namespace, idempotencyKey string, req instancemanager.RestoreRequest) (instancemanager.Operation, error)
 	// GetOperation polls /v1/operations/{id}.
 	GetOperation(ctx context.Context, podName, namespace, id string) (instancemanager.Operation, error)
+	OperationFinder
+}
+
+// OperationFinder asks GET /v1/operations?idempotencyKey= for the operation
+// of kind that the member holds under the key. It never starts anything.
+// found is false only when the member answered that it holds none; any other
+// answer is an error.
+type OperationFinder interface {
+	FindOperation(ctx context.Context, podName, namespace string, kind instancemanager.OperationKind,
+		idempotencyKey string) (op instancemanager.Operation, found bool, err error)
 }
 
 // reasonTokenRefused is the condition and Event reason for a member whose
@@ -86,6 +99,36 @@ var errObjectStorageNotApplied = errors.New("the member's Instance Manager runs 
 // request owns the staging destination.
 var errStartConflict = errors.New("the member refused the start as a conflict")
 
+// errOperationInProgress is wrapped, with errStartConflict, by a start that
+// the member refused because another operation that has not ended holds the
+// database. It is retryable: the start is sent again once that one ended.
+var errOperationInProgress = errors.New("another operation runs on the database")
+
+// errStagingInUse is wrapped, with errStartConflict, by a backup start whose
+// staging destination a running operation of another request owns. It is
+// retryable like errOperationInProgress.
+var errStagingInUse = errors.New("a running operation of another request owns the staging destination")
+
+// errRequestConflict is wrapped, with errStartConflict, by a start that the
+// member refused because it holds an operation under the same key for
+// another request body. Sending the start again never succeeds.
+var errRequestConflict = errors.New("the member holds an operation under this key for another request")
+
+// maxErrorBody bounds what is read of an error answer, and maxErrorMessage
+// the length of the message taken from it.
+const (
+	maxErrorBody    = 4 << 10
+	maxErrorMessage = 256
+)
+
+// Condition reasons of a start the member refused as a conflict (409).
+const (
+	reasonOperationInProgress = "InstanceManagerOperationInProgress"
+	reasonStagingInUse        = "InstanceManagerStagingInUse"
+	reasonRequestConflict     = "InstanceManagerRequestConflict"
+	reasonConflict            = "InstanceManagerConflict"
+)
+
 // tokenRefused reports whether an Instance Manager answer refuses the
 // operator's token (401) or the call made with it (403). It only names the
 // cause of a failed call: a 403 is not retried with the previous token and
@@ -95,26 +138,125 @@ func tokenRefused(status int) bool {
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }
 
-// unexpectedStatus describes an answer the call did not expect; a refused
-// token wraps errTokenRefused.
+// unexpectedStatus describes an answer the call did not expect, with the
+// cause and the message the member sent (readErrorAnswer). The cause comes
+// from the answer's code; a manager that sends no code, or one this operator
+// does not know, is judged by the status, as before codes existed (ADR-0003):
+// 401 and 403 refuse the token, 412 means no object storage, and 409 is a
+// conflict of no named cause.
 func unexpectedStatus(resp *http.Response) error {
-	if tokenRefused(resp.StatusCode) {
-		return fmt.Errorf("%w (status %d)%s", errTokenRefused, resp.StatusCode, requestRef(resp))
+	code, msg := readErrorAnswer(resp)
+	detail := fmt.Sprintf("status %d", resp.StatusCode)
+	if code != "" {
+		detail += ", " + code
 	}
-	return fmt.Errorf("unexpected status %d%s", resp.StatusCode, requestRef(resp))
+	if msg != "" {
+		detail += ": " + msg
+	}
+	detail += requestRef(resp)
+	switch {
+	case tokenRefused(resp.StatusCode):
+		return fmt.Errorf("%w (%s)", errTokenRefused, detail)
+	case resp.StatusCode == http.StatusPreconditionFailed:
+		return fmt.Errorf("%w (%s)", errObjectStorageNotApplied, detail)
+	case resp.StatusCode != http.StatusConflict:
+		return fmt.Errorf("unexpected %s", detail)
+	}
+	switch code {
+	case instancemanager.CodeOperationInProgress:
+		return fmt.Errorf("%w: %w (%s)", errStartConflict, errOperationInProgress, detail)
+	case instancemanager.CodeStagingDestinationInUse:
+		return fmt.Errorf("%w: %w (%s)", errStartConflict, errStagingInUse, detail)
+	case instancemanager.CodeIdempotencyConflict:
+		return fmt.Errorf("%w: %w (%s)", errStartConflict, errRequestConflict, detail)
+	}
+	return fmt.Errorf("%w (%s)", errStartConflict, detail)
+}
+
+// readErrorAnswer reads the code and the message of an error answer
+// (instancemanager.ErrorResponse). At most maxErrorBody bytes are read; a body
+// that is larger, or no such answer, yields neither. The message ends up in
+// conditions, Events and logs, so runs of characters that are not printable
+// or are white space become one space, and it is cut to maxErrorMessage
+// runes. A code that is not a plain word is dropped.
+func readErrorAnswer(resp *http.Response) (code, msg string) {
+	if resp.Body == nil {
+		return "", ""
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody+1))
+	if err != nil || len(raw) > maxErrorBody {
+		return "", ""
+	}
+	var answer instancemanager.ErrorResponse
+	if json.Unmarshal(raw, &answer) != nil {
+		return "", ""
+	}
+	if len(answer.Code) <= 64 && strings.IndexFunc(answer.Code, func(r rune) bool {
+		return (r < 'A' || r > 'Z') && (r < 'a' || r > 'z')
+	}) < 0 {
+		code = answer.Code
+	}
+	cleaned := []rune(strings.Join(strings.FieldsFunc(answer.Error, func(r rune) bool {
+		return !unicode.IsPrint(r) || unicode.IsSpace(r)
+	}), " "))
+	if len(cleaned) > maxErrorMessage {
+		cleaned = append(cleaned[:maxErrorMessage], []rune("...")...)
+	}
+	return code, string(cleaned)
 }
 
 // instanceManagerFailureReason is the condition reason for a failed call to
-// an Instance Manager: a refused token is told apart from an unavailable
-// manager.
+// an Instance Manager: a refused token, a manager without object storage and
+// each cause of a conflict are told apart from an unavailable manager.
 func instanceManagerFailureReason(err error) string {
-	if errors.Is(err, errTokenRefused) {
+	switch {
+	case errors.Is(err, errTokenRefused):
 		return reasonTokenRefused
-	}
-	if errors.Is(err, errObjectStorageNotApplied) {
+	case errors.Is(err, errObjectStorageNotApplied):
 		return reasonObjectStorageNotApplied
+	case errors.Is(err, errOperationInProgress):
+		return reasonOperationInProgress
+	case errors.Is(err, errStagingInUse):
+		return reasonStagingInUse
+	case errors.Is(err, errRequestConflict):
+		return reasonRequestConflict
+	case errors.Is(err, errStartConflict):
+		return reasonConflict
 	}
-	return "InstanceManagerUnavailable"
+	return reasonInstanceManagerUnavailable
+}
+
+// reasonInstanceManagerUnavailable is the reason of a failed call to an
+// Instance Manager that is not told apart otherwise.
+const reasonInstanceManagerUnavailable = "InstanceManagerUnavailable"
+
+// operationOfKey answers a start of kind under key that the member refused as
+// a conflict. The idempotency key names one request; a refusal because the
+// member holds an operation under the key for another request body (the
+// spec changed after the request was first sent, or an earlier operator
+// built it differently) is answered by that operation, which find looks up,
+// so it is followed to its end and the changed request is never started in
+// its place. A refusal for another cause, or from a manager that names none,
+// is looked up the same way unless it says that the database or the staging
+// destination is busy, which holds nothing under the key and is retried. An
+// operation that cannot be found leaves the refusal, with what the lookup
+// said.
+func operationOfKey(ctx context.Context, err error, kind instancemanager.OperationKind, key string,
+	find func() (instancemanager.Operation, bool, error)) (instancemanager.Operation, error) {
+	if !errors.Is(err, errStartConflict) || errors.Is(err, errOperationInProgress) || errors.Is(err, errStagingInUse) {
+		return instancemanager.Operation{}, err
+	}
+	op, found, lookupErr := find()
+	switch {
+	case lookupErr != nil:
+		return instancemanager.Operation{}, fmt.Errorf("%w; the %s operation under the key %q could not be looked up: %v",
+			err, kind, key, lookupErr)
+	case !found:
+		return instancemanager.Operation{}, fmt.Errorf("%w; the member holds no %s operation under the key %q", err, kind, key)
+	}
+	logf.FromContext(ctx).Info("Following the operation of the idempotency key instead of the changed request",
+		"kind", kind, "idempotencyKey", key, "operationID", op.ID, "state", op.State)
+	return op, nil
 }
 
 // TokenSource returns the bearer tokens a member's Instance Manager may hold,
@@ -185,12 +327,6 @@ func (c *HTTPBackupClient) StartBackup(ctx context.Context, podName, namespace, 
 		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w", podName, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusPreconditionFailed {
-		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w%s", podName, errObjectStorageNotApplied, requestRef(resp))
-	}
-	if resp.StatusCode == http.StatusConflict {
-		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w (status 409)%s", podName, errStartConflict, requestRef(resp))
-	}
 	if resp.StatusCode != http.StatusAccepted {
 		return instancemanager.Operation{}, fmt.Errorf("start backup on %s: %w", podName, unexpectedStatus(resp))
 	}
@@ -262,10 +398,17 @@ func (c *HTTPBackupClient) GetOperation(ctx context.Context, podName, namespace,
 	return decodeOperation(resp)
 }
 
-// FindBackupOperation reads the member's operations under idempotencyKey. A
-// manager that does not have the lookup answers 404, which is an error here:
-// only an answered empty list says that the member holds no operation.
+// FindBackupOperation reads the member's backup operation under
+// idempotencyKey.
 func (c *HTTPBackupClient) FindBackupOperation(ctx context.Context, podName, namespace, idempotencyKey string) (instancemanager.Operation, bool, error) {
+	return c.FindOperation(ctx, podName, namespace, instancemanager.OpBackup, idempotencyKey)
+}
+
+// FindOperation reads the member's operation of kind under idempotencyKey. A
+// manager that does not have the lookup answers 404, which is an error here:
+// only an answered list says that the member holds no such operation.
+func (c *HTTPBackupClient) FindOperation(ctx context.Context, podName, namespace string, kind instancemanager.OperationKind,
+	idempotencyKey string) (instancemanager.Operation, bool, error) {
 	target := c.baseURL(podName, namespace) + "/v1/operations?" + neturl.Values{"idempotencyKey": {idempotencyKey}}.Encode()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -273,18 +416,18 @@ func (c *HTTPBackupClient) FindBackupOperation(ctx context.Context, podName, nam
 	}
 	resp, err := c.do(ctx, httpReq, podName, namespace)
 	if err != nil {
-		return instancemanager.Operation{}, false, fmt.Errorf("look up the backup operation on %s: %w", podName, err)
+		return instancemanager.Operation{}, false, fmt.Errorf("look up the %s operation on %s: %w", kind, podName, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return instancemanager.Operation{}, false, fmt.Errorf("look up the backup operation on %s: %w", podName, unexpectedStatus(resp))
+		return instancemanager.Operation{}, false, fmt.Errorf("look up the %s operation on %s: %w", kind, podName, unexpectedStatus(resp))
 	}
 	var list instancemanager.OperationList
 	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil || list.Operations == nil {
-		return instancemanager.Operation{}, false, fmt.Errorf("look up the backup operation on %s: unreadable answer%s", podName, requestRef(resp))
+		return instancemanager.Operation{}, false, fmt.Errorf("look up the %s operation on %s: unreadable answer%s", kind, podName, requestRef(resp))
 	}
 	for _, op := range list.Operations {
-		if op.Kind == instancemanager.OpBackup {
+		if op.Kind == kind {
 			return op, true, nil
 		}
 	}

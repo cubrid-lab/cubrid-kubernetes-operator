@@ -392,7 +392,7 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 	// once the manager has object storage starts it afresh (#290).
 	if status, err := s.backupPreflight(req); err != nil {
 		s.ops.Done()
-		writeJSON(w, status, map[string]string{errKey: err.Error()})
+		writeErr(w, status, err)
 		return
 	}
 
@@ -403,13 +403,13 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):
-		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusConflict, err)
 		return
 	case errors.Is(err, ErrOperationInProgress):
-		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusConflict, err)
 		return
 	case errors.Is(err, ErrBackupStagingInUse):
-		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusConflict, err)
 		return
 	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
@@ -576,10 +576,10 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):
-		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusConflict, err)
 		return
 	case errors.Is(err, ErrOperationInProgress):
-		writeJSON(w, http.StatusConflict, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusConflict, err)
 		return
 	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
@@ -868,7 +868,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 				reason = reasonNoToken
 			}
 			s.logRefused(w, r, reason)
-			writeJSON(w, http.StatusUnauthorized, map[string]string{errKey: "unauthorized"})
+			writeError(w, http.StatusUnauthorized, CodeUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r)

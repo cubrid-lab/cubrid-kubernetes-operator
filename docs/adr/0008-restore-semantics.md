@@ -173,7 +173,12 @@ Resuming an interrupted restore (#120, with the marker of #107): the restore's
 key carries the attempt number, so the operator finds a running restore again
 after its own restart. A restore that ends `Failed`, which includes one cut
 off by a manager restart, is started again under the next key, three attempts
-in all (`status.bootstrap.attempts`), then the recovery is `Failed`. Before it
+in all (`status.bootstrap.attempts`), then the recovery is `Failed`. A
+`Failed` recovery is terminal: the operator asks the member nothing more, so
+the reason it failed with stays in `BootstrapReady` (#302). A start the
+member refuses because it holds an operation under the key for another
+request is answered by that operation, which is recorded and polled
+(ADR-0010, #302). Before it
 restores again the Instance Manager removes the directory and the
 `databases.txt` line of its own failed restore, which it recognises by the
 operation ID it wrote into `<db>/.im-operation`; a target without that proof

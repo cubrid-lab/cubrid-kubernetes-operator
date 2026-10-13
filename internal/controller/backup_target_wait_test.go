@@ -323,6 +323,17 @@ var _ = Describe("CubridBackup wait on its recorded target", func() {
 		Expect(f.fake.instances).To(HaveEach(standby))
 	})
 
+	It("waits, under a reason of its own, while another operation holds the database (#302)", func() {
+		f := lostStart("bk-busy")
+		f.fake.lose = 1000
+		f.fake.startErr = fmt.Errorf("start backup on %s: %w", "bk-busy-1", imAnswer(http.StatusConflict, busyBody))
+		reconcileOnce(ctx, f.r, f.backup)
+		got := stored(ctx, f.backup)
+		Expect(got.Status.Phase).NotTo(Equal(databasev1alpha1.BackupPhaseFailed))
+		Expect(readyOf(got).Reason).To(Equal(reasonOperationInProgress))
+		Expect(readyOf(got).Message).To(ContainSubstring("already in progress"))
+	})
+
 	// singleBackup creates a cluster of one member, with the cluster's
 	// object storage when withStorage is set, and a backup of it.
 	singleBackup := func(name string, withStorage bool) (*databasev1alpha1.CubridCluster, *databasev1alpha1.CubridBackup) {
