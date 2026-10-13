@@ -124,15 +124,6 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return r.pollBackup(ctx, &backup)
 	}
 
-	// Only object storage has an execution path: the Instance Manager uploads
-	// the staged backup and writes its manifest there. Any other destination
-	// (PVC) is refused before a member is asked for anything. A backup that
-	// was already dispatched is followed to its end above instead.
-	if backup.Spec.Destination.Type != databasev1alpha1.DestinationObjectStorage {
-		return r.rejected(ctx, &backup, reasonUnsupportedDestination, "destination type "+
-			string(backup.Spec.Destination.Type)+" is not supported: a backup is stored in object storage only")
-	}
-
 	// The DB Pods get their object-storage endpoint and credentials from the
 	// cluster at Pod start (ADR-0007); a backup cannot bring its own. Not
 	// terminal: the cluster can be given the setting.
@@ -204,22 +195,25 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		}
 	}
 
-	// Not terminal: the Pod picks the settings up when it is restarted, and
-	// the backup goes on then. A target that is not recorded yet stays
-	// unrecorded, so a later selection may take another member.
-	notApplied, err := r.objectStorageNotApplied(ctx, cluster, sel.Instance)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if notApplied != "" {
-		if backup.Status.Phase == "" {
-			backup.Status.Phase = databasev1alpha1.BackupPhasePending
-		}
-		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reasonObjectStorageNotApplied, notApplied)
-		return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
-	}
-
 	if backup.Status.TargetInstance == "" {
+		// Not terminal: the Pod picks the settings up when it is restarted,
+		// and the backup goes on then. The target stays unrecorded, so a
+		// later selection may take another member. A recorded target is not
+		// judged here: an earlier dispatch to it may run already, and asking
+		// it again returns that operation; a manager without object storage
+		// refuses with 412 (ObjectStorageNotApplied).
+		notApplied, err := r.objectStorageNotApplied(ctx, cluster, sel.Instance)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if notApplied != "" {
+			if backup.Status.Phase == "" {
+				backup.Status.Phase = databasev1alpha1.BackupPhasePending
+			}
+			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reasonObjectStorageNotApplied, notApplied)
+			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+		}
+
 		if backup.Status.Phase == "" {
 			backup.Status.Phase = databasev1alpha1.BackupPhasePending
 		}
@@ -365,7 +359,7 @@ func (r *CubridBackupReconciler) objectStorageNotApplied(ctx context.Context, cl
 		return "", nil
 	}
 	return "Pod " + instance + " was started without the cluster's current spec.objectStorage; " +
-		"it picks the settings up when it is restarted (delete the Pod)", nil
+		"it picks the settings up when it is restarted", nil
 }
 
 func (r *CubridBackupReconciler) probeAll(ctx context.Context, members []string, namespace string) map[string]RoleObservation {
@@ -405,7 +399,17 @@ func (r *CubridBackupReconciler) commit(ctx context.Context, backup *databasev1a
 
 // validateBackupSpec enforces the ADR-0007 destination invariants that CRD
 // markers cannot express (ObjectStorage requires the objectStorage block).
+//
+// Only object storage has an execution path: the Instance Manager uploads
+// the staged backup and writes its manifest there. Any other destination
+// (PVC) is refused before a member is asked for anything, and before the
+// cluster is looked up. A backup whose operation was started, by an earlier
+// operator, is followed to the end of that operation instead.
 func validateBackupSpec(backup *databasev1alpha1.CubridBackup) (reason, msg string, ok bool) {
+	if backup.Spec.Destination.Type != databasev1alpha1.DestinationObjectStorage && backup.Status.OperationRef == "" {
+		return reasonUnsupportedDestination, "destination type " + string(backup.Spec.Destination.Type) +
+			" is not supported: a backup is stored in object storage only", false
+	}
 	if backup.Spec.Destination.Type == databasev1alpha1.DestinationObjectStorage &&
 		backup.Spec.Destination.ObjectStorage == nil {
 		return "InvalidDestination", "destination.objectStorage is required when type is ObjectStorage", false

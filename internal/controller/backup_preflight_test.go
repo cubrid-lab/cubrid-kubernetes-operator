@@ -173,6 +173,71 @@ var _ = Describe("CubridBackup preflight", func() {
 		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
 		Expect(got.Status.TargetInstance).To(Equal(member))
 	})
+
+	// A recorded target may run the backup already: the earlier dispatch may
+	// have been accepted and only its response lost. The request is sent to
+	// it again, which returns the existing operation; its Pod's environment
+	// is not judged, and the manager refuses with 412 if it has no store.
+	It("sends the request again to a recorded target whatever its Pod's environment", func() {
+		cluster := singleCluster("bk-recorded")
+		const member = "bk-recorded-0"
+		createMemberPod(ctx, namespace, member, nil)
+		backup := createBackup("bk-recorded", "bk-recorded", toObjectStorage)
+		backup.Status.Phase = databasev1alpha1.BackupPhasePending
+		backup.Status.TargetInstance = member
+		backup.Status.TargetRole = string(databasev1alpha1.RoleMaster)
+		backup.Status.ClusterUID = cluster.UID
+		Expect(k8sClient.Status().Update(ctx, backup)).To(Succeed())
+
+		fake := &lostResponseBackupClient{}
+		r := &CubridBackupReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(),
+			Prober: &memberProber{master: member}, Backup: fake,
+		}
+		got := reconcileBackup(r, backup)
+		Expect(fake.instances).To(Equal([]string{member}), "the recorded target was not asked again")
+		Expect(got.Status.TargetInstance).To(Equal(member))
+		Expect(got.Status.OperationRef).To(Equal(opFake))
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+	})
+
+	It("refuses a PVC destination at once, also while its cluster is not found", func() {
+		backup := createBackup("bk-pvc-nocluster", "bk-pvc-nocluster", databasev1alpha1.CubridBackupDestination{
+			Type: databasev1alpha1.DestinationPVC,
+		})
+		r := &CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		got := reconcileBackup(r, backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+		Expect(reasonOf(got, conditionAccepted)).To(Equal("UnsupportedDestination"))
+		Expect(reasonOf(got, conditionBackupReady)).To(Equal("UnsupportedDestination"))
+	})
+
+	// A PVC backup that an earlier operator dispatched is followed to the end
+	// of its operation, not ended while backupdb may run.
+	It("polls a PVC backup whose operation was started instead of refusing it", func() {
+		cluster := singleCluster("bk-pvc-started")
+		const member = "bk-pvc-started-0"
+		backup := createBackup("bk-pvc-started", "bk-pvc-started", databasev1alpha1.CubridBackupDestination{
+			Type: databasev1alpha1.DestinationPVC,
+		})
+		backup.Status.Phase = databasev1alpha1.BackupPhaseRunning
+		backup.Status.TargetInstance = member
+		backup.Status.TargetRole = string(databasev1alpha1.RoleMaster)
+		backup.Status.ClusterUID = cluster.UID
+		backup.Status.OperationRef = opFake
+		Expect(k8sClient.Status().Update(ctx, backup)).To(Succeed())
+
+		fake := &lostResponseBackupClient{}
+		r := &CubridBackupReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(),
+			Prober: &memberProber{master: member}, Backup: fake,
+		}
+		got := reconcileBackup(r, backup)
+		Expect(fake.polls).To(Equal(1), "the started operation was not polled")
+		Expect(fake.instances).To(BeEmpty())
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+		Expect(reasonOf(got, conditionBackupReady)).To(Equal("BackupRunning"))
+	})
 })
 
 // A member that answers that it has no object storage is told apart from an

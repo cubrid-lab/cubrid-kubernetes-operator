@@ -207,9 +207,13 @@ spec:
   the old environment until it is deleted. Before dispatching, the controller
   compares the `IM_S3_*` environment of the selected Pod with the cluster's
   `spec.objectStorage`; on a difference it starts nothing, records no target,
-  and waits with `Ready=False`, reason `ObjectStorageNotApplied`. To let the
-  backup go on, delete the Pod (one at a time, standbys first) so that it is
-  recreated with the cluster's settings. The value of the credentials Secret
+  and waits with `Ready=False`, reason `ObjectStorageNotApplied`. The wait is
+  not bounded yet (#365). To let the backup go on, restart the Pod (one at a
+  time, standbys first, while no backup or restore runs on it) so that it is
+  recreated with the cluster's settings. A target that is already recorded is
+  not compared: the earlier dispatch to it may have been accepted with its
+  answer lost, so the request is sent to it again and returns the operation
+  that runs; only the manager's 412 below holds it. The value of the credentials Secret
   is not compared, because the operator does not read it: a Secret whose keys
   changed also needs the Pods restarted, and that is not detected. The
   manager checks again before `backupdb` runs: a request without an upload
@@ -224,8 +228,14 @@ spec:
 - `destination.type: ObjectStorage` is the only destination a backup is run
   for. `PVC` is reserved: it has no execution path, so a backup to it is
   ended before any member is called (`Failed`, `Accepted=False` and
-  `Ready=False` with reason `UnsupportedDestination`). It would not be durable
-  enough for HA rebuild / DR either.
+  `Ready=False` with reason `UnsupportedDestination`), also when its cluster
+  is not found. It would not be durable enough for HA rebuild / DR either.
+  Upgrade note: a PVC backup whose operation an earlier operator started
+  (`status.operationRef` set) is polled to its end. One whose target was
+  recorded but whose operation was not (a lost dispatch answer) is ended as
+  `UnsupportedDestination` although `backupdb` may still run on the target;
+  that backup would have failed at the upload either way, and the manager
+  removes its staging directory when it fails.
 
 ### Idempotency & resumability
 

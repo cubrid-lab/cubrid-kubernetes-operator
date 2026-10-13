@@ -140,7 +140,13 @@ member has joined once (POC-23); that master counts here, although its role
 is not relied on for anything else. A holder that does not answer, no master,
 two masters or a contradictory answer mean waiting (`BootstrapReady=False`,
 `SeedSourceNotResolved`); nothing is started and no attempt is used up, also
-while a member that holds the database is down.
+while a member that holds the database is down. A source whose Instance
+Manager was started without object storage refuses the seed backup before
+`backupdb` runs (412, #290): the bootstrap waits with `BootstrapReady=False`,
+`ObjectStorageNotApplied`, and no attempt is used up, until the source is
+restarted with the cluster's `spec.objectStorage`. Before #290 the backup
+ran and failed at the upload, which ended the step `SeedBackupFailed` and used
+up an attempt.
 
 The roles are asked for at every reconcile until the restore on the member is
 started. A master that changes before that is followed, and every change of

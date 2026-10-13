@@ -82,7 +82,7 @@ the fixed names below; free text belongs in `message`.
 | `BrokerReady` | A Broker of each access mode is available | `BrokersNotAvailable`, `BrokerReconcileFailed` |
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
 | `RoutingReady` | The primary is resolved and a read-write Broker is available | the reason of `PrimaryResolved`, which comes first; `NoBrokerAvailable`; `Unknown` with `RolesNotObserved` or `BrokerReconcileFailed` |
-| `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped |
+| `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped; `ObjectStorageNotApplied` while the seed source's Instance Manager runs without object storage (waits, uses up no attempt) |
 | `Updating` | A member is being replaced for a new image | why nothing is being replaced |
 
 When the Operator cannot write one of the cluster's objects, `Ready` turns
