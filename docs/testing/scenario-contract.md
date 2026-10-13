@@ -738,7 +738,7 @@ it needs more.
   object for a moment). Status the killed Operator wrote cannot satisfy it.
   With an unchanged cluster the replacement writes that time within 30
   seconds (`observationWriteInterval`) of its first reconcile, so
-  `operatorBackWithin` is an upper bound of the resync by that much.
+  `operatorBackWithin` overstates the resync by up to that much.
 - **Limit while the Operator is absent, observed on Kind:** nobody updates
   `status`. After the failover it went on naming the former master as
   `currentPrimary` with `PrimaryResolved=True` until the Operator was back.

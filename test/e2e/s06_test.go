@@ -21,6 +21,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -221,6 +222,10 @@ func (r *haRun) s06Restart() {
 				return false, nil
 			}
 			started, err := operatorStartedAt(ctx, pods[0])
+			var parseErr *time.ParseError
+			if errors.As(err, &parseErr) {
+				return false, fmt.Errorf("the replacement Operator's start time: %w", err)
+			}
 			if err != nil || started.IsZero() {
 				return false, nil
 			}
@@ -413,7 +418,14 @@ func (r *haRun) s06Absent() {
 			}
 			staleStatus = fmt.Sprintf("currentPrimary=%s PrimaryResolved=%s lastObservedTime=%s age=%s",
 				s.primary, s.conditions["PrimaryResolved"], s.lastObserved.Format(time.RFC3339), age.Round(time.Second))
+			// A member whose identity could not be read is read again: the
+			// baseline must hold every member.
 			membersBeforeReturn = r.identities(r.members)
+			for _, id := range membersBeforeReturn {
+				if id == faults.UnknownIdentity {
+					return false, nil
+				}
+			}
 			return true, nil
 		},
 	})
