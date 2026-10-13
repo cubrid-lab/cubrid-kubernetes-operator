@@ -162,13 +162,45 @@ type CubridStorage struct {
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
 }
 
+// The accepted form of spec.bootstrap.recovery.manifestUri (ADR-0008). The
+// XValidation markers on RecoverySource.ManifestURI carry these expressions
+// verbatim, and the operator applies the same ones before it restores, so the
+// API server and the operator accept the same URIs.
+const (
+	// ManifestURIPattern must match: s3://, a bucket of 3 to 63 lower-case
+	// letters, digits, dots and hyphens that starts and ends with a letter or
+	// digit, one or more prefix segments, and the file name manifest.json. A
+	// segment is not empty, not "." or "..", and has no "/", "?", "#", "%",
+	// whitespace or control character.
+	ManifestURIPattern = `^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]` +
+		`(/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))+` +
+		`/manifest[.]json$`
+	// ManifestURIBucketAdjacentDotsPattern must not match: a bucket name has
+	// no two adjacent dots.
+	ManifestURIBucketAdjacentDotsPattern = `^s3://[^/]*[.][.]`
+	// ManifestURIMaxLength is the longest manifestUri: s3://, a 63-character
+	// bucket, "/" and an S3 key of 1024 characters.
+	ManifestURIMaxLength = 1093
+)
+
 // RecoverySource points restore-as-bootstrap at an object-storage backup
 // manifest (ADR-0008).
 type RecoverySource struct {
 	// manifestUri is the object-storage URI of the backup manifest.json (the
-	// ADR-0007 artifact identity). Required for recovery bootstrap.
+	// ADR-0007 artifact identity), of the form
+	// s3://<bucket>/<prefix>/manifest.json; the object it names is the one
+	// read. The bucket has 3 to 63 lower-case letters, digits, dots and
+	// hyphens, starts and ends with a letter or digit and has no two adjacent
+	// dots. The prefix has one or more segments; a segment is not empty, not
+	// "." or "..", and has no "/", "?", "#", "%", whitespace or control
+	// character, so the URI has no query, fragment or percent escape. The
+	// file name is manifest.json. The URI CubridBackup status.artifact.uri
+	// reports for a backup has this form. Required for recovery bootstrap.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1093
+	// +kubebuilder:validation:XValidation:rule="self.matches('^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9](/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))+/manifest[.]json$')",message="manifestUri must be s3://<bucket>/<prefix>/manifest.json: a bucket of 3 to 63 lower-case letters, digits, dots and hyphens, a prefix of one or more segments that are not empty, '.' or '..' and have no '?', '#', '%', whitespace or control character, and the file name manifest.json"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^s3://[^/]*[.][.]')",message="the bucket of manifestUri must not contain two adjacent dots"
 	ManifestURI string `json:"manifestUri"`
 }
 

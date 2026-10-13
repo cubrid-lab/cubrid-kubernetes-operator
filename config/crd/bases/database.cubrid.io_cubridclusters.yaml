@@ -69,9 +69,28 @@ spec:
                       manifestUri:
                         description: |-
                           manifestUri is the object-storage URI of the backup manifest.json (the
-                          ADR-0007 artifact identity). Required for recovery bootstrap.
+                          ADR-0007 artifact identity), of the form
+                          s3://<bucket>/<prefix>/manifest.json; the object it names is the one
+                          read. The bucket has 3 to 63 lower-case letters, digits, dots and
+                          hyphens, starts and ends with a letter or digit and has no two adjacent
+                          dots. The prefix has one or more segments; a segment is not empty, not
+                          "." or "..", and has no "/", "?", "#", "%", whitespace or control
+                          character, so the URI has no query, fragment or percent escape. The
+                          file name is manifest.json. The URI CubridBackup status.artifact.uri
+                          reports for a backup has this form. Required for recovery bootstrap.
+                        maxLength: 1093
                         minLength: 1
                         type: string
+                        x-kubernetes-validations:
+                        - message: 'manifestUri must be s3://<bucket>/<prefix>/manifest.json:
+                            a bucket of 3 to 63 lower-case letters, digits, dots and
+                            hyphens, a prefix of one or more segments that are not
+                            empty, ''.'' or ''..'' and have no ''?'', ''#'', ''%'',
+                            whitespace or control character, and the file name manifest.json'
+                          rule: self.matches('^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9](/([^/?#%[:space:][:cntrl:]]{3,}|[^./?#%[:space:][:cntrl:]][^/?#%[:space:][:cntrl:]]?|[.][^./?#%[:space:][:cntrl:]]))+/manifest[.]json$')
+                        - message: the bucket of manifestUri must not contain two
+                            adjacent dots
+                          rule: '!self.matches(''^s3://[^/]*[.][.]'')'
                     required:
                     - manifestUri
                     type: object

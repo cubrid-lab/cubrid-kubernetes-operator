@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,6 +83,15 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 		return ctrl.Result{}, true
 	}
 
+	// A URI outside the accepted form is never acted on, also when it was
+	// admitted by an earlier release and its restore has already started:
+	// the object read could be another one than the object named.
+	bucket, prefix, err := parseManifestURI(rec.ManifestURI)
+	if err != nil {
+		r.recoveryFailed(cluster, "InvalidManifestURI", err.Error())
+		return ctrl.Result{}, true
+	}
+
 	if r.Restore == nil {
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "RestoreClientNotConfigured",
 			"no restore client configured on the controller")
@@ -94,11 +105,6 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 
 	// Start once: begin the restore when no operation is recorded yet.
 	if cluster.Status.Bootstrap.OperationID == "" {
-		bucket, prefix, err := parseManifestURI(rec.ManifestURI)
-		if err != nil {
-			r.recoveryFailed(cluster, "InvalidManifestURI", err.Error())
-			return ctrl.Result{}, true
-		}
 		req := instancemanager.RestoreRequest{
 			Database:              db,
 			Bucket:                bucket,
@@ -256,16 +262,25 @@ func recoveryIdempotencyKey(cluster *databasev1alpha1.CubridCluster, member stri
 	return key
 }
 
-// parseManifestURI splits an s3://bucket/prefix/manifest.json URI into the
-// bucket and the artifact prefix (the directory holding manifest.json).
+var (
+	manifestURIRe                   = regexp.MustCompile(databasev1alpha1.ManifestURIPattern)
+	manifestURIBucketAdjacentDotsRe = regexp.MustCompile(databasev1alpha1.ManifestURIBucketAdjacentDotsPattern)
+)
+
+// parseManifestURI splits an s3://<bucket>/<prefix>/manifest.json URI into the
+// bucket and the artifact prefix (the directory holding manifest.json). It
+// accepts what the API server admits for spec.bootstrap.recovery.manifestUri
+// and nothing else, so that a URI that names another object, or the same one
+// only after normalization, is refused instead of being read as another
+// manifest. The prefix is returned as written: the key the Instance Manager
+// reads, path.Join(prefix, manifest.json), is the key the URI names.
 func parseManifestURI(uri string) (bucket, prefix string, err error) {
-	rest, ok := strings.CutPrefix(uri, "s3://")
-	if !ok {
-		return "", "", fmt.Errorf("manifestUri %q is not an s3:// URI", uri)
+	if utf8.RuneCountInString(uri) > databasev1alpha1.ManifestURIMaxLength ||
+		!manifestURIRe.MatchString(uri) || manifestURIBucketAdjacentDotsRe.MatchString(uri) {
+		return "", "", fmt.Errorf("manifestUri %q is not of the form s3://<bucket>/<prefix>/manifest.json "+
+			"accepted for a recovery (ADR-0008)", uri)
 	}
-	b, key, ok := strings.Cut(rest, "/")
-	if !ok || b == "" || key == "" {
-		return "", "", fmt.Errorf("manifestUri %q is missing a bucket or key", uri)
-	}
-	return b, path.Dir(key), nil
+	key := strings.TrimPrefix(uri, "s3://")
+	bucket, key, _ = strings.Cut(key, "/")
+	return bucket, strings.TrimSuffix(key, "/"+instancemanager.ManifestObjectName), nil
 }

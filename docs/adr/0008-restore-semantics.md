@@ -79,6 +79,48 @@ primary API — cross-namespace / cross-cluster / migration recovery often
 happens without the original CR. A same-namespace `backupRef` convenience
 may be added later without breaking the URI contract.
 
+The URI names the manifest object, and that object is the one read (#320).
+Its form is `s3://<bucket>/<prefix>/manifest.json`:
+
+- the scheme is `s3://`;
+- the bucket has 3 to 63 lower-case letters, digits, dots and hyphens,
+  starts and ends with a letter or digit, and has no two adjacent dots. These
+  are the S3 general-purpose bucket naming rules that can be checked on the
+  name alone; the others (no IP-address form, reserved prefixes and
+  suffixes) are left to the object store, which refuses such a bucket;
+- the prefix has one or more segments. A segment is not empty, not `.` or
+  `..`, and has no `/`, `?`, `#`, `%`, whitespace or control character, so
+  the URI has no query, fragment or percent escape and the key is the text
+  of the URI as written, never a normalized form of it;
+- the file name is `manifest.json`;
+- the URI is at most 1093 characters: a 63-character bucket and a key of
+  1024 characters, the S3 key limit.
+
+The API server refuses any other URI when the cluster is created
+(`x-kubernetes-validations` on `manifestUri`), and the operator applies the
+same expressions (`api/v1alpha1`, `ManifestURIPattern`) before it restores,
+so a URI is admitted exactly when the operator would act on it. Before #320
+the operator took the directory of any key and read its `manifest.json`:
+`s3://bucket/a/b/other.json` restored `a/b/manifest.json`, and `..` or `.`
+segments were resolved first.
+
+The URI a `CubridBackup` reports (`status.artifact.uri`,
+`s3://<bucket>/<prefix>/<cluster-uid>/<database>/<backup-uid>/manifest.json`)
+and the URIs of the seed backups of an HA cluster have this form. A
+`CubridBackup` destination prefix is not checked against these rules: a
+prefix that starts with `/` or `..`, or has one of the characters above,
+writes the backup under a key that a recovery refuses.
+
+Upgrading from a release before #320: a cluster stored with a URI outside
+this form stays updatable, because the API server does not check a field
+that an update leaves unchanged (CRD validation ratcheting, on by default
+since Kubernetes 1.30) and `manifestUri` cannot be changed. The operator does
+not act on such a URI: a recovery that has not completed ends as `Failed`
+with reason `InvalidManifestURI`, also when its restore had already been
+started, since the object read could be another one than the object named.
+As for any failed recovery, the way out is a new cluster with a URI of this
+form.
+
 Time limit. The Instance Manager ends a restore, the download and
 `restoredb` together, after two hours and reports it `Failed`; the operator
 then starts it again within its attempt limit. The limit can be changed for

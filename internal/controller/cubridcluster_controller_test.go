@@ -48,6 +48,8 @@ type fakeRestoreClient struct {
 	failed         bool
 	idempotencyKey string
 	keys           []string
+	// requests are the restore requests started, in order.
+	requests []instancemanager.RestoreRequest
 	// state, when set, is what a restore that is neither failed nor
 	// completed reports.
 	state instancemanager.OperationState
@@ -66,10 +68,11 @@ const (
 	testManifestURI = "s3://bucket/prod/uid/manifest.json"
 )
 
-func (f *fakeRestoreClient) StartRestore(_ context.Context, _, _, key string, _ instancemanager.RestoreRequest) (instancemanager.Operation, error) {
+func (f *fakeRestoreClient) StartRestore(_ context.Context, _, _, key string, req instancemanager.RestoreRequest) (instancemanager.Operation, error) {
 	f.started = true
 	f.idempotencyKey = key
 	f.keys = append(f.keys, key)
+	f.requests = append(f.requests, req)
 	if f.startErr != nil {
 		return instancemanager.Operation{}, f.startErr
 	}
