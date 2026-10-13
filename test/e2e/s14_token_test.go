@@ -86,8 +86,8 @@ type imTokenSecret struct {
 
 // imTokens reads the cluster's token Secret and registers its tokens with the
 // evidence redactor. A token is only ever compared, never printed: the
-// redactor cleans the evidence files only, not the test output, so a token
-// must never reach an assertion message or GinkgoWriter.
+// redactor cleans the evidence files, GinkgoWriter and failed commands, but
+// not Ginkgo's own output, so a token must never reach an assertion message.
 func (r *haRun) imTokens() (imTokenSecret, error) {
 	out, err := r.kubectl("get", "secret", r.cluster+"-im-token", "-o", "json")
 	if err != nil {

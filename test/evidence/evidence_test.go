@@ -487,6 +487,11 @@ func TestWriteJUnit(t *testing.T) {
 }
 
 func TestRedact(t *testing.T) {
+	const (
+		hunter2   = "hunter2"
+		keyBody   = "MIIEvQIBADANBg"
+		basicCred = "dXNlcjpwYXNzd29yZA"
+	)
 	r := NewRedactor("s3cr3t-token-value", "", "ab")
 	tests := map[string]struct{ in, gone, kept string }{
 		"a value that was registered": {
@@ -496,13 +501,73 @@ func TestRedact(t *testing.T) {
 		"an environment variable": {
 			in: "IM_TOKEN=tok123 OTHER=1", gone: "tok123", kept: "OTHER=1"},
 		"a JSON field": {
-			in: `{"password": "hunter2", "name": "cc"}`, gone: "hunter2", kept: `"name": "cc"`},
+			in: `{"password": "hunter2", "name": "cc"}`, gone: hunter2, kept: `"name": "cc"`},
 		"a YAML field": {
 			in: "secretAccessKey: wJalrXUtnFEMI\nbucket: backups", gone: "wJalrXUtnFEMI", kept: "bucket: backups"},
 		"an access key id anywhere": {
 			in: "used AKIAIOSFODNN7EXAMPLE for upload", gone: "AKIAIOSFODNN7EXAMPLE", kept: "for upload"},
 		"a URL with credentials": {
 			in: "s3 endpoint http://user:pw12345@s3mock:9090/bucket", gone: "pw12345", kept: "@s3mock:9090/bucket"},
+		"an escaped JSON field": {
+			in: `{\"password\":\"hunter2\",\"name\":\"cc\"}`, gone: hunter2, kept: `\"name\":\"cc\"`},
+		"a single-quoted field": {
+			in: "password='hunter2' user='dba'", gone: hunter2, kept: "user='dba'"},
+		"a secretKey field": {
+			in: `{"secretKey": "wJalrXUtnFEMI", "bucket": "b"}`, gone: "wJalrXUtnFEMI", kept: `"bucket": "b"`},
+		"an apiKey field": {
+			in: "apiKey=k3y-value-1 next", gone: "k3y-value-1", kept: "next"},
+		"an api_key field": {
+			in: "api_key: k3y-value-2\nnext: 1", gone: "k3y-value-2", kept: "next: 1"},
+		"a private key in PEM form": {
+			in:   "private_key: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----\nnext: 1",
+			gone: keyBody, kept: "next: 1"},
+		"an escaped PEM private key in JSON": {
+			in: `{"private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBg` +
+				`\n-----END RSA PRIVATE KEY-----\n", "id": "x"}`,
+			gone: keyBody, kept: `"id": "x"`},
+		"a basic authorization header": {
+			in:   "Authorization: Basic dXNlcjpwYXNzd29yZA==\nnext",
+			gone: basicCred, kept: "Authorization: Basic [REDACTED]\nnext"},
+		"a CUBRID JDBC URL with a password": {
+			in:   "jdbc:cubrid:cubrid-rw:33000:demodb:dba:s3cretpw:?charset=utf-8",
+			gone: "s3cretpw", kept: "jdbc:cubrid:cubrid-rw:33000:demodb:dba:[REDACTED]:?charset=utf-8"},
+		"a password in a URL query": {
+			in: "http://h:8080/x?password=abc123&db=demodb", gone: "abc123", kept: "&db=demodb"},
+		"an unquoted value with & and ; in a query": {
+			in: "url?password=Pa&ss&db=demodb", gone: "Pa", kept: "&ss&db=demodb"},
+		"a quoted value with &, ; and a backslash": {
+			in: `"password": "Pa&ss;w\\0\"rd", "db": "demodb"`, gone: "ss;w", kept: `"db": "demodb"`},
+		"a quoted value in escaped JSON with escapes inside": {
+			in:   `{\"password\":\"Pa\\\\ss\\\"wd\",\"db\":\"demodb\"}`,
+			gone: "wd", kept: `\"db\":\"demodb\"`},
+		"escaped JSON with inner JSON escapes": {
+			in:   `{\"password\":\"Pa\\u0026ss\\nword-tail\",\"db\":\"demodb\"}`,
+			gone: "word-tail", kept: `\"db\":\"demodb\"`},
+		"escaped JSON with an escaped slash": {
+			in: `{\"token\":\"abc\\/def-tail\"}`, gone: "def-tail", kept: `{\"token\":\"[REDACTED]\"}`},
+		"a quote that is not closed": {
+			in: "failed to get token: \"unterminated\nnext line kept", gone: "unterminated", kept: "\nnext line kept"},
+		"a single quote that is not closed": {
+			in: "password='x1y2z3\nmany lines kept", gone: "x1y2z3", kept: "\nmany lines kept"},
+		"basic authorization without padding": {
+			in: "Authorization: Basic dXNlcjpwYXNzd29yZA", gone: basicCred, kept: "Authorization: Basic [REDACTED]"},
+		"a curl --user= password": {
+			in: "curl --user=dba:s3cr3tpw http://h", gone: "s3cr3tpw", kept: " http://h"},
+		"a single-quoted value with a doubled quote, as SQL writes it": {
+			in: "token: 'it''s-x9' next", gone: "s-x9", kept: "' next"},
+		"a single-quoted value with a space": {
+			in: "password='Pa ss;wd' next", gone: "ss;wd", kept: "' next"},
+		"basic authorization in a JSON header": {
+			in:   `{"Authorization": "Basic dXNlcjpwYXNzd29yZA=="}`,
+			gone: basicCred, kept: `{"Authorization": "Basic [REDACTED]"}`},
+		"basic authorization in a Go header map": {
+			in: "map[Authorization:[Basic dXNlcjpwYXNzd29yZA==]]", gone: basicCred, kept: "]]"},
+		"a curl user and password": {
+			in: "curl -u dba:s3cr3tpw http://h", gone: "s3cr3tpw", kept: "curl -u dba:[REDACTED] http://h"},
+		"a PEM private key cut short": {
+			in: "private_key: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg ...", gone: keyBody, kept: "private_key: "},
+		"a token in a URL query ended by a semicolon": {
+			in: "url?token=abc123;next=1", gone: "abc123", kept: ";next=1"},
 	}
 	for name, tc := range tests {
 		got := string(r.Redact([]byte(tc.in)))
@@ -515,7 +580,11 @@ func TestRedact(t *testing.T) {
 	}
 	// A reference to a Secret is a name, not a secret, and a short registered
 	// value must not blank ordinary text.
-	plain := "credentialsSecretRef:\n  name: backup-credentials\nabout a table\n"
+	plain := "credentialsSecretRef:\n  name: backup-credentials\nabout a table\n" +
+		"valueFrom:\n  secretKeyRef:\n    name: c-im-token\n    key: token\n" +
+		`"tokenFound": 0, "secretRef": "s"` + "\na basic check passed\nbasic authentication is off\n" +
+		"password=\"\" token: \"\" password='' docker run -u 1000:1000 img\n" +
+		"jdbc:cubrid:cubrid-rw:33000:demodb:dba::?charset=utf-8\n"
 	if got := string(r.Redact([]byte(plain))); got != plain {
 		t.Errorf("redaction changed text without credentials:\n%s", got)
 	}
@@ -523,6 +592,36 @@ func TestRedact(t *testing.T) {
 
 // A value learned during the run, a cluster's generated token for example, is
 // removed from everything written after it was added.
+// A registered value is also removed where it appears encoded: in base64,
+// as a Secret's data shows it, in URL encoding and escaped in JSON.
+func TestRedactEncoded(t *testing.T) {
+	const secret = `p@ss w0rd/+"x\`
+	r := NewRedactor(secret)
+	for name, encoded := range map[string]string{
+		"base64":              "cEBzcyB3MHJkLysieFw=",
+		"base64 without pads": "cEBzcyB3MHJkLysieFw",
+		"query encoding":      "p%40ss+w0rd%2F%2B%22x%5C",
+		"path encoding":       "p@ss%20w0rd%2F+%22x%5C",
+		"JSON":                `p@ss w0rd/+\"x\\`,
+	} {
+		in := "value " + encoded + " end"
+		got := string(r.Redact([]byte(in)))
+		if strings.Contains(got, encoded) || !strings.Contains(got, " end") {
+			t.Errorf("%s: %q redacted to %q", name, in, got)
+		}
+	}
+	// The base64 for URLs differs from standard base64 for this one.
+	urlSafe := NewRedactor("??>>??>>")
+	if got := string(urlSafe.Redact([]byte("v Pz8-Pj8_Pj4= Pz8+Pj8/Pj4= end"))); strings.Contains(got, "Pz8-Pj8_Pj4") ||
+		strings.Contains(got, "Pz8+Pj8/Pj4") {
+		t.Errorf("base64 variants of ??>>??>> remain in %q", got)
+	}
+	// The base64 of a short value is not registered: it occurs by chance.
+	if got := string(NewRedactor("abcd").Redact([]byte("id YWJjZA end"))); got != "id YWJjZA end" {
+		t.Errorf("the base64 of a short value was removed: %q", got)
+	}
+}
+
 func TestRedactAdded(t *testing.T) {
 	r := NewRedactor()
 	r.Add("generated-cluster-token", "ab")

@@ -510,10 +510,38 @@ computed from this file and `history.jsonl`, so a reader can recompute it.
 
 ### Secrets
 
-No evidence file may contain a password, a token or an object-storage
-credential. The redaction rules and their test belong to issue
-[#103](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/103),
-"test(evidence): emit versioned results and redact sensitive output".
+No evidence file and no line the suite prints may contain a password, a
+token or an object-storage credential. The same redaction (`Redactor` in
+`test/evidence`) applies to every evidence file, to everything written to
+`GinkgoWriter`, and to the command line and error of every command the
+suite runs through `utils.Run`. The output such a command returns to the
+test is not redacted, so a step can still read a value from it; a step must
+not print a credential it reads, except through that redaction.
+
+The redaction removes:
+
+- every value the run registers, such as the cluster's Instance Manager
+  token, also in URL encoding, JSON escaping and, for a value of at least
+  eight bytes, base64 (as a Secret's `data` holds it);
+- a value named `password`, `passwd`, `token`, `secret`, `secretKey`,
+  `secretAccessKey`, `accessKey`, `accessKeyId`, `apiKey` or `privateKey`
+  (with `_` or `-` also accepted between the words), written as `name=value`
+  or `name: value`. A value in escaped JSON is removed up to its closing
+  `\"` or the end of the line, and a quoted value up to its closing quote on
+  the same line, escapes included. A value without its closing quote, or
+  unquoted, ends at a space, a quote, a comma, a brace or a URL query's `&`
+  or `;`. An empty value, such as `password=""`, is kept;
+- a `Bearer` credential, a `Basic` credential (a word after "Basic" that
+  decodes to `user:password`), the password of `curl -u` or `--user`, a PEM private key
+  (to the end of the text when its end marker is missing), an AWS access key
+  ID, the password of a URL's user part and the password field of a CUBRID
+  JDBC URL (`jdbc:cubrid:host:port:database:user:password:`).
+
+A registered value is matched in base64 reliably only as the encoding of
+the value alone, and a credential split across two writes to `GinkgoWriter`
+is not recognized. Output Ginkgo itself prints, such as a failed
+assertion's message, the text of `By` and `GinkgoLogr`, is not redacted: a
+step's assertion does not print a credential.
 
 ## Scenarios
 

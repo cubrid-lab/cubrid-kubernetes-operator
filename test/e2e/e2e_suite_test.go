@@ -65,6 +65,10 @@ func TestE2E(t *testing.T) {
 // and, below, the deployed manager. A failure here leaves every planned
 // scenario not_run. Each group sets up its own cluster in its BeforeAll.
 var _ = BeforeSuite(func() {
+	// What the suite prints and what a failed command reports pass through
+	// the same redaction as the evidence files. Installed here, not before
+	// RunSpecs, which needs Ginkgo's own writer.
+	utils.SetRedaction(func(text string) string { return string(redactor.Redact([]byte(text))) })
 	// Before anything is built: a run whose evidence would be mixed with an
 	// earlier run's is not started (#310).
 	if dir := evidenceDir(); dir != "" {
