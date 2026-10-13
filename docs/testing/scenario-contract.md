@@ -494,22 +494,25 @@ not print a credential it reads, except through that redaction.
 The redaction removes:
 
 - every value the run registers, such as the cluster's Instance Manager
-  token, also in base64 (as a Secret's `data` holds it), URL encoding and
-  JSON escaping;
+  token, also in URL encoding, JSON escaping and, for a value of at least
+  eight bytes, base64 (as a Secret's `data` holds it);
 - a value named `password`, `passwd`, `token`, `secret`, `secretKey`,
   `secretAccessKey`, `accessKey`, `accessKeyId`, `apiKey` or `privateKey`
   (with `_` or `-` also accepted between the words), written as `name=value`
-  or `name: value`, quoted, unquoted or in escaped JSON, and ending at a URL
-  query boundary;
-- `Authorization: Bearer` and `Authorization: Basic` credentials, PEM private
-  keys, AWS access key IDs, the password of a URL's user part and the
-  password field of a CUBRID JDBC URL
-  (`jdbc:cubrid:host:port:database:user:password:`).
+  or `name: value`: a quoted value up to its closing quote, in plain text or
+  in escaped JSON, and an unquoted one up to a space, a quote, a comma, a
+  brace or a URL query's `&` or `;`;
+- a `Bearer` credential, a `Basic` credential (a word after "Basic" that
+  decodes to `user:password`), `curl -u user:password`, a PEM private key
+  (to the end of the text when its end marker is missing), an AWS access key
+  ID, the password of a URL's user part and the password field of a CUBRID
+  JDBC URL (`jdbc:cubrid:host:port:database:user:password:`).
 
-A registered value is matched in base64 only as the encoding of the value
-alone, and a credential split across two writes to `GinkgoWriter` is not
-recognized. Output Ginkgo itself prints, such as a failed assertion's
-message, is not redacted: a step's assertion does not print a credential.
+A registered value is matched in base64 reliably only as the encoding of
+the value alone, and a credential split across two writes to `GinkgoWriter`
+is not recognized. Output Ginkgo itself prints, such as a failed
+assertion's message, the text of `By` and `GinkgoLogr`, is not redacted: a
+step's assertion does not print a credential.
 
 ## Scenarios
 

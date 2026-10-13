@@ -45,7 +45,7 @@ var redact func(string) string
 // SetRedaction makes the commands Run logs, the errors it returns and
 // everything written to GinkgoWriter pass through f first. The output Run
 // returns is left as it is, since callers read values from it. Call it once,
-// before the specs run.
+// in BeforeSuite: RunSpecs needs Ginkgo's own GinkgoWriter.
 func SetRedaction(f func(string) string) {
 	redact = f
 	GinkgoWriter = redactingWriter{inner: GinkgoWriter, redact: f}

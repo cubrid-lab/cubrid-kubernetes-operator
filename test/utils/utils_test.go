@@ -66,3 +66,24 @@ func TestRunRedacts(t *testing.T) {
 		}
 	}
 }
+
+// The redaction installed in a suite's BeforeSuite, as the e2e suite does,
+// leaves Ginkgo working and redacts what the specs write.
+func TestRedactionInASuite(t *testing.T) {
+	const secret = "s3cr3t-in-suite"
+	previous := GinkgoWriter
+	t.Cleanup(func() { GinkgoWriter = previous; redact = nil })
+	var captured bytes.Buffer
+	BeforeSuite(func() {
+		SetRedaction(func(s string) string { return strings.ReplaceAll(s, secret, "[REDACTED]") })
+		GinkgoWriter.TeeTo(&captured)
+	})
+	It("writes the secret", func() {
+		_, _ = fmt.Fprintf(GinkgoWriter, "wrote %s\n", secret)
+	})
+	RunSpecs(t, "redaction")
+	got := captured.String()
+	if strings.Contains(got, secret) || !strings.Contains(got, "wrote [REDACTED]") {
+		t.Errorf("the spec's output was not redacted:\n%s", got)
+	}
+}

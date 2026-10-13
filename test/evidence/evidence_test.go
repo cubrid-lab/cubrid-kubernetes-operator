@@ -376,7 +376,11 @@ func TestWriteJUnit(t *testing.T) {
 }
 
 func TestRedact(t *testing.T) {
-	const hunter2 = "hunter2"
+	const (
+		hunter2   = "hunter2"
+		keyBody   = "MIIEvQIBADANBg"
+		basicCred = "dXNlcjpwYXNzd29yZA"
+	)
 	r := NewRedactor("s3cr3t-token-value", "", "ab")
 	tests := map[string]struct{ in, gone, kept string }{
 		"a value that was registered": {
@@ -405,19 +409,37 @@ func TestRedact(t *testing.T) {
 			in: "api_key: k3y-value-2\nnext: 1", gone: "k3y-value-2", kept: "next: 1"},
 		"a private key in PEM form": {
 			in:   "private_key: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----\nnext: 1",
-			gone: "MIIEvQIBADANBg", kept: "next: 1"},
+			gone: keyBody, kept: "next: 1"},
 		"an escaped PEM private key in JSON": {
 			in: `{"private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBg` +
 				`\n-----END RSA PRIVATE KEY-----\n", "id": "x"}`,
-			gone: "MIIEvQIBADANBg", kept: `"id": "x"`},
+			gone: keyBody, kept: `"id": "x"`},
 		"a basic authorization header": {
 			in:   "Authorization: Basic dXNlcjpwYXNzd29yZA==\nnext",
-			gone: "dXNlcjpwYXNzd29yZA", kept: "Authorization: Basic [REDACTED]\nnext"},
+			gone: basicCred, kept: "Authorization: Basic [REDACTED]\nnext"},
 		"a CUBRID JDBC URL with a password": {
 			in:   "jdbc:cubrid:cubrid-rw:33000:demodb:dba:s3cretpw:?charset=utf-8",
 			gone: "s3cretpw", kept: "jdbc:cubrid:cubrid-rw:33000:demodb:dba:[REDACTED]:?charset=utf-8"},
 		"a password in a URL query": {
 			in: "http://h:8080/x?password=abc123&db=demodb", gone: "abc123", kept: "&db=demodb"},
+		"an unquoted value with & and ; in a query": {
+			in: "url?password=Pa&ss&db=demodb", gone: "Pa", kept: "&ss&db=demodb"},
+		"a quoted value with &, ; and a backslash": {
+			in: `"password": "Pa&ss;w\\0\"rd", "db": "demodb"`, gone: "ss;w", kept: `"db": "demodb"`},
+		"a quoted value in escaped JSON with escapes inside": {
+			in:   `{\"password\":\"Pa\\\\ss\\\"wd\",\"db\":\"demodb\"}`,
+			gone: "wd", kept: `\"db\":\"demodb\"`},
+		"a single-quoted value with a space": {
+			in: "password='Pa ss;wd' next", gone: "ss;wd", kept: "' next"},
+		"basic authorization in a JSON header": {
+			in:   `{"Authorization": "Basic dXNlcjpwYXNzd29yZA=="}`,
+			gone: basicCred, kept: `{"Authorization": "Basic [REDACTED]"}`},
+		"basic authorization in a Go header map": {
+			in: "map[Authorization:[Basic dXNlcjpwYXNzd29yZA==]]", gone: basicCred, kept: "]]"},
+		"a curl user and password": {
+			in: "curl -u dba:s3cr3tpw http://h", gone: "s3cr3tpw", kept: "curl -u dba:[REDACTED] http://h"},
+		"a PEM private key cut short": {
+			in: "private_key: -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg ...", gone: keyBody, kept: "private_key: "},
 		"a token in a URL query ended by a semicolon": {
 			in: "url?token=abc123;next=1", gone: "abc123", kept: ";next=1"},
 	}
@@ -434,7 +456,7 @@ func TestRedact(t *testing.T) {
 	// value must not blank ordinary text.
 	plain := "credentialsSecretRef:\n  name: backup-credentials\nabout a table\n" +
 		"valueFrom:\n  secretKeyRef:\n    name: c-im-token\n    key: token\n" +
-		`"tokenFound": 0, "secretRef": "s"` + "\na basic check passed\n" +
+		`"tokenFound": 0, "secretRef": "s"` + "\na basic check passed\nbasic authentication is off\n" +
 		"jdbc:cubrid:cubrid-rw:33000:demodb:dba::?charset=utf-8\n"
 	if got := string(r.Redact([]byte(plain))); got != plain {
 		t.Errorf("redaction changed text without credentials:\n%s", got)
@@ -462,10 +484,14 @@ func TestRedactEncoded(t *testing.T) {
 		}
 	}
 	// The base64 for URLs differs from standard base64 for this one.
-	urlSafe := NewRedactor("??>>")
-	if got := string(urlSafe.Redact([]byte("v Pz8-Pg== Pz8+Pg== end"))); strings.Contains(got, "Pz8-Pg") ||
-		strings.Contains(got, "Pz8+Pg") {
-		t.Errorf("base64 variants of ??>> remain in %q", got)
+	urlSafe := NewRedactor("??>>??>>")
+	if got := string(urlSafe.Redact([]byte("v Pz8-Pj8_Pj4= Pz8+Pj8/Pj4= end"))); strings.Contains(got, "Pz8-Pj8_Pj4") ||
+		strings.Contains(got, "Pz8+Pj8/Pj4") {
+		t.Errorf("base64 variants of ??>>??>> remain in %q", got)
+	}
+	// The base64 of a short value is not registered: it occurs by chance.
+	if got := string(NewRedactor("abcd").Redact([]byte("id YWJjZA end"))); got != "id YWJjZA end" {
+		t.Errorf("the base64 of a short value was removed: %q", got)
 	}
 }
 
