@@ -424,3 +424,48 @@ func TestResumeCompletedRestores_DoesNotStartHeartbeatWhenStatusDidNotAnswer(t *
 	}
 	f.wantRestoredDataKept()
 }
+
+// A member that is not standalone joins HA after a restore, and what it joins
+// is in its HA configuration. Without a usable one the manager cannot start
+// the database of a completed restore: it starts nothing, returns the error
+// and keeps the marker, so the next start of the manager tries again (#348).
+func TestResumeCompletedRestores_NeedsTheHAConfigurationOfAnHAMember(t *testing.T) {
+	for name, breakConf := range map[string]func(path string) error{
+		"a missing file":              os.Remove,
+		"a file without ha_node_list": func(path string) error { return os.WriteFile(path, []byte("ha_mode=on\n"), 0o600) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newResumeFixture(t)
+			f.haConf = filepath.Join(t.TempDir(), "cubrid_ha.conf")
+			if err := os.WriteFile(f.haConf, []byte(testHAConf), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f.start(&volumeCLI{stepCLI: stepCLI{failing: map[string]bool{stepHeartbeatStatus: true}}, databases: f.databases})
+			done := f.run("restore-1")
+			if done.State != OpCompleted {
+				t.Fatalf("restore = %s (%s), want Completed", done.State, done.FailureReason)
+			}
+			marker := filepath.Join(f.databases, dbName, ownershipMarker)
+			if err := os.WriteFile(marker, []byte(done.ID+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := breakConf(f.haConf); err != nil {
+				t.Fatal(err)
+			}
+
+			restarted := &volumeCLI{databases: f.databases}
+			f.start(restarted)
+			err := f.server.ResumeCompletedRestores(t.Context())
+			if err == nil || !strings.Contains(err.Error(), "HA configuration") {
+				t.Errorf("ResumeCompletedRestores = %v, want an error about the HA configuration", err)
+			}
+			if calls := restarted.recorded(); len(calls) != 0 {
+				t.Errorf("commands ran without a usable HA configuration: %q", calls)
+			}
+			if got := f.marker(); got != done.ID {
+				t.Errorf("marker = %q, want it kept as %q", got, done.ID)
+			}
+			f.wantRestoredDataKept()
+		})
+	}
+}

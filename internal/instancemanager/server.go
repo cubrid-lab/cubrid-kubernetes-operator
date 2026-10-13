@@ -681,6 +681,8 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 // restore started it, and the marker is cleared afterwards, so that a start
 // that fails is tried again at the next start of the manager. A marker of any
 // other operation is left for the next operation on that database to judge.
+// A member that is not standalone needs a usable HA configuration for it;
+// without one nothing is started, the marker stays and the error is returned.
 // It counts as a running operation: once the member is stopping it starts
 // nothing, and a stop waits for it.
 func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
@@ -702,10 +704,12 @@ func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read the database root: %w", err)
 	}
-	haMember := false
-	if s.standaloneDB == "" {
-		_, err := haHosts(s.ha.ConfPath)
-		haMember = err == nil
+	// A member that is not standalone joins HA, which takes its HA
+	// configuration: without a usable one its database is not started.
+	haMember := s.standaloneDB == ""
+	var haErr error
+	if haMember {
+		_, haErr = haHosts(s.ha.ConfPath)
 	}
 	var errs []error
 	for _, e := range entries {
@@ -719,6 +723,10 @@ func (s *Server) ResumeCompletedRestores(ctx context.Context) error {
 		}
 		op, err := s.store.Get(strings.TrimSpace(string(data)))
 		if err != nil || op.Kind != OpRestore || op.State != OpCompleted || op.Restored == nil || op.Database != database {
+			continue
+		}
+		if haErr != nil {
+			errs = append(errs, fmt.Errorf("start %s of completed restore %s: the HA configuration is not usable: %w", database, op.ID, haErr))
 			continue
 		}
 		s.log().Info("Starting the database of a completed restore", "operationID", op.ID, "database", database)
