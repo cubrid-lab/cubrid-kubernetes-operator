@@ -553,6 +553,8 @@ func TestRedact(t *testing.T) {
 			in: "Authorization: Basic dXNlcjpwYXNzd29yZA", gone: basicCred, kept: "Authorization: Basic [REDACTED]"},
 		"a curl --user= password": {
 			in: "curl --user=dba:s3cr3tpw http://h", gone: "s3cr3tpw", kept: " http://h"},
+		"a single-quoted value with a doubled quote, as SQL writes it": {
+			in: "token: 'it''s-x9' next", gone: "s-x9", kept: "' next"},
 		"a single-quoted value with a space": {
 			in: "password='Pa ss;wd' next", gone: "ss;wd", kept: "' next"},
 		"basic authorization in a JSON header": {

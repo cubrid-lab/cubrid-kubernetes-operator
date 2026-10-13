@@ -383,7 +383,8 @@ var (
 // fieldPatterns find a credential written as name=value or name: value. A
 // value in escaped JSON (\"...\") ends at its closing \" or at the end of
 // the line. A double- or single-quoted value ends at its closing quote on the
-// same line, honoring escapes; without one it ends like an unquoted value.
+// same line, honoring escapes and SQL's doubled quote; without one it ends
+// like an unquoted value.
 // An unquoted value ends at a space, a quote, a comma, a brace, or a URL
 // query's & or ;. An empty value is left as it is.
 var fieldPatterns = func() []*regexp.Regexp {
@@ -394,7 +395,8 @@ var fieldPatterns = func() []*regexp.Regexp {
 		// quote of the inner JSON, \ and a letter for its other escapes.
 		regexp.MustCompile(key + `\\")()(?:\\\\\\\\|\\\\\\"|\\\\[^\\"\n]|\\[^\\"\n]|[^\\"\n])+`),
 		regexp.MustCompile(key + `")(?:\\.|[^"\\\n])+(")`),
-		regexp.MustCompile(key + `')[^'\n]+(')`),
+		// SQL writes a quote inside a string as ''.
+		regexp.MustCompile(key + `')(?:''|[^'\n])+(')`),
 		regexp.MustCompile(key + `["'])()[^\s"']+`),
 		regexp.MustCompile(key + `)()[^\s"'\\,;&}]+`),
 	}
