@@ -16,7 +16,12 @@ limitations under the License.
 
 package instancemanager
 
-import "testing"
+import (
+	"context"
+	"slices"
+	"strings"
+	"testing"
+)
 
 // masterOut / slaveOut are verbatim `cubrid heartbeat status` output captured
 // from the real 2-node HA POC (docs/poc/RESULTS.md).
@@ -145,5 +150,88 @@ func TestParseHAStatus_NeedsExactlyOneMatchingLocalNode(t *testing.T) {
 	}
 	if s := ParseHAStatus(slaveOut); s.Role != RoleSlave || s.Reason != "" {
 		t.Errorf("recorded slave output: role %q, reason %q", s.Role, s.Reason)
+	}
+}
+
+// slaveWithAppliersOut is the status of a slave of a three-member group: it
+// applies the log of each of the two other members.
+const slaveWithAppliersOut = ` HA-Node Info (current hab-2, state slave)
+   Node hab-2 (priority 3, state slave)
+   Node hab-1 (priority 2, state slave)
+   Node hab-0 (priority 1, state master)
+
+ HA-Process Info (master 56, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_hab-1 (pid 329, state registered)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_hab-0 (pid 327, state registered)
+   Copylogdb appdb@hab-1:/var/lib/cubrid/databases/appdb_hab-1 (pid 325, state registered)
+   Copylogdb appdb@hab-0:/var/lib/cubrid/databases/appdb_hab-0 (pid 323, state registered)
+   Server appdb (pid 65, state registered_and_standby)`
+
+func TestParseHAStatus_Appliers(t *testing.T) {
+	got := ParseHAStatus(slaveWithAppliersOut).Appliers
+	want := []ApplierProcess{
+		{LogPath: "/var/lib/cubrid/databases/appdb_hab-1", PID: 329},
+		{LogPath: "/var/lib/cubrid/databases/appdb_hab-0", PID: 327},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("appliers = %+v, want %+v", got, want)
+	}
+	if got := ParseHAStatus(transitionOut).Appliers; len(got) != 0 {
+		t.Errorf("appliers of a status without applier lines = %+v, want none", got)
+	}
+}
+
+// The reading of a slave's replication names the applier process of the
+// master's log, by its process ID and start time (#360).
+func TestReplicationOf_NamesTheApplierOfTheMastersLog(t *testing.T) {
+	started := map[int]string{327: "48213"}
+	defer func(old func(int) (string, bool)) { processStarted = old }(processStarted)
+	processStarted = func(pid int) (string, bool) {
+		at, ok := started[pid]
+		return at, ok
+	}
+	st := ParseHAStatus(slaveWithAppliersOut)
+	cli := fakeCLI{out: applyinfoOutput(t, "applyinfo-local.txt")}
+	got := replicationOf(context.Background(), cli, st, "appdb", "/var/lib/cubrid/databases")
+	if got == nil || got.Source != "hab-0" {
+		t.Fatalf("replication = %+v, want a reading of hab-0's log", got)
+	}
+	if got.Applier != "pid:327:48213" {
+		t.Errorf("applier = %q, want the process of hab-0's log with its start time", got.Applier)
+	}
+
+	// A process whose start cannot be read is still another process than
+	// one with another ID.
+	delete(started, 327)
+	if got := replicationOf(context.Background(), cli, st, "appdb", "/var/lib/cubrid/databases"); got.Applier != "pid:327" {
+		t.Errorf("applier without a readable start = %q, want pid:327", got.Applier)
+	}
+	// No applier line for the master's log: the identity is not known.
+	st.Appliers = st.Appliers[:1]
+	if got := replicationOf(context.Background(), cli, st, "appdb", "/var/lib/cubrid/databases"); got.Applier != "" {
+		t.Errorf("applier without a line for the log = %q, want none", got.Applier)
+	}
+}
+
+// The start time is field 22 of /proc/<pid>/stat, counted past a process
+// name that may itself hold spaces and parentheses.
+func TestStartTicks(t *testing.T) {
+	const rest = " S 1 327 327 0 -1 4194560 2143 0 0 0 12 7 0 0 20 0 3 0 48213 123456789 2048 18446744073709551615 1 1 0 0 0 0"
+	for name, stat := range map[string]string{
+		"a plain name":            "327 (cub_admin)" + rest,
+		"a name with parentheses": "327 (cub (ad) min)" + rest,
+	} {
+		if got, ok := startTicks(stat); !ok || got != "48213" {
+			t.Errorf("%s: start = %q (%v), want 48213", name, got, ok)
+		}
+	}
+	for name, stat := range map[string]string{
+		"an empty file":  "",
+		"too few fields": "327 (cub_admin) S 1 327",
+		"not a number":   "327 (cub_admin)" + strings.Replace(rest, "48213", "soon", 1),
+	} {
+		if got, ok := startTicks(stat); ok {
+			t.Errorf("%s: start = %q, want none", name, got)
+		}
 	}
 }

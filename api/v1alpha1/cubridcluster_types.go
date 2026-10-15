@@ -425,6 +425,11 @@ type InstanceReplication struct {
 	// delayedPages is the number of copied log pages that are not applied yet.
 	// +optional
 	DelayedPages int64 `json:"delayedPages,omitempty"`
+	// applier identifies the applier process these counters were read
+	// beside. The counters outlast the process, so a change of it starts a
+	// new series: a restarted applier does not inherit stalledSince.
+	// +optional
+	Applier string `json:"applier,omitempty"`
 	// stalledSince is when the operator first saw log pages waiting while the
 	// applier had applied nothing since the reading before. It is cleared
 	// as soon as the applier applies something or no page waits.

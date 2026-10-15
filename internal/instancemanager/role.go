@@ -53,6 +53,15 @@ type HAStatus struct {
 	// log (docs/poc/RESULTS.md, POC-20); absent for any other role and for a
 	// member that was not told its database.
 	Replication *ApplyConvergence `json:"replication,omitempty"`
+	// Appliers are the log applier processes heartbeat lists.
+	Appliers []ApplierProcess `json:"appliers,omitempty"`
+}
+
+// ApplierProcess is one "Applylogdb" line of `cubrid heartbeat status`.
+type ApplierProcess struct {
+	// LogPath is the directory of the copied log it applies.
+	LogPath string `json:"logPath"`
+	PID     int    `json:"pid"`
 }
 
 // NodeState is one node's line in the HA-Node Info block.
@@ -69,6 +78,8 @@ var (
 	reNode = regexp.MustCompile(`Node (\S+) \(priority (\d+), state (\w+)\)`)
 	// "   Server pocdb (pid 272, state registered_and_active)"
 	reServer = regexp.MustCompile(`Server \S+ \(pid \d+, state (\w+)\)`)
+	// "   Applylogdb appdb@localhost:/path/appdb_cub-0 (pid 327, state registered)"
+	reApplier = regexp.MustCompile(`Applylogdb \S+?:(\S+) \(pid (\d+), state \w+\)`)
 )
 
 // ParseHAStatus parses `cubrid heartbeat status` output into an authoritative
@@ -96,6 +107,9 @@ func ParseHAStatus(out string) HAStatus {
 
 	if sm := reServer.FindStringSubmatch(out); sm != nil {
 		s.ServerActive = sm[1] == "registered_and_active"
+	}
+	for _, am := range reApplier.FindAllStringSubmatch(out, -1) {
+		s.Appliers = append(s.Appliers, ApplierProcess{LogPath: am[1], PID: atoiSafe(am[2])})
 	}
 
 	switch currentState {

@@ -818,6 +818,12 @@ spec:
                             it was started.
                           format: int64
                           type: integer
+                        applier:
+                          description: |-
+                            applier identifies the applier process these counters were read
+                            beside. The counters outlast the process, so a change of it starts a
+                            new series: a restarted applier does not inherit stalledSince.
+                          type: string
                         delayedPages:
                           description: delayedPages is the number of copied log pages
                             that are not applied yet.
