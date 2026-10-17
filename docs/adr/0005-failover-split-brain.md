@@ -50,7 +50,8 @@ promotion priority (`ha_node_list`); heartbeat-level split-brain
 avoidance; replication state and catch-up.
 
 **The operator owns:** rendering HA topology/config and stable
-identities; observing roles via `/v1/role` + `/v1/ha/status`; aggregating
+identities; observing roles via `/v1/role` (as implemented, the operator
+does not call `/v1/ha/status`); aggregating
 `status`/Conditions/Events/metrics; reconciling Kubernetes/broker
 resources around observed HA state; detecting unresolved/incomplete/
 conflicting primaries; **quarantining write routing** when safety is not
@@ -80,7 +81,12 @@ Manual intervention is required for confirmed/suspected split-brain.
   `RoutingReady=False` and withhold the RW endpoint (broker readiness
   gate / config gate / scale RW brokers to zero). This is **not** DB
   fencing; it minimizes *new* stale-master writes without picking a
-  winner.
+  winner. As implemented, only `RoutingReady=False` is set: the RW
+  Brokers keep running and the `-rw` Service keeps its endpoints, so the
+  quarantine is reported and not enforced (S03 on Kind saw writes
+  acknowledged through `-rw` meanwhile; #113, ROADMAP.md). The operator
+  does not call `/v1/shutdown`; a Pod's preStop hook stops its member, and
+  no step sets `FencingRequired`.
 - **Manual break-glass** — the operator surfaces enough status/Events for
   an admin to fence manually; automatic execution is out of v1alpha1
   scope.
@@ -102,7 +108,8 @@ enabled only by a future active-fencing ADR with an explicit gate.
 ### 3. Primary detection algorithm
 
 Each reconcile builds a **fresh** snapshot by polling every promotable
-member's `/v1/role` + `/v1/ha/status` (bounded timeout), recording
+member's `/v1/role` (bounded timeout; as implemented `/v1/ha/status` is
+not polled, and a conflict is one inside the `/v1/role` answer), recording
 `observed`, `managerReachable`, `role`, `roleAuthoritative`,
 `lastObservationTime`, `reason`.
 
@@ -145,7 +152,12 @@ never by weakening `PrimaryResolved`.
 ### 5. Conditions and reasons
 
 `reason` strings are **open-ended** (not CRD enums) so status can evolve
-without breaking. Key set:
+without breaking. Key set (the target set of this decision; as implemented,
+`PrimaryResolved` carries the reasons below, `HAReady` carries
+`HealthyReplication`, the reason of `PrimaryResolved`, `HADisabled` or
+`RoleDiscoveryDisabled`, `RoutingReady` the reasons listed in
+[docs/observability.md](../observability.md#conditions), and nothing sets
+`Degraded`, `FencingRequired` or `FailingOver`):
 
 - **PrimaryResolved**: `SinglePrimaryObserved` (True) /
   `NoPrimaryObserved` / `MultiplePrimariesObserved` /

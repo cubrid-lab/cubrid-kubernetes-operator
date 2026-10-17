@@ -76,7 +76,8 @@ the fixed names below; free text belongs in `message`.
 
 | Condition | `True` means | `False` or `Unknown` reasons |
 |---|---|---|
-| `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved` |
+| `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed (`ClusterReady`) | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved`, or the reason of a step that could not write an object of the cluster, such as `StatefulSetReconcileFailed` (see below) |
+| `Progressing` | The Operator is still working towards the spec: members are starting (`InstancesStarting`), a recovery bootstrap runs (`BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`), or a step failed and is retried (that step's reason) | `Reconciled` once the cluster is reconciled, also while more than one master is observed; `BootstrapRecoveryFailed` |
 | `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member); `Unknown` with `RolesNotObserved` |
 | `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` or `RolesNotObserved` |
 | `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
@@ -84,7 +85,7 @@ the fixed names below; free text belongs in `message`.
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
 | `RoutingReady` | The primary is resolved and a read-write Broker is available | the reason of `PrimaryResolved`, which comes first; `NoBrokerAvailable`; `Unknown` with `RolesNotObserved` or `BrokerReconcileFailed` |
 | `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped; `ObjectStorageNotApplied` while the seed source's Instance Manager runs without object storage (waits, uses up no attempt). A start a member refused keeps the cause it named (ADR-0003, error answers): `InstanceManagerTokenRefused`; `InstanceManagerOperationInProgress` or `InstanceManagerStagingInUse` while another operation holds the database or the staging destination (waits, uses up no attempt); `InstanceManagerRequestConflict` when the member holds an operation under the step's key for another request and that operation could not be found (a found one is followed instead); `InstanceManagerNotAnHAMember` while the member runs as a standalone server (waits, uses up no attempt); `InstanceManagerConflict` for a conflict of no named cause; `InstanceManagerUnavailable` for any other failed call, or `RestoreStartFailed` at the start of a recovery restore. A start the member refuses as a request (400, 413 or 422, ADR-0003) is a failed attempt, reported by the step's failure reason (`RestoreFailed`, `DatabaseCreationFailed`, `SeedBackupFailed`, `SeedRestoreFailed`, with `Retrying` while attempts remain). `SeedRestoreSourceMismatch`: a followed seed restore completed with another backup than the step's; the member is not recorded as seeded and is left for a person. `InvalidManifestURI`: `spec.bootstrap.recovery.manifestUri` is not of the form ADR-0008 accepts (a cluster stored by a release that admitted it), and either no restore was started for it, so none is, or the restore started for it reads another object than the one it names; the recovery is `Failed` and that restore is no longer polled, though a running one goes on to its end on the member. A started restore that reads the object the URI names is followed. Once a recovery is `Failed` its reason stays: the member is not asked again |
-| `Updating` | A member is being replaced for a new image | why nothing is being replaced, among them `UpdateBlockedEngineVersionNotObserved`, `UpdateBlockedEngineVersionUnknown`, `UpdateBlockedMixedEngineVersions`, `UpdateBlockedEngineUpgrade`, `UpdateBlockedUnverifiableEngineVersion`, `AutomaticReplacementDisabled`, `MasterUpdatePending`, `UpToDate`, `ImageChangeNotAccepted`; `Unknown` with `UpdateStateUnavailable`. The engine-version reasons apply to a standalone cluster as well. `ImageChangeNotAccepted` is removed once the Pod template carries the image the spec asks for, unless another reason replaces it |
+| `Updating` | A member is being replaced for a new image (`RollingUpdateInProgress`, or `MemberUpdateInProgress` when its Pod could not be deleted), or the rolling update waits: `WaitingForPrimaryResolved`, `WaitingForHealthyCluster`, `WaitingForCatchUp`, `UpdatePausedFencingRequired`, `WaitingForPDB` | why nothing is being replaced, among them `UpdateBlockedEngineVersionNotObserved`, `UpdateBlockedEngineVersionUnknown`, `UpdateBlockedMixedEngineVersions`, `UpdateBlockedEngineUpgrade`, `UpdateBlockedUnverifiableEngineVersion`, `AutomaticReplacementDisabled`, `MasterUpdatePending`, `UpToDate`, `ImageChangeNotAccepted`; `Unknown` with `UpdateStateUnavailable`. The engine-version reasons apply to a standalone cluster as well. `ImageChangeNotAccepted` is removed once the Pod template carries the image the spec asks for, unless another reason replaces it. The manager is built with automatic replacement off (`AutomaticReplacement` is never set in `cmd/main.go`), so an outdated slave is reported as `AutomaticReplacementDisabled` and no Pod is deleted: `RollingUpdateInProgress` and `MemberUpdateInProgress` are not produced by a released build. No step of the Operator sets a `FencingRequired` Condition, and no PodDisruptionBudget is read, so `UpdatePausedFencingRequired` and `WaitingForPDB` are not produced either |
 
 When the Operator cannot write one of the cluster's objects, `Ready` turns
 `False` with the reason of that step, such as `StatefulSetReconcileFailed`,
@@ -112,8 +113,8 @@ this records the `PrimaryUnresolved` transition with the reason
 `RolesNotObserved`, next to the Warning Event of the failure itself. A
 cluster without a role prober is not changed.
 
-`HAReady` does not depend on `ReplicationHealthy` yet; that is issue
-[#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249).
+`HAReady` does not depend on `ReplicationHealthy`
+([#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249)).
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
 available; they do not say that a client can run SQL. For an HA cluster,
 `Ready` is also `False` (`MultiplePrimariesObserved`) while more than one
@@ -253,9 +254,13 @@ underscores.
 | A member's role changes; a member first listed with the role `unknown`, as a standalone member always is, is no change | none | | `member_role_changed` |
 | A member whose role was known gives no answer that counts: its role becomes `unknown` | none | | `member_role_unobserved`, with `oldRole`, the `reason` and the `requestID` of the role query when one was sent (see below) |
 | Any other Condition changes its status or reason | none | | `condition_changed` |
-| The bootstrap reaches its next phase | `DatabaseCreated`, `DatabaseRestored` (a recovery restore completed and seeding starts), `PeersSeeded` | Normal | `bootstrap_phase_changed` |
+| `Ready` becomes `True` | `ClusterReady` | Normal | `condition_changed` (`Ready`) |
+| A step could not write an object of the cluster (`Ready` takes that step's reason, see [Conditions](#conditions)) | the step's reason, such as `StatefulSetReconcileFailed`, once for a failure that stays the same | Warning | `condition_changed` (`Ready`) |
+| The bootstrap reaches its next phase | `DatabaseCreated`, `DatabaseRestored` (a recovery restore completed and seeding starts), `PeersSeeded` | Normal | no log event of its own; `condition_changed` when `BootstrapReady` changes |
+| A bootstrap step failed: attempts remain, or the last one failed | the step's failure reason with `Retrying` (`DatabaseCreationFailedRetrying`, `SeedBackupFailedRetrying`, `SeedRestoreFailedRetrying`, `RestoreFailedRetrying`), or without it after the last attempt | Warning | `condition_changed` (`BootstrapReady`); a failed recovery also `restore_failed` |
 | A member is copied from another member than the one the database was created or restored on, because that member is no longer the master | `SeedSourceChanged` | Normal | `condition_changed` (`BootstrapReady`, reason `SeedSourceSelected`) |
-| A member is replaced for a new image | `RollingUpdate` | Normal | `rolling_update` |
+| A member is replaced for a new image | `RollingUpdate`; not produced by a released build, which never deletes a Pod for an update (see `Updating` above) | Normal | none |
+| The Instance Manager token is rotated, its overlap ends, a requested rotation waits, or a new token is generated under running Pods (ADR-0003) | `InstanceManagerTokenRotated`, `InstanceManagerTokenOverlapEnded`, `InstanceManagerTokenRotationDeferred`, all Normal; `InstanceManagerTokenRegenerated`, a Warning; none carries the token | | none |
 | A CubridBackup reaches a phase: `Pending`, `Running`, `Uploading`, `Completed`, `Failed` | on the CubridBackup: `BackupPending`, `BackupStarted`, `BackupUploading`, `BackupCompleted`, `BackupFailed` | Normal; `BackupFailed` is a Warning | `backup_pending`, `backup_started`, `backup_uploading`, `backup_completed`, `backup_failed` |
 | A recovery bootstrap takes a step: a restore operation is started (once for each attempt), restoredb begins after the download, the recovery ends | `RestoreStarted`, `RestoreRunning`, `RestoreCompleted`, `RestoreFailed` | Normal; `RestoreFailed` is a Warning | `restore_started`, `restore_running`, `restore_completed`, `restore_failed` |
 
@@ -375,9 +380,9 @@ otherwise.
 
 | Metric | Labels | Value |
 |---|---|---|
-| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when `Ready` is `True`, else 0 |
-| `cubrid_cluster_instances` | `namespace`, `cluster` | members the cluster should have |
-| `cubrid_cluster_instances_ready` | `namespace`, `cluster` | members that are ready |
+| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when the expected members are ready and no more than one master is observed, else 0 (see below) |
+| `cubrid_cluster_instances` | `namespace`, `cluster` | members the cluster should have (see below) |
+| `cubrid_cluster_instances_ready` | `namespace`, `cluster` | members whose Pods are ready, as the StatefulSet counts them (see below) |
 | `cubrid_cluster_ha_ready` | `namespace`, `cluster` | 1 or 0 |
 | `cubrid_cluster_primary_resolved` | `namespace`, `cluster` | 1 or 0 |
 | `cubrid_cluster_routing_ready` | `namespace`, `cluster` | 1 or 0 |
@@ -390,9 +395,17 @@ otherwise.
 | `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set, 0 while it is not; no sample without a reading |
 | `cubrid_instance_last_observation_timestamp_seconds` | `namespace`, `cluster`, `member` | time of the member's last answer; no sample for a member that never answered, nor for the member of a standalone cluster, which is not observed periodically |
 
-Every metric is taken from the cluster's status when that status was written,
-so a metric and the Condition or status field it mirrors come from the same
-observation. A reading of an applier that could not be renewed stays in the
+Every metric except the first three is taken from the cluster's status when
+that status was written, so a metric and the Condition or status field it
+mirrors come from the same observation. `cubrid_cluster_ready`,
+`cubrid_cluster_instances` and `cubrid_cluster_instances_ready` are set
+instead when a reconcile computes the members' readiness
+(`setReady` in `internal/controller/cubridcluster_controller.go`), before the
+status is written and whether or not the write succeeds. A reconcile that ends
+before that step, because a step failed or a recovery bootstrap runs, does
+not change them: while `Ready` is `False` for such a reason,
+`cubrid_cluster_ready` keeps the value it had and can still be 1. Read
+`Ready` itself where that difference matters. A reading of an applier that could not be renewed stays in the
 status, and so in the metrics, for a bounded time before it is dropped. A
 Condition that the status does not carry has no sample; `cubrid_cluster_ha_ready`,
 `cubrid_cluster_primary_resolved` and `cubrid_cluster_routing_ready` are 0 while

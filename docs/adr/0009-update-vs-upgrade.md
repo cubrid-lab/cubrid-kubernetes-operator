@@ -139,13 +139,15 @@ reports nothing about them.
 
 Status records: `observedEngineVersion` (cluster + per member),
 per-member `imageID`/digest, `update.desiredRevision`,
-`update.currentRevision`, `update.engineVersion`.
+`update.currentRevision`, `update.engineVersion`. The per-member
+`imageID` field exists in the API but the Operator does not set it.
 
 ### StatefulSet strategy
 
 **`OnDelete`** (operator-owned). Kubernetes never replaces a pod merely
 because the template changed; the operator patches the template, then
-**deletes exactly one eligible pod at a time**, gating each replacement.
+**deletes exactly one eligible pod at a time**, gating each replacement
+(switched off, see above: the operator deletes no Pod).
 The strategy is **not** a user-configurable field in v1alpha1 (exposing
 native `RollingUpdate` would undermine safety).
 
@@ -153,7 +155,10 @@ Per-pod replacement gate: `PrimaryResolved=True`; no `FencingRequired`;
 master known/stable; target role known; **target is not the current
 master** (except the explicit master-update flow); ≥2 members remain
 healthy (3-node HA); PDB permits disruption; catch-up acceptable; no other
-member updating/catching-up/ambiguous.
+member updating/catching-up/ambiguous. As implemented, the `FencingRequired`
+and PDB checks have no input (no step sets `FencingRequired`, and no
+PodDisruptionBudget is created or read: `pdbAllows` is fixed to true in
+`internal/controller/update.go`), and catch-up is taken from readiness.
 
 ### Safe restart sequence (3-node HA)
 
@@ -219,7 +224,12 @@ reasons include `RollingUpdateInProgress`, `ReloadInProgress`,
 `WaitingForCatchUp`, `Blocked`, `MasterUpdatePending`. A blocked
 engine-upgrade surfaces `Updating=False`/`Progressing=False` reason
 `UpdateBlockedEngineUpgrade` with a message naming observed + desired
-versions; **no pod deletion**.
+versions; **no pod deletion**. This is the target set. As implemented,
+nothing sets `Degraded` or `FencingRequired`; `ReloadInProgress`,
+`ReloadSucceeded`, `PlannedFailoverRequired` and `UpdatePausedRoleAmbiguous`
+are not produced, `UpdateCompleted` is reported as `UpToDate`, and there is
+no per-member update phase. The reasons the Operator sets are listed in
+[docs/observability.md](../observability.md#conditions).
 
 ### Health guard
 

@@ -84,7 +84,7 @@ make test-e2e KIND_CLUSTER=cubrid-contributor-e2e
 make cleanup-test-e2e KIND_CLUSTER=cubrid-contributor-e2e
 ```
 
-The target builds the manager image, creates/reuses the named Kind cluster,
+The target builds the manager image and the images its groups need, creates/reuses the named Kind cluster,
 and deletes that cluster after a successful run. Never reuse a valuable
 cluster name. The suite has independent groups: the manager itself, the wiring
 scenario with a fake Instance Manager (label `fake-instance-manager`, no
@@ -94,8 +94,10 @@ labelled with its ID, and a variant also with `<ID>-<variant>`). The real-image
 groups run on linux/amd64 only and are skipped elsewhere. A failure in one
 group does not stop the others. A skipped, filtered-out or blocked scenario
 is recorded as `not_run` or `blocked` with the reason, never as a pass. S00
-covers one standalone member; a Kind run does not establish backup, restore
-or behavior on real VM failures.
+covers one standalone member. No e2e test creates a CubridBackup or a
+recovery bootstrap (S11 and S12 have no test), so a Kind run does not
+establish backup or restore, and Kind never establishes behavior on real VM
+failures.
 
 ```bash
 make test-e2e E2E_LABEL_FILTER=S00        # one scenario by its ID
@@ -456,7 +458,7 @@ which level was used.
 |-------|-------------------|----------------------------|
 | Unit | State decisions, parsing, validation, retry and operation rules | Real engine or network behavior |
 | envtest | API validation and the Kubernetes resources the controller creates | Pod execution, scheduling or database recovery |
-| Real database on Kind | Installation, SQL, replication, backup and restore working together | What happens when a real VM fails |
+| Real database on Kind | Installation, SQL, replication, and (once S11 and S12 run there) backup and restore working together | What happens when a real VM fails |
 | VM lab | The supported topology, VM failures and controlled network faults | Resilience across physical zones or a whole provider |
 | POC | What one engine build did under the recorded conditions | A general CUBRID guarantee |
 
@@ -497,7 +499,7 @@ it is the only evidence.
   | Check | Hosts |
   |-------|-------|
   | `make test` (unit and envtest), `make lint` | Any host with Go; no container tool needed |
-  | `make docker-build`, `make docker-build-instance-manager`, `make test-e2e` (manager and Kubernetes wiring on Kind) | Docker or Podman, amd64 or arm64 |
+  | `make docker-build`, `make docker-build-instance-manager`, `make test-e2e` (manager and Kubernetes wiring on Kind) | Docker or Podman, amd64 or arm64; CI runs Docker on linux/amd64 only. On arm64 the real-image groups are skipped as `not_run` |
   | Anything that runs CUBRID itself | linux/amd64 only: the official CUBRID image has no other architecture. A run under emulation on another architecture can show command output; it is not accepted as HA, timing or recovery evidence |
 
 - The Kind e2e scenario labelled `fake-instance-manager` runs the DB Pods from

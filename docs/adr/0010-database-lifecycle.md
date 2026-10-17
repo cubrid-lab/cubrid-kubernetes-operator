@@ -107,9 +107,12 @@ copylogdb and applylogdb, about 1 second after `cub_master` was gone during a
 because the manager's own utilities (`applyinfo`) may run under that name. A
 stop asked for during the 2 seconds ends the wait, and nothing is started.
 The same rules hold for the heartbeat start of a restored member (ADR-0008),
-including the rule for running heartbeat: a restore, or the start of a
-completed restore's database when the manager starts, counts as done only when
-heartbeat reports the member in a confirmed role (master, slave or replica).
+including the rule for running heartbeat: when heartbeat already runs, a
+restore, or the start of a completed restore's database when the manager
+starts, counts as done only when heartbeat reports the member in a confirmed
+role (master, slave or replica). A start the manager issues itself, in the
+bootstrap or a restore, counts as done when `cubrid heartbeat start` exits 0;
+no role is checked after it.
 Any other state, such as `unknown`, which POC-26 saw stay after
 `cubrid heartbeat stop` and after a failed start, fails it without a start;
 the restored data and its ownership marker are kept (#454).
@@ -128,10 +131,16 @@ is not seen (the decision is a check, then an act). A shutdown that runs its
 own fallback before the manager listens is not such a start or stop: it
 records the stop first, and the manager starts no heartbeat after a recorded
 stop (ADR-0003, Shutdown model).
-The 2 seconds were measured against one local host without load. Right after
-the manager's own `cubrid createdb` and `cubrid restoredb -u` exited, no
-`cub*` process was seen for 1 and 0.6 seconds (`cubrid/cubrid:11.4`, one
-standalone container, a few runs), so neither leaves a veto behind. Ordinal 0 is
+The 2 seconds were chosen above the POC-26 observations (up to 159 ms of a
+start that looked inactive, about 1 s of processes after a stop), on one
+native linux/amd64 Docker host without load; they are not a measured bound.
+Right after the manager's own `cubrid createdb` and `cubrid restoredb -u`
+exited, no `cub*` process was seen when `/proc` was sampled every 100 ms for
+1 s and 0.6 s (`cubrid/cubrid:11.4`, local Docker, one standalone container,
+a few runs; recorded in `internal/instancemanager/cli.go`, not in
+docs/poc/RESULTS.md), so neither leaves a veto behind.
+Known limit: the entrypoint of an HA member that finds its database runs
+`cubrid heartbeat start` itself, without this guard. Ordinal 0 is
 only where the database is created; which member is master afterwards is
 CUBRID's decision. A standalone member's entrypoint runs `createdb` itself,
 inside the ownership marker described below with a value that is not an

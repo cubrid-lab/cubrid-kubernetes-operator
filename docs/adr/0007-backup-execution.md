@@ -76,7 +76,8 @@ itself. A Kubernetes Job is **not** in the v1alpha1 critical path
 
 - **Operator:** watch/validate `CubridBackup`; resolve target via
   ADR-0005 role/health; call `/v1/backup` with
-  `Idempotency-Key = cubridbackup:<ns>:<name>:<uid>:<attempt>`; poll
+  `Idempotency-Key = cubridbackup:<ns>:<name>:<uid>` (as implemented, no
+  attempt part; `idempotencyKey` in `internal/controller/cubridbackup_controller.go`); poll
   `/v1/operations/{id}`; update CR + cluster-level backup summary.
 - **Instance Manager:** create a durable operation record; run
   `backupdb.sh` / `cubrid backupdb` locally; capture command/db/role-at-
@@ -96,7 +97,12 @@ no ambiguous/incomplete primary observation (ADR-0005) — so backup load
 never lands on a suspected master during unsafe failover evidence; it
 records `fallbackUsed: true`, `targetRole: master`, reason
 `MasterFallbackSelected`. `StandbyOnly`
-fails if no eligible slave. **Backup on master is allowed** (fallback,
+fails if no eligible slave. As implemented, an eligible slave is a member
+authoritatively observed as a slave in a fresh observation, and the first
+one in ordinal order is taken: Pod readiness and how far the slave has
+caught up are not evaluated (`internal/controller/backuptarget.go`), and the
+`FencingRequired` check has no input because no step sets that Condition.
+**Backup on master is allowed** (fallback,
 health-checked) but not preferred. If all roles are `unknown`: single
 instance → allow with reason `RoleUnknownSingleInstanceFallback`; HA
 cluster → fail for `PreferStandby` (avoid accidentally loading the true
@@ -358,7 +364,12 @@ operation of it, and waits within the bound while that cannot be asked),
 `RecordedTargetNotEligible`,
 `RecordedTargetNotStarted`, `RecordedTargetUnverified`, `ObjectStorageWaitExpired`,
 `ObjectStorageUnavailable`). Cluster-level: `BackupReady`
-(True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary.
+(True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary. As
+implemented, `ChecksumMismatch`, `InsufficientStagingSpace` and
+`ObjectStorageUnavailable` are not produced (a backup operation that fails on
+the member ends `Failed` with `BackupFailed` and the operation's reason in
+the message), and the cluster has no
+`BackupReady` Condition and no backup summary in its status.
 **Backup state must not be conflated with cluster/HA readiness.**
 
 ## Consequences

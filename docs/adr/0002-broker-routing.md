@@ -190,6 +190,14 @@ BrokerReady          WriteEndpointReady   ReadEndpointReady   RoutingReady
 - Ambiguous primary → `RoutingReady=False` (`AmbiguousPrimary`); do not
   claim write-endpoint safety until ADR-0005 resolves split-brain.
 
+As implemented, no RW Broker available gives `WriteEndpointReady=False`
+and `RoutingReady=False` with `NoBrokerAvailable`; an unresolved primary
+gives `RoutingReady=False` with the reason of `PrimaryResolved` (for
+example `MultiplePrimariesObserved`), `AmbiguousPrimary` only when that
+reason is empty. Whether a Broker can reach the master is not checked, so
+`BrokerCannotReachPrimary` is not produced (`internal/controller/broker.go`;
+reasons in [docs/observability.md](../observability.md#conditions)).
+
 ## Consequences
 
 ### Positive
