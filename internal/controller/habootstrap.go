@@ -376,17 +376,17 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		// on, and has to pick up what that member committed since.
 		SeedFromMaster: source,
 	}
-	// A retry whose restore will take over what an earlier attempt's
+	// A retry whose restore is predicted to take over what an earlier attempt's
 	// restore of this step's backup restored takes no new backup: the
 	// Instance Manager would only start that data and never restore the
 	// new backup (ADR-0008, #463).
 	reused := false
 	if !restoreStarted {
 		var err error
-		reused, err = r.restoredByEarlierAttempt(ctx, cluster, status, peer, keyMember, artifact, restoreReq)
+		reused, err = r.retrySkipsSeedBackup(ctx, cluster, status, peer, keyMember, artifact, restoreKey, restoreReq)
 		if err != nil {
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err),
-				"waiting to copy database "+database+" to "+peer+": the restore of an earlier attempt could not be looked up: "+err.Error())
+				"waiting to copy database "+database+" to "+peer+": a restore of this step could not be looked up: "+err.Error())
 			return false
 		}
 	}
@@ -498,19 +498,33 @@ func (r *CubridClusterReconciler) seedBackup(ctx context.Context, cluster *datab
 	return true
 }
 
-// restoredByEarlierAttempt reports whether the Instance Manager of peer will
-// take over, for req, the data that an earlier attempt's restore of this step
-// restored, and so restores nothing for it (ADR-0008). The latest earlier
-// attempt that has a restore under this step's key decides; the key names the
-// member and, for a later member, the source and the round, so a restore of
-// another source or round is never looked at. It counts only when that restore
+// retrySkipsSeedBackup reports whether a retry of the seed step of peer needs
+// no new seed backup. That is so once this attempt has a restore under its own
+// key, restoreKey: its backup step is behind it. Otherwise it is so only when
+// the Instance Manager of peer is predicted to take over, for req, the data
+// that an earlier attempt's restore of this step restored, and so to restore
+// nothing for it (ADR-0008). The latest earlier attempt that has a restore
+// under this step's key decides. The key names the member and, for a later
+// member, the source and the round, but a round counts only within one
+// attempt, because a failed attempt clears status.databases[].seeding: an
+// earlier attempt of the same key may have copied from the same source before
+// a failover and back (ADR-0010). The earlier restore counts only when it
 // failed after it recorded this step's seed backup as restored, and was
 // started with the same request body, which the manager compares by its hash.
-// Anything else, also an earlier attempt without a restore and the first
-// attempt, answers false: the step then takes a new backup and restores it
-// from the same place.
-func (r *CubridClusterReconciler) restoredByEarlierAttempt(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	status *databasev1alpha1.DatabaseStatus, peer, keyMember, artifact string, req instancemanager.RestoreRequest) (bool, error) {
+// The prediction rests on that operation record; the manager itself decides
+// by the ownership marker on the data, which is not visible here. Anything
+// else, also an earlier attempt without a restore, answers false: the step
+// then takes a new backup and restores it from the same place. The first
+// attempt looks nothing up.
+func (r *CubridClusterReconciler) retrySkipsSeedBackup(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, peer, keyMember, artifact, restoreKey string, req instancemanager.RestoreRequest) (bool, error) {
+	if status.BootstrapAttempts == 0 {
+		return false, nil
+	}
+	_, started, err := r.Restore.FindOperation(ctx, peer, cluster.Namespace, instancemanager.OpRestore, restoreKey)
+	if err != nil || started {
+		return started, err
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return false, err
@@ -530,7 +544,7 @@ func (r *CubridClusterReconciler) restoredByEarlierAttempt(ctx context.Context, 
 		reused := op.State == instancemanager.OpFailed && op.Restored != nil && op.RequestHash == hash &&
 			restoredSeed(op, string(cluster.UID), artifact, status.Name)
 		if reused {
-			logf.FromContext(ctx).Info("Reusing the seed backup that an earlier attempt restored",
+			logf.FromContext(ctx).V(1).Info("Reusing the seed backup that an earlier attempt restored",
 				"member", peer, "source", req.SeedFromMaster, "location", seedLocationDir(artifact), "operationID", op.ID)
 		}
 		return reused, nil

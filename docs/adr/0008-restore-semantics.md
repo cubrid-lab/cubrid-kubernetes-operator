@@ -296,17 +296,41 @@ the same request body under its new key (the seed location names the source
 and the round, not the attempt), so it is the same request: it takes over the
 data the earlier attempt restored and only starts it. The operator therefore
 takes no new seed backup for such a retry (#463): before the backup it looks
-up the restore of the latest earlier attempt under this step's key (the same
-member, source and round), and when that restore failed after it recorded
-this step's seed backup as restored, with the same request body (compared by
-the hash the Instance Manager keeps), the retry sends that request again
-without a backup. In every other case, also when the earlier restore failed
-before it restored anything or there is none, the retry takes a new seed
-backup as before, at the same place, and its restore restores it. A lookup
-that fails keeps the step waiting and starts nothing. A seeding retry from
-another source, or in another round, is a different request, so it is
-refused in the same way while the restored data of the earlier attempt is in
-place.
+up the restore of the latest earlier attempt under this step's key, and when
+that restore failed after it recorded this step's seed backup as restored,
+with the same request body (compared by the hash the Instance Manager keeps),
+the retry sends that request again without a backup. The key names the
+member and, for a later member, the source and the round, but a round counts
+only within one attempt: a failed attempt clears
+`status.databases[].seeding`, so the next attempt starts again at round 0,
+and an earlier attempt under the same key may have copied from the same
+source before a failover and back (ADR-0010). Once the retry's own restore
+exists under its key, only that key is looked up. In every other case, also
+when the earlier restore failed before it restored anything or there is
+none, the retry takes a new seed backup as before, at the same place, and its
+restore restores it. The first attempt looks nothing up. A lookup that fails
+keeps the step waiting and starts nothing, without using up an attempt: a
+peer that cannot be reached now also holds back the seed backup on the
+source, where it held back only the restore before, since that restore
+waited in the same way.
+
+The operator predicts the takeover from the earlier operation record; the
+Instance Manager decides by the ownership marker on the data. When the marker
+or the data was removed while the record stayed (for example by a person),
+the backup is skipped and the Instance Manager restores the backup that is at
+the seed location, which is the earlier attempt's: the member starts from an
+older point of the same source and may fail to catch up when the source no
+longer holds the logs since then. That is a risk to availability, not
+divergence, because the backup is of the same source. A download that then
+fails leaves a restore that restored nothing, so the next attempt takes a new
+backup; a member that restored the older backup and cannot catch up fails
+like any other start, under the attempt limit, and a bootstrap that keeps
+failing waits for a person. Closing the gap would take exposing the marker's
+owner through the operations API, or a field of the restore request that
+requires a takeover and that the request hash leaves out; neither is done.
+A seeding retry from another source, or in another round, is a different
+request, so it is refused in the same way while the restored data of the
+earlier attempt is in place.
 
 When the marker of a restore recorded `Completed` is still there (the
 operation was recorded, then the marker could not be removed), the entrypoint

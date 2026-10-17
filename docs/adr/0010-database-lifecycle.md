@@ -206,7 +206,14 @@ which is not detected and has not been tried on the engine; and a copy that
 failed after it had restored the data, when the master has changed since: the
 next attempt copies from the new master, the Instance Manager refuses to
 restore over data that another request restored (ADR-0008), and the bootstrap
-ends `Failed` and waits for a person.
+ends `Failed` and waits for a person. Nor does it cover a copy that failed
+after it had restored the data when the master changed and changed back
+between the attempts (m0, then m1, then m0 again): a failed attempt clears
+`status.databases[].seeding`, so the next attempt sees m0 in round 0 again and
+sends the same request, and the Instance Manager takes over the data copied
+from m0 before the failover and starts it. That is the Instance Manager's
+existing behaviour; the operator no longer takes a seed backup for such a
+retry (#463), which changes nothing that reaches the member.
 
 Resuming (#107): the key of every step carries the attempt number, so a
 reconcile after an operator restart addresses the operation that is already

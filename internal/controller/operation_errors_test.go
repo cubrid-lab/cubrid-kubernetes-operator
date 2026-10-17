@@ -491,7 +491,10 @@ var _ = Describe("Terminal and retryable answers of a recovery restore (#302)", 
 // was started with the same request body, which the operator compares by the
 // hash the Instance Manager keeps (#463). The Instance Manager of this version
 // must therefore hash exactly what the client sends: a restore held under a
-// key with the operator's hash of a request answers that request as the same.
+// key with the operator's hash of a request answers that request as the same,
+// and a request with one field changed as another. This guards that contract
+// between the operator and the Instance Manager; it does not reproduce the
+// unused seed backup, which the seeding specs show.
 func TestHTTPBackupClient_RequestHashAgreesWithTheInstanceManager(t *testing.T) {
 	store, err := instancemanager.NewOperationStore(t.TempDir())
 	if err != nil {
@@ -517,5 +520,10 @@ func TestHTTPBackupClient_RequestHashAgreesWithTheInstanceManager(t *testing.T) 
 	op, err := c.StartRestore(context.Background(), "db-1", "ns", "seed-restore-key", req)
 	if err != nil || op.ID != held.ID || op.RequestHash != held.RequestHash {
 		t.Fatalf("StartRestore = %+v, %v; want the held operation %s with the operator's hash of the request", op, err, held.ID)
+	}
+	changed := req
+	changed.ExpectedCubridVersion = "11.4.1"
+	if _, err := c.StartRestore(context.Background(), "db-1", "ns", "seed-restore-key", changed); !errors.Is(err, errRequestConflict) {
+		t.Errorf("StartRestore with a changed field: err = %v, want a request conflict (another hash)", err)
 	}
 }

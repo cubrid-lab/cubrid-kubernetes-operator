@@ -95,8 +95,10 @@ type fakeSeedClient struct {
 	// that the operations of earlier attempts can be looked up, with the
 	// hash of the request body they were started with.
 	restoresByKey map[string]instancemanager.RestoreRequest
-	// findErr is what a lookup of a restore operation answers instead.
-	findErr error
+	// findErr is what a lookup of a restore operation answers instead, and
+	// lookupKeys are the keys of every restore lookup.
+	findErr    error
+	lookupKeys []string
 }
 
 // restoreOp is the restore operation the fake holds on podName under key.
@@ -182,6 +184,7 @@ func (f *fakeSeedClient) FindBackupOperation(_ context.Context, _, _, key string
 
 func (f *fakeSeedClient) FindOperation(_ context.Context, podName, _ string, kind instancemanager.OperationKind, key string) (instancemanager.Operation, bool, error) {
 	f.lookups++
+	f.lookupKeys = append(f.lookupKeys, key)
 	if f.findErr != nil {
 		return instancemanager.Operation{}, false, f.findErr
 	}
@@ -693,13 +696,129 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 				firstReq := seed.restoresByKey[firstKey]
 
 				By("the retry restoring the same backup with the same request, without a new backup")
-				seed.restore[n+"-1"] = instancemanager.OpCompleted
-				got = reconcileOnce(r, key)
+				seed.restore[n+"-1"] = instancemanager.OpRestoring
+				reconcileOnce(r, key)
 				Expect(seedBackupsAt(seed, prefix)).To(Equal(1), "the retry took a seed backup that it does not restore")
 				Expect(seed.restoreKeys[n+"-1"]).NotTo(Equal(firstKey))
 				Expect(seed.restores[n+"-1"]).To(Equal(firstReq),
 					"the retry must send the earlier request, which the Instance Manager takes over")
+
+				By("looking up only the retry's own restore while it runs")
+				seed.lookupKeys = nil
+				reconcileOnce(r, key)
+				Expect(seed.lookupKeys).To(Equal([]string{seed.restoreKeys[n+"-1"]}))
+				Expect(seedBackupsAt(seed, prefix)).To(Equal(1))
+
+				seed.restore[n+"-1"] = instancemanager.OpCompleted
+				got = reconcileOnce(r, key)
 				Expect(got.Status.Databases[0].SeededMembers).To(Equal([]string{n + "-1"}))
+			})
+
+			It("looks nothing up on the first attempt", func() {
+				const n = "seed-firstattempt"
+				seed := &fakeSeedClient{
+					backupState: instancemanager.OpCompleted,
+					restore:     map[string]instancemanager.OperationState{n + "-1": instancemanager.OpRestoring},
+				}
+				key := create(seededCluster(n))
+				r := reconcilerFor(seed)
+				for range 2 {
+					got := reconcileOnce(r, key)
+					_, reason := bootstrapCondition(got)
+					Expect(reason).To(Equal("SeedRestoreInProgress"))
+				}
+				Expect(seed.lookups).To(BeZero())
+			})
+
+			It("takes a new backup when the latest earlier restore failed without restoring, though an older one restored", func() {
+				const n = "seed-latest"
+				seed := &fakeSeedClient{
+					backupState:  instancemanager.OpCompleted,
+					restore:      map[string]instancemanager.OperationState{n + "-1": instancemanager.OpFailed},
+					restoreByKey: map[string]instancemanager.OperationState{},
+					restoredFrom: map[string]string{},
+				}
+				key := create(seededCluster(n))
+				r := reconcilerFor(seed)
+				stored := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, stored)).To(Succeed())
+				uid := string(stored.UID)
+				prefix := "prod/" + uid + "/seed/appdb"
+				firstKey := fmt.Sprintf("seed-restore-%s-appdb-a0-%s-1", uid, n)
+				seed.restoredFrom[firstKey] = "s3://cluster-artifacts/" + prefix + "/" + m
+
+				reconcileOnce(r, key) // a0 restores, then fails
+				got := reconcileOnce(r, key)
+				Expect(got.Status.Databases[0].BootstrapAttempts).To(BeEquivalentTo(2))
+				Expect(seedBackupsAt(seed, prefix)).To(Equal(1), "a1 skips the backup, then fails before it restores anything")
+
+				seed.restoreByKey[firstKey] = instancemanager.OpFailed
+				seed.restoreByKey[seed.restoreKeys[n+"-1"]] = instancemanager.OpFailed
+				seed.restore[n+"-1"] = instancemanager.OpRestoring
+				reconcileOnce(r, key)
+				Expect(seedBackupsAt(seed, prefix)).To(Equal(2), "the latest earlier restore, a1, decides")
+			})
+
+			It("takes a new backup when the retry's request differs from the earlier restore's", func() {
+				const n = "seed-hash"
+				seed := &fakeSeedClient{
+					backupState:  instancemanager.OpCompleted,
+					restore:      map[string]instancemanager.OperationState{n + "-1": instancemanager.OpFailed},
+					restoreByKey: map[string]instancemanager.OperationState{},
+					restoredFrom: map[string]string{},
+				}
+				key := create(seededCluster(n))
+				r := reconcilerFor(seed)
+				stored := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, stored)).To(Succeed())
+				uid := string(stored.UID)
+				prefix := "prod/" + uid + "/seed/appdb"
+				firstKey := fmt.Sprintf("seed-restore-%s-appdb-a0-%s-1", uid, n)
+				seed.restoredFrom[firstKey] = "s3://cluster-artifacts/" + prefix + "/" + m
+				seed.restoreByKey[firstKey] = instancemanager.OpFailed
+				got := reconcileOnce(r, key)
+				Expect(got.Status.Databases[0].BootstrapAttempts).To(BeEquivalentTo(1))
+
+				By("a spec.version that the earlier restore was not started with")
+				got.Spec.Version = cubridVersion + ".1"
+				Expect(k8sClient.Update(ctx, got)).To(Succeed())
+				seed.restore[n+"-1"] = instancemanager.OpRestoring
+				reconcileOnce(r, key)
+				Expect(seedBackupsAt(seed, prefix)).To(Equal(2))
+				Expect(seed.restores[n+"-1"].ExpectedCubridVersion).To(Equal(cubridVersion + ".1"))
+			})
+
+			It("does not take another member's earlier restore for a member's step", func() {
+				const n = "seed-othermember"
+				seed := &fakeSeedClient{
+					backupState:  instancemanager.OpCompleted,
+					restore:      map[string]instancemanager.OperationState{n + "-1": instancemanager.OpFailed, n + "-2": instancemanager.OpRestoring},
+					restoreByKey: map[string]instancemanager.OperationState{},
+					restoredFrom: map[string]string{},
+				}
+				key := create(seededCluster(n))
+				r := reconcilerFor(seed)
+				stored := &databasev1alpha1.CubridCluster{}
+				Expect(k8sClient.Get(ctx, key, stored)).To(Succeed())
+				uid := string(stored.UID)
+				firstKey := fmt.Sprintf("seed-restore-%s-appdb-a0-%s-1", uid, n)
+				seed.restoredFrom[firstKey] = "s3://cluster-artifacts/prod/" + uid + "/seed/appdb/" + m
+				seed.restoreByKey[firstKey] = instancemanager.OpFailed
+				reconcileOnce(r, key)
+
+				By(n + "-1 being seeded by the retry, then " + n + "-2 being copied for the first time in attempt 1")
+				seed.restore[n+"-1"] = instancemanager.OpCompleted
+				seed.lookupKeys = nil
+				got := reconcileOnce(r, key)
+				Expect(got.Status.Databases[0].SeededMembers).To(Equal([]string{n + "-1"}))
+				artifact := n + "-2-from-" + n + "-0"
+				Expect(seedBackupsAt(seed, "prod/"+uid+"/seed-"+artifact+"/appdb")).To(Equal(1),
+					"the step of "+n+"-2 has no earlier restore of its own")
+				base := "seed-restore-" + uid + "-appdb-"
+				Expect(seed.lookupKeys).To(Equal([]string{
+					base + "a1-" + n + "-1", firstKey, // the step of -1: its own restore, then a0's
+					base + "a1-" + artifact, base + "a0-" + artifact, // the step of -2: never the restore of -1
+				}))
 			})
 
 			It("takes a new seed backup when the earlier restore failed before it restored anything", func() {
