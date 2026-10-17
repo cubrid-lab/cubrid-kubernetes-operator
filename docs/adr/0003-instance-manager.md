@@ -78,7 +78,10 @@ Kubelet endpoints (unauthenticated — probes are awkward with strong auth):
 - `GET /livez` — manager process alive.
 - `GET /readyz` — instance safe to serve/participate; **not-ready** during
   startup, shutdown, restore prep, ambiguous HA state, or local CUBRID
-  unavailability.
+  unavailability. As implemented it follows the engine only: a standalone
+  member is ready while its server runs, an HA member while heartbeat
+  reports it in a confirmed role (master, slave or replica). A requested
+  stop or a running operation does not turn it false by itself.
 
 Because anyone who reaches the port can ask them, their bodies carry nothing
 but the answer: `{"status":"ok"}` for `/livez`, `{"ready":true}` or
@@ -88,8 +91,10 @@ member is not ready is written to the manager's log (#333).
 
 Operator endpoints (bearer-token authenticated, `/v1/`):
 
-- `GET /v1/role`, `GET /v1/ha/status`, `GET /v1/config`
-- `POST /v1/shutdown`, `POST /v1/backup`, `POST /v1/restore/prepare`
+- `GET /v1/role`, `GET /v1/ha/status`, `GET /v1/ha/convergence` (the
+  `GET /v1/config` of the first version of this ADR is not provided)
+- `POST /v1/ha/bootstrap`, `POST /v1/shutdown`, `POST /v1/backup`,
+  `POST /v1/restore/prepare`
 - `GET /v1/operations/{operationID}`
 - `GET /v1/operations?idempotencyKey=<key>`: the operations recorded under
   the key, as `{"operations": [...]}`; an empty list means none. It only
@@ -153,6 +158,12 @@ answer readable.
   "hostname": "<pod name>", "database": "<db>",
   "reason": "human-readable" }
 ```
+
+As implemented, the answer is `{current, role, serverActive, nodes, source,
+reason, engineVersion, replication}` (`internal/instancemanager/role.go`),
+the role is derived from `cubrid heartbeat status` alone, and `source` is
+always `heartbeat`. The manager does not run `changemode` and does not
+cross-check the configuration.
 
 As implemented, the manager watches the CUBRID processes the member needs
 (`cub_master` and `cub_server`; `cub_server` alone for a standalone member).
@@ -257,7 +268,8 @@ Time budget: the stop may take 100 seconds (`IM_SHUTDOWN_TIMEOUT`), and the
 Pod's `terminationGracePeriodSeconds` is 120, which leaves 20 seconds for the
 manager and the container to end. Both are fixed values today.
 
-`terminationGracePeriodSeconds` is generous (≥120s, POC-tuned). For
+`terminationGracePeriodSeconds` is generous (≥120s). It is a fixed 120s;
+no POC has measured a shutdown against it (Validation item 5). For
 StatefulSet rolling updates the operator updates one DB pod at a time,
 observes role via the manager, waits for `PrimaryResolved`, and does not
 voluntarily terminate the current master unless failover is intended.
@@ -273,7 +285,7 @@ persists operation records on the DB PVC (e.g.
 `$CUBRID_DATABASES/.instance-manager/operations/`). On startup it
 reconstructs state from durable facts (CUBRID process state + command
 output + config + backup manifests + operation/shutdown markers), never
-RAM. Long operations return `202 Accepted` + operation ID; the operator
+RAM. No shutdown marker is written (step 2 of the shutdown model). Long operations return `202 Accepted` + operation ID; the operator
 polls `GET /v1/operations/{id}` and never assumes completion from an HTTP
 return/timeout — it reconciles from durable manager-reported state.
 
@@ -360,9 +372,9 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `IM_PROCESS_GRACE` | optional: how long a CUBRID process may be missing before the manager ends itself; `30s` when unset |
 | `IM_BACKUP_STAGING_ROOT`, `IM_RESTORE_STAGING_ROOT` | `/var/lib/cubrid/backup-staging` and `/var/lib/cubrid/restore-staging`: the roots the operator builds its requests with |
 | `IM_S3_ENDPOINT`, `IM_S3_REGION`, `IM_S3_INSECURE`, `IM_S3_ACCESS_KEY`, `IM_S3_SECRET_KEY` | from `spec.objectStorage` when set; the two keys are references to the Secret it names (`accessKey`, `secretKey`) |
-| `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the preStop limit (110s). The operator sets the first two on the DB Pods when it is started with `--instance-manager-backup-timeout` or `--instance-manager-restore-timeout` (#341); otherwise it sets none of them. |
+| `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the Pod's `terminationGracePeriodSeconds` (120s), which also bounds the preStop hook. The operator sets the first two on the DB Pods when it is started with `--instance-manager-backup-timeout` or `--instance-manager-restore-timeout` (#341); otherwise it sets none of them. |
 | PID 1 | the entrypoint shell, running as UID 1000 with no capabilities; the Instance Manager is its child |
-| Termination | on `SIGTERM` the shell stops CUBRID (`cubrid server stop <db>` for `SERVER`, `cubrid heartbeat stop` otherwise), then the manager, and exits with the manager's status |
+| Termination | on `SIGTERM` or `SIGINT` the shell runs `instance-manager shutdown` (the manager's stop procedure, see "Shutdown model"), then sends `SIGTERM` to the manager, and exits with the manager's status |
 
 Observed with the real 11.4 image (#97): the CUBRID daemons are orphans
 adopted by PID 1, and `cubrid server stop` waits for the server process to
@@ -488,7 +500,7 @@ one, without the token: `PrimaryResolved` takes the reason
 that name, and a refused backup, restore or bootstrap call sets that reason
 on its condition. The operator remembers per member only a
 SHA-256 fingerprint of the token the member accepted last, never the token.
-The manager compares the token it is sent in constant time once #271 lands.
+The manager compares the SHA-256 of the token it is sent with that of its own in constant time (`internal/instancemanager/server.go`, #271).
 
 An operator version that reads only `token` (#326) and runs during an overlap
 calls every member with the new token: members that still hold the previous
@@ -506,8 +518,8 @@ The token is sent over plain HTTP inside the cluster network and is not
 encrypted in transit; a NetworkPolicy limits who can reach the port, not who
 can observe the traffic.
 
-The concrete `/v1/` request/response, operation-status enum, and error
-schemas are **not yet defined** and are **POC-gated**: they are drafted
-and validated during the POC before being frozen. Every mutating command
+The error answers are fixed above ("Error answers") and the operation
+states in `internal/instancemanager/operation.go`; the remaining `/v1/`
+request and response schemas are not frozen. Every mutating command
 must have a recorded state machine with terminal states and recovery
 rules on the DB PVC.

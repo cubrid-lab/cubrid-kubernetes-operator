@@ -212,7 +212,10 @@ The restore command as implemented (#169, from POC-11 in
 guard, the artifact verification and the download, the Instance Manager
 creates `<CUBRID_DATABASES>/<db>`, adds the database to `databases.txt` in the
 form `createdb` writes (with the Pod's host name), and runs
-`cubrid restoredb -u -B <staged backup> <db>`. When `restoredb` fails it
+`cubrid restoredb -u -B <staged backup> <db>`; a member seeded from a
+running master (ADR-0010) is restored with
+`cubrid restoreslave -u -s master -m <source> -B <staged backup> <db>`
+instead (POC-14, `internal/instancemanager/restore.go`). When the command fails it
 removes that directory and puts `databases.txt` back as it was, so the target
 is empty again for a retry.
 
@@ -224,7 +227,11 @@ commands (ADR-0003), so for a standalone member it starts the server
 state `Starting`; the operation is `Completed` only when that succeeded, and a
 failed start leaves the restored data in place and the operation `Failed`.
 Deleting the Pod to let the entrypoint start it was rejected: it would make a
-restart the start mechanism. An HA member is started by the HA bootstrap.
+restart the start mechanism. For an HA member the restore operation starts
+heartbeat as its last step, under the start rules of ADR-0010: a member whose
+heartbeat already runs completes only in a confirmed role, and a start the
+manager issues completes when `cubrid heartbeat start` exits 0 (no role is
+checked after it).
 A member that is not standalone restores only when its HA configuration
 (`cubrid_ha.conf` with a usable `ha_node_list`) can be read, because the
 restored database is registered under that member list and joins HA; without
@@ -338,6 +345,11 @@ The cluster is **not Ready** until ALL hold: manifest trust checks pass;
 restored DB opens under the expected DB name/version; the initial master
 is configured as the authoritative HA master; all required
 `promotableMembers` are seeded; slaves join HA and catch up (ADR-0006).
+As implemented, the recovery completes once the restore operation is
+`Completed` (manifest and checksums verified, the restore command and the
+start succeeded) and every other member is seeded and HA-configured; no
+step opens the database or checks its version, catch-up is not checked,
+and the `Validating` phase of the API is never set.
 Failed/partial restore → `Ready=False` + blocked/degraded condition;
 **never report a half-restored DB as healthy** and never advertise DB
 service from a partially restored pod.
@@ -391,7 +403,9 @@ bootstrap branch**: an existing DB is a hard block here, not an adoption.
 This guard covers the **initial master PVC**; slave PVC safety is
 delegated to the ADR-0006 seed/rebuild flow. Source `clusterUid` is
 verified for manifest integrity/presence and **recorded as provenance**,
-not required to equal the new cluster UID (restore-into-new-cluster).
+not required to equal the new cluster UID (restore-into-new-cluster). As
+implemented, it stays in `manifest.json`; the cluster's status records the
+`manifestUri`, not the source UID.
 
 ### Status
 
@@ -411,7 +425,13 @@ status:
     - { type: Ready, status: "False", reason: BootstrapRecoveryInProgress }  # BootstrapRecoveryFailed when state is Failed
 ```
 
-Open-ended reasons, consistent with prior ADRs.
+Open-ended reasons, consistent with prior ADRs. The example is the
+original proposal. As implemented, the fields are
+`status.bootstrap.{mode, phase, manifestUri, operationID, targetMember,
+attempts}` (`api/v1alpha1/cubridcluster_types.go`); there is no
+`status.phase` and no `RecoveryValidated` Condition, and the reasons of
+`BootstrapReady` and `Ready` are those of
+[docs/observability.md](../observability.md#conditions).
 
 ## Consequences
 
