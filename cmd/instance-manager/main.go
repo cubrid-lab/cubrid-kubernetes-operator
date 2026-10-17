@@ -67,6 +67,12 @@ func shutdown(logger *slog.Logger) error {
 	}
 	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: budget}, Logger: logger}
 	logger.Info("Shutdown requested", "event", "shutdown_requested")
+	// The stop is recorded before the manager is asked: a manager that does
+	// not listen yet finds the record once it listens and starts nothing
+	// (#323). A record that could not be written does not hold up the stop.
+	if err := instancemanager.RecordStopRequest(stopFile()); err != nil {
+		logger.Error("Could not record the stop request", "event", "stop_record_failed", "err", err)
+	}
 	return instancemanager.RequestShutdown(context.Background(), "http://127.0.0.1:"+port,
 		os.Getenv("IM_TOKEN"), envOr("CUBRID_DB", "appdb"), cli, budget)
 }
@@ -101,6 +107,7 @@ func run(logger *slog.Logger) error {
 	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second}, Logger: logger}
 	server := instancemanager.NewServer(cli, token).
 		WithLogger(logger).
+		WithStopFile(stopFile()).
 		// A backup may stage only below this root; it is also what a failed
 		// backup removes. It matches the operator's backup staging path.
 		WithBackupStagingRoot(envOr("IM_BACKUP_STAGING_ROOT", "/var/lib/cubrid/backup-staging")).
@@ -224,6 +231,13 @@ func run(logger *slog.Logger) error {
 		defer cancel()
 		return srv.Shutdown(shutCtx)
 	}
+}
+
+// stopFile is where "instance-manager shutdown" records a stop and the
+// manager looks for it: IM_STOP_FILE, or a path on the container's own file
+// system.
+func stopFile() string {
+	return envOr("IM_STOP_FILE", instancemanager.DefaultStopFile)
 }
 
 func envOr(key, def string) string {

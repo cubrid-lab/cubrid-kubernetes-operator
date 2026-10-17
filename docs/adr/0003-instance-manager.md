@@ -245,7 +245,33 @@ completed restore's database when the manager starts (ADR-0008) is held to
 the same rule: the manager listens before it starts that database, so a
 stop asked for meanwhile reaches the manager and not the command's own
 fallback, and until that start has ended the manager refuses every other
-backup, restore or HA bootstrap (`503`, "the manager is starting"). The stop waits for the
+backup, restore or HA bootstrap (`503`, "the manager is starting").
+
+A shutdown can also arrive after the entrypoint has launched the manager
+but before the manager listens; the command then finds nobody and stops
+CUBRID itself, in its own process, unordered with the manager (#323). So the
+command first records the stop in a file on the container's own file system
+(`IM_STOP_FILE`, `/tmp/instance-manager-stop-requested` by default), and
+only then asks the manager. The manager looks for that record right after it
+listens, and again before every `cubrid server start` and
+`cubrid heartbeat start`. When it is there, the manager behaves as a member
+that is stopping: it reclaims nothing, starts no completed restore's
+database, admits no operation (`503`), and treats the absence of CUBRID as
+intended; it does not run the shutdown itself, which the command ran. A
+record that cannot be examined counts as one. The order closes both races: a
+record written before the manager's look is found, and one written after it
+was written after the listen, so the command's request reaches the manager,
+which orders the stop after its start. A manager that died before it
+listened starts nothing at all. Nothing removes the record: a stop is final
+for the container, and a restarted container starts from the image's file
+system without it. A command that cannot write the record still stops
+CUBRID and logs the failure; the manager is then not kept from a start.
+Alternatives not taken: a lock shared by the command and the manager still
+needs a record for a command that takes the lock before the manager does;
+and making only the entrypoint wait for the listener leaves the `preStop`
+hook, which runs the command directly, open.
+
+The stop waits for the
 running operations to end before it withdraws HA and stops the server, so no
 operation starts CUBRID after the final shutdown. The wait never takes the
 last 30 seconds of the stop's budget (half of a budget shorter than 60
