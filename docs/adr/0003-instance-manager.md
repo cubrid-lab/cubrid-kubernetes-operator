@@ -277,6 +277,17 @@ RAM. Long operations return `202 Accepted` + operation ID; the operator
 polls `GET /v1/operations/{id}` and never assumes completion from an HTTP
 return/timeout — it reconciles from durable manager-reported state.
 
+A request is checked before anything is done for it (#301). A body larger
+than 16 KiB is answered with 413 without being read to its end. `POST
+/v1/backup` is answered with 400, and no directory, operation or command is
+created for it, unless the database name is a plain identifier, the level is
+0 (only full backups are supported, ADR-0007) and, with an upload, every
+field of the upload is present, its prefix is a clean relative key prefix and
+its source is a host name with a known role. `GET /v1/ha/convergence` runs
+`applyinfo` only on `<databases directory>/<database>_<host>`, the place of
+a copied log below the directory the manager was started with; any other
+path is answered with 400.
+
 ### Security
 
 Run DB container + manager as the non-root CUBRID user:

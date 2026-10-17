@@ -218,8 +218,9 @@ func TestServer_Convergence_RequiresParams(t *testing.T) {
 }
 
 func TestServer_Convergence_ReportsFacts(t *testing.T) {
-	h := newAsyncServer(t, fakeCLI{out: convergedApplyinfo})
-	req := httptest.NewRequest("GET", "/v1/ha/convergence?database=appdb&copiedLogPath=/x", nil)
+	databases := t.TempDir()
+	h := NewServer(fakeCLI{out: convergedApplyinfo}, "tok").WithReplication(dbName, databases).Handler()
+	req := httptest.NewRequest("GET", "/v1/ha/convergence?database=appdb&copiedLogPath="+filepath.Join(databases, "appdb_db-0"), nil)
 	req.Header.Set("Authorization", "Bearer tok")
 	req.RemoteAddr = testRemoteAddr
 	rr := httptest.NewRecorder()
