@@ -116,7 +116,8 @@ the restored data and its ownership marker are kept (#454).
 Known limit: an attempt that is cut off while its `cubrid heartbeat start`
 still runs (a manager restart, a timeout) leaves heartbeat activating, and the
 next attempt can see a `to-be-*` or `unknown` state, fail on it and use up an
-attempt; on the seeding path each such retry also takes a new seed backup.
+attempt. On the seeding path such a retry takes over the data the earlier
+attempt restored and takes no new seed backup (ADR-0008, #463).
 Whether this exhausts the attempt limit in practice is not shown, and no
 extra retry is made for it.
 Known limit: a start issued outside the Instance Manager while `cub_master`

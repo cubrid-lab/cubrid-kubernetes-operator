@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -485,3 +486,36 @@ var _ = Describe("Terminal and retryable answers of a recovery restore (#302)", 
 		Expect(restore.lookups).To(BeZero())
 	})
 })
+
+// A seed restore retry takes no new seed backup only when the earlier restore
+// was started with the same request body, which the operator compares by the
+// hash the Instance Manager keeps (#463). The Instance Manager of this version
+// must therefore hash exactly what the client sends: a restore held under a
+// key with the operator's hash of a request answers that request as the same.
+func TestHTTPBackupClient_RequestHashAgreesWithTheInstanceManager(t *testing.T) {
+	store, err := instancemanager.NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := instancemanager.RestoreRequest{Database: testDatabase, Bucket: "b", Prefix: "p/uid/seed/" + testDatabase,
+		ExpectedCubridVersion: "11.4", StagingDir: "/var/lib/cubrid/restore-staging/seed-uid", TargetDir: restoreTargetRoot,
+		SeedFromMaster: "db-0"}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, _, err := store.FindOrCreate(instancemanager.OpRestore, "seed-restore-key", instancemanager.HashRequest(body), testDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Update(held.ID, func(o *instancemanager.Operation) { o.State = instancemanager.OpFailed }); err != nil {
+		t.Fatal(err)
+	}
+	h := instancemanager.NewServer(nil, "tok").WithOperationStore(store).WithObjectStore(nopObjects{}).Handler()
+	c := NewHTTPBackupClient(staticToken("tok"))
+	c.Client = &http.Client{Transport: toHandler{h}}
+	op, err := c.StartRestore(context.Background(), "db-1", "ns", "seed-restore-key", req)
+	if err != nil || op.ID != held.ID || op.RequestHash != held.RequestHash {
+		t.Fatalf("StartRestore = %+v, %v; want the held operation %s with the operator's hash of the request", op, err, held.ID)
+	}
+}
