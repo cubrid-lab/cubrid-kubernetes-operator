@@ -458,7 +458,7 @@ which level was used.
 |-------|-------------------|----------------------------|
 | Unit | State decisions, parsing, validation, retry and operation rules | Real engine or network behavior |
 | envtest | API validation and the Kubernetes resources the controller creates | Pod execution, scheduling or database recovery |
-| Real database on Kind | Installation, SQL, replication, and (once S11 and S12 run there) backup and restore working together | What happens when a real VM fails |
+| Real database on Kind | Installation, SQL and replication working together; backup and restore only through a scenario that runs them (S11 and S12 have no e2e test) | What happens when a real VM fails |
 | VM lab | The supported topology, VM failures and controlled network faults | Resilience across physical zones or a whole provider |
 | POC | What one engine build did under the recorded conditions | A general CUBRID guarantee |
 

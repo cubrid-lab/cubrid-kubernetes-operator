@@ -176,6 +176,13 @@ catching-up member may have `role=slave` but stays per-instance
 `Ready=False` and is excluded from read endpoints; cluster
 `PrimaryResolved` (about the master) is independent.
 
+As implemented, there is no `spec.highAvailability.catchUp` field and no
+per-member catch-up gate: a member's readiness is its Pod readiness, which
+follows the Instance Manager's `/readyz` (a confirmed heartbeat role), and
+the `-ro` Service selects Broker Pods, not members. A slave whose applier
+applies nothing is reported by the `ReplicationHealthy` Condition, which
+nothing acts on (docs/observability.md).
+
 ### PVC-intact vs rebuild decision signal
 
 Decided from **durable identity markers, not pod lifecycle**:
@@ -197,7 +204,8 @@ stale data as authoritative; never restore over unknown existing data.
 ### Scale-down / member removal
 
 **Out of scope for v1alpha1.** Reject `promotableMembers` decrease in
-validation if possible; else `Degraded=True/ScaleDownUnsupported` and do
+validation if possible (as implemented, the CRD refuses any change of
+`promotableMembers`); else `Degraded=True/ScaleDownUnsupported` and do
 not mutate HA config, delete PVCs, shrink `ha_node_list`, or stop a member
 implicitly. Safe removal is a separate future workflow.
 
@@ -210,6 +218,15 @@ joining/rebuilding/catching-up/blocked); `Degraded`
 (`JoinFailed`/`RebuildFailed`/`BootstrapBlocked`/`DataAmbiguous`/
 `HAConfigMismatch`/`HAConfigReloadFailed`/`ScaleDownUnsupported`);
 `FencingRequired` (former-primary/split-brain).
+
+This is the target set. As implemented, the Operator sets no `Degraded`
+or `FencingRequired` Condition, and `Progressing` carries none of
+`NewMemberJoining`, `InstanceRebuilding`, `HAConfigReloading`, `CatchUp` or
+`RetryBackoff`; the reasons it sets are listed in
+[docs/observability.md](../observability.md#conditions). The per-instance
+fields below are not in the API either: `status.instances[]` carries the
+name, ordinal, role, readiness, observation time, engine version and
+replication reading (`api/v1alpha1/cubridcluster_types.go`).
 
 Per-instance: `phase` (`Pending`→…→`CatchingUp`→`Ready`, plus
 `Quarantined`/`Blocked`), `reason`, `operationID`, `sourceMember`,

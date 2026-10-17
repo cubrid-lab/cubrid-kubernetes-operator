@@ -316,7 +316,9 @@ persists operation records on the DB PVC (e.g.
 `$CUBRID_DATABASES/.instance-manager/operations/`). On startup it
 reconstructs state from durable facts (CUBRID process state + command
 output + config + backup manifests + operation/shutdown markers), never
-RAM. No shutdown marker is written (step 2 of the shutdown model). Long operations return `202 Accepted` + operation ID; the operator
+RAM. No durable shutdown marker is written (step 2 of the shutdown model);
+the stop record of the shutdown command is container-local and does not
+outlive the container. Long operations return `202 Accepted` + operation ID; the operator
 polls `GET /v1/operations/{id}` and never assumes completion from an HTTP
 return/timeout — it reconciles from durable manager-reported state.
 

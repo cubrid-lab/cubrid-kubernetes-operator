@@ -739,10 +739,15 @@ auto-failbacks (ADR-0001, ADR-0005).
 
 #### Shutdown & state
 
-preStop + PID-1 `SIGTERM` run the same stop: admit no new operation,
-cancel and wait for the running ones, then `cubrid heartbeat stop` and
+preStop + PID-1 `SIGTERM` run the same stop through
+`instance-manager shutdown`. The command first records the stop in the
+container-local file `/tmp/instance-manager-stop-requested`, after which
+the manager starts nothing, also when the stop came before it listened
+(ADR-0003, Shutdown model). The stop then admits no new operation, cancels
+and waits for the running ones, and runs `cubrid heartbeat stop` and
 `cubrid server stop <db>`. The ADR-0003 steps "readyz false", "persist a
-shutdown marker" and "verify processes exited" are not part of it; a failed
+shutdown marker" on the PVC and "verify processes exited" are not part of
+it (the stop record does not outlive the container); a failed
 command is reported, but no check confirms that no CUBRID process remains
 (POC-26 recorded `state unknown` with `cub_master` alive after
 `cubrid heartbeat stop`). `terminationGracePeriodSeconds` is 120s and the
@@ -987,9 +992,7 @@ For each scenario the design must define:
 - who performs fencing when fencing is required
 - how fencing failure is surfaced
 
-Example condition (illustrative; the Operator sets no `Degraded`
-Condition, and the reason it reports is `PrimaryResolved=False` with
-`AmbiguousPrimaryObservation`):
+Example condition (original proposal):
 
 ```text
 Ready=False
@@ -997,6 +1000,14 @@ HAReady=False
 Degraded=True
 Reason=AmbiguousPrimary
 ```
+
+As implemented, the Operator sets no `Degraded` Condition. An unresolved
+primary is reported as `PrimaryResolved=False` and `HAReady=False` with a
+reason such as `PrimaryObservationIncomplete` or
+`AmbiguousPrimaryObservation`, and `RoutingReady=False` with the same
+reason; `Ready` follows the members' readiness and stays `True` while the
+primary is only unresolved. Only more than one observed master turns
+`Ready` `False` (`MultiplePrimariesObserved`).
 
 Hard invariant:
 
@@ -1421,9 +1432,9 @@ operation.
   it **pauses** when not `PrimaryResolved`, on `FencingRequired`,
   role ambiguity, incomplete catch-up, or PDB denial. As implemented, the
   planner pauses when the primary is not resolved, while a member is not
-  ready, or when fewer than two healthy members would remain; "caught up"
-  (`WaitingForCatchUp`) is taken from the member's readiness, not from its
-  applier. The
+  ready, or when fewer than two healthy members would remain. Catch-up is
+  not evaluated separately from readiness: a member counts as caught up
+  when it is ready, so `WaitingForCatchUp` is never reached. The
   `FencingRequired` and PDB checks have no input: nothing sets that
   Condition and no PodDisruptionBudget is created or read.
 
