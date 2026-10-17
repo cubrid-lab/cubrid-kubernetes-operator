@@ -133,6 +133,20 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+# A lab run is started by hand only, against the shared multi-VM lab; see
+# docs/testing/lab-runs.md. LAB_CONTEXT is the kubectl context to use and
+# LAB_TARGET the lab that context must lead to (its cubrid-lab/lab marker).
+# LAB_COMMAND runs while the run holds the lab's campaign Lease, with KUBECONFIG
+# pinned to LAB_CONTEXT. `make test-e2e` never uses the lab.
+LAB_CONTEXT ?=
+LAB_TARGET ?=
+LAB_DURATION ?= 2h
+LAB_COMMAND ?= kubectl get nodes
+
+.PHONY: test-lab
+test-lab: ## Run LAB_COMMAND against the lab LAB_TARGET through LAB_CONTEXT, holding the lab
+	go run ./test/lab/cmd/lab -context '$(LAB_CONTEXT)' -target '$(LAB_TARGET)' -duration '$(LAB_DURATION)' -- $(LAB_COMMAND)
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
