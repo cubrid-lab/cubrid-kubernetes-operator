@@ -250,15 +250,20 @@ backup, restore or HA bootstrap (`503`, "the manager is starting").
 A shutdown can also arrive after the entrypoint has launched the manager
 but before the manager listens; the command then finds nobody and stops
 CUBRID itself, in its own process, unordered with the manager (#323). So the
-command first records the stop in a file on the container's own file system
-(`IM_STOP_FILE`, `/tmp/instance-manager-stop-requested` by default), and
-only then asks the manager. The manager looks for that record right after it
+command first records the stop in a file on the container's own file system,
+the fixed path `/tmp/instance-manager-stop-requested`, and only then asks the
+manager. The path is not configurable and must stay off every volume: a
+record that outlived its container would keep every later container of the
+member from starting CUBRID. The command dials the manager at `127.0.0.1` on
+the port of `IM_ADDR`, so `IM_ADDR` must include the loopback address (`:9090`
+or `0.0.0.0:9090`, not a Pod IP alone). The manager looks for that record right after it
 listens, and again before every `cubrid server start` and
 `cubrid heartbeat start`. When it is there, the manager behaves as a member
 that is stopping: it reclaims nothing, starts no completed restore's
 database, admits no operation (`503`), and treats the absence of CUBRID as
 intended; it does not run the shutdown itself, which the command ran. A
-record that cannot be examined counts as one. The order closes both races: a
+record that cannot be examined counts as one, and is logged as
+`stop_file_unreadable` rather than as a recorded stop (`stop_recorded`). The order closes both races: a
 record written before the manager's look is found, and one written after it
 was written after the listen, so the command's request reaches the manager,
 which orders the stop after its start. A manager that died before it

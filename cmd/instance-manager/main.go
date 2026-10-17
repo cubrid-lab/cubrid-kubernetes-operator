@@ -41,7 +41,7 @@ func main() {
 	// "instance-manager shutdown" is the one trigger of a stop: the preStop
 	// hook and the entrypoint both run it (ADR-0003).
 	if len(os.Args) > 1 && os.Args[1] == "shutdown" {
-		if err := shutdown(logger); err != nil {
+		if err := shutdown(logger, instancemanager.StopFile); err != nil {
 			logger.Error("Shutdown failed", "event", "shutdown_failed", "err", err)
 			os.Exit(1)
 		}
@@ -54,8 +54,8 @@ func main() {
 }
 
 // shutdown asks the manager of this Pod to stop CUBRID, or stops it itself
-// when no manager listens.
-func shutdown(logger *slog.Logger) error {
+// when no manager listens. It records the stop in stopFile first.
+func shutdown(logger *slog.Logger, stopFile string) error {
 	timeouts, err := timeoutsFromEnv()
 	if err != nil {
 		return err
@@ -70,7 +70,7 @@ func shutdown(logger *slog.Logger) error {
 	// The stop is recorded before the manager is asked: a manager that does
 	// not listen yet finds the record once it listens and starts nothing
 	// (#323). A record that could not be written does not hold up the stop.
-	if err := instancemanager.RecordStopRequest(stopFile()); err != nil {
+	if err := instancemanager.RecordStopRequest(stopFile); err != nil {
 		logger.Error("Could not record the stop request", "event", "stop_record_failed", "err", err)
 	}
 	return instancemanager.RequestShutdown(context.Background(), "http://127.0.0.1:"+port,
@@ -107,7 +107,7 @@ func run(logger *slog.Logger) error {
 	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second}, Logger: logger}
 	server := instancemanager.NewServer(cli, token).
 		WithLogger(logger).
-		WithStopFile(stopFile()).
+		WithStopFile(instancemanager.StopFile).
 		// A backup may stage only below this root; it is also what a failed
 		// backup removes. It matches the operator's backup staging path.
 		WithBackupStagingRoot(envOr("IM_BACKUP_STAGING_ROOT", "/var/lib/cubrid/backup-staging")).
@@ -231,13 +231,6 @@ func run(logger *slog.Logger) error {
 		defer cancel()
 		return srv.Shutdown(shutCtx)
 	}
-}
-
-// stopFile is where "instance-manager shutdown" records a stop and the
-// manager looks for it: IM_STOP_FILE, or a path on the container's own file
-// system.
-func stopFile() string {
-	return envOr("IM_STOP_FILE", instancemanager.DefaultStopFile)
 }
 
 func envOr(key, def string) string {

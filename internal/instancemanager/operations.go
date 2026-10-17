@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -230,7 +231,6 @@ func (s *Server) ResumeAndServe(ctx context.Context, serve func() error) error {
 		return err
 	}
 	if s.honorRecordedStop() {
-		s.log().Info("Started nothing because a stop was asked for before the manager listened", "event", "stop_recorded")
 		return nil
 	}
 	// Backup staging that ended or unknown operations left is removed; that
@@ -287,15 +287,17 @@ func (s *Server) activate(ctx context.Context, args ...string) (string, error) {
 	return s.cli.Run(ctx, "cubrid", args...)
 }
 
-// DefaultStopFile is where "instance-manager shutdown" records a stop when
-// IM_STOP_FILE does not say otherwise. It is on the container's own file
-// system, which a restarted container does not keep, so a recorded stop
-// holds for the container it was asked for and for no later one.
-const DefaultStopFile = "/tmp/instance-manager-stop-requested"
+// StopFile is where "instance-manager shutdown" records a stop. It is a
+// fixed path on the container's own file system, which a restarted container
+// does not keep, so a recorded stop holds for the container it was asked for
+// and for no later one. It must never be on a volume: a record that outlived
+// its container would keep every later container from starting CUBRID.
+const StopFile = "/tmp/instance-manager-stop-requested"
 
-// WithStopFile sets where "instance-manager shutdown" records a stop
-// (RecordStopRequest). The manager looks there once it listens and before
-// every start of CUBRID.
+// WithStopFile sets where the manager looks for a stop that
+// "instance-manager shutdown" recorded (RecordStopRequest): once it listens
+// and before every start of CUBRID. The manager passes StopFile; tests pass
+// their own path.
 func (s *Server) WithStopFile(path string) *Server {
 	s.stopFile = path
 	return s
@@ -304,29 +306,43 @@ func (s *Server) WithStopFile(path string) *Server {
 // RecordStopRequest records that a stop of this member was asked for.
 // "instance-manager shutdown" calls it before it asks the manager, so that a
 // manager that does not listen yet, and would later, finds the stop and
-// starts nothing (#323). Nothing removes the record: a stop is final for the
-// container.
+// starts nothing (#323). Only the file's existence counts: an existing file
+// is neither truncated nor followed when it is a symbolic link. Nothing
+// removes the record: a stop is final for the container.
 func RecordStopRequest(path string) error {
-	return os.WriteFile(path, []byte("stop requested\n"), 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600) // #nosec G304 -- the fixed StopFile, or a test's path
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // honorRecordedStop says whether a stop was recorded in the stop file and,
 // if so, makes the member stopping as Stop does, without running the
 // shutdown: the command that recorded the stop runs it, or asks this manager
 // to. A stop file that cannot be examined counts as a recorded stop, so that
-// a doubt never ends in a start.
+// a doubt never ends in a start; it is logged as such, not as a stop that
+// was asked for.
 func (s *Server) honorRecordedStop() bool {
 	if s.stopFile == "" {
 		return false
 	}
-	if _, err := os.Lstat(s.stopFile); errors.Is(err, fs.ErrNotExist) {
+	_, err := os.Lstat(s.stopFile)
+	if errors.Is(err, fs.ErrNotExist) {
 		return false
 	}
 	s.stopRequested.Store(true)
 	s.lifeMu.Lock()
+	wasStopping := s.stopping
 	s.stopping = true
 	s.lifeMu.Unlock()
 	s.endOps()
+	switch {
+	case err != nil:
+		s.log().Error("Could not examine the stop file, so CUBRID is not started", "event", "stop_file_unreadable", "path", s.stopFile, "err", err)
+	case !wasStopping:
+		s.log().Info("Found a recorded stop, so CUBRID is not started", "event", "stop_recorded", "path", s.stopFile)
+	}
 	return true
 }
 

@@ -46,9 +46,8 @@ func TestShutdown_RecordsTheStopBeforeItAsksTheManager(t *testing.T) {
 	}
 	t.Setenv("IM_ADDR", ":"+port)
 	t.Setenv("IM_TOKEN", "tok")
-	t.Setenv("IM_STOP_FILE", stopFile)
 
-	if err := shutdown(slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+	if err := shutdown(slog.New(slog.NewTextHandler(io.Discard, nil)), stopFile); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
 	select {
