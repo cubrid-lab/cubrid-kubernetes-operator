@@ -12,7 +12,7 @@ narrow for the MVP and are widened only after they are validated in CI.
 | Architecture | amd64 | arm64 is not targeted for the MVP. The official CUBRID image is linux/amd64 only; the operator image and the wiring scenario with a fake Instance Manager also run on arm64. |
 | Go toolchain | see `go.mod` | Pinned via `go.mod`; CI uses `go-version-file: go.mod`. |
 | Storage | CSI-backed PVC, `ReadWriteOnce` | Per-instance data volume (ADR-0004, #17). |
-| CSI target | Local minikube/Kind defaults; lab driver TBD (#80) | A development default is not a validated CSI support claim. |
+| CSI target | Local minikube/Kind defaults; lab driver TBD (#80) | A development default is not a validated CSI support claim. The lab currently provisions with k3s `local-path`, which is node-local and not a CSI driver ([lab inventory](testing/lab-inventory.md)). |
 | HA topology | 1 master + 2 slaves (`promotableMembers: 3`) | Standalone `1/0` is also a design target (ADR-0001); live evidence is tracked in ROADMAP.md. |
 | Non-promotable replica | Not supported | `topology.readReplicas` reserved, must be `0` (ADR-0001). |
 
