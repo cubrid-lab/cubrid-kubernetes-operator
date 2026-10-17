@@ -124,8 +124,10 @@ comes and goes (POC-26 state 4b, for example a person running
 `cubrid heartbeat start` in the container) passes when both process
 snapshots miss `cub_master`; and a start or a stop from outside the Instance
 Manager that begins after the second snapshot and before the start command
-is not seen (the decision is a check, then an act). The shutdown fallback
-that runs in another process before the manager listens is tracked in #323.
+is not seen (the decision is a check, then an act). A shutdown that runs its
+own fallback before the manager listens is not such a start or stop: it
+records the stop first, and the manager starts no heartbeat after a recorded
+stop (ADR-0003, Shutdown model).
 The 2 seconds were measured against one local host without load. Right after
 the manager's own `cubrid createdb` and `cubrid restoredb -u` exited, no
 `cub*` process was seen for 1 and 0.6 seconds (`cubrid/cubrid:11.4`, one

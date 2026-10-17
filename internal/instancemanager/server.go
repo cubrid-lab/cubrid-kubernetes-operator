@@ -84,6 +84,9 @@ type Server struct {
 	// stopMu and stopped make the stop run once.
 	stopMu  sync.Mutex
 	stopped bool
+	// stopFile is where "instance-manager shutdown" records a stop it was
+	// asked for (RecordStopRequest); empty when the manager does not look.
+	stopFile string
 	// lifeMu guards stopping, starting and the admission into ops. Once
 	// stopping is set no operation is admitted and none starts CUBRID. While
 	// starting is set only the resume of completed restores is admitted.

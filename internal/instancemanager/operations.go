@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -208,6 +210,11 @@ var errStarting = errors.New("the manager is starting")
 // that a shutdown during the resume reaches it and is ordered after the
 // start that is running; were nobody listening, "instance-manager shutdown"
 // would stop CUBRID itself and the resume could start it again afterwards.
+// That is what a shutdown before the listen does: the command records the
+// stop (RecordStopRequest) before it asks, and the manager looks for the
+// record after it listens. A stop recorded before that look makes the member
+// stopping, and nothing is reclaimed or started; one recorded after it was
+// recorded after the listen, so the command's request reaches the manager.
 // Until the resume has ended every other mutating operation is refused. A
 // resume that fails is logged; the manager serves all the same.
 func (s *Server) ResumeAndServe(ctx context.Context, serve func() error) error {
@@ -221,6 +228,10 @@ func (s *Server) ResumeAndServe(ctx context.Context, serve func() error) error {
 	}()
 	if err := serve(); err != nil {
 		return err
+	}
+	if s.honorRecordedStop() {
+		s.log().Info("Started nothing because a stop was asked for before the manager listened", "event", "stop_recorded")
+		return nil
 	}
 	// Backup staging that ended or unknown operations left is removed; that
 	// of a live operation is judged by the store and kept.
@@ -259,10 +270,14 @@ func (s *Server) stoppingReason(reason string) string {
 }
 
 // activate runs a `cubrid` command that starts CUBRID (server start,
-// heartbeat start) for an admitted operation, unless the member is stopping.
-// A stop that begins after the check cancels the command and waits for the
-// operation, so the start is over before the shutdown runs.
+// heartbeat start) for an admitted operation, unless the member is stopping
+// or a stop was recorded (honorRecordedStop). A stop that begins after the
+// check cancels the command and waits for the operation, so the start is
+// over before the shutdown runs.
 func (s *Server) activate(ctx context.Context, args ...string) (string, error) {
+	if s.honorRecordedStop() {
+		return "", errStopping
+	}
 	s.lifeMu.Lock()
 	stopping := s.stopping
 	s.lifeMu.Unlock()
@@ -272,13 +287,58 @@ func (s *Server) activate(ctx context.Context, args ...string) (string, error) {
 	return s.cli.Run(ctx, "cubrid", args...)
 }
 
+// DefaultStopFile is where "instance-manager shutdown" records a stop when
+// IM_STOP_FILE does not say otherwise. It is on the container's own file
+// system, which a restarted container does not keep, so a recorded stop
+// holds for the container it was asked for and for no later one.
+const DefaultStopFile = "/tmp/instance-manager-stop-requested"
+
+// WithStopFile sets where "instance-manager shutdown" records a stop
+// (RecordStopRequest). The manager looks there once it listens and before
+// every start of CUBRID.
+func (s *Server) WithStopFile(path string) *Server {
+	s.stopFile = path
+	return s
+}
+
+// RecordStopRequest records that a stop of this member was asked for.
+// "instance-manager shutdown" calls it before it asks the manager, so that a
+// manager that does not listen yet, and would later, finds the stop and
+// starts nothing (#323). Nothing removes the record: a stop is final for the
+// container.
+func RecordStopRequest(path string) error {
+	return os.WriteFile(path, []byte("stop requested\n"), 0o600)
+}
+
+// honorRecordedStop says whether a stop was recorded in the stop file and,
+// if so, makes the member stopping as Stop does, without running the
+// shutdown: the command that recorded the stop runs it, or asks this manager
+// to. A stop file that cannot be examined counts as a recorded stop, so that
+// a doubt never ends in a start.
+func (s *Server) honorRecordedStop() bool {
+	if s.stopFile == "" {
+		return false
+	}
+	if _, err := os.Lstat(s.stopFile); errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	s.stopRequested.Store(true)
+	s.lifeMu.Lock()
+	s.stopping = true
+	s.lifeMu.Unlock()
+	s.endOps()
+	return true
+}
+
 // RequestShutdown is what "instance-manager shutdown" does. It asks the
 // manager that listens at managerURL to stop CUBRID, so that the manager
 // knows the stop is intended, and it sends the token of its Pod like every
 // other caller. When no manager answers, for example because the container is
 // terminated before the manager was started, it stops CUBRID itself with the
 // same procedure. A manager that answers and refuses is not that case: the
-// refusal is returned and nothing is stopped here.
+// refusal is returned and nothing is stopped here. Its caller records the
+// stop first (RecordStopRequest), so that a manager that listens only after
+// this stop starts nothing.
 func RequestShutdown(ctx context.Context, managerURL, token, database string, cli CLI, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
