@@ -165,7 +165,11 @@ relies on, are verified with a real engine, not by the configuration tests.
   for a created cluster; changing them is a destructive identity
   migration.
 - A missing per-member alias Service (or one with no endpoints) →
-  degraded condition, because short HA names may stop resolving.
+  degraded condition, because short HA names may stop resolving. As
+  implemented, there is no such condition: a missing alias Service is
+  created again, one of the same name that the cluster does not own fails
+  the reconcile (`Ready=False`, `MemberServiceReconcileFailed`), and an
+  alias Service without endpoints is not reported.
 - All generated names must be DNS-1123 lowercase labels within Kubernetes
   label limits and CUBRID's practical hostname length.
 

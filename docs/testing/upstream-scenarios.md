@@ -286,8 +286,9 @@ with no outside test behind it.
 | S16 compatible rolling update (conditional) | None read | POC-9 |
 | S17 disk full (conditional) | None read | None |
 
-S04, S06, S14 and S15 have no outside reference. Their contracts in #79 have
-to be written from this project's own decisions, and say so.
+S04, S06, S14 and S15 have no outside reference. Their contracts in
+[scenario-contract.md](scenario-contract.md) are written from this project's
+own decisions.
 
 ## CUBRID 11.4 facts checked for this catalog
 
@@ -340,14 +341,15 @@ These are findings for the maintainers. This catalog changes no decision.
   `docs/poc/RESULTS.md` ran both cases on a real engine: the simpler path
   forms a working group when it is new and empty, and leaves a member without
   the earlier data when the group already holds rows.
-- **The command used for seeding.** The operator seeds a member with
+- **The command used for seeding.** The operator seeds a member from a
+  running master with `cubrid restoreslave -u -s master -m <master>`
+  (`internal/instancemanager/restore.go`); a recovery restore uses
   `cubrid restoredb -u`. Fact 5 says the documented command for building a
   slave from a backup is `cubrid restoreslave`, which also sets the
-  replication catalog. The Kind scenario shows that a row written after the
-  seeding replicates; it does not show that a member seeded with plain
-  `restoredb` applies the right logs when the master was written to between
-  the backup and the start of the slave. That case needs an experiment
-  (issue #217).
+  replication catalog. The experiment of issue #217 (POC-14) showed that a
+  member seeded with plain `restoredb` misses what the master committed
+  between the backup and the slave's start, and POC-23 that the seed source
+  must be the current master.
 - **`ha_ping_hosts` is not configured** in the generated `cubrid_ha.conf`,
   so by fact 6 a master cannot tell a partition from the loss of its slaves.
   That bears on S07 (noted on issue #114).
@@ -364,7 +366,10 @@ is built from. The table lists what the tests in this repository use today.
 | `adobe/s3mock:5.2.3` image | Object store stand-in in the Kind scenario | Source: Apache-2.0 | Pulled for tests, not redistributed |
 | `pycubrid` 1.9.0 | SQL client in the Broker check of the Kind scenario | MIT | Installed from the Python package index inside a test Pod; not vendored |
 | `python:3.12-slim` image | Runs that client | Not reviewed | Pulled for tests, not redistributed |
-| `busybox:1.37` image | Base of the test-only fake Instance Manager image | BusyBox is GPL-2.0 | The image is built locally for tests and is not published. Publishing it would bring GPL-2.0 distribution duties, which is one more reason to keep it out of the release images |
+| `debian:12-slim` image (`test/fakeim/Dockerfile`) | Base of the test-only fake Instance Manager image | Not reviewed | The image is built locally for tests and is not published |
+| `curlimages/curl:8.10.1` image | Caller of the Instance Manager endpoints in S14 | Not reviewed | Pulled for tests, not redistributed |
+| `eclipse-temurin:17-jdk` and `17-jre` images (`test/workload/client/Dockerfile`) | Build and run the JDBC workload client | Not reviewed | The client image is built locally for tests and is not published |
+| cert-manager v1.21.1 (`test/utils/utils.go`) | Installed into the Kind cluster by the suite | Not reviewed | Applied from its release manifest for tests, not redistributed |
 
 ## Rules for a later import
 

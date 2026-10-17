@@ -7,6 +7,21 @@ ADRs). Tracks issues #42–#49.
 Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
+> **How to read this file (annotation, 2026-10-18).** The file now holds
+> POC-1 to POC-26, not only the first runs for #42–#49. "amd64/linux" is the
+> image's platform, not where a POC ran. POC-1 to POC-9 do not record the
+> host or the container runtime: their timings (for example "within ~6 s"
+> in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
+> not timing baselines. POC-10 to POC-16, POC-20 and POC-24 ran linux/amd64
+> under emulation (podman on another architecture): their command output is
+> functional evidence, and their timings and rates are not native timings.
+> POC-17, POC-23, POC-25 and POC-26 ran on native linux/amd64 hosts, and
+> POC-19, POC-21 and POC-22 in the Kind e2e workflow; each states its own
+> environment. Each POC is the behavior of one image in a few runs, not a
+> general CUBRID guarantee. The raw observations below are kept as recorded;
+> where a later POC contradicts one, a note says so. The current reading of
+> the whole is at the top of [Net assessment](#net-assessment).
+
 ---
 
 ## Image intelligence (feeds ADR-0003)
@@ -142,6 +157,10 @@ native HA owns role transition; the operator only observes.**
 - Never hand-write `databases.txt`; let `createdb` register absolute paths.
 - `heartbeat start` is a **single idempotent** op — never retry-spam
   (retry mid-activation flips activate/deactivate).
+  > **Correction (POC-26):** a start is single-shot, not idempotent: a second
+  > start during a start or a stop fails (state 4c), and
+  > `cubrid heartbeat status` cannot always tell that a start or a stop is
+  > under way.
 - Slave seeding = master backup → restore on the slave (with the db first
   registered in `databases.txt`).
 
@@ -1030,7 +1049,7 @@ comparable leftover after a kill inside a running container (issue #180).
 
 ---
 
-## POC-19 — a master whose Pod is deleted without a grace period and is back at once (ADR-0005, S03) — **observation: no failover**
+## POC-19 — a master whose Pod is deleted without a grace period and is back at once (ADR-0005, S03) — **observation: no failover in 10 of 11 recorded runs**
 
 Found on Kind in CI by scenario S03 of
 [docs/testing/scenario-contract.md](../testing/scenario-contract.md), in the
@@ -1226,6 +1245,9 @@ log. Five more rows reached all three members within 30 seconds.
   after which the Operator reports a slave as stalled.
 - A member whose heartbeat is stopped inside its container stays down: the
   container does not exit and nothing restarts the processes (issue #180).
+  > **Superseded (#180):** the Instance Manager now ends a member whose
+  > CUBRID processes stay away for more than 30 seconds, and its container
+  > is restarted; see "Later observation" below.
 
 **Consequence for the Operator.** Deleting the Pod is a recovery for a slave
 in this state, and it is what the ordinary Pod life cycle does anyway. The
@@ -1630,6 +1652,46 @@ call took 181 ms). One image, local Docker; a few runs per state, not a general
 CUBRID guarantee.
 
 ## Net assessment
+
+### Current reading (annotation, 2026-10-18)
+
+The original assessment below was written after POC-1 to POC-9 and is kept
+as written. Later POCs confirm parts of it and contradict others:
+
+- **Confirmed, with limits.** The official image runs a single-node
+  lifecycle; backup and restore round-trip (POC-4, POC-5, POC-11); two- and
+  three-member HA forms and replicates (POC-3, POC-13, and on Kind S01/S02);
+  RW/RO Brokers route natively and RO refuses writes with `-581` (POC-8,
+  POC-22). Environments differ per POC (see the note at the top).
+- **Failover is not guaranteed.** A killed master that returns within a
+  second was re-elected instead of a slave being promoted in 10 of 11
+  recorded Kind runs (POC-19). POC-3's "~6 s" is one run of an unknown
+  environment.
+- **A slave can look healthy and apply nothing.** A returning slave stays
+  behind while its role and server state look normal (POC-16 under
+  emulation, POC-17 native, POC-21 on Kind). Whether work is lost is not
+  tested.
+- **No quorum.** A lone member accepts writes (POC-16; the promoted-slave
+  case reproduced natively in POC-17).
+- **Seeding can lose data silently.** A member restored with plain
+  `restoredb` from a running master misses what was committed between the
+  backup and its start; `restoreslave` avoids it (POC-14), and the seed
+  source must be the current master (POC-23).
+- **Heartbeat status misreports transitions.** A start or a stop in
+  progress can look inactive, and after `cubrid heartbeat stop` or a failed
+  start `state unknown` stays with `cub_master` alive (POC-26). The
+  POC-7/POC-9 recovery command `cubrid master stop` is not a utility in
+  11.4.6; `cubrid service stop` is (POC-26). The POC-9 start failure was not
+  reproduced (POC-26, state 4d).
+- **Split brain.** Two masters with divergent data were seen in one run of
+  an unknown environment with `ha_ping_hosts` unset (POC-6); whether
+  `ha_ping_hosts` changes that is open (scenario contract, Q3).
+- **Not tested.** The per-member Service fix for the short-name problem of
+  POC-3 has not been tested in Kubernetes by a POC (the Instance Manager
+  image sets `hosts: files dns`, POC-26); the POC-9 slave restart was a
+  Docker container restart, not a StatefulSet `OnDelete` replacement.
+
+### Original assessment (after POC-1 to POC-9)
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed
 against real CUBRID 11.4: the official image runs, single-node DB lifecycle

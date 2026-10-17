@@ -6,8 +6,9 @@ behavior, the outcomes that must never happen, how the data is checked and
 what evidence the run must leave. A reviewer can decide pass or fail from this
 document and the evidence of a run, without reading the controller code.
 
-It is a specification, not test code, and it does not say which scenario is
-implemented or validated. That status is kept only in
+It is a specification, not test code. Apart from the definition of the Kind
+lane and the measured baselines of the time limits, it does not say which
+scenario is implemented or validated. That status is kept only in
 [ROADMAP.md](../../ROADMAP.md). The outside tests and manual passages the
 scenarios learn from are recorded in
 [upstream-scenarios.md](upstream-scenarios.md).
@@ -62,7 +63,7 @@ from a lower level never counts as evidence for a higher one.
 |---|---|---|
 | Unit | State decisions, parsing, validation, retry and operation rules | Real engine or network behavior |
 | envtest | API validation and the Kubernetes resources the controller creates | Pod execution, scheduling or database recovery |
-| Real database on Kind | Installation, SQL, replication, backup and restore working together | What happens when a real VM fails |
+| Real database on Kind | Installation, SQL, replication, and (once S11 and S12 run there) backup and restore working together | What happens when a real VM fails |
 | VM lab | The supported topology, VM failures and controlled network faults | Resilience across physical zones or a whole provider |
 
 ## Rules for every run
@@ -586,7 +587,8 @@ it needs more.
 
 - **Level:** real database on Kind.
 - **Starting state:** an empty cluster with the Operator installed from the
-  release manifests.
+  release manifests. Until release manifests exist (#123), the suite installs
+  it with `make deploy` (`config/default`, `test/e2e/e2e_suite_test.go`).
 - **Action:** create a `CubridCluster` with one member and one database.
 - **The Operator must** (ADR-0010): create the database once; report `Ready`
   only when SQL can be run (ADR-0003).
@@ -677,7 +679,8 @@ it needs more.
   `failover_limit`, on whichever member CUBRID made the master, and the master
   does not change a second time. The run records which member it is. How a
   former master comes back is judged by S09 `clean`, which this scenario runs
-  as its second half.
+  as its second half. The suite measures that return against `rejoin_limit`
+  inside S03; S09 itself has no test and no result in `summary.json`.
 - **Must never happen:** an `acknowledged` operation missing; two masters
   reported as healthy, or two members reporting themselves active masters in
   two consecutive sweeps of all members; the Operator deleting or restarting another member
@@ -1033,7 +1036,8 @@ because they move the master.
 ### S15: node drain and PodDisruptionBudget
 
 - **Level:** real database on a multi-node Kind cluster; VM lab for the
-  variant `no-spare-node`.
+  variant `no-spare-node`. The suite's Kind cluster has one node
+  (`make setup-test-e2e`), and no multi-node Kind configuration is in the repository.
 - **Variants:** `drain-slave-node`, `drain-master-node`, and `no-spare-node`
   (the drained node's Pod has nowhere to be scheduled).
 - **Fault confirmed by:** the node is cordoned and its member Pod was evicted
@@ -1141,7 +1145,7 @@ and the verdict all four rules give as the measurement `timeLimitVerdict`.
 | `formation_limit` | Kind on a GitHub-hosted `ubuntu-latest` runner, CUBRID 11.4.6, object storage mocked | 59 s, 71 s, 71 s, 83 s in four runs on 2026-10-05 | From the `creationTimestamp` of the `CubridCluster` to the latest `lastTransitionTime` of `Ready`, `HAReady`, `PrimaryResolved` and `RoutingReady`, all as the API server recorded them | 5 minutes, about four times the slowest run, because a runner's speed and image pulls vary |
 | `replication_limit` | The same | 1.74 s to 1.81 s in the same four runs, measured before #367 changed the method | Measured then from the return of the workload client, after its last commit, until every member returned the same rows and the same catalog, including the time the checks take (about one second). It is now measured from just before a marker row's commit until every slave returns the marker and the master's ledger row count, which is also an upper bound; no baseline of the new method is recorded yet | 30 seconds |
 
-| `failover_limit` | The same; scenario S03, both variants | 1.1 s to 1.8 s in eight runs (four per variant) on 2026-10-05 | From the moment the deletion of the master Pod was issued to the client's first acknowledged operation after which none failed, taken from the client's history | 30 seconds |
+| `failover_limit` | The same; scenario S03, the variants `graceful` and `abrupt` (the variant `abrupt-first-member` was added later and has no baseline here; POC-19 recorded its clients acknowledged again after 10.9 to 11.4 s) | 1.1 s to 1.8 s in eight runs (four per variant) on 2026-10-05 | From the moment the deletion of the master Pod was issued to the client's first acknowledged operation after which none failed, taken from the client's history | 30 seconds |
 | `rejoin_limit` | The same | 21.4 s to 26.8 s in the same eight runs | From the moment the deletion was issued until CUBRID reports one master and two slaves on all three members, the former master among the slaves, and the Operator's status agrees. On Kind the Pod is recreated at once, so the time is taken from the fault | 5 minutes |
 
 | `broker_recovery_limit` | The same; scenario S05, three variants | Slowest of four clients per run, in two runs on 2026-10-05: 1.4 s and 2.4 s (Broker process killed), 0.1 s and 0.2 s (one Broker Pod deleted), 7.7 s and 15.8 s (all read-write Broker Pods deleted) | From the moment the fault was issued to the client's first acknowledged operation after which none failed, taken from each client's history | 1 minute, about four times the slowest run |
@@ -1177,7 +1181,7 @@ is written.
 | Q6 | How long does an already-open session keep writing to an isolated old master? ADR-0005 names this the stale-write exposure measurement. | S07 | Measured in the S07 run itself; reported, not judged. |
 | Q7 | Does a backup interrupted by a Pod kill leave files that `restoredb` accepts? | S11 | Half a day under Podman. |
 | Q8 | What evidence shows that a former master did not accept writes the others lack, so that it may rejoin without a rebuild? POC-3 saw a stopped master return as a slave on its own; ADR-0006 blocks a former master until it is verified. | S03, S09 | One day, with issue [#116](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/116), "feat(recovery): rejoin retained-PVC members without unsafe failback". |
-| Q9 | Does a slave that was not running when its master died apply the new master's log when it returns? Not when its container kept running: POC-16, POC-17 (native linux/amd64) and POC-21 (in a Pod) saw such a slave stay behind while it reported itself as a healthy slave. A Pod that is deleted and recreated does catch up (POC-21). Still open: is anything of the old master's log lost when a member starts without the applier's lock file? | S03, S08, S09 | Half a day, with issue [#226](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/226), "test(ha): reproduce a returning slave that does not apply the new master's log". The check that reports such a slave is issue [#229](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/229), "feat(ha): detect a slave that does not apply the master's log". |
+| Q9 | Does a slave that was not running when its master died apply the new master's log when it returns? Not when its container kept running: POC-16, POC-17 (native linux/amd64) and POC-21 (in a Pod) saw such a slave stay behind while it reported itself as a healthy slave. A Pod that is deleted and recreated was seen to catch up in one Kind run (POC-21). Still open: is anything of the old master's log lost when a member starts without the applier's lock file? | S03, S08, S09 | Half a day, with issue [#226](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/226), "test(ha): reproduce a returning slave that does not apply the new master's log". The check that reports such a slave is issue [#229](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/229), "feat(ha): detect a slave that does not apply the master's log". |
 
 ## What this contract does not promise
 
