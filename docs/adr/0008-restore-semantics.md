@@ -294,10 +294,19 @@ failed before its data was recorded, and so was never started, is removed and
 restored again. A seeding retry from the same source in the same round sends
 the same request body under its new key (the seed location names the source
 and the round, not the attempt), so it is the same request: it takes over the
-data the earlier attempt restored and only starts it, and the new seed backup
-that the retry took is not restored. A seeding retry from another source, or
-in another round, is a different request, so it is refused in the same way
-while the restored data of the earlier attempt is in place.
+data the earlier attempt restored and only starts it. The operator therefore
+takes no new seed backup for such a retry (#463): before the backup it looks
+up the restore of the latest earlier attempt under this step's key (the same
+member, source and round), and when that restore failed after it recorded
+this step's seed backup as restored, with the same request body (compared by
+the hash the Instance Manager keeps), the retry sends that request again
+without a backup. In every other case, also when the earlier restore failed
+before it restored anything or there is none, the retry takes a new seed
+backup as before, at the same place, and its restore restores it. A lookup
+that fails keeps the step waiting and starts nothing. A seeding retry from
+another source, or in another round, is a different request, so it is
+refused in the same way while the restored data of the earlier attempt is in
+place.
 
 When the marker of a restore recorded `Completed` is still there (the
 operation was recorded, then the marker could not be removed), the entrypoint

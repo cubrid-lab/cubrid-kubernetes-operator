@@ -331,7 +331,12 @@ Uploading → Completed | Failed | CleaningUp`. Operator restart → re-poll
 by operation ref / idempotency key. Manager restart → reconstruct from
 records + filesystem facts. **Successful `backupdb` ≠ successful backup**
 — success requires upload + checksum + `manifest.json`. Never overwrite a
-completed artifact; retries are new attempts. Restore/rebuild trust an
+completed artifact; retries are new attempts. A seed backup of an HA member
+(ADR-0010) is the exception: its place names the source and the round, not
+the attempt, so a retry's seed backup replaces the earlier attempt's at the
+same place, and a seed restore retry that takes over the data the earlier
+attempt already restored takes no new seed backup at all (ADR-0008, #463).
+Restore/rebuild trust an
 artifact **only** if `manifest.json` exists and validates all listed
 objects (per-file hashes + metadata: CUBRID version, db, level, source
 cluster UID/instance/role, timestamps).
