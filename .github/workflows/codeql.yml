@@ -20,14 +20,14 @@ permissions:
 jobs:
   go:
     name: Analyze (go)
-    uses: cubrid-lab/.github/.github/workflows/codeql.yml@fc28334e151429d8f976ae01119dab0deb6bd87e
+    uses: cubrid-lab/.github/.github/workflows/codeql.yml@90b89fd672e63dfbc953172b8c473d58e334cdfb
     with:
       language: go
       category: /language:go
 
   actions:
     name: Analyze (actions)
-    uses: cubrid-lab/.github/.github/workflows/codeql.yml@fc28334e151429d8f976ae01119dab0deb6bd87e
+    uses: cubrid-lab/.github/.github/workflows/codeql.yml@90b89fd672e63dfbc953172b8c473d58e334cdfb
     with:
       language: actions
       category: /language:actions
