@@ -294,10 +294,13 @@ implemented as a report, not yet as a gate.
   applied yet, read with `cubrid applyinfo` for the log of the master the
   member's node list names. A master's answer has none.
 - **Status.** `status.instances[].replication` holds the last report of each
-  slave: `source`, `appliedChanges`, `failCount`, `delayedPages`, and
-  `stalledSince`, which the operator sets when log pages wait in two
-  observations in a row and the applier applied nothing in between. It is
-  cleared as soon as the applier applies something or no page waits.
+  slave: `source`, `appliedChanges`, `failCount`, `delayedPages`,
+  `applier`, an opaque identity of the applier process that is only compared
+  for equality, and `stalledSince`, which the operator sets when log pages
+  wait in two observations in a row and the applier applied nothing in
+  between. It is cleared as soon as the applier applies something or no page
+  waits, and starts again at the current observation when the applier
+  process changes while pages still wait.
   `observedAt` is when the counters were read.
 - **Missed readings.** A reconcile that read a slave's role but could not
   read its applier (`applyinfo` timed out or failed) keeps the last reading
@@ -322,13 +325,21 @@ Why two observations and not the number of waiting pages alone: a healthy
 slave under load has pages waiting too, but its counters rise (POC-20).
 
 Which applier the counters belong to (#360): the counters are kept across a
-restart of the applier and of the member (POC-25), so a restarted applier
+restart of the applier and of the member (POC-30), so a restarted applier
 comes back with the values it had. The Instance Manager reports the applier
 process with each reading (`replication.applier`: its process ID and the
 kernel's start time of the process), and a reading beside another process
-starts a new series: the restarted applier is not stalled until it, too, has
-applied nothing between two readings. An identity that is missing on one
-side, as from a manager that does not report it yet, decides nothing; the
+starts a new series, so the restarted applier does not inherit the age of a
+stall. A stall that was reported when the applier changed and pages still
+wait is not reported as over: `stalledSince` starts again at that reading,
+so no resumption is reported, and an applier that keeps crashing faster than
+the readings stays reported stalled. Its 60-second window starts again with
+each new process, so such a crash loop does not turn `ReplicationHealthy`
+`False`, and a condition that was already `False` for that slave turns `True`
+again for at least one window. A stall in which the applier retries inside the same process, as
+in #357 (POC-28), keeps the identity and is reported as before. An identity
+that is missing on one side, as from a manager that does not report it yet
+or one that could not read the process's start time, decides nothing; the
 counters alone are compared then.
 
 What it does not do. Nothing acts on the condition: `HAReady`, `Ready` and

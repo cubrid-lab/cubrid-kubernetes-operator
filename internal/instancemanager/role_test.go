@@ -17,7 +17,9 @@ limitations under the License.
 package instancemanager
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -154,7 +156,10 @@ func TestParseHAStatus_NeedsExactlyOneMatchingLocalNode(t *testing.T) {
 }
 
 // slaveWithAppliersOut is the status of a slave of a three-member group: it
-// applies the log of each of the two other members.
+// applies the log of each of the two other members. It is hand-written, not
+// captured: POC-30 recorded the applier's process IDs but not the verbatim
+// output. Its Applylogdb lines follow the verbatim line in masterOut (POC-3)
+// and the layout of `cubrid heartbeat status` in the CUBRID manual.
 const slaveWithAppliersOut = ` HA-Node Info (current hab-2, state slave)
    Node hab-2 (priority 3, state slave)
    Node hab-1 (priority 2, state slave)
@@ -184,6 +189,7 @@ func TestParseHAStatus_Appliers(t *testing.T) {
 // The reading of a slave's replication names the applier process of the
 // master's log, by its process ID and start time (#360).
 func TestReplicationOf_NamesTheApplierOfTheMastersLog(t *testing.T) {
+	const want = "pid:327:48213"
 	started := map[int]string{327: "48213"}
 	defer func(old func(int) (string, bool)) { processStarted = old }(processStarted)
 	processStarted = func(pid int) (string, bool) {
@@ -196,20 +202,62 @@ func TestReplicationOf_NamesTheApplierOfTheMastersLog(t *testing.T) {
 	if got == nil || got.Source != "hab-0" {
 		t.Fatalf("replication = %+v, want a reading of hab-0's log", got)
 	}
-	if got.Applier != "pid:327:48213" {
+	if got.Applier != want {
 		t.Errorf("applier = %q, want the process of hab-0's log with its start time", got.Applier)
 	}
 
-	// A process whose start cannot be read is still another process than
-	// one with another ID.
+	// A process whose start cannot be read has no identity: one without the
+	// start time would differ from the one read before and look like a
+	// restart.
 	delete(started, 327)
-	if got := replicationOf(context.Background(), cli, st, "appdb", "/var/lib/cubrid/databases"); got.Applier != "pid:327" {
-		t.Errorf("applier without a readable start = %q, want pid:327", got.Applier)
+	if got := replicationOf(context.Background(), cli, st, "appdb", "/var/lib/cubrid/databases"); got.Applier != "" {
+		t.Errorf("applier without a readable start = %q, want none", got.Applier)
+	}
+	started[327] = "48213"
+	// The paths are compared after filepath.Clean.
+	if got := replicationOf(context.Background(), cli, st, "appdb", "/var/lib/cubrid/databases/"); got.Applier != want {
+		t.Errorf("applier for a databases directory with a trailing slash = %q, want %s", got.Applier, want)
+	}
+	unclean := ParseHAStatus(strings.Replace(slaveWithAppliersOut, "databases/appdb_hab-0", "databases//appdb_hab-0/", 1))
+	if got := replicationOf(context.Background(), cli, unclean, "appdb", "/var/lib/cubrid/databases"); got.Applier != want {
+		t.Errorf("applier listed with an unclean path = %q, want %s", got.Applier, want)
 	}
 	// No applier line for the master's log: the identity is not known.
 	st.Appliers = st.Appliers[:1]
 	if got := replicationOf(context.Background(), cli, st, "appdb", "/var/lib/cubrid/databases"); got.Applier != "" {
 		t.Errorf("applier without a line for the log = %q, want none", got.Applier)
+	}
+}
+
+// A slave without an applier line for its master's log is logged once, and
+// again only after an applier was found in between.
+func TestLogMissingApplier_LogsOnce(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewServer(fakeCLI{}, "tok").WithReplication("appdb", "/var/lib/cubrid/databases")
+	s.WithLogger(slog.New(slog.NewJSONHandler(&buf, nil)))
+	withApplier := ParseHAStatus(slaveWithAppliersOut)
+	withApplier.Replication = &ApplyConvergence{Source: "hab-0"}
+	without := withApplier
+	without.Appliers = withApplier.Appliers[:1]
+	const msg = "Found no log applier process for the master's log"
+	for i, st := range []HAStatus{without, without, without, withApplier, without} {
+		s.logMissingApplier(context.Background(), st)
+		if i == 2 && strings.Count(buf.String(), msg) != 1 {
+			t.Fatalf("after three readings without an applier: log = %q, want the message once", buf.String())
+		}
+	}
+	if got := strings.Count(buf.String(), msg); got != 2 {
+		t.Errorf("log has the message %d times, want 2: %s", got, buf.String())
+	}
+	if !strings.Contains(buf.String(), `"logPath":"/var/lib/cubrid/databases/appdb_hab-0"`) {
+		t.Errorf("log = %s, want the master's log path", buf.String())
+	}
+	// A reading of no slave logs nothing.
+	buf.Reset()
+	s.logMissingApplier(context.Background(), HAStatus{})
+	s.logMissingApplier(context.Background(), without)
+	if strings.Count(buf.String(), msg) != 1 {
+		t.Errorf("after a reading of no slave: log = %q, want the message once more", buf.String())
 	}
 }
 

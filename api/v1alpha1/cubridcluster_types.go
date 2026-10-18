@@ -426,13 +426,18 @@ type InstanceReplication struct {
 	// +optional
 	DelayedPages int64 `json:"delayedPages,omitempty"`
 	// applier identifies the applier process these counters were read
-	// beside. The counters outlast the process, so a change of it starts a
-	// new series: a restarted applier does not inherit stalledSince.
+	// beside. The value is opaque and is only compared for equality. The
+	// counters outlast the process, so a change of it starts a new series: a
+	// restarted applier does not inherit the age of stalledSince. Empty when
+	// the Instance Manager could not identify the process; an empty value on
+	// either side decides nothing.
 	// +optional
 	Applier string `json:"applier,omitempty"`
 	// stalledSince is when the operator first saw log pages waiting while the
 	// applier had applied nothing since the reading before. It is cleared
-	// as soon as the applier applies something or no page waits.
+	// as soon as the applier applies something or no page waits, and starts
+	// again at the current reading when the applier process changes while
+	// pages still wait.
 	// +optional
 	StalledSince *metav1.Time `json:"stalledSince,omitempty"`
 	// observedAt is when the operator last read these counters. A reading

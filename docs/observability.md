@@ -134,7 +134,12 @@ window goes on counting. Under intermittent read timeouts the Condition
 therefore alternates between `Unknown` and `True` or `False`, and its
 `lastTransitionTime` moves with it: an alert must not rely on a continuous
 `False` duration. `stalledSince` carries the start of a stall across such
-gaps.
+gaps. When the slave's applier process changes while pages still wait,
+`stalledSince` starts again at that observation: the member stays reported
+stalled (`cubrid_instance_replication_stalled` stays 1 and no
+`member_replication_resumed` is logged), but the 60-second window starts
+over, so a Condition that was `False` with `ReplicationStalled` for that
+slave turns `True` again (`ReplicationRecovered`) for at least one window.
 
 ### What `RoutingReady=False` does not do
 

@@ -48,8 +48,9 @@ type ApplyConvergence struct {
 	Source string `json:"source,omitempty"`
 	// Applier identifies the applier process the counters were read beside:
 	// its process ID and start time. The counters outlast the process
-	// (docs/poc/RESULTS.md, POC-25), so only this tells a restarted applier
-	// from one that kept running. Empty when the process was not found.
+	// (docs/poc/RESULTS.md, POC-30), so only this tells a restarted applier
+	// from one that kept running. The value is opaque and is only compared
+	// for equality. Empty when the process or its start time was not found.
 	Applier string `json:"applier,omitempty"`
 	// Reason explains Available=false or a non-converged verdict.
 	Reason string `json:"reason,omitempty"`
@@ -158,22 +159,34 @@ func startTicks(stat string) (string, bool) {
 	return fields[startTime], true
 }
 
-// applierIdentity names the applier process of the copied log at logPath:
-// its process ID and, when it can be read, its start time, which tells it
-// from a later process that was given the same ID. Empty when heartbeat
-// lists no applier for that log.
-func applierIdentity(st HAStatus, logPath string) string {
+// applierOf returns the applier process heartbeat lists for the copied log
+// at logPath. The paths are compared after filepath.Clean, so a trailing or
+// doubled separator in either does not hide the process.
+func applierOf(st HAStatus, logPath string) (ApplierProcess, bool) {
+	want := filepath.Clean(logPath)
 	for _, a := range st.Appliers {
-		if a.LogPath != logPath || a.PID <= 0 {
-			continue
+		if a.PID > 0 && filepath.Clean(a.LogPath) == want {
+			return a, true
 		}
-		id := "pid:" + strconv.Itoa(a.PID)
-		if started, ok := processStarted(a.PID); ok {
-			id += ":" + started
-		}
-		return id
 	}
-	return ""
+	return ApplierProcess{}, false
+}
+
+// applierIdentity names the applier process of the copied log at logPath:
+// its process ID and its start time, which tells it from a later process
+// that was given the same ID. Empty when heartbeat lists no applier for that
+// log, and also when the start time cannot be read: an identity without it
+// would differ from the one read before and look like a restart.
+func applierIdentity(st HAStatus, logPath string) string {
+	a, ok := applierOf(st, logPath)
+	if !ok {
+		return ""
+	}
+	started, ok := processStarted(a.PID)
+	if !ok {
+		return ""
+	}
+	return "pid:" + strconv.Itoa(a.PID) + ":" + started
 }
 
 // replicationOf returns what a slave's applier reports for the log of the

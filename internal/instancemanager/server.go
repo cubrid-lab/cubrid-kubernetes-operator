@@ -111,6 +111,9 @@ type Server struct {
 	// notReady is why /readyz last answered that the member is not ready;
 	// empty when it answered that it is. Guarded by pollMu.
 	notReady string
+	// applierMissing is the copied log for which the last role answer found
+	// no applier process; empty when it found one. Guarded by pollMu.
+	applierMissing string
 	// timeouts are the per-operation deadlines.
 	timeouts Timeouts
 	// heartbeatProcesses lists the processes that run now, and
@@ -309,6 +312,29 @@ const (
 	replicationBudget = 2 * time.Second
 )
 
+// logMissingApplier logs once that heartbeat lists no applier process for
+// the master's log a slave's replication was read for: its reading then
+// carries no applier identity. It logs again only after a reading in between
+// that found an applier, was not of a slave, or was of another master's log.
+func (s *Server) logMissingApplier(ctx context.Context, st HAStatus) {
+	missing := ""
+	if r := st.Replication; r != nil && r.Source != "" {
+		logPath := filepath.Join(s.databasesDir, s.replicationDB+"_"+r.Source)
+		if _, ok := applierOf(st, logPath); !ok {
+			missing = logPath
+		}
+	}
+	s.pollMu.Lock()
+	changed := missing != s.applierMissing
+	s.applierMissing = missing
+	s.pollMu.Unlock()
+	if missing == "" || !changed {
+		return
+	}
+	s.log().InfoContext(ctx, "Found no log applier process for the master's log",
+		"source", st.Replication.Source, "logPath", missing)
+}
+
 // role returns the local node's authoritative CUBRID role.
 func (s *Server) role(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), roleBudget)
@@ -318,6 +344,7 @@ func (s *Server) role(w http.ResponseWriter, r *http.Request) {
 	replCtx, cancelRepl := context.WithTimeout(ctx, replicationBudget)
 	defer cancelRepl()
 	st.Replication = replicationOf(replCtx, s.cli, st, s.replicationDB, s.databasesDir)
+	s.logMissingApplier(ctx, st)
 	writeJSON(w, http.StatusOK, st)
 }
 

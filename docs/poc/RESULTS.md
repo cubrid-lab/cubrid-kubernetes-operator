@@ -2139,7 +2139,8 @@ across the member's restart without a row being written.
 running by its counters. The Instance Manager reports the applier's process
 with each reading of the counters (its process ID and the kernel's start
 time of the process), and the Operator starts a new replication series when
-that identity changes, so a restarted applier does not inherit `stalledSince`.
+that identity changes, so a restarted applier does not inherit the age of
+`stalledSince`.
 
 **Not covered:** a real Pod restart on Kubernetes; an applier that restarts
 while changes wait to be applied; timing, which emulation does not show. One
