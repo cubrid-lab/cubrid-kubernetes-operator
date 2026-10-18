@@ -8,14 +8,15 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-26, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-28, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
 > not timing baselines. POC-10 to POC-16, POC-20 and POC-24 ran linux/amd64
 > under emulation (podman on another architecture): their command output is
 > functional evidence, and their timings and rates are not native timings.
-> POC-17, POC-23, POC-25 and POC-26 ran on native linux/amd64 hosts, and
+> POC-17, POC-23, POC-25, POC-26, POC-27 and POC-28 ran on native linux/amd64
+> hosts (part 1 of POC-28 in Kind on such a host), and
 > POC-19, POC-21 and POC-22 in the Kind e2e workflow; each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
 > general CUBRID guarantee. The raw observations below are kept as recorded;
@@ -1111,6 +1112,12 @@ a slave. Which of the two happens is a race between the returning member and
 the others' failure detection. Of the runs recorded so far the same member
 resumed in ten and a slave was promoted in one.
 
+> **Note (POC-28, 2026-10-18):** "deleted" does not mean "gone at once". On
+> Kind the old container of a force-deleted StatefulSet Pod kept running for
+> about three seconds after the deletion, and its replacement could start
+> before it ended. The old master may therefore still have answered its
+> peers while the new Pod came up.
+
 **Not tested here:** a killed master that stays away longer than the others'
 failure detection but shorter than a Pod start; the same on the VM lab, where
 a Pod does not come back within a second.
@@ -1780,6 +1787,203 @@ loops have a resolution of 50 ms and 0.5 to 0.9 s, so a shorter window can
 be missed. One image, local Docker; a few runs per case, not a general
 CUBRID guarantee.
 
+## POC-28 — a replaced master whose old server still runs on the same volume, and slaves that then apply nothing (ADR-0005/0006, #357) — **REPRODUCED with two servers on one volume; not with packet loss alone**
+
+**Question (#357).** In S03 `abrupt-first-member` on Kind, the master Pod
+`hab-0` was deleted without a grace period and came back as the master; both
+slaves then applied nothing more, and once `hab-0` itself lacked six
+acknowledged writes that both slaves held. Which exchange is lost, and why do
+the slaves apply nothing instead of recovering?
+
+**Environment.** `cubrid/cubrid:11.4`
+(`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
+`CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`), Docker 29.2.1 on a native
+linux/amd64 host (6 CPUs, 31 GiB, Linux 5.15), 2026-10-18. Kind v0.33.0 with
+the pinned node image `kindest/node:v1.37.0@sha256:a1ed56cf…` for part 1.
+The Docker root is on a spinning disk under constant I/O pressure from
+other work (`/proc/pressure/io` "full" 25 to 46 % during the runs); the
+members' volumes were therefore put on the SSD, which brought a commit
+through the Broker from about one second to below 100 ms. The containers'
+own file systems (where `$CUBRID/log` is) stayed on the spinning disk.
+
+### Part 1 — Kind: does a force-deleted StatefulSet Pod still run when its replacement starts?
+
+A one-replica StatefulSet with a PVC (`standard` storage class),
+`terminationGracePeriodSeconds: 120` as the Operator sets it, a preStop
+hook that sleeps, and a PID 1 that ignores SIGTERM: every container appends
+"Pod UID, time, event" to the volume every 100 ms. The Pod was deleted with
+`kubectl delete pod --wait=false --grace-period=0 --force`, as S03's fault
+does, four times per variant. Times are from the deletion, on the shared
+kernel clock.
+
+| Variant | preStop starts | SIGTERM | Old container's last write | New container starts | Both containers run |
+|---|---|---|---|---|---|
+| No init container | 0.09 to 0.17 s | 1.10 to 1.26 s | 3.03 to 3.08 s | 2.60 to 2.72 s | **310 to 470 ms, in 4 of 4** |
+| One init container that exits at once | 0.09 to 0.22 s | 1.09 to 1.31 s | 3.02 to 3.13 s | 4.30 to 4.44 s | no: a gap of 1.26 to 1.39 s, in 4 of 4 |
+
+So on Kind the replacement of a force-deleted Pod can start on the same
+volume while the old container still runs; the old one is killed about
+three seconds after the deletion whatever its preStop hook does. An init
+container (the Operator adds `wait-for-peer` only when NetworkPolicies are
+enabled, PR #327) delayed the new container by about 1.7 s, past the old
+one's end, on an idle node. The Kubernetes documentation warns that force
+deletion of a StatefulSet Pod can run two Pods with the same identity
+([Force Delete StatefulSet Pods](https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/)).
+
+### Part 2 — Docker: does CUBRID refuse a second server on a database whose server runs?
+
+With the member `h-0` running (its `cub_server` pid 50 in its container,
+`appdb_lgat__lock` reading `cubrid 50 h-0 …`), a second container with the
+same hostname `h-0` and the same volume ran `cubrid server start appdb`:
+
+- It printed `++ cubrid server start: success`, and its `cub_server` (pid 30
+  in its container) ran next to the first one.
+- On the host, `lsof` showed both servers with `appdb_lgat` open for
+  writing; the first held a POSIX write lock on the whole file
+  (`/proc/locks`), the second had it open without a lock. The lock file now
+  read `cubrid 30 h-0 …`.
+
+In a later run of part 3 (o2) the same attempt was refused: `Unable to mount
+disk volume ".../appdb_lgat". The database ... is in use by user cubrid on
+process 45 of host h-0`, and that member's heartbeat start failed. **Reading,
+not confirmed in CUBRID's source:** the refusal depends on whether a process
+with the PID written in `<db>_lgat__lock` exists in the new container's PID
+namespace; in the first case pid 50 did not exist there, in the second pid 45
+did (the new container replays the old one's start sequence). The kernel lock
+the first server held did not stop the second. Part 3's runs o7 to o11 and l1 to l3 start
+the old server at a PID above 400 (400 short processes before
+`heartbeat start`), so that the new container's
+processes do not reach it, as for a member whose server the Instance Manager
+started after other work.
+
+### Part 3 — Docker: the deletion replayed with a CUBRID group under load
+
+Three members `h-0` (master), `h-1`, `h-2` formed as the Operator does
+(`createdb --server-name=h-0:h-1:h-2` on `h-0`, `backupdb -C`,
+`restoreslave -u -s master -m h-0` on the others, one `heartbeat start`
+each; `ha_node_list=cubrid@h-0:h-1:h-2`, `ha_db_list=appdb`,
+`ha_port_id=59901`, the image's `cubrid.conf` plus `ha_mode=on`, no
+`ha_copy_sync_mode`, as rendered by `haconfig.go`). An RW Broker rendered as
+`broker_config.go` renders it, and the e2e workload client
+(`test/workload/client`) writing one row per transaction every 100 ms, every
+fifth rolled back. A fresh group for every run. Once a second, on every
+member, `cubrid heartbeat status` and, on each slave, `cubrid applyinfo` for
+each other member's copied log.
+
+A run, with t0 the moment the old `h-0` container loses its DNS name (as the
+headless member Service loses the deleted Pod's address): optionally the
+preStop's `cubrid heartbeat stop` in the old container at t0 + 0.1 s; a new
+container `h-0` (same hostname and volume, new IP, `$CUBRID/var` and
+`$CUBRID/log` empty as in a new Pod) started at a set time; `docker kill`
+(SIGKILL) of the old container at a set time; optionally `iptables` DROP of
+all, TCP-only or UDP-only traffic between the new `h-0` and both peers,
+installed in the peers' network namespaces before the start and removed
+about 1.2 to 1.4 s after the container had started. Then 150 s of writes and
+20 s of quiet. "Recovery" is when the new server's error log says
+`Log recovery is started`.
+
+| Run | Old container | New container started | New server's recovery | Two servers at once | Afterwards | Acknowledged rows missing |
+|---|---|---|---|---|---|---|
+| c1 | SIGKILL first, then a new container (2.4 s later) | — | after | no | `h-1` promoted, old `h-0` back as slave | none |
+| o1 | preStop at +0.1 s, SIGKILL at about +4.6 s | about +5.6 s | after | no | `h-1` promoted within 2.4 s of the preStop | none |
+| o2 | SIGKILL issued +3.06 s | +1.96 s | refused at +3.03 s (volume in use) | no | new `h-0` stays `unknown`; `h-1` promoted | none on `h-1`, `h-2` |
+| o5, o6 | SIGKILL issued +3.06 s | +1.97 s, +2.61 s | +3.71 s, +5.10 s | no | **`h-0` master again** | none |
+| o7, o8 | SIGKILL issued +3.05 s, returned +4.73 s, +3.96 s | +1.96 s, +1.94 s | +4.40 s, +3.25 s | not settled: between SIGKILL issued and returned | **`h-0` master again** | none |
+| l1, l2, l3 | SIGKILL issued +3.05 s | +3.45 to +3.77 s, with all / TCP / UDP traffic to the peers dropped until +4.84 to +4.92 s | +4.65 to +5.26 s | no | **`h-0` master again** | none |
+| o9 | SIGKILL issued +6.01 s | +1.98 s | +3.34 s | **yes, about 2.7 s** | new `h-0` standby, then promoted when the old one died; its server went from `to-be-active` to down and heartbeat deactivated; `h-1` promoted | none on `h-1`, `h-2`; the new `h-0` is left down |
+| o10 | SIGKILL issued +6.01 s | +1.99 s | +3.49 s | **yes, about 2.5 s** | **`h-0` master again** | **`h-0` lacks 9 that both slaves hold; both slaves lack 663** |
+| o11 | SIGKILL issued +6.01 s | +1.92 s | +3.26 s | **yes, about 2.7 s** | **`h-0` master again** | **`h-0` lacks 17 that both slaves hold; both slaves lack 694** |
+
+"Missing" counts acknowledged inserts of the client not found on the
+member at the end. In o11 one row on `h-0` has no outcome in the client's
+history: its operation was cut off when the client was stopped.
+
+**What o10 showed, in order** (o11 the same, at other positions):
+
+1. Before t0 the slaves copied and applied `h-0`'s log normally.
+2. At +3.49 s the new server started recovery on the volume while the old
+   server was still the active master and committing; its checkpoint ended at
+   page 156. It became `registered_and_standby` while the old one was still
+   master.
+3. The old server was killed at about +6 s. At that moment both slaves had
+   copied the old master's log to `157|9936`; their appliers had committed
+   to `157|9896` (`change log apply state from 'working' to 'done'. last
+   committed LSA: 157|9896`).
+4. The new `h-0` became master (`registered_and_active` at +12.9 s). The
+   copied log's header on both slaves then showed the new master's end of log
+   at `157|1216`, then `157|2408`: behind what they had already copied.
+5. From then on both appliers logged, every 100 ms, `log applier: invalid
+   replication record. LSA: 157|9936, forw LSA: 4288|0, backw LSA: 157|9648,
+   ...` (1127 times on `h-1` in two minutes). `applyinfo` for `h-0`'s log:
+   `Insert count : 91` and `Fail count : 0` unchanged, copy delay 0, applying
+   delay rising to 56 pages. `cubrid heartbeat status` on both slaves:
+   `slave`, server `registered_and_standby`, every `Copylogdb` and
+   `Applylogdb` `registered`.
+6. The nine rows `h-0` lacks (`ro10-000103` to `ro10-000113`) were
+   acknowledged by the old server after the new server's recovery had read
+   the log, and were copied and applied by the slaves. Every row written
+   after `h-0` returned is on `h-0` only.
+
+**Findings.**
+
+- **Two servers on one database reproduce every symptom of #357**: the
+  returning member becomes master again, it lacks acknowledged writes the
+  slaves hold, both slaves stop applying with a fail count of 0, and every
+  later write exists on the master only. Seen in 2 of 3 runs with an overlap
+  of about 2.5 s; in the third the new member failed to become active and a
+  slave took over.
+- **Why the slaves apply nothing:** the new server's log continues from an
+  earlier point than what the slaves copied, so the record at the position
+  where their appliers stopped is now a part of a different log. The applier
+  rejects it as an invalid replication record and retries the same position
+  without end; the copier keeps copying. Nothing in heartbeat status shows it.
+- **Packet loss alone did not reproduce it.** With the replacement started
+  after the old server ended and every packet, only TCP or only UDP between
+  the new `h-0` and its peers dropped for its first 1.2 to 1.4 s (l1 to l3),
+  and without loss (o5 to o8), `h-0` became master again and nothing was
+  lost or stalled.
+- **CUBRID does not reliably refuse a second server on a running database**
+  from another container with the same hostname (part 2).
+- **Kind starts a force-deleted StatefulSet Pod's replacement while the old
+  container still runs**, by 310 to 470 ms without an init container on an
+  idle node (part 1).
+
+**What this does and does not establish for #357.** Established on this
+image: the mechanism above produces the exact signature, and the
+precondition (two containers of one member on one volume) occurs on Kind.
+**Not established:** that the failures on GitHub runners were caused by it.
+In part 1 the replacement's container, not its server, overlapped the old
+one, and by 310 to 470 ms only; a new server started 1.1 to 2.5 s after
+its container (part 3, POC-26), so on an idle node it would start after the
+old container ended. A loaded runner, a slower kill of the old container or
+a faster start of the new one would close that gap; none of that was
+measured. The init container delayed the replacement past the old
+container's end in part 1, which may be why PR #327's runs passed 6 of 6,
+rather than the network reason given there; the later occurrences with the
+init container are not explained by this. The member's lock-file reading in
+part 2 is a reading of two observations. The timings of part 3 come from
+`docker` commands on a host under I/O pressure (a `docker kill` took 0.4 to
+1.7 s to return).
+
+**Consequences.** This is not an engine recovery behavior to wait out: once
+the logs diverged the slaves never caught up, and the rows the old master
+acknowledged after the new server's recovery are on the slaves only. Whatever
+the Operator does has to keep a member's server from starting while another
+container of the same member can still write to its volume, and has to
+detect the divergence when it happens (the `ReplicationHealthy` condition did
+report the stall in the CI occurrence of 2026-10-12). Neither is decided
+here; see #357.
+
+**Not covered.** A real Kind run of S03 with this evidence (the S03 step now
+records each member's replication state after the abrupt variants, #357; one
+local attempt on this host stopped in the HA setup, before S03, when the
+workload client step timed out after 600 s under the I/O pressure); the
+pinned Kind on a loaded runner; the old server stopped by the Instance
+Manager's real shutdown instead of `heartbeat stop`; `ha_copy_sync_mode`
+other than the default; more than three runs with overlapping servers; the
+three-VM lab. One image, local Docker, a few runs each; not a general CUBRID
+guarantee.
+
 ## Net assessment
 
 ### Current reading (annotation, 2026-10-18)
@@ -1800,6 +2004,13 @@ as written. Later POCs confirm parts of it and contradict others:
   behind while its role and server state look normal (POC-16 under
   emulation, POC-17 native, POC-21 on Kind). Whether work is lost is not
   tested.
+- **Two servers on one database diverge the log.** A replacement container
+  of a member whose old server still runs started a second server on the
+  same volume; the returning master then lacked acknowledged writes the
+  slaves held, and both slaves applied nothing more (POC-28, Docker). Kind
+  started a force-deleted Pod's replacement while the old container still
+  ran (POC-28, part 1). That this caused the CI failures of #357 is not
+  shown; packet loss alone did not reproduce them.
 - **No quorum.** A lone member accepts writes (POC-16; the promoted-slave
   case reproduced natively in POC-17).
 - **Seeding can lose data silently.** A member restored with plain
