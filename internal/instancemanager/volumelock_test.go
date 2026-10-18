@@ -58,6 +58,10 @@ func holdLock(path string) int {
 	return 0
 }
 
+// copiedApplierLock is the log applier's lock file next to the log it
+// copies from the peer h-1 (POC-29).
+const copiedApplierLock = "appdb_h-1/appdb_lgla__lock"
+
 // lockHolder is another process holding a POSIX write lock on path.
 type lockHolder struct {
 	cmd   *exec.Cmd
@@ -100,11 +104,11 @@ func (h *lockHolder) release() {
 // file free again once the holder is gone. Volumes nobody locks are not
 // reported.
 func TestHeldVolumeLocks_ReportsALockHeldByAnotherProcessUntilItEnds(t *testing.T) {
-	for _, name := range []string{"appdb/appdb_lgat", "appdb_h-1/appdb_lgat", "appdb_h-1/appdb_lgla__lock"} {
+	for _, name := range []string{"appdb/appdb_lgat", "appdb_h-1/appdb_lgat", copiedApplierLock} {
 		t.Run(name, func(t *testing.T) {
 			databases := t.TempDir()
 			for _, other := range []string{"appdb/appdb", "appdb/appdb_lgat", "appdb/appdb_lgat__lock",
-				"appdb_h-1/appdb_lgat", "appdb_h-1/appdb_lgla__lock"} {
+				"appdb_h-1/appdb_lgat", copiedApplierLock} {
 				writeFile(t, filepath.Join(databases, other), "x")
 			}
 			file := filepath.Join(databases, name)
@@ -134,7 +138,7 @@ func TestHeldVolumeLocks_ChecksTheRegisteredLogDirectory(t *testing.T) {
 	logDir := filepath.Join(t.TempDir(), "logs")
 	file := filepath.Join(logDir, "appdb_lgat")
 	writeFile(t, file, "x")
-	line := "appdb\t" + filepath.Join(databases, "appdb") + "\th-0\t" + logDir + "\tfile:/x/lob\n"
+	line := "appdb\t" + filepath.Join(databases, dbName) + "\th-0\t" + logDir + "\tfile:/x/lob\n"
 	if err := os.WriteFile(filepath.Join(databases, "databases.txt"), []byte("#db-name\n"+line), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -155,11 +159,62 @@ func TestHeldVolumeLocks_MissingFilesAreFree(t *testing.T) {
 			t.Errorf("%s: held = %+v, err = %v, want none", databases, held, err)
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(root, "appdb"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, dbName), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if held, err := HeldVolumeLocks(root); err != nil || len(held) != 0 {
 		t.Errorf("empty database directory: held = %+v, err = %v, want none", held, err)
+	}
+}
+
+// A database directory or a lock file reached through a symbolic link is
+// checked like the real one, and a link that leads nowhere is not taken for
+// free.
+func TestHeldVolumeLocks_FollowsSymbolicLinksAndFailsClosed(t *testing.T) {
+	t.Run("linked database directory", func(t *testing.T) {
+		databases, elsewhere := t.TempDir(), t.TempDir()
+		file := filepath.Join(elsewhere, dbName, "appdb_lgat")
+		writeFile(t, file, "x")
+		if err := os.Symlink(filepath.Join(elsewhere, dbName), filepath.Join(databases, dbName)); err != nil {
+			t.Fatal(err)
+		}
+		holdLockInChild(t, file)
+		held, err := HeldVolumeLocks(databases)
+		if err != nil || len(held) != 1 || held[0].File != filepath.Join(databases, dbName, "appdb_lgat") {
+			t.Fatalf("held = %+v, err = %v, want the linked directory's active log", held, err)
+		}
+	})
+	t.Run("linked lock file", func(t *testing.T) {
+		databases, elsewhere := t.TempDir(), t.TempDir()
+		file := filepath.Join(elsewhere, "appdb_lgat")
+		writeFile(t, file, "x")
+		link := filepath.Join(databases, dbName, "appdb_lgat")
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(file, link); err != nil {
+			t.Fatal(err)
+		}
+		holdLockInChild(t, file)
+		held, err := HeldVolumeLocks(databases)
+		if err != nil || len(held) != 1 || held[0].File != link {
+			t.Fatalf("held = %+v, err = %v, want %s", held, err, link)
+		}
+	})
+	for _, name := range []string{dbName, copiedApplierLock} {
+		t.Run("dangling "+name, func(t *testing.T) {
+			databases := t.TempDir()
+			link := filepath.Join(databases, name)
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), link); err != nil {
+				t.Fatal(err)
+			}
+			if held, err := HeldVolumeLocks(databases); err == nil {
+				t.Fatalf("held = %+v, err = nil, want an error for the dangling link", held)
+			}
+		})
 	}
 }
 
@@ -169,7 +224,7 @@ func TestHeldVolumeLocks_AnUncheckableFileIsAnError(t *testing.T) {
 		t.Skip("root reads a file without permission")
 	}
 	databases := t.TempDir()
-	file := filepath.Join(databases, "appdb", "appdb_lgat")
+	file := filepath.Join(databases, dbName, "appdb_lgat")
 	writeFile(t, file, "x")
 	if err := os.Chmod(file, 0); err != nil {
 		t.Fatal(err)
@@ -187,7 +242,7 @@ func jsonLogger(buf *bytes.Buffer) *slog.Logger {
 // ends once the holder is gone.
 func TestWaitVolumeFree_WaitsWhileHeldAndEndsWhenReleased(t *testing.T) {
 	databases := t.TempDir()
-	file := filepath.Join(databases, "appdb", "appdb_lgat")
+	file := filepath.Join(databases, dbName, "appdb_lgat")
 	writeFile(t, file, "x")
 	holder := holdLockInChild(t, file)
 
@@ -222,7 +277,7 @@ func TestWaitVolumeFree_WaitsWhileHeldAndEndsWhenReleased(t *testing.T) {
 // A termination ends the wait with an error, never as free.
 func TestWaitVolumeFree_EndsWithTheContextWhileHeld(t *testing.T) {
 	databases := t.TempDir()
-	file := filepath.Join(databases, "appdb", "appdb_lgat")
+	file := filepath.Join(databases, dbName, "appdb_lgat")
 	writeFile(t, file, "x")
 	holdLockInChild(t, file)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -243,7 +298,7 @@ func TestWaitVolumeFree_AFailedCheckWaits(t *testing.T) {
 		t.Skip("root reads a file without permission")
 	}
 	databases := t.TempDir()
-	file := filepath.Join(databases, "appdb", "appdb_lgat")
+	file := filepath.Join(databases, dbName, "appdb_lgat")
 	writeFile(t, file, "x")
 	if err := os.Chmod(file, 0); err != nil {
 		t.Fatal(err)

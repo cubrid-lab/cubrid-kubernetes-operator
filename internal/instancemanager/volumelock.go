@@ -53,8 +53,9 @@ type VolumeLock struct {
 // database directories under databases: each directory directly below it
 // and each log directory registered in its databases.txt. It only asks
 // (F_GETLK): it never takes, waits for or breaks a lock. A file or directory
-// that is not there holds no lock; any other failure is returned, so that a
-// caller does not take a volume it could not check for free.
+// that is not there holds no lock. A symbolic link is followed, and one that
+// cannot be followed is an error. Any other failure is returned as well, so
+// that a caller does not take a volume it could not check for free.
 //
 // The caller must not hold a lock on these files itself: F_GETLK does not
 // report the caller's own locks, and closing a file drops them.
@@ -84,7 +85,11 @@ func volumeLockFiles(databases string) ([]string, error) {
 		return nil, fmt.Errorf("list %s: %w", databases, err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		mode, err := followedMode(databases, entry)
+		if err != nil {
+			return nil, err
+		}
+		if mode.IsDir() {
 			dirs[filepath.Join(databases, entry.Name())] = true
 		}
 	}
@@ -105,18 +110,43 @@ func volumeLockFiles(databases string) ([]string, error) {
 			return nil, fmt.Errorf("list %s: %w", dir, err)
 		}
 		for _, entry := range entries {
-			if !entry.Type().IsRegular() {
+			if !hasVolumeLockSuffix(entry.Name()) {
 				continue
 			}
-			for _, suffix := range volumeLockSuffixes {
-				if strings.HasSuffix(entry.Name(), suffix) {
-					files = append(files, filepath.Join(dir, entry.Name()))
-					break
-				}
+			mode, err := followedMode(dir, entry)
+			if err != nil {
+				return nil, err
+			}
+			if mode.IsRegular() {
+				files = append(files, filepath.Join(dir, entry.Name()))
 			}
 		}
 	}
 	return files, nil
+}
+
+func hasVolumeLockSuffix(name string) bool {
+	for _, suffix := range volumeLockSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// followedMode is the type of a directory entry, through a symbolic link: a
+// linked database directory or lock file is checked like the real one, and
+// a link that cannot be followed is an error, never a free file.
+func followedMode(dir string, entry fs.DirEntry) (fs.FileMode, error) {
+	if entry.Type()&fs.ModeSymlink == 0 {
+		return entry.Type(), nil
+	}
+	path := filepath.Join(dir, entry.Name())
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("follow %s: %w", path, err)
+	}
+	return info.Mode(), nil
 }
 
 // registeredLogDirs returns the log-path column of databases.txt. A missing

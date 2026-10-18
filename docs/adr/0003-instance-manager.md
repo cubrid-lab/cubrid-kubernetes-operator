@@ -485,9 +485,10 @@ database is complete cannot be told from its files (POC-25).
 **One running CUBRID per volume (#472).** The old container of a Pod
 deleted with `--grace-period=0 --force` can still run when its replacement
 starts on the same volume (Kind, #357), and
-CUBRID does not reliably refuse a second server on a running database: two
-servers diverge the log, the returning master lacks acknowledged writes and
-its slaves apply nothing more. So the entrypoint, after it installed its
+CUBRID does not reliably refuse a second server on a running database
+(POC-28, POC-29 part C). Under forced conditions, two servers diverged the
+log: the returning master lacked acknowledged writes and its slaves applied
+nothing more (POC-28). So the entrypoint, after it installed its
 termination handler and before anything else, runs
 `instance-manager wait-volume-free` and waits for it. The command asks the
 kernel (`fcntl(F_GETLK)`, a write lock over the whole file) about the files
@@ -520,12 +521,38 @@ means something else holds the volume.
 The wait sits in the entrypoint and not in the manager's `activate`: the
 manager runs only as the entrypoint's child, after the wait, so a restore,
 an HA bootstrap or the start of a completed restore's database never runs
-before it. Not covered: an old container that has no CUBRID running when
-the new one looks and starts one afterwards (its entrypoint then has
-already received `SIGTERM` and starts nothing, but a manager operation in
-flight there was not measured); network volumes, where `fcntl` locks go
-through the file system's own lock service; Kubernetes itself (the check
-ran in Docker).
+before it.
+
+Started as root (a plain `docker run --user 0`), the entrypoint runs
+`chown -R` on `CUBRID_DATABASES` before it re-executes itself as `cubrid`,
+and so before the wait. That changes no ownership on a volume the image's
+own user already owns, and the operator runs the container as UID 1000,
+where this branch is never taken.
+
+Not covered:
+
+- **A start already under way in the old container.** The check is made
+  once, and no lock is held afterwards. Bash runs a trap only after the
+  current foreground command has returned, so a `createdb`,
+  `cubrid server start` or `cubrid heartbeat start` the old entrypoint has
+  begun, or a start the old manager has in flight, still completes after
+  its `SIGTERM`. Until the old `cub_server` has booted far enough to take
+  its `<db>_lgat` lock, the new container can find the volume free. This
+  needs a force deletion within seconds of the old container's start. A
+  lock held by the member for the container's whole life would remove
+  this gap (#475).
+- **Utilities other than the running server, copier and applier.** The
+  locks of `createdb`, `restoredb`, `restoreslave` and the standalone
+  utilities were not probed. `restoredb` writes `<db>_lgat_000_tmp`
+  (POC-27), which the `_lgat` suffix does not match. What still protects:
+  a `backupdb -C` runs inside the server, whose lock covers it; an
+  unfinished `createdb` or restore leaves the ownership marker, and the new
+  container neither creates over nor starts that database (#442); a
+  `restoredb` that lingers after the manager killed its process group
+  (#468) is covered only by timing. The member lock of #475 would cover
+  these too.
+- Network volumes, where `fcntl` locks go through the file system's own
+  lock service, and Kubernetes itself (the check ran in Docker).
 
 Each cluster has a token of its own (#270). Before it creates the cluster's
 first Pod, the operator generates 256 random bits (hex) into the

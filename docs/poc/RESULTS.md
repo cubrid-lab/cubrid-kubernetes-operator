@@ -2141,11 +2141,13 @@ as written. Later POCs confirm parts of it and contradict others:
   probe whose container ignored SIGTERM (POC-28, part 1). That this caused
   the CI failures of #357, and that it is reachable with the Operator's real
   preStop, is not shown; packet loss alone did not reproduce them.
-- **A second server on a running database is not refused by CUBRID; the
-  kernel lock shows it.** The server, log copier and log applier hold POSIX
-  write locks on `<db>_lgat` and `<db>_lgla__lock`, which `F_GETLK` from
-  another container on the volume sees and which end with the process; the
-  PID in `<db>_lgat__lock` does not (POC-29, Docker).
+- **A second server on a running database is not reliably refused by
+  CUBRID; the kernel lock shows it.** A second server started next to a
+  running one (POC-28, POC-29 part C); write loss from it was shown under
+  forced conditions (POC-28). The server, log copier and log applier hold
+  POSIX write locks on `<db>_lgat` and `<db>_lgla__lock`, which `F_GETLK`
+  from another container on the volume sees and which end with the
+  process; the PID in `<db>_lgat__lock` does not (POC-29, Docker).
 - **No quorum.** A lone member accepts writes (POC-16; the promoted-slave
   case reproduced natively in POC-17).
 - **Seeding can lose data silently.** A member restored with plain

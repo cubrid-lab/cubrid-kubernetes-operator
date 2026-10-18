@@ -87,10 +87,11 @@ fi
 	// returns at once unless VOLUME_HELD is set; then it records the call
 	// and waits while the file VOLUME_HELD names exists, as the real one
 	// waits while another process holds a CUBRID lock on the volume. It
-	// exits with ${WAIT_EXIT} when set.
+	// exits with ${WAIT_EXIT} when set, and records a SIGTERM that ends it.
 	waitVolumeStub = `if [ "${1:-}" = "wait-volume-free" ]; then
   [ -n "${VOLUME_HELD:-}" ] || exit "${WAIT_EXIT:-0}"
   echo "manager wait-volume-free" >> "${CALLS}"
+  trap 'echo "manager wait-volume-free term" >> "${CALLS}"; exit 1' TERM
   while [ -e "${VOLUME_HELD}" ]; do sleep 0.05; done
   exit "${WAIT_EXIT:-0}"
 fi
@@ -1363,7 +1364,8 @@ func TestEntrypoint_StartsNothingWhileTheVolumeIsHeld(t *testing.T) {
 
 // A termination while the entrypoint waits for the volume ends the wait and
 // starts nothing: no createdb, no server, no manager. The shutdown command
-// still runs, so the stop is recorded as for any termination (#464).
+// still runs, so the stop is recorded as for any termination (#464), and the
+// wait itself is sent SIGTERM rather than left running.
 func TestEntrypoint_TerminationWhileWaitingForTheVolume(t *testing.T) {
 	f := newFixture(t, blockingManagerStub)
 	f.holdVolume()
@@ -1380,7 +1382,7 @@ func TestEntrypoint_TerminationWhileWaitingForTheVolume(t *testing.T) {
 	if err := waitExit(cmd); err != nil {
 		t.Fatalf("entrypoint after SIGTERM while waiting: %v\n%s", err, out.String())
 	}
-	wantCalls(t, f.recorded(), callWaitVolume, callShutdown)
+	wantCalls(t, f.recorded(), callWaitVolume, callShutdown, callWaitVolume+" term")
 	if _, err := os.Stat(filepath.Join(f.databases, dbName)); !os.IsNotExist(err) {
 		t.Errorf("the database directory was created (err=%v)", err)
 	}

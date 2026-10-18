@@ -398,7 +398,10 @@ waits again and starts nothing meanwhile. The Pod is not ready meanwhile, and it
 A member that logs `volume_in_use` for longer than the old container's
 termination grace period has something else running on its volume: find
 the process (on the node, `lslocks` or `/proc/locks` shows the holder of
-the file) before anything is removed. Nothing here removes or breaks a
+the file) before anything is removed. Each startup-probe restart during a
+long hold adds to the container's restart back-off (`CrashLoopBackOff`, up
+to five minutes), so after the release the member may start up to that much
+later. Nothing here removes or breaks a
 lock, a lock file or data.
 
 ## Metrics
