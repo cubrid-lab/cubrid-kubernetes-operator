@@ -448,3 +448,35 @@ func TestEntrypoint_StartedAsRootTerminatedDuringTheChown(t *testing.T) {
 		t.Errorf("the log does not say that nothing was started:\n%s", out.String())
 	}
 }
+
+// The real "instance-manager wait-volume-free" started without the member
+// lock's descriptor as its descriptor 3 (an entrypoint that forgot to pass
+// it) exits 1 and takes no lock: it never reports a lock it does not hold.
+func TestWaitVolumeFree_WithoutTheDescriptorExitsOneAndTakesNoLock(t *testing.T) {
+	im := realInstanceManager(t)
+	databases := t.TempDir()
+	path := filepath.Join(databases, memberLockName)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(im, "wait-volume-free")
+	cmd.Env = append(os.Environ(), "CUBRID_DATABASES="+databases)
+	var out syncBuffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd); err == nil {
+		t.Fatalf("exit 0 without the member lock's descriptor:\n%s", out.String())
+	} else if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+		t.Fatalf("err = %v, want exit 1:\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "member_lock_acquired") || !strings.Contains(out.String(), "volume_wait_stopped") {
+		t.Errorf("want volume_wait_stopped and no member_lock_acquired:\n%s", out.String())
+	}
+	probe := exec.Command(os.Args[0])
+	probe.Env = append(os.Environ(), envProbeMemberLock+"="+path)
+	if got, err := probe.Output(); err != nil || string(got) != "free" {
+		t.Errorf("member lock after the command: %q, %v, want free", got, err)
+	}
+}

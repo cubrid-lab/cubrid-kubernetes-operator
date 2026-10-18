@@ -150,7 +150,8 @@ shows to be unfinished, and never creates over files in a database
 directory without a registration (ADR-0003, #312).
 An HA member's entrypoint never runs `createdb`: without a database it
 starts nothing and waits, and with one it starts heartbeat. Before either
-entrypoint writes anything to the volume, and before it launches the manager
+entrypoint writes anything to the volume except creating `CUBRID_DATABASES`
+itself, and before it launches the manager
 that runs the bootstrap, restores and seeding, it takes the member lock on
 the volume, which it then holds until the container ends. It waits for as
 long as another container of the member, such as the old container of a

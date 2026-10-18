@@ -418,6 +418,15 @@ later. Nothing here removes or breaks a
 lock, a lock file or data; never remove `.member-lock` while a container of
 the member may run.
 
+A member that ends at once with `could not open the member lock` cannot open
+`.member-lock` for writing. The entrypoint creates it with the default
+permissions (`0644` under the usual umask), owned by the user it ran as, so a container that runs
+as another UID afterwards is refused, as it would be by the data files: run
+the member as the user that owns the volume. A member that ends with
+`volume_wait_stopped` and a lock error other than a held lock (for example
+`invalid argument` on a sandboxed runtime without open file description
+locks) never starts there; that is by design.
+
 ## Metrics
 
 Metrics describe what was observed. They do not decide by themselves whether

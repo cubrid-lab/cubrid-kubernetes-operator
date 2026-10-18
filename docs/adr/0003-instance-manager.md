@@ -510,7 +510,8 @@ volume for its whole life, and a container starts nothing while another
 holds it.
 
 - **The member lock.** After the entrypoint installed its termination
-  handler, and before anything else writes to the volume, it opens
+  handler, and before anything writes to the volume except creating
+  `CUBRID_DATABASES` itself (`mkdir -p`), it opens
   `<CUBRID_DATABASES>/.member-lock` (read and write, created when missing)
   on a descriptor it keeps until it exits, and runs
   `instance-manager wait-volume-free` with that descriptor as its
@@ -593,8 +594,11 @@ writes to the volume. It lets the lock go just before it re-executes itself
 as `cubrid` and takes it again as `cubrid`; another container that takes
 it in between is waited for, and nothing is written meanwhile. A
 termination handled during the `chown` ends the script with nothing
-started. The operator
-runs the container as UID 1000, where this branch is never taken.
+started. A termination that arrives between the `exec gosu` and the
+re-executed script's handler finds no handler and is lost (PID 1 ignores
+it), so that script goes on to start; the same window existed before #475
+at the very start of the script. The operator runs the container as UID
+1000, where this branch is never taken.
 
 Not covered:
 
@@ -607,8 +611,14 @@ Not covered:
 - **Another node.** Both locks are the kernel's of one node. A volume
   attached on a second node while a partitioned first node still runs a
   container on it is not covered; nor are network volumes, where `fcntl`
-  locks go through the file system's own lock service. Kubernetes itself
-  is not covered either (the checks ran in Docker).
+  locks go through the file system's own lock service (NFS with NLM is
+  unverified). Kubernetes itself is not covered either (the checks ran in
+  Docker).
+- **Runtimes without `F_OFD_SETLK`.** A sandboxed runtime (gVisor, Kata)
+  whose kernel interface lacks open file description locks fails the lock
+  with an error other than "held": the container ends with nothing
+  started, every time. It never starts without the lock. A build of the
+  manager for another operating system fails the same way.
 
 Each cluster has a token of its own (#270). Before it creates the cluster's
 first Pod, the operator generates 256 random bits (hex) into the

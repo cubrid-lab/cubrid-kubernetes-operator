@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -501,12 +502,21 @@ func TestAcquireMemberLock_RefusesALockFileRemovedWhileWaiting(t *testing.T) {
 	first, path := openMemberLock(t, databases)
 	takeMemberLockInChild(t, first, path)
 	second, _ := openMemberLock(t, databases)
+	busy := &eventWriter{event: `"event":"member_lock_busy"`, seen: make(chan struct{})}
 	done := make(chan error, 1)
 	go func() {
 		done <- AcquireMemberLock(context.Background(), second, path,
-			slog.New(slog.NewTextHandler(io.Discard, nil)), 10*time.Millisecond, time.Hour)
+			slog.New(slog.NewJSONHandler(busy, nil)), 10*time.Millisecond, time.Hour)
 	}()
-	time.Sleep(100 * time.Millisecond)
+	// The file is removed only once the wait is under way, so the check
+	// after the lock is taken is what refuses it.
+	select {
+	case <-busy.seen:
+	case err := <-done:
+		t.Fatalf("AcquireMemberLock returned before it waited: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no member_lock_busy line while another container held the lock")
+	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -515,10 +525,29 @@ func TestAcquireMemberLock_RefusesALockFileRemovedWhileWaiting(t *testing.T) {
 	}
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("err = nil after the lock file was removed, want a refusal")
+		if err == nil || !strings.Contains(err.Error(), "replaced or removed") {
+			t.Fatalf("err = %v after the lock file was removed, want the refusal of a replaced or removed file", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("AcquireMemberLock did not return after the old file was released")
 	}
+}
+
+// eventWriter is a log destination that closes seen at the first line
+// holding event; it is written from another goroutine.
+type eventWriter struct {
+	mu    sync.Mutex
+	event string
+	seen  chan struct{}
+	done  bool
+}
+
+func (w *eventWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.done && strings.Contains(string(p), w.event) {
+		w.done = true
+		close(w.seen)
+	}
+	return len(p), nil
 }
