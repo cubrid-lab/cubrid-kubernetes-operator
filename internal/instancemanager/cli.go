@@ -89,13 +89,13 @@ func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, 
 // their own, which a cancellation ends as a whole. `cubrid <utility>` forks
 // cub_admin, which does the work; a signal to `cubrid` alone (SIGKILL, as the
 // default cancellation sends, or SIGTERM) leaves cub_admin running on its own,
-// and it goes on writing the restored database or driving the backup to its
-// end (docs/poc/RESULTS.md, POC-27). The starts of the server and of
-// heartbeat leave daemons on purpose and are never among them. A backupdb -C
-// file is written by cub_server, which is not in the group: it kept the file
-// open for up to about 1 s after the group had ended, and Run does not wait
-// for that.
-var groupUtilities = map[string]bool{"backupdb": true, "restoredb": true, "restoreslave": true}
+// and it goes on writing the restored or created database, registering a
+// created one, or driving the backup to its end (docs/poc/RESULTS.md,
+// POC-27). The starts of the server and of heartbeat leave daemons on purpose
+// and are never among them. A backupdb -C file is written by cub_server,
+// which is not in the group: it kept the file open for up to about 1 s after
+// the group had ended, and Run does not wait for that.
+var groupUtilities = map[string]bool{"backupdb": true, "restoredb": true, "restoreslave": true, "createdb": true}
 
 // groupPoll is how often endGroup looks whether a process group has ended.
 const groupPoll = 20 * time.Millisecond

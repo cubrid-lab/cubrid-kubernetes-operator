@@ -86,13 +86,13 @@ func fileSize(t *testing.T, path string) int64 {
 	return fi.Size()
 }
 
-// A backupdb, restoredb or restoreslave that is cancelled, by its deadline or
+// A backupdb, restoredb, restoreslave or createdb that is cancelled, by its deadline or
 // by its caller (a stop ends every running operation's context), leaves no
 // process of the utility behind once Run has returned: the work is done by a
 // child that outlives a signal to the direct process alone and goes on writing
 // (POC-27), and the caller removes or retries what it wrote right after Run.
 func TestExecCLI_CancelledUtilityLeavesNoWriter(t *testing.T) {
-	for utility := range strings.FieldsSeq("backupdb restoredb restoreslave") {
+	for utility := range strings.FieldsSeq("backupdb restoredb restoreslave createdb") {
 		for _, byDeadline := range []bool{true, false} {
 			name := utility + "/cancelled"
 			if byDeadline {

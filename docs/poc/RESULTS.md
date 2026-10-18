@@ -1629,7 +1629,7 @@ window shorter than one call can be missed (the two runs of state 3 whose first
 call took 181 ms). One image, local Docker; a few runs per state, not a general
 CUBRID guarantee.
 
-## POC-27 — what a cancelled `backupdb`, `restoredb` or `restoreslave` leaves running (ADR-0003/0007/0008, #277) — **observation: the utility's worker outlives a signal to `cubrid`**
+## POC-27 — what a cancelled `backupdb`, `restoredb`, `restoreslave` or `createdb` leaves running (ADR-0003/0007/0008, #277) — **observation: the utility's worker outlives a signal to `cubrid`**
 
 **Environment:** `docker.io/cubrid/cubrid:11.4`
 (`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
@@ -1731,13 +1731,22 @@ directory when `Run` returned and each second for 5 s after:
 context) returned at once while `cub_admin` went on writing the target for
 up to 18 s. The restore then takes the registration and the directory back
 (`restore.go`, `unregister`) under a live writer, and a retry or the next
-restore races it. `ExecCLI` now runs the three utilities in a process group
-of their own, sends `SIGKILL` to the group on cancellation, and returns only
-once no process of the group exists. For `backupdb -C` the writer of the
-backup file is the database server, outside that group: it held the file
-for up to about 1 s after the group ended, then either removed it or left
-it at its full size. `Run` does not wait for that; the backup's failure
-path removes the staging directory right after.
+restore races it. The HA bootstrap's `createdb` has the same exposure: after
+a cancellation it removes the directory it created (`habootstrap.go`) while
+the surviving `cub_admin` goes on writing there and later registers the
+database. `ExecCLI` now runs these four utilities (`backupdb`, `restoredb`,
+`restoreslave`, `createdb`) in a process group of their own, sends `SIGKILL`
+to the group on cancellation, and returns only once no process of the group
+exists. The patched `ExecCLI` was run on the image for `restoredb`,
+`restoreslave` and `backupdb` only; for `createdb` the change rests on the
+tree above and the unit test. For `backupdb -C` the writer of the backup
+file is the database server, outside that group: it held the file for up
+to about 1 s after the group ended, then either removed it or left it at
+its full size. `Run` does not wait for that; the backup's failure path
+removes the staging directory right after.
+
+**Follow-up:** the `cub_server` writer of a cancelled `backupdb -C` is
+tracked in #469.
 
 **Not covered:** the Instance Manager binary itself and its stop path
 (`Server.Stop` cancels the operations' context, the cancellation measured
