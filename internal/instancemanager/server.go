@@ -458,7 +458,7 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	if staging == "" {
@@ -641,7 +641,7 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	if existed {

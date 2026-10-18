@@ -46,6 +46,7 @@ const (
 	eventOperationState   = "operation_state_changed"
 	eventStoreWriteFailed = "operation_store_write_failed"
 	eventNotReady         = "not_ready"
+	eventRecordUnreadable = "operation_record_unreadable"
 
 	reasonNoToken    = "NoToken"
 	reasonWrongToken = "WrongToken"

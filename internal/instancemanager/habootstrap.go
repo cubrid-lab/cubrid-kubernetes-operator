@@ -129,7 +129,7 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	if !existed {

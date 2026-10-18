@@ -360,7 +360,15 @@ the same; the member's role is what `/v1/role` answers to a caller with the
 token. An operation record that could not be written is logged as an error
 with `event` `operation_store_write_failed`, the `operationID` and the state
 that is therefore not on disk; the retries of an operation's end that could
-not be written are logged at debug level. A credential is never logged: no
+not be written are logged at debug level. An operation record that cannot be
+read or decoded is logged once as an error with `event`
+`operation_record_unreadable`, its `operationID` and the error, also when it
+was found at start; while it stays unreadable the Instance Manager starts no
+backup, restore or HA bootstrap and answers each start `500` with the code
+`OperationRecordUnreadable` (ADR-0003, #427). On a `CubridBackup` that start
+shows as `InstanceManagerUnavailable`, with the code in the message. Repair
+the file's permissions or contents or, once it is known that its operation
+does not run, move the file out of the operations directory. A credential is never logged: no
 token, no `Authorization` header, no object-storage key, also not inside a
 failed command's output.
 

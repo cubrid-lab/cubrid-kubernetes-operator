@@ -54,6 +54,11 @@ const (
 	// CodeObjectStorageNotApplied answers 412: the manager was started
 	// without object storage. Terminal until the Pod is restarted with it.
 	CodeObjectStorageNotApplied = "ObjectStorageNotApplied"
+	// CodeOperationRecordUnreadable answers 500: the manager holds an
+	// operation record it cannot read, which may be the operation the key
+	// names, so it starts none. Retryable once the record is readable or
+	// removed.
+	CodeOperationRecordUnreadable = "OperationRecordUnreadable"
 )
 
 // writeError answers with status and an ErrorResponse; an empty code is left
@@ -77,6 +82,8 @@ func errorCode(status int, err error) string {
 		return CodeOperationInProgress
 	case errors.Is(err, ErrBackupStagingInUse):
 		return CodeStagingDestinationInUse
+	case errors.Is(err, ErrOperationRecordUnreadable):
+		return CodeOperationRecordUnreadable
 	case status == http.StatusPreconditionFailed:
 		return CodeObjectStorageNotApplied
 	}

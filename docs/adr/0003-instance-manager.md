@@ -128,6 +128,7 @@ each:
 | 409 | `IdempotencyConflict` | the manager holds an operation of this kind under the `Idempotency-Key` for another request body | terminal for the key: the request is never sent in its place; the operation the key names is read with `GET /v1/operations?idempotencyKey=` and followed |
 | 409 | `NotAnHAMember` | an HA request reached a standalone member | terminal for the member until its Pod runs as an HA member: the operator does not look the key up, reports `InstanceManagerNotAnHAMember` and asks again later without using up an attempt |
 | 412 | `ObjectStorageNotApplied` | the manager was started without object storage (#290) | terminal until the Pod is restarted with it; the operator waits, bounded (ADR-0007) |
+| 500 | `OperationRecordUnreadable` | a start, and the manager's operation store holds a record it cannot read or decode, which may be the operation the key names (#427) | retryable once the record is readable or removed by hand; nothing was started. The operator does not know the code and treats it as any 500 (`InstanceManagerUnavailable`, the message carries the code) |
 | 400, 413, 422 | none | the request is malformed or invalid (400), too large (413) or cannot be processed (422) | terminal for the request: the same request is refused again, so the operator counts a refused start as a failed attempt (`InstanceManagerRequestRefused` for a `CubridBackup`, which ends unless the target holds an operation of it) |
 | 404, 405, 408, 429 and any other 4xx | none | the manager could not be asked: an earlier image without the route (404 or 405 from its mux), a timeout (408), load shedding (429) | retryable, like an unavailable manager: the operator waits and uses up no attempt (`InstanceManagerUnavailable`, `RestoreStartFailed` at a recovery start) |
 
@@ -355,6 +356,28 @@ from is a host name. `GET /v1/ha/convergence` runs
 `applyinfo` only on `<databases directory>/<database>_<host>`, the place of
 a copied log below the directory the manager was started with; any other
 path is answered with 400.
+
+As implemented, a record the store cannot read or decode (an I/O or
+permission error, a truncated file) is never taken for an absent one where
+that would start work (#427). A record's file is named by its random
+operation ID; its idempotency key, kind and database are only inside it, so
+the key of a record that cannot be read is never known, and it may be the
+operation a request names or one that holds the database. While the store
+holds such a record, a request that would create an operation (`POST
+/v1/backup`, `POST /v1/restore/prepare`, `POST /v1/ha/bootstrap`), of any key,
+kind or database, is answered `500` with the code `OperationRecordUnreadable`
+and starts nothing. A repeat whose key names a record that can be read is
+still answered with it, since that starts nothing. The rule trades
+availability for safety: one unreadable record stops every new mutating
+operation on that member until the record is readable again or removed by
+hand, rather than risk a second `backupdb` or restore writer beside one that
+may run. Reads by ID and the read-only key lookup already answer `500` for a
+record they cannot read. At start the manager fails every readable record
+that has not ended and leaves an unreadable one as it is: it cannot fail it,
+and it admits nothing beside it. Each unreadable record is logged once, as an
+error with `event` `operation_record_unreadable` and its `operationID`, and
+again only after it was readable or gone in between. Making the condition
+visible in `/readyz` is #473.
 
 ### Security
 
