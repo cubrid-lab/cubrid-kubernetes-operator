@@ -60,6 +60,8 @@ const (
 type Server struct {
 	cli   CLI
 	token string
+	// readyMu bounds unauthenticated readiness commands to one at a time.
+	readyMu sync.Mutex
 	// store is the durable operation store; nil disables the async operation
 	// endpoints (so unit tests can construct a store-less server).
 	store *OperationStore
@@ -265,6 +267,12 @@ func (s *Server) livez(w http.ResponseWriter, _ *http.Request) {
 // what /v1/role gives to a caller with the token, and why a member is not
 // ready goes to the manager's log (#333).
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	if !s.readyMu.TryLock() {
+		s.logReadiness(r.Context(), "another readiness check is in progress")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]bool{readyKey: false})
+		return
+	}
+	defer s.readyMu.Unlock()
 	reason := s.notReadyReason(r.Context())
 	s.logReadiness(r.Context(), reason)
 	if reason != "" {
