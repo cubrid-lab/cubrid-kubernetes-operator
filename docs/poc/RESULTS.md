@@ -8,15 +8,15 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-28, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-29, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
 > not timing baselines. POC-10 to POC-16, POC-20 and POC-24 ran linux/amd64
 > under emulation (podman on another architecture): their command output is
 > functional evidence, and their timings and rates are not native timings.
-> POC-17, POC-23, POC-25, POC-26, POC-27 and POC-28 ran on native linux/amd64
-> hosts (part 1 of POC-28 in Kind on such a host), and
+> POC-17, POC-23, POC-25, POC-26, POC-27, POC-28 and POC-29 ran on native
+> linux/amd64 hosts (part 1 of POC-28 in Kind on such a host), and
 > POC-19, POC-21 and POC-22 in the Kind e2e workflow; each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
 > general CUBRID guarantee. The raw observations below are kept as recorded;
@@ -2004,6 +2004,114 @@ other than the default; more than three runs with overlapping servers; the
 three-VM lab. One image, local Docker, a few runs each; not a general CUBRID
 guarantee.
 
+## POC-29 — which kernel locks a running CUBRID holds on the data volume, and whether another container on the volume sees them (ADR-0003/0010, #472) — **observation: POSIX write locks on `<db>_lgat` and `<db>_lgla__lock`, seen across containers, released at exit**
+
+**Question (#472).** The replacement container of a member can start while
+the old container still runs on the same volume (Kind, #357). Is there a
+kernel lock a running CUBRID holds on the volume that a new container can
+ask about, without relying on the PID written into `<db>_lgat__lock`?
+Which kind (POSIX `fcntl`, OFD or `flock`), on which files, and is it gone
+once the old server stops or its container is killed?
+
+**Environment:** `cubrid/cubrid:11.4`
+(`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
+`cubrid_rel`: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1) (64bit release build for
+Linux) (Sep  7 2026 17:45:11)`), Docker 29.2.1 on a native linux/amd64 host
+(6 CPUs, Linux 5.15), 2026-10-18. Containers with `--init`, `sleep` as the
+command, every CUBRID command run as `cubrid` (UID 1000), named Docker
+volumes (ext4 on the host). The probe is a static Go binary mounted
+read-only into the containers: for each file it opens it read-only and asks
+`fcntl(F_GETLK)` and `fcntl(F_OFD_GETLK)` for a write lock on the whole file;
+it never sets a lock. The holders were read from `/proc/locks` and from the
+`lock:` lines of `/proc/<pid>/fdinfo/<fd>` (read as `cubrid`; root in the
+container lacks the capability).
+
+**Part A, a standalone server.** Two containers `a` and `b` with the same
+hostname `h-0` and the same volume at `/var/lib/cubrid/databases`;
+`createdb --db-volume-size=64M --log-volume-size=64M --server-name=h-0 appdb en_US`
+and `cubrid server start appdb` in `a`.
+
+| Step | Locks of `a`'s processes (`fdinfo`) | `F_GETLK` from `b` on `appdb_lgat` | Other files of the database from `b` |
+|---|---|---|---|
+| Created, nothing running | none | `F_UNLCK` | `F_UNLCK` |
+| `cub_server` running (pid 110 in `a`) | `cub_server` fd 112 → `appdb/appdb_lgat`: `POSIX ADVISORY WRITE 110 … 0 EOF`; `cub_pl` → `$CUBRID/log/pl/appdb_pl.log.lck` (container file system, not the volume) | **`F_WRLCK`, pid 0, whole file** (`F_OFD_GETLK` the same) | `F_UNLCK` for `appdb`, `appdb_x001`, `appdb_dwb`, `appdb_keys`, `appdb_lgar_t`, `appdb_lginf`, `appdb_vinf` and **`appdb_lgat__lock`** |
+| From `a` itself (same PID namespace) | | `F_WRLCK`, pid 110 | |
+| After `cubrid server stop appdb` | none on the volume (`/proc/locks` empty) | `F_UNLCK` at once | `appdb_lgat__lock` removed |
+| Started again, then `docker kill` (SIGKILL) of `a` | | `F_WRLCK` before; **`F_UNLCK` in the first probe after `docker kill` returned** (0.95 s after it was issued) and in the next four | `appdb_lgat__lock` left behind, reading `cubrid 746 h-0 …` |
+
+`F_GETLK` reports the holder's PID as 0 when it is in another PID namespace.
+
+**Part B, a two-member HA group.** Containers `h-0` and `h-1` on one
+Docker network, each with its own volume at `$CUBRID/databases`,
+`ha_port_id=59901`, `ha_node_list=cubrid@h-0:h-1`, `ha_db_list=appdb`,
+`ha_mode=on`; `createdb --server-name=h-0:h-1` and `heartbeat start` on
+`h-0`, `backupdb -C` of it, `restoreslave -u -s master -m h-0` and
+`heartbeat start` on `h-1`. Heartbeat status: `h-0` master, `h-1` slave,
+every process `registered`. Locks (`fdinfo`), the same on both members:
+
+| Process | File (on the volume) | Lock |
+|---|---|---|
+| `cub_server appdb` | `appdb/appdb_lgat` | POSIX write, whole file |
+| `copylogdb -L …/appdb_<peer> -m sync appdb@<peer>` | `appdb_<peer>/appdb_lgat` (the copied log) | POSIX write, whole file |
+| `applylogdb -L …/appdb_<peer> appdb@localhost` | `appdb_<peer>/appdb_lgla__lock` | POSIX write, whole file |
+| `cub_pl appdb` | `$CUBRID/log/pl/appdb_pl.log.lck` (container file system) | POSIX write |
+
+A third container on `h-1`'s volume saw `F_WRLCK` (pid 0) on
+`appdb/appdb_lgat` and `appdb_h-0/appdb_lgat`. Right after `docker kill` of
+`h-1` both were `F_UNLCK`; the lock files `appdb/appdb_lgat__lock`,
+`appdb_h-0/appdb_lgat__lock` and `appdb_h-0/appdb_lgla__lock` were left,
+naming PIDs of the killed container.
+
+**Part C, the Instance Manager image with the wait of #472** (built from
+the change, `poc472-im:dev`, standalone, `CUBRID_DB` the image's `cubdb`).
+Containers with the hostname `m-0` on one volume, one after the other:
+
+1. `A` created and started the database.
+2. `B` started 25 s later: no `cub_master` or `cub_server` in `B` for 25 s;
+   its log said `volume_in_use` for `…/cubdb/cubdb_lgat`, `pid` 0, at 0, 10
+   and 20 s.
+3. `docker stop A` (the entrypoint's shutdown stops the server): `B`
+   logged `volume_free` (`waitedSeconds` 26) before `docker stop`
+   returned, then started the server and the manager; `csql` worked.
+4. `C` started while `B` ran and logged `volume_in_use`; `docker kill B`
+   (SIGKILL): `C` logged `volume_free` at its next check, 0.04 s after
+   `docker kill` returned, and started the server.
+5. `D` started while `C` ran, logged `volume_in_use`, then `docker stop D`:
+   `D` exited 0 within 1.1 s with `terminated while waiting for the data
+   volume: nothing is started`; `C`'s server ran on.
+
+The same steps 1 and 2 with the image built from `main` before the change
+(`7242c37`): `B` started a second `cub_server` on the database 3 s after
+its container started, next to `A`'s, and rewrote `cubdb_lgat__lock` with
+its own PID.
+
+**Findings.**
+
+- A running CUBRID holds **POSIX (`fcntl`) write locks over the whole file**
+  on the volume: the server on `<db>/<db>_lgat`, and on an HA member also
+  the log copier on `<db>_<peer>/<db>_lgat` and the log applier on
+  `<db>_<peer>/<db>_lgla__lock`. The data volumes, `<db>_lgat__lock` and the
+  other files carry no lock. No OFD or `flock` lock was seen.
+- **`F_GETLK` from another container on the same volume sees them**, with
+  the holder's PID as 0 (another PID namespace). It needs only a read-only
+  descriptor and takes nothing.
+- **The kernel drops them when the process ends**: at once after a server
+  stop, and by the time `docker kill` returned. The `__lock` files with
+  their PIDs are left after a kill, so they say nothing about a running
+  process.
+- The image built from `main` started a second server next to a running
+  one; with the wait it did not, and started once the first was stopped or
+  killed.
+
+**Not covered:** Kubernetes (a Pod's containers, a force deletion on Kind);
+network volumes (NFS and other RWX file systems, where `fcntl` locks go
+through the file system's own lock service); the locks during `createdb`,
+`restoredb`, `restoreslave` and `backupdb` (not probed; every process of
+a container ends with it); a three-member group;
+the HA path through the real image (part C ran standalone; part B shows
+the HA locks); more than one run of each step. One image, local Docker; not
+a general CUBRID guarantee.
+
 ## Net assessment
 
 ### Current reading (annotation, 2026-10-18)
@@ -2033,6 +2141,11 @@ as written. Later POCs confirm parts of it and contradict others:
   probe whose container ignored SIGTERM (POC-28, part 1). That this caused
   the CI failures of #357, and that it is reachable with the Operator's real
   preStop, is not shown; packet loss alone did not reproduce them.
+- **A second server on a running database is not refused by CUBRID; the
+  kernel lock shows it.** The server, log copier and log applier hold POSIX
+  write locks on `<db>_lgat` and `<db>_lgla__lock`, which `F_GETLK` from
+  another container on the volume sees and which end with the process; the
+  PID in `<db>_lgat__lock` does not (POC-29, Docker).
 - **No quorum.** A lone member accepts writes (POC-16; the promoted-slave
   case reproduced natively in POC-17).
 - **Seeding can lose data silently.** A member restored with plain

@@ -83,15 +83,27 @@ if [ "$1" = "createdb" ]; then
   printf '%s\t%s\tlocalhost\n' "${CUBRID_DB}" "${PWD}" >> "${CUBRID_DATABASES}/databases.txt"
 fi
 `
+	// waitVolumeStub stands in for "instance-manager wait-volume-free": it
+	// returns at once unless VOLUME_HELD is set; then it records the call
+	// and waits while the file VOLUME_HELD names exists, as the real one
+	// waits while another process holds a CUBRID lock on the volume. It
+	// exits with ${WAIT_EXIT} when set.
+	waitVolumeStub = `if [ "${1:-}" = "wait-volume-free" ]; then
+  [ -n "${VOLUME_HELD:-}" ] || exit "${WAIT_EXIT:-0}"
+  echo "manager wait-volume-free" >> "${CALLS}"
+  while [ -e "${VOLUME_HELD}" ]; do sleep 0.05; done
+  exit "${WAIT_EXIT:-0}"
+fi
+`
 	// managerStub exits at once, with ${IM_EXIT} when set.
 	managerStub = `#!/bin/bash
-if [ "${1:-}" = "shutdown" ]; then echo "manager shutdown" >> "${CALLS}"; exit 0; fi
+` + waitVolumeStub + `if [ "${1:-}" = "shutdown" ]; then echo "manager shutdown" >> "${CALLS}"; exit 0; fi
 echo "manager start" >> "${CALLS}"
 exit "${IM_EXIT:-0}"
 `
 	// blockingManagerStub runs until it is told to stop, like the real one.
 	blockingManagerStub = `#!/bin/bash
-if [ "${1:-}" = "shutdown" ]; then echo "manager shutdown" >> "${CALLS}"; exit 0; fi
+` + waitVolumeStub + `if [ "${1:-}" = "shutdown" ]; then echo "manager shutdown" >> "${CALLS}"; exit 0; fi
 echo "manager start" >> "${CALLS}"
 trap 'echo "manager term" >> "${CALLS}"; exit 0' TERM
 while :; do sleep 0.05; done
@@ -1277,4 +1289,112 @@ func TestEntrypoint_TerminationAroundTheStartOfTheManager(t *testing.T) {
 			}
 		})
 	}
+}
+
+const callWaitVolume = "manager wait-volume-free"
+
+// holdVolume makes the wait stand-in report the volume as held until the
+// returned function is called.
+func (f *fixture) holdVolume() (release func()) {
+	f.t.Helper()
+	held := filepath.Join(f.root, "volume-held")
+	if err := os.WriteFile(held, nil, 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+	f.env["VOLUME_HELD"] = held
+	return func() {
+		if err := os.Remove(held); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+}
+
+// While another container's CUBRID process still holds its lock on the
+// volume, the entrypoint creates, starts and recovers nothing and does not
+// start the manager, which would start a restored or bootstrapped database:
+// a second server on the same database diverges the log and loses
+// acknowledged writes (#357, #472; docs/poc/RESULTS.md, POC-29). Once
+// the lock is gone it goes on as before.
+func TestEntrypoint_StartsNothingWhileTheVolumeIsHeld(t *testing.T) {
+	for name, tc := range map[string]struct {
+		setup func(f *fixture)
+		after []string
+	}{
+		"new standalone": {func(f *fixture) {},
+			[]string{"cubrid createdb", "cubrid server start " + dbName, callManagerStart}},
+		"existing standalone": {func(f *fixture) { f.registerDatabase() },
+			[]string{"cubrid server start " + dbName, callManagerStart}},
+		"HA member": {func(f *fixture) {
+			f.env["CUBRID_COMPONENTS"] = componentsHA
+			f.configureHA()
+			f.registerDatabase()
+		}, []string{callHeartbeat, callManagerStart}},
+		"HA member waiting for the bootstrap": {func(f *fixture) {
+			f.env["CUBRID_COMPONENTS"] = componentsHA
+			f.configureHA()
+		}, []string{callManagerStart}},
+		"recovery": {func(f *fixture) { f.env["CUBRID_BOOTSTRAP"] = bootstrapRecovery },
+			[]string{callManagerStart}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			tc.setup(f)
+			release := f.holdVolume()
+			cmd := f.command()
+			var out bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &out
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, func() bool { return len(f.recorded()) > 0 }, &out)
+			time.Sleep(500 * time.Millisecond)
+			wantCalls(t, f.recorded(), callWaitVolume)
+			if _, err := os.Stat(filepath.Join(f.databases, dbName)); name == "new standalone" && !os.IsNotExist(err) {
+				t.Errorf("the database directory was created while the volume was held (err=%v)", err)
+			}
+			release()
+			if err := waitExit(cmd); err != nil {
+				t.Fatalf("entrypoint after the release: %v\n%s", err, out.String())
+			}
+			wantCalls(t, f.recorded(), append([]string{callWaitVolume}, tc.after...)...)
+		})
+	}
+}
+
+// A termination while the entrypoint waits for the volume ends the wait and
+// starts nothing: no createdb, no server, no manager. The shutdown command
+// still runs, so the stop is recorded as for any termination (#464).
+func TestEntrypoint_TerminationWhileWaitingForTheVolume(t *testing.T) {
+	f := newFixture(t, blockingManagerStub)
+	f.holdVolume()
+	cmd := f.command()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(f.recorded()) > 0 }, &out)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd); err != nil {
+		t.Fatalf("entrypoint after SIGTERM while waiting: %v\n%s", err, out.String())
+	}
+	wantCalls(t, f.recorded(), callWaitVolume, callShutdown)
+	if _, err := os.Stat(filepath.Join(f.databases, dbName)); !os.IsNotExist(err) {
+		t.Errorf("the database directory was created (err=%v)", err)
+	}
+}
+
+// A wait that ends without the volume found free (the command failed) starts
+// nothing and fails the container, which Kubernetes starts again.
+func TestEntrypoint_FailedVolumeWaitStartsNothing(t *testing.T) {
+	f := newFixture(t, managerStub)
+	f.env["VOLUME_HELD"] = filepath.Join(f.root, "not-held")
+	f.env["WAIT_EXIT"] = "1"
+	code, out := f.run()
+	if code == 0 {
+		t.Fatalf("exit 0 after a failed wait:\n%s", out)
+	}
+	wantCalls(t, f.recorded(), callWaitVolume)
 }

@@ -47,6 +47,21 @@ func main() {
 		}
 		return
 	}
+	// "instance-manager wait-volume-free" returns once no other process holds
+	// a CUBRID lock on the data volume; the entrypoint runs it before it
+	// creates or starts anything (ADR-0003, #472). A SIGTERM ends it with
+	// exit 1, never as free.
+	if len(os.Args) > 1 && os.Args[1] == "wait-volume-free" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		err := instancemanager.WaitVolumeFree(ctx, envOr("CUBRID_DATABASES", "/var/lib/cubrid/databases"),
+			logger, time.Second, 10*time.Second)
+		stop()
+		if err != nil {
+			logger.Info("Stopped waiting for the data volume", "event", "volume_wait_stopped", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(logger); err != nil {
 		logger.Error("Instance Manager stopped", "err", err)
 		os.Exit(1)

@@ -424,7 +424,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `IM_S3_ENDPOINT`, `IM_S3_REGION`, `IM_S3_INSECURE`, `IM_S3_ACCESS_KEY`, `IM_S3_SECRET_KEY` | from `spec.objectStorage` when set; the two keys are references to the Secret it names (`accessKey`, `secretKey`) |
 | `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the Pod's `terminationGracePeriodSeconds` (120s), which also bounds the preStop hook. The operator sets the first two on the DB Pods when it is started with `--instance-manager-backup-timeout` or `--instance-manager-restore-timeout` (#341); otherwise it sets none of them. |
 | PID 1 | the entrypoint shell, running as UID 1000 with no capabilities; the Instance Manager is its child |
-| Termination | on `SIGTERM` or `SIGINT` the shell runs `instance-manager shutdown` (the manager's stop procedure, see "Shutdown model"), then sends `SIGTERM` to the manager, and exits with the manager's status |
+| Termination | on `SIGTERM` or `SIGINT` the shell runs `instance-manager shutdown` (the manager's stop procedure, see "Shutdown model"), then sends `SIGTERM` to the manager, and exits with the manager's status. During the wait for the data volume (`instance-manager wait-volume-free`, #472) it ends the wait and exits 0 without starting anything |
 
 Observed with the real 11.4 image (#97): the CUBRID daemons are orphans
 adopted by PID 1, and `cubrid server stop` waits for the server process to
@@ -481,6 +481,40 @@ interrupted `createdb` of a build from before #312, or a database whose
 marker was lost — is started like any other, and a start that fails ends
 the entrypoint and can still crash-loop the container. Whether such a
 database is complete cannot be told from its files (POC-25).
+
+**One running CUBRID per volume (#472).** The old container of a Pod
+deleted with `--grace-period=0 --force` can still run when its replacement
+starts on the same volume (Kind, #357), and
+CUBRID does not reliably refuse a second server on a running database: two
+servers diverge the log, the returning master lacks acknowledged writes and
+its slaves apply nothing more. So the entrypoint, after it installed its
+termination handler and before anything else, runs
+`instance-manager wait-volume-free` and waits for it. The command asks the
+kernel (`fcntl(F_GETLK)`, a write lock over the whole file) about the files
+a running CUBRID holds a POSIX write lock on: `<db>_lgat` (the server; on
+an HA member also the log copier, in `<db>_<peer>`) and `<db>_lgla__lock`
+(the log applier), in every directory directly below `CUBRID_DATABASES`
+and every log directory registered in `databases.txt` (POC-29). Another
+container's lock is seen, with PID 0; it is gone when its process is, also
+after a SIGKILL. The PID in `<db>_lgat__lock` is not used: it is left behind
+after a kill and names another PID namespace. The command returns when no
+file is held; a missing file is free, and any other failure counts as held.
+It waits without a time limit, logs `volume_in_use` (file, PID, seconds
+waited) at once and then every 10 seconds, and `volume_free` when it
+returns. It takes, breaks and removes nothing. A `SIGTERM` or `SIGINT` to
+the entrypoint during the wait runs the shutdown command as at any other
+time, ends the wait, and exits 0 with nothing started; a wait that fails
+otherwise ends the container with nothing started.
+
+The wait sits in the entrypoint and not in the manager's `activate`: the
+manager runs only as the entrypoint's child, after the wait, so a restore,
+an HA bootstrap or the start of a completed restore's database never runs
+before it. Not covered: an old container that has no CUBRID running when
+the new one looks and starts one afterwards (its entrypoint then has
+already received `SIGTERM` and starts nothing, but a manager operation in
+flight there was not measured); network volumes, where `fcntl` locks go
+through the file system's own lock service; Kubernetes itself (the check
+ran in Docker).
 
 Each cluster has a token of its own (#270). Before it creates the cluster's
 first Pod, the operator generates 256 random bits (hex) into the

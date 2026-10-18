@@ -22,6 +22,9 @@
 #      waits for the server process to disappear, so PID 1 has to reap them;
 #      the Instance Manager does not. On SIGTERM/SIGINT the shell stops CUBRID
 #      (a no-op after the Pod's preStop hook already did), then the manager.
+#   6. Nothing is created or started, and the manager is not launched, while
+#      another process (an earlier container of this member) holds a CUBRID
+#      lock on the data volume; the wait has no time limit.
 #
 # Roles map to CUBRID_COMPONENTS (as in the official image): SERVER | MASTER |
 # SLAVE | HA. The operator sets the environment.
@@ -71,10 +74,12 @@ database_registered() {
 # step returns: without a handler, PID 1 of a container ignores SIGTERM.
 terminating=0
 im_pid=""
+wait_pid=""
 terminate() {
   terminating=1
   log "termination requested: stopping CUBRID, then the Instance Manager"
   "${IM_BIN}" shutdown || true
+  [ -z "${wait_pid}" ] || kill -TERM "${wait_pid}" 2>/dev/null || true
   [ -z "${im_pid}" ] || kill -TERM "${im_pid}" 2>/dev/null || true
 }
 trap terminate TERM INT
@@ -176,6 +181,32 @@ start_cubrid() {
 # bootstrap (#106) supplies it; until then `cubrid heartbeat start` would exit
 # 1 ("The server was not configured for HA.", docs/poc/RESULTS.md POC-12).
 CUBRID_HA_CONF="${CUBRID_HA_CONF:-/etc/cubrid-ha/cubrid_ha.conf}"
+
+# Wait while another container of this member still runs CUBRID on the
+# volume: the old container of a force-deleted Pod can outlive the start of
+# its replacement, and a second server on the same database diverges the log
+# and loses acknowledged writes (#357, #472). The manager asks the kernel
+# for the locks CUBRID's server, log copier and log applier hold on the
+# volume (docs/poc/RESULTS.md, POC-29), without a time limit and without
+# taking or breaking one. This comes before anything that creates, starts or
+# recovers a database here, and before the manager, which starts restored and
+# bootstrapped databases, is launched. It runs in the background so that a
+# termination is handled at once: nothing is started after it.
+"${IM_BIN}" wait-volume-free &
+wait_pid=$!
+# A termination handled before the PID was recorded found no wait to end.
+[ "${terminating}" = "0" ] || kill -TERM "${wait_pid}" 2>/dev/null || true
+wait_status=0
+wait "${wait_pid}" || wait_status=$?
+if [ "${terminating}" = "1" ]; then
+  # A trapped signal makes `wait` return early; collect the wait itself.
+  wait "${wait_pid}" 2>/dev/null || true
+  log "terminated while waiting for the data volume: nothing is started"
+  exit 0
+fi
+wait_pid=""
+[ "${wait_status}" = "0" ] \
+  || die "could not wait for the data volume to be free of other CUBRID processes (exit ${wait_status}): nothing is started"
 
 started=0
 if [ -e "${marker}" ] || [ -L "${marker}" ]; then

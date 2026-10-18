@@ -376,6 +376,29 @@ member is then not ready. Read the reason in `kubectl logs <pod>`:
 The entrypoint never removes these files itself, and neither does the
 Instance Manager.
 
+### Runbook: a member that waits for its data volume
+
+Every database member checks its volume before it creates or starts
+anything, and before it launches the Instance Manager: it waits for as long
+as another process holds a CUBRID lock on the volume, which happens when
+the old container of a member still runs there, for example after a Pod was
+deleted with `--grace-period=0 --force` (ADR-0003, #472). The wait has no
+time limit. The Pod is not ready meanwhile, and its log (`kubectl logs
+<pod>`) says why, in the Instance Manager's JSON lines:
+
+| `event` | Level | Fields | What it means |
+|---|---|---|---|
+| `volume_in_use` | warn | `file`, `pid`, `waitedSeconds` | Another process holds the lock on `file` (`<db>_lgat` of the server or the log copier, `<db>_lgla__lock` of the log applier). `pid` is 0 when the holder runs in another container. Logged at once, then every 10 seconds |
+| `volume_check_failed` | warn | `err`, `waitedSeconds` | The volume could not be checked (a file or directory could not be read); counted as held, so the member keeps waiting |
+| `volume_free` | info | `waitedSeconds` | No other process holds a lock; the member goes on to start |
+| `volume_wait_stopped` | info | `err` | The wait was ended by a termination; nothing was started (`[im-entrypoint] terminated while waiting for the data volume: nothing is started`) |
+
+A member that logs `volume_in_use` for longer than the old container's
+termination grace period has something else running on its volume: find
+the process (on the node, `lslocks` or `/proc/locks` shows the holder of
+the file) before anything is removed. Nothing here removes or breaks a
+lock, a lock file or data.
+
 ## Metrics
 
 Metrics describe what was observed. They do not decide by themselves whether
