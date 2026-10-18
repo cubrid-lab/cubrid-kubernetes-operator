@@ -20,9 +20,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -38,9 +42,16 @@ type CLI interface {
 // returns it whatever the command's exit status was.
 var ErrOutputUnread = errors.New("the command's output could not be read")
 
+// ErrProcessLeft marks a utility that exited by itself but left a process of
+// its group running. Run ends that process before it returns.
+var ErrProcessLeft = errors.New("the utility left a process behind")
+
 // ExecCLI runs commands via os/exec with a bounded timeout.
 type ExecCLI struct {
 	Timeout time.Duration
+	// Logger reports a process group that has not ended long after its
+	// SIGKILL; nil means slog.Default().
+	Logger *slog.Logger
 }
 
 func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
@@ -68,14 +79,28 @@ func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, 
 	}()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout, cmd.Stderr = output, output
-	grouped := len(args) > 0 && groupUtilities[args[0]]
+	grouped := filepath.Base(name) == "cubrid" && len(args) > 0 && groupUtilities[args[0]]
 	if grouped {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Cancel = func() error { return killGroup(cmd.Process.Pid) }
 	}
 	runErr := cmd.Run()
 	if grouped && cmd.Process != nil {
-		endGroup(cmd.Process.Pid)
+		pgid := cmd.Process.Pid
+		// A utility that exited by itself has waited for its own children,
+		// so its group is empty and nothing is sent to it. A process left
+		// anyway is ended, and the run is not a success.
+		left := runErr == nil && groupExists(pgid)
+		if runErr != nil || left {
+			logger := c.Logger
+			if logger == nil {
+				logger = slog.Default()
+			}
+			endGroup(logger, pgid)
+		}
+		if left {
+			runErr = fmt.Errorf("%w: %s %s", ErrProcessLeft, name, args[0])
+		}
 	}
 	out, readErr := os.ReadFile(output.Name())
 	if readErr != nil {
@@ -100,6 +125,47 @@ var groupUtilities = map[string]bool{"backupdb": true, "restoredb": true, "resto
 // groupPoll is how often endGroup looks whether a process group has ended.
 const groupPoll = 20 * time.Millisecond
 
+// groupWaitReport is how long endGroup waits before it logs the group's
+// surviving members, and groupWaitRepeat how often it logs them again.
+const (
+	groupWaitReport = 10 * time.Second
+	groupWaitRepeat = 30 * time.Second
+)
+
+// groupExists reports whether a process of the group pgid exists.
+func groupExists(pgid int) bool {
+	return !errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH)
+}
+
+// groupMembers lists the processes of the group pgid from /proc/*/stat as
+// "pid comm state", or says why it could not.
+func groupMembers(pgid int) []string {
+	stats, err := filepath.Glob("/proc/[0-9]*/stat")
+	if err != nil {
+		return []string{"the process list could not be read: " + err.Error()}
+	}
+	want := strconv.Itoa(pgid)
+	var members []string
+	for _, stat := range stats {
+		b, err := os.ReadFile(stat)
+		if err != nil {
+			continue
+		}
+		// pid (comm) state ppid pgrp ...; comm may hold spaces and parentheses.
+		line := string(b)
+		open, closing := strings.IndexByte(line, '('), strings.LastIndexByte(line, ')')
+		if open < 0 || closing < open {
+			continue
+		}
+		fields := strings.Fields(line[closing+1:])
+		if len(fields) < 3 || fields[2] != want {
+			continue
+		}
+		members = append(members, strings.TrimSpace(line[:open])+" "+line[open+1:closing]+" "+fields[0])
+	}
+	return members
+}
+
 // killGroup sends SIGKILL to the process group pgid. A group that has already
 // ended is not an error.
 func killGroup(pgid int) error {
@@ -115,13 +181,23 @@ func killGroup(pgid int) error {
 // endGroup returns once no process of the group pgid exists, after sending it
 // SIGKILL: the caller removes or retries what the utility wrote right after
 // Run, so nothing of it may still write then. After a SIGKILL to the group,
-// cub_admin was still seen for up to 3 s (POC-27). A process that SIGKILL
-// cannot end keeps the operation waiting here; a stop does not wait for that
-// operation beyond its own deadline. The orphaned members are reaped by PID 1
-// (the entrypoint), which is when the group ceases to exist.
-func endGroup(pgid int) {
+// cub_admin was still seen for up to about 2 s (POC-27). A process that
+// SIGKILL cannot end keeps the operation waiting here, with no bound; a stop
+// does not wait for that operation beyond its own deadline. A wait past
+// groupWaitReport is logged with the surviving members, and again every
+// groupWaitRepeat, so that a hung member can be told from a slow one. The
+// orphaned members are reaped by PID 1 (the entrypoint), which is when the
+// group ceases to exist.
+func endGroup(logger *slog.Logger, pgid int) {
 	_ = killGroup(pgid)
-	for !errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH) {
+	start := time.Now()
+	report := groupWaitReport
+	for groupExists(pgid) {
+		if waited := time.Since(start); waited >= report {
+			logger.Warn("Process group has not ended after SIGKILL", "event", "process_group_not_ended",
+				"pgid", pgid, "waitedSeconds", int(waited.Seconds()), "members", groupMembers(pgid))
+			report += groupWaitRepeat
+		}
 		time.Sleep(groupPoll)
 	}
 }

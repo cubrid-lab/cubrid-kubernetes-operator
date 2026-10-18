@@ -65,7 +65,7 @@ func shutdown(logger *slog.Logger, stopFile string) error {
 	if err != nil {
 		return fmt.Errorf("IM_ADDR: %w", err)
 	}
-	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: budget}, Logger: logger}
+	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: budget, Logger: logger}, Logger: logger}
 	logger.Info("Shutdown requested", "event", "shutdown_requested")
 	// The stop is recorded before the manager is asked: a manager that does
 	// not listen yet finds the record once it listens and starts nothing
@@ -104,7 +104,8 @@ func run(logger *slog.Logger) error {
 		return errors.New("IM_TOKEN is empty: the Instance Manager does not start without a token")
 	}
 
-	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second}, Logger: logger}
+	cli := instancemanager.LoggingCLI{
+		CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second, Logger: logger}, Logger: logger}
 	server := instancemanager.NewServer(cli, token).
 		WithLogger(logger).
 		WithStopFile(instancemanager.StopFile).
