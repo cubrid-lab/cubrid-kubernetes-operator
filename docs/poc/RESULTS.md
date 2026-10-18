@@ -1629,6 +1629,126 @@ window shorter than one call can be missed (the two runs of state 3 whose first
 call took 181 ms). One image, local Docker; a few runs per state, not a general
 CUBRID guarantee.
 
+## POC-27 — what a cancelled `backupdb`, `restoredb` or `restoreslave` leaves running (ADR-0003/0007/0008, #277) — **observation: the utility's worker outlives a signal to `cubrid`**
+
+**Environment:** `docker.io/cubrid/cubrid:11.4`
+(`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
+`cubrid_rel`: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1) (64bit release build for
+Linux) (Sep  7 2026 17:45:11)`), Docker 29.2.1 on a native linux/amd64 host
+(6 CPUs, Linux 5.15), 2026-10-18. Two containers `h-0` and `h-1` on one
+user-defined Docker network, hostnames equal to the node names, `--init`
+(so an orphan is adopted and reaped by `tini` as PID 1, as by the
+entrypoint shell in the Instance Manager image), `sleep` as the command,
+every CUBRID command run as `cubrid` (UID 1000), `hosts: files dns`.
+
+**Setup (POC-26 recipe):** `ha_mode=on`, `ha_port_id=59901`,
+`ha_node_list=cubrid@h-0:h-1`, `ha_db_list=appdb`,
+`ha_copy_sync_mode=sync:sync` on both nodes. On `h-0`:
+`cubrid createdb --db-volume-size=512M --log-volume-size=256M --server-name=h-0:h-1 -F <dir> appdb en_US`
+and `cubrid heartbeat start`; `h-1` seeded with `restoredb -u` and started
+as the slave, so that the master accepts writes; 400,000 rows of 900
+bytes loaded on `h-0` (database directory 1.1 GB). `h-1`'s heartbeat was
+then stopped (`heartbeat stop`, `service stop`); `h-0` stayed master for
+the rest. A full `backupdb -C` of `h-0` (139 MB) was copied to `h-1`.
+
+**Method:** each utility was started with the arguments the Instance
+Manager uses (`operations.go`, `restore.go`):
+`cubrid backupdb -D <dir> -C -l 0 appdb@localhost` on `h-0`,
+`cubrid restoredb -u -B <backup> appdb` and
+`cubrid restoreslave -u -s master -m h-0 -B <backup> appdb` on `h-1`, the
+latter two into an empty directory registered in `databases.txt` (POC-11),
+as a direct child of a script, with its output in a file and in the
+script's process group, as `ExecCLI` starts it. The image has no `ps`: a
+loop read `/proc/*/stat` (pid, ppid, pgid, state, comm) every 50 ms, and a
+second loop listed every process holding a file open under the database or
+backup directory, and the directory's size, every 0.5 to 0.9 s. After a
+delay, one signal was sent: `SIGKILL` to the direct pid (what
+`exec.CommandContext` sends on a timeout or a cancellation), `SIGTERM` to
+the direct pid, or `SIGKILL` to the whole process group (the utility
+started in a group of its own). The processes were followed for 5 to 40 s
+after.
+
+**Observed — the process tree.** In every run `cubrid <utility>` (comm
+`cubrid`, its command line reduced to `cubrid <utility>`) forked one child,
+comm `cub_admin`, with the full command line, in the same process group,
+within 60 to 190 ms. No further descendant was seen. `cub_admin` held the
+restored volumes open (`appdb`, `appdb_lgat_000_tmp`, `appdb_lgar000_000_tmp`,
+`appdb_dwb`, …). For `backupdb -C` the backup file was held open only by
+`cub_server`, never by `cub_admin`: in client-server mode the server
+writes it.
+
+| Utility, full run | Signal at | Signal | `cub_admin` after the signal | What was left |
+|---|---|---|---|---|
+| `restoredb` (13 to 23 s) | 1.1 s | `SIGKILL` to `cubrid` | adopted by PID 1, kept writing, gone 17.6 s later | the complete file set (`appdb`, `appdb_lgat`, `appdb_lgar_t`, `appdb_lgar000`, `appdb_keys`, `appdb_lginf`, `appdb_vinf`, `appdb_bkvinf`), as after a run to its end |
+| | 2.0 s (5 MB backup) | `SIGKILL` to `cubrid` | kept writing, at least 5 s | the complete file set |
+| | 8.0 s | `SIGKILL` to `cubrid` | kept writing, gone 9.4 s later | the complete file set |
+| | 2.0 s (5 MB backup) | `SIGTERM` to `cubrid` | kept writing, gone 4.7 s later | the complete file set |
+| | 8.1 s | `SIGTERM` to `cubrid` | kept writing, gone 6.8 s later | the complete file set |
+| | 2.0 s (5 MB backup) | `SIGKILL` to the group | still listed 1.0 s later, gone 1.6 s later | `appdb`, `appdb_vinf` |
+| | 8.1 s | `SIGKILL` to the group | listed in state `D` at 11 ms, gone 0.6 s later | `appdb`, `appdb_lgat_000_tmp`, `appdb_lginf`, `appdb_vinf` |
+| `restoreslave` (17 s) | 1.2 s | `SIGKILL` to `cubrid` | kept writing, gone 12.8 s later | the complete file set |
+| | 3.1 s | `SIGKILL` to `cubrid` | kept writing, gone 8.9 s later | the complete file set |
+| | 6.1 s | `SIGKILL` to `cubrid` | kept writing, gone 17.8 s later | the complete file set |
+| | 6.2 s | `SIGTERM` to `cubrid` | kept writing, gone 13.2 s later | the complete file set |
+| | 3.1 s | `SIGKILL` to the group | gone at the next sample (15 ms) | `appdb`, `appdb_vinf` |
+| | 6.0 s | `SIGKILL` to the group | still listed 1.6 s later, gone 2.1 s later | `appdb`, `appdb_lgat_000_tmp`, `appdb_lginf`, `appdb_vinf` |
+| `backupdb -C` (2.0 to 51 s; file 75 or 139 MB) | 3.0 s (51 s run) | `SIGKILL` to `cubrid` | kept running, gone 28.5 s later | the backup file at its full size (139 MB) |
+| | 1.1 s | `SIGKILL` to `cubrid` | gone 2.2 s later | the backup file at its full size (75 MB) |
+| | 1.1 s | `SIGTERM` to `cubrid` | gone 0.5 s later | the backup file at its full size |
+| | 0.5 s, 1.2 s | `SIGKILL` to the group | gone at once | `cub_server` went on writing the file (to 61 MB, to 125 MB) for up to about 2 s, then the file was removed: an empty directory |
+| | 1.0 s, 1.0 s, 1.5 s, 3.1 s | `SIGKILL` to the group | gone at once | `cub_server` held the file open for about 0.3 to 2 s more; the file stayed, at its full size |
+
+The `backupdb` times and sizes varied with the HA state of the pair (51 s
+and 139 MB while `h-1` was the slave, 2.0 s and 75 MB later); that was not
+investigated. Whether a backup left at full size after the group was killed
+restores, and whether a `restoreslave` that finished after `cubrid` was
+killed wrote the replication catalog, was not checked.
+
+**Also seen — `createdb`** (the HA bootstrap's command, `habootstrap.go`,
+not one of the three above): `cubrid createdb --db-volume-size=512M
+--server-name=h-0:h-1 -F <dir> crdb en_US` on `h-1` has the same tree.
+After a `SIGKILL` to `cubrid` at 3 s, `cub_admin` went on in state `D` for
+the 33 s it was followed, and later registered `crdb` in `databases.txt`.
+
+**With the change of #277**, a small program that calls the patched
+`ExecCLI.Run` (`cli.go`) and cancels its context was run in the same
+containers, listing every `cub*` process and every open file under the
+directory when `Run` returned and each second for 5 s after:
+
+- `restoredb`, cancelled at 1 s and at 5 s; `restoreslave`, cancelled at
+  3 s: `Run` returned 3.0 s, 1.6 s and 1.8 s after the cancellation, with
+  `signal: killed`. At its return no `cub_admin` ran and nothing held a file
+  under the database directory; the directory held a partial set
+  (`appdb`, `appdb_vinf`, and at 5 s also `appdb_lgat_000_tmp`,
+  `appdb_lginf`). Nothing changed in the 5 s after.
+- `backupdb -C`, cancelled at 0.5 s and at 1 s: `Run` returned at 0.50 s and
+  1.02 s. The utility's processes were gone, but `cub_server` still held
+  the backup file open; 1 s later it no longer did. The directory was empty
+  after the first run and held the file at its full size after the second.
+
+**Consequence:** a cancelled `cubrid restoredb` or `cubrid restoreslave`
+(the restore's deadline, or a stop, which ends every running operation's
+context) returned at once while `cub_admin` went on writing the target for
+up to 18 s. The restore then takes the registration and the directory back
+(`restore.go`, `unregister`) under a live writer, and a retry or the next
+restore races it. `ExecCLI` now runs the three utilities in a process group
+of their own, sends `SIGKILL` to the group on cancellation, and returns only
+once no process of the group exists. For `backupdb -C` the writer of the
+backup file is the database server, outside that group: it held the file
+for up to about 1 s after the group ended, then either removed it or left
+it at its full size. `Run` does not wait for that; the backup's failure
+path removes the staging directory right after.
+
+**Not covered:** the Instance Manager binary itself and its stop path
+(`Server.Stop` cancels the operations' context, the cancellation measured
+here); a member terminated by Kubernetes; Kind or a real cluster; a
+three-member `ha_node_list`; volumes other than 512M and backups of other
+sizes; I/O pressure, which may lengthen the time a killed `cub_admin` stays
+in state `D`; a utility killed after it had finished writing. The `/proc`
+loops have a resolution of 50 ms and 0.5 to 0.9 s, so a shorter window can
+be missed. One image, local Docker; a few runs per case, not a general
+CUBRID guarantee.
+
 ## Net assessment
 
 The fundamentals **and the core HA lifecycle** are now empirically confirmed

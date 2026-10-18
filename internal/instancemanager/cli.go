@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"syscall"
 	"time"
 )
 
@@ -67,13 +68,62 @@ func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, 
 	}()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout, cmd.Stderr = output, output
+	grouped := len(args) > 0 && groupUtilities[args[0]]
+	if grouped {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return killGroup(cmd.Process.Pid) }
+	}
 	runErr := cmd.Run()
+	if grouped && cmd.Process != nil {
+		endGroup(cmd.Process.Pid)
+	}
 	out, readErr := os.ReadFile(output.Name())
 	if readErr != nil {
 		// What the command printed is unknown, whatever its exit status.
 		return "", errors.Join(fmt.Errorf("%w: %s: %w", ErrOutputUnread, name, readErr), runErr)
 	}
 	return string(out), runErr
+}
+
+// groupUtilities are the `cubrid` utilities that run in a process group of
+// their own, which a cancellation ends as a whole. `cubrid <utility>` forks
+// cub_admin, which does the work; a signal to `cubrid` alone (SIGKILL, as the
+// default cancellation sends, or SIGTERM) leaves cub_admin running on its own,
+// and it goes on writing the restored database or driving the backup to its
+// end (docs/poc/RESULTS.md, POC-27). The starts of the server and of
+// heartbeat leave daemons on purpose and are never among them. A backupdb -C
+// file is written by cub_server, which is not in the group: it kept the file
+// open for up to about 1 s after the group had ended, and Run does not wait
+// for that.
+var groupUtilities = map[string]bool{"backupdb": true, "restoredb": true, "restoreslave": true}
+
+// groupPoll is how often endGroup looks whether a process group has ended.
+const groupPoll = 20 * time.Millisecond
+
+// killGroup sends SIGKILL to the process group pgid. A group that has already
+// ended is not an error.
+func killGroup(pgid int) error {
+	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	return nil
+}
+
+// endGroup returns once no process of the group pgid exists, after sending it
+// SIGKILL: the caller removes or retries what the utility wrote right after
+// Run, so nothing of it may still write then. After a SIGKILL to the group,
+// cub_admin was still seen for up to 3 s (POC-27). A process that SIGKILL
+// cannot end keeps the operation waiting here; a stop does not wait for that
+// operation beyond its own deadline. The orphaned members are reaped by PID 1
+// (the entrypoint), which is when the group ceases to exist.
+func endGroup(pgid int) {
+	_ = killGroup(pgid)
+	for !errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH) {
+		time.Sleep(groupPoll)
+	}
 }
 
 // HeartbeatStatus runs `cubrid heartbeat status` and parses the local node's
