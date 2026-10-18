@@ -22,7 +22,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,6 +32,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -45,11 +45,34 @@ import (
 var _ = Describe("Readiness metrics of a cluster (#458)", func() {
 	ctx := context.Background()
 
-	readiness := func(key types.NamespacedName) (ready, instances, instancesReady float64) {
-		of := metricspkg.ClusterLabels(key.Namespace, key.Name)
-		return testutil.ToFloat64(metricspkg.ClusterReady.With(of)),
-			testutil.ToFloat64(metricspkg.ClusterInstances.With(of)),
-			testutil.ToFloat64(metricspkg.InstanceReady.With(of))
+	// readiness returns cubrid_cluster_ready, cubrid_cluster_instances and
+	// cubrid_cluster_instances_ready of the cluster as gathered from the
+	// registry, noSample for a series that does not exist.
+	const noSample = -1
+	readiness := func(key types.NamespacedName) []float64 {
+		families, err := ctrlmetrics.Registry.Gather()
+		Expect(err).NotTo(HaveOccurred())
+		values := map[string]float64{}
+		for _, family := range families {
+			for _, m := range family.GetMetric() {
+				labels := map[string]string{}
+				for _, l := range m.GetLabel() {
+					labels[l.GetName()] = l.GetValue()
+				}
+				if len(labels) == 2 && labels["namespace"] == key.Namespace && labels["cluster"] == key.Name {
+					values[family.GetName()] = m.GetGauge().GetValue()
+				}
+			}
+		}
+		out := make([]float64, 0, 3)
+		for _, name := range []string{"cubrid_cluster_ready", "cubrid_cluster_instances", "cubrid_cluster_instances_ready"} {
+			v, ok := values[name]
+			if !ok {
+				v = noSample
+			}
+			out = append(out, v)
+		}
+		return out
 	}
 	storedReady := func(key types.NamespacedName) *metav1.Condition {
 		got := &databasev1alpha1.CubridCluster{}
@@ -102,8 +125,7 @@ var _ = Describe("Readiness metrics of a cluster (#458)", func() {
 		setReadyReplicas(key, 3)
 		Expect(reconcileOnce()).To(Succeed())
 		Expect(storedReady(key).Status).To(Equal(metav1.ConditionTrue))
-		ready, instances, instancesReady := readiness(key)
-		Expect([]float64{ready, instances, instancesReady}).To(Equal([]float64{1, 3, 3}))
+		Expect(readiness(key)).To(Equal([]float64{1, 3, 3}))
 
 		By("a child write failing, which stores Ready=False")
 		svc := &corev1.Service{}
@@ -113,32 +135,29 @@ var _ = Describe("Readiness metrics of a cluster (#458)", func() {
 		Expect(reconcileOnce()).To(MatchError(ContainSubstring("admission webhook denied")))
 		Expect(storedReady(key).Status).To(Equal(metav1.ConditionFalse))
 		Expect(storedReady(key).Reason).To(Equal("ServiceReconcileFailed"))
-		ready, instances, instancesReady = readiness(key)
-		Expect(ready).To(Equal(float64(0)), "cubrid_cluster_ready must match the stored Ready=False")
-		Expect([]float64{instances, instancesReady}).To(Equal([]float64{3, 3}),
-			"the StatefulSet was not read: the count of the last status that had one is kept")
+		got := readiness(key)
+		Expect(got[0]).To(Equal(float64(0)), "cubrid_cluster_ready must match the stored Ready=False")
+		Expect(got[1:]).To(Equal([]float64{3, noSample}),
+			"the StatefulSet was not read: cubrid_cluster_instances_ready has no sample")
 
 		By("the child write succeeding again")
 		serviceError = nil
 		Expect(reconcileOnce()).To(Succeed())
 		Expect(storedReady(key).Status).To(Equal(metav1.ConditionTrue))
-		ready, instances, instancesReady = readiness(key)
-		Expect([]float64{ready, instances, instancesReady}).To(Equal([]float64{1, 3, 3}))
+		Expect(readiness(key)).To(Equal([]float64{1, 3, 3}))
 
 		By("a Pod becoming not ready in a reconcile whose status write is refused")
 		setReadyReplicas(key, 2)
 		statusConflicts = 1
 		Expect(reconcileOnce()).To(Succeed())
 		Expect(storedReady(key).Status).To(Equal(metav1.ConditionTrue))
-		ready, instances, instancesReady = readiness(key)
-		Expect([]float64{ready, instances, instancesReady}).To(Equal([]float64{1, 3, 3}),
+		Expect(readiness(key)).To(Equal([]float64{1, 3, 3}),
 			"a status that was not stored must not be published")
 
 		By("the next reconcile storing it")
 		Expect(reconcileOnce()).To(Succeed())
 		Expect(storedReady(key).Status).To(Equal(metav1.ConditionFalse))
-		ready, instances, instancesReady = readiness(key)
-		Expect([]float64{ready, instances, instancesReady}).To(Equal([]float64{0, 3, 2}))
+		Expect(readiness(key)).To(Equal([]float64{0, 3, 2}))
 	})
 
 	It("follow the stored Ready condition while a recovery bootstrap runs", func() {
@@ -150,16 +169,17 @@ var _ = Describe("Readiness metrics of a cluster (#458)", func() {
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
 		key := types.NamespacedName{Name: c.Name, Namespace: c.Namespace}
 
-		By("a sample left from an earlier observation")
+		By("samples left from an earlier observation")
 		of := metricspkg.ClusterLabels(key.Namespace, key.Name)
 		metricspkg.ClusterReady.With(of).Set(1)
+		metricspkg.InstanceReady.With(of).Set(7)
 
 		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: &fakeRestoreClient{},
 			Prober: &memberProber{master: c.Name + "-0"}, Recorder: record.NewFakeRecorder(50)}
 		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(storedReady(key).Reason).To(Equal("BootstrapRecoveryInProgress"))
-		ready, instances, instancesReady := readiness(key)
-		Expect([]float64{ready, instances, instancesReady}).To(Equal([]float64{0, 3, 0}))
+		Expect(readiness(key)).To(Equal([]float64{0, 3, 0}),
+			"the recovery branch publishes the ready count of the StatefulSet it read")
 	})
 })

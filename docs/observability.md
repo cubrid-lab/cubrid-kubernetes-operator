@@ -380,7 +380,7 @@ otherwise.
 
 | Metric | Labels | Value |
 |---|---|---|
-| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when `Ready` is `True`, else 0 |
+| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when `Ready` is `True`, else 0; no sample without the Condition |
 | `cubrid_cluster_instances` | `namespace`, `cluster` | members the cluster should have (`spec.topology.promotableMembers`) |
 | `cubrid_cluster_instances_ready` | `namespace`, `cluster` | members whose Pods are ready, as the StatefulSet counts them (see below) |
 | `cubrid_cluster_ha_ready` | `namespace`, `cluster` | 1 or 0 |
@@ -399,12 +399,14 @@ Every metric is taken from the cluster when its status was written, so a
 metric and the Condition or status field it mirrors come from the same
 observation; a status write that fails changes no metric. This holds for every
 reconcile that writes the status, also one that ends at a failed write of a
-child object or while a recovery bootstrap runs: `cubrid_cluster_ready` is 0
-whenever the stored `Ready` is not `True`. `cubrid_cluster_instances_ready` is
-not in the status; it is the count of ready Pods the StatefulSet reported to
-the reconcile that wrote the status. A reconcile that stopped before it read
-the StatefulSet, because a write of a child object failed, keeps the count
-written with the last status that had one. A reading of an applier that could
+child object or while a recovery bootstrap runs: `cubrid_cluster_ready` is 1
+when the stored `Ready` is `True`, else 0, and has no sample without the
+Condition. `cubrid_cluster_instances_ready` is not in the status; it is the
+count of ready Pods the StatefulSet reported to the reconcile that wrote the
+status. A reconcile that wrote the status without reading the StatefulSet,
+because a write of a child object failed first, removes the sample instead of
+keeping an earlier count; it is absent until a reconcile reads the
+StatefulSet, also after an Operator restart. A reading of an applier that could
 not be renewed stays in the status, and so in the metrics, for a bounded time
 before it is dropped. A Condition that the status does not carry has no
 sample; `cubrid_cluster_ha_ready`, `cubrid_cluster_primary_resolved` and
@@ -416,7 +418,9 @@ sample; `cubrid_cluster_ha_ready`, `cubrid_cluster_primary_resolved` and
   image digest, a command and an error text are never labels.
 - The series of a cluster are removed when the cluster is deleted, and the
   series of a member when it is no longer in the status.
-- Gauges are set again from the first reconcile after an Operator restart.
+- Gauges are set again from the first reconcile after an Operator restart
+  that writes the status; `cubrid_cluster_instances_ready` from the first one
+  that also reads the StatefulSet.
   Counters, when one is added, start from zero then; none is defined yet.
 - There is no `replication_lag_seconds`: `cubrid applyinfo` gave no delay in
   time in the experiment POC-20. The tested values are the waiting pages, the

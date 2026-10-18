@@ -218,3 +218,53 @@ func TestPublishClusterMetrics(t *testing.T) {
 		t.Error("cubrid_instance_role still has a series for a member that left")
 	}
 }
+
+// cubrid_cluster_ready follows the stored Ready condition and
+// cubrid_cluster_instances_ready the StatefulSet count the reconcile read;
+// without either there is no sample, never a 0 or an earlier value (#458).
+func TestPublishClusterMetrics_Readiness(t *testing.T) {
+	three, two, seven := int32(3), int32(2), int32(7)
+	for _, tc := range []struct {
+		name          string
+		ready         metav1.ConditionStatus // "" for no Ready condition
+		readyReplicas *int32
+		wantReady     float64
+		readySample   bool
+		wantCount     float64
+		countSample   bool
+	}{
+		{"Ready True with a count", metav1.ConditionTrue, &three, 1, true, 3, true},
+		{"Ready False with a count", metav1.ConditionFalse, &two, 0, true, 2, true},
+		{"Ready Unknown with a count", metav1.ConditionUnknown, &two, 0, true, 2, true},
+		{"no Ready condition", "", &three, 0, false, 3, true},
+		{"Ready False without a count", metav1.ConditionFalse, nil, 0, true, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := metricCluster("publish-readiness")
+			c.Spec.Topology.PromotableMembers = 3
+			// The samples of an earlier observation, which this one replaces.
+			earlier := c.DeepCopy()
+			setCondition(earlier, conditionReady, metav1.ConditionTrue, "ClusterReady", "")
+			publishClusterMetrics(earlier, &seven)
+
+			if tc.ready != "" {
+				setCondition(c, conditionReady, tc.ready, "Test", "")
+			}
+			publishClusterMetrics(c, tc.readyReplicas)
+			for _, want := range []struct {
+				metric    string
+				value     float64
+				available bool
+			}{
+				{"cubrid_cluster_ready", tc.wantReady, tc.readySample},
+				{"cubrid_cluster_instances", 3, true},
+				{"cubrid_cluster_instances_ready", tc.wantCount, tc.countSample},
+			} {
+				got, ok := sample(t, want.metric, c, nil)
+				if ok != want.available || (ok && got != want.value) {
+					t.Errorf("%s = %v (sample: %v), want %v (sample: %v)", want.metric, got, ok, want.value, want.available)
+				}
+			}
+		})
+	}
+}

@@ -29,10 +29,10 @@ import (
 // from its status, so that the metrics and the Conditions of one observation
 // agree (docs/observability.md). What the status does not hold gets no
 // sample: a Condition that is Unknown, a time nothing was observed at, the
-// applier of a member that is no slave or was not read. readyReplicas is the
-// number of ready Pods the reconcile that wrote the status read from the
-// StatefulSet; nil, as for a reconcile that stopped at a failed child write,
-// keeps the count of the last status written with one.
+// applier of a member that is no slave or was not read, the ready count of a
+// reconcile that did not read the StatefulSet. readyReplicas is the number of
+// ready Pods the reconcile that wrote the status read from the StatefulSet;
+// it is nil for a reconcile that stopped at a failed child write.
 func publishClusterMetrics(cluster *databasev1alpha1.CubridCluster, readyReplicas *int32) {
 	of := metrics.ClusterLabels(cluster.Namespace, cluster.Name)
 	status := &cluster.Status
@@ -40,9 +40,11 @@ func publishClusterMetrics(cluster *databasev1alpha1.CubridCluster, readyReplica
 	ready := meta.FindStatusCondition(status.Conditions, conditionReady)
 	metrics.SetOrDelete(metrics.ClusterReady, of, boolToFloat(ready != nil && ready.Status == metav1.ConditionTrue), ready != nil)
 	metrics.ClusterInstances.With(of).Set(float64(cluster.Spec.Topology.PromotableMembers))
+	var readyCount float64
 	if readyReplicas != nil {
-		metrics.InstanceReady.With(of).Set(float64(*readyReplicas))
+		readyCount = float64(*readyReplicas)
 	}
+	metrics.SetOrDelete(metrics.InstanceReady, of, readyCount, readyReplicas != nil)
 
 	for condition, vec := range map[string]*prometheus.GaugeVec{
 		conditionHAReady:         metrics.ClusterHAReady,
