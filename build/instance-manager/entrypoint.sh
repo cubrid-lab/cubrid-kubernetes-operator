@@ -24,7 +24,8 @@
 #      (a no-op after the Pod's preStop hook already did), then the manager.
 #   6. Nothing is created or started, and the manager is not launched, while
 #      another process (an earlier container of this member) holds a CUBRID
-#      lock on the data volume; the wait has no time limit.
+#      lock on the data volume. The wait has no time limit of its own; the
+#      Pod's startup probe still bounds the container's start (ADR-0003).
 #
 # Roles map to CUBRID_COMPONENTS (as in the official image): SERVER | MASTER |
 # SLAVE | HA. The operator sets the environment.

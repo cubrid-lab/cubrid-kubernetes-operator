@@ -382,8 +382,10 @@ Every database member checks its volume before it creates or starts
 anything, and before it launches the Instance Manager: it waits for as long
 as another process holds a CUBRID lock on the volume, which happens when
 the old container of a member still runs there, for example after a Pod was
-deleted with `--grace-period=0 --force` (ADR-0003, #472). The wait has no
-time limit. The Pod is not ready meanwhile, and its log (`kubectl logs
+deleted with `--grace-period=0 --force` (ADR-0003, #472). The wait itself
+has no time limit; the container's startup probe (ten minutes) still runs
+during it, so a volume held for longer restarts the container, which then
+waits again and starts nothing meanwhile. The Pod is not ready meanwhile, and its log (`kubectl logs
 <pod>`) says why, in the Instance Manager's JSON lines:
 
 | `event` | Level | Fields | What it means |

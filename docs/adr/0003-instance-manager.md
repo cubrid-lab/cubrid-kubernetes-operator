@@ -506,6 +506,17 @@ the entrypoint during the wait runs the shutdown command as at any other
 time, ends the wait, and exits 0 with nothing started; a wait that fails
 otherwise ends the container with nothing started.
 
+The command itself has no time limit, but the container's startup probe
+(`/livez`, ten minutes) runs during the wait, because nothing listens
+before the manager is launched. A volume held for longer than that gets the
+container restarted by the kubelet, which sends `SIGTERM` (nothing is
+started) and starts a new container that waits again. A long wait also
+leaves less of those ten minutes for what the entrypoint starts after it,
+as for a slow `createdb`, which already shares that budget. The old
+container of a force-deleted Pod is killed within its grace period (120
+seconds), so a wait is expected to end well inside the budget; a longer one
+means something else holds the volume.
+
 The wait sits in the entrypoint and not in the manager's `activate`: the
 manager runs only as the entrypoint's child, after the wait, so a restore,
 an HA bootstrap or the start of a completed restore's database never runs
