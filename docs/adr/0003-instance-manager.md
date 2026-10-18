@@ -591,7 +591,9 @@ Started as root (a plain `docker run --user 0`), the entrypoint takes the
 member lock and waits before its `chown -R` of `CUBRID_DATABASES`, which
 writes to the volume. It lets the lock go just before it re-executes itself
 as `cubrid` and takes it again as `cubrid`; another container that takes
-it in between is waited for, and nothing is written meanwhile. The operator
+it in between is waited for, and nothing is written meanwhile. A
+termination handled during the `chown` ends the script with nothing
+started. The operator
 runs the container as UID 1000, where this branch is never taken.
 
 Not covered:
@@ -602,8 +604,11 @@ Not covered:
   no lock yet is not seen. Anything else that writes to the volume without
   the member lock, such as a person's `csql -S` or utility in another
   container, is not covered either.
-- Network volumes, where `fcntl` locks go through the file system's own
-  lock service, and Kubernetes itself (the checks ran in Docker).
+- **Another node.** Both locks are the kernel's of one node. A volume
+  attached on a second node while a partitioned first node still runs a
+  container on it is not covered; nor are network volumes, where `fcntl`
+  locks go through the file system's own lock service. Kubernetes itself
+  is not covered either (the checks ran in Docker).
 
 Each cluster has a token of its own (#270). Before it creates the cluster's
 first Pod, the operator generates 256 random bits (hex) into the

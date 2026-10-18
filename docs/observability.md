@@ -398,7 +398,7 @@ waits again and starts nothing meanwhile. The Pod is not ready meanwhile, and it
 
 | `event` | Level | Fields | What it means |
 |---|---|---|---|
-| `member_lock_busy` | warn | `file`, `waitedSeconds` | Another container on the volume (an earlier container of this member) holds the member lock `file`. Logged at once, then every 10 seconds |
+| `member_lock_busy` | warn | `file`, `waitedSeconds` | Another container on the volume on this node (an earlier container of this member) holds the member lock `file`. Logged at once, then every 10 seconds |
 | `member_lock_acquired` | info | `file`, `waitedSeconds` | This container holds the member lock now, until it ends; next it checks CUBRID's own locks |
 | `volume_in_use` | warn | `file`, `pid`, `waitedSeconds` | Another process holds the lock on `file` (`<db>_lgat` of the server or the log copier, `<db>_lgla__lock` of the log applier), although this container holds the member lock: a process of a container that took none, such as one of an earlier image. `pid` is 0 when the holder runs in another container. Logged at once, then every 10 seconds |
 | `volume_check_failed` | warn | `err`, `waitedSeconds` | The volume could not be checked (a file or directory could not be read); counted as held, so the member keeps waiting |
@@ -408,8 +408,9 @@ waits again and starts nothing meanwhile. The Pod is not ready meanwhile, and it
 A member that logs `member_lock_busy` or `volume_in_use` for longer than the
 old container's termination grace period has something else running on its
 volume: find the process (on the node, `lslocks` or `/proc/locks` shows the
-holder of the file; the member lock is an `OFDLCK` line, whose PID is shown
-as -1, so look for the processes that have the file open) before anything
+holder of the file; the member lock is an `OFDLCK` line, whose PID was
+shown as -1 on the kernel tested, so look for the processes that have the
+file open) before anything
 is removed. Each startup-probe restart during a
 long hold adds to the container's restart back-off (`CrashLoopBackOff`, up
 to five minutes), so after the release the member may start up to that much

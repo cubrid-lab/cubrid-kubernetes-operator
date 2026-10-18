@@ -105,6 +105,11 @@ if [ "$(id -u)" = "0" ]; then
   # takes it anew and would otherwise wait for itself.
   take_member_lock
   chown -R cubrid:cubrid "${CUBRID_DATABASES}"
+  # A termination handled during the chown: nothing is started.
+  if [ "${terminating}" = "1" ]; then
+    log "terminated before the switch to cubrid: nothing is started"
+    exit 0
+  fi
   log "started as root; continuing as cubrid"
   exec {member_lock_fd}>&-
   exec gosu cubrid "$0" "$@"

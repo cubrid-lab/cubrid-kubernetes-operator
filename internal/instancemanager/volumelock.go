@@ -234,6 +234,11 @@ func AcquireMemberLock(ctx context.Context, lock *os.File, path string, logger *
 		flock := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart}
 		err := syscall.FcntlFlock(lock.Fd(), fOFDSetlk, &flock)
 		if err == nil {
+			// A lock file replaced or removed during the wait is one no other
+			// container opens: holding a lock on it holds nothing.
+			if now, err := os.Stat(path); err != nil || !os.SameFile(got, now) {
+				return fmt.Errorf("the member lock file %s was replaced or removed while waiting for it", path)
+			}
 			logger.Info("Took the member lock on the data volume", "event", "member_lock_acquired",
 				"file", path, "waitedSeconds", int(time.Since(start).Seconds()))
 			return nil

@@ -472,8 +472,15 @@ func TestAcquireMemberLock_RefusesADescriptorThatIsNotTheLockFile(t *testing.T) 
 		t.Fatal(err)
 	}
 	_ = closed.Close()
+	readOnly, err := os.Open(path) // #nosec G304 -- a test directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = readOnly.Close() }()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	for name, f := range map[string]*os.File{"another file": other, "a closed descriptor": closed} {
+	for name, f := range map[string]*os.File{
+		"another file": other, "a closed descriptor": closed, "a read-only descriptor": readOnly,
+	} {
 		if err := AcquireMemberLock(context.Background(), f, path, logger, 10*time.Millisecond, time.Hour); err == nil {
 			t.Errorf("%s: err = nil, want a refusal", name)
 		}
@@ -484,5 +491,34 @@ func TestAcquireMemberLock_RefusesADescriptorThatIsNotTheLockFile(t *testing.T) 
 	}
 	if memberLockHeld(t, path) {
 		t.Error("the member lock was taken through a descriptor that is not its file")
+	}
+}
+
+// A lock file that is removed while the wait goes on is not taken for the
+// lock: no other container opens the old file any more.
+func TestAcquireMemberLock_RefusesALockFileRemovedWhileWaiting(t *testing.T) {
+	databases := t.TempDir()
+	first, path := openMemberLock(t, databases)
+	takeMemberLockInChild(t, first, path)
+	second, _ := openMemberLock(t, databases)
+	done := make(chan error, 1)
+	go func() {
+		done <- AcquireMemberLock(context.Background(), second, path,
+			slog.New(slog.NewTextHandler(io.Discard, nil)), 10*time.Millisecond, time.Hour)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("err = nil after the lock file was removed, want a refusal")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("AcquireMemberLock did not return after the old file was released")
 	}
 }

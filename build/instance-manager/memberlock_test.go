@@ -72,7 +72,11 @@ func TestMain(m *testing.M) {
 	if path := os.Getenv(envProbeMemberLock); path != "" {
 		os.Exit(probeMemberLock(path))
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if builtIM != "" {
+		_ = os.RemoveAll(filepath.Dir(builtIM))
+	}
+	os.Exit(code)
 }
 
 func probeMemberLock(path string) int {
@@ -370,13 +374,35 @@ func TestEntrypoint_UnopenableMemberLockStartsNothing(t *testing.T) {
 	}
 }
 
-// Started as root, the entrypoint takes the member lock and waits for the
-// volume before its chown, which writes to the volume, and again as cubrid.
-func TestEntrypoint_StartedAsRootWaitsBeforeTheChown(t *testing.T) {
-	f := newFixture(t, managerStub)
-	f.tools = writeTools(t, f.root, rootStubs)
+// rootProbingStubs are rootStubs whose chown also records whether the
+// member lock is held while it runs, and takes ${CHOWN_SECONDS} when set.
+var rootProbingStubs = map[string]string{
+	"chown": `#!/bin/bash
+echo "chown $* [member lock: $("${PROBE}")]" >> "${CALLS}"
+if [ -n "${CHOWN_SECONDS:-}" ]; then sleep "${CHOWN_SECONDS}"; fi
+`,
+	"gosu": rootStubs["gosu"],
+}
+
+// newRootMemberLockFixture starts the entrypoint as root with the real
+// member lock and a chown that probes it.
+func newRootMemberLockFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := newMemberLockFixture(t)
+	f.tools = writeTools(t, f.root, rootProbingStubs)
 	f.env[envFakeUID] = uidRoot
-	release := f.holdVolume()
+	f.env["PROBE"] = os.Args[0]
+	f.env[envProbeMemberLock] = filepath.Join(f.databases, memberLockName)
+	return f
+}
+
+// Started as root, the entrypoint takes the member lock and waits before its
+// chown, which writes to the volume, holds the lock during the chown, and
+// lets it go before it starts again as cubrid, where it takes it again: it
+// does not wait for its own lock.
+func TestEntrypoint_StartedAsRootHoldsTheMemberLockForTheChown(t *testing.T) {
+	f := newRootMemberLockFixture(t)
+	release := f.holdMemberLock()
 	cmd := f.command()
 	var out syncBuffer
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -384,12 +410,41 @@ func TestEntrypoint_StartedAsRootWaitsBeforeTheChown(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.waitForCalls(func(calls []string) bool { return len(calls) > 0 }, &out)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(time.Second)
 	wantCalls(t, f.recorded(), callWaitVolume)
 	release()
-	if err := waitExit(cmd); err != nil {
-		t.Fatalf("entrypoint after the release: %v\n%s", err, out.String())
-	}
-	wantCalls(t, f.recorded(), callWaitVolume, "chown -R cubrid:cubrid "+f.databases, "gosu cubrid",
+	f.waitForCalls(managerStarted, &out)
+	wantCalls(t, f.recorded(), callWaitVolume,
+		"chown -R cubrid:cubrid "+f.databases+" [member lock: held]", "gosu cubrid",
 		callWaitVolume, "cubrid createdb", "cubrid server start "+dbName, callManagerStart)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd); err != nil {
+		t.Fatalf("entrypoint after SIGTERM: %v\n%s", err, out.String())
+	}
+}
+
+// Started as root, a termination during the chown starts nothing: the
+// script does not go on as cubrid.
+func TestEntrypoint_StartedAsRootTerminatedDuringTheChown(t *testing.T) {
+	f := newRootMemberLockFixture(t)
+	f.env["CHOWN_SECONDS"] = "1"
+	cmd := f.command()
+	var out syncBuffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	f.waitForCalls(func(calls []string) bool { return len(calls) >= 2 }, &out)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitExit(cmd); err != nil {
+		t.Fatalf("entrypoint after SIGTERM during the chown: %v\n%s", err, out.String())
+	}
+	wantCalls(t, f.recorded(), callWaitVolume, "chown -R", callShutdown)
+	if !strings.Contains(out.String(), "terminated before the switch to cubrid: nothing is started") {
+		t.Errorf("the log does not say that nothing was started:\n%s", out.String())
+	}
 }

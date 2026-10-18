@@ -2216,10 +2216,15 @@ hostname `m-0`, the volume at `/var/lib/cubrid`):
 3. **B while A is inside `cubrid server start`, before `cub_server` holds
    its lock.** The window was held open on purpose: a wrapper mounted over
    `$CUBRID/bin/cubrid` slept 15 s before it ran the real utility for
-   `server start`. B started about 2 s after A had entered that start. Two
-   runs: B logged `member_lock_busy` for 31 s and started nothing while A's
+   `server start`. B started about 2 s after A had entered that start.
+   Three runs (the last with the image rebuilt after the review
+   follow-ups): B logged `member_lock_busy` for 31 s and started nothing while A's
    start completed and its server ran (`cub_server` processes: A 1, B 0);
    after `docker kill A`, B took the lock within one second and started.
+4. **Started as root** (`docker run --user 0`, a volume with a database):
+   the entrypoint logged `member_lock_acquired` and `volume_free`, ran its
+   `chown`, re-executed itself as `cubrid`, took the lock again without
+   waiting for itself, and started the server and the manager as UID 1000.
 
 **Part C, the image from `main` without the member lock** (`poc475-im:main`,
 `190ca5f`, with the wait of #472), step 3 of part B: B logged `volume_free`
