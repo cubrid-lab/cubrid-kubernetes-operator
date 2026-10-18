@@ -345,7 +345,13 @@ than 16 KiB is answered with 413 without being read to its end. `POST
 created for it, unless the database name is a plain identifier, the level is
 0 (only full backups are supported, ADR-0007) and, with an upload, every
 field of the upload is present, its prefix is a clean relative key prefix and
-its source is a host name with a known role. `GET /v1/ha/convergence` runs
+its source is a host name with a known role (`master`, `slave`, `replica`,
+`unknown` or none; `unknown` is the only member of a single-instance cluster,
+ADR-0007). `POST /v1/restore/prepare` is answered with 400, before it is
+admitted and before an operation is recorded, unless the database name is a
+plain identifier, every field is present, the staging and target directories
+are clean absolute paths that do not contain each other and a master to seed
+from is a host name. `GET /v1/ha/convergence` runs
 `applyinfo` only on `<databases directory>/<database>_<host>`, the place of
 a copied log below the directory the manager was started with; any other
 path is answered with 400.

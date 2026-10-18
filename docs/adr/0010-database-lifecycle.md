@@ -174,7 +174,10 @@ transport, not of HA (#256). A cluster that an earlier version admitted
 without them stops after the first database with `SeedStorageNotConfigured`. The
 bucket and prefix of `spec.objectStorage` are not held to the `manifestUri`
 rules of ADR-0008 (#320, #437): a seed backup is restored by its bucket and
-prefix, never through a `manifestUri`. A recovery bootstrap seeds the other members the
+prefix, never through a `manifestUri`. The seed's key is relative to the
+bucket, the only form the Instance Manager uploads to (#301): a leading slash
+of the prefix is left out and a `..` inside it is resolved; a prefix whose
+`..` leads above the bucket stops seeding with `SeedStoragePrefixInvalid`. A recovery bootstrap seeds the other members the
 same way, starting from the member its backup was restored on (ADR-0008,
 #268).
 

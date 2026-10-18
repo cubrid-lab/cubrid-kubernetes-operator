@@ -586,6 +586,12 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
 		return
 	}
+	// The request is checked before it is admitted and recorded, so an
+	// invalid one leaves no operation behind. Restore checks it again.
+	if err := validateRestoreRequest(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
+		return
+	}
 	key := r.Header.Get("Idempotency-Key")
 	if key == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
@@ -881,7 +887,9 @@ func (s *Server) convergence(w http.ResponseWriter, r *http.Request) {
 // the manager's databases directory and returns a path built from that
 // directory: `<databases>/<database>_<host>`, where a slave keeps the log it
 // copies from the member <host> (docs/poc/RESULTS.md, POC-14). Any other path
-// is refused, so the request cannot make applyinfo read elsewhere.
+// is refused, so the request cannot make applyinfo read elsewhere. <host> is
+// a single DNS label: HA members are named by their short StatefulSet pod
+// names, not by FQDNs (ADR-0004), so a name with a dot is no member's.
 func confineCopiedLogPath(database, copiedLogPath, databasesDir string) (string, error) {
 	if databasesDir == "" || !filepath.IsAbs(databasesDir) || filepath.Clean(databasesDir) != databasesDir {
 		return "", fmt.Errorf("the databases directory %q is not configured as a clean absolute path", databasesDir)
@@ -944,10 +952,13 @@ func validateBackupRequest(req BackupRequest) error {
 	if !hostLabelPattern.MatchString(up.SourceInstance) {
 		return fmt.Errorf("upload sourceInstance %q is not a host name (a DNS label)", up.SourceInstance)
 	}
+	// unknown is what the operator records for the only member of a
+	// single-instance cluster, whose role is not resolved (ADR-0007,
+	// RoleUnknownSingleInstanceFallback).
 	switch Role(up.SourceRole) {
-	case "", RoleMaster, RoleSlave, RoleReplica:
+	case "", RoleMaster, RoleSlave, RoleReplica, RoleUnknown:
 	default:
-		return fmt.Errorf("upload sourceRole %q is not master, slave or replica", up.SourceRole)
+		return fmt.Errorf("upload sourceRole %q is not master, slave, replica or unknown", up.SourceRole)
 	}
 	return nil
 }

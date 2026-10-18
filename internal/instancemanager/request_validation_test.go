@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -152,6 +153,50 @@ func TestServer_Backup_RejectsWhatItDoesNotSupportBeforeAnyWork(t *testing.T) {
 			t.Fatalf("/v1/backup = %d (%s), want 202", rr.Code, strings.TrimSpace(rr.Body.String()))
 		}
 	})
+
+	// Every source role the operator sends is accepted. unknown is the only
+	// member of a single-instance cluster under the PreferStandby fallback
+	// (ADR-0007, RoleUnknownSingleInstanceFallback in internal/controller).
+	for _, role := range []Role{RoleUnknown, RoleMaster, RoleSlave, RoleReplica, ""} {
+		t.Run("a source with the role "+strconv.Quote(string(role))+" is accepted", func(t *testing.T) {
+			f := newValidationFixture(t)
+			req := BackupRequest{Database: dbName, Destination: filepath.Join(f.staging, "bk"),
+				Upload: upload(func(u *BackupUpload) { u.SourceRole = string(role) })}
+			body, _ := json.Marshal(req)
+			if rr := f.send(http.MethodPost, pathBackup, string(body)); rr.Code != http.StatusAccepted {
+				t.Fatalf("/v1/backup = %d (%s), want 202", rr.Code, strings.TrimSpace(rr.Body.String()))
+			}
+		})
+	}
+}
+
+// A restore request is checked before it is admitted and recorded: an
+// invalid one leaves no operation behind, runs no command and creates no
+// directory (#301).
+func TestServer_Restore_RejectsAnInvalidRequestBeforeAnyWork(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(*RestoreRequest)
+	}{
+		{"a database name that is an option", func(r *RestoreRequest) { r.Database = "-S" }},
+		{"no prefix", func(r *RestoreRequest) { r.Prefix = "" }},
+		{"a relative target directory", func(r *RestoreRequest) { r.TargetDir = "databases/appdb" }},
+		{"a master that is no host name", func(r *RestoreRequest) { r.SeedFromMaster = "db 0" }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newValidationFixture(t)
+			req := RestoreRequest{Database: dbName, Bucket: "artifacts", Prefix: "prod/uid/appdb/backup-1",
+				StagingDir: filepath.Join(f.staging, "restore"), TargetDir: filepath.Join(f.databases, dbName)}
+			c.change(&req)
+			body, _ := json.Marshal(req)
+			rr := f.send(http.MethodPost, pathRestorePrepare, string(body))
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("%s = %d (%s), want 400", pathRestorePrepare, rr.Code, strings.TrimSpace(rr.Body.String()))
+			}
+			f.wantNoWork(c.name)
+		})
+	}
 }
 
 // The requests of the operator are a few hundred bytes. A body beyond the

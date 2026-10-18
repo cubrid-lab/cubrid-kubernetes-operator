@@ -432,6 +432,46 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			Expect(status.HAConfigured).To(BeFalse())
 		})
 
+		// The prefix of spec.objectStorage has no rule in the API, and the
+		// Instance Manager refuses an upload whose prefix is not a clean
+		// relative key for good (#301). The seed backup is sent with such a
+		// key, or, for a prefix that leads above the bucket, not at all.
+		It("sends a seed backup whose prefix the Instance Manager accepts", func() {
+			for prefix, want := range map[string]string{
+				"/prod":    "prod/uid-seed/seed/appdb",
+				"//prod/a": "prod/a/uid-seed/seed/appdb",
+				"a/../b":   "b/uid-seed/seed/appdb",
+				"":         "uid-seed/seed/appdb",
+			} {
+				seed := &fakeSeedClient{backupState: instancemanager.OpRunningBackup}
+				c := seededCluster("seed-prefix")
+				c.UID = "uid-seed"
+				c.Spec.ObjectStorage.Prefix = prefix
+				status := databaseStatus(c, "appdb")
+				reconcilerFor(seed).reconcileSeeding(ctx, c, status, "seed-prefix-0")
+				_, reason := bootstrapCondition(c)
+				Expect(reason).To(Equal("SeedBackupInProgress"), "prefix %q", prefix)
+				Expect(seed.backupReq.Upload).NotTo(BeNil())
+				Expect(seed.backupReq.Upload.Prefix).To(Equal(want), "prefix %q", prefix)
+				passed, answer := instanceManagerChecks(GinkgoT().TempDir(), seed.backupReq)
+				Expect(passed).To(BeTrue(), "prefix %q: the Instance Manager answers %s", prefix, answer)
+			}
+		})
+
+		It("stops with a condition for a prefix that leads above the bucket", func() {
+			for _, prefix := range []string{"..", "../prod", "/../prod", "a/../.."} {
+				seed := &fakeSeedClient{backupState: instancemanager.OpRunningBackup}
+				c := seededCluster("seed-escape")
+				c.Spec.ObjectStorage.Prefix = prefix
+				status := databaseStatus(c, "appdb")
+				reconcilerFor(seed).reconcileSeeding(ctx, c, status, "seed-escape-0")
+				_, reason := bootstrapCondition(c)
+				Expect(reason).To(Equal("SeedStoragePrefixInvalid"), "prefix %q", prefix)
+				Expect(seed.backupOn).To(BeEmpty(), "prefix %q", prefix)
+				Expect(status.HAConfigured).To(BeFalse())
+			}
+		})
+
 		It("backs up the first member, then restores the peers one at a time", func() {
 			seed := &fakeSeedClient{
 				backupState: instancemanager.OpRunningBackup,

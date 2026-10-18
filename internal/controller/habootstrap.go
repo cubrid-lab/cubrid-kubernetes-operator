@@ -197,10 +197,26 @@ func seedSourceAmong(holders []string, obs map[string]RoleObservation, now time.
 
 // seedLocation is where a seed backup of database lives in object storage:
 // the backup the first peer is copied from, or, with artifact, the one taken
-// for a later member on its source, which has a place of its own.
+// for a later member on its source, which has a place of its own. The prefix
+// is a clean key relative to the bucket, the only form the Instance Manager
+// accepts: a leading slash of spec.objectStorage.prefix, which the API does
+// not refuse, is left out. A prefix that leads above the bucket is refused
+// before (seedPrefixRefusal).
 func seedLocation(cluster *databasev1alpha1.CubridCluster, database, artifact string) (bucket, prefix string) {
 	storage := cluster.Spec.ObjectStorage
-	return storage.Bucket, path.Join(storage.Prefix, string(cluster.UID), seedLocationDir(artifact), database)
+	return storage.Bucket, path.Join(strings.TrimLeft(storage.Prefix, "/"), string(cluster.UID), seedLocationDir(artifact), database)
+}
+
+// seedPrefixRefusal says why spec.objectStorage.prefix cannot hold the seed
+// backups, or "" when it can. A ".." inside the prefix is resolved, as for a
+// CubridBackup destination; one that leads above the bucket names no key in
+// it, and the Instance Manager refuses such an upload for good.
+func seedPrefixRefusal(prefix string) string {
+	cleaned := path.Clean(strings.TrimLeft(prefix, "/"))
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return fmt.Sprintf("spec.objectStorage.prefix %q leads above the bucket with \"..\" and names no key for the seed backups", prefix)
+	}
+	return ""
 }
 
 // seedLocationDir is the directory below the cluster's UID that names the
@@ -281,6 +297,10 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedStorageNotConfigured",
 			origin+
 				"; spec.objectStorage with a bucket is needed to copy it to the other members")
+		return
+	}
+	if why := seedPrefixRefusal(cluster.Spec.ObjectStorage.Prefix); why != "" {
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedStoragePrefixInvalid", origin+"; "+why)
 		return
 	}
 
