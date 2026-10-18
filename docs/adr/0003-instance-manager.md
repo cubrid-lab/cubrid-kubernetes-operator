@@ -440,8 +440,8 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `IM_BACKUP_STAGING_ROOT`, `IM_RESTORE_STAGING_ROOT` | `/var/lib/cubrid/backup-staging` and `/var/lib/cubrid/restore-staging`: the roots the operator builds its requests with |
 | `IM_S3_ENDPOINT`, `IM_S3_REGION`, `IM_S3_INSECURE`, `IM_S3_ACCESS_KEY`, `IM_S3_SECRET_KEY` | from `spec.objectStorage` when set; the two keys are references to the Secret it names (`accessKey`, `secretKey`) |
 | `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the Pod's `terminationGracePeriodSeconds` (120s), which also bounds the preStop hook. The operator sets the first two on the DB Pods when it is started with `--instance-manager-backup-timeout` or `--instance-manager-restore-timeout` (#341); otherwise it sets none of them. |
-| PID 1 | the entrypoint shell, running as UID 1000 with no capabilities; the Instance Manager is its child |
-| Termination | on `SIGTERM` or `SIGINT` the shell runs `instance-manager shutdown` (the manager's stop procedure, see "Shutdown model"), then sends `SIGTERM` to the manager, and exits with the manager's status. During the wait for the data volume (`instance-manager wait-volume-free`, #472) it ends the wait and exits 0 without starting anything |
+| PID 1 | the entrypoint shell, running as UID 1000 with no capabilities; the Instance Manager is its child. It keeps the descriptor of `<CUBRID_DATABASES>/.member-lock` that holds the member lock for the container's whole life (#475) |
+| Termination | on `SIGTERM` or `SIGINT` the shell runs `instance-manager shutdown` (the manager's stop procedure, see "Shutdown model"), then sends `SIGTERM` to the manager, and exits with the manager's status. During the wait for the member lock and the data volume (`instance-manager wait-volume-free`, #472, #475) it ends the wait and exits 0 without starting anything |
 
 Observed with the real 11.4 image (#97): the CUBRID daemons are orphans
 adopted by PID 1, and `cubrid server stop` waits for the server process to
@@ -499,30 +499,77 @@ marker was lost — is started like any other, and a start that fails ends
 the entrypoint and can still crash-loop the container. Whether such a
 database is complete cannot be told from its files (POC-25).
 
-**One running CUBRID per volume (#472).** The old container of a Pod
+**One running CUBRID per volume (#472, #475).** The old container of a Pod
 deleted with `--grace-period=0 --force` can still run when its replacement
 starts on the same volume (Kind, #357), and
 CUBRID does not reliably refuse a second server on a running database
 (POC-28, POC-29 part C). Under forced conditions, two servers diverged the
 log: the returning master lacked acknowledged writes and its slaves applied
-nothing more (POC-28). So the entrypoint, after it installed its
-termination handler and before anything else, runs
-`instance-manager wait-volume-free` and waits for it. The command asks the
-kernel (`fcntl(F_GETLK)`, a write lock over the whole file) about the files
-a running CUBRID holds a POSIX write lock on: `<db>_lgat` (the server; on
-an HA member also the log copier, in `<db>_<peer>`) and `<db>_lgla__lock`
-(the log applier), in every directory directly below `CUBRID_DATABASES`
-and every log directory registered in `databases.txt` (POC-29). Another
-container's lock is seen, with PID 0; it is gone when its process is, also
-after a SIGKILL. The PID in `<db>_lgat__lock` is not used: it is left behind
-after a kill and names another PID namespace. The command returns when no
-file is held; a missing file is free, and any other failure counts as held.
-It waits without a time limit, logs `volume_in_use` (file, PID, seconds
-waited) at once and then every 10 seconds, and `volume_free` when it
-returns. It takes, breaks and removes nothing. A `SIGTERM` or `SIGINT` to
-the entrypoint during the wait runs the shutdown command as at any other
-time, ends the wait, and exits 0 with nothing started; a wait that fails
-otherwise ends the container with nothing started.
+nothing more (POC-28). So each container of a member holds a lock on its
+volume for its whole life, and a container starts nothing while another
+holds it.
+
+- **The member lock.** After the entrypoint installed its termination
+  handler, and before anything else writes to the volume, it opens
+  `<CUBRID_DATABASES>/.member-lock` (read and write, created when missing)
+  on a descriptor it keeps until it exits, and runs
+  `instance-manager wait-volume-free` with that descriptor as its
+  descriptor 3. The command checks that the descriptor is that file and
+  takes an exclusive open file description lock (`fcntl(F_OFD_SETLK)`, a
+  write lock over the whole file) on it. Such a lock belongs to the open
+  file description, not to the process: it stays held after the command
+  has exited, for as long as the entrypoint (PID 1) or any child that
+  inherited the descriptor runs (the manager, the CUBRID daemons), and the
+  kernel drops it when the last of them ends, also on a SIGKILL. Closing
+  another descriptor of the file does not drop it, as it would a POSIX
+  lock. Another container on the volume sees it (POC-31). The lock is
+  therefore held through every stage of the container's life: its
+  `createdb`, its `cubrid server start` or `cubrid heartbeat start` before
+  `cub_server` has taken its own lock, the manager's restores
+  (`restoredb`, `restoreslave`) and HA bootstrap, and any utility the
+  container runs. If PID 1 ends, the container ends, and with it the lock.
+- **The wait.** While another container of the member holds the member
+  lock, the command waits without a time limit and logs
+  `member_lock_busy` (file, seconds waited) at once and then every 10
+  seconds; it never breaks, removes or takes over the other holder's lock.
+  Once it holds the lock it logs `member_lock_acquired`, then also waits
+  while a CUBRID process holds its own lock on the volume: it asks the
+  kernel (`fcntl(F_GETLK)`) about the files a running CUBRID holds a POSIX
+  write lock on, `<db>_lgat` (the server; on an HA member also the log
+  copier, in `<db>_<peer>`) and `<db>_lgla__lock` (the log applier), in
+  every directory directly below `CUBRID_DATABASES` and every log
+  directory registered in `databases.txt` (POC-29), and logs `volume_in_use`
+  (file, PID, seconds waited) at once and then every 10 seconds, and
+  `volume_free` when it returns. This second check covers a process of a
+  container that took no member lock, such as one of an image from before
+  #475 during an upgrade. The PID in `<db>_lgat__lock` is not used: it is
+  left behind after a kill and names another PID namespace.
+- **Failures.** Everything fails closed. A member lock file that cannot be
+  opened for writing ends the container with nothing started. A descriptor
+  that is not that file, or a lock that fails other than by being held,
+  ends the command with exit 1 (`volume_wait_stopped`), and the container
+  with nothing started. For the CUBRID locks, a missing file is free and any
+  other failure counts as held (`volume_check_failed`). A `SIGTERM` or
+  `SIGINT` to the entrypoint during the wait runs the shutdown command as
+  at any other time (which records the stop, #464), ends the wait, and
+  exits 0 with nothing started.
+
+Why a lock held for the container's life, rather than a check: a check is
+made once, and bash runs a trap only after the current foreground command
+has returned, so a start the old container has begun completes after its
+`SIGTERM`; until its `cub_server` has booted far enough to take its
+`<db>_lgat` lock, a check finds the volume free. The member lock is taken
+before the old container's first write and held until its last process
+ends, whatever that process is. Why the lock is taken by the manager and
+held by PID 1's descriptor rather than by a process that holds it: a POSIX
+lock (the only kind the shell or a plain `fcntl(F_SETLK)` helper could
+take) belongs to a process and would be dropped when that process exits,
+or when any of its descriptors of the file is closed; a holder process
+next to PID 1 would have to be watched, and its death would have to end
+the container. With an open file description lock on PID 1's descriptor,
+the holder is PID 1 itself, whose end is the container's end. Taking the
+member lock, polled every second, is itself the wait, and the CUBRID-lock
+check stays as the second step.
 
 The command itself has no time limit, but the container's startup probe
 (`/livez`, ten minutes) runs during the wait, because nothing listens
@@ -540,36 +587,23 @@ manager runs only as the entrypoint's child, after the wait, so a restore,
 an HA bootstrap or the start of a completed restore's database never runs
 before it.
 
-Started as root (a plain `docker run --user 0`), the entrypoint runs
-`chown -R` on `CUBRID_DATABASES` before it re-executes itself as `cubrid`,
-and so before the wait. That changes no ownership on a volume the image's
-own user already owns, and the operator runs the container as UID 1000,
-where this branch is never taken.
+Started as root (a plain `docker run --user 0`), the entrypoint takes the
+member lock and waits before its `chown -R` of `CUBRID_DATABASES`, which
+writes to the volume. It lets the lock go just before it re-executes itself
+as `cubrid` and takes it again as `cubrid`; another container that takes
+it in between is waited for, and nothing is written meanwhile. The operator
+runs the container as UID 1000, where this branch is never taken.
 
 Not covered:
 
-- **A start already under way in the old container.** The check is made
-  once, and no lock is held afterwards. Bash runs a trap only after the
-  current foreground command has returned, so a `createdb`,
-  `cubrid server start` or `cubrid heartbeat start` the old entrypoint has
-  begun, or a start the old manager has in flight, still completes after
-  its `SIGTERM`. Until the old `cub_server` has booted far enough to take
-  its `<db>_lgat` lock, the new container can find the volume free. This
-  needs a force deletion within seconds of the old container's start. A
-  lock held by the member for the container's whole life would remove
-  this gap (#475).
-- **Utilities other than the running server, copier and applier.** The
-  locks of `createdb`, `restoredb`, `restoreslave` and the standalone
-  utilities were not probed. `restoredb` writes `<db>_lgat_000_tmp`
-  (POC-27), which the `_lgat` suffix does not match. What still protects:
-  a `backupdb -C` runs inside the server, whose lock covers it; an
-  unfinished `createdb` or restore leaves the ownership marker, and the new
-  container neither creates over nor starts that database (#442); a
-  `restoredb` that lingers after the manager killed its process group
-  (#468) is covered only by timing. The member lock of #475 would cover
-  these too.
+- **A container that takes no member lock.** A container of an image from
+  before #475 (during an upgrade) is covered only by the CUBRID-lock check,
+  with that check's gap: a start it has begun but whose `cub_server` holds
+  no lock yet is not seen. Anything else that writes to the volume without
+  the member lock, such as a person's `csql -S` or utility in another
+  container, is not covered either.
 - Network volumes, where `fcntl` locks go through the file system's own
-  lock service, and Kubernetes itself (the check ran in Docker).
+  lock service, and Kubernetes itself (the checks ran in Docker).
 
 Each cluster has a token of its own (#270). Before it creates the cluster's
 first Pod, the operator generates 256 random bits (hex) into the

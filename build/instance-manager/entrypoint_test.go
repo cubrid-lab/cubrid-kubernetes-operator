@@ -1321,7 +1321,7 @@ func TestEntrypoint_StartsNothingWhileTheVolumeIsHeld(t *testing.T) {
 		setup func(f *fixture)
 		after []string
 	}{
-		"new standalone": {func(f *fixture) {},
+		caseNewStandalone: {func(f *fixture) {},
 			[]string{"cubrid createdb", "cubrid server start " + dbName, callManagerStart}},
 		"existing standalone": {func(f *fixture) { f.registerDatabase() },
 			[]string{"cubrid server start " + dbName, callManagerStart}},
@@ -1350,7 +1350,7 @@ func TestEntrypoint_StartsNothingWhileTheVolumeIsHeld(t *testing.T) {
 			waitFor(t, func() bool { return len(f.recorded()) > 0 }, &out)
 			time.Sleep(500 * time.Millisecond)
 			wantCalls(t, f.recorded(), callWaitVolume)
-			if _, err := os.Stat(filepath.Join(f.databases, dbName)); name == "new standalone" && !os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(f.databases, dbName)); name == caseNewStandalone && !os.IsNotExist(err) {
 				t.Errorf("the database directory was created while the volume was held (err=%v)", err)
 			}
 			release()

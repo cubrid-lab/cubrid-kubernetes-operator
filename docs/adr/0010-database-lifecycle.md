@@ -150,12 +150,16 @@ shows to be unfinished, and never creates over files in a database
 directory without a registration (ADR-0003, #312).
 An HA member's entrypoint never runs `createdb`: without a database it
 starts nothing and waits, and with one it starts heartbeat. Before either
-entrypoint creates or starts anything, and before it launches the manager
-that runs the bootstrap, restores and seeding, it waits for as long as
-another process, such as the old container of a force-deleted Pod, holds a
-CUBRID lock on the member's volume (the server's, the log copier's or the
-log applier's, docs/poc/RESULTS.md POC-29; ADR-0003, #472), so no member
-runs two servers on one database. A
+entrypoint writes anything to the volume, and before it launches the manager
+that runs the bootstrap, restores and seeding, it takes the member lock on
+the volume, which it then holds until the container ends. It waits for as
+long as another container of the member, such as the old container of a
+force-deleted Pod, holds that lock at any stage of its life, including
+mid-start and during a restore or seeding, and then for as long as a CUBRID
+process holds its own lock on the volume (the server's, the log copier's or
+the log applier's; docs/poc/RESULTS.md POC-29 and POC-31; ADR-0003, #472,
+#475), so no member runs two servers, or a utility next to a server, on one
+database. A
 database directory that exists without a registration stops the bootstrap; it
 is never removed automatically. `status.databases[]` records `Creating`,
 `Created` with `primaryCreated`, or `Failed`. The first member

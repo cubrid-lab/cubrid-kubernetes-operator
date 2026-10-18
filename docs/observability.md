@@ -383,11 +383,14 @@ Instance Manager.
 
 ### Runbook: a member that waits for its data volume
 
-Every database member checks its volume before it creates or starts
-anything, and before it launches the Instance Manager: it waits for as long
-as another process holds a CUBRID lock on the volume, which happens when
-the old container of a member still runs there, for example after a Pod was
-deleted with `--grace-period=0 --force` (ADR-0003, #472). The wait itself
+Every database member takes the member lock on its volume
+(`<CUBRID_DATABASES>/.member-lock`) before it writes anything there, and
+holds it until its container ends. It waits for as long as another
+container of the member holds that lock, at any stage of that container's
+life, and then for as long as another process holds a CUBRID lock on the
+volume. Both happen when the old container of a member still runs there,
+for example after a Pod was deleted with `--grace-period=0 --force`
+(ADR-0003, #472, #475). The wait itself
 has no time limit; the container's startup probe (ten minutes) still runs
 during it, so a volume held for longer restarts the container, which then
 waits again and starts nothing meanwhile. The Pod is not ready meanwhile, and its log (`kubectl logs
@@ -395,19 +398,24 @@ waits again and starts nothing meanwhile. The Pod is not ready meanwhile, and it
 
 | `event` | Level | Fields | What it means |
 |---|---|---|---|
-| `volume_in_use` | warn | `file`, `pid`, `waitedSeconds` | Another process holds the lock on `file` (`<db>_lgat` of the server or the log copier, `<db>_lgla__lock` of the log applier). `pid` is 0 when the holder runs in another container. Logged at once, then every 10 seconds |
+| `member_lock_busy` | warn | `file`, `waitedSeconds` | Another container on the volume (an earlier container of this member) holds the member lock `file`. Logged at once, then every 10 seconds |
+| `member_lock_acquired` | info | `file`, `waitedSeconds` | This container holds the member lock now, until it ends; next it checks CUBRID's own locks |
+| `volume_in_use` | warn | `file`, `pid`, `waitedSeconds` | Another process holds the lock on `file` (`<db>_lgat` of the server or the log copier, `<db>_lgla__lock` of the log applier), although this container holds the member lock: a process of a container that took none, such as one of an earlier image. `pid` is 0 when the holder runs in another container. Logged at once, then every 10 seconds |
 | `volume_check_failed` | warn | `err`, `waitedSeconds` | The volume could not be checked (a file or directory could not be read); counted as held, so the member keeps waiting |
 | `volume_free` | info | `waitedSeconds` | No other process holds a lock; the member goes on to start |
-| `volume_wait_stopped` | info | `err` | The wait was ended by a termination; nothing was started (`[im-entrypoint] terminated while waiting for the data volume: nothing is started`) |
+| `volume_wait_stopped` | info | `err` | The wait ended without the volume found free, and nothing was started: a termination (`[im-entrypoint] terminated while waiting for the data volume: nothing is started`), or the member lock could not be taken (`err` says why; the container then ends and is started again) |
 
-A member that logs `volume_in_use` for longer than the old container's
-termination grace period has something else running on its volume: find
-the process (on the node, `lslocks` or `/proc/locks` shows the holder of
-the file) before anything is removed. Each startup-probe restart during a
+A member that logs `member_lock_busy` or `volume_in_use` for longer than the
+old container's termination grace period has something else running on its
+volume: find the process (on the node, `lslocks` or `/proc/locks` shows the
+holder of the file; the member lock is an `OFDLCK` line, whose PID is shown
+as -1, so look for the processes that have the file open) before anything
+is removed. Each startup-probe restart during a
 long hold adds to the container's restart back-off (`CrashLoopBackOff`, up
 to five minutes), so after the release the member may start up to that much
 later. Nothing here removes or breaks a
-lock, a lock file or data.
+lock, a lock file or data; never remove `.member-lock` while a container of
+the member may run.
 
 ## Metrics
 

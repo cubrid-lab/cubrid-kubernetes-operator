@@ -8,14 +8,14 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-30, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-31, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
 > not timing baselines. POC-10 to POC-16, POC-20, POC-24 and POC-30 ran linux/amd64
 > under emulation (podman on another architecture): their command output is
 > functional evidence, and their timings and rates are not native timings.
-> POC-17, POC-23, POC-25, POC-26, POC-27, POC-28 and POC-29 ran on native
+> POC-17, POC-23, POC-25, POC-26, POC-27, POC-28, POC-29 and POC-31 ran on native
 > linux/amd64 hosts (part 1 of POC-28 in Kind on such a host), and
 > POC-19, POC-21 and POC-22 in the Kind e2e workflow; each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
@@ -2112,6 +2112,10 @@ the HA path through the real image (part C ran standalone; part B shows
 the HA locks); more than one run of each step. One image, local Docker; not
 a general CUBRID guarantee.
 
+> **Note (POC-31).** `createdb` was later seen holding a POSIX write lock
+> on `<db>_lgat` once that file exists. The other utilities stay unprobed;
+> the member lock of POC-31 does not depend on their locks.
+
 ## POC-30 — the applier's counters after a restart of the applier and of the member (ADR-0006, #360) — **observation: they are kept**
 
 **Environment:** two containers of `docker.io/cubrid/cubrid:11.4`
@@ -2145,6 +2149,109 @@ that identity changes, so a restarted applier does not inherit the age of
 **Not covered:** a real Pod restart on Kubernetes; an applier that restarts
 while changes wait to be applied; timing, which emulation does not show. One
 run on one image.
+
+## POC-31 — a member lock held by the entrypoint for the container's whole life, and a second container of the member on the same volume (ADR-0003/0010, #475) — **observation: held across `exec` and by the CUBRID daemons, seen from another container, released on SIGKILL and stop; the second container waited also mid-start**
+
+**Question (#475).** The wait of #472 checks CUBRID's own locks once. A
+start the old container has begun (`createdb`, `cubrid server start`)
+completes after its SIGTERM, and before `cub_server` holds its `<db>_lgat`
+lock the volume looks free. Can PID 1 of the container hold a lock on a
+file of the volume for the container's whole life, taken by a short-lived
+helper, so that a second container of the member sees it at every stage,
+and is it gone when the container is stopped or killed?
+
+**Environment:** `cubrid/cubrid:11.4`
+(`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
+`CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`, bash 4.4.20, Rocky Linux 8.10),
+Docker 29.2.1 on a native linux/amd64 host (6 CPUs, Linux 5.15),
+2026-10-18. Containers without `--init`, so the script under test is PID
+1, run as `cubrid` (UID 1000); named Docker volumes (ext4 on the host). The
+lock is an open file description lock (`fcntl(F_OFD_SETLK)`, a write lock
+over the whole file), which belongs to the open file description, not to
+the process that set it. Probes: a static Go binary that asks `F_GETLK` and
+`F_OFD_GETLK` on a read-only descriptor of the file, and the lock lines of
+`/proc/<pid>/fdinfo/<fd>` and `/proc/locks`.
+
+**Part A, the primitive.** A test script as PID 1 opens
+`/var/lib/cubrid/databases/.member-lock` read-write with
+`exec {fd}<>file` (fd 10; the descriptor is not close-on-exec), runs a
+helper that sets the OFD lock on that inherited descriptor and exits, then
+re-executes itself with `exec` (as the entrypoint does through `gosu`),
+creates `pocdb` and runs `cubrid server start pocdb`. Containers with the
+same hostname on one volume.
+
+| Step | Observed |
+|---|---|
+| `a` after the helper exited and PID 1 re-executed itself | fd 10 still open in PID 1; `fdinfo`: `OFDLCK ADVISORY WRITE -1 … 0 EOF` |
+| `a` during its `createdb` | the same lock line on fd 10 of PID 1, of the subshell, and of both `cubrid createdb` processes (inherited); `createdb` itself held a POSIX write lock on `pocdb/pocdb_lgat` |
+| From a third container, `a` running | `F_GETLK` = `F_WRLCK`, pid -1; `F_OFD_GETLK` = `F_WRLCK`, pid -1 |
+| `a` running the server | fd 10 with the lock in PID 1, `cub_master`, `cub_server pocdb`, `cub_pl pocdb` (inherited); `cub_server` held its own POSIX lock on `pocdb_lgat` |
+| `b` started while `a` ran | the helper failed with `EAGAIN` every second for 32 s; `b` ran no `createdb` and no server |
+| `docker kill a` (SIGKILL) at 12:01:15.785 | `b` took the lock at its next attempt, 12:01:16.814 (before `docker kill` returned), and started the server |
+| `c` started while `b` ran, then `docker stop b` at 12:01:57.831 | `b`'s trap stopped the server and exited 0; `c` took the lock at 12:01:59.764 |
+| `docker stop c`, then probe | `.member-lock` and `pocdb_lgat` both `F_UNLCK` |
+
+**Part B, the Instance Manager image with the member lock** (built from
+this change, `poc475-im:dev`, standalone, `CUBRID_DB` the image's `cubdb`,
+hostname `m-0`, the volume at `/var/lib/cubrid`):
+
+1. **B during A's `createdb`, then A killed.** A took the member lock and
+   ran `createdb`. B started 9.6 s later, while A's `createdb` ran: B's
+   only process was `instance-manager wait-volume-free`, and it logged
+   `member_lock_busy` at 0, 10, 20 and 30 s while A finished `createdb`,
+   started the server and its manager. `docker kill A` at 12:15:39.738:
+   B logged `member_lock_acquired` at 12:15:40.203 and `volume_free`,
+   found the database present and started the server. In B then, PID 1
+   (the entrypoint), `cub_master`, `cub_server`, `cub_pl` and the manager
+   had the lock's descriptor open, each with the `OFDLCK … WRITE` line in
+   `fdinfo`. `docker stop B`: it exited 0, and a probe found the member
+   lock free.
+2. **B during A's `createdb`, then A stopped during its `createdb`.** B
+   started while A ran `createdb` and logged `member_lock_busy`.
+   `docker stop A` at 12:16:11.653: A's trap ran only when `createdb`
+   returned (`termination requested during createdb: the server is not
+   started`), and A exited 0 at 12:16:18.792. B took the lock at
+   12:16:19.377, its next attempt after A's exit, and started the server
+   on the completed database.
+3. **B while A is inside `cubrid server start`, before `cub_server` holds
+   its lock.** The window was held open on purpose: a wrapper mounted over
+   `$CUBRID/bin/cubrid` slept 15 s before it ran the real utility for
+   `server start`. B started about 2 s after A had entered that start. Two
+   runs: B logged `member_lock_busy` for 31 s and started nothing while A's
+   start completed and its server ran (`cub_server` processes: A 1, B 0);
+   after `docker kill A`, B took the lock within one second and started.
+
+**Part C, the image from `main` without the member lock** (`poc475-im:main`,
+`190ca5f`, with the wait of #472), step 3 of part B: B logged `volume_free`
+at once, found the database present and started its server while A's
+start was held; 30 s later both containers ran a `cub_server` on the same
+database (A 1, B 1). The same steps without the wrapper (B started about
+2.7 s after A, the time `docker run` takes) did not hit the window once:
+A's server already held `cubdb_lgat` and B logged `volume_in_use`.
+
+**Findings.**
+
+- **An OFD lock set by a short-lived helper on a descriptor PID 1 opened
+  stays held** after the helper exits and across PID 1's `exec`, and the
+  processes started afterwards inherit the descriptor (the CUBRID daemons
+  and the manager on this image). Another container on the volume sees it
+  (`F_GETLK` and `F_OFD_GETLK` report `F_WRLCK` with pid -1). It is gone
+  when the container ends, at once after a SIGKILL and after a stop.
+- **A second container that takes the lock first waits at every stage of
+  the first one's life,** including its `createdb`, a `createdb` that
+  completes after its SIGTERM, and a server start before `cub_server` holds
+  a lock, the gap of #472's check (#475). Without the member lock, a
+  second server started on the database in that gap.
+- `createdb` holds a POSIX write lock on `<db>_lgat` once the file exists,
+  as the server does.
+
+**Not covered:** Kubernetes (a force deletion on Kind); the HA path through
+the real image (part B ran standalone; the entrypoint takes the lock the
+same way for every role); `restoredb` and `restoreslave` run by the manager
+(the manager inherits the descriptor, and the lock is PID 1's either way);
+network volumes; the window of part B step 3 and part C was widened by a
+wrapper, not produced by a slow engine; one or two runs of each step. One
+image, local Docker; not a general CUBRID guarantee.
 
 ## Net assessment
 
@@ -2181,7 +2288,11 @@ as written. Later POCs confirm parts of it and contradict others:
   forced conditions (POC-28). The server, log copier and log applier hold
   POSIX write locks on `<db>_lgat` and `<db>_lgla__lock`, which `F_GETLK`
   from another container on the volume sees and which end with the
-  process; the PID in `<db>_lgat__lock` does not (POC-29, Docker).
+  process; the PID in `<db>_lgat__lock` does not (POC-29, Docker). Those
+  locks are not there before the server process takes them, so a start
+  under way is not seen; a lock PID 1 holds on its own descriptor for the
+  container's life (an OFD lock) is seen at every stage and ends with the
+  container (POC-31, Docker).
 - **No quorum.** A lone member accepts writes (POC-16; the promoted-slave
   case reproduced natively in POC-17).
 - **Seeding can lose data silently.** A member restored with plain

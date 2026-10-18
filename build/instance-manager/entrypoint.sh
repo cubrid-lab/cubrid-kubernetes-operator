@@ -22,10 +22,13 @@
 #      waits for the server process to disappear, so PID 1 has to reap them;
 #      the Instance Manager does not. On SIGTERM/SIGINT the shell stops CUBRID
 #      (a no-op after the Pod's preStop hook already did), then the manager.
-#   6. Nothing is created or started, and the manager is not launched, while
-#      another process (an earlier container of this member) holds a CUBRID
-#      lock on the data volume. The wait has no time limit of its own; the
-#      Pod's startup probe still bounds the container's start (ADR-0003).
+#   6. Before anything here writes to the data volume, this shell takes the
+#      member lock (<CUBRID_DATABASES>/.member-lock) and holds it until the
+#      container ends. Nothing is created or started, and the manager is not
+#      launched, while another container of this member holds that lock or
+#      another process holds a CUBRID lock on the volume. The wait has no
+#      time limit of its own; the Pod's startup probe still bounds the
+#      container's start (ADR-0003).
 #
 # Roles map to CUBRID_COMPONENTS (as in the official image): SERVER | MASTER |
 # SLAVE | HA. The operator sets the environment.
@@ -40,10 +43,70 @@ CUBRID_BOOTSTRAP="${CUBRID_BOOTSTRAP:-new}"
 IM_BIN="${IM_BIN:-/usr/local/bin/instance-manager}"
 [ -n "${CUBRID_DATABASES:-}" ] || die "CUBRID_DATABASES is not set"
 
+# One way to stop the member, for every trigger: "instance-manager shutdown"
+# (ADR-0003). It asks the running manager, or stops CUBRID itself when no
+# manager runs yet. The handler is installed before anything is started, so a
+# termination that arrives during createdb or a start is handled when that
+# step returns: without a handler, PID 1 of a container ignores SIGTERM.
+terminating=0
+im_pid=""
+wait_pid=""
+terminate() {
+  terminating=1
+  log "termination requested: stopping CUBRID, then the Instance Manager"
+  "${IM_BIN}" shutdown || true
+  [ -z "${wait_pid}" ] || kill -TERM "${wait_pid}" 2>/dev/null || true
+  [ -z "${im_pid}" ] || kill -TERM "${im_pid}" 2>/dev/null || true
+}
+trap terminate TERM INT
+
+# Take the member lock, then wait until no other process runs CUBRID on the
+# volume. The old container of a force-deleted Pod can outlive the start of
+# its replacement, and a second server on the same database diverges the log
+# and loses acknowledged writes (#357, #472).
+#
+# This shell opens the member lock file and keeps the descriptor for the rest
+# of its life; "instance-manager wait-volume-free" takes an open file
+# description lock on it (its descriptor 3), so the lock stays held after the
+# command has exited, for as long as this shell or a child that inherited the
+# descriptor runs, and the kernel drops it when the container ends, also on a
+# SIGKILL (docs/poc/RESULTS.md, POC-31). While another container of this
+# member holds it, at any stage of its start, the command waits. Once it holds
+# the lock, it also waits while a CUBRID server, log copier or log applier
+# holds its own lock on the volume (POC-29): a process of a container that
+# took no member lock. It takes no lock but its own and breaks or removes
+# nothing. It runs in the background so that a termination is handled at
+# once: nothing is started after it.
+member_lock="${CUBRID_DATABASES}/.member-lock"
+take_member_lock() {
+  exec {member_lock_fd}<>"${member_lock}" \
+    || die "could not open the member lock ${member_lock}: nothing is started"
+  "${IM_BIN}" wait-volume-free 3<&"${member_lock_fd}" &
+  wait_pid=$!
+  # A termination handled before the PID was recorded found no wait to end.
+  [ "${terminating}" = "0" ] || kill -TERM "${wait_pid}" 2>/dev/null || true
+  local wait_status=0
+  wait "${wait_pid}" || wait_status=$?
+  if [ "${terminating}" = "1" ]; then
+    # A trapped signal makes `wait` return early; collect the wait itself.
+    wait "${wait_pid}" 2>/dev/null || true
+    log "terminated while waiting for the data volume: nothing is started"
+    exit 0
+  fi
+  wait_pid=""
+  [ "${wait_status}" = "0" ] \
+    || die "could not take the member lock and wait for the data volume to be free of other CUBRID processes (exit ${wait_status}): nothing is started"
+}
+
 if [ "$(id -u)" = "0" ]; then
   mkdir -p "${CUBRID_DATABASES}"
+  # The chown writes to the volume, so it runs under the member lock. The
+  # lock is let go before the switch of user: the script, started again,
+  # takes it anew and would otherwise wait for itself.
+  take_member_lock
   chown -R cubrid:cubrid "${CUBRID_DATABASES}"
   log "started as root; continuing as cubrid"
+  exec {member_lock_fd}>&-
   exec gosu cubrid "$0" "$@"
 fi
 
@@ -67,23 +130,6 @@ export PATH="${CUBRID:-/home/cubrid/CUBRID}/bin:${PATH}"
 database_registered() {
   grep -qwe "^${CUBRID_DB}" "${CUBRID_DATABASES}/databases.txt" 2>/dev/null
 }
-
-# One way to stop the member, for every trigger: "instance-manager shutdown"
-# (ADR-0003). It asks the running manager, or stops CUBRID itself when no
-# manager runs yet. The handler is installed before anything is started, so a
-# termination that arrives during createdb or a start is handled when that
-# step returns: without a handler, PID 1 of a container ignores SIGTERM.
-terminating=0
-im_pid=""
-wait_pid=""
-terminate() {
-  terminating=1
-  log "termination requested: stopping CUBRID, then the Instance Manager"
-  "${IM_BIN}" shutdown || true
-  [ -z "${wait_pid}" ] || kill -TERM "${wait_pid}" 2>/dev/null || true
-  [ -z "${im_pid}" ] || kill -TERM "${im_pid}" 2>/dev/null || true
-}
-trap terminate TERM INT
 
 db_dir="${CUBRID_DATABASES}/${CUBRID_DB}"
 marker="${db_dir}/.im-operation"
@@ -183,31 +229,10 @@ start_cubrid() {
 # 1 ("The server was not configured for HA.", docs/poc/RESULTS.md POC-12).
 CUBRID_HA_CONF="${CUBRID_HA_CONF:-/etc/cubrid-ha/cubrid_ha.conf}"
 
-# Wait while another container of this member still runs CUBRID on the
-# volume: the old container of a force-deleted Pod can outlive the start of
-# its replacement, and a second server on the same database diverges the log
-# and loses acknowledged writes (#357, #472). The manager asks the kernel
-# for the locks CUBRID's server, log copier and log applier hold on the
-# volume (docs/poc/RESULTS.md, POC-29), without a time limit and without
-# taking or breaking one. This comes before anything that creates, starts or
-# recovers a database here, and before the manager, which starts restored and
-# bootstrapped databases, is launched. It runs in the background so that a
-# termination is handled at once: nothing is started after it.
-"${IM_BIN}" wait-volume-free &
-wait_pid=$!
-# A termination handled before the PID was recorded found no wait to end.
-[ "${terminating}" = "0" ] || kill -TERM "${wait_pid}" 2>/dev/null || true
-wait_status=0
-wait "${wait_pid}" || wait_status=$?
-if [ "${terminating}" = "1" ]; then
-  # A trapped signal makes `wait` return early; collect the wait itself.
-  wait "${wait_pid}" 2>/dev/null || true
-  log "terminated while waiting for the data volume: nothing is started"
-  exit 0
-fi
-wait_pid=""
-[ "${wait_status}" = "0" ] \
-  || die "could not wait for the data volume to be free of other CUBRID processes (exit ${wait_status}): nothing is started"
+# The member lock comes before anything that creates, starts or recovers a
+# database here, and before the manager, which starts restored and
+# bootstrapped databases, is launched.
+take_member_lock
 
 started=0
 if [ -e "${marker}" ] || [ -L "${marker}" ]; then

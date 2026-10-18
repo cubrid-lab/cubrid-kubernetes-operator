@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -47,14 +48,20 @@ func main() {
 		}
 		return
 	}
-	// "instance-manager wait-volume-free" returns once no other process holds
-	// a CUBRID lock on the data volume; the entrypoint runs it before it
-	// creates or starts anything (ADR-0003, #472). A SIGTERM ends it with
-	// exit 1, never as free.
+	// "instance-manager wait-volume-free" takes the member lock on the
+	// descriptor the entrypoint opened as its file descriptor 3, then
+	// returns once no other process holds a CUBRID lock on the data volume
+	// either. The entrypoint runs it before it creates or starts anything and
+	// keeps the descriptor, and so the lock, for the container's whole life
+	// (ADR-0003, #472, #475). A SIGTERM ends it with exit 1, never as free.
 	if len(os.Args) > 1 && os.Args[1] == "wait-volume-free" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-		err := instancemanager.WaitVolumeFree(ctx, envOr("CUBRID_DATABASES", "/var/lib/cubrid/databases"),
-			logger, time.Second, 10*time.Second)
+		databases := envOr("CUBRID_DATABASES", "/var/lib/cubrid/databases")
+		err := instancemanager.AcquireMemberLock(ctx, os.NewFile(3, "member lock"),
+			filepath.Join(databases, instancemanager.MemberLockFile), logger, time.Second, 10*time.Second)
+		if err == nil {
+			err = instancemanager.WaitVolumeFree(ctx, databases, logger, time.Second, 10*time.Second)
+		}
 		stop()
 		if err != nil {
 			logger.Info("Stopped waiting for the data volume", "event", "volume_wait_stopped", "err", err)
