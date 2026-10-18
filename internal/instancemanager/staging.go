@@ -113,6 +113,13 @@ func (s *Server) recordBackup(key, requestHash string, req BackupRequest) (op *O
 		return nil, "", err
 	}
 	for _, owner := range live {
+		// An owner whose record cannot be read may be this request's
+		// operation.
+		if owner.Kind == "" {
+			if _, gerr := s.store.Get(owner.ID); gerr != nil && !errors.Is(gerr, ErrOperationNotFound) {
+				return nil, "", fmt.Errorf("%w: operation %s owns an entry of %s: %w", ErrOperationRecordUnreadable, owner.ID, name, gerr)
+			}
+		}
 		if owner.Kind != OpBackup || owner.IdempotencyKey != key {
 			return nil, "", fmt.Errorf("%w: %s is owned by operation %s", ErrBackupStagingInUse, name, owner.ID)
 		}

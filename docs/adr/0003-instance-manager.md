@@ -372,9 +372,14 @@ availability for safety: one unreadable record stops every new mutating
 operation on that member until the record is readable again or removed by
 hand, rather than risk a second `backupdb` or restore writer beside one that
 may run. Reads by ID and the read-only key lookup already answer `500` for a
-record they cannot read. At start the manager fails every readable record
-that has not ended and leaves an unreadable one as it is: it cannot fail it,
-and it admits nothing beside it. Each unreadable record is logged once, as an
+record they cannot read. A record that decodes but names another operation
+ID, or has no kind or idempotency key, counts as one that cannot be read. A
+backup whose staging destination holds an entry of such a record gets the
+same answer, not `StagingDestinationInUse`. At start the manager fails every
+readable record that has not ended and leaves an unreadable one as it is: it
+cannot fail it, and it admits nothing beside it. It remembers it, and the
+first successful read of it after a repair fails it with the same reason
+when it has not ended, since nothing in this process runs it. Each unreadable record is logged once, as an
 error with `event` `operation_record_unreadable` and its `operationID`, and
 again only after it was readable or gone in between. Making the condition
 visible in `/readyz` is #473.

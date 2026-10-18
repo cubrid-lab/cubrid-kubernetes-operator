@@ -366,11 +366,34 @@ read or decoded is logged once as an error with `event`
 was found at start; while it stays unreadable the Instance Manager starts no
 backup, restore or HA bootstrap and answers each start `500` with the code
 `OperationRecordUnreadable` (ADR-0003, #427). On a `CubridBackup` that start
-shows as `InstanceManagerUnavailable`, with the code in the message. Repair
-the file's permissions or contents or, once it is known that its operation
-does not run, move the file out of the operations directory. A credential is never logged: no
+shows as `InstanceManagerUnavailable`, with the code in the message. The
+runbook below says what to do. A credential is never logged: no
 token, no `Authorization` header, no object-storage key, also not inside a
 failed command's output.
+
+### Runbook: an operation record that cannot be read
+
+While one record is unreadable, the member starts no backup, restore or HA
+bootstrap (`500`, `OperationRecordUnreadable`); the database keeps serving.
+
+1. Find the record. The operation ID is the `operationID` of the
+   `operation_record_unreadable` log line, or is named in the `500` message
+   (`read operation op-…: permission denied`, `decode operation op-…: …`).
+   The file is `$IM_OPERATIONS_DIR/op-<id>.json` in the database container
+   (by default `/var/lib/cubrid/operations`, on the PVC).
+2. Confirm that its operation does not run: no `backupdb` and no
+   `restoredb` process in the container, for example
+   `kubectl exec <pod> -c <db container> -- ps -eo pid,args | grep -E 'backupdb|restoredb'`.
+3. Then either:
+   - **Repair it.** Fix the file's owner and mode (the manager's user must
+     read and write it) or its contents. The record is readable again at the
+     next request, and starts are admitted. A record that was unreadable when
+     the manager started and has not ended becomes `Failed` with
+     `manager restarted while operation was in progress` at its first read,
+     as it would have at the start.
+   - **Remove it**, when it cannot be repaired. Move the file out of the
+     directory rather than delete it, so it can be inspected. Its idempotency
+     key is then unknown to the manager, and a poll of its ID answers `404`.
 
 ### Runbook: a standalone member that starts only the Instance Manager
 
