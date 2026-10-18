@@ -73,6 +73,16 @@ without a duplicated CUBRID install cannot run the required CLIs).
 Container port **`instance-manager: 9090`**, pod/cluster-internal only,
 never exposed outside the cluster.
 
+The HTTP server allows 5 seconds for request headers, 10 seconds for the
+complete request including its body, and 60 seconds between keep-alive
+requests. A complete body does not shorten an operation's execution budget.
+The write deadline covers the longest synchronous work: the greater of the
+configured backup budget, shutdown budget and 10 seconds, plus 10 seconds
+for body reading and 5 seconds for the response. With default operation
+budgets it is 2 hours and 15 seconds, preserving the store-less synchronous
+backup as well as shutdown responses. These are transport I/O deadlines;
+they do not introduce a new cancellation rule for background operations.
+
 Kubelet endpoints (unauthenticated — probes are awkward with strong auth):
 
 - `GET /livez` — manager process alive.

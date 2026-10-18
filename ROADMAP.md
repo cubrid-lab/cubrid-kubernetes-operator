@@ -129,6 +129,11 @@ CSI or VM behavior; the integrated backup scenarios remain with #88.
 The [storage command, failure reproduction and verification record](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/337#issuecomment-6259247347)
 identify the backend revision and the evidence level.
 
+The Instance Manager HTTP server bounds request headers, complete body reads,
+response writes and idle keep-alive connections while preserving the configured
+synchronous backup/shutdown budgets (#301: real TCP and unit/race-detector
+tests; not measured under real CUBRID or cluster load).
+
 For live scenarios use **not run**, **blocked**, **fail**, **pass** or **not
 applicable**, with a revision, environment, command, evidence link and reason.
 A required scenario cannot pass through skipping, missing evidence, a timeout

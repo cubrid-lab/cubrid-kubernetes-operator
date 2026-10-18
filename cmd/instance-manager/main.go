@@ -192,11 +192,7 @@ func run(logger *slog.Logger) error {
 		server = server.WithObjectStore(objects)
 	}
 
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           server.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	srv := server.HTTPServer(addr)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

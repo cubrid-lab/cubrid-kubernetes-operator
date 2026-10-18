@@ -236,6 +236,31 @@ func (s *Server) WithRestoreRoots(roots RestoreRoots) *Server {
 	return s
 }
 
+// HTTPServer builds the HTTP transport for the Instance Manager API.
+func (s *Server) HTTPServer(addr string) *http.Server {
+	const readTimeout = 10 * time.Second
+	const responseAllowance = readTimeout + 5*time.Second
+	const maxTimeout = time.Duration(1<<63 - 1)
+	// A store-less backup and an ordered shutdown answer synchronously.
+	// Their configured budgets must fit after the body is read, with time
+	// left to send the response. Extreme valid durations saturate rather
+	// than overflow into a negative (and therefore disabled) timeout.
+	writeTimeout := max(s.timeouts.Backup, s.timeouts.Shutdown, 10*time.Second)
+	if writeTimeout > maxTimeout-responseAllowance {
+		writeTimeout = maxTimeout
+	} else {
+		writeTimeout += responseAllowance
+	}
+	return &http.Server{
+		Addr:              addr,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       time.Minute,
+	}
+}
+
 // Handler builds the API mux.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
