@@ -371,6 +371,23 @@ runbook below says what to do. A credential is never logged: no
 token, no `Authorization` header, no object-storage key, also not inside a
 failed command's output.
 
+A failed or cancelled backup removes its staging directory only once no
+process holds a file in it (ADR-0007, #469). `cub_server` writes the file of
+`backupdb -C` and may hold it for a short time after the backup ended
+(POC-27). The Instance Manager logs that wait with the `operationID` and the
+`stagingDir`:
+
+| `event` | Level | Fields | What it means |
+|---|---|---|---|
+| `backup_staging_writer_wait` | info | `holders` | A process (`pid comm path`) holds a file in the staging, or its holders cannot be told; the backup waits, looking again every 200 ms for up to 30 s |
+| `backup_staging_writer_closed` | info | `waitedMilliseconds` | The files were closed; the staging is removed and the operation ends `Failed` |
+| `backup_staging_writer_timeout` | warn | `holders`, `waitedSeconds` | A process still held a file after 30 s: the staging is kept, never uploaded or reused, and the operation's failure reason says so |
+| `backup_staging_held` | warn | `destination`, `entry`, `holders` | A backup request or the cleanup at start found such a kept entry still held: the destination is kept, and a request to it is answered `409` `StagingDestinationInUse` until the file is closed; the next request after that removes the entry |
+
+A `backup_staging_writer_timeout` or a repeated `backup_staging_held` names
+the holder: find out why it still writes before anything is removed. The
+manager never signals `cub_server` for this.
+
 ### Runbook: an operation record that cannot be read
 
 While one record is unreadable, the member starts no backup, restore or HA

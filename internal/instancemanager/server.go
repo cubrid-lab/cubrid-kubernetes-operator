@@ -76,6 +76,11 @@ type Server struct {
 	backupStagingRoot string
 	// stagingMu serializes the claim, release and reclaim of backup staging.
 	stagingMu sync.Mutex
+	// stagingWriterBound and stagingWriterPoll override how long and how
+	// often a failed backup waits for its staging files to be closed; zero
+	// keeps the defaults (awaitStagingWriters).
+	stagingWriterBound time.Duration
+	stagingWriterPoll  time.Duration
 	// restoreRoots confine every path a restore request names (#119).
 	restoreRoots RestoreRoots
 	// ha is what the HA bootstrap needs (#106).
@@ -524,7 +529,8 @@ func notRecorded(state OperationState, err error) string {
 // transitions. A successful `backupdb` is NOT Completed on its own: the staged
 // output must upload and manifest.json (the atomic completion marker) must be
 // written before the operation reaches Completed. On any failure it terminates
-// Failed and removes the staging directory (ADR-0003/0007).
+// Failed and removes the staging directory once no process holds a file in it,
+// or keeps it, unused, when one still does after a bound (ADR-0003/0007).
 func (s *Server) runBackup(id string, req BackupRequest) {
 	go func() {
 		defer s.ops.Done()
@@ -532,7 +538,14 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		defer cancel()
 		fail := func(reason string) {
 			reason = s.stoppingReason(reason)
-			s.removeBackupStaging(req.Destination)
+			// cub_server writes the file of backupdb -C and may still hold
+			// it after Run returned (POC-27): remove the staging only once
+			// nothing does, and keep it, unused, when that does not happen.
+			if err := s.awaitStagingWriters(id, req.Destination); err != nil {
+				reason += "; " + err.Error()
+			} else {
+				s.removeBackupStaging(req.Destination)
+			}
 			_ = s.store.Settle(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason

@@ -190,9 +190,25 @@ ends, also one that was refused, has `status.completedAt`.
   in the destination is uploaded, so a file that an interrupted attempt
   left never enters a later manifest. The operation removes its directory,
   and the destination once it is empty, when it fails or completes.
+  The file of `backupdb -C` is written by `cub_server`, outside the
+  utility's process group that a cancellation ends: after the group was
+  killed, `cub_server` kept the file open for about 0.3 to 2 s, then removed
+  it or left it at its full size (POC-27). A failed backup therefore removes
+  its directory only once no process holds a file below it, read from
+  `/proc/<pid>/fd` (the manager runs in the CUBRID container as the same
+  user as `cub_server`), and looks again every 200 ms for up to 30 s,
+  15 times the longest hold seen, and inside the stop's wait for the
+  operations. A directory still held after that is kept as it is, never
+  uploaded or reused, and the operation's failure reason says so (#469). A
+  CUBRID process (`cub*`) whose open files cannot be read, or a process list
+  that cannot be read, counts as a holder (fail closed); a process of
+  another user, or one of the same user that does not let its files be
+  read, is not one CUBRID started for the backup and is skipped. The
+  manager never signals `cub_server` for this.
   Ownership of the staging (#275): an entry of a destination belongs to a
   live operation when it is named after an operation that the store records
-  as not ended, or whose record cannot be read. A request whose destination
+  as not ended, or whose record cannot be read, or when a process holds a
+  file in it, or its holders cannot be told (#469). A request whose destination
   holds an entry of a live operation of another request is answered 409
   with "the backup staging destination is owned by another operation that
   is still running" (`ErrBackupStagingInUse`), before anything is recorded,

@@ -124,7 +124,7 @@ each:
 |---|---|---|---|
 | 401 | `Unauthorized` | the bearer token is missing or not the manager's | unauthorized: nothing was done; the operator reports `InstanceManagerTokenRefused` |
 | 409 | `OperationInProgress` | another operation that has not ended holds the database | retryable: the same request is sent again later |
-| 409 | `StagingDestinationInUse` | a running operation of another request owns the backup's staging destination (#275) | retryable |
+| 409 | `StagingDestinationInUse` | a running operation of another request owns the backup's staging destination (#275), or a process still holds a file that a failed backup left in it (#469) | retryable |
 | 409 | `IdempotencyConflict` | the manager holds an operation of this kind under the `Idempotency-Key` for another request body | terminal for the key: the request is never sent in its place; the operation the key names is read with `GET /v1/operations?idempotencyKey=` and followed |
 | 409 | `NotAnHAMember` | an HA request reached a standalone member | terminal for the member until its Pod runs as an HA member: the operator does not look the key up, reports `InstanceManagerNotAnHAMember` and asks again later without using up an attempt |
 | 412 | `ObjectStorageNotApplied` | the manager was started without object storage (#290) | terminal until the Pod is restarted with it; the operator waits, bounded (ADR-0007) |
@@ -252,7 +252,14 @@ Operations and the stop are serialized. Once a stop is asked for, the manager
 admits no new backup, restore or HA bootstrap (`503`), cancels the commands
 of the running ones, and refuses any `cubrid server start` or
 `cubrid heartbeat start` they would issue next; such an operation ends
-`Failed` with the reason that the member is stopping. The start of a
+`Failed` with the reason that the member is stopping. A cancelled or
+failed backup ends only once no process holds a file in its staging
+directory, or 30 s have passed: `cub_server`, which writes the file of
+`backupdb -C`, is outside the utility's process group and kept it open for
+up to about 2 s after the group ended (POC-27). The stop's wait for the
+operations covers that, before CUBRID is stopped; `cub_server` is never
+signalled for it. A directory still held after 30 s is kept, unused, and
+the failure reason says so (ADR-0007, #469). The start of a
 completed restore's database when the manager starts (ADR-0008) is held to
 the same rule: the manager listens before it starts that database, so a
 stop asked for meanwhile reaches the manager and not the command's own
