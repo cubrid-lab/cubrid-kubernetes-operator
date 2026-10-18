@@ -634,6 +634,10 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
 		return
 	}
+	if err := s.validateRestoreDatabase(req.Database); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
+		return
+	}
 	key := r.Header.Get("Idempotency-Key")
 	if key == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgNoIdempotencyKey})
@@ -666,6 +670,14 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 
 	s.runRestore(op.ID, req)
 	writeJSON(w, http.StatusAccepted, op)
+}
+
+// A standalone member restores only the database it is configured to start.
+func (s *Server) validateRestoreDatabase(database string) error {
+	if s.standaloneDB != "" && s.standaloneDB != database {
+		return fmt.Errorf("restore database %q does not match configured standalone database %q", database, s.standaloneDB)
+	}
+	return nil
 }
 
 // runRestore executes the restore in the background and records the durable
@@ -793,10 +805,13 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 // each start command, and an error from it stops before that command; nil
 // runs nothing.
 func (s *Server) startRestoredDatabase(ctx context.Context, database string, haMember bool, before func() error) error {
+	if err := s.validateRestoreDatabase(database); err != nil {
+		return err
+	}
 	if before == nil {
 		before = func() error { return nil }
 	}
-	if s.standaloneDB != "" && s.standaloneDB == database {
+	if s.standaloneDB != "" {
 		if err := before(); err != nil {
 			return err
 		}
