@@ -47,10 +47,12 @@ const (
 )
 
 // stagingHolders lists, as "pid comm path", the processes that hold a file
-// open at or below dir, read from the /proc/<pid>/fd links. The Instance
-// Manager runs in the CUBRID container as the same user as cub_server, as
-// the process watch and cli.go rely on, so it reads the links of CUBRID's
-// processes. A held file that was deleted still counts ("<path> (deleted)").
+// open at or below dir, read from the <proc>/<pid>/fd links; comm reads a
+// process's command name. dir is compared as given: the caller resolves it
+// (stagingScanPath). The Instance Manager runs in the CUBRID container as
+// the same user as cub_server, as the process watch and cli.go rely on, so
+// it reads the links of CUBRID's processes. A held file that was deleted
+// still counts ("<path> (deleted)").
 //
 // A process that ended during the scan is skipped. A process whose links
 // cannot be read is skipped too, unless it is a CUBRID process (comm cub*):
@@ -60,12 +62,9 @@ const (
 // that CUBRID started for the backup; refusing on it would block a
 // destination for good because of an unrelated process. A process list that
 // cannot be read is an error.
-func stagingHolders(dir string) ([]string, error) {
-	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = resolved
-	}
+func stagingHolders(proc string, comm func(pid string) string, dir string) ([]string, error) {
 	dir = filepath.Clean(dir)
-	procs, err := os.ReadDir("/proc")
+	procs, err := os.ReadDir(proc)
 	if err != nil {
 		return nil, fmt.Errorf("read the process list: %w", err)
 	}
@@ -76,12 +75,12 @@ func stagingHolders(dir string) ([]string, error) {
 		if _, err := strconv.Atoi(pid); err != nil {
 			continue
 		}
-		fdDir := filepath.Join("/proc", pid, "fd")
+		fdDir := filepath.Join(proc, pid, "fd")
 		fds, err := os.ReadDir(fdDir)
 		if err != nil {
-			comm := procComm(pid)
-			if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ESRCH) && strings.HasPrefix(comm, "cub") {
-				unreadable = errors.Join(unreadable, fmt.Errorf("read the open files of %s %s: %w", pid, comm, err))
+			name := comm(pid)
+			if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ESRCH) && strings.HasPrefix(name, "cub") {
+				unreadable = errors.Join(unreadable, fmt.Errorf("read the open files of %s %s: %w", pid, name, err))
 			}
 			continue
 		}
@@ -91,7 +90,7 @@ func stagingHolders(dir string) ([]string, error) {
 				continue
 			}
 			if target == dir || strings.HasPrefix(target, dir+"/") {
-				holders = append(holders, pid+" "+procComm(pid)+" "+target)
+				holders = append(holders, pid+" "+comm(pid)+" "+target)
 				break
 			}
 		}
@@ -99,13 +98,57 @@ func stagingHolders(dir string) ([]string, error) {
 	return holders, unreadable
 }
 
-// procComm is the command name of the process pid, empty once it ended.
-func procComm(pid string) string {
-	b, err := os.ReadFile(filepath.Join("/proc", pid, "comm"))
-	if err != nil {
-		return ""
+// procCommReader returns the reader of a process's command name below the
+// process list proc; it reads an empty name once the process ended.
+func procCommReader(proc string) func(pid string) string {
+	return func(pid string) string {
+		b, err := os.ReadFile(filepath.Join(proc, pid, "comm"))
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(b))
 	}
-	return strings.TrimSpace(string(b))
+}
+
+// stagingScanPath returns the path under which the fd links show a file
+// below dir, a destination entry or an operation's directory below the
+// staging root. Only the staging root is resolved, since the kernel shows
+// resolved paths; the components below it are not followed. A dir that is,
+// or lies below, a link is reported as one: what it points to is not
+// staging, and a link is removed, never followed (reclaimDestination).
+func (s *Server) stagingScanPath(dir string) (path string, link bool) {
+	rel, err := s.stagingRel(dir)
+	if err != nil {
+		return filepath.Clean(dir), false
+	}
+	root := filepath.Clean(s.backupStagingRoot)
+	resolved := root
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		resolved = r
+	}
+	at := root
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		at = filepath.Join(at, part)
+		if info, err := os.Lstat(at); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+			return filepath.Join(resolved, rel), true
+		}
+	}
+	return filepath.Join(resolved, rel), false
+}
+
+// stagingHeld lists the processes that hold a file below the staging
+// directory dir. A dir that is a link is never held (stagingScanPath), so
+// the reclaim removes the link as before.
+func (s *Server) stagingHeld(dir string) ([]string, error) {
+	path, link := s.stagingScanPath(dir)
+	if link {
+		return nil, nil
+	}
+	proc := s.procRoot
+	if proc == "" {
+		proc = "/proc"
+	}
+	return stagingHolders(proc, procCommReader(proc), path)
 }
 
 // describeHolders is what a log line or a reason says about the holders of
@@ -135,15 +178,19 @@ func (s *Server) awaitStagingWriters(id, dir string) error {
 		poll = stagingWriterPoll
 	}
 	start := time.Now()
-	held, err := stagingHolders(dir)
+	held, err := s.stagingHeld(dir)
 	if err == nil && len(held) == 0 {
+		// A writer that has not opened its file yet is not seen here. That
+		// is harmless only because every operation stages in a directory of
+		// its own (staging.go): a late writer reaches no other operation's
+		// files, and this directory is never claimed again.
 		return nil
 	}
 	s.log().Info("Waiting for processes to close backup staging files", "event", "backup_staging_writer_wait",
 		"operationID", id, "stagingDir", dir, "holders", describeHolders(held, err))
 	for time.Since(start) < bound {
 		time.Sleep(poll)
-		held, err = stagingHolders(dir)
+		held, err = s.stagingHeld(dir)
 		if err == nil && len(held) == 0 {
 			s.log().Info("Processes closed backup staging files", "event", "backup_staging_writer_closed",
 				"operationID", id, "stagingDir", dir, "waitedMilliseconds", time.Since(start).Milliseconds())

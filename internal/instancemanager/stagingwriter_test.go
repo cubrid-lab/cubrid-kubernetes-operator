@@ -22,44 +22,70 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// holdFile starts a process that holds path open for writing until it is
+// startHolder starts a process that holds path open for writing until it is
 // released, as cub_server holds the file of a cancelled backupdb -C after
 // the utility's process group has ended (POC-27). It is a child of the test,
-// not of a utility's process group. It returns once the file is open, and
-// the release kills the process and waits for it.
-func holdFile(t *testing.T, path string) (release func()) {
-	t.Helper()
+// not of a utility's process group. It returns once the file is open. When
+// procDir is set, the process is listed there as a link to its /proc entry,
+// so that a scan of procDir sees only the test's own holders, not the host's
+// other processes. The release kills the process, waits for it and removes
+// the link. It never fails the test itself: it may run on the goroutine of
+// a backup, so the caller checks the error on the test's goroutine.
+func startHolder(path, procDir string) (release func(), err error) {
 	cmd := exec.Command("sh", "-c", `exec 3>"$1"; echo open; exec sleep 60`, "sh", path)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("start the holder: %v", err)
+		return nil, fmt.Errorf("start the holder: %w", err)
 	}
+	pid := strconv.Itoa(cmd.Process.Pid)
 	var once sync.Once
 	release = func() {
 		once.Do(func() {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
+			if procDir != "" {
+				_ = os.Remove(filepath.Join(procDir, pid))
+			}
 		})
 	}
-	t.Cleanup(release)
 	line, err := bufio.NewReader(out).ReadString('\n')
 	if err != nil || strings.TrimSpace(line) != "open" {
-		t.Fatalf("the holder did not open %s: %q %v", path, line, err)
+		release()
+		return nil, fmt.Errorf("the holder did not open %s: %q %v", path, line, err)
 	}
+	if procDir != "" {
+		if err := os.Symlink(filepath.Join("/proc", pid), filepath.Join(procDir, pid)); err != nil {
+			release()
+			return nil, err
+		}
+	}
+	return release, nil
+}
+
+// holdFile is startHolder on the test's goroutine.
+func holdFile(t *testing.T, path, procDir string) (release func()) {
+	t.Helper()
+	release, err := startHolder(path, procDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(release)
 	return release
 }
 
@@ -67,12 +93,26 @@ func holdFile(t *testing.T, path string) (release func()) {
 // backupdb leaves a process holding the backup volume open in its -D
 // directory and fails, as Run does once the utility's group has ended while
 // cub_server still writes. Later backupdb runs write a volume and succeed.
+// The holder is listed in procDir, the process list the server scans.
 type cancelledBackupCLI struct {
-	t       *testing.T
+	procDir string
 	mu      sync.Mutex
 	calls   int
 	dirs    []string
 	release func()
+	holdErr error
+}
+
+func newCancelledBackupCLI(t *testing.T) *cancelledBackupCLI {
+	c := &cancelledBackupCLI{procDir: t.TempDir()}
+	t.Cleanup(func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.release != nil {
+			c.release()
+		}
+	})
+	return c
 }
 
 func (c *cancelledBackupCLI) Run(_ context.Context, _ string, args ...string) (string, error) {
@@ -91,7 +131,7 @@ func (c *cancelledBackupCLI) Run(_ context.Context, _ string, args ...string) (s
 	c.dirs = append(c.dirs, dir)
 	volume := filepath.Join(dir, dbName+"_bk0v000")
 	if c.calls == 1 {
-		c.release = holdFile(c.t, volume)
+		c.release, c.holdErr = startHolder(volume, c.procDir)
 		return "", errors.New("signal: killed")
 	}
 	if err := os.WriteFile(volume, []byte("new "+dbName), 0o600); err != nil {
@@ -100,13 +140,13 @@ func (c *cancelledBackupCLI) Run(_ context.Context, _ string, args ...string) (s
 	return "ok", nil
 }
 
-func (c *cancelledBackupCLI) first() (string, func()) {
+func (c *cancelledBackupCLI) first() (dir string, release func(), err error, ran bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.dirs) == 0 {
-		return "", nil
+		return "", nil, nil, false
 	}
-	return c.dirs[0], c.release
+	return c.dirs[0], c.release, c.holdErr, true
 }
 
 func (c *cancelledBackupCLI) runs() int {
@@ -119,7 +159,10 @@ func waitFirstBackup(t *testing.T, cli *cancelledBackupCLI) (string, func()) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if dir, release := cli.first(); release != nil {
+		if dir, release, err, ran := cli.first(); ran {
+			if err != nil {
+				t.Fatalf("the fake backupdb could not start its holder: %v", err)
+			}
 			return dir, release
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -139,10 +182,11 @@ func TestServer_Backup_FailedBackupWaitsForTheStagingWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOperationStore: %v", err)
 	}
-	cli := &cancelledBackupCLI{t: t}
+	cli := newCancelledBackupCLI(t)
 	var buf bytes.Buffer
 	srv := NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(newFakeStore()).
 		WithBackupStagingRoot(root).WithLogger(testLogger(&buf, slog.LevelInfo))
+	srv.procRoot = cli.procDir
 	h := srv.Handler()
 
 	rr := postBackup(t, h, "key-1", backupBodyOf(dbName, destination, "appdb"))
@@ -194,13 +238,14 @@ func TestServer_Backup_StagingHeldPastTheBoundIsKeptAndNotReused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOperationStore: %v", err)
 	}
-	cli := &cancelledBackupCLI{t: t}
+	cli := newCancelledBackupCLI(t)
 	objects := newFakeStore()
 	var buf bytes.Buffer
 	srv := NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(objects).
 		WithBackupStagingRoot(root).WithLogger(testLogger(&buf, slog.LevelInfo))
 	srv.stagingWriterBound = 300 * time.Millisecond
 	srv.stagingWriterPoll = 20 * time.Millisecond
+	srv.procRoot = cli.procDir
 	h := srv.Handler()
 
 	rr := postBackup(t, h, "key-1", backupBodyOf(dbName, destination, "appdb"))
@@ -256,25 +301,141 @@ func TestServer_Backup_StagingHeldPastTheBoundIsKeptAndNotReused(t *testing.T) {
 	}
 }
 
-// Only a file below the directory counts, not one of a sibling whose name
-// starts the same; a held file that was deleted still counts.
-func TestStagingHolders_MatchesOnlyFilesBelowTheDirectory(t *testing.T) {
-	base := t.TempDir()
-	dir := filepath.Join(base, "op-1")
-	sibling := filepath.Join(base, "op-10")
-	writeFile(t, filepath.Join(sibling, "f"), "")
-	holdFile(t, filepath.Join(sibling, "f"))
+// fakeProc is a process list for stagingHolders: each process has a comm
+// file and fd links to the given paths, which need not exist.
+func fakeProc(t *testing.T, procs map[string]struct {
+	comm string
+	fds  []string
+}) string {
+	t.Helper()
+	proc := t.TempDir()
+	for pid, p := range procs {
+		fd := filepath.Join(proc, pid, "fd")
+		if err := os.MkdirAll(fd, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(proc, pid, "comm"), p.comm+"\n")
+		for i, target := range p.fds {
+			if err := os.Symlink(target, filepath.Join(fd, strconv.Itoa(i))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	writeFile(t, filepath.Join(proc, "self-not-a-pid"), "")
+	return proc
+}
 
-	if held, err := stagingHolders(dir); err != nil || len(held) != 0 {
-		t.Errorf("stagingHolders(%s) = %v, %v; want none for a file of %s", dir, held, err, sibling)
+// Only a file at or below the directory counts, not one of a sibling whose
+// name starts the same; a held file that was deleted still counts.
+func TestStagingHolders_MatchesOnlyFilesBelowTheDirectory(t *testing.T) {
+	const dir = "/stage/uid-1/op-1"
+	proc := fakeProc(t, map[string]struct {
+		comm string
+		fds  []string
+	}{
+		"10": {"cub_server", []string{"/stage/uid-1/op-10/appdb_bk0v000", "/dev/null"}},
+		"11": {"sleep", []string{"/stage/uid-1/op-1/appdb_bk0v000 (deleted)"}},
+	})
+	held, err := stagingHolders(proc, procCommReader(proc), dir)
+	if err != nil || len(held) != 1 || !strings.HasPrefix(held[0], "11 sleep ") {
+		t.Errorf("stagingHolders(%s) = %v, %v; want only process 11, which holds a deleted file below it", dir, held, err)
 	}
-	if held, err := stagingHolders(sibling); err != nil || len(held) == 0 {
-		t.Errorf("stagingHolders(%s) = %v, %v; want the holder", sibling, held, err)
+	held, err = stagingHolders(proc, procCommReader(proc), "/stage/uid-1/op-10")
+	if err != nil || len(held) != 1 || !strings.HasPrefix(held[0], "10 cub_server ") {
+		t.Errorf("stagingHolders(op-10) = %v, %v; want process 10", held, err)
 	}
-	if err := os.Remove(filepath.Join(sibling, "f")); err != nil {
+}
+
+// A CUBRID process whose open files cannot be read counts as a holder (an
+// error, fail closed); an unreadable process of any other name is skipped,
+// and so is the comm reader's answer for it. A process list that cannot be
+// read is an error.
+func TestStagingHolders_UnreadableProcesses(t *testing.T) {
+	proc := fakeProc(t, map[string]struct {
+		comm string
+		fds  []string
+	}{
+		"20": {"cub_server", nil},
+		"21": {"sshd", nil},
+	})
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory without permissions")
+	}
+	for _, pid := range []string{"20", "21"} {
+		lockDir(t, filepath.Join(proc, pid, "fd"))
+	}
+	held, err := stagingHolders(proc, procCommReader(proc), "/stage/uid-1/op-1")
+	if err == nil || !strings.Contains(err.Error(), "20 cub_server") || strings.Contains(err.Error(), "21") || len(held) != 0 {
+		t.Errorf("stagingHolders = %v, %v; want an error naming only the unreadable cub_server", held, err)
+	}
+
+	onlyOther := fakeProc(t, map[string]struct {
+		comm string
+		fds  []string
+	}{"21": {"sshd", nil}})
+	lockDir(t, filepath.Join(onlyOther, "21", "fd"))
+	if held, err := stagingHolders(onlyOther, procCommReader(onlyOther), "/stage/uid-1/op-1"); err != nil || len(held) != 0 {
+		t.Errorf("stagingHolders with only an unreadable non-CUBRID process = %v, %v; want none and no error", held, err)
+	}
+
+	if _, err := stagingHolders(filepath.Join(proc, "missing"), procCommReader(proc), "/stage"); err == nil {
+		t.Error("stagingHolders of a process list that cannot be read = nil error, want one")
+	}
+}
+
+// A destination entry that is a link is not followed: a process that holds
+// a file where the link points (here the database directory, which
+// cub_server holds for as long as it runs) does not make it held. A backup
+// to that destination reclaims the link as before, and nothing it pointed
+// to is touched.
+func TestServer_Backup_ReclaimsALinkedEntryAlthoughItsTargetIsHeld(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "backup-staging")
+	destination := filepath.Join(root, "uid-1")
+	databases := filepath.Join(base, "databases")
+	volume := filepath.Join(databases, dbName+"_lgat")
+	writeFile(t, volume, "database volume")
+	const abandoned = "op-0123456789abcdef0123456789abcdef"
+	if err := os.MkdirAll(destination, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if held, err := stagingHolders(sibling); err != nil || len(held) == 0 {
-		t.Errorf("stagingHolders(%s) after the held file was deleted = %v, %v; want the holder", sibling, held, err)
+	link := filepath.Join(destination, abandoned)
+	if err := os.Symlink(databases, link); err != nil {
+		t.Fatal(err)
+	}
+	procDir := t.TempDir()
+	holdFile(t, volume, procDir)
+
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOperationStore: %v", err)
+	}
+	var buf bytes.Buffer
+	srv := NewServer(newWritingCLI(), "tok").WithOperationStore(store).WithObjectStore(newFakeStore()).
+		WithBackupStagingRoot(root).WithLogger(testLogger(&buf, slog.LevelInfo))
+	srv.procRoot = procDir
+	// The scan itself sees the holder of the database volume.
+	if held, err := stagingHolders(procDir, procCommReader(procDir), databases); err != nil || len(held) == 0 {
+		t.Fatalf("the holder of %s is not seen: %v, %v", volume, held, err)
+	}
+	h := srv.Handler()
+
+	rr := postBackup(t, h, "key-1", backupBodyOf(dbName, destination, "appdb"))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("/v1/backup to a destination with a linked entry = %d (body %s), want 202", rr.Code, rr.Body.String())
+	}
+	var op Operation
+	_ = json.Unmarshal(rr.Body.Bytes(), &op)
+	if final := pollUntilSettled(t, srv, h, op.ID); final.State != OpCompleted {
+		t.Fatalf("backup = %s (reason %q), want Completed", final.State, final.FailureReason)
+	}
+	if exists(link) {
+		t.Errorf("the linked entry %s was kept; a link is removed, never followed", link)
+	}
+	if !exists(volume) {
+		t.Errorf("%s, where the link pointed, was removed", volume)
+	}
+	if held := withEvent(logLines(t, &buf), "backup_staging_held"); len(held) != 0 {
+		t.Errorf("backup_staging_held logged for a link: %v", held)
 	}
 }

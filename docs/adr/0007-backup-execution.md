@@ -208,7 +208,8 @@ ends, also one that was refused, has `status.completedAt`.
   Ownership of the staging (#275): an entry of a destination belongs to a
   live operation when it is named after an operation that the store records
   as not ended, or whose record cannot be read, or when a process holds a
-  file in it, or its holders cannot be told (#469). A request whose destination
+  file in it, or its holders cannot be told (#469); an entry that is a link
+  is not followed and never counts as held. A request whose destination
   holds an entry of a live operation of another request is answered 409
   with "the backup staging destination is owned by another operation that
   is still running" (`ErrBackupStagingInUse`), before anything is recorded,

@@ -81,6 +81,8 @@ type Server struct {
 	// keeps the defaults (awaitStagingWriters).
 	stagingWriterBound time.Duration
 	stagingWriterPoll  time.Duration
+	// procRoot is the process list that wait reads; empty is /proc.
+	procRoot string
 	// restoreRoots confine every path a restore request names (#119).
 	restoreRoots RestoreRoots
 	// ha is what the HA bootstrap needs (#106).

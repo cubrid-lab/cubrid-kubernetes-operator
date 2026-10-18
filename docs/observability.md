@@ -382,11 +382,19 @@ process holds a file in it (ADR-0007, #469). `cub_server` writes the file of
 | `backup_staging_writer_wait` | info | `holders` | A process (`pid comm path`) holds a file in the staging, or its holders cannot be told; the backup waits, looking again every 200 ms for up to 30 s |
 | `backup_staging_writer_closed` | info | `waitedMilliseconds` | The files were closed; the staging is removed and the operation ends `Failed` |
 | `backup_staging_writer_timeout` | warn | `holders`, `waitedSeconds` | A process still held a file after 30 s: the staging is kept, never uploaded or reused, and the operation's failure reason says so |
-| `backup_staging_held` | warn | `destination`, `entry`, `holders` | A backup request or the cleanup at start found such a kept entry still held: the destination is kept, and a request to it is answered `409` `StagingDestinationInUse` until the file is closed; the next request after that removes the entry |
+| `backup_staging_held` | warn | `destination`, `entry`, `holders` | A backup request or the cleanup at start found such a kept entry still held: the destination is kept, and a request to it is answered `409` `StagingDestinationInUse` until the file is closed; a request after that removes the entry. A link is never followed and never counts as held |
 
 A `backup_staging_writer_timeout` or a repeated `backup_staging_held` names
 the holder: find out why it still writes before anything is removed. The
-manager never signals `cub_server` for this.
+manager never signals `cub_server` for this. The operator does not send
+another request to that destination (a destination belongs to one
+`CubridBackup` UID or to one bootstrap), so a kept entry stays until the
+next Instance Manager start, whose cleanup removes it once nothing holds a
+file in it. To clear it earlier, check from inside the Pod that no process
+holds a file under it (`ls -l /proc/*/fd 2>/dev/null | grep <stagingDir>`
+prints nothing); it is then safe to delete
+(`rm -r <stagingDir>`). A file that `cub_server` never closes is closed when
+`cub_server` restarts.
 
 ### Runbook: an operation record that cannot be read
 

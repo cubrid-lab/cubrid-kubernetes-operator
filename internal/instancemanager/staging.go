@@ -58,7 +58,7 @@ func (s *Server) stagingOwnerLive(destination, name string) (*Operation, bool) {
 	if op, live := s.stagingRecordLive(destination, name); live {
 		return op, true
 	}
-	held, err := stagingHolders(filepath.Join(s.backupStagingRoot, destination, name))
+	held, err := s.stagingHeld(filepath.Join(s.backupStagingRoot, destination, name))
 	if err != nil || len(held) > 0 {
 		s.log().Warn("Kept backup staging that a process holds open; the destination is kept",
 			"event", "backup_staging_held", "destination", destination, "entry", name,
