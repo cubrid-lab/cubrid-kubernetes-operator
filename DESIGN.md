@@ -916,9 +916,13 @@ reconciler polls each member's `/v1/role` and aggregates safety-first,
 ADR-0005): when a role prober is configured `HAReady` reflects the resolved
 primary; when none is configured it is `Unknown` (reason
 `RoleDiscoveryDisabled`). The cluster's `Ready` follows the members'
-readiness, except that more than one observed master keeps it `False`
-(`MultiplePrimariesObserved`, #339); an only unresolved primary does not
-change it (see [observability.md](docs/observability.md)). A reconcile that
+readiness, except that fresh, correctly identified reports of more than one
+locally active master keep it `False` (`MultiplePrimariesObserved`, #339).
+Each report must have an active server and exactly one matching local node
+entry. Seeing another master in its node list keeps the role untrusted for
+primary resolution, but does not erase that local active-master claim.
+A primary that is merely unresolved does not change `Ready`
+(see [observability.md](docs/observability.md)). A reconcile that
 ends before the roles are observed clears `currentPrimary` and sets the
 role-based conditions to `Unknown` (`RolesNotObserved`, #340), rather than
 observing the roles on that path: nothing in the status rests on an
@@ -1006,8 +1010,11 @@ primary is reported as `PrimaryResolved=False` and `HAReady=False` with a
 reason such as `PrimaryObservationIncomplete` or
 `AmbiguousPrimaryObservation`, and `RoutingReady=False` with the same
 reason; `Ready` follows the members' readiness and stays `True` while the
-primary is only unresolved. Only more than one observed master turns
-`Ready` `False` (`MultiplePrimariesObserved`).
+primary is only unresolved. More than one fresh, correctly identified local
+active-master claim turns `Ready` `False` (`MultiplePrimariesObserved`),
+including when conflicting peer lists leave `PrimaryResolved` at
+`AmbiguousPrimaryObservation`. Those claims do not authorize a primary or
+any change to the topology or write path.
 
 Hard invariant:
 

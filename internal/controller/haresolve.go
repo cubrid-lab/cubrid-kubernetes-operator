@@ -193,6 +193,10 @@ type PrimaryResolution struct {
 	CurrentPrimary string
 	Status         metav1.ConditionStatus
 	Reason         string
+	// MultipleMasters reports fresh local master claims independently of
+	// primary authority. Conflicting claims can keep Ready false without
+	// allowing either member to become currentPrimary.
+	MultipleMasters bool
 	// TokenRefused names the members whose Instance Manager refused the
 	// cluster's token, when the reason is reasonTokenRefused.
 	TokenRefused []string
@@ -233,12 +237,16 @@ const reasonMultiplePrimaries = "MultiplePrimariesObserved"
 // like an unreachable one; the reason only names the cause.
 func resolvePrimary(members []string, obs map[string]RoleObservation, now time.Time) PrimaryResolution {
 	masters := 0
+	masterClaims := 0
 	primary := ""
 	incomplete := false
 	ambiguous := false
 	var refused []string
 	for _, m := range members {
 		o, ok := obs[m]
+		if fresh(o, now) && o.Role == databasev1alpha1.RoleMaster && o.ActiveMasterClaim {
+			masterClaims++
+		}
 		if ok && o.Reachable && o.Conflicting {
 			ambiguous = true
 			continue
@@ -256,20 +264,22 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 		}
 	}
 
+	res := PrimaryResolution{Status: metav1.ConditionFalse, MultipleMasters: masterClaims > 1}
 	switch {
 	case masters > 1:
-		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: reasonMultiplePrimaries}
+		res.Reason = reasonMultiplePrimaries
 	case ambiguous:
-		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "AmbiguousPrimaryObservation"}
+		res.Reason = "AmbiguousPrimaryObservation"
 	case len(refused) > 0:
-		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: reasonTokenRefused, TokenRefused: refused}
+		res.Reason, res.TokenRefused = reasonTokenRefused, refused
 	case incomplete:
-		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "PrimaryObservationIncomplete"}
+		res.Reason = "PrimaryObservationIncomplete"
 	case masters == 0:
-		return PrimaryResolution{Status: metav1.ConditionFalse, Reason: "NoPrimaryObserved"}
+		res.Reason = "NoPrimaryObserved"
 	default:
-		return PrimaryResolution{CurrentPrimary: primary, Status: metav1.ConditionTrue, Reason: "SinglePrimaryObserved"}
+		res.CurrentPrimary, res.Status, res.Reason = primary, metav1.ConditionTrue, "SinglePrimaryObserved"
 	}
+	return res
 }
 
 // instanceStatuses builds the per-instance status list from observations,

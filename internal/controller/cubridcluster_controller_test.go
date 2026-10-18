@@ -988,7 +988,7 @@ func (p *mastersProber) ProbeRole(_ context.Context, podName, _ string) RoleObse
 	if p.masters[podName] {
 		role = databasev1alpha1.RoleMaster
 	}
-	return RoleObservation{Reachable: true, Role: role, ObservedAt: time.Now()}
+	return RoleObservation{Reachable: true, Role: role, ObservedAt: time.Now(), ActiveMasterClaim: p.masters[podName]}
 }
 
 // Deleting a cluster removes every series that carries its namespace and

@@ -46,6 +46,10 @@ type RoleObservation struct {
 	// (role vs HA status, ADR-0005 ConflictingLocalHAStatus) or names a member
 	// other than the one that was asked; the role is then not trusted.
 	Conflicting bool
+	// ActiveMasterClaim preserves a locally consistent active-master report
+	// even when another master in the node list makes the role untrusted.
+	// It is diagnostic evidence for Ready, never authority to name a primary.
+	ActiveMasterClaim bool
 	// MasterNotYetActive is set when the answer contradicts itself in one way
 	// only: the member reports itself master while its server is not
 	// registered_and_active. That is the state of the master of a group
@@ -130,6 +134,9 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	}
 	o := observationFromStatus(st, p.now())
 	o.RequestID = id
+	if st.Current != podName {
+		o.ActiveMasterClaim = false
+	}
 	// The answer is recorded under the name that was asked. An answer that
 	// carries a role but names another member came from somewhere else, a
 	// wrong DNS record or Service for example, and is not this member's role.
@@ -202,14 +209,22 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 	}
 	notYetActive := st.Role == instancemanager.RoleMaster && !st.ServerActive
 	contradictsNodeList := false
+	localEntries := 0
+	localMaster := true
 	for _, n := range st.Nodes {
-		if n.Name == st.Current && n.State != string(st.Role) {
-			contradictsNodeList = true
+		if n.Name == st.Current {
+			localEntries++
+			localMaster = localMaster && n.State == string(instancemanager.RoleMaster)
+			if n.State != string(st.Role) {
+				contradictsNodeList = true
+			}
 		}
 		if n.Name != st.Current && st.Role == instancemanager.RoleMaster && n.State == string(instancemanager.RoleMaster) {
 			contradictsNodeList = true
 		}
 	}
+	o.ActiveMasterClaim = st.Role == instancemanager.RoleMaster && st.ServerActive &&
+		st.Current != "" && localEntries == 1 && localMaster
 	o.Conflicting = notYetActive || contradictsNodeList
 	o.MasterNotYetActive = notYetActive && !contradictsNodeList
 	switch {

@@ -118,9 +118,17 @@ cluster without a role prober is not changed.
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
 available; they do not say that a client can run SQL. For an HA cluster,
 `Ready` is also `False` (`MultiplePrimariesObserved`) while more than one
-member reports itself master, since two masters are never a healthy cluster
-(ADR-0001); members that are not ready still give `InstancesNotReady`
-first. A primary that is only unresolved, as during a failover or while
+member reports itself master with an active server, since two masters are
+never a healthy cluster (ADR-0001). Each claim must be fresh, name the member
+that was asked, and have exactly one matching local entry in its node list.
+A master that also lists another master is still untrusted for primary
+resolution: `PrimaryResolved` remains `False/AmbiguousPrimaryObservation`,
+and its instance role stays `unknown`. Its local active-master claim still
+counts for `Ready`; two such members give `Ready=False` and
+`cubrid_cluster_ready=0`. A stale response, wrong or missing identity,
+inactive server, or contradictory local entry does not count as that claim.
+Members that are not ready still give `InstancesNotReady` first.
+A primary that is only unresolved, as during a failover or while
 a member is unreachable, leaves `Ready` to the members' readiness, so that it
 does not change on every failover; `PrimaryResolved`, `HAReady` and
 `RoutingReady` report that state.

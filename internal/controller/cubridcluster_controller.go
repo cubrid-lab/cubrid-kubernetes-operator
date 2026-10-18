@@ -946,7 +946,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		// The first database is created once, on one member (ADR-0010).
 		r.reconcileHABootstrap(ctx, cluster)
 		res := r.reconcileHAStatus(ctx, cluster, desired)
-		multiplePrimaries = res.Reason == reasonMultiplePrimaries
+		multiplePrimaries = res.MultipleMasters
 		// Reconcile the broker tier and set routing conditions from the same
 		// safety-first primary resolution (ADR-0002/0005).
 		// A conflicting write leaves the broker conditions as they are; the
