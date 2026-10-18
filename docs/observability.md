@@ -354,8 +354,10 @@ not ready is in the Instance Manager's log (`event` `not_ready`, with the
 the same; the member's role is what `/v1/role` answers to a caller with the
 token. An operation record that could not be written is logged as an error
 with `event` `operation_store_write_failed`, the `operationID` and the state
-that is therefore not on disk. A credential is never logged: no token, no `Authorization` header, no
-object-storage key, also not inside a failed command's output.
+that is therefore not on disk; the retries of an operation's end that could
+not be written are logged at debug level. A credential is never logged: no
+token, no `Authorization` header, no object-storage key, also not inside a
+failed command's output.
 
 ### Runbook: a standalone member that starts only the Instance Manager
 

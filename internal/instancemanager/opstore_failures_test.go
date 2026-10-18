@@ -83,6 +83,10 @@ func TestOperationStore_Settle_KeepsAnEndThatCouldNotBeWritten(t *testing.T) {
 	if _, _, err := store.FindOrCreate(OpBackup, "other-key", "h", "appdb"); err == nil {
 		t.Error("another operation on the database was admitted while this one's end is unwritten")
 	}
+	// The retries of those reads do not log another error each.
+	if n := strings.Count(logged.String(), `"level":"ERROR"`); n != 1 {
+		t.Errorf("failed writes logged as errors = %d, want only the first: %s", n, logged.String())
+	}
 
 	restore()
 	got, err := store.Get(op.ID)
@@ -208,7 +212,7 @@ func TestHABootstrap_StartsNothingItCannotRecord(t *testing.T) {
 		t.Errorf("heartbeat was started although the state Starting could not be recorded: %q", calls)
 	}
 	restore()
-	ops, err := f.store.listLocked()
+	ops, err := f.store.FindByKey("bootstrap-1")
 	if err != nil || len(ops) != 1 {
 		t.Fatalf("operations = %d, %v", len(ops), err)
 	}
@@ -275,6 +279,12 @@ func TestServer_Backup_UnrecordedStagingClaimIsNotAnsweredAsPending(t *testing.T
 		t.Errorf("backupdb ran for an operation whose staging is not on record: %q", calls)
 	}
 
+	// A repeat while the store is still broken is not answered as Pending
+	// either: the operation it names never runs.
+	if rr := postBackup(t, h, "key-1", body); rr.Code == http.StatusAccepted {
+		t.Errorf("repeat of the same key = 202 %s while the operation's end is unwritten", rr.Body.String())
+	}
+
 	restore()
 	again := postBackup(t, h, "key-1", body)
 	var op Operation
@@ -307,5 +317,69 @@ func TestOperationStore_FindByKey_DoesNotReturnAnUnwrittenEnd(t *testing.T) {
 	got, err := store.FindByKey("k")
 	if err != nil || len(got) != 1 || got[0].State != OpCompleted {
 		t.Fatalf("after the store works again FindByKey = %v, %v; want the Completed operation", got, err)
+	}
+}
+
+// afterCallCLI runs after once, when the command call has run.
+type afterCallCLI struct {
+	*volumeCLI
+	call  string
+	after func()
+}
+
+func (c *afterCallCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
+	out, err := c.volumeCLI.Run(ctx, name, args...)
+	if name+" "+strings.Join(args, " ") == c.call && c.after != nil {
+		c.after()
+		c.after = nil
+	}
+	return out, err
+}
+
+// A restore whose Completed cannot be written keeps its ownership marker, is
+// not answered as running, and is Failed with its restored data on record
+// after a restart: the end that was only in memory does not count (#299).
+func TestServer_Restore_UnwrittenCompletedIsFailedAfterARestart(t *testing.T) {
+	f := newResumeFixture(t)
+	var restore func()
+	cli := &afterCallCLI{
+		volumeCLI: &volumeCLI{databases: f.databases},
+		call:      callServerStart,
+		after:     func() { restore = unwritable(t, f.storeDir) },
+	}
+	f.start(cli)
+	op := f.post("restore-1")
+	poll := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/v1/operations/"+op.ID, nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		req.RemoteAddr = testRemoteAddr
+		got := httptest.NewRecorder()
+		f.handler.ServeHTTP(got, req)
+		return got
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	got := poll()
+	for got.Code == http.StatusOK && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		got = poll()
+	}
+	if restore == nil {
+		t.Fatalf("the server was not started: %q", cli.recorded())
+	}
+	if got.Code != http.StatusInternalServerError {
+		t.Fatalf("poll = %d %s, want 500 while Completed is unwritten", got.Code, got.Body.String())
+	}
+	if marker := f.marker(); marker != op.ID {
+		t.Errorf("ownership marker = %q, want %q: the restore is not on record as complete", marker, op.ID)
+	}
+
+	restore()
+	f.start(&volumeCLI{databases: f.databases})
+	ended, err := f.server.store.Get(op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended.State != OpFailed || ended.Restored == nil {
+		t.Errorf("after a restart = %s (restored %v), want Failed with the restored data on record", ended.State, ended.Restored)
 	}
 }
