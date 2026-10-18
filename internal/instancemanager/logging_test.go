@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -86,6 +87,45 @@ func TestLogger_CommonFieldsAndSecrets(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), logSecret) {
 		t.Errorf("the log shows a secret:\n%s", buf.String())
+	}
+}
+
+// A value that a caller sent cannot start a line of its own or hide one: a
+// request path, a command argument, a command's output and an error that
+// carry line breaks, a terminal escape or a forged JSON object each stay
+// inside their own escaped field of one line.
+func TestLogger_EscapesControlCharactersInValues(t *testing.T) {
+	const forged = `{"level":"INFO","msg":"forged"}`
+	injected := "x\n" + forged + "\r\n\x1b[2K\u2028" + forged
+
+	var buf bytes.Buffer
+	h := logServer(&buf, slog.LevelInfo)
+	path := "/v1/operations/" + url.PathEscape(injected)
+	send(h, http.MethodGet, path, map[string]string{authHeader: "Bearer " + logSecret})
+	send(h, http.MethodGet, path, nil)
+	cli := LoggingCLI{CLI: resultCLI{out: injected, err: errors.New(injected)}, Logger: testLogger(&buf, slog.LevelInfo)}
+	_, _ = cli.Run(context.Background(), "cubrid", "restoredb", injected)
+
+	raw := strings.TrimSuffix(buf.String(), "\n")
+	if strings.ContainsFunc(raw, func(r rune) bool { return (r < 0x20 && r != '\n') || r == '\u2028' }) {
+		t.Errorf("the log holds an unescaped control character:\n%q", raw)
+	}
+	lines := logLines(t, &buf)
+	if len(lines) != 3 {
+		t.Fatalf("lines = %d, want 3 (one per call):\n%s", len(lines), buf.String())
+	}
+	for _, l := range lines {
+		if l["msg"] == "forged" {
+			t.Errorf("a caller's value became a line of its own: %v", l)
+		}
+	}
+	if want := "/v1/operations/" + injected; lines[0]["path"] != want || lines[1]["path"] != want ||
+		lines[1][keyEvent] != "request_refused" {
+		t.Errorf("request lines = %v, %v; want path %q, the second refused", lines[0], lines[1], want)
+	}
+	if lines[2]["command"] != "cubrid restoredb "+injected || lines[2]["err"] != injected ||
+		lines[2]["outputTail"] != strings.TrimSpace(injected) {
+		t.Errorf("command line = %v", lines[2])
 	}
 }
 
