@@ -110,7 +110,7 @@ func TestPublishClusterMetrics_Standalone(t *testing.T) {
 		Name: name, Role: databasev1alpha1.RoleUnknown, Ready: true,
 		ObservedEngineVersion: fullEngineVersion, LastObservedTime: &answered,
 	}}
-	publishClusterMetrics(c)
+	publishClusterMetrics(c, nil)
 
 	member := map[string]string{serviceRoleMember: name}
 	if got, ok := sample(t, metricMemberReady, c, member); !ok || got != 1 {
@@ -145,7 +145,7 @@ func TestPublishClusterMetrics(t *testing.T) {
 		{Name: "publish-2", Role: databasev1alpha1.RoleSlave, Ready: false},
 		{Name: "publish-3"},
 	}
-	publishClusterMetrics(c)
+	publishClusterMetrics(c, nil)
 
 	member := func(name string) map[string]string { return map[string]string{"member": name} }
 	role := func(name, role string) map[string]string { return map[string]string{"member": name, "role": role} }
@@ -199,7 +199,7 @@ func TestPublishClusterMetrics(t *testing.T) {
 	c.Status.Instances[1].Replication.StalledSince = nil
 	c.Status.Instances[1].Replication.DelayedPages = 0
 	c.Status.Instances = c.Status.Instances[:2]
-	publishClusterMetrics(c)
+	publishClusterMetrics(c, nil)
 	if got, ok := sample(t, "cubrid_cluster_replication_healthy", c, nil); !ok || got != 1 {
 		t.Errorf("cubrid_cluster_replication_healthy = %v (sample: %v), want 1", got, ok)
 	}

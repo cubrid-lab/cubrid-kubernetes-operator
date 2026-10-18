@@ -380,8 +380,8 @@ otherwise.
 
 | Metric | Labels | Value |
 |---|---|---|
-| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when the expected members are ready and no more than one master is observed, else 0 (see below) |
-| `cubrid_cluster_instances` | `namespace`, `cluster` | members the cluster should have (see below) |
+| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when `Ready` is `True`, else 0 |
+| `cubrid_cluster_instances` | `namespace`, `cluster` | members the cluster should have (`spec.topology.promotableMembers`) |
 | `cubrid_cluster_instances_ready` | `namespace`, `cluster` | members whose Pods are ready, as the StatefulSet counts them (see below) |
 | `cubrid_cluster_ha_ready` | `namespace`, `cluster` | 1 or 0 |
 | `cubrid_cluster_primary_resolved` | `namespace`, `cluster` | 1 or 0 |
@@ -395,23 +395,21 @@ otherwise.
 | `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set, 0 while it is not; no sample without a reading |
 | `cubrid_instance_last_observation_timestamp_seconds` | `namespace`, `cluster`, `member` | time of the member's last answer; no sample for a member that never answered, nor for the member of a standalone cluster, which is not observed periodically |
 
-Every metric except the first three is taken from the cluster's status when
-that status was written, so a metric and the Condition or status field it
-mirrors come from the same observation. `cubrid_cluster_ready`,
-`cubrid_cluster_instances` and `cubrid_cluster_instances_ready` are set
-instead when a reconcile computes the members' readiness
-(`setReady` in `internal/controller/cubridcluster_controller.go`), before the
-status is written and whether or not the write succeeds. A reconcile that ends
-before that step, because a step failed or a recovery bootstrap runs, does
-not change them: while `Ready` is `False` for such a reason,
-`cubrid_cluster_ready` keeps the value it had and can still be 1. Read
-`Ready` itself where that difference matters. Deriving these metrics from the
-stored Conditions is
-[#458](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/458). A reading of an applier that could not be renewed stays in the
-status, and so in the metrics, for a bounded time before it is dropped. A
-Condition that the status does not carry has no sample; `cubrid_cluster_ha_ready`,
-`cubrid_cluster_primary_resolved` and `cubrid_cluster_routing_ready` are 0 while
-their Condition is `False` or `Unknown`.
+Every metric is taken from the cluster when its status was written, so a
+metric and the Condition or status field it mirrors come from the same
+observation; a status write that fails changes no metric. This holds for every
+reconcile that writes the status, also one that ends at a failed write of a
+child object or while a recovery bootstrap runs: `cubrid_cluster_ready` is 0
+whenever the stored `Ready` is not `True`. `cubrid_cluster_instances_ready` is
+not in the status; it is the count of ready Pods the StatefulSet reported to
+the reconcile that wrote the status. A reconcile that stopped before it read
+the StatefulSet, because a write of a child object failed, keeps the count
+written with the last status that had one. A reading of an applier that could
+not be renewed stays in the status, and so in the metrics, for a bounded time
+before it is dropped. A Condition that the status does not carry has no
+sample; `cubrid_cluster_ha_ready`, `cubrid_cluster_primary_resolved` and
+`cubrid_cluster_routing_ready` are 0 while their Condition is `False` or
+`Unknown`.
 
 - A value that is not available has no sample. It is never exported as 0.
 - Labels are few and bounded. An operation ID, a request ID, a Pod UID, an
