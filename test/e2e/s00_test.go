@@ -349,8 +349,11 @@ var podDeletionLimits = faults.Limits{
 // the same name exists with another UID: the exit code of the delete command
 // is not relied on. There is nothing to remove afterwards.
 //
-// With force the Pod gets no termination grace period: its containers are
-// killed without the preStop hook and without SIGTERM.
+// With force the Pod gets no termination grace period: the Pod object is
+// removed at once, but its containers still run the preStop hook, get
+// SIGTERM about one second later and are killed about three seconds after
+// the deletion, and the replacement's container can start before that
+// (docs/poc/RESULTS.md, POC-28, part 1).
 type podDeletion struct {
 	namespace, pod, uid string
 	force               bool

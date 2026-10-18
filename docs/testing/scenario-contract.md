@@ -655,8 +655,8 @@ it needs more.
 
 - **Level:** real database on Kind.
 - **Variants:** `graceful` (the Pod is deleted and its termination grace
-  period is respected) and `abrupt` (the container's processes are killed
-  without notice). On Kind the abrupt case runs twice: as
+  period is respected) and `abrupt` (the Pod is deleted without a grace
+  period; Kubernetes kills its containers about three seconds later). On Kind the abrupt case runs twice: as
   `abrupt-first-member` while the master is the first member of the node
   list, where CUBRID was observed to make the same member master again in
   most runs (POC-19), and as `abrupt` with whichever member is the master
@@ -667,7 +667,9 @@ it needs more.
   at once, but not its containers: in a probe on the pinned Kind the old
   container still ran its preStop hook, got `SIGTERM` about one second after
   the deletion and was killed about three seconds after it, and the
-  replacement's container could start before that (POC-28, part 1).
+  replacement's container could start before that (POC-28, part 1). The
+  probe's container ignored SIGTERM; a member's container stops CUBRID in
+  its preStop hook and on SIGTERM, so it can end earlier.
 - **CUBRID is expected to** (Manual; POC-3, POC-19): end with exactly one
   master. Normally a slave is promoted, and the former master does not become
   master again when it returns. When the master is the first member of the

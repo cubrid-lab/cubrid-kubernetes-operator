@@ -277,8 +277,13 @@ func (l *roleLog) write(rel string) string {
 
 // replicationStateLimit bounds how long replicationState may take in all;
 // each kubectl call it makes is stopped at that deadline, and each API
-// request also after 20 s.
+// request also after 20 s. Each CUBRID command in a member is stopped after
+// 15 s (memberReplicationScript), so that a member that is gone or
+// restarting cannot use up the budget of the others.
 const replicationStateLimit = 2 * time.Minute
+
+// kubectlExec is kubectl's subcommand that runs a command in a container.
+const kubectlExec = "exec"
 
 // memberReplicationScript prints, inside a member's container, what bears on
 // whether the member applies the master's log (#357): heartbeat status; for
@@ -290,11 +295,11 @@ const replicationStateLimit = 2 * time.Minute
 const memberReplicationScript = `db=$1; shift
 PATH="${CUBRID}/bin:${PATH}"
 logs="${CUBRID}/log"
-echo "== heartbeat status"; cubrid heartbeat status 2>&1 | head -n 40
+echo "== heartbeat status"; timeout 15 cubrid heartbeat status 2>&1 | head -n 40
 for src in "$@"; do
   [ "$src" = "$HOSTNAME" ] && continue
   echo "== applyinfo for the log copied from $src"
-  cubrid applyinfo -L "${CUBRID_DATABASES}/${db}_${src}" -r "$src" -a "$db" 2>&1 | head -n 60
+  timeout 15 cubrid applyinfo -L "${CUBRID_DATABASES}/${db}_${src}" -r "$src" -a "$db" 2>&1 | head -n 60
   for f in "${logs}/${db}@${src}_copylogdb.err" "${logs}/${db}@localhost_applylogdb_${db}_${src}.err"; do
     echo "== $(basename "$f"): first and last time stamps, then the last messages with repeats counted"
     [ -f "$f" ] || { echo "(no file)"; continue; }
@@ -316,17 +321,25 @@ echo "== active log lock file"; head -c 200 "${CUBRID_DATABASES}/${db}/${db}_lga
 // force-deleted StatefulSet Pod's replacement while the old container still
 // ran (docs/poc/RESULTS.md, POC-28). It is recorded on success as well, so
 // that the margin between the two can be compared across runs. It takes at
-// most replicationStateLimit; what could not be read in time is recorded
-// with its error. The file is redacted.
-func (r *haRun) replicationState(variant string, result *evidence.Scenario) {
+// most replicationStateLimit and ends with the spec's context, so it does
+// not run past the suite's deadline; what could not be read in time is
+// recorded with its error. A failed call records its exit error only: the
+// command is known from this code and its output is recorded once. The file
+// is redacted.
+func (r *haRun) replicationState(spec context.Context, variant string, result *evidence.Scenario) {
 	if variant == s03Graceful {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), replicationStateLimit)
+	ctx, cancel := context.WithTimeout(spec, replicationStateLimit)
 	defer cancel()
 	kubectl := func(args ...string) (string, error) {
-		return utils.Run(exec.CommandContext(ctx, "kubectl",
+		out, err := utils.Run(exec.CommandContext(ctx, "kubectl",
 			append([]string{"--request-timeout=20s", "-n", r.namespace}, args...)...))
+		// utils.Run wraps the exit error with the command and its output.
+		if wrapped, ok := err.(interface{ Unwrap() error }); ok && wrapped.Unwrap() != nil {
+			err = wrapped.Unwrap()
+		}
+		return out, err
 	}
 	var b strings.Builder
 	add := func(format string, args ...any) { _, _ = fmt.Fprintf(&b, format+"\n", args...) }
@@ -347,7 +360,7 @@ func (r *haRun) replicationState(variant string, result *evidence.Scenario) {
 				`{.status.containerStatuses[?(@.name=="cubrid")].state.running.startedAt}`)
 		add("\n%s: Pod uid, created, init container start and end, cubrid restarts and start: %s (err %v)",
 			member, started, serr)
-		out, err := kubectl(append([]string{"exec", member, "-c", "cubrid", "--", "bash", "-c",
+		out, err := kubectl(append([]string{kubectlExec, member, "-c", "cubrid", "--", "bash", "-c",
 			memberReplicationScript, "replication-state", r.database}, r.members...)...)
 		add("%s (err %v):\n%s", member, err, out)
 	}
@@ -363,23 +376,23 @@ func (r *haRun) replicationState(variant string, result *evidence.Scenario) {
 // master's Pod is deleted.
 func s03Step(r *haRun, variant string) {
 	It("S03/"+variant+": one member is master again after the master Pod is deleted, and no acknowledged write is lost",
-		Label("S03", evidence.Requirement{ID: "S03", Variant: variant}.Label()), func() {
+		Label("S03", evidence.Requirement{ID: "S03", Variant: variant}.Label()), func(ctx SpecContext) {
 			var needs func(context.Context) error
 			if variant == s03AbruptFirst {
 				needs = r.needsFirstMemberAsMaster
 			}
 			r.enter(needs)
-			r.s03(variant)
+			r.s03(ctx, variant)
 		})
 }
 
-func (r *haRun) s03(variant string) {
+func (r *haRun) s03(spec context.Context, variant string) {
 	result := evidence.Scenario{ID: "S03", Variant: variant, Result: evidence.Fail,
 		Reason: "a check of S03 failed; see the test output"}
 	// Reported also when a check below fails.
 	defer func() { recordScenario(result) }()
 	// Runs before the scenario is recorded, also when a check below failed.
-	defer func() { r.replicationState(variant, &result) }()
+	defer func() { r.replicationState(spec, variant, &result) }()
 
 	client := s03Clients[variant]
 

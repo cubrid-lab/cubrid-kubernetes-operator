@@ -1112,10 +1112,10 @@ a slave. Which of the two happens is a race between the returning member and
 the others' failure detection. Of the runs recorded so far the same member
 resumed in ten and a slave was promoted in one.
 
-> **Note (POC-28, 2026-10-18):** "deleted" does not mean "gone at once". On
-> Kind the old container of a force-deleted StatefulSet Pod kept running for
-> about three seconds after the deletion, and its replacement could start
-> before it ended. The old master may therefore still have answered its
+> **Note (POC-28, 2026-10-18):** "deleted" does not mean "gone at once". In
+> a Kind probe whose container ignored SIGTERM, the old container of a
+> force-deleted StatefulSet Pod kept running for about three seconds after
+> the deletion, and its replacement could start before it ended. The old master may therefore still have answered its
 > peers while the new Pod came up.
 
 **Not tested here:** a killed master that stays away longer than the others'
@@ -1787,7 +1787,7 @@ loops have a resolution of 50 ms and 0.5 to 0.9 s, so a shorter window can
 be missed. One image, local Docker; a few runs per case, not a general
 CUBRID guarantee.
 
-## POC-28 — a replaced master whose old server still runs on the same volume, and slaves that then apply nothing (ADR-0005/0006, #357) — **REPRODUCED with two servers on one volume; not with packet loss alone**
+## POC-28 — a replaced master whose old server still runs on the same volume, and slaves that then apply nothing (ADR-0005/0006, #357) — **REPRODUCED with two servers on one volume under forced conditions; not with packet loss alone; not with the preStop's `heartbeat stop`**
 
 **Question (#357).** In S03 `abrupt-first-member` on Kind, the master Pod
 `hab-0` was deleted without a grace period and came back as the master; both
@@ -1823,7 +1823,15 @@ kernel clock.
 
 So on Kind the replacement of a force-deleted Pod can start on the same
 volume while the old container still runs; the old one is killed about
-three seconds after the deletion whatever its preStop hook does. An init
+three seconds after the deletion whatever its preStop hook does. **This is
+an upper bound under the probe's conditions:** the probe's PID 1 ignored
+SIGTERM and its preStop only slept. A member container of the Operator
+behaves differently: its preStop runs `instance-manager shutdown`
+(`heartbeat stop`, then `server stop`), and its entrypoint stops CUBRID and
+exits on SIGTERM (`build/instance-manager/entrypoint.sh`, `terminate`), so
+its server is being stopped from about 0.1 s and the container can end
+before it is killed. How long a real member's server keeps running after a
+force deletion was not measured. An init
 container (the Operator adds `wait-for-peer` only when NetworkPolicies are
 enabled, PR #327) delayed the new container by about 1.7 s, past the old
 one's end, on an idle node. The Kubernetes documentation warns that force
@@ -1931,7 +1939,14 @@ history: its operation was cut off when the client was stopped.
   slaves hold, both slaves stop applying with a fail count of 0, and every
   later write exists on the master only. Seen in 2 of 3 runs with an overlap
   of about 2.5 s; in the third the new member failed to become active and a
-  slave took over.
+  slave took over. **These three runs (o9, o10, o11) were forced:** they ran
+  without the preStop's `heartbeat stop`, the old container was SIGKILLed at
+  +6 s where Kind kills at about +3 s, and the old server's PID was forced
+  above 400 so that CUBRID would not refuse the second server.
+- **The only run with the preStop's `heartbeat stop` (o1) did not
+  reproduce it:** the old master withdrew, a slave was promoted, and nothing
+  was lost. (In o1 the replacement also started after the old container was
+  killed, so it says nothing about an overlap with a stopping server.)
 - **Why the slaves apply nothing:** the new server's log continues from an
   earlier point than what the slaves copied, so the record at the position
   where their appliers stopped is now a part of a different log. The applier
@@ -1942,16 +1957,19 @@ history: its operation was cut off when the client was stopped.
   the new `h-0` and its peers dropped for its first 1.2 to 1.4 s (l1 to l3),
   and without loss (o5 to o8), `h-0` became master again and nothing was
   lost or stalled.
-- **CUBRID does not reliably refuse a second server on a running database**
-  from another container with the same hostname (part 2).
+- **CUBRID did not refuse a second server on a running database in 1 of 2
+  attempts** from another container with the same hostname (part 2).
 - **Kind starts a force-deleted StatefulSet Pod's replacement while the old
   container still runs**, by 310 to 470 ms without an init container on an
   idle node (part 1).
 
 **What this does and does not establish for #357.** Established on this
-image: the mechanism above produces the exact signature, and the
-precondition (two containers of one member on one volume) occurs on Kind.
-**Not established:** that the failures on GitHub runners were caused by it.
+image: the mechanism above, forced as described, produces the exact
+signature, and two containers of one member on one volume occur on Kind
+under the probe's conditions. **Hypothesis, not established:** that the
+failures on GitHub runners were caused by it. **Open question:** whether two
+servers on one volume are reachable at all with the Operator's real preStop
+and SIGTERM handling, which start stopping the old server at about 0.1 s.
 In part 1 the replacement's container, not its server, overlapped the old
 one, and by 310 to 470 ms only; a new server started 1.1 to 2.5 s after
 its container (part 3, POC-26), so on an idle node it would start after the
@@ -1978,8 +1996,10 @@ here; see #357.
 records each member's replication state after the abrupt variants, #357; one
 local attempt on this host stopped in the HA setup, before S03, when the
 workload client step timed out after 600 s under the I/O pressure); the
-pinned Kind on a loaded runner; the old server stopped by the Instance
-Manager's real shutdown instead of `heartbeat stop`; `ha_copy_sync_mode`
+pinned Kind on a loaded runner; the Instance Manager's real preStop and
+SIGTERM handling in the old container (no overlap run used any stop of the
+old server; only o1, without an overlap, used `heartbeat stop`); a probe
+whose old container exits on SIGTERM as a member's does; `ha_copy_sync_mode`
 other than the default; more than three runs with overlapping servers; the
 three-VM lab. One image, local Docker, a few runs each; not a general CUBRID
 guarantee.
@@ -2007,10 +2027,12 @@ as written. Later POCs confirm parts of it and contradict others:
 - **Two servers on one database diverge the log.** A replacement container
   of a member whose old server still runs started a second server on the
   same volume; the returning master then lacked acknowledged writes the
-  slaves held, and both slaves applied nothing more (POC-28, Docker). Kind
-  started a force-deleted Pod's replacement while the old container still
-  ran (POC-28, part 1). That this caused the CI failures of #357 is not
-  shown; packet loss alone did not reproduce them.
+  slaves held, and both slaves applied nothing more (POC-28, Docker, under
+  forced conditions: no preStop, a late kill, a forced PID). Kind started a
+  force-deleted Pod's replacement while the old container still ran, in a
+  probe whose container ignored SIGTERM (POC-28, part 1). That this caused
+  the CI failures of #357, and that it is reachable with the Operator's real
+  preStop, is not shown; packet loss alone did not reproduce them.
 - **No quorum.** A lone member accepts writes (POC-16; the promoted-slave
   case reproduced natively in POC-17).
 - **Seeding can lose data silently.** A member restored with plain
