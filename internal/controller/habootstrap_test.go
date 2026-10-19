@@ -453,6 +453,7 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 				Expect(reason).To(Equal("SeedBackupInProgress"), "prefix %q", prefix)
 				Expect(seed.backupReq.Upload).NotTo(BeNil())
 				Expect(seed.backupReq.Upload.Prefix).To(Equal(want), "prefix %q", prefix)
+				Expect(seed.backupReq.Upload.Seed).To(BeTrue())
 				passed, answer := instanceManagerChecks(GinkgoT().TempDir(), seed.backupReq)
 				Expect(passed).To(BeTrue(), "prefix %q: the Instance Manager answers %s", prefix, answer)
 			}
@@ -574,6 +575,30 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			_, reason = bootstrapCondition(got)
 			Expect(reason).To(Equal("SeedRestoreInProgress"))
 			Expect(seed.restoreReq.ExpectedCubridVersion).To(Equal(cubridVersion + ".1"))
+		})
+
+		It("adopts a seed backup recorded before explicit seed purpose was sent", func() {
+			seed := &fakeSeedClient{backupState: instancemanager.OpRunningBackup,
+				restore: map[string]instancemanager.OperationState{}, heldKeys: true}
+			key := create(seededCluster("seed-legacy"))
+			r := reconcilerFor(seed)
+			reconcileOnce(r, key)
+			Expect(seed.backups).To(HaveLen(1))
+			for k, b := range seed.backups {
+				b.req.Upload.Seed = false
+				seed.backups[k] = b
+			}
+			got := reconcileOnce(r, key)
+			_, reason := bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedBackupInProgress"))
+			Expect(seed.lookups).To(Equal(1))
+			Expect(seed.backups).To(HaveLen(1))
+			seed.backupState = instancemanager.OpCompleted
+			seed.restore["seed-legacy-1"] = instancemanager.OpRestoring
+			got = reconcileOnce(r, key)
+			_, reason = bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedRestoreInProgress"))
+			Expect(seed.restoreReq.Prefix).To(Equal("prod/" + string(got.UID) + "/seed/appdb"))
 		})
 
 		// The restore of a later member is started from the master that was

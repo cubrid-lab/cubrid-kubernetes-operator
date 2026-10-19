@@ -1327,7 +1327,7 @@ spec:
   databases: [{ name: production }]
   bootstrap:
     recovery:
-      manifestUri: s3://bucket/prod/<cluster-uid>/production/<backup-uid>/manifest.json
+      manifestUri: s3://bucket/prod/<cluster-uid>/production/<backup-uid>/attempt-<upload-id>/manifest.json
   objectStorage:
     endpoint: s3.example.com
     credentialsSecretRef: { name: restore-object-storage }

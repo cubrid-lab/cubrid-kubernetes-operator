@@ -125,12 +125,13 @@ func TestUploadBackup_ManifestWrittenLast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadBackup: %v", err)
 	}
-	if res.ManifestURI != "s3://cubrid-backups/prod/example/uid-1/manifest.json" {
-		t.Errorf("manifest URI = %s", res.ManifestURI)
+	prefix := uploadedPrefix(t, res.ManifestURI, "cubrid-backups")
+	if !strings.HasPrefix(prefix, "prod/example/uid-1/attempt-") {
+		t.Fatalf("manifest URI = %s", res.ManifestURI)
 	}
 
 	// manifest.json must exist and validate its listed objects.
-	manifestData, ok := store.objects["cubrid-backups/prod/example/uid-1/manifest.json"]
+	manifestData, ok := store.objects["cubrid-backups/"+prefix+"/manifest.json"]
 	if !ok {
 		t.Fatal("manifest.json was not uploaded")
 	}
@@ -145,7 +146,7 @@ func TestUploadBackup_ManifestWrittenLast(t *testing.T) {
 		t.Errorf("object size = %d", m.Objects[0].SizeBytes)
 	}
 	// The data object must be present.
-	if _, ok := store.objects["cubrid-backups/prod/example/uid-1/backup/pocdb_bk0v000"]; !ok {
+	if _, ok := store.objects["cubrid-backups/"+prefix+"/backup/pocdb_bk0v000"]; !ok {
 		t.Error("data object was not uploaded")
 	}
 }
@@ -221,4 +222,27 @@ func TestParseManifest_RejectsUnknownVersion(t *testing.T) {
 	if _, err := ParseManifest([]byte(`{"manifestVersion":999}`)); err == nil {
 		t.Error("expected rejection of unknown manifest version")
 	}
+}
+
+// uploadedPrefix requires the exact returned manifest URI; callers must never
+// infer a completed artifact location from an upload's requested parent.
+func uploadedPrefix(t *testing.T, uri, bucket string) string {
+	t.Helper()
+	key, ok := strings.CutPrefix(uri, "s3://"+bucket+"/")
+	if !ok {
+		t.Fatalf("manifest URI %q is outside bucket %q", uri, bucket)
+	}
+	prefix, ok := strings.CutSuffix(key, "/"+ManifestObjectName)
+	if !ok || prefix == "" {
+		t.Fatalf("invalid manifest URI %q", uri)
+	}
+	return prefix
+}
+
+func operationPrefix(t *testing.T, op Operation, bucket string) string {
+	t.Helper()
+	if op.Artifact == nil {
+		t.Fatalf("operation %s has no artifact", op.ID)
+	}
+	return uploadedPrefix(t, op.Artifact.ManifestURI, bucket)
 }

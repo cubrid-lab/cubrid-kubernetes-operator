@@ -581,6 +581,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			StagingDir: req.Destination,
 			Bucket:     req.Upload.Bucket,
 			Prefix:     req.Upload.Prefix,
+			Seed:       req.Upload.Seed,
 			Manifest: BackupManifest{
 				Database:       req.Database,
 				ClusterUID:     req.Upload.ClusterUID,
@@ -993,6 +994,18 @@ func validateBackupRequest(req BackupRequest) error {
 	}
 	if !hostLabelPattern.MatchString(up.SourceInstance) {
 		return fmt.Errorf("upload sourceInstance %q is not a host name (a DNS label)", up.SourceInstance)
+	}
+	if up.Seed {
+		if err := validateSeedUpload(up.Prefix, up.ClusterUID, req.Database, up.SourceRole); err != nil {
+			return err
+		}
+	}
+	manifestPrefix := up.Prefix
+	if !up.Seed {
+		manifestPrefix = BackupAttemptPrefix(up.Prefix, strings.Repeat("0", BackupAttemptIDLength))
+	}
+	if len(path.Join(manifestPrefix, ManifestObjectName)) > 1024 {
+		return errors.New("upload manifest key exceeds the S3 1024-byte limit, including the attempt suffix")
 	}
 	// unknown is what the operator records for the only member of a
 	// single-instance cluster, whose role is not resolved (ADR-0007,

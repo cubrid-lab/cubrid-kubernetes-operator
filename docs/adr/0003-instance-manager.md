@@ -439,6 +439,21 @@ the manager API.
 9. **Sidecar negative POC** — confirm a sidecar without duplicated CUBRID
    install cannot run required CLIs; document as the rejection reason.
 
+### Backup artifact identity
+
+An ordinary asynchronous backup uploads below a fresh `attempt-<upload-id>`
+directory and reports the exact manifest URI in its operation's artifact.
+The upload ID is generated independently of the durable operation ID, so an
+empty/reset operation store cannot reuse a completed ordinary artifact's keys.
+The internal HA bootstrap explicitly sends `upload.seed: true` for the stable
+seed-location exception in ADR-0007. That purpose is refused before work unless
+the master source metadata and `<clusterUID>/seed[-artifact]/<database>` suffix
+match. Ordinary callers omit it. The new seed field can change a recorded
+backup request's hash; the existing lookup by idempotency key follows the old
+operation rather than starting a second one. Restore requests are unchanged.
+See [ADR-0007](0007-backup-execution.md#artifact-and-upload-model) for retention,
+compatibility and the distinction between requested prefix and returned URI.
+
 ## Revisit When
 
 - mTLS/cert rotation infrastructure exists → upgrade `/v1/*` auth.

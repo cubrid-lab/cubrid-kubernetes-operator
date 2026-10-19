@@ -234,10 +234,45 @@ ends, also one that was refused, has `status.completedAt`.
 
   ```text
   s3://<bucket>/<prefix>/<cluster-uid>/<database>/<backup-uid>/
-    manifest.json        # written LAST = atomic completion marker
-    backup/<cubrid files>
-    logs/backupdb.log
+    attempt-<fresh-upload-id>/
+      manifest.json      # written LAST = atomic completion marker
+      backup/<cubrid files>
   ```
+
+Each ordinary upload generates a fresh cryptographically random 128-bit ID,
+including a retry after its operation store was lost or an operation ID was
+reused. Its whole artifact is below `attempt-<32-hex-id>/`. The returned
+manifest URI is recorded in the operation and `CubridBackup.status.artifact`;
+consumers use that exact URI, never infer one from the requested parent prefix.
+There is no manifest pointer at the parent and no last-writer selection. Two
+concurrent attempts may both complete at distinct URIs without modifying each
+other. An incomplete attempt has no completed manifest; failed, cancelled or
+ambiguous uploads leave their remote attempt objects in place and never remove
+another attempt. Remote attempt retention/garbage collection requires an
+explicit separate policy. Legacy manifest-v1 URIs and the relative
+`backup/<original filename>` layout remain readable without a schema change.
+The manager, not a caller-supplied operation ID, generates the upload ID.
+A new Operator with an older Instance Manager does not acquire this protection:
+the updated Instance Manager must be deployed before claiming immutable ordinary
+artifacts. Deploy the updated Operator before updating Instance Managers: an
+older Operator omits `seed: true`, so a new manager would isolate its seed
+upload while the old controller tried to restore the obsolete stable location.
+Use the matching controller for HA seeding; for a rollback, revert the Instance
+Managers before reverting the Operator. The ordinary-artifact protection is
+absent again on the old manager. There is no version-negotiation guarantee for
+mixed controller/manager versions. Existing artifact URIs do not move.
+
+The HA seed exception below uses explicit `upload.seed: true`, supplied by the
+bootstrap controller. A seed upload is accepted only with master source
+metadata and the clean suffix `<cluster-uid>/seed[-<artifact>]/<database>`;
+ordinary `CubridBackup` destinations end in their backup UID and cannot use
+that mode. This is authenticated request metadata, not independent proof of
+the caller's identity as a controller or the engine's actual role. The stable
+seed prefix and restore request body remain unchanged, preserving restore
+takeover/idempotency. An older recorded seed backup request without the field
+can conflict by hash; the existing 409 lookup adopts its recorded operation
+instead of dispatching another one. The earlier manager/seed artifact behavior
+remains a compatibility consideration, separate from ordinary artifact safety.
 
 - **ADR-0006 rebuild consumes the object-storage manifest** (download +
   verify checksum/manifest before restore), **not** a direct
@@ -354,8 +389,8 @@ Uploading → Completed | Failed | CleaningUp`. Operator restart → re-poll
 by operation ref / idempotency key. Manager restart → reconstruct from
 records + filesystem facts. **Successful `backupdb` ≠ successful backup**
 — success requires upload + checksum + `manifest.json`. Never overwrite a
-completed artifact; retries are new attempts. A seed backup of an HA member
-(ADR-0010) is the exception: its place names the source and the round, not
+completed ordinary artifact; retries have distinct artifact URIs. A seed backup
+of an HA member (ADR-0010) is the exception: its place names the source and the round, not
 the attempt, so a retry's seed backup replaces the earlier attempt's at the
 same place, and a seed restore retry that takes over the data the earlier
 attempt already restored takes no new seed backup at all (ADR-0008, #463).
@@ -437,6 +472,24 @@ the message), and the cluster has no
     queued (ADR-0003 policy).
 15. Role change during backup — source role recorded at start; outcome
     conservative.
+
+The focused storage-publication regression is opt-in:
+
+```sh
+CUBRID_TEST_S3_ENDPOINT=127.0.0.1:<port> \
+CUBRID_TEST_S3_ACCESS_KEY="$TEST_ACCESS_KEY" \
+CUBRID_TEST_S3_SECRET_KEY="$TEST_SECRET_KEY" \
+go test ./internal/instancemanager -run '^TestUploadBackup_RealS3$' -count=1 -v
+```
+
+Use a dedicated loopback S3 service; the test refuses non-loopback targets,
+creates a uniquely named bucket and removes only that bucket and its objects.
+It interleaves two uploads before either manifest, verifies both artifacts and
+original restore filenames, and injects a lost result after the backend stored
+a manifest. This establishes the object-store publication boundary. It does
+not execute `backupdb`, replace a PVC or certify the integrated #88 scenarios.
+The ordinary unit suite covers data/verification/manifest failures, a reset
+operation store, legacy artifacts and the explicit seed exception.
 
 ## Revisit When
 

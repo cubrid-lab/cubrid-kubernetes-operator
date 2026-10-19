@@ -193,7 +193,7 @@ func TestServer_Backup_RetryAfterRestartUploadsOnlyItsOwnFiles(t *testing.T) {
 		t.Fatalf("final state = %s (reason %q), want Completed", final.State, final.FailureReason)
 	}
 
-	got := manifestObjects(t, objects, testUpload.Bucket, "seed/r1")
+	got := manifestObjects(t, objects, testUpload.Bucket, operationPrefix(t, final, testUpload.Bucket))
 	want := map[string]string{"backup/" + dbName + "_bk0v000": sha256Hex("new " + dbName)}
 	if len(got) != len(want) || got["backup/"+dbName+"_bk0v000"] != want["backup/"+dbName+"_bk0v000"] {
 		t.Errorf("manifest objects = %v, want only what this backupdb wrote: %v", got, want)
@@ -253,7 +253,7 @@ func TestServer_Backup_SharedDestinationKeepsTheRunningBackupsFiles(t *testing.T
 	if final.State != OpCompleted {
 		t.Fatalf("first backup = %s (reason %q), want Completed", final.State, final.FailureReason)
 	}
-	got := manifestObjects(t, objects, testUpload.Bucket, "appdb")
+	got := manifestObjects(t, objects, testUpload.Bucket, operationPrefix(t, final, testUpload.Bucket))
 	if len(got) != 1 || got["backup/"+dbName+"_bk0v000"] != sha256Hex("new "+dbName) {
 		t.Errorf("manifest objects = %v, want only %s_bk0v000 of the first backup", got, dbName)
 	}

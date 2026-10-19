@@ -88,6 +88,18 @@ POC history, not live support certification.
 | Hardening | Update sequencing, auth (a generated Instance Manager token per cluster, #270, and its rotation with an operator-side overlap that also moves clusters off the shared token of older versions, #324, and the report of a member that refuses the token apart from an unreachable one, #325: unit/envtest), metrics and Events code | Placement/retention/PDB, security and operational accuracy require #90–#92; the token rotation and the move off a shared token are an e2e scenario on Kind (S14 `token-rotation`, `token-migration`, #343) and have not run in the VM lab, and a refused token has not been reported by real members; automatic Pod replacement for updates is switched off until its gates exist (#96, #197, #198): the manager never sets `AutomaticReplacement`, nothing sets the `FencingRequired` Condition that the update planner checks, and no PodDisruptionBudget is created or read (code inspection of `cmd/main.go` and `internal/controller/update.go`) |
 | Release | Lint, unit/envtest and manager E2E workflows | Real-DB lane, lab gates, candidate artifacts and runbook reproduction require #122–#127; the demo (#128) is a post-v0.1 follow-up, not a release gate |
 
+Ordinary backup uploads (#337) use a fresh artifact directory for each upload,
+including a retry with a reset operation store; the returned manifest URI is
+recorded in the operation and backup status. Unit/race tests and a dedicated
+MinIO service built from release source `RELEASE.2025-10-15T17-29-55Z`
+verify separate concurrent attempts and preservation after an ambiguous
+manifest response. Explicit HA seed requests retain their stable location;
+legacy seed-operation adoption and unchanged restore paths are covered in
+envtest/unit tests. These results do not establish real CUBRID/PVC replacement,
+CSI or VM behavior; the integrated backup scenarios remain with #88.
+The [storage command, failure reproduction and verification record](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/337#issuecomment-6259247347)
+identify the backend revision and the evidence level.
+
 For live scenarios use **not run**, **blocked**, **fail**, **pass** or **not
 applicable**, with a revision, environment, command, evidence link and reason.
 A required scenario cannot pass through skipping, missing evidence, a timeout
