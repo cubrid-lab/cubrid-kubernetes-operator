@@ -88,6 +88,18 @@ POC history, not live support certification.
 | Hardening | Update sequencing, auth (a generated Instance Manager token per cluster, #270, and its rotation with an operator-side overlap that also moves clusters off the shared token of older versions, #324, and the report of a member that refuses the token apart from an unreachable one, #325: unit/envtest), metrics and Events code | Placement/retention/PDB, security and operational accuracy require #90–#92; the token rotation and the move off a shared token are an e2e scenario on Kind (S14 `token-rotation`, `token-migration`, #343) and have not run in the VM lab, and a refused token has not been reported by real members; automatic Pod replacement for updates is switched off until its gates exist (#96, #197, #198): the manager never sets `AutomaticReplacement`, nothing sets the `FencingRequired` Condition that the update planner checks, and no PodDisruptionBudget is created or read (code inspection of `cmd/main.go` and `internal/controller/update.go`) |
 | Release | Lint, unit/envtest and manager E2E workflows | Real-DB lane, lab gates, candidate artifacts and runbook reproduction require #122–#127; the demo (#128) is a post-v0.1 follow-up, not a release gate |
 
+The installed-Operator connection command (#489, under #122) creates a fresh
+namespace, checks declared and actual runtime identities, commits/reads SQL,
+and confirms UID-protected namespace cleanup. Its `lab-installed-smoke` / LAB00
+baseline [passed with recorded command and evidence](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/489#issuecomment-6257627016)
+on a dedicated Kind v1.37.0/containerd 2.3.4 with CUBRID
+11.4.6.1963 and locally built images from main `20afeaa`; wrong-target,
+existing-namespace and SIGTERM/cleanup cases were also checked. Unit/race and
+API precondition tests cover its safety boundaries. Actual VM execution,
+the guarded lab launcher and private self-hosted workflow acceptance remain
+under #80/#122. This connection result is separate from S00 installation or
+S00–S15 qualification, and does not establish CSI or VM-fault behavior.
+
 For live scenarios use **not run**, **blocked**, **fail**, **pass** or **not
 applicable**, with a revision, environment, command, evidence link and reason.
 A required scenario cannot pass through skipping, missing evidence, a timeout
