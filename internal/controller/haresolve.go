@@ -193,9 +193,9 @@ type PrimaryResolution struct {
 	CurrentPrimary string
 	Status         metav1.ConditionStatus
 	Reason         string
-	// MultipleMasters reports fresh local master claims independently of
-	// primary authority. Conflicting claims can keep Ready false without
-	// allowing either member to become currentPrimary.
+	// MultipleMasters preserves the authoritative multiple-master verdict and
+	// also reports fresh local master claims independently of primary authority.
+	// Conflicting claims can keep Ready false without authorizing a primary.
 	MultipleMasters bool
 	// TokenRefused names the members whose Instance Manager refused the
 	// cluster's token, when the reason is reasonTokenRefused.
@@ -264,7 +264,7 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 		}
 	}
 
-	res := PrimaryResolution{Status: metav1.ConditionFalse, MultipleMasters: masterClaims > 1}
+	res := PrimaryResolution{Status: metav1.ConditionFalse, MultipleMasters: masters > 1 || masterClaims > 1}
 	switch {
 	case masters > 1:
 		res.Reason = reasonMultiplePrimaries

@@ -170,8 +170,8 @@ func TestReadyMasterClaims(t *testing.T) {
 }
 
 // The HTTP API can return a status that did not pass through ParseHAStatus.
-// A role alone remains subject to the existing primary-resolution rules, but
-// cannot substitute for the explicit local evidence used by Ready.
+// Existing authoritative masters must still keep Ready false even when the
+// response lacks the additional local evidence used for conflicting claims.
 func TestReadyMasterClaimsWithoutLocalEvidence(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -194,11 +194,24 @@ func TestReadyMasterClaimsWithoutLocalEvidence(t *testing.T) {
 				c1: probe(c1, tc.status),
 			}
 			res := resolvePrimary([]string{c0, c1}, obs, testNow)
-			if res.MultipleMasters || obs[c1].ActiveMasterClaim {
+			if obs[c1].ActiveMasterClaim {
 				t.Fatalf("a response without local evidence counted as a second active master: %+v", obs[c1])
 			}
 			if res.Reason != reasonMultiplePrimaries || res.Status != metav1.ConditionFalse || res.CurrentPrimary != "" {
 				t.Fatalf("existing primary authority rules changed: %+v", res)
+			}
+			cluster := haCluster("raw-master-claims")
+			t.Cleanup(func() { metricspkg.DeleteCluster(cluster.Namespace, cluster.Name) })
+			r := &CubridClusterReconciler{}
+			r.setReady(cluster, 2, 2, res.MultipleMasters)
+			readyCount := int32(2)
+			publishClusterMetrics(cluster, &readyCount)
+			ready := meta.FindStatusCondition(cluster.Status.Conditions, conditionReady)
+			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonMultiplePrimaries {
+				t.Errorf("two authoritative masters must keep Ready false: %+v", ready)
+			}
+			if got := testutil.ToFloat64(metricspkg.ClusterReady.WithLabelValues(cluster.Namespace, cluster.Name)); got != 0 {
+				t.Errorf("two authoritative masters must keep cubrid_cluster_ready at zero, got %v", got)
 			}
 		})
 	}

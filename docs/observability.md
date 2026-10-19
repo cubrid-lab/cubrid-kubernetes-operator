@@ -118,9 +118,12 @@ cluster without a role prober is not changed.
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
 available; they do not say that a client can run SQL. For an HA cluster,
 `Ready` is also `False` (`MultiplePrimariesObserved`) while more than one
-member reports itself master with an active server, since two masters are
-never a healthy cluster (ADR-0001). Each claim must be fresh, name the member
-that was asked, and have exactly one matching local entry in its node list.
+authoritative master is observed, since two masters are never a healthy
+cluster (ADR-0001). In addition, more than one member's local active-master
+claim keeps `Ready` false even when its role is untrusted for primary
+resolution. Each additional claim must be fresh, name the member that was
+asked, have an active server, and have exactly one matching local entry in
+its node list.
 A master that also lists another master is still untrusted for primary
 resolution: `PrimaryResolved` remains `False/AmbiguousPrimaryObservation`,
 and its instance role stays `unknown`. Its local active-master claim still
