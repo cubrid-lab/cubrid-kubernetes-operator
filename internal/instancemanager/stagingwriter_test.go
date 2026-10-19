@@ -358,6 +358,13 @@ func TestStagingHolders_UnreadableProcesses(t *testing.T) {
 		"20": {"cub_server", nil},
 		"21": {"sshd", nil},
 	})
+	// Path digits are not process identity. Keep PID 21 in the wrapped
+	// filesystem path even though only PID 20 belongs in the error.
+	withDigits := filepath.Join(t.TempDir(), "proc-21")
+	if err := os.Rename(proc, withDigits); err != nil {
+		t.Fatal(err)
+	}
+	proc = withDigits
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory without permissions")
 	}
@@ -365,7 +372,8 @@ func TestStagingHolders_UnreadableProcesses(t *testing.T) {
 		lockDir(t, filepath.Join(proc, pid, "fd"))
 	}
 	held, err := stagingHolders(proc, procCommReader(proc), "/stage/uid-1/op-1")
-	if err == nil || !strings.Contains(err.Error(), "20 cub_server") || strings.Contains(err.Error(), "21") || len(held) != 0 {
+	if err == nil || !strings.Contains(err.Error(), "read the open files of 20 cub_server:") ||
+		strings.Contains(err.Error(), "read the open files of 21 ") || len(held) != 0 {
 		t.Errorf("stagingHolders = %v, %v; want an error naming only the unreadable cub_server", held, err)
 	}
 
