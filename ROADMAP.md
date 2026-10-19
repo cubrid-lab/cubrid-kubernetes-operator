@@ -95,10 +95,27 @@ baseline [passed with recorded command and evidence](https://github.com/cubrid-l
 on a dedicated Kind v1.37.0/containerd 2.3.4 with CUBRID
 11.4.6.1963 and locally built images from main `20afeaa`; wrong-target,
 existing-namespace and SIGTERM/cleanup cases were also checked. Unit/race and
-API precondition tests cover its safety boundaries. Actual VM execution,
-the guarded lab launcher and private self-hosted workflow acceptance remain
-under #80/#122. This connection result is separate from S00 installation or
-S00–S15 qualification, and does not establish CSI or VM-fault behavior.
+API precondition tests cover its safety boundaries.
+
+The first recorded VM-lab LAB00 connection smoke
+[passed on 2026-10-19](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/492#issuecomment-6269706537)
+after a manual deployment of main `701b427deb22d7fc664ce00812db57bd7695a5a8`,
+using published development images from
+[run 39253773768](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/39253773768).
+The manager deployed by the private GitOps owner was observed Running/Ready
+at digest `sha256:cff4fb2623ed7fd18250d4cb3ed763e648b70f9c6a572283c908a2c052668431`;
+the observed Instance Manager runtime matched
+`sha256:1b228d401e1b54942af098fd73da5c951e1a4fb5d9a7916af5b562300aa854cd`.
+The smoke ran from `2026-10-19T14:20:40.635937212Z` to
+`2026-10-19T14:21:46.805417516Z` on Kubernetes `v1.36.5+k3s1`, CUBRID
+`11.4.6.1963`, four Ready nodes and node-local `local-path` storage (not CSI).
+Both SQL commands produced clean outputs; LAB00 reported `pass`,
+`passed=true`, `problems=[]`, `cleanupSucceeded=true` and `neverEvents=[]`.
+The guarded lab launcher, private self-hosted workflow acceptance and
+new-node registry access remain under #80/#122. These connection results are
+separate from S00 installation or S00–S15 qualification, and do not establish
+CSI or VM-fault behavior. Namespace cleanup does not certify deletion of
+retained backend volumes.
 
 Ordinary backup uploads (#337) use a fresh artifact directory for each upload,
 including a retry with a reset operation store; the returned manifest URI is
