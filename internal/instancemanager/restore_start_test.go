@@ -153,6 +153,83 @@ func TestServer_Restore_StartsTheStandaloneServerBeforeCompleting(t *testing.T) 
 	}
 }
 
+// A standalone member cannot complete a restore of a database it is not
+// configured to start. Reject it before admitting or recording any work.
+func TestServer_Restore_RejectsAnotherStandaloneDatabaseBeforeAnyWork(t *testing.T) {
+	fake, bucket, prefix := stageUploadedArtifact(t)
+	objects := &countingStore{fakeObjectStore: fake}
+	req := baseRestoreRequest(t, bucket, prefix)
+	storeDir := t.TempDir()
+	store, err := NewOperationStore(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := &stepCLI{}
+	srv := NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(objects).
+		WithRestoreRoots(rootsFor(req)).WithStandaloneDatabase("otherdb")
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := srv.Handler()
+	for range 2 {
+		post := httptest.NewRequest(http.MethodPost, pathRestorePrepare, strings.NewReader(string(body)))
+		post.Header.Set("Authorization", "Bearer tok")
+		post.Header.Set("Idempotency-Key", "other-database")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, post)
+		if rr.Code == http.StatusAccepted {
+			var op Operation
+			if err := json.Unmarshal(rr.Body.Bytes(), &op); err != nil {
+				t.Fatal(err)
+			}
+			final := pollUntilSettled(t, srv, h, op.ID)
+			t.Fatalf("restore of %s on a member configured for otherdb was accepted and reached %s; want 400 before work; calls=%v",
+				req.Database, final.State, cli.recorded())
+		}
+		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), req.Database) ||
+			!strings.Contains(rr.Body.String(), "otherdb") {
+			t.Fatalf("restore = %d (%s), want 400 naming both mismatched databases", rr.Code, rr.Body.String())
+		}
+		if calls := cli.recorded(); len(calls) != 0 {
+			t.Errorf("refused restore ran commands: %v", calls)
+		}
+		if objects.gets != 0 {
+			t.Errorf("refused restore read the artifact %d times", objects.gets)
+		}
+		if entries, err := os.ReadDir(storeDir); err != nil || len(entries) != 0 {
+			t.Errorf("refused restore changed operation store: %v, %v", entries, err)
+		}
+		if _, err := os.Stat(req.StagingDir); !os.IsNotExist(err) {
+			t.Errorf("refused restore created staging: %v", err)
+		}
+		if entries, err := os.ReadDir(req.TargetDir); err != nil || len(entries) != 0 {
+			t.Errorf("refused restore changed database root: %v, %v", entries, err)
+		}
+	}
+}
+
+// Internal callers must not treat the same mismatch as a successful start,
+// including a caller with a contradictory HA flag.
+func TestStartRestoredDatabase_RejectsAnotherStandaloneDatabase(t *testing.T) {
+	for _, haMember := range []bool{false, true} {
+		cli := &stepCLI{}
+		srv := NewServer(cli, "tok").WithStandaloneDatabase("otherdb")
+		beforeCalled := false
+		err := srv.startRestoredDatabase(t.Context(), dbName, haMember, func() error {
+			beforeCalled = true
+			return nil
+		})
+		if err == nil || !strings.Contains(err.Error(), dbName) || !strings.Contains(err.Error(), "otherdb") {
+			t.Errorf("haMember=%t: start = %v, want an error naming both databases", haMember, err)
+		}
+		if beforeCalled || len(cli.recorded()) != 0 {
+			t.Errorf("haMember=%t: rejected start advanced its operation or ran commands: before=%t calls=%v",
+				haMember, beforeCalled, cli.recorded())
+		}
+	}
+}
+
 // A restore whose server does not start is not a completed restore.
 func TestServer_Restore_FailedServerStartFailsTheOperation(t *testing.T) {
 	cli := &stepCLI{failing: map[string]bool{stepServerStart: true}}

@@ -359,7 +359,13 @@ ADR-0007). `POST /v1/restore/prepare` is answered with 400, before it is
 admitted and before an operation is recorded, unless the database name is a
 plain identifier, every field is present, the staging and target directories
 are clean absolute paths that do not contain each other and a master to seed
-from is a host name. `GET /v1/ha/convergence` runs
+from is a host name. On a standalone member the requested database must also
+match the database the manager is configured to start; a mismatch is answered
+with 400 before admission, operation recording, artifact reads or filesystem
+changes. The same check applies before starting restored data internally:
+resuming a completed restore under a different standalone database
+configuration returns an error and keeps the ownership marker and restored
+data. `GET /v1/ha/convergence` runs
 `applyinfo` only on `<databases directory>/<database>_<host>`, the place of
 a copied log below the directory the manager was started with; any other
 path is answered with 400.
