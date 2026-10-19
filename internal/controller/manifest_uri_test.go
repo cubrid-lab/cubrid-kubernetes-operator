@@ -72,14 +72,16 @@ func (m *memoryStore) Get(_ context.Context, bucket, key string) (io.ReadCloser,
 
 // uploadedManifestURI uploads a staged backup to bucket/prefix the way the
 // Instance Manager does and returns the manifest URI it reports.
-func uploadedManifestURI(t *testing.T, bucket, prefix string) string {
+func uploadedManifestURI(t *testing.T, bucket, prefix string, seed bool) string {
 	t.Helper()
 	staging := t.TempDir()
 	if err := os.WriteFile(filepath.Join(staging, "demodb_bk0v000"), []byte("backup"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	res, err := instancemanager.UploadBackup(context.Background(), &memoryStore{objects: map[string][]byte{}},
-		instancemanager.UploadSpec{StagingDir: staging, Bucket: bucket, Prefix: prefix})
+		instancemanager.UploadSpec{StagingDir: staging, Bucket: bucket, Prefix: prefix, Seed: seed,
+			Manifest: instancemanager.BackupManifest{Database: testDatabase, ClusterUID: string(sourceCluster().UID),
+				SourceRole: string(instancemanager.RoleMaster)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,12 +178,12 @@ func TestOperatorProducedManifestURIsAreAccepted(t *testing.T) {
 				t.Fatalf("the operator runs the backup: %v, want %v (%s)", runs, tc.runs, refusal)
 			}
 			req := (&CubridBackupReconciler{}).buildBackupRequest(backup, cluster, sel)
-			uri := uploadedManifestURI(t, req.Upload.Bucket, req.Upload.Prefix)
+			uri := uploadedManifestURI(t, req.Upload.Bucket, req.Upload.Prefix, false)
 			bucket, prefix, err := parseManifestURI(uri)
 			if (err == nil) != tc.runs {
 				t.Fatalf("the backup runs: %v, but a recovery from its artifact URI %q is refused: %v", tc.runs, uri, err)
 			}
-			if err == nil && (bucket != req.Upload.Bucket || prefix != req.Upload.Prefix) {
+			if err == nil && (bucket != req.Upload.Bucket || !strings.HasPrefix(prefix, req.Upload.Prefix+"/attempt-")) {
 				t.Fatalf("artifact URI %q parses to %q,%q, uploaded to %q,%q",
 					uri, bucket, prefix, req.Upload.Bucket, req.Upload.Prefix)
 			}
@@ -193,7 +195,7 @@ func TestOperatorProducedManifestURIsAreAccepted(t *testing.T) {
 	ha.Spec.ObjectStorage.Prefix = "operator"
 	for _, artifact := range []string{"", "seeded-1-from-seeded-0", "seeded-2-from-seeded-0-r1"} {
 		bucket, prefix := seedLocation(ha, testDatabase, artifact)
-		uri := uploadedManifestURI(t, bucket, prefix)
+		uri := uploadedManifestURI(t, bucket, prefix, true)
 		gotBucket, gotPrefix, err := parseManifestURI(uri)
 		if err != nil {
 			t.Errorf("seed backup URI %q is refused: %v", uri, err)
@@ -609,3 +611,21 @@ var _ = Describe("The object-storage location of a backup (#437)", Serial, func(
 		}
 	})
 })
+
+func TestBackupDestinationReservesTheUploadAttemptSuffix(t *testing.T) {
+	cluster := sourceCluster()
+	bucket := strings.Repeat("b", 63)
+	backup := destinationBackup("boundary", cluster.Name, bucket, "x")
+	key := instancemanager.BackupAttemptPrefix(backupArtifactPrefix(backup, cluster),
+		strings.Repeat("0", instancemanager.BackupAttemptIDLength)) + "/" + instancemanager.ManifestObjectName
+	// Replace the one-character input prefix with the longest usable prefix.
+	prefixLength := 1024 - len(key) + 1
+	backup.Spec.Destination.ObjectStorage.Prefix = strings.Repeat("p", prefixLength)
+	if why := backupDestinationRefusal(backup, cluster); why != "" {
+		t.Fatalf("boundary refused: %s", why)
+	}
+	backup.Spec.Destination.ObjectStorage.Prefix += "p"
+	if why := backupDestinationRefusal(backup, cluster); why == "" {
+		t.Fatal("attempt suffix exceeded the accepted key/URI limit")
+	}
+}

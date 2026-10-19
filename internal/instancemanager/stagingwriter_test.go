@@ -289,13 +289,14 @@ func TestServer_Backup_StagingHeldPastTheBoundIsKeptAndNotReused(t *testing.T) {
 	}
 	var second Operation
 	_ = json.Unmarshal(again.Body.Bytes(), &second)
-	if done := pollUntilSettled(t, srv, h, second.ID); done.State != OpCompleted {
+	done := pollUntilSettled(t, srv, h, second.ID)
+	if done.State != OpCompleted {
 		t.Fatalf("retry = %s (reason %q), want Completed", done.State, done.FailureReason)
 	}
 	if exists(dir) {
 		t.Errorf("the closed staging %s of the failed backup was not reclaimed by the retry", dir)
 	}
-	got := manifestObjects(t, objects, testUpload.Bucket, "appdb-2")
+	got := manifestObjects(t, objects, testUpload.Bucket, operationPrefix(t, done, testUpload.Bucket))
 	if len(got) != 1 || got["backup/"+dbName+"_bk0v000"] != sha256Hex("new "+dbName) {
 		t.Errorf("manifest objects = %v, want only the retry's own volume", got)
 	}

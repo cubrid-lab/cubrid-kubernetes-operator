@@ -362,6 +362,34 @@ func TestResumeCompletedRestores_StartsTheDatabaseAndClearsTheMarker(t *testing.
 	f.wantRestoredDataKept()
 }
 
+// A configuration mismatch after restart must not clear the ownership of a
+// completed restore whose database the member cannot start.
+func TestResumeCompletedRestores_KeepsAnotherStandaloneDatabase(t *testing.T) {
+	f := newResumeFixture(t)
+	f.start(&volumeCLI{databases: f.databases})
+	done := f.run("restore-1")
+	if done.State != OpCompleted {
+		t.Fatalf("restore = %s (%s), want Completed", done.State, done.FailureReason)
+	}
+	marker := filepath.Join(f.databases, dbName, ownershipMarker)
+	if err := os.WriteFile(marker, []byte(done.ID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &volumeCLI{databases: f.databases}
+	f.start(restarted)
+	f.server.WithStandaloneDatabase("otherdb")
+	if err := f.server.ResumeCompletedRestores(t.Context()); err == nil || !strings.Contains(err.Error(), "otherdb") {
+		t.Errorf("resume = %v, want an error naming the configured database mismatch", err)
+	}
+	if calls := restarted.recorded(); len(calls) != 0 {
+		t.Errorf("resume ran commands for another database: %v", calls)
+	}
+	if got := f.marker(); got != done.ID {
+		t.Errorf("marker = %q, want it kept as %q", got, done.ID)
+	}
+	f.wantRestoredDataKept()
+}
+
 // A start that fails keeps the marker, so the next start of the manager tries
 // again; the marker of an operation that did not complete is left alone.
 func TestResumeCompletedRestores_LeavesWhatItCannotFinish(t *testing.T) {

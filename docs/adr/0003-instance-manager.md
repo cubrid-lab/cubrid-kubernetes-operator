@@ -83,6 +83,12 @@ Kubelet endpoints (unauthenticated — probes are awkward with strong auth):
   reports it in a confirmed role (master, slave or replica). A requested
   stop or a running operation does not turn it false by itself.
 
+Only one `/readyz` request at a time runs a local status command. A concurrent
+request is answered immediately with 503 and `{"ready":false}`, without
+starting or waiting for another command. Once the active request finishes or
+is cancelled, the next request reads the engine again; no earlier result is
+cached. `/livez` stays independent of the readiness check.
+
 Because anyone who reaches the port can ask them, their bodies carry nothing
 but the answer: `{"status":"ok"}` for `/livez`, `{"ready":true}` or
 `{"ready":false}` for `/readyz`. The member's role, which `/v1/role` gives
@@ -359,7 +365,13 @@ ADR-0007). `POST /v1/restore/prepare` is answered with 400, before it is
 admitted and before an operation is recorded, unless the database name is a
 plain identifier, every field is present, the staging and target directories
 are clean absolute paths that do not contain each other and a master to seed
-from is a host name. `GET /v1/ha/convergence` runs
+from is a host name. On a standalone member the requested database must also
+match the database the manager is configured to start; a mismatch is answered
+with 400 before admission, operation recording, artifact reads or filesystem
+changes. The same check applies before starting restored data internally:
+resuming a completed restore under a different standalone database
+configuration returns an error and keeps the ownership marker and restored
+data. `GET /v1/ha/convergence` runs
 `applyinfo` only on `<databases directory>/<database>_<host>`, the place of
 a copied log below the directory the manager was started with; any other
 path is answered with 400.
@@ -438,6 +450,21 @@ the manager API.
    limits `/v1/*` to the operator; kubelet probes still work.
 9. **Sidecar negative POC** — confirm a sidecar without duplicated CUBRID
    install cannot run required CLIs; document as the rejection reason.
+
+### Backup artifact identity
+
+An ordinary asynchronous backup uploads below a fresh `attempt-<upload-id>`
+directory and reports the exact manifest URI in its operation's artifact.
+The upload ID is generated independently of the durable operation ID, so an
+empty/reset operation store cannot reuse a completed ordinary artifact's keys.
+The internal HA bootstrap explicitly sends `upload.seed: true` for the stable
+seed-location exception in ADR-0007. That purpose is refused before work unless
+the master source metadata and `<clusterUID>/seed[-artifact]/<database>` suffix
+match. Ordinary callers omit it. The new seed field can change a recorded
+backup request's hash; the existing lookup by idempotency key follows the old
+operation rather than starting a second one. Restore requests are unchanged.
+See [ADR-0007](0007-backup-execution.md#artifact-and-upload-model) for retention,
+compatibility and the distinction between requested prefix and returned URI.
 
 ## Revisit When
 

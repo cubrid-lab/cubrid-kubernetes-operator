@@ -108,14 +108,17 @@ and `..` or `.` segments were resolved first.
 
 The bucket and prefix a backup is written under follow the same rules, so the
 URI a `CubridBackup` reports (`status.artifact.uri`,
-`s3://<bucket>/<prefix>/<cluster-uid>/<database>/<backup-uid>/manifest.json`)
+`s3://<bucket>/<prefix>/<cluster-uid>/<database>/<backup-uid>/attempt-<upload-id>/manifest.json`)
 is one a recovery accepts (#437). The API server checks
 `spec.destination.objectStorage.bucket` and `prefix` of a `CubridBackup`: the
 bucket by the rules above, and a non-empty prefix as segments by the rules
 above, without a leading `/`, with at most one trailing `/` (left out of the
 key written), at most 1024 characters. A key is never rewritten to fit; a
-backup whose artifact URI would be longer than 1093 characters is not run
-(`InvalidBackupDestination`). `spec.objectStorage.bucket` and `prefix` of a
+backup whose artifact URI would be longer than 1093 characters, or whose
+manifest key exceeds 1024 bytes including the fresh attempt suffix, is not run
+(`InvalidBackupDestination`). The returned artifact URI selects an upload;
+consumers must not reconstruct it from the requested destination. Legacy URIs
+without the attempt component stay valid. `spec.objectStorage.bucket` and `prefix` of a
 `CubridCluster` are not restricted by these rules: they place the seed
 backups of an HA cluster (ADR-0010), which are restored by their bucket and
 prefix and never read through a `manifestUri`.

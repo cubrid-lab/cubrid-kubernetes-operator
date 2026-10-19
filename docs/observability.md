@@ -356,8 +356,12 @@ probes are answered without a token, so `/readyz` says only whether the
 member is ready, and `/livez` only that the manager is alive. Why a member is
 not ready is in the Instance Manager's log (`event` `not_ready`, with the
 `reason`), at info level when the reason is new and below it while it stays
-the same; the member's role is what `/v1/role` answers to a caller with the
-token. An operation record that could not be written is logged as an error
+the same. Only one readiness request runs a status command at a time: another
+request gets 503 with `ready=false` and the logged reason `another readiness
+check is in progress`, rather than another command or a cached healthy result.
+`/livez` remains available during that check. The member's role is what
+`/v1/role` answers to a caller with the token.
+An operation record that could not be written is logged as an error
 with `event` `operation_store_write_failed`, the `operationID` and the state
 that is therefore not on disk; the retries of an operation's end that could
 not be written are logged at debug level. An operation record that cannot be

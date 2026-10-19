@@ -97,7 +97,7 @@ func TestServer_Backup_RejectsWhatItDoesNotSupportBeforeAnyWork(t *testing.T) {
 	upload := func(change func(*BackupUpload)) *BackupUpload {
 		u := &BackupUpload{
 			Bucket: "artifacts", Prefix: "prod/uid/appdb/backup-1", ClusterUID: "uid",
-			CubridVersion: testUpload.CubridVersion, SourceInstance: "db-1", SourceRole: "slave",
+			CubridVersion: testUpload.CubridVersion, SourceInstance: "db-1", SourceRole: string(RoleSlave),
 		}
 		change(u)
 		return u
@@ -125,6 +125,9 @@ func TestServer_Backup_RejectsWhatItDoesNotSupportBeforeAnyWork(t *testing.T) {
 		{"an upload from a source that is no host name", func(r *BackupRequest) {
 			r.Upload = upload(func(u *BackupUpload) { u.SourceInstance = "db 1" })
 		}},
+		{"seed bypass on an ordinary destination", func(r *BackupRequest) { r.Upload.Seed = true; r.Upload.SourceRole = string(RoleMaster) }},
+		{"a seed without master metadata", func(r *BackupRequest) { r.Upload.Seed = true; r.Upload.Prefix = "prod/uid/seed/appdb" }},
+		{"a manifest key beyond its attempt budget", func(r *BackupRequest) { r.Upload.Prefix = strings.Repeat("p", 1000) }},
 		{"an upload from a source with an unknown role", func(r *BackupRequest) {
 			r.Upload = upload(func(u *BackupUpload) { u.SourceRole = "primary" })
 		}},
@@ -251,5 +254,19 @@ func TestServer_Convergence_ReadsOnlyThisMembersCopiedLogs(t *testing.T) {
 	}
 	if ran := f.cli.recorded(); len(ran) != 1 || ran[0] != "cubrid applyinfo -L "+want+" -a "+dbName {
 		t.Errorf("commands = %v, want one applyinfo on %s", ran, want)
+	}
+}
+
+func TestBackupValidationReservesTheUploadAttemptSuffix(t *testing.T) {
+	key := BackupAttemptPrefix("x", strings.Repeat("0", BackupAttemptIDLength)) + "/" + ManifestObjectName
+	req := BackupRequest{Database: dbName, Destination: "/tmp/backup", Upload: &BackupUpload{
+		Bucket: testUpload.Bucket, Prefix: strings.Repeat("p", 1024-len(key)+1), ClusterUID: "uid",
+		CubridVersion: testUpload.CubridVersion, SourceInstance: "db-1", SourceRole: string(RoleSlave)}}
+	if err := validateBackupRequest(req); err != nil {
+		t.Fatalf("boundary refused: %v", err)
+	}
+	req.Upload.Prefix += "p"
+	if err := validateBackupRequest(req); err == nil {
+		t.Fatal("oversized attempt manifest was accepted")
 	}
 }

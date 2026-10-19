@@ -116,12 +116,14 @@ func TestUploadBackup_RejectsALinkToADirectory(t *testing.T) {
 func TestUploadBackup_RegularFilesStillUpload(t *testing.T) {
 	staging := stageBackup(t, map[string]string{stagedFileName: backupContent, "sub/vol_1": "second"})
 	store := newFakeStore()
-	if err := uploadWithin(t, store, baseSpec(staging)); err != nil {
+	spec := baseSpec(staging)
+	res, err := UploadBackup(context.Background(), store, spec)
+	if err != nil {
 		t.Fatalf("UploadBackup: %v", err)
 	}
-	spec := baseSpec(staging)
+	prefix := uploadedPrefix(t, res.ManifestURI, spec.Bucket)
 	for _, rel := range []string{stagedFileName, "sub/vol_1"} {
-		key := spec.Bucket + "/" + spec.Prefix + "/backup/" + rel
+		key := spec.Bucket + "/" + prefix + "/backup/" + rel
 		if _, ok := store.objects[key]; !ok {
 			t.Errorf("%s was not uploaded; have %v", key, store.keys())
 		}
