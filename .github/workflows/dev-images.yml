@@ -1,0 +1,173 @@
+name: Development Images
+
+# Builds the manager and Instance Manager images of a main commit and pushes
+# them to GHCR as main-<full sha> (#449), so that the lab and anyone else can
+# run a given commit. These are development images, not releases: release
+# candidates, versioned tags, signing and SBOMs belong to #123 and #124, and an
+# ordinary merge still never publishes a release (#94). No mutable tag is
+# pushed. linux/amd64 only: the official CUBRID image has no other
+# architecture, and the lab and Kind run amd64.
+#
+# Never runs on pull_request, so a fork cannot push. A manual run builds only a
+# commit that is on main: `gh workflow run dev-images.yml -f sha=<full sha>`.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Full commit SHA on main to build (default: the head of the selected ref, which must be on main)"
+        required: false
+        default: ""
+
+concurrency:
+  # One group per commit; a main build is never cancelled.
+  group: ${{ github.workflow }}-${{ inputs.sha || github.sha }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  push:
+    # A fork's own main has no right to these package names.
+    if: github.repository == 'cubrid-lab/cubrid-kubernetes-operator'
+    permissions:
+      contents: read
+      packages: write
+    name: Build and push
+    runs-on: ubuntu-latest
+    # The Instance Manager image is about 600 MB on the CUBRID base image; a cold
+    # build and push of both takes well under this, and a hung pull or push
+    # would otherwise hold the runner for the default 6 hours.
+    timeout-minutes: 45
+    env:
+      REGISTRY: ghcr.io/cubrid-lab/cubrid-kubernetes-operator
+    steps:
+      # Before anything is fetched: an input that is not exactly a full SHA
+      # fails here, whatever else it contains.
+      - name: Check the format of the requested commit
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          if [ -z "$INPUT_SHA" ]; then
+            exit 0
+          fi
+          if [[ ! "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be a full 40-character lowercase commit SHA"
+            exit 1
+          fi
+
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+          # The full history, so the ancestry check below can see main.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the commit and check that it is on main
+        id: meta
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          if [ -n "$INPUT_SHA" ] && [ "$sha" != "$INPUT_SHA" ]; then
+            echo "::error::Checked out $sha, not the requested commit $INPUT_SHA"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::Commit $sha is not on main; development images are built only for main commits"
+            exit 1
+          fi
+          {
+            echo "sha=$sha"
+            echo "tag=main-$sha"
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A tag is never overwritten. The lab records tags, and a rebuild on
+      # mutable base images would change the bytes under the same tag, so a
+      # re-run of a commit that already has images fails here. A tag that
+      # cannot be inspected (absent, or a package not created yet, which GHCR
+      # answers with an authorization error) is built.
+      - name: Refuse to overwrite an existing tag
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          for img in manager instance-manager; do
+            if docker buildx imagetools inspect "$REGISTRY/$img:$TAG" > /dev/null 2>&1; then
+              echo "::error::$REGISTRY/$img:$TAG already exists; development image tags are never overwritten"
+              exit 1
+            fi
+          done
+
+      # Same Dockerfile, context and build arguments as `make docker-build`
+      # (BASE_IMAGE left at its default). Provenance and SBOM attestations are
+      # left to the release work, so the tag is a plain image manifest.
+      - name: Build and push the manager image
+        id: manager
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ env.REGISTRY }}/manager:${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+          cache-from: type=gha,scope=manager
+          cache-to: type=gha,scope=manager,mode=max
+
+      # Same Dockerfile, context and build arguments as
+      # `make docker-build-instance-manager`.
+      - name: Build and push the Instance Manager image
+        id: instance-manager
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: build/instance-manager/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ env.REGISTRY }}/instance-manager:${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+          cache-from: type=gha,scope=instance-manager
+          cache-to: type=gha,scope=instance-manager,mode=max
+
+      # Also after a failed step, so a partial run says what it left behind.
+      - name: Write the digests to the job summary
+        if: always() && steps.meta.outputs.sha != ''
+        env:
+          SHA: ${{ steps.meta.outputs.sha }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
+          IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
+        run: |
+          {
+            echo "## Development images of $SHA"
+            echo
+            echo "Not a release. linux/amd64 only. A commit has images only if this run succeeded."
+            echo
+            echo "| Image | Tag | Digest |"
+            echo "|---|---|---|"
+            echo "| \`$REGISTRY/manager\` | \`$TAG\` | ${MANAGER_DIGEST:-(not pushed)} |"
+            echo "| \`$REGISTRY/instance-manager\` | \`$TAG\` | ${IM_DIGEST:-(not pushed)} |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -201,8 +201,10 @@ func TestServer_Stop_RejectsNewOperations(t *testing.T) {
 	}
 	h := srv.Handler()
 	for path, body := range map[string]string{
-		"/v1/backup":          `{"database":"` + dbName + `","destination":"` + testStagingRoot + `/b1"}`,
-		"/v1/restore/prepare": `{"database":"` + dbName + `"}`,
+		"/v1/backup": `{"database":"` + dbName + `","destination":"` + testStagingRoot + `/b1"}`,
+		// A complete restore request, so the answer is about admission and
+		// not about the request checks that come before it.
+		"/v1/restore/prepare": `{"database":"` + dbName + `","bucket":"b","prefix":"p","stagingDir":"/staging/r1","targetDir":"/databases/` + dbName + `"}`,
 		"/v1/ha/bootstrap":    `{"database":"` + dbName + `"}`,
 	} {
 		if rr := postOperation(h, path, body, "k1"); rr.Code != http.StatusServiceUnavailable {

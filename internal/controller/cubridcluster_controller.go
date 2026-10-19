@@ -190,6 +190,9 @@ type reconcileReport struct {
 	// statusWritten says that the last write of the status succeeded.
 	statusWritten bool
 	events        []pendingEvent
+	// readyReplicas is the number of ready Pods of the StatefulSet this
+	// reconcile read, nil when it read none.
+	readyReplicas *int32
 }
 
 type pendingEvent struct{ eventType, reason, message string }
@@ -246,12 +249,14 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 		holdObservationTimes(report.(*reconcileReport).before, &cluster.Status, r.now())
 	}
 	err := r.Status().Update(ctx, cluster)
+	var readyReplicas *int32
 	if ok {
 		report.(*reconcileReport).statusWritten = err == nil
+		readyReplicas = report.(*reconcileReport).readyReplicas
 	}
 	if err == nil {
 		// The metrics say what the stored status says.
-		publishClusterMetrics(cluster)
+		publishClusterMetrics(cluster, readyReplicas)
 	}
 	return err
 }
@@ -882,6 +887,9 @@ func preStopShutdown(_ *databasev1alpha1.CubridCluster) *corev1.Lifecycle {
 func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) (ctrl.Result, error) {
 	desired := cluster.Spec.Topology.PromotableMembers
 	ready := sts.Status.ReadyReplicas
+	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
+		report.(*reconcileReport).readyReplicas = &ready
+	}
 
 	cluster.Status.ObservedGeneration = cluster.Generation
 	// Several steps below set Updating; only the value it ends with is compared
@@ -998,7 +1006,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	return ctrl.Result{}, nil
 }
 
-// setReady sets Ready and its metrics. Every instance ready makes the cluster
+// setReady sets Ready. Every instance ready makes the cluster
 // Ready, except while more than one master is observed: two masters are never
 // reported as a healthy cluster (ADR-0001). A primary that is only unresolved,
 // as during a failover or while a member is unreachable, leaves Ready to the
@@ -1026,11 +1034,6 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, "InstancesStarting",
 			fmt.Sprintf("waiting for %d/%d instances", ready, desired))
 	}
-
-	labels := metrics.ClusterLabels(cluster.Namespace, cluster.Name)
-	metrics.ClusterInstances.With(labels).Set(float64(desired))
-	metrics.InstanceReady.With(labels).Set(float64(ready))
-	metrics.ClusterReady.With(labels).Set(boolToFloat(instancesReady && !multiplePrimaries))
 }
 
 // failed records a failure condition and returns the error for requeue. A

@@ -88,17 +88,79 @@ issued only when `cubrid heartbeat status` exited by itself, its output was
 read, and the output carries no HA node information (no `HA-Node Info`
 header and no `Node <name> (priority ...` line). HA node information in any
 form means heartbeat runs and nothing is started: the bootstrap completes
-when it reports the member as master or slave, and fails with the observed
-state otherwise (a transition such as `to-be-master`, or `unknown` after a
+when it reports the member in a confirmed role (master, slave or replica),
+and fails with the observed state otherwise (a transition such as `to-be-master`, or `unknown` after a
 failed start). A status that did not answer (a timeout, a cancellation, a
 signal, a command that could not be run, or output that could not be read)
 fails the bootstrap without a start. A failed bootstrap is asked again
-within the operator's attempt limit (#274). That a status without HA node
-information means inactive heartbeat is an assumption: that output is not
-recorded on the engine (#345). Ordinal 0 is
+within the operator's attempt limit (#274). A status without HA node
+information is necessary for the start, not enough: on the engine it is what
+a member where nothing runs prints, and also what a start or a stop under way
+prints (docs/poc/RESULTS.md, POC-26). The start is therefore issued only when
+two such statuses, 2 seconds apart, each find none of `cub_master`,
+`cub_server` and `cub_pl` running (names matched exactly); otherwise, or
+when the process list cannot be read, nothing is started. A second status
+that reports heartbeat follows the rule for running heartbeat above: a
+confirmed role completes the bootstrap, any other state fails it. `cub_pl` ran as long as
+copylogdb and applylogdb, about 1 second after `cub_master` was gone during a
+`cubrid service stop`. Those two run as `cub_admin`, which is not checked,
+because the manager's own utilities (`applyinfo`) may run under that name. A
+stop asked for during the 2 seconds ends the wait, and nothing is started.
+The same rules hold for the heartbeat start of a restored member (ADR-0008),
+including the rule for running heartbeat: when heartbeat already runs, a
+restore, or the start of a completed restore's database when the manager
+starts, counts as done only when heartbeat reports the member in a confirmed
+role (master, slave or replica). A start the manager issues itself, in the
+bootstrap or a restore, counts as done when `cubrid heartbeat start` exits 0;
+no role is checked after it.
+Any other state, such as `unknown`, which POC-26 saw stay after
+`cubrid heartbeat stop` and after a failed start, fails it without a start;
+the restored data and its ownership marker are kept (#454).
+Known limit: an attempt that is cut off while its `cubrid heartbeat start`
+still runs (a manager restart, a timeout) leaves heartbeat activating, and the
+next attempt can see a `to-be-*` or `unknown` state, fail on it and use up an
+attempt. On the seeding path such a retry takes over the data the earlier
+attempt restored and takes no new seed backup (ADR-0008, #463).
+Whether this exhausts the attempt limit in practice is not shown, and no
+extra retry is made for it.
+Known limit: a start issued outside the Instance Manager while `cub_master`
+comes and goes (POC-26 state 4b, for example a person running
+`cubrid heartbeat start` in the container) passes when both process
+snapshots miss `cub_master`; and a start or a stop from outside the Instance
+Manager that begins after the second snapshot and before the start command
+is not seen (the decision is a check, then an act). A shutdown that runs its
+own fallback before the manager listens is not such a start or stop: it
+records the stop first, and the manager starts no heartbeat after a recorded
+stop (ADR-0003, Shutdown model).
+The 2 seconds were chosen above the POC-26 observations (up to 159 ms of a
+start that looked inactive, about 1 s of processes after a stop), on one
+native linux/amd64 Docker host without load; they are not a measured bound.
+Right after the manager's own `cubrid createdb` and `cubrid restoredb -u`
+exited, no `cub*` process was seen when `/proc` was sampled every 100 ms for
+1 s and 0.6 s (`cubrid/cubrid:11.4`, local Docker, one standalone container,
+a few runs; recorded in `internal/instancemanager/cli.go`, not in
+docs/poc/RESULTS.md), so neither leaves a veto behind.
+Known limit: the entrypoint of an HA member that finds its database runs
+`cubrid heartbeat start` itself, without this guard. Ordinal 0 is
 only where the database is created; which member is master afterwards is
-CUBRID's decision. An HA member's entrypoint never runs `createdb`: without a
-database it starts nothing and waits, and with one it starts heartbeat. A
+CUBRID's decision. A standalone member's entrypoint runs `createdb` itself,
+inside the ownership marker described below with a value that is not an
+operation ID. It never creates over or starts a database that this marker
+shows to be unfinished, and never creates over files in a database
+directory without a registration (ADR-0003, #312).
+An HA member's entrypoint never runs `createdb`: without a database it
+starts nothing and waits, and with one it starts heartbeat. Before either
+entrypoint writes anything to the volume except creating `CUBRID_DATABASES`
+itself, and before it launches the manager
+that runs the bootstrap, restores and seeding, it takes the member lock on
+the volume, which it then holds until the container ends. It waits for as
+long as another container of the member, such as the old container of a
+force-deleted Pod, holds that lock at any stage of its life, including
+mid-start and during a restore or seeding, and then for as long as a CUBRID
+process holds its own lock on the volume (the server's, the log copier's or
+the log applier's; docs/poc/RESULTS.md POC-29 and POC-31; ADR-0003, #472,
+#475), so no member runs two servers, or a utility next to a server, on one
+database. A
 database directory that exists without a registration stops the bootstrap; it
 is never removed automatically. `status.databases[]` records `Creating`,
 `Created` with `primaryCreated`, or `Failed`. The first member
@@ -123,7 +185,10 @@ transport, not of HA (#256). A cluster that an earlier version admitted
 without them stops after the first database with `SeedStorageNotConfigured`. The
 bucket and prefix of `spec.objectStorage` are not held to the `manifestUri`
 rules of ADR-0008 (#320, #437): a seed backup is restored by its bucket and
-prefix, never through a `manifestUri`. A recovery bootstrap seeds the other members the
+prefix, never through a `manifestUri`. The seed's key is relative to the
+bucket, the only form the Instance Manager uploads to (#301): a leading slash
+of the prefix is left out and a `..` inside it is resolved; a prefix whose
+`..` leads above the bucket stops seeding with `SeedStoragePrefixInvalid`. A recovery bootstrap seeds the other members the
 same way, starting from the member its backup was restored on (ADR-0008,
 #268).
 
@@ -166,7 +231,14 @@ which is not detected and has not been tried on the engine; and a copy that
 failed after it had restored the data, when the master has changed since: the
 next attempt copies from the new master, the Instance Manager refuses to
 restore over data that another request restored (ADR-0008), and the bootstrap
-ends `Failed` and waits for a person.
+ends `Failed` and waits for a person. Nor does it cover a copy that failed
+after it had restored the data when the master changed and changed back
+between the attempts (m0, then m1, then m0 again): a failed attempt clears
+`status.databases[].seeding`, so the next attempt sees m0 in round 0 again and
+sends the same request, and the Instance Manager takes over the data copied
+from m0 before the failover and starts it. That is the Instance Manager's
+existing behaviour; the operator no longer takes a seed backup for such a
+retry (#463), which changes nothing that reaches the member.
 
 Resuming (#107): the key of every step carries the attempt number, so a
 reconcile after an operator restart addresses the operation that is already
@@ -231,7 +303,9 @@ file when `createdb` has succeeded, or when the restore has been recorded
 recorded as `Failed`, and never for a restore that had recorded its data as
 restored (ADR-0008, #267). A directory without the file, with
 an unreadable one, or with one that names an unknown or running operation is
-left untouched and stops the bootstrap.
+left untouched and stops the bootstrap. The marker a standalone entrypoint
+writes around its own `createdb` (`entrypoint-createdb`) is such an
+unreadable one: the manager never removes that directory.
 
 **`ha_db_list` generation.** Join `spec.databases[*].name` in spec order
 with commas; write identically to every node's `cubrid_ha.conf`. Names

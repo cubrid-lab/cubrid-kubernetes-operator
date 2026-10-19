@@ -48,8 +48,13 @@ func (c *stepCLI) Run(_ context.Context, name string, args ...string) (string, e
 	c.calls = append(c.calls, name+" "+strings.Join(args, " "))
 	if len(args) > 1 && c.failing[args[0]+" "+args[1]] {
 		// A command that ran to its end and exited 1. For heartbeat status
-		// this is the assumed answer of inactive heartbeat (#345).
-		return "++ cubrid " + args[0] + " " + args[1] + ": fail", exec.Command("sh", "-c", "exit 1").Run()
+		// this is what it printed while heartbeat was never started
+		// (docs/poc/RESULTS.md, POC-26, shape B).
+		out := "++ cubrid " + args[0] + " " + args[1] + ": fail"
+		if args[0]+" "+args[1] == stepHeartbeatStatus {
+			out = noNodeOut
+		}
+		return out, exec.Command("sh", "-c", "exit 1").Run()
 	}
 	if len(args) > 1 {
 		if err, ok := c.errs[args[0]+" "+args[1]]; ok {
@@ -76,6 +81,9 @@ func (c *stepCLI) recorded() []string {
 type restoreMember struct {
 	standalone bool
 	haConf     string
+	// processes is the process table the member's manager reads; nil is one
+	// without any CUBRID process.
+	processes func() (map[string]bool, error)
 }
 
 // lastRestoreTarget is the database root of the latest runRestoreOperation.
@@ -96,6 +104,10 @@ func runRestoreOperation(t *testing.T, cli CLI, member restoreMember) Operation 
 	}
 	if member.haConf != "" {
 		srv = srv.WithHAConfig(HAConfig{ConfPath: member.haConf})
+	}
+	srv.heartbeatProcesses, srv.heartbeatSettle = processTable(), 0
+	if member.processes != nil {
+		srv.heartbeatProcesses = member.processes
 	}
 	h := srv.Handler()
 
@@ -187,7 +199,8 @@ func TestServer_Restore_RefusesAMemberWithoutValidHAConfiguration(t *testing.T) 
 }
 
 // A seeded HA member registers the database under the member list and joins
-// HA with one heartbeat start (docs/poc/RESULTS.md, POC-13).
+// HA with one heartbeat start (docs/poc/RESULTS.md, POC-13), issued after two
+// statuses without HA node information (POC-26).
 func TestServer_Restore_SeededHAMemberJoinsHA(t *testing.T) {
 	conf := filepath.Join(t.TempDir(), "cubrid_ha.conf")
 	if err := os.WriteFile(conf, []byte(testHAConf), 0o600); err != nil {
@@ -200,7 +213,7 @@ func TestServer_Restore_SeededHAMemberJoinsHA(t *testing.T) {
 		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
 	}
 	calls := cli.recorded()
-	want := []string{"cubrid restoredb ", "cubrid heartbeat status", callHeartbeatStart}
+	want := []string{"cubrid restoredb ", "cubrid heartbeat status", "cubrid heartbeat status", callHeartbeatStart}
 	if len(calls) != len(want) {
 		t.Fatalf("calls = %q, want %q", calls, want)
 	}
@@ -230,7 +243,9 @@ func TestServer_Restore_DoesNotRestartRunningHeartbeat(t *testing.T) {
 }
 
 // Heartbeat that reports the local node in a transition is running, and is
-// not started a second time (docs/poc/RESULTS.md, POC-3 and POC-7).
+// not started a second time (docs/poc/RESULTS.md, POC-3 and POC-7). As in the
+// HA bootstrap, a transition is not a confirmed role, and the restore does not
+// complete on it (#454).
 func TestServer_Restore_DoesNotStartHeartbeatInTransition(t *testing.T) {
 	conf := filepath.Join(t.TempDir(), "cubrid_ha.conf")
 	if err := os.WriteFile(conf, []byte(testHAConf), 0o600); err != nil {
@@ -238,8 +253,8 @@ func TestServer_Restore_DoesNotStartHeartbeatInTransition(t *testing.T) {
 	}
 	cli := &stepCLI{output: map[string]string{stepHeartbeatStatus: transitionOut}}
 	final := runRestoreOperation(t, cli, restoreMember{haConf: conf})
-	if final.State != OpCompleted {
-		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
+	if final.State != OpFailed || !strings.Contains(final.FailureReason, "'to-be-master'") {
+		t.Fatalf("final = %s (%s), want Failed naming state 'to-be-master'", final.State, final.FailureReason)
 	}
 	for _, call := range cli.recorded() {
 		if call == callHeartbeatStart {

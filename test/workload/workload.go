@@ -116,6 +116,43 @@ type Report struct {
 	Diverged            []Violation            `json:"diverged"`
 }
 
+// FirstViolation returns the first violation of the report whose operation
+// ID starts with prefix, or else the first one. Violations are taken of the
+// members and endpoints named in order, then of the others in name order,
+// then of the divergence between them, where member is empty. total counts
+// every violation; it is 0 when there is none.
+func (r Report) FirstViolation(order []string, prefix string) (member string, first Violation, total int) {
+	names := slices.Clone(order)
+	for _, name := range slices.Sorted(maps.Keys(r.Members)) {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	type found struct {
+		member string
+		v      Violation
+	}
+	var all []found
+	for _, name := range slices.Compact(names) {
+		for _, v := range r.Members[name].Violations {
+			all = append(all, found{name, v})
+		}
+	}
+	for _, v := range r.Diverged {
+		all = append(all, found{"", v})
+	}
+	if len(all) == 0 {
+		return "", Violation{}, 0
+	}
+	pick := all[0]
+	if i := slices.IndexFunc(all, func(f found) bool {
+		return prefix != "" && strings.HasPrefix(f.v.OpID, prefix)
+	}); i >= 0 {
+		pick = all[i]
+	}
+	return pick.member, pick.v, len(all)
+}
+
 // Data rules, as they appear in a Violation.
 const (
 	RuleMissing           = "missing"

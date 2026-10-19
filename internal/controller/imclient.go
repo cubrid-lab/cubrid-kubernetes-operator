@@ -231,13 +231,20 @@ func readErrorAnswer(resp *http.Response) (code, msg string) {
 	}) < 0 {
 		code = answer.Code
 	}
-	cleaned := []rune(strings.Join(strings.FieldsFunc(answer.Error, func(r rune) bool {
+	return code, cleanMessage(answer.Error)
+}
+
+// cleanMessage makes a message from a member fit for conditions, Events and
+// logs: runs of characters that are not printable or are white space become
+// one space, and it is cut to maxErrorMessage runes.
+func cleanMessage(msg string) string {
+	cleaned := []rune(strings.Join(strings.FieldsFunc(msg, func(r rune) bool {
 		return !unicode.IsPrint(r) || unicode.IsSpace(r)
 	}), " "))
 	if len(cleaned) > maxErrorMessage {
 		cleaned = append(cleaned[:maxErrorMessage], []rune("...")...)
 	}
-	return code, string(cleaned)
+	return string(cleaned)
 }
 
 // instanceManagerFailureReason is the condition reason for a failed call to

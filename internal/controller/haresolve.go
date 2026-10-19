@@ -19,12 +19,14 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
@@ -85,7 +87,9 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	now := r.now()
 	res := resolvePrimary(members, obs, now)
 	cluster.Status.CurrentPrimary = res.CurrentPrimary
-	cluster.Status.Instances = instanceStatuses(members, obs, now, cluster.Status.Instances)
+	previous := cluster.Status.Instances
+	cluster.Status.Instances = instanceStatuses(members, obs, now, previous)
+	logUnobservedMembers(ctx, cluster, previous, obs, now)
 	observedAt := metav1.NewTime(now)
 	cluster.Status.LastObservedTime = &observedAt
 
@@ -99,6 +103,46 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 		setCondition(cluster, conditionHAReady, metav1.ConditionFalse, res.Reason, primaryResolvedMessage(res))
 	}
 	return res
+}
+
+// logUnobservedMembers writes one line for each member whose role the status
+// held before this observation and no longer holds, with why its observation
+// does not count. The member_role_changed transition says only that the role
+// became unknown; a member that stays unknown is not logged again.
+func logUnobservedMembers(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	previous []databasev1alpha1.InstanceStatus, obs map[string]RoleObservation, now time.Time) {
+	known := make(map[string]databasev1alpha1.CubridRole, len(previous))
+	for _, in := range previous {
+		if in.Role != databasev1alpha1.RoleUnknown && in.Role != "" {
+			known[in.Name] = in.Role
+		}
+	}
+	for _, in := range cluster.Status.Instances {
+		was, ok := known[in.Name]
+		if !ok || in.Role != databasev1alpha1.RoleUnknown {
+			continue
+		}
+		logf.FromContext(ctx).Info(fmt.Sprintf("Could not observe the role of member %s", in.Name),
+			"event", "member_role_unobserved", "namespace", cluster.Namespace, "cluster", cluster.Name,
+			"member", in.Name, "oldRole", string(was), "reason", unobservedReason(obs[in.Name], now),
+			"requestID", obs[in.Name].RequestID)
+	}
+}
+
+// unobservedReason says why an observation that is not authoritative at now
+// does not count.
+func unobservedReason(o RoleObservation, now time.Time) string {
+	switch {
+	case o.ObservedAt.IsZero():
+		return "the member was not asked"
+	case o.Reason != "":
+		return o.Reason
+	case !o.Reachable:
+		return "no answer"
+	case !fresh(o, now):
+		return fmt.Sprintf("the answer is older than %s", roleObservationTTL)
+	}
+	return "the answer reports the role " + strconv.Quote(string(o.Role))
 }
 
 // reasonRolesNotObserved marks the HA status of a reconcile that ended before

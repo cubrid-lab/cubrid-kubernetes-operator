@@ -141,10 +141,11 @@ func (sleepingCLI) Run(ctx context.Context, _ string, _ ...string) (string, erro
 	return ExecCLI{Timeout: 50 * time.Millisecond}.Run(ctx, "sleep", "5")
 }
 
-// noNodeOut is what heartbeat status is assumed to print on an HA member
-// whose heartbeat is not active. The real output is not recorded in docs/poc
-// (#345); it stands for any output without HA node information.
-const noNodeOut = "++ cubrid heartbeat status: fail"
+// noNodeOut is what heartbeat status printed, with exit 1, on an HA member
+// whose heartbeat was never started: shape B of docs/poc/RESULTS.md, POC-26.
+// It printed the same while a start or a stop was under way, which is why a
+// start needs more than this answer (observeStartable).
+const noNodeOut = "@ cubrid heartbeat status\n++ cubrid master is not running.\n"
 
 // Heartbeat may be started only on a status that ran to its end by itself,
 // with its output read, without HA node information; a reported state, in any

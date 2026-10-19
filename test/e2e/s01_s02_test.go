@@ -150,11 +150,12 @@ func (r *haRun) master() (string, []string, error) {
 		case strings.Contains(out, "current "+pod+", state slave") && strings.Contains(out, "registered_and_standby"):
 			slaves = append(slaves, pod)
 		default:
-			return "", nil, fmt.Errorf("%s is neither an active master nor a standby slave:\n%s", pod, out)
+			return "", nil, &faults.Unmet{Member: pod, Kind: faults.UnmetRole,
+				Detail: "neither an active master nor a standby slave:\n" + out}
 		}
 	}
 	if len(masters) != 1 || len(slaves) != len(r.members)-1 {
-		return "", nil, fmt.Errorf("masters %v, slaves %v", masters, slaves)
+		return "", nil, &faults.Unmet{Kind: faults.UnmetRole, Detail: fmt.Sprintf("masters %v, slaves %v", masters, slaves)}
 	}
 	return masters[0], slaves, nil
 }
@@ -275,7 +276,7 @@ func (r *haRun) formationTime() (time.Duration, error) {
 				continue
 			}
 			if c.Status != "True" {
-				return 0, fmt.Errorf("condition %s is %s", want, c.Status)
+				return 0, &faults.Unmet{Kind: faults.UnmetCondition, Detail: fmt.Sprintf("%s is %s", want, c.Status)}
 			}
 			found = true
 			if c.LastTransitionTime.After(last) {
@@ -283,7 +284,7 @@ func (r *haRun) formationTime() (time.Duration, error) {
 			}
 		}
 		if !found {
-			return 0, fmt.Errorf("condition %s is not reported", want)
+			return 0, &faults.Unmet{Kind: faults.UnmetCondition, Detail: want + " is not reported"}
 		}
 	}
 	return last.Sub(cluster.Metadata.CreationTimestamp), nil

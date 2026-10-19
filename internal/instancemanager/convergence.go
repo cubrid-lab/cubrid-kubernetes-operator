@@ -19,6 +19,7 @@ package instancemanager
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -45,6 +46,12 @@ type ApplyConvergence struct {
 	// Source is the member whose log these facts are about; set by the
 	// caller that chose the log.
 	Source string `json:"source,omitempty"`
+	// Applier identifies the applier process the counters were read beside:
+	// its process ID and start time. The counters outlast the process
+	// (docs/poc/RESULTS.md, POC-30), so only this tells a restarted applier
+	// from one that kept running. The value is opaque and is only compared
+	// for equality. Empty when the process or its start time was not found.
+	Applier string `json:"applier,omitempty"`
 	// Reason explains Available=false or a non-converged verdict.
 	Reason string `json:"reason,omitempty"`
 }
@@ -121,6 +128,67 @@ func mustAtoi(s string) int {
 	return n
 }
 
+// processStarted reports when the process with the given ID was started, as
+// the kernel counts it: clock ticks since boot, field 22 of /proc/<pid>/stat.
+// The value stays the same for as long as the process lives.
+var processStarted = func(pid int) (string, bool) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return "", false
+	}
+	return startTicks(string(data))
+}
+
+// startTicks takes the start time out of the content of /proc/<pid>/stat.
+// The process name, field 2, is in parentheses and may hold spaces and
+// parentheses itself, so the fields are counted from the last ")".
+func startTicks(stat string) (string, bool) {
+	end := strings.LastIndexByte(stat, ')')
+	if end < 0 {
+		return "", false
+	}
+	// After the name come fields 3, 4, ...; the start time is field 22.
+	fields := strings.Fields(stat[end+1:])
+	const startTime = 22 - 3
+	if len(fields) <= startTime {
+		return "", false
+	}
+	if _, err := strconv.ParseUint(fields[startTime], 10, 64); err != nil {
+		return "", false
+	}
+	return fields[startTime], true
+}
+
+// applierOf returns the applier process heartbeat lists for the copied log
+// at logPath. The paths are compared after filepath.Clean, so a trailing or
+// doubled separator in either does not hide the process.
+func applierOf(st HAStatus, logPath string) (ApplierProcess, bool) {
+	want := filepath.Clean(logPath)
+	for _, a := range st.Appliers {
+		if a.PID > 0 && filepath.Clean(a.LogPath) == want {
+			return a, true
+		}
+	}
+	return ApplierProcess{}, false
+}
+
+// applierIdentity names the applier process of the copied log at logPath:
+// its process ID and its start time, which tells it from a later process
+// that was given the same ID. Empty when heartbeat lists no applier for that
+// log, and also when the start time cannot be read: an identity without it
+// would differ from the one read before and look like a restart.
+func applierIdentity(st HAStatus, logPath string) string {
+	a, ok := applierOf(st, logPath)
+	if !ok {
+		return ""
+	}
+	started, ok := processStarted(a.PID)
+	if !ok {
+		return ""
+	}
+	return "pid:" + strconv.Itoa(a.PID) + ":" + started
+}
+
 // replicationOf returns what a slave's applier reports for the log of the
 // master its node list names, or nil when st is not a slave's status or the
 // member was not told its database. A node list without exactly one master
@@ -144,7 +212,8 @@ func replicationOf(ctx context.Context, cli CLI, st HAStatus, database, database
 	if !hostLabelPattern.MatchString(master) {
 		return &ApplyConvergence{Reason: "the master's name in the node list is not a host label"}
 	}
-	c := ApplyConvergenceStatus(ctx, cli, database, filepath.Join(databasesDir, database+"_"+master))
+	logPath := filepath.Join(databasesDir, database+"_"+master)
+	c := ApplyConvergenceStatus(ctx, cli, database, logPath)
 	if !c.Available {
 		switch err := ctx.Err(); {
 		case errors.Is(err, context.Canceled):
@@ -154,5 +223,6 @@ func replicationOf(ctx context.Context, cli CLI, st HAStatus, database, database
 		}
 	}
 	c.Source = master
+	c.Applier = applierIdentity(st, logPath)
 	return &c
 }

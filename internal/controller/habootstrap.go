@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -27,6 +28,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
@@ -195,10 +197,26 @@ func seedSourceAmong(holders []string, obs map[string]RoleObservation, now time.
 
 // seedLocation is where a seed backup of database lives in object storage:
 // the backup the first peer is copied from, or, with artifact, the one taken
-// for a later member on its source, which has a place of its own.
+// for a later member on its source, which has a place of its own. The prefix
+// is a clean key relative to the bucket, the only form the Instance Manager
+// accepts: a leading slash of spec.objectStorage.prefix, which the API does
+// not refuse, is left out. A prefix that leads above the bucket is refused
+// before (seedPrefixRefusal).
 func seedLocation(cluster *databasev1alpha1.CubridCluster, database, artifact string) (bucket, prefix string) {
 	storage := cluster.Spec.ObjectStorage
-	return storage.Bucket, path.Join(storage.Prefix, string(cluster.UID), seedLocationDir(artifact), database)
+	return storage.Bucket, path.Join(strings.TrimLeft(storage.Prefix, "/"), string(cluster.UID), seedLocationDir(artifact), database)
+}
+
+// seedPrefixRefusal says why spec.objectStorage.prefix cannot hold the seed
+// backups, or "" when it can. A ".." inside the prefix is resolved, as for a
+// CubridBackup destination; one that leads above the bucket names no key in
+// it, and the Instance Manager refuses such an upload for good.
+func seedPrefixRefusal(prefix string) string {
+	cleaned := path.Clean(strings.TrimLeft(prefix, "/"))
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return fmt.Sprintf("spec.objectStorage.prefix %q leads above the bucket with \"..\" and names no key for the seed backups", prefix)
+	}
+	return ""
 }
 
 // seedLocationDir is the directory below the cluster's UID that names the
@@ -281,6 +299,10 @@ func (r *CubridClusterReconciler) reconcileSeeding(ctx context.Context, cluster 
 				"; spec.objectStorage with a bucket is needed to copy it to the other members")
 		return
 	}
+	if why := seedPrefixRefusal(cluster.Spec.ObjectStorage.Prefix); why != "" {
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedStoragePrefixInvalid", origin+"; "+why)
+		return
+	}
 
 	for _, peer := range memberNames(cluster, cluster.Spec.Topology.PromotableMembers) {
 		// A member that holds the database is never restored over.
@@ -356,73 +378,50 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 
 	bucket, prefix := seedLocation(cluster, database, artifact)
 	uid := string(cluster.UID)
-	// A restore that was started has its backup; the source is not asked
-	// again, so that it need not be reachable while the member is restored.
-	if !restoreStarted {
-		staging := "seed-" + uid
-		if artifact != "" {
-			staging += "-" + peer
-		}
-		backupKey := bootstrapKey("seed-backup", cluster, status, artifact)
-		backup, err := r.Backup.StartBackup(ctx, source, cluster.Namespace, backupKey,
-			instancemanager.BackupRequest{
-				Database:    database,
-				Destination: path.Join(backupStagingRoot, staging),
-				Upload: &instancemanager.BackupUpload{
-					Bucket: bucket, Prefix: prefix, ClusterUID: uid, CubridVersion: cluster.Spec.Version,
-					SourceInstance: source, SourceRole: string(databasev1alpha1.RoleMaster),
-				},
-			})
-		if err != nil {
-			backup, err = operationOfKey(ctx, err, instancemanager.OpBackup, backupKey, func() (instancemanager.Operation, bool, error) {
-				return r.Backup.FindBackupOperation(ctx, source, cluster.Namespace, backupKey)
-			})
-		}
-		if errors.Is(err, errRequestRefused) {
-			status.Seeding = nil
-			r.bootstrapStepFailed(cluster, status, "SeedBackupFailed", err.Error())
-			return false
-		}
-		if err != nil {
-			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
-			return false
-		}
-		switch backup.State {
-		case instancemanager.OpCompleted:
-		case instancemanager.OpFailed:
-			status.Seeding = nil
-			r.bootstrapStepFailed(cluster, status, "SeedBackupFailed", "on "+source+": "+backup.FailureReason)
-			return false
-		default:
-			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedBackupInProgress",
-				"backing up database "+database+" on "+source)
-			return false
-		}
-		if !sourceRecorded {
-			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedSourceSelected",
-				"database "+database+" will be copied to "+peer+" from "+source+", the master")
-			return false
-		}
-	}
-
 	// The restore of a later member is keyed by its source and round, as
 	// its backup is, so a key never names the restore of another source:
 	// one that a lost status write left running is never taken for a
 	// later round's (ADR-0005).
-	restoreKey := bootstrapKey("seed-restore", cluster, status, peer)
+	keyMember := peer
 	if artifact != "" {
-		restoreKey = bootstrapKey("seed-restore", cluster, status, artifact)
+		keyMember = artifact
 	}
-	restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, restoreKey,
-		instancemanager.RestoreRequest{
-			Database: database, Bucket: bucket, Prefix: prefix,
-			ExpectedCubridVersion: cluster.Spec.Version,
-			StagingDir:            path.Join(restoreStagingRoot, "seed-"+uid),
-			TargetDir:             restoreTargetRoot,
-			// The member becomes a slave of the member the backup was taken
-			// on, and has to pick up what that member committed since.
-			SeedFromMaster: source,
-		})
+	restoreKey := bootstrapKey("seed-restore", cluster, status, keyMember)
+	restoreReq := instancemanager.RestoreRequest{
+		Database: database, Bucket: bucket, Prefix: prefix,
+		ExpectedCubridVersion: cluster.Spec.Version,
+		StagingDir:            path.Join(restoreStagingRoot, "seed-"+uid),
+		TargetDir:             restoreTargetRoot,
+		// The member becomes a slave of the member the backup was taken
+		// on, and has to pick up what that member committed since.
+		SeedFromMaster: source,
+	}
+	// A retry whose restore is predicted to take over what an earlier attempt's
+	// restore of this step's backup restored takes no new backup: the
+	// Instance Manager would only start that data and never restore the
+	// new backup (ADR-0008, #463).
+	reused := false
+	if !restoreStarted {
+		var err error
+		reused, err = r.retrySkipsSeedBackup(ctx, cluster, status, peer, keyMember, artifact, restoreKey, restoreReq)
+		if err != nil {
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err),
+				"waiting to copy database "+database+" to "+peer+": a restore of this step could not be looked up: "+err.Error())
+			return false
+		}
+	}
+	// A restore that was started has its backup; the source is not asked
+	// again, so that it need not be reachable while the member is restored.
+	if !restoreStarted && !reused && !r.seedBackup(ctx, cluster, status, source, peer, artifact) {
+		return false
+	}
+	if !restoreStarted && !sourceRecorded {
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedSourceSelected",
+			"database "+database+" will be copied to "+peer+" from "+source+", the master")
+		return false
+	}
+
+	restore, err := r.Restore.StartRestore(ctx, peer, cluster.Namespace, restoreKey, restoreReq)
 	followed := false
 	if err != nil {
 		restore, err = operationOfKey(ctx, err, instancemanager.OpRestore, restoreKey, func() (instancemanager.Operation, bool, error) {
@@ -467,6 +466,110 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 			"restoring database "+database+" on "+peer)
 		return false
 	}
+}
+
+// seedBackup takes the seed backup of artifact on source, for peer, and
+// reports whether it has completed. The condition says what it waits for
+// otherwise; a backup that failed ends the attempt.
+func (r *CubridClusterReconciler) seedBackup(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, source, peer, artifact string) bool {
+	database := status.Name
+	uid := string(cluster.UID)
+	bucket, prefix := seedLocation(cluster, database, artifact)
+	staging := "seed-" + uid
+	if artifact != "" {
+		staging += "-" + peer
+	}
+	backupKey := bootstrapKey("seed-backup", cluster, status, artifact)
+	backup, err := r.Backup.StartBackup(ctx, source, cluster.Namespace, backupKey,
+		instancemanager.BackupRequest{
+			Database:    database,
+			Destination: path.Join(backupStagingRoot, staging),
+			Upload: &instancemanager.BackupUpload{
+				Bucket: bucket, Prefix: prefix, ClusterUID: uid, CubridVersion: cluster.Spec.Version,
+				SourceInstance: source, SourceRole: string(databasev1alpha1.RoleMaster),
+			},
+		})
+	if err != nil {
+		backup, err = operationOfKey(ctx, err, instancemanager.OpBackup, backupKey, func() (instancemanager.Operation, bool, error) {
+			return r.Backup.FindBackupOperation(ctx, source, cluster.Namespace, backupKey)
+		})
+	}
+	if errors.Is(err, errRequestRefused) {
+		status.Seeding = nil
+		r.bootstrapStepFailed(cluster, status, "SeedBackupFailed", err.Error())
+		return false
+	}
+	if err != nil {
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
+		return false
+	}
+	switch backup.State {
+	case instancemanager.OpCompleted:
+	case instancemanager.OpFailed:
+		status.Seeding = nil
+		r.bootstrapStepFailed(cluster, status, "SeedBackupFailed", "on "+source+": "+backup.FailureReason)
+		return false
+	default:
+		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedBackupInProgress",
+			"backing up database "+database+" on "+source)
+		return false
+	}
+	return true
+}
+
+// retrySkipsSeedBackup reports whether a retry of the seed step of peer needs
+// no new seed backup. That is so once this attempt has a restore under its own
+// key, restoreKey: its backup step is behind it. Otherwise it is so only when
+// the Instance Manager of peer is predicted to take over, for req, the data
+// that an earlier attempt's restore of this step restored, and so to restore
+// nothing for it (ADR-0008). The latest earlier attempt that has a restore
+// under this step's key decides. The key names the member and, for a later
+// member, the source and the round, but a round counts only within one
+// attempt, because a failed attempt clears status.databases[].seeding: an
+// earlier attempt of the same key may have copied from the same source before
+// a failover and back (ADR-0010). The earlier restore counts only when it
+// failed after it recorded this step's seed backup as restored, and was
+// started with the same request body, which the manager compares by its hash.
+// The prediction rests on that operation record; the manager itself decides
+// by the ownership marker on the data, which is not visible here. Anything
+// else, also an earlier attempt without a restore, answers false: the step
+// then takes a new backup and restores it from the same place. The first
+// attempt looks nothing up.
+func (r *CubridClusterReconciler) retrySkipsSeedBackup(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, peer, keyMember, artifact, restoreKey string, req instancemanager.RestoreRequest) (bool, error) {
+	if status.BootstrapAttempts == 0 {
+		return false, nil
+	}
+	_, started, err := r.Restore.FindOperation(ctx, peer, cluster.Namespace, instancemanager.OpRestore, restoreKey)
+	if err != nil || started {
+		return started, err
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return false, err
+	}
+	hash := instancemanager.HashRequest(body)
+	earlier := *status
+	for earlier.BootstrapAttempts > 0 {
+		earlier.BootstrapAttempts--
+		key := bootstrapKey("seed-restore", cluster, &earlier, keyMember)
+		op, found, err := r.Restore.FindOperation(ctx, peer, cluster.Namespace, instancemanager.OpRestore, key)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			continue
+		}
+		reused := op.State == instancemanager.OpFailed && op.Restored != nil && op.RequestHash == hash &&
+			restoredSeed(op, string(cluster.UID), artifact, status.Name)
+		if reused {
+			logf.FromContext(ctx).V(1).Info("Reusing the seed backup that an earlier attempt restored",
+				"member", peer, "source", req.SeedFromMaster, "location", seedLocationDir(artifact), "operationID", op.ID)
+		}
+		return reused, nil
+	}
+	return false, nil
 }
 
 // haConfVolume and haConfMount give an HA member the cluster's cubrid_ha.conf.

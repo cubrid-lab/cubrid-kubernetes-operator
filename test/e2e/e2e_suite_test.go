@@ -49,6 +49,9 @@ var (
 	workloadDriver = "cubrid-jdbc 11.3.2.0053"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
+	// kindContextVerified is set once kubectl was found pointing at the Kind
+	// cluster; until then nothing may be deployed or removed.
+	kindContextVerified = false
 )
 
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
@@ -78,6 +81,9 @@ var _ = BeforeSuite(func() {
 	}
 	planRun()
 	Expect(checkBreakSettings()).To(Succeed())
+	// Before anything reaches a cluster, and before AfterSuite may undeploy.
+	Expect(utils.RequireKindContext()).To(Succeed())
+	kindContextVerified = true
 
 	By("building the manager image")
 	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
@@ -99,8 +105,12 @@ var _ = BeforeSuite(func() {
 // Ginkgo process: with -p each process would judge only its own scenarios.
 var _ = AfterSuite(func() {
 	err := concludeRun()
-	undeployManager()
-	teardownCertManager()
+	// Undeploying removes the CRDs; on a cluster that is not the suite's own
+	// it would delete that cluster's CubridClusters.
+	if kindContextVerified {
+		undeployManager()
+		teardownCertManager()
+	}
 	Expect(err).NotTo(HaveOccurred(), "The run did not pass its required scenarios")
 })
 

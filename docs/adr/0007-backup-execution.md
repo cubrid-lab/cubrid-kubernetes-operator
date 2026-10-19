@@ -76,7 +76,8 @@ itself. A Kubernetes Job is **not** in the v1alpha1 critical path
 
 - **Operator:** watch/validate `CubridBackup`; resolve target via
   ADR-0005 role/health; call `/v1/backup` with
-  `Idempotency-Key = cubridbackup:<ns>:<name>:<uid>:<attempt>`; poll
+  `Idempotency-Key = cubridbackup:<ns>:<name>:<uid>` (as implemented, no
+  attempt part; `idempotencyKey` in `internal/controller/cubridbackup_controller.go`); poll
   `/v1/operations/{id}`; update CR + cluster-level backup summary.
 - **Instance Manager:** create a durable operation record; run
   `backupdb.sh` / `cubrid backupdb` locally; capture command/db/role-at-
@@ -96,7 +97,12 @@ no ambiguous/incomplete primary observation (ADR-0005) — so backup load
 never lands on a suspected master during unsafe failover evidence; it
 records `fallbackUsed: true`, `targetRole: master`, reason
 `MasterFallbackSelected`. `StandbyOnly`
-fails if no eligible slave. **Backup on master is allowed** (fallback,
+fails if no eligible slave. As implemented, an eligible slave is a member
+authoritatively observed as a slave in a fresh observation, and the first
+one in ordinal order is taken: Pod readiness and how far the slave has
+caught up are not evaluated (`internal/controller/backuptarget.go`), and the
+`FencingRequired` check has no input because no step sets that Condition.
+**Backup on master is allowed** (fallback,
 health-checked) but not preferred. If all roles are `unknown`: single
 instance → allow with reason `RoleUnknownSingleInstanceFallback`; HA
 cluster → fail for `PreferStandby` (avoid accidentally loading the true
@@ -184,9 +190,26 @@ ends, also one that was refused, has `status.completedAt`.
   in the destination is uploaded, so a file that an interrupted attempt
   left never enters a later manifest. The operation removes its directory,
   and the destination once it is empty, when it fails or completes.
+  The file of `backupdb -C` is written by `cub_server`, outside the
+  utility's process group that a cancellation ends: after the group was
+  killed, `cub_server` kept the file open for about 0.3 to 2 s, then removed
+  it or left it at its full size (POC-27). A failed backup therefore removes
+  its directory only once no process holds a file below it, read from
+  `/proc/<pid>/fd` (the manager runs in the CUBRID container as the same
+  user as `cub_server`), and looks again every 200 ms for up to 30 s,
+  15 times the longest hold seen, and inside the stop's wait for the
+  operations. A directory still held after that is kept as it is, never
+  uploaded or reused, and the operation's failure reason says so (#469). A
+  CUBRID process (`cub*`) whose open files cannot be read, or a process list
+  that cannot be read, counts as a holder (fail closed); a process of
+  another user, or one of the same user that does not let its files be
+  read, is not one CUBRID started for the backup and is skipped. The
+  manager never signals `cub_server` for this.
   Ownership of the staging (#275): an entry of a destination belongs to a
   live operation when it is named after an operation that the store records
-  as not ended, or whose record cannot be read. A request whose destination
+  as not ended, or whose record cannot be read, or when a process holds a
+  file in it, or its holders cannot be told (#469); an entry that is a link
+  is not followed and never counts as held. A request whose destination
   holds an entry of a live operation of another request is answered 409
   with "the backup staging destination is owned by another operation that
   is still running" (`ErrBackupStagingInUse`), before anything is recorded,
@@ -331,7 +354,12 @@ Uploading → Completed | Failed | CleaningUp`. Operator restart → re-poll
 by operation ref / idempotency key. Manager restart → reconstruct from
 records + filesystem facts. **Successful `backupdb` ≠ successful backup**
 — success requires upload + checksum + `manifest.json`. Never overwrite a
-completed artifact; retries are new attempts. Restore/rebuild trust an
+completed artifact; retries are new attempts. A seed backup of an HA member
+(ADR-0010) is the exception: its place names the source and the round, not
+the attempt, so a retry's seed backup replaces the earlier attempt's at the
+same place, and a seed restore retry that takes over the data the earlier
+attempt already restored takes no new seed backup at all (ADR-0008, #463).
+Restore/rebuild trust an
 artifact **only** if `manifest.json` exists and validates all listed
 objects (per-file hashes + metadata: CUBRID version, db, level, source
 cluster UID/instance/role, timestamps).
@@ -358,7 +386,12 @@ operation of it, and waits within the bound while that cannot be asked),
 `RecordedTargetNotEligible`,
 `RecordedTargetNotStarted`, `RecordedTargetUnverified`, `ObjectStorageWaitExpired`,
 `ObjectStorageUnavailable`). Cluster-level: `BackupReady`
-(True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary.
+(True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary. As
+implemented, `ChecksumMismatch`, `InsufficientStagingSpace` and
+`ObjectStorageUnavailable` are not produced (a backup operation that fails on
+the member ends `Failed` with `BackupFailed` and the operation's reason in
+the message), and the cluster has no
+`BackupReady` Condition and no backup summary in its status.
 **Backup state must not be conflated with cluster/HA readiness.**
 
 ## Consequences

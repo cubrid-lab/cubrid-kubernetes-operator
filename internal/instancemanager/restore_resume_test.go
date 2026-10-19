@@ -57,8 +57,11 @@ func (c *volumeCLI) Run(ctx context.Context, name string, args ...string) (strin
 // whose manager can be restarted on the same operation store and database
 // root.
 type resumeFixture struct {
-	t         *testing.T
-	haConf    string
+	t      *testing.T
+	haConf string
+	// processes is the process table the manager reads; nil is one without
+	// any CUBRID process.
+	processes func() (map[string]bool, error)
 	objects   ObjectStore
 	req       RestoreRequest
 	storeDir  string
@@ -87,6 +90,10 @@ func (f *resumeFixture) start(cli CLI) {
 		f.server = f.server.WithHAConfig(HAConfig{ConfPath: f.haConf})
 	} else {
 		f.server = f.server.WithStandaloneDatabase(dbName)
+	}
+	f.server.heartbeatProcesses, f.server.heartbeatSettle = processTable(), 0
+	if f.processes != nil {
+		f.server.heartbeatProcesses = f.processes
 	}
 	f.handler = f.server.Handler()
 }
@@ -425,6 +432,131 @@ func TestResumeCompletedRestores_DoesNotStartHeartbeatWhenStatusDidNotAnswer(t *
 	f.wantRestoredDataKept()
 }
 
+// stateUnknownOut is what `cubrid heartbeat status` printed, with exit 0,
+// after `cubrid heartbeat stop` and after a failed `cubrid heartbeat start`:
+// cub_master stays and HA is not active (docs/poc/RESULTS.md, POC-26, 2a, 4a
+// and 4c).
+const stateUnknownOut = `@ cubrid heartbeat status
+
+ HA-Node Info (current h-0, state unknown)
+
+
+ HA-Process Info (master 344, state unknown)
+
+`
+
+// The restore of an HA member whose heartbeat runs without a confirmed role
+// does not complete: heartbeat is not started again, the operation fails
+// with the reason, and the restored data and its marker are kept. A later
+// attempt of the same request, once heartbeat reports a role, takes that data
+// over and completes without running restoredb again (#454).
+func TestServer_Restore_FailsWhileHeartbeatRunsWithoutAConfirmedRole(t *testing.T) {
+	f := newResumeFixture(t)
+	f.haConf = filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(f.haConf, []byte(testHAConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cli := &volumeCLI{stepCLI: stepCLI{output: map[string]string{stepHeartbeatStatus: stateUnknownOut}}, databases: f.databases}
+	f.start(cli)
+	failed := f.run("restore-1")
+	if failed.State != OpFailed || !strings.Contains(failed.FailureReason, "'unknown'") ||
+		!strings.Contains(failed.FailureReason, "without a confirmed role") {
+		t.Fatalf("restore = %s (%s), want Failed naming state 'unknown' and the missing role", failed.State, failed.FailureReason)
+	}
+	if calls := cli.recorded(); count(calls, callHeartbeatStart) != 0 {
+		t.Errorf("heartbeat was started although it reported state unknown: %q", calls)
+	}
+	if got := f.marker(); got != failed.ID {
+		t.Errorf("marker = %q, want it kept as %q", got, failed.ID)
+	}
+	f.wantRestoredDataKept()
+
+	retry := &volumeCLI{stepCLI: stepCLI{output: map[string]string{stepHeartbeatStatus: masterOut}}, databases: f.databases}
+	f.start(retry)
+	done := f.run("restore-2")
+	if done.State != OpCompleted {
+		t.Fatalf("retry = %s (%s), want Completed", done.State, done.FailureReason)
+	}
+	if calls := retry.recorded(); count(calls, "cubrid restoredb") != 0 || count(calls, callHeartbeatStart) != 0 {
+		t.Errorf("retry calls = %q, want neither restoredb nor a heartbeat start", calls)
+	}
+	f.wantRestoredDataKept()
+}
+
+// On an HA member whose heartbeat runs without a confirmed role, the start of
+// a completed restore's database does not count as done: the error is
+// returned, the marker and the data are kept so that the next start of the
+// manager tries again, and the manager serves all the same (#454).
+func TestResumeCompletedRestores_FailsWhileHeartbeatRunsWithoutAConfirmedRole(t *testing.T) {
+	f := newResumeFixture(t)
+	f.haConf = filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(f.haConf, []byte(testHAConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.start(&volumeCLI{stepCLI: stepCLI{failing: map[string]bool{stepHeartbeatStatus: true}}, databases: f.databases})
+	done := f.run("restore-1")
+	if done.State != OpCompleted {
+		t.Fatalf("restore = %s (%s), want Completed", done.State, done.FailureReason)
+	}
+	marker := filepath.Join(f.databases, dbName, ownershipMarker)
+	if err := os.WriteFile(marker, []byte(done.ID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := &volumeCLI{stepCLI: stepCLI{output: map[string]string{stepHeartbeatStatus: stateUnknownOut}}, databases: f.databases}
+	f.start(restarted)
+	err := f.server.ResumeCompletedRestores(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "'unknown'") || !strings.Contains(err.Error(), "without a confirmed role") {
+		t.Errorf("ResumeCompletedRestores = %v, want an error naming state 'unknown' and the missing role", err)
+	}
+	if err := f.server.ResumeAndServe(t.Context(), func() error { return nil }); err != nil {
+		t.Errorf("ResumeAndServe = %v, want the manager to serve", err)
+	}
+	if calls := restarted.recorded(); count(calls, callHeartbeatStart) != 0 {
+		t.Errorf("heartbeat was started although it reported state unknown: %q", calls)
+	}
+	if got := f.marker(); got != done.ID {
+		t.Errorf("marker = %q, want it kept as %q", got, done.ID)
+	}
+	f.wantRestoredDataKept()
+}
+
+// A second round that finds heartbeat running without a confirmed role
+// follows the same rule when the manager resumes a completed restore: nothing
+// is started, the error is returned and the marker kept (#454).
+func TestResumeCompletedRestores_SecondRoundWithoutAConfirmedRoleStartsNothing(t *testing.T) {
+	f := newResumeFixture(t)
+	f.haConf = filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(f.haConf, []byte(testHAConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.start(&volumeCLI{stepCLI: stepCLI{failing: map[string]bool{stepHeartbeatStatus: true}}, databases: f.databases})
+	done := f.run("restore-1")
+	if done.State != OpCompleted {
+		t.Fatalf("restore = %s (%s), want Completed", done.State, done.FailureReason)
+	}
+	if err := os.WriteFile(filepath.Join(f.databases, dbName, ownershipMarker), []byte(done.ID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cli := &sequenceCLI{t: t, answers: []statusAnswer{answerB, {stateUnknownOut, false}}}
+	f.start(cli)
+	err := f.server.ResumeCompletedRestores(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "'unknown'") || !strings.Contains(err.Error(), "without a confirmed role") {
+		t.Errorf("ResumeCompletedRestores = %v, want an error naming state 'unknown' and the missing role", err)
+	}
+	cli.mu.Lock()
+	calls := append([]string(nil), cli.calls...)
+	cli.mu.Unlock()
+	if count(calls, callHeartbeatStart) != 0 || len(cli.statusCalls()) != 2 {
+		t.Errorf("calls = %q, want two statuses and no heartbeat start", calls)
+	}
+	if got := f.marker(); got != done.ID {
+		t.Errorf("marker = %q, want it kept as %q", got, done.ID)
+	}
+	f.wantRestoredDataKept()
+}
+
 // A member that is not standalone joins HA after a restore, and what it joins
 // is in its HA configuration. Without a usable one the manager cannot start
 // the database of a completed restore: it starts nothing, returns the error
@@ -468,4 +600,56 @@ func TestResumeCompletedRestores_NeedsTheHAConfigurationOfAnHAMember(t *testing.
 			f.wantRestoredDataKept()
 		})
 	}
+}
+
+// The marker the image's entrypoint writes around a standalone member's own
+// createdb names no operation of this manager. A restore into that target,
+// the adoption of earlier restored data and the start of completed restores
+// all leave the directory and the marker as they are, and run no command.
+func TestRestore_LeavesTheEntrypointsUnfinishedCreatedbAlone(t *testing.T) {
+	const entrypointMarker = "entrypoint-createdb"
+	f := newResumeFixture(t)
+	dir := filepath.Join(f.databases, dbName)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	volume := filepath.Join(dir, dbName+"_lgat")
+	const left = "left by createdb"
+	for name, content := range map[string]string{ownershipMarker: entrypointMarker + "\n", filepath.Base(volume): left} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantUntouched := func() {
+		t.Helper()
+		if got := f.marker(); got != entrypointMarker {
+			t.Errorf("marker = %q, want it kept as %q", got, entrypointMarker)
+		}
+		if data, err := os.ReadFile(volume); err != nil || string(data) != left {
+			t.Errorf("the files createdb left were changed (err=%v): %q", err, data)
+		}
+	}
+
+	cli := &volumeCLI{databases: f.databases}
+	f.start(cli)
+	if err := f.server.ResumeCompletedRestores(t.Context()); err != nil {
+		t.Fatalf("ResumeCompletedRestores: %v", err)
+	}
+	if calls := cli.recorded(); len(calls) != 0 {
+		t.Errorf("commands ran at the start of the manager: %q", calls)
+	}
+	wantUntouched()
+
+	op := f.run("restore-1")
+	if op.State != OpFailed || !strings.Contains(op.FailureReason, "unreadable ownership marker") {
+		t.Fatalf("restore = %s (%s), want Failed for an unreadable ownership marker", op.State, op.FailureReason)
+	}
+	if calls := cli.recorded(); len(calls) != 0 {
+		t.Errorf("commands ran for a restore over the entrypoint's createdb: %q", calls)
+	}
+	restored, err := f.server.adoptRestored(op.ID, dbName)
+	if err != nil || restored != nil {
+		t.Errorf("adoptRestored = %v, %v; want nothing taken over", restored, err)
+	}
+	wantUntouched()
 }

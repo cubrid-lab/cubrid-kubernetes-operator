@@ -182,15 +182,49 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
+// kindCluster is the name of the Kind cluster the suite runs against: the
+// KIND_CLUSTER the Makefile passes, or Kind's own default.
+func kindCluster() string {
+	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
+		return v
+	}
+	return defaultKindCluster
+}
+
+// KindContext is the kubectl context Kind creates for that cluster.
+func KindContext() string {
+	return "kind-" + kindCluster()
+}
+
+// RequireKindContext returns an error unless kubectl's current context is
+// KindContext. The suite installs the CRDs and removes them again at the end,
+// and removing them deletes every CubridCluster, so on any other cluster,
+// such as a shared lab, a run would delete its databases. `make test-e2e`
+// does not switch the context when the Kind cluster already exists, so a
+// context left on another cluster reaches the suite unchanged.
+func RequireKindContext() error {
+	out, err := Run(exec.Command("kubectl", "config", "current-context"))
+	if err != nil {
+		return fmt.Errorf("reading kubectl's current context: %w", err)
+	}
+	return checkKindContext(strings.TrimSpace(out), KindContext())
+}
+
+func checkKindContext(current, want string) error {
+	if current == want {
+		return nil
+	}
+	return fmt.Errorf("kubectl's current context is %q, not %q of the Kind cluster: "+
+		"the suite installs and removes the CRDs, which deletes every CubridCluster of the "+
+		"cluster it runs against; switch with `kubectl config use-context %s`", current, want, want)
+}
+
 // LoadImageToKindClusterWithName loads a locally built image into the kind
 // cluster. `kind load docker-image` reads the Docker daemon only, so with any
 // other tool (CONTAINER_TOOL, e.g. podman) the image is saved to an archive
 // and loaded from there.
 func LoadImageToKindClusterWithName(name string) error {
-	cluster := defaultKindCluster
-	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
-		cluster = v
-	}
+	cluster := kindCluster()
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
 		kindBinary = v

@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -385,5 +386,82 @@ func TestInstanceStatuses_ReplicationKeptOnlyForAReadSlave(t *testing.T) {
 		if r := instanceStatuses(members, obs, testNow, prev)[1].Replication; (r != nil) != tc.kept {
 			t.Errorf("%s: replication = %+v, want kept %t", name, r, tc.kept)
 		}
+	}
+}
+
+// The applier's counters outlast its process (docs/poc/RESULTS.md, POC-30),
+// so a restarted applier comes back with the counters it had. It is told
+// from one that kept running by its identity: a reading beside another
+// applier process starts a new series and does not inherit the age of the
+// stall (#360).
+func TestNextReplication_RestartedApplierStartsANewSeries(t *testing.T) {
+	const before, after = "pid:277:48213", "pid:329:51377"
+	prevOf := func(applier string, stalledAgo time.Duration) *databasev1alpha1.InstanceReplication {
+		r := repl(10, 9, stalledAgo)
+		r.Applier = applier
+		return r
+	}
+	reading := func(applier string, changes, delayed int64) *ReplicationObservation {
+		return &ReplicationObservation{Source: replMaster, AppliedChanges: changes, DelayedPages: delayed, Applier: applier}
+	}
+	const notStalled = -1
+	for name, tc := range map[string]struct {
+		prev      *databasev1alpha1.InstanceReplication
+		obs       *ReplicationObservation
+		wantSince time.Duration // how long ago; notStalled for none
+	}{
+		"the same applier is still stalled": {prevOf(before, 40*time.Second), reading(before, 10, 9), 40 * time.Second},
+		// The stall was reported and pages still wait: it restarts now
+		// instead of ending, so no resumption is reported.
+		"another applier while a stall was reported":        {prevOf(before, 40*time.Second), reading(after, 10, 9), 0},
+		"another applier before any stall was reported":     {prevOf(before, notStalled), reading(after, 10, 9), notStalled},
+		"another applier that applied something":            {prevOf(before, 40*time.Second), reading(after, 11, 9), notStalled},
+		"another applier with nothing waiting":              {prevOf(before, 40*time.Second), reading(after, 10, 0), notStalled},
+		"an applier whose identity was not known before":    {prevOf("", 40*time.Second), reading(after, 10, 9), 40 * time.Second},
+		"an applier whose identity could not be read":       {prevOf(before, 40*time.Second), reading("", 10, 9), 40 * time.Second},
+		"the same applier, first two readings with a stall": {prevOf(before, notStalled), reading(before, 10, 9), 0},
+	} {
+		got := nextReplication(tc.prev, tc.obs, testNow)
+		if got.Applier != tc.obs.Applier {
+			t.Errorf("%s: applier = %q, want the one of the reading, %q", name, got.Applier, tc.obs.Applier)
+		}
+		switch {
+		case tc.wantSince == notStalled && got.StalledSince != nil:
+			t.Errorf("%s: stalledSince = %v, want not stalled", name, got.StalledSince)
+		case tc.wantSince != notStalled && (got.StalledSince == nil || !got.StalledSince.Time.Equal(testNow.Add(-tc.wantSince))):
+			t.Errorf("%s: stalledSince = %v, want %s ago", name, got.StalledSince, tc.wantSince)
+		}
+	}
+	// A reading that is missed keeps the identity with the rest.
+	if got := nextReplication(prevOf(before, 40*time.Second), nil, testNow); got.Applier != before {
+		t.Errorf("a missed reading: applier = %q, want it kept as %q", got.Applier, before)
+	}
+}
+
+// An applier that is replaced at every reading while pages wait and nothing
+// is applied must not hide the stall: the member stays reported stalled, so
+// no member_replication_resumed Event is emitted and the stalled metric does
+// not drop to 0 (#360).
+func TestNextReplication_CrashLoopingApplierStaysStalled(t *testing.T) {
+	prev := repl(10, 9, 40*time.Second)
+	prev.Applier = "pid:100:1000"
+	for i := 1; i <= 5; i++ {
+		now := testNow.Add(time.Duration(i) * haResyncInterval)
+		obs := &ReplicationObservation{Source: replMaster, AppliedChanges: 10, DelayedPages: 9,
+			Applier: "pid:" + strconv.Itoa(100+i) + ":" + strconv.Itoa(1000+i)}
+		next := nextReplication(prev, obs, now)
+		if next.StalledSince == nil {
+			t.Fatalf("reading %d beside applier %s: stalledSince = nil, want the stall still reported", i, obs.Applier)
+		}
+		before := &databasev1alpha1.CubridClusterStatus{Instances: []databasev1alpha1.InstanceStatus{
+			{Name: replSlaveA, Role: databasev1alpha1.RoleSlave, Replication: prev}}}
+		after := &databasev1alpha1.CubridClusterStatus{Instances: []databasev1alpha1.InstanceStatus{
+			{Name: replSlaveA, Role: databasev1alpha1.RoleSlave, Replication: next}}}
+		for _, tr := range memberTransitions(before, after) {
+			if tr.Event == "member_replication_resumed" {
+				t.Errorf("reading %d beside applier %s: %s reported, want none", i, obs.Applier, tr.Event)
+			}
+		}
+		prev = next
 	}
 }

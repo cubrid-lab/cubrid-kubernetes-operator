@@ -36,9 +36,11 @@ import (
 //
 // An entry of a destination is owned by a live operation when it is named
 // after an operation that the store records as not ended, or whose record
-// cannot be read. Every other entry (a directory of an operation that has
-// ended or that the store does not know, a file staged directly in the
-// destination by an earlier manager) is abandoned and may be removed.
+// cannot be read, or when a process holds a file in it (a backupdb -C that
+// cub_server still writes after its operation failed, POC-27). Every other
+// entry (a directory of an operation that has ended or that the store does
+// not know, a file staged directly in the destination by an earlier manager)
+// is abandoned and may be removed.
 
 // ErrBackupStagingInUse refuses a backup whose staging destination is owned
 // by another operation that is still running. Nothing is recorded, run or
@@ -48,8 +50,26 @@ var ErrBackupStagingInUse = errors.New("the backup staging destination is owned 
 // stagingOwnerLive reports whether the entry name of the destination belongs
 // to a live operation. A record that cannot be read counts as live: what it
 // owns cannot be shown to be abandoned. That keeps the destination blocked
-// until the record is repaired, so it is logged as a warning.
+// until the record is repaired, so it is logged as a warning. An entry that
+// a process holds a file in, or whose holders cannot be told, counts as live
+// too, under its own name: it is neither removed nor reused while something
+// may still write it, and is logged as a warning.
 func (s *Server) stagingOwnerLive(destination, name string) (*Operation, bool) {
+	if op, live := s.stagingRecordLive(destination, name); live {
+		return op, true
+	}
+	held, err := s.stagingHeld(filepath.Join(s.backupStagingRoot, destination, name))
+	if err != nil || len(held) > 0 {
+		s.log().Warn("Kept backup staging that a process holds open; the destination is kept",
+			"event", "backup_staging_held", "destination", destination, "entry", name,
+			"holders", describeHolders(held, err))
+		return &Operation{ID: name}, true
+	}
+	return nil, false
+}
+
+// stagingRecordLive is stagingOwnerLive by the operation record alone.
+func (s *Server) stagingRecordLive(destination, name string) (*Operation, bool) {
 	if !isValidOperationID(name) {
 		return nil, false
 	}
@@ -113,6 +133,13 @@ func (s *Server) recordBackup(key, requestHash string, req BackupRequest) (op *O
 		return nil, "", err
 	}
 	for _, owner := range live {
+		// An owner whose record cannot be read may be this request's
+		// operation.
+		if owner.Kind == "" {
+			if _, gerr := s.store.Get(owner.ID); gerr != nil && !errors.Is(gerr, ErrOperationNotFound) {
+				return nil, "", fmt.Errorf("%w: operation %s owns an entry of %s: %w", ErrOperationRecordUnreadable, owner.ID, name, gerr)
+			}
+		}
 		if owner.Kind != OpBackup || owner.IdempotencyKey != key {
 			return nil, "", fmt.Errorf("%w: %s is owned by operation %s", ErrBackupStagingInUse, name, owner.ID)
 		}
@@ -131,13 +158,20 @@ func (s *Server) recordBackup(key, requestHash string, req BackupRequest) (op *O
 			_ = root.RemoveAll(filepath.Join(name, op.ID))
 		}
 		reason := "claim the backup staging directory: " + err.Error()
-		if failed, uerr := s.store.Update(op.ID, func(o *Operation) {
+		// An end that cannot be written is kept and written later (Settle);
+		// until then the request is answered with the error, not with a
+		// Pending operation that never runs.
+		if serr := s.store.Settle(op.ID, func(o *Operation) {
 			o.State = OpFailed
 			o.FailureReason = reason
-		}); uerr == nil {
-			op = failed
+		}); serr != nil {
+			return nil, "", fmt.Errorf("%s; recording that the operation failed: %w", reason, serr)
 		}
-		return op, "", nil
+		failed, gerr := s.store.Get(op.ID)
+		if gerr != nil {
+			return nil, "", gerr
+		}
+		return failed, "", nil
 	}
 	return op, staging, nil
 }

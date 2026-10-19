@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -41,8 +42,29 @@ func main() {
 	// "instance-manager shutdown" is the one trigger of a stop: the preStop
 	// hook and the entrypoint both run it (ADR-0003).
 	if len(os.Args) > 1 && os.Args[1] == "shutdown" {
-		if err := shutdown(logger); err != nil {
+		if err := shutdown(logger, instancemanager.StopFile); err != nil {
 			logger.Error("Shutdown failed", "event", "shutdown_failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+	// "instance-manager wait-volume-free" takes the member lock on the
+	// descriptor the entrypoint opened as its file descriptor 3, then
+	// returns once no other process holds a CUBRID lock on the data volume
+	// either. The entrypoint runs it before it creates or starts anything and
+	// keeps the descriptor, and so the lock, for the container's whole life
+	// (ADR-0003, #472, #475). A SIGTERM ends it with exit 1, never as free.
+	if len(os.Args) > 1 && os.Args[1] == "wait-volume-free" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		databases := envOr("CUBRID_DATABASES", "/var/lib/cubrid/databases")
+		err := instancemanager.AcquireMemberLock(ctx, os.NewFile(3, "member lock"),
+			filepath.Join(databases, instancemanager.MemberLockFile), logger, time.Second, 10*time.Second)
+		if err == nil {
+			err = instancemanager.WaitVolumeFree(ctx, databases, logger, time.Second, 10*time.Second)
+		}
+		stop()
+		if err != nil {
+			logger.Info("Stopped waiting for the data volume", "event", "volume_wait_stopped", "err", err)
 			os.Exit(1)
 		}
 		return
@@ -54,8 +76,8 @@ func main() {
 }
 
 // shutdown asks the manager of this Pod to stop CUBRID, or stops it itself
-// when no manager listens.
-func shutdown(logger *slog.Logger) error {
+// when no manager listens. It records the stop in stopFile first.
+func shutdown(logger *slog.Logger, stopFile string) error {
 	timeouts, err := timeoutsFromEnv()
 	if err != nil {
 		return err
@@ -65,8 +87,14 @@ func shutdown(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("IM_ADDR: %w", err)
 	}
-	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: budget}, Logger: logger}
+	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: budget, Logger: logger}, Logger: logger}
 	logger.Info("Shutdown requested", "event", "shutdown_requested")
+	// The stop is recorded before the manager is asked: a manager that does
+	// not listen yet finds the record once it listens and starts nothing
+	// (#323). A record that could not be written does not hold up the stop.
+	if err := instancemanager.RecordStopRequest(stopFile); err != nil {
+		logger.Error("Could not record the stop request", "event", "stop_record_failed", "err", err)
+	}
 	return instancemanager.RequestShutdown(context.Background(), "http://127.0.0.1:"+port,
 		os.Getenv("IM_TOKEN"), envOr("CUBRID_DB", "appdb"), cli, budget)
 }
@@ -98,9 +126,11 @@ func run(logger *slog.Logger) error {
 		return errors.New("IM_TOKEN is empty: the Instance Manager does not start without a token")
 	}
 
-	cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second}, Logger: logger}
+	cli := instancemanager.LoggingCLI{
+		CLI: instancemanager.ExecCLI{Timeout: 10 * time.Second, Logger: logger}, Logger: logger}
 	server := instancemanager.NewServer(cli, token).
 		WithLogger(logger).
+		WithStopFile(instancemanager.StopFile).
 		// A backup may stage only below this root; it is also what a failed
 		// backup removes. It matches the operator's backup staging path.
 		WithBackupStagingRoot(envOr("IM_BACKUP_STAGING_ROOT", "/var/lib/cubrid/backup-staging")).

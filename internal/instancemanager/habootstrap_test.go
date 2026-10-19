@@ -59,7 +59,8 @@ func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, err
 		if c.status != "" || c.statusErr != nil {
 			return c.status, c.statusErr
 		}
-		// Assumed output of inactive heartbeat; not recorded (#345).
+		// What heartbeat status printed while heartbeat was never started
+		// (docs/poc/RESULTS.md, POC-26, shape B).
 		return noNodeOut, c.exit
 
 	}
@@ -109,6 +110,7 @@ func newHAFixture(t *testing.T) *haFixture {
 		WithOperationStore(store).
 		WithRestoreRoots(RestoreRoots{Target: databases, Staging: filepath.Join(base, "staging")}).
 		WithHAConfig(HAConfig{ConfPath: conf, VolumeSize: "64M"})
+	srv.heartbeatProcesses, srv.heartbeatSettle = processTable(), 0
 	return &haFixture{t: t, cli: cli, store: store, databases: databases, srv: srv, handler: srv.Handler()}
 }
 

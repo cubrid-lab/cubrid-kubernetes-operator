@@ -87,6 +87,8 @@ func TestHABootstrap_DoesNotReclaimWhatItCannotProveItOwns(t *testing.T) {
 	}{
 		{"an operation this manager does not know", "op-00000000000000000000000000000000\n", "does not know"},
 		{"an unreadable marker", "../../etc\n", "unreadable ownership marker"},
+		// The value the image's entrypoint writes around its own createdb.
+		{"the entrypoint's createdb", "entrypoint-createdb\n", "unreadable ownership marker"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

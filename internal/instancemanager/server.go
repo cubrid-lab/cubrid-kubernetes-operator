@@ -28,6 +28,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,6 +38,10 @@ import (
 
 // DefaultPort is the Instance Manager API port (ADR-0003).
 const DefaultPort = 9090
+
+// maxRequestBody is the largest request body the manager reads. The
+// operator's requests are a few hundred bytes of JSON.
+const maxRequestBody = 16 << 10
 
 const (
 	authHeader = "Authorization"
@@ -71,6 +76,13 @@ type Server struct {
 	backupStagingRoot string
 	// stagingMu serializes the claim, release and reclaim of backup staging.
 	stagingMu sync.Mutex
+	// stagingWriterBound and stagingWriterPoll override how long and how
+	// often a failed backup waits for its staging files to be closed; zero
+	// keeps the defaults (awaitStagingWriters).
+	stagingWriterBound time.Duration
+	stagingWriterPoll  time.Duration
+	// procRoot is the process list that wait reads; empty is /proc.
+	procRoot string
 	// restoreRoots confine every path a restore request names (#119).
 	restoreRoots RestoreRoots
 	// ha is what the HA bootstrap needs (#106).
@@ -84,6 +96,9 @@ type Server struct {
 	// stopMu and stopped make the stop run once.
 	stopMu  sync.Mutex
 	stopped bool
+	// stopFile is where "instance-manager shutdown" records a stop it was
+	// asked for (RecordStopRequest); empty when the manager does not look.
+	stopFile string
 	// lifeMu guards stopping, starting and the admission into ops. Once
 	// stopping is set no operation is admitted and none starts CUBRID. While
 	// starting is set only the resume of completed restores is admitted.
@@ -108,8 +123,16 @@ type Server struct {
 	// notReady is why /readyz last answered that the member is not ready;
 	// empty when it answered that it is. Guarded by pollMu.
 	notReady string
+	// applierMissing is the copied log for which the last role answer found
+	// no applier process; empty when it found one. Guarded by pollMu.
+	applierMissing string
 	// timeouts are the per-operation deadlines.
 	timeouts Timeouts
+	// heartbeatProcesses lists the processes that run now, and
+	// heartbeatSettle is the time between the two observations a heartbeat
+	// start needs (observeStartable).
+	heartbeatProcesses func() (map[string]bool, error)
+	heartbeatSettle    time.Duration
 }
 
 func NewServer(cli CLI, token string) *Server {
@@ -117,6 +140,7 @@ func NewServer(cli CLI, token string) *Server {
 	return &Server{
 		cli: cli, token: token, timeouts: Timeouts{}.withDefaults(), pollStatus: map[string]int{},
 		opsCtx: opsCtx, endOps: endOps,
+		heartbeatProcesses: RunningProcesses, heartbeatSettle: heartbeatSettle,
 	}
 }
 
@@ -300,6 +324,29 @@ const (
 	replicationBudget = 2 * time.Second
 )
 
+// logMissingApplier logs once that heartbeat lists no applier process for
+// the master's log a slave's replication was read for: its reading then
+// carries no applier identity. It logs again only after a reading in between
+// that found an applier, was not of a slave, or was of another master's log.
+func (s *Server) logMissingApplier(ctx context.Context, st HAStatus) {
+	missing := ""
+	if r := st.Replication; r != nil && r.Source != "" {
+		logPath := filepath.Join(s.databasesDir, s.replicationDB+"_"+r.Source)
+		if _, ok := applierOf(st, logPath); !ok {
+			missing = logPath
+		}
+	}
+	s.pollMu.Lock()
+	changed := missing != s.applierMissing
+	s.applierMissing = missing
+	s.pollMu.Unlock()
+	if missing == "" || !changed {
+		return
+	}
+	s.log().InfoContext(ctx, "Found no log applier process for the master's log",
+		"source", st.Replication.Source, "logPath", missing)
+}
+
 // role returns the local node's authoritative CUBRID role.
 func (s *Server) role(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), roleBudget)
@@ -309,6 +356,7 @@ func (s *Server) role(w http.ResponseWriter, r *http.Request) {
 	replCtx, cancelRepl := context.WithTimeout(ctx, replicationBudget)
 	defer cancelRepl()
 	st.Replication = replicationOf(replCtx, s.cli, st, s.replicationDB, s.databasesDir)
+	s.logMissingApplier(ctx, st)
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -340,14 +388,19 @@ func (s *Server) haStatus(w http.ResponseWriter, r *http.Request) {
 // a repeat with a different body is a 409, and a concurrent op on the same
 // database is a 409. Without a store it stays the original synchronous path.
 func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgUnreadableBody})
+	body, ok := readBody(w, r)
+	if !ok {
 		return
 	}
 	var req BackupRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+		return
+	}
+	// Nothing is done for a request this manager does not support: no
+	// directory, no operation and no command.
+	if err := validateBackupRequest(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
 		return
 	}
 
@@ -412,7 +465,7 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	if staging == "" {
@@ -468,11 +521,18 @@ func (s *Server) findOperations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
+// notRecorded is the failure reason of an operation that stops because its
+// next state could not be written: it does nothing that is not on record.
+func notRecorded(state OperationState, err error) string {
+	return "could not record the state " + string(state) + ", so the operation went no further: " + err.Error()
+}
+
 // runBackup executes the backup in the background and records the durable state
 // transitions. A successful `backupdb` is NOT Completed on its own: the staged
 // output must upload and manifest.json (the atomic completion marker) must be
 // written before the operation reaches Completed. On any failure it terminates
-// Failed and removes the staging directory (ADR-0003/0007).
+// Failed and removes the staging directory once no process holds a file in it,
+// or keeps it, unused, when one still does after a bound (ADR-0003/0007).
 func (s *Server) runBackup(id string, req BackupRequest) {
 	go func() {
 		defer s.ops.Done()
@@ -480,14 +540,22 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		defer cancel()
 		fail := func(reason string) {
 			reason = s.stoppingReason(reason)
-			s.removeBackupStaging(req.Destination)
-			_, _ = s.store.Update(id, func(op *Operation) {
+			// cub_server writes the file of backupdb -C and may still hold
+			// it after Run returned (POC-27): remove the staging only once
+			// nothing does, and keep it, unused, when that does not happen.
+			if err := s.awaitStagingWriters(id, req.Destination); err != nil {
+				reason += "; " + err.Error()
+			} else {
+				s.removeBackupStaging(req.Destination)
+			}
+			_ = s.store.Settle(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
 			})
 		}
 
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRunningBackup }); err != nil {
+			fail(notRecorded(OpRunningBackup, err))
 			return
 		}
 		if err := s.createBackupStaging(req.Destination); err != nil {
@@ -506,6 +574,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		}
 
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpUploading }); err != nil {
+			fail(notRecorded(OpUploading, err))
 			return
 		}
 		res, err := UploadBackup(ctx, s.objects, UploadSpec{
@@ -529,7 +598,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		}
 		// Upload + manifest succeeded: remove staging, then mark Completed.
 		s.removeBackupStaging(req.Destination)
-		_, _ = s.store.Update(id, func(op *Operation) {
+		_ = s.store.Settle(id, func(op *Operation) {
 			op.State = OpCompleted
 			op.Artifact = &OperationArtifact{
 				ManifestURI:    res.ManifestURI,
@@ -550,14 +619,19 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{errKey: "restore is not enabled (no operation/object store)"})
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgUnreadableBody})
+	body, ok := readBody(w, r)
+	if !ok {
 		return
 	}
 	var req RestoreRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+		return
+	}
+	// The request is checked before it is admitted and recorded, so an
+	// invalid one leaves no operation behind. Restore checks it again.
+	if err := validateRestoreRequest(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
 		return
 	}
 	key := r.Header.Get("Idempotency-Key")
@@ -582,7 +656,7 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	if existed {
@@ -612,7 +686,7 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		defer cancel()
 		fail := func(reason string) {
 			reason = s.stoppingReason(reason)
-			_, _ = s.store.Update(id, func(op *Operation) {
+			_ = s.store.Settle(id, func(op *Operation) {
 				op.State = OpFailed
 				op.FailureReason = reason
 			})
@@ -634,9 +708,11 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			roots.Host = hosts
 		}
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpDownloading }); err != nil {
+			fail(notRecorded(OpDownloading, err))
 			return
 		}
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
+			fail(notRecorded(OpRestoring, err))
 			return
 		}
 		// Data that a failed attempt of this same request restored is taken
@@ -678,12 +754,15 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			return err
 		})
 		if err != nil {
-			if !storeFailed {
-				fail(err.Error())
+			if storeFailed {
+				err = errors.New(notRecorded(OpStarting, err))
 			}
+			fail(err.Error())
 			return
 		}
-		if _, err := s.store.Update(id, func(op *Operation) {
+		// A Completed that cannot be written leaves the ownership marker:
+		// the database runs, and its restore is not on record as complete.
+		if err := s.store.Settle(id, func(op *Operation) {
 			op.State = OpCompleted
 			op.Artifact = restored
 		}); err != nil {
@@ -703,9 +782,14 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 // stopped: in a recovery bootstrap it started nothing and runs only once, and
 // it starts no database that carries an ownership marker. A standalone
 // member's server is started; a configured HA member joins HA, with
-// `cubrid heartbeat start` issued only when heartbeat status exited by itself
-// without HA node information (observeHeartbeat); a status that did not
-// answer starts nothing and is an error. before runs ahead of
+// `cubrid heartbeat start` issued only when observeStartable allows it: two
+// rounds, heartbeatSettle apart, of a heartbeat status that exited by itself
+// without HA node information and a process table without any of
+// heartbeatVeto. A round that did not answer, or that sees such a process,
+// starts nothing and is an error. Heartbeat that already runs is not started
+// again and counts as joined only in a confirmed role; any other state is an
+// error, by the rule the HA bootstrap shares (heartbeatObservation.startError).
+// before runs ahead of
 // each start command, and an error from it stops before that command; nil
 // runs nothing.
 func (s *Server) startRestoredDatabase(ctx context.Context, database string, haMember bool, before func() error) error {
@@ -723,9 +807,9 @@ func (s *Server) startRestoredDatabase(ctx context.Context, database string, haM
 	if !haMember {
 		return nil
 	}
-	hb := observeHeartbeat(ctx, s.cli)
-	if !hb.startable && !hb.running {
-		return errors.New(hb.reason + "; heartbeat start was not issued")
+	hb := s.observeStartable(ctx)
+	if err := hb.startError(); err != nil {
+		return err
 	}
 	if hb.startable {
 		if err := before(); err != nil {
@@ -828,12 +912,97 @@ func (s *Server) getOperation(w http.ResponseWriter, r *http.Request) {
 // the master's copy-log directory to inspect.
 func (s *Server) convergence(w http.ResponseWriter, r *http.Request) {
 	db := r.URL.Query().Get("database")
-	path := r.URL.Query().Get("copiedLogPath")
-	if db == "" || path == "" {
+	requested := r.URL.Query().Get("copiedLogPath")
+	if db == "" || requested == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "database and copiedLogPath are required"})
 		return
 	}
-	writeJSON(w, http.StatusOK, ApplyConvergenceStatus(r.Context(), s.cli, db, path))
+	copied, err := confineCopiedLogPath(db, requested, s.databasesDir)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ApplyConvergenceStatus(r.Context(), s.cli, db, copied))
+}
+
+// confineCopiedLogPath maps the copied-log path of a convergence request onto
+// the manager's databases directory and returns a path built from that
+// directory: `<databases>/<database>_<host>`, where a slave keeps the log it
+// copies from the member <host> (docs/poc/RESULTS.md, POC-14). Any other path
+// is refused, so the request cannot make applyinfo read elsewhere. <host> is
+// a single DNS label: HA members are named by their short StatefulSet pod
+// names, not by FQDNs (ADR-0004), so a name with a dot is no member's.
+func confineCopiedLogPath(database, copiedLogPath, databasesDir string) (string, error) {
+	if databasesDir == "" || !filepath.IsAbs(databasesDir) || filepath.Clean(databasesDir) != databasesDir {
+		return "", fmt.Errorf("the databases directory %q is not configured as a clean absolute path", databasesDir)
+	}
+	if !databaseNamePattern.MatchString(database) {
+		return "", fmt.Errorf("database name %q is not a plain identifier", database)
+	}
+	host, isCopiedLog := strings.CutPrefix(filepath.Base(copiedLogPath), database+"_")
+	if filepath.Clean(copiedLogPath) != copiedLogPath || filepath.Dir(copiedLogPath) != databasesDir ||
+		!isCopiedLog || !hostLabelPattern.MatchString(host) {
+		return "", fmt.Errorf("copiedLogPath %q is not a copied log of %s directly below %q", copiedLogPath, database, databasesDir)
+	}
+	return filepath.Join(databasesDir, database+"_"+host), nil
+}
+
+// readBody reads a request body of at most maxRequestBody bytes. It answers
+// a larger or unreadable one itself and reports false.
+func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	var tooLarge *http.MaxBytesError
+	switch {
+	case errors.As(err, &tooLarge):
+		writeJSON(w, http.StatusRequestEntityTooLarge,
+			map[string]string{errKey: fmt.Sprintf("the request body is larger than %d bytes", maxRequestBody)})
+		return nil, false
+	case err != nil:
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgUnreadableBody})
+		return nil, false
+	}
+	return body, true
+}
+
+// validateBackupRequest rejects a backup request this manager does not carry
+// out as asked (#301). The database name becomes a command argument and part
+// of file names, so it is a plain identifier. Only a full backup is
+// supported: an incremental one needs the levels before it, which nothing
+// here keeps track of. An upload names where the artifact goes and what its
+// manifest says, so each of its fields is present and of the expected form;
+// the prefix stays below the place it names.
+func validateBackupRequest(req BackupRequest) error {
+	if req.Database == "" || req.Destination == "" {
+		return errors.New("database and destination are required")
+	}
+	if !databaseNamePattern.MatchString(req.Database) {
+		return fmt.Errorf("database name %q is not a plain identifier", req.Database)
+	}
+	if req.Level != 0 {
+		return fmt.Errorf("backup level %d is not supported: only a full backup (level 0) is", req.Level)
+	}
+	up := req.Upload
+	if up == nil {
+		return nil
+	}
+	if up.Bucket == "" || up.Prefix == "" || up.ClusterUID == "" || up.CubridVersion == "" || up.SourceInstance == "" {
+		return errors.New("upload needs bucket, prefix, clusterUID, cubridVersion and sourceInstance")
+	}
+	if path.IsAbs(up.Prefix) || path.Clean(up.Prefix) != up.Prefix || up.Prefix == ".." || strings.HasPrefix(up.Prefix, "../") {
+		return fmt.Errorf("upload prefix %q must be a clean relative key prefix", up.Prefix)
+	}
+	if !hostLabelPattern.MatchString(up.SourceInstance) {
+		return fmt.Errorf("upload sourceInstance %q is not a host name (a DNS label)", up.SourceInstance)
+	}
+	// unknown is what the operator records for the only member of a
+	// single-instance cluster, whose role is not resolved (ADR-0007,
+	// RoleUnknownSingleInstanceFallback).
+	switch Role(up.SourceRole) {
+	case "", RoleMaster, RoleSlave, RoleReplica, RoleUnknown:
+	default:
+		return fmt.Errorf("upload sourceRole %q is not master, slave, replica or unknown", up.SourceRole)
+	}
+	return nil
 }
 
 // shutdown performs the ADR-0003 ordered graceful shutdown (withdraw HA, stop server).

@@ -275,27 +275,124 @@ func (l *roleLog) write(rel string) string {
 	return writeScenarioFile(rel, []byte(strings.Join(l.lines, "\n")+"\n"))
 }
 
+// replicationStateLimit bounds how long replicationState may take in all;
+// each kubectl call it makes is stopped at that deadline, and each API
+// request also after 20 s. Each CUBRID command in a member is stopped after
+// 15 s (memberReplicationScript), so that a member that is gone or
+// restarting cannot use up the budget of the others.
+const replicationStateLimit = 2 * time.Minute
+
+// kubectlExec is kubectl's subcommand that runs a command in a container.
+const kubectlExec = "exec"
+
+// memberReplicationScript prints, inside a member's container, what bears on
+// whether the member applies the master's log (#357): heartbeat status; for
+// each other member ($2...) applyinfo for the log copied from it and the
+// last lines of its copylogdb and applylogdb error logs, with repeated
+// messages counted; the server error log's recovery, checkpoint, HA mode and
+// volume lock lines; and the database's active log lock file. $1 is the
+// database. Every part is bounded.
+const memberReplicationScript = `db=$1; shift
+PATH="${CUBRID}/bin:${PATH}"
+logs="${CUBRID}/log"
+echo "== heartbeat status"; timeout 15 cubrid heartbeat status 2>&1 | head -n 40
+for src in "$@"; do
+  [ "$src" = "$HOSTNAME" ] && continue
+  echo "== applyinfo for the log copied from $src"
+  timeout 15 cubrid applyinfo -L "${CUBRID_DATABASES}/${db}_${src}" -r "$src" -a "$db" 2>&1 | head -n 60
+  for f in "${logs}/${db}@${src}_copylogdb.err" "${logs}/${db}@localhost_applylogdb_${db}_${src}.err"; do
+    echo "== $(basename "$f"): first and last time stamps, then the last messages with repeats counted"
+    [ -f "$f" ] || { echo "(no file)"; continue; }
+    grep '^Time' "$f" | sed -n '1p;$p' | cut -c1-40
+    grep -v -e '^Time' -e '^$' -e '^\*\*\* The previous' "$f" | tail -n 2000 | uniq -c | tail -n 15 | cut -c1-400
+  done
+done
+echo "== server error log: recovery, checkpoint, HA mode and volume lock lines"
+cat "${logs}"/server/"${db}"_[0-9]*.err 2>/dev/null \
+  | grep -B1 -e 'Log recovery' -e 'Checkpoint' -e 'HA mode is changed' -e 'Unable to mount' \
+  | grep -v '^--$' | sed -E 's/^(Time: [^ ]+ [^ ]+) .*/\1/' | tail -n 60 | cut -c1-400
+echo "== active log lock file"; head -c 200 "${CUBRID_DATABASES}/${db}/${db}_lgat__lock" 2>&1; echo`
+
+// replicationState records, after every abrupt variant, what each member
+// reports about the master's log and when the deleted Pod's containers and
+// its replacement's ran, to S03/<variant>/replication-state.txt, which is
+// added to the scenario's evidence. #357 asks whether a returning master's
+// log can stop continuing what the slaves copied; Kind was seen to start a
+// force-deleted StatefulSet Pod's replacement while the old container still
+// ran (docs/poc/RESULTS.md, POC-28). It is recorded on success as well, so
+// that the margin between the two can be compared across runs. It takes at
+// most replicationStateLimit and ends with the spec's context, so it does
+// not run past the suite's deadline; what could not be read in time is
+// recorded with its error. A failed call records its exit error only: the
+// command is known from this code and its output is recorded once. The file
+// is redacted.
+func (r *haRun) replicationState(spec context.Context, variant string, result *evidence.Scenario) {
+	if variant == s03Graceful {
+		return
+	}
+	ctx, cancel := context.WithTimeout(spec, replicationStateLimit)
+	defer cancel()
+	kubectl := func(args ...string) (string, error) {
+		out, err := utils.Run(exec.CommandContext(ctx, "kubectl",
+			append([]string{"--request-timeout=20s", "-n", r.namespace}, args...)...))
+		// utils.Run wraps the exit error with the command and its output.
+		if wrapped, ok := err.(interface{ Unwrap() error }); ok && wrapped.Unwrap() != nil {
+			err = wrapped.Unwrap()
+		}
+		return out, err
+	}
+	var b strings.Builder
+	add := func(format string, args ...any) { _, _ = fmt.Fprintf(&b, format+"\n", args...) }
+	add("taken at: %s", time.Now().UTC().Format(time.RFC3339Nano))
+	// The Events of every Pod of the member names, old and new: the deleted
+	// Pod's Killing and the replacement's Created and Started, by Pod UID.
+	events, err := kubectl("get", "events", "--sort-by=.metadata.creationTimestamp", "-o",
+		`jsonpath={range .items[?(@.involvedObject.kind=="Pod")]}`+
+			`{.metadata.creationTimestamp} {.eventTime} {.involvedObject.name} {.involvedObject.uid} `+
+			`{.reason} {.message}{"\n"}{end}`)
+	add("\nPod Events (err %v):\n%s", err, strings.Join(lastLines(events, maxLogLines, nil, r.members...), "\n"))
+	for _, member := range r.members {
+		started, serr := kubectl("get", "pod", member, "-o",
+			`jsonpath={.metadata.uid} {.metadata.creationTimestamp} `+
+				`init {.status.initContainerStatuses[*].state.terminated.startedAt} `+
+				`{.status.initContainerStatuses[*].state.terminated.finishedAt} `+
+				`cubrid {.status.containerStatuses[?(@.name=="cubrid")].restartCount} `+
+				`{.status.containerStatuses[?(@.name=="cubrid")].state.running.startedAt}`)
+		add("\n%s: Pod uid, created, init container start and end, cubrid restarts and start: %s (err %v)",
+			member, started, serr)
+		out, err := kubectl(append([]string{kubectlExec, member, "-c", "cubrid", "--", "bash", "-c",
+			memberReplicationScript, "replication-state", r.database}, r.members...)...)
+		add("%s (err %v):\n%s", member, err, out)
+	}
+	if file := writeScenarioFile("S03/"+variant+"/replication-state.txt", []byte(b.String())); file != "" &&
+		!slices.Contains(result.Evidence, file) {
+		result.Evidence = append(result.Evidence, file)
+	}
+}
+
 // s03Step registers one variant of S03 (primary Pod termination) of the
 // scenario contract. The run continues on the cluster the earlier steps left,
 // with the workload client writing through the read-write Service while the
 // master's Pod is deleted.
 func s03Step(r *haRun, variant string) {
 	It("S03/"+variant+": one member is master again after the master Pod is deleted, and no acknowledged write is lost",
-		Label("S03", evidence.Requirement{ID: "S03", Variant: variant}.Label()), func() {
+		Label("S03", evidence.Requirement{ID: "S03", Variant: variant}.Label()), func(ctx SpecContext) {
 			var needs func(context.Context) error
 			if variant == s03AbruptFirst {
 				needs = r.needsFirstMemberAsMaster
 			}
 			r.enter(needs)
-			r.s03(variant)
+			r.s03(ctx, variant)
 		})
 }
 
-func (r *haRun) s03(variant string) {
+func (r *haRun) s03(spec context.Context, variant string) {
 	result := evidence.Scenario{ID: "S03", Variant: variant, Result: evidence.Fail,
 		Reason: "a check of S03 failed; see the test output"}
 	// Reported also when a check below fails.
 	defer func() { recordScenario(result) }()
+	// Runs before the scenario is recorded, also when a check below failed.
+	defer func() { r.replicationState(spec, variant, &result) }()
 
 	client := s03Clients[variant]
 

@@ -6,8 +6,12 @@ inventory, not a support claim: what the project supports is stated only in
 and only after a run with evidence. Where the lab differs from what #80
 expects, the difference is listed under [Gaps](#gaps-against-80).
 
-Measured on 2026-10-15. The provider's name, addresses, account names and
-credentials are left out on purpose.
+Inventory measurements were recorded on 2026-10-15; measurement scopes are
+listed below. The separate 2026-10-13 manual Pod-deletion observation is
+recorded in [ROADMAP.md](../../ROADMAP.md#shared-lab-historical-baseline).
+No new measurements are introduced by this document's review corrections.
+The provider's name, addresses, account names and credentials are left out
+on purpose.
 
 ## Provider and VMs
 
@@ -20,27 +24,30 @@ credentials are left out on purpose.
 | Disks | 40 GB root volume per node; each worker also has a 50 GB data volume |
 | Architecture | amd64 on every node |
 | Placement | Three worker VMs in one availability zone. This is placement across VMs, not across physical zones |
+| Hypervisor and physical hosts | Not recorded; placement of workers on separate physical hosts is unverified |
+| Disk accounting | Listed Kubernetes-node volumes total 310 GB (4 × 40 + 3 × 50). State-VM allocation is unknown; the reported 340 GB total is unreconciled |
+| Resource budget plan | Not recorded for CPU, memory or disk; the account quota is not a workload budget |
 
 The control plane is tainted `NoSchedule`, so database members, Brokers and
 tests run on the three workers only.
 
 ## Operating system
 
-| Item | Value (identical on all four nodes) |
-|---|---|
-| OS | Ubuntu 24.04.5 LTS |
-| Kernel | 6.8.0-142-generic |
-| cgroup | v2 (`cgroup2fs`; a container sees `0::/`) |
-| Time synchronisation | `systemd-timesyncd` against `ntp.ubuntu.com`, `NTPSynchronized=yes`, time zone UTC. Offsets read on two workers: -23.7 ms and +0.16 ms |
-| `nofile` on the node (login shell) | 1024 |
-| `nofile` a Pod sees | 1048576 (soft and hard, PID 1 of the `cubrid` container in `ha-0`) |
+| Item | Recorded value | Measurement scope |
+|---|---|---|
+| OS | Ubuntu 24.04.5 LTS | Node-reported on all four Kubernetes nodes (`kubectl get nodes`) |
+| Kernel | 6.8.0-142-generic | Node-reported on all four Kubernetes nodes (`kubectl get nodes`) |
+| cgroup | v2 (`cgroup2fs`; `0::/`) | `cubrid` container in `ha-0` only |
+| Time synchronization | `systemd-timesyncd` against `ntp.ubuntu.com`, `NTPSynchronized=yes`, time zone UTC; offsets -23.7 ms and +0.16 ms | SSH measurements on two workers only |
+| `nofile` on the node (login shell) | 1024 | SSH login shells on two workers only |
+| `nofile` a Pod sees | 1048576 (soft and hard) | PID 1 of the `cubrid` container in `ha-0` only |
 
 ## Kubernetes
 
 | Item | Value |
 |---|---|
 | Distribution | k3s `v1.36.5+k3s1`, one server with its default SQLite datastore |
-| Container runtime | containerd `2.3.4-k3s1.36` |
+| Container runtime | containerd `2.3.4-k3s1.36`, node-reported on all four Kubernetes nodes (`kubectl get nodes`) |
 | CNI | flannel, VXLAN backend (the k3s default) |
 | Network policy | the k3s embedded network-policy controller |
 | Disabled k3s add-ons | Traefik, ServiceLB |
@@ -49,25 +56,42 @@ tests run on the three workers only.
 `local-path` is a node-local provisioner, not a CSI driver. See
 [Gaps](#gaps-against-80).
 
+The single k3s server is a control-plane single point of failure. A fault on
+that VM also affects the control plane and cannot be interpreted as only a
+database-member fault.
+
 ## Network between nodes
 
-All traffic between the four nodes is allowed by one security group that
-references itself, so CUBRID's HA heartbeat (UDP 59901) and the Broker and
-Instance Manager ports are open between them. From outside, only SSH and the
-Kubernetes API are open, and only to the operators' address. Database ports
-are not exposed outside the cluster.
+The provider security-group rules inspected on 2026-10-15 allow traffic
+between the four nodes through a self-reference. Those rules include
+CUBRID's HA heartbeat (UDP 59901) and the Broker and Instance Manager ports;
+external ingress rules list SSH and the Kubernetes API restricted to the
+operators' address. No database-port rule was recorded for external ingress.
+These are configuration observations, not end-to-end reachability or
+isolation measurements: no complete port probes, NetworkPolicy oracle or
+check for other exposure paths was recorded.
 
 ## Images and versions
 
-The operator runs from commit `2c39873`. Its images are not published yet
-(#123), so both were built from that commit and imported into containerd on
-each worker. The digests below are the local image IDs that containerd
-reports, not registry digests.
+On 2026-10-15 the reported Operator source commit was `2c39873`; both images
+were reported as built from that commit and imported into containerd on each
+worker, rather than pulled as published registry artifacts. The values below
+were read from Pod `imageID` fields and identify local runtime images, not
+registry artifact digests. The supplied measurement record contains only
+the short names below; full loaded image references and the full source SHA
+were not recorded and are unknown.
 
 | Image | Image ID |
 |---|---|
 | `manager:dev` (Operator) | `sha256:12314d2d3b9de77909527b6ce7d9ef0b9aa705e2b462bb50be020aa63b9ac013` |
 | `instance-manager:dev` (DB and Broker Pods) | `sha256:c34f0a0f27c11d2eac4638c17dedfc04d02b43cb43e97087b7204da3cb1949ce` |
+
+The CUBRID base-image digest used for these builds was not recorded. A match
+to the `cubrid/cubrid:11.4` digest in
+[compatibility.md](../compatibility.md) is unverified; the engine build
+string alone cannot establish that match. Development-image publication is
+described separately in that document, and release artifacts are tracked in
+#123.
 
 The engine reports `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1) (64bit release build
 for Linux)`.
@@ -87,39 +111,55 @@ That location does not protect against:
 
 ## Fault controls
 
-| Fault | Available | Exercised |
-|---|---|---|
-| Delete a database Pod | yes (`kubectl`) | yes, see below |
-| Stop and start a VM | offered by the EC2-compatible API (`StopInstances`, `StartInstances`); not tried | no |
-| Block traffic between two nodes | not established; the node security group is shared by all nodes, so changing it affects every node at once | no |
+| Fault | Control recorded on 2026-10-15 |
+|---|---|
+| Delete a database Pod | `kubectl delete pod` |
+| Stop and start a VM | EC2-compatible API exposes `StopInstances` and `StartInstances`; successful stop/start and recovery were not established |
+| Block traffic between two nodes | Not established; the node security group is shared by all nodes, so a group-rule change is not scoped to one node pair |
 
-No fault tool is installed. Pod deletion was the only fault exercised so far.
-With a three-member `CubridCluster` (`promotableMembers: 3`) whose master was
-`ha-0`, `kubectl delete pod ha-0` made `ha-1` report itself master 13 seconds
-later, and the cluster was `Ready=True` again, with `ha-0` back as a slave,
-after 26 seconds. A row written on the new master was readable on `ha-0`.
+No dedicated fault tool was recorded on 2026-10-15. Historical observations
+and validation gaps are kept in
+[ROADMAP.md](../../ROADMAP.md#shared-lab-historical-baseline), not inferred
+from a provider API's existence.
 
 ## Test client
 
-A self-hosted GitHub Actions runner runs as a Pod in the lab. It can reach the
-read-write and read-only Broker Services of the HA cluster and HTTPS on the
-internet, and nothing else in the cluster. It is not registered to this
-repository; it serves the private repository that provisions the lab.
+On 2026-10-15 a self-hosted GitHub Actions runner Pod was reported in the lab,
+outside this repository's runner registration. Its intended destinations
+were the HA cluster's read-write and read-only Broker Services and internet
+HTTPS. No NetworkPolicy enforcement record or positive/negative probe
+results were supplied, so reachability and exclusive access to those
+destinations are unverified.
 
 ## Gaps against #80
+
+Relative to #80, the 2026-10-15 record has these gaps:
 
 - #80 expects three VMs with 4 vCPU and 8 GiB each. The workers have 2 vCPU
   and 8 GiB, and a fourth VM runs the control plane.
 - There is no CSI driver. `local-path` stores data on the node's disk, so a
-  member's volume cannot move to another node, and the data of a VM that is
-  lost is lost with it.
-- The operator commit and images are older than `main` and are not registry
-  artifacts, so a run here identifies the code by commit and local image ID
-  only.
+  member's volume does not automatically move to another node. Data recovery
+  after VM loss depends on the survival and recovery of that node's disks;
+  that path was not established by this inventory.
+- The lab's k3s `v1.36.5+k3s1` differs from the Kubernetes 1.37 dependency
+  and envtest target and Kind `v1.37.0` in compatibility.md. No supported
+  version range follows from this inventory.
+- Hypervisor, physical hosts and worker host separation were not recorded.
+- The reported source is `2c39873` with local runtime image IDs, not pinned
+  registry artifacts. Full source SHA, full loaded image references and
+  CUBRID base-image digest were not supplied; correspondence to the
+  compatibility.md base-image digest is unverified.
+- Provisioning steps were reported to live in a private repository. A
+  reproduction and cleanup procedure accessible to the other maintainer,
+  and independent recreation using it, were not evidenced in this PR.
+- A CPU, memory and disk workload budget plan was not supplied.
 - Whether root volumes count against the 508 GB storage quota has not been
-  confirmed with the provider. The volumes that exist add up to 340 GB with
-  the root volumes and to 160 GB without them.
-- VM power loss and network partitions have not been injected.
-- Test results are not stored outside the node a fault is injected into.
-- Nothing refuses to inject a fault when the current kubecontext is not this
-  lab.
+  confirmed with the provider in this record. Listed node disks total
+  310 GB; the state VM's allocation is unknown, so the reported 340 GB total
+  cannot be reconciled from the supplied measurements.
+- VM power-loss, network-partition and VM-return/recovery evidence was not
+  supplied. The single-server control plane also requires distinct fault
+  interpretation.
+- Off-node evidence retention and a kubecontext/cluster-identity fault guard
+  were not evidenced by the 2026-10-15 record. Delivery and validation status
+  is tracked in ROADMAP.md under #80/#122.

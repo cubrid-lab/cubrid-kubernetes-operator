@@ -1,3 +1,9 @@
+<!-- CUBRID-LAB-ICON:START -->
+<p align="center">
+  <a href="https://github.com/cubrid-lab/brand"><img src="https://raw.githubusercontent.com/cubrid-lab/brand/572addda0f5403a455c27ec742eacd315f9ff929/dist/icons/cubrid-kubernetes-operator.svg" alt="CUBRID Lab Operator icon (Go)" width="120"></a>
+</p>
+<!-- CUBRID-LAB-ICON:END -->
+
 # CUBRID Kubernetes Operator
 
 > An experimental Kubernetes-native operator for running highly available CUBRID clusters.

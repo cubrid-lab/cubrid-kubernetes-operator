@@ -35,7 +35,9 @@ import (
 // directory that carries the marker of an operation this manager recorded as
 // Failed, before it recorded the data as restored, is ever removed. A
 // directory without the marker is someone's data and is never touched
-// (ADR-0006, ADR-0008).
+// (ADR-0006, ADR-0008). The image's entrypoint writes the same file around
+// the createdb of a standalone member, with a value that is not an operation
+// ID; this manager therefore never takes that directory for its own.
 const ownershipMarker = ".im-operation"
 
 func markerPath(database string) string { return filepath.Join(database, ownershipMarker) }

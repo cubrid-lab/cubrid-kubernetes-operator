@@ -20,7 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Reasons for a variant that a Gate keeps from starting.
@@ -59,9 +61,15 @@ type Gate struct {
 	// Describe, if set, returns the verified state for the entry, such as
 	// the identity of each member.
 	Describe func(ctx context.Context) string
+	// Redact, if set, removes credentials from a failing condition and a
+	// reason before they are cut to their bound. The evidence files are
+	// redacted again when they are written.
+	Redact func(string) string
 
 	blocked string
 	spent   time.Duration
+	mu      sync.Mutex
+	unmet   *Unmet // the condition the last check found not holding
 }
 
 // Entry is what the gate decided for one variant, for the run's evidence.
@@ -75,6 +83,75 @@ type Entry struct {
 	State string `json:"state,omitempty"`
 	// Reason is why the variant is blocked; empty when it may start.
 	Reason string `json:"reason,omitempty"`
+	// Unmet is the condition the last check found not holding, when the
+	// starting state was not verified within the limit.
+	Unmet *Unmet `json:"lastFailingCondition,omitempty"`
+}
+
+// Kinds of a condition of the starting state that does not hold.
+const (
+	UnmetPod       = "pod"
+	UnmetRole      = "role"
+	UnmetCondition = "condition"
+	UnmetBroker    = "broker"
+	UnmetOperator  = "operator"
+	UnmetClient    = "client"
+	UnmetData      = "data"
+	// UnmetOther is a failure that does not say which condition it is,
+	// such as a command that could not run.
+	UnmetOther = "other"
+)
+
+// MaxUnmetDetail bounds the detail kept of a failing condition, so that the
+// record stays small whatever the check returned.
+const MaxUnmetDetail = 512
+
+// Unmet is the first condition of the starting state that a check found not
+// holding: on which member, if it concerns one, of which kind, and what.
+// Verify returns it, possibly wrapped, as its error.
+type Unmet struct {
+	Member string `json:"member,omitempty"`
+	Kind   string `json:"kind"`
+	Detail string `json:"detail"`
+}
+
+func (u *Unmet) Error() string {
+	if u.Member == "" {
+		return u.Kind + ": " + u.Detail
+	}
+	return u.Kind + " on " + u.Member + ": " + u.Detail
+}
+
+// unmetOf returns the failing condition err names, or err itself as one of
+// kind UnmetOther, with its detail redacted and bounded.
+func (g *Gate) unmetOf(err error) *Unmet {
+	u := &Unmet{Kind: UnmetOther, Detail: err.Error()}
+	if found := (*Unmet)(nil); errors.As(err, &found) {
+		*u = *found
+	}
+	u.Detail = g.cut(u.Detail, MaxUnmetDetail)
+	return u
+}
+
+// cut redacts s, then clips it to n bytes. Redacting first keeps a cut from
+// leaving part of a secret that the redaction would no longer recognize.
+func (g *Gate) cut(s string, n int) string {
+	if g.Redact != nil {
+		s = g.Redact(s)
+	}
+	return clip(s, n)
+}
+
+// clip cuts s to at most n bytes, at a character boundary, and says so.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s... (%d bytes cut)", s[:cut], len(s)-cut)
 }
 
 // Enter restores and verifies the starting state for a variant. needs is the
@@ -109,19 +186,28 @@ func (g *Gate) Enter(ctx context.Context, variant string, needs func(ctx context
 	if stop <= 0 {
 		stop = DefaultStop
 	}
+	g.setUnmet(nil)
 	held, err := poll(ctx, limit, g.Poll, stop, false, g.attempt)
 	g.spent += time.Since(start)
+	if !held {
+		e.Unmet = g.lastUnmet()
+	}
 	if errors.Is(err, errStepStillRunning) {
 		// Something of the restore or the verification is still running
 		// against the system: no variant may start next to it.
-		g.Block(fmt.Sprintf("%s before %s: restoring or verifying the starting state did not stop after %s",
-			ReasonStepStillRunning, variant, limit.Round(time.Millisecond)))
+		last := ""
+		if e.Unmet != nil {
+			last = "; the last check that returned found " + e.Unmet.Error()
+		}
+		g.Block(fmt.Sprintf("%s before %s: restoring or verifying the starting state did not stop after %s%s",
+			ReasonStepStillRunning, variant, limit.Round(time.Millisecond), last))
 		e.Reason = g.blocked
 		return e
 	}
 	if !held {
-		g.Block(fmt.Sprintf("%s before %s within %s%s: %v",
-			ReasonStartingStateNotRestored, variant, limit.Round(time.Millisecond), budgetNote, err))
+		g.Block(fmt.Sprintf("%s before %s within %s%s: %s",
+			ReasonStartingStateNotRestored, variant, limit.Round(time.Millisecond), budgetNote,
+			g.cut(fmt.Sprint(err), 2*MaxUnmetDetail)))
 		e.Reason = g.blocked
 		return e
 	}
@@ -136,7 +222,7 @@ func (g *Gate) Enter(ctx context.Context, variant string, needs func(ctx context
 				ReasonStepStillRunning, variant))
 			e.Reason = g.blocked
 		case err != nil:
-			e.Reason = ReasonOrderDependency + ": " + err.Error()
+			e.Reason = ReasonOrderDependency + ": " + g.cut(err.Error(), 2*MaxUnmetDetail)
 		}
 	}
 	return e
@@ -152,6 +238,7 @@ func (g *Gate) attempt(ctx context.Context) (bool, error) {
 		}
 	}
 	if err := errors.Join(restoreErr, g.Verify(ctx)); err != nil {
+		g.note(ctx, err)
 		return false, err
 	}
 	if g.Settle <= 0 {
@@ -163,9 +250,34 @@ func (g *Gate) attempt(ctx context.Context) (bool, error) {
 	case <-time.After(g.Settle):
 	}
 	if err := g.Verify(ctx); err != nil {
-		return false, fmt.Errorf("held, and no longer %s later: %w", g.Settle, err)
+		err = fmt.Errorf("held, and no longer %s later: %w", g.Settle, err)
+		g.note(ctx, err)
+		return false, err
 	}
 	return true, nil
+}
+
+// note keeps what a check found not holding, unless the check was cut short
+// by the limit and so says nothing about the starting state. It replaces
+// the condition kept before, so that only the last one is kept.
+func (g *Gate) note(ctx context.Context, err error) {
+	if ctx.Err() == nil {
+		g.setUnmet(g.unmetOf(err))
+	}
+}
+
+// setUnmet and lastUnmet guard the condition kept: a check that did not
+// stop may still return after Enter has.
+func (g *Gate) setUnmet(u *Unmet) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.unmet = u
+}
+
+func (g *Gate) lastUnmet() *Unmet {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.unmet
 }
 
 // Block keeps every later variant from starting, with the reason. The first

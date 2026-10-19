@@ -471,6 +471,14 @@ The single most important structural requirement:
 
 ### 8.1 Spec (draft)
 
+The samples in this section are the original proposal. The `v1alpha1`
+fields are those of the CRD (`api/v1alpha1/cubridcluster_types.go`). It has
+no `broker`, `credentials`, `config`, `scheduling` or `storage.logs` field:
+the Operator runs two Broker Pods per access mode (`brokerReplicas` in
+`internal/controller/broker.go`), and `dbaPasswordSecretRef` is rejected
+(see Section 19). It has `fencingPolicy`, `bootstrap`, `objectStorage` and
+`networkPolicy`, which the sample does not show.
+
 ```yaml
 apiVersion: database.cubrid.io/v1alpha1
 kind: CubridCluster
@@ -591,8 +599,10 @@ status:
 
 `status.instances[].role` is one of `master`, `slave`, `replica`, or
 `unknown`. When no primary or multiple primaries are observed,
-`currentPrimary` is unset and `PrimaryResolved=False` with reason
-`NoPrimaryObserved` or `MultiplePrimariesObserved` (see ADR-0005). The
+`currentPrimary` is unset and `PrimaryResolved=False` with one of the
+reasons of [docs/observability.md](docs/observability.md#conditions), such
+as `NoPrimaryObserved`, `MultiplePrimariesObserved` or
+`PrimaryObservationIncomplete` (see ADR-0005). The
 operator must never report two `master` roles as a healthy steady state.
 `lastObservedTime` says how old this HA status is: it is written at most
 every 30 seconds for a newer time alone, and the status is stale when it is
@@ -705,14 +715,18 @@ visibility, not the env/filesystem/helper-script contract).
 #### API
 
 - **HTTP/JSON** on port `instance-manager: 9090`, cluster-internal only.
-- Kubelet (unauthenticated): `GET /livez`, `GET /readyz` (not-ready
-  during startup/shutdown/restore/ambiguous HA). Their bodies say only
-  that the manager is alive and whether the member is ready, not the role
-  and not why.
+- Kubelet (unauthenticated): `GET /livez`, `GET /readyz`. `/readyz`
+  follows the engine only: a standalone member is ready while its server
+  runs, an HA member while heartbeat reports it in a confirmed role
+  (master, slave or replica). A requested stop does not turn it false by
+  itself; the member turns not ready once heartbeat or the server has
+  stopped. Their bodies say only that the manager is alive and whether the
+  member is ready, not the role and not why.
 - Operator (bearer-token, `/v1/`): `GET /v1/role`, `GET /v1/ha/status`,
-  `GET /v1/config`, `POST /v1/shutdown`, `POST /v1/backup`,
-  `POST /v1/restore/prepare`, `GET /v1/operations/{id}`,
-  `GET /v1/operations?idempotencyKey=<key>` (read-only lookup).
+  `GET /v1/ha/convergence`, `POST /v1/ha/bootstrap`, `POST /v1/shutdown`,
+  `POST /v1/backup`, `POST /v1/restore/prepare`, `GET /v1/operations/{id}`,
+  `GET /v1/operations?idempotencyKey=<key>` (read-only lookup). There is no
+  `GET /v1/config` (`internal/instancemanager/server.go`).
 - Auth: a per-cluster bearer token from the cluster's Secret + NetworkPolicy (not mTLS in
   v1alpha1). The manager holds **no** Kubernetes RBAC.
 
@@ -725,9 +739,21 @@ auto-failbacks (ADR-0001, ADR-0005).
 
 #### Shutdown & state
 
-preStop + PID-1 `SIGTERM` run the same ordered shutdown (readyz false →
-withdraw HA → stop server → verify); `terminationGracePeriodSeconds` ≥120s
-(POC-tuned). Mutating ops are idempotent via an `Idempotency-Key` and
+preStop + PID-1 `SIGTERM` run the same stop through
+`instance-manager shutdown`. The command first records the stop in the
+container-local file `/tmp/instance-manager-stop-requested`, after which
+the manager starts nothing, also when the stop came before it listened
+(ADR-0003, Shutdown model). The stop then admits no new operation, cancels
+and waits for the running ones, and runs `cubrid heartbeat stop` and
+`cubrid server stop <db>`. The ADR-0003 steps "readyz false", "persist a
+shutdown marker" on the PVC and "verify processes exited" are not part of
+it (the stop record does not outlive the container); a failed
+command is reported, but no check confirms that no CUBRID process remains
+(POC-26 recorded `state unknown` with `cub_master` alive after
+`cubrid heartbeat stop`). `terminationGracePeriodSeconds` is 120s and the
+stop's own budget 100s (`IM_SHUTDOWN_TIMEOUT`); no POC in
+[docs/poc/RESULTS.md](docs/poc/RESULTS.md) records how long a real shutdown
+takes, so the margin is not verified. Mutating ops are idempotent via an `Idempotency-Key` and
 PVC-durable operation records; the manager reconstructs state from durable
 facts, not RAM.
 
@@ -791,7 +817,8 @@ pods**. RW/RO routing is **CUBRID-native**: RW brokers (`ACCESS_MODE=RW`)
 carry a generated `databases.txt` of all promotable HA member hostnames
 and seek the master themselves, so the write path never depends on
 operator reconcile latency or a `role=master` Service selector (the
-master is runtime-decided, ADR-0001). RO/PHRO brokers serve reads.
+master is runtime-decided, ADR-0001). RO brokers serve reads; the
+Operator generates no PHRO Broker (`internal/controller/broker_config.go`).
 
 ### Services
 
@@ -800,7 +827,7 @@ At minimum the operator exposes:
 - `<cluster>-rw` — application **write endpoint**; selects only ready RW
   broker pods. Never changes with `status.currentPrimary`.
 - `<cluster>-ro` — application **read endpoint**; selects only ready
-  RO/PHRO broker pods.
+  RO broker pods.
 - `<cluster>-instances` — internal **headless** Service for stable DB pod
   identity DNS. HA short names resolve via per-member alias Services
   (ADR-0004); broker `databases.txt` may use the governing per-pod FQDNs.
@@ -965,7 +992,7 @@ For each scenario the design must define:
 - who performs fencing when fencing is required
 - how fencing failure is surfaced
 
-Example condition:
+Example condition (original proposal):
 
 ```text
 Ready=False
@@ -973,6 +1000,14 @@ HAReady=False
 Degraded=True
 Reason=AmbiguousPrimary
 ```
+
+As implemented, the Operator sets no `Degraded` Condition. An unresolved
+primary is reported as `PrimaryResolved=False` and `HAReady=False` with a
+reason such as `PrimaryObservationIncomplete` or
+`AmbiguousPrimaryObservation`, and `RoutingReady=False` with the same
+reason; `Ready` follows the members' readiness and stays `True` while the
+primary is only unresolved. Only more than one observed master turns
+`Ready` `False` (`MultiplePrimariesObserved`).
 
 Hard invariant:
 
@@ -988,13 +1023,16 @@ authority**:
 - **CUBRID native HA owns** role election, automatic failover, promotion
   priority, and heartbeat split-brain avoidance. **Failback is not
   automatic** — the operator owns rejoin.
-- **The operator only** observes roles (Instance Manager `/v1/role` +
-  `/v1/ha/status`), aggregates status/conditions, reconciles
+- **The operator only** observes roles (Instance Manager `/v1/role`; the
+  Operator does not call `/v1/ha/status`), aggregates status/conditions, reconciles
   Kubernetes/broker resources, and recovers failed members.
 - **No automatic emergency DB fencing.** Only planned lifecycle fencing
   via `/v1/shutdown`, plus **write-path quarantine** (`RoutingReady=False`,
   withhold the RW endpoint) on ambiguous/incomplete/multi-primary
-  evidence. Pod delete / scale-down / cordon / NetworkPolicy isolation
+  evidence. The Operator itself never calls `/v1/shutdown` (only a Pod's
+  preStop hook stops its member), and `RoutingReady=False` withholds
+  nothing: the write quarantine is reported, not enforced
+  ([docs/observability.md](docs/observability.md#what-routingreadyfalse-does-not-do), #113). Pod delete / scale-down / cordon / NetworkPolicy isolation
   are **rejected** as automatic split-brain resolution.
 - **Detection:** `PrimaryResolved=True` only when **all** promotable
   members are freshly, authoritatively observed and exactly one is
@@ -1004,6 +1042,8 @@ authority**:
   the cluster's token, means "no evidence", never "node is down".
 - **Conditions:** `PrimaryResolved`, `HAReady`, `RoutingReady`,
   `Degraded`, `FencingRequired`, `FailingOver` (open-ended reasons).
+  The Operator sets the first three; nothing sets `Degraded`,
+  `FencingRequired` or `FailingOver`.
 - A reserved `spec.highAvailability.fencingPolicy`
   (`Disabled | Manual | Automatic`, default `Manual`) keeps future active
   fencing non-breaking.
@@ -1087,7 +1127,8 @@ CatchUp
 Ready
 ```
 
-Condition example:
+Condition example (proposed; the Operator emits no `InstanceRebuilding`
+reason):
 
 ```text
 Ready=False
@@ -1108,7 +1149,10 @@ rebuild **within** the fixed 3-member topology.
 lifecycles.** A pod being `Running`, a PVC existing, or a replica-count
 increase is **not** sufficient to mark a member usable.
 
-- **Seed only from the currently resolved master** in v1alpha1;
+- **Seed only from the currently resolved master** in v1alpha1 (as
+  implemented in the HA bootstrap: from the member last observed as master
+  among those that hold the database, recorded before the restore starts,
+  with `restoreslave` when that member runs as master; POC-14, POC-23);
   bootstrap/rebuild targets stay **quarantined** (no heartbeat, no
   endpoint) until restored, HA-configured, started, and caught up.
 - **PVC-intact vs rebuild is decided by durable identity markers, not pod
@@ -1117,10 +1161,12 @@ increase is **not** sufficient to mark a member usable.
   until authoritative verification.
 - **Catch-up ≠ `role=slave`:** Ready requires replication lag below
   `spec.highAvailability.catchUp.maxLag` for a stable window; catching-up
-  members are excluded from read endpoints.
+  members are excluded from read endpoints. Not in v1alpha1: there is no
+  `catchUp` field, `Ready` follows Pod readiness, and the `-ro` Service
+  selects Broker Pods, not members.
 - **Scale-down / member removal is out of v1alpha1 scope**
-  (`Degraded/ScaleDownUnsupported`; never shrink `ha_node_list` or delete
-  PVCs).
+  (never shrink `ha_node_list` or delete PVCs; the proposed
+  `Degraded/ScaleDownUnsupported` is not emitted).
 - **Future (when the topology bound is relaxed):** new-slave join /
   scale-out via live `cubrid heartbeat reload` — append to `ha_node_list`,
   reload **slaves first, master last**, never a StatefulSet rolling
@@ -1173,8 +1219,10 @@ PVC capacity
 - StorageClass
 - ReadWriteOnce
 - PersistentVolumeClaim
-- volume expansion
 - PVC retention
+
+Volume expansion is not supported: the API refuses a change of the data
+volume's size or class (see below).
 
 Deleting a CubridCluster must **NOT** accidentally destroy database data
 without an explicit retention policy.
@@ -1232,16 +1280,19 @@ S3-compatible object storage  (canonical; ADR-0006 rebuild consumes it)
 - **No Kubernetes Job** in the v1alpha1 critical path (RWO PVC + it would
   duplicate the Instance Manager). Jobs are reserved for future
   retention/verification/copy work.
-- **Target selection:** prefer the most caught-up healthy slave; fall
-  back to master (recording `fallbackUsed`) so single-node/degraded
-  clusters stay backup-capable without destabilizing the writer.
+- **Target selection:** prefer a slave; fall
+  back to master (recording `fallbackUsed`). As implemented, the first
+  freshly observed slave in ordinal order is taken; whether it has caught
+  up is not judged (`internal/controller/backuptarget.go`). The master
+  fallback keeps single-node/degraded clusters backup-capable.
 - **Successful `backupdb` ≠ successful backup** — completion requires
   upload + checksum + `manifest.json`; restore/rebuild trust only a
   validated manifest.
 - **Full only, single-shot** in v1alpha1 (`level: Full` → CUBRID level 0;
   scheduling is a future separate API).
 - Backup state is reported separately from cluster/HA readiness
-  (`CubridBackup.status` + cluster `BackupReady`).
+  (`CubridBackup.status`, condition `Ready`; the cluster has no
+  `BackupReady` Condition).
 
 See ADR-0007 for the full CR shape, division of labor, artifact/upload
 model, idempotency, status, and the 15-item POC checklist.
@@ -1297,11 +1348,16 @@ in-place restore** in v1alpha1.
   the **new** cluster's object-storage credentials only.
 - **Validation gate:** not Ready until manifest trust passes, the DB
   opens, HA forms, and slaves catch up. A half-restored DB is never
-  reported healthy.
+  reported healthy. As implemented, the recovery is `Complete` once the
+  manifest and its checksums verified, `restoredb` succeeded and the other
+  members are seeded and HA-configured
+  (`internal/controller/bootstrap.go`); no catch-up is checked, and the
+  `Validating` phase of the API is never set.
 - **Safety:** bootstrap recovery only targets an empty/operator-owned
   initial master PVC; a valid/ambiguous existing DB → refused and blocked
-  (never dropped/overwritten). Source `clusterUid` is recorded as
-  provenance, not required to match.
+  (never dropped/overwritten). The source `clusterUid` is not
+  required to match; it stays in `manifest.json`, and the cluster's status
+  records only the `manifestUri`.
 - Full-manifest restore only; no point-in-time / level selection in
   v1alpha1.
 
@@ -1347,13 +1403,22 @@ operation.
 
 - **StatefulSet strategy = `OnDelete`** (not user-configurable in
   v1alpha1). The operator patches the pod template, then **deletes exactly
-  one eligible pod at a time**, gating each replacement on health.
+  one eligible pod at a time**, gating each replacement on health. As
+  implemented, the Operator plans that sequence and reports it in
+  `Updating`, but deletes no Pod: the manager never sets
+  `AutomaticReplacement` (`cmd/main.go`), so an outdated member is reported
+  as `AutomaticReplacementDisabled` and takes the new template only when its
+  Pod is replaced by hand (#96).
 - **Change classification** before touching pods: **ReloadOnly** (via
   `cubrid heartbeat reload`, no restart), **RestartRequiredRollingUpdate**
-  (engine-compatible), or **EngineUpgradeBlocked**.
+  (engine-compatible), or **EngineUpgradeBlocked**. As implemented,
+  changes are classified by engine version only (`None`,
+  `EngineUpgradeBlocked`, `Unverifiable` in `internal/controller/update.go`);
+  there is no reload path.
 - **Detection guard:** never trust image tags — compare a desired engine
-  compatibility key (metadata + preflight `cubrid --version`) against the
-  recorded **observed engine version**. Different / missing / unverifiable
+  compatibility key against the recorded **observed engine version**. As
+  implemented, the key is the major.minor of `spec.version`, compared with
+  `status.observedEngineVersion` that the members report. Different / missing / unverifiable
   → blocked (`UpdateBlockedEngineUpgrade` /
   `UpdateBlockedUnverifiableEngineVersion`), no pod deletion.
   `spec.version` is effectively immutable for an initialized cluster, HA
@@ -1365,7 +1430,13 @@ operation.
   voluntarily terminate the current master, ADR-0005).
 - **Health guard:** an update is availability maintenance, not recovery —
   it **pauses** when not `PrimaryResolved`, on `FencingRequired`,
-  role ambiguity, incomplete catch-up, or PDB denial.
+  role ambiguity, incomplete catch-up, or PDB denial. As implemented, the
+  planner pauses when the primary is not resolved, while a member is not
+  ready, or when fewer than two healthy members would remain. Catch-up is
+  not evaluated separately from readiness: a member counts as caught up
+  when it is ready, so `WaitingForCatchUp` is never reached. The
+  `FencingRequired` and PDB checks have no input: nothing sets that
+  Condition and no PodDisruptionBudget is created or read.
 
 **Non-goals (future engine-upgrade ADR):** engine version migration,
 volume/on-disk format migration, cross-version HA, downgrade. See ADR-0009
@@ -1388,10 +1459,11 @@ everywhere; and a reconcile that changes nothing says nothing.
 
 ### Implementation status (#23)
 
-Implemented: custom gauges registered on the controller-runtime metrics
-registry (exposed on the manager's metrics endpoint) —
-`cubrid_cluster_ready`, `cubrid_cluster_instances`,
-`cubrid_cluster_instances_ready` (labels: `namespace`, `cluster`). The
+Custom gauges are registered on the controller-runtime metrics registry
+(exposed on the manager's metrics endpoint): eight per cluster
+(`cubrid_cluster_*`) and six per member (`cubrid_instance_*`), listed with
+their labels in [docs/observability.md](docs/observability.md#metrics)
+(`internal/metrics/metrics.go`). No counter is defined. The
 reconciler emits Kubernetes Events via an `EventRecorder`
 (`ClusterReady` Normal; reconcile-failure Warnings), and logs each change of the status once per reconcile, with an Event for a change of the primary and of replication health (docs/observability.md, section "Transitions"). The manager logs JSON at info level by default. Role/HA/failover and
 backup/restore observation are implemented in the reconciler and Instance
@@ -1428,8 +1500,11 @@ Implemented: DB pods run under **Pod Security Standards "restricted"** —
 RuntimeDefault` (pod + container), and all Linux capabilities dropped
 (`drop: ["ALL"]`). The operator does not use `pods/exec` (role discovery
 and DB-local ops go through the Instance Manager, ADR-0003).
-Secrets are referenced (`dbaPasswordSecretRef`,
-`objectStorage.credentialsSecretRef`), never inlined. The Instance Manager authenticates
+Object-storage credentials are referenced by Secret
+(`objectStorage.credentialsSecretRef`), never inlined. A DBA password is not
+supported: `dbaPasswordSecretRef` is rejected by the CRD and the database is
+created with an empty DBA password, so every client the Broker policy admits
+can connect as `dba` (README, "Network access"). The Instance Manager authenticates
 `/v1` endpoints with a bearer token (the preStop path sends it too; loopback
 is not exempt, ADR-0003), and object-storage credentials come from the manager's env,
 never a request body. Per-cluster ingress NetworkPolicies admit only the
@@ -1458,9 +1533,10 @@ CI                → Kind (kind-action is the de facto standard)
 Failure E2E       → multi-node Kind (node drain, network partition)
 ```
 
-The E2E harness must be provider-agnostic: it consumes only a
-`KUBECONFIG` and must not depend on minikube- or Kind-specific
-behavior. Any conformant cluster can run the smoke suite.
+The goal is a provider-agnostic E2E harness. The suite as it is runs only
+against its own Kind cluster: it refuses any other kubectl context and loads
+its images with `kind load` (`test/utils/utils.go`), and the `Makefile`
+creates only Kind clusters.
 
 ### Unit
 
@@ -1590,9 +1666,10 @@ template.
 
 ### Implementation Gate
 
-HA controller implementation does not start until all P0 decisions are
-accepted. Kubebuilder scaffold, CI, envtest, and the Kind harness may
-proceed in parallel.
+HA controller implementation was to start only after all P0 decisions
+were accepted, with the Kubebuilder scaffold, CI, envtest and the Kind
+harness in parallel. The state of that gate is kept in
+[ROADMAP.md](ROADMAP.md#implementation-gate).
 
 ---
 
@@ -1643,8 +1720,8 @@ Not required for MVP:
 ```bash
 $ kubectl get cubridclusters
 
-NAME   PRIMARY   READY   STATUS
-prod   prod-0    3/3     Healthy
+NAME   PRIMARY   HA     READY   AGE
+prod   prod-0    true   True    5m
 ```
 
 Delete the primary:
@@ -1672,8 +1749,8 @@ Failed node recovered
 Result:
 
 ```text
-NAME   PRIMARY   READY   STATUS
-prod   prod-1    3/3     Healthy
+NAME   PRIMARY   HA     READY   AGE
+prod   prod-1    true   True    9m
 ```
 
 The test also validates:

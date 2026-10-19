@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -135,6 +136,131 @@ func (r *haRun) tokenStatus(member, token string) (string, error) {
 	cmd.Stdin = strings.NewReader("Authorization: Bearer " + token + "\n")
 	out, err := utils.Run(cmd)
 	return strings.TrimSpace(out), err
+}
+
+// roleAnswer returns the HTTP status and the body of GET /v1/role on a
+// member, sent like tokenStatus, within ctx. The body is cut at maxRoleAnswer
+// bytes.
+func (r *haRun) roleAnswer(ctx context.Context, member, token string) (status, body string, err error) {
+	cmd := exec.CommandContext(ctx, "kubectl", "--request-timeout=20s", "-n", r.clientNamespace,
+		"exec", "-i", "token-caller", "--",
+		"curl", "-s", "-w", `\n%{http_code}`, "--max-time", "20", "-H", "@-",
+		fmt.Sprintf("http://%s.%s.svc:9090/v1/role", member, r.namespace))
+	cmd.Stdin = strings.NewReader("Authorization: Bearer " + token + "\n")
+	out, err := utils.Run(cmd)
+	out = strings.TrimSpace(out)
+	i := strings.LastIndexByte(out, '\n')
+	body, status = out[:max(i, 0)], out[i+1:]
+	if len(body) > maxRoleAnswer {
+		body = body[:maxRoleAnswer] + " ..."
+	}
+	return status, body, err
+}
+
+// maxRoleAnswer bounds what overlapState keeps of a role answer, maxLogLines
+// how many lines of a log it keeps, and overlapRecordLimit how long it may
+// take in all: each kubectl call it makes is stopped at that deadline, and
+// each API request also after 20 s, so that a stalled API server cannot hold
+// up the failure.
+const (
+	maxRoleAnswer      = 2048
+	maxLogLines        = 60
+	overlapRecordLimit = 2 * time.Minute
+)
+
+// lastLines returns the last n lines of log that contain every one of the
+// substrings in all and at least one of oneOf, when oneOf is given.
+func lastLines(log string, n int, all []string, oneOf ...string) []string {
+	var out []string
+	for _, line := range strings.Split(log, "\n") {
+		keep := len(oneOf) == 0
+		for _, s := range oneOf {
+			keep = keep || strings.Contains(line, s)
+		}
+		for _, s := range all {
+			keep = keep && strings.Contains(line, s)
+		}
+		if keep {
+			out = append(out, line)
+		}
+	}
+	if len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return out
+}
+
+// overlapState is the failure message of the overlap checks of S14 (#438),
+// taken just after the check failed: what the operator's status says, what
+// each member answers to the role query with the token it holds, how many
+// requests each member refused, how often its container started, and what
+// the operator and the members logged about roles and refusals. The whole
+// record goes to S14/<variant>/overlap-state.txt, which is added to the
+// scenario's evidence; the message carries a summary. Both are redacted. It
+// takes at most overlapRecordLimit; what could not be read in time is
+// recorded with its error.
+func (r *haRun) overlapState(variant, token string, result *evidence.Scenario) string {
+	ctx, cancel := context.WithTimeout(context.Background(), overlapRecordLimit)
+	defer cancel()
+	kubectl := func(ns string, args ...string) (string, error) {
+		return utils.Run(exec.CommandContext(ctx, "kubectl",
+			append([]string{"--request-timeout=20s", "-n", ns}, args...)...))
+	}
+	var full, short strings.Builder
+	add := func(b *strings.Builder, format string, args ...any) { _, _ = fmt.Fprintf(b, format+"\n", args...) }
+	add(&full, "taken at: %s", time.Now().UTC().Format(time.RFC3339Nano))
+	status, err := kubectl(r.namespace, "get", "cubridcluster", r.cluster, "-o",
+		`jsonpath={range .status.conditions[?(@.type=="PrimaryResolved")]}`+
+			`{.status} {.reason} {.lastTransitionTime}: {.message}{end}{"\n"}`+
+			`{range .status.instances[*]}{.name} {.role} {.lastObservedTime}{"\n"}{end}`)
+	add(&full, "PrimaryResolved and instances (err %v):\n%s", err, status)
+	for _, member := range r.members {
+		code, body, err := r.roleAnswer(ctx, member, token)
+		var answer struct {
+			Role, Reason string
+		}
+		_ = json.Unmarshal([]byte(body), &answer)
+		started, serr := kubectl(r.namespace, "get", "pod", member, "-o",
+			`jsonpath={.status.containerStatuses[?(@.name=="cubrid")].restartCount} `+
+				`{.status.containerStatuses[?(@.name=="cubrid")].state.running.startedAt}`)
+		log, lerr := kubectl(r.namespace, "logs", member, "-c", "cubrid", "--tail=-1")
+		// Counted as refusals counts them, from the same log.
+		refused := len(lastLines(log, math.MaxInt,
+			[]string{`"event":"request_refused"`, `"component":"instance-manager"`}))
+		lines := lastLines(log, maxLogLines, []string{`"component":"instance-manager"`})
+		add(&full, "\n%s: /v1/role with the token it holds: status %s (err %v)\n%s", member, code, err, body)
+		add(&full, "%s: requests refused since the container started: %d (log err %v)", member, refused, lerr)
+		add(&full, "%s: restart count and container start: %s (err %v)", member, started, serr)
+		add(&full, "%s: last %d lines of the Instance Manager log (err %v):\n%s", member, len(lines), lerr,
+			strings.Join(lines, "\n"))
+		add(&short, "%s: role answer %s %s %q, refusals %d, restarts and start %s", member, code, answer.Role,
+			answer.Reason, refused, started)
+	}
+	operatorLines := func(log string, n int, events ...string) []string {
+		return lastLines(log, n, []string{`"cluster":"` + r.cluster + `"`}, events...)
+	}
+	roleEvents := []string{`"event":"member_role_unobserved"`, `"event":"member_role_changed"`,
+		`"event":"primary_unresolved"`, `"event":"primary_resolved"`, `"event":"instance_manager_token_refused"`}
+	// The log of an Operator container that ended before the running one;
+	// an Operator that was not restarted has none, and that error is ignored.
+	if log, err := kubectl(namespace, "logs", "-l", operatorSelector, "--previous", "--tail=-1"); err == nil {
+		lines := operatorLines(log, maxLogLines, roleEvents...)
+		add(&full, "\noperator, previous container: last %d lines about roles and the primary:\n%s",
+			len(lines), strings.Join(lines, "\n"))
+	}
+	log, err := kubectl(namespace, "logs", "-l", operatorSelector, "--tail=-1")
+	lines := operatorLines(log, maxLogLines, roleEvents...)
+	add(&full, "\noperator: last %d lines about roles and the primary (err %v):\n%s", len(lines), err,
+		strings.Join(lines, "\n"))
+	for _, line := range operatorLines(log, 5, `"event":"member_role_unobserved"`) {
+		add(&short, "operator: %s", line)
+	}
+	file := writeScenarioFile("S14/"+variant+"/overlap-state.txt", []byte(full.String()))
+	if file != "" && !slices.Contains(result.Evidence, file) {
+		result.Evidence = append(result.Evidence, file)
+	}
+	add(&short, "the whole record: %s", file)
+	return string(redactor.Redact([]byte(short.String())))
 }
 
 // eventCount is how many times the operator recorded an Event with the
@@ -338,8 +464,11 @@ func (r *haRun) s14Token(variant string) {
 		g.Expect(p).To(Equal(master))
 		g.Expect(at).To(Equal(since), "PrimaryResolved changed since the rotation")
 	}
+	// A failure records what each member answers and what the operator
+	// logged about the roles at that moment (#438).
+	overlapFailure := func() string { return r.overlapState(variant, during.previous, &result) }
 	refusedFirst := refusalsAt(Default)
-	Consistently(resolved, overlapQuiet/3, 3*time.Second).Should(Succeed())
+	Consistently(resolved, overlapQuiet/3, 3*time.Second).Should(Succeed(), overlapFailure)
 	// A slow first reconcile may still send the new token; the quiet window
 	// starts once the members' refusal counts stop growing.
 	// Each poll compares with the sample of the poll before, 10 s earlier.
@@ -350,7 +479,7 @@ func (r *haRun) s14Token(variant string) {
 		refusedSettled = n
 		g.Expect(same).To(BeTrue(), "the members are still refusing requests")
 	}, 2*time.Minute, 10*time.Second).Should(Succeed())
-	Consistently(resolved, overlapQuiet-overlapQuiet/3, 3*time.Second).Should(Succeed())
+	Consistently(resolved, overlapQuiet-overlapQuiet/3, 3*time.Second).Should(Succeed(), overlapFailure)
 	refusedLast := refusalsAt(Default)
 	settling, later := 0, 0
 	for _, member := range r.members {

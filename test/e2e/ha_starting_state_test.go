@@ -81,6 +81,7 @@ func (r *haRun) newGate() *faults.Gate {
 		Restore:  func(context.Context) error { return r.restoreStartingState() },
 		Verify:   func(context.Context) error { return r.verifyStartingState() },
 		Describe: func(context.Context) string { return r.memberIdentities() },
+		Redact:   func(s string) string { return string(redactor.Redact([]byte(s))) },
 	}
 }
 
@@ -156,6 +157,9 @@ func (r *haRun) restoreStartingState() error {
 // holding on every member and through both Services, which also shows that
 // both endpoints answer.
 func (r *haRun) verifyStartingState() error {
+	unmet := func(member, kind, format string, args ...any) error {
+		return &faults.Unmet{Member: member, Kind: kind, Detail: fmt.Sprintf(format, args...)}
+	}
 	for _, member := range r.members {
 		// A Pod that is being deleted is still Ready for a while.
 		ready, err := r.kubectl("get", "pod", member,
@@ -164,7 +168,7 @@ func (r *haRun) verifyStartingState() error {
 			return err
 		}
 		if ready != "True" {
-			return fmt.Errorf("Pod %s is not Ready, or is being deleted: %q", member, ready)
+			return unmet(member, faults.UnmetPod, "Pod is not Ready, or is being deleted: %q", ready)
 		}
 	}
 	deleting, err := r.kubectl("get", "pods",
@@ -174,12 +178,14 @@ func (r *haRun) verifyStartingState() error {
 		return err
 	}
 	if strings.TrimSpace(deleting) != "" {
-		return fmt.Errorf("Broker Pods are being deleted: %s", deleting)
+		return unmet("", faults.UnmetBroker, "Broker Pods are being deleted: %s", deleting)
 	}
 	master, _, err := r.master()
 	if err != nil {
 		return err
 	}
+	// A condition that is not True is an Unmet of kind condition; a
+	// command or decoding failure stays a plain error, of kind other.
 	if _, err := r.formationTime(); err != nil {
 		return err
 	}
@@ -188,10 +194,10 @@ func (r *haRun) verifyStartingState() error {
 		return err
 	}
 	if s.primary != master {
-		return fmt.Errorf("status.currentPrimary is %q, CUBRID reports %s as master", s.primary, master)
+		return unmet(master, faults.UnmetRole, "status.currentPrimary is %q, CUBRID reports %s as master", s.primary, master)
 	}
 	if !operatorAvailable() {
-		return fmt.Errorf("the Operator is not available")
+		return unmet("", faults.UnmetOperator, "the Operator is not available")
 	}
 	for _, mode := range []string{"rw", "ro"} {
 		out, err := r.kubectl("get", "deployment", r.cluster+"-broker-"+mode,
@@ -201,7 +207,8 @@ func (r *haRun) verifyStartingState() error {
 		}
 		f := strings.Fields(out)
 		if len(f) != 3 || f[0] == "0" || f[1] != f[0] || f[2] != f[0] {
-			return fmt.Errorf("the %s Brokers are not all available (replicas, updated, available: %s)", mode, out)
+			return unmet("", faults.UnmetBroker,
+				"the %s Brokers are not all available (replicas, updated, available: %s)", mode, out)
 		}
 	}
 	// A client Pod that is being deleted still answers for a while.
@@ -211,7 +218,7 @@ func (r *haRun) verifyStartingState() error {
 		return err
 	}
 	if client != "Running" {
-		return fmt.Errorf("the workload client Pod is not running, or is being deleted: %q", client)
+		return unmet("", faults.UnmetClient, "the workload client Pod is not running, or is being deleted: %q", client)
 	}
 	// A marker written through the read-write Service must reach every
 	// member: a slave whose applier stalled is not in the starting state.
@@ -221,10 +228,11 @@ func (r *haRun) verifyStartingState() error {
 	r.mu.Unlock()
 	h, err := r.runWorkload("CLIENT_ID=" + marker + " OPS=1 ROLLBACK_EVERY=0")
 	if err != nil {
-		return fmt.Errorf("marker write through -rw: %w", err)
+		// The client could not run or its history could not be read.
+		return unmet("", faults.UnmetClient, "marker write: %v", err)
 	}
 	if h.Counts[workload.Acknowledged] != 1 {
-		return fmt.Errorf("the marker write through -rw was not acknowledged: %v", h.Counts)
+		return unmet("rw", faults.UnmetData, "the marker write was not acknowledged: %v", h.Counts)
 	}
 	var report workload.Report
 	for deadline := time.Now().Add(time.Minute); ; time.Sleep(3 * time.Second) {
@@ -238,8 +246,22 @@ func (r *haRun) verifyStartingState() error {
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("the data rules do not hold, or marker %s did not reach every member within a minute: %+v",
-		marker, report)
+	// The first violation names the member and the rule, a violation of the
+	// marker row and a member before an endpoint; the whole report is in the
+	// data checks of the steps.
+	member, v, total := report.FirstViolation(append(slices.Clone(r.members), "rw", "ro"), marker+"-")
+	if total == 0 {
+		return unmet("", faults.UnmetData, "the data rules were checked on no member")
+	}
+	what := v.Rule
+	switch {
+	case strings.HasPrefix(v.OpID, marker+"-"):
+		what += " marker row " + v.OpID
+	case v.OpID != "":
+		what += " row " + v.OpID
+	}
+	return unmet(member, faults.UnmetData, "%s within a minute: %s (%d violations in all, marker %s)",
+		what, v.Detail, total, marker)
 }
 
 // needsFirstMemberAsMaster is the order dependency of S03

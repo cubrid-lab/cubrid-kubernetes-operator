@@ -59,8 +59,7 @@ func completeBackupBody(t *testing.T) string {
 	t.Helper()
 	body, err := json.Marshal(BackupRequest{
 		Database: dbName, Destination: testStagingRoot + "/bk",
-		Upload: &BackupUpload{Bucket: testUpload.Bucket, Prefix: testUpload.Prefix, ClusterUID: "uid-1",
-			CubridVersion: "11.4", SourceInstance: "db-0", SourceRole: "slave"},
+		Upload: testUpload,
 	})
 	if err != nil {
 		t.Fatal(err)

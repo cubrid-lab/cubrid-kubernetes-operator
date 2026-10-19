@@ -62,6 +62,8 @@ type ReplicationObservation struct {
 	AppliedChanges int64
 	FailCount      int64
 	DelayedPages   int64
+	// Applier identifies the applier process; empty when it is not known.
+	Applier string
 }
 
 // nextReplication turns a reading of a slave's applier into the status of its
@@ -69,7 +71,12 @@ type ReplicationObservation struct {
 // wait now, waited at the reading before, and the applier applied nothing in
 // between; the time it was first seen so is kept until it applies something
 // or no page waits. Counters of another source, or of an applier that was
-// restarted, are not comparable and start a new series.
+// restarted, are not comparable and start a new series. The counters outlast
+// the applier's process (docs/poc/RESULTS.md, POC-30), so a restarted applier
+// is known by its identity, when the Instance Manager reports one. A stall
+// that was reported when the applier changed restarts at now instead of
+// ending. An applier that retries inside the same process, as in the stall
+// of #357 (POC-28), keeps its identity, so that stall is still reported.
 //
 // Without a reading (obs nil) the status before is kept unchanged, neither
 // progress nor a stall, until it is older than replicationHistoryTTL. The age
@@ -95,16 +102,29 @@ func nextReplication(prev *databasev1alpha1.InstanceReplication, obs *Replicatio
 	observedAt := metav1.NewTime(now)
 	next := &databasev1alpha1.InstanceReplication{
 		Source: obs.Source, AppliedChanges: obs.AppliedChanges, FailCount: obs.FailCount, DelayedPages: obs.DelayedPages,
-		ObservedAt: &observedAt,
+		Applier: obs.Applier, ObservedAt: &observedAt,
 	}
-	stalled := prev != nil && prev.Source == obs.Source &&
+	// An identity that is not known on one side decides nothing: the
+	// counters alone are compared then, as for a manager that reports none.
+	sameApplier := prev != nil && (prev.Applier == "" || obs.Applier == "" || prev.Applier == obs.Applier)
+	waiting := prev != nil && prev.Source == obs.Source &&
 		prev.DelayedPages > 0 && obs.DelayedPages > 0 && prev.AppliedChanges == obs.AppliedChanges
-	if !stalled {
+	switch {
+	case !waiting:
 		return next
-	}
-	if prev.StalledSince != nil {
+	case !sameApplier:
+		// Another applier process while a stall was reported and pages
+		// still wait: the series starts again, so the new process does not
+		// inherit the age of the stall, but the stall is not reported as
+		// over. An applier that keeps crashing faster than the readings
+		// stays reported stalled.
+		if prev.StalledSince != nil {
+			since := metav1.NewTime(now)
+			next.StalledSince = &since
+		}
+	case prev.StalledSince != nil:
 		next.StalledSince = prev.StalledSince.DeepCopy()
-	} else {
+	default:
 		since := metav1.NewTime(now)
 		next.StalledSince = &since
 	}

@@ -78,7 +78,10 @@ Kubelet endpoints (unauthenticated — probes are awkward with strong auth):
 - `GET /livez` — manager process alive.
 - `GET /readyz` — instance safe to serve/participate; **not-ready** during
   startup, shutdown, restore prep, ambiguous HA state, or local CUBRID
-  unavailability.
+  unavailability. As implemented it follows the engine only: a standalone
+  member is ready while its server runs, an HA member while heartbeat
+  reports it in a confirmed role (master, slave or replica). A requested
+  stop or a running operation does not turn it false by itself.
 
 Because anyone who reaches the port can ask them, their bodies carry nothing
 but the answer: `{"status":"ok"}` for `/livez`, `{"ready":true}` or
@@ -88,8 +91,10 @@ member is not ready is written to the manager's log (#333).
 
 Operator endpoints (bearer-token authenticated, `/v1/`):
 
-- `GET /v1/role`, `GET /v1/ha/status`, `GET /v1/config`
-- `POST /v1/shutdown`, `POST /v1/backup`, `POST /v1/restore/prepare`
+- `GET /v1/role`, `GET /v1/ha/status`, `GET /v1/ha/convergence` (the
+  `GET /v1/config` of the first version of this ADR is not provided)
+- `POST /v1/ha/bootstrap`, `POST /v1/shutdown`, `POST /v1/backup`,
+  `POST /v1/restore/prepare`
 - `GET /v1/operations/{operationID}`
 - `GET /v1/operations?idempotencyKey=<key>`: the operations recorded under
   the key, as `{"operations": [...]}`; an empty list means none. It only
@@ -119,10 +124,11 @@ each:
 |---|---|---|---|
 | 401 | `Unauthorized` | the bearer token is missing or not the manager's | unauthorized: nothing was done; the operator reports `InstanceManagerTokenRefused` |
 | 409 | `OperationInProgress` | another operation that has not ended holds the database | retryable: the same request is sent again later |
-| 409 | `StagingDestinationInUse` | a running operation of another request owns the backup's staging destination (#275) | retryable |
+| 409 | `StagingDestinationInUse` | a running operation of another request owns the backup's staging destination (#275), or a process still holds a file that a failed backup left in it (#469) | retryable |
 | 409 | `IdempotencyConflict` | the manager holds an operation of this kind under the `Idempotency-Key` for another request body | terminal for the key: the request is never sent in its place; the operation the key names is read with `GET /v1/operations?idempotencyKey=` and followed |
 | 409 | `NotAnHAMember` | an HA request reached a standalone member | terminal for the member until its Pod runs as an HA member: the operator does not look the key up, reports `InstanceManagerNotAnHAMember` and asks again later without using up an attempt |
 | 412 | `ObjectStorageNotApplied` | the manager was started without object storage (#290) | terminal until the Pod is restarted with it; the operator waits, bounded (ADR-0007) |
+| 500 | `OperationRecordUnreadable` | a start, and the manager's operation store holds a record it cannot read or decode, which may be the operation the key names (#427) | retryable once the record is readable or removed by hand; nothing was started. The operator does not know the code and treats it as any 500 (`InstanceManagerUnavailable`, the message carries the code) |
 | 400, 413, 422 | none | the request is malformed or invalid (400), too large (413) or cannot be processed (422) | terminal for the request: the same request is refused again, so the operator counts a refused start as a failed attempt (`InstanceManagerRequestRefused` for a `CubridBackup`, which ends unless the target holds an operation of it) |
 | 404, 405, 408, 429 and any other 4xx | none | the manager could not be asked: an earlier image without the route (404 or 405 from its mux), a timeout (408), load shedding (429) | retryable, like an unavailable manager: the operator waits and uses up no attempt (`InstanceManagerUnavailable`, `RestoreStartFailed` at a recovery start) |
 
@@ -153,6 +159,12 @@ answer readable.
   "hostname": "<pod name>", "database": "<db>",
   "reason": "human-readable" }
 ```
+
+As implemented, the answer is `{current, role, serverActive, nodes, source,
+reason, engineVersion, replication}` (`internal/instancemanager/role.go`),
+the role is derived from `cubrid heartbeat status` alone, and `source` is
+always `heartbeat`. The manager does not run `changemode` and does not
+cross-check the configuration.
 
 As implemented, the manager watches the CUBRID processes the member needs
 (`cub_master` and `cub_server`; `cub_server` alone for a standalone member).
@@ -240,12 +252,50 @@ Operations and the stop are serialized. Once a stop is asked for, the manager
 admits no new backup, restore or HA bootstrap (`503`), cancels the commands
 of the running ones, and refuses any `cubrid server start` or
 `cubrid heartbeat start` they would issue next; such an operation ends
-`Failed` with the reason that the member is stopping. The start of a
+`Failed` with the reason that the member is stopping. A cancelled or
+failed backup ends only once no process holds a file in its staging
+directory, or 30 s have passed: `cub_server`, which writes the file of
+`backupdb -C`, is outside the utility's process group and kept it open for
+up to about 2 s after the group ended (POC-27). The stop's wait for the
+operations covers that, before CUBRID is stopped; `cub_server` is never
+signalled for it. A directory still held after 30 s is kept, unused, and
+the failure reason says so (ADR-0007, #469). The start of a
 completed restore's database when the manager starts (ADR-0008) is held to
 the same rule: the manager listens before it starts that database, so a
 stop asked for meanwhile reaches the manager and not the command's own
 fallback, and until that start has ended the manager refuses every other
-backup, restore or HA bootstrap (`503`, "the manager is starting"). The stop waits for the
+backup, restore or HA bootstrap (`503`, "the manager is starting").
+
+A shutdown can also arrive after the entrypoint has launched the manager
+but before the manager listens; the command then finds nobody and stops
+CUBRID itself, in its own process, unordered with the manager (#323). So the
+command first records the stop in a file on the container's own file system,
+the fixed path `/tmp/instance-manager-stop-requested`, and only then asks the
+manager. The path is not configurable and must stay off every volume: a
+record that outlived its container would keep every later container of the
+member from starting CUBRID. The command dials the manager at `127.0.0.1` on
+the port of `IM_ADDR`, so `IM_ADDR` must include the loopback address (`:9090`
+or `0.0.0.0:9090`, not a Pod IP alone). The manager looks for that record right after it
+listens, and again before every `cubrid server start` and
+`cubrid heartbeat start`. When it is there, the manager behaves as a member
+that is stopping: it reclaims nothing, starts no completed restore's
+database, admits no operation (`503`), and treats the absence of CUBRID as
+intended; it does not run the shutdown itself, which the command ran. A
+record that cannot be examined counts as one, and is logged as
+`stop_file_unreadable` rather than as a recorded stop (`stop_recorded`). The order closes both races: a
+record written before the manager's look is found, and one written after it
+was written after the listen, so the command's request reaches the manager,
+which orders the stop after its start. A manager that died before it
+listened starts nothing at all. Nothing removes the record: a stop is final
+for the container, and a restarted container starts from the image's file
+system without it. A command that cannot write the record still stops
+CUBRID and logs the failure; the manager is then not kept from a start.
+Alternatives not taken: a lock shared by the command and the manager still
+needs a record for a command that takes the lock before the manager does;
+and making only the entrypoint wait for the listener leaves the `preStop`
+hook, which runs the command directly, open.
+
+The stop waits for the
 running operations to end before it withdraws HA and stops the server, so no
 operation starts CUBRID after the final shutdown. The wait never takes the
 last 30 seconds of the stop's budget (half of a budget shorter than 60
@@ -257,7 +307,8 @@ Time budget: the stop may take 100 seconds (`IM_SHUTDOWN_TIMEOUT`), and the
 Pod's `terminationGracePeriodSeconds` is 120, which leaves 20 seconds for the
 manager and the container to end. Both are fixed values today.
 
-`terminationGracePeriodSeconds` is generous (≥120s, POC-tuned). For
+`terminationGracePeriodSeconds` is generous (≥120s). It is a fixed 120s;
+no POC has measured a shutdown against it (Validation item 5). For
 StatefulSet rolling updates the operator updates one DB pod at a time,
 observes role via the manager, waits for `PrimaryResolved`, and does not
 voluntarily terminate the current master unless failover is intended.
@@ -273,9 +324,72 @@ persists operation records on the DB PVC (e.g.
 `$CUBRID_DATABASES/.instance-manager/operations/`). On startup it
 reconstructs state from durable facts (CUBRID process state + command
 output + config + backup manifests + operation/shutdown markers), never
-RAM. Long operations return `202 Accepted` + operation ID; the operator
+RAM. No durable shutdown marker is written (step 2 of the shutdown model);
+the stop record of the shutdown command is container-local and does not
+outlive the container. Long operations return `202 Accepted` + operation ID; the operator
 polls `GET /v1/operations/{id}` and never assumes completion from an HTTP
 return/timeout — it reconciles from durable manager-reported state.
+
+As implemented, an operation does nothing that is not on record (#299). When
+the record of its next state cannot be written, the operation goes no further
+and ends `Failed` with that reason: no upload after `backupdb`, no start of a
+database or of heartbeat. When the record of how an operation ended cannot be
+written, the manager keeps the end in memory, logs the failed write as an
+error (`event` `operation_store_write_failed`; its retries at debug level) and
+tries again at the next poll of the operation or the next request for an
+operation. Until it is written, `GET /v1/operations/{id}`,
+`GET /v1/operations?idempotencyKey=` and a repeat of the same request answer
+`500` and not the stored record, which still says that the operation runs, and
+no other operation is started on that database. A backup whose staging directory
+cannot be claimed, and whose failure cannot be recorded either, is answered
+`500`, not `202` with an operation that never runs. An end that was only in
+memory does not count: a manager that restarts first finds the operation
+unfinished and records it as `Failed`, and the same idempotency key still
+names that operation.
+
+A request is checked before anything is done for it (#301). A body larger
+than 16 KiB is answered with 413 without being read to its end. `POST
+/v1/backup` is answered with 400, and no directory, operation or command is
+created for it, unless the database name is a plain identifier, the level is
+0 (only full backups are supported, ADR-0007) and, with an upload, every
+field of the upload is present, its prefix is a clean relative key prefix and
+its source is a host name with a known role (`master`, `slave`, `replica`,
+`unknown` or none; `unknown` is the only member of a single-instance cluster,
+ADR-0007). `POST /v1/restore/prepare` is answered with 400, before it is
+admitted and before an operation is recorded, unless the database name is a
+plain identifier, every field is present, the staging and target directories
+are clean absolute paths that do not contain each other and a master to seed
+from is a host name. `GET /v1/ha/convergence` runs
+`applyinfo` only on `<databases directory>/<database>_<host>`, the place of
+a copied log below the directory the manager was started with; any other
+path is answered with 400.
+
+As implemented, a record the store cannot read or decode (an I/O or
+permission error, a truncated file) is never taken for an absent one where
+that would start work (#427). A record's file is named by its random
+operation ID; its idempotency key, kind and database are only inside it, so
+the key of a record that cannot be read is never known, and it may be the
+operation a request names or one that holds the database. While the store
+holds such a record, a request that would create an operation (`POST
+/v1/backup`, `POST /v1/restore/prepare`, `POST /v1/ha/bootstrap`), of any key,
+kind or database, is answered `500` with the code `OperationRecordUnreadable`
+and starts nothing. A repeat whose key names a record that can be read is
+still answered with it, since that starts nothing. The rule trades
+availability for safety: one unreadable record stops every new mutating
+operation on that member until the record is readable again or removed by
+hand, rather than risk a second `backupdb` or restore writer beside one that
+may run. Reads by ID and the read-only key lookup already answer `500` for a
+record they cannot read. A record that decodes but names another operation
+ID, or has no kind or idempotency key, counts as one that cannot be read. A
+backup whose staging destination holds an entry of such a record gets the
+same answer, not `StagingDestinationInUse`. At start the manager fails every
+readable record that has not ended and leaves an unreadable one as it is: it
+cannot fail it, and it admits nothing beside it. It remembers it, and the
+first successful read of it after a repair fails it with the same reason
+when it has not ended, since nothing in this process runs it. Each unreadable record is logged once, as an
+error with `event` `operation_record_unreadable` and its `operationID`, and
+again only after it was readable or gone in between. Making the condition
+visible in `/readyz` is #473.
 
 ### Security
 
@@ -360,9 +474,9 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `IM_PROCESS_GRACE` | optional: how long a CUBRID process may be missing before the manager ends itself; `30s` when unset |
 | `IM_BACKUP_STAGING_ROOT`, `IM_RESTORE_STAGING_ROOT` | `/var/lib/cubrid/backup-staging` and `/var/lib/cubrid/restore-staging`: the roots the operator builds its requests with |
 | `IM_S3_ENDPOINT`, `IM_S3_REGION`, `IM_S3_INSECURE`, `IM_S3_ACCESS_KEY`, `IM_S3_SECRET_KEY` | from `spec.objectStorage` when set; the two keys are references to the Secret it names (`accessKey`, `secretKey`) |
-| `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the preStop limit (110s). The operator sets the first two on the DB Pods when it is started with `--instance-manager-backup-timeout` or `--instance-manager-restore-timeout` (#341); otherwise it sets none of them. |
-| PID 1 | the entrypoint shell, running as UID 1000 with no capabilities; the Instance Manager is its child |
-| Termination | on `SIGTERM` the shell stops CUBRID (`cubrid server stop <db>` for `SERVER`, `cubrid heartbeat stop` otherwise), then the manager, and exits with the manager's status |
+| `IM_BACKUP_TIMEOUT`, `IM_RESTORE_TIMEOUT`, `IM_SHUTDOWN_TIMEOUT` | optional Go durations read by the manager; defaults 2h, 2h and 100s. The shutdown deadline stays below the Pod's `terminationGracePeriodSeconds` (120s), which also bounds the preStop hook. The operator sets the first two on the DB Pods when it is started with `--instance-manager-backup-timeout` or `--instance-manager-restore-timeout` (#341); otherwise it sets none of them. |
+| PID 1 | the entrypoint shell, running as UID 1000 with no capabilities; the Instance Manager is its child. It keeps the descriptor of `<CUBRID_DATABASES>/.member-lock` that holds the member lock for the container's whole life (#475) |
+| Termination | on `SIGTERM` or `SIGINT` the shell runs `instance-manager shutdown` (the manager's stop procedure, see "Shutdown model"), then sends `SIGTERM` to the manager, and exits with the manager's status. During the wait for the member lock and the data volume (`instance-manager wait-volume-free`, #472, #475) it ends the wait and exits 0 without starting anything |
 
 Observed with the real 11.4 image (#97): the CUBRID daemons are orphans
 adopted by PID 1, and `cubrid server stop` waits for the server process to
@@ -377,6 +491,169 @@ restore starts heartbeat (#350). A database whose directory carries the manager'
 marker (`<db>/.im-operation`, an interrupted `createdb` or `restoredb`) is
 neither created over nor started: the entrypoint runs only the manager, after
 installing an HA member's configuration, and leaves the marker in place.
+
+A standalone member (`SERVER`, bootstrap `new`) creates its database in the
+entrypoint, and the entrypoint writes the same file around that `createdb`,
+with the value `entrypoint-createdb` instead of an operation ID. The file is
+synced to the volume before `createdb` starts and removed only when
+`createdb` exited 0 (#312). On the pinned image an interrupted `createdb`
+leaves volumes behind. Before it registered the database in
+`databases.txt`, a second `createdb` refuses them with exit 1; shortly after
+the registration, `cubrid server start` fails with a fatal log recovery
+error (docs/poc/RESULTS.md, POC-25). Either ended the entrypoint and
+crash-looped the container. The entrypoint now refuses two states, in both
+cases creating and starting nothing and running only the manager:
+
+- **Unfinished `createdb`.** The marker is there with the entrypoint's value,
+  because `createdb` was interrupted or failed. On a standalone member the
+  same applies to a marker that names no operation of the manager (empty,
+  unreadable, a dangling link): the manager resolves only its own. The log
+  says the database is unfinished and how to create it again: remove `<db>`
+  and its `databases.txt` line (no CUBRID process uses them), then restart
+  the member, or, in a recovery bootstrap, run the restore again.
+  With the entrypoint's value the server was never started on that data, so
+  no client wrote to it; a marker of unknown origin is worth a look before
+  anything is removed. The manager never removes such a directory: the value
+  is not an operation ID, so it is never its own unfinished work.
+- **Files without a registration and without a marker.** This may be an
+  interrupted `createdb` of an earlier build, or someone's data, so nothing
+  in it is called unfinished. The log says that the directory holds files
+  while the database is not registered; the way out is to move the files
+  out of `<db>` and restart the member.
+
+When the marker or the directory cannot be written, or the marker cannot be
+synced, `createdb` is not run, the log says it could not be prepared, and a
+marker that start wrote is removed again. A termination that arrives
+during that `createdb` is handled when it returns, and nothing more is
+started; one handled just before the server start, which then still runs,
+stops that server before the script exits.
+
+Not covered: a registered database without the marker — left by an
+interrupted `createdb` of a build from before #312, or a database whose
+marker was lost — is started like any other, and a start that fails ends
+the entrypoint and can still crash-loop the container. Whether such a
+database is complete cannot be told from its files (POC-25).
+
+**One running CUBRID per volume (#472, #475).** The old container of a Pod
+deleted with `--grace-period=0 --force` can still run when its replacement
+starts on the same volume (Kind, #357), and
+CUBRID does not reliably refuse a second server on a running database
+(POC-28, POC-29 part C). Under forced conditions, two servers diverged the
+log: the returning master lacked acknowledged writes and its slaves applied
+nothing more (POC-28). So each container of a member holds a lock on its
+volume for its whole life, and a container starts nothing while another
+holds it.
+
+- **The member lock.** After the entrypoint installed its termination
+  handler, and before anything writes to the volume except creating
+  `CUBRID_DATABASES` itself (`mkdir -p`), it opens
+  `<CUBRID_DATABASES>/.member-lock` (read and write, created when missing)
+  on a descriptor it keeps until it exits, and runs
+  `instance-manager wait-volume-free` with that descriptor as its
+  descriptor 3. The command checks that the descriptor is that file and
+  takes an exclusive open file description lock (`fcntl(F_OFD_SETLK)`, a
+  write lock over the whole file) on it. Such a lock belongs to the open
+  file description, not to the process: it stays held after the command
+  has exited, for as long as the entrypoint (PID 1) or any child that
+  inherited the descriptor runs (the manager, the CUBRID daemons), and the
+  kernel drops it when the last of them ends, also on a SIGKILL. Closing
+  another descriptor of the file does not drop it, as it would a POSIX
+  lock. Another container on the volume sees it (POC-31). The lock is
+  therefore held through every stage of the container's life: its
+  `createdb`, its `cubrid server start` or `cubrid heartbeat start` before
+  `cub_server` has taken its own lock, the manager's restores
+  (`restoredb`, `restoreslave`) and HA bootstrap, and any utility the
+  container runs. If PID 1 ends, the container ends, and with it the lock.
+- **The wait.** While another container of the member holds the member
+  lock, the command waits without a time limit and logs
+  `member_lock_busy` (file, seconds waited) at once and then every 10
+  seconds; it never breaks, removes or takes over the other holder's lock.
+  Once it holds the lock it logs `member_lock_acquired`, then also waits
+  while a CUBRID process holds its own lock on the volume: it asks the
+  kernel (`fcntl(F_GETLK)`) about the files a running CUBRID holds a POSIX
+  write lock on, `<db>_lgat` (the server; on an HA member also the log
+  copier, in `<db>_<peer>`) and `<db>_lgla__lock` (the log applier), in
+  every directory directly below `CUBRID_DATABASES` and every log
+  directory registered in `databases.txt` (POC-29), and logs `volume_in_use`
+  (file, PID, seconds waited) at once and then every 10 seconds, and
+  `volume_free` when it returns. This second check covers a process of a
+  container that took no member lock, such as one of an image from before
+  #475 during an upgrade. The PID in `<db>_lgat__lock` is not used: it is
+  left behind after a kill and names another PID namespace.
+- **Failures.** Everything fails closed. A member lock file that cannot be
+  opened for writing ends the container with nothing started. A descriptor
+  that is not that file, or a lock that fails other than by being held,
+  ends the command with exit 1 (`volume_wait_stopped`), and the container
+  with nothing started. For the CUBRID locks, a missing file is free and any
+  other failure counts as held (`volume_check_failed`). A `SIGTERM` or
+  `SIGINT` to the entrypoint during the wait runs the shutdown command as
+  at any other time (which records the stop, #464), ends the wait, and
+  exits 0 with nothing started.
+
+Why a lock held for the container's life, rather than a check: a check is
+made once, and bash runs a trap only after the current foreground command
+has returned, so a start the old container has begun completes after its
+`SIGTERM`; until its `cub_server` has booted far enough to take its
+`<db>_lgat` lock, a check finds the volume free. The member lock is taken
+before the old container's first write and held until its last process
+ends, whatever that process is. Why the lock is taken by the manager and
+held by PID 1's descriptor rather than by a process that holds it: a POSIX
+lock (the only kind the shell or a plain `fcntl(F_SETLK)` helper could
+take) belongs to a process and would be dropped when that process exits,
+or when any of its descriptors of the file is closed; a holder process
+next to PID 1 would have to be watched, and its death would have to end
+the container. With an open file description lock on PID 1's descriptor,
+the holder is PID 1 itself, whose end is the container's end. Taking the
+member lock, polled every second, is itself the wait, and the CUBRID-lock
+check stays as the second step.
+
+The command itself has no time limit, but the container's startup probe
+(`/livez`, ten minutes) runs during the wait, because nothing listens
+before the manager is launched. A volume held for longer than that gets the
+container restarted by the kubelet, which sends `SIGTERM` (nothing is
+started) and starts a new container that waits again. A long wait also
+leaves less of those ten minutes for what the entrypoint starts after it,
+as for a slow `createdb`, which already shares that budget. The old
+container of a force-deleted Pod is killed within its grace period (120
+seconds), so a wait is expected to end well inside the budget; a longer one
+means something else holds the volume.
+
+The wait sits in the entrypoint and not in the manager's `activate`: the
+manager runs only as the entrypoint's child, after the wait, so a restore,
+an HA bootstrap or the start of a completed restore's database never runs
+before it.
+
+Started as root (a plain `docker run --user 0`), the entrypoint takes the
+member lock and waits before its `chown -R` of `CUBRID_DATABASES`, which
+writes to the volume. It lets the lock go just before it re-executes itself
+as `cubrid` and takes it again as `cubrid`; another container that takes
+it in between is waited for, and nothing is written meanwhile. A
+termination handled during the `chown` ends the script with nothing
+started. A termination that arrives between the `exec gosu` and the
+re-executed script's handler finds no handler and is lost (PID 1 ignores
+it), so that script goes on to start; the same window existed before #475
+at the very start of the script. The operator runs the container as UID
+1000, where this branch is never taken.
+
+Not covered:
+
+- **A container that takes no member lock.** A container of an image from
+  before #475 (during an upgrade) is covered only by the CUBRID-lock check,
+  with that check's gap: a start it has begun but whose `cub_server` holds
+  no lock yet is not seen. Anything else that writes to the volume without
+  the member lock, such as a person's `csql -S` or utility in another
+  container, is not covered either.
+- **Another node.** Both locks are the kernel's of one node. A volume
+  attached on a second node while a partitioned first node still runs a
+  container on it is not covered; nor are network volumes, where `fcntl`
+  locks go through the file system's own lock service (NFS with NLM is
+  unverified). Kubernetes itself is not covered either (the checks ran in
+  Docker).
+- **Runtimes without `F_OFD_SETLK`.** A sandboxed runtime (gVisor, Kata)
+  whose kernel interface lacks open file description locks fails the lock
+  with an error other than "held": the container ends with nothing
+  started, every time. It never starts without the lock. A build of the
+  manager for another operating system fails the same way.
 
 Each cluster has a token of its own (#270). Before it creates the cluster's
 first Pod, the operator generates 256 random bits (hex) into the
@@ -446,7 +723,7 @@ one, without the token: `PrimaryResolved` takes the reason
 that name, and a refused backup, restore or bootstrap call sets that reason
 on its condition. The operator remembers per member only a
 SHA-256 fingerprint of the token the member accepted last, never the token.
-The manager compares the token it is sent in constant time once #271 lands.
+The manager compares the SHA-256 of the token it is sent with that of its own in constant time (`internal/instancemanager/server.go`, #271).
 
 An operator version that reads only `token` (#326) and runs during an overlap
 calls every member with the new token: members that still hold the previous
@@ -464,8 +741,8 @@ The token is sent over plain HTTP inside the cluster network and is not
 encrypted in transit; a NetworkPolicy limits who can reach the port, not who
 can observe the traffic.
 
-The concrete `/v1/` request/response, operation-status enum, and error
-schemas are **not yet defined** and are **POC-gated**: they are drafted
-and validated during the POC before being frozen. Every mutating command
+The error answers are fixed above ("Error answers") and the operation
+states in `internal/instancemanager/operation.go`; the remaining `/v1/`
+request and response schemas are not frozen. Every mutating command
 must have a recorded state machine with terminal states and recovery
 rules on the DB PVC.

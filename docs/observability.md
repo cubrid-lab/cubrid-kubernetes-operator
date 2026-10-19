@@ -76,7 +76,8 @@ the fixed names below; free text belongs in `message`.
 
 | Condition | `True` means | `False` or `Unknown` reasons |
 |---|---|---|
-| `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved` |
+| `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed (`ClusterReady`) | `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved`, or the reason of a step that could not write an object of the cluster, such as `StatefulSetReconcileFailed` (see below) |
+| `Progressing` | The Operator is still working towards the spec: members are starting (`InstancesStarting`), a recovery bootstrap runs (`BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`), or a step failed and is retried (that step's reason) | `Reconciled` once the cluster is reconciled, also while more than one master is observed; `BootstrapRecoveryFailed` |
 | `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member); `Unknown` with `RolesNotObserved` |
 | `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` or `RolesNotObserved` |
 | `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
@@ -84,7 +85,7 @@ the fixed names below; free text belongs in `message`.
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
 | `RoutingReady` | The primary is resolved and a read-write Broker is available | the reason of `PrimaryResolved`, which comes first; `NoBrokerAvailable`; `Unknown` with `RolesNotObserved` or `BrokerReconcileFailed` |
 | `BootstrapReady` | The database exists on every member | the phase in progress, or why it stopped; `ObjectStorageNotApplied` while the seed source's Instance Manager runs without object storage (waits, uses up no attempt). A start a member refused keeps the cause it named (ADR-0003, error answers): `InstanceManagerTokenRefused`; `InstanceManagerOperationInProgress` or `InstanceManagerStagingInUse` while another operation holds the database or the staging destination (waits, uses up no attempt); `InstanceManagerRequestConflict` when the member holds an operation under the step's key for another request and that operation could not be found (a found one is followed instead); `InstanceManagerNotAnHAMember` while the member runs as a standalone server (waits, uses up no attempt); `InstanceManagerConflict` for a conflict of no named cause; `InstanceManagerUnavailable` for any other failed call, or `RestoreStartFailed` at the start of a recovery restore. A start the member refuses as a request (400, 413 or 422, ADR-0003) is a failed attempt, reported by the step's failure reason (`RestoreFailed`, `DatabaseCreationFailed`, `SeedBackupFailed`, `SeedRestoreFailed`, with `Retrying` while attempts remain). `SeedRestoreSourceMismatch`: a followed seed restore completed with another backup than the step's; the member is not recorded as seeded and is left for a person. `InvalidManifestURI`: `spec.bootstrap.recovery.manifestUri` is not of the form ADR-0008 accepts (a cluster stored by a release that admitted it), and either no restore was started for it, so none is, or the restore started for it reads another object than the one it names; the recovery is `Failed` and that restore is no longer polled, though a running one goes on to its end on the member. A started restore that reads the object the URI names is followed. Once a recovery is `Failed` its reason stays: the member is not asked again |
-| `Updating` | A member is being replaced for a new image | why nothing is being replaced, among them `UpdateBlockedEngineVersionNotObserved`, `UpdateBlockedEngineVersionUnknown`, `UpdateBlockedMixedEngineVersions`, `UpdateBlockedEngineUpgrade`, `UpdateBlockedUnverifiableEngineVersion`, `AutomaticReplacementDisabled`, `MasterUpdatePending`, `UpToDate`, `ImageChangeNotAccepted`; `Unknown` with `UpdateStateUnavailable`. The engine-version reasons apply to a standalone cluster as well. `ImageChangeNotAccepted` is removed once the Pod template carries the image the spec asks for, unless another reason replaces it |
+| `Updating` | A member is being replaced for a new image (`RollingUpdateInProgress`, or `MemberUpdateInProgress` when its Pod could not be deleted), or the rolling update waits: `WaitingForPrimaryResolved`, `WaitingForHealthyCluster`, `WaitingForCatchUp`, `UpdatePausedFencingRequired`, `WaitingForPDB` | why nothing is being replaced, among them `UpdateBlockedEngineVersionNotObserved`, `UpdateBlockedEngineVersionUnknown`, `UpdateBlockedMixedEngineVersions`, `UpdateBlockedEngineUpgrade`, `UpdateBlockedUnverifiableEngineVersion`, `AutomaticReplacementDisabled`, `MasterUpdatePending`, `UpToDate`, `ImageChangeNotAccepted`; `Unknown` with `UpdateStateUnavailable`. The engine-version reasons apply to a standalone cluster as well. `ImageChangeNotAccepted` is removed once the Pod template carries the image the spec asks for, unless another reason replaces it. The manager is built with automatic replacement off (`AutomaticReplacement` is never set in `cmd/main.go`), so an outdated slave is reported as `AutomaticReplacementDisabled` and no Pod is deleted: `RollingUpdateInProgress` and `MemberUpdateInProgress` are not produced by the manager as built from `cmd/main.go`. No step of the Operator sets a `FencingRequired` Condition, and no PodDisruptionBudget is read, so `UpdatePausedFencingRequired` and `WaitingForPDB` are not produced either. `WaitingForCatchUp` is not produced: a member counts as caught up when it is ready (`internal/controller/update.go`), and any member that is not ready gives `WaitingForHealthyCluster` first (`internal/controller/rollingplan.go`) |
 
 When the Operator cannot write one of the cluster's objects, `Ready` turns
 `False` with the reason of that step, such as `StatefulSetReconcileFailed`,
@@ -112,8 +113,8 @@ this records the `PrimaryUnresolved` transition with the reason
 `RolesNotObserved`, next to the Warning Event of the failure itself. A
 cluster without a role prober is not changed.
 
-`HAReady` does not depend on `ReplicationHealthy` yet; that is issue
-[#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249).
+`HAReady` does not depend on `ReplicationHealthy`
+([#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249)).
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
 available; they do not say that a client can run SQL. For an HA cluster,
 `Ready` is also `False` (`MultiplePrimariesObserved`) while more than one
@@ -133,7 +134,12 @@ window goes on counting. Under intermittent read timeouts the Condition
 therefore alternates between `Unknown` and `True` or `False`, and its
 `lastTransitionTime` moves with it: an alert must not rely on a continuous
 `False` duration. `stalledSince` carries the start of a stall across such
-gaps.
+gaps. When the slave's applier process changes while pages still wait,
+`stalledSince` starts again at that observation: the member stays reported
+stalled (`cubrid_instance_replication_stalled` stays 1 and no
+`member_replication_resumed` is logged), but the 60-second window starts
+over, so a Condition that was `False` with `ReplicationStalled` for that
+slave turns `True` again (`ReplicationRecovered`) for at least one window.
 
 ### What `RoutingReady=False` does not do
 
@@ -251,12 +257,39 @@ underscores.
 | `ReplicationHealthy` becomes `False` | `ReplicationStalled` or `ApplyFailures` | Warning | `replication_stalled`, `apply_failures` |
 | `ReplicationHealthy` becomes `True` again | `ReplicationRecovered` | Normal | `replication_recovered` |
 | A member's role changes; a member first listed with the role `unknown`, as a standalone member always is, is no change | none | | `member_role_changed` |
+| A member whose role was known gives no answer that counts: its role becomes `unknown` | none | | `member_role_unobserved`, with `oldRole`, the `reason` and the `requestID` of the role query when one was sent (see below) |
 | Any other Condition changes its status or reason | none | | `condition_changed` |
-| The bootstrap reaches its next phase | `DatabaseCreated`, `DatabaseRestored` (a recovery restore completed and seeding starts), `PeersSeeded` | Normal | `bootstrap_phase_changed` |
+| `Ready` becomes `True` | `ClusterReady` | Normal | `condition_changed` (`Ready`) |
+| A step could not write an object of the cluster (`Ready` takes that step's reason, see [Conditions](#conditions)) | the step's reason, such as `StatefulSetReconcileFailed`, once for a failure that stays the same | Warning | `condition_changed` (`Ready`) |
+| The bootstrap reaches its next phase | `DatabaseCreated`, `DatabaseRestored` (a recovery restore completed and seeding starts), `PeersSeeded` | Normal | no log event of its own; `condition_changed` when `BootstrapReady` changes |
+| A bootstrap step failed: attempts remain, or the last one failed | the step's failure reason with `Retrying` (`DatabaseCreationFailedRetrying`, `SeedBackupFailedRetrying`, `SeedRestoreFailedRetrying`, `RestoreFailedRetrying`), or without it after the last attempt | Warning | `condition_changed` (`BootstrapReady`); a failed recovery also `restore_failed` |
 | A member is copied from another member than the one the database was created or restored on, because that member is no longer the master | `SeedSourceChanged` | Normal | `condition_changed` (`BootstrapReady`, reason `SeedSourceSelected`) |
-| A member is replaced for a new image | `RollingUpdate` | Normal | `rolling_update` |
+| A member is replaced for a new image | `RollingUpdate`; not produced by the manager as built from `cmd/main.go`, which never deletes a Pod for an update (see `Updating` above) | Normal | none |
+| The Instance Manager token is rotated, its overlap ends, a requested rotation waits, or a new token is generated under running Pods (ADR-0003) | `InstanceManagerTokenRotated`, `InstanceManagerTokenOverlapEnded`, `InstanceManagerTokenRotationDeferred`, all Normal; `InstanceManagerTokenRegenerated`, a Warning; none carries the token | | none |
 | A CubridBackup reaches a phase: `Pending`, `Running`, `Uploading`, `Completed`, `Failed` | on the CubridBackup: `BackupPending`, `BackupStarted`, `BackupUploading`, `BackupCompleted`, `BackupFailed` | Normal; `BackupFailed` is a Warning | `backup_pending`, `backup_started`, `backup_uploading`, `backup_completed`, `backup_failed` |
 | A recovery bootstrap takes a step: a restore operation is started (once for each attempt), restoredb begins after the download, the recovery ends | `RestoreStarted`, `RestoreRunning`, `RestoreCompleted`, `RestoreFailed` | Normal; `RestoreFailed` is a Warning | `restore_started`, `restore_running`, `restore_completed`, `restore_failed` |
+
+The `reason` of `member_role_unobserved` is one of:
+
+| `reason` | Meaning |
+|---|---|
+| the request's error, for example `Get "http://<member>.<namespace>.svc:9090/v1/role": dial tcp: ... no such host` | The role query could not be sent or got no answer |
+| the error that the member's token could not be read with | The member was not asked |
+| `status <code>`, for example `status 401` | The Instance Manager answered with an error status; 401 refuses the token |
+| `unreadable answer` | The answer was not a role answer |
+| `the Instance Manager reported no role`, followed by `: ` and the reason it gave when it gave one, for example `current node state 'unknown' is not an authoritative role` | The member does not report an authoritative role |
+| `the answer names the member <name>` | The answer came from another member |
+| `the role <role> contradicts the HA node list` | The answer contradicts itself |
+| `a master whose server is not registered_and_active` | The member reports itself master while its server is not active |
+| `the answer is older than 15s` | The answer came too long ago to count |
+| `no answer`, `the member was not asked` | No answer was recorded for another cause |
+
+The member's text and the request's error are made one line and, when
+longer, cut to 256 characters followed by `...`; they are not otherwise
+changed. The line is logged when the
+role changes, in the reconcile that observed it. If that reconcile could not
+write the status, the next one starts from the role stored before and logs
+the line again.
 
 The `BackupFailed` Event carries the message of the CubridBackup's `Ready`
 condition. A backup whose start was not confirmed within 30 minutes
@@ -324,8 +357,131 @@ member is ready, and `/livez` only that the manager is alive. Why a member is
 not ready is in the Instance Manager's log (`event` `not_ready`, with the
 `reason`), at info level when the reason is new and below it while it stays
 the same; the member's role is what `/v1/role` answers to a caller with the
-token. A credential is never logged: no token, no `Authorization` header, no
-object-storage key, also not inside a failed command's output.
+token. An operation record that could not be written is logged as an error
+with `event` `operation_store_write_failed`, the `operationID` and the state
+that is therefore not on disk; the retries of an operation's end that could
+not be written are logged at debug level. An operation record that cannot be
+read or decoded is logged once as an error with `event`
+`operation_record_unreadable`, its `operationID` and the error, also when it
+was found at start; while it stays unreadable the Instance Manager starts no
+backup, restore or HA bootstrap and answers each start `500` with the code
+`OperationRecordUnreadable` (ADR-0003, #427). On a `CubridBackup` that start
+shows as `InstanceManagerUnavailable`, with the code in the message. The
+runbook below says what to do. A credential is never logged: no
+token, no `Authorization` header, no object-storage key, also not inside a
+failed command's output.
+
+A failed or cancelled backup removes its staging directory only once no
+process holds a file in it (ADR-0007, #469). `cub_server` writes the file of
+`backupdb -C` and may hold it for a short time after the backup ended
+(POC-27). The Instance Manager logs that wait with the `operationID` and the
+`stagingDir`:
+
+| `event` | Level | Fields | What it means |
+|---|---|---|---|
+| `backup_staging_writer_wait` | info | `holders` | A process (`pid comm path`) holds a file in the staging, or its holders cannot be told; the backup waits, looking again every 200 ms for up to 30 s |
+| `backup_staging_writer_closed` | info | `waitedMilliseconds` | The files were closed; the staging is removed and the operation ends `Failed` |
+| `backup_staging_writer_timeout` | warn | `holders`, `waitedSeconds` | A process still held a file after 30 s: the staging is kept, never uploaded or reused, and the operation's failure reason says so |
+| `backup_staging_held` | warn | `destination`, `entry`, `holders` | A backup request or the cleanup at start found such a kept entry still held: the destination is kept, and a request to it is answered `409` `StagingDestinationInUse` until the file is closed; a request after that removes the entry. A link is never followed and never counts as held |
+
+A `backup_staging_writer_timeout` or a repeated `backup_staging_held` names
+the holder: find out why it still writes before anything is removed. The
+manager never signals `cub_server` for this. The operator does not send
+another request to that destination (a destination belongs to one
+`CubridBackup` UID or to one bootstrap), so a kept entry stays until the
+next Instance Manager start, whose cleanup removes it once nothing holds a
+file in it. To clear it earlier, check from inside the Pod that no process
+holds a file under it (`ls -l /proc/*/fd 2>/dev/null | grep <stagingDir>`
+prints nothing); it is then safe to delete
+(`rm -r <stagingDir>`). A file that `cub_server` never closes is closed when
+`cub_server` restarts.
+
+### Runbook: an operation record that cannot be read
+
+While one record is unreadable, the member starts no backup, restore or HA
+bootstrap (`500`, `OperationRecordUnreadable`); the database keeps serving.
+
+1. Find the record. The operation ID is the `operationID` of the
+   `operation_record_unreadable` log line, or is named in the `500` message
+   (`read operation op-…: permission denied`, `decode operation op-…: …`).
+   The file is `$IM_OPERATIONS_DIR/op-<id>.json` in the database container
+   (by default `/var/lib/cubrid/operations`, on the PVC).
+2. Confirm that its operation does not run: no `backupdb` and no
+   `restoredb` process in the container, for example
+   `kubectl exec <pod> -c <db container> -- ps -eo pid,args | grep -E 'backupdb|restoredb'`.
+3. Then either:
+   - **Repair it.** Fix the file's owner and mode (the manager's user must
+     read and write it) or its contents. The record is readable again at the
+     next request, and starts are admitted. A record that was unreadable when
+     the manager started and has not ended becomes `Failed` with
+     `manager restarted while operation was in progress` at its first read,
+     as it would have at the start.
+   - **Remove it**, when it cannot be repaired. Move the file out of the
+     directory rather than delete it, so it can be inspected. Its idempotency
+     key is then unknown to the manager, and a poll of its ID answers `404`.
+
+### Runbook: a standalone member that starts only the Instance Manager
+
+The database entrypoint of a standalone member (`CUBRID_COMPONENTS=SERVER`)
+refuses to create over or start a database it cannot show to be whole, and
+runs only the Instance Manager instead of crash-looping (ADR-0003, #312). The
+member is then not ready. Read the reason in `kubectl logs <pod>`:
+
+| Log line (`[im-entrypoint]`) | What it means | What to do |
+|---|---|---|
+| `database '<db>' is unfinished (<dir>/.im-operation): the entrypoint's createdb did not complete; …` | The entrypoint's own `createdb` was interrupted or failed. Its volumes may be left, registered in `databases.txt` or not. The server never ran on them | No CUBRID process runs in the Pod, so the files can be changed from inside it (`kubectl exec`): remove `<dir>` and the `<db>` line of `databases.txt`, then delete the Pod. Its next start creates the database; in a recovery bootstrap (the log then says to run the restore again) it waits for the restore instead |
+| `database '<db>' is unfinished (<dir>/.im-operation): the marker names no operation of the Instance Manager; …` | The marker is empty, unreadable or a dangling link, so neither the entrypoint nor the manager owns it | Find out where it came from before anything is removed; then as above |
+| `database directory <dir> holds files, but '<db>' is not registered in …/databases.txt: …` | Files without a registration and without a marker: an interrupted `createdb` of an earlier build, or someone's data | Move the files out of `<dir>` from inside the Pod (keep them if they may be data), then delete the Pod |
+| `could not prepare createdb of '<db>' in <dir> (…)` | `databases.txt`, the directory or the marker could not be written, or the marker could not be synced; `createdb` was not run, and a marker this start wrote was removed again | Fix the volume (permissions, space) and restart the member |
+
+The entrypoint never removes these files itself, and neither does the
+Instance Manager.
+
+### Runbook: a member that waits for its data volume
+
+Every database member takes the member lock on its volume
+(`<CUBRID_DATABASES>/.member-lock`) before it writes anything there, and
+holds it until its container ends. It waits for as long as another
+container of the member holds that lock, at any stage of that container's
+life, and then for as long as another process holds a CUBRID lock on the
+volume. Both happen when the old container of a member still runs there,
+for example after a Pod was deleted with `--grace-period=0 --force`
+(ADR-0003, #472, #475). The wait itself
+has no time limit; the container's startup probe (ten minutes) still runs
+during it, so a volume held for longer restarts the container, which then
+waits again and starts nothing meanwhile. The Pod is not ready meanwhile, and its log (`kubectl logs
+<pod>`) says why, in the Instance Manager's JSON lines:
+
+| `event` | Level | Fields | What it means |
+|---|---|---|---|
+| `member_lock_busy` | warn | `file`, `waitedSeconds` | Another container on the volume on this node (an earlier container of this member) holds the member lock `file`. Logged at once, then every 10 seconds |
+| `member_lock_acquired` | info | `file`, `waitedSeconds` | This container holds the member lock now, until it ends; next it checks CUBRID's own locks |
+| `volume_in_use` | warn | `file`, `pid`, `waitedSeconds` | Another process holds the lock on `file` (`<db>_lgat` of the server or the log copier, `<db>_lgla__lock` of the log applier), although this container holds the member lock: a process of a container that took none, such as one of an earlier image. `pid` is 0 when the holder runs in another container. Logged at once, then every 10 seconds |
+| `volume_check_failed` | warn | `err`, `waitedSeconds` | The volume could not be checked (a file or directory could not be read); counted as held, so the member keeps waiting |
+| `volume_free` | info | `waitedSeconds` | No other process holds a lock; the member goes on to start |
+| `volume_wait_stopped` | info | `err` | The wait ended without the volume found free, and nothing was started: a termination (`[im-entrypoint] terminated while waiting for the data volume: nothing is started`), or the member lock could not be taken (`err` says why; the container then ends and is started again) |
+
+A member that logs `member_lock_busy` or `volume_in_use` for longer than the
+old container's termination grace period has something else running on its
+volume: find the process (on the node, `lslocks` or `/proc/locks` shows the
+holder of the file; the member lock is an `OFDLCK` line, whose PID was
+shown as -1 on the kernel tested, so look for the processes that have the
+file open) before anything
+is removed. Each startup-probe restart during a
+long hold adds to the container's restart back-off (`CrashLoopBackOff`, up
+to five minutes), so after the release the member may start up to that much
+later. Nothing here removes or breaks a
+lock, a lock file or data; never remove `.member-lock` while a container of
+the member may run.
+
+A member that ends at once with `could not open the member lock` cannot open
+`.member-lock` for writing. The entrypoint creates it with the default
+permissions (`0644` under the usual umask), owned by the user it ran as, so a container that runs
+as another UID afterwards is refused, as it would be by the data files: run
+the member as the user that owns the volume. A member that ends with
+`volume_wait_stopped` and a lock error other than a held lock (for example
+`invalid argument` on a sandboxed runtime without open file description
+locks) never starts there; that is by design.
 
 ## Metrics
 
@@ -335,9 +491,9 @@ otherwise.
 
 | Metric | Labels | Value |
 |---|---|---|
-| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when `Ready` is `True`, else 0 |
-| `cubrid_cluster_instances` | `namespace`, `cluster` | members the cluster should have |
-| `cubrid_cluster_instances_ready` | `namespace`, `cluster` | members that are ready |
+| `cubrid_cluster_ready` | `namespace`, `cluster` | 1 when `Ready` is `True`, else 0; no sample without the Condition |
+| `cubrid_cluster_instances` | `namespace`, `cluster` | members the cluster should have (`spec.topology.promotableMembers`) |
+| `cubrid_cluster_instances_ready` | `namespace`, `cluster` | members whose Pods are ready, as the StatefulSet counts them (see below) |
 | `cubrid_cluster_ha_ready` | `namespace`, `cluster` | 1 or 0 |
 | `cubrid_cluster_primary_resolved` | `namespace`, `cluster` | 1 or 0 |
 | `cubrid_cluster_routing_ready` | `namespace`, `cluster` | 1 or 0 |
@@ -350,20 +506,32 @@ otherwise.
 | `cubrid_instance_replication_stalled` | `namespace`, `cluster`, `member` | 1 while `stalledSince` is set, 0 while it is not; no sample without a reading |
 | `cubrid_instance_last_observation_timestamp_seconds` | `namespace`, `cluster`, `member` | time of the member's last answer; no sample for a member that never answered, nor for the member of a standalone cluster, which is not observed periodically |
 
-Every metric is taken from the cluster's status when that status was written,
-so a metric and the Condition or status field it mirrors come from the same
-observation. A reading of an applier that could not be renewed stays in the
-status, and so in the metrics, for a bounded time before it is dropped. A
-Condition that the status does not carry has no sample; `cubrid_cluster_ha_ready`,
-`cubrid_cluster_primary_resolved` and `cubrid_cluster_routing_ready` are 0 while
-their Condition is `False` or `Unknown`.
+Every metric is taken from the cluster when its status was written, so a
+metric and the Condition or status field it mirrors come from the same
+observation; a status write that fails changes no metric. This holds for every
+reconcile that writes the status, also one that ends at a failed write of a
+child object or while a recovery bootstrap runs: `cubrid_cluster_ready` is 1
+when the stored `Ready` is `True`, else 0, and has no sample without the
+Condition. `cubrid_cluster_instances_ready` is not in the status; it is the
+count of ready Pods the StatefulSet reported to the reconcile that wrote the
+status. A reconcile that wrote the status without reading the StatefulSet,
+because a write of a child object failed first, removes the sample instead of
+keeping an earlier count; it is absent until a reconcile reads the
+StatefulSet, also after an Operator restart. A reading of an applier that could
+not be renewed stays in the status, and so in the metrics, for a bounded time
+before it is dropped. A Condition that the status does not carry has no
+sample; `cubrid_cluster_ha_ready`, `cubrid_cluster_primary_resolved` and
+`cubrid_cluster_routing_ready` are 0 while their Condition is `False` or
+`Unknown`.
 
 - A value that is not available has no sample. It is never exported as 0.
 - Labels are few and bounded. An operation ID, a request ID, a Pod UID, an
   image digest, a command and an error text are never labels.
 - The series of a cluster are removed when the cluster is deleted, and the
   series of a member when it is no longer in the status.
-- Gauges are set again from the first reconcile after an Operator restart.
+- Gauges are set again from the first reconcile after an Operator restart
+  that writes the status; `cubrid_cluster_instances_ready` from the first one
+  that also reads the StatefulSet.
   Counters, when one is added, start from zero then; none is defined yet.
 - There is no `replication_lag_seconds`: `cubrid applyinfo` gave no delay in
   time in the experiment POC-20. The tested values are the waiting pages, the

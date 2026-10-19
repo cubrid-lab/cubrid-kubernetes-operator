@@ -18,10 +18,15 @@ package faults
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeSystem is a shared system whose starting state holds from a given
@@ -219,6 +224,168 @@ func TestGate_NeverHangs(t *testing.T) {
 	}
 	if later := g.Enter(context.Background(), "S15", nil); later.Verified || later.Reason != e.Reason {
 		t.Errorf("a later variant was not blocked for the same reason: %+v", later)
+	}
+}
+
+// markerMissing is the failing condition of a starting state whose marker
+// row did not reach a slave.
+var markerMissing = &Unmet{Member: "hab-2", Kind: UnmetData,
+	Detail: "missing gate31-000001: acknowledged to the client and not found (2 violations in all)"}
+
+// A check that does not hold within its limit names its last failing
+// condition, the member and the rule, in its entry (starting-state.jsonl)
+// and in the reason (summary.json), also when the last check did not stop.
+func TestGate_ATimeoutNamesTheLastFailingCondition(t *testing.T) {
+	for name, hang := range map[string]bool{"not restored": false, "still running": true} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			g := &Gate{Limit: 60 * time.Millisecond, Poll: 5 * time.Millisecond, Stop: 20 * time.Millisecond,
+				Verify: func(context.Context) error {
+					calls++
+					switch {
+					case calls == 1:
+						return &Unmet{Member: "hab-1", Kind: UnmetRole, Detail: "neither an active master nor a standby slave"}
+					case hang && calls > 2:
+						select {}
+					}
+					return fmt.Errorf("the data rules do not hold: %w", markerMissing)
+				}}
+			e := g.Enter(context.Background(), "S14-token-rotation", nil)
+			if e.Verified || e.Unmet == nil || *e.Unmet != *markerMissing {
+				t.Fatalf("want the last failing condition %+v in the entry, got %+v", markerMissing, e)
+			}
+			line, err := json.Marshal(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				`"lastFailingCondition":{`, `"member":"hab-2"`, `"kind":"data"`, `missing gate31-000001`,
+			} {
+				if !strings.Contains(string(line), want) {
+					t.Errorf("the record does not contain %s: %s", want, line)
+				}
+			}
+			for _, want := range []string{"hab-2", "missing gate31-000001"} {
+				if !strings.Contains(e.Reason, want) {
+					t.Errorf("the reason does not name %q: %s", want, e.Reason)
+				}
+			}
+		})
+	}
+}
+
+// The failing condition kept is bounded: a long detail, such as a whole data
+// report, is cut.
+func TestGate_TheFailingConditionIsBounded(t *testing.T) {
+	long := strings.Repeat("ö", 4*MaxUnmetDetail)
+	g := &Gate{Limit: 30 * time.Millisecond, Poll: 5 * time.Millisecond,
+		Verify: func(context.Context) error { return errors.New(long) }}
+	e := g.Enter(context.Background(), "S14", nil)
+	if e.Unmet == nil {
+		t.Fatalf("want a failing condition, got %+v", e)
+	}
+	if e.Unmet.Kind != UnmetOther || len(e.Unmet.Detail) > MaxUnmetDetail+64 ||
+		!utf8.ValidString(e.Unmet.Detail) || !strings.Contains(e.Unmet.Detail, "bytes cut") {
+		t.Fatalf("want a bounded detail, got %d bytes: %+v", len(e.Unmet.Detail), e.Unmet)
+	}
+	if len(e.Reason) > 2*MaxUnmetDetail+256 || !utf8.ValidString(e.Reason) {
+		t.Errorf("the reason is not bounded or not valid UTF-8: %d bytes", len(e.Reason))
+	}
+	// A starting state that holds keeps no failing condition.
+	ok := &fakeSystem{holdsFrom: 2}
+	if e := ok.gate().Enter(context.Background(), "S02", nil); !e.Verified || e.Unmet != nil {
+		t.Errorf("a verified entry carries a failing condition: %+v", e)
+	}
+	// The reason of a broken order dependency is bounded too.
+	needs := func(context.Context) error { return errors.New(long) }
+	if e := (&fakeSystem{holdsFrom: 1}).gate().Enter(context.Background(), "S03", needs); !e.Verified ||
+		len(e.Reason) > 2*MaxUnmetDetail+256 || !utf8.ValidString(e.Reason) {
+		t.Errorf("the order-dependency reason is not bounded or not valid UTF-8: %d bytes", len(e.Reason))
+	}
+}
+
+// A secret is redacted before the detail is cut: a cut through it would
+// leave a part the redaction no longer recognizes.
+func TestGate_TheFailingConditionIsRedactedBeforeItIsCut(t *testing.T) {
+	const secret = "s3cr3t-token"
+	detail := strings.Repeat("a", MaxUnmetDetail-4) + secret + strings.Repeat("b", MaxUnmetDetail)
+	g := &Gate{Limit: 30 * time.Millisecond, Poll: 5 * time.Millisecond,
+		Redact: func(s string) string { return strings.ReplaceAll(s, secret, "[REDACTED]") },
+		Verify: func(context.Context) error { return errors.New(detail) }}
+	e := g.Enter(context.Background(), "S14", nil)
+	if e.Unmet == nil || strings.Contains(e.Unmet.Detail, "s3cr") || strings.Contains(e.Reason, "s3cr") {
+		t.Errorf("a part of the secret is left: %+v", e)
+	}
+}
+
+// cutShort returns a Verify that reports first and then, on every later
+// call, waits for its context to be done, waits after for the given time,
+// and reports second. returned is closed when such a call has returned.
+func cutShort(first, second *Unmet, after time.Duration) (verify func(context.Context) error, returned chan struct{}) {
+	var calls atomic.Int32
+	returned = make(chan struct{})
+	var once sync.Once
+	return func(ctx context.Context) error {
+		if calls.Add(1) == 1 {
+			return first
+		}
+		<-ctx.Done()
+		time.Sleep(after)
+		once.Do(func() { close(returned) })
+		return second
+	}, returned
+}
+
+// A check cut short by the limit says nothing about the starting state: what
+// it returns does not replace the condition an earlier check found, whether
+// it returns within the stop period or after it.
+func TestGate_ACheckCutShortKeepsTheEarlierCondition(t *testing.T) {
+	later := &Unmet{Member: "hab-0", Kind: UnmetPod, Detail: "cut short"}
+	t.Run("returns within the stop period", func(t *testing.T) {
+		verify, _ := cutShort(markerMissing, later, 0)
+		g := &Gate{Limit: 60 * time.Millisecond, Poll: 5 * time.Millisecond, Stop: 200 * time.Millisecond, Verify: verify}
+		e := g.Enter(context.Background(), "S14", nil)
+		if e.Verified || !strings.HasPrefix(e.Reason, ReasonStartingStateNotRestored) ||
+			e.Unmet == nil || *e.Unmet != *markerMissing {
+			t.Errorf("want %+v kept, got %+v", markerMissing, e)
+		}
+	})
+	t.Run("returns after the stop period", func(t *testing.T) {
+		verify, returned := cutShort(markerMissing, later, 60*time.Millisecond)
+		g := &Gate{Limit: 60 * time.Millisecond, Poll: 5 * time.Millisecond, Stop: 20 * time.Millisecond, Verify: verify}
+		e := g.Enter(context.Background(), "S14", nil)
+		if !strings.HasPrefix(e.Reason, ReasonStepStillRunning) || e.Unmet == nil || *e.Unmet != *markerMissing {
+			t.Fatalf("want %s with %+v kept, got %+v", ReasonStepStillRunning, markerMissing, e)
+		}
+		<-returned
+		time.Sleep(20 * time.Millisecond)
+		if u := g.lastUnmet(); u == nil || *u != *markerMissing {
+			t.Errorf("the check that returned late replaced the condition kept: %+v", u)
+		}
+	})
+}
+
+// Each Enter starts with no failing condition: one that an earlier variant's
+// checks found is not reported for a later one whose only check was cut
+// short.
+func TestGate_AFailingConditionIsNotCarriedToTheNextVariant(t *testing.T) {
+	var calls atomic.Int32
+	g := &Gate{Limit: 60 * time.Millisecond, Poll: 5 * time.Millisecond, Stop: 200 * time.Millisecond,
+		Verify: func(ctx context.Context) error {
+			switch calls.Add(1) {
+			case 1:
+				return markerMissing
+			case 2:
+				return nil
+			}
+			<-ctx.Done()
+			return &Unmet{Kind: UnmetPod, Detail: "cut short"}
+		}}
+	if e := g.Enter(context.Background(), "S02", nil); !e.Verified {
+		t.Fatalf("the first variant fails once and then holds, got %+v", e)
+	}
+	if e := g.Enter(context.Background(), "S03", nil); e.Verified || e.Unmet != nil {
+		t.Errorf("want no failing condition for a variant whose only check was cut short, got %+v", e.Unmet)
 	}
 }
 

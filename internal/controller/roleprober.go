@@ -59,6 +59,17 @@ type RoleObservation struct {
 	// Replication is what a slave's Instance Manager read from its log
 	// applier; nil for another role and when the applier could not be read.
 	Replication *ReplicationObservation
+	// Reason says why the answer gives no role that counts: the request that
+	// failed, the status the member answered, what its Instance Manager said
+	// of a role it does not report, or how the answer contradicts itself.
+	// It is empty for an answer with a role. The Operator never puts a token
+	// into it. Text from the member or the network is made one line and cut
+	// to maxErrorMessage runes (cleanMessage), not scrubbed: what a member
+	// sends is kept up to the cut as it is.
+	Reason string
+	// RequestID is the ID the role query was sent with; empty when none was
+	// sent.
+	RequestID string
 }
 
 // RoleProber polls one instance's Instance Manager /v1/role endpoint.
@@ -90,34 +101,42 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	url := fmt.Sprintf("http://%s.%s.svc:%d/v1/role", podName, namespace, instancemanager.DefaultPort)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return RoleObservation{Reachable: false, ObservedAt: p.now()}
+		return RoleObservation{Reachable: false, ObservedAt: p.now(), Reason: cleanMessage(err.Error())}
 	}
 	tokens, err := memberTokens(ctx, p.Tokens, podName, namespace)
 	if err != nil {
 		// The error names the Pod and the Secret, never a token value.
 		logf.FromContext(ctx).V(1).Info("Could not resolve Instance Manager token; member not probed",
 			"pod", podName, "namespace", namespace, "reason", err.Error())
-		return RoleObservation{Reachable: false, ObservedAt: p.now()}
+		return RoleObservation{Reachable: false, ObservedAt: p.now(), Reason: cleanMessage(err.Error())}
 	}
 	resp, err := p.accepted.send(p.Client, req, namespace+"/"+podName, tokens)
+	// send gave the query its ID, which the member's log carries if the
+	// query reached it.
+	id := req.Header.Get(requestIDHeader)
 	if err != nil {
-		return RoleObservation{Reachable: false, ObservedAt: p.now()}
+		// The error names the URL, which carries no token.
+		return RoleObservation{Reachable: false, ObservedAt: p.now(), Reason: cleanMessage(err.Error()), RequestID: id}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return RoleObservation{Reachable: false, TokenRefused: tokenRefused(resp.StatusCode), ObservedAt: p.now()}
+		return RoleObservation{Reachable: false, TokenRefused: tokenRefused(resp.StatusCode), ObservedAt: p.now(),
+			Reason: fmt.Sprintf("status %d", resp.StatusCode), RequestID: id}
 	}
 	var st instancemanager.HAStatus
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
-		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: p.now()}
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: p.now(),
+			Reason: "unreadable answer", RequestID: id}
 	}
 	o := observationFromStatus(st, p.now())
+	o.RequestID = id
 	// The answer is recorded under the name that was asked. An answer that
 	// carries a role but names another member came from somewhere else, a
 	// wrong DNS record or Service for example, and is not this member's role.
 	if st.Current != "" && st.Current != podName {
 		o.Conflicting = true
 		o.MasterNotYetActive = false
+		o.Reason = "the answer names the member " + cleanMessage(st.Current)
 	}
 	return o
 }
@@ -164,6 +183,12 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 		EngineVersion: st.EngineVersion,
 	}
 	if st.Role != instancemanager.RoleMaster && st.Role != instancemanager.RoleSlave {
+		if st.Role == instancemanager.RoleUnknown || st.Role == "" {
+			o.Reason = "the Instance Manager reported no role"
+			if why := cleanMessage(st.Reason); why != "" {
+				o.Reason += ": " + why
+			}
+		}
 		return o
 	}
 	if r := st.Replication; st.Role == instancemanager.RoleSlave && r != nil && r.Available {
@@ -172,6 +197,7 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 			AppliedChanges: int64(r.AppliedChanges),
 			FailCount:      int64(r.FailCount),
 			DelayedPages:   int64(r.DelayedPageCount),
+			Applier:        r.Applier,
 		}
 	}
 	notYetActive := st.Role == instancemanager.RoleMaster && !st.ServerActive
@@ -186,5 +212,11 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 	}
 	o.Conflicting = notYetActive || contradictsNodeList
 	o.MasterNotYetActive = notYetActive && !contradictsNodeList
+	switch {
+	case contradictsNodeList:
+		o.Reason = "the role " + string(st.Role) + " contradicts the HA node list"
+	case notYetActive:
+		o.Reason = "a master whose server is not registered_and_active"
+	}
 	return o
 }

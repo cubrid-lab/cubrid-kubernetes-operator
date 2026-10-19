@@ -90,3 +90,28 @@ func TestEndedBySIGKILL(t *testing.T) {
 		}
 	}
 }
+
+// The suite runs only when kubectl points at its own Kind cluster; any other
+// context, including an empty one, is refused and named in the error.
+func TestCheckKindContext(t *testing.T) {
+	const want = "kind-cubrid-kubernetes-operator-test-e2e"
+	if err := checkKindContext(want, want); err != nil {
+		t.Fatalf("the Kind context was refused: %v", err)
+	}
+	for _, current := range []string{"lab", "", "kind-other", "kind-cubrid-kubernetes-operator-test-e2e-2"} {
+		err := checkKindContext(current, want)
+		if err == nil {
+			t.Fatalf("context %q was accepted", current)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("%q", current)) || !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error for %q names neither context: %v", current, err)
+		}
+	}
+}
+
+func TestKindContextFollowsKindCluster(t *testing.T) {
+	t.Setenv("KIND_CLUSTER", "cubrid-kubernetes-operator-test-e2e")
+	if got, want := KindContext(), "kind-cubrid-kubernetes-operator-test-e2e"; got != want {
+		t.Fatalf("KindContext() = %q, want %q", got, want)
+	}
+}

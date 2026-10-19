@@ -344,3 +344,44 @@ func TestCheckReadOnlyRefusal(t *testing.T) {
 		t.Error("two writes: judged as one refusal")
 	}
 }
+
+// The first violation names the member and the rule, the members named
+// first, and counts every violation, so that a check that does not hold
+// says where.
+func TestReport_FirstViolation(t *testing.T) {
+	h := mustHistory(t)
+	// c1-2 is missing on memberB and through the endpoint "ep", which sorts
+	// before it: two violations of the members and one divergence.
+	report := Check(h, map[string][]Row{memberB: {row(1, 10, "n1")}, memberA: good(), "ep": {row(1, 10, "n1")}})
+	missing := row(2, 20, "n2").OpID
+	if member, v, total := report.FirstViolation([]string{memberA, memberB}, ""); member != memberB ||
+		v.Rule != RuleMissing || v.OpID != missing || total != 3 {
+		t.Errorf("FirstViolation = %s %+v of %d, want missing %s on %s of 3", member, v, total, missing, memberB)
+	}
+	if member, _, _ := report.FirstViolation(nil, ""); member != "ep" {
+		t.Errorf("without an order, FirstViolation names %q, want the first name, ep", member)
+	}
+	differ := Check(h, map[string][]Row{memberA: good(), memberB: append(good(), row(4, 40, "n4"))})
+	if member, v, total := differ.FirstViolation(nil, ""); member != "" || v.Rule != RuleMembersDiverge || total != 1 {
+		t.Errorf("FirstViolation = %q %+v of %d, want the divergence", member, v, total)
+	}
+	if _, _, total := Check(h, map[string][]Row{memberA: good()}).FirstViolation(nil, ""); total != 0 {
+		t.Errorf("a report that holds has %d violations", total)
+	}
+}
+
+// A violation of the operation the prefix names, such as the marker row of
+// the starting-state check, comes before the others.
+func TestReport_FirstViolationPrefersThePrefix(t *testing.T) {
+	h := mustHistory(t)
+	marker := Row{OpID: "gate1-000001", Client: "gate1", Seq: 1, Amount: 1, Note: "n"}
+	report := Check(h, map[string][]Row{memberA: append(good(), marker), memberB: {row(1, 10, "n1")}})
+	member, v, _ := report.FirstViolation([]string{memberB, memberA}, "gate1-")
+	if member != memberA || v.OpID != marker.OpID {
+		t.Errorf("FirstViolation = %s %+v, want %s on %s", member, v, marker.OpID, memberA)
+	}
+	if member, v, _ := report.FirstViolation([]string{memberB, memberA}, "gate2-"); member != memberB ||
+		v.Rule != RuleMissing {
+		t.Errorf("FirstViolation = %s %+v, want the first violation when none has the prefix", member, v)
+	}
+}
