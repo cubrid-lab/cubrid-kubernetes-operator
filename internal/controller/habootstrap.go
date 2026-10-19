@@ -488,6 +488,7 @@ func (r *CubridClusterReconciler) seedBackup(ctx context.Context, cluster *datab
 			Upload: &instancemanager.BackupUpload{
 				Bucket: bucket, Prefix: prefix, ClusterUID: uid, CubridVersion: cluster.Spec.Version,
 				SourceInstance: source, SourceRole: string(databasev1alpha1.RoleMaster),
+				Seed: true,
 			},
 		})
 	if err != nil {

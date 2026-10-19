@@ -185,10 +185,14 @@ func TestServer_Backup_CompletesAfterUpload(t *testing.T) {
 	if final.State != OpCompleted {
 		t.Fatalf("final state = %s (reason %q), want Completed", final.State, final.FailureReason)
 	}
-	if final.Artifact == nil || final.Artifact.ManifestURI != "s3://cubrid-backups/prod/uid-1/manifest.json" {
-		t.Errorf("artifact = %+v", final.Artifact)
+	if final.Artifact == nil {
+		t.Fatalf("artifact = %+v", final.Artifact)
 	}
-	if _, ok := objStore.objects["cubrid-backups/prod/uid-1/manifest.json"]; !ok {
+	prefix := uploadedPrefix(t, final.Artifact.ManifestURI, "cubrid-backups")
+	if !strings.HasPrefix(prefix, "prod/uid-1/attempt-") {
+		t.Fatalf("artifact prefix = %q", prefix)
+	}
+	if _, ok := objStore.objects["cubrid-backups/"+prefix+"/manifest.json"]; !ok {
 		t.Error("manifest.json was not uploaded on completion")
 	}
 }

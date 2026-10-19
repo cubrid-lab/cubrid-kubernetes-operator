@@ -50,6 +50,9 @@ type BackupUpload struct {
 	CubridVersion  string `json:"cubridVersion"`
 	SourceInstance string `json:"sourceInstance"`
 	SourceRole     string `json:"sourceRole"`
+	// Seed names the internal HA seed purpose, whose stable location may be
+	// replaced. It requires an HA seed suffix and master metadata (ADR-0007).
+	Seed bool `json:"seed,omitempty"`
 }
 
 // BackupResult reports the outcome of a local backup.

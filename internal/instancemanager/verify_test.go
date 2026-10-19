@@ -92,10 +92,11 @@ func stageUploadedArtifact(t *testing.T) (*fakeObjectStore, string, string) {
 	store := newFakeStore()
 	spec := baseSpec(staging)
 	spec.Manifest.CubridVersion = testCubridVersion
-	if _, err := UploadBackup(context.Background(), store, spec); err != nil {
+	res, err := UploadBackup(context.Background(), store, spec)
+	if err != nil {
 		t.Fatalf("UploadBackup: %v", err)
 	}
-	return store, spec.Bucket, spec.Prefix
+	return store, spec.Bucket, uploadedPrefix(t, res.ManifestURI, spec.Bucket)
 }
 
 func TestVerifyArtifact_HappyPath(t *testing.T) {

@@ -642,9 +642,10 @@ func backupDestinationRefusal(backup *databasev1alpha1.CubridBackup, cluster *da
 	if store == nil {
 		return ""
 	}
-	uri := fmt.Sprintf("s3://%s/%s", store.Bucket,
-		path.Join(backupArtifactPrefix(backup, cluster), instancemanager.ManifestObjectName))
-	if _, _, err := parseManifestURI(uri); err != nil {
+	key := path.Join(instancemanager.BackupAttemptPrefix(backupArtifactPrefix(backup, cluster),
+		strings.Repeat("0", instancemanager.BackupAttemptIDLength)), instancemanager.ManifestObjectName)
+	uri := fmt.Sprintf("s3://%s/%s", store.Bucket, key)
+	if _, _, err := parseManifestURI(uri); err != nil || len(key) > 1024 {
 		return fmt.Sprintf("destination bucket %q and prefix %q would give the artifact the URI %q, "+
 			"which a recovery does not accept", store.Bucket, store.Prefix, uri)
 	}
