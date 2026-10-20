@@ -146,6 +146,19 @@ an HTTP response or peer closure. A separate fresh LAB00 connection smoke
 passed on this VM environment. These results do not establish sustained load,
 a two-hour synchronous backup, VM-fault or CSI behavior, or S00–S15 qualification.
 
+Operation-store persistence failures (#299) have per-transition filesystem/HTTP
+tests for `RunningBackup`, `Downloading`, `Restoring` and `Creating`, alongside
+the existing staging-claim, upload/start and terminal-settlement checks. With
+the record directory readable but unwritable, each attempted transition is
+logged, the preceding disk record remains, and operation lookup and same-key
+replay return 500 while the failed end is only in memory. Repair, settlement
+and replay through a reopened store retain the same failed operation without
+command or object-store side effects. Guard-omission mutations verify the four
+new negative oracles. These are non-root unit/HTTP-handler tests with actual
+directory-permission failures and CLI/object-store fakes, not CUBRID, disk-full,
+power-loss or Pod/PVC-replacement validation. Directory durability and retention
+remain separate work under #298 and #369.
+
 For live scenarios use **not run**, **blocked**, **fail**, **pass** or **not
 applicable**, with a revision, environment, command, evidence link and reason.
 A required scenario cannot pass through skipping, missing evidence, a timeout

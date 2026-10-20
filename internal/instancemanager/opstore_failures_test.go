@@ -383,3 +383,228 @@ func TestServer_Restore_UnwrittenCompletedIsFailedAfterARestart(t *testing.T) {
 		t.Errorf("after a restart = %s (restored %v), want Failed with the restored data on record", ended.State, ended.Restored)
 	}
 }
+
+// afterStateRecord runs after a successful state write. It only changes the
+// test directory's permissions: the store still holds its mutex here.
+type afterStateRecord struct {
+	slog.Handler
+	state OperationState
+	once  func()
+}
+
+func (h *afterStateRecord) Handle(ctx context.Context, r slog.Record) error {
+	var event, state string
+	r.Attrs(func(a slog.Attr) bool {
+		switch a.Key {
+		case "event":
+			event = a.Value.String()
+		case "state":
+			state = a.Value.String()
+		}
+		return true
+	})
+	if event == eventOperationState && state == string(h.state) && h.once != nil {
+		h.once()
+		h.once = nil
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func persistenceRequest(h http.Handler, method, path, key, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("Idempotency-Key", key)
+	req.RemoteAddr = testRemoteAddr
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
+// checkTransitionFailure checks the disk and HTTP boundaries while writes
+// remain broken, then settles the failure and replays the request through a
+// fresh manager/store. The caller checks command, object and filesystem side
+// effects after every replay has finished.
+func checkTransitionFailure(t *testing.T, srv *Server, op Operation, previous, attempted OperationState,
+	logged *bytes.Buffer, repair func(), replay func(http.Handler) *httptest.ResponseRecorder,
+) {
+	t.Helper()
+	srv.ops.Wait()
+	if repair == nil {
+		t.Fatal("the intended persistence-failure boundary was not reached")
+	}
+	data, err := os.ReadFile(filepath.Join(srv.store.dir, op.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var disk Operation
+	if err := json.Unmarshal(data, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if disk.ID != op.ID || disk.State != previous || disk.FailureReason != "" {
+		t.Fatalf("disk record = %+v, want the preceding durable %s", disk, previous)
+	}
+	found := false
+	for line := range strings.SplitSeq(strings.TrimSpace(logged.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["event"] == eventStoreWriteFailed && record["operationID"] == op.ID &&
+			record["state"] == string(attempted) && record["level"] == "ERROR" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no write-failure error names %s and %s: %s", op.ID, attempted, logged.String())
+	}
+	h := srv.Handler()
+	for _, path := range []string{"/v1/operations/" + op.ID, "/v1/operations?idempotencyKey=" + op.IdempotencyKey} {
+		if rr := persistenceRequest(h, http.MethodGet, path, "", ""); rr.Code != http.StatusInternalServerError {
+			t.Errorf("GET %s = %d %s, want 500 while the end is unwritten", path, rr.Code, rr.Body.String())
+		}
+	}
+	if rr := replay(h); rr.Code != http.StatusInternalServerError {
+		t.Errorf("same-key replay = %d %s while the end is unwritten, want 500", rr.Code, rr.Body.String())
+	}
+	srv.ops.Wait()
+	repair()
+	ended, err := srv.store.Get(op.ID)
+	if err != nil || ended.State != OpFailed || !strings.Contains(ended.FailureReason, "could not record the state "+string(attempted)) {
+		t.Fatalf("settled operation = %+v, %v; want Failed naming %s", ended, err, attempted)
+	}
+	reopened, err := NewOperationStore(srv.store.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewServer(srv.cli, "tok").WithOperationStore(reopened).WithObjectStore(srv.objects).
+		WithBackupStagingRoot(srv.backupStagingRoot).WithRestoreRoots(srv.restoreRoots).
+		WithStandaloneDatabase(srv.standaloneDB).WithHAConfig(srv.ha)
+	restarted.heartbeatProcesses, restarted.heartbeatSettle = srv.heartbeatProcesses, srv.heartbeatSettle
+	rr := replay(restarted.Handler())
+	restarted.ops.Wait()
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("same-key replay after restart = %d %s, want 202 with the existing failure", rr.Code, rr.Body.String())
+	}
+	var again Operation
+	if err := json.Unmarshal(rr.Body.Bytes(), &again); err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != op.ID || again.State != OpFailed || again.FailureReason != ended.FailureReason {
+		t.Errorf("same-key replay after restart = %+v, want the same durable failure %+v", again, ended)
+	}
+}
+
+func TestServer_Backup_StopsBeforeUnrecordedRunningBackup(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a directory mode does not keep root from writing")
+	}
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	store.SetLogger(slog.New(slog.NewJSONHandler(&logged, nil)))
+	cli, objects := &stepCLI{}, newFakeStore()
+	root := t.TempDir()
+	srv := NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(objects).WithBackupStagingRoot(root)
+	upload := *testUpload
+	req := BackupRequest{Database: dbName, Destination: filepath.Join(root, "backup"), Upload: &upload}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The staging claim must succeed before injection; failing it would test
+	// an earlier boundary and never exercise RunningBackup.
+	op, staging, err := srv.recordBackup("backup-key", HashRequest(body), req)
+	if err != nil || staging == "" {
+		t.Fatalf("recordBackup = %q, %v", staging, err)
+	}
+	claimed, err := store.Get(op.ID)
+	if err != nil || claimed.StagingDir != staging {
+		t.Fatalf("staging claim was not persisted: %+v, %v", claimed, err)
+	}
+	repair := unwritable(t, store.dir)
+	if err := srv.admit(); err != nil {
+		t.Fatal(err)
+	}
+	req.Destination = staging
+	srv.runBackup(op.ID, req)
+	checkTransitionFailure(t, srv, *op, OpPending, OpRunningBackup, &logged, repair, func(h http.Handler) *httptest.ResponseRecorder {
+		return postBackup(t, h, "backup-key", string(body))
+	})
+	if calls := cli.recorded(); len(calls) != 0 || len(objects.objects) != 0 {
+		t.Errorf("unrecorded RunningBackup ran commands %v or uploaded %d objects", calls, len(objects.objects))
+	}
+}
+
+func TestServer_Restore_StopsBeforeUnrecordedTransitions(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a directory mode does not keep root from writing")
+	}
+	for _, tc := range []struct{ previous, attempted OperationState }{
+		{OpPending, OpDownloading}, {OpDownloading, OpRestoring},
+	} {
+		t.Run(string(tc.attempted), func(t *testing.T) {
+			f := newResumeFixture(t)
+			objects := &countingStore{fakeObjectStore: f.objects.(*fakeObjectStore)}
+			f.objects = objects
+			cli := &stepCLI{}
+			f.start(cli)
+			var logged bytes.Buffer
+			var repair func()
+			f.server.store.SetLogger(slog.New(&afterStateRecord{Handler: slog.NewJSONHandler(&logged, nil), state: tc.previous,
+				once: func() { repair = unwritable(t, f.storeDir) }}))
+			op := f.post("restore-key")
+			body, err := json.Marshal(f.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Join before reading the injection callback's result.
+			f.server.ops.Wait()
+			checkTransitionFailure(t, f.server, op, tc.previous, tc.attempted, &logged, repair, func(h http.Handler) *httptest.ResponseRecorder {
+				return persistenceRequest(h, http.MethodPost, "/v1/restore/prepare", "restore-key", string(body))
+			})
+			if calls := cli.recorded(); len(calls) != 0 || objects.gets != 0 {
+				t.Errorf("unrecorded %s ran commands %v or read %d objects", tc.attempted, calls, objects.gets)
+			}
+			for _, path := range []string{filepath.Join(f.databases, dbName), filepath.Join(f.databases, databasesTxt), f.req.StagingDir} {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Errorf("unrecorded %s changed %s: %v", tc.attempted, path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestHABootstrap_StopsBeforeUnrecordedCreating(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a directory mode does not keep root from writing")
+	}
+	f := newHAFixture(t)
+	var logged bytes.Buffer
+	var repair func()
+	f.store.SetLogger(slog.New(&onCreated{Handler: slog.NewJSONHandler(&logged, nil),
+		once: func() { repair = unwritable(t, f.store.dir) }}))
+	rr := f.post("bootstrap-key")
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("bootstrap = %d %s", rr.Code, rr.Body.String())
+	}
+	var op Operation
+	if err := json.Unmarshal(rr.Body.Bytes(), &op); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.ops.Wait()
+	body, err := json.Marshal(HABootstrapRequest{Database: dbName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkTransitionFailure(t, f.srv, op, OpPending, OpCreating, &logged, repair, func(h http.Handler) *httptest.ResponseRecorder {
+		return persistenceRequest(h, http.MethodPost, "/v1/ha/bootstrap", "bootstrap-key", string(body))
+	})
+	if calls := f.cli.recorded(); len(calls) != 0 {
+		t.Errorf("unrecorded Creating ran commands: %v", calls)
+	}
+	if _, err := os.Stat(f.databases); !os.IsNotExist(err) {
+		t.Errorf("unrecorded Creating changed the target: %v", err)
+	}
+}

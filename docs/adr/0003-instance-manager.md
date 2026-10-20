@@ -349,7 +349,11 @@ return/timeout — it reconciles from durable manager-reported state.
 As implemented, an operation does nothing that is not on record (#299). When
 the record of its next state cannot be written, the operation goes no further
 and ends `Failed` with that reason: no upload after `backupdb`, no start of a
-database or of heartbeat. When the record of how an operation ended cannot be
+database or of heartbeat. A recorded backup staging claim does not authorize
+`backupdb` before `RunningBackup` is persisted. Restore's `Downloading` and
+`Restoring` states precede artifact reads, ownership adoption/reclaim and
+restore commands; HA bootstrap persists `Creating` before creating a database.
+When the record of how an operation ended cannot be
 written, the manager keeps the end in memory, logs the failed write as an
 error (`event` `operation_store_write_failed`; its retries at debug level) and
 tries again at the next poll of the operation or the next request for an
