@@ -131,8 +131,20 @@ identify the backend revision and the evidence level.
 
 The Instance Manager HTTP server bounds request headers, complete body reads,
 response writes and idle keep-alive connections while preserving the configured
-synchronous backup/shutdown budgets (#301: real TCP and unit/race-detector
-tests; not measured under real CUBRID or cluster load).
+synchronous backup/shutdown budgets (#301; real TCP and unit/race-detector tests).
+[Bounded VM connection checks](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/301#issuecomment-6281330433)
+at `39b1cb6` (build [39353186855](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/39353186855))
+on a standalone member with CUBRID `11.4.6.1963`, k3s `v1.36.5+k3s1` and
+node-local `local-path` storage (not CSI) observed incomplete-header closure at
+6.013 s, an incomplete-body HTTP 400 at 10.011 s (peer closure at 11.019 s;
+server duration 9.997 s), and idle keep-alive closure at 61.002 s. During the
+idle check, 21 other `/livez` requests kept the port-forward active. No case
+hit its client watchdog; the Ready Pod/container incarnation and pinned image
+remained stable, and the empty operation inventory stayed unchanged. On the
+previous image, the body check ended at its 18 s client-watchdog cutoff without
+an HTTP response or peer closure. A separate fresh LAB00 connection smoke
+passed on this VM environment. These results do not establish sustained load,
+a two-hour synchronous backup, VM-fault or CSI behavior, or S00–S15 qualification.
 
 For live scenarios use **not run**, **blocked**, **fail**, **pass** or **not
 applicable**, with a revision, environment, command, evidence link and reason.
