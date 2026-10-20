@@ -64,6 +64,26 @@ func TestGenerateBrokerConf_OneAccessModeEach(t *testing.T) {
 	}
 }
 
+// Enough CAS that pooled clients do not force a CHANGE CLIENT, whose kept
+// sessions make DROP USER fail with -1188 (#303), and few enough that every
+// Broker at its maximum fits the DB server's max_clients.
+func TestGenerateBrokerConf_CASCapacity(t *testing.T) {
+	for _, mode := range []string{brokerModeRW, brokerModeRO} {
+		conf := generateBrokerConf(mode)
+		for _, want := range []string{"MIN_NUM_APPL_SERVER     =2\n", "MAX_NUM_APPL_SERVER     =20\n"} {
+			if !strings.Contains(conf, want) {
+				t.Errorf("%s broker conf missing %q\n%s", mode, strings.TrimSpace(want), conf)
+			}
+		}
+	}
+	if brokerMaxApplServers <= 5 {
+		t.Errorf("MAX_NUM_APPL_SERVER = %d, want more than the 5 that led to CHANGE CLIENT", brokerMaxApplServers)
+	}
+	if worst := 2 * brokerReplicas * brokerMaxApplServers; worst > serverMaxClients {
+		t.Errorf("RW and RO Brokers at MAX_NUM_APPL_SERVER open %d CAS, more than max_clients %d", worst, serverMaxClients)
+	}
+}
+
 func TestMemberDNSNames_AllMembers(t *testing.T) {
 	got := memberDNSNames(brokerTestCluster())
 	want := []string{

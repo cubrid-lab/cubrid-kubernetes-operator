@@ -122,12 +122,28 @@ func generateBrokerConf(mode string) string {
 	return b.String()
 }
 
+// CAS processes per Broker. With KEEP_CONNECTION=AUTO (the default), a Broker
+// whose CAS are all held by connected clients takes one over for a new client
+// ("CHANGE CLIENT" in the CAS SQL log). CUBRID 11.4 then keeps every later
+// session of that CAS, so a user who disconnected cleanly stays active and
+// DROP USER fails with -1188 until another client logs in on that CAS. A
+// pooled client reaches that point quickly with five CAS (#303). The maximum
+// is bounded by the DB server's max_clients (100 by default): every RW and RO
+// Broker at its maximum stays within it even if all of them reach one server.
+const (
+	brokerMinApplServers = 2
+	brokerMaxApplServers = 20
+	// serverMaxClients is the DB server's default max_clients; the operator
+	// does not change it.
+	serverMaxClients = 100
+)
+
 func writeBrokerSection(b *strings.Builder, name string, port int, accessMode string) {
 	fmt.Fprintf(b, "[%%%s]\n", name)
 	b.WriteString("SERVICE                 =ON\n")
 	fmt.Fprintf(b, "BROKER_PORT             =%d\n", port)
-	b.WriteString("MIN_NUM_APPL_SERVER     =2\n")
-	b.WriteString("MAX_NUM_APPL_SERVER     =5\n")
+	fmt.Fprintf(b, "MIN_NUM_APPL_SERVER     =%d\n", brokerMinApplServers)
+	fmt.Fprintf(b, "MAX_NUM_APPL_SERVER     =%d\n", brokerMaxApplServers)
 	fmt.Fprintf(b, "APPL_SERVER_SHM_ID      =%d\n", port)
 	b.WriteString("LOG_DIR                 =log/broker/sql_log\n")
 	b.WriteString("ERROR_LOG_DIR           =log/broker/error_log\n")
