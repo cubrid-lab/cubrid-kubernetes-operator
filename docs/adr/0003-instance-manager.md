@@ -353,8 +353,12 @@ database or of heartbeat. A recorded backup staging claim does not authorize
 `backupdb` before `RunningBackup` is persisted. Restore's `Downloading` and
 `Restoring` states precede artifact reads, ownership adoption/reclaim and
 restore commands; HA bootstrap persists `Creating` before creating a database.
-When the record of how an operation ended cannot be
-written, the manager keeps the end in memory, logs the failed write as an
+A restore records its restored artifact before `Starting`, and records
+`Starting` before it starts the server or heartbeat. A takeover records the
+previous artifact under the new operation before changing the ownership marker
+or starting the database. A failed metadata write authorizes neither a later
+state transition nor a change of ownership. When the record of how an operation
+ended cannot be written, the manager keeps the end in memory, logs the failed write as an
 error (`event` `operation_store_write_failed`; its retries at debug level) and
 tries again at the next poll of the operation or the next request for an
 operation. Until it is written, `GET /v1/operations/{id}`,
