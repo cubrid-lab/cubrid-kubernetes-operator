@@ -2367,3 +2367,97 @@ empirically confirmed against real CUBRID 11.4; the remaining work is the
 operator-level wiring of these primitives (broker tier, backup/restore workflow,
 rolling-update controller) plus a real CCI/JDBC client test for broker write
 persistence + `altHosts` failover.
+
+## POC-32 — heartbeat observations across a slave restart, with direct commands and Go output capture (ADR-0005, #438) — **post-ready failure not reproduced in two bounded Docker experiments**
+
+**Question.** Can steady or concurrent heartbeat polling, or a local member restart, reproduce the non-authoritative HA observation captured by S14 after its starting-state gate? These two single-run experiments did not reproduce it. This does not establish a cause, a fix, or a CUBRID guarantee.
+
+**Environment (2026-10-20):** linux/amd64, 6 CPUs. Installed Instance Manager image revision `20afeaa46694a43e82360a34cbe5a5f491d0dc89`; Docker `Image`/`inspect.Id` and OCI index descriptor `sha256:9a3ad220caeecc044a7ec2803b180f2ffa306924d6bcd96f789a8dc1d823493f`; running linux/amd64 **platform manifest** `sha256:09c5d8a3f55d540e7b62d8f8bc7b5cb79f3cd8b1979762dfbbcb5b1a0a88fdf0`. These identify different descriptor levels. Actual engine: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`.
+
+The Go observer was statically built with cached Go 1.26.9, no dependency downloads, from a disposable module copy of `f12632473de9e91e6b65e44444b4cf622d0caf43`. `ExecCLI`, `HeartbeatStatus`, and `ParseHAStatus` were imported unchanged from the actual package. `cli.go` and `role.go` are also unchanged from the installed image revision; `go.mod`/`go.sum` stayed unchanged. The first experiment captured direct command output and compared the header/local-node rules; the second exercised the real Go temporary-file output/read path and actual parser inside the containers. Host `docker exec` collected the Go helper's JSON, not the CUBRID command inside `ExecCLI`.
+
+**Setup:** three disposable members `h-0:h-1:h-2`, `ha_mode=on`, appdb, HA port 59901, 64 MiB data/log volumes. POC-13/27/28's recipe: one `createdb --server-name=h-0:h-1:h-2`, one heartbeat start on h-0, `backupdb -C ... appdb@localhost`, `restoreslave` on each slave, one heartbeat start each. Before measurement, h-0 was master with an active registered server; h-1/h-2 were slaves with standby registered servers. Every local node matched its HA header. Each experiment measured 30 s of single polling, 45 s with four concurrent workers on h-1 and one on each peer, then a 90 s window containing one h-1 Docker restart and one heartbeat start. Both completed within three minutes after fixture validation.
+
+The first setup attempt stopped before measurement because the backup argument omitted `@localhost`; CUBRID returned its explicit multihost-address error, exit 1. Its resources were cleaned, the documented argument was restored, and setup succeeded. Neither measured experiment was repeated to obtain a passing result.
+
+| Observation | Direct CLI | Actual Go ExecCLI/parser |
+| --- | ---: | ---: |
+| Steady single: authoritative | 78 | 87 |
+| Steady concurrent: authoritative | 730 | 867 |
+| Restart window: authoritative | 1,188 | 1,437 |
+| Restart window: expected down/start unknown | 149 | 173 |
+| Commands started after first authoritative registered-server response: authoritative | 1,152 (1,016 on restarted member) | 1,408 (1,264 on restarted member) |
+| After that response: unknown | 0 | 0 |
+
+The post-first-authoritative counts are subsets of the restart window and count commands started after the first matching response completed; no unknown command completed after that boundary either. The first such target response completed at 00:41:26.375646 UTC in the direct experiment, followed for about 74.3 s, and 00:50:31.647457495 UTC in the Go experiment, followed for about 75.65 s. These are observed role/server responses, not HTTP Ready checks or integrated S14 passes.
+
+**Expected startup output:** the direct experiment had four Docker-down errors, four CLI exit-1 failures before `cub_master` ran, and 141 successful commands whose header said `slave` while the local-node line said `unknown`. The Go experiment had four CLI exit-1 failures and 169 successful commands with that same contradiction:
+
+```text
+ HA-Node Info (current h-1, state slave)
+   Node h-2 (priority 3, state slave)
+   Node h-1 (priority 2, state unknown)
+   Node h-0 (priority 1, state master)
+```
+
+Some contradictory startup outputs already contained a standby registered server (58 direct; 112 Go). The parser correctly withheld an authoritative role. Every unknown preceded the first authoritative registered-server response. No successful steady/post-rejoin sample had an unmatched header or missing local node. Startup unknowns are not a reproduction of S14's post-ready failure.
+
+**Separate existing CI evidence.** [Run 39140080400](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/39140080400), head `57e3df3`, recorded hab-0 becoming unknown with a missing-header parse reason, then `PrimaryObservationIncomplete`. The failure snapshot queried the held previous token and received HTTP 200 with an unknown role and missing-local-node reason; the other members remained slave/master. One recorded refusal per member matches the test's deliberate new-token checks; no additional refusal is recorded. Thus that transition's proximate cause was an authenticated non-authoritative HA observation. Its raw successful heartbeat output was not retained, so the underlying cause remains unknown. The new Docker observations do not explain it.
+
+**Minimal capture method:** in a disposable copy of the source module, add this program under `cmd/heartbeat-capture/main.go`. With cached dependencies and Go 1.26.9 on PATH, build with `CGO_ENABLED=0 GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build -o observer ./cmd/heartbeat-capture`; copy it into an owned fixture member and execute it there. The wrapper returns the actual output/error unchanged before the real parser consumes it:
+
+```go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "os"
+    "os/exec"
+    "time"
+
+    im "github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
+)
+
+type capture struct {
+    base im.CLI
+    raw string
+    err error
+    start, end time.Time
+}
+
+func (c *capture) Run(ctx context.Context, name string, args ...string) (string, error) {
+    c.start = time.Now().UTC()
+    c.raw, c.err = c.base.Run(ctx, name, args...)
+    c.end = time.Now().UTC()
+    return c.raw, c.err
+}
+
+func main() {
+    member, _ := os.Hostname()
+    c := &capture{base: im.ExecCLI{Timeout: 10 * time.Second}}
+    ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+    defer cancel()
+    status := im.HeartbeatStatus(ctx, c)
+    exit, message := 0, ""
+    if c.err != nil {
+        exit, message = -1, c.err.Error()
+        var e *exec.ExitError
+        if errors.As(c.err, &e) { exit = e.ExitCode() }
+    }
+    _ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+        "requestID": fmt.Sprintf("%s-%d", member, c.start.UnixNano()),
+        "member": member, "start": c.start, "end": c.end,
+        "rawOutput": c.raw, "rawByteLen": len(c.raw),
+        "exitCode": exit, "exitError": message, "status": status,
+    })
+}
+```
+
+For example, `docker cp observer "$member:/tmp/observer"`, make that copied executable readable/executable by the member user, then `docker exec "$member" /tmp/observer`. This minimal single-call capture illustrates the path; the measured helper also supplied bounded loops, concurrency, phase labels, and random unique sample IDs. Retain raw output for nil-error unknown parses, not only command failures. Classify each unknown against the prior completed valid role, restart timing, and registered-server presence.
+
+**Limits:** the restarted fixture member h-1 was a middle-priority slave (priority 2), with h-0 master at priority 1. The failure's hab-0 was the highest-priority slave (priority 1), with hab-2 master at priority 3. A manual Docker restart of a sleep-based container plus heartbeat start retains its writable layer and does not replay S14's process-stop/entrypoint/watchdog path. No Operator, Secret rotation, authenticated HTTP handler, handler replication queries, application workload, Kind scheduling/network/storage, or integrated data-convergence validation was exercised. Only one restart per experiment, one host, and one engine/image were observed. All created container IDs, volumes, and network IDs were removed; independent checks found none remaining.
+
+**Next evidence:** capture bounded raw successful-command output linked to the Operator request ID in the real Instance Manager path on isolated Kind, with the actual preceding process-stop/restart, matching priority/master history, and unchanged S14 rotation/migration gates. Preserve ADR-0005 authority and the oracle until that condition is understood. Issue #438 remains open.
