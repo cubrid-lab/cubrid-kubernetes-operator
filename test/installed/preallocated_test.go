@@ -76,6 +76,8 @@ const (
 	testForeignReplicaSet  = "foreign-replicaset"
 	testForeignPod         = "foreign-pod"
 	testPVCMount           = "pvc-mount"
+	testHostPath           = "hostpath-mount"
+	testExtraDeployment    = "extra-deployment"
 	testReplacedDeployment = "replaced-deployment"
 	testReplacedReplicaSet = "replaced-replicaset"
 	testReplacedPod        = "replaced-pod"
@@ -445,11 +447,12 @@ func TestPreallocatedSameNamespaceCandidateAndRetainedClaimBlockReuse(t *testing
 }
 
 // The Broker tier the created cluster owns is permitted; a look-alike outside
-// that ownership chain, a replacement or a Broker Pod with a PVC is not.
+// that ownership chain, a third owned Deployment, a replacement or a Broker Pod
+// with a PVC or hostPath volume is not.
 func TestPreallocatedRefusesWorkloadsOutsideTheBrokerChain(t *testing.T) {
 	const rw = clusterName + "-broker-rw"
 	for _, kind := range []string{testForeignDeployment, testForeignReplicaSet, testForeignPod, testPVCMount,
-		testReplacedDeployment, testReplacedReplicaSet, testReplacedPod} {
+		testHostPath, testExtraDeployment, testReplacedDeployment, testReplacedReplicaSet, testReplacedPod} {
 		t.Run(kind, func(t *testing.T) {
 			f := preallocatedFixture(t)
 			ns := f.cfg.Namespace
@@ -479,13 +482,22 @@ func TestPreallocatedRefusesWorkloadsOutsideTheBrokerChain(t *testing.T) {
 						obj.SetOwnerReferences([]metav1.OwnerReference{ref})
 						err = c.Update(t.Context(), obj)
 					}
-				case testPVCMount:
+				case testPVCMount, testHostPath:
 					pod := &corev1.Pod{}
 					if err = c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: rw + "-rs-a"}, pod); err == nil {
-						pod.Spec.Volumes = []corev1.Volume{{Name: dataClaimName, VolumeSource: corev1.VolumeSource{
-							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}}}
+						source := corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}
+						if kind == testHostPath {
+							source = corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/cubrid"}}
+						}
+						pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{Name: dataClaimName, VolumeSource: source})
 						err = c.Update(t.Context(), pod)
 					}
+				case testExtraDeployment:
+					// Correctly owned, but not one of the two Broker Deployments.
+					err = f.store.Create(t.Context(), &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+						Name: clusterName + "-broker-x", Namespace: ns, UID: "broker-x",
+						OwnerReferences: []metav1.OwnerReference{owner("CubridCluster", clusterName, "smoke-cluster")}}})
 				default:
 					var obj client.Object = &appsv1.Deployment{}
 					name := rw
@@ -556,6 +568,74 @@ func TestPreallocatedCleanupWaitsForBrokerTier(t *testing.T) {
 				t.Fatal("incomplete Broker GC passed cleanup")
 			}
 		})
+	}
+}
+
+// rollBrokerOut acts as the Deployment controller of a rolling update: a new
+// ReplicaSet under the pinned read-write Broker Deployment and its two Pods.
+// Cleanup's simulated GC also removes them.
+func rollBrokerOut(t *testing.T, f *fixture) {
+	t.Helper()
+	const rw = clusterName + "-broker-rw"
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: rw + "-rs2", Namespace: f.cfg.Namespace,
+		UID: rw + "-rs2", OwnerReferences: []metav1.OwnerReference{owner("Deployment", rw, rw)}}}
+	ns := f.cfg.Namespace
+	rollout := []client.Object{rs, brokerPod(ns, rs.Name+"-a", rs), brokerPod(ns, rs.Name+"-b", rs)}
+	if err := createAll(t.Context(), f.store, rollout...); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteHook = func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+		if err := c.Delete(ctx, obj, opts...); err != nil {
+			return err
+		}
+		children := append([]client.Object{&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: clusterName,
+			Namespace: f.cfg.Namespace}}, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0",
+			Namespace: f.cfg.Namespace}}}, brokerTier(f.cfg.Namespace, obj.GetUID())...)
+		for _, child := range append(children, rollout...) {
+			if err := c.Delete(ctx, child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func TestPreallocatedAcceptsBrokerRollingUpdate(t *testing.T) {
+	f := preallocatedFixture(t)
+	f.commandHook = func(_ context.Context, args []string) (string, error) {
+		if strings.Contains(args[len(args)-1], "cubrid_rel") && f.deleteHook == nil {
+			rollBrokerOut(t, f)
+		}
+		return f.answer(t, args)
+	}
+	if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+		t.Fatalf("a rolling update under the pinned Broker Deployment was refused: %v", err)
+	}
+	if !readSummary(t, f.cfg.EvidenceDir).Passed || f.deletes != 1 {
+		t.Fatal("the run did not pass through a Broker rolling update")
+	}
+}
+
+// A ReplicaSet and its Pod created between the guard's ReplicaSet and Pod
+// reads must not look like an unidentified Pod.
+func TestPreallocatedToleratesBrokerCreatedBetweenReads(t *testing.T) {
+	f := preallocatedFixture(t)
+	f.runner.Client = interceptor.NewClient(f.runner.Client.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if _, ok := list.(*appsv1.ReplicaSetList); ok && f.store != nil && f.deleteHook == nil {
+				rollBrokerOut(t, f)
+			}
+			return nil
+		},
+	})
+	if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+		t.Fatalf("a Broker ReplicaSet created between reads failed the run: %v", err)
+	}
+	if !readSummary(t, f.cfg.EvidenceDir).Passed || f.deletes != 1 {
+		t.Fatal("the run did not pass after the Broker tier changed between reads")
 	}
 }
 

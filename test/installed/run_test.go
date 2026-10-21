@@ -157,6 +157,9 @@ type fixture struct {
 	marker      string
 	commandHook func(context.Context, []string) (string, error)
 	deleteHook  func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error
+	// store bypasses the write hooks so a test can act as the Operator; it is
+	// set once the runner creates the cluster.
+	store client.WithWatch
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -187,6 +190,7 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 				value.UID = "smoke-cluster"
 				value.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}}
 				f.writes = append(f.writes, testClusterAction)
+				f.store = c
 				if err := c.Create(ctx, value, opts...); err != nil {
 					return err
 				}
@@ -299,12 +303,27 @@ func brokerTier(namespace string, cluster types.UID) []client.Object {
 			UID: types.UID(name + "-rs"), OwnerReferences: []metav1.OwnerReference{owner("Deployment", name, dep.UID)}}}
 		objects = append(objects, dep, rs)
 		for _, suffix := range []string{"a", "b"} {
-			objects = append(objects, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: rs.Name + "-" + suffix,
-				Namespace: namespace, UID: types.UID(rs.Name + "-" + suffix),
-				OwnerReferences: []metav1.OwnerReference{owner("ReplicaSet", rs.Name, rs.UID)}}})
+			objects = append(objects, brokerPod(namespace, rs.Name+"-"+suffix, rs))
 		}
 	}
 	return objects
+}
+
+// brokerPod carries the volumes a Broker Pod has on a real cluster: the
+// Operator's Broker ConfigMap and the service-account token volume that
+// admission injects.
+func brokerPod(namespace, name string, rs *appsv1.ReplicaSet) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(name),
+		OwnerReferences: []metav1.OwnerReference{owner("ReplicaSet", rs.Name, rs.UID)}},
+		Spec: corev1.PodSpec{Volumes: []corev1.Volume{
+			{Name: "broker-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: clusterName + "-broker-config"}}}},
+			{Name: "kube-api-access", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{
+					{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Path: "token"}},
+					{ConfigMap: &corev1.ConfigMapProjection{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"}}},
+					{DownwardAPI: &corev1.DownwardAPIProjection{}}}}}}}}}
 }
 
 func createAll(ctx context.Context, c client.WithWatch, objects ...client.Object) error {

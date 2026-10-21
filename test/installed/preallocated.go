@@ -118,10 +118,11 @@ func soleController(obj metav1.Object, kind, name string, uid types.UID) bool {
 }
 
 // brokerChain reports whether obj belongs to the created cluster's Broker
-// tier: a Deployment the cluster solely controls, a ReplicaSet of such a
-// Deployment, or a Pod of such a ReplicaSet. Parents are matched by the UIDs
-// pinned when they were observed, so a child outliving its parent during GC
-// is still identified and a replacement never inherits the identity.
+// tier: the <cluster>-broker-rw or <cluster>-broker-ro Deployment the cluster
+// solely controls, a ReplicaSet of such a Deployment, or a Pod of such a
+// ReplicaSet. Parents are matched by the UIDs pinned when they were observed,
+// so a child outliving its parent during GC is still identified and a
+// replacement never inherits the identity.
 func (g *namespaceGuard) brokerChain(obj client.Object) bool {
 	if g.cluster == nil || len(obj.GetOwnerReferences()) != 1 {
 		return false
@@ -129,7 +130,8 @@ func (g *namespaceGuard) brokerChain(obj client.Object) bool {
 	parent := obj.GetOwnerReferences()[0].Name
 	switch obj.(type) {
 	case *appsv1.Deployment:
-		return soleController(obj, "CubridCluster", clusterName, g.cluster.UID)
+		return (obj.GetName() == clusterName+"-broker-rw" || obj.GetName() == clusterName+"-broker-ro") &&
+			soleController(obj, "CubridCluster", clusterName, g.cluster.UID)
 	case *appsv1.ReplicaSet:
 		return soleController(obj, "Deployment", parent, types.UID(g.seen["Deployment/"+parent]))
 	case *corev1.Pod:
@@ -151,6 +153,13 @@ func (g *namespaceGuard) check(ctx context.Context) error {
 		return errors.New("candidate manager identity changed")
 	}
 
+	// Pods are read before their controllers: a controller creates its parent
+	// before any child, so every Pod read here has its parent in the later
+	// workload reads, even while the Operator or a rollout creates new ones.
+	pods := &corev1.PodList{}
+	if err := g.runner.Client.List(ctx, pods, client.InNamespace(g.cfg.Namespace)); err != nil {
+		return err
+	}
 	for _, check := range []func(context.Context) error{g.checkClusters, g.checkManagerWorkloads,
 		g.checkScheduledWriters} {
 		if err := check(ctx); err != nil {
@@ -161,7 +170,7 @@ func (g *namespaceGuard) check(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := g.checkPods(ctx); err != nil {
+	if err := g.checkPods(pods); err != nil {
 		return err
 	}
 	if err := g.checkClaims(ctx, databaseSet); err != nil {
@@ -297,12 +306,7 @@ func (g *namespaceGuard) checkStatefulSets(ctx context.Context) (*appsv1.Statefu
 	return databaseSet, nil
 }
 
-func (g *namespaceGuard) checkPods(ctx context.Context) error {
-	c, ns := g.runner.Client, client.InNamespace(g.cfg.Namespace)
-	pods := &corev1.PodList{}
-	if err := c.List(ctx, pods, ns); err != nil {
-		return err
-	}
+func (g *namespaceGuard) checkPods(pods *corev1.PodList) error {
 	for i := range pods.Items {
 		obj := &pods.Items[i]
 		manager := false
@@ -315,16 +319,22 @@ func (g *namespaceGuard) checkPods(ctx context.Context) error {
 				}
 			}
 		}
-		if manager || g.brokerChain(obj) {
+		if manager {
 			for _, volume := range obj.Spec.Volumes {
 				if volume.PersistentVolumeClaim != nil {
-					return errors.New("candidate manager or Broker Pod could mount retained data; writer ambiguity")
+					return errors.New("candidate manager Pod could mount retained data; writer ambiguity")
 				}
 			}
-			if !manager {
-				if err := g.remember("Pod", obj); err != nil {
-					return err
+			continue
+		}
+		if g.brokerChain(obj) {
+			for _, volume := range obj.Spec.Volumes {
+				if !brokerVolume(volume) {
+					return errors.New("broker Pod mounts a volume the Operator does not give it; writer ambiguity")
 				}
+			}
+			if err := g.remember("Pod", obj); err != nil {
+				return err
 			}
 			continue
 		}
@@ -352,6 +362,31 @@ func (g *namespaceGuard) checkPods(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// brokerVolume reports whether volume is one a Broker Pod has on a real
+// cluster: the Operator's Broker ConfigMap, or the projected service-account
+// token volume admission injects (token, kube-root-ca.crt, namespace).
+func brokerVolume(volume corev1.Volume) bool {
+	source := volume.VolumeSource
+	switch {
+	case source.ConfigMap != nil:
+		return source == corev1.VolumeSource{ConfigMap: source.ConfigMap} &&
+			source.ConfigMap.Name == clusterName+"-broker-config"
+	case source.Projected != nil:
+		if source != (corev1.VolumeSource{Projected: source.Projected}) {
+			return false
+		}
+		for _, p := range source.Projected.Sources {
+			if p != (corev1.VolumeProjection{ServiceAccountToken: p.ServiceAccountToken}) &&
+				p != (corev1.VolumeProjection{ConfigMap: p.ConfigMap}) &&
+				p != (corev1.VolumeProjection{DownwardAPI: p.DownwardAPI}) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (g *namespaceGuard) checkClaims(ctx context.Context, databaseSet *appsv1.StatefulSet) error {
