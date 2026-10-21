@@ -382,6 +382,40 @@ func TestServer_Readyz_LogsAnAbandonedCheck(t *testing.T) {
 	}
 }
 
+// A check whose command answered keeps that answer when its last caller
+// leaves before the answer is taken: it is not logged as abandoned.
+func TestServer_Readyz_AnAnsweredCheckIsNotLoggedAsAbandoned(t *testing.T) {
+	log, logger := lockedLog()
+	srv := NewServer(fakeCLI{out: serverStatusStopped}, "tok").WithStandaloneDatabase(dbName).WithLogger(logger)
+	answered, resume := make(chan struct{}), make(chan struct{})
+	srv.afterReadinessCheck = func() {
+		close(answered)
+		<-resume
+	}
+	h := srv.Handler()
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil).WithContext(ctx))
+		result <- rr
+	}()
+	<-answered
+	cancel()
+	<-result
+	close(resume)
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(log(), `"event":"not_ready"`) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the answered check left no not_ready line: %s", log())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := log(); strings.Contains(got, readinessAbandoned) || !strings.Contains(got, "is not running") {
+		t.Errorf("the answered check was not logged with its own reason: %s", got)
+	}
+}
+
 // panickingCLI panics in its command, as a parser bug would.
 type panickingCLI struct{}
 
@@ -400,8 +434,8 @@ func TestServer_Readyz_APanicInTheCheckAnswersNotReady(t *testing.T) {
 	if rr := doReq(t, h, "/livez", "", testRemoteAddr); rr.Code != http.StatusOK {
 		t.Errorf("/livez after a panic in the check = %d, want 200", rr.Code)
 	}
-	if got := log(); !strings.Contains(got, "parser bug") || !strings.Contains(got, `"stack"`) {
-		t.Errorf("the panic is not logged with its stack: %s", got)
+	if got := log(); !strings.Contains(got, "parser bug") || strings.Count(got, `"stack"`) != 1 {
+		t.Errorf("the panic is not logged with its stack once: %s", got)
 	}
 }
 

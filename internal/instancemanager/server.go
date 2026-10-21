@@ -66,6 +66,13 @@ type Server struct {
 	// callers run at most one status command at a time.
 	readyMu    sync.Mutex
 	readyCheck *readinessCheck
+	// afterReadinessCheck, when set, runs after a readiness check's command
+	// answered and before the answer is taken; tests use it to make the last
+	// caller leave in between.
+	afterReadinessCheck func()
+	// readinessPanicLogged is set once a panic in a readiness check was
+	// logged with its stack; later ones are known by their reason.
+	readinessPanicLogged atomic.Bool
 	// store is the durable operation store; nil disables the async operation
 	// endpoints (so unit tests can construct a store-less server).
 	store *OperationStore
@@ -368,6 +375,13 @@ func (s *Server) startReadinessCheck(ctx context.Context) *readinessCheck {
 	go func() {
 		defer cancel()
 		reason := s.checkReadiness(checkCtx)
+		// Whether the command was cancelled is taken before the answer: a
+		// caller that leaves after the command answered cancels nothing that
+		// ran, although it marks the check abandoned.
+		cancelled := checkCtx.Err() != nil
+		if s.afterReadinessCheck != nil {
+			s.afterReadinessCheck()
+		}
 		s.readyMu.Lock()
 		abandoned := c.abandoned
 		c.reason = reason
@@ -378,7 +392,7 @@ func (s *Server) startReadinessCheck(ctx context.Context) *readinessCheck {
 		// A cancelled check says nothing about the member but that no request
 		// waited for it, as when its command outlasts the kubelet's timeout.
 		// A check that ended before its cancellation keeps its own answer.
-		if abandoned && checkCtx.Err() != nil {
+		if abandoned && cancelled {
 			reason = readinessAbandoned
 		}
 		s.logReadiness(checkCtx, reason)
@@ -397,8 +411,10 @@ func (s *Server) checkReadiness(ctx context.Context) (reason string) {
 	defer func() {
 		if r := recover(); r != nil {
 			reason = fmt.Sprintf("the readiness check failed: %v", r)
-			s.log().Error("Recovered a panic in the readiness check", "panic", fmt.Sprint(r),
-				"stack", string(debug.Stack()))
+			if !s.readinessPanicLogged.Swap(true) {
+				s.log().Error("Recovered a panic in the readiness check", "panic", fmt.Sprint(r),
+					"stack", string(debug.Stack()))
+			}
 		}
 	}()
 	return s.notReadyReason(ctx)
