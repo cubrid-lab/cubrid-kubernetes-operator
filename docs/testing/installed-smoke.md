@@ -133,16 +133,22 @@ does not create, modify or delete those objects or the external ownership marker
 
 After successful create-only CR creation returns its UID, subsequent inventory
 permits only that CR, its sole-controller-owned `smoke` StatefulSet and `smoke-0`
-Pod, and the deterministic `data-smoke-0` 2Gi PVC from its `data` claim template.
-Observed StatefulSet, Pod and PVC UIDs are pinned. Foreign objects, replacements,
+Pod, the deterministic `data-smoke-0` 2Gi PVC from its `data` claim template,
+and the CR's Broker tier: each Deployment the CR solely controls
+(`smoke-broker-rw` and `smoke-broker-ro`), each ReplicaSet such a Deployment
+solely controls and each Pod such a ReplicaSet solely controls. A Broker Pod
+may not mount a PVC. Observed StatefulSet, Deployment, ReplicaSet, Pod and PVC
+UIDs are pinned, and a child is matched to the UID pinned for its parent, so a
+Broker object outliving its parent during garbage collection stays identified.
+The Broker Services and ConfigMap are passive objects and are not inventoried. Foreign objects, replacements,
 ambiguous ownership or a changed recorded backing-volume name stop work and
 preserve resources. Failed, already-existing, ambiguous or UID-less CR creation
 grants no SQL or CR-cleanup authority. Reads followed by name-based exec are not
 an atomic fence; the external exclusive reservation remains required.
 
-Preallocated cleanup UID-deletes **only the created CR** and waits for both its
-StatefulSet and DB Pod to disappear through Kubernetes garbage collection and
-normal Pod termination. It never deletes the namespace or PVC, removes finalizers,
+Preallocated cleanup UID-deletes **only the created CR** and waits for its
+StatefulSet, DB Pod and every Broker Deployment, ReplicaSet and Pod to
+disappear through Kubernetes garbage collection and normal Pod termination. It never deletes the namespace or PVC, removes finalizers,
 force-deletes Pods or falls back to deletion by name. An ownership change before
 cleanup blocks deletion; an observed replacement during cleanup is preserved and
 fails the run. Failure to observe stopped workloads within the cleanup deadline

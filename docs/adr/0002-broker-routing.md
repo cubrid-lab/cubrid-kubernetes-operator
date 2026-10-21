@@ -176,7 +176,9 @@ usable backend?" — distinct from "which DB pod is master?" (status) and
   read-write Broker is available; `False` with `InstancesNotReady` while the
   member is not ready, else `NoBrokerAvailable`. A Broker that listens is
   available even while the server is down; a client then gets `-677` at
-  connect (POC-33).
+  connect (POC-33). After the server stops, `RoutingReady` stays `True`
+  until the member's readiness probe has failed three times (period 5 s,
+  timeout 5 s), about 15 s or more, and the next reconcile has run.
 
 ### Failover write sequence
 

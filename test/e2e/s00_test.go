@@ -72,9 +72,9 @@ func s00Scenario() {
 			s00Namespace = "cubrid-s00"
 			// clientNamespace holds the remote client of the Broker Services.
 			clientNamespace = "cubrid-s00-client"
-			clusterName  = "s00"
-			database     = "appdb"
-			marker       = "s00-before-pod-delete"
+			clusterName     = "s00"
+			database        = "appdb"
+			marker          = "s00-before-pod-delete"
 		)
 		pod := clusterName + "-0"
 		record := &s00Evidence{Scenario: "S00", Result: string(evidence.Fail), ProbeFailureEvents: []string{}}

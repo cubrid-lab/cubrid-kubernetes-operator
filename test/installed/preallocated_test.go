@@ -72,6 +72,16 @@ const (
 )
 
 const (
+	testForeignDeployment  = "foreign-deployment"
+	testForeignReplicaSet  = "foreign-replicaset"
+	testForeignPod         = "foreign-pod"
+	testPVCMount           = "pvc-mount"
+	testReplacedDeployment = "replaced-deployment"
+	testReplacedReplicaSet = "replaced-replicaset"
+	testReplacedPod        = "replaced-pod"
+)
+
+const (
 	testOwnerUID             = "owner-uid"
 	testTerminatingNamespace = "terminating-namespace"
 	testBeforeWrite          = "before-write"
@@ -431,6 +441,121 @@ func TestPreallocatedSameNamespaceCandidateAndRetainedClaimBlockReuse(t *testing
 	}
 	if len(f.writes) != 1 || f.deletes != 1 {
 		t.Fatal("retained fixture received another write/delete")
+	}
+}
+
+// The Broker tier the created cluster owns is permitted; a look-alike outside
+// that ownership chain, a replacement or a Broker Pod with a PVC is not.
+func TestPreallocatedRefusesWorkloadsOutsideTheBrokerChain(t *testing.T) {
+	const rw = clusterName + "-broker-rw"
+	for _, kind := range []string{testForeignDeployment, testForeignReplicaSet, testForeignPod, testPVCMount,
+		testReplacedDeployment, testReplacedReplicaSet, testReplacedPod} {
+		t.Run(kind, func(t *testing.T) {
+			f := preallocatedFixture(t)
+			ns := f.cfg.Namespace
+			executedSQL := 0
+			f.commandHook = func(_ context.Context, args []string) (string, error) {
+				last := args[len(args)-1]
+				if strings.HasPrefix(last, "CREATE TABLE") || strings.HasPrefix(last, "SELECT") {
+					executedSQL++
+				}
+				if !strings.Contains(last, "cubrid_rel") {
+					return f.answer(t, args)
+				}
+				c := f.runner.Client
+				var err error
+				switch kind {
+				case testForeignDeployment, testForeignReplicaSet, testForeignPod:
+					// A same-named object controlled outside the chain.
+					var obj client.Object = &appsv1.Deployment{}
+					name, ref := rw, owner("CubridCluster", clusterName, testForeignUID)
+					switch kind {
+					case testForeignReplicaSet:
+						obj, name, ref = &appsv1.ReplicaSet{}, rw+"-rs", owner("Deployment", rw, testForeignUID)
+					case testForeignPod:
+						obj, name, ref = &corev1.Pod{}, rw+"-rs-a", owner("ReplicaSet", rw+"-rs", testForeignUID)
+					}
+					if err = c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: name}, obj); err == nil {
+						obj.SetOwnerReferences([]metav1.OwnerReference{ref})
+						err = c.Update(t.Context(), obj)
+					}
+				case testPVCMount:
+					pod := &corev1.Pod{}
+					if err = c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: rw + "-rs-a"}, pod); err == nil {
+						pod.Spec.Volumes = []corev1.Volume{{Name: dataClaimName, VolumeSource: corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}}}
+						err = c.Update(t.Context(), pod)
+					}
+				default:
+					var obj client.Object = &appsv1.Deployment{}
+					name := rw
+					switch kind {
+					case testReplacedReplicaSet:
+						obj, name = &appsv1.ReplicaSet{}, rw+"-rs"
+					case testReplacedPod:
+						obj, name = &corev1.Pod{}, rw+"-rs-a"
+					}
+					if err = c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: name}, obj); err == nil {
+						obj.SetUID(testReplacementUID)
+						err = c.Update(t.Context(), obj)
+					}
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				return f.answer(t, args)
+			}
+			if err := f.runner.Run(t.Context(), f.cfg); err == nil {
+				t.Fatal("a workload outside the created cluster's Broker chain passed")
+			}
+			if executedSQL != 0 || f.deletes != 0 {
+				t.Fatalf("unidentified workload granted SQL=%d or cleanup=%d", executedSQL, f.deletes)
+			}
+		})
+	}
+}
+
+func TestPreallocatedCleanupWaitsForBrokerTier(t *testing.T) {
+	for _, left := range []client.Object{&appsv1.Deployment{}, &appsv1.ReplicaSet{}, &corev1.Pod{}} {
+		t.Run(fmt.Sprintf("%T", left), func(t *testing.T) {
+			f := preallocatedFixture(t)
+			f.cfg.CleanupTimeout = 30 * time.Millisecond
+			f.deleteHook = func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if err := c.Delete(ctx, obj, opts...); err != nil {
+					return err
+				}
+				// GC removes the database workload but leaves one Broker object.
+				children := []client.Object{&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: clusterName,
+					Namespace: f.cfg.Namespace}}, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0",
+					Namespace: f.cfg.Namespace}}}
+				kept := false
+				for _, child := range brokerTier(f.cfg.Namespace, obj.GetUID()) {
+					if !kept && fmt.Sprintf("%T", child) == fmt.Sprintf("%T", left) {
+						kept = true
+						continue
+					}
+					children = append(children, child)
+				}
+				for _, child := range children {
+					if err := c.Delete(ctx, child); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			err := f.runner.Run(t.Context(), f.cfg)
+			if err == nil {
+				t.Fatal("a remaining Broker object was reported as stopped workloads")
+			}
+			if f.marker == "" || f.deletes != 1 || strings.Contains(err.Error(), "unidentified") {
+				t.Fatalf("the run did not reach cleanup through the Broker tier: marker=%q deletes=%d err=%v",
+					f.marker, f.deletes, err)
+			}
+			summary := readSummary(t, f.cfg.EvidenceDir)
+			if summary.Scenarios[0].CleanupSucceeded == nil || *summary.Scenarios[0].CleanupSucceeded {
+				t.Fatal("incomplete Broker GC passed cleanup")
+			}
+		})
 	}
 }
 

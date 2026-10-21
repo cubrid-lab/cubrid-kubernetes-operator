@@ -86,8 +86,8 @@ spec:
 // committed write through -rw, the same row read through -ro, and a write
 // through -ro that has to be refused with the read-only Broker's -581. It
 // prints BROKER-CHECK-OK when all three hold. The HA bootstrap and S00 (a
-// standalone cluster) both run it. broker_tester is not used: its statements do not persist
-// (docs/poc/RESULTS.md, POC-8).
+// standalone cluster) both run it. broker_tester is not used: its statements
+// do not persist (docs/poc/RESULTS.md, POC-8).
 const brokerClientManifest = `apiVersion: v1
 kind: Pod
 metadata:
@@ -147,7 +147,7 @@ spec:
               ro.commit()
           except Exception as exc:
               # The read-only Broker's refusal, not any failure (POC-22, POC-33).
-              if "-581" not in repr(exc):
+              if getattr(exc, "errno", None) != -581:
                   sys.exit("a write through -ro failed, but not as a refused update: %%r" %% (exc,))
               print("write through -ro refused:", repr(exc))
           else:

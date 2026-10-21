@@ -212,18 +212,19 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 						return err
 					}
 				}
-				return c.Create(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0", Namespace: f.cfg.Namespace,
-					UID:             "database-pod",
-					OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", clusterName, sts.UID)}},
-					Spec: corev1.PodSpec{NodeName: "node-1", Volumes: []corev1.Volume{{Name: dataClaimName,
-						VolumeSource: corev1.VolumeSource{
-							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}}},
-						Containers: []corev1.Container{{Name: databaseContainer, Image: f.cfg.InstanceManagerImage}}},
-					Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-						ContainerStatuses: []corev1.ContainerStatus{{Name: databaseContainer, Ready: true,
-							ContainerID: "containerd://database-container",
-							State:       corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
-							ImageID:     "containerd://sha256:" + strings.Repeat("c", 64)}}}})
+				return createAll(ctx, c, append(brokerTier(f.cfg.Namespace, value.UID),
+					&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0", Namespace: f.cfg.Namespace,
+						UID:             "database-pod",
+						OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", clusterName, sts.UID)}},
+						Spec: corev1.PodSpec{NodeName: "node-1", Volumes: []corev1.Volume{{Name: dataClaimName,
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}}},
+							Containers: []corev1.Container{{Name: databaseContainer, Image: f.cfg.InstanceManagerImage}}},
+						Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+							ContainerStatuses: []corev1.ContainerStatus{{Name: databaseContainer, Ready: true,
+								ContainerID: "containerd://database-container",
+								State:       corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+								ImageID:     "containerd://sha256:" + strings.Repeat("c", 64)}}}})...)
 			default:
 				t.Fatalf("runner attempted a forbidden write: %T", obj)
 				return errors.New("forbidden write")
@@ -247,9 +248,9 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 					return err
 				}
 				// Fake-client GC only; real GC is required in isolated Kind.
-				for _, child := range []client.Object{&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: clusterName,
+				for _, child := range append([]client.Object{&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: clusterName,
 					Namespace: f.cfg.Namespace}}, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0",
-					Namespace: f.cfg.Namespace}}} {
+					Namespace: f.cfg.Namespace}}}, brokerTier(f.cfg.Namespace, cluster.UID)...) {
 					if err := c.Delete(ctx, child); err != nil {
 						return err
 					}
@@ -284,6 +285,35 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 		return f.answer(t, args)
 	}
 	return f
+}
+
+// brokerTier is the Broker tier the Operator creates for every cluster: per
+// access mode a Deployment owned by the cluster, its ReplicaSet and two Pods.
+func brokerTier(namespace string, cluster types.UID) []client.Object {
+	objects := make([]client.Object, 0, 8)
+	for _, mode := range []string{"rw", "ro"} {
+		name := clusterName + "-broker-" + mode
+		dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(name),
+			OwnerReferences: []metav1.OwnerReference{owner("CubridCluster", clusterName, cluster)}}}
+		rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: name + "-rs", Namespace: namespace,
+			UID: types.UID(name + "-rs"), OwnerReferences: []metav1.OwnerReference{owner("Deployment", name, dep.UID)}}}
+		objects = append(objects, dep, rs)
+		for _, suffix := range []string{"a", "b"} {
+			objects = append(objects, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: rs.Name + "-" + suffix,
+				Namespace: namespace, UID: types.UID(rs.Name + "-" + suffix),
+				OwnerReferences: []metav1.OwnerReference{owner("ReplicaSet", rs.Name, rs.UID)}}})
+		}
+	}
+	return objects
+}
+
+func createAll(ctx context.Context, c client.WithWatch, objects ...client.Object) error {
+	for _, obj := range objects {
+		if err := c.Create(ctx, obj); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (f *fixture) answer(t *testing.T, args []string) (string, error) {

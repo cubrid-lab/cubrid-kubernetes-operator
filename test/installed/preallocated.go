@@ -117,6 +117,27 @@ func soleController(obj metav1.Object, kind, name string, uid types.UID) bool {
 		refs[0].APIVersion == apiVersion && refs[0].Kind == kind && refs[0].Name == name && refs[0].UID == uid && uid != ""
 }
 
+// brokerChain reports whether obj belongs to the created cluster's Broker
+// tier: a Deployment the cluster solely controls, a ReplicaSet of such a
+// Deployment, or a Pod of such a ReplicaSet. Parents are matched by the UIDs
+// pinned when they were observed, so a child outliving its parent during GC
+// is still identified and a replacement never inherits the identity.
+func (g *namespaceGuard) brokerChain(obj client.Object) bool {
+	if g.cluster == nil || len(obj.GetOwnerReferences()) != 1 {
+		return false
+	}
+	parent := obj.GetOwnerReferences()[0].Name
+	switch obj.(type) {
+	case *appsv1.Deployment:
+		return soleController(obj, "CubridCluster", clusterName, g.cluster.UID)
+	case *appsv1.ReplicaSet:
+		return soleController(obj, "Deployment", parent, types.UID(g.seen["Deployment/"+parent]))
+	case *corev1.Pod:
+		return soleController(obj, "ReplicaSet", parent, types.UID(g.seen["ReplicaSet/"+parent]))
+	}
+	return false
+}
+
 func (g *namespaceGuard) check(ctx context.Context) error {
 	if err := g.epoch(ctx); err != nil {
 		return err
@@ -186,6 +207,12 @@ func (g *namespaceGuard) checkManagerWorkloads(ctx context.Context) error {
 	}
 	for i := range deployments.Items {
 		obj := &deployments.Items[i]
+		if g.brokerChain(obj) {
+			if err := g.remember("Deployment", obj); err != nil {
+				return err
+			}
+			continue
+		}
 		if g.cfg.Namespace != g.cfg.OperatorNamespace || obj.Name != g.cfg.OperatorDeployment ||
 			string(obj.UID) != g.rec.Operator.DeploymentUID || !obj.DeletionTimestamp.IsZero() {
 			return errors.New("unidentified Deployment in preallocated namespace")
@@ -194,6 +221,9 @@ func (g *namespaceGuard) checkManagerWorkloads(ctx context.Context) error {
 	if g.managerSets == nil {
 		g.managerSets = map[string]types.UID{}
 		for _, obj := range sets.Items {
+			if g.brokerChain(&obj) {
+				continue
+			}
 			if g.cfg.Namespace != g.cfg.OperatorNamespace || !soleController(&obj, "Deployment",
 				g.cfg.OperatorDeployment, types.UID(g.rec.Operator.DeploymentUID)) || obj.UID == "" {
 				return errors.New("unidentified bootstrap ReplicaSet")
@@ -203,6 +233,12 @@ func (g *namespaceGuard) checkManagerWorkloads(ctx context.Context) error {
 	}
 	for i := range sets.Items {
 		obj := &sets.Items[i]
+		if g.brokerChain(obj) {
+			if err := g.remember("ReplicaSet", obj); err != nil {
+				return err
+			}
+			continue
+		}
 		if g.managerSets[obj.Name] != obj.UID || !soleController(obj, "Deployment", g.cfg.OperatorDeployment,
 			types.UID(g.rec.Operator.DeploymentUID)) {
 			return errors.New("candidate ReplicaSet was replaced or is unidentified")
@@ -279,10 +315,15 @@ func (g *namespaceGuard) checkPods(ctx context.Context) error {
 				}
 			}
 		}
-		if manager {
+		if manager || g.brokerChain(obj) {
 			for _, volume := range obj.Spec.Volumes {
 				if volume.PersistentVolumeClaim != nil {
-					return errors.New("candidate manager could mount retained data; writer ambiguity")
+					return errors.New("candidate manager or Broker Pod could mount retained data; writer ambiguity")
+				}
+			}
+			if !manager {
+				if err := g.remember("Pod", obj); err != nil {
+					return err
 				}
 			}
 			continue
@@ -391,6 +432,37 @@ func (g *namespaceGuard) cleanup(ctx context.Context, poll time.Duration) error 
 				return false, err
 			}
 		}
+		if remaining, err := g.brokerRemains(ctx); err != nil || remaining {
+			return false, err
+		}
 		return true, g.epoch(ctx)
 	})
+}
+
+// brokerRemains reports whether any object of the created cluster's Broker
+// tier is still present.
+func (g *namespaceGuard) brokerRemains(ctx context.Context) (bool, error) {
+	ns := client.InNamespace(g.cfg.Namespace)
+	deployments, sets, pods := &appsv1.DeploymentList{}, &appsv1.ReplicaSetList{}, &corev1.PodList{}
+	for _, list := range []client.ObjectList{deployments, sets, pods} {
+		if err := g.runner.Client.List(ctx, list, ns); err != nil {
+			return false, err
+		}
+	}
+	for i := range deployments.Items {
+		if g.brokerChain(&deployments.Items[i]) {
+			return true, nil
+		}
+	}
+	for i := range sets.Items {
+		if g.brokerChain(&sets.Items[i]) {
+			return true, nil
+		}
+	}
+	for i := range pods.Items {
+		if g.brokerChain(&pods.Items[i]) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

@@ -2586,3 +2586,12 @@ docker run -d --name poc286-broker-rw --hostname broker-rw --network poc286-net 
 docker run --rm --network poc286-net -v "$PWD/poc286:/poc:ro" \
   -e RW_HOST=broker-rw -e RO_HOST=broker-ro --entrypoint /bin/sh python:3.12-slim /poc/client.sh
 ```
+
+Not kept: the text of `/poc/client.sh` and the `poc286/conf` directory were
+removed with the run's working directory and are not in the repository or
+the PR branch history. The client's connection call and statement order are
+described above; the exact script text is not recorded. How the two
+`cubrid_broker_<mode>.conf` files and `databases.txt` were produced (rendered
+from the Operator's Broker configuration code or written by hand to match it)
+is not recorded either; only the settings listed under **Setup** are known.
+A rerun has to write both again.
