@@ -187,6 +187,8 @@ func unexpectedStatus(resp *http.Response) error {
 		return fmt.Errorf("%w (%s)", errTokenRefused, detail)
 	case resp.StatusCode == http.StatusPreconditionFailed:
 		return fmt.Errorf("%w (%s)", errObjectStorageNotApplied, detail)
+	// The code is taken at any status: the manager answers it with 500, and
+	// startError still counts a 400, 413 or 422 as a refused request.
 	case code == instancemanager.CodeOperationRecordUnreadable:
 		return fmt.Errorf("%w (%s); see the runbook %q in docs/observability.md",
 			errOperationRecordUnreadable, detail, runbookUnreadableRecord)

@@ -381,8 +381,9 @@ read or decoded is logged once as an error with `event`
 was found at start; while it stays unreadable the Instance Manager starts no
 backup, restore or HA bootstrap and answers each start `500` with the code
 `OperationRecordUnreadable` (ADR-0003, #427). The operator reports that start
-as `InstanceManagerOperationRecordUnreadable` on a `CubridBackup` and on
-`BootstrapReady`, and waits without using up an attempt (#481). The
+as `InstanceManagerOperationRecordUnreadable` (#481): on `BootstrapReady` it
+waits without using up an attempt; a `CubridBackup` waits within the
+recorded-target bound like any member that cannot be asked (ADR-0007). The
 runbook below says what to do. A credential is never logged: no
 token, no `Authorization` header, no object-storage key, also not inside a
 failed command's output.

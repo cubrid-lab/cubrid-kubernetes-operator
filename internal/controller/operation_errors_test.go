@@ -330,7 +330,9 @@ func TestHTTPBackupClient_AgainstTheInstanceManager(t *testing.T) {
 
 // A start that the real Instance Manager refuses because its operation store
 // holds a record it cannot read is reported by its own reason, retryable and
-// with a pointer to the runbook, on every kind of start (#481).
+// with a pointer to the runbook (#481). Backup and restore starts are asked
+// of the real handler; the HA bootstrap start is classified by the same
+// answer in TestHTTPBackupClient_ErrorAnswersAreClassified.
 func TestHTTPBackupClient_UnreadableRecordAgainstTheInstanceManager(t *testing.T) {
 	const member = "db-0"
 	dir := t.TempDir()
