@@ -147,9 +147,10 @@ func TestGenerateHAConf_Rejects(t *testing.T) {
 	}
 }
 
-// The longest accepted cluster name still yields 63-character member names.
+// The longest accepted cluster name (52 characters, constrained by the
+// StatefulSet controller-revision-hash Pod label) yields valid member names.
 func TestGenerateHAConf_LongestName(t *testing.T) {
-	name := strings.Repeat("a", 61)
+	name := strings.Repeat("a", databasev1alpha1.MaxClusterNameLength)
 	conf, err := generateHAConf(haTestCluster(name))
 	if err != nil {
 		t.Fatalf("generateHAConf: %v", err)

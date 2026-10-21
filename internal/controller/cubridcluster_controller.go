@@ -23,6 +23,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -43,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/metrics"
@@ -317,6 +321,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	report := r.beginReport(&cluster)
 	defer func() { r.endReport(ctx, &cluster, report.before, report) }()
 
+	// A name no child object can be built from is refused before any is
+	// written; it cannot change, so it is not retried.
+	if err := validateManagedClusterName(cluster.Name); err != nil {
+		return r.refuseClusterName(ctx, &cluster, err)
+	}
+
 	// Reconcile the governing headless Service (ADR-0004: stable per-pod DNS).
 	if err := r.reconcileHeadlessService(ctx, &cluster); err != nil {
 		return r.failed(ctx, &cluster, "ServiceReconcileFailed", err)
@@ -376,6 +386,58 @@ func (r *CubridClusterReconciler) reportDeferredRotation(ctx context.Context, cl
 		fmt.Sprintf("the requested Instance Manager token rotation waits until every member holds the current token of Secret %s",
 			secret.Name))
 	return nil
+}
+
+// maxManagedClusterNameLength is the longest CubridCluster name the operator
+// manages. It is one more than the admission limit
+// databasev1alpha1.MaxClusterNameLength (52): the API accepted 53-character
+// names before that limit existed, and every name and label value the
+// operator writes for them still fits in 63 characters (the longest are
+// <cluster>-instances and <cluster>-broker-rw/-ro). Only the StatefulSet
+// controller's controller-revision-hash Pod label can exceed 63 characters
+// for such a name, which is why new names are limited to 52 (ADR-0004).
+const maxManagedClusterNameLength = 53
+
+// reasonInvalidClusterName is the Ready reason of a CubridCluster whose name
+// the operator refuses to manage.
+const reasonInvalidClusterName = "InvalidClusterName"
+
+// validateManagedClusterName checks that a cluster name is a DNS-1035 label
+// of at most maxManagedClusterNameLength characters.
+func validateManagedClusterName(name string) error {
+	if len(name) > maxManagedClusterNameLength {
+		return fmt.Errorf("cluster name %q has %d characters, more than the %d the operator can derive child object names from",
+			name, len(name), maxManagedClusterNameLength)
+	}
+	if errs := validation.IsDNS1035Label(name); len(errs) > 0 {
+		return fmt.Errorf("cluster name %q is not a DNS-1035 label: %s", name, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// refuseClusterName reports a cluster name the operator cannot manage: Ready
+// is False with reason InvalidClusterName, one Warning Event is recorded, and
+// the returned terminal error is not retried. The name is immutable, so a
+// retry cannot succeed.
+func (r *CubridClusterReconciler) refuseClusterName(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	cause error) (ctrl.Result, error) {
+	logf.FromContext(ctx).Error(cause, "Refused to manage a CubridCluster with an invalid name")
+	msg := cause.Error() + "; recreate the cluster with a name of at most " +
+		strconv.Itoa(databasev1alpha1.MaxClusterNameLength) + " characters"
+	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionReady)
+	same := was != nil && was.Status == metav1.ConditionFalse && was.Reason == reasonInvalidClusterName && was.Message == msg
+	setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonInvalidClusterName, msg)
+	setCondition(cluster, conditionProgressing, metav1.ConditionFalse, reasonInvalidClusterName, msg)
+	r.markRolesNotObserved(cluster, reasonInvalidClusterName)
+	if !same {
+		r.statusEvent(cluster, corev1.EventTypeWarning, reasonInvalidClusterName, msg)
+	}
+	// A status that could not be written is retried: the refusal itself is
+	// terminal, but its report would otherwise wait for the next change.
+	if err := r.writeStatus(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, reconcile.TerminalError(cause)
 }
 
 // instancesServiceName is the governing headless Service (<cluster>-instances).
