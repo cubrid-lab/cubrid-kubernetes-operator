@@ -286,8 +286,18 @@ remains a compatibility consideration, separate from ordinary artifact safety.
 - **Artifact trust:** restore/rebuild must **reject** any manifest whose
   `database`, `clusterUID`, `cubridVersion`, `level`, or expected
   source-role policy does not match the intended operation, in addition
-  to per-file checksum validation. A `PVC` destination (reserved; not run,
-  see below) is **not eligible** for ADR-0006 rebuild or disaster recovery.
+  to per-file checksum validation. As implemented (#276), the Instance
+  Manager checks this at the restore boundary, before anything is
+  downloaded into staging, registered in `databases.txt` or run: every
+  restore takes only a full backup (`level` 0) of the request's database
+  and engine version; a seed restore (`seedFromMaster`) takes only a backup
+  whose `sourceInstance` is that master and whose `sourceRole` is `master`,
+  and, when the request carries `expectedClusterUID` (the operator always
+  sends it for a seed), whose `clusterUID` is that cluster's. A restore into
+  a new cluster takes another cluster's full backup from a standby or the
+  master. The engine version is still compared as the declared string
+  (#321). A `PVC` destination (reserved; not run, see below) is **not
+  eligible** for ADR-0006 rebuild or disaster recovery.
 
 ### `CubridBackup` CR (v1alpha1)
 

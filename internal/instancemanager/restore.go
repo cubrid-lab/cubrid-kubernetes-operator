@@ -51,6 +51,34 @@ type RestoreRequest struct {
 	// taken on. When set, this member is restored as a slave of that master.
 	// Empty for a restore into a new cluster, which has no master to follow.
 	SeedFromMaster string `json:"seedFromMaster,omitempty"`
+	// ExpectedClusterUID, when set with SeedFromMaster, must equal the UID of
+	// the cluster the artifact was taken in: a member is seeded only from
+	// its own cluster's master. A restore into a new cluster leaves it
+	// empty, since its artifact comes from another cluster.
+	ExpectedClusterUID string `json:"expectedClusterUID,omitempty"`
+}
+
+// fullBackup is the only backup level a restore takes: restoredb of a level 1
+// or 2 backup needs the backups it builds on, which an artifact does not
+// carry, and the operator takes full backups only (CubridBackupFull).
+var fullBackup = 0
+
+// restoreExpectation is what the artifact of req must say about itself
+// before anything is downloaded into staging or registered (ADR-0008
+// artifact trust, #276). Every restore takes a full backup of req's
+// database and engine version. A member seeded from a running master
+// follows that master from the position of its backup, so the backup must
+// have been taken on that master, as master, and, when the request names
+// it, in this cluster. A restore into a new cluster takes a backup of
+// another cluster, taken on a standby or the master.
+func restoreExpectation(req RestoreRequest) ManifestExpectation {
+	exp := ManifestExpectation{Database: req.Database, CubridVersion: req.ExpectedCubridVersion, Level: &fullBackup}
+	if req.SeedFromMaster != "" {
+		exp.RequireSourceRole = string(RoleMaster)
+		exp.SourceInstance = req.SeedFromMaster
+		exp.ClusterUID = req.ExpectedClusterUID
+	}
+	return exp
 }
 
 // RestoreRoots are the only directories a restore may touch, set from the
@@ -132,7 +160,7 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	// Every object is read once, into the staging directory, and checked
 	// against the manifest as it is written: what restoredb reads below is
 	// what was verified, not a second copy (#195).
-	exp := ManifestExpectation{Database: req.Database, CubridVersion: req.ExpectedCubridVersion}
+	exp := restoreExpectation(req)
 	manifest, err := stageArtifact(ctx, store, req.Bucket, req.Prefix, exp, stagingDir)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("artifact verification failed: %w", err)
