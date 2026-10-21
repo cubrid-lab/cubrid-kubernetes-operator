@@ -29,8 +29,9 @@ import (
 )
 
 const (
-	labCtx = "lab-ctx"
-	labA   = "lab-a"
+	labCtx      = "lab-ctx"
+	labA        = "lab-a"
+	contextFlag = "--context"
 )
 
 // fakeLab is a kubectl stand-in, a shell script, for one lab cluster. It logs
@@ -76,7 +77,8 @@ case "$*" in
 	esac
 	printf 'uid-1 7' ;;
 *"get lease"*)
-	printf '{"metadata":{"uid":"uid-0","resourceVersion":"3"},"spec":{"holderIdentity":"other","leaseDurationSeconds":3600,"acquireTime":"2026-10-15T06:00:00.000000Z"}}' ;;
+	printf '{"metadata":{"uid":"uid-0","resourceVersion":"3"},'
+	printf '"spec":{"holderIdentity":"other","leaseDurationSeconds":3600,"acquireTime":"2026-10-15T06:00:00.000000Z"}}' ;;
 *" delete "*)
 	cat > "$dir/delete-options" ;;
 *)
@@ -163,14 +165,14 @@ func copyOf(t *testing.T, calls []call) string {
 	}
 	first := calls[0].args
 	if !slices.Contains(first, "config") || slices.Contains(first, "--kubeconfig") ||
-		!slices.Equal(first[len(first)-2:], []string{"--context", labCtx}) {
+		!slices.Equal(first[len(first)-2:], []string{contextFlag, labCtx}) {
 		t.Fatalf("the first call should copy the context from the caller's kubeconfig: %q", first)
 	}
 	if len(calls) < 2 || len(calls[1].args) < 2 || calls[1].args[0] != "--kubeconfig" {
 		t.Fatalf("the calls after the copy do not name it: %q", calls)
 	}
 	pinned := calls[1].args[1]
-	want := []string{"--kubeconfig", pinned, "--context", labCtx}
+	want := []string{"--kubeconfig", pinned, contextFlag, labCtx}
 	for _, c := range calls[1:] {
 		if len(c.args) < len(want) || !slices.Equal(c.args[:len(want)], want) {
 			t.Errorf("call %q does not start with %q", c.args, want)
@@ -190,8 +192,8 @@ func TestRunHoldsTheLabThroughThePinnedCopy(t *testing.T) {
 	f := newFakeLab(t, labA, "ok")
 	signals := newSignalSource()
 	seen := filepath.Join(t.TempDir(), "seen")
-	code := run(labArgs("sh", "-c", `printf '%s\n%s\n' "$KUBECONFIG" "$LAB_CONTEXT" > "$0"; cat "$KUBECONFIG" >> "$0"`, seen),
-		callerEnviron(t), f.kubectl, signals.notify)
+	command := `printf '%s\n%s\n' "$KUBECONFIG" "$LAB_CONTEXT" > "$0"; cat "$KUBECONFIG" >> "$0"`
+	code := run(labArgs("sh", "-c", command, seen), callerEnviron(t), f.kubectl, signals.notify)
 	if code != 0 {
 		t.Fatalf("run() = %d, want 0", code)
 	}
@@ -201,7 +203,7 @@ func TestRunHoldsTheLabThroughThePinnedCopy(t *testing.T) {
 
 	calls := f.calls(t)
 	pinned := copyOf(t, calls)
-	var verbs []string
+	verbs := make([]string, 0, len(calls)-1)
 	for _, c := range calls[1:] {
 		verbs = append(verbs, c.args[4])
 	}

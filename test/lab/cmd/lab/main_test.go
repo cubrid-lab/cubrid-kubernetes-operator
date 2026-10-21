@@ -71,7 +71,7 @@ func TestPinnedKubeconfigKeepsTheCredentialsPrivately(t *testing.T) {
 			t.Errorf("kubectl config view was called without %s: %q", flag, args)
 		}
 	}
-	if !slices.Equal(args[len(args)-2:], []string{"--context", "lab-ctx"}) {
+	if !slices.Equal(args[len(args)-2:], []string{contextFlag, labCtx}) {
 		t.Errorf("kubectl config view did not name the context: %q", args)
 	}
 	info, err := os.Stat(path)

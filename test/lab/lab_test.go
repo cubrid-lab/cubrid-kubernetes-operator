@@ -133,6 +133,18 @@ func (f *fakeCluster) update(spec map[string]any) {
 
 func (f *fakeCluster) resourceVersion() string { return fmt.Sprint(f.version) }
 
+// spec is a Lease spec as another holder writes it; a zero renewed leaves
+// renewTime out.
+func spec(holder string, seconds int, acquired, renewed time.Time) map[string]any {
+	s := map[string]any{"holderIdentity": holder, "leaseDurationSeconds": seconds, "acquireTime": acquired}
+	if !renewed.IsZero() {
+		s["renewTime"] = renewed
+	}
+	return s
+}
+
+const otherHolder = "other"
+
 const (
 	labA   = "lab-a"
 	labCtx = "lab-ctx"
@@ -268,12 +280,7 @@ func TestAForeignLeaseIsNeverAdvisedForDeletion(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeCluster{context: labCtx, marker: labA}
-			f.store(map[string]any{
-				"holderIdentity":       "operator-campaign-lease/9f2c1e",
-				"leaseDurationSeconds": 60,
-				"acquireTime":          acquired,
-				"renewTime":            tc.renewed,
-			})
+			f.store(spec("operator-campaign-lease/9f2c1e", 60, acquired, tc.renewed))
 			_, err := target.Acquire(ctx, f.kubectl, "mine", time.Hour, tc.now)
 			if err == nil {
 				t.Fatal("a foreign Lease was taken over")
@@ -292,12 +299,7 @@ func TestAForeignLeaseIsNeverAdvisedForDeletion(t *testing.T) {
 // point's form that its holder renewed is not past its end.
 func TestARenewedLeaseIsNotPastItsEnd(t *testing.T) {
 	f := &fakeCluster{context: labCtx, marker: labA}
-	f.store(map[string]any{
-		"holderIdentity":       killedRun,
-		"leaseDurationSeconds": 3600,
-		"acquireTime":          t0,
-		"renewTime":            t0.Add(3 * time.Hour),
-	})
+	f.store(spec(killedRun, 3600, t0, t0.Add(3*time.Hour)))
 	_, err := (Target{Context: labCtx, Name: labA}).Acquire(context.Background(), f.kubectl, "mine", time.Hour,
 		t0.Add(3*time.Hour+time.Minute))
 	if err == nil || strings.Contains(err.Error(), "delete lease") {
@@ -347,11 +349,11 @@ func TestReleaseLeavesALeaseUpdatedInPlace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			f.update(map[string]any{"holderIdentity": "other", "leaseDurationSeconds": 60, "acquireTime": t0})
+			f.update(spec(otherHolder, 60, t0, time.Time{}))
 			if err := lock.Release(ctx, f.kubectl); err == nil || !strings.Contains(err.Error(), "left in place") {
 				t.Fatalf("Release() = %v, want a refusal that leaves the updated Lease", err)
 			}
-			if f.lease == nil || f.lease["holderIdentity"] != "other" {
+			if f.lease == nil || f.lease["holderIdentity"] != otherHolder {
 				t.Fatal("the Lease another holder updated in place was deleted")
 			}
 		})
@@ -399,7 +401,7 @@ func TestAnAmbiguousCreateKeepsThisRunsLease(t *testing.T) {
 	other := &fakeCluster{context: labCtx, marker: labA}
 	theirs := func(ctx context.Context, stdin string, args ...string) (string, error) {
 		if slices.Contains(args, "create") {
-			other.store(map[string]any{"holderIdentity": "other", "leaseDurationSeconds": 3600, "acquireTime": t0})
+			other.store(spec(otherHolder, 3600, t0, time.Time{}))
 			return "", errors.New("timeout")
 		}
 		return other.kubectl(ctx, stdin, args...)
