@@ -111,6 +111,14 @@ limits cached reads, including each cluster's Instance Manager token Secret.
 Cluster references and object-storage Secret references remain in the
 resource's own namespace.
 
+With or without a watch namespace, the manager caches only Secrets and Pods
+labeled `app.kubernetes.io/managed-by=cubrid-kubernetes-operator`, which every
+Secret it writes and every Pod of its workloads carry. A `<cluster>-im-token`
+Secret without that label is neither read nor adopted: the cluster reports
+`Ready=False` with reason `SecretReconcileFailed`, naming the Secret and the
+label, until that Secret is deleted or renamed. The label limits what the
+manager holds in memory, not what its role allows it to read.
+
 **Cache scope is not API authorization.** Client writes go directly to the API
 server; explicitly injected uncached readers/clients and any cluster-scoped
 resources are not restricted by a namespaced cache. Supply a namespace-bound

@@ -92,6 +92,12 @@ const (
 	conditionHAReady     = "HAReady"
 
 	appName = "cubrid"
+
+	// ManagedByLabel and ManagedByOperator mark every object the operator
+	// writes and every Pod of its workloads. The manager caches only Secrets
+	// and Pods that carry them.
+	ManagedByLabel    = "app.kubernetes.io/managed-by"
+	ManagedByOperator = "cubrid-kubernetes-operator"
 )
 
 // CubridClusterReconciler reconciles a CubridCluster object.
@@ -367,10 +373,10 @@ func instancesServiceName(name string) string { return name + "-instances" }
 // labelsFor returns the standard selector labels for a cluster's DB instances.
 func labelsFor(cluster *databasev1alpha1.CubridCluster) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":       appName,
-		"app.kubernetes.io/instance":   cluster.Name,
-		"app.kubernetes.io/component":  "database",
-		"app.kubernetes.io/managed-by": "cubrid-kubernetes-operator",
+		"app.kubernetes.io/name":      appName,
+		"app.kubernetes.io/instance":  cluster.Name,
+		"app.kubernetes.io/component": "database",
+		ManagedByLabel:                ManagedByOperator,
 	}
 }
 
@@ -469,6 +475,12 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 		}
 		return controllerutil.SetControllerReference(cluster, secret, r.Scheme)
 	})
+	// The manager caches only Secrets with the managed-by label, so a Secret
+	// of this name without it is not seen and the create is refused.
+	if apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("the Secret %s exists without the label %s=%s, so the operator neither reads nor adopts it; "+
+			"delete or rename it: %w", secret.Name, ManagedByLabel, ManagedByOperator, err)
+	}
 	if err != nil {
 		return err
 	}
