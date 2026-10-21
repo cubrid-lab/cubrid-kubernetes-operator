@@ -45,6 +45,9 @@ const envHoldLock = "IM_TEST_HOLD_POSIX_LOCK"
 const envTakeMemberLock = "IM_TEST_TAKE_MEMBER_LOCK"
 
 func TestMain(m *testing.M) {
+	if spec := os.Getenv(envCrashWrite); spec != "" {
+		os.Exit(crashWrite(spec))
+	}
 	if path := os.Getenv(envHoldLock); path != "" {
 		os.Exit(holdLock(path))
 	}

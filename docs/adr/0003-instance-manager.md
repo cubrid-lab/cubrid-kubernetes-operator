@@ -93,11 +93,14 @@ Kubelet endpoints (unauthenticated — probes are awkward with strong auth):
   reports it in a confirmed role (master, slave or replica). A requested
   stop or a running operation does not turn it false by itself.
 
-Only one `/readyz` request at a time runs a local status command. A concurrent
-request is answered immediately with 503 and `{"ready":false}`, without
-starting or waiting for another command. Once the active request finishes or
-is cancelled, the next request reads the engine again; no earlier result is
-cached. `/livez` stays independent of the readiness check.
+Only one local status command runs for `/readyz` at a time. A request that
+arrives while a check runs waits for that check and gets its answer, so a
+caller beside the kubelet never turns a healthy member's probe into a 503
+(#494). A request that leaves does not cancel the check while another request
+still waits for it; the check is cancelled once none does, and the next
+request starts a new one after that command has ended. No result is kept past
+its check: a request that arrives after a check ended reads the engine again.
+`/livez` stays independent of the readiness check.
 
 Because anyone who reaches the port can ask them, their bodies carry nothing
 but the answer: `{"status":"ok"}` for `/livez`, `{"ready":true}` or
@@ -144,7 +147,7 @@ each:
 | 409 | `IdempotencyConflict` | the manager holds an operation of this kind under the `Idempotency-Key` for another request body | terminal for the key: the request is never sent in its place; the operation the key names is read with `GET /v1/operations?idempotencyKey=` and followed |
 | 409 | `NotAnHAMember` | an HA request reached a standalone member | terminal for the member until its Pod runs as an HA member: the operator does not look the key up, reports `InstanceManagerNotAnHAMember` and asks again later without using up an attempt |
 | 412 | `ObjectStorageNotApplied` | the manager was started without object storage (#290) | terminal until the Pod is restarted with it; the operator waits, bounded (ADR-0007) |
-| 500 | `OperationRecordUnreadable` | a start, and the manager's operation store holds a record it cannot read or decode, which may be the operation the key names (#427) | retryable once the record is readable or removed by hand; nothing was started. The operator does not know the code and treats it as any 500 (`InstanceManagerUnavailable`, the message carries the code) |
+| 500 | `OperationRecordUnreadable` | a start, and the manager's operation store holds a record it cannot read or decode, which may be the operation the key names (#427) | retryable once the record is readable or removed by hand; nothing was started. The operator reports `InstanceManagerOperationRecordUnreadable`, with a message that points at the runbook, waits and uses up no attempt (#481) |
 | 400, 413, 422 | none | the request is malformed or invalid (400), too large (413) or cannot be processed (422) | terminal for the request: the same request is refused again, so the operator counts a refused start as a failed attempt (`InstanceManagerRequestRefused` for a `CubridBackup`, which ends unless the target holds an operation of it) |
 | 404, 405, 408, 429 and any other 4xx | none | the manager could not be asked: an earlier image without the route (404 or 405 from its mux), a timeout (408), load shedding (429) | retryable, like an unavailable manager: the operator waits and uses up no attempt (`InstanceManagerUnavailable`, `RestoreStartFailed` at a recovery start) |
 
@@ -340,7 +343,14 @@ persists operation records on the DB PVC (e.g.
 `$CUBRID_DATABASES/.instance-manager/operations/`). On startup it
 reconstructs state from durable facts (CUBRID process state + command
 output + config + backup manifests + operation/shutdown markers), never
-RAM. No durable shutdown marker is written (step 2 of the shutdown model);
+RAM. Operation records, `databases.txt` and ownership markers are each
+replaced whole: written to a temporary file beside them, synced, renamed over
+the earlier file, and their directory synced, so that a crash leaves either
+the earlier content or the new one, never a truncated file that drops another
+database's registration or an unreadable marker (#298). The manager's own
+writes of `databases.txt` run one at a time, and undoing a registration
+removes only its own line. No durable shutdown marker is written (step 2 of
+the shutdown model);
 the stop record of the shutdown command is container-local and does not
 outlive the container. Long operations return `202 Accepted` + operation ID; the operator
 polls `GET /v1/operations/{id}` and never assumes completion from an HTTP
