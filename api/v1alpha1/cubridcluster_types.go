@@ -409,8 +409,9 @@ type InstanceStatus struct {
 	// that the member's database carries the marker of a createdb or
 	// restoredb that did not finish: the database is neither created over nor
 	// started. It is taken from the answer that set lastObservedTime in the
-	// same observation, and is absent when the member gave no such answer.
-	// It does not change role.
+	// same observation; a member that gave no answer that counts keeps its
+	// last report. It is absent for the marker of an operation that runs now,
+	// which the bootstrap status reports. It does not change role.
 	// +optional
 	UnfinishedDatabase *InstanceUnfinishedDatabase `json:"unfinishedDatabase,omitempty"`
 }
@@ -421,11 +422,16 @@ type UnfinishedDatabaseState string
 
 const (
 	// UnfinishedWaitingForOperation: the marker names an operation of the
-	// Instance Manager that is still running, or whose leftover the next
-	// restore or HA bootstrap of the database clears or removes.
+	// Instance Manager that has ended, whose leftover the next restore or HA
+	// bootstrap of the database clears or removes. That happens only while the
+	// bootstrap or recovery still retries; once it has ended Failed nothing
+	// clears the directory and a person decides (docs/observability.md,
+	// "Unfinished databases").
 	UnfinishedWaitingForOperation UnfinishedDatabaseState = "WaitingForOperation"
 	// UnfinishedRefused: no operation of the Instance Manager removes or
-	// creates over the directory; a person decides what happens to it.
+	// creates over the directory now. Either a person decides what happens to
+	// it, or the marker or the operation record cannot be read now and the
+	// message says the database cannot be judged now.
 	UnfinishedRefused UnfinishedDatabaseState = "Refused"
 )
 

@@ -221,9 +221,10 @@ const (
 
 // unfinishedTransitions reports a member that begins to report an unfinished
 // database, or reports it for another database, operation or state, with an
-// Event: a Warning when no operation of the Instance Manager takes it up. A
-// member that no longer reports it is logged only, since that is also what a
-// member that gave no answer looks like.
+// Event: a Warning when no operation of the Instance Manager takes it up now.
+// A member that answers without it is logged only. A member that gave no
+// answer that counts keeps its last report (instanceStatuses), so a missed
+// probe changes nothing here.
 func unfinishedTransitions(member string, was, now *databasev1alpha1.InstanceUnfinishedDatabase) []transition {
 	switch {
 	case now == nil && was == nil:
@@ -252,7 +253,7 @@ func unfinishedTransitions(member string, was, now *databasev1alpha1.InstanceUnf
 	if now.State != databasev1alpha1.UnfinishedWaitingForOperation {
 		t.Reason, t.Warning = reasonUnfinishedDatabaseRefused, true
 		t.Message = fmt.Sprintf("Member %s does not start database %s: it carries %s, which no operation of the "+
-			"Instance Manager removes; a person has to decide: %s", member, now.Database, marker, now.Message)
+			"Instance Manager takes up now: %s", member, now.Database, marker, now.Message)
 	}
 	return []transition{t}
 }

@@ -70,7 +70,6 @@ func TestServer_Role_ReportsAnUnfinishedDatabase(t *testing.T) {
 	}{
 		{name: "a failed operation", state: OpFailed, want: UnfinishedWaiting, reason: "next"},
 		{name: "a completed operation", state: OpCompleted, want: UnfinishedWaiting, reason: "next"},
-		{name: "a running operation", state: OpCreating, want: UnfinishedWaiting, reason: "Creating"},
 		{name: "a failed restore with restored data", state: OpFailed, restored: true, want: UnfinishedRefused,
 			reason: "restored"},
 		{name: "an operation this manager does not know", marker: "op-00000000000000000000000000000000\n",
@@ -167,5 +166,136 @@ func TestServer_Role_ReportsNoUnfinishedDatabaseWithoutAMarker(t *testing.T) {
 		if u := roleAnswer(t, s).Unfinished; u != nil {
 			t.Errorf("%s: unfinished = %+v, want none", name, u)
 		}
+	}
+}
+
+// A role answer only observes: the record of the operation a marker names is
+// not written, neither to fail an operation the start could not read and
+// that has not ended, nor to write an end that could not be written before.
+// The answer judges both as the next read of the record will: failed.
+func TestServer_Role_UnfinishedReportWritesNoOperationRecord(t *testing.T) {
+	tests := map[string]struct {
+		state OperationState
+		// leave turns the record into the case to report, and returns the
+		// store the role answer reads.
+		leave func(t *testing.T, storeDir string, store *OperationStore, id string) *OperationStore
+	}{
+		"a record the start could not read": {
+			state: OpCreating,
+			leave: func(t *testing.T, storeDir string, _ *OperationStore, id string) *OperationStore {
+				repair := overwrite("{")(t, filepath.Join(storeDir, id+".json"))
+				reopened, err := NewOperationStore(storeDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				repair()
+				return reopened
+			},
+		},
+		"an end that could not be written": {
+			state: OpRestoring,
+			leave: func(t *testing.T, storeDir string, store *OperationStore, id string) *OperationStore {
+				restore := unwritable(t, storeDir)
+				if err := store.Settle(id, func(o *Operation) { o.State = OpFailed }); err == nil {
+					t.Fatal("Settle reported no error although the store cannot be written")
+				}
+				restore()
+				return store
+			},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			databases, storeDir := t.TempDir(), t.TempDir()
+			store, err := NewOperationStore(storeDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := leaveInterrupted(t, store, databases, OpRestore, tc.state)
+			data, err := os.ReadFile(filepath.Join(dir, ownershipMarker))
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := strings.TrimSpace(string(data))
+			store = tc.leave(t, storeDir, store, id)
+			record := filepath.Join(storeDir, id+".json")
+			before, err := os.ReadFile(record) // #nosec G304 -- a file of the test
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := NewServer(fakeCLI{out: masterOut}, "tok").WithOperationStore(store).
+				WithRestoreRoots(RestoreRoots{Target: databases}).WithReplication(dbName, databases)
+
+			u := roleAnswer(t, s).Unfinished
+			if u == nil || u.State != UnfinishedWaiting || u.Operation != id || !strings.Contains(u.Reason, "failed") {
+				t.Errorf("unfinished = %+v, want operation %s waiting as failed", u, id)
+			}
+			after, err := os.ReadFile(record) // #nosec G304 -- a file of the test
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Errorf("the role answer wrote the operation record:\nbefore %s\nafter  %s", before, after)
+			}
+			if got, err := store.Get(id); err != nil || got.State != OpFailed {
+				t.Errorf("Get after the role answer = %+v, %v; want the record failed by the store's own read", got, err)
+			}
+		})
+	}
+}
+
+// An operation that runs now leaves its marker until it completes: that is
+// its work in progress, which the bootstrap or restore status reports, not a
+// database left unfinished.
+func TestServer_Role_ReportsNoUnfinishedDatabaseForARunningOperation(t *testing.T) {
+	databases := t.TempDir()
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaveInterrupted(t, store, databases, OpRestore, OpCreating)
+	s := NewServer(fakeCLI{out: masterOut}, "tok").WithOperationStore(store).
+		WithRestoreRoots(RestoreRoots{Target: databases}).WithReplication(dbName, databases)
+	if u := roleAnswer(t, s).Unfinished; u != nil {
+		t.Errorf("unfinished = %+v, want none for an operation that runs", u)
+	}
+}
+
+// A database root that cannot be opened for another reason than its absence
+// is not taken for a database without the marker: it cannot be judged now.
+func TestServer_Role_ReportsADatabaseRootThatCannotBeOpened(t *testing.T) {
+	databases := t.TempDir()
+	notADirectory := filepath.Join(databases, "file")
+	if err := os.WriteFile(notADirectory, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(fakeCLI{out: masterOut}, "tok").
+		WithRestoreRoots(RestoreRoots{Target: notADirectory}).WithReplication(dbName, databases)
+	u := roleAnswer(t, s).Unfinished
+	if u == nil || u.State != UnfinishedRefused || !strings.Contains(u.Reason, "cannot be judged now") {
+		t.Errorf("unfinished = %+v, want refused as cannot be judged now", u)
+	}
+}
+
+// A record that cannot be read now is not said to need a person: the
+// report says that the database cannot be judged now, and why.
+func TestServer_Role_ReportsARecordThatCannotBeReadNow(t *testing.T) {
+	databases, storeDir := t.TempDir(), t.TempDir()
+	store, err := NewOperationStore(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := leaveInterrupted(t, store, databases, OpRestore, OpFailed)
+	data, err := os.ReadFile(filepath.Join(dir, ownershipMarker))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(string(data))
+	t.Cleanup(overwrite("{")(t, filepath.Join(storeDir, id+".json")))
+	s := NewServer(fakeCLI{out: masterOut}, "tok").WithOperationStore(store).
+		WithRestoreRoots(RestoreRoots{Target: databases}).WithReplication(dbName, databases)
+	u := roleAnswer(t, s).Unfinished
+	if u == nil || u.State != UnfinishedRefused || u.Operation != id || !strings.Contains(u.Reason, "cannot be judged now") {
+		t.Errorf("unfinished = %+v, want operation %s refused as cannot be judged now", u, id)
 	}
 }

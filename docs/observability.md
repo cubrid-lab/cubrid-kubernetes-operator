@@ -270,8 +270,8 @@ underscores.
 | `ReplicationHealthy` becomes `True` again | `ReplicationRecovered` | Normal | `replication_recovered` |
 | A member's role changes; a member first listed with the role `unknown`, as a standalone member always is, is no change | none | | `member_role_changed` |
 | A member whose role was known gives no answer that counts: its role becomes `unknown` | none | | `member_role_unobserved`, with `oldRole`, the `reason` and the `requestID` of the role query when one was sent (see below) |
-| A member begins to report an unfinished database, or reports it for another database, operation or state (see [Unfinished databases](#unfinished-databases)) | `UnfinishedDatabaseWaiting`, or `UnfinishedDatabaseRefused` when no operation of the Instance Manager takes it up; the message names the member, the database and the operation | Normal; `UnfinishedDatabaseRefused` is a Warning | `member_database_unfinished`, with `member`, `database`, `operationID` and `state` |
-| A member no longer reports its database as unfinished, or gave no answer that counts | none | | `member_database_unfinished_cleared` |
+| A member begins to report an unfinished database, or reports it for another database, operation or state (see [Unfinished databases](#unfinished-databases)) | `UnfinishedDatabaseWaiting`, or `UnfinishedDatabaseRefused` when no operation of the Instance Manager takes it up now; the message names the member, the database and the operation | Normal; `UnfinishedDatabaseRefused` is a Warning | `member_database_unfinished`, with `member`, `database`, `operationID` and `state` |
+| A member answers without reporting its database as unfinished (a member that gave no answer that counts keeps its last report and makes no Event) | none | | `member_database_unfinished_cleared` |
 | Any other Condition changes its status or reason | none | | `condition_changed` |
 | `Ready` becomes `True` | `ClusterReady` | Normal | `condition_changed` (`Ready`) |
 | A step could not write an object of the cluster (`Ready` takes that step's reason, see [Conditions](#conditions)) | the step's reason, such as `StatefulSetReconcileFailed`, once for a failure that stays the same | Warning | `condition_changed` (`Ready`) |
@@ -473,7 +473,11 @@ which it does not change. The Operator copies it into
 `status.instances[].unfinishedDatabase`, from the same answer that sets
 that member's `lastObservedTime`, and makes an Event when it appears or
 changes (see [Transitions](#transitions)). The report only reads the marker
-and the operation record: it removes, clears and starts nothing.
+and the operation record: it removes, clears, starts and writes nothing, so
+an operation record is not changed by a role answer either. The marker of an
+operation that runs now, such as a `createdb` or `restoredb` of a bootstrap
+or recovery in progress, is not reported: it is that operation's work, which
+`BootstrapReady`, `status.bootstrap` and `status.databases[]` report.
 
 ```bash
 kubectl get cubridcluster <name> -o jsonpath='{range .status.instances[*]}{.name}{"\t"}{.unfinishedDatabase}{"\n"}{end}'
@@ -482,12 +486,14 @@ kubectl get events --field-selector involvedObject.name=<name>,reason=Unfinished
 
 | `state` | When | What to do |
 |---|---|---|
-| `WaitingForOperation` | The marker names an operation of this member's Instance Manager that failed before it recorded restored data, that completed but left its marker, or that still runs (`message` names its state) | Nothing by hand. The next restore or HA bootstrap of the database on this member removes what a failed operation left, or clears the marker of a completed one, then goes on. A running operation clears the marker itself when it completes |
-| `Refused` | The marker was written by the entrypoint around its own `createdb`; it names no operation (empty or unreadable); it names an operation this Instance Manager does not know, or whose record cannot be read; or it names a restore that recorded its data as restored before it failed | A person decides; nothing removes the directory. For the entrypoint's `createdb` and a marker that names no operation, follow [the standalone runbook](#runbook-a-standalone-member-that-starts-only-the-instance-manager). For an unreadable record, follow [the record runbook](#runbook-an-operation-record-that-cannot-be-read). For restored data, a restore with the same request takes the data over and starts it; otherwise follow "Runbook for restored data left for a person" in ADR-0008. For an unknown operation, find where the directory came from before anything is removed |
+| `WaitingForOperation` | The marker names an operation of this member's Instance Manager that has ended: it failed before it recorded restored data, also by a restart of the manager, or it completed but left its marker | Nothing by hand while the HA bootstrap or recovery bootstrap still retries (`BootstrapReady` carries the step's failure reason with `Retrying`): its next restore or HA bootstrap of the database on this member removes what a failed operation left, or clears the marker of a completed one, then goes on. Once that bootstrap has ended `Failed` (the failure reason without `Retrying`, or `BootstrapRecoveryFailed`), the Operator starts no further attempt and nothing clears the directory: the database waits for a person (ADR-0010, ADR-0008). Read the reason in `BootstrapReady` and the member's log, and treat the directory as for `Refused` below before anything is removed |
+| `Refused` | The marker was written by the entrypoint around its own `createdb`; it names no operation (empty or unreadable); it names an operation this Instance Manager does not know; it names a restore that recorded its data as restored before it failed; or the marker, the database root or the operation record cannot be read now, so the database cannot be judged (`message` says `cannot be judged now` and the error) | Nothing removes the directory. For the entrypoint's `createdb` and a marker that names no operation, follow [the standalone runbook](#runbook-a-standalone-member-that-starts-only-the-instance-manager). For restored data, a restore with the same request takes the data over and starts it; otherwise follow "Runbook for restored data left for a person" in ADR-0008. For an unknown operation, find where the directory came from before anything is removed. For `cannot be judged now`, nothing is decided yet: fix what the error names (for an operation record, follow [the record runbook](#runbook-an-operation-record-that-cannot-be-read)); the next answer judges the database again |
 
-The field is absent for a database without the marker and for a member that
-gave no answer that counts, so a member that cannot be reached shows
-nothing here; its container log still says
+The field is absent for a database without the marker and for a marker of
+an operation that runs now. A member that gave no answer that counts keeps
+its last report, so a missed probe neither clears it nor makes its Event
+again; a member that was never reached shows nothing here, and its
+container log still says
 `database '<db>' is unfinished (<dir>/.im-operation): …`. A standalone
 member is observed when its cluster is reconciled, not periodically (#155),
 so its report can lag behind the marker until the next reconcile.

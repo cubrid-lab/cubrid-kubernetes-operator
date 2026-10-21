@@ -79,13 +79,14 @@ type UnfinishedState string
 
 const (
 	// UnfinishedWaiting: the marker names an operation of this manager that
-	// is still running, or whose leftover the next restore or HA bootstrap
-	// of the database clears or removes.
+	// has ended, and whose leftover the next restore or HA bootstrap of the
+	// database clears or removes.
 	UnfinishedWaiting UnfinishedState = "WaitingForOperation"
 	// UnfinishedRefused: no operation of this manager removes or creates over
-	// the directory. The marker is unreadable, was written by the image's
-	// entrypoint, names an operation this manager does not know or cannot
-	// read, or names a restore that recorded its data as restored.
+	// the directory now. The marker names no operation, was written by the
+	// image's entrypoint, names an operation this manager does not know, or
+	// names a restore that recorded its data as restored; or the marker or
+	// the record cannot be read now, so the database cannot be judged.
 	UnfinishedRefused UnfinishedState = "Refused"
 )
 
@@ -104,8 +105,10 @@ type UnfinishedDatabase struct {
 
 // unfinishedDatabase reports the member's database when it carries the
 // ownership marker, judged as reclaimIncomplete judges it. It only reads: it
-// removes, clears and starts nothing. It is nil for a database without the
-// marker and for a member that was not told its database.
+// removes, clears, starts and writes nothing, also no operation record
+// (OperationStore.Peek). It is nil for a database without the marker, for a
+// marker of an operation that runs now, and for a member that was not told
+// its database.
 func (s *Server) unfinishedDatabase() *UnfinishedDatabase {
 	database := s.standaloneDB
 	if database == "" {
@@ -114,18 +117,22 @@ func (s *Server) unfinishedDatabase() *UnfinishedDatabase {
 	if !databaseNamePattern.MatchString(database) {
 		return nil
 	}
+	u := &UnfinishedDatabase{Database: database, State: UnfinishedRefused}
 	root, err := os.OpenRoot(s.restoreRoots.Target)
-	if err != nil {
+	if os.IsNotExist(err) {
 		return nil
+	}
+	if err != nil {
+		u.Reason = fmt.Sprintf("the database root could not be opened, so the database cannot be judged now: %v", err)
+		return u
 	}
 	defer func() { _ = root.Close() }()
 	data, err := root.ReadFile(markerPath(database))
 	if os.IsNotExist(err) {
 		return nil
 	}
-	u := &UnfinishedDatabase{Database: database, State: UnfinishedRefused}
 	if err != nil {
-		u.Reason = fmt.Sprintf("the ownership marker could not be read: %v", err)
+		u.Reason = fmt.Sprintf("the ownership marker could not be read, so the database cannot be judged now: %v", err)
 		return u
 	}
 	id := strings.TrimSpace(string(data))
@@ -142,27 +149,30 @@ func (s *Server) unfinishedDatabase() *UnfinishedDatabase {
 		return u
 	}
 	u.Operation = id
-	op, err := s.store.Get(id)
+	// Peek, not Get: a read of the role writes no record.
+	op, err := s.store.Peek(id)
 	if errors.Is(err, ErrOperationNotFound) {
 		u.Reason = "the marker names operation " + id + ", which this manager does not know"
 		return u
 	}
 	if err != nil {
-		u.Reason = fmt.Sprintf("the record of operation %s could not be read: %v", id, err)
+		u.Reason = fmt.Sprintf("the record of operation %s could not be read, so the database cannot be judged now: %v", id, err)
 		return u
 	}
 	switch {
+	case !op.State.IsTerminal():
+		// The operation runs now and clears the marker when it completes;
+		// its own status reports it.
+		return nil
 	case op.State == OpCompleted:
 		u.State, u.Reason = UnfinishedWaiting,
 			"operation "+id+" completed and left its marker; the next restore or HA bootstrap of the database clears it"
 	case op.State == OpFailed && op.Restored != nil:
 		u.Reason = "operation " + id + " recorded its data as restored before it failed; " +
 			"only a restore of the same request takes it over, and no operation removes it"
-	case op.State == OpFailed:
+	default:
 		u.State, u.Reason = UnfinishedWaiting,
 			"operation "+id+" failed; the next restore or HA bootstrap of the database removes what it left"
-	default:
-		u.State, u.Reason = UnfinishedWaiting, "operation "+id+" is "+string(op.State)
 	}
 	return u
 }

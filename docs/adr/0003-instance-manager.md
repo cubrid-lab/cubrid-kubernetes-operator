@@ -548,8 +548,10 @@ neither created over nor started: the entrypoint runs only the manager, after
 installing an HA member's configuration, and leaves the marker in place.
 The manager reports that database in its role answer (`unfinished`), with
 whether its next operation takes it up (`WaitingForOperation`) or no
-operation of it does (`Refused`); reporting it changes nothing on disk, and
-the Operator shows it in `status.instances[].unfinishedDatabase` and an Event
+operation of it does now (`Refused`). Reporting it changes nothing on disk:
+the operation record is read without being written (`OperationStore.Peek`),
+and the marker of an operation that runs now is not reported. The
+Operator shows it in `status.instances[].unfinishedDatabase` and an Event
 (docs/observability.md, "Unfinished databases").
 
 A standalone member (`SERVER`, bootstrap `new`) creates its database in the

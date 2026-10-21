@@ -103,10 +103,45 @@ func TestInstanceStatuses_UnfinishedDatabase(t *testing.T) {
 	}
 }
 
+// A member that gave no answer that counts keeps its last report, so that a
+// missed probe neither clears it nor, when the member answers again, makes
+// its Event again. An answer without the marker clears it.
+func TestInstanceStatuses_UnfinishedDatabaseKeptWithoutAnAnswer(t *testing.T) {
+	report := unfinished(databasev1alpha1.UnfinishedRefused, "")
+	answer := func(u *databasev1alpha1.InstanceUnfinishedDatabase) map[string]RoleObservation {
+		return map[string]RoleObservation{c1: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow,
+			Unfinished: u}}
+	}
+	reported := instanceStatuses([]string{c1}, answer(report), testNow, nil)
+	for name, obs := range map[string]map[string]RoleObservation{
+		"no observation":   {},
+		"unreachable":      {c1: {Reachable: false, ObservedAt: testNow}},
+		"a stale answer":   {c1: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow.Add(-2 * roleObservationTTL)}},
+		"another member's": {c1: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow, Conflicting: true}},
+	} {
+		missed := instanceStatuses([]string{c1}, obs, testNow, reported)
+		if got := missed[0].UnfinishedDatabase; got == nil || *got != *report {
+			t.Errorf("%s: unfinishedDatabase = %+v, want the last report %+v kept", name, got, report)
+		}
+		before := &databasev1alpha1.CubridClusterStatus{Instances: reported}
+		again := &databasev1alpha1.CubridClusterStatus{Instances: instanceStatuses([]string{c1}, answer(report), testNow,
+			missed)}
+		if got := events(transitions(&databasev1alpha1.CubridClusterStatus{Instances: missed}, again)); strings.Contains(got, "unfinished") {
+			t.Errorf("%s: answering again after the miss made %q, want no unfinished-database transition", name, got)
+		}
+		if got := events(transitions(before, &databasev1alpha1.CubridClusterStatus{Instances: missed})); strings.Contains(got, "unfinished") {
+			t.Errorf("%s: the miss made %q, want no unfinished-database transition", name, got)
+		}
+	}
+	if got := instanceStatuses([]string{c1}, answer(nil), testNow, reported)[0].UnfinishedDatabase; got != nil {
+		t.Errorf("an answer without the marker: unfinishedDatabase = %+v, want none", got)
+	}
+}
+
 // A member that begins to report an unfinished database, or reports it in
 // another state or for another operation, makes an Event naming the member
-// and the database: a Warning when a person has to decide. One that stops
-// reporting it is logged only.
+// and the database: a Warning when no operation takes it up now. One that
+// answers without it is logged only.
 func TestTransitions_UnfinishedDatabase(t *testing.T) {
 	member := func(u *databasev1alpha1.InstanceUnfinishedDatabase) *databasev1alpha1.CubridClusterStatus {
 		return &databasev1alpha1.CubridClusterStatus{Instances: []databasev1alpha1.InstanceStatus{

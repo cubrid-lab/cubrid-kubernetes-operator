@@ -875,8 +875,9 @@ spec:
                         that the member's database carries the marker of a createdb or
                         restoredb that did not finish: the database is neither created over nor
                         started. It is taken from the answer that set lastObservedTime in the
-                        same observation, and is absent when the member gave no such answer.
-                        It does not change role.
+                        same observation; a member that gave no answer that counts keeps its
+                        last report. It is absent for the marker of an operation that runs now,
+                        which the bootstrap status reports. It does not change role.
                       properties:
                         database:
                           description: database is the name of the database.
