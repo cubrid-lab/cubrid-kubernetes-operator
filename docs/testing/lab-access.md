@@ -68,6 +68,9 @@ here.
    jump, pass it to both commands, the outer `ssh` and the one in
    `ProxyCommand`: each checks its own host's key.
 
+To run a command against the lab while holding it, so that no other campaign
+interleaves, use `make test-lab` ([lab-runs.md](lab-runs.md)).
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

@@ -133,6 +133,28 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+# A lab run is started by hand only, against the shared multi-VM lab; see
+# docs/testing/lab-runs.md. LAB_CONTEXT is the kubectl context to use and
+# LAB_TARGET the lab that context must lead to (its cubrid-lab/lab marker).
+# LAB_COMMAND runs while the run holds the lab's campaign Lease, with KUBECONFIG
+# pinned to LAB_CONTEXT. `make test-e2e` never uses the lab.
+LAB_CONTEXT ?=
+LAB_TARGET ?=
+LAB_DURATION ?= 2h
+LAB_COMMAND ?= kubectl get nodes
+# The whole of LAB_COMMAND, `&&`, `;` and `|` included, runs under the Lease,
+# as one `sh -c`. Every LAB_ value is passed as written ($(value ...),
+# single-quoted), so make expands no `$` in it: write `$KUBECONFIG`, since a
+# doubled `$$KUBECONFIG` reaches the shell as is, which reads it as its own
+# pid followed by `KUBECONFIG`.
+lab-quote = '$(subst ','\'',$(value $(1)))'
+
+.PHONY: test-lab
+test-lab: $(LOCALBIN) ## Run LAB_COMMAND against the lab LAB_TARGET through LAB_CONTEXT, holding the lab
+	go build -o "$(LOCALBIN)/lab" ./test/lab/cmd/lab
+	"$(LOCALBIN)/lab" -context $(call lab-quote,LAB_CONTEXT) -target $(call lab-quote,LAB_TARGET) \
+		-duration $(call lab-quote,LAB_DURATION) -- sh -c $(call lab-quote,LAB_COMMAND)
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
