@@ -50,7 +50,7 @@ func TestGenerateBrokerConf_OneAccessModeEach(t *testing.T) {
 		},
 	}
 	for mode, tc := range tests {
-		conf := generateBrokerConf(mode)
+		conf := generateBrokerConf(mode, DefaultBrokerMaxApplServers)
 		for _, want := range tc.want {
 			if !strings.Contains(conf, want) {
 				t.Errorf("%s broker conf missing %q\n%s", mode, want, conf)
@@ -64,23 +64,48 @@ func TestGenerateBrokerConf_OneAccessModeEach(t *testing.T) {
 	}
 }
 
-// Enough CAS that pooled clients do not force a CHANGE CLIENT, whose kept
-// sessions make DROP USER fail with -1188 (#303), and few enough that every
-// Broker at its maximum fits the DB server's max_clients.
+// MAX_NUM_APPL_SERVER keeps its default of 5 unless the manager is told
+// otherwise (--broker-max-appl-servers): a deployment whose pooled clients
+// hold every CAS raises it, because a CHANGE CLIENT makes DROP USER fail with
+// -1188 (#303).
 func TestGenerateBrokerConf_CASCapacity(t *testing.T) {
-	for _, mode := range []string{brokerModeRW, brokerModeRO} {
-		conf := generateBrokerConf(mode)
-		for _, want := range []string{"MIN_NUM_APPL_SERVER     =2\n", "MAX_NUM_APPL_SERVER     =20\n"} {
-			if !strings.Contains(conf, want) {
-				t.Errorf("%s broker conf missing %q\n%s", mode, strings.TrimSpace(want), conf)
+	tests := map[string]struct {
+		flag int // the reconciler's BrokerMaxApplServers; 0 is unset
+		want string
+	}{
+		"unset":       {0, "MAX_NUM_APPL_SERVER     =5\n"},
+		"flag raised": {20, "MAX_NUM_APPL_SERVER     =20\n"},
+	}
+	for name, tc := range tests {
+		r := &CubridClusterReconciler{BrokerMaxApplServers: tc.flag}
+		data := brokerConfigData(brokerTestCluster(), r.brokerMaxApplServers())
+		for _, mode := range []string{brokerModeRW, brokerModeRO} {
+			conf := data[brokerConfKey(mode)]
+			for _, want := range []string{"MIN_NUM_APPL_SERVER     =2\n", tc.want} {
+				if !strings.Contains(conf, want) {
+					t.Errorf("%s: %s broker conf missing %q\n%s", name, mode, strings.TrimSpace(want), conf)
+				}
 			}
 		}
 	}
-	if brokerMaxApplServers <= 5 {
-		t.Errorf("MAX_NUM_APPL_SERVER = %d, want more than the 5 that led to CHANGE CLIENT", brokerMaxApplServers)
+}
+
+// A different maximum is a different configuration, so the Brokers are
+// replaced to read it.
+func TestBrokerConfigHash_ChangesWithCASMaximum(t *testing.T) {
+	cluster := brokerTestCluster()
+	for _, mode := range []string{brokerModeRW, brokerModeRO} {
+		if brokerConfigHash(brokerConfigData(cluster, 5), mode) == brokerConfigHash(brokerConfigData(cluster, 20), mode) {
+			t.Errorf("%s config hash does not change with MAX_NUM_APPL_SERVER", mode)
+		}
 	}
-	if worst := 2 * brokerReplicas * brokerMaxApplServers; worst > serverMaxClients {
-		t.Errorf("RW and RO Brokers at MAX_NUM_APPL_SERVER open %d CAS, more than max_clients %d", worst, serverMaxClients)
+}
+
+func TestValidateBrokerMaxApplServers(t *testing.T) {
+	for n, ok := range map[int]bool{-1: false, 0: false, 1: false, 2: true, 5: true, 20: true} {
+		if err := ValidateBrokerMaxApplServers(n); (err == nil) != ok {
+			t.Errorf("ValidateBrokerMaxApplServers(%d) = %v, want ok=%v", n, err, ok)
+		}
 	}
 }
 

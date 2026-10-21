@@ -135,14 +135,17 @@ usable backend?" — distinct from "which DB pod is master?" (status) and
   `cubrid broker stop`, which removes the shared memory a killed Broker of
   the same Pod left behind; without that the restarted container could not
   start a Broker (POC-18).
-- Each Broker runs 2 to 20 CAS (`MIN_NUM_APPL_SERVER`, `MAX_NUM_APPL_SERVER`),
-  with CUBRID's default `KEEP_CONNECTION=AUTO`. With five, pooled clients held
-  every CAS, so the Broker took one over for a new client (`CHANGE CLIENT`).
-  CUBRID 11.4 keeps every later session of a CAS taken over that way, so a
+- Each Broker runs 2 to 5 CAS (`MIN_NUM_APPL_SERVER`, `MAX_NUM_APPL_SERVER`),
+  with CUBRID's default `KEEP_CONNECTION=AUTO`. The manager flag
+  `--broker-max-appl-servers` sets the maximum for every Broker; changing it
+  changes the configuration hash, so the Brokers are replaced. When pooled
+  clients hold every CAS, the Broker takes one over for a new client
+  (`CHANGE CLIENT`), and CUBRID 11.4 keeps every later session of that CAS: a
   user who disconnected stays active and `DROP USER` fails with -1188 until
-  another client logs in on that CAS (#303). Twenty per Broker keeps all four
-  Brokers at their maximum (80 CAS) within the DB server's default
-  `max_clients` of 100, even on one server. The limits are not configurable.
+  another client logs in on that CAS (#303). A deployment with such clients
+  raises the maximum. All four Brokers at their maximum must fit the DB
+  server's `max_clients` (100 by default, which the operator does not change),
+  so 25 is the most the default allows.
 - A Pod is ready when its Broker port accepts a connection. The operator sets
   `WriteEndpointReady` and `ReadEndpointReady` from the available Pods of each
   Deployment and `BrokerReady` when both have one; none of them is derived

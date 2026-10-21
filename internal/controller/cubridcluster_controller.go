@@ -121,6 +121,10 @@ type CubridClusterReconciler struct {
 	// DefaultImage is the DB Pod image when spec.image is not set; empty falls
 	// back to DefaultInstanceManagerImage.
 	DefaultImage string
+	// BrokerMaxApplServers is every Broker's MAX_NUM_APPL_SERVER; zero means
+	// DefaultBrokerMaxApplServers. Changing it replaces the Brokers, as any
+	// change of their configuration does.
+	BrokerMaxApplServers int
 	// Clock judges observation freshness; nil means time.Now.
 	Clock func() time.Time
 	// BackupTimeout and RestoreTimeout are how long the Instance Manager lets
