@@ -97,19 +97,19 @@ func (r *haRun) reportNotRun(reason string) {
 	}
 }
 
-func (r *haRun) kubectl(args ...string) (string, error) {
-	return utils.Run(exec.Command("kubectl", append([]string{"-n", r.namespace}, args...)...))
+func (r *haRun) kubectl(ctx context.Context, args ...string) (string, error) {
+	return utils.Run(exec.CommandContext(ctx, "kubectl", append([]string{"-n", r.namespace}, args...)...))
 }
 
 // client runs a command in the workload client Pod.
-func (r *haRun) client(script string) (string, error) {
-	return utils.Run(exec.Command("kubectl", "-n", r.clientNamespace, "exec", "workload-client", "--",
+func (r *haRun) client(ctx context.Context, script string) (string, error) {
+	return utils.Run(exec.CommandContext(ctx, "kubectl", "-n", r.clientNamespace, "exec", "workload-client", "--",
 		"sh", "-c", script))
 }
 
 // runWorkload runs client operations and adds their history to the run's.
-func (r *haRun) runWorkload(settings string) (workload.History, error) {
-	out, err := r.client(settings + " workload run")
+func (r *haRun) runWorkload(ctx context.Context, settings string) (workload.History, error) {
+	out, err := r.client(ctx, settings+" workload run")
 	if err != nil {
 		return workload.History{}, err
 	}
@@ -137,10 +137,10 @@ func (r *haRun) historyText() string {
 
 // master asks CUBRID on every member for its role and returns the one master
 // and the slaves. Any other distribution of roles is an error.
-func (r *haRun) master() (string, []string, error) {
+func (r *haRun) master(ctx context.Context) (string, []string, error) {
 	var masters, slaves []string
 	for _, pod := range r.members {
-		out, err := r.kubectl("exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
+		out, err := r.kubectl(ctx, "exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
 		if err != nil {
 			return "", nil, err
 		}
@@ -165,8 +165,8 @@ var quotedValue = regexp.MustCompile(`^\s*'(.*)'\s*$`)
 
 // memberValues runs a query that returns one string column on a member, with
 // csql inside its Pod, and returns the values.
-func (r *haRun) memberValues(pod, query string) ([]string, error) {
-	out, err := runSQL(csqlInPod(r.namespace, pod, r.database), query)
+func (r *haRun) memberValues(ctx context.Context, pod, query string) ([]string, error) {
+	out, err := runSQL(csqlInPod(ctx, r.namespace, pod, r.database), query)
 	if err != nil {
 		return nil, err
 	}
@@ -189,8 +189,8 @@ func (r *haRun) memberValues(pod, query string) ([]string, error) {
 }
 
 // memberRows reads the ledger rows a member holds, not through a Broker.
-func (r *haRun) memberRows(pod string) ([]workload.Row, error) {
-	values, err := r.memberValues(pod, `SELECT '{"opId":"' || op_id || '","client":"' || client_id ||`+
+func (r *haRun) memberRows(ctx context.Context, pod string) ([]workload.Row, error) {
+	values, err := r.memberValues(ctx, pod, `SELECT '{"opId":"' || op_id || '","client":"' || client_id ||`+
 		` '","seq":' || CAST(seq AS VARCHAR) || ',"amount":' || CAST(amount AS VARCHAR) ||`+
 		` ',"note":"' || note || '"}' AS v FROM ledger ORDER BY client_id, seq;`)
 	if err != nil {
@@ -200,26 +200,26 @@ func (r *haRun) memberRows(pod string) ([]workload.Row, error) {
 }
 
 // catalog lists the columns of the workload's tables on a member.
-func (r *haRun) catalog(pod string) (string, error) {
-	values, err := r.memberValues(pod, `SELECT class_name || '.' || attr_name || ':' || data_type AS v`+
+func (r *haRun) catalog(ctx context.Context, pod string) (string, error) {
+	values, err := r.memberValues(ctx, pod, `SELECT class_name || '.' || attr_name || ':' || data_type AS v`+
 		` FROM db_attribute WHERE class_name IN ('ledger', 'marker', 's02_added', 's02_marker') ORDER BY 1;`)
 	return strings.Join(values, "\n"), err
 }
 
 // dataCheck applies the data rules to every member and to both Services.
-func (r *haRun) dataCheck() (workload.Report, error) {
+func (r *haRun) dataCheck(ctx context.Context) (workload.Report, error) {
 	history, err := workload.ReadHistory(strings.NewReader(r.historyText()))
 	if err != nil {
 		return workload.Report{}, err
 	}
 	rows := map[string][]workload.Row{}
 	for _, pod := range r.members {
-		if rows[pod], err = r.memberRows(pod); err != nil {
+		if rows[pod], err = r.memberRows(ctx, pod); err != nil {
 			return workload.Report{}, fmt.Errorf("%s: %w", pod, err)
 		}
 	}
 	for name, dump := range map[string]string{"rw": "workload dump", "ro": `JDBC_URL="$RO_JDBC_URL" workload dump`} {
-		out, err := r.client(dump)
+		out, err := r.client(ctx, dump)
 		if err != nil {
 			return workload.Report{}, fmt.Errorf("-%s: %w", name, err)
 		}
@@ -231,8 +231,8 @@ func (r *haRun) dataCheck() (workload.Report, error) {
 }
 
 // failCount is the fail count of a slave's applier for the master's log.
-func (r *haRun) failCount(slave, master string) (int, error) {
-	out, err := r.kubectl("exec", slave, "--", "bash", "-c",
+func (r *haRun) failCount(ctx context.Context, slave, master string) (int, error) {
+	out, err := r.kubectl(ctx, "exec", slave, "--", "bash", "-c",
 		`PATH="${CUBRID}/bin:${PATH}" cubrid applyinfo -L "${CUBRID_DATABASES}/$0_$1" -r "$1" -a "$0"`,
 		r.database, master)
 	if err != nil {
@@ -248,8 +248,8 @@ func (r *haRun) failCount(slave, master string) (int, error) {
 // formationTime is the time from the creation of the CubridCluster until the
 // last of the conditions of the starting state became True, as the API server
 // recorded both.
-func (r *haRun) formationTime() (time.Duration, error) {
-	out, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "json")
+func (r *haRun) formationTime(ctx context.Context) (time.Duration, error) {
+	out, err := r.kubectl(ctx, "get", "cubridcluster", r.cluster, "-o", "json")
 	if err != nil {
 		return 0, err
 	}
@@ -316,16 +316,18 @@ func s01AndS02Steps(r *haRun) {
 		defer func() { recordScenario(result) }()
 
 		By("asking CUBRID for the roles and comparing them with the operator's status")
-		master, _, err := r.master()
+		master, _, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
-		primary, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
+		primary, err := r.kubectl(context.Background(),
+			"get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(primary).To(Equal(master), "status.currentPrimary is not the member CUBRID reports as master")
-		formation, err := r.formationTime()
+		formation, err := r.formationTime(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 
 		By("attempting a write through the read-only Service")
-		refused, err := r.runWorkload(`JDBC_URL="$RO_JDBC_URL" ENDPOINT=ro CLIENT_ID=ro OPS=1 ROLLBACK_EVERY=0`)
+		refused, err := r.runWorkload(context.Background(),
+			`JDBC_URL="$RO_JDBC_URL" ENDPOINT=ro CLIENT_ID=ro OPS=1 ROLLBACK_EVERY=0`)
 		Expect(err).NotTo(HaveOccurred())
 		// Refused by the read-only Broker itself; a Broker that could not be
 		// reached is not a refusal.
@@ -335,7 +337,7 @@ func s01AndS02Steps(r *haRun) {
 		var report workload.Report
 		Eventually(func(g Gomega) {
 			var err error
-			report, err = r.dataCheck()
+			report, err = r.dataCheck(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 		}, 2*time.Minute, 3*time.Second).Should(Succeed())
@@ -360,11 +362,11 @@ func s01AndS02Steps(r *haRun) {
 		// Recorded also when a check below fails.
 		defer func() { recordScenario(result) }()
 
-		master, slaves, err := r.master()
+		master, slaves, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 
 		By("changing the schema on the master")
-		_, err = runSQL(csqlInPod(r.namespace, master, r.database),
+		_, err = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database),
 			"ALTER TABLE ledger ADD COLUMN extra VARCHAR(16);"+
 				" CREATE TABLE s02_added (id INT PRIMARY KEY, v VARCHAR(16));"+
 				" INSERT INTO s02_added VALUES (1, 'added');"+
@@ -372,7 +374,7 @@ func s01AndS02Steps(r *haRun) {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("running inserts and rolled-back transactions through the read-write Service")
-		run, err := r.runWorkload("CLIENT_ID=c2 OPS=40")
+		run, err := r.runWorkload(context.Background(), "CLIENT_ID=c2 OPS=40")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(run.Counts[workload.Acknowledged]).To(Equal(40), "with no fault every operation is acknowledged")
 
@@ -382,23 +384,23 @@ func s01AndS02Steps(r *haRun) {
 		// is an upper bound; the full check below is not part of it.
 		By("committing a marker row on the master and timing until every slave returns it with every row")
 		ledgerRows := "SELECT CAST(COUNT(*) AS VARCHAR(20)) AS n FROM ledger;"
-		wantRows, err := r.memberValues(master, ledgerRows)
+		wantRows, err := r.memberValues(context.Background(), master, ledgerRows)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(wantRows).To(HaveLen(1), "the ledger row count on the master")
 		marker := fmt.Sprintf("marker-%d", time.Now().UnixNano())
 		committed := time.Now()
-		_, err = runSQL(csqlInPod(r.namespace, master, r.database),
+		_, err = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database),
 			"INSERT INTO s02_marker VALUES (1, '"+marker+"'); COMMIT;")
 		Expect(err).NotTo(HaveOccurred())
 		visibleCtx, cancelVisible := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancelVisible()
 		seen, err := workload.WaitVisible(visibleCtx, committed, slaves, 200*time.Millisecond,
-			func(_ context.Context, slave string) (bool, error) {
-				values, err := r.memberValues(slave, "SELECT v FROM s02_marker WHERE id = 1;")
+			func(vctx context.Context, slave string) (bool, error) {
+				values, err := r.memberValues(vctx, slave, "SELECT v FROM s02_marker WHERE id = 1;")
 				if err != nil || !slices.Equal(values, []string{marker}) {
 					return false, err
 				}
-				rows, err := r.memberValues(slave, ledgerRows)
+				rows, err := r.memberValues(vctx, slave, ledgerRows)
 				return slices.Equal(rows, wantRows), err
 			})
 		Expect(err).NotTo(HaveOccurred())
@@ -408,18 +410,18 @@ func s01AndS02Steps(r *haRun) {
 		var report workload.Report
 		converged := func(g Gomega) {
 			var err error
-			report, err = r.dataCheck()
+			report, err = r.dataCheck(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
-			want, err := r.catalog(master)
+			want, err := r.catalog(context.Background(), master)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(want).To(ContainSubstring("ledger.extra:"))
 			g.Expect(want).To(ContainSubstring("s02_added.v:"))
 			for _, slave := range slaves {
-				got, err := r.catalog(slave)
+				got, err := r.catalog(context.Background(), slave)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(got).To(Equal(want), "catalog on %s", slave)
-				added, err := r.memberValues(slave, "SELECT v FROM s02_added;")
+				added, err := r.memberValues(context.Background(), slave, "SELECT v FROM s02_added;")
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(added).To(Equal([]string{"added"}), "the new table's row on %s", slave)
 			}
@@ -430,23 +432,23 @@ func s01AndS02Steps(r *haRun) {
 
 		By("reading the fail count of each slave's applier")
 		for _, slave := range slaves {
-			count, err := r.failCount(slave, master)
+			count, err := r.failCount(context.Background(), slave, master)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(count).To(BeZero(), "fail count of the applier on %s", slave)
 		}
 
 		By("checking what the operator reports about each slave's applier")
 		Eventually(func(g Gomega) {
-			healthy, err := r.kubectl("get", "cubridcluster", r.cluster,
+			healthy, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster,
 				"-o", `jsonpath={.status.conditions[?(@.type=="ReplicationHealthy")].status}`)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(healthy).To(Equal("True"), "the ReplicationHealthy condition")
 			for _, slave := range slaves {
-				source, err := r.kubectl("get", "cubridcluster", r.cluster,
+				source, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster,
 					"-o", `jsonpath={.status.instances[?(@.name=="`+slave+`")].replication.source}`)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(source).To(Equal(master), "the log %s applies, as the operator's status reports it", slave)
-				stalled, err := r.kubectl("get", "cubridcluster", r.cluster,
+				stalled, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster,
 					"-o", `jsonpath={.status.instances[?(@.name=="`+slave+`")].replication.stalledSince}`)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(stalled).To(BeEmpty(), "%s is reported as stalled", slave)
@@ -455,23 +457,23 @@ func s01AndS02Steps(r *haRun) {
 
 		By("replacing a slave Pod and checking that it holds everything again")
 		replaced := slaves[0]
-		uid, err := r.kubectl("get", "pod", replaced, "-o", "jsonpath={.metadata.uid}")
+		uid, err := r.kubectl(context.Background(), "get", "pod", replaced, "-o", "jsonpath={.metadata.uid}")
 		Expect(err).NotTo(HaveOccurred())
 		outcome := r.runFault(faults.Scenario{
 			Fault:  podDeletion{namespace: r.namespace, pod: replaced, uid: uid},
 			Limits: podDeletionLimits,
-			Before: func(context.Context) error { _, _, err := r.master(); return err },
+			Before: func(ctx context.Context) error { _, _, err := r.master(ctx); return err },
 			// The same master, the replaced member a standby slave again, and
 			// every data rule holding on it.
-			Check: func(context.Context) (bool, error) {
-				now, _, err := r.master()
+			Check: func(ctx context.Context) (bool, error) {
+				now, _, err := r.master(ctx)
 				if err != nil {
 					return false, nil
 				}
 				if now != master {
 					return false, fmt.Errorf("the master changed from %s to %s when a slave was replaced", master, now)
 				}
-				check, err := r.dataCheck()
+				check, err := r.dataCheck(ctx)
 				return err == nil && check.OK, nil
 			},
 		})
@@ -479,11 +481,11 @@ func s01AndS02Steps(r *haRun) {
 		Expect(outcome.Result).To(Equal(evidence.Pass), "replacing %s: %s", replaced, outcome.Reason)
 
 		By("writing again and checking the replaced slave with the others")
-		run, err = r.runWorkload("CLIENT_ID=c3 OPS=20")
+		run, err = r.runWorkload(context.Background(), "CLIENT_ID=c3 OPS=20")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(run.Counts[workload.Acknowledged]).To(Equal(20))
 		Eventually(converged, 2*time.Minute, time.Second).Should(Succeed())
-		count, err := r.failCount(replaced, master)
+		count, err := r.failCount(context.Background(), replaced, master)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero(), "fail count of the applier on the replaced slave %s", replaced)
 

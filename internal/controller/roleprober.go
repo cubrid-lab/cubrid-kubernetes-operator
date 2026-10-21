@@ -74,6 +74,10 @@ type RoleObservation struct {
 	// RequestID is the ID the role query was sent with; empty when none was
 	// sent.
 	RequestID string
+	// Unfinished is the member's database as the Instance Manager reports it
+	// when the database carries the marker of an unfinished createdb or
+	// restoredb; nil when it reports none. It is independent of Role.
+	Unfinished *databasev1alpha1.InstanceUnfinishedDatabase
 }
 
 // RoleProber polls one instance's Instance Manager /v1/role endpoint.
@@ -187,7 +191,7 @@ func (p *HTTPRoleProber) now() time.Time {
 func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObservation {
 	o := RoleObservation{
 		Reachable: true, Role: databasev1alpha1.CubridRole(st.Role), ObservedAt: at,
-		EngineVersion: st.EngineVersion,
+		EngineVersion: st.EngineVersion, Unfinished: unfinishedFromStatus(st.Unfinished),
 	}
 	if st.Role != instancemanager.RoleMaster && st.Role != instancemanager.RoleSlave {
 		if st.Role == instancemanager.RoleUnknown || st.Role == "" {
@@ -234,4 +238,21 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 		o.Reason = "a master whose server is not registered_and_active"
 	}
 	return o
+}
+
+// unfinishedFromStatus turns the Instance Manager's report of an unfinished
+// database into the status form. A state other than WaitingForOperation is
+// taken as Refused: nothing is promised to take that database up.
+func unfinishedFromStatus(u *instancemanager.UnfinishedDatabase) *databasev1alpha1.InstanceUnfinishedDatabase {
+	if u == nil {
+		return nil
+	}
+	state := databasev1alpha1.UnfinishedRefused
+	if u.State == instancemanager.UnfinishedWaiting {
+		state = databasev1alpha1.UnfinishedWaitingForOperation
+	}
+	return &databasev1alpha1.InstanceUnfinishedDatabase{
+		Database: cleanMessage(u.Database), Operation: cleanMessage(u.Operation),
+		State: state, Message: cleanMessage(u.Reason),
+	}
 }

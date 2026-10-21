@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"os/exec"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
@@ -32,9 +33,9 @@ import (
 type sqlRunner = sqlcheck.Runner
 
 // csqlInPod runs csql inside a DB Pod, as a client on that host would.
-func csqlInPod(namespace, pod, database string) sqlRunner {
+func csqlInPod(ctx context.Context, namespace, pod, database string) sqlRunner {
 	return func(sql string) (string, error) {
-		return utils.Run(exec.Command("kubectl", "-n", namespace, "exec", pod, "--",
+		return utils.Run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "exec", pod, "--",
 			"bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`, database+"@localhost", sql))
 	}
 }
