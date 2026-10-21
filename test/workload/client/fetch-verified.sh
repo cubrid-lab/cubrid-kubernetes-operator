@@ -16,7 +16,7 @@ backoff=${FETCH_BACKOFF:-2}
 
 i=1
 while :; do
-	if curl -fsSL -o "$out.part" "$url"; then
+	if curl -fsSL --connect-timeout 20 --max-time 300 -o "$out.part" "$url"; then
 		got=$(sha256sum "$out.part" | cut -d ' ' -f 1)
 		if [ "$got" = "$want" ]; then
 			mv "$out.part" "$out"

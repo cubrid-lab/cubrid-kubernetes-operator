@@ -40,6 +40,11 @@ func fetchVerified(t *testing.T, want []byte, attempts string,
 			t.Skip(tool + " is not installed")
 		}
 	}
+	// Reading the script makes it an input of the test for Go's test cache.
+	script := filepath.Join("client", "fetch-verified.sh")
+	if _, err := os.ReadFile(script); err != nil {
+		t.Fatal(err)
+	}
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		serve(requests.Add(1), w)
@@ -47,13 +52,16 @@ func fetchVerified(t *testing.T, want []byte, attempts string,
 	defer srv.Close()
 	sum := sha256.Sum256(want)
 	out := filepath.Join(t.TempDir(), "driver.jar")
-	cmd := exec.Command("sh", filepath.Join("client", "fetch-verified.sh"), srv.URL+"/driver.jar",
+	cmd := exec.Command("sh", script, srv.URL+"/driver.jar",
 		hex.EncodeToString(sum[:]), out, attempts)
 	cmd.Env = append(os.Environ(), "FETCH_BACKOFF=0")
 	var errOut strings.Builder
 	cmd.Stderr = &errOut
 	err = cmd.Run()
 	got, _ = os.ReadFile(out)
+	if _, statErr := os.Stat(out + ".part"); !os.IsNotExist(statErr) {
+		t.Errorf("the unverified download %s.part was left behind (stat: %v)", out, statErr)
+	}
 	return errOut.String(), got, err
 }
 
