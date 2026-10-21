@@ -263,7 +263,7 @@ func holder() string {
 		name = u.Username
 	}
 	host, _ := os.Hostname()
-	return fmt.Sprintf("%s@%s/%d/%s", name, host, os.Getpid(), time.Now().UTC().Format(time.RFC3339))
+	return lab.Holder(name, host, os.Getpid(), time.Now())
 }
 
 func kubectl(ctx context.Context, stdin string, args ...string) (string, error) {

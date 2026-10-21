@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -42,6 +43,16 @@ const (
 	// LeaseName is the Lease a campaign holds while it runs.
 	LeaseName = "campaign"
 )
+
+// Holder is the holderIdentity this entry point writes in the Lease: who
+// started the run, on which host, its process, and when.
+func Holder(user, host string, pid int, at time.Time) string {
+	return fmt.Sprintf("%s@%s/%d/%s", user, host, pid, at.UTC().Format(time.RFC3339))
+}
+
+// ownHolder matches the holders Holder writes. Other tools, such as the
+// canonical campaign launcher, take the same Lease with their own holders.
+var ownHolder = regexp.MustCompile(`^[^@/\s]+@[^/\s]*/[0-9]+/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`)
 
 // Kubectl runs kubectl with args, passing stdin when it is not empty, and
 // returns its standard output. An error carries what kubectl wrote to its
@@ -169,6 +180,7 @@ type leaseObject struct {
 		Holder   string    `json:"holderIdentity"`
 		Seconds  int       `json:"leaseDurationSeconds"`
 		Acquired time.Time `json:"acquireTime"`
+		Renewed  time.Time `json:"renewTime"`
 	} `json:"spec"`
 }
 
@@ -198,11 +210,23 @@ func (t Target) held(ctx context.Context, k Kubectl, holder string, now time.Tim
 	return t.describe(l, now)
 }
 
-// describe says who holds the lab, and how to remove a Lease past its end.
+// describe says who holds the lab and, for a Lease of this entry point past
+// its end, how to remove it. A Lease ends its duration after its last renewal
+// (its acquisition when it has none). Another tool's Lease is never advised
+// for removal: that tool may renew it, or have its own recovery, and only it
+// can tell whether its campaign still runs.
 func (t Target) describe(l leaseObject, now time.Time) error {
 	msg := fmt.Sprintf("the lab %q is held by %q since %s", t.Name, l.Spec.Holder,
 		l.Spec.Acquired.UTC().Format(time.RFC3339))
-	if end := l.Spec.Acquired.Add(time.Duration(l.Spec.Seconds) * time.Second); now.After(end) {
+	if !ownHolder.MatchString(l.Spec.Holder) {
+		return errors.New(msg + "; that Lease was not taken by this entry point, so ask its holder, " +
+			"or follow the recovery of the tool that took it, before touching it")
+	}
+	last := l.Spec.Renewed
+	if last.IsZero() {
+		last = l.Spec.Acquired
+	}
+	if end := last.Add(time.Duration(l.Spec.Seconds) * time.Second); now.After(end) {
 		msg += fmt.Sprintf("; it was due to end at %s, so that run may have been killed. "+
 			"Once it is certain no campaign runs, remove the Lease: kubectl --context %s -n %s delete lease %s",
 			end.UTC().Format(time.RFC3339), t.Context, Namespace, LeaseName)

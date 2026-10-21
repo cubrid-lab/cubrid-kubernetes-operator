@@ -225,13 +225,16 @@ func TestASecondCampaignIsRefused(t *testing.T) {
 	}
 }
 
-// A Lease past its duration is reported, with the way to remove it, but not
-// taken over.
+// killedRun is a holder in the form this entry point writes.
+const killedRun = "alice@ws/4242/2026-10-15T06:00:00Z"
+
+// A Lease of this entry point past its duration is reported, with the way to
+// remove it, but not taken over.
 func TestAnExpiredLeaseIsNotTakenOver(t *testing.T) {
 	ctx := context.Background()
 	f := &fakeCluster{context: labCtx, marker: labA}
 	target := Target{Context: labCtx, Name: labA}
-	if _, err := target.Acquire(ctx, f.kubectl, "killed-run", time.Hour, t0); err != nil {
+	if _, err := target.Acquire(ctx, f.kubectl, killedRun, time.Hour, t0); err != nil {
 		t.Fatal(err)
 	}
 	_, err := target.Acquire(ctx, f.kubectl, "next-run", time.Hour, t0.Add(2*time.Hour))
@@ -242,8 +245,63 @@ func TestAnExpiredLeaseIsNotTakenOver(t *testing.T) {
 		!strings.Contains(err.Error(), "kubectl --context lab-ctx -n cubrid-lab delete lease campaign") {
 		t.Fatalf("the refusal should explain the expired Lease and how to remove it: %v", err)
 	}
-	if got := f.lease["holderIdentity"]; got != "killed-run" {
+	if got := f.lease["holderIdentity"]; got != killedRun {
 		t.Fatalf("the Lease holder changed to %v", got)
+	}
+}
+
+// Another tool's Lease, such as the canonical launcher's 60-second Lease that
+// is renewed every 10 seconds, is live as long as it is renewed, whenever it
+// was acquired; and since only the tool that holds it knows whether its
+// campaign still runs, the refusal never advises deleting it.
+func TestAForeignLeaseIsNeverAdvisedForDeletion(t *testing.T) {
+	ctx := context.Background()
+	target := Target{Context: labCtx, Name: labA}
+	acquired := t0
+	for _, tc := range []struct {
+		name    string
+		renewed time.Time
+		now     time.Time
+	}{
+		{"renewed and live", t0.Add(2 * time.Hour), t0.Add(2*time.Hour + 30*time.Second)},
+		{"no longer renewed", t0.Add(time.Hour), t0.Add(3 * time.Hour)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeCluster{context: labCtx, marker: labA}
+			f.store(map[string]any{
+				"holderIdentity":       "operator-campaign-lease/9f2c1e",
+				"leaseDurationSeconds": 60,
+				"acquireTime":          acquired,
+				"renewTime":            tc.renewed,
+			})
+			_, err := target.Acquire(ctx, f.kubectl, "mine", time.Hour, tc.now)
+			if err == nil {
+				t.Fatal("a foreign Lease was taken over")
+			}
+			if !strings.Contains(err.Error(), `held by "operator-campaign-lease/9f2c1e"`) {
+				t.Fatalf("the refusal should name the holder: %v", err)
+			}
+			if strings.Contains(err.Error(), "delete lease") || strings.Contains(err.Error(), "may have been killed") {
+				t.Fatalf("the refusal advises removing a Lease this entry point did not create: %v", err)
+			}
+		})
+	}
+}
+
+// The end of a Lease is counted from its last renewal: a Lease of this entry
+// point's form that its holder renewed is not past its end.
+func TestARenewedLeaseIsNotPastItsEnd(t *testing.T) {
+	f := &fakeCluster{context: labCtx, marker: labA}
+	f.store(map[string]any{
+		"holderIdentity":       killedRun,
+		"leaseDurationSeconds": 3600,
+		"acquireTime":          t0,
+		"renewTime":            t0.Add(3 * time.Hour),
+	})
+	_, err := (Target{Context: labCtx, Name: labA}).Acquire(context.Background(), f.kubectl, "mine", time.Hour,
+		t0.Add(3*time.Hour+time.Minute))
+	if err == nil || strings.Contains(err.Error(), "delete lease") {
+		t.Fatalf("Acquire() = %v, want a refusal without removal advice", err)
 	}
 }
 
@@ -373,5 +431,15 @@ func TestAcquireRejectsADurationUnderASecond(t *testing.T) {
 	}
 	if f.lease != nil {
 		t.Fatal("a Lease exists after the refusal")
+	}
+}
+
+// The holders this entry point writes are the ones it recognizes as its own.
+func TestHolderIsRecognizedAsOwn(t *testing.T) {
+	if got := Holder("alice", "ws", 4242, t0); got != killedRun {
+		t.Fatalf("Holder() = %q, want %q", got, killedRun)
+	}
+	if h := Holder("ci-runner", "lab-host.example", 1, time.Now()); !ownHolder.MatchString(h) {
+		t.Fatalf("the holder %q is not recognized as this entry point's", h)
 	}
 }
