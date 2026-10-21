@@ -39,11 +39,13 @@ func hangingKubectl(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+const pod0 = "pod-0"
+
 // TestCallbackHelpersEndWithTheStepContext checks that every helper a Before or
 // Check callback calls ends its command when the context of the step ends. A
 // kubectl that stays would outlive the step the flow cancelled.
 func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
-	r := newHARun("ns", "client-ns", "cluster", "db", []string{"pod-0", "pod-1", "pod-2"})
+	r := newHARun("ns", "client-ns", "cluster", "db", []string{pod0, "pod-1", "pod-2"})
 	helpers := map[string]func(ctx context.Context){
 		"kubectl":       func(ctx context.Context) { _, _ = r.kubectl(ctx, "get", "pods") },
 		"client":        func(ctx context.Context) { _, _ = r.client(ctx, "true") },
@@ -53,20 +55,20 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 		"formationTime": func(ctx context.Context) { _, _ = r.formationTime(ctx) },
 		"activeMasters": func(ctx context.Context) { _ = r.activeMasters(ctx) },
 		"activeMasterAmong": func(ctx context.Context) {
-			_ = r.activeMasterAmong(ctx, []string{"pod-0"})
+			_ = r.activeMasterAmong(ctx, []string{pod0})
 		},
 		"lastAnswerAcknowledged": func(ctx context.Context) { _ = r.lastAnswerAcknowledged(ctx, "c") },
 		"memberValues": func(ctx context.Context) {
-			_, _ = r.memberValues(ctx, "pod-0", "SELECT 1;")
+			_, _ = r.memberValues(ctx, pod0, "SELECT 1;")
 		},
-		"identities": func(ctx context.Context) { _ = r.identities(ctx, []string{"pod-0"}) },
+		"identities": func(ctx context.Context) { _ = r.identities(ctx, []string{pod0}) },
 		"roleLog.sample": func(ctx context.Context) {
 			var roles roleLog
 			roles.sample(ctx, r)
 		},
 		"operatorAvailable": func(ctx context.Context) { _ = operatorAvailable(ctx) },
 		"readS00Row": func(ctx context.Context) {
-			_ = readS00Row(csqlInPod(ctx, "ns", "pod-0", "db"), "m")
+			_ = readS00Row(csqlInPod(ctx, "ns", pod0, "db"), "m")
 		},
 	}
 	hangingKubectl(t)

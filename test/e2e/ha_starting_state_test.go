@@ -105,6 +105,16 @@ func checkBreakSettings() error {
 	return fmt.Errorf("%s=%q is not the label of an HA step after S01", breakStepEnv, step)
 }
 
+// sleepUnlessDone waits for d and returns ctx.Err() if ctx ends first.
+func sleepUnlessDone(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
 // memberIdentities is the UID and the restart count of each member's Pod.
 func (r *haRun) memberIdentities(ctx context.Context) string {
 	byMember := r.identities(ctx, r.members)
@@ -125,6 +135,8 @@ func (r *haRun) restoreStartingState(ctx context.Context) error {
 	running := slices.Sorted(maps.Keys(r.running))
 	r.mu.Unlock()
 	for _, id := range running {
+		// collectClient takes no context on purpose: stopping a client and
+		// reading its history must finish even when ctx has ended.
 		text, err := r.collectClient(id)
 		if err != nil {
 			return fmt.Errorf("collecting the history of client %s: %w", id, err)
@@ -235,12 +247,15 @@ func (r *haRun) verifyStartingState(ctx context.Context) error {
 		return unmet("rw", faults.UnmetData, "the marker write was not acknowledged: %v", h.Counts)
 	}
 	var report workload.Report
-	for deadline := time.Now().Add(time.Minute); ; time.Sleep(3 * time.Second) {
+	for deadline := time.Now().Add(time.Minute); ; {
 		if report, err = r.dataCheck(ctx); err == nil && report.OK {
 			return nil
 		}
 		if time.Now().After(deadline) {
 			break
+		}
+		if err := sleepUnlessDone(ctx, 3*time.Second); err != nil {
+			return err
 		}
 	}
 	if err != nil {
