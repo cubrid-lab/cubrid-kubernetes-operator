@@ -143,15 +143,17 @@ LAB_TARGET ?=
 LAB_DURATION ?= 2h
 LAB_COMMAND ?= kubectl get nodes
 # The whole of LAB_COMMAND, `&&`, `;` and `|` included, runs under the Lease,
-# as one `sh -c`. It is passed as written ($(value ...), single-quoted), so
-# make does not expand its `$`: `$$KUBECONFIG` and `$KUBECONFIG` are both left
-# to the shell.
-LAB_COMMAND_QUOTED = '$(subst ','\'',$(value LAB_COMMAND))'
+# as one `sh -c`. Every LAB_ value is passed as written ($(value ...),
+# single-quoted), so make expands no `$` in it: write `$KUBECONFIG`, since a
+# doubled `$$KUBECONFIG` reaches the shell as is, which reads it as its own
+# pid followed by `KUBECONFIG`.
+lab-quote = '$(subst ','\'',$(value $(1)))'
 
 .PHONY: test-lab
 test-lab: $(LOCALBIN) ## Run LAB_COMMAND against the lab LAB_TARGET through LAB_CONTEXT, holding the lab
 	go build -o "$(LOCALBIN)/lab" ./test/lab/cmd/lab
-	"$(LOCALBIN)/lab" -context '$(LAB_CONTEXT)' -target '$(LAB_TARGET)' -duration '$(LAB_DURATION)' -- sh -c $(LAB_COMMAND_QUOTED)
+	"$(LOCALBIN)/lab" -context $(call lab-quote,LAB_CONTEXT) -target $(call lab-quote,LAB_TARGET) \
+		-duration $(call lab-quote,LAB_DURATION) -- sh -c $(call lab-quote,LAB_COMMAND)
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
