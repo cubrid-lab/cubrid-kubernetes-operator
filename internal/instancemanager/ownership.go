@@ -43,12 +43,18 @@ const ownershipMarker = ".im-operation"
 func markerPath(database string) string { return filepath.Join(database, ownershipMarker) }
 
 // markOwned records opID as the operation creating <targetDir>/<database>.
-// An empty opID (a caller without a durable operation) writes nothing.
+// An empty opID (a caller without a durable operation) writes nothing. The
+// marker is replaced whole and made durable together with the database
+// directory that holds it: a crash leaves the earlier owner or the new one,
+// never an unreadable marker or a directory without one.
 func markOwned(root *os.Root, database, opID string) error {
 	if opID == "" {
 		return nil
 	}
-	if err := root.WriteFile(markerPath(database), []byte(opID+"\n"), 0o600); err != nil {
+	if err := replaceFile(root, markerPath(database), []byte(opID+"\n")); err != nil {
+		return fmt.Errorf("mark %s as owned by %s: %w", database, opID, err)
+	}
+	if err := syncDir(root, filepath.Dir(database)); err != nil {
 		return fmt.Errorf("mark %s as owned by %s: %w", database, opID, err)
 	}
 	return nil
@@ -61,7 +67,7 @@ func clearOwned(targetDir, database string) error {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	if err := root.Remove(markerPath(database)); err != nil && !os.IsNotExist(err) {
+	if err := removeFile(root, markerPath(database)); err != nil {
 		return fmt.Errorf("clear the ownership marker of %s: %w", database, err)
 	}
 	return nil
@@ -208,7 +214,7 @@ func unregisterDatabase(root *os.Root, database string) error {
 	if !removed {
 		return nil
 	}
-	if err := root.WriteFile(databasesTxt, []byte(kept.String()), 0o600); err != nil {
+	if err := replaceFile(root, databasesTxt, []byte(kept.String())); err != nil {
 		return fmt.Errorf("unregister %s from %s: %w", database, databasesTxt, err)
 	}
 	return nil

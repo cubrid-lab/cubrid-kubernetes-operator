@@ -308,6 +308,10 @@ func registerRestoreTarget(targetDir, database, host, owner string) (undo func()
 		_ = root.RemoveAll(database)
 		return nil, fmt.Errorf("create %s/lob in %s: %w", database, targetDir, err)
 	}
+	if err := syncDir(root, database); err != nil {
+		_ = root.RemoveAll(database)
+		return nil, err
+	}
 	undo = func() {
 		root, err := os.OpenRoot(targetDir)
 		if err != nil {
@@ -316,9 +320,9 @@ func registerRestoreTarget(targetDir, database, host, owner string) (undo func()
 		defer func() { _ = root.Close() }()
 		_ = root.RemoveAll(database)
 		if existed {
-			_ = root.WriteFile(databasesTxt, before, 0o600)
+			_ = replaceFile(root, databasesTxt, before)
 		} else {
-			_ = root.Remove(databasesTxt)
+			_ = removeFile(root, databasesTxt)
 		}
 	}
 
@@ -328,7 +332,7 @@ func registerRestoreTarget(targetDir, database, host, owner string) (undo func()
 		content += "\n"
 	}
 	content += fmt.Sprintf("%s\t\t%s\t%s\t%s\tfile:%s\n", database, dbDir, host, dbDir, filepath.Join(dbDir, "lob"))
-	if err := root.WriteFile(databasesTxt, []byte(content), 0o600); err != nil {
+	if err := replaceFile(root, databasesTxt, []byte(content)); err != nil {
 		undo()
 		return nil, fmt.Errorf("register %s in %s: %w", database, databasesTxt, err)
 	}

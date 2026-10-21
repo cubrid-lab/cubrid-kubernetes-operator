@@ -495,7 +495,8 @@ func (s *OperationStore) failInterruptedLocked(op *Operation) error {
 }
 
 // writeLocked persists op atomically: write a temp file then rename over the
-// target so a crash mid-write never leaves a partial record.
+// target so a crash mid-write never leaves a partial record, and sync the
+// directory so that the renamed record survives a power loss.
 func (s *OperationStore) writeLocked(op *Operation) error {
 	data, err := json.Marshal(op)
 	if err != nil {
@@ -524,6 +525,9 @@ func (s *OperationStore) writeLocked(op *Operation) error {
 	if err := os.Rename(tmpName, final); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename operation file: %w", err)
+	}
+	if err := syncDirPath(s.dir); err != nil {
+		return fmt.Errorf("sync the operation directory: %w", err)
 	}
 	return nil
 }
