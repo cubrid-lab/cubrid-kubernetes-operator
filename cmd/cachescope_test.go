@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -101,7 +102,8 @@ func TestManagedCacheScope(t *testing.T) {
 	})
 	mustWatch(t, err)
 	mustWatch(t, (&controller.CubridClusterReconciler{
-		Client: manager.GetClient(), Scheme: scheme, Recorder: record.NewFakeRecorder(1000),
+		Client: manager.GetClient(), APIReader: manager.GetAPIReader(), Scheme: scheme,
+		Recorder: record.NewFakeRecorder(1000),
 	}).SetupWithManager(manager))
 	managerCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -129,6 +131,16 @@ func TestManagedCacheScope(t *testing.T) {
 		return err == nil && len(tokens) == 1
 	})
 	mustWatch(t, cached.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "managed-0"}, &corev1.Pod{}))
+
+	// Every member Pod carries the label the cache selects on.
+	sts := &appsv1.StatefulSet{}
+	waitWatch(t, ctx, func() bool {
+		return admin.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "managed"}, sts) == nil
+	})
+	if got := sts.Spec.Template.Labels[controller.ManagedByLabel]; got != controller.ManagedByOperator {
+		t.Errorf("StatefulSet Pod template label %s = %q, want %q",
+			controller.ManagedByLabel, got, controller.ManagedByOperator)
+	}
 
 	// Objects the operator does not manage stay out of the cache.
 	err = cached.Get(ctx, client.ObjectKey{Namespace: namespace, Name: unrelated}, &corev1.Secret{})

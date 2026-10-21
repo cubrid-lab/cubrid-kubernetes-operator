@@ -116,7 +116,9 @@ labeled `app.kubernetes.io/managed-by=cubrid-kubernetes-operator`, which every
 Secret it writes and every Pod of its workloads carry. A `<cluster>-im-token`
 Secret without that label is neither read nor adopted: the cluster reports
 `Ready=False` with reason `SecretReconcileFailed`, naming the Secret and the
-label, until that Secret is deleted or renamed. The label limits what the
+label, until that Secret is deleted or renamed. A member Pod whose label is
+removed is no longer seen by the operator: updates that replace members wait
+for it, and backups report the Pod as not found. The label limits what the
 manager holds in memory, not what its role allows it to read.
 
 **Cache scope is not API authorization.** Client writes go directly to the API

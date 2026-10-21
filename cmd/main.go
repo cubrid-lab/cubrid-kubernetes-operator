@@ -245,8 +245,9 @@ func main() {
 	tokens := controller.ClusterTokens(mgr.GetClient())
 	clusterProber := controller.NewHTTPRoleProber(tokens)
 	if err := (&controller.CubridClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
 		//nolint:staticcheck // v0.25 GetEventRecorder returns an events/v1 interface incompatible with record.EventRecorder.
 		Recorder:     mgr.GetEventRecorderFor("cubridcluster-controller"),
 		Prober:       clusterProber,
