@@ -33,7 +33,8 @@ import (
 // fakeUtility writes a script that behaves as `cubrid <utility>` did on the
 // pinned image (docs/poc/RESULTS.md, POC-27): it forks a child that does the
 // work, here appending to a file, and waits for it. The child writes its pid
-// to pidFile once it runs.
+// to pidFile once it runs and has written to the file once, so that a test
+// that cancels on the pid finds the file (#516).
 func fakeUtility(t *testing.T) (script, pidFile, written string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -41,7 +42,7 @@ func fakeUtility(t *testing.T) (script, pidFile, written string) {
 	pidFile = filepath.Join(dir, "child.pid")
 	written = filepath.Join(dir, "written")
 	body := fmt.Sprintf(`#!/bin/sh
-sh -c 'echo $$ > %[1]q.tmp; mv %[1]q.tmp %[1]q; while :; do echo x >> %[2]q; sleep 0.02; done' &
+sh -c 'echo x >> %[2]q; echo $$ > %[1]q.tmp; mv %[1]q.tmp %[1]q; while :; do echo x >> %[2]q; sleep 0.02; done' &
 wait
 `, pidFile, written)
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
