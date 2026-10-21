@@ -428,12 +428,19 @@ const reasonOperationStoreWriteFailed = "OperationStoreWriteFailed"
 // that is. A member whose operation store keeps an operation's end that it
 // could not write is not ready, whatever its engine says: its starts and
 // lookups answer 500 until the end is written (#299), and readiness is what
-// makes that visible on the Pod. The end is tried again on every check.
+// makes that visible on the Pod. The end is tried again on every check and is
+// dropped once it is written or its record no longer exists
+// (ErrOperationNotFound). An end whose record exists but cannot be read or
+// written stays, so the member stays not ready until it restarts.
 func (s *Server) notReadyReason(ctx context.Context) string {
 	if s.store != nil {
 		if ids := s.store.UnwrittenEnds(); len(ids) > 0 {
-			return fmt.Sprintf("%s: the end of operation %s could not be written to the operation store",
-				reasonOperationStoreWriteFailed, strings.Join(ids, ", "))
+			noun := "operation"
+			if len(ids) > 1 {
+				noun = "operations"
+			}
+			return fmt.Sprintf("%s: the end of %s %s could not be written to the operation store",
+				reasonOperationStoreWriteFailed, noun, strings.Join(ids, ", "))
 		}
 	}
 	if s.standaloneDB != "" {
