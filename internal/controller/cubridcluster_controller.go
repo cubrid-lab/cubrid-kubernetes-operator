@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -92,13 +93,22 @@ const (
 	conditionHAReady     = "HAReady"
 
 	appName = "cubrid"
+
+	// ManagedByLabel and ManagedByOperator mark every object the operator
+	// writes and every Pod of its workloads. The manager caches only Secrets
+	// and Pods that carry them.
+	ManagedByLabel    = "app.kubernetes.io/managed-by"
+	ManagedByOperator = "cubrid-kubernetes-operator"
 )
 
 // CubridClusterReconciler reconciles a CubridCluster object.
 type CubridClusterReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	// APIReader reads from the API server, past the manager's cache, which
+	// holds only labelled Secrets. Nil reads through Client.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
 	// Prober is nil-safe: nil skips HA role discovery (HAReady=Unknown).
 	Prober RoleProber
 	// TokenChecker confirms that every member accepts the current Instance
@@ -315,7 +325,10 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// The DB Pods authenticate the operator with the cluster's own token
 	// (ADR-0003), which exists before the first Pod does.
-	if err := r.reconcileIMTokenSecret(ctx, &cluster); err != nil {
+	if err := r.reconcileIMTokenSecret(ctx, &cluster); errors.Is(err, errIMTokenSecretNotCached) {
+		logf.FromContext(ctx).V(1).Info("Retrying until the cache holds the token Secret")
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	} else if err != nil {
 		return r.failed(ctx, &cluster, "SecretReconcileFailed", err)
 	}
 
@@ -367,10 +380,10 @@ func instancesServiceName(name string) string { return name + "-instances" }
 // labelsFor returns the standard selector labels for a cluster's DB instances.
 func labelsFor(cluster *databasev1alpha1.CubridCluster) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":       appName,
-		"app.kubernetes.io/instance":   cluster.Name,
-		"app.kubernetes.io/component":  "database",
-		"app.kubernetes.io/managed-by": "cubrid-kubernetes-operator",
+		"app.kubernetes.io/name":      appName,
+		"app.kubernetes.io/instance":  cluster.Name,
+		"app.kubernetes.io/component": "database",
+		ManagedByLabel:                ManagedByOperator,
 	}
 }
 
@@ -403,6 +416,10 @@ func (r *CubridClusterReconciler) reconcileHeadlessService(ctx context.Context, 
 const instanceManagerBinary = "/usr/local/bin/instance-manager"
 
 func imTokenSecretName(cluster string) string { return cluster + "-im-token" }
+
+// errIMTokenSecretNotCached is a create of the token Secret refused because
+// the operator's own labelled Secret exists but is not in the cache yet.
+var errIMTokenSecretNotCached = errors.New("the token Secret is not in the cache yet")
 
 // reconcileIMTokenSecret gives the cluster a random token of its own in
 // <cluster>-im-token, which its DB Pods serve with and the operator calls them
@@ -469,6 +486,9 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 		}
 		return controllerutil.SetControllerReference(cluster, secret, r.Scheme)
 	})
+	if apierrors.IsAlreadyExists(err) {
+		return r.imTokenSecretRefused(ctx, secret, err)
+	}
 	if err != nil {
 		return err
 	}
@@ -513,6 +533,32 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 		fmt.Sprintf("generated a new Instance Manager token in Secret %s; running Pods keep the old one and refuse the operator until they are replaced",
 			secret.Name))
 	return nil
+}
+
+// imTokenSecretRefused explains a create of the token Secret refused as
+// AlreadyExists. The manager caches only Secrets with the managed-by label, so
+// a Secret of this name without it is not seen and the create is refused. So
+// is the create of a labelled Secret the cache has not caught up with yet,
+// which is no collision: deleting it would replace the token running Pods
+// hold. An uncached read tells the two apart.
+func (r *CubridClusterReconciler) imTokenSecretRefused(ctx context.Context, secret *corev1.Secret, err error) error {
+	reader := client.Reader(r.Client)
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	stored := &corev1.Secret{}
+	readErr := reader.Get(ctx, client.ObjectKeyFromObject(secret), stored)
+	switch {
+	case readErr == nil && stored.Labels[ManagedByLabel] == ManagedByOperator:
+		return errIMTokenSecretNotCached
+	case readErr == nil:
+		return fmt.Errorf("the Secret %s exists without the label %s=%s, so the operator neither reads nor adopts it; "+
+			"delete or rename it: %w", secret.Name, ManagedByLabel, ManagedByOperator, err)
+	default:
+		return fmt.Errorf("the Secret %s exists but the operator cannot read it (%v); "+
+			"if it lacks the label %s=%s, the operator neither reads nor adopts it: %w",
+			secret.Name, readErr, ManagedByLabel, ManagedByOperator, err)
+	}
 }
 
 // membersHoldToken reports whether every member of the cluster holds the

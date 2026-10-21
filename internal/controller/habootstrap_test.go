@@ -505,6 +505,8 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			Expect(seed.restoreReq.TargetDir).To(Equal(restoreTargetRoot))
 			Expect(seed.restoreReq.SeedFromMaster).To(Equal("seed-order-0"),
 				"a seeded member is restored as a slave of the member the backup came from")
+			Expect(seed.restoreReq.ExpectedClusterUID).To(Equal(string(got.UID)),
+				"a seed is taken only from a backup of this cluster (#276)")
 			Expect(got.Status.Databases[0].HAConfigured).To(BeFalse())
 
 			By("moving to the second peer when the first is done, once its source is recorded")
@@ -1057,6 +1059,7 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			notReady(r, key) // starts the restore
 			Expect(seed.restoreOn).To(Equal([]string{"rseed-first-0"}))
 			Expect(seed.restoreReq.SeedFromMaster).To(BeEmpty())
+			Expect(seed.restoreReq.ExpectedClusterUID).To(BeEmpty(), "a recovery restores another cluster's backup")
 
 			By("the restore completes; the peers are still empty")
 			seed.recovered = instancemanager.OpCompleted

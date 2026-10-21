@@ -324,8 +324,13 @@ type junitMessage struct {
 	Message string `xml:"message,attr"`
 }
 
+// junitRunCase names the JUnit case of the run as a whole.
+const junitRunCase = "run"
+
 // junit maps judged results to JUnit. Blocked is an error, not a skip, so
-// that CI tooling does not show an unproven scenario as green.
+// that CI tooling does not show an unproven scenario as green. The run
+// itself is a case of its own when it did not pass: an error for a
+// checkpoint, a failure for a concluded run with problems.
 func (s Summary) junit() junitSuite {
 	suite := junitSuite{Name: s.RunID, Tests: len(s.Scenarios)}
 	for _, sc := range s.Scenarios {
@@ -344,11 +349,20 @@ func (s Summary) junit() junitSuite {
 		}
 		suite.Cases = append(suite.Cases, c)
 	}
-	if s.provisional {
+	switch {
+	case s.provisional:
 		suite.Tests++
 		suite.Errors++
-		suite.Cases = append(suite.Cases, junitCase{Name: "run", Classname: "run",
+		suite.Cases = append(suite.Cases, junitCase{Name: junitRunCase, Classname: junitRunCase,
 			Error: &junitMessage{Message: strings.Join(s.Problems, "; ")}})
+	case !s.Passed && len(s.Problems) > 0:
+		// A concluded run that did not pass its lane fails as a whole, also
+		// when no scenario failed: a required scenario that was not run,
+		// is missing, or another problem of the run (#460).
+		suite.Tests++
+		suite.Failures++
+		suite.Cases = append(suite.Cases, junitCase{Name: junitRunCase, Classname: junitRunCase,
+			Failure: &junitMessage{Message: strings.Join(s.Problems, "; ")}})
 	}
 	return suite
 }

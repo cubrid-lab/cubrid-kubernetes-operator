@@ -57,7 +57,7 @@ type brokerPod struct {
 
 // rwBrokerPods lists the read-write Broker Pods that are not being deleted.
 func (r *haRun) rwBrokerPods() ([]brokerPod, error) {
-	out, err := r.kubectl("get", "pods",
+	out, err := r.kubectl(context.Background(), "get", "pods",
 		"-l", "database.cubrid.io/broker-access-mode=rw,app.kubernetes.io/instance="+r.cluster,
 		"-o", `jsonpath={range .items[*]}{.metadata.name}{" "}{.metadata.uid}{" "}`+
 			`{.status.containerStatuses[0].restartCount}{" "}{.metadata.deletionTimestamp}{"\n"}{end}`)
@@ -178,7 +178,7 @@ func (r *haRun) s05(variant string) {
 	defer func() { recordScenario(result) }()
 
 	By("recording the starting state")
-	master, _, err := r.master()
+	master, _, err := r.master(context.Background())
 	Expect(err).NotTo(HaveOccurred())
 	brokers, err := r.rwBrokerPods()
 	Expect(err).NotTo(HaveOccurred())
@@ -209,14 +209,14 @@ func (r *haRun) s05(variant string) {
 	outcome := r.runFault(faults.Scenario{
 		Fault:  fault,
 		Limits: s03FlowLimits,
-		Before: func(context.Context) error {
-			now, _, err := r.master()
+		Before: func(ctx context.Context) error {
+			now, _, err := r.master(ctx)
 			if err == nil && now != master {
 				err = fmt.Errorf("the master is %s, not %s", now, master)
 			}
 			return err
 		},
-		Check: func(context.Context) (bool, error) {
+		Check: func(ctx context.Context) (bool, error) {
 			// New connections right after the fault. With one Broker Pod
 			// deleted they have to succeed through the other one; up to
 			// three are tried, because the Service may still hold the
@@ -230,7 +230,7 @@ func (r *haRun) s05(variant string) {
 				newConnection = "failed"
 				var lastErr error
 				for attempt := 1; attempt <= attempts; attempt++ {
-					if _, lastErr = r.client("workload dump > /dev/null"); lastErr == nil {
+					if _, lastErr = r.client(ctx, "workload dump > /dev/null"); lastErr == nil {
 						newConnection = fmt.Sprintf("succeeded on attempt %d", attempt)
 						break
 					}
@@ -240,23 +240,23 @@ func (r *haRun) s05(variant string) {
 				}
 			}
 			// A Broker failure must not move the master.
-			now, _, err := r.master()
+			now, _, err := r.master(ctx)
 			if err != nil {
 				return false, nil
 			}
 			if now != master {
 				return false, fmt.Errorf("the master changed from %s to %s after a Broker failure", master, now)
 			}
-			available, err := r.kubectl("get", "deployment", r.cluster+"-broker-rw",
+			available, err := r.kubectl(ctx, "get", "deployment", r.cluster+"-broker-rw",
 				"-o", "jsonpath={.status.availableReplicas}")
 			if err != nil || available != "2" {
 				return false, nil
 			}
-			if _, err := r.formationTime(); err != nil {
+			if _, err := r.formationTime(ctx); err != nil {
 				return false, nil // a condition of the starting state is not True yet
 			}
 			for _, id := range clients {
-				if !r.lastAnswerAcknowledged(id) {
+				if !r.lastAnswerAcknowledged(ctx, id) {
 					return false, nil
 				}
 			}
@@ -304,7 +304,7 @@ func (r *haRun) s05(variant string) {
 	}
 
 	By("checking that the master is the same")
-	now, slaves, err := r.master()
+	now, slaves, err := r.master(context.Background())
 	Expect(err).NotTo(HaveOccurred())
 	Expect(now).To(Equal(master), "the master after a Broker failure")
 
@@ -312,12 +312,12 @@ func (r *haRun) s05(variant string) {
 	var report workload.Report
 	Eventually(func(g Gomega) {
 		var err error
-		report, err = r.dataCheck()
+		report, err = r.dataCheck(context.Background())
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 	}, 3*time.Minute, 3*time.Second).Should(Succeed())
 	for _, slave := range slaves {
-		count, err := r.failCount(slave, master)
+		count, err := r.failCount(context.Background(), slave, master)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero(), "fail count of the applier on %s", slave)
 	}

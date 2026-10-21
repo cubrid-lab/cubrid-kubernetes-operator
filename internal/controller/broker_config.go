@@ -38,10 +38,10 @@ const (
 // (component=broker), distinct from the database instances (ADR-0002).
 func brokerLabelsFor(cluster *databasev1alpha1.CubridCluster) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":       appName,
-		"app.kubernetes.io/instance":   cluster.Name,
-		"app.kubernetes.io/component":  componentBroker,
-		"app.kubernetes.io/managed-by": "cubrid-kubernetes-operator",
+		"app.kubernetes.io/name":      appName,
+		"app.kubernetes.io/instance":  cluster.Name,
+		"app.kubernetes.io/component": componentBroker,
+		ManagedByLabel:                ManagedByOperator,
 	}
 }
 

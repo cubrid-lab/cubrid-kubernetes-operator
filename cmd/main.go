@@ -28,12 +28,15 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -242,8 +245,9 @@ func main() {
 	tokens := controller.ClusterTokens(mgr.GetClient())
 	clusterProber := controller.NewHTTPRoleProber(tokens)
 	if err := (&controller.CubridClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
 		//nolint:staticcheck // v0.25 GetEventRecorder returns an events/v1 interface incompatible with record.EventRecorder.
 		Recorder:     mgr.GetEventRecorderFor("cubridcluster-controller"),
 		Prober:       clusterProber,
@@ -291,12 +295,20 @@ func main() {
 
 // watchCacheOptions scopes namespaced informers and cached reads. Empty keeps
 // controller-runtime's cluster-wide default; API authorization is separate.
+// Secrets and Pods are cached only when they carry the operator's managed-by
+// label, so a cached read of any other Secret or Pod finds nothing.
 func watchCacheOptions(namespace string) (cache.Options, error) {
+	managed := labels.SelectorFromSet(labels.Set{controller.ManagedByLabel: controller.ManagedByOperator})
+	options := cache.Options{ByObject: map[client.Object]cache.ByObject{
+		&corev1.Secret{}: {Label: managed},
+		&corev1.Pod{}:    {Label: managed},
+	}}
 	if namespace == "" {
-		return cache.Options{}, nil
+		return options, nil
 	}
 	if problems := validation.IsDNS1123Label(namespace); len(problems) != 0 {
 		return cache.Options{}, fmt.Errorf("invalid watch namespace %q: %s", namespace, strings.Join(problems, "; "))
 	}
-	return cache.Options{DefaultNamespaces: map[string]cache.Config{namespace: {}}}, nil
+	options.DefaultNamespaces = map[string]cache.Config{namespace: {}}
+	return options, nil
 }

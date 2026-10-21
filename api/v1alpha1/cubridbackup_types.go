@@ -87,7 +87,8 @@ const (
 	// PreferStandby prefers a caught-up standby, falling back to master only on
 	// fresh, unambiguous HA evidence (ADR-0007).
 	PreferStandby TargetPreference = "PreferStandby"
-	// StandbyOnly requires a standby and fails if none is eligible.
+	// StandbyOnly requires a standby and waits (reason NoHealthyStandby) while
+	// none is eligible; it never falls back to the master.
 	StandbyOnly TargetPreference = "StandbyOnly"
 	// PrimaryOnly forces the backup onto the resolved master.
 	PrimaryOnly TargetPreference = "PrimaryOnly"

@@ -869,6 +869,38 @@ spec:
                       - replica
                       - unknown
                       type: string
+                    unfinishedDatabase:
+                      description: |-
+                        unfinishedDatabase is set while the member's Instance Manager reports
+                        that the member's database carries the marker of a createdb or
+                        restoredb that did not finish: the database is neither created over nor
+                        started. It is taken from the answer that set lastObservedTime in the
+                        same observation; a member that gave no answer that counts keeps its
+                        last report. It is absent for the marker of an operation that runs now,
+                        which the bootstrap status reports. It does not change role.
+                      properties:
+                        database:
+                          description: database is the name of the database.
+                          type: string
+                        message:
+                          description: message is the Instance Manager's reason for
+                            the state.
+                          type: string
+                        operation:
+                          description: |-
+                            operation is the Instance Manager operation the marker names; empty
+                            when it names none.
+                          type: string
+                        state:
+                          description: state is WaitingForOperation or Refused.
+                          enum:
+                          - WaitingForOperation
+                          - Refused
+                          type: string
+                      required:
+                      - database
+                      - state
+                      type: object
                   required:
                   - name
                   type: object
