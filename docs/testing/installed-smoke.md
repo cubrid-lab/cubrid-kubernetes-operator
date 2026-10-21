@@ -1,6 +1,6 @@
 # SQL connection smoke with an installed Operator
 
-The `lab-installed-smoke` lane runs `LAB00`: create a standalone database
+The default `lab-installed-smoke` lane runs `LAB00`: create a standalone database
 through an existing Operator, commit a row, read it back and remove the run's
 namespace. It records the installed manager and database container identities.
 S00 installation validation, S00–S15 qualification, VM failures and storage
@@ -91,6 +91,93 @@ a replacement namespace is left in place. The command waits for namespace
 disappearance and never removes finalizers or falls back to deletion by name.
 This confirms namespaced cleanup, not deletion of retained backend volumes.
 
+## Explicit preallocated namespace mode
+
+A confined evaluator can opt in with `--namespace-mode=preallocated`. This is a
+separate `lab-preallocated-component-smoke` lane requiring `LAB00/preallocated`;
+it does not change the fresh LAB00 verdict or grant fixture-reset authority.
+The caller must reserve an exclusively owned disposable namespace and create an
+**immutable** ConfigMap there, with a unique run nonce in `data.nonce`. Supply
+identities observed from that external allocation, not names alone:
+
+```sh
+bin/installed-smoke \
+  --kubeconfig "$RUNNER_KUBECONFIG" --context "$RUNNER_CONTEXT" \
+  --cluster-uid "$LAB_CLUSTER_UID" --namespace "$CANDIDATE_NAMESPACE" \
+  --namespace-mode=preallocated --namespace-uid "$NAMESPACE_UID" \
+  --owner-configmap "$OWNER_CONFIGMAP" --owner-uid "$OWNER_UID" \
+  --owner-nonce "$RUN_NONCE" \
+  --operator-namespace "$OPERATOR_NAMESPACE" \
+  --operator-deployment "$OPERATOR_DEPLOYMENT" \
+  --operator-image "$MANAGER_REF" --instance-manager-image "$IM_REF" \
+  --commit "$OPERATOR_COMMIT" --storage-class "$LAB_STORAGE_CLASS" \
+  --evidence-dir "$EVIDENCE_DIR" --level vm-lab
+```
+
+Only this explicit mode permits the manager and smoke in the same namespace or
+a namespace without the `cubrid-lab-` prefix. Fresh mode keeps its existing
+prefix, distinct-manager-namespace, create-only namespace and UID-delete rules;
+external ownership flags in fresh mode are rejected.
+
+The runner rechecks namespace UID/non-termination and marker UID, immutability,
+nonce and non-termination before creation, on each readiness poll, before every
+database command and throughout cleanup. The manager must retain its observed
+Deployment/ReplicaSet/Pod and runtime identities. Initial inventory rejects every
+existing CubridCluster, CubridBackup, StatefulSet, PVC and unidentified Pod,
+Deployment, ReplicaSet, DaemonSet, ReplicationController, Job or CronJob, even
+when a controller currently has no Pods. A same-namespace manager is permitted only
+through its observed Deployment ownership chain; it may not mount a PVC.
+Passive bootstrap objects such as the default ServiceAccount, root-CA ConfigMap,
+RBAC bindings and Services confer no workload or deletion authority. This command
+does not create, modify or delete those objects or the external ownership marker.
+
+After successful create-only CR creation returns its UID, subsequent inventory
+permits only that CR, its sole-controller-owned `smoke` StatefulSet and `smoke-0`
+Pod, and the deterministic `data-smoke-0` 2Gi PVC from its `data` claim template.
+Observed StatefulSet, Pod and PVC UIDs are pinned. Foreign objects, replacements,
+ambiguous ownership or a changed recorded backing-volume name stop work and
+preserve resources. Failed, already-existing, ambiguous or UID-less CR creation
+grants no SQL or CR-cleanup authority. Reads followed by name-based exec are not
+an atomic fence; the external exclusive reservation remains required.
+
+Preallocated cleanup UID-deletes **only the created CR** and waits for both its
+StatefulSet and DB Pod to disappear through Kubernetes garbage collection and
+normal Pod termination. It never deletes the namespace or PVC, removes finalizers,
+force-deletes Pods or falls back to deletion by name. An ownership change before
+cleanup blocks deletion; an observed replacement during cleanup is preserved and
+fails the run. Failure to observe stopped workloads within the cleanup deadline
+fails the component lane.
+
+The confined runner needs a namespaced Role with get/list for Pods, ConfigMaps,
+PVCs and apps Deployments/ReplicaSets/StatefulSets; list for apps DaemonSets, core
+ReplicationControllers, batch Jobs/CronJobs and CubridBackups; get/list/create/delete
+for CubridClusters; and create for `pods/exec`. The manager namespace, if different, also needs its manager-identity
+read grants. Cluster-wide permissions are limited to **get by fixed resource name**
+for the selected StorageClass and the selected namespace plus `kube-system`.
+Namespace writes and PVC deletion are unnecessary and should be denied. This
+feature supplies no RBAC grant to any public/private ServiceAccount and installs
+no manager; candidate watch scope, non-overlap and shared CRD compatibility are
+separate prerequisites.
+
+Preallocated evidence records `namespaceMode`, namespace UID, `ownershipEpoch`
+(marker name/UID/nonce), `cleanupScope=smoke-cr-uid-and-owned-workloads`, and
+`retainedPVCs` (namespace/name/UID, StorageClass and observed volume name).
+`cleanupSucceeded=true` means the component's owned workloads stopped. It does
+**not** mean fixture reset or backend deletion. Preallocated records explicitly
+set `fixtureReusable=false` and `resetRequired=true`, including after successful
+SQL and workload cleanup. A retained PVC blocks the next fresh-data smoke. The
+overall private campaign must also require separate reset evidence from an
+independently authorized reset identity after confirming the same ownership epoch
+and stopped writers. This tool grants no PVC-delete authority to that identity,
+the runner or the candidate, and cannot certify whole-campaign cleanup.
+
+Unit tests exercise ownership transitions and ambiguous creates. Envtest checks
+actual non-admin authorization and UID preconditions with simulated readiness and
+child removal; it does not prove engine behavior, scheduling or garbage
+collection. Isolated Kind evidence must separately demonstrate real SQL, actual
+StatefulSet/Pod disappearance and the retained PVC. VM failure, CSI/storage
+resilience and the mandatory release campaign remain independent acceptance work.
+
 ## Evidence and verdict
 
 The output contains `summary.json`, `junit.xml` and `LAB00/record.json`.
@@ -111,7 +198,7 @@ and [containerd v2.2 image-reference handling](https://github.com/containerd/con
 
 Process errors, CUBRID SQL error output, a wrong/missing row, changed runtime
 identity, failed cleanup or failed evidence writes produce a nonzero result.
-No failed or unfinished run passes the lane. A successful `LAB00` establishes
+No failed or unfinished run passes its selected lane. A successful fresh `LAB00` establishes
 this connection smoke; the scenario contract's required VM/fault/recovery
 campaign remains independently required.
 

@@ -168,10 +168,13 @@ func (r *Runner) observeManager(ctx context.Context, cfg Config) (managerIdentit
 }
 
 func (r *Runner) waitDatabase(
-	ctx context.Context, cfg Config, created *databasev1alpha1.CubridCluster,
+	ctx context.Context, cfg Config, created *databasev1alpha1.CubridCluster, guard func(context.Context) error,
 ) (imageIdentity, error) {
 	var identity imageIdentity
 	err := pollUntil(ctx, cfg.Poll, func() (bool, error) {
+		if err := guard(ctx); err != nil {
+			return false, err
+		}
 		cluster := &databasev1alpha1.CubridCluster{}
 		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(created), cluster); err != nil {
 			return false, err
