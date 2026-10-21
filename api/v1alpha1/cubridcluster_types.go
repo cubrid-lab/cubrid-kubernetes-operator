@@ -405,6 +405,51 @@ type InstanceStatus struct {
 	// (docs/observability.md, "Freshness").
 	// +optional
 	LastObservedTime *metav1.Time `json:"lastObservedTime,omitempty"`
+	// unfinishedDatabase is set while the member's Instance Manager reports
+	// that the member's database carries the marker of a createdb or
+	// restoredb that did not finish: the database is neither created over nor
+	// started. It is taken from the answer that set lastObservedTime in the
+	// same observation; a member that gave no answer that counts keeps its
+	// last report. It is absent for the marker of an operation that runs now,
+	// which the bootstrap status reports. It does not change role.
+	// +optional
+	UnfinishedDatabase *InstanceUnfinishedDatabase `json:"unfinishedDatabase,omitempty"`
+}
+
+// UnfinishedDatabaseState says what becomes of a member's unfinished database.
+// +kubebuilder:validation:Enum=WaitingForOperation;Refused
+type UnfinishedDatabaseState string
+
+const (
+	// UnfinishedWaitingForOperation: the marker names an operation of the
+	// Instance Manager that has ended, whose leftover the next restore or HA
+	// bootstrap of the database clears or removes. That happens only while the
+	// bootstrap or recovery still retries; once it has ended Failed nothing
+	// clears the directory and a person decides (docs/observability.md,
+	// "Unfinished databases").
+	UnfinishedWaitingForOperation UnfinishedDatabaseState = "WaitingForOperation"
+	// UnfinishedRefused: no operation of the Instance Manager removes or
+	// creates over the directory now. Either a person decides what happens to
+	// it, or the marker or the operation record cannot be read now and the
+	// message says the database cannot be judged now.
+	UnfinishedRefused UnfinishedDatabaseState = "Refused"
+)
+
+// InstanceUnfinishedDatabase is a member's database that carries the
+// Instance Manager's ownership marker (docs/observability.md, "Unfinished
+// databases").
+type InstanceUnfinishedDatabase struct {
+	// database is the name of the database.
+	Database string `json:"database"`
+	// operation is the Instance Manager operation the marker names; empty
+	// when it names none.
+	// +optional
+	Operation string `json:"operation,omitempty"`
+	// state is WaitingForOperation or Refused.
+	State UnfinishedDatabaseState `json:"state"`
+	// message is the Instance Manager's reason for the state.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // InstanceReplication reports how a slave's log applier is doing (ADR-0006).

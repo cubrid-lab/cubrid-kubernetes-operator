@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -49,11 +50,12 @@ const stallForceRetryEnv = "E2E_STALL_FORCE_RETRY"
 func replicationStallStep(r *haRun) {
 	It("reports a slave that looks healthy and applies nothing, and no longer after its Pod is replaced", func() {
 		inPod := func(pod, script string) (string, error) {
-			return r.kubectl("exec", pod, "--", "bash", "-c", `export PATH="${CUBRID}/bin:${PATH}"; `+script)
+			return r.kubectl(context.Background(),
+				"exec", pod, "--", "bash", "-c", `export PATH="${CUBRID}/bin:${PATH}"; `+script)
 		}
 		condition := func() (string, string, string) {
 			field := func(name string) string {
-				out, _ := r.kubectl("get", "cubridcluster", r.cluster, "-o",
+				out, _ := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
 					`jsonpath={.status.conditions[?(@.type=="ReplicationHealthy")].`+name+`}`)
 				return out
 			}
@@ -62,7 +64,8 @@ func replicationStallStep(r *haRun) {
 		// restarts is the restart count of the container of a member's Pod;
 		// a count that could not be read is an error, never a count.
 		restarts := func(pod string) (string, error) {
-			out, err := r.kubectl("get", "pod", pod, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+			out, err := r.kubectl(context.Background(),
+				"get", "pod", pod, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
 			if err == nil && out == "" {
 				err = fmt.Errorf("pod %s reports no restart count", pod)
 			}
@@ -72,11 +75,11 @@ func replicationStallStep(r *haRun) {
 		// member, for a failure message and for the record of an attempt.
 		observed := func() string {
 			var roles roleLog
-			roles.sample(r)
-			instances, _ := r.kubectl("get", "cubridcluster", r.cluster, "-o",
+			roles.sample(context.Background(), r)
+			instances, _ := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
 				`jsonpath={range .status.instances[*]}{.name}: {.role} {.replication}{"\n"}{end}`)
 			return fmt.Sprintf("CUBRID: %s\nPods (uid/restarts): %s\nstatus.instances:\n%s",
-				roles.last, r.memberIdentities(), instances)
+				roles.last, r.memberIdentities(context.Background()), instances)
 		}
 		// Each run of the step writes with client IDs of its own.
 		r.mu.Lock()
@@ -113,7 +116,7 @@ func replicationStallStep(r *haRun) {
 			By(fmt.Sprintf("recording the starting state (attempt %d of %d)", attempt, attempts))
 			var slaves []string
 			var err error
-			master, slaves, err = r.master()
+			master, slaves, err = r.master(context.Background())
 			Expect(err).NotTo(HaveOccurred())
 			victim = slaves[0]
 			var candidate string
@@ -141,20 +144,20 @@ func replicationStallStep(r *haRun) {
 
 			// What the master logged before it ends, for an attempt in which
 			// the failover does not come.
-			masterLog, err := r.kubectl("logs", master, "--tail=300")
+			masterLog, err := r.kubectl(context.Background(), "logs", master, "--tail=300")
 			if err != nil {
 				masterLog = err.Error()
 			}
 			// The deleted master is not a new master: until its Pod ends, it
 			// can still report itself as one.
 			By("deleting the master Pod " + master + " and waiting for " + candidate + " to be master")
-			_, err = r.kubectl("delete", "pod", master, "--wait=false")
+			_, err = r.kubectl(context.Background(), "delete", "pod", master, "--wait=false")
 			Expect(err).NotTo(HaveOccurred())
 			var roles roleLog
 			newMaster = ""
 			for time.Since(stopped) < wait && newMaster == "" {
-				roles.sample(r)
-				newMaster = r.activeMasterAmong([]string{candidate})
+				roles.sample(context.Background(), r)
+				newMaster = r.activeMasterAmong(context.Background(), []string{candidate})
 				if newMaster == "" {
 					time.Sleep(time.Second)
 				}
@@ -190,7 +193,7 @@ func replicationStallStep(r *haRun) {
 				Fail("the failover this step needs did not come in any attempt:\n" + strings.Join(tries, "\n\n"))
 			}
 			By("replacing the Pod of " + victim + ", so that it is not left in the state of this step")
-			_, err = r.kubectl("delete", "pod", victim, "--wait=false")
+			_, err = r.kubectl(context.Background(), "delete", "pod", victim, "--wait=false")
 			Expect(err).NotTo(HaveOccurred())
 		}
 
@@ -201,11 +204,11 @@ func replicationStallStep(r *haRun) {
 
 		By("writing on the new master")
 		Eventually(func() error {
-			_, err := r.runWorkload("CLIENT_ID=" + clients + "a OPS=20 ROLLBACK_EVERY=0")
+			_, err := r.runWorkload(context.Background(), "CLIENT_ID="+clients+"a OPS=20 ROLLBACK_EVERY=0")
 			return err
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		Eventually(func(g Gomega) {
-			m, slaves, err := r.master()
+			m, slaves, err := r.master(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(m).To(Equal(newMaster))
 			g.Expect(slaves).To(ContainElement(victim))
@@ -220,7 +223,7 @@ func replicationStallStep(r *haRun) {
 			"the container of %s was restarted, so the member is not in the state this step is about", victim)
 
 		By("writing more, so that log pages wait on the slave")
-		h, err := r.runWorkload("CLIENT_ID=" + clients + "b OPS=40 ROLLBACK_EVERY=0")
+		h, err := r.runWorkload(context.Background(), "CLIENT_ID="+clients+"b OPS=40 ROLLBACK_EVERY=0")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(h.Counts[workload.Acknowledged]).To(Equal(40))
 
@@ -248,7 +251,7 @@ func replicationStallStep(r *haRun) {
 			var out []workload.Row
 			Eventually(func() string {
 				var err error
-				if out, err = r.memberRows(pod); err != nil {
+				if out, err = r.memberRows(context.Background(), pod); err != nil {
 					message := err.Error()
 					if len(message) > 1500 {
 						message = message[:1500] + " ..."
@@ -263,7 +266,7 @@ func replicationStallStep(r *haRun) {
 		behind := rows(victim)
 		ahead := rows(newMaster)
 		Expect(len(behind)).To(BeNumerically("<", len(ahead)), "rows on the stalled slave and on the master")
-		haReady, err := r.kubectl("get", "cubridcluster", r.cluster, "-o",
+		haReady, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
 			`jsonpath={.status.conditions[?(@.type=="HAReady")].status}`)
 		Expect(err).NotTo(HaveOccurred())
 		record := fmt.Sprintf("stalled member: %s\nnew master: %s\nrows on the stalled member: %d\nrows on the master: %d\n"+
@@ -271,12 +274,12 @@ func replicationStallStep(r *haRun) {
 			victim, newMaster, len(behind), len(ahead), message, haReady)
 
 		By("deleting the Pod of the stalled slave")
-		_, err = r.kubectl("delete", "pod", victim, "--wait=false")
+		_, err = r.kubectl(context.Background(), "delete", "pod", victim, "--wait=false")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(func(g Gomega) {
 			status, reason, m := condition()
 			g.Expect(status).To(Equal("True"), "ReplicationHealthy after the Pod was replaced: %s %s", reason, m)
-			report, err := r.dataCheck()
+			report, err := r.dataCheck(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 		}, 5*time.Minute, 5*time.Second).Should(Succeed(), observed)
@@ -290,11 +293,12 @@ func replicationStallStep(r *haRun) {
 	// and the member comes back by the ordinary start (#180).
 	It("restarts the container of a member whose CUBRID processes were stopped", func() {
 		r.enter(nil)
-		_, slaves, err := r.master()
+		_, slaves, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		victim := slaves[0]
 		restarts := func() string {
-			out, _ := r.kubectl("get", "pod", victim, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+			out, _ := r.kubectl(context.Background(),
+				"get", "pod", victim, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
 			return out
 		}
 		before := restarts()
@@ -304,14 +308,14 @@ func replicationStallStep(r *haRun) {
 		// victim may be the member whose Pod the step before replaced.
 		By("waiting until the Instance Manager of " + victim + " watches the CUBRID processes")
 		Eventually(func(g Gomega) {
-			log, err := r.kubectl("logs", victim, "-c", "cubrid", "--tail=-1")
+			log, err := r.kubectl(context.Background(), "logs", victim, "-c", "cubrid", "--tail=-1")
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(log).To(ContainSubstring(`"event":"process_watch_started"`))
 		}, 2*time.Minute, 2*time.Second).Should(Succeed())
 
 		By("stopping heartbeat inside the running container of " + victim + " and leaving it stopped")
 		stopped := time.Now()
-		_, err = r.kubectl("exec", victim, "--", "bash", "-c",
+		_, err = r.kubectl(context.Background(), "exec", victim, "--", "bash", "-c",
 			`export PATH="${CUBRID}/bin:${PATH}"; cubrid heartbeat stop >/tmp/hb-stop.log 2>&1`)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -320,16 +324,16 @@ func replicationStallStep(r *haRun) {
 		restartedAfter := time.Since(stopped)
 
 		By("reading why from the log of the container that ended")
-		previous, err := r.kubectl("logs", victim, "--previous", "--tail=-1")
+		previous, err := r.kubectl(context.Background(), "logs", victim, "--previous", "--tail=-1")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(previous).To(ContainSubstring(`"event":"process_gone"`))
 
 		By("waiting for the member to be a slave again that holds everything")
 		Eventually(func(g Gomega) {
-			_, nowSlaves, err := r.master()
+			_, nowSlaves, err := r.master(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(nowSlaves).To(ContainElement(victim))
-			report, err := r.dataCheck()
+			report, err := r.dataCheck(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 		}, 5*time.Minute, 5*time.Second).Should(Succeed())

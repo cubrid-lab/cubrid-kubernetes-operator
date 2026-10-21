@@ -285,14 +285,17 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 // instanceStatuses builds the per-instance status list from observations,
 // preserving the ordinal ordering of members. previous is the list of the
 // reconcile before: a slave's replication is judged against what it reported
-// then, and a member that gave no answer keeps the time of its last one.
+// then, and a member that gave no answer keeps the time of its last one and
+// its last report of an unfinished database.
 func instanceStatuses(members []string, obs map[string]RoleObservation, now time.Time,
 	previous []databasev1alpha1.InstanceStatus) []databasev1alpha1.InstanceStatus {
 	before := make(map[string]*databasev1alpha1.InstanceReplication, len(previous))
 	answered := make(map[string]*metav1.Time, len(previous))
+	reported := make(map[string]*databasev1alpha1.InstanceUnfinishedDatabase, len(previous))
 	for _, in := range previous {
 		before[in.Name] = in.Replication
 		answered[in.Name] = in.LastObservedTime
+		reported[in.Name] = in.UnfinishedDatabase
 	}
 	out := make([]databasev1alpha1.InstanceStatus, 0, len(members))
 	for i, m := range members {
@@ -313,9 +316,14 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 		// not the prober's stamp: an equal time means the member answered in
 		// that pass. An answer that contradicts itself or names another
 		// member is not counted as this member's answer.
+		// An unfinished database is reported from the same answer, whatever
+		// role it carries; without one the last report is kept, so that a
+		// missed probe neither clears it nor reports it again.
+		unfinished := reported[m].DeepCopy()
 		if o, ok := obs[m]; ok && fresh(o, now) && !o.Conflicting {
 			at := metav1.NewTime(now)
 			lastObserved = &at
+			unfinished = o.Unfinished
 		}
 		// Only an authoritative slave's applier is taken into account. A
 		// slave whose applier could not be read keeps its last reading; a
@@ -333,6 +341,7 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 			ObservedEngineVersion: version,
 			Replication:           replication,
 			LastObservedTime:      lastObserved,
+			UnfinishedDatabase:    unfinished,
 		})
 	}
 	return out

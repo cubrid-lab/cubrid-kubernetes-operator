@@ -206,10 +206,14 @@ docker-buildx: container-tool ## Build and push docker image for the manager for
 	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
 	- $(CONTAINER_TOOL) buildx create --name cubrid-kubernetes-operator-builder
-	$(CONTAINER_TOOL) buildx use cubrid-kubernetes-operator-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) $(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE)) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm cubrid-kubernetes-operator-builder
-	rm Dockerfile.cross
+	# The builder and Dockerfile.cross are removed whatever "buildx use" or the
+	# build did; the target then exits with that failure's status (#461).
+	status=0; \
+	$(CONTAINER_TOOL) buildx use cubrid-kubernetes-operator-builder && \
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) $(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE)) --tag ${IMG} -f Dockerfile.cross . || status=$$?; \
+	$(CONTAINER_TOOL) buildx rm cubrid-kubernetes-operator-builder || echo "Could not remove the buildx builder cubrid-kubernetes-operator-builder" >&2; \
+	rm -f Dockerfile.cross; \
+	exit $$status
 
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.

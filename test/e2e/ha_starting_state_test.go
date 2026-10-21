@@ -78,9 +78,9 @@ func (r *haRun) newGate() *faults.Gate {
 		Poll:     5 * time.Second,
 		Settle:   startingStateSettle,
 		Budget:   startingStateBudget,
-		Restore:  func(context.Context) error { return r.restoreStartingState() },
-		Verify:   func(context.Context) error { return r.verifyStartingState() },
-		Describe: func(context.Context) string { return r.memberIdentities() },
+		Restore:  func(ctx context.Context) error { return r.restoreStartingState(ctx) },
+		Verify:   func(ctx context.Context) error { return r.verifyStartingState(ctx) },
+		Describe: func(ctx context.Context) string { return r.memberIdentities(ctx) },
 		Redact:   func(s string) string { return string(redactor.Redact([]byte(s))) },
 	}
 }
@@ -105,9 +105,19 @@ func checkBreakSettings() error {
 	return fmt.Errorf("%s=%q is not the label of an HA step after S01", breakStepEnv, step)
 }
 
+// sleepUnlessDone waits for d and returns ctx.Err() if ctx ends first.
+func sleepUnlessDone(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
 // memberIdentities is the UID and the restart count of each member's Pod.
-func (r *haRun) memberIdentities() string {
-	byMember := r.identities(r.members)
+func (r *haRun) memberIdentities(ctx context.Context) string {
+	byMember := r.identities(ctx, r.members)
 	ids := make([]string, 0, len(r.members))
 	for _, member := range r.members {
 		ids = append(ids, member+"="+byMember[member])
@@ -120,11 +130,13 @@ func (r *haRun) memberIdentities() string {
 // recorded to the run's history, and it scales the Operator back to one
 // replica. Pods and Brokers are brought back by their controllers and the
 // Operator; the database is never touched.
-func (r *haRun) restoreStartingState() error {
+func (r *haRun) restoreStartingState(ctx context.Context) error {
 	r.mu.Lock()
 	running := slices.Sorted(maps.Keys(r.running))
 	r.mu.Unlock()
 	for _, id := range running {
+		// collectClient takes no context on purpose: stopping a client and
+		// reading its history must finish even when ctx has ended.
 		text, err := r.collectClient(id)
 		if err != nil {
 			return fmt.Errorf("collecting the history of client %s: %w", id, err)
@@ -135,14 +147,14 @@ func (r *haRun) restoreStartingState() error {
 		r.addHistory(text)
 		_, _ = fmt.Fprintf(GinkgoWriter, "stopped client %s, left running by an earlier step\n", id)
 	}
-	replicas, err := utils.Run(exec.Command("kubectl", "-n", namespace, "get", operatorDeployment,
+	replicas, err := utils.Run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "get", operatorDeployment,
 		"-o", "jsonpath={.spec.replicas}"))
 	if err != nil {
 		return err
 	}
 	if replicas != "1" {
 		_, _ = fmt.Fprintf(GinkgoWriter, "scaling the Operator from %s replicas back to 1\n", replicas)
-		if _, err := utils.Run(exec.Command("kubectl", "-n", namespace, "scale", operatorDeployment,
+		if _, err := utils.Run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "scale", operatorDeployment,
 			"--replicas=1")); err != nil {
 			return err
 		}
@@ -156,13 +168,13 @@ func (r *haRun) restoreStartingState() error {
 // every Broker available, the workload client running, and the data rules
 // holding on every member and through both Services, which also shows that
 // both endpoints answer.
-func (r *haRun) verifyStartingState() error {
+func (r *haRun) verifyStartingState(ctx context.Context) error {
 	unmet := func(member, kind, format string, args ...any) error {
 		return &faults.Unmet{Member: member, Kind: kind, Detail: fmt.Sprintf(format, args...)}
 	}
 	for _, member := range r.members {
 		// A Pod that is being deleted is still Ready for a while.
-		ready, err := r.kubectl("get", "pod", member,
+		ready, err := r.kubectl(ctx, "get", "pod", member,
 			"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}{.metadata.deletionTimestamp}`)
 		if err != nil {
 			return err
@@ -171,7 +183,7 @@ func (r *haRun) verifyStartingState() error {
 			return unmet(member, faults.UnmetPod, "Pod is not Ready, or is being deleted: %q", ready)
 		}
 	}
-	deleting, err := r.kubectl("get", "pods",
+	deleting, err := r.kubectl(ctx, "get", "pods",
 		"-l", "database.cubrid.io/broker-access-mode,app.kubernetes.io/instance="+r.cluster,
 		"-o", `jsonpath={range .items[?(@.metadata.deletionTimestamp)]}{.metadata.name}{" "}{end}`)
 	if err != nil {
@@ -180,27 +192,27 @@ func (r *haRun) verifyStartingState() error {
 	if strings.TrimSpace(deleting) != "" {
 		return unmet("", faults.UnmetBroker, "Broker Pods are being deleted: %s", deleting)
 	}
-	master, _, err := r.master()
+	master, _, err := r.master(ctx)
 	if err != nil {
 		return err
 	}
 	// A condition that is not True is an Unmet of kind condition; a
 	// command or decoding failure stays a plain error, of kind other.
-	if _, err := r.formationTime(); err != nil {
+	if _, err := r.formationTime(ctx); err != nil {
 		return err
 	}
-	s, err := r.status()
+	s, err := r.status(ctx)
 	if err != nil {
 		return err
 	}
 	if s.primary != master {
 		return unmet(master, faults.UnmetRole, "status.currentPrimary is %q, CUBRID reports %s as master", s.primary, master)
 	}
-	if !operatorAvailable() {
+	if !operatorAvailable(ctx) {
 		return unmet("", faults.UnmetOperator, "the Operator is not available")
 	}
 	for _, mode := range []string{"rw", "ro"} {
-		out, err := r.kubectl("get", "deployment", r.cluster+"-broker-"+mode,
+		out, err := r.kubectl(ctx, "get", "deployment", r.cluster+"-broker-"+mode,
 			"-o", "jsonpath={.spec.replicas} {.status.updatedReplicas} {.status.availableReplicas}")
 		if err != nil {
 			return err
@@ -212,7 +224,7 @@ func (r *haRun) verifyStartingState() error {
 		}
 	}
 	// A client Pod that is being deleted still answers for a while.
-	client, err := utils.Run(exec.Command("kubectl", "-n", r.clientNamespace, "get", "pod", "workload-client",
+	client, err := utils.Run(exec.CommandContext(ctx, "kubectl", "-n", r.clientNamespace, "get", "pod", "workload-client",
 		"-o", "jsonpath={.status.phase}{.metadata.deletionTimestamp}"))
 	if err != nil {
 		return err
@@ -226,7 +238,7 @@ func (r *haRun) verifyStartingState() error {
 	r.markers++
 	marker := fmt.Sprintf("gate%d", r.markers)
 	r.mu.Unlock()
-	h, err := r.runWorkload("CLIENT_ID=" + marker + " OPS=1 ROLLBACK_EVERY=0")
+	h, err := r.runWorkload(ctx, "CLIENT_ID="+marker+" OPS=1 ROLLBACK_EVERY=0")
 	if err != nil {
 		// The client could not run or its history could not be read.
 		return unmet("", faults.UnmetClient, "marker write: %v", err)
@@ -235,12 +247,15 @@ func (r *haRun) verifyStartingState() error {
 		return unmet("rw", faults.UnmetData, "the marker write was not acknowledged: %v", h.Counts)
 	}
 	var report workload.Report
-	for deadline := time.Now().Add(time.Minute); ; time.Sleep(3 * time.Second) {
-		if report, err = r.dataCheck(); err == nil && report.OK {
+	for deadline := time.Now().Add(time.Minute); ; {
+		if report, err = r.dataCheck(ctx); err == nil && report.OK {
 			return nil
 		}
 		if time.Now().After(deadline) {
 			break
+		}
+		if err := sleepUnlessDone(ctx, 3*time.Second); err != nil {
+			return err
 		}
 	}
 	if err != nil {
@@ -266,8 +281,8 @@ func (r *haRun) verifyStartingState() error {
 
 // needsFirstMemberAsMaster is the order dependency of S03
 // abrupt-first-member: the steps before it move no role.
-func (r *haRun) needsFirstMemberAsMaster(context.Context) error {
-	master, _, err := r.master()
+func (r *haRun) needsFirstMemberAsMaster(ctx context.Context) error {
+	master, _, err := r.master(ctx)
 	if err != nil {
 		return err
 	}
@@ -351,7 +366,8 @@ func (r *haRun) breakOnPurpose(name string) {
 	brokers, err := r.rwBrokerPods()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(brokers).NotTo(BeEmpty())
-	_, err = r.kubectl("delete", "pod", brokers[0].name, "--wait=false", "--grace-period=0", "--force")
+	_, err = r.kubectl(context.Background(),
+		"delete", "pod", brokers[0].name, "--wait=false", "--grace-period=0", "--force")
 	Expect(err).NotTo(HaveOccurred())
 	_, err = utils.Run(exec.Command("kubectl", "-n", namespace, "scale", operatorDeployment, "--replicas=0"))
 	Expect(err).NotTo(HaveOccurred())

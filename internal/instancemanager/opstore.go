@@ -462,7 +462,46 @@ func (s *OperationStore) unreadableErrLocked() error {
 		ErrOperationRecordUnreadable, more, s.unreadable[ids[0]].err)
 }
 
+// Peek returns the operation with the given ID as the next Get will see it,
+// and writes nothing: an end that could not be written (Settle) is applied
+// to the returned copy only, and a record the start could not read that has
+// not ended is returned Failed, as its first read records it. The record on
+// disk, the kept end and the remembered interruption are left as they are.
+func (s *OperationStore) Peek(id string) (*Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	op, err := s.decodeLocked(id)
+	if err != nil {
+		return nil, err
+	}
+	if mutate, ok := s.unsettled[id]; ok {
+		mutate(op)
+		return op, nil
+	}
+	if s.interrupted[id] && !op.State.IsTerminal() {
+		op.State, op.FailureReason = OpFailed, reasonRestarted
+	}
+	return op, nil
+}
+
+// readLocked returns the record of operation id, and fails it first when the
+// start could not read it and it has not ended (failInterruptedLocked).
 func (s *OperationStore) readLocked(id string) (*Operation, error) {
+	op, err := s.decodeLocked(id)
+	if err != nil {
+		return nil, err
+	}
+	if s.interrupted[id] {
+		if err := s.failInterruptedLocked(op); err != nil {
+			return nil, err
+		}
+	}
+	return op, nil
+}
+
+// decodeLocked reads and decodes the record of operation id as it is on
+// disk.
+func (s *OperationStore) decodeLocked(id string) (*Operation, error) {
 	if !isValidOperationID(id) {
 		return nil, ErrOperationNotFound
 	}
@@ -486,11 +525,6 @@ func (s *OperationStore) readLocked(id string) (*Operation, error) {
 	if op.ID != id || op.Kind == "" || op.IdempotencyKey == "" {
 		return nil, fmt.Errorf("decode operation %s: the record has ID %q, kind %q and an idempotency key of %d bytes",
 			id, op.ID, op.Kind, len(op.IdempotencyKey))
-	}
-	if s.interrupted[id] {
-		if err := s.failInterruptedLocked(&op); err != nil {
-			return nil, err
-		}
 	}
 	return &op, nil
 }

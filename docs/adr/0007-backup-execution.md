@@ -97,11 +97,30 @@ no ambiguous/incomplete primary observation (ADR-0005) — so backup load
 never lands on a suspected master during unsafe failover evidence; it
 records `fallbackUsed: true`, `targetRole: master`, reason
 `MasterFallbackSelected`. `StandbyOnly`
-fails if no eligible slave. As implemented, an eligible slave is a member
-authoritatively observed as a slave in a fresh observation, and the first
-one in ordinal order is taken: Pod readiness and how far the slave has
-caught up are not evaluated (`internal/controller/backuptarget.go`), and the
-`FencingRequired` check has no input because no step sets that Condition.
+waits if no slave is eligible. As implemented (#291,
+`internal/controller/backuptarget.go`), a slave is eligible for a new
+selection only on fresh evidence that it follows the master: it is
+authoritatively observed as a slave in this reconcile's observation, its
+log applier was read in the same observation, it applies the log of the
+resolved primary, it has failed no change (`failCount` 0), and the stall
+series that reading continues (from the cluster status' replication
+history) has not reached the 60 s stall window of `ReplicationHealthy`.
+Eligible slaves are ordered by the log pages waiting to be applied
+(`delayedPages`), then by ordinal. Missing evidence never counts as caught
+up: a slave whose applier could not be read is not eligible, and no slave is
+eligible while the primary is not resolved, so `StandbyOnly` waits
+(`NoHealthyStandby`) and `PreferStandby` falls back to the master only under
+the rule above. That also holds when the applier cannot be read at all,
+because the Instance Manager is older and reports no replication or because
+`applyinfo` timed out under load: that slave is not eligible, so
+`PreferStandby` then falls back to the master. A `failCount` greater than 0
+excludes a slave for as long as the applier's counter keeps it. A long transaction on the master can keep pages waiting
+with nothing applied and so exclude a slave that is not behind (#249); that
+only moves the backup to another slave or to the master fallback. A target
+already recorded is not judged again on its replication (an earlier dispatch
+to it may run); it must still be authoritatively a slave. Pod readiness is
+not evaluated, and the `FencingRequired` check has no input because no step
+sets that Condition.
 **Backup on master is allowed** (fallback,
 health-checked) but not preferred. If all roles are `unknown`: single
 instance → allow with reason `RoleUnknownSingleInstanceFallback`; HA
@@ -145,7 +164,18 @@ neither case is another member started, then or later. The bound is not the
 time a backup takes: an adopted operation is polled until it ends. While its
 member is reachable the Instance Manager's backup time limit
 (`IM_BACKUP_TIMEOUT`, default 2h) ends it; while the member does not answer,
-the operator keeps polling until it does. It covers a
+the operator keeps polling until it does. A member that answers that it
+holds no record of the recorded operation (`404` on
+`GET /v1/operations/{id}`, for example after its operation store was lost or
+replaced) is told apart from one that does not answer (#457): the backup
+reports `RecordedOperationMissing` and waits 30 minutes from
+`status.operationMissingSince`, which only a read of the operation clears,
+so an operator restart or a failure to ask in between does not reset it.
+Then the backup ends `Failed` with reason `RecordedOperationLost`, naming the
+member and the operation. A missing record does not show that the work
+ended, so the reason says that a backup may still run there and upload under
+the backup's prefix; the backup is not started again, on that member or
+another, and no artifact is recorded. It covers a
 member restart or a failover and its settling, and an operator who restarts
 a Pod to apply `spec.objectStorage`. Limit: a start delayed in the network
 beyond the bound and the lookup could still be taken after the backup ended
@@ -286,8 +316,19 @@ remains a compatibility consideration, separate from ordinary artifact safety.
 - **Artifact trust:** restore/rebuild must **reject** any manifest whose
   `database`, `clusterUID`, `cubridVersion`, `level`, or expected
   source-role policy does not match the intended operation, in addition
-  to per-file checksum validation. A `PVC` destination (reserved; not run,
-  see below) is **not eligible** for ADR-0006 rebuild or disaster recovery.
+  to per-file checksum validation. As implemented (#276), the Instance
+  Manager checks this at the restore boundary, before anything is
+  downloaded into staging, registered in `databases.txt` or run: every
+  restore takes only a full backup (`level` 0) of the request's database
+  and engine version; a seed restore (`seedFromMaster`) takes only a backup
+  whose manifest declares that master as `sourceInstance` and `master` as
+  `sourceRole` (the role the operator declared when it requested the backup),
+  and, when the request carries `expectedClusterUID` (the operator always
+  sends it for a seed), whose `clusterUID` is that cluster's. A restore into
+  a new cluster takes another cluster's full backup from a standby or the
+  master. The engine version is still compared as the declared string
+  (#321). A `PVC` destination (reserved; not run, see below) is **not
+  eligible** for ADR-0006 rebuild or disaster recovery.
 
 ### `CubridBackup` CR (v1alpha1)
 
@@ -423,6 +464,7 @@ operation of it, and waits within the bound while that cannot be asked),
 `ObjectStorageNotApplied`, `UnsupportedDestination`, `InvalidBackupDestination`,
 `RecordedTargetNotEligible`,
 `RecordedTargetNotStarted`, `RecordedTargetUnverified`, `ObjectStorageWaitExpired`,
+`RecordedOperationMissing`, `RecordedOperationLost`,
 `ObjectStorageUnavailable`). Cluster-level: `BackupReady`
 (True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary. As
 implemented, `ChecksumMismatch`, `InsufficientStagingSpace` and

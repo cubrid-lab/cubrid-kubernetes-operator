@@ -439,7 +439,8 @@ bootstrap branch**: an existing DB is a hard block here, not an adoption.
 This guard covers the **initial master PVC**; slave PVC safety is
 delegated to the ADR-0006 seed/rebuild flow. Source `clusterUid` is
 verified for manifest integrity/presence and **recorded as provenance**,
-not required to equal the new cluster UID (restore-into-new-cluster). As
+not required to equal the new cluster UID (restore-into-new-cluster); the
+backup must be full (`level` 0) and may come from a standby (#276). As
 implemented, it stays in `manifest.json`; the cluster's status records the
 `manifestUri`, not the source UID.
 

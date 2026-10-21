@@ -114,12 +114,14 @@ func (f *fakeRestoreClient) GetOperation(_ context.Context, _, _, _ string) (ins
 // memberProber reports one member as master and every other as slave.
 type memberProber struct{ master string }
 
+// ProbeRole answers master for p.master and slave for every other member,
+// whose applier was read applying the master's log with nothing waiting.
 func (p *memberProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
-	role := databasev1alpha1.RoleSlave
 	if podName == p.master {
-		role = databasev1alpha1.RoleMaster
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now()}
 	}
-	return RoleObservation{Reachable: true, Role: role, ObservedAt: time.Now()}
+	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now(),
+		Replication: &ReplicationObservation{Source: p.master, AppliedChanges: 1}}
 }
 
 // applierProber reports one master and slaves with the given appliers, at the

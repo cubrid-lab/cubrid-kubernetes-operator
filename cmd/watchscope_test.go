@@ -227,8 +227,11 @@ func makeWatchObjects(t *testing.T, ctx context.Context, admin client.Client, na
 	mustWatch(t, admin.Create(ctx, cluster))
 	mustWatch(t, admin.Create(ctx, backup))
 	owner := metav1.NewControllerRef(cluster, databasev1alpha1.GroupVersion.WithKind("CubridCluster"))
+	// Like every Secret the operator writes, the sentinel carries the
+	// managed-by label, without which the manager does not cache it.
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: watchTestSecret, Namespace: namespace,
-		OwnerReferences: []metav1.OwnerReference{*owner}},
+		OwnerReferences: []metav1.OwnerReference{*owner},
+		Labels:          map[string]string{controller.ManagedByLabel: controller.ManagedByOperator}},
 		Data: map[string][]byte{"sequence": []byte("initial")}}
 	mustWatch(t, admin.Create(ctx, secret))
 }

@@ -275,6 +275,14 @@ spec:
                   this status.
                 format: int64
                 type: integer
+              operationMissingSince:
+                description: |-
+                  operationMissingSince is when the target first answered that it holds
+                  no record of operationRef, since the operation was last read. The
+                  backup ends Failed when the record stays missing for a bound from this
+                  time (ADR-0007); a read of the operation clears it.
+                format: date-time
+                type: string
               operationRef:
                 description: operationRef is the Instance Manager operation ID (idempotent
                   contract).
