@@ -23,6 +23,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
@@ -111,6 +113,10 @@ func TestHTTPBackupClient_ErrorAnswersAreClassified(t *testing.T) {
 			[]error{errObjectStorageNotApplied}, []error{errStartConflict}, reasonObjectStorageNotApplied, ""},
 		{"a refused token", http.StatusUnauthorized, `{"error":"unauthorized","code":"Unauthorized"}`,
 			[]error{errTokenRefused}, []error{errStartConflict}, reasonTokenRefused, "refused the cluster's Instance Manager token"},
+		{"an operation record the member cannot read", http.StatusInternalServerError,
+			`{"error":"an operation record cannot be read: decode operation op-1: unexpected end of JSON input","code":"OperationRecordUnreadable"}`,
+			[]error{errOperationRecordUnreadable}, []error{errStartConflict, errTokenRefused, errRequestRefused},
+			reasonOperationRecordUnreadable, "decode operation op-1"},
 		{"a server error", http.StatusInternalServerError, `{"error":"write operation record: disk full"}`,
 			nil, []error{errStartConflict, errTokenRefused, errRequestRefused}, "InstanceManagerUnavailable", "disk full"},
 		{"a request the member refuses as invalid", http.StatusBadRequest, `{"error":"database name \"a b\" is not a plain identifier"}`,
@@ -322,6 +328,55 @@ func TestHTTPBackupClient_AgainstTheInstanceManager(t *testing.T) {
 	}
 }
 
+// A start that the real Instance Manager refuses because its operation store
+// holds a record it cannot read is reported by its own reason, retryable and
+// with a pointer to the runbook, on every kind of start (#481).
+func TestHTTPBackupClient_UnreadableRecordAgainstTheInstanceManager(t *testing.T) {
+	const member = "db-0"
+	dir := t.TempDir()
+	corrupt := filepath.Join(dir, "op-"+strings.Repeat("0", 32)+".json")
+	if err := os.WriteFile(corrupt, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := instancemanager.NewOperationStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staging := t.TempDir()
+	h := instancemanager.NewServer(nil, "tok").WithOperationStore(store).WithObjectStore(nopObjects{}).
+		WithBackupStagingRoot(staging).Handler()
+	c := NewHTTPBackupClient(staticToken("tok"))
+	c.Client = &http.Client{Transport: toHandler{h}}
+	ctx := context.Background()
+	starts := map[string]func() error{
+		"backup": func() error {
+			_, err := c.StartBackup(ctx, member, "ns", "backup-key", instancemanager.BackupRequest{
+				Database: testDatabase, Destination: filepath.Join(staging, "uid"),
+				Upload: &instancemanager.BackupUpload{Bucket: "b", Prefix: "p", ClusterUID: "c", CubridVersion: cubridVersion,
+					SourceInstance: member, SourceRole: string(instancemanager.RoleMaster)}})
+			return err
+		},
+		"restore": func() error {
+			_, err := c.StartRestore(ctx, member, "ns", "restore-key", instancemanager.RestoreRequest{
+				Database: testDatabase, Bucket: "b", Prefix: "p", ExpectedCubridVersion: cubridVersion,
+				StagingDir: "/var/lib/cubrid/restore-staging/uid", TargetDir: restoreTargetRoot})
+			return err
+		},
+	}
+	for name, start := range starts {
+		err := start()
+		if !errors.Is(err, errOperationRecordUnreadable) || errors.Is(err, errRequestRefused) || errors.Is(err, errStartConflict) {
+			t.Errorf("%s: err = %v, want only an unreadable operation record", name, err)
+		}
+		if got := instanceManagerFailureReason(err); got != reasonOperationRecordUnreadable {
+			t.Errorf("%s: reason = %q, want %q", name, got, reasonOperationRecordUnreadable)
+		}
+		if err != nil && !strings.Contains(err.Error(), "runbook") {
+			t.Errorf("%s: %q does not point at the runbook", name, err)
+		}
+	}
+}
+
 var _ = Describe("Terminal and retryable answers of a recovery restore (#302)", func() {
 	ctx := context.Background()
 
@@ -407,6 +462,27 @@ var _ = Describe("Terminal and retryable answers of a recovery restore (#302)", 
 		Expect(got.Status.Bootstrap.OperationID).To(Equal(opRestore))
 		Expect(restore.keys).To(HaveLen(2))
 		Expect(restore.keys[1]).To(Equal(restore.keys[0]))
+	})
+
+	It("names an unreadable operation record, waits and then starts (#481)", func() {
+		restore := &fakeRestoreClient{startErr: imAnswer(http.StatusInternalServerError,
+			`{"error":"an operation record cannot be read: decode operation op-1: unexpected end of JSON input","code":"OperationRecordUnreadable"}`)}
+		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore}
+		key := newRecovery("recovery-unreadable")
+		for range maxBootstrapAttempts + 1 {
+			res, got := reconcileOnce(r, key)
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(bootstrapReady(got)).To(Equal(reasonOperationRecordUnreadable))
+			Expect(meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady).Message).To(
+				ContainSubstring("Runbook: an operation record that cannot be read"))
+			Expect(got.Status.Bootstrap.Phase).NotTo(Equal(databasev1alpha1.BootstrapFailed))
+			Expect(got.Status.Bootstrap.Attempts).To(BeZero(), "waiting uses up no attempt")
+		}
+		Expect(restore.lookups).To(BeZero(), "a member that cannot read its records is not asked for the key")
+
+		restore.startErr = nil
+		_, got := reconcileOnce(r, key)
+		Expect(got.Status.Bootstrap.OperationID).To(Equal(opRestore))
 	})
 
 	It("follows the operation its key names when the member holds it for another request", func() {

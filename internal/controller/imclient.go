@@ -114,6 +114,20 @@ var errStagingInUse = errors.New("a running operation of another request owns th
 // another request body. Sending the start again never succeeds.
 var errRequestConflict = errors.New("the member holds an operation under this key for another request")
 
+// errOperationRecordUnreadable is wrapped by a start that the member refused
+// because its operation store holds a record it cannot read (500,
+// OperationRecordUnreadable). Nothing was started; it is retryable once the
+// record is readable again or removed by hand, so it uses up no attempt.
+var errOperationRecordUnreadable = errors.New("the member's Instance Manager holds an operation record it cannot read")
+
+// reasonOperationRecordUnreadable is the condition reason of a start refused
+// with errOperationRecordUnreadable, and runbookUnreadableRecord the runbook
+// its message points at.
+const (
+	reasonOperationRecordUnreadable = "InstanceManagerOperationRecordUnreadable"
+	runbookUnreadableRecord         = "Runbook: an operation record that cannot be read"
+)
+
 // maxErrorBody bounds what is read of an error answer, and maxErrorMessage
 // the length of the message taken from it. Of a larger answer at most
 // maxErrorDrain bytes more are read and discarded.
@@ -173,6 +187,9 @@ func unexpectedStatus(resp *http.Response) error {
 		return fmt.Errorf("%w (%s)", errTokenRefused, detail)
 	case resp.StatusCode == http.StatusPreconditionFailed:
 		return fmt.Errorf("%w (%s)", errObjectStorageNotApplied, detail)
+	case code == instancemanager.CodeOperationRecordUnreadable:
+		return fmt.Errorf("%w (%s); see the runbook %q in docs/observability.md",
+			errOperationRecordUnreadable, detail, runbookUnreadableRecord)
 	case resp.StatusCode != http.StatusConflict:
 		return fmt.Errorf("unexpected %s", detail)
 	}
@@ -248,8 +265,9 @@ func cleanMessage(msg string) string {
 }
 
 // instanceManagerFailureReason is the condition reason for a failed call to
-// an Instance Manager: a refused token, a manager without object storage and
-// each cause of a conflict are told apart from an unavailable manager.
+// an Instance Manager: a refused token, a manager without object storage,
+// each cause of a conflict and an unreadable operation record are told apart
+// from an unavailable manager.
 func instanceManagerFailureReason(err error) string {
 	switch {
 	case errors.Is(err, errTokenRefused):
@@ -268,6 +286,8 @@ func instanceManagerFailureReason(err error) string {
 		return reasonRequestRefused
 	case errors.Is(err, errStartConflict):
 		return reasonConflict
+	case errors.Is(err, errOperationRecordUnreadable):
+		return reasonOperationRecordUnreadable
 	}
 	return reasonInstanceManagerUnavailable
 }
