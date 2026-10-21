@@ -19,8 +19,9 @@ limitations under the License.
 // starts only when the cluster behind that context carries the marker of that
 // lab, and only while no other run holds the lab's campaign Lease.
 //
-// Everything goes through kubectl with an explicit --context, so a run never
-// depends on, or changes, the caller's current context.
+// Everything goes through kubectl with an explicit --context, and with
+// --kubeconfig when the run has pinned its own copy of that context, so a run
+// never depends on, or changes, the caller's current context.
 package lab
 
 import (
@@ -53,10 +54,19 @@ type Target struct {
 	Context string
 	// Name is the lab that context must lead to, as its marker names it.
 	Name string
+	// Kubeconfig, when set, is the file every call reads the context from,
+	// instead of the caller's KUBECONFIG: a copy taken once at the start, so
+	// that redefining the context during a run cannot move the run, or the
+	// release of its Lease, to another cluster.
+	Kubeconfig string
 }
 
 func (t Target) kubectl(ctx context.Context, k Kubectl, stdin string, args ...string) (string, error) {
-	return k(ctx, stdin, append([]string{"--context", t.Context}, args...)...)
+	prefix := []string{"--context", t.Context}
+	if t.Kubeconfig != "" {
+		prefix = append([]string{"--kubeconfig", t.Kubeconfig}, prefix...)
+	}
+	return k(ctx, stdin, append(prefix, args...)...)
 }
 
 // Check returns an error unless the cluster behind t.Context carries the
@@ -82,6 +92,8 @@ func (t Target) Check(ctx context.Context, k Kubectl) error {
 type Lock struct {
 	target Target
 	holder string
+	// uid is the Lease's metadata.uid: Release deletes that object only.
+	uid string
 }
 
 // Acquire creates the campaign Lease for holder, so that a second campaign on
@@ -92,6 +104,10 @@ type Lock struct {
 // A Lease left behind by a run that was killed is not taken over: whether
 // that campaign still runs cannot be told from here, so the error names its
 // holder and how to remove it once that is known.
+//
+// When the create fails in another way, for example a timeout after the API
+// server stored the Lease, the Lease is read back: if it names holder, it is
+// this run's and the lock is returned, so that it is released as usual.
 func (t Target) Acquire(
 	ctx context.Context, k Kubectl, holder string, duration time.Duration, now time.Time,
 ) (*Lock, error) {
@@ -114,31 +130,69 @@ func (t Target) Acquire(
 	if err != nil {
 		return nil, err
 	}
-	if _, err := t.kubectl(ctx, k, string(manifest), "create", "-f", "-"); err != nil {
-		if !strings.Contains(err.Error(), "AlreadyExists") {
-			return nil, fmt.Errorf("context %q: creating the campaign Lease: %w", t.Context, err)
+	uid, err := t.kubectl(ctx, k, string(manifest), "create", "-f", "-", "-o", "jsonpath={.metadata.uid}")
+	if err == nil {
+		if uid = strings.TrimSpace(uid); uid == "" {
+			return nil, fmt.Errorf("context %q: the campaign Lease was created without a uid", t.Context)
 		}
-		return nil, t.held(ctx, k, now)
+		return &Lock{target: t, holder: holder, uid: uid}, nil
 	}
-	return &Lock{target: t, holder: holder}, nil
+	if strings.Contains(err.Error(), "AlreadyExists") {
+		return nil, t.held(ctx, k, holder, now)
+	}
+	// The create may still have been stored.
+	l, readErr := t.lease(ctx, k)
+	switch {
+	case readErr == nil && l.Spec.Holder == holder && l.Metadata.UID != "":
+		return &Lock{target: t, holder: holder, uid: l.Metadata.UID}, nil
+	case readErr == nil && l.Spec.Holder != "":
+		return nil, fmt.Errorf("context %q: creating the campaign Lease: %w; %w", t.Context, err, t.describe(l, now))
+	default:
+		return nil, fmt.Errorf("context %q: creating the campaign Lease: %w; "+
+			"whether the Lease exists is unknown, check with: kubectl --context %s -n %s get lease %s",
+			t.Context, err, t.Context, Namespace, LeaseName)
+	}
+}
+
+type leaseObject struct {
+	Metadata struct {
+		UID string `json:"uid"`
+	} `json:"metadata"`
+	Spec struct {
+		Holder   string    `json:"holderIdentity"`
+		Seconds  int       `json:"leaseDurationSeconds"`
+		Acquired time.Time `json:"acquireTime"`
+	} `json:"spec"`
+}
+
+// lease reads the campaign Lease.
+func (t Target) lease(ctx context.Context, k Kubectl) (leaseObject, error) {
+	var l leaseObject
+	out, err := t.kubectl(ctx, k, "", "-n", Namespace, "get", "lease", LeaseName, "-o", "json")
+	if err != nil {
+		return l, err
+	}
+	if err := json.Unmarshal([]byte(out), &l); err != nil {
+		return l, fmt.Errorf("parsing the Lease: %w", err)
+	}
+	return l, nil
 }
 
 // held describes the Lease another campaign holds.
-func (t Target) held(ctx context.Context, k Kubectl, now time.Time) error {
-	out, err := t.kubectl(ctx, k, "", "-n", Namespace, "get", "lease", LeaseName, "-o", "json")
+func (t Target) held(ctx context.Context, k Kubectl, holder string, now time.Time) error {
+	l, err := t.lease(ctx, k)
 	if err != nil {
 		return fmt.Errorf("the lab %q is held by another campaign (its Lease could not be read: %w)", t.Name, err)
 	}
-	var l struct {
-		Spec struct {
-			Holder   string    `json:"holderIdentity"`
-			Seconds  int       `json:"leaseDurationSeconds"`
-			Acquired time.Time `json:"acquireTime"`
-		} `json:"spec"`
+	if l.Spec.Holder == holder {
+		// Two Acquire calls of one run; a run calls it once.
+		return fmt.Errorf("the lab %q is already held by this run", t.Name)
 	}
-	if err := json.Unmarshal([]byte(out), &l); err != nil {
-		return fmt.Errorf("the lab %q is held by another campaign (its Lease could not be parsed: %w)", t.Name, err)
-	}
+	return t.describe(l, now)
+}
+
+// describe says who holds the lab, and how to remove a Lease past its end.
+func (t Target) describe(l leaseObject, now time.Time) error {
 	msg := fmt.Sprintf("the lab %q is held by %q since %s", t.Name, l.Spec.Holder,
 		l.Spec.Acquired.UTC().Format(time.RFC3339))
 	if end := l.Spec.Acquired.Add(time.Duration(l.Spec.Seconds) * time.Second); now.After(end) {
@@ -149,27 +203,29 @@ func (t Target) held(ctx context.Context, k Kubectl, now time.Time) error {
 	return errors.New(msg)
 }
 
-// Release deletes the Lease, but only while it is still this lock's: a Lease
-// that someone removed and another run created since is left alone. The
-// check and the delete are two calls, so a Lease replaced between them would
-// still be deleted; replacing one means deleting it by hand first, which the
-// error of Acquire only suggests once it has expired.
+// Release deletes the Lease, but only the object Acquire created: the delete
+// carries its uid as a precondition, so a Lease that someone removed and
+// another run created since is left alone, and nothing is read before the
+// delete that could change under it.
 func (l *Lock) Release(ctx context.Context, k Kubectl) error {
-	out, err := l.target.kubectl(ctx, k, "", "-n", Namespace, "get", "lease", LeaseName,
-		"--ignore-not-found", "-o", "jsonpath={.spec.holderIdentity}")
+	options, err := json.Marshal(map[string]any{
+		"apiVersion":    "v1",
+		"kind":          "DeleteOptions",
+		"preconditions": map[string]any{"uid": l.uid},
+	})
 	if err != nil {
-		return fmt.Errorf("reading the campaign Lease before releasing it: %w", err)
+		return err
 	}
-	switch got := strings.TrimSpace(out); got {
-	case "":
+	path := "/apis/coordination.k8s.io/v1/namespaces/" + Namespace + "/leases/" + LeaseName
+	_, err = l.target.kubectl(ctx, k, string(options), "delete", "--raw", path, "-f", "-")
+	switch {
+	case err == nil:
+		return nil
+	case strings.Contains(err.Error(), "(NotFound)"):
 		return fmt.Errorf("the campaign Lease of %q was removed while the run held it", l.holder)
-	case l.holder:
+	case strings.Contains(err.Error(), "(Conflict)"):
+		return fmt.Errorf("the campaign Lease is no longer the one %q created (uid %s); left in place", l.holder, l.uid)
 	default:
-		return fmt.Errorf("the campaign Lease is now held by %q, not %q; left in place", got, l.holder)
-	}
-	if _, err := l.target.kubectl(ctx, k, "", "-n", Namespace, "delete", "lease", LeaseName,
-		"--ignore-not-found"); err != nil {
 		return fmt.Errorf("deleting the campaign Lease: %w", err)
 	}
-	return nil
 }

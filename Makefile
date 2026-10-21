@@ -142,10 +142,16 @@ LAB_CONTEXT ?=
 LAB_TARGET ?=
 LAB_DURATION ?= 2h
 LAB_COMMAND ?= kubectl get nodes
+# The whole of LAB_COMMAND, `&&`, `;` and `|` included, runs under the Lease,
+# as one `sh -c`. It is passed as written ($(value ...), single-quoted), so
+# make does not expand its `$`: `$$KUBECONFIG` and `$KUBECONFIG` are both left
+# to the shell.
+LAB_COMMAND_QUOTED = '$(subst ','\'',$(value LAB_COMMAND))'
 
 .PHONY: test-lab
-test-lab: ## Run LAB_COMMAND against the lab LAB_TARGET through LAB_CONTEXT, holding the lab
-	go run ./test/lab/cmd/lab -context '$(LAB_CONTEXT)' -target '$(LAB_TARGET)' -duration '$(LAB_DURATION)' -- $(LAB_COMMAND)
+test-lab: $(LOCALBIN) ## Run LAB_COMMAND against the lab LAB_TARGET through LAB_CONTEXT, holding the lab
+	go build -o "$(LOCALBIN)/lab" ./test/lab/cmd/lab
+	"$(LOCALBIN)/lab" -context '$(LAB_CONTEXT)' -target '$(LAB_TARGET)' -duration '$(LAB_DURATION)' -- sh -c $(LAB_COMMAND_QUOTED)
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
