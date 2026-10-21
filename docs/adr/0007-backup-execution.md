@@ -428,6 +428,9 @@ sizeBytes, cubridVersion, database, level}`, `conditions`
 `InstanceManagerStagingInUse`, `InstanceManagerRequestConflict`,
 `InstanceManagerConflict` (a 409 by the cause its code names, ADR-0003; each
 waits on the recorded target like any refused start),
+`InstanceManagerOperationRecordUnreadable` (a 500 `OperationRecordUnreadable`:
+the member holds an operation record it cannot read; waits like an
+unavailable member, #481),
 `InstanceManagerRequestRefused` (a start refused as a request, 400, 413 or
 422, ADR-0003: the backup ends `Failed` unless the target holds an
 operation of it, and waits within the bound while that cannot be asked),

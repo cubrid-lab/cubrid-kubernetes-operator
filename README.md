@@ -94,6 +94,64 @@ with:
 
 CUBRID engine version migration is not included in the initial MVP.
 
+## Manager watch namespace
+
+The manager watches all namespaces by default. Set one explicit namespace to
+limit both `CubridCluster` / `CubridBackup` watches and their namespaced
+secondary-resource informers:
+
+```text
+/manager --watch-namespace=candidate --operator-namespace=candidate-system --metrics-bind-address=0
+```
+
+`--watch-namespace` accepts one Kubernetes namespace name. An empty value keeps
+the cluster-wide default; whitespace, lists, selectors and invalid names are
+rejected. It does not default to the Pod's namespace. The scoped cache also
+limits cached reads, including each cluster's Instance Manager token Secret.
+Cluster references and object-storage Secret references remain in the
+resource's own namespace.
+
+**Cache scope is not API authorization.** Client writes go directly to the API
+server; explicitly injected uncached readers/clients and any cluster-scoped
+resources are not restricted by a namespaced cache. Supply a namespace-bound
+`Role` and `RoleBinding` externally instead of applying the default manager
+`ClusterRoleBinding` to a restricted candidate. The Role in `candidate` needs
+the namespaced resource rules from [the generated manager role](config/rbac/role.yaml).
+Bind it to the manager's actual ServiceAccount, whose namespace may differ:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: candidate-manager
+  namespace: candidate
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: candidate-manager  # Externally supplied Role with the manager rules
+subjects:
+  - kind: ServiceAccount
+    name: controller-manager
+    namespace: candidate-system
+```
+
+Keep `--operator-namespace` set to the namespace where the Operator actually
+runs (or retain its service-account namespace default). It independently
+controls Instance Manager NetworkPolicy admission; watch scope does not change
+it or require caching that namespace. Certificate file flags still read their
+mounted paths, not Secrets through this cache.
+
+Leader-election settings are unchanged: the normal lease Role/RoleBinding is
+needed in the Operator's own namespace when election is enabled. Managers in
+the same election namespace share the existing lock ID. Authenticated metrics
+also require the existing cluster-scoped TokenReview/SubjectAccessReview
+permissions; the example disables metrics to avoid needing those permissions
+for a Role-only candidate. CRD installation remains an external cluster-wide
+prerequisite, and the default deployment/RBAC manifests are unchanged.
+
+Do not run overlapping controllers on the same resources: a scoped candidate
+and a cluster-wide Operator must not both watch one namespace.
+
 ## Network access
 
 For each `CubridCluster` the operator keeps two ingress NetworkPolicies:
