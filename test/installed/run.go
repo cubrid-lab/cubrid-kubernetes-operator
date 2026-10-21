@@ -52,12 +52,23 @@ const (
 	recordFile        = "LAB00/record.json"
 )
 
-// Config selects the installed target, fresh namespace and bounded evidence run.
+// NamespaceMode selects who owns the namespace lifecycle.
+// Empty retains the fresh namespace default.
+type NamespaceMode string
+
+const (
+	FreshNamespace        NamespaceMode = "fresh"
+	PreallocatedNamespace NamespaceMode = "preallocated"
+)
+
+// Config selects the installed target and bounded evidence run.
 type Config struct {
-	Namespace, OperatorNamespace, OperatorDeployment string
-	OperatorImage, InstanceManagerImage, Commit      string
-	StorageClass, EvidenceDir, Level, ClusterUID     string
-	Timeout, CleanupTimeout, Poll                    time.Duration
+	NamespaceMode                                      NamespaceMode
+	NamespaceUID, OwnerConfigMap, OwnerUID, OwnerNonce string
+	Namespace, OperatorNamespace, OperatorDeployment   string
+	OperatorImage, InstanceManagerImage, Commit        string
+	StorageClass, EvidenceDir, Level, ClusterUID       string
+	Timeout, CleanupTimeout, Poll                      time.Duration
 }
 
 // Runner uses an API client and command runner bound to the same target.
@@ -89,15 +100,36 @@ type record struct {
 	Database              imageIdentity   `json:"database"`
 	SQL                   []sqlStep       `json:"sql"`
 	Cleanup               string          `json:"cleanup"`
+	NamespaceMode         NamespaceMode   `json:"namespaceMode"`
+	OwnershipEpoch        *ownershipEpoch `json:"ownershipEpoch,omitempty"`
+	CleanupScope          string          `json:"cleanupScope"`
+	RetainedPVCs          []pvcIdentity   `json:"retainedPVCs"`
+	FixtureReusable       *bool           `json:"fixtureReusable,omitempty"`
+	ResetRequired         *bool           `json:"resetRequired,omitempty"`
 }
 
 func (c Config) validate() error {
 	if c.ClusterUID == "" {
 		return errors.New("the expected kube-system namespace UID is required to identify the target cluster")
 	}
-	if !strings.HasPrefix(c.Namespace, "cubrid-lab-") || len(validation.IsDNS1123Label(c.Namespace)) != 0 ||
-		c.Namespace == c.OperatorNamespace {
-		return errors.New("a fresh cubrid-lab- namespace distinct from the Operator namespace is required")
+	if c.NamespaceMode != "" && c.NamespaceMode != FreshNamespace && c.NamespaceMode != PreallocatedNamespace {
+		return errors.New("namespace mode must be fresh or preallocated")
+	}
+	if len(validation.IsDNS1123Label(c.Namespace)) != 0 {
+		return errors.New("a valid explicit namespace is required")
+	}
+	if c.NamespaceMode == PreallocatedNamespace {
+		if c.NamespaceUID == "" || c.OwnerUID == "" || c.OwnerNonce == "" ||
+			len(validation.IsDNS1123Subdomain(c.OwnerConfigMap)) != 0 {
+			return errors.New("preallocated mode requires namespace UID, owner ConfigMap name/UID and nonce")
+		}
+	} else {
+		if !strings.HasPrefix(c.Namespace, "cubrid-lab-") || c.Namespace == c.OperatorNamespace {
+			return errors.New("a fresh cubrid-lab- namespace distinct from the Operator namespace is required")
+		}
+		if c.NamespaceUID != "" || c.OwnerConfigMap != "" || c.OwnerUID != "" || c.OwnerNonce != "" {
+			return errors.New("external ownership inputs require explicit preallocated mode")
+		}
 	}
 	if len(validation.IsDNS1123Label(c.OperatorNamespace)) != 0 ||
 		len(validation.IsDNS1123Subdomain(c.OperatorDeployment)) != 0 ||
@@ -148,6 +180,9 @@ func validPinnedImage(image, commit string) bool {
 // Run uses the installed manager as read-only infrastructure. The only
 // cluster-scoped write is creation/deletion of this run's own namespace.
 func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
+	if cfg.NamespaceMode == "" {
+		cfg.NamespaceMode = FreshNamespace
+	}
 	if err := cfg.validate(); err != nil {
 		return err
 	}
@@ -163,7 +198,8 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 	}
 	rec := record{RunID: string(uuid.NewUUID()), Namespace: cfg.Namespace, SelectedCommit: cfg.Commit,
 		ExpectedOperatorImage: cfg.OperatorImage, ExpectedInstanceImage: cfg.InstanceManagerImage,
-		StorageClass: cfg.StorageClass, SQL: []sqlStep{}, Cleanup: "not owned"}
+		StorageClass: cfg.StorageClass, SQL: []sqlStep{}, Cleanup: "not owned",
+		NamespaceMode: cfg.NamespaceMode, CleanupScope: "namespace-uid", RetainedPVCs: []pvcIdentity{}}
 	summary := evidence.Summary{RunID: rec.RunID, StartedAt: time.Now().UTC(),
 		Environment: evidence.Environment{Level: cfg.Level, OperatorCommit: cfg.Commit,
 			KubernetesVersion: evidence.Unknown, OperatorImageDigest: evidence.Unknown,
@@ -171,10 +207,22 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 		Notes: []string{"Connection smoke against an installed Operator; no installation, VM fault or S00-S15 qualification",
 			"Commit is selected by the campaign; actual runtime image identities are recorded separately",
 			"Namespace cleanup does not certify deletion of retained backend volumes"}}
-	requirements := []evidence.Requirement{{ID: scenarioID}}
+	lane := laneName
+	variant := ""
+	if cfg.NamespaceMode == PreallocatedNamespace {
+		lane, variant = preallocatedLane, "preallocated"
+		rec.CleanupScope = ownedWorkloadsScope
+		rec.FixtureReusable, rec.ResetRequired = new(false), new(true)
+		rec.OwnershipEpoch = &ownershipEpoch{ConfigMap: cfg.OwnerConfigMap, UID: cfg.OwnerUID, Nonce: cfg.OwnerNonce}
+		summary.Notes = append(summary.Notes, "Component SQL/owned-workload cleanup only; retained PVCs and ownership epoch "+
+			"require separate fixture reset evidence")
+	}
+	requirements := []evidence.Requirement{{ID: scenarioID, Variant: variant}}
 	summary.Plan(requirements, "connection smoke has not started")
-	scenario := evidence.Scenario{ID: scenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
+	scenario := evidence.Scenario{ID: scenarioID, Variant: variant, Result: evidence.Blocked, NeverEvents: []string{}}
 	var owned *corev1.Namespace
+	var borrowed *namespaceGuard
+	var created *databasev1alpha1.CubridCluster
 	writeRecord := func() error {
 		data, err := json.MarshalIndent(rec, "", "  ")
 		if err != nil {
@@ -186,19 +234,18 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 		if err := writeRecord(); err != nil {
 			return err
 		}
-		return summary.Checkpoint(cfg.EvidenceDir, redactor, laneName, time.Now())
+		return summary.Checkpoint(cfg.EvidenceDir, redactor, lane, time.Now())
 	}
 	defer func() {
-		if owned != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.CleanupTimeout)
-			cleanupErr := r.cleanup(cleanupCtx, owned, cfg.Poll)
-			cancel()
+		if owned != nil || created != nil {
+			cleanupErr := r.cleanupRun(cfg, owned, borrowed)
 			cleaned := cleanupErr == nil
 			scenario.CleanupSucceeded = &cleaned
 			rec.Cleanup = "complete"
+
 			if cleanupErr != nil {
 				rec.Cleanup = cleanupErr.Error()
-				runErr = errors.Join(runErr, fmt.Errorf("namespace cleanup: %w", cleanupErr))
+				runErr = errors.Join(runErr, fmt.Errorf("scoped cleanup: %w", cleanupErr))
 			}
 		}
 		if err := writeRecord(); err != nil {
@@ -210,15 +257,15 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 			scenario.Result = evidence.Pass
 			scenario.Reason = "committed SQL row read through the installed Operator's new cluster"
 		} else {
-			if owned != nil {
+			if owned != nil || created != nil {
 				scenario.Result = evidence.Fail
 			}
 			scenario.Reason = runErr.Error()
 		}
 		summary.Record(scenario)
 		summary.FinishedAt = time.Now().UTC()
-		lane := evidence.Lane{Name: laneName, Required: requirements}
-		runErr = errors.Join(runErr, summary.Conclude(cfg.EvidenceDir, redactor, lane))
+		verdictLane := evidence.Lane{Name: lane, Required: requirements}
+		runErr = errors.Join(runErr, summary.Conclude(cfg.EvidenceDir, redactor, verdictLane))
 		if runErr != nil {
 			runErr = errors.New(string(redactor.Redact([]byte(runErr.Error()))))
 		}
@@ -237,20 +284,16 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Namespace, Labels: map[string]string{
-		"app.kubernetes.io/managed-by": "cubrid-installed-smoke", "app.kubernetes.io/instance": rec.RunID,
-		"pod-security.kubernetes.io/enforce": "restricted"}}}
-	if err := r.Client.Create(ctx, ns); err != nil {
-		return fmt.Errorf("create fresh run namespace (no cleanup authority granted): %w", err)
+	runNamespace, borrowedGuard, err := r.prepareNamespace(ctx, cfg, &rec)
+	if err != nil {
+		return err
 	}
-	if ns.UID == "" {
-		return errors.New("created namespace has no observed UID; cleanup authority was not granted")
-	}
-	owned, rec.NamespaceUID = ns, string(ns.UID)
+	owned, borrowed = runNamespace, borrowedGuard
+	guard := func(ctx context.Context) error { return r.requireOwned(ctx, owned, borrowed) }
 	if err := checkpoint(); err != nil {
 		return err
 	}
-	if err := r.requireNamespace(ctx, owned); err != nil {
+	if err := guard(ctx); err != nil {
 		return err
 	}
 	cluster := &databasev1alpha1.CubridCluster{ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: cfg.Namespace},
@@ -266,14 +309,21 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 	if cluster.UID == "" {
 		return errors.New("created smoke cluster has no observed UID")
 	}
+	created = cluster
 	rec.ClusterUID = string(cluster.UID)
-	database, err := r.waitDatabase(ctx, cfg, cluster)
+	if borrowed != nil {
+		borrowed.cluster = cluster
+	}
+	database, err := r.waitDatabase(ctx, cfg, cluster, guard)
 	if err != nil {
 		return err
 	}
 	rec.Database = database
+	if borrowed != nil {
+		borrowed.requireStorage = true
+	}
 	summary.Environment.CubridImageDigest = rec.Database.ImageID
-	return r.checkSQL(ctx, cfg, owned, &rec, &summary.Environment, checkpoint)
+	return r.checkSQL(ctx, cfg, guard, &rec, &summary.Environment, checkpoint)
 }
 
 func (r *Runner) observeEnvironment(ctx context.Context, cfg Config, rec *record, env *evidence.Environment) error {
@@ -308,11 +358,11 @@ func (r *Runner) observeEnvironment(ctx context.Context, cfg Config, rec *record
 }
 
 func (r *Runner) checkSQL(
-	ctx context.Context, cfg Config, owned *corev1.Namespace, rec *record,
+	ctx context.Context, cfg Config, guard func(context.Context) error, rec *record,
 	env *evidence.Environment, checkpoint func() error,
 ) error {
 	execInDatabase := func(args ...string) (string, error) {
-		if err := r.requireNamespace(ctx, owned); err != nil {
+		if err := guard(ctx); err != nil {
 			return "", err
 		}
 		current := &corev1.Pod{}
@@ -447,4 +497,45 @@ func pollUntil(ctx context.Context, interval time.Duration, check func() (bool, 
 		case <-ticker.C:
 		}
 	}
+}
+
+func (r *Runner) prepareNamespace(ctx context.Context, cfg Config, rec *record) (*corev1.Namespace,
+	*namespaceGuard, error) {
+	if cfg.NamespaceMode == PreallocatedNamespace {
+		borrowed := &namespaceGuard{runner: r, cfg: cfg, rec: rec, seen: map[string]string{}}
+		if err := borrowed.check(ctx); err != nil {
+			return nil, nil, err
+		}
+		rec.NamespaceUID = cfg.NamespaceUID
+		return nil, borrowed, nil
+	} else {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Namespace, Labels: map[string]string{
+			"app.kubernetes.io/managed-by": "cubrid-installed-smoke", "app.kubernetes.io/instance": rec.RunID,
+			"pod-security.kubernetes.io/enforce": "restricted"}}}
+		if err := r.Client.Create(ctx, ns); err != nil {
+			return nil, nil, fmt.Errorf("create fresh run namespace (no cleanup authority granted): %w", err)
+		}
+		if ns.UID == "" {
+			return nil, nil, errors.New("created namespace has no observed UID; cleanup authority was not granted")
+		}
+		rec.NamespaceUID = string(ns.UID)
+		return ns, nil, nil
+	}
+
+}
+
+func (r *Runner) requireOwned(ctx context.Context, owned *corev1.Namespace, borrowed *namespaceGuard) error {
+	if borrowed != nil {
+		return borrowed.check(ctx)
+	}
+	return r.requireNamespace(ctx, owned)
+}
+
+func (r *Runner) cleanupRun(cfg Config, owned *corev1.Namespace, borrowed *namespaceGuard) error {
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.CleanupTimeout)
+	defer cancel()
+	if borrowed != nil {
+		return borrowed.cleanup(ctx, cfg.Poll)
+	}
+	return r.cleanup(ctx, owned, cfg.Poll)
 }
