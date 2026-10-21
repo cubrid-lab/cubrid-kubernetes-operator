@@ -50,7 +50,8 @@ const stallForceRetryEnv = "E2E_STALL_FORCE_RETRY"
 func replicationStallStep(r *haRun) {
 	It("reports a slave that looks healthy and applies nothing, and no longer after its Pod is replaced", func() {
 		inPod := func(pod, script string) (string, error) {
-			return r.kubectl(context.Background(), "exec", pod, "--", "bash", "-c", `export PATH="${CUBRID}/bin:${PATH}"; `+script)
+			return r.kubectl(context.Background(),
+				"exec", pod, "--", "bash", "-c", `export PATH="${CUBRID}/bin:${PATH}"; `+script)
 		}
 		condition := func() (string, string, string) {
 			field := func(name string) string {
@@ -63,7 +64,8 @@ func replicationStallStep(r *haRun) {
 		// restarts is the restart count of the container of a member's Pod;
 		// a count that could not be read is an error, never a count.
 		restarts := func(pod string) (string, error) {
-			out, err := r.kubectl(context.Background(), "get", "pod", pod, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+			out, err := r.kubectl(context.Background(),
+				"get", "pod", pod, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
 			if err == nil && out == "" {
 				err = fmt.Errorf("pod %s reports no restart count", pod)
 			}
@@ -77,7 +79,7 @@ func replicationStallStep(r *haRun) {
 			instances, _ := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
 				`jsonpath={range .status.instances[*]}{.name}: {.role} {.replication}{"\n"}{end}`)
 			return fmt.Sprintf("CUBRID: %s\nPods (uid/restarts): %s\nstatus.instances:\n%s",
-				roles.last, r.memberIdentities(), instances)
+				roles.last, r.memberIdentities(context.Background()), instances)
 		}
 		// Each run of the step writes with client IDs of its own.
 		r.mu.Lock()
@@ -295,7 +297,8 @@ func replicationStallStep(r *haRun) {
 		Expect(err).NotTo(HaveOccurred())
 		victim := slaves[0]
 		restarts := func() string {
-			out, _ := r.kubectl(context.Background(), "get", "pod", victim, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+			out, _ := r.kubectl(context.Background(),
+				"get", "pod", victim, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
 			return out
 		}
 		before := restarts()

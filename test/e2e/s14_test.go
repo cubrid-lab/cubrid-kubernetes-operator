@@ -146,7 +146,8 @@ func s14Step(r *haRun) {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("reading the cluster's own Instance Manager token")
-		encoded, err := r.kubectl(context.Background(), "get", "secret", r.cluster+"-im-token", "-o", "jsonpath={.data.token}")
+		encoded, err := r.kubectl(context.Background(),
+			"get", "secret", r.cluster+"-im-token", "-o", "jsonpath={.data.token}")
 		Expect(err).NotTo(HaveOccurred())
 		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
 		Expect(err).NotTo(HaveOccurred())
@@ -253,10 +254,12 @@ func s14Step(r *haRun) {
 		Expect(faults.CheckUnchanged(membersBefore, r.identities(context.Background(), r.members))).To(Succeed(),
 			"the DB Pods and their containers after the refused requests")
 		for _, member := range r.members {
-			restarts, err := r.kubectl(context.Background(), "get", "pod", member, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+			restarts, err := r.kubectl(context.Background(),
+				"get", "pod", member, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(restarts).To(Equal("0"), "restarts of %s", member)
-			operations, err := r.kubectl(context.Background(), "exec", member, "--", "sh", "-c", "ls /var/lib/cubrid/operations 2>/dev/null | wc -l")
+			operations, err := r.kubectl(context.Background(),
+				"exec", member, "--", "sh", "-c", "ls /var/lib/cubrid/operations 2>/dev/null | wc -l")
 			Expect(err).NotTo(HaveOccurred())
 			_, _ = fmt.Fprintf(GinkgoWriter, "operation records on %s: %s\n", member, strings.TrimSpace(operations))
 		}

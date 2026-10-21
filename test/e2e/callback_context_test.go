@@ -59,6 +59,12 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 		"memberValues": func(ctx context.Context) {
 			_, _ = r.memberValues(ctx, "pod-0", "SELECT 1;")
 		},
+		"identities": func(ctx context.Context) { _ = r.identities(ctx, []string{"pod-0"}) },
+		"roleLog.sample": func(ctx context.Context) {
+			var roles roleLog
+			roles.sample(ctx, r)
+		},
+		"operatorAvailable": func(ctx context.Context) { _ = operatorAvailable(ctx) },
 		"readS00Row": func(ctx context.Context) {
 			_ = readS00Row(csqlInPod(ctx, "ns", "pod-0", "db"), "m")
 		},

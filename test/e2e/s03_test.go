@@ -214,7 +214,8 @@ func (r *haRun) stopClient(id string) ([]workload.Event, workload.History) {
 	history, err := workload.ReadHistory(strings.NewReader(text))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	r.addHistory(text)
-	if errors, err := r.client(context.Background(), fmt.Sprintf("tail -n 5 /tmp/%s.err", id)); err == nil && strings.TrimSpace(errors) != "" {
+	if errors, err := r.client(context.Background(),
+		fmt.Sprintf("tail -n 5 /tmp/%s.err", id)); err == nil && strings.TrimSpace(errors) != "" {
 		_, _ = fmt.Fprintf(GinkgoWriter, "client %s stderr:\n%s\n", id, errors)
 	}
 	return events, history
@@ -403,7 +404,8 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	Expect(err).NotTo(HaveOccurred())
 	// The fault deletes the master's Pod only: the other members keep their
 	// Pods and containers.
-	untouched := r.identities(context.Background(), slices.DeleteFunc(slices.Clone(r.members), func(m string) bool { return m == master }))
+	untouched := r.identities(context.Background(),
+		slices.DeleteFunc(slices.Clone(r.members), func(m string) bool { return m == master }))
 
 	By("starting a client that keeps writing through the read-write Service")
 	r.startClient(client)
@@ -531,7 +533,8 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	if newMaster != master {
 		Expect(nowSlaves).To(ContainElement(master), "the former master is a slave")
 	}
-	primary, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
+	primary, err := r.kubectl(context.Background(),
+		"get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(primary).To(Equal(newMaster))
 
@@ -549,7 +552,8 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	// (docs/observability.md, section "Transitions").
 	By("reading the change of the primary from the operator's Events and log")
 	Eventually(func(g Gomega) {
-		recorded, err := r.kubectl(context.Background(), "get", "events", "--field-selector", "involvedObject.name="+r.cluster,
+		recorded, err := r.kubectl(context.Background(),
+			"get", "events", "--field-selector", "involvedObject.name="+r.cluster,
 			"-o", `jsonpath={range .items[*]}{.reason}{"\n"}{end}`)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(recorded).To(ContainSubstring("PrimaryUnresolved"))

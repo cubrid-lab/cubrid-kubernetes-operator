@@ -318,14 +318,16 @@ func s01AndS02Steps(r *haRun) {
 		By("asking CUBRID for the roles and comparing them with the operator's status")
 		master, _, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
-		primary, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
+		primary, err := r.kubectl(context.Background(),
+			"get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(primary).To(Equal(master), "status.currentPrimary is not the member CUBRID reports as master")
 		formation, err := r.formationTime(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 
 		By("attempting a write through the read-only Service")
-		refused, err := r.runWorkload(context.Background(), `JDBC_URL="$RO_JDBC_URL" ENDPOINT=ro CLIENT_ID=ro OPS=1 ROLLBACK_EVERY=0`)
+		refused, err := r.runWorkload(context.Background(),
+			`JDBC_URL="$RO_JDBC_URL" ENDPOINT=ro CLIENT_ID=ro OPS=1 ROLLBACK_EVERY=0`)
 		Expect(err).NotTo(HaveOccurred())
 		// Refused by the read-only Broker itself; a Broker that could not be
 		// reached is not a refusal.
@@ -393,12 +395,12 @@ func s01AndS02Steps(r *haRun) {
 		visibleCtx, cancelVisible := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancelVisible()
 		seen, err := workload.WaitVisible(visibleCtx, committed, slaves, 200*time.Millisecond,
-			func(_ context.Context, slave string) (bool, error) {
-				values, err := r.memberValues(context.Background(), slave, "SELECT v FROM s02_marker WHERE id = 1;")
+			func(vctx context.Context, slave string) (bool, error) {
+				values, err := r.memberValues(vctx, slave, "SELECT v FROM s02_marker WHERE id = 1;")
 				if err != nil || !slices.Equal(values, []string{marker}) {
 					return false, err
 				}
-				rows, err := r.memberValues(context.Background(), slave, ledgerRows)
+				rows, err := r.memberValues(vctx, slave, ledgerRows)
 				return slices.Equal(rows, wantRows), err
 			})
 		Expect(err).NotTo(HaveOccurred())
