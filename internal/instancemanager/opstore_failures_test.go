@@ -25,25 +25,44 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
-// unwritable makes the store's directory refuse new files, as a full or
-// read-only volume would, and returns the way back. The records in it stay
-// readable. It skips the test for a user the mode does not hold for.
-func unwritable(t *testing.T, dir string) (restore func()) {
+func skipRootPersistence(t *testing.T) {
 	t.Helper()
+	// Check on the test goroutine so no operation callback calls SkipNow.
 	if os.Geteuid() == 0 {
 		t.Skip("a directory mode does not keep root from writing")
 	}
+}
+
+// unwritable makes the store's directory refuse new files, as a full or
+// read-only volume would, and returns the way back. The records stay readable.
+// Only call this wrapper on the test goroutine; workers use the helper below.
+func unwritable(t *testing.T, dir string) (restore func()) {
+	t.Helper()
+	skipRootPersistence(t)
+	restore = unwritableDuringOperation(t, dir)
+	if restore == nil {
+		t.Fatal("could not inject the operation-store permission failure")
+	}
+	return restore
+}
+
+// unwritableDuringOperation reports setup errors without ending a worker
+// goroutine. Callers join the operation before checking its returned repair.
+func unwritableDuringOperation(t *testing.T, dir string) (restore func()) {
+	t.Helper()
 	if err := os.Chmod(dir, 0o500); err != nil { // #nosec G302 -- a directory of the test
-		t.Fatal(err)
+		t.Error(err)
+		return nil
 	}
 	restore = func() {
 		if err := os.Chmod(dir, 0o700); err != nil { // #nosec G302 -- a directory of the test
-			t.Fatal(err)
+			t.Error(err)
 		}
 	}
 	t.Cleanup(restore)
@@ -250,6 +269,7 @@ func (h *onCreated) Handle(ctx context.Context, r slog.Record) error {
 // runs. Its end is written once the store works again, and the same key then
 // names the Failed operation.
 func TestServer_Backup_UnrecordedStagingClaimIsNotAnsweredAsPending(t *testing.T) {
+	skipRootPersistence(t)
 	dir := t.TempDir()
 	store, err := NewOperationStore(dir)
 	if err != nil {
@@ -258,7 +278,7 @@ func TestServer_Backup_UnrecordedStagingClaimIsNotAnsweredAsPending(t *testing.T
 	var restore func()
 	store.SetLogger(slog.New(&onCreated{
 		Handler: slog.NewJSONHandler(&bytes.Buffer{}, nil),
-		once:    func() { restore = unwritable(t, dir) },
+		once:    func() { restore = unwritableDuringOperation(t, dir) },
 	}))
 	cli := newHeldCLI("backupdb")
 	staging := t.TempDir()
@@ -340,12 +360,13 @@ func (c *afterCallCLI) Run(ctx context.Context, name string, args ...string) (st
 // not answered as running, and is Failed with its restored data on record
 // after a restart: the end that was only in memory does not count (#299).
 func TestServer_Restore_UnwrittenCompletedIsFailedAfterARestart(t *testing.T) {
+	skipRootPersistence(t)
 	f := newResumeFixture(t)
 	var restore func()
 	cli := &afterCallCLI{
 		volumeCLI: &volumeCLI{databases: f.databases},
 		call:      callServerStart,
-		after:     func() { restore = unwritable(t, f.storeDir) },
+		after:     func() { restore = unwritableDuringOperation(t, f.storeDir) },
 	}
 	f.start(cli)
 	op := f.post("restore-1")
@@ -363,6 +384,7 @@ func TestServer_Restore_UnwrittenCompletedIsFailedAfterARestart(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		got = poll()
 	}
+	f.server.ops.Wait()
 	if restore == nil {
 		t.Fatalf("the server was not started: %q", cli.recorded())
 	}
@@ -381,5 +403,400 @@ func TestServer_Restore_UnwrittenCompletedIsFailedAfterARestart(t *testing.T) {
 	}
 	if ended.State != OpFailed || ended.Restored == nil {
 		t.Errorf("after a restart = %s (restored %v), want Failed with the restored data on record", ended.State, ended.Restored)
+	}
+}
+
+// afterStateRecord runs after a successful state write. It only changes the
+// test directory's permissions: the store still holds its mutex here.
+type afterStateRecord struct {
+	slog.Handler
+	state OperationState
+	once  func()
+}
+
+func (h *afterStateRecord) Handle(ctx context.Context, r slog.Record) error {
+	var event, state string
+	r.Attrs(func(a slog.Attr) bool {
+		switch a.Key {
+		case "event":
+			event = a.Value.String()
+		case "state":
+			state = a.Value.String()
+		}
+		return true
+	})
+	if event == eventOperationState && state == string(h.state) && h.once != nil {
+		h.once()
+		h.once = nil
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func persistenceRequest(h http.Handler, method, path, key, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("Idempotency-Key", key)
+	req.RemoteAddr = testRemoteAddr
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
+type failureMetadata struct {
+	restored  *OperationArtifact
+	owner     string
+	reason    string
+	forbidden OperationState
+}
+
+func checkFailureMetadata(t *testing.T, srv *Server, stage string, record *Operation, want failureMetadata) {
+	t.Helper()
+	if !reflect.DeepEqual(record.Restored, want.restored) {
+		t.Errorf("%s restored record = %+v, want %+v", stage, record.Restored, want.restored)
+	}
+	if want.owner != "" {
+		marker := strings.TrimSpace(readFile(t, filepath.Join(srv.restoreRoots.Target, record.Database, ownershipMarker)))
+		if marker != want.owner {
+			t.Errorf("%s ownership marker = %q, want %q", stage, marker, want.owner)
+		}
+	}
+}
+
+// checkTransitionFailure checks the disk and HTTP boundaries while writes
+// remain broken, then settles the failure and replays the request through a
+// fresh manager/store. The caller checks command, object and filesystem side
+// effects after every replay has finished.
+func checkTransitionFailure(t *testing.T, srv *Server, op Operation, previous, attempted OperationState,
+	logged *bytes.Buffer, repair func(), replay func(http.Handler) *httptest.ResponseRecorder,
+	metadata ...failureMetadata,
+) {
+	t.Helper()
+	want := failureMetadata{reason: "could not record the state " + string(attempted)}
+	if len(metadata) == 1 {
+		want = metadata[0]
+	}
+
+	srv.ops.Wait()
+	if repair == nil {
+		t.Fatal("the intended persistence-failure boundary was not reached")
+	}
+	data, err := os.ReadFile(filepath.Join(srv.store.dir, op.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var disk Operation
+	if err := json.Unmarshal(data, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if disk.ID != op.ID || disk.State != previous || disk.FailureReason != "" {
+		t.Fatalf("disk record = %+v, want the preceding durable %s", disk, previous)
+	}
+	checkFailureMetadata(t, srv, "preceding disk", &disk, want)
+	found := false
+	for line := range strings.SplitSeq(strings.TrimSpace(logged.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if want.forbidden != "" && record["operationID"] == op.ID && record["state"] == string(want.forbidden) {
+			t.Errorf("operation advanced to %s after its preceding record failed: %s", want.forbidden, line)
+		}
+		if record["event"] == eventStoreWriteFailed && record["operationID"] == op.ID &&
+			record["state"] == string(attempted) && record["level"] == "ERROR" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no write-failure error names %s and %s: %s", op.ID, attempted, logged.String())
+	}
+	h := srv.Handler()
+	for _, path := range []string{"/v1/operations/" + op.ID, "/v1/operations?idempotencyKey=" + op.IdempotencyKey} {
+		if rr := persistenceRequest(h, http.MethodGet, path, "", ""); rr.Code != http.StatusInternalServerError {
+			t.Errorf("GET %s = %d %s, want 500 while the end is unwritten", path, rr.Code, rr.Body.String())
+		}
+	}
+	if rr := replay(h); rr.Code != http.StatusInternalServerError {
+		t.Errorf("same-key replay = %d %s while the end is unwritten, want 500", rr.Code, rr.Body.String())
+	}
+	srv.ops.Wait()
+	repair()
+	ended, err := srv.store.Get(op.ID)
+	if err != nil || ended.State != OpFailed || !strings.Contains(ended.FailureReason, want.reason) {
+		t.Fatalf("settled operation = %+v, %v; want Failed with reason containing %q", ended, err, want.reason)
+	}
+	checkFailureMetadata(t, srv, "settled", ended, want)
+	reopened, err := NewOperationStore(srv.store.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewServer(srv.cli, "tok").WithOperationStore(reopened).WithObjectStore(srv.objects).
+		WithBackupStagingRoot(srv.backupStagingRoot).WithRestoreRoots(srv.restoreRoots).
+		WithStandaloneDatabase(srv.standaloneDB).WithHAConfig(srv.ha)
+	restarted.heartbeatProcesses, restarted.heartbeatSettle = srv.heartbeatProcesses, srv.heartbeatSettle
+	rr := replay(restarted.Handler())
+	restarted.ops.Wait()
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("same-key replay after restart = %d %s, want 202 with the existing failure", rr.Code, rr.Body.String())
+	}
+	var again Operation
+	if err := json.Unmarshal(rr.Body.Bytes(), &again); err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != op.ID || again.State != OpFailed || again.FailureReason != ended.FailureReason {
+		t.Errorf("same-key replay after restart = %+v, want the same durable failure %+v", again, ended)
+	}
+	checkFailureMetadata(t, srv, "replayed after restart", &again, want)
+}
+
+func TestServer_Backup_StopsBeforeUnrecordedRunningBackup(t *testing.T) {
+	skipRootPersistence(t)
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	store.SetLogger(slog.New(slog.NewJSONHandler(&logged, nil)))
+	cli, objects := &stepCLI{}, newFakeStore()
+	root := t.TempDir()
+	srv := NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(objects).WithBackupStagingRoot(root)
+	upload := *testUpload
+	req := BackupRequest{Database: dbName, Destination: filepath.Join(root, "backup"), Upload: &upload}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The staging claim must succeed before injection; failing it would test
+	// an earlier boundary and never exercise RunningBackup.
+	op, staging, err := srv.recordBackup("backup-key", HashRequest(body), req)
+	if err != nil || staging == "" {
+		t.Fatalf("recordBackup = %q, %v", staging, err)
+	}
+	claimed, err := store.Get(op.ID)
+	if err != nil || claimed.StagingDir != staging {
+		t.Fatalf("staging claim was not persisted: %+v, %v", claimed, err)
+	}
+	repair := unwritable(t, store.dir)
+	if err := srv.admit(); err != nil {
+		t.Fatal(err)
+	}
+	req.Destination = staging
+	srv.runBackup(op.ID, req)
+	checkTransitionFailure(t, srv, *op, OpPending, OpRunningBackup, &logged, repair, func(h http.Handler) *httptest.ResponseRecorder {
+		return postBackup(t, h, "backup-key", string(body))
+	})
+	if calls := cli.recorded(); len(calls) != 0 || len(objects.objects) != 0 {
+		t.Errorf("unrecorded RunningBackup ran commands %v or uploaded %d objects", calls, len(objects.objects))
+	}
+	if _, err := os.Stat(staging); !os.IsNotExist(err) {
+		t.Errorf("unrecorded RunningBackup left its staging directory: %v", err)
+	}
+}
+
+func TestServer_Restore_StopsBeforeUnrecordedTransitions(t *testing.T) {
+	skipRootPersistence(t)
+	for _, tc := range []struct{ previous, attempted OperationState }{
+		{OpPending, OpDownloading}, {OpDownloading, OpRestoring},
+	} {
+		t.Run(string(tc.attempted), func(t *testing.T) {
+			f := newResumeFixture(t)
+			objects := &countingStore{fakeObjectStore: f.objects.(*fakeObjectStore)}
+			f.objects = objects
+			cli := &stepCLI{}
+			f.start(cli)
+			var logged bytes.Buffer
+			var repair func()
+			f.server.store.SetLogger(slog.New(&afterStateRecord{Handler: slog.NewJSONHandler(&logged, nil), state: tc.previous,
+				once: func() { repair = unwritableDuringOperation(t, f.storeDir) }}))
+			op := f.post("restore-key")
+			body, err := json.Marshal(f.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Join before reading the injection callback's result.
+			f.server.ops.Wait()
+			checkTransitionFailure(t, f.server, op, tc.previous, tc.attempted, &logged, repair, func(h http.Handler) *httptest.ResponseRecorder {
+				return persistenceRequest(h, http.MethodPost, "/v1/restore/prepare", "restore-key", string(body))
+			})
+			if calls := cli.recorded(); len(calls) != 0 || objects.gets != 0 {
+				t.Errorf("unrecorded %s ran commands %v or read %d objects", tc.attempted, calls, objects.gets)
+			}
+			for _, path := range []string{filepath.Join(f.databases, dbName), filepath.Join(f.databases, databasesTxt), f.req.StagingDir} {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Errorf("unrecorded %s changed %s: %v", tc.attempted, path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestHABootstrap_StopsBeforeUnrecordedCreating(t *testing.T) {
+	skipRootPersistence(t)
+	f := newHAFixture(t)
+	var logged bytes.Buffer
+	var repair func()
+	f.store.SetLogger(slog.New(&onCreated{Handler: slog.NewJSONHandler(&logged, nil),
+		once: func() { repair = unwritableDuringOperation(t, f.store.dir) }}))
+	rr := f.post("bootstrap-key")
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("bootstrap = %d %s", rr.Code, rr.Body.String())
+	}
+	var op Operation
+	if err := json.Unmarshal(rr.Body.Bytes(), &op); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.ops.Wait()
+	body, err := json.Marshal(HABootstrapRequest{Database: dbName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkTransitionFailure(t, f.srv, op, OpPending, OpCreating, &logged, repair, func(h http.Handler) *httptest.ResponseRecorder {
+		return persistenceRequest(h, http.MethodPost, "/v1/ha/bootstrap", "bootstrap-key", string(body))
+	})
+	if calls := f.cli.recorded(); len(calls) != 0 {
+		t.Errorf("unrecorded Creating ran commands: %v", calls)
+	}
+	if _, err := os.Stat(f.databases); !os.IsNotExist(err) {
+		t.Errorf("unrecorded Creating changed the target: %v", err)
+	}
+}
+
+// The restored-artifact record is a separate boundary from the Starting state:
+// restoredb has finished, but no start or subsequent transition is authorized.
+func TestServer_Restore_StopsBeforeUnrecordedRestoredArtifact(t *testing.T) {
+	skipRootPersistence(t)
+	f := newResumeFixture(t)
+	objects := &countingStore{fakeObjectStore: f.objects.(*fakeObjectStore)}
+	f.objects = objects
+	var repair func()
+	cli := &volumeCLI{databases: f.databases,
+		afterRestore: func() { repair = unwritableDuringOperation(t, f.storeDir) }}
+	f.start(cli)
+	var logged bytes.Buffer
+	f.server.store.SetLogger(slog.New(slog.NewJSONHandler(&logged, nil)))
+	op := f.post("restore-artifact")
+	f.server.ops.Wait()
+	reads := objects.gets
+	if calls := cli.recorded(); count(calls, "cubrid restoredb ") != 1 ||
+		count(calls, callServerStart) != 0 || count(calls, callHeartbeatStart) != 0 {
+		t.Errorf("unrecorded restored artifact ran commands: %v", calls)
+	}
+	body, err := json.Marshal(f.req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkTransitionFailure(t, f.server, op, OpRestoring, OpRestoring, &logged, repair,
+		func(h http.Handler) *httptest.ResponseRecorder {
+			return persistenceRequest(h, http.MethodPost, "/v1/restore/prepare", "restore-artifact", string(body))
+		}, failureMetadata{owner: op.ID, reason: "record the restored database:", forbidden: OpStarting})
+	if calls := cli.recorded(); count(calls, "cubrid restoredb ") != 1 ||
+		count(calls, callServerStart) != 0 || count(calls, callHeartbeatStart) != 0 || objects.gets != reads {
+		t.Errorf("same-key replay changed restore work: commands %v, reads %d (before %d)", calls, objects.gets, reads)
+	}
+	f.wantRestoredDataKept()
+}
+
+// HA status is read only after the restored-artifact write succeeded. Injecting
+// here exercises Starting itself, rather than the earlier metadata boundary.
+func TestServer_Restore_StopsBeforeUnrecordedStarting(t *testing.T) {
+	skipRootPersistence(t)
+	f := newResumeFixture(t)
+	f.haConf = filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(f.haConf, []byte(testHAConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objects := &countingStore{fakeObjectStore: f.objects.(*fakeObjectStore)}
+	f.objects = objects
+	var repair func()
+	var recorded *OperationArtifact
+	cli := &afterCallCLI{
+		volumeCLI: &volumeCLI{databases: f.databases,
+			stepCLI: stepCLI{failing: map[string]bool{stepHeartbeatStatus: true}}},
+		call: "cubrid " + stepHeartbeatStatus,
+		after: func() {
+			ops, err := f.server.store.FindByKey("restore-starting")
+			if err != nil || len(ops) != 1 || ops[0].State != OpRestoring || ops[0].Restored == nil {
+				t.Errorf("restored artifact was not durable before Starting injection: %v, %v", ops, err)
+				return
+			}
+			artifact := *ops[0].Restored
+			recorded = &artifact
+			repair = unwritableDuringOperation(t, f.storeDir)
+		},
+	}
+	f.start(cli)
+	var logged bytes.Buffer
+	f.server.store.SetLogger(slog.New(slog.NewJSONHandler(&logged, nil)))
+	op := f.post("restore-starting")
+	f.server.ops.Wait()
+	if recorded == nil {
+		t.Fatal("Starting injection did not follow a durable restored-artifact record")
+	}
+	reads := objects.gets
+	if calls := cli.recorded(); count(calls, "cubrid restoredb ") != 1 ||
+		count(calls, callServerStart) != 0 || count(calls, callHeartbeatStart) != 0 {
+		t.Errorf("unrecorded Starting ran commands: %v", calls)
+	}
+	body, err := json.Marshal(f.req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkTransitionFailure(t, f.server, op, OpRestoring, OpStarting, &logged, repair,
+		func(h http.Handler) *httptest.ResponseRecorder {
+			return persistenceRequest(h, http.MethodPost, "/v1/restore/prepare", "restore-starting", string(body))
+		}, failureMetadata{restored: recorded, owner: op.ID, reason: "could not record the state Starting"})
+	if calls := cli.recorded(); count(calls, "cubrid restoredb ") != 1 ||
+		count(calls, callServerStart) != 0 || count(calls, callHeartbeatStart) != 0 || objects.gets != reads {
+		t.Errorf("same-key replay changed restore work: commands %v, reads %d (before %d)", calls, objects.gets, reads)
+	}
+	f.wantRestoredDataKept()
+}
+
+// A takeover must record the previous artifact under its new operation before
+// changing ownership or starting it; readable old data alone is not authority.
+func TestServer_Restore_StopsBeforeUnrecordedAdoption(t *testing.T) {
+	skipRootPersistence(t)
+	f := newResumeFixture(t)
+	f.start(&volumeCLI{databases: f.databases,
+		stepCLI: stepCLI{failing: map[string]bool{stepServerStart: true}}})
+	previous := f.run("restore-original")
+	if previous.State != OpFailed || previous.Restored == nil || f.marker() != previous.ID {
+		t.Fatalf("initial failed restore did not retain its artifact and ownership: %+v", previous)
+	}
+	volume := readFile(t, filepath.Join(f.databases, dbName, restoredVolume))
+	registration := readFile(t, filepath.Join(f.databases, databasesTxt))
+	objects := &countingStore{fakeObjectStore: f.objects.(*fakeObjectStore)}
+	f.objects = objects
+	cli := &volumeCLI{databases: f.databases}
+	f.start(cli)
+	var logged bytes.Buffer
+	var repair func()
+	f.server.store.SetLogger(slog.New(&afterStateRecord{Handler: slog.NewJSONHandler(&logged, nil), state: OpRestoring,
+		once: func() { repair = unwritableDuringOperation(t, f.storeDir) }}))
+	op := f.post("restore-adoption")
+	f.server.ops.Wait()
+	if calls := cli.recorded(); len(calls) != 0 || objects.gets != 0 || f.marker() != previous.ID {
+		t.Errorf("unrecorded adoption changed ownership or work: calls %v, reads %d, owner %q (want %q)",
+			calls, objects.gets, f.marker(), previous.ID)
+	}
+	body, err := json.Marshal(f.req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkTransitionFailure(t, f.server, op, OpRestoring, OpRestoring, &logged, repair,
+		func(h http.Handler) *httptest.ResponseRecorder {
+			return persistenceRequest(h, http.MethodPost, "/v1/restore/prepare", "restore-adoption", string(body))
+		}, failureMetadata{owner: previous.ID, reason: "restore failed:", forbidden: OpStarting})
+	if calls := cli.recorded(); len(calls) != 0 || objects.gets != 0 || f.marker() != previous.ID {
+		t.Errorf("same-key replay changed adoption work: commands %v, reads %d, owner %q", calls, objects.gets, f.marker())
+	}
+	if got := readFile(t, filepath.Join(f.databases, dbName, restoredVolume)); got != volume {
+		t.Errorf("adoption changed restored volume: %q, want %q", got, volume)
+	}
+	if got := readFile(t, filepath.Join(f.databases, databasesTxt)); got != registration {
+		t.Errorf("adoption changed database registration: %q, want %q", got, registration)
+	}
+	original, err := f.server.store.Get(previous.ID)
+	if err != nil || !reflect.DeepEqual(original.Restored, previous.Restored) || original.State != previous.State {
+		t.Errorf("previous restored record changed: %+v, %v; want %+v", original, err, previous)
 	}
 }
