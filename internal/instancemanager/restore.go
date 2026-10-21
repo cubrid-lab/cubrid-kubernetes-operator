@@ -296,7 +296,9 @@ func registeredInDatabasesTxt(targetDir, database string) (bool, error) {
 // registerRestoreTarget creates <targetDir>/<database> and registers the
 // database there in databases.txt, in the form `cubrid createdb` writes. The
 // caller has checked that neither exists. The returned function undoes both:
-// it removes the directory and restores databases.txt to what it was.
+// it removes the directory and this database's line of databases.txt, and
+// removes databases.txt if this call created it and it registers nothing
+// else.
 //
 // Every file operation goes through an os.Root opened on targetDir, so
 // nothing here can reach outside the manager's database root whatever the
@@ -317,6 +319,8 @@ func registerRestoreTarget(targetDir, database, host, owner string) (undo func()
 	}
 	defer func() { _ = root.Close() }()
 
+	databasesTxtMu.Lock()
+	defer databasesTxtMu.Unlock()
 	before, err := root.ReadFile(databasesTxt)
 	existed := err == nil
 	if err != nil && !os.IsNotExist(err) {
@@ -335,18 +339,26 @@ func registerRestoreTarget(targetDir, database, host, owner string) (undo func()
 		_ = root.RemoveAll(database)
 		return nil, fmt.Errorf("create %s/lob in %s: %w", database, targetDir, err)
 	}
+	if err := syncDir(root, database); err != nil {
+		_ = root.RemoveAll(database)
+		return nil, err
+	}
+	// The undo removes only this database's line: another database may have
+	// been registered since. A databases.txt that this call created goes
+	// again once nothing else is registered in it.
+	undoLocked := func(root *os.Root) {
+		_ = root.RemoveAll(database)
+		_ = unregisterDatabaseLocked(root, database, !existed)
+	}
 	undo = func() {
 		root, err := os.OpenRoot(targetDir)
 		if err != nil {
 			return
 		}
 		defer func() { _ = root.Close() }()
-		_ = root.RemoveAll(database)
-		if existed {
-			_ = root.WriteFile(databasesTxt, before, 0o600)
-		} else {
-			_ = root.Remove(databasesTxt)
-		}
+		databasesTxtMu.Lock()
+		defer databasesTxtMu.Unlock()
+		undoLocked(root)
 	}
 
 	dbDir := filepath.Join(targetDir, database)
@@ -355,8 +367,8 @@ func registerRestoreTarget(targetDir, database, host, owner string) (undo func()
 		content += "\n"
 	}
 	content += fmt.Sprintf("%s\t\t%s\t%s\t%s\tfile:%s\n", database, dbDir, host, dbDir, filepath.Join(dbDir, "lob"))
-	if err := root.WriteFile(databasesTxt, []byte(content), 0o600); err != nil {
-		undo()
+	if err := replaceFile(root, databasesTxt, []byte(content)); err != nil {
+		undoLocked(root)
 		return nil, fmt.Errorf("register %s in %s: %w", database, databasesTxt, err)
 	}
 	return undo, nil
