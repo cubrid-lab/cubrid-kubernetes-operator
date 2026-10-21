@@ -21,6 +21,7 @@ import (
 	"encoding/xml"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -332,6 +333,137 @@ func TestCheckpoint(t *testing.T) {
 	}
 	if err := passing.Checkpoint("", NewRedactor(), kind, at); err == nil {
 		t.Error("a checkpoint without a run directory reported success")
+	}
+}
+
+// junitReport is what junitVerdict reads from junit.xml.
+type junitReport struct {
+	tests, failures, errs int
+	run                   string // the message of the run-level case
+	hasRun                bool
+	runIsFailure          bool     // the run-level case is a <failure>
+	runIsError            bool     // the run-level case is an <error>
+	skipped               []string // the names of the cases that are <skipped>
+}
+
+// junitVerdict reads junit.xml in dir: its counts, its run-level case, if it
+// has one, and the cases that are skipped.
+func junitVerdict(t *testing.T, dir string) junitReport {
+	t.Helper()
+	report, err := os.ReadFile(filepath.Join(dir, "junit.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var suite struct {
+		Tests    int `xml:"tests,attr"`
+		Failures int `xml:"failures,attr"`
+		Errors   int `xml:"errors,attr"`
+		Cases    []struct {
+			Name    string `xml:"name,attr"`
+			Failure *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"failure"`
+			Error *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"error"`
+			Skipped *struct{} `xml:"skipped"`
+		} `xml:"testcase"`
+	}
+	if err := xml.Unmarshal(report, &suite); err != nil {
+		t.Fatal(err)
+	}
+	got := junitReport{tests: suite.Tests, failures: suite.Failures, errs: suite.Errors}
+	for _, c := range suite.Cases {
+		if c.Skipped != nil {
+			got.skipped = append(got.skipped, c.Name)
+		}
+		if c.Name != "run" {
+			continue
+		}
+		got.hasRun = true
+		switch {
+		case c.Failure != nil:
+			got.runIsFailure = true
+			got.run = c.Failure.Message
+		case c.Error != nil:
+			got.runIsError = true
+			got.run = c.Error.Message
+		}
+	}
+	return got
+}
+
+// The returned error, summary.json and the final junit.xml agree: a run that
+// did not pass its lane has a failed run-level case carrying its problems,
+// also when no scenario failed and also when it replaces a checkpoint, and a
+// passing run, permitted skips included, has none (#460).
+func TestConclude_JUnitCarriesTheLaneVerdict(t *testing.T) {
+	lane := Lane{Name: kind, Required: []Requirement{
+		{ID: s00}, {ID: s03, Variant: graceful}, {ID: s03, Variant: abrupt, NotApplicable: true},
+	}}
+	s00Pass := Scenario{ID: s00, Result: Pass, Evidence: []string{s00Record}}
+	gracefulPass := Scenario{ID: s03, Variant: graceful, Result: Pass, Evidence: []string{s00Record}}
+	abruptNA := Scenario{ID: s03, Variant: abrupt, Result: NotApplicable, Reason: "no abrupt stop in this lane"}
+	at := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name       string
+		summary    Summary
+		other      []string
+		checkpoint bool
+		want       string // a problem the run-level case must carry; empty: the run passes
+	}{
+		{"a missing required variant", Summary{Scenarios: []Scenario{s00Pass, abruptNA}}, nil, false,
+			"S03/graceful: missing"},
+		{"a required scenario that was not run", Summary{Scenarios: []Scenario{
+			s00Pass, {ID: s03, Variant: graceful, Result: NotRun, Reason: "setup failed"}, abruptNA}}, nil, false,
+			"S03/graceful: not_run"},
+		{"a problem of the run alone", Summary{Scenarios: []Scenario{s00Pass, gracefulPass, abruptNA}},
+			[]string{"S03/abrupt: no step of the suite carries the label S03-abrupt"}, false, "S03-abrupt"},
+		{"a failing conclusion that replaces a checkpoint", Summary{Scenarios: []Scenario{
+			s00Pass, {ID: s03, Variant: graceful, Result: NotRun, Reason: "setup failed"}, abruptNA}}, nil, true,
+			"S03/graceful: not_run"},
+		{"a passing run with a permitted skip", Summary{Scenarios: []Scenario{s00Pass, gracefulPass, abruptNA}}, nil,
+			true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := runDir(t, s00Record)
+			if tc.checkpoint {
+				if err := tc.summary.Checkpoint(dir, NewRedactor(), kind, at); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := tc.summary.Conclude(dir, NewRedactor(), lane, tc.other...)
+			j := junitVerdict(t, dir)
+			if tc.want == "" {
+				if err != nil || j.hasRun || j.failures+j.errs != 0 {
+					t.Errorf("a passing run: err = %v, junit failures=%d errors=%d run case %v %q",
+						err, j.failures, j.errs, j.hasRun, j.run)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("the run passed")
+			}
+			if !j.hasRun || j.failures < 1 || !strings.Contains(j.run, tc.want) {
+				t.Errorf("junit.xml failures=%d errors=%d run case %v %q, want a failed run carrying %q",
+					j.failures, j.errs, j.hasRun, j.run, tc.want)
+			}
+			if !j.runIsFailure || j.runIsError {
+				t.Errorf("the run case of a concluded run is failure=%v error=%v, want a <failure>",
+					j.runIsFailure, j.runIsError)
+			}
+			if j.tests != len(tc.summary.Scenarios)+1 {
+				t.Errorf("junit.xml tests=%d, want %d scenarios and the run case", j.tests, len(tc.summary.Scenarios))
+			}
+			for _, sc := range tc.summary.Scenarios {
+				if (sc.Result == NotRun || sc.Result == NotApplicable) && !slices.Contains(j.skipped, sc.Name()) {
+					t.Errorf("junit.xml skipped cases %q, want %s among them", j.skipped, sc.Name())
+				}
+			}
+			if strings.Contains(j.run, "did not finish") {
+				t.Errorf("the final report kept the checkpoint's problem: %q", j.run)
+			}
+		})
 	}
 }
 
