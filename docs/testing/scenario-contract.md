@@ -615,9 +615,13 @@ it needs more.
 - **The Operator must** (ADR-0010): create the database once; report `Ready`
   only when SQL can be run (ADR-0003).
 - **Expected:** a client creates a table, inserts rows, reads them back and
-  reads them again after the Pod is deleted and has returned.
+  reads them again after the Pod is deleted and has returned. A client with
+  a CUBRID driver in another namespace commits a row through `<cluster>-rw`,
+  reads it through `<cluster>-ro`, and is refused a write there by the
+  read-only Broker with `-581` (POC-33); `BrokerReady`,
+  `WriteEndpointReady`, `ReadEndpointReady` and `RoutingReady` are `True`.
 - **Must never happen:** `Ready=True` while SQL fails; the database created a
-  second time over existing data.
+  second time over existing data; a successful write through `<cluster>-ro`.
 - **Data check:** the rows written before the Pod deletion are present after
   it.
 - **Limits:** `install_limit`, `ready_limit`.

@@ -163,7 +163,9 @@ func writeBrokerSection(b *strings.Builder, name string, port int, accessMode st
 
 // generateBrokerDatabasesTxt renders the broker databases.txt whose db-host
 // field lists every promotable DB member (ADR-0002/0004). This is broker→DB
-// routing metadata; the RW broker seeks the master across this host list.
+// routing metadata; the RW broker seeks the master across this host list. A
+// standalone cluster's list is its one server, which both access modes
+// connect to (docs/poc/RESULTS.md, POC-33).
 func generateBrokerDatabasesTxt(cluster *databasev1alpha1.CubridCluster) string {
 	db := ""
 	if len(cluster.Spec.Databases) > 0 {

@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
@@ -70,32 +71,54 @@ func rwServiceName(cluster string) string { return cluster + "-rw" }
 func roServiceName(cluster string) string { return cluster + "-ro" }
 
 // reconcileBrokerTier reconciles the operator-managed broker tier (ADR-0002): a
-// generated config ConfigMap, a broker Deployment, and the -rw/-ro Services
-// fronting broker pods (never DB pods). It then sets the broker conditions.
-func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, cluster *databasev1alpha1.CubridCluster, res PrimaryResolution, image string) error {
+// generated config ConfigMap, a broker Deployment per access mode, and the
+// -rw/-ro Services fronting broker pods (never DB pods). It returns how many
+// Broker Pods of each access mode are available. An HA and a standalone
+// cluster get the same tier; only how their routing is judged differs.
+func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, cluster *databasev1alpha1.CubridCluster, image string) (map[string]int32, error) {
 	config := brokerConfigData(cluster, r.brokerMaxApplServers())
 	if err := r.reconcileBrokerConfig(ctx, cluster, config); err != nil {
-		return err
+		return nil, err
 	}
 	if err := r.deleteLegacyBrokerDeployment(ctx, cluster); err != nil {
-		return err
+		return nil, err
 	}
 	available := map[string]int32{}
 	for _, mode := range []string{brokerModeRW, brokerModeRO} {
 		dep, err := r.reconcileBrokerDeployment(ctx, cluster, mode, image, brokerConfigHash(config, mode))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		available[mode] = dep.Status.AvailableReplicas
 	}
 	if err := r.reconcileBrokerService(ctx, cluster, rwServiceName(cluster.Name), brokerModeRW); err != nil {
-		return err
+		return nil, err
 	}
 	if err := r.reconcileBrokerService(ctx, cluster, roServiceName(cluster.Name), brokerModeRO); err != nil {
-		return err
+		return nil, err
 	}
-	r.setBrokerConditions(cluster, res, available)
-	return nil
+	return available, nil
+}
+
+// brokerTier reconciles the Broker tier with the image the DB Pods run and
+// reports whether the caller is to set the conditions from what it returns.
+// A conflicting write that is still young leaves the conditions as they are;
+// the next reconcile writes again. Any other failure marks the Brokers
+// unobserved (res is nil for a standalone cluster).
+func (r *CubridClusterReconciler) brokerTier(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	sts *appsv1.StatefulSet, res *PrimaryResolution) (map[string]int32, bool) {
+	available, err := r.reconcileBrokerTier(ctx, cluster, r.imageToRun(cluster, sts))
+	young, err := r.lastingConflict(cluster, brokerWrites, err)
+	switch {
+	case young:
+		logf.FromContext(ctx).V(1).Info("Retrying broker tier after a conflicting write")
+	case err != nil:
+		logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
+		setBrokerConditionsUnobserved(cluster, res, err)
+	default:
+		return available, true
+	}
+	return nil, false
 }
 
 func (r *CubridClusterReconciler) reconcileBrokerConfig(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
@@ -263,15 +286,53 @@ func (r *CubridClusterReconciler) reconcileBrokerService(ctx context.Context, cl
 	return err
 }
 
-// setBrokerConditions sets the broker/routing conditions (ADR-0002). An
-// endpoint is ready when at least one Broker Pod of its access mode is
-// available, which means its Broker listens; that the Service object exists
-// says nothing. Routing is never claimed safe while the primary is
+// setBrokerConditions sets the broker/routing conditions of an HA cluster
+// (ADR-0002). Routing is never claimed safe while the primary is
 // ambiguous/unresolved (ADR-0005): an unresolved primary yields
 // RoutingReady=False, so the write endpoint is not advertised as safe during
 // a split-brain. With a resolved primary, routing is ready when a read-write
 // Broker is available to carry writes to it.
 func (r *CubridClusterReconciler) setBrokerConditions(cluster *databasev1alpha1.CubridCluster, res PrimaryResolution, available map[string]int32) {
+	rw := setEndpointConditions(cluster, available)
+	switch {
+	case !setRoutingUnresolved(cluster, res):
+	case !rw:
+		// A resolved master without a Broker in front of it is no route.
+		setCondition(cluster, conditionRoutingReady, metav1.ConditionFalse, "NoBrokerAvailable",
+			"the primary is "+res.CurrentPrimary+", but no rw Broker Pod is available to route writes to it")
+	default:
+		setCondition(cluster, conditionRoutingReady, metav1.ConditionTrue, "PrimaryResolved",
+			"RW routing target resolved: "+res.CurrentPrimary)
+	}
+}
+
+// setStandaloneBrokerConditions sets the broker/routing conditions of a
+// standalone cluster. Its Brokers have one server to connect to and no HA
+// role to seek (docs/poc/RESULTS.md, POC-33): write routing is ready when that
+// server's member is ready, which for a standalone member means its server
+// runs, and a read-write Broker is available. No primary is resolved for it.
+func setStandaloneBrokerConditions(cluster *databasev1alpha1.CubridCluster, serverReady bool, available map[string]int32) {
+	rw := setEndpointConditions(cluster, available)
+	server := memberNames(cluster, cluster.Spec.Topology.PromotableMembers)[0]
+	switch {
+	case !serverReady:
+		setCondition(cluster, conditionRoutingReady, metav1.ConditionFalse, "InstancesNotReady",
+			"the standalone server "+server+" is not ready")
+	case !rw:
+		setCondition(cluster, conditionRoutingReady, metav1.ConditionFalse, "NoBrokerAvailable",
+			"the standalone server "+server+" is ready, but no rw Broker Pod is available to route writes to it")
+	default:
+		setCondition(cluster, conditionRoutingReady, metav1.ConditionTrue, "StandaloneServerReady",
+			"RW routing target: the standalone server "+server)
+	}
+}
+
+// setEndpointConditions sets BrokerReady, WriteEndpointReady and
+// ReadEndpointReady, and reports whether a read-write Broker is available. An
+// endpoint is ready when at least one Broker Pod of its access mode is
+// available, which means its Broker listens; that the Service object exists
+// says nothing.
+func setEndpointConditions(cluster *databasev1alpha1.CubridCluster, available map[string]int32) bool {
 	endpoint := func(conditionType, mode, service string) bool {
 		n := available[mode]
 		if n > 0 {
@@ -292,17 +353,7 @@ func (r *CubridClusterReconciler) setBrokerConditions(cluster *databasev1alpha1.
 		setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, "BrokersNotAvailable",
 			"not every access mode has an available Broker Pod")
 	}
-
-	switch {
-	case !setRoutingUnresolved(cluster, res):
-	case !rw:
-		// A resolved master without a Broker in front of it is no route.
-		setCondition(cluster, conditionRoutingReady, metav1.ConditionFalse, "NoBrokerAvailable",
-			"the primary is "+res.CurrentPrimary+", but no rw Broker Pod is available to route writes to it")
-	default:
-		setCondition(cluster, conditionRoutingReady, metav1.ConditionTrue, "PrimaryResolved",
-			"RW routing target resolved: "+res.CurrentPrimary)
-	}
+	return rw
 }
 
 // setRoutingUnresolved reports whether a single primary is resolved. When
@@ -326,13 +377,15 @@ func setRoutingUnresolved(cluster *databasev1alpha1.CubridCluster, res PrimaryRe
 // reconcile saw of them is not kept: the endpoints are Unknown, and so is the
 // routing unless the primary is unresolved, which is reported either way.
 // Nothing is invented: Unknown says that the Brokers were not looked at.
-func setBrokerConditionsUnobserved(cluster *databasev1alpha1.CubridCluster, res PrimaryResolution, cause error) {
+// res is nil for a standalone cluster, which has no primary: its routing is
+// then Unknown.
+func setBrokerConditionsUnobserved(cluster *databasev1alpha1.CubridCluster, res *PrimaryResolution, cause error) {
 	const reason = "BrokerReconcileFailed"
 	msg := "the Brokers were not observed in this reconcile: " + cause.Error()
 	setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, reason, cause.Error())
 	setCondition(cluster, conditionWriteEndpointReady, metav1.ConditionUnknown, reason, msg)
 	setCondition(cluster, conditionReadEndpointReady, metav1.ConditionUnknown, reason, msg)
-	if setRoutingUnresolved(cluster, res) {
+	if res == nil || setRoutingUnresolved(cluster, *res) {
 		setCondition(cluster, conditionRoutingReady, metav1.ConditionUnknown, reason, msg)
 	}
 }

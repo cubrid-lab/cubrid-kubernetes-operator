@@ -343,6 +343,125 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 			Expect(conditionOf(key, conditionType).Status).To(BeEquivalentTo("True"), conditionType)
 		}
 	})
+
+	// A standalone cluster has one server and no HA role: its Brokers point at
+	// that server, and its routing follows the server's readiness, not a
+	// primary resolution (#286, docs/poc/RESULTS.md POC-33).
+	Context("of a standalone cluster", func() {
+		reconcileStandalone := func(name string) (*CubridClusterReconciler, types.NamespacedName) {
+			c := standaloneCluster(name)
+			Expect(k8sClient.Create(ctx, c)).To(Succeed())
+			DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, c))).To(Succeed()) })
+			r := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20),
+				DefaultImage: "registry.example/cubrid-instance-manager:standalone",
+			}
+			key := types.NamespacedName{Name: name, Namespace: brokerNamespace}
+			reconcileAgain(r, key)
+			return r, key
+		}
+		setServerReady := func(key types.NamespacedName, ready int32) {
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, key, sts)).To(Succeed())
+			sts.Status.Replicas, sts.Status.ReadyReplicas = 1, ready
+			Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
+		}
+
+		It("serves the read-write and the read-only Service with Brokers of the one server", func() {
+			const name = "standalone-brokers"
+			reconcileStandalone(name)
+
+			rw := backends(name, name+"-rw")
+			ro := backends(name, name+"-ro")
+			Expect(rw).To(HaveLen(1), "the -rw Service of a standalone cluster selects no Broker Pods")
+			Expect(ro).To(HaveLen(1), "the -ro Service of a standalone cluster selects no Broker Pods")
+			for mode, dep := range map[string]appsv1.Deployment{"rw": rw[0], "ro": ro[0]} {
+				access, ok := envValue(dep.Spec.Template.Spec.Containers[0], "BROKER_ACCESS_MODE")
+				Expect(ok).To(BeTrue(), mode)
+				Expect(access.Value).To(Equal(mode))
+			}
+
+			By("a databases.txt that names the one server and nothing else")
+			config := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: brokerConfigMapName(name), Namespace: brokerNamespace}, config)).
+				To(Succeed())
+			Expect(config.Data["databases.txt"]).To(ContainSubstring(
+				"appdb\t/home/cubrid/CUBRID/databases/appdb\t" + name + "-0." + name + "-instances." + brokerNamespace + ".svc\t"))
+		})
+
+		It("reports write routing ready only with its server ready and a read-write Broker available", func() {
+			const name = "standalone-routing"
+			r, key := reconcileStandalone(name)
+
+			By("neither the server nor a Broker being ready")
+			for _, conditionType := range []string{conditionBrokerReady, conditionWriteEndpointReady,
+				conditionReadEndpointReady, conditionRoutingReady} {
+				Expect(conditionOf(key, conditionType).Status).To(BeEquivalentTo("False"), conditionType)
+			}
+			Expect(conditionOf(key, conditionRoutingReady).Reason).To(Equal("InstancesNotReady"))
+
+			By("the Brokers being available while the server is not ready")
+			setAvailable(name, brokerModeRW, 2)
+			setAvailable(name, brokerModeRO, 2)
+			reconcileAgain(r, key)
+			for _, conditionType := range []string{conditionBrokerReady, conditionWriteEndpointReady, conditionReadEndpointReady} {
+				Expect(conditionOf(key, conditionType).Status).To(BeEquivalentTo("True"), conditionType)
+			}
+			routing := conditionOf(key, conditionRoutingReady)
+			Expect(routing.Status).To(BeEquivalentTo("False"), "write routing is claimed to a server that is not ready")
+			Expect(routing.Reason).To(Equal("InstancesNotReady"))
+
+			By("the server becoming ready")
+			setServerReady(key, 1)
+			reconcileAgain(r, key)
+			routing = conditionOf(key, conditionRoutingReady)
+			Expect(routing.Status).To(BeEquivalentTo("True"))
+			Expect(routing.Reason).To(Equal("StandaloneServerReady"))
+			Expect(routing.Message).To(ContainSubstring(name + "-0"))
+
+			By("no read-write Broker being available")
+			setAvailable(name, brokerModeRW, 0)
+			reconcileAgain(r, key)
+			routing = conditionOf(key, conditionRoutingReady)
+			Expect(routing.Status).To(BeEquivalentTo("False"))
+			Expect(routing.Reason).To(Equal("NoBrokerAvailable"))
+			Expect(conditionOf(key, conditionReadEndpointReady).Status).To(BeEquivalentTo("True"))
+
+			By("no primary being resolved or claimed for a standalone server")
+			c := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, key, c)).To(Succeed())
+			Expect(meta.FindStatusCondition(c.Status.Conditions, conditionPrimaryResolved)).To(BeNil())
+			Expect(c.Status.CurrentPrimary).To(BeEmpty())
+		})
+
+		It("does not keep its endpoint and routing conditions when the Broker tier cannot be reconciled", func() {
+			const name = "standalone-stale"
+			r, key := reconcileStandalone(name)
+			setAvailable(name, brokerModeRW, 2)
+			setAvailable(name, brokerModeRO, 2)
+			setServerReady(key, 1)
+			reconcileAgain(r, key)
+			Expect(conditionOf(key, conditionRoutingReady).Status).To(BeEquivalentTo("True"))
+
+			base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+			Expect(err).NotTo(HaveOccurred())
+			r.Client = interceptor.NewClient(base, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*corev1.ConfigMap); ok && key.Name == brokerConfigMapName(name) {
+						return apierrors.NewInternalError(errors.New("etcd is unavailable"))
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+			reconcileAgain(r, key)
+			Expect(conditionOf(key, conditionBrokerReady).Reason).To(Equal("BrokerReconcileFailed"))
+			for _, conditionType := range []string{conditionWriteEndpointReady, conditionReadEndpointReady, conditionRoutingReady} {
+				cond := conditionOf(key, conditionType)
+				Expect(cond.Status).To(BeEquivalentTo("Unknown"), "%s still says what an earlier reconcile saw", conditionType)
+				Expect(cond.Reason).To(Equal("BrokerReconcileFailed"), conditionType)
+			}
+		})
+	})
 })
 
 // ctrlSetOwner makes cluster the controller owner of obj, as the operator does.
