@@ -25,8 +25,11 @@ import (
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
 
+// obsSlave is a fresh slave whose applier was read in the same reconcile,
+// applying c0's log with nothing waiting.
 func obsSlave() RoleObservation {
-	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow}
+	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow,
+		Replication: &ReplicationObservation{Source: c0, AppliedChanges: 10}}
 }
 func obsMaster() RoleObservation {
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: testNow}
@@ -121,7 +124,7 @@ func TestSelectBackupTarget(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := selectBackupTarget(tc.members, tc.obs, tc.res, tc.pref, tc.single, testNow)
+			got := selectBackupTarget(tc.members, tc.obs, nil, tc.res, tc.pref, tc.single, testNow)
 			if got.Selected != tc.wantSelected {
 				t.Fatalf("Selected = %v, want %v (reason %q)", got.Selected, tc.wantSelected, got.Reason)
 			}
@@ -176,7 +179,7 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := map[string]RoleObservation{c0: obsMaster(), c1: tc.c1, c2: obsDown()}
 
-			got := selectBackupTarget(members, obs, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
+			got := selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
 			if got.Selected {
 				t.Errorf("StandbyOnly selected %s on an observation that is not authoritative", got.Instance)
 			}
@@ -186,7 +189,7 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 
 			// PreferStandby must not take that slave either; with a resolved
 			// primary it falls back to the master, as documented.
-			got = selectBackupTarget(members, obs, resolvedPrimary(), databasev1alpha1.PreferStandby, false, testNow)
+			got = selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.PreferStandby, false, testNow)
 			if got.Instance == c1 {
 				t.Errorf("PreferStandby selected %s on an observation that is not authoritative", c1)
 			}
@@ -195,7 +198,7 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 
 	t.Run("a fresh, consistent slave is selected", func(t *testing.T) {
 		obs := map[string]RoleObservation{c0: obsMaster(), c1: obsSlave(), c2: obsDown()}
-		got := selectBackupTarget(members, obs, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
+		got := selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
 		if !got.Selected || got.Instance != c1 {
 			t.Errorf("got %+v, want %s selected", got, c1)
 		}
@@ -251,6 +254,77 @@ func TestRecordedTargetEligible(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := recordedTargetEligible(tt.sel, tt.members, tt.obs, tt.res, tt.single, testNow); got != tt.want {
 				t.Fatalf("recordedTargetEligible() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// slaveApplying is a fresh slave whose applier was read in this reconcile,
+// applying source's log with delayed pages waiting.
+func slaveApplying(source string, delayed int64) RoleObservation {
+	o := obsSlave()
+	o.Replication = &ReplicationObservation{Source: source, AppliedChanges: 10, DelayedPages: delayed}
+	return o
+}
+
+// A standby is chosen on fresh evidence that it follows the master: its
+// applier was read in this reconcile, applies the resolved primary's log,
+// has failed no change and has not been stalled past the stall window.
+// Among such standbys the one with the fewest log pages waiting is chosen;
+// a standby whose applier could not be read never counts as caught up
+// (#291).
+func TestSelectBackupTarget_StandbyNeedsFreshReplicationEvidence(t *testing.T) {
+	members := []string{c0, c1, c2}
+	stalledFor := func(d time.Duration) map[string]*databasev1alpha1.InstanceReplication {
+		// The reading before, 10 s ago, had the same counters: nothing was
+		// applied since while pages waited.
+		since, read := metav1.NewTime(testNow.Add(-d)), metav1.NewTime(testNow.Add(-10*time.Second))
+		return map[string]*databasev1alpha1.InstanceReplication{
+			c1: {Source: c0, AppliedChanges: 10, DelayedPages: 5, StalledSince: &since, ObservedAt: &read},
+		}
+	}
+	failing := slaveApplying(c0, 0)
+	failing.Replication.FailCount = 1
+	unread := obsSlave()
+	unread.Replication = nil
+	tests := []struct {
+		name        string
+		c1, c2      RoleObservation
+		history     map[string]*databasev1alpha1.InstanceReplication
+		res         PrimaryResolution
+		wantStandby string // for StandbyOnly; empty: none
+	}{
+		{"the standby with fewer pages waiting, not the lower ordinal",
+			slaveApplying(c0, 900), slaveApplying(c0, 3), nil, resolvedPrimary(), c2},
+		{"the lower ordinal among equally caught-up standbys",
+			slaveApplying(c0, 0), slaveApplying(c0, 0), nil, resolvedPrimary(), c1},
+		{"not a standby whose applier was not read",
+			unread, unread, nil, resolvedPrimary(), ""},
+		{"not a standby whose applier could not apply a change",
+			failing, slaveApplying(c0, 50), nil, resolvedPrimary(), c2},
+		{"not a standby stalled for the stall window",
+			slaveApplying(c0, 5), obsDown(), stalledFor(replicationStallWindow), resolvedPrimary(), ""},
+		{"a standby stalled for less than the stall window",
+			slaveApplying(c0, 5), obsDown(), stalledFor(replicationStallWindow / 2), resolvedPrimary(), c1},
+		{"not a standby that applies another member's log",
+			slaveApplying(c2, 0), obsDown(), nil, resolvedPrimary(), ""},
+		{"no standby while the primary is not resolved",
+			slaveApplying(c0, 0), slaveApplying(c0, 0), nil, ambiguousPrimary(), ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := map[string]RoleObservation{c0: obsMaster(), c1: tc.c1, c2: tc.c2}
+			got := selectBackupTarget(members, obs, tc.history, tc.res, databasev1alpha1.StandbyOnly, false, testNow)
+			switch {
+			case tc.wantStandby == "" && (got.Selected || got.Reason != reasonNoHealthyStandby):
+				t.Errorf("StandbyOnly = %+v, want no standby (NoHealthyStandby)", got)
+			case tc.wantStandby != "" && (!got.Selected || got.Instance != tc.wantStandby):
+				t.Errorf("StandbyOnly = %+v, want %s", got, tc.wantStandby)
+			}
+			got = selectBackupTarget(members, obs, tc.history, tc.res, databasev1alpha1.PreferStandby, false, testNow)
+			if tc.wantStandby == "" && tc.res.Status == metav1.ConditionTrue &&
+				(got.Instance != c0 || got.Reason != reasonMasterFallbackSelected) {
+				t.Errorf("PreferStandby = %+v, want the master as a fallback", got)
 			}
 		})
 	}

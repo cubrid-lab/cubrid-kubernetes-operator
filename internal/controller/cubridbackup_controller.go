@@ -196,6 +196,17 @@ func (r *CubridBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return r.startBackup(ctx, &backup, &cluster)
 }
 
+// replicationHistory is the replication each member's status records, by
+// member name: the stall history that one reading cannot show.
+func replicationHistory(cluster *databasev1alpha1.CubridCluster) map[string]*databasev1alpha1.InstanceReplication {
+	history := make(map[string]*databasev1alpha1.InstanceReplication, len(cluster.Status.Instances))
+	for i := range cluster.Status.Instances {
+		in := &cluster.Status.Instances[i]
+		history[in.Name] = in.Replication
+	}
+	return history
+}
+
 // startBackup resolves the cluster HA state, selects a safe target, records it
 // in status, and only then starts the Instance Manager backup operation with a
 // deterministic idempotency key. A dispatch whose response is lost may still
@@ -236,7 +247,7 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 				"recorded target "+sel.Instance+" is no longer eligible for its recorded role "+backup.Status.TargetRole)
 		}
 	} else {
-		sel = selectBackupTarget(members, obs, res, backup.Spec.Target.Preference, single, observedAt)
+		sel = selectBackupTarget(members, obs, replicationHistory(cluster), res, backup.Spec.Target.Preference, single, observedAt)
 		if !sel.Selected {
 			// Not terminal: HA may resolve later. Surface why and requeue.
 			// A wait for object storage that this interrupts starts again
