@@ -269,7 +269,9 @@ func registeredInDatabasesTxt(targetDir, database string) (bool, error) {
 // registerRestoreTarget creates <targetDir>/<database> and registers the
 // database there in databases.txt, in the form `cubrid createdb` writes. The
 // caller has checked that neither exists. The returned function undoes both:
-// it removes the directory and restores databases.txt to what it was.
+// it removes the directory and this database's line of databases.txt, and
+// removes databases.txt if this call created it and it registers nothing
+// else.
 //
 // Every file operation goes through an os.Root opened on targetDir, so
 // nothing here can reach outside the manager's database root whatever the

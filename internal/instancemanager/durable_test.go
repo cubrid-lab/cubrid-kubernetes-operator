@@ -18,12 +18,14 @@ package instancemanager
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 )
@@ -228,5 +230,40 @@ func TestRegisterRestoreTarget_UndoKeepsLaterRegistrations(t *testing.T) {
 	got := readFile(t, filepath.Join(dir, databasesTxt))
 	if strings.Contains(got, "dba\t") || !strings.Contains(got, "dbb\t") {
 		t.Errorf("databases.txt after undoing dba = %q, want dbb only", got)
+	}
+}
+
+// Registrations and their undos of different databases that run at once
+// leave databases.txt with exactly the databases still registered: none is
+// lost to another's write.
+func TestRegisterRestoreTarget_ConcurrentWritersLoseNoRegistration(t *testing.T) {
+	dir := t.TempDir()
+	const n = 30
+	undos := make([]func(), n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			undo, err := registerRestoreTarget(dir, fmt.Sprintf("db%02d", i), "host-0", crashOldOwner)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			undos[i] = undo
+		})
+	}
+	wg.Wait()
+	if t.Failed() {
+		return
+	}
+	for i := 0; i < n; i += 2 {
+		wg.Go(undos[i])
+	}
+	wg.Wait()
+	got := readFile(t, filepath.Join(dir, databasesTxt))
+	for i := range n {
+		registered := strings.Contains(got, fmt.Sprintf("db%02d\t", i))
+		if registered != (i%2 == 1) {
+			t.Errorf("db%02d registered = %v, want %v", i, registered, i%2 == 1)
+		}
 	}
 }
