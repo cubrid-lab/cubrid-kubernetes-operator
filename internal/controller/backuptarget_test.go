@@ -326,6 +326,9 @@ func TestSelectBackupTarget_StandbyNeedsFreshReplicationEvidence(t *testing.T) {
 				(got.Instance != c0 || got.Reason != reasonMasterFallbackSelected) {
 				t.Errorf("PreferStandby = %+v, want the master as a fallback", got)
 			}
+			if tc.wantStandby != "" && (!got.Selected || got.Instance != tc.wantStandby || got.FallbackUsed) {
+				t.Errorf("PreferStandby = %+v, want the best-ranked standby %s", got, tc.wantStandby)
+			}
 		})
 	}
 }

@@ -97,7 +97,7 @@ no ambiguous/incomplete primary observation (ADR-0005) — so backup load
 never lands on a suspected master during unsafe failover evidence; it
 records `fallbackUsed: true`, `targetRole: master`, reason
 `MasterFallbackSelected`. `StandbyOnly`
-fails if no eligible slave. As implemented (#291,
+waits if no slave is eligible. As implemented (#291,
 `internal/controller/backuptarget.go`), a slave is eligible for a new
 selection only on fresh evidence that it follows the master: it is
 authoritatively observed as a slave in this reconcile's observation, its
@@ -110,7 +110,11 @@ Eligible slaves are ordered by the log pages waiting to be applied
 up: a slave whose applier could not be read is not eligible, and no slave is
 eligible while the primary is not resolved, so `StandbyOnly` waits
 (`NoHealthyStandby`) and `PreferStandby` falls back to the master only under
-the rule above. A long transaction on the master can keep pages waiting
+the rule above. That also holds when the applier cannot be read at all,
+because the Instance Manager is older and reports no replication or because
+`applyinfo` timed out under load: that slave is not eligible, so
+`PreferStandby` then falls back to the master. A `failCount` greater than 0
+excludes a slave for as long as the applier's counter keeps it. A long transaction on the master can keep pages waiting
 with nothing applied and so exclude a slave that is not behind (#249); that
 only moves the backup to another slave or to the master fallback. A target
 already recorded is not judged again on its replication (an earlier dispatch
