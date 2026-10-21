@@ -83,7 +83,7 @@ type Server struct {
 	// keeps the defaults (awaitStagingWriters).
 	stagingWriterBound time.Duration
 	stagingWriterPoll  time.Duration
-	// procRoot is the process list that wait reads; empty is /proc.
+	// procRoot is the process list that wait reads; empty is defaultProcRoot.
 	procRoot string
 	// restoreRoots confine every path a restore request names (#119).
 	restoreRoots RestoreRoots
