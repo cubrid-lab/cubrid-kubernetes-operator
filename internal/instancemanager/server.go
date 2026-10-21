@@ -366,20 +366,38 @@ func (s *Server) startReadinessCheck(ctx context.Context) *readinessCheck {
 	s.readyCheck = c
 	go func() {
 		defer cancel()
-		reason := s.notReadyReason(checkCtx)
+		reason := s.checkReadiness(checkCtx)
 		s.readyMu.Lock()
 		abandoned := c.abandoned
 		c.reason = reason
-		s.readyCheck = nil
-		s.readyMu.Unlock()
-		// A cancelled check says nothing about the member; its reason is the
-		// cancellation, which no request is waiting to hear.
-		if !abandoned {
-			s.logReadiness(checkCtx, reason)
+		if s.readyCheck == c {
+			s.readyCheck = nil
 		}
+		s.readyMu.Unlock()
+		// A cancelled check says nothing about the member but that no request
+		// waited for it, as when its command outlasts the kubelet's timeout.
+		if abandoned {
+			reason = readinessAbandoned
+		}
+		s.logReadiness(checkCtx, reason)
 		close(c.done)
 	}()
 	return c
+}
+
+// readinessAbandoned is the logged reason of a check that every request left
+// before it ended.
+const readinessAbandoned = "no request waited for the readiness check to end; it was cancelled"
+
+// checkReadiness is notReadyReason run apart from any request: a panic in it
+// answers not ready instead of ending the manager.
+func (s *Server) checkReadiness(ctx context.Context) (reason string) {
+	defer func() {
+		if r := recover(); r != nil {
+			reason = fmt.Sprintf("the readiness check failed: %v", r)
+		}
+	}()
+	return s.notReadyReason(ctx)
 }
 
 // notReadyReason says why the member is not ready; it is empty for a member

@@ -370,6 +370,9 @@ not ready is in the Instance Manager's log (`event` `not_ready`, with the
 the same. Only one readiness status command runs at a time: requests that
 arrive while it runs share its answer and its single logged reason, rather
 than starting another command or getting a cached result of an earlier check.
+A check that every request left before it ended, such as a status command
+that outlasts the kubelet's timeout, is cancelled and logged with the reason
+`no request waited for the readiness check to end; it was cancelled`.
 `/livez` remains available during that check. The member's role is what
 `/v1/role` answers to a caller with the token.
 An operation record that could not be written is logged as an error

@@ -117,6 +117,9 @@ type readinessCLI struct {
 	release  chan struct{}
 	canceled chan struct{}
 	output   string
+	// unwind, when set, holds a cancelled command until it is closed, as a
+	// command that takes a while to end after its kill.
+	unwind chan struct{}
 }
 
 func newReadinessCLI(output string) *readinessCLI {
@@ -133,6 +136,9 @@ func (c *readinessCLI) Run(ctx context.Context, _ string, _ ...string) (string, 
 		return c.output, nil
 	case <-ctx.Done():
 		c.canceled <- struct{}{}
+		if c.unwind != nil {
+			<-c.unwind
+		}
 		return "", ctx.Err()
 	}
 }
@@ -282,33 +288,111 @@ func TestServer_Readyz_CheckOutlivesACallerThatLeaves(t *testing.T) {
 	})
 }
 
+// A request that arrives while an abandoned command is still ending starts
+// no command of its own until that one has ended: unauthenticated callers
+// never run two status commands at once.
+func TestServer_Readyz_WaitsForAnAbandonedCommandToEnd(t *testing.T) {
+	readinessCases(t, func(t *testing.T, standalone bool, healthy string) {
+		rh := newReadinessHarness(t, standalone, healthy, nil)
+		unwind := make(chan struct{})
+		var unwound sync.Once
+		rh.cli.unwind = unwind
+		t.Cleanup(func() { unwound.Do(func() { close(unwind) }) })
+
+		firstCtx, cancelFirst := context.WithCancel(t.Context())
+		first := rh.get(firstCtx)
+		rh.waitCommand()
+		cancelFirst()
+		rh.answer(first)
+		select {
+		case <-rh.cli.canceled:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the abandoned check was not cancelled")
+		}
+
+		next := rh.get(t.Context())
+		rh.noNewCommand()
+		rh.releaseCommands()
+		unwound.Do(func() { close(unwind) })
+		rh.waitCommand()
+		if rr := rh.answer(next); rr.Code != http.StatusOK {
+			t.Errorf("readiness after the abandoned command ended = %d, want a new successful check", rr.Code)
+		}
+	})
+}
+
 // The reason in the log is the reason of the check, logged once for the check
 // however many callers shared it, and never replaced by the mere overlap of
 // two requests.
 func TestServer_Readyz_SharedCheckLogsItsOwnReason(t *testing.T) {
-	var log bytes.Buffer
-	var mu sync.Mutex
-	logger := slog.New(slog.NewJSONHandler(lockedWriter{&mu, &log}, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	rh := newReadinessHarness(t, true, serverStatusStopped, logger)
-	first := rh.get(t.Context())
+	cases := []struct {
+		name       string
+		standalone bool
+		output     string
+		reason     string
+	}{
+		{"ha", false, transitionOut, "no HA-Node Info line"},
+		{"standalone", true, serverStatusStopped, "is not running"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			log, logger := lockedLog()
+			rh := newReadinessHarness(t, c.standalone, c.output, logger)
+			first := rh.get(t.Context())
+			rh.waitCommand()
+			second := rh.get(t.Context())
+			rh.noNewCommand()
+			rh.releaseCommands()
+			for _, result := range []<-chan *httptest.ResponseRecorder{first, second} {
+				if rr := rh.answer(result); rr.Code != http.StatusServiceUnavailable {
+					t.Errorf("readiness of a member that is not ready = %d, want 503", rr.Code)
+				}
+			}
+			got := log()
+			if n := strings.Count(got, `"event":"not_ready"`); n != 1 {
+				t.Errorf("a shared check was logged %d times, want once: %s", n, got)
+			}
+			if !strings.Contains(got, c.reason) || strings.Contains(got, "in progress") {
+				t.Errorf("the log does not carry the check's own reason (%q): %s", c.reason, got)
+			}
+		})
+	}
+}
+
+// A check that every caller left, such as a status command that hangs past
+// the kubelet's timeout, is logged: a member that cannot answer its probe is
+// not left silent.
+func TestServer_Readyz_LogsAnAbandonedCheck(t *testing.T) {
+	log, logger := lockedLog()
+	rh := newReadinessHarness(t, true, serverStatusRunning, logger)
+	ctx, cancel := context.WithCancel(t.Context())
+	result := rh.get(ctx)
 	rh.waitCommand()
-	second := rh.get(t.Context())
-	rh.noNewCommand()
-	rh.releaseCommands()
-	for _, result := range []<-chan *httptest.ResponseRecorder{first, second} {
-		if rr := rh.answer(result); rr.Code != http.StatusServiceUnavailable {
-			t.Errorf("readiness of a stopped server = %d, want 503", rr.Code)
+	cancel()
+	rh.answer(result)
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(log(), `"event":"not_ready"`) {
+		if time.Now().After(deadline) {
+			t.Fatalf("an abandoned check left no not_ready line: %s", log())
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	mu.Lock()
-	got := log.String()
-	mu.Unlock()
-	if n := strings.Count(got, `"event":"not_ready"`); n != 1 {
-		t.Errorf("a shared check was logged %d times, want once: %s", n, got)
+	if got := log(); !strings.Contains(got, "no request waited") {
+		t.Errorf("the log does not say that the check was abandoned: %s", got)
 	}
-	if !strings.Contains(got, "is not running") || strings.Contains(got, "in progress") {
-		t.Errorf("the log does not carry the check's own reason: %s", got)
-	}
+}
+
+// lockedLog is a JSON logger at debug level and a reader of what it wrote,
+// safe to use from the readiness check's goroutine.
+func lockedLog() (read func() string, logger *slog.Logger) {
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	logger = slog.New(slog.NewJSONHandler(lockedWriter{&mu, &buf}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.String()
+	}, logger
 }
 
 type lockedWriter struct {
