@@ -162,6 +162,24 @@ prerequisite, and the default deployment/RBAC manifests are unchanged.
 Do not run overlapping controllers on the same resources: a scoped candidate
 and a cluster-wide Operator must not both watch one namespace.
 
+## Client endpoints
+
+Applications connect through Brokers, never to a DB Pod directly
+([ADR-0002](./docs/adr/0002-broker-routing.md)). Every `CubridCluster`, HA or
+standalone, gets two Services:
+
+| Service | Port | HA cluster | Standalone cluster |
+|---|---|---|---|
+| `<cluster>-rw` | 33000/TCP | reads and writes on the current master | reads and writes on the one server |
+| `<cluster>-ro` | 33001/TCP | reads; writes refused with `-581` | reads of the same one server, not a replica; writes refused with `-581` |
+
+The standalone behavior is that of POC-33 in
+[docs/poc/RESULTS.md](./docs/poc/RESULTS.md). The `BrokerReady`,
+`WriteEndpointReady`, `ReadEndpointReady` and `RoutingReady` Conditions say
+whether the Brokers are available
+([docs/observability.md](./docs/observability.md#conditions)); they do not
+prove that a client can run SQL.
+
 ## Network access
 
 For each `CubridCluster` the operator keeps two ingress NetworkPolicies:

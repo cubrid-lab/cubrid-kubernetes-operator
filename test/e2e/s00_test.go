@@ -70,9 +70,11 @@ func s00Scenario() {
 	Context("S00 standalone cluster with the real CUBRID image", Label("db", "S00"), Ordered, func() {
 		const (
 			s00Namespace = "cubrid-s00"
-			clusterName  = "s00"
-			database     = "appdb"
-			marker       = "s00-before-pod-delete"
+			// clientNamespace holds the remote client of the Broker Services.
+			clientNamespace = "cubrid-s00-client"
+			clusterName     = "s00"
+			database        = "appdb"
+			marker          = "s00-before-pod-delete"
 		)
 		pod := clusterName + "-0"
 		record := &s00Evidence{Scenario: "S00", Result: string(evidence.Fail), ProbeFailureEvents: []string{}}
@@ -141,7 +143,12 @@ spec:
   storage:
     data:
       size: 2Gi
-`, clusterName, s00Namespace, repository, tag, database)
+  networkPolicy:
+    clients:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: %s
+`, clusterName, s00Namespace, repository, tag, database, clientNamespace)
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(manifest)
 			createdAt = time.Now()
@@ -215,6 +222,7 @@ spec:
 
 			_, _ = kubectl("delete", "cubridcluster", clusterName, "--ignore-not-found", "--timeout=5m")
 			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", s00Namespace, "--ignore-not-found", "--timeout=5m"))
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", clientNamespace, "--ignore-not-found", "--timeout=5m"))
 		})
 
 		It("becomes Ready as a non-root Pod and answers SQL", func() {
@@ -258,6 +266,45 @@ spec:
 			}).Should(Succeed())
 			_, err = kubectl("get", "service", pod)
 			Expect(err).NotTo(HaveOccurred())
+		})
+
+		// A standalone cluster's Brokers connect to its one server: -rw takes
+		// writes, -ro serves reads and refuses writes (docs/poc/RESULTS.md,
+		// POC-33).
+		It("serves SQL through the read-write and the read-only Service to a client in another namespace", func() {
+			By("waiting for a Broker of each access mode")
+			for _, mode := range []string{"rw", "ro"} {
+				_, err := kubectl("rollout", "status", "deployment/"+clusterName+"-broker-"+mode, "--timeout=5m")
+				Expect(err).NotTo(HaveOccurred(), "the %s Brokers did not become available", mode)
+			}
+
+			By("running a client with a CUBRID driver against the two Services")
+			_, err := utils.Run(exec.Command("kubectl", "create", "ns", clientNamespace))
+			Expect(err).NotTo(HaveOccurred())
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(fmt.Sprintf(brokerClientManifest, clientNamespace, clusterName, s00Namespace, database))
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				phase, err := utils.Run(exec.Command("kubectl", "-n", clientNamespace, "get", "pod", "broker-client",
+					"-o", "jsonpath={.status.phase}"))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(phase).To(Or(Equal("Succeeded"), Equal("Failed")))
+			}, 10*time.Minute, 3*time.Second).Should(Succeed())
+			logs, err := utils.Run(exec.Command("kubectl", "-n", clientNamespace, "logs", "broker-client"))
+			Expect(err).NotTo(HaveOccurred())
+			_, _ = fmt.Fprintf(GinkgoWriter, "broker client output:\n%s\n", logs)
+			Expect(logs).To(ContainSubstring("BROKER-CHECK-OK"), "client output:\n%s", logs)
+
+			By("checking that the operator reports both endpoints and the route to the server")
+			Eventually(func(g Gomega) {
+				for _, conditionType := range []string{"BrokerReady", "WriteEndpointReady", "ReadEndpointReady", "RoutingReady"} {
+					status, err := kubectl("get", "cubridcluster", clusterName,
+						"-o", `jsonpath={.status.conditions[?(@.type=="`+conditionType+`")].status}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(status).To(Equal("True"), conditionType)
+				}
+			}, 2*time.Minute, 3*time.Second).Should(Succeed())
 		})
 
 		It("keeps the data when the Pod is deleted", func() {

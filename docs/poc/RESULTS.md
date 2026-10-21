@@ -2461,3 +2461,137 @@ For example, `docker cp observer "$member:/tmp/observer"`, make that copied exec
 **Limits:** the restarted fixture member h-1 was a middle-priority slave (priority 2), with h-0 master at priority 1. The failure's hab-0 was the highest-priority slave (priority 1), with hab-2 master at priority 3. A manual Docker restart of a sleep-based container plus heartbeat start retains its writable layer and does not replay S14's process-stop/entrypoint/watchdog path. No Operator, Secret rotation, authenticated HTTP handler, handler replication queries, application workload, Kind scheduling/network/storage, or integrated data-convergence validation was exercised. Only one restart per experiment, one host, and one engine/image were observed. All created container IDs, volumes, and network IDs were removed; independent checks found none remaining.
 
 **Next evidence:** capture bounded raw successful-command output linked to the Operator request ID in the real Instance Manager path on isolated Kind, with the actual preceding process-stop/restart, matching priority/master history, and unchanged S14 rotation/migration gates. Preserve ADR-0005 authority and the oracle until that condition is understood. Issue #438 remains open.
+
+## POC-33 — a read-write and a read-only Broker in front of a standalone server (ADR-0002, #286) — **observation: RW reads and writes; RO reads and refuses every write with -581**
+
+**Question.** The Broker configuration of POC-8 was observed only in front of an
+HA group. Does a Broker with `ACCESS_MODE=RW`, and one with `ACCESS_MODE=RO`,
+connect to a standalone server (no `ha_mode`), and what does each let a remote
+client do?
+
+**Environment (2026-10-21):** native linux/amd64 host (6 CPUs), Docker 29.2.1.
+The Instance Manager image built from `bb1ddbbedc3fd3a195e5038c1fbbaa862c523e21`
+with `make docker-build-instance-manager IM_IMG=poc286/instance-manager:poc`
+(image ID `sha256:5f94a91d01d8e600a83feca78b5c0dc5076cc8d1061ab81708800d11dbb290dd`)
+on `cubrid/cubrid:11.4`
+(`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`);
+`cubrid_rel`: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`. Client:
+`python:3.12-slim` (`sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f`)
+with `pycubrid==1.9.0`, the driver of the e2e Broker check.
+
+**Setup.** Three containers of the Instance Manager image on one Docker network,
+all as UID 1000:
+
+- `db-0` (hostname `db-0`) ran, as a standalone member's entrypoint does:
+  `cubrid createdb --db-volume-size=64M --log-volume-size=64M --server-name="$(hostname)" appdb en_US`
+  in `$CUBRID_DATABASES/appdb`, then `cubrid server start appdb`.
+  `cubrid.conf` had no `ha_mode` line; `cubrid changemode appdb@localhost`
+  printed `The server was not configured for HA.` (exit 1).
+- `broker-rw` and `broker-ro` ran the image's
+  `/usr/local/bin/broker-entrypoint.sh` with `BROKER_ACCESS_MODE=rw` or `ro`,
+  `BROKER_CONF_DIR=/etc/cubrid-broker`, `CUBRID_DATABASES=/tmp/cubrid-databases`,
+  and a mounted directory holding the files the Operator generates: one
+  `cubrid_broker_<mode>.conf` per mode (`[%RW]` on 33000 or `[%RO]` on 33001,
+  `MIN_NUM_APPL_SERVER=2`, `MAX_NUM_APPL_SERVER=5`, `ACCESS_MODE=RW` or `RO`)
+  and a `databases.txt` whose db-host field is the one server:
+
+  ```text
+  appdb	/home/cubrid/CUBRID/databases/appdb	db-0	/home/cubrid/CUBRID/databases/appdb	file:/home/cubrid/CUBRID/databases/appdb/lob
+  ```
+
+  Both printed `++ cubrid broker start: success`.
+
+A client container then opened a new connection for each statement
+(`pycubrid.connect(host=<broker>, port=<port>, database="appdb", user="dba", password="")`,
+then `execute`, `fetchall` for a `SELECT`, `commit` otherwise). The
+statements, in order: through RW `CREATE TABLE poc (id INT PRIMARY KEY, marker VARCHAR(32))`,
+`INSERT INTO poc VALUES (1, 'through-rw')`, `SELECT id, marker FROM poc ORDER BY id`;
+through RO the same `SELECT`, `INSERT INTO poc VALUES (2, 'through-ro')`,
+`UPDATE poc SET marker = 'ro-update' WHERE id = 1`, `DELETE FROM poc WHERE id = 1`,
+`CREATE TABLE poc_ro (id INT)`; through RW the `SELECT` again and
+`SELECT COUNT(*) FROM poc_ro`.
+
+**Observed:**
+
+```text
+rw create table: OK
+rw insert: OK
+rw select (new connection): OK [(1, 'through-rw')]
+ro select: OK [(1, 'through-rw')]
+ro insert: FAILED: DatabaseError('Attempted to update the database when updates are disabled. ', errno=-581, sqlstate='HY000')
+ro update: FAILED: DatabaseError('Attempted to update the database when updates are disabled. ', errno=-581, sqlstate='HY000')
+ro delete: FAILED: DatabaseError('Attempted to update the database when updates are disabled. ', errno=-581, sqlstate='HY000')
+ro create table: FAILED: DatabaseError('Attempted to update the database when updates are disabled. ', errno=-581, sqlstate='HY000')
+rw select after ro writes: OK [(1, 'through-rw')]
+rw select poc_ro: FAILED: ProgrammingError('Syntax: Unknown class "dba.poc_ro". select count(*) from [dba.poc_ro]', errno=-493, ...)
+```
+
+The row committed through RW was read through a new RW connection and through
+RO. The refused `UPDATE` and `DELETE` left the row as it was, and the refused
+`CREATE TABLE` created nothing. Each Broker's log under `$CUBRID/log/broker`
+showed its CAS connected to the one server:
+
+```text
+Program 'rw_cub_cas_1' (pid 17) connected to database server 'appdb' on the host 'db-0' (port 1523).
+Program 'ro_cub_cas_1' (pid 17) connected to database server 'appdb' on the host 'db-0' (port 1523).
+```
+
+**The server stopped.** After `cubrid server stop appdb` on `db-0`, a new
+connection through either Broker failed at connect with
+`DatabaseError("Failed to connect to database server, 'appdb', on the following host(s): db-0:db-0", errno=-677)`:
+the Broker accepted the client and its CAS found no server. After
+`cubrid server start appdb`, a `SELECT` through each Broker succeeded again
+with no change to the Brokers. (The `cubrid server stop` command itself did not
+return within 120 s; its `cub_commdb -S appdb` child was still running after
+the server had been started again and was killed by hand. This was not
+examined further.)
+
+**Consequence (feeds ADR-0002, #286).** In front of a standalone server, a
+read-write Broker carries reads and writes, and a read-only Broker serves reads
+of the same server and refuses writes and DDL itself with `-581`, the code
+POC-22 recorded for the HA group. The read-only endpoint of a standalone
+cluster is therefore enforced read-only access to that one server, not a read
+replica or added capacity. A Broker listening on its port does not mean that a
+client gets a session: with the server stopped, both Brokers accepted the
+connection and the client got `-677`, so Broker Pod readiness alone does not
+say the server is reachable.
+
+**Limits:** one run on one host and one engine/image; one driver (`pycubrid`),
+not JDBC or CCI; `dba` with an empty password; no Kubernetes, Services,
+NetworkPolicy or Operator; one stop and start of the server, not a crash or a
+Pod deletion. All three containers and the network were removed afterwards.
+
+Scripts (each run with `/bin/sh` in its container; the client with
+`pip install --quiet --no-cache-dir pycubrid==1.9.0` first):
+
+```sh
+# db-0: docker run -d --name poc286-db-0 --hostname db-0 --network poc286-net \
+#   -v "$PWD/poc286:/poc:ro" --entrypoint /bin/sh poc286/instance-manager:poc /poc/db.sh
+set -e
+mkdir -p "$CUBRID_DATABASES/appdb"
+cd "$CUBRID_DATABASES/appdb"
+cubrid createdb --db-volume-size=64M --log-volume-size=64M --server-name="$(hostname)" appdb en_US
+cubrid server start appdb
+grep '^ha_mode' "$CUBRID/conf/cubrid.conf" || echo "ha_mode not set in cubrid.conf"
+exec sleep infinity
+```
+
+```sh
+# Brokers (mode rw or ro):
+docker run -d --name poc286-broker-rw --hostname broker-rw --network poc286-net \
+  -v "$PWD/poc286/conf:/etc/cubrid-broker:ro" -e BROKER_ACCESS_MODE=rw \
+  -e BROKER_CONF_DIR=/etc/cubrid-broker -e CUBRID_DATABASES=/tmp/cubrid-databases \
+  --entrypoint /usr/local/bin/broker-entrypoint.sh poc286/instance-manager:poc
+# Client:
+docker run --rm --network poc286-net -v "$PWD/poc286:/poc:ro" \
+  -e RW_HOST=broker-rw -e RO_HOST=broker-ro --entrypoint /bin/sh python:3.12-slim /poc/client.sh
+```
+
+Not kept: the text of `/poc/client.sh` and the `poc286/conf` directory were
+removed with the run's working directory and are not in the repository or
+the PR branch history. The client's connection call and statement order are
+described above; the exact script text is not recorded. How the two
+`cubrid_broker_<mode>.conf` files and `databases.txt` were produced (rendered
+from the Operator's Broker configuration code or written by hand to match it)
+is not recorded either; only the settings listed under **Setup** are known.
+A rerun has to write both again.

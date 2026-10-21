@@ -1051,6 +1051,11 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		if r.Prober != nil {
 			r.reconcileStandaloneUpdate(ctx, cluster, sts, desired)
 		}
+		// Its Brokers need no role prober: they connect to the one server,
+		// whose readiness the Pod reports.
+		if available, ok := r.brokerTier(ctx, cluster, sts, nil); ok {
+			setStandaloneBrokerConditions(cluster, ready >= desired && desired > 0, available)
+		}
 	} else if r.Prober == nil {
 		setCondition(cluster, conditionHAReady, metav1.ConditionUnknown, "RoleDiscoveryDisabled",
 			"no role prober configured")
@@ -1063,12 +1068,8 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 		// safety-first primary resolution (ADR-0002/0005).
 		// A conflicting write leaves the broker conditions as they are; the
 		// next reconcile writes again.
-		young, err := r.lastingConflict(cluster, brokerWrites, r.reconcileBrokerTier(ctx, cluster, res, r.imageToRun(cluster, sts)))
-		if young {
-			logf.FromContext(ctx).V(1).Info("Retrying broker tier after a conflicting write")
-		} else if err != nil {
-			logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
-			setBrokerConditionsUnobserved(cluster, res, err)
+		if available, ok := r.brokerTier(ctx, cluster, sts, &res); ok {
+			r.setBrokerConditions(cluster, res, available)
 		}
 		// Rolling update (ADR-0009): only when the engine-version guard permits
 		// (no blocked upgrade / unverifiable version), roll outdated slaves one at

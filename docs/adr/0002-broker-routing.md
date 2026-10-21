@@ -163,6 +163,22 @@ usable backend?" — distinct from "which DB pod is master?" (status) and
   stopped are closed; whether a client rides through that depends on its
   driver and has not been measured.
 - The single `<cluster>-broker` Deployment of earlier versions is deleted.
+- A standalone cluster (`highAvailability.enabled: false`, one member) gets
+  the same tier: both Deployments, both Services and the same configuration,
+  with `databases.txt` naming its one server (#286). In front of a standalone
+  server a read-write Broker carries reads and writes, and a read-only Broker
+  serves reads of that same server and refuses writes and DDL itself with
+  `-581` (POC-33). `<cluster>-ro` of a standalone cluster is therefore
+  enforced read-only access to the one server, not a replica and not added
+  read capacity. Its Brokers need no role prober, and no primary is resolved
+  for it: `RoutingReady` is `True` (`StandaloneServerReady`) when the member
+  is ready, which for a standalone member means its server runs, and a
+  read-write Broker is available; `False` with `InstancesNotReady` while the
+  member is not ready, else `NoBrokerAvailable`. A Broker that listens is
+  available even while the server is down; a client then gets `-677` at
+  connect (POC-33). After the server stops, `RoutingReady` stays `True`
+  until the member's readiness probe has failed three times (period 5 s,
+  timeout 5 s), about 15 s or more, and the next reconcile has run.
 
 ### Failover write sequence
 
@@ -205,7 +221,9 @@ As implemented, no RW Broker available gives `WriteEndpointReady=False`
 and `RoutingReady=False` with `NoBrokerAvailable`; an unresolved primary
 gives `RoutingReady=False` with the reason of `PrimaryResolved` (for
 example `MultiplePrimariesObserved`), `AmbiguousPrimary` only when that
-reason is empty. Whether a Broker can reach the master is not checked, so
+reason is empty. A standalone cluster has no primary; its `RoutingReady`
+follows the member's readiness instead (see "As implemented" above).
+Whether a Broker can reach the master is not checked, so
 `BrokerCannotReachPrimary` is not produced (`internal/controller/broker.go`;
 reasons in [docs/observability.md](../observability.md#conditions)).
 

@@ -84,9 +84,10 @@ spec:
 // brokerClientManifest is a client outside the cluster's namespace that talks
 // to the two Broker Services with pycubrid, the CUBRID driver for Python: a
 // committed write through -rw, the same row read through -ro, and a write
-// through -ro that has to be refused. It prints BROKER-CHECK-OK when all
-// three hold. broker_tester is not used: its statements do not persist
-// (docs/poc/RESULTS.md, POC-8).
+// through -ro that has to be refused with the read-only Broker's -581. It
+// prints BROKER-CHECK-OK when all three hold. The HA bootstrap and S00 (a
+// standalone cluster) both run it. broker_tester is not used: its statements
+// do not persist (docs/poc/RESULTS.md, POC-8).
 const brokerClientManifest = `apiVersion: v1
 kind: Pod
 metadata:
@@ -145,7 +146,10 @@ spec:
               cur.execute("INSERT INTO broker_check VALUES (2, 'through-ro')")
               ro.commit()
           except Exception as exc:
-              print("write through -ro refused:", exc)
+              # The read-only Broker's refusal, not any failure (POC-22, POC-33).
+              if getattr(exc, "errno", None) != -581:
+                  sys.exit("a write through -ro failed, but not as a refused update: %%r" %% (exc,))
+              print("write through -ro refused:", repr(exc))
           else:
               sys.exit("a write through -ro was accepted")
           print("BROKER-CHECK-OK")
