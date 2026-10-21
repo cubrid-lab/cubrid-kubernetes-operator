@@ -53,15 +53,10 @@ type RestoreRequest struct {
 	SeedFromMaster string `json:"seedFromMaster,omitempty"`
 	// ExpectedClusterUID, when set with SeedFromMaster, must equal the UID of
 	// the cluster the artifact was taken in: a member is seeded only from
-	// its own cluster's master. A restore into a new cluster leaves it
-	// empty, since its artifact comes from another cluster.
+	// its own cluster's master. It is ignored without SeedFromMaster: a
+	// restore into a new cluster takes another cluster's artifact.
 	ExpectedClusterUID string `json:"expectedClusterUID,omitempty"`
 }
-
-// fullBackup is the only backup level a restore takes: restoredb of a level 1
-// or 2 backup needs the backups it builds on, which an artifact does not
-// carry, and the operator takes full backups only (CubridBackupFull).
-var fullBackup = 0
 
 // restoreExpectation is what the artifact of req must say about itself
 // before anything is downloaded into staging or registered (ADR-0008
@@ -72,6 +67,10 @@ var fullBackup = 0
 // it, in this cluster. A restore into a new cluster takes a backup of
 // another cluster, taken on a standby or the master.
 func restoreExpectation(req RestoreRequest) ManifestExpectation {
+	// A full backup is the only level a restore takes: restoredb of a level 1
+	// or 2 backup needs the backups it builds on, which an artifact does not
+	// carry, and the operator takes full backups only (CubridBackupFull).
+	fullBackup := 0
 	exp := ManifestExpectation{Database: req.Database, CubridVersion: req.ExpectedCubridVersion, Level: &fullBackup}
 	if req.SeedFromMaster != "" {
 		exp.RequireSourceRole = string(RoleMaster)

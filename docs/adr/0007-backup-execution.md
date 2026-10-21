@@ -291,7 +291,8 @@ remains a compatibility consideration, separate from ordinary artifact safety.
   downloaded into staging, registered in `databases.txt` or run: every
   restore takes only a full backup (`level` 0) of the request's database
   and engine version; a seed restore (`seedFromMaster`) takes only a backup
-  whose `sourceInstance` is that master and whose `sourceRole` is `master`,
+  whose manifest declares that master as `sourceInstance` and `master` as
+  `sourceRole` (the role the operator declared when it requested the backup),
   and, when the request carries `expectedClusterUID` (the operator always
   sends it for a seed), whose `clusterUID` is that cluster's. A restore into
   a new cluster takes another cluster's full backup from a standby or the
