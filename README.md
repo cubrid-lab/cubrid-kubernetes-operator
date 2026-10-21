@@ -149,13 +149,8 @@ permissions; the example disables metrics to avoid needing those permissions
 for a Role-only candidate. CRD installation remains an external cluster-wide
 prerequisite, and the default deployment/RBAC manifests are unchanged.
 
-The regression tests use envtest with an explicitly non-admin identity and a
-namespaced Role, plus an admin-backed cache test to distinguish watch filtering
-from authorization. They check both primary watches and a secondary Secret
-watch, preserve the global default, and deny out-of-namespace API reads/writes
-under RBAC. This does not validate a live VM candidate rollout. Baseline/candidate
-orchestration, CRD compatibility, and pausing/restoring a baseline are separate
-work; do not run overlapping controllers on the same resources.
+Do not run overlapping controllers on the same resources: a scoped candidate
+and a cluster-wide Operator must not both watch one namespace.
 
 ## Network access
 
