@@ -29,8 +29,10 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -64,14 +66,18 @@ func testConfig(t *testing.T) Config {
 
 func owner(kind, name string, uid types.UID) metav1.OwnerReference {
 	yes := true
-	return metav1.OwnerReference{APIVersion: "apps/v1", Kind: kind, Name: name, UID: uid, Controller: &yes}
+	apiVersion := "apps/v1"
+	if kind == "CubridCluster" {
+		apiVersion = "database.cubrid.io/v1alpha1"
+	}
+	return metav1.OwnerReference{APIVersion: apiVersion, Kind: kind, Name: name, UID: uid, Controller: &yes}
 }
 
 func testClient(t *testing.T, cfg Config, hooks interceptor.Funcs, extra ...client.Object) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
-		corev1.AddToScheme, appsv1.AddToScheme, storagev1.AddToScheme, databasev1alpha1.AddToScheme,
+		corev1.AddToScheme, appsv1.AddToScheme, batchv1.AddToScheme, storagev1.AddToScheme, databasev1alpha1.AddToScheme,
 	} {
 		if err := add(scheme); err != nil {
 			t.Fatal(err)
@@ -79,10 +85,11 @@ func testClient(t *testing.T, cfg Config, hooks interceptor.Funcs, extra ...clie
 	}
 	objects := make([]client.Object, 0, 5+len(extra))
 	objects = append(objects,
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID(cfg.ClusterUID)}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testSystemNamespace, UID: types.UID(cfg.ClusterUID)}},
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: cfg.OperatorDeployment, Namespace: cfg.OperatorNamespace,
 			UID: "deployment", Generation: 1},
-			Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": testManagerName}},
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{testAppLabel: testManagerName}},
 				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{Name: testManagerName, Image: cfg.OperatorImage}}}}},
 			Status: appsv1.DeploymentStatus{ObservedGeneration: 1, Replicas: 1, UpdatedReplicas: 1,
@@ -91,7 +98,7 @@ func testClient(t *testing.T, cfg Config, hooks interceptor.Funcs, extra ...clie
 			UID:             "replicaset",
 			OwnerReferences: []metav1.OwnerReference{owner("Deployment", cfg.OperatorDeployment, "deployment")}}},
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: testManagerPodName, Namespace: cfg.OperatorNamespace,
-			UID: testManagerPodName, Labels: map[string]string{"app": testManagerName},
+			UID: testManagerPodName, Labels: map[string]string{testAppLabel: testManagerName},
 			OwnerReferences: []metav1.OwnerReference{owner("ReplicaSet", "manager-rs", "replicaset")}},
 			Spec: corev1.PodSpec{NodeName: "node-1",
 				Containers: []corev1.Container{{Name: testManagerName, Image: cfg.OperatorImage}}},
@@ -154,16 +161,24 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{cfg: testConfig(t)}
+	return newConfiguredFixture(t, testConfig(t))
+}
+
+func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fixture {
+	t.Helper()
+	f := &fixture{cfg: cfg}
 	hooks := interceptor.Funcs{
 		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			switch value := obj.(type) {
 			case *corev1.Namespace:
+				if f.cfg.NamespaceMode == PreallocatedNamespace {
+					return errors.New("namespace writes denied")
+				}
 				if value.Name != f.cfg.Namespace {
 					t.Fatalf("runner wrote shared namespace %s", value.Name)
 				}
 				value.UID = "run-namespace"
-				f.writes = append(f.writes, "namespace")
+				f.writes = append(f.writes, testNamespaceAction)
 				return c.Create(ctx, value, opts...)
 			case *databasev1alpha1.CubridCluster:
 				if value.Namespace != f.cfg.Namespace || value.Name != clusterName {
@@ -171,7 +186,7 @@ func newFixture(t *testing.T) *fixture {
 				}
 				value.UID = "smoke-cluster"
 				value.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}}
-				f.writes = append(f.writes, "cluster")
+				f.writes = append(f.writes, testClusterAction)
 				if err := c.Create(ctx, value, opts...); err != nil {
 					return err
 				}
@@ -182,10 +197,27 @@ func newFixture(t *testing.T) *fixture {
 				if err := c.Create(ctx, sts); err != nil {
 					return err
 				}
+				if f.cfg.NamespaceMode == PreallocatedNamespace {
+					sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{{
+						ObjectMeta: metav1.ObjectMeta{Name: dataClaimName}}}
+					if err := c.Update(ctx, sts); err != nil {
+						return err
+					}
+					claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: smokePVCName,
+						Namespace: f.cfg.Namespace, UID: "claim-uid"},
+						Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &f.cfg.StorageClass, VolumeName: "pv-smoke",
+							Resources: corev1.VolumeResourceRequirements{
+								Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Gi")}}}}
+					if err := c.Create(ctx, claim); err != nil {
+						return err
+					}
+				}
 				return c.Create(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0", Namespace: f.cfg.Namespace,
 					UID:             "database-pod",
 					OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", clusterName, sts.UID)}},
-					Spec: corev1.PodSpec{NodeName: "node-1",
+					Spec: corev1.PodSpec{NodeName: "node-1", Volumes: []corev1.Volume{{Name: dataClaimName,
+						VolumeSource: corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}}},
 						Containers: []corev1.Container{{Name: databaseContainer, Image: f.cfg.InstanceManagerImage}}},
 					Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 						ContainerStatuses: []corev1.ContainerStatus{{Name: databaseContainer, Ready: true,
@@ -199,6 +231,31 @@ func newFixture(t *testing.T) *fixture {
 		},
 		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 			f.deletes++
+			if f.cfg.NamespaceMode == PreallocatedNamespace {
+				cluster, ok := obj.(*databasev1alpha1.CubridCluster)
+				if !ok {
+					return fmt.Errorf("namespace/PVC deletion denied: %T", obj)
+				}
+				options := (&client.DeleteOptions{}).ApplyOptions(opts)
+				if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID != cluster.UID {
+					return errors.New("missing CR UID precondition")
+				}
+				if f.deleteHook != nil {
+					return f.deleteHook(ctx, c, obj, opts...)
+				}
+				if err := c.Delete(ctx, obj, opts...); err != nil {
+					return err
+				}
+				// Fake-client GC only; real GC is required in isolated Kind.
+				for _, child := range []client.Object{&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: clusterName,
+					Namespace: f.cfg.Namespace}}, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0",
+					Namespace: f.cfg.Namespace}}} {
+					if err := c.Delete(ctx, child); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 			if _, ok := obj.(*corev1.Namespace); !ok || obj.GetName() != f.cfg.Namespace {
 				t.Fatalf("runner deleted a shared object: %T %v", obj, client.ObjectKeyFromObject(obj))
 			}
@@ -219,7 +276,7 @@ func newFixture(t *testing.T) *fixture {
 			return c.Delete(ctx, obj, opts...)
 		},
 	}
-	f.runner.Client = testClient(t, f.cfg, hooks)
+	f.runner.Client = testClient(t, f.cfg, hooks, extra...)
 	f.runner.Command = func(ctx context.Context, args ...string) (string, error) {
 		if f.commandHook != nil {
 			return f.commandHook(ctx, args)
@@ -275,11 +332,11 @@ func TestRunWritesSQLAndRetainsItsScopedEvidence(t *testing.T) {
 }
 
 func TestRunRefusesWrongInstalledIdentityBeforeWrites(t *testing.T) {
-	for _, change := range []string{"cluster", "template", "pod-image", "image-id", "owner"} {
+	for _, change := range []string{testClusterAction, "template", "pod-image", "image-id", testOwnerName} {
 		t.Run(change, func(t *testing.T) {
 			f := newFixture(t)
 			switch change {
-			case "cluster":
+			case testClusterAction:
 				f.cfg.ClusterUID = "another-cluster"
 			case "template":
 				deployment := &appsv1.Deployment{}
@@ -377,7 +434,7 @@ func TestRunCleansUpAfterCancellation(t *testing.T) {
 }
 
 func TestRunDoesNotClaimFailedOrUnidentifiedNamespaceCreation(t *testing.T) {
-	for _, failure := range []string{"denied", "ambiguous", "missing-uid"} {
+	for _, failure := range []string{"denied", testAmbiguous, "missing-uid"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newFixture(t)
 			f.runner.Client = interceptor.NewClient(f.runner.Client.(client.WithWatch), interceptor.Funcs{
@@ -386,7 +443,7 @@ func TestRunDoesNotClaimFailedOrUnidentifiedNamespaceCreation(t *testing.T) {
 						switch failure {
 						case "denied":
 							return errors.New("namespace creation denied")
-						case "ambiguous":
+						case testAmbiguous:
 							return context.DeadlineExceeded
 						default:
 							return nil
@@ -527,7 +584,7 @@ func TestNamespaceReplacementStopsFurtherWork(t *testing.T) {
 			if f.marker != "" || f.deletes != 0 {
 				t.Fatalf("replacement namespace received SQL or deletion: marker=%s deletes=%d", f.marker, f.deletes)
 			}
-			if when == testBeforeCluster && strings.Join(f.writes, ",") != "namespace" {
+			if when == testBeforeCluster && strings.Join(f.writes, ",") != testNamespaceAction {
 				t.Fatalf("cluster was created after replacement: %v", f.writes)
 			}
 		})

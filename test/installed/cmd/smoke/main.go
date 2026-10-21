@@ -40,12 +40,17 @@ func main() {
 
 func run(ctx context.Context, args []string) (runErr error) {
 	flags := flag.NewFlagSet("installed-smoke", flag.ContinueOnError)
-	var path, targetContext string
+	var path, targetContext, namespaceMode string
 	var cfg installed.Config
 	flags.StringVar(&path, "kubeconfig", "", "explicit target kubeconfig (credentials stay private)")
 	flags.StringVar(&targetContext, "context", "", "explicit context to snapshot")
 	flags.StringVar(&cfg.ClusterUID, "cluster-uid", "", "expected kube-system namespace UID")
-	flags.StringVar(&cfg.Namespace, "namespace", "", "fresh cubrid-lab- namespace for this run")
+	flags.StringVar(&cfg.Namespace, "namespace", "", "explicit disposable run namespace")
+	flags.StringVar(&namespaceMode, "namespace-mode", "fresh", "fresh or explicitly preallocated namespace")
+	flags.StringVar(&cfg.NamespaceUID, "namespace-uid", "", "expected preallocated namespace UID")
+	flags.StringVar(&cfg.OwnerConfigMap, "owner-configmap", "", "external immutable owner ConfigMap name")
+	flags.StringVar(&cfg.OwnerUID, "owner-uid", "", "expected external owner ConfigMap UID")
+	flags.StringVar(&cfg.OwnerNonce, "owner-nonce", "", "expected external owner ConfigMap data.nonce")
 	flags.StringVar(&cfg.OperatorNamespace, "operator-namespace", "", "namespace of the installed Operator")
 	flags.StringVar(&cfg.OperatorDeployment, "operator-deployment", "", "installed manager Deployment name")
 	flags.StringVar(&cfg.OperatorImage, "operator-image", "", "expected digest or main-commit manager image")
@@ -67,6 +72,7 @@ func run(ctx context.Context, args []string) (runErr error) {
 	if flags.NArg() != 0 || (cfg.Level != "kind" && cfg.Level != "vm-lab") {
 		return errors.New("choose kind or vm-lab explicitly and provide no positional command")
 	}
+	cfg.NamespaceMode = installed.NamespaceMode(namespaceMode)
 	target, err := installed.OpenTarget(path, targetContext)
 	if err != nil {
 		return err

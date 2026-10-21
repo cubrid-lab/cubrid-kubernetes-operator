@@ -121,12 +121,20 @@ lane's environment rules the scenario out; work that was skipped is
 |---|---|---|---|
 | `kind` | `make test-e2e` with no filter; the E2E workflow on a GitHub-hosted `ubuntu-latest` (linux/amd64) runner | S00, S01, S02, S03 (`abrupt-first-member`, `abrupt`, `graceful`), S05 (`broker-process`, `one-broker-pod`, `all-rw-brokers`), S06 (`restart`, `absent-during-failover`), S14, S14 (`token-rotation`, `token-migration`) | none |
 | `lab-installed-smoke` | The [installed-Operator connection command](installed-smoke.md), under an authorized launcher on its explicitly selected environment | LAB00: create a new standalone cluster, commit/read SQL and verify scoped cleanup | none |
+| `lab-preallocated-component-smoke` | The installed command with explicit preallocated ownership inputs on its selected environment | LAB00 (`preallocated`): commit/read SQL, UID-delete only the created CR, observe owned StatefulSet/DB Pod disappearance, retain/report PVCs | none |
 
 `lab-installed-smoke` is a connection baseline. Its `passed` verdict applies
 to LAB00 and establishes neither S00 installation validation nor S00–S15
 qualification. The mandatory VM/fault/recovery scenarios retain their own
 required evidence. The command records the actual environment level separately
 from this lane name; `vm-lab` alone does not imply a qualification verdict.
+
+`lab-preallocated-component-smoke` is a distinct component result. Its successful
+owned-workload cleanup is not fresh LAB00 namespace cleanup or private campaign
+fixture reset. `fixtureReusable=false` and `resetRequired=true` remain explicit;
+retained PVCs block the next fresh-data run and overall private campaign acceptance
+until separately authorized reset evidence exists. Neither lane establishes backend
+volume deletion or changes mandatory VM/fault/recovery acceptance.
 
 The list for `kind` is kept in `test/e2e/summary_test.go` (`kindLane`);
 change it there and here together. The check itself is `Lane.Gate` in
