@@ -290,6 +290,8 @@ func registerRestoreTarget(targetDir, database, host, owner string) (undo func()
 	}
 	defer func() { _ = root.Close() }()
 
+	databasesTxtMu.Lock()
+	defer databasesTxtMu.Unlock()
 	before, err := root.ReadFile(databasesTxt)
 	existed := err == nil
 	if err != nil && !os.IsNotExist(err) {
@@ -312,18 +314,22 @@ func registerRestoreTarget(targetDir, database, host, owner string) (undo func()
 		_ = root.RemoveAll(database)
 		return nil, err
 	}
+	// The undo removes only this database's line: another database may have
+	// been registered since. A databases.txt that this call created goes
+	// again once nothing else is registered in it.
+	undoLocked := func(root *os.Root) {
+		_ = root.RemoveAll(database)
+		_ = unregisterDatabaseLocked(root, database, !existed)
+	}
 	undo = func() {
 		root, err := os.OpenRoot(targetDir)
 		if err != nil {
 			return
 		}
 		defer func() { _ = root.Close() }()
-		_ = root.RemoveAll(database)
-		if existed {
-			_ = replaceFile(root, databasesTxt, before)
-		} else {
-			_ = removeFile(root, databasesTxt)
-		}
+		databasesTxtMu.Lock()
+		defer databasesTxtMu.Unlock()
+		undoLocked(root)
 	}
 
 	dbDir := filepath.Join(targetDir, database)
@@ -333,7 +339,7 @@ func registerRestoreTarget(targetDir, database, host, owner string) (undo func()
 	}
 	content += fmt.Sprintf("%s\t\t%s\t%s\t%s\tfile:%s\n", database, dbDir, host, dbDir, filepath.Join(dbDir, "lob"))
 	if err := replaceFile(root, databasesTxt, []byte(content)); err != nil {
-		undo()
+		undoLocked(root)
 		return nil, fmt.Errorf("register %s in %s: %w", database, databasesTxt, err)
 	}
 	return undo, nil

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 )
 
@@ -28,9 +29,12 @@ import (
 // data, never a truncated or partial file, and data survives a power loss
 // once replaceFile returned.
 // It writes a temporary file beside name, syncs it, renames it over name and
-// syncs the directory. The temporary file has a fixed name, so one left by a
-// crash is reused by the next write instead of piling up; writers of the
-// same name are serialized by their callers.
+// syncs the directory. The file is created anew, owned by the manager's user
+// with mode 0600, as root.WriteFile left an existing file's. The temporary
+// file has a fixed name, so one left by a crash is reused by the next write
+// instead of piling up; two writers of the same name must therefore not run
+// at once (databasesTxtMu; a marker has one writer, the operation that owns
+// its database).
 func replaceFile(root *os.Root, name string, data []byte) error {
 	tmp := name + ".im-tmp"
 	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
@@ -53,6 +57,12 @@ func replaceFile(root *os.Root, name string, data []byte) error {
 	}
 	return syncDir(root, filepath.Dir(name))
 }
+
+// databasesTxtMu serializes the manager's read-modify-writes of
+// databases.txt: a restore and an HA bootstrap of different databases may
+// run at once. It does not exclude `cubrid createdb` of an HA bootstrap,
+// which registers its database in the same file itself.
+var databasesTxtMu sync.Mutex
 
 // removeFile removes name below root, if it exists, and syncs its directory,
 // so that the removal survives a power loss.

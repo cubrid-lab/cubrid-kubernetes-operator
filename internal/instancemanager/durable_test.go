@@ -126,6 +126,8 @@ func TestMetadataWrites_ACrashLeavesTheEarlierContent(t *testing.T) {
 		dir := t.TempDir()
 		before := registrations(dir)
 		writeFile(t, filepath.Join(dir, databasesTxt), before)
+		// 64 bytes pass the 36-byte marker and stop the write of
+		// databases.txt, whose every line is longer.
 		runCrash(t, crashRegister, 64, dir)
 		if got := readFile(t, filepath.Join(dir, databasesTxt)); got != before {
 			t.Errorf("databases.txt after a crash in its write =\n%q\nwant the earlier content\n%q", got, before)
@@ -169,5 +171,62 @@ func TestMetadataWrites_TheNextWriteAfterACrashSucceeds(t *testing.T) {
 	got := readFile(t, filepath.Join(dir, databasesTxt))
 	if strings.Contains(got, "db2\t") || !strings.Contains(got, "db1\t") || !strings.Contains(got, "db3\t") {
 		t.Errorf("databases.txt = %q, want db1 and db3 only", got)
+	}
+}
+
+// A new operation whose record was renamed into place but whose directory
+// could not be synced is reported as not created, and leaves nothing behind:
+// a retry of the same request creates the operation afresh and is answered
+// as new, instead of finding a Pending record of an operation that nothing
+// runs.
+func TestFindOrCreate_AFailedDirectorySyncLeavesNoRecord(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewOperationStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncErr := errors.New("sync: input/output error")
+	syncOperationDir = func(string) error { return syncErr }
+	t.Cleanup(func() { syncOperationDir = syncDirPath })
+
+	if _, _, err := store.FindOrCreate(OpRestore, "key", "hash", "db1"); !errors.Is(err, syncErr) {
+		t.Fatalf("FindOrCreate with a failed directory sync: err = %v, want %v", err, syncErr)
+	}
+	syncOperationDir = syncDirPath
+	op, existed, err := store.FindOrCreate(OpRestore, "key", "hash", "db1")
+	if err != nil || existed {
+		t.Fatalf("retry = %+v, existed %v, %v; want a new operation", op, existed, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			records = append(records, e.Name())
+		}
+	}
+	if len(records) != 1 || records[0] != op.ID+".json" {
+		t.Errorf("records = %v, want only %s.json", records, op.ID)
+	}
+}
+
+// Undoing a restore target removes only its own registration: a database
+// registered after it stays registered, and databases.txt stays while it
+// registers anything.
+func TestRegisterRestoreTarget_UndoKeepsLaterRegistrations(t *testing.T) {
+	dir := t.TempDir()
+	undoA, err := registerRestoreTarget(dir, "dba", "host-0", crashOldOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registerRestoreTarget(dir, "dbb", "host-0", crashNewOwner); err != nil {
+		t.Fatal(err)
+	}
+	undoA()
+	got := readFile(t, filepath.Join(dir, databasesTxt))
+	if strings.Contains(got, "dba\t") || !strings.Contains(got, "dbb\t") {
+		t.Errorf("databases.txt after undoing dba = %q, want dbb only", got)
 	}
 }

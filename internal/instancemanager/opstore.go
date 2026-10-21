@@ -196,6 +196,11 @@ func (s *OperationStore) FindOrCreate(kind OperationKind, idempotencyKey, reques
 		UpdatedAt:      now,
 	}
 	if err := s.writeLocked(op); err != nil {
+		// The record may be in place although its directory could not be
+		// synced: removed, it holds neither the key nor the database for an
+		// operation that nothing runs. One that a crash brings back is
+		// failed at the next start (reconcileOnStart).
+		_ = os.Remove(filepath.Join(s.dir, op.ID+".json"))
 		s.logWriteFailure(op, err, slog.LevelError)
 		return nil, false, err
 	}
@@ -526,11 +531,15 @@ func (s *OperationStore) writeLocked(op *Operation) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename operation file: %w", err)
 	}
-	if err := syncDirPath(s.dir); err != nil {
+	if err := syncOperationDir(s.dir); err != nil {
 		return fmt.Errorf("sync the operation directory: %w", err)
 	}
 	return nil
 }
+
+// syncOperationDir makes a renamed operation record durable; tests replace
+// it to fail after the rename.
+var syncOperationDir = syncDirPath
 
 // newOperationID returns a server-generated hex ID. Because the ID is never
 // caller-supplied it is always a safe filesystem name (no path traversal).

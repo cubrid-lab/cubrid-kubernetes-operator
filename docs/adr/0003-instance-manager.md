@@ -344,7 +344,10 @@ RAM. Operation records, `databases.txt` and ownership markers are each
 replaced whole: written to a temporary file beside them, synced, renamed over
 the earlier file, and their directory synced, so that a crash leaves either
 the earlier content or the new one, never a truncated file that drops another
-database's registration or an unreadable marker (#298). No durable shutdown marker is written (step 2 of the shutdown model);
+database's registration or an unreadable marker (#298). The manager's own
+writes of `databases.txt` run one at a time, and undoing a registration
+removes only its own line. No durable shutdown marker is written (step 2 of
+the shutdown model);
 the stop record of the shutdown command is container-local and does not
 outlive the container. Long operations return `202 Accepted` + operation ID; the operator
 polls `GET /v1/operations/{id}` and never assumes completion from an HTTP

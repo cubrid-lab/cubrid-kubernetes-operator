@@ -189,6 +189,14 @@ func (s *Server) adoptRestored(id, database string) (*OperationArtifact, error) 
 // unregisterDatabase removes database's line from databases.txt and leaves
 // every other line as it is.
 func unregisterDatabase(root *os.Root, database string) error {
+	databasesTxtMu.Lock()
+	defer databasesTxtMu.Unlock()
+	return unregisterDatabaseLocked(root, database, false)
+}
+
+// unregisterDatabaseLocked is unregisterDatabase with databasesTxtMu held.
+// With removeEmpty, a databases.txt that registers nothing else is removed.
+func unregisterDatabaseLocked(root *os.Root, database string, removeEmpty bool) error {
 	data, err := root.ReadFile(databasesTxt)
 	if os.IsNotExist(err) {
 		return nil
@@ -210,6 +218,12 @@ func unregisterDatabase(root *os.Root, database string) error {
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read %s: %w", databasesTxt, err)
+	}
+	if removeEmpty && strings.TrimSpace(kept.String()) == "" {
+		if err := removeFile(root, databasesTxt); err != nil {
+			return fmt.Errorf("unregister %s from %s: %w", database, databasesTxt, err)
+		}
+		return nil
 	}
 	if !removed {
 		return nil
