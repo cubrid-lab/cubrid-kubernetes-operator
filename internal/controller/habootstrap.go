@@ -395,6 +395,8 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		// The member becomes a slave of the member the backup was taken
 		// on, and has to pick up what that member committed since.
 		SeedFromMaster: source,
+		// The member refuses a backup that was not taken in this cluster.
+		ExpectedClusterUID: uid,
 	}
 	// A retry whose restore is predicted to take over what an earlier attempt's
 	// restore of this step's backup restored takes no new backup: the

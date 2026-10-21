@@ -128,6 +128,10 @@ type ManifestExpectation struct {
 	// RequireSourceRole, when non-empty, must equal the manifest's source role
 	// (ADR-0006 rebuild seeds only from the resolved master).
 	RequireSourceRole string
+	// SourceInstance, when set, must equal the member the backup ran on.
+	SourceInstance string
+	// ClusterUID, when set, must equal the cluster the backup was taken in.
+	ClusterUID string
 }
 
 // Verify rejects a manifest whose identity does not match the intended
@@ -148,6 +152,12 @@ func (m BackupManifest) Verify(exp ManifestExpectation) error {
 	}
 	if exp.RequireSourceRole != "" && m.SourceRole != exp.RequireSourceRole {
 		return fmt.Errorf("manifest sourceRole %q does not match required %q", m.SourceRole, exp.RequireSourceRole)
+	}
+	if exp.SourceInstance != "" && m.SourceInstance != exp.SourceInstance {
+		return fmt.Errorf("manifest sourceInstance %q does not match expected %q", m.SourceInstance, exp.SourceInstance)
+	}
+	if exp.ClusterUID != "" && m.ClusterUID != exp.ClusterUID {
+		return fmt.Errorf("manifest clusterUID %q does not match expected %q", m.ClusterUID, exp.ClusterUID)
 	}
 	if len(m.Objects) == 0 {
 		return fmt.Errorf("manifest lists no backup objects")
