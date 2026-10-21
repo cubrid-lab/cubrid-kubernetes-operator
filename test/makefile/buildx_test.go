@@ -69,7 +69,7 @@ func runBuildx(t *testing.T, failEnv string) (code int, out string, calls []stri
 	// The caller's make flags (MAKEFLAGS=i, -n, ...) must not reach this make.
 	for _, kv := range os.Environ() {
 		switch strings.SplitN(kv, "=", 2)[0] {
-		case "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES":
+		case "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", "GNUMAKEFLAGS", "MAKEFILES":
 		default:
 			cmd.Env = append(cmd.Env, kv)
 		}
@@ -130,6 +130,9 @@ func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 			}
 			if tc.build && !hasCall(calls, "buildx build --push") {
 				t.Errorf("calls = %q, want the build", calls)
+			}
+			if !tc.build && hasCall(calls, "buildx build") {
+				t.Errorf("calls = %q, want no build after %s", calls, tc.name)
 			}
 			if !hasCall(calls, "buildx rm cubrid-kubernetes-operator-builder") {
 				t.Errorf("calls = %q, want the removal of the builder", calls)
