@@ -382,6 +382,29 @@ func TestServer_Readyz_LogsAnAbandonedCheck(t *testing.T) {
 	}
 }
 
+// panickingCLI panics in its command, as a parser bug would.
+type panickingCLI struct{}
+
+func (panickingCLI) Run(context.Context, string, ...string) (string, error) { panic("parser bug") }
+
+// A panic in the readiness check, which runs apart from the request, answers
+// not ready and leaves the manager serving.
+func TestServer_Readyz_APanicInTheCheckAnswersNotReady(t *testing.T) {
+	log, logger := lockedLog()
+	h := NewServer(panickingCLI{}, "tok").WithLogger(logger).Handler()
+	for range 2 {
+		if rr := doReq(t, h, "/readyz", "", testRemoteAddr); rr.Code != http.StatusServiceUnavailable {
+			t.Fatalf("/readyz after a panic in the check = %d, want 503", rr.Code)
+		}
+	}
+	if rr := doReq(t, h, "/livez", "", testRemoteAddr); rr.Code != http.StatusOK {
+		t.Errorf("/livez after a panic in the check = %d, want 200", rr.Code)
+	}
+	if got := log(); !strings.Contains(got, "parser bug") || !strings.Contains(got, `"stack"`) {
+		t.Errorf("the panic is not logged with its stack: %s", got)
+	}
+}
+
 // lockedLog is a JSON logger at debug level and a reader of what it wrote,
 // safe to use from the readiness check's goroutine.
 func lockedLog() (read func() string, logger *slog.Logger) {

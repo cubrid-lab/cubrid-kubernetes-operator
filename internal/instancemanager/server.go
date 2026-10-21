@@ -30,6 +30,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -376,7 +377,8 @@ func (s *Server) startReadinessCheck(ctx context.Context) *readinessCheck {
 		s.readyMu.Unlock()
 		// A cancelled check says nothing about the member but that no request
 		// waited for it, as when its command outlasts the kubelet's timeout.
-		if abandoned {
+		// A check that ended before its cancellation keeps its own answer.
+		if abandoned && checkCtx.Err() != nil {
 			reason = readinessAbandoned
 		}
 		s.logReadiness(checkCtx, reason)
@@ -395,6 +397,8 @@ func (s *Server) checkReadiness(ctx context.Context) (reason string) {
 	defer func() {
 		if r := recover(); r != nil {
 			reason = fmt.Sprintf("the readiness check failed: %v", r)
+			s.log().Error("Recovered a panic in the readiness check", "panic", fmt.Sprint(r),
+				"stack", string(debug.Stack()))
 		}
 	}()
 	return s.notReadyReason(ctx)
