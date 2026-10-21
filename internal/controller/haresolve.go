@@ -313,9 +313,13 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 		// not the prober's stamp: an equal time means the member answered in
 		// that pass. An answer that contradicts itself or names another
 		// member is not counted as this member's answer.
+		// An unfinished database is reported from the same answer, whatever
+		// role it carries.
+		var unfinished *databasev1alpha1.InstanceUnfinishedDatabase
 		if o, ok := obs[m]; ok && fresh(o, now) && !o.Conflicting {
 			at := metav1.NewTime(now)
 			lastObserved = &at
+			unfinished = o.Unfinished
 		}
 		// Only an authoritative slave's applier is taken into account. A
 		// slave whose applier could not be read keeps its last reading; a
@@ -333,6 +337,7 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 			ObservedEngineVersion: version,
 			Replication:           replication,
 			LastObservedTime:      lastObserved,
+			UnfinishedDatabase:    unfinished,
 		})
 	}
 	return out

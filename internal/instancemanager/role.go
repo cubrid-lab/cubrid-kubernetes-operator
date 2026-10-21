@@ -55,6 +55,11 @@ type HAStatus struct {
 	Replication *ApplyConvergence `json:"replication,omitempty"`
 	// Appliers are the log applier processes heartbeat lists.
 	Appliers []ApplierProcess `json:"appliers,omitempty"`
+	// Unfinished is set when the member's database carries the ownership
+	// marker of a createdb or restoredb that did not finish. It changes
+	// neither Role nor Reason. Absent for a database without the marker and
+	// for a member that was not told its database.
+	Unfinished *UnfinishedDatabase `json:"unfinished,omitempty"`
 }
 
 // ApplierProcess is one "Applylogdb" line of `cubrid heartbeat status`.

@@ -73,6 +73,104 @@ func clearOwned(targetDir, database string) error {
 	return nil
 }
 
+// UnfinishedState says what becomes of a database that carries the
+// ownership marker.
+type UnfinishedState string
+
+const (
+	// UnfinishedWaiting: the marker names an operation of this manager that
+	// is still running, or whose leftover the next restore or HA bootstrap
+	// of the database clears or removes.
+	UnfinishedWaiting UnfinishedState = "WaitingForOperation"
+	// UnfinishedRefused: no operation of this manager removes or creates over
+	// the directory. The marker is unreadable, was written by the image's
+	// entrypoint, names an operation this manager does not know or cannot
+	// read, or names a restore that recorded its data as restored.
+	UnfinishedRefused UnfinishedState = "Refused"
+)
+
+// UnfinishedDatabase is what the role answer reports of a database that
+// carries the ownership marker. The image's entrypoint neither creates nor
+// starts such a database.
+type UnfinishedDatabase struct {
+	Database string `json:"database"`
+	// Operation is the operation ID the marker names; empty when it names
+	// none.
+	Operation string          `json:"operation,omitempty"`
+	State     UnfinishedState `json:"state"`
+	// Reason says why the database is in State.
+	Reason string `json:"reason"`
+}
+
+// unfinishedDatabase reports the member's database when it carries the
+// ownership marker, judged as reclaimIncomplete judges it. It only reads: it
+// removes, clears and starts nothing. It is nil for a database without the
+// marker and for a member that was not told its database.
+func (s *Server) unfinishedDatabase() *UnfinishedDatabase {
+	database := s.standaloneDB
+	if database == "" {
+		database = s.replicationDB
+	}
+	if !databaseNamePattern.MatchString(database) {
+		return nil
+	}
+	root, err := os.OpenRoot(s.restoreRoots.Target)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile(markerPath(database))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	u := &UnfinishedDatabase{Database: database, State: UnfinishedRefused}
+	if err != nil {
+		u.Reason = fmt.Sprintf("the ownership marker could not be read: %v", err)
+		return u
+	}
+	id := strings.TrimSpace(string(data))
+	switch {
+	case id == entrypointMarker:
+		u.Reason = "the image's entrypoint did not complete its createdb; no operation of the Instance Manager removes it"
+		return u
+	case !isValidOperationID(id):
+		u.Reason = "the ownership marker is unreadable: it names no operation"
+		return u
+	case s.store == nil:
+		u.Operation = id
+		u.Reason = "the marker names operation " + id + ", which this manager does not know: it has no operation store"
+		return u
+	}
+	u.Operation = id
+	op, err := s.store.Get(id)
+	if errors.Is(err, ErrOperationNotFound) {
+		u.Reason = "the marker names operation " + id + ", which this manager does not know"
+		return u
+	}
+	if err != nil {
+		u.Reason = fmt.Sprintf("the record of operation %s could not be read: %v", id, err)
+		return u
+	}
+	switch {
+	case op.State == OpCompleted:
+		u.State, u.Reason = UnfinishedWaiting,
+			"operation "+id+" completed and left its marker; the next restore or HA bootstrap of the database clears it"
+	case op.State == OpFailed && op.Restored != nil:
+		u.Reason = "operation " + id + " recorded its data as restored before it failed; " +
+			"only a restore of the same request takes it over, and no operation removes it"
+	case op.State == OpFailed:
+		u.State, u.Reason = UnfinishedWaiting,
+			"operation "+id+" failed; the next restore or HA bootstrap of the database removes what it left"
+	default:
+		u.State, u.Reason = UnfinishedWaiting, "operation "+id+" is "+string(op.State)
+	}
+	return u
+}
+
+// entrypointMarker is the value the image's entrypoint writes into the
+// marker around its own createdb (build/instance-manager/entrypoint.sh).
+const entrypointMarker = "entrypoint-createdb"
+
 // reclaimIncomplete removes what an earlier, failed operation of this manager
 // left of database, so that the next attempt starts from an empty target. It
 // does nothing when the directory carries no marker; whether such a directory

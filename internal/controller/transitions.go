@@ -30,9 +30,11 @@ import (
 
 // Log keys of a transition (docs/observability.md, section "Logs").
 const (
-	logKeyReason    = "reason"
-	logKeyMember    = "member"
-	logKeyOldReason = "oldReason"
+	logKeyReason      = "reason"
+	logKeyMember      = "member"
+	logKeyOldReason   = "oldReason"
+	logKeyDatabase    = "database"
+	logKeyOperationID = "operationID"
 )
 
 // transition is one change of the observed state between two reconciles: a
@@ -204,8 +206,55 @@ func memberTransitions(before, after *databasev1alpha1.CubridClusterStatus) []tr
 				Fields:  []any{logKeyMember, in.Name},
 			})
 		}
+		out = append(out, unfinishedTransitions(in.Name, was.UnfinishedDatabase, in.UnfinishedDatabase)...)
 	}
 	return out
+}
+
+// Event reasons of a member whose database carries the marker of an
+// unfinished createdb or restoredb (docs/observability.md, "Unfinished
+// databases").
+const (
+	reasonUnfinishedDatabaseWaiting = "UnfinishedDatabaseWaiting"
+	reasonUnfinishedDatabaseRefused = "UnfinishedDatabaseRefused"
+)
+
+// unfinishedTransitions reports a member that begins to report an unfinished
+// database, or reports it for another database, operation or state, with an
+// Event: a Warning when no operation of the Instance Manager takes it up. A
+// member that no longer reports it is logged only, since that is also what a
+// member that gave no answer looks like.
+func unfinishedTransitions(member string, was, now *databasev1alpha1.InstanceUnfinishedDatabase) []transition {
+	switch {
+	case now == nil && was == nil:
+		return nil
+	case now == nil:
+		return []transition{{
+			Event:   "member_database_unfinished_cleared",
+			Message: fmt.Sprintf("Member %s no longer reports database %s as unfinished", member, was.Database),
+			Fields:  []any{logKeyMember, member, logKeyDatabase, was.Database, logKeyOperationID, was.Operation},
+		}}
+	case was != nil && was.Database == now.Database && was.Operation == now.Operation && was.State == now.State:
+		return nil
+	}
+	marker := "the marker of an unfinished createdb or restoredb"
+	if now.Operation != "" {
+		marker += " (operation " + now.Operation + ")"
+	}
+	t := transition{
+		Event:  "member_database_unfinished",
+		Reason: reasonUnfinishedDatabaseWaiting,
+		Message: fmt.Sprintf("Member %s does not start database %s: it carries %s, which the Instance Manager "+
+			"takes up: %s", member, now.Database, marker, now.Message),
+		Fields: []any{logKeyMember, member, logKeyDatabase, now.Database, logKeyOperationID, now.Operation,
+			"state", string(now.State)},
+	}
+	if now.State != databasev1alpha1.UnfinishedWaitingForOperation {
+		t.Reason, t.Warning = reasonUnfinishedDatabaseRefused, true
+		t.Message = fmt.Sprintf("Member %s does not start database %s: it carries %s, which no operation of the "+
+			"Instance Manager removes; a person has to decide: %s", member, now.Database, marker, now.Message)
+	}
+	return []transition{t}
 }
 
 // recoveryTransitions reports the steps of a recovery bootstrap: a restore
@@ -225,13 +274,13 @@ func recoveryTransitions(before, after *databasev1alpha1.CubridClusterStatus) []
 		out = append(out, transition{
 			Event: "restore_started", Reason: "RestoreStarted",
 			Message: fmt.Sprintf("Restore of %s started on %s (attempt %d)", now.ManifestURI, now.TargetMember, now.Attempts+1),
-			Fields:  []any{logKeyMember, now.TargetMember, "operationID", now.OperationID},
+			Fields:  []any{logKeyMember, now.TargetMember, logKeyOperationID, now.OperationID},
 		})
 	}
 	if now.Phase == was.Phase {
 		return out
 	}
-	fields := []any{logKeyMember, now.TargetMember, "operationID", now.OperationID}
+	fields := []any{logKeyMember, now.TargetMember, logKeyOperationID, now.OperationID}
 	switch now.Phase {
 	case databasev1alpha1.BootstrapRestoring:
 		out = append(out, transition{

@@ -61,6 +61,7 @@ observation comes from; "Published as" says where a reader finds it.
 | Instance ready | The member's database server is registered and has a role (HA), or is running (standalone) | `/readyz` | Pod readiness, `status.instances[].ready` |
 | Role known | The member reports one role that does not contradict itself | `/v1/role` | `status.instances[].role`; always `unknown` for a standalone member, which has no HA role |
 | Engine version known | The member reports the version of its engine, whatever its role | `engineVersion` in `/v1/role` | `status.instances[].observedEngineVersion`, `status.observedEngineVersion` (HA and standalone) |
+| Database unfinished | The member's database carries the marker of a `createdb` or `restoredb` that did not finish, so it is neither created over nor started; whatever role the member reports is kept | `unfinished` in `/v1/role` | `status.instances[].unfinishedDatabase`, the `UnfinishedDatabaseWaiting` and `UnfinishedDatabaseRefused` Events (see [Unfinished databases](#unfinished-databases)) |
 | Primary resolved | Every member was observed freshly and exactly one is master | all members' roles in one reconcile | `PrimaryResolved`, `status.currentPrimary` |
 | Replication healthy | Every observed slave applies the master's log | `replication` in a slave's `/v1/role` | `ReplicationHealthy`, `status.instances[].replication` |
 | Routing ready | The primary is resolved and a read-write Broker is available; each access mode has its own endpoint condition | Broker Deployments, `PrimaryResolved` | `BrokerReady`, `WriteEndpointReady`, `ReadEndpointReady`, `RoutingReady` |
@@ -269,6 +270,8 @@ underscores.
 | `ReplicationHealthy` becomes `True` again | `ReplicationRecovered` | Normal | `replication_recovered` |
 | A member's role changes; a member first listed with the role `unknown`, as a standalone member always is, is no change | none | | `member_role_changed` |
 | A member whose role was known gives no answer that counts: its role becomes `unknown` | none | | `member_role_unobserved`, with `oldRole`, the `reason` and the `requestID` of the role query when one was sent (see below) |
+| A member begins to report an unfinished database, or reports it for another database, operation or state (see [Unfinished databases](#unfinished-databases)) | `UnfinishedDatabaseWaiting`, or `UnfinishedDatabaseRefused` when no operation of the Instance Manager takes it up; the message names the member, the database and the operation | Normal; `UnfinishedDatabaseRefused` is a Warning | `member_database_unfinished`, with `member`, `database`, `operationID` and `state` |
+| A member no longer reports its database as unfinished, or gave no answer that counts | none | | `member_database_unfinished_cleared` |
 | Any other Condition changes its status or reason | none | | `condition_changed` |
 | `Ready` becomes `True` | `ClusterReady` | Normal | `condition_changed` (`Ready`) |
 | A step could not write an object of the cluster (`Ready` takes that step's reason, see [Conditions](#conditions)) | the step's reason, such as `StatefulSetReconcileFailed`, once for a failure that stays the same | Warning | `condition_changed` (`Ready`) |
@@ -455,7 +458,39 @@ member is then not ready. Read the reason in `kubectl logs <pod>`:
 | `could not prepare createdb of '<db>' in <dir> (…)` | `databases.txt`, the directory or the marker could not be written, or the marker could not be synced; `createdb` was not run, and a marker this start wrote was removed again | Fix the volume (permissions, space) and restart the member |
 
 The entrypoint never removes these files itself, and neither does the
-Instance Manager.
+Instance Manager. A database that carries the marker is also reported in
+the cluster's status (see [Unfinished databases](#unfinished-databases)).
+
+### Unfinished databases
+
+A database whose directory carries the Instance Manager's ownership marker
+(`<db>/.im-operation`) is the unfinished work of a `createdb` or
+`restoredb`. The entrypoint neither creates over nor starts it, on an HA or
+a standalone member, and runs only the Instance Manager (ADR-0003). The
+Instance Manager reports such a database in its role answer
+(`unfinished: {database, operation, state, reason}`), next to the role,
+which it does not change. The Operator copies it into
+`status.instances[].unfinishedDatabase`, from the same answer that sets
+that member's `lastObservedTime`, and makes an Event when it appears or
+changes (see [Transitions](#transitions)). The report only reads the marker
+and the operation record: it removes, clears and starts nothing.
+
+```bash
+kubectl get cubridcluster <name> -o jsonpath='{range .status.instances[*]}{.name}{"\t"}{.unfinishedDatabase}{"\n"}{end}'
+kubectl get events --field-selector involvedObject.name=<name>,reason=UnfinishedDatabaseRefused
+```
+
+| `state` | When | What to do |
+|---|---|---|
+| `WaitingForOperation` | The marker names an operation of this member's Instance Manager that failed before it recorded restored data, that completed but left its marker, or that still runs (`message` names its state) | Nothing by hand. The next restore or HA bootstrap of the database on this member removes what a failed operation left, or clears the marker of a completed one, then goes on. A running operation clears the marker itself when it completes |
+| `Refused` | The marker was written by the entrypoint around its own `createdb`; it names no operation (empty or unreadable); it names an operation this Instance Manager does not know, or whose record cannot be read; or it names a restore that recorded its data as restored before it failed | A person decides; nothing removes the directory. For the entrypoint's `createdb` and a marker that names no operation, follow [the standalone runbook](#runbook-a-standalone-member-that-starts-only-the-instance-manager). For an unreadable record, follow [the record runbook](#runbook-an-operation-record-that-cannot-be-read). For restored data, a restore with the same request takes the data over and starts it; otherwise follow "Runbook for restored data left for a person" in ADR-0008. For an unknown operation, find where the directory came from before anything is removed |
+
+The field is absent for a database without the marker and for a member that
+gave no answer that counts, so a member that cannot be reached shows
+nothing here; its container log still says
+`database '<db>' is unfinished (<dir>/.im-operation): …`. A standalone
+member is observed when its cluster is reconciled, not periodically (#155),
+so its report can lag behind the marker until the next reconcile.
 
 ### Runbook: a member that waits for its data volume
 

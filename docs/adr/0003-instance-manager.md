@@ -180,7 +180,7 @@ answer readable.
 ```
 
 As implemented, the answer is `{current, role, serverActive, nodes, source,
-reason, engineVersion, replication}` (`internal/instancemanager/role.go`),
+reason, engineVersion, replication, appliers, unfinished}` (`internal/instancemanager/role.go`),
 the role is derived from `cubrid heartbeat status` alone, and `source` is
 always `heartbeat`. The manager does not run `changemode` and does not
 cross-check the configuration.
@@ -546,6 +546,11 @@ restore starts heartbeat (#350). A database whose directory carries the manager'
 marker (`<db>/.im-operation`, an interrupted `createdb` or `restoredb`) is
 neither created over nor started: the entrypoint runs only the manager, after
 installing an HA member's configuration, and leaves the marker in place.
+The manager reports that database in its role answer (`unfinished`), with
+whether its next operation takes it up (`WaitingForOperation`) or no
+operation of it does (`Refused`); reporting it changes nothing on disk, and
+the Operator shows it in `status.instances[].unfinishedDatabase` and an Event
+(docs/observability.md, "Unfinished databases").
 
 A standalone member (`SERVER`, bootstrap `new`) creates its database in the
 entrypoint, and the entrypoint writes the same file around that `createdb`,

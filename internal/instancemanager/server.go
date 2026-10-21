@@ -503,6 +503,7 @@ func (s *Server) role(w http.ResponseWriter, r *http.Request) {
 	defer cancelRepl()
 	st.Replication = replicationOf(replCtx, s.cli, st, s.replicationDB, s.databasesDir)
 	s.logMissingApplier(ctx, st)
+	st.Unfinished = s.unfinishedDatabase()
 	writeJSON(w, http.StatusOK, st)
 }
 
