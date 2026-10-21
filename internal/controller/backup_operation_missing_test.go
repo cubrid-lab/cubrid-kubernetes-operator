@@ -180,16 +180,32 @@ var _ = Describe("CubridBackup whose recorded operation goes missing", func() {
 		Expect(got.Status.OperationMissingSince).To(BeNil())
 
 		By("a record missing again starts a new bound")
+		firstSince := *f.now
 		advance(f, 20*time.Minute)
 		f.fake.getErr = errMissing
 		reconcileOnce(ctx, reconciler(f), f.backup)
-		Expect(stored(ctx, f.backup).Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+		got = stored(ctx, f.backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+		Expect(got.Status.OperationMissingSince.Time).To(BeTemporally(">", firstSince))
 
 		By("a completed operation still completes the backup")
 		f.fake.getErr = nil
 		f.fake.state = instancemanager.OpCompleted
 		reconcileOnce(ctx, reconciler(f), f.backup)
 		Expect(stored(ctx, f.backup).Status.Phase).To(Equal(databasev1alpha1.BackupPhaseCompleted))
+		Expect(f.fake.starts).To(Equal(1))
+	})
+
+	It("still ends a backup whose operation is read as failed after its record was missing", func() {
+		f := started("bk-missing-failed", instancemanager.OpRunningBackup)
+		f.fake.getErr = errMissing
+		reconcileOnce(ctx, reconciler(f), f.backup)
+		f.fake.getErr = nil
+		f.fake.state = instancemanager.OpFailed
+		reconcileOnce(ctx, reconciler(f), f.backup)
+		got := stored(ctx, f.backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+		Expect(readyOf(got).Reason).NotTo(Equal(reasonRecordedOperationLost))
 		Expect(f.fake.starts).To(Equal(1))
 	})
 })

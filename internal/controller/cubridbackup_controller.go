@@ -401,9 +401,11 @@ func (r *CubridBackupReconciler) operationMissing(ctx context.Context, backup *d
 				"again, on %s or another member",
 			target, id, since.UTC().Format(time.RFC3339), backupOperationMissingWait, err, target, target))
 	}
+	// The answer is left out of this message: it carries the ID of each
+	// request, and the condition would change at every poll.
 	setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reasonRecordedOperationMissing, fmt.Sprintf(
-		"%s holds no record of this backup's operation %s (%v); waiting for at most %s from %s for it to be read again",
-		target, id, err, backupOperationMissingWait, since.UTC().Format(time.RFC3339)))
+		"%s holds no record of this backup's operation %s; waiting for at most %s from %s for it to be read again",
+		target, id, backupOperationMissingWait, since.UTC().Format(time.RFC3339)))
 	return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
 }
 
