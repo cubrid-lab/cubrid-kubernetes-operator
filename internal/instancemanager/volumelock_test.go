@@ -58,7 +58,22 @@ func TestMain(m *testing.M) {
 		_, _ = os.Stdout.WriteString("locked\n")
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	os.Exit(runTests(m))
+}
+
+// runTests runs the tests with an empty process list in place of /proc for
+// the staging scans of servers that name none: a CUBRID process of another
+// user on the host would otherwise hold every staging directory (#503).
+// Tests about holders give their server a process list of their own.
+func runTests(m *testing.M) int {
+	proc, err := os.MkdirTemp("", "instancemanager-proc-")
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(proc) }()
+	defaultProcRoot = proc
+	return m.Run()
 }
 
 func holdLock(path string) int {
