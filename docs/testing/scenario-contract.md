@@ -516,7 +516,8 @@ One `<testsuite>` per run, one `<testcase>` per scenario and variant, named
 | `not_run`, `not_applicable` | `<skipped>` with the reason |
 
 `blocked` is an error, not a skip, so that CI tooling does not show an
-unproven scenario as green.
+unproven scenario as green. The run itself has a `run` case when it did not
+pass: an `<error>` for a checkpoint, a `<failure>` for a failed lane.
 
 A concluded run that did not pass its lane has one more test case, `run`,
 with a `<failure>` that lists the run's problems, the same ones as in
