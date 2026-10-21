@@ -36,6 +36,8 @@ type fakeCluster struct {
 	lease      map[string]any
 	uid        string
 	uids       int
+	// version is the Lease's resourceVersion; every write raises it.
+	version int
 	// createErr, when set, fails the next create after storing the Lease, as
 	// a timeout after the API server stored it would.
 	createErr error
@@ -63,7 +65,7 @@ func (f *fakeCluster) kubectl(_ context.Context, stdin string, args ...string) (
 			return "", errors.New(`Error from server (NotFound): configmaps "lab" not found`)
 		}
 		return f.marker, nil
-	case rest == "create -f - -o jsonpath={.metadata.uid}":
+	case rest == "create -f - -o jsonpath={.metadata.uid} {.metadata.resourceVersion}":
 		if f.lease != nil {
 			return "", errors.New(`Error from server (AlreadyExists): leases.coordination.k8s.io "campaign" already exists`)
 		}
@@ -76,17 +78,21 @@ func (f *fakeCluster) kubectl(_ context.Context, stdin string, args ...string) (
 			f.createErr = nil
 			return "", err
 		}
-		return f.uid, nil
+		return f.uid + " " + f.resourceVersion(), nil
 	case rest == "-n "+Namespace+" get lease "+LeaseName+" -o json":
 		if f.lease == nil {
 			return "", errors.New(`Error from server (NotFound): leases.coordination.k8s.io "campaign" not found`)
 		}
-		out, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": f.uid}, "spec": f.lease})
+		out, _ := json.Marshal(map[string]any{
+			"metadata": map[string]any{"uid": f.uid, "resourceVersion": f.resourceVersion()},
+			"spec":     f.lease,
+		})
 		return string(out), nil
 	case rest == "delete --raw /apis/coordination.k8s.io/v1/namespaces/"+Namespace+"/leases/"+LeaseName+" -f -":
 		var options struct {
 			Preconditions struct {
-				UID string `json:"uid"`
+				UID             string `json:"uid"`
+				ResourceVersion string `json:"resourceVersion"`
 			} `json:"preconditions"`
 		}
 		if err := json.Unmarshal([]byte(stdin), &options); err != nil {
@@ -99,6 +105,11 @@ func (f *fakeCluster) kubectl(_ context.Context, stdin string, args ...string) (
 			return "", fmt.Errorf(`Error from server (Conflict): Operation cannot be fulfilled on `+
 				`leases.coordination.k8s.io "campaign": Precondition failed: `+
 				`UID in precondition: %s, UID in object meta: %s`, options.Preconditions.UID, f.uid)
+		case options.Preconditions.ResourceVersion != "" && options.Preconditions.ResourceVersion != f.resourceVersion():
+			return "", fmt.Errorf(`Error from server (Conflict): Operation cannot be fulfilled on `+
+				`leases.coordination.k8s.io "campaign": Precondition failed: `+
+				`ResourceVersion in precondition: %s, ResourceVersion in object meta: %s`,
+				options.Preconditions.ResourceVersion, f.resourceVersion())
 		}
 		f.lease = nil
 		return "", nil
@@ -111,7 +122,16 @@ func (f *fakeCluster) store(spec map[string]any) {
 	f.uids++
 	f.lease = spec
 	f.uid = fmt.Sprintf("uid-%d", f.uids)
+	f.version++
 }
+
+// update writes the Lease in place: same uid, new resourceVersion.
+func (f *fakeCluster) update(spec map[string]any) {
+	f.lease = spec
+	f.version++
+}
+
+func (f *fakeCluster) resourceVersion() string { return fmt.Sprint(f.version) }
 
 const (
 	labA   = "lab-a"
@@ -250,6 +270,33 @@ func TestReleaseLeavesAnotherRunsLease(t *testing.T) {
 	f.lease = nil
 	if err := lock.Release(ctx, f.kubectl); err == nil || !strings.Contains(err.Error(), "removed while the run held it") {
 		t.Fatalf("Release() of a vanished Lease = %v", err)
+	}
+}
+
+// A Lease that another holder wrote in place since the create, keeping its
+// uid, is not this run's any more, and is not deleted.
+func TestReleaseLeavesALeaseUpdatedInPlace(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeCluster{context: labCtx, marker: labA}
+	target := Target{Context: labCtx, Name: labA}
+	for _, ambiguous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ambiguous create=%v", ambiguous), func(t *testing.T) {
+			f.lease = nil
+			if ambiguous {
+				f.createErr = errors.New("timeout")
+			}
+			lock, err := target.Acquire(ctx, f.kubectl, "mine", time.Hour, t0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.update(map[string]any{"holderIdentity": "other", "leaseDurationSeconds": 60, "acquireTime": t0})
+			if err := lock.Release(ctx, f.kubectl); err == nil || !strings.Contains(err.Error(), "left in place") {
+				t.Fatalf("Release() = %v, want a refusal that leaves the updated Lease", err)
+			}
+			if f.lease == nil || f.lease["holderIdentity"] != "other" {
+				t.Fatal("the Lease another holder updated in place was deleted")
+			}
+		})
 	}
 }
 

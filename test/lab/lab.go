@@ -92,8 +92,11 @@ func (t Target) Check(ctx context.Context, k Kubectl) error {
 type Lock struct {
 	target Target
 	holder string
-	// uid is the Lease's metadata.uid: Release deletes that object only.
-	uid string
+	// uid and version are the Lease's metadata.uid and resourceVersion as
+	// this run created it: Release deletes that object only, and only while
+	// nobody has written it since.
+	uid     string
+	version string
 }
 
 // Acquire creates the campaign Lease for holder, so that a second campaign on
@@ -130,12 +133,15 @@ func (t Target) Acquire(
 	if err != nil {
 		return nil, err
 	}
-	uid, err := t.kubectl(ctx, k, string(manifest), "create", "-f", "-", "-o", "jsonpath={.metadata.uid}")
+	out, err := t.kubectl(ctx, k, string(manifest), "create", "-f", "-",
+		"-o", "jsonpath={.metadata.uid} {.metadata.resourceVersion}")
 	if err == nil {
-		if uid = strings.TrimSpace(uid); uid == "" {
-			return nil, fmt.Errorf("context %q: the campaign Lease was created without a uid", t.Context)
+		meta := strings.Fields(out)
+		if len(meta) != 2 {
+			return nil, fmt.Errorf("context %q: the campaign Lease was created without a uid and a resourceVersion: %q",
+				t.Context, out)
 		}
-		return &Lock{target: t, holder: holder, uid: uid}, nil
+		return &Lock{target: t, holder: holder, uid: meta[0], version: meta[1]}, nil
 	}
 	if strings.Contains(err.Error(), "AlreadyExists") {
 		return nil, t.held(ctx, k, holder, now)
@@ -143,8 +149,8 @@ func (t Target) Acquire(
 	// The create may still have been stored.
 	l, readErr := t.lease(ctx, k)
 	switch {
-	case readErr == nil && l.Spec.Holder == holder && l.Metadata.UID != "":
-		return &Lock{target: t, holder: holder, uid: l.Metadata.UID}, nil
+	case readErr == nil && l.Spec.Holder == holder && l.Metadata.UID != "" && l.Metadata.ResourceVersion != "":
+		return &Lock{target: t, holder: holder, uid: l.Metadata.UID, version: l.Metadata.ResourceVersion}, nil
 	case readErr == nil && l.Spec.Holder != "":
 		return nil, fmt.Errorf("context %q: creating the campaign Lease: %w; %w", t.Context, err, t.describe(l, now))
 	default:
@@ -156,7 +162,8 @@ func (t Target) Acquire(
 
 type leaseObject struct {
 	Metadata struct {
-		UID string `json:"uid"`
+		UID             string `json:"uid"`
+		ResourceVersion string `json:"resourceVersion"`
 	} `json:"metadata"`
 	Spec struct {
 		Holder   string    `json:"holderIdentity"`
@@ -203,15 +210,16 @@ func (t Target) describe(l leaseObject, now time.Time) error {
 	return errors.New(msg)
 }
 
-// Release deletes the Lease, but only the object Acquire created: the delete
-// carries its uid as a precondition, so a Lease that someone removed and
-// another run created since is left alone, and nothing is read before the
-// delete that could change under it.
+// Release deletes the Lease, but only the object Acquire created, as it
+// created it: the delete carries its uid and resourceVersion as
+// preconditions, so a Lease that someone removed and another run created
+// since, or that another holder wrote in place, is left alone, and nothing is
+// read before the delete that could change under it.
 func (l *Lock) Release(ctx context.Context, k Kubectl) error {
 	options, err := json.Marshal(map[string]any{
 		"apiVersion":    "v1",
 		"kind":          "DeleteOptions",
-		"preconditions": map[string]any{"uid": l.uid},
+		"preconditions": map[string]any{"uid": l.uid, "resourceVersion": l.version},
 	})
 	if err != nil {
 		return err
@@ -224,7 +232,8 @@ func (l *Lock) Release(ctx context.Context, k Kubectl) error {
 	case strings.Contains(err.Error(), "(NotFound)"):
 		return fmt.Errorf("the campaign Lease of %q was removed while the run held it", l.holder)
 	case strings.Contains(err.Error(), "(Conflict)"):
-		return fmt.Errorf("the campaign Lease is no longer the one %q created (uid %s); left in place", l.holder, l.uid)
+		return fmt.Errorf("the campaign Lease is no longer the one %q created (uid %s, resourceVersion %s); left in place",
+			l.holder, l.uid, l.version)
 	default:
 		return fmt.Errorf("deleting the campaign Lease: %w", err)
 	}
