@@ -85,8 +85,8 @@ func operatorStartedAt(ctx context.Context, old string) (time.Time, error) {
 
 // operatorAvailable reports whether the Operator's Deployment has its Pod
 // available.
-func operatorAvailable() bool {
-	out, err := utils.Run(exec.Command("kubectl", "-n", namespace, "get", operatorDeployment,
+func operatorAvailable(ctx context.Context) bool {
+	out, err := utils.Run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "get", operatorDeployment,
 		"-o", "jsonpath={.status.availableReplicas}"))
 	return err == nil && out == "1"
 }
@@ -174,9 +174,9 @@ func (r *haRun) s06Restart() {
 	defer func() { recordScenario(result) }()
 
 	By("recording the starting state")
-	master, _, err := r.master()
+	master, _, err := r.master(context.Background())
 	Expect(err).NotTo(HaveOccurred())
-	membersBefore := r.identities(r.members)
+	membersBefore := r.identities(context.Background(), r.members)
 	pods, err := operatorPods(context.Background())
 	Expect(err).NotTo(HaveOccurred())
 	Expect(pods).To(HaveLen(1), "Operator Pods")
@@ -195,11 +195,11 @@ func (r *haRun) s06Restart() {
 	outcome := r.runFault(faults.Scenario{
 		Fault:  operatorPodKill{pod: pods[0]},
 		Limits: s03FlowLimits,
-		Before: func(context.Context) error {
-			if !operatorAvailable() {
+		Before: func(ctx context.Context) error {
+			if !operatorAvailable(ctx) {
 				return fmt.Errorf("the Operator is not available")
 			}
-			_, err := r.formationTime()
+			_, err := r.formationTime(ctx)
 			return err
 		},
 		// The status must come from the replacement: its observation time
@@ -211,14 +211,14 @@ func (r *haRun) s06Restart() {
 			if goneAt.IsZero() {
 				goneAt = time.Now()
 			}
-			now, _, err := r.master()
+			now, _, err := r.master(ctx)
 			if err != nil {
 				return false, nil
 			}
 			if now != master {
 				return false, fmt.Errorf("the master changed from %s to %s when the Operator was restarted", master, now)
 			}
-			if !operatorAvailable() {
+			if !operatorAvailable(ctx) {
 				return false, nil
 			}
 			started, err := operatorStartedAt(ctx, pods[0])
@@ -229,11 +229,11 @@ func (r *haRun) s06Restart() {
 			if err != nil || started.IsZero() {
 				return false, nil
 			}
-			s, err := r.status()
+			s, err := r.status(ctx)
 			if err != nil || s.primary != master || !s.lastObserved.After(goneAt) || !s.lastObserved.After(started) {
 				return false, nil
 			}
-			_, err = r.formationTime()
+			_, err = r.formationTime(ctx)
 			return err == nil, nil
 		},
 	})
@@ -273,22 +273,22 @@ func (r *haRun) s06Restart() {
 	Expect(notAcknowledged).To(BeZero(), "client operations that were not acknowledged after the Operator was killed")
 
 	By("checking that the restarted Operator restarted no member and moved no role")
-	now, slaves, err := r.master()
+	now, slaves, err := r.master(context.Background())
 	Expect(err).NotTo(HaveOccurred())
 	Expect(now).To(Equal(master))
-	Expect(faults.CheckUnchanged(membersBefore, r.identities(r.members))).To(Succeed(),
+	Expect(faults.CheckUnchanged(membersBefore, r.identities(context.Background(), r.members))).To(Succeed(),
 		"the DB Pods and their containers after the Operator was restarted")
 
 	By("applying the data rules to every member and to both Services")
 	var report workload.Report
 	Eventually(func(g Gomega) {
 		var err error
-		report, err = r.dataCheck()
+		report, err = r.dataCheck(context.Background())
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 	}, 3*time.Minute, 3*time.Second).Should(Succeed())
 	for _, slave := range slaves {
-		count, err := r.failCount(slave, master)
+		count, err := r.failCount(context.Background(), slave, master)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero(), "fail count of the applier on %s", slave)
 	}
@@ -329,9 +329,9 @@ func (r *haRun) s06Absent() {
 	const client = "s06a1"
 
 	By("recording the starting state")
-	master, slaves, err := r.master()
+	master, slaves, err := r.master(context.Background())
 	Expect(err).NotTo(HaveOccurred())
-	masterUID, err := r.kubectl("get", "pod", master, "-o", "jsonpath={.metadata.uid}")
+	masterUID, err := r.kubectl(context.Background(), "get", "pod", master, "-o", "jsonpath={.metadata.uid}")
 	Expect(err).NotTo(HaveOccurred())
 
 	By("starting a client that keeps writing through the read-write Service")
@@ -352,14 +352,14 @@ func (r *haRun) s06Absent() {
 	outcome := r.runFault(faults.Scenario{
 		Fault:  absence,
 		Limits: s03FlowLimits,
-		Before: func(context.Context) error {
-			if !operatorAvailable() {
+		Before: func(ctx context.Context) error {
+			if !operatorAvailable(ctx) {
 				return fmt.Errorf("the Operator is not available")
 			}
 			// The status is fresh while the Operator runs, also on a cluster
 			// in which nothing changes: otherwise a stale one during the
 			// absence would prove nothing.
-			s, err := r.status()
+			s, err := r.status(ctx)
 			if err != nil {
 				return err
 			}
@@ -370,7 +370,7 @@ func (r *haRun) s06Absent() {
 				return fmt.Errorf("status.lastObservedTime is %s old while the Operator runs, more than %s",
 					ageBeforeAbsence.Round(time.Second), statusStaleAfter)
 			}
-			_, err = r.formationTime()
+			_, err = r.formationTime(ctx)
 			return err
 		},
 		Check: func(ctx context.Context) (bool, error) {
@@ -391,26 +391,26 @@ func (r *haRun) s06Absent() {
 			}
 			// CUBRID's election, without the Operator.
 			if newMaster == "" {
-				if newMaster = r.activeMasterAmong(slaves); newMaster == "" {
+				if newMaster = r.activeMasterAmong(ctx, slaves); newMaster == "" {
 					return false, nil
 				}
 			}
 			// One master and two slaves again: the StatefulSet recreates the
 			// deleted Pod and its member rejoins by itself.
-			now, _, err := r.master()
+			now, _, err := r.master(ctx)
 			if err != nil {
 				return false, nil
 			}
 			if now != newMaster {
 				return false, fmt.Errorf("the master changed again, from %s to %s", newMaster, now)
 			}
-			if !r.lastAnswerAcknowledged(client) {
+			if !r.lastAnswerAcknowledged(ctx, client) {
 				return false, nil
 			}
 			// What the status says while nobody maintains it: its last
 			// observation time stays where the Operator left it, and the
 			// absence lasts until a reader can tell from it that it is stale.
-			s, err := r.status()
+			s, err := r.status(ctx)
 			if err != nil {
 				return false, nil
 			}
@@ -431,7 +431,7 @@ func (r *haRun) s06Absent() {
 				s.primary, s.conditions["PrimaryResolved"], s.lastObserved.Format(time.RFC3339), age.Round(time.Second))
 			// A member whose identity could not be read is read again: the
 			// baseline must hold every member.
-			membersBeforeReturn = r.identities(r.members)
+			membersBeforeReturn = r.identities(ctx, r.members)
 			for _, id := range membersBeforeReturn {
 				if id == faults.UnknownIdentity {
 					return false, nil
@@ -451,15 +451,15 @@ func (r *haRun) s06Absent() {
 
 	By("waiting for the returned Operator to report the new master from a fresh observation")
 	Eventually(func(g Gomega) {
-		g.Expect(operatorAvailable()).To(BeTrue(), "the Operator is available")
-		s, err := r.status()
+		g.Expect(operatorAvailable(context.Background())).To(BeTrue(), "the Operator is available")
+		s, err := r.status(context.Background())
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(s.primary).To(Equal(newMaster), "status.currentPrimary")
 		// The API server stores the time to the second.
 		g.Expect(s.lastObserved).To(BeTemporally(">=", absence.returnedAt.Truncate(time.Second)),
 			"status.lastObservedTime is not newer than the Operator's return")
 		g.Expect(time.Since(s.lastObserved)).To(BeNumerically("<=", statusStaleAfter), "status.lastObservedTime is stale")
-		_, err = r.formationTime()
+		_, err = r.formationTime(context.Background())
 		g.Expect(err).NotTo(HaveOccurred())
 	}, 5*time.Minute, time.Second).Should(Succeed())
 	resync := time.Since(absence.returnedAt)
@@ -474,23 +474,23 @@ func (r *haRun) s06Absent() {
 	recovery := recoveredAt.Sub(masterDeletedAt)
 
 	By("checking that the returned Operator caused no further failover and restarted no member")
-	now, nowSlaves, err := r.master()
+	now, nowSlaves, err := r.master(context.Background())
 	Expect(err).NotTo(HaveOccurred())
 	Expect(now).To(Equal(newMaster), "the master after the Operator returned")
 	Expect(nowSlaves).To(ContainElement(master), "the former master is a slave")
-	Expect(faults.CheckUnchanged(membersBeforeReturn, r.identities(r.members))).To(Succeed(),
+	Expect(faults.CheckUnchanged(membersBeforeReturn, r.identities(context.Background(), r.members))).To(Succeed(),
 		"the DB Pods and their containers after the Operator returned")
 
 	By("applying the data rules to every member and to both Services")
 	var report workload.Report
 	Eventually(func(g Gomega) {
 		var err error
-		report, err = r.dataCheck()
+		report, err = r.dataCheck(context.Background())
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 	}, 3*time.Minute, 3*time.Second).Should(Succeed())
 	for _, slave := range nowSlaves {
-		count, err := r.failCount(slave, newMaster)
+		count, err := r.failCount(context.Background(), slave, newMaster)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero(), "fail count of the applier on %s", slave)
 	}

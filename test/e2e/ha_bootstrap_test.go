@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -403,18 +404,18 @@ spec:
 		It("replicates a row written on the master to both slaves", Label(haSetup), func() {
 			By("writing on the master")
 			Eventually(func() error {
-				return writeS00Row(csqlInPod(haNamespace, first, database), marker)
+				return writeS00Row(csqlInPod(context.Background(), haNamespace, first, database), marker)
 			}, 3*time.Minute, 5*time.Second).Should(Succeed())
 
 			By("reading on each slave")
 			for _, peer := range peers {
 				Eventually(func() error {
-					return readS00Row(csqlInPod(haNamespace, peer, database), marker)
+					return readS00Row(csqlInPod(context.Background(), haNamespace, peer, database), marker)
 				}, 3*time.Minute, 3*time.Second).Should(Succeed(), peer)
 			}
 
 			By("checking that a slave refuses a write")
-			_, err := runSQL(csqlInPod(haNamespace, peers[0], database),
+			_, err := runSQL(csqlInPod(context.Background(), haNamespace, peers[0], database),
 				"INSERT INTO "+s00Table+" VALUES (99, 'on-a-slave');")
 			Expect(err).To(HaveOccurred())
 		})

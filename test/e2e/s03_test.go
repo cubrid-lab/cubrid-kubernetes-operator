@@ -69,9 +69,9 @@ var s03FlowLimits = faults.Limits{
 
 // activeMasterAmong returns the first of the given members that CUBRID
 // reports as an active master, or "".
-func (r *haRun) activeMasterAmong(pods []string) string {
+func (r *haRun) activeMasterAmong(ctx context.Context, pods []string) string {
 	for _, pod := range pods {
-		out, err := r.kubectl("exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
+		out, err := r.kubectl(ctx, "exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
 		if err == nil && strings.Contains(out, "current "+pod+", state master") &&
 			strings.Contains(out, "registered_and_active") {
 			return pod
@@ -82,10 +82,10 @@ func (r *haRun) activeMasterAmong(pods []string) string {
 
 // activeMasters returns the members that CUBRID reports as an active master,
 // asked one after another. A member that does not answer is not counted.
-func (r *haRun) activeMasters() []string {
+func (r *haRun) activeMasters(ctx context.Context) []string {
 	var masters []string
 	for _, pod := range r.members {
-		if r.activeMasterAmong([]string{pod}) != "" {
+		if r.activeMasterAmong(ctx, []string{pod}) != "" {
 			masters = append(masters, pod)
 		}
 	}
@@ -94,10 +94,10 @@ func (r *haRun) activeMasters() []string {
 
 // identities returns the Pod UID and container restart count of each of the
 // given members, or faults.UnknownIdentity where it could not be read.
-func (r *haRun) identities(members []string) map[string]string {
+func (r *haRun) identities(ctx context.Context, members []string) map[string]string {
 	ids := make(map[string]string, len(members))
 	for _, member := range members {
-		out, err := r.kubectl("get", "pod", member,
+		out, err := r.kubectl(ctx, "get", "pod", member,
 			"-o", "jsonpath={.metadata.uid}/{.status.containerStatuses[0].restartCount}")
 		if err != nil || strings.HasPrefix(out, "/") || strings.HasSuffix(out, "/") {
 			out = faults.UnknownIdentity
@@ -116,8 +116,8 @@ type statusSnapshot struct {
 	lastObserved time.Time
 }
 
-func (r *haRun) status() (statusSnapshot, error) {
-	out, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "json")
+func (r *haRun) status(ctx context.Context) (statusSnapshot, error) {
+	out, err := r.kubectl(ctx, "get", "cubridcluster", r.cluster, "-o", "json")
 	if err != nil {
 		return statusSnapshot{}, err
 	}
@@ -176,14 +176,14 @@ func (w window) length() string {
 // operations were acknowledged.
 func (r *haRun) startClient(id string) {
 	file := "/tmp/" + id
-	_, err := r.client(fmt.Sprintf("CLIENT_ID=%s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7"+
+	_, err := r.client(context.Background(), fmt.Sprintf("CLIENT_ID=%s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7"+
 		" nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", id, file))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	r.mu.Lock()
 	r.running[id] = true
 	r.mu.Unlock()
 	EventuallyWithOffset(1, func(g Gomega) {
-		out, err := r.client(fmt.Sprintf("grep -c '\"acknowledged\"' %s.jsonl", file))
+		out, err := r.client(context.Background(), fmt.Sprintf("grep -c '\"acknowledged\"' %s.jsonl", file))
 		g.Expect(err).NotTo(HaveOccurred())
 		acknowledged, err := strconv.Atoi(strings.TrimSpace(out))
 		g.Expect(err).NotTo(HaveOccurred())
@@ -194,13 +194,13 @@ func (r *haRun) startClient(id string) {
 // killClient stops a client started with startClient. It is safe to call
 // more than once.
 func (r *haRun) killClient(id string) {
-	_, _ = r.client(fmt.Sprintf("kill $(cat /tmp/%s.pid) 2>/dev/null; true", id))
+	_, _ = r.client(context.Background(), fmt.Sprintf("kill $(cat /tmp/%s.pid) 2>/dev/null; true", id))
 }
 
 // lastAnswerAcknowledged reports whether the latest answer a running client
 // received is an acknowledgement.
-func (r *haRun) lastAnswerAcknowledged(id string) bool {
-	last, err := r.client(fmt.Sprintf("grep -v '\"attempted\"' /tmp/%s.jsonl | tail -n 1", id))
+func (r *haRun) lastAnswerAcknowledged(ctx context.Context, id string) bool {
+	last, err := r.client(ctx, fmt.Sprintf("grep -v '\"attempted\"' /tmp/%s.jsonl | tail -n 1", id))
 	return err == nil && strings.Contains(last, `"event":"acknowledged"`)
 }
 
@@ -214,7 +214,7 @@ func (r *haRun) stopClient(id string) ([]workload.Event, workload.History) {
 	history, err := workload.ReadHistory(strings.NewReader(text))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	r.addHistory(text)
-	if errors, err := r.client(fmt.Sprintf("tail -n 5 /tmp/%s.err", id)); err == nil && strings.TrimSpace(errors) != "" {
+	if errors, err := r.client(context.Background(), fmt.Sprintf("tail -n 5 /tmp/%s.err", id)); err == nil && strings.TrimSpace(errors) != "" {
 		_, _ = fmt.Fprintf(GinkgoWriter, "client %s stderr:\n%s\n", id, errors)
 	}
 	return events, history
@@ -224,7 +224,7 @@ func (r *haRun) stopClient(id string) ([]workload.Event, workload.History) {
 // recorded. The client is no longer running once they were read.
 func (r *haRun) collectClient(id string) (string, error) {
 	r.killClient(id)
-	text, err := r.client(fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
+	text, err := r.client(context.Background(), fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
 	if err != nil {
 		return "", err
 	}
@@ -246,10 +246,10 @@ type roleLog struct {
 }
 
 // sample asks every member for its node and server state.
-func (l *roleLog) sample(r *haRun) {
+func (l *roleLog) sample(ctx context.Context, r *haRun) {
 	states := make([]string, 0, len(r.members))
 	for _, pod := range r.members {
-		out, err := r.kubectl("exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
+		out, err := r.kubectl(ctx, "exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
 		state := "unreachable"
 		if err == nil {
 			state = "no state"
@@ -397,13 +397,13 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	client := s03Clients[variant]
 
 	By("recording the starting state")
-	master, _, err := r.master()
+	master, _, err := r.master(context.Background())
 	Expect(err).NotTo(HaveOccurred())
-	uid, err := r.kubectl("get", "pod", master, "-o", "jsonpath={.metadata.uid}")
+	uid, err := r.kubectl(context.Background(), "get", "pod", master, "-o", "jsonpath={.metadata.uid}")
 	Expect(err).NotTo(HaveOccurred())
 	// The fault deletes the master's Pod only: the other members keep their
 	// Pods and containers.
-	untouched := r.identities(slices.DeleteFunc(slices.Clone(r.members), func(m string) bool { return m == master }))
+	untouched := r.identities(context.Background(), slices.DeleteFunc(slices.Clone(r.members), func(m string) bool { return m == master }))
 
 	By("starting a client that keeps writing through the read-write Service")
 	r.startClient(client)
@@ -419,8 +419,8 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	outcome := r.runFault(faults.Scenario{
 		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful},
 		Limits: s03FlowLimits,
-		Before: func(context.Context) error {
-			now, _, err := r.master()
+		Before: func(ctx context.Context) error {
+			now, _, err := r.master(ctx)
 			if err != nil {
 				return err
 			}
@@ -435,12 +435,12 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			}
 			return nil
 		},
-		Check: func(context.Context) (bool, error) {
-			roles.sample(r)
+		Check: func(ctx context.Context) (bool, error) {
+			roles.sample(ctx, r)
 			// The operator's own view, from one read of its status. It must
 			// never offer the write endpoint while the primary is not
 			// resolved (ADR-0005, section 6).
-			if s, err := r.status(); err == nil {
+			if s, err := r.status(ctx); err == nil {
 				resolved := s.conditions["PrimaryResolved"] == "True"
 				routing := s.conditions["RoutingReady"] == "True"
 				if routing && !resolved {
@@ -453,9 +453,9 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			// Two members that are active masters at once must never happen.
 			// One sweep asks the members one after another and can see both
 			// sides of a handover, so a second sweep confirms it.
-			masters := r.activeMasters()
+			masters := r.activeMasters(ctx)
 			if len(masters) > 1 {
-				if err := faults.CheckOneMaster(masters, r.activeMasters()); err != nil {
+				if err := faults.CheckOneMaster(masters, r.activeMasters(ctx)); err != nil {
 					return false, err
 				}
 				return false, nil // a handover seen mid-sweep
@@ -472,7 +472,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			}
 			// The Operator noticing it.
 			if noticedAt.IsZero() {
-				primary, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
+				primary, err := r.kubectl(ctx, "get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 				if err != nil || primary != newMaster {
 					return false, nil
 				}
@@ -481,18 +481,18 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			// One master and two slaves again. A master other than the
 			// elected one is a second change of role, which must not happen
 			// by itself.
-			now, _, err := r.master()
+			now, _, err := r.master(ctx)
 			if err != nil {
 				return false, nil
 			}
 			if now != newMaster {
 				return false, fmt.Errorf("the master changed again, from %s to %s", newMaster, now)
 			}
-			if _, err := r.formationTime(); err != nil {
+			if _, err := r.formationTime(ctx); err != nil {
 				return false, nil // a condition of the starting state is not True yet
 			}
 			// The client recovered: its latest answer is an acknowledgement.
-			return r.lastAnswerAcknowledged(client), nil
+			return r.lastAnswerAcknowledged(ctx, client), nil
 		},
 	})
 	timeline := writeTimeline("S03/"+variant+"/timeline.jsonl", outcome.Timeline)
@@ -502,7 +502,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	if outcome.Result != evidence.Pass {
 		result.Result, result.Reason = outcome.Result, outcome.Reason
 		// Keep what the client saw: the scenario ends here.
-		if text, err := r.client(fmt.Sprintf("cat /tmp/%s.jsonl", client)); err == nil {
+		if text, err := r.client(context.Background(), fmt.Sprintf("cat /tmp/%s.jsonl", client)); err == nil {
 			writeScenarioFile("S03/"+variant+"/client-history.jsonl", []byte(text))
 		}
 	}
@@ -510,11 +510,11 @@ func (r *haRun) s03(spec context.Context, variant string) {
 
 	By("letting the client run for the stable period, with one active master throughout, then stopping it")
 	Consistently(func() error {
-		masters := r.activeMasters()
+		masters := r.activeMasters(context.Background())
 		if len(masters) < 2 {
 			return nil
 		}
-		return faults.CheckOneMaster(masters, r.activeMasters())
+		return faults.CheckOneMaster(masters, r.activeMasters(context.Background()))
 	}, stablePeriod.Value+2*time.Second, 3*time.Second).Should(Succeed())
 	events, history := r.stopClient(client)
 
@@ -525,13 +525,13 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	recovery := recoveredAt.Sub(outcome.FaultIssuedAt)
 
 	By("checking that the master did not change a second time")
-	now, nowSlaves, err := r.master()
+	now, nowSlaves, err := r.master(context.Background())
 	Expect(err).NotTo(HaveOccurred())
 	Expect(now).To(Equal(newMaster), "the master after the stable period")
 	if newMaster != master {
 		Expect(nowSlaves).To(ContainElement(master), "the former master is a slave")
 	}
-	primary, err := r.kubectl("get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
+	primary, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o", "jsonpath={.status.currentPrimary}")
 	Expect(err).NotTo(HaveOccurred())
 	Expect(primary).To(Equal(newMaster))
 
@@ -539,7 +539,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	// A read that fails is retried; one that keeps failing counts as changed.
 	var after map[string]string
 	Eventually(func() bool {
-		after = r.identities(slices.Collect(maps.Keys(untouched)))
+		after = r.identities(context.Background(), slices.Collect(maps.Keys(untouched)))
 		return !slices.Contains(slices.Collect(maps.Values(after)), faults.UnknownIdentity)
 	}, time.Minute, 3*time.Second).Should(BeTrue())
 	Expect(faults.CheckUnchanged(untouched, after)).To(Succeed())
@@ -549,7 +549,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	// (docs/observability.md, section "Transitions").
 	By("reading the change of the primary from the operator's Events and log")
 	Eventually(func(g Gomega) {
-		recorded, err := r.kubectl("get", "events", "--field-selector", "involvedObject.name="+r.cluster,
+		recorded, err := r.kubectl(context.Background(), "get", "events", "--field-selector", "involvedObject.name="+r.cluster,
 			"-o", `jsonpath={range .items[*]}{.reason}{"\n"}{end}`)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(recorded).To(ContainSubstring("PrimaryUnresolved"))
@@ -565,12 +565,12 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	var report workload.Report
 	Eventually(func(g Gomega) {
 		var err error
-		report, err = r.dataCheck()
+		report, err = r.dataCheck(context.Background())
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 	}, 3*time.Minute, 3*time.Second).Should(Succeed())
 	for _, slave := range nowSlaves {
-		count, err := r.failCount(slave, newMaster)
+		count, err := r.failCount(context.Background(), slave, newMaster)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(BeZero(), "fail count of the applier on %s", slave)
 	}

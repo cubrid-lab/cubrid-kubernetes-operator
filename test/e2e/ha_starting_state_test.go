@@ -107,7 +107,7 @@ func checkBreakSettings() error {
 
 // memberIdentities is the UID and the restart count of each member's Pod.
 func (r *haRun) memberIdentities() string {
-	byMember := r.identities(r.members)
+	byMember := r.identities(context.Background(), r.members)
 	ids := make([]string, 0, len(r.members))
 	for _, member := range r.members {
 		ids = append(ids, member+"="+byMember[member])
@@ -162,7 +162,7 @@ func (r *haRun) verifyStartingState() error {
 	}
 	for _, member := range r.members {
 		// A Pod that is being deleted is still Ready for a while.
-		ready, err := r.kubectl("get", "pod", member,
+		ready, err := r.kubectl(context.Background(), "get", "pod", member,
 			"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}{.metadata.deletionTimestamp}`)
 		if err != nil {
 			return err
@@ -171,7 +171,7 @@ func (r *haRun) verifyStartingState() error {
 			return unmet(member, faults.UnmetPod, "Pod is not Ready, or is being deleted: %q", ready)
 		}
 	}
-	deleting, err := r.kubectl("get", "pods",
+	deleting, err := r.kubectl(context.Background(), "get", "pods",
 		"-l", "database.cubrid.io/broker-access-mode,app.kubernetes.io/instance="+r.cluster,
 		"-o", `jsonpath={range .items[?(@.metadata.deletionTimestamp)]}{.metadata.name}{" "}{end}`)
 	if err != nil {
@@ -180,27 +180,27 @@ func (r *haRun) verifyStartingState() error {
 	if strings.TrimSpace(deleting) != "" {
 		return unmet("", faults.UnmetBroker, "Broker Pods are being deleted: %s", deleting)
 	}
-	master, _, err := r.master()
+	master, _, err := r.master(context.Background())
 	if err != nil {
 		return err
 	}
 	// A condition that is not True is an Unmet of kind condition; a
 	// command or decoding failure stays a plain error, of kind other.
-	if _, err := r.formationTime(); err != nil {
+	if _, err := r.formationTime(context.Background()); err != nil {
 		return err
 	}
-	s, err := r.status()
+	s, err := r.status(context.Background())
 	if err != nil {
 		return err
 	}
 	if s.primary != master {
 		return unmet(master, faults.UnmetRole, "status.currentPrimary is %q, CUBRID reports %s as master", s.primary, master)
 	}
-	if !operatorAvailable() {
+	if !operatorAvailable(context.Background()) {
 		return unmet("", faults.UnmetOperator, "the Operator is not available")
 	}
 	for _, mode := range []string{"rw", "ro"} {
-		out, err := r.kubectl("get", "deployment", r.cluster+"-broker-"+mode,
+		out, err := r.kubectl(context.Background(), "get", "deployment", r.cluster+"-broker-"+mode,
 			"-o", "jsonpath={.spec.replicas} {.status.updatedReplicas} {.status.availableReplicas}")
 		if err != nil {
 			return err
@@ -226,7 +226,7 @@ func (r *haRun) verifyStartingState() error {
 	r.markers++
 	marker := fmt.Sprintf("gate%d", r.markers)
 	r.mu.Unlock()
-	h, err := r.runWorkload("CLIENT_ID=" + marker + " OPS=1 ROLLBACK_EVERY=0")
+	h, err := r.runWorkload(context.Background(), "CLIENT_ID="+marker+" OPS=1 ROLLBACK_EVERY=0")
 	if err != nil {
 		// The client could not run or its history could not be read.
 		return unmet("", faults.UnmetClient, "marker write: %v", err)
@@ -236,7 +236,7 @@ func (r *haRun) verifyStartingState() error {
 	}
 	var report workload.Report
 	for deadline := time.Now().Add(time.Minute); ; time.Sleep(3 * time.Second) {
-		if report, err = r.dataCheck(); err == nil && report.OK {
+		if report, err = r.dataCheck(context.Background()); err == nil && report.OK {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -267,7 +267,7 @@ func (r *haRun) verifyStartingState() error {
 // needsFirstMemberAsMaster is the order dependency of S03
 // abrupt-first-member: the steps before it move no role.
 func (r *haRun) needsFirstMemberAsMaster(context.Context) error {
-	master, _, err := r.master()
+	master, _, err := r.master(context.Background())
 	if err != nil {
 		return err
 	}
@@ -351,7 +351,7 @@ func (r *haRun) breakOnPurpose(name string) {
 	brokers, err := r.rwBrokerPods()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(brokers).NotTo(BeEmpty())
-	_, err = r.kubectl("delete", "pod", brokers[0].name, "--wait=false", "--grace-period=0", "--force")
+	_, err = r.kubectl(context.Background(), "delete", "pod", brokers[0].name, "--wait=false", "--grace-period=0", "--force")
 	Expect(err).NotTo(HaveOccurred())
 	_, err = utils.Run(exec.Command("kubectl", "-n", namespace, "scale", operatorDeployment, "--replicas=0"))
 	Expect(err).NotTo(HaveOccurred())

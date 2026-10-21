@@ -90,7 +90,7 @@ type imTokenSecret struct {
 // redactor cleans the evidence files, GinkgoWriter and failed commands, but
 // not Ginkgo's own output, so a token must never reach an assertion message.
 func (r *haRun) imTokens() (imTokenSecret, error) {
-	out, err := r.kubectl("get", "secret", r.cluster+"-im-token", "-o", "json")
+	out, err := r.kubectl(context.Background(), "get", "secret", r.cluster+"-im-token", "-o", "json")
 	if err != nil {
 		return imTokenSecret{}, err
 	}
@@ -266,7 +266,7 @@ func (r *haRun) overlapState(variant, token string, result *evidence.Scenario) s
 // eventCount is how many times the operator recorded an Event with the
 // reason for the cluster. Repeated Events are counted in one object.
 func (r *haRun) eventCount(reason string) (int, error) {
-	out, err := r.kubectl("get", "events", "--field-selector",
+	out, err := r.kubectl(context.Background(), "get", "events", "--field-selector",
 		"involvedObject.kind=CubridCluster,involvedObject.name="+r.cluster+",reason="+reason,
 		"-o", `jsonpath={range .items[*]}{.count}{" "}{end}`)
 	if err != nil {
@@ -286,7 +286,7 @@ func (r *haRun) eventCount(reason string) (int, error) {
 // refusals counts the requests a member's Instance Manager refused since its
 // container started, from its own log.
 func (r *haRun) refusals(member string) (int, error) {
-	log, err := r.kubectl("logs", member, "--tail=-1")
+	log, err := r.kubectl(context.Background(), "logs", member, "--tail=-1")
 	if err != nil {
 		return 0, err
 	}
@@ -302,7 +302,7 @@ func (r *haRun) refusals(member string) (int, error) {
 // primaryResolved returns the status, the reason and the last transition time
 // of PrimaryResolved, and status.currentPrimary.
 func (r *haRun) primaryResolved() (status, reason, since, primary string, err error) {
-	out, err := r.kubectl("get", "cubridcluster", r.cluster, "-o",
+	out, err := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
 		`jsonpath={.status.conditions[?(@.type=="PrimaryResolved")].status} `+
 			`{.status.conditions[?(@.type=="PrimaryResolved")].reason} `+
 			`{.status.conditions[?(@.type=="PrimaryResolved")].lastTransitionTime} {.status.currentPrimary}`)
@@ -386,7 +386,7 @@ func (r *haRun) s14Token(variant string) {
 	before, err := r.imTokens()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(before.current != "" && before.previous == "").To(BeTrue(), "a token and no previous one")
-	master, slaves, err := r.master()
+	master, slaves, err := r.master(context.Background())
 	Expect(err).NotTo(HaveOccurred())
 	status, _, since, primary, err := r.primaryResolved()
 	Expect(err).NotTo(HaveOccurred())
@@ -407,7 +407,7 @@ func (r *haRun) s14Token(variant string) {
 	switch variant {
 	case s14TokenRotation:
 		By("requesting a rotation with the annotation on the CubridCluster")
-		_, err = r.kubectl("annotate", "--overwrite", "cubridcluster", r.cluster,
+		_, err = r.kubectl(context.Background(), "annotate", "--overwrite", "cubridcluster", r.cluster,
 			fmt.Sprintf("%s=e2e-%d", rotateIMTokenAnnotation, time.Now().Unix()))
 		Expect(err).NotTo(HaveOccurred())
 		note("rotation requested with the annotation %s on the CubridCluster", rotateIMTokenAnnotation)
@@ -416,7 +416,7 @@ func (r *haRun) s14Token(variant string) {
 		// started with, and no rotation time. Every member holds this
 		// Secret's token, so removing the rotation time is all that differs.
 		By("removing the rotation time from the token Secret, as an operator before #326 left it")
-		_, err = r.kubectl("annotate", "secret", r.cluster+"-im-token", imTokenRotatedAtAnnotation+"-")
+		_, err = r.kubectl(context.Background(), "annotate", "secret", r.cluster+"-im-token", imTokenRotatedAtAnnotation+"-")
 		Expect(err).NotTo(HaveOccurred())
 		note("rotation time removed from the token Secret, whose token every member holds")
 	}
@@ -499,12 +499,12 @@ func (r *haRun) s14Token(variant string) {
 	replaced := 0
 	for i, member := range order {
 		By(fmt.Sprintf("replacing %s, %d of %d, and waiting until it is Ready", member, i+1, len(order)))
-		uid, err := r.kubectl("get", "pod", member, "-o", "jsonpath={.metadata.uid}")
+		uid, err := r.kubectl(context.Background(), "get", "pod", member, "-o", "jsonpath={.metadata.uid}")
 		Expect(err).NotTo(HaveOccurred())
-		_, err = r.kubectl("delete", "pod", member, "--wait=false")
+		_, err = r.kubectl(context.Background(), "delete", "pod", member, "--wait=false")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(func(g Gomega) {
-			out, err := r.kubectl("get", "pod", member, "-o",
+			out, err := r.kubectl(context.Background(), "get", "pod", member, "-o",
 				`jsonpath={.metadata.uid} {.status.conditions[?(@.type=="Ready")].status}{.metadata.deletionTimestamp}`)
 			g.Expect(err).NotTo(HaveOccurred())
 			f := strings.Fields(out)
@@ -514,7 +514,7 @@ func (r *haRun) s14Token(variant string) {
 		}, 10*time.Minute, 3*time.Second).Should(Succeed())
 		var now string
 		Eventually(func(g Gomega) {
-			m, _, err := r.master()
+			m, _, err := r.master(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
 			now = m
 		}, 10*time.Minute, 5*time.Second).Should(Succeed())
@@ -601,7 +601,7 @@ func (r *haRun) s14Token(variant string) {
 	var report workload.Report
 	Eventually(func(g Gomega) {
 		var err error
-		report, err = r.dataCheck()
+		report, err = r.dataCheck(context.Background())
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 	}, 3*time.Minute, 3*time.Second).Should(Succeed())

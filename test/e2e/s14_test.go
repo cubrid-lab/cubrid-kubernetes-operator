@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os/exec"
@@ -123,7 +124,7 @@ func s14Step(r *haRun) {
 		By("waiting for every member's Pod to be Ready")
 		Eventually(func(g Gomega) {
 			for _, member := range r.members {
-				ready, err := r.kubectl("get", "pod", member,
+				ready, err := r.kubectl(context.Background(), "get", "pod", member,
 					"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(ready).To(Equal("True"), "Pod %s", member)
@@ -131,9 +132,9 @@ func s14Step(r *haRun) {
 		}, 5*time.Minute, 3*time.Second).Should(Succeed())
 
 		By("recording the starting state")
-		master, slaves, err := r.master()
+		master, slaves, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
-		membersBefore := r.identities(r.members)
+		membersBefore := r.identities(context.Background(), r.members)
 
 		By("starting a Pod to call from")
 		cmd := exec.Command("kubectl", "apply", "-f", "-")
@@ -145,7 +146,7 @@ func s14Step(r *haRun) {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("reading the cluster's own Instance Manager token")
-		encoded, err := r.kubectl("get", "secret", r.cluster+"-im-token", "-o", "jsonpath={.data.token}")
+		encoded, err := r.kubectl(context.Background(), "get", "secret", r.cluster+"-im-token", "-o", "jsonpath={.data.token}")
 		Expect(err).NotTo(HaveOccurred())
 		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
 		Expect(err).NotTo(HaveOccurred())
@@ -246,30 +247,30 @@ func s14Step(r *haRun) {
 		Expect(call(slaves[0], calls[0], "Authorization: Bearer "+instanceManagerToken)).To(Equal("200"))
 
 		By("checking that the refused requests changed nothing")
-		now, _, err := r.master()
+		now, _, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(now).To(Equal(master), "the master after the refused requests")
-		Expect(faults.CheckUnchanged(membersBefore, r.identities(r.members))).To(Succeed(),
+		Expect(faults.CheckUnchanged(membersBefore, r.identities(context.Background(), r.members))).To(Succeed(),
 			"the DB Pods and their containers after the refused requests")
 		for _, member := range r.members {
-			restarts, err := r.kubectl("get", "pod", member, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
+			restarts, err := r.kubectl(context.Background(), "get", "pod", member, "-o", "jsonpath={.status.containerStatuses[0].restartCount}")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(restarts).To(Equal("0"), "restarts of %s", member)
-			operations, err := r.kubectl("exec", member, "--", "sh", "-c", "ls /var/lib/cubrid/operations 2>/dev/null | wc -l")
+			operations, err := r.kubectl(context.Background(), "exec", member, "--", "sh", "-c", "ls /var/lib/cubrid/operations 2>/dev/null | wc -l")
 			Expect(err).NotTo(HaveOccurred())
 			_, _ = fmt.Fprintf(GinkgoWriter, "operation records on %s: %s\n", member, strings.TrimSpace(operations))
 		}
 		var report workload.Report
 		Eventually(func(g Gomega) {
 			var err error
-			report, err = r.dataCheck()
+			report, err = r.dataCheck(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 		}, 2*time.Minute, 3*time.Second).Should(Succeed())
 
 		By("reading the refusals from the Instance Manager's own log")
 		for _, member := range []string{master, slaves[0]} {
-			log, err := r.kubectl("logs", member, "--tail=-1")
+			log, err := r.kubectl(context.Background(), "logs", member, "--tail=-1")
 			Expect(err).NotTo(HaveOccurred())
 			refusals := 0
 			for _, line := range strings.Split(log, "\n") {
