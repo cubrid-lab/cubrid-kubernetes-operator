@@ -54,8 +54,13 @@ and Ginkgo skip their cleanup. The Lease is released, and the copy removed,
 only when no process is left in that group: a `sh -c` without a trap ends at
 once on a signal while what it started may still clean up with kubectl, and a
 job left in the background still runs after the command. Until then the run
-says it is waiting, and passes signals on to the group. A process that left
-the group (`setsid`) is not waited for. The exit code is the command's, or 128
+says it is waiting, and passes signals on to the group. A job that a
+non-interactive shell started in the background (`&`) ignores Ctrl-C, so
+Ctrl-C does not end that wait and the wait has no limit; end such a job with
+`kill -TERM -- -<pgid>` (the group the waiting message names). Since the Lease
+is not renewed, a run that outlasts `LAB_DURATION` looks ended to the next
+user; keep `LAB_DURATION` above what the command and its jobs take. A process
+that left the group (`setsid`) is not waited for. The exit code is the command's, or 128
 plus the number of the signal that ended it.
 
 `LAB_DURATION` (default `2h`) is how long the run is expected to take. A
@@ -85,5 +90,9 @@ The entry point runs a command; it does not have scenarios of its own. The
 e2e suite cannot be that command: it deploys the Operator and its CRDs and
 removes them at the end, which on a lab would delete every `CubridCluster`
 it has. It refuses to start there anyway, since its current context is not a
-Kind cluster (`utils.RequireKindContext`, #440). Lab scenarios that use the Operator already installed on the lab, and
-starting a lab run from CI, are follow-ups of #122.
+Kind cluster (`utils.RequireKindContext`, #440). A command that uses the
+Operator already installed on the lab, such as the LAB00 SQL smoke
+([installed-smoke.md](installed-smoke.md)), can run under it: the Lease it
+takes is the `cubrid-lab/campaign` Lease that smoke's documentation asks the
+launcher to hold. Lab scenarios beyond LAB00, and starting a lab run from CI,
+are follow-ups of #122. How to reach the lab is in [lab-access.md](lab-access.md).

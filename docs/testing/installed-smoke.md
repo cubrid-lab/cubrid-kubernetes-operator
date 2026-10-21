@@ -7,7 +7,9 @@ S00 installation validation, S00–S15 qualification, VM failures and storage
 resilience have their own acceptance checks in [the scenario contract](scenario-contract.md).
 
 This is the public scenario command for the [#122 lab-connection handoff](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122).
-The authorized lab launcher owns the reservation, target marker, campaign Lease,
+The authorized lab launcher owns the reservation, target marker, campaign Lease
+(for a run from a maintainer's machine, `make test-lab`, see
+[lab-runs.md](lab-runs.md)),
 deployment and image selection. Its Lease must cover this command and its
 cleanup. Use a reserved shared-lab dispatch; public PR jobs must never receive
 lab credentials. A dedicated disposable Kind installation can exercise this
