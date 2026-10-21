@@ -56,25 +56,35 @@ import (
 // still gets its own time.
 const callTimeout = time.Minute
 
+// handled are the signals the entry point owns for its whole run.
+var handled = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP}
+
 func main() {
-	os.Exit(run())
+	os.Exit(run(os.Args[1:], os.Environ(), "kubectl", signal.Notify))
 }
 
-func run() int {
+// run is the whole entry point: args are its arguments, environ the
+// environment the command starts from, kubectlPath the kubectl it runs, and
+// notify registers the channel the handled signals arrive on.
+func run(args, environ []string, kubectlPath string, notify func(chan<- os.Signal, ...os.Signal)) int {
 	// Installed before anything else, so that no signal can end the process
 	// between taking the Lease and releasing it, or before the copy of the
 	// kubeconfig is removed.
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	notify(signals, handled...)
 	defer signal.Stop(signals)
 	relay := newRelay(signals)
+	kubectl := kubectlAt(kubectlPath)
 
 	var target lab.Target
-	flag.StringVar(&target.Context, "context", "", "kubectl context of the lab (required)")
-	flag.StringVar(&target.Name, "target", "", "name of the lab the context must lead to (required)")
-	duration := flag.Duration("duration", 2*time.Hour, "how long the campaign is expected to take at most")
-	flag.Parse()
-	command := flag.Args()
+	flags := flag.NewFlagSet("lab", flag.ContinueOnError)
+	flags.StringVar(&target.Context, "context", "", "kubectl context of the lab (required)")
+	flags.StringVar(&target.Name, "target", "", "name of the lab the context must lead to (required)")
+	duration := flags.Duration("duration", 2*time.Hour, "how long the campaign is expected to take at most")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	command := flags.Args()
 	if len(command) == 0 {
 		fmt.Fprintln(os.Stderr, "lab: no command to run; give it after --")
 		return 2
@@ -109,7 +119,7 @@ func run() int {
 
 	code, stop := relay.stopped()
 	if !stop {
-		code = relay.run(command, append(os.Environ(),
+		code = relay.run(command, append(environ,
 			"KUBECONFIG="+kubeconfig,
 			"LAB_CONTEXT="+target.Context,
 			"LAB_TARGET="+target.Name,
@@ -266,10 +276,17 @@ func holder() string {
 	return lab.Holder(name, host, os.Getpid(), time.Now())
 }
 
-func kubectl(ctx context.Context, stdin string, args ...string) (string, error) {
+// kubectlAt runs the kubectl at path for the entry point's own calls.
+func kubectlAt(path string) lab.Kubectl {
+	return func(ctx context.Context, stdin string, args ...string) (string, error) {
+		return runKubectl(ctx, path, stdin, args...)
+	}
+}
+
+func runKubectl(ctx context.Context, path, stdin string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd := exec.CommandContext(ctx, path, args...)
 	// Out of the terminal's foreground process group: a Ctrl-C does not cut a
 	// call short, for example a create the API server has already stored; the
 	// relay stops the run after the call instead.
