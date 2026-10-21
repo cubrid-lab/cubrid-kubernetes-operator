@@ -9,11 +9,14 @@ FROM ${JDK_IMAGE} AS build
 ARG JDBC_VERSION=11.3.2.0053
 ARG JDBC_SHA256=ab8ab5632382a3042c0f354dd903d53b4f15c67b462afbeddb4edcf0bf43ad1f
 WORKDIR /build
-# Readable by the unprivileged user of the final image: a file fetched by ADD
-# is otherwise owner-only, and the driver would not be found.
-ADD --checksum=sha256:${JDBC_SHA256} --chmod=0644 \
-    https://repo1.maven.org/maven2/org/cubrid/cubrid-jdbc/${JDBC_VERSION}/cubrid-jdbc-${JDBC_VERSION}.jar \
-    cubrid-jdbc.jar
+# A response whose digest differs is asked for again, a few times, and never
+# kept (#521). The driver must be readable by the unprivileged user of the
+# final image.
+COPY test/workload/client/fetch-verified.sh /usr/local/bin/fetch-verified
+RUN fetch-verified \
+        https://repo1.maven.org/maven2/org/cubrid/cubrid-jdbc/${JDBC_VERSION}/cubrid-jdbc-${JDBC_VERSION}.jar \
+        "${JDBC_SHA256}" cubrid-jdbc.jar \
+    && chmod 0644 cubrid-jdbc.jar
 COPY test/workload/client/Workload.java .
 RUN javac -Xlint:all -Werror -d classes -cp cubrid-jdbc.jar Workload.java \
     && printf '#!/bin/sh\nexec java -cp /app/classes:/app/cubrid-jdbc.jar Workload "$@"\n' > workload \

@@ -91,7 +91,15 @@ Kubelet endpoints (unauthenticated — probes are awkward with strong auth):
   unavailability. As implemented it follows the engine only: a standalone
   member is ready while its server runs, an HA member while heartbeat
   reports it in a confirmed role (master, slave or replica). A requested
-  stop or a running operation does not turn it false by itself.
+  stop or a running operation does not turn it false by itself. A member
+  whose operation store keeps an operation's end that it could not write
+  (#299) is not ready, with the logged reason `OperationStoreWriteFailed`,
+  until a check writes that end (#473): its starts and lookups answer 500
+  meanwhile, and the Pod shows it. Peers and the Broker still reach it (the
+  member Services publish not-ready addresses), and `/v1/role` still
+  answers its role. `/livez` does not restart it for that: the restarted
+  manager would fail the operation whose end was kept (reconcileOnStart),
+  and an unwritable store stays unwritable.
 
 Only one local status command runs for `/readyz` at a time. A request that
 arrives while a check runs waits for that check and gets its answer, so a

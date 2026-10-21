@@ -48,6 +48,9 @@ func imAnswer(status int, body string) error {
 }
 
 const (
+	// muxNotFound is what Go's mux of an earlier manager answers for a
+	// route it does not have.
+	muxNotFound  = "404 page not found"
 	busyBody     = `{"error":"a mutating operation is already in progress for this database","code":"OperationInProgress"}`
 	conflictBody = `{"error":"idempotency key reused with a different request","code":"IdempotencyConflict"}`
 )
@@ -127,7 +130,7 @@ func TestHTTPBackupClient_ErrorAnswersAreClassified(t *testing.T) {
 			[]error{errRequestRefused}, []error{errStartConflict, errTokenRefused}, reasonRequestRefused, "unprocessable"},
 		// An earlier manager without the route, or one that cannot take the
 		// request now, could not be asked: the start waits.
-		{"an endpoint an earlier member does not have", http.StatusNotFound, `404 page not found`,
+		{"an endpoint an earlier member does not have", http.StatusNotFound, muxNotFound,
 			nil, []error{errRequestRefused, errStartConflict, errTokenRefused}, reasonInstanceManagerUnavailable, ""},
 		{"a method an earlier member does not have", http.StatusMethodNotAllowed, `Method Not Allowed`,
 			nil, []error{errRequestRefused, errStartConflict}, reasonInstanceManagerUnavailable, ""},
@@ -328,6 +331,42 @@ func TestHTTPBackupClient_AgainstTheInstanceManager(t *testing.T) {
 	}
 }
 
+// A poll of an operation the real Instance Manager holds no record of is
+// told apart from a member that cannot be asked (#457).
+func TestHTTPBackupClient_GetOperationOfAMissingRecord(t *testing.T) {
+	store, err := instancemanager.NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := instancemanager.NewServer(nil, "tok").WithOperationStore(store).Handler()
+	c := NewHTTPBackupClient(staticToken("tok"))
+	c.Client = &http.Client{Transport: toHandler{h}}
+	_, err = c.GetOperation(context.Background(), "db-0", "ns", "op-"+strings.Repeat("0", 32))
+	if !errors.Is(err, errOperationMissing) {
+		t.Errorf("err = %v, want a missing record", err)
+	}
+	for _, answer := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"a member that answers 503", http.StatusServiceUnavailable, `{"error":"x"}`},
+		{"a member without an operation store", http.StatusNotFound, `{"error":"operations are not enabled"}`},
+		{"a 404 that is not the manager's", http.StatusNotFound, muxNotFound},
+	} {
+		c.Client = &http.Client{Transport: &answerBody{status: answer.status, body: answer.body}}
+		if _, err := c.GetOperation(context.Background(), "db-0", "ns", "op-1"); err == nil || errors.Is(err, errOperationMissing) {
+			t.Errorf("%s: err = %v, want an error that is no missing record", answer.name, err)
+		}
+	}
+	// A store-less manager: the real handler's answer is no missing record.
+	c.Client = &http.Client{Transport: toHandler{instancemanager.NewServer(nil, "tok").Handler()}}
+	if _, err := c.GetOperation(context.Background(), "db-0", "ns", "op-"+strings.Repeat("0", 32)); err == nil ||
+		errors.Is(err, errOperationMissing) {
+		t.Errorf("a store-less manager: err = %v, want an error that is no missing record", err)
+	}
+}
+
 // A start that the real Instance Manager refuses because its operation store
 // holds a record it cannot read is reported by its own reason, retryable and
 // with a pointer to the runbook (#481). Backup and restore starts are asked
@@ -521,7 +560,7 @@ var _ = Describe("Terminal and retryable answers of a recovery restore (#302)", 
 	// An Instance Manager image without the route answers 404 from its mux:
 	// it could not be asked, which uses up no attempt.
 	It("waits on a member that has no restore endpoint, without using up an attempt", func() {
-		restore := &fakeRestoreClient{startErr: imAnswer(http.StatusNotFound, "404 page not found")}
+		restore := &fakeRestoreClient{startErr: imAnswer(http.StatusNotFound, muxNotFound)}
 		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Restore: restore}
 		key := newRecovery("recovery-no-route")
 		var got *databasev1alpha1.CubridCluster

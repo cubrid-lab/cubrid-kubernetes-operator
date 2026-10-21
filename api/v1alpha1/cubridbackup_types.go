@@ -87,7 +87,8 @@ const (
 	// PreferStandby prefers a caught-up standby, falling back to master only on
 	// fresh, unambiguous HA evidence (ADR-0007).
 	PreferStandby TargetPreference = "PreferStandby"
-	// StandbyOnly requires a standby and fails if none is eligible.
+	// StandbyOnly requires a standby and waits (reason NoHealthyStandby) while
+	// none is eligible; it never falls back to the master.
 	StandbyOnly TargetPreference = "StandbyOnly"
 	// PrimaryOnly forces the backup onto the resolved master.
 	PrimaryOnly TargetPreference = "PrimaryOnly"
@@ -237,6 +238,13 @@ type CubridBackupStatus struct {
 	// (ADR-0007).
 	// +optional
 	ObjectStorageNotAppliedSince *metav1.Time `json:"objectStorageNotAppliedSince,omitempty"`
+
+	// operationMissingSince is when the target first answered that it holds
+	// no record of operationRef, since the operation was last read. The
+	// backup ends Failed when the record stays missing for a bound from this
+	// time (ADR-0007); a read of the operation clears it.
+	// +optional
+	OperationMissingSince *metav1.Time `json:"operationMissingSince,omitempty"`
 
 	// startedAt is when the backup started.
 	// +optional

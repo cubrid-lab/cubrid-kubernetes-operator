@@ -28,12 +28,15 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -71,6 +74,7 @@ func main() {
 	var instanceManagerImage string
 	var operatorNamespace, watchNamespace string
 	var backupTimeout, restoreTimeout time.Duration
+	var brokerMaxApplServers int
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
@@ -79,6 +83,9 @@ func main() {
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.StringVar(&instanceManagerImage, "instance-manager-image", controller.DefaultInstanceManagerImage,
 		"The DB Pod image (CUBRID with the Instance Manager) when a CubridCluster does not set spec.image.")
+	flag.IntVar(&brokerMaxApplServers, "broker-max-appl-servers", controller.DefaultBrokerMaxApplServers,
+		"MAX_NUM_APPL_SERVER of every Broker: how many CAS it runs at most. Raise it when clients pool "+
+			"more connections; all Brokers at the maximum must fit the DB server's max_clients.")
 	flag.DurationVar(&backupTimeout, "instance-manager-backup-timeout", 0,
 		"How long the Instance Manager lets one backup run (backupdb and the upload) before it ends it, as a duration "+
 			"such as 6h. 0 keeps the manager's default of 2h. A Pod takes a changed value when it is replaced.")
@@ -127,6 +134,11 @@ func main() {
 	if backupTimeout < 0 || restoreTimeout < 0 {
 		setupLog.Error(nil, "The Instance Manager's backup and restore time limits cannot be negative",
 			"backupTimeout", backupTimeout.String(), "restoreTimeout", restoreTimeout.String())
+		os.Exit(1)
+	}
+
+	if err := controller.ValidateBrokerMaxApplServers(brokerMaxApplServers); err != nil {
+		setupLog.Error(err, "Invalid --broker-max-appl-servers")
 		os.Exit(1)
 	}
 
@@ -242,8 +254,9 @@ func main() {
 	tokens := controller.ClusterTokens(mgr.GetClient())
 	clusterProber := controller.NewHTTPRoleProber(tokens)
 	if err := (&controller.CubridClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
 		//nolint:staticcheck // v0.25 GetEventRecorder returns an events/v1 interface incompatible with record.EventRecorder.
 		Recorder:     mgr.GetEventRecorderFor("cubridcluster-controller"),
 		Prober:       clusterProber,
@@ -253,6 +266,8 @@ func main() {
 		Backup:       controller.NewHTTPBackupClient(tokens),
 		DefaultImage: instanceManagerImage,
 		OperatorNS:   operatorNamespace,
+		// Checked above: at least MIN_NUM_APPL_SERVER.
+		BrokerMaxApplServers: brokerMaxApplServers,
 		// Checked above: neither is negative.
 		BackupTimeout:  backupTimeout,
 		RestoreTimeout: restoreTimeout,
@@ -291,12 +306,20 @@ func main() {
 
 // watchCacheOptions scopes namespaced informers and cached reads. Empty keeps
 // controller-runtime's cluster-wide default; API authorization is separate.
+// Secrets and Pods are cached only when they carry the operator's managed-by
+// label, so a cached read of any other Secret or Pod finds nothing.
 func watchCacheOptions(namespace string) (cache.Options, error) {
+	managed := labels.SelectorFromSet(labels.Set{controller.ManagedByLabel: controller.ManagedByOperator})
+	options := cache.Options{ByObject: map[client.Object]cache.ByObject{
+		&corev1.Secret{}: {Label: managed},
+		&corev1.Pod{}:    {Label: managed},
+	}}
 	if namespace == "" {
-		return cache.Options{}, nil
+		return options, nil
 	}
 	if problems := validation.IsDNS1123Label(namespace); len(problems) != 0 {
 		return cache.Options{}, fmt.Errorf("invalid watch namespace %q: %s", namespace, strings.Join(problems, "; "))
 	}
-	return cache.Options{DefaultNamespaces: map[string]cache.Config{namespace: {}}}, nil
+	options.DefaultNamespaces = map[string]cache.Config{namespace: {}}
+	return options, nil
 }

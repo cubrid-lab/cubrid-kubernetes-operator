@@ -57,6 +57,15 @@ const (
 	brokerDatabasesDir = "/tmp/cubrid-databases"
 )
 
+// brokerMaxApplServers is the Brokers' MAX_NUM_APPL_SERVER: the manager's
+// --broker-max-appl-servers, or DefaultBrokerMaxApplServers when unset.
+func (r *CubridClusterReconciler) brokerMaxApplServers() int {
+	if r.BrokerMaxApplServers > 0 {
+		return r.BrokerMaxApplServers
+	}
+	return DefaultBrokerMaxApplServers
+}
+
 func rwServiceName(cluster string) string { return cluster + "-rw" }
 func roServiceName(cluster string) string { return cluster + "-ro" }
 
@@ -64,7 +73,7 @@ func roServiceName(cluster string) string { return cluster + "-ro" }
 // generated config ConfigMap, a broker Deployment, and the -rw/-ro Services
 // fronting broker pods (never DB pods). It then sets the broker conditions.
 func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, cluster *databasev1alpha1.CubridCluster, res PrimaryResolution, image string) error {
-	config := brokerConfigData(cluster)
+	config := brokerConfigData(cluster, r.brokerMaxApplServers())
 	if err := r.reconcileBrokerConfig(ctx, cluster, config); err != nil {
 		return err
 	}

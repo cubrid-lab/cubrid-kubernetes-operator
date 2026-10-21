@@ -24,3 +24,4 @@
 
 # The test-only SQL workload client (test/workload/client/Dockerfile)
 !test/workload/client/Workload.java
+!test/workload/client/fetch-verified.sh

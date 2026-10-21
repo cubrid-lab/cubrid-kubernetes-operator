@@ -318,6 +318,17 @@ backup goes back to waiting for a safe target) ends with one of these
 | `RecordedTargetUnverified` | The recorded target could not be asked whether it holds the operation, including when its operation store holds any record it cannot read (the lookup answers 500) | A backup may still run on the member named in the message; check it (`GET /v1/operations?idempotencyKey=`) before relying on the backup's prefix |
 | `ObjectStorageWaitExpired` | No target was recorded: the selected Pod did not run with the cluster's `spec.objectStorage` | Nothing was started; restart the Pod with the cluster's settings and create a new CubridBackup |
 
+A backup whose operation was started and recorded (`status.operationRef`)
+but whose target then answers that it holds no record of it reports
+`RecordedOperationMissing` while it waits, for 30 minutes from
+`status.operationMissingSince`; a read of the operation clears that time and
+the backup goes on. When the record stays missing, the backup ends with
+`RecordedOperationLost` (ADR-0007, #457):
+
+| Reason | Meaning | What to do |
+|---|---|---|
+| `RecordedOperationLost` | The target named in the message held no record of the operation named there for 30 minutes, for example after its operation store was lost or replaced | A backup may still run on that member and may have uploaded under the backup's prefix: check the member's processes and the prefix before relying on or deleting what is there, then create a new CubridBackup. No artifact is recorded |
+
 An Event is a notice, not the record. The Operator sends at most 100 Events
 about one object in a row, and the allowance comes back at one Event in ten
 seconds; an Event beyond it is dropped, and nothing reports the drop. Kubernetes
@@ -381,7 +392,11 @@ that outlasts the kubelet's timeout, is cancelled and logged with the reason
 An operation record that could not be written is logged as an error
 with `event` `operation_store_write_failed`, the `operationID` and the state
 that is therefore not on disk; the retries of an operation's end that could
-not be written are logged at debug level. An operation record that cannot be
+not be written are logged at debug level. While such an end stays unwritten
+the member is not ready: `/readyz` answers 503 and the `not_ready` reason
+starts with `OperationStoreWriteFailed` and names the operation (#473). Free
+or repair the volume of `$IM_OPERATIONS_DIR`; the next readiness check writes
+the end and the member is ready again. An operation record that cannot be
 read or decoded is logged once as an error with `event`
 `operation_record_unreadable`, its `operationID` and the error, also when it
 was found at start; while it stays unreadable the Instance Manager starts no

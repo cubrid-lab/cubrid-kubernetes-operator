@@ -38,10 +38,10 @@ const (
 // (component=broker), distinct from the database instances (ADR-0002).
 func brokerLabelsFor(cluster *databasev1alpha1.CubridCluster) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":       appName,
-		"app.kubernetes.io/instance":   cluster.Name,
-		"app.kubernetes.io/component":  componentBroker,
-		"app.kubernetes.io/managed-by": "cubrid-kubernetes-operator",
+		"app.kubernetes.io/name":      appName,
+		"app.kubernetes.io/instance":  cluster.Name,
+		"app.kubernetes.io/component": componentBroker,
+		ManagedByLabel:                ManagedByOperator,
 	}
 }
 
@@ -88,10 +88,10 @@ const brokerConfigHashAnnotation = "database.cubrid.io/broker-config-hash"
 // brokerConfigData is the content of the Broker ConfigMap: one
 // cubrid_broker.conf per access mode and the databases.txt that says where
 // the database's members are.
-func brokerConfigData(cluster *databasev1alpha1.CubridCluster) map[string]string {
+func brokerConfigData(cluster *databasev1alpha1.CubridCluster, maxApplServers int) map[string]string {
 	return map[string]string{
-		brokerConfKey(brokerModeRW): generateBrokerConf(brokerModeRW),
-		brokerConfKey(brokerModeRO): generateBrokerConf(brokerModeRO),
+		brokerConfKey(brokerModeRW): generateBrokerConf(brokerModeRW, maxApplServers),
+		brokerConfKey(brokerModeRO): generateBrokerConf(brokerModeRO, maxApplServers),
 		brokerDatabasesKey:          generateBrokerDatabasesTxt(cluster),
 	}
 }
@@ -113,21 +113,47 @@ func brokerConfigHash(data map[string]string, mode string) string {
 // generateBrokerConf renders cubrid_broker.conf for one access mode: a single
 // Broker, ACCESS_MODE=RW or RO, as in POC-8 (ADR-0002). A Pod runs one mode,
 // so that the -rw and -ro Services each select Pods that serve it.
-func generateBrokerConf(mode string) string {
+func generateBrokerConf(mode string, maxApplServers int) string {
 	var b strings.Builder
 	b.WriteString("[broker]\n")
 	b.WriteString("MASTER_SHM_ID           =30001\n")
 	b.WriteString("ADMIN_LOG_FILE          =log/broker/cubrid_broker.log\n\n")
-	writeBrokerSection(&b, strings.ToUpper(mode), int(brokerPort(mode)), strings.ToUpper(mode))
+	writeBrokerSection(&b, strings.ToUpper(mode), int(brokerPort(mode)), strings.ToUpper(mode), maxApplServers)
 	return b.String()
 }
 
-func writeBrokerSection(b *strings.Builder, name string, port int, accessMode string) {
+// CAS processes per Broker. The minimum is fixed; the maximum defaults to
+// DefaultBrokerMaxApplServers and is set with the manager's
+// --broker-max-appl-servers (CubridClusterReconciler.BrokerMaxApplServers).
+//
+// With KEEP_CONNECTION=AUTO (the default), a Broker whose CAS are all held by
+// connected clients takes one over for a new client ("CHANGE CLIENT" in the
+// CAS SQL log). CUBRID 11.4 then keeps every later session of that CAS, so a
+// user who disconnected cleanly stays active and DROP USER fails with -1188
+// until another client logs in on that CAS (#303). A deployment whose clients
+// pool more connections than that raises the maximum. Every Broker at its
+// maximum (2 modes x 2 replicas) has to fit the DB server's max_clients,
+// 100 by default.
+const (
+	brokerMinApplServers        = 2
+	DefaultBrokerMaxApplServers = 5
+)
+
+// ValidateBrokerMaxApplServers reports whether n can be a Broker's
+// MAX_NUM_APPL_SERVER: at least its MIN_NUM_APPL_SERVER.
+func ValidateBrokerMaxApplServers(n int) error {
+	if n < brokerMinApplServers {
+		return fmt.Errorf("MAX_NUM_APPL_SERVER %d is below MIN_NUM_APPL_SERVER %d", n, brokerMinApplServers)
+	}
+	return nil
+}
+
+func writeBrokerSection(b *strings.Builder, name string, port int, accessMode string, maxApplServers int) {
 	fmt.Fprintf(b, "[%%%s]\n", name)
 	b.WriteString("SERVICE                 =ON\n")
 	fmt.Fprintf(b, "BROKER_PORT             =%d\n", port)
-	b.WriteString("MIN_NUM_APPL_SERVER     =2\n")
-	b.WriteString("MAX_NUM_APPL_SERVER     =5\n")
+	fmt.Fprintf(b, "MIN_NUM_APPL_SERVER     =%d\n", brokerMinApplServers)
+	fmt.Fprintf(b, "MAX_NUM_APPL_SERVER     =%d\n", maxApplServers)
 	fmt.Fprintf(b, "APPL_SERVER_SHM_ID      =%d\n", port)
 	b.WriteString("LOG_DIR                 =log/broker/sql_log\n")
 	b.WriteString("ERROR_LOG_DIR           =log/broker/error_log\n")
