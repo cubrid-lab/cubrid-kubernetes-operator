@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -118,6 +119,91 @@ func TestASignalBeforeTheCommandStopsTheRun(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the command started after the run was stopped")
+	}
+}
+
+// A command that ends while a job it started in the background still runs
+// is over only when that job is.
+func TestTheCommandEndsWithItsBackgroundJobs(t *testing.T) {
+	done := filepath.Join(t.TempDir(), "done")
+	r := newRelay(make(chan os.Signal))
+	if code := r.run([]string{"sh", "-c", `(sleep 0.5; : > "$0") & exit 0`, done}, os.Environ()); code != 0 {
+		t.Fatalf("run() = %d, want 0", code)
+	}
+	if _, err := os.Stat(done); err != nil {
+		t.Fatalf("run() returned while the command's background job still ran: %v", err)
+	}
+}
+
+// After the command itself has ended, signals still reach what it started.
+func TestASignalReachesWhatOutlivesTheCommand(t *testing.T) {
+	dir := t.TempDir()
+	outer, log := filepath.Join(dir, "outer"), filepath.Join(dir, "log")
+	// The outer shell has no trap and ends on the first SIGTERM; its child
+	// ends on the second only.
+	child := `trap 'n=$((n+1)); echo $n >> "$1"; [ $n -ge 2 ] && exit 0' TERM
+while :; do sleep 0.01; done`
+	signals := make(chan os.Signal, 1)
+	r := newRelay(signals)
+	done := make(chan int, 1)
+	go func() {
+		done <- r.run([]string{"sh", "-c", `echo $$ > "$0"; sh -c "$2" "$0" "$1" && echo next`, outer, log, child},
+			os.Environ())
+	}()
+	waitUntil(t, func() bool { _, err := os.Stat(outer); return err == nil })
+	time.Sleep(100 * time.Millisecond) // let the outer shell start its child
+	signals <- syscall.SIGTERM
+	got, _ := os.ReadFile(outer)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(got)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The outer shell leads the command's process group: whatever the test
+	// ends with, nothing of it is left running.
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	// Once the outer shell has been waited for, only its child is left.
+	waitUntil(t, func() bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) })
+	signals <- syscall.SIGTERM
+	select {
+	case code := <-done:
+		if code != 128+int(syscall.SIGTERM) {
+			t.Fatalf("run() = %d, want the outer shell's %d", code, 128+int(syscall.SIGTERM))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second signal did not reach the child left after the command ended")
+	}
+}
+
+func waitUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The command reads /dev/null, not the entry point's standard input: outside
+// the terminal's foreground group, a read of the terminal would stop it.
+func TestTheCommandReadsNothing(t *testing.T) {
+	stdin, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+	saved := os.Stdin
+	os.Stdin = stdin
+	defer func() { os.Stdin = saved; _ = stdin.Close() }()
+
+	seen := filepath.Join(t.TempDir(), "stdin")
+	r := newRelay(make(chan os.Signal))
+	if code := r.run([]string{"sh", "-c", `readlink /proc/$$/fd/0 > "$0"`, seen}, os.Environ()); code != 0 {
+		t.Fatalf("run() = %d, want 0", code)
+	}
+	if got, _ := os.ReadFile(seen); strings.TrimSpace(string(got)) != os.DevNull {
+		t.Fatalf("the command's standard input is %q, want %s", got, os.DevNull)
 	}
 }
 

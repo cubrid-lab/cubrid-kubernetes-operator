@@ -29,7 +29,9 @@ limitations under the License.
 // before the command starts stops the run there, after releasing the Lease if
 // it was taken. During the command, each one is passed on once to the
 // command's process group, so a `sh -c` command and everything it started
-// get it, and the Lease is released when the command has ended.
+// get it. The Lease is released, and the copy removed, only when no process
+// is left in that group: the command, what it started, and what it left in
+// the background.
 package main
 
 import (
@@ -182,11 +184,17 @@ func (r *relay) stopped() (int, bool) {
 // The command does not share the terminal's foreground process group, so a
 // Ctrl-C reaches it once, from the relay, and not twice (from the terminal
 // and again from the relay), which `go test` and Ginkgo would take as "skip
-// the cleanup". A command that reads the terminal is stopped (SIGTTIN); lab
-// commands are not interactive.
+// the cleanup". Its standard input is /dev/null: from outside the foreground
+// group, a read of the terminal would stop it (SIGTTIN) with the lab held.
+//
+// The command has ended only when its whole process group has: a `sh -c`
+// without a trap ends at once on a signal while the commands it started may
+// still be cleaning up, and a job it left in the background still runs.
+// Until then, signals are still passed on to the group. A process that left
+// the group (setsid, setpgid) is not waited for.
 func (r *relay) run(command []string, env []string) int {
 	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
@@ -208,10 +216,22 @@ func (r *relay) run(command []string, env []string) int {
 	}
 
 	err = cmd.Wait()
+	group := cmd.Process.Pid
+	for told := false; groupExists(group); time.Sleep(50 * time.Millisecond) {
+		if !told {
+			fmt.Fprintf(os.Stderr, "lab: the command ended; waiting for the processes it started (process group %d)\n", group)
+			told = true
+		}
+	}
 	r.mu.Lock()
 	r.group = 0
 	r.mu.Unlock()
 	return exitCode(err)
+}
+
+// groupExists reports whether any process is left in the process group.
+func groupExists(group int) bool {
+	return !errors.Is(syscall.Kill(-group, 0), syscall.ESRCH)
 }
 
 // exitCode maps the end of a command to an exit code the way a shell does: a

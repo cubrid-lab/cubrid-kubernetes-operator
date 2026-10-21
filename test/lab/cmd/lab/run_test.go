@@ -315,6 +315,49 @@ func TestRunReleasesTheLabAfterASignalBeforeTheCommand(t *testing.T) {
 	requireRemoved(t, copyOf(t, f.calls(t)))
 }
 
+// A `sh -c` without a trap ends at once on a signal, while what it started
+// may still be cleaning up, with kubectl: the Lease and the copy stay until
+// all of it has ended.
+func TestRunHoldsTheLabUntilEverythingTheCommandStartedHasEnded(t *testing.T) {
+	f := newFakeLab(t, labA, "ok")
+	signals := newSignalSource()
+	dir := t.TempDir()
+	ready, seen := filepath.Join(dir, "ready"), filepath.Join(dir, "seen")
+	// The child's cleanup records, after a while, whether the Lease and the
+	// copy are still there.
+	child := `trap 'sleep 0.5
+if [ -e "$2" ]; then echo released; elif [ -e "$KUBECONFIG" ]; then echo held; else echo removed; fi > "$1"
+exit 0' TERM
+: > "$0"; while :; do sleep 0.01; done`
+	done := make(chan int, 1)
+	go func() {
+		done <- run(labArgs("sh", "-c", `sh -c "$3" "$0" "$1" "$2" && echo next`, ready, seen, f.deleteOptions, child),
+			callerEnviron(t), f.kubectl, signals.notify)
+	}()
+	c := <-signals.ch
+	waitFor(t, ready)
+	c <- syscall.SIGTERM
+	select {
+	case code := <-done:
+		if code != 128+int(syscall.SIGTERM) {
+			t.Fatalf("run() = %d, want the shell's %d", code, 128+int(syscall.SIGTERM))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run did not end after the signal")
+	}
+	got, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatalf("the run ended before the command's child finished its cleanup: %v", err)
+	}
+	if strings.TrimSpace(string(got)) != "held" {
+		t.Fatalf("during the child's cleanup the lab was %q, want held", got)
+	}
+	if !f.released() {
+		t.Error("the Lease was not released")
+	}
+	requireRemoved(t, copyOf(t, f.calls(t)))
+}
+
 func waitFor(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
