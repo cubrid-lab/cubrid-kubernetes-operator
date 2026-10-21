@@ -238,6 +238,13 @@ type CubridBackupStatus struct {
 	// +optional
 	ObjectStorageNotAppliedSince *metav1.Time `json:"objectStorageNotAppliedSince,omitempty"`
 
+	// operationMissingSince is when the target first answered that it holds
+	// no record of operationRef, since the operation was last read. The
+	// backup ends Failed when the record stays missing for a bound from this
+	// time (ADR-0007); a read of the operation clears it.
+	// +optional
+	OperationMissingSince *metav1.Time `json:"operationMissingSince,omitempty"`
+
 	// startedAt is when the backup started.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

@@ -145,7 +145,18 @@ neither case is another member started, then or later. The bound is not the
 time a backup takes: an adopted operation is polled until it ends. While its
 member is reachable the Instance Manager's backup time limit
 (`IM_BACKUP_TIMEOUT`, default 2h) ends it; while the member does not answer,
-the operator keeps polling until it does. It covers a
+the operator keeps polling until it does. A member that answers that it
+holds no record of the recorded operation (`404` on
+`GET /v1/operations/{id}`, for example after its operation store was lost or
+replaced) is told apart from one that does not answer (#457): the backup
+reports `RecordedOperationMissing` and waits 30 minutes from
+`status.operationMissingSince`, which only a read of the operation clears,
+so an operator restart or a failure to ask in between does not reset it.
+Then the backup ends `Failed` with reason `RecordedOperationLost`, naming the
+member and the operation. A missing record does not show that the work
+ended, so the reason says that a backup may still run there and upload under
+the backup's prefix; the backup is not started again, on that member or
+another, and no artifact is recorded. It covers a
 member restart or a failover and its settling, and an operator who restarts
 a Pod to apply `spec.objectStorage`. Limit: a start delayed in the network
 beyond the bound and the lookup could still be taken after the backup ended
@@ -423,6 +434,7 @@ operation of it, and waits within the bound while that cannot be asked),
 `ObjectStorageNotApplied`, `UnsupportedDestination`, `InvalidBackupDestination`,
 `RecordedTargetNotEligible`,
 `RecordedTargetNotStarted`, `RecordedTargetUnverified`, `ObjectStorageWaitExpired`,
+`RecordedOperationMissing`, `RecordedOperationLost`,
 `ObjectStorageUnavailable`). Cluster-level: `BackupReady`
 (True/False/Unknown) + `lastSuccessfulBackupRef`/artifact summary. As
 implemented, `ChecksumMismatch`, `InsufficientStagingSpace` and

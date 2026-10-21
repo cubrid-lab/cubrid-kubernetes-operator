@@ -328,6 +328,26 @@ func TestHTTPBackupClient_AgainstTheInstanceManager(t *testing.T) {
 	}
 }
 
+// A poll of an operation the real Instance Manager holds no record of is
+// told apart from a member that cannot be asked (#457).
+func TestHTTPBackupClient_GetOperationOfAMissingRecord(t *testing.T) {
+	store, err := instancemanager.NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := instancemanager.NewServer(nil, "tok").WithOperationStore(store).Handler()
+	c := NewHTTPBackupClient(staticToken("tok"))
+	c.Client = &http.Client{Transport: toHandler{h}}
+	_, err = c.GetOperation(context.Background(), "db-0", "ns", "op-"+strings.Repeat("0", 32))
+	if !errors.Is(err, errOperationMissing) {
+		t.Errorf("err = %v, want a missing record", err)
+	}
+	c.Client = &http.Client{Transport: &answerBody{status: http.StatusServiceUnavailable, body: `{"error":"x"}`}}
+	if _, err := c.GetOperation(context.Background(), "db-0", "ns", "op-1"); err == nil || errors.Is(err, errOperationMissing) {
+		t.Errorf("a member that answers 503: err = %v, want an error that is no missing record", err)
+	}
+}
+
 // A start that the real Instance Manager refuses because its operation store
 // holds a record it cannot read is reported by its own reason, retryable and
 // with a pointer to the runbook (#481). Backup and restore starts are asked

@@ -65,6 +65,12 @@ const (
 	// target was recorded, because the selected Pod did not run with the
 	// cluster's object-storage settings; nothing was started.
 	reasonRecordedTargetNotStarted = "RecordedTargetNotStarted"
+	// reasonRecordedOperationMissing: the target answers that it holds no
+	// record of the recorded operation; the backup waits within
+	// backupOperationMissingWait. reasonRecordedOperationLost: the record
+	// stayed missing past it, and the backup is Failed.
+	reasonRecordedOperationMissing = "RecordedOperationMissing"
+	reasonRecordedOperationLost    = "RecordedOperationLost"
 	reasonRecordedTargetUnverified = "RecordedTargetUnverified"
 	reasonObjectStorageWaitExpired = "ObjectStorageWaitExpired"
 
@@ -109,6 +115,11 @@ const backupClusterWait = 10 * time.Minute
 // operator's clock later; a clock that differs between operator processes
 // moves the bound by that difference.
 const backupTargetWait = 30 * time.Minute
+
+// backupOperationMissingWait bounds how long a backup waits for its recorded
+// operation while its target answers that it holds no record of it, from
+// status.operationMissingSince.
+const backupOperationMissingWait = 30 * time.Minute
 
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups/status,verbs=get;update;patch
@@ -343,10 +354,14 @@ func (r *CubridBackupReconciler) pollBackup(ctx context.Context, backup *databas
 		return r.commit(ctx, backup, ctrl.Result{})
 	}
 	op, err := r.Backup.GetOperation(ctx, backup.Status.TargetInstance, backup.Namespace, backup.Status.OperationRef)
+	if errors.Is(err, errOperationMissing) {
+		return r.operationMissing(ctx, backup, err)
+	}
 	if err != nil {
 		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 		return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
 	}
+	backup.Status.OperationMissingSince = nil
 
 	switch op.State {
 	case instancemanager.OpCompleted:
@@ -360,6 +375,35 @@ func (r *CubridBackupReconciler) pollBackup(ctx context.Context, backup *databas
 		backup.Status.Phase = databasev1alpha1.BackupPhaseRunning
 		setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "BackupRunning", "backup in progress")
 	}
+	return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+}
+
+// operationMissing is the poll of a backup whose target answered that it
+// holds no record of the recorded operation (#457). The backup waits, from
+// status.operationMissingSince, which only a read of the operation clears,
+// so that an operator restart or a transient failure in between does not
+// reset the bound. Once the record has stayed missing for
+// backupOperationMissingWait the backup is Failed. A missing record does not
+// show that the work ended, so the reason says that a backup may still run
+// and upload, and the backup is never started again.
+func (r *CubridBackupReconciler) operationMissing(ctx context.Context, backup *databasev1alpha1.CubridBackup, err error) (ctrl.Result, error) {
+	target, id := backup.Status.TargetInstance, backup.Status.OperationRef
+	if backup.Status.OperationMissingSince == nil {
+		since := metav1.NewTime(r.now())
+		backup.Status.OperationMissingSince = &since
+	}
+	since := backup.Status.OperationMissingSince.Time
+	if r.now().Sub(since) > backupOperationMissingWait {
+		return r.ended(ctx, backup, reasonRecordedOperationLost, fmt.Sprintf(
+			"%s has held no record of this backup's operation %s since %s, for %s or longer (%v). A missing record "+
+				"does not show that the work ended: a backup may still be running on %s and upload under this "+
+				"backup's prefix; check that member and the prefix before relying on it. The backup is not started "+
+				"again, on %s or another member",
+			target, id, since.UTC().Format(time.RFC3339), backupOperationMissingWait, err, target, target))
+	}
+	setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reasonRecordedOperationMissing, fmt.Sprintf(
+		"%s holds no record of this backup's operation %s (%v); waiting for at most %s from %s for it to be read again",
+		target, id, err, backupOperationMissingWait, since.UTC().Format(time.RFC3339)))
 	return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
 }
 

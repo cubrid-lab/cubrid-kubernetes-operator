@@ -114,6 +114,10 @@ var errStagingInUse = errors.New("a running operation of another request owns th
 // another request body. Sending the start again never succeeds.
 var errRequestConflict = errors.New("the member holds an operation under this key for another request")
 
+// errOperationMissing is wrapped by a poll of an operation that the member
+// answered 404: it holds no record of it.
+var errOperationMissing = errors.New("the member holds no record of the operation")
+
 // errOperationRecordUnreadable is wrapped by a start that the member refused
 // because its operation store holds a record it cannot read (500,
 // OperationRecordUnreadable). Nothing was started; it is retryable once the
@@ -463,6 +467,12 @@ func (c *HTTPBackupClient) GetOperation(ctx context.Context, podName, namespace,
 		return instancemanager.Operation{}, fmt.Errorf("get operation %s on %s: %w", id, podName, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound {
+		// The route has existed since operations were recorded, so a 404
+		// says that the member holds no record of the operation.
+		return instancemanager.Operation{}, fmt.Errorf("get operation %s on %s: %w (%w)", id, podName,
+			errOperationMissing, unexpectedStatus(resp))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return instancemanager.Operation{}, fmt.Errorf("get operation %s on %s: %w", id, podName, unexpectedStatus(resp))
 	}
