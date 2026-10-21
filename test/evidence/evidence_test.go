@@ -335,6 +335,106 @@ func TestCheckpoint(t *testing.T) {
 	}
 }
 
+// junitVerdict reads junit.xml in dir: its failure and error counts and the
+// message of its run-level case, if it has one.
+func junitVerdict(t *testing.T, dir string) (failures, errs int, run string, hasRun bool) {
+	t.Helper()
+	report, err := os.ReadFile(filepath.Join(dir, "junit.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var suite struct {
+		Failures int `xml:"failures,attr"`
+		Errors   int `xml:"errors,attr"`
+		Cases    []struct {
+			Name    string `xml:"name,attr"`
+			Failure *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"failure"`
+			Error *struct {
+				Message string `xml:"message,attr"`
+			} `xml:"error"`
+		} `xml:"testcase"`
+	}
+	if err := xml.Unmarshal(report, &suite); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range suite.Cases {
+		if c.Name != "run" {
+			continue
+		}
+		hasRun = true
+		switch {
+		case c.Failure != nil:
+			run = c.Failure.Message
+		case c.Error != nil:
+			run = c.Error.Message
+		}
+	}
+	return suite.Failures, suite.Errors, run, hasRun
+}
+
+// The returned error, summary.json and the final junit.xml agree: a run that
+// did not pass its lane has a failed run-level case carrying its problems,
+// also when no scenario failed and also when it replaces a checkpoint, and a
+// passing run, permitted skips included, has none (#460).
+func TestConclude_JUnitCarriesTheLaneVerdict(t *testing.T) {
+	lane := Lane{Name: kind, Required: []Requirement{
+		{ID: s00}, {ID: s03, Variant: graceful}, {ID: s03, Variant: abrupt, NotApplicable: true},
+	}}
+	s00Pass := Scenario{ID: s00, Result: Pass, Evidence: []string{s00Record}}
+	gracefulPass := Scenario{ID: s03, Variant: graceful, Result: Pass, Evidence: []string{s00Record}}
+	abruptNA := Scenario{ID: s03, Variant: abrupt, Result: NotApplicable, Reason: "no abrupt stop in this lane"}
+	at := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name       string
+		summary    Summary
+		other      []string
+		checkpoint bool
+		want       string // a problem the run-level case must carry; empty: the run passes
+	}{
+		{"a missing required variant", Summary{Scenarios: []Scenario{s00Pass, abruptNA}}, nil, false,
+			"S03/graceful: missing"},
+		{"a required scenario that was not run", Summary{Scenarios: []Scenario{
+			s00Pass, {ID: s03, Variant: graceful, Result: NotRun, Reason: "setup failed"}, abruptNA}}, nil, false,
+			"S03/graceful: not_run"},
+		{"a problem of the run alone", Summary{Scenarios: []Scenario{s00Pass, gracefulPass, abruptNA}},
+			[]string{"S03/abrupt: no step of the suite carries the label S03-abrupt"}, false, "S03-abrupt"},
+		{"a failing conclusion that replaces a checkpoint", Summary{Scenarios: []Scenario{
+			s00Pass, {ID: s03, Variant: graceful, Result: NotRun, Reason: "setup failed"}, abruptNA}}, nil, true,
+			"S03/graceful: not_run"},
+		{"a passing run with a permitted skip", Summary{Scenarios: []Scenario{s00Pass, gracefulPass, abruptNA}}, nil,
+			true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := runDir(t, s00Record)
+			if tc.checkpoint {
+				if err := tc.summary.Checkpoint(dir, NewRedactor(), kind, at); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := tc.summary.Conclude(dir, NewRedactor(), lane, tc.other...)
+			failures, errs, run, hasRun := junitVerdict(t, dir)
+			if tc.want == "" {
+				if err != nil || hasRun || failures+errs != 0 {
+					t.Errorf("a passing run: err = %v, junit failures=%d errors=%d run case %v %q", err, failures, errs, hasRun, run)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("the run passed")
+			}
+			if !hasRun || failures+errs == 0 || !strings.Contains(run, tc.want) {
+				t.Errorf("junit.xml failures=%d errors=%d run case %v %q, want a failed run carrying %q",
+					failures, errs, hasRun, run, tc.want)
+			}
+			if strings.Contains(run, "did not finish") {
+				t.Errorf("the final report kept the checkpoint's problem: %q", run)
+			}
+		})
+	}
+}
+
 // WriteFile replaces a file in one step: a process killed while it writes
 // leaves the previous content or the new one, never a part, and no temporary
 // file remains after a write.

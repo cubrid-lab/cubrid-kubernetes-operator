@@ -518,6 +518,12 @@ One `<testsuite>` per run, one `<testcase>` per scenario and variant, named
 `blocked` is an error, not a skip, so that CI tooling does not show an
 unproven scenario as green.
 
+A concluded run that did not pass its lane has one more test case, `run`,
+with a `<failure>` that lists the run's problems, the same ones as in
+`summary.json`: a required scenario that is missing or was not run, or a
+problem of the run alone. So a report whose scenarios are all skipped still
+fails when the lane did. A passing run has no `run` case (#460).
+
 ### `history.jsonl`
 
 One JSON object per line, written by the client as it happens and never
