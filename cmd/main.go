@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -29,8 +30,10 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -66,7 +69,7 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var instanceManagerImage string
-	var operatorNamespace string
+	var operatorNamespace, watchNamespace string
 	var backupTimeout, restoreTimeout time.Duration
 	var secureMetrics bool
 	var enableHTTP2 bool
@@ -82,6 +85,8 @@ func main() {
 	flag.DurationVar(&restoreTimeout, "instance-manager-restore-timeout", 0,
 		"How long the Instance Manager lets one restore run (the download and restoredb) before it ends it, as a "+
 			"duration such as 6h. 0 keeps the manager's default of 2h. A Pod takes a changed value when it is replaced.")
+	flag.StringVar(&watchNamespace, "watch-namespace", "",
+		"Watch only this namespace; empty watches all namespaces. This limits the cache, not API authorization.")
 	flag.StringVar(&operatorNamespace, "operator-namespace", "",
 		"The namespace of the operator's Pods, which the DB Pods' NetworkPolicy admits to the Instance Manager. "+
 			"Defaults to the namespace of the operator's service account.")
@@ -111,6 +116,12 @@ func main() {
 
 	// Every line names the component that wrote it (docs/observability.md).
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)).WithValues("component", "operator"))
+
+	cacheOptions, err := watchCacheOptions(watchNamespace)
+	if err != nil {
+		setupLog.Error(err, "Invalid watch namespace", "flag", "--watch-namespace")
+		os.Exit(1)
+	}
 
 	// A negative limit would be passed to no member and so look like "unset".
 	if backupTimeout < 0 || restoreTimeout < 0 {
@@ -199,6 +210,7 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
+		Cache:                  cacheOptions,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
@@ -275,4 +287,16 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// watchCacheOptions scopes namespaced informers and cached reads. Empty keeps
+// controller-runtime's cluster-wide default; API authorization is separate.
+func watchCacheOptions(namespace string) (cache.Options, error) {
+	if namespace == "" {
+		return cache.Options{}, nil
+	}
+	if problems := validation.IsDNS1123Label(namespace); len(problems) != 0 {
+		return cache.Options{}, fmt.Errorf("invalid watch namespace %q: %s", namespace, strings.Join(problems, "; "))
+	}
+	return cache.Options{DefaultNamespaces: map[string]cache.Config{namespace: {}}}, nil
 }

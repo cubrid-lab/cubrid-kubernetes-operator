@@ -146,10 +146,15 @@ func (s *Server) stagingHeld(dir string) ([]string, error) {
 	}
 	proc := s.procRoot
 	if proc == "" {
-		proc = "/proc"
+		proc = defaultProcRoot
 	}
 	return stagingHolders(proc, procCommReader(proc), path)
 }
+
+// defaultProcRoot is the process list stagingHeld reads when the server
+// names none. The package's tests replace it, so that the processes of the
+// host they run on do not hold their staging.
+var defaultProcRoot = "/proc"
 
 // describeHolders is what a log line or a reason says about the holders of
 // a staging directory and the error of looking for them.
