@@ -30,6 +30,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,8 +61,18 @@ const (
 type Server struct {
 	cli   CLI
 	token string
-	// readyMu bounds unauthenticated readiness commands to one at a time.
-	readyMu sync.Mutex
+	// readyMu guards readyCheck, the readiness check that runs now; nil when
+	// none does. Concurrent /readyz requests share it, so unauthenticated
+	// callers run at most one status command at a time.
+	readyMu    sync.Mutex
+	readyCheck *readinessCheck
+	// afterReadinessCheck, when set, runs after a readiness check's command
+	// answered and before the answer is taken; tests use it to make the last
+	// caller leave in between.
+	afterReadinessCheck func()
+	// readinessPanicLogged is set once a panic in a readiness check was
+	// logged with its stack; later ones are known by their reason.
+	readinessPanicLogged atomic.Bool
 	// store is the durable operation store; nil disables the async operation
 	// endpoints (so unit tests can construct a store-less server).
 	store *OperationStore
@@ -83,7 +94,7 @@ type Server struct {
 	// keeps the defaults (awaitStagingWriters).
 	stagingWriterBound time.Duration
 	stagingWriterPoll  time.Duration
-	// procRoot is the process list that wait reads; empty is /proc.
+	// procRoot is the process list that wait reads; empty is defaultProcRoot.
 	procRoot string
 	// restoreRoots confine every path a restore request names (#119).
 	restoreRoots RestoreRoots
@@ -292,19 +303,121 @@ func (s *Server) livez(w http.ResponseWriter, _ *http.Request) {
 // what /v1/role gives to a caller with the token, and why a member is not
 // ready goes to the manager's log (#333).
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
-	if !s.readyMu.TryLock() {
-		s.logReadiness(r.Context(), "another readiness check is in progress")
-		writeJSON(w, http.StatusServiceUnavailable, map[string]bool{readyKey: false})
-		return
-	}
-	defer s.readyMu.Unlock()
-	reason := s.notReadyReason(r.Context())
-	s.logReadiness(r.Context(), reason)
-	if reason != "" {
+	reason, answered := s.sharedReadiness(r.Context())
+	if !answered || reason != "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]bool{readyKey: false})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{readyKey: true})
+}
+
+// readinessCheck is one run of notReadyReason, shared by every /readyz
+// request that arrives while it runs.
+type readinessCheck struct {
+	done   chan struct{}
+	cancel context.CancelFunc
+	// reason is the check's result, set before done is closed.
+	reason string
+	// waiters counts the requests that wait for the check; abandoned is set
+	// when the last of them left before it ended, and the check cancelled.
+	// Both are guarded by Server.readyMu.
+	waiters   int
+	abandoned bool
+}
+
+// sharedReadiness joins the readiness check that runs, or starts one, and
+// returns its not-ready reason. answered is false when ctx ended first. The
+// check does not end with the request that started it: it is cancelled only
+// once no request waits for it, and a request that finds an abandoned check
+// waits for its command to end before it starts the next one. No result is
+// kept past its check.
+func (s *Server) sharedReadiness(ctx context.Context) (reason string, answered bool) {
+	for {
+		s.readyMu.Lock()
+		c := s.readyCheck
+		if c != nil && c.abandoned {
+			s.readyMu.Unlock()
+			select {
+			case <-c.done:
+				continue
+			case <-ctx.Done():
+				return "", false
+			}
+		}
+		if c == nil {
+			c = s.startReadinessCheck(ctx)
+		}
+		c.waiters++
+		s.readyMu.Unlock()
+
+		select {
+		case <-c.done:
+			return c.reason, true
+		case <-ctx.Done():
+			s.readyMu.Lock()
+			c.waiters--
+			if c.waiters == 0 && s.readyCheck == c {
+				c.abandoned = true
+				c.cancel()
+			}
+			s.readyMu.Unlock()
+			return "", false
+		}
+	}
+}
+
+// startReadinessCheck runs a check apart from the request that asked for it.
+// It is called with readyMu held.
+func (s *Server) startReadinessCheck(ctx context.Context) *readinessCheck {
+	checkCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	c := &readinessCheck{done: make(chan struct{}), cancel: cancel}
+	s.readyCheck = c
+	go func() {
+		defer cancel()
+		reason := s.checkReadiness(checkCtx)
+		// Whether the command was cancelled is taken before the answer: a
+		// caller that leaves after the command answered cancels nothing that
+		// ran, although it marks the check abandoned.
+		cancelled := checkCtx.Err() != nil
+		if s.afterReadinessCheck != nil {
+			s.afterReadinessCheck()
+		}
+		s.readyMu.Lock()
+		abandoned := c.abandoned
+		c.reason = reason
+		if s.readyCheck == c {
+			s.readyCheck = nil
+		}
+		s.readyMu.Unlock()
+		// A cancelled check says nothing about the member but that no request
+		// waited for it, as when its command outlasts the kubelet's timeout.
+		// A check that ended before its cancellation keeps its own answer.
+		if abandoned && cancelled {
+			reason = readinessAbandoned
+		}
+		s.logReadiness(checkCtx, reason)
+		close(c.done)
+	}()
+	return c
+}
+
+// readinessAbandoned is the logged reason of a check that every request left
+// before it ended.
+const readinessAbandoned = "no request waited for the readiness check to end; it was cancelled"
+
+// checkReadiness is notReadyReason run apart from any request: a panic in it
+// answers not ready instead of ending the manager.
+func (s *Server) checkReadiness(ctx context.Context) (reason string) {
+	defer func() {
+		if r := recover(); r != nil {
+			reason = fmt.Sprintf("the readiness check failed: %v", r)
+			if !s.readinessPanicLogged.Swap(true) {
+				s.log().Error("Recovered a panic in the readiness check", "panic", fmt.Sprint(r),
+					"stack", string(debug.Stack()))
+			}
+		}
+	}()
+	return s.notReadyReason(ctx)
 }
 
 // notReadyReason says why the member is not ready; it is empty for a member
