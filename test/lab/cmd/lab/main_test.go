@@ -142,7 +142,7 @@ func TestASignalReachesWhatOutlivesTheCommand(t *testing.T) {
 	// The outer shell has no trap and ends on the first SIGTERM; its child
 	// ends on the second only.
 	child := `trap 'n=$((n+1)); echo $n >> "$1"; [ $n -ge 2 ] && exit 0' TERM
-while :; do sleep 0.01; done`
+: > "$1.ready"; while :; do sleep 0.01; done`
 	signals := make(chan os.Signal, 1)
 	r := newRelay(signals)
 	done := make(chan int, 1)
@@ -151,7 +151,7 @@ while :; do sleep 0.01; done`
 			os.Environ())
 	}()
 	waitUntil(t, func() bool { _, err := os.Stat(outer); return err == nil })
-	time.Sleep(100 * time.Millisecond) // let the outer shell start its child
+	waitUntil(t, func() bool { _, err := os.Stat(log + ".ready"); return err == nil })
 	signals <- syscall.SIGTERM
 	got, _ := os.ReadFile(outer)
 	pid, err := strconv.Atoi(strings.TrimSpace(string(got)))
@@ -161,8 +161,11 @@ while :; do sleep 0.01; done`
 	// The outer shell leads the command's process group: whatever the test
 	// ends with, nothing of it is left running.
 	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
-	// Once the outer shell has been waited for, only its child is left.
+	// Once the outer shell has been waited for, only its child is left. The
+	// child must have handled the first signal: a shell takes a signal that
+	// arrives before its trap ran for the same one as that one.
 	waitUntil(t, func() bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) })
+	waitUntil(t, func() bool { got, _ := os.ReadFile(log); return string(got) == "1\n" })
 	signals <- syscall.SIGTERM
 	select {
 	case code := <-done:
@@ -170,7 +173,8 @@ while :; do sleep 0.01; done`
 			t.Fatalf("run() = %d, want the outer shell's %d", code, 128+int(syscall.SIGTERM))
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("the second signal did not reach the child left after the command ended")
+		got, _ := os.ReadFile(log)
+		t.Fatalf("the second signal did not reach the child left after the command ended; the child logged %q", got)
 	}
 }
 
