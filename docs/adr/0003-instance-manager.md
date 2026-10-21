@@ -93,11 +93,14 @@ Kubelet endpoints (unauthenticated — probes are awkward with strong auth):
   reports it in a confirmed role (master, slave or replica). A requested
   stop or a running operation does not turn it false by itself.
 
-Only one `/readyz` request at a time runs a local status command. A concurrent
-request is answered immediately with 503 and `{"ready":false}`, without
-starting or waiting for another command. Once the active request finishes or
-is cancelled, the next request reads the engine again; no earlier result is
-cached. `/livez` stays independent of the readiness check.
+Only one local status command runs for `/readyz` at a time. A request that
+arrives while a check runs waits for that check and gets its answer, so a
+caller beside the kubelet never turns a healthy member's probe into a 503
+(#494). A request that leaves does not cancel the check while another request
+still waits for it; the check is cancelled once none does, and the next
+request starts a new one after that command has ended. No result is kept past
+its check: a request that arrives after a check ended reads the engine again.
+`/livez` stays independent of the readiness check.
 
 Because anyone who reaches the port can ask them, their bodies carry nothing
 but the answer: `{"status":"ok"}` for `/livez`, `{"ready":true}` or
@@ -340,7 +343,14 @@ persists operation records on the DB PVC (e.g.
 `$CUBRID_DATABASES/.instance-manager/operations/`). On startup it
 reconstructs state from durable facts (CUBRID process state + command
 output + config + backup manifests + operation/shutdown markers), never
-RAM. No durable shutdown marker is written (step 2 of the shutdown model);
+RAM. Operation records, `databases.txt` and ownership markers are each
+replaced whole: written to a temporary file beside them, synced, renamed over
+the earlier file, and their directory synced, so that a crash leaves either
+the earlier content or the new one, never a truncated file that drops another
+database's registration or an unreadable marker (#298). The manager's own
+writes of `databases.txt` run one at a time, and undoing a registration
+removes only its own line. No durable shutdown marker is written (step 2 of
+the shutdown model);
 the stop record of the shutdown command is container-local and does not
 outlive the container. Long operations return `202 Accepted` + operation ID; the operator
 polls `GET /v1/operations/{id}` and never assumes completion from an HTTP
