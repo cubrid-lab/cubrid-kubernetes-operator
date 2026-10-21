@@ -800,3 +800,42 @@ func TestServer_Restore_StopsBeforeUnrecordedAdoption(t *testing.T) {
 		t.Errorf("previous restored record changed: %+v, %v; want %+v", original, err, previous)
 	}
 }
+
+// While the end of an operation cannot be written to the store, the member
+// answers that it is not ready, with a reason of its own in the log; once
+// the store takes writes again, the next check writes the end and the member
+// is ready (#473).
+func TestServer_Readyz_NotReadyWhileAnEndCannotBeWritten(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewOperationStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	h := NewServer(fakeCLI{out: masterOut}, "tok").WithOperationStore(store).
+		WithLogger(slog.New(slog.NewJSONHandler(&logged, nil))).Handler()
+	op, _, err := store.FindOrCreate(OpBackup, "k", "h", "appdb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := doReq(t, h, "/readyz", "", testRemoteAddr); rr.Code != http.StatusOK {
+		t.Fatalf("/readyz of a master with a working store = %d, want 200", rr.Code)
+	}
+
+	restore := unwritable(t, dir)
+	_ = store.Settle(op.ID, func(o *Operation) { o.State = OpCompleted })
+	if rr := doReq(t, h, "/readyz", "", testRemoteAddr); rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("/readyz while an end is unwritten = %d, want 503", rr.Code)
+	}
+	if got := logged.String(); !strings.Contains(got, "OperationStoreWriteFailed") || !strings.Contains(got, op.ID) {
+		t.Errorf("the log does not name the unwritten end: %s", got)
+	}
+
+	restore()
+	if rr := doReq(t, h, "/readyz", "", testRemoteAddr); rr.Code != http.StatusOK {
+		t.Errorf("/readyz once the store takes writes again = %d, want 200", rr.Code)
+	}
+	if got, err := store.Get(op.ID); err != nil || got.State != OpCompleted {
+		t.Errorf("the end was not written by the readiness check: %+v, %v", got, err)
+	}
+}

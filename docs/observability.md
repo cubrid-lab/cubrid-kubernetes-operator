@@ -378,7 +378,11 @@ that outlasts the kubelet's timeout, is cancelled and logged with the reason
 An operation record that could not be written is logged as an error
 with `event` `operation_store_write_failed`, the `operationID` and the state
 that is therefore not on disk; the retries of an operation's end that could
-not be written are logged at debug level. An operation record that cannot be
+not be written are logged at debug level. While such an end stays unwritten
+the member is not ready: `/readyz` answers 503 and the `not_ready` reason
+starts with `OperationStoreWriteFailed` and names the operation (#473). Free
+or repair the volume of `$IM_OPERATIONS_DIR`; the next readiness check writes
+the end and the member is ready again. An operation record that cannot be
 read or decoded is logged once as an error with `event`
 `operation_record_unreadable`, its `operationID` and the error, also when it
 was found at start; while it stays unreadable the Instance Manager starts no

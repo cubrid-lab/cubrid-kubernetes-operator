@@ -325,6 +325,22 @@ func (s *OperationStore) settleLocked(id string, retry bool) error {
 	return err
 }
 
+// UnwrittenEnds tries again to write every end kept in memory (Settle) and
+// returns the operations whose end still is not on record, sorted.
+func (s *OperationStore) UnwrittenEnds() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range s.unsettled {
+		_ = s.settleLocked(id, true)
+	}
+	ids := make([]string, 0, len(s.unsettled))
+	for id := range s.unsettled {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
 // errUnwrittenEnd is the error for operation id while its end is kept in
 // memory only (Settle); cause is the failed write, when there is one.
 func errUnwrittenEnd(id string, cause error) error {
