@@ -90,7 +90,7 @@ POC history, not live support certification.
 | Network access | Per-cluster ingress NetworkPolicies for the DB and Broker Pods (generated objects checked in envtest) | S14 on Kind checks that the DB Pods drop connections to ports 9090 and 1523 from another namespace under Kind's network plugin, and the HA scenarios run with the policies in place. Not run under the reference lab's network plugin |
 | Backup and restore | CubridBackup API/controller (object storage is the only destination with an execution path), Instance Manager artifact/restore paths, `restoreslave` when a member is seeded from a running master (POC-14), and a restore that fails while heartbeat runs without a confirmed role (#456) (unit/envtest); a member is not ready while its operation store keeps an end it could not write (#473: unit tests with an unwritable store directory; not run with a full volume on a cluster); a backup whose recorded operation its target no longer holds a record of ends `Failed` (`RecordedOperationLost`) after 30 minutes, bounded across operator restarts and never started again (#457: envtest with a client that answers the missing record; no operation store has been lost on a real member); a backup is taken on a standby only on fresh evidence that it applies the resolved primary's log without failures or a stall past the window, the one with the fewest pages waiting first (#291: unit/envtest; no long transaction or stuck applier has been produced on an engine for this choice); a restore refuses, before any download, registration or command, an artifact that is not a full backup, and a seed restore one not taken on the named master of the same cluster (#276: unit/envtest with fixture manifests; no real artifact of another source has been restored); `databases.txt` and ownership markers are replaced whole with file and directory syncs, and the manager's writes of `databases.txt` are serialized (#298: a child process killed by the kernel inside the write leaves the earlier content, unit tests); operation records, already renamed into place, are also directory-synced, and a new record whose sync failed is removed (#298: unit test with an injected sync failure; no power loss has been produced); standalone restore requests for another configured database are refused before work, and completed-restore resume keeps its marker and data on that configuration mismatch (#301: unit tests; not run on a real database); a failed or cancelled backup that removes its staging only once no process holds a file in it, and keeps it unused when one still does after 30 s (#469: unit tests with a holder process outside the utility's group; not run against a real `cub_server`); manual engine POCs. The HA bootstrap's seeding runs `backupdb`, the upload and `restoreslave` on Kind against an S3 mock (see the HA row); no e2e test creates a CubridBackup or a recovery bootstrap | Real workflow, interrupted recovery and dataset checks require #88 and #119–#121 |
 | Hardening | Readiness probes run at most one status command at a time, and concurrent requests share its answer (#301, #494: unit and race-detector tests, not exercised with a real kubelet on a cluster); a manager started with `--watch-namespace` caches and reconciles only that namespace (#498: envtest with a namespace-Role-only identity, primary and Secret watches; no live candidate rollout on the VM lab, and baseline/candidate orchestration and CRD compatibility are not covered); the manager caches only Secrets and Pods with the operator's managed-by label and refuses to adopt an unlabeled `<cluster>-im-token` Secret (#282: envtest; memory use is unmeasured, and caches of the other owned kinds and the unused permissions are not yet narrowed); update sequencing, auth (a generated Instance Manager token per cluster, #270, and its rotation with an operator-side overlap that also moves clusters off the shared token of older versions, #324, and the report of a member that refuses the token apart from an unreachable one, #325: unit/envtest), metrics and Events code | Placement/retention/PDB, security and operational accuracy require #90–#92; the token rotation and the move off a shared token are an e2e scenario on Kind (S14 `token-rotation`, `token-migration`, #343) and have not run in the VM lab, and a refused token has not been reported by real members; automatic Pod replacement for updates is switched off until its gates exist (#96, #197, #198): the manager never sets `AutomaticReplacement`, nothing sets the `FencingRequired` Condition that the update planner checks, and no PodDisruptionBudget is created or read (code inspection of `cmd/main.go` and `internal/controller/update.go`) |
-| Release | Lint, unit/envtest and manager E2E workflows; `make test-lab`, an explicit lab entry point that runs one command while it holds the `cubrid-lab/campaign` Lease, on a pinned kubeconfig and context, and releases it only with uid and resourceVersion preconditions once the command's process group is empty (#441: unit tests with fake kubectl and a throwaway API server; not yet run against the lab) | Real-DB lane, lab gates, candidate artifacts and runbook reproduction require #122–#127; the demo (#128) is a post-v0.1 follow-up, not a release gate |
+| Release | Lint, unit/envtest and manager E2E workflows; `make test-lab`, an explicit lab entry point that runs one command while it holds the `cubrid-lab/campaign` Lease, on a pinned kubeconfig and context, and releases it only with uid and resourceVersion preconditions once the command's process group is empty (#441: unit tests with fake kubectl and a throwaway API server; on the VM lab it held the Lease for one LAB00 run and for one session of manual Pod replacements on 2026-10-21, and released it, [record](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210); Lease renewal and repeated signals remain #525) | Real-DB lane, lab gates, candidate artifacts and runbook reproduction require #122–#127; the demo (#128) is a post-v0.1 follow-up, not a release gate |
 
 The installed-Operator connection command (#489, under #122) creates a fresh
 namespace, checks declared and actual runtime identities, commits/reads SQL,
@@ -120,6 +120,39 @@ new-node registry access remain under #80/#122. These connection results are
 separate from S00 installation or S00–S15 qualification, and do not establish
 CSI or VM-fault behavior. Namespace cleanup does not certify deletion of
 retained backend volumes.
+
+A [manual VM-lab run on 2026-10-21](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210)
+moved the lab to main `9c6ae9c1ef97eae29c13dff7a272d1082715c9e2` through the
+private GitOps repository (images from
+[run 39623042119](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/39623042119),
+pulled by the nodes from the now public packages), on k3s `v1.36.5+k3s1`,
+CUBRID `11.4.6.1963` and node-local `local-path` storage (not CSI). One run
+each, all while `make test-lab` held the Lease:
+
+- LAB00 passed (`passed=true`, `problems=[]`, `cleanupSucceeded=true`).
+- The upgraded manager created the standalone Broker endpoints of #286 on an
+  existing cluster; a driver client in the cluster's namespace committed
+  through `-rw` and read through `-ro`. A client in another namespace was
+  refused (connection refused) by the `<cluster>-broker` NetworkPolicy, the
+  documented default, so the lab's network plugin enforces it. The `-ro`
+  write refusal of S00 was not checked there.
+- Accepting a new Instance Manager image rolled both clusters' Brokers at
+  once; the DB Pods moved only when deleted by hand (#96). Deleting a slave
+  of the three-member HA cluster turned `PrimaryResolved` to
+  `PrimaryObservationIncomplete` for about 17 s, and back.
+- Deleting the master with a client committing every 0.5 s through `-rw`:
+  CUBRID promoted another member, the client saw two failed commits in about
+  1.1 s, and all 438 acknowledged rows were on all three members, whose rows
+  were identical; neither failed row was anywhere. The Operator claimed
+  `RoutingReady` for the new master 33 s after the deletion, while commits
+  through `-rw` were already acknowledged (quarantine reported, not
+  enforced, as in S03; #113).
+- A full backup with `PreferStandby` completed on a slave afterwards; it was
+  not restored.
+
+These are single manual runs, not scenario passes or recovery-time
+measurements, and they include no VM power loss, network fault, CSI
+storage or restore.
 
 Ordinary backup uploads (#337) use a fresh artifact directory for each upload,
 including a retry with a reset operation store; the returned manifest URI is
