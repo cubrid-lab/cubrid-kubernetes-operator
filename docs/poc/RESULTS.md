@@ -2595,3 +2595,109 @@ described above; the exact script text is not recorded. How the two
 from the Operator's Broker configuration code or written by hand to match it)
 is not recorded either; only the settings listed under **Setup** are known.
 A rerun has to write both again.
+
+## POC-34 — how long `cubrid applyinfo` takes on a slave under write load, against the Instance Manager's 2 s budget (ADR-0006, #278) — **observation: at most 807 ms under load; the budget was exceeded only right after a member first became Ready**
+
+**Question.** The role answer of the Instance Manager reads the slave's
+replication with `cubrid applyinfo -L <copied log of the master> -a <db>`
+and gives it 2 s (`replicationBudget`) within the 4 s role answer
+(`roleBudget`, `internal/instancemanager/server.go`); a read that does not
+finish leaves the replication unknown (#351). Is 2 s enough for a busy but
+healthy slave on real disks?
+
+**Setup.** VM lab (`vm-lab`): k3s `v1.36.5+k3s1`, four VMs with 2 vCPUs
+each, node-local `local-path` volumes on the VMs' root disks (not CSI).
+Operator `main` `9c6ae9c`, Instance Manager image
+`instance-manager@sha256:b49a6a92e48478bcf0001fe25061014936e286a4ba039ba145ed7e5c85f20303`,
+engine `11.4.6.1963`. A dedicated three-member HA `CubridCluster` (`lat`,
+`appdb`, 4Gi volumes) was created for the run in the lab's shared
+namespace and removed afterwards with its PVCs; the lab Lease was held
+throughout. The scheduler put the master `lat-0` and the slave `lat-2` on
+the same VM, and `lat-1` on another: `lat-2` shares the master's disk and
+CPUs. The clients ran `pycubrid` (the version pip installed at the time, not
+recorded) in a Pod of the same namespace, through the `lat-rw` Broker. The
+measurement ran the same command as the Instance Manager inside each slave's
+`cubrid` container, every 0.5 s, timing it with `date +%s%N`:
+
+```sh
+# N samples; MASTER=lat-0
+L=/var/lib/cubrid/databases/appdb_${MASTER}
+i=0; while [ $i -lt $N ]; do
+  t0=$(date +%s%N); out=$(timeout 20 cubrid applyinfo -L $L -a appdb 2>&1); rc=$?; t1=$(date +%s%N)
+  echo "$(date -u +%T) ms=$(( (t1-t0)/1000000 )) rc=$rc $(echo "$out" | grep 'Delayed log page' | awk -F: '{print "pages="$2}' | tr -d ' ')"
+  i=$((i+1)); sleep 0.5
+done
+```
+
+The time includes `fork`/`exec` of the `cubrid` wrapper and of `cub_admin`,
+as the Instance Manager's call does; it does not include the HTTP request.
+
+**Loads.**
+
+1. *Idle*: 60 samples on `lat-1` with no client.
+2. *Insert*: a table `big (id int auto_increment primary key, pad
+   varchar(1000))`; two clients inserting single 1000-byte rows, committing
+   every 500, and one client running `insert into big(pad) select pad from big
+   limit 50000` with a commit after each, until the table passed 600 000
+   rows. It reached 627 000 rows (about 630 MB of row data) in 65 s
+   (23:44:35–23:45:40 UTC on 2026-10-21); each bulk statement took 4–6 s
+   once the table was large. 380 samples per slave, 23:44:38–23:48:25,
+   covering the load and the backlog after it.
+3. *Update*: two clients, each updating 10 000 rows' 1000-byte `pad` in one
+   statement and committing, then waiting for the rest of 4 s, for 180 s:
+   89 statements, about 890 000 row updates (23:55:49–23:58:48). 480
+   samples per slave, 23:55:30–00:00:22.
+
+**Results** (milliseconds; every run exited 0 and none was cut by the 20 s
+`timeout`):
+
+| Load, slave | n | p50 | p95 | p99 | max | > 1000 | > 2000 |
+|---|---|---|---|---|---|---|---|
+| Idle, `lat-1` | 60 | 54 | 81 | 112 | 116 | 0 | 0 |
+| Insert, `lat-1` (other VM) | 380 | 62 | 131 | 178 | 251 | 0 | 0 |
+| Insert, `lat-2` (master's VM) | 380 | 85 | 259 | 435 | 807 | 0 | 0 |
+| Update, `lat-1` (other VM) | 480 | 57 | 94 | 152 | 285 | 0 | 0 |
+| Update, `lat-2` (master's VM) | 480 | 70 | 143 | 207 | 421 | 0 | 0 |
+
+The insert load left the slaves behind: about half a minute after it ended,
+`applyinfo` reported 13 226 (`lat-1`) and 19 269 (`lat-2`) delayed log
+pages, with `Fail count : 0`. `lat-1` caught up about 1 minute after the load
+ended and `lat-2` about 2 minutes after it. During the update load the delay
+peaked at 426 pages on both slaves. Throughout both loads, the Operator's
+`ReplicationHealthy` was `True/AppliersProgressing` and `Ready`, `HAReady`
+and `PrimaryResolved` stayed `True` (conditions sampled every 2 s). A slave
+that is far behind but applying is reported as progressing, as designed; the
+delay itself is not part of the Condition.
+
+**The budget was hit at start.** The Instance Manager's own log shows one
+`applyinfo` cut at the budget on each slave, 3 s (`lat-1`) and 6 s
+(`lat-2`) after the member first became Ready during the cluster's
+bootstrap, before any client load: `Command failed`, `signal: killed`,
+`durationMs` 2109 and 3320. No later call failed (a failed call is logged
+at warning level; a successful read only at debug level). So the first read after a member starts its
+applier can take longer than 2 s, and that observation reports the
+replication as unknown once. The 3320 ms of the second shows that the
+command returned 1.3 s after its 2 s deadline: `applyinfo` is not one of the
+utilities run in a process group of their own (#277), so the cancellation
+sends `SIGKILL` to the `cubrid` wrapper, and the call returns when that
+process has been reaped. No `applyinfo` or `cub_admin applyinfo` process was
+found running on either slave afterwards (`/proc` listing; only the
+`copylogdb` and `applylogdb` of each peer).
+
+**Consequence (feeds #278).** On these VMs, 2 s leaves more than twice the
+largest observed read under both loads, including on a slave that shares
+the master's disk; no tuning or cached reading is needed for a busy but
+healthy slave. The budget is reached right after a member starts, where an
+`Unknown` replication for one observation is the documented behavior
+(`docs/observability.md`). A read that is killed can return later than the
+budget, since the deadline cannot shorten the reaping of a killed process,
+so a role answer can take longer than its 4 s budget. The Operator gives up
+on a role answer after 5 s (`NewHTTPRoleProber`); whether the role answers
+around these two reads were late was not recorded.
+
+**Limits:** one run of each load on one lab and one engine; 2-vCPU VMs with
+node-local disks, not CSI or networked storage; no disk saturated to its
+limit (the VMs kept 9 GB or more free), no CPU limits on the members, no
+long-running open transaction (#249), no stalled applier. Times on a
+different disk or with more data can differ. The seed backup the cluster
+wrote to the lab's object store under `cubrid-test/lat-278` was not removed.
