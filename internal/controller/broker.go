@@ -102,9 +102,10 @@ func (r *CubridClusterReconciler) reconcileBrokerTier(ctx context.Context, clust
 
 // brokerTier reconciles the Broker tier with the image the DB Pods run and
 // reports whether the caller is to set the conditions from what it returns.
-// A conflicting write that is still young leaves the conditions as they are;
-// the next reconcile writes again. Any other failure marks the Brokers
-// unobserved (res is nil for a standalone cluster).
+// A conflicting write that is still young, or a write the API server refused
+// because the namespace is being deleted, leaves the conditions as they are;
+// after a conflict the next reconcile writes again. Any other failure marks
+// the Brokers unobserved (res is nil for a standalone cluster).
 func (r *CubridClusterReconciler) brokerTier(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	sts *appsv1.StatefulSet, res *PrimaryResolution) (map[string]int32, bool) {
 	available, err := r.reconcileBrokerTier(ctx, cluster, r.imageToRun(cluster, sts))
@@ -112,6 +113,8 @@ func (r *CubridClusterReconciler) brokerTier(ctx context.Context, cluster *datab
 	switch {
 	case young:
 		logf.FromContext(ctx).V(1).Info("Retrying broker tier after a conflicting write")
+	case namespaceTerminating(err):
+		logf.FromContext(ctx).V(1).Info("Skipped broker tier because the namespace is being deleted")
 	case err != nil:
 		logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
 		setBrokerConditionsUnobserved(cluster, res, err)

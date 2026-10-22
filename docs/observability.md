@@ -97,6 +97,10 @@ retried, changes no Condition, records no Event and is not logged as an
 error. Only when such writes have kept conflicting for more than 30 seconds,
 without one that succeeded, is the conflict reported like any other failed
 write, because another writer then keeps the Operator's change from arriving.
+A write the API server refuses because the cluster's namespace is being
+deleted is no failure either: the reconcile ends without changing a
+Condition, recording an Event, logging an error or being retried, and a
+status write that finds the cluster deleted is logged only at verbosity 1.
 The same holds for `BrokerReconcileFailed`. In a reconcile that could not reconcile the Brokers
 they were not observed, so what an earlier reconcile saw is not kept:
 `WriteEndpointReady` and `ReadEndpointReady` are `Unknown`, and so is
