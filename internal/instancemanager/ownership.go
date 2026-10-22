@@ -205,6 +205,13 @@ func (s *Server) reclaimIncomplete(database string) error {
 	}
 	defer func() { _ = root.Close() }()
 
+	// What an earlier reclaim moved aside and did not finish removing goes
+	// first.
+	tomb := reclaimDir(database)
+	if err := removeTree(root, tomb); err != nil {
+		return fmt.Errorf("remove %s: %w", filepath.Join(target, tomb), err)
+	}
+
 	data, err := root.ReadFile(markerPath(database))
 	if os.IsNotExist(err) {
 		return nil
@@ -236,11 +243,34 @@ func (s *Server) reclaimIncomplete(database string) error {
 		return fmt.Errorf("%s belongs to operation %s, which is %s; refusing to touch it", where, id, op.State)
 	}
 
-	if err := root.RemoveAll(database); err != nil {
+	// The registration goes first, while the marker still proves whose the
+	// directory is: after a crash here the next attempt finds the marker and
+	// reclaims again. The directory then leaves the database's name in one
+	// rename, so that a removal stopped partway never leaves a registered or
+	// unmarked directory under that name, only a reclaim directory that the
+	// next attempt removes.
+	if err := unregisterDatabase(root, database); err != nil {
+		return fmt.Errorf("unregister the unfinished %s: %w", where, err)
+	}
+	if err := root.Rename(database, tomb); err != nil {
+		return fmt.Errorf("move the unfinished %s aside: %w", where, err)
+	}
+	if err := syncDir(root, "."); err != nil {
+		return fmt.Errorf("move the unfinished %s aside: %w", where, err)
+	}
+	if err := removeTree(root, tomb); err != nil {
 		return fmt.Errorf("remove the unfinished %s: %w", where, err)
 	}
-	return unregisterDatabase(root, database)
+	return nil
 }
+
+// reclaimDir is where reclaimIncomplete moves a database directory before it
+// removes it. The leading dot keeps it apart from every database name.
+func reclaimDir(database string) string { return ".reclaim-" + database }
+
+// removeTree removes a directory and everything in it; tests replace it to
+// stop a removal partway, as a crash would.
+var removeTree = func(root *os.Root, name string) error { return root.RemoveAll(name) }
 
 // adoptRestored takes over, for the restore operation id, the data a failed
 // restore of the same request left after restoredb had succeeded: id records
