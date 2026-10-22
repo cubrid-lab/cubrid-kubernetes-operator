@@ -70,6 +70,7 @@ The Makefile uses Docker when it is installed and Podman otherwise
 make build        # compile
 make test         # unit + envtest (downloads envtest binaries on first run)
 make lint         # golangci-lint
+make security     # govulncheck at the version pinned in the Makefile (reachable vulnerabilities)
 make manifests generate   # regenerate CRDs/RBAC/DeepCopy after API changes
 make verify       # fail if generated files, formatting or go.mod/go.sum are not committed (CI runs this)
 make run          # run the operator against your current kubecontext
