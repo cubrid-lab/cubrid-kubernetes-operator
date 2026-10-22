@@ -58,10 +58,11 @@ func replaceFile(root *os.Root, name string, data []byte) error {
 	return syncDir(root, filepath.Dir(name))
 }
 
-// databasesTxtMu serializes the manager's read-modify-writes of
-// databases.txt: a restore and an HA bootstrap of different databases may
-// run at once. It does not exclude `cubrid createdb` of an HA bootstrap,
-// which registers its database in the same file itself.
+// databasesTxtMu serializes the writers of databases.txt in this process: a
+// restore and an HA bootstrap of different databases may run at once. It is
+// also held while `cubrid createdb` of an HA bootstrap runs, which registers
+// its database in the same file itself. It does not exclude a process other
+// than the manager, such as the image's entrypoint before the manager starts.
 var databasesTxtMu sync.Mutex
 
 // removeFile removes name below root, if it exists, and syncs its directory,
