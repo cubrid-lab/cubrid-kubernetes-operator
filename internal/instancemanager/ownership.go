@@ -214,6 +214,8 @@ func (s *Server) reclaimIncomplete(database string) error {
 		}
 		s.log().Info("Removed a database directory an earlier reclaim moved aside",
 			"event", "reclaim_leftover_removed", "path", filepath.Join(target, tomb))
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("check %s: %w", filepath.Join(target, tomb), err)
 	}
 
 	data, err := root.ReadFile(markerPath(database))
