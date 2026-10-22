@@ -34,14 +34,28 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Running Tests
-        run: |
-          go mod tidy
-          make test
-
-      # make test regenerates CRDs, RBAC and DeepCopy and runs go fmt, and the
-      # step above runs go mod tidy, all in this workspace. Without this check a
-      # PR with stale generated files or an untidy go.mod passed, because CI
-      # quietly fixed its own copy (#104).
-      - name: Verify generated files and go.mod are committed
+      # make verify runs check-generated, format-check, vet, lint and test.
+      # None of them writes the workspace: check-generated regenerates CRDs,
+      # RBAC and DeepCopy, runs go fmt and go mod tidy in a temporary copy, and
+      # fails if the result differs from what is committed (#104, #535).
+      - name: Verify generated files, formatting, vet, lint and tests
         run: make verify
+
+      # A stale generated file must fail check-generated and leave the
+      # workspace as it was.
+      - name: Check that check-generated reports a stale CRD and writes nothing
+        run: |
+          f=api/v1alpha1/cubridcluster_types.go
+          sed -i '0,/^type CubridClusterSpec struct {/s//&\n\tStaleCheck *string `json:"staleCheck,omitempty"`/' "$f"
+          git add "$f"
+          before="$(git status --porcelain; git diff; git diff --cached)"
+          if make check-generated; then
+            echo "error: check-generated passed although the CRD and DeepCopy are stale." >&2
+            exit 1
+          fi
+          after="$(git status --porcelain; git diff; git diff --cached)"
+          if [ "$after" != "$before" ]; then
+            git status --porcelain
+            echo "error: check-generated changed the workspace." >&2
+            exit 1
+          fi
