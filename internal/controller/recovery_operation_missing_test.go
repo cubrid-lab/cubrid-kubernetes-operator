@@ -78,7 +78,9 @@ var _ = Describe("Recovery whose recorded restore operation goes missing", func(
 		c.Spec.ObjectStorage = haObjectStorage()
 		Expect(k8sClient.Create(ctx, c)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
-		now := time.Now()
+		// Whole seconds, as the stored time keeps them, so the bound can be
+		// checked to the second.
+		now := time.Now().Truncate(time.Second)
 		f := fixture{key: types.NamespacedName{Name: name, Namespace: c.Namespace}, restore: &fakeRestoreClient{},
 			now: &now, target: name + "-0"}
 		_, got := reconcileOnce(f)
@@ -113,8 +115,14 @@ var _ = Describe("Recovery whose recorded restore operation goes missing", func(
 		Expect(got.Status.Bootstrap.OperationMissingSince.Time).To(BeTemporally("==", missingSince))
 		Expect(bootstrapReady(got).Reason).To(Equal(reasonRecordedOperationMissing))
 
+		By("still waiting when exactly the bound has passed")
+		advance(f, time.Minute)
+		_, got = reconcileOnce(f)
+		Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapRestoring))
+		Expect(bootstrapReady(got).Reason).To(Equal(reasonRecordedOperationMissing))
+
 		By("ending the recovery once the bound has passed")
-		advance(f, 2*time.Minute)
+		advance(f, time.Minute)
 		res, got = reconcileOnce(f)
 		Expect(res.RequeueAfter).To(BeZero())
 		Expect(got.Status.Bootstrap.Phase).To(Equal(databasev1alpha1.BootstrapFailed))
