@@ -103,6 +103,15 @@ they were not observed, so what an earlier reconcile saw is not kept:
 `RoutingReady` unless the primary of an HA cluster is unresolved, which is
 reported either way.
 
+A write the API server refuses because the cluster's namespace is being
+deleted is no failure (#526). When it is one of the cluster's own objects,
+the reconcile ends there: no Condition is changed, no Event is recorded, no
+error is logged and nothing is retried, so the status is not refreshed while
+the namespace is being deleted. When it is a Broker object, the Broker
+conditions are left as they were and the rest of the status is written as
+usual. A status write that finds the cluster deleted is logged only at
+verbosity 1.
+
 A reconcile of an HA cluster that ends before the roles are observed, after
 such a failure or while a recovery bootstrap runs, does not keep what an
 earlier reconcile observed: `status.currentPrimary` is cleared, and

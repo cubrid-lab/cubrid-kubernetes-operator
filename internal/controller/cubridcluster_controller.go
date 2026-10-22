@@ -276,7 +276,24 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 		// The metrics say what the stored status says.
 		publishClusterMetrics(cluster, readyReplicas)
 	}
+	if apierrors.IsNotFound(err) {
+		// The cluster was deleted during the reconcile: there is nothing to
+		// write the status to, and nothing to retry. Any other NotFound, such
+		// as a CRD without the status subresource, stays an error.
+		gone := r.Get(ctx, client.ObjectKeyFromObject(cluster), &databasev1alpha1.CubridCluster{})
+		if apierrors.IsNotFound(gone) {
+			logf.FromContext(ctx).V(1).Info("Skipped status write of a deleted CubridCluster")
+			return nil
+		}
+	}
 	return err
+}
+
+// namespaceTerminating reports whether the API server refused a write because
+// the namespace is being deleted. The namespace's objects go with it, so the
+// refusal is no failure of the cluster.
+func namespaceTerminating(err error) bool {
+	return apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause)
 }
 
 func (r *CubridClusterReconciler) now() time.Time {
@@ -1150,12 +1167,19 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 }
 
 // failed records a failure condition and returns the error for requeue. A
-// conflict means the object was read before someone else changed it, which
-// says nothing about the cluster: it is retried with the conditions and
+// write refused because the namespace is being deleted ends the reconcile
+// with no Condition, Event or requeue. A conflict means the object was read
+// before someone else changed it, which says nothing about the cluster: it is retried with the conditions and
 // Events left as they are, unless the writes have kept conflicting for longer
 // than conflictPatience.
 func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev1alpha1.CubridCluster, reason string, cause error) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	if namespaceTerminating(cause) {
+		// Nothing to retry and nothing to report: the cluster goes with its
+		// namespace.
+		log.V(1).Info("Stopped reconcile because the namespace is being deleted", "reason", reason)
+		return ctrl.Result{}, nil
+	}
 	young, cause := r.lastingConflict(cluster, childWrites, cause)
 	if young {
 		log.V(1).Info("Retrying after a conflicting write", "reason", reason)
