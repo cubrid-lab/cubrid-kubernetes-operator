@@ -102,17 +102,28 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
-	By("checking that the suite's Services left room in the Service IP range")
-	// envtest runs no garbage collector, so every Service the specs create
-	// keeps its ClusterIP until the suite ends. A range that fills up fails
-	// whichever spec comes next, in random order (#530).
-	Expect(clusterIPServices()).To(BeNumerically("<", serviceIPCapacity/2),
-		"ClusterIP Services use more than half of the %d addresses of %s", serviceIPCapacity, serviceIPRange)
+	// The count is taken before the environment stops and checked after, so
+	// a full range still tears the environment down.
+	services, listErr := -1, error(nil)
+	if k8sClient != nil {
+		services, listErr = clusterIPServices(ctx)
+	}
 
 	By("tearing down the test environment")
 	cancel()
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
+
+	if k8sClient == nil {
+		return
+	}
+	By("checking that the suite's Services left room in the Service IP range")
+	// envtest runs no garbage collector, so every Service the specs create
+	// keeps its ClusterIP until the suite ends. A range that fills up fails
+	// whichever spec comes next, in random order (#530).
+	Expect(listErr).NotTo(HaveOccurred())
+	Expect(services).To(BeNumerically("<", serviceIPCapacity/2),
+		"ClusterIP Services use more than half of the %d addresses of %s", serviceIPCapacity, serviceIPRange)
 })
 
 // serviceIPRange is the API server's Service range, and serviceIPCapacity the
@@ -124,16 +135,18 @@ const (
 )
 
 // clusterIPServices counts the Services that hold a ClusterIP.
-func clusterIPServices() int {
+func clusterIPServices(ctx context.Context) (int, error) {
 	var services corev1.ServiceList
-	Expect(k8sClient.List(context.Background(), &services)).To(Succeed())
+	if err := k8sClient.List(ctx, &services); err != nil {
+		return 0, err
+	}
 	n := 0
 	for _, s := range services.Items {
 		if s.Spec.ClusterIP != "" && s.Spec.ClusterIP != corev1.ClusterIPNone {
 			n++
 		}
 	}
-	return n
+	return n, nil
 }
 
 // getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
