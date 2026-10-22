@@ -45,6 +45,15 @@ const (
 	reasonBootstrapRecoveryFailed = "BootstrapRecoveryFailed"
 )
 
+// recoveryOperationMissingWait bounds how long a recovery waits for its
+// recorded restore operation while the target answers that it holds no
+// record of it, from status.bootstrap.operationMissingSince, as long as a
+// backup waits (backupOperationMissingWait). The time is the operator's
+// clock, written to the API server and compared with the operator's clock
+// later; a clock that differs between operator processes moves the bound by
+// that difference.
+const recoveryOperationMissingWait = 30 * time.Minute
+
 // recoveryActive reports whether this cluster is a recovery-bootstrap that has
 // not yet completed. While active, the operator must not report Ready
 // (ADR-0008: never advertise a half-restored DB as healthy).
@@ -146,10 +155,14 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 
 	// Poll the running operation.
 	op, err := r.Restore.GetOperation(ctx, target, cluster.Namespace, cluster.Status.Bootstrap.OperationID)
+	if errors.Is(err, errOperationMissing) {
+		return r.restoreOperationMissing(cluster, target, err)
+	}
 	if err != nil {
 		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, instanceManagerFailureReason(err), err.Error())
 		return ctrl.Result{RequeueAfter: restorePollAfter}, true
 	}
+	cluster.Status.Bootstrap.OperationMissingSince = nil
 	switch op.State {
 	case instancemanager.OpCompleted:
 		if cluster.Spec.HighAvailability.Enabled {
@@ -184,6 +197,38 @@ func (r *CubridClusterReconciler) restoreAttemptFailed(cluster *databasev1alpha1
 	r.recoveryFailed(cluster, "RestoreFailed",
 		fmt.Sprintf("on %s: %s; giving up after %d attempts", target, why, maxBootstrapAttempts))
 	return ctrl.Result{}, true
+}
+
+// restoreOperationMissing is the poll of a recovery restore whose target
+// answered that it holds no record of the recorded operation (#457). The
+// recovery waits, from status.bootstrap.operationMissingSince, which only a
+// read of the operation clears, so that an operator restart or a transient
+// failure in between does not reset the bound. Once the record has stayed
+// missing for recoveryOperationMissingWait the recovery is Failed. A missing
+// record does not show that the restore ended, so it is not counted as a
+// failed attempt and the restore is never started again.
+func (r *CubridClusterReconciler) restoreOperationMissing(cluster *databasev1alpha1.CubridCluster, target string, err error) (ctrl.Result, bool) {
+	boot := cluster.Status.Bootstrap
+	if boot.OperationMissingSince == nil {
+		since := metav1.NewTime(r.now())
+		boot.OperationMissingSince = &since
+	}
+	since := boot.OperationMissingSince.Time
+	if r.now().Sub(since) > recoveryOperationMissingWait {
+		r.recoveryFailed(cluster, reasonRecordedOperationLost, fmt.Sprintf(
+			"%s has held no record of the restore operation %s since %s, for %s or longer (%v). A missing record "+
+				"does not show that the restore ended: restoredb may still be running on %s, or have left data "+
+				"there. The restore is not started again; check %s before relying on its data, and delete and "+
+				"create the CubridCluster again to restore anew (ADR-0008)",
+			target, boot.OperationID, since.UTC().Format(time.RFC3339), recoveryOperationMissingWait, err, target, target))
+		return ctrl.Result{}, true
+	}
+	// The answer is left out of this message: it carries the ID of each
+	// request, and the condition would change at every poll.
+	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonRecordedOperationMissing, fmt.Sprintf(
+		"%s holds no record of the restore operation %s; waiting for at most %s from %s for it to be read again",
+		target, boot.OperationID, recoveryOperationMissingWait, since.UTC().Format(time.RFC3339)))
+	return ctrl.Result{RequeueAfter: restorePollAfter}, true
 }
 
 // setRestoreProgress reports a restore operation that has not ended, by what

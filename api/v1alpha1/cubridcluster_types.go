@@ -662,6 +662,12 @@ type BootstrapStatus struct {
 	// recovery stops as Failed when it reaches the limit.
 	// +optional
 	Attempts int32 `json:"attempts,omitempty"`
+	// operationMissingSince is when targetMember first answered that it
+	// holds no record of operationID, since the operation was last read. The
+	// recovery ends Failed when the record stays missing for a bound from
+	// this time (ADR-0008); a read of the operation clears it.
+	// +optional
+	OperationMissingSince *metav1.Time `json:"operationMissingSince,omitempty"`
 }
 
 // +kubebuilder:object:root=true

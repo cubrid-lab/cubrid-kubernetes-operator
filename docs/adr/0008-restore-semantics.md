@@ -257,7 +257,19 @@ after its own restart. A restore that ends `Failed`, which includes one cut
 off by a manager restart, is started again under the next key, three attempts
 in all (`status.bootstrap.attempts`), then the recovery is `Failed`. A
 `Failed` recovery is terminal: the operator asks the member nothing more, so
-the reason it failed with stays in `BootstrapReady` (#302). A start the
+the reason it failed with stays in `BootstrapReady` (#302). A member that
+answers that it holds no record of the recorded restore operation (`404` on
+`GET /v1/operations/{id}`, for example after its operation store was lost or
+replaced) is told apart from one that does not answer (#457), as for a
+backup (ADR-0007): `BootstrapReady` reports `RecordedOperationMissing` and
+the recovery waits 30 minutes from `status.bootstrap.operationMissingSince`,
+which only a read of the operation clears, so an operator restart or a
+failure to ask in between does not reset it. Then the recovery ends `Failed`
+with reason `RecordedOperationLost`, naming the member and the operation. A
+missing record does not show that the restore ended: `restoredb` may still
+run on that member or have left data there. It is not counted as a failed
+attempt, and the restore is not started again; the way out is the one for
+any failed recovery below, after checking the member. A start the
 member refuses because it holds an operation under the key for another
 request is answered by that operation, which is recorded and polled
 (ADR-0010, #302). That operation may have been started with a request built
@@ -473,7 +485,7 @@ status:
 Open-ended reasons, consistent with prior ADRs. The example is the
 original proposal. As implemented, the fields are
 `status.bootstrap.{mode, phase, manifestUri, operationID, targetMember,
-attempts}` (`api/v1alpha1/cubridcluster_types.go`); there is no
+attempts, operationMissingSince}` (`api/v1alpha1/cubridcluster_types.go`); there is no
 `status.phase` and no `RecoveryValidated` Condition, and the reasons of
 `BootstrapReady` and `Ready` are those of
 [docs/observability.md](../observability.md#conditions).
