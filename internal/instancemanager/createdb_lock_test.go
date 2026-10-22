@@ -73,9 +73,11 @@ func TestCreateHADatabase_KeepsARegistrationMadeWhileCreatedbRuns(t *testing.T) 
 		_, err := registerRestoreTarget(target, otherDatabase, "host", "op-restore")
 		registered <- err
 	}()
-	// Give the registration the time it needs to finish if nothing holds it.
+	// Give the registration the time it needs to finish if nothing holds it;
+	// it must still be waiting for createdb.
 	select {
 	case err := <-registered:
+		t.Errorf("the registration of %s ended while createdb ran (err=%v)", otherDatabase, err)
 		registered <- err
 	case <-time.After(200 * time.Millisecond):
 	}
