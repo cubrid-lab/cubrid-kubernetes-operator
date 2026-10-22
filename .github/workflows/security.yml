@@ -34,4 +34,4 @@ jobs:
           go-version-file: go.mod
 
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+        run: make security
