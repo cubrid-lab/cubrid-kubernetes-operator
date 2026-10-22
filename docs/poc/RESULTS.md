@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-31, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-34, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -17,7 +17,9 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > functional evidence, and their timings and rates are not native timings.
 > POC-17, POC-23, POC-25, POC-26, POC-27, POC-28, POC-29 and POC-31 ran on native
 > linux/amd64 hosts (part 1 of POC-28 in Kind on such a host), and
-> POC-19, POC-21 and POC-22 in the Kind e2e workflow; each states its own
+> POC-19, POC-21 and POC-22 in the Kind e2e workflow; POC-32 and POC-33 state
+> theirs; POC-34 ran on the VM lab, with the Operator's derivative image of the
+> same engine build, and its timings are of those VMs only. Each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
 > general CUBRID guarantee. The raw observations below are kept as recorded;
 > where a later POC contradicts one, a note says so. The current reading of
