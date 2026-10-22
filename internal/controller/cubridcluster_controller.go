@@ -278,9 +278,13 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 	}
 	if apierrors.IsNotFound(err) {
 		// The cluster was deleted during the reconcile: there is nothing to
-		// write the status to, and nothing to retry.
-		logf.FromContext(ctx).V(1).Info("Skipped status write of a deleted CubridCluster")
-		return nil
+		// write the status to, and nothing to retry. Any other NotFound, such
+		// as a CRD without the status subresource, stays an error.
+		gone := r.Get(ctx, client.ObjectKeyFromObject(cluster), &databasev1alpha1.CubridCluster{})
+		if apierrors.IsNotFound(gone) {
+			logf.FromContext(ctx).V(1).Info("Skipped status write of a deleted CubridCluster")
+			return nil
+		}
 	}
 	return err
 }
@@ -1164,8 +1168,8 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 
 // failed records a failure condition and returns the error for requeue. A
 // write refused because the namespace is being deleted ends the reconcile
-// without either. A conflict means the object was read before someone else changed it, which
-// says nothing about the cluster: it is retried with the conditions and
+// with no Condition, Event or requeue. A conflict means the object was read
+// before someone else changed it, which says nothing about the cluster: it is retried with the conditions and
 // Events left as they are, unless the writes have kept conflicting for longer
 // than conflictPatience.
 func (r *CubridClusterReconciler) failed(ctx context.Context, cluster *databasev1alpha1.CubridCluster, reason string, cause error) (ctrl.Result, error) {

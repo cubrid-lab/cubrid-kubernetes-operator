@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/go-logr/logr/funcr"
 	. "github.com/onsi/ginkgo/v2"
@@ -30,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -49,10 +51,15 @@ var _ = Describe("Reconcile while the cluster goes away (#526)", func() {
 	// logging returns a context whose logger collects the Error lines: only
 	// an Info line carries a level.
 	logging := func() (context.Context, *[]string) {
-		var errorLines []string
+		var (
+			mu         sync.Mutex
+			errorLines []string
+		)
 		level := "level"
 		return logf.IntoContext(ctx, funcr.New(func(_, line string) {
 			if !strings.Contains(line, `"level"=`) {
+				mu.Lock()
+				defer mu.Unlock()
 				errorLines = append(errorLines, line)
 			}
 		}, funcr.Options{Verbosity: 1, LogInfoLevel: &level})), &errorLines
@@ -88,7 +95,9 @@ var _ = Describe("Reconcile while the cluster goes away (#526)", func() {
 	}
 
 	It("reports no Broker failure when the namespace refuses the Broker ConfigMap", func() {
-		name := "ns-gone-broker"
+		// A terminating namespace stays for the rest of the suite: a new name
+		// each run.
+		name := "ns-gone-broker-" + utilrand.String(5)
 		r, cluster, recorder := reconciledInTerminatingNamespace(name,
 			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: brokerConfigMapName(name)}})
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
@@ -107,7 +116,7 @@ var _ = Describe("Reconcile while the cluster goes away (#526)", func() {
 	})
 
 	It("ends the reconcile without an error when the namespace refuses a cluster object", func() {
-		name := "ns-gone-service"
+		name := "ns-gone-service-" + utilrand.String(5)
 		r, cluster, recorder := reconciledInTerminatingNamespace(name,
 			&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: instancesServiceName(name)}})
 
