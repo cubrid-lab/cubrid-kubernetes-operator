@@ -2639,7 +2639,7 @@ as the Instance Manager's call does; it does not include the HTTP request.
    varchar(1000))`; two clients inserting single 1000-byte rows, committing
    every 500, and one client running `insert into big(pad) select pad from big
    limit 50000` with a commit after each, until the table passed 600 000
-   rows. It reached 627 000 rows (about 630 MB of row data) in 65 s
+   rows. It held 628 000 rows (about 630 MB of row data) after 65 s
    (23:44:35–23:45:40 UTC on 2026-10-21); each bulk statement took 4–6 s
    once the table was large. 380 samples per slave, from 23:44:38 to
    23:48:25 (`lat-1`) and 23:48:46 (`lat-2`), covering the load and the
