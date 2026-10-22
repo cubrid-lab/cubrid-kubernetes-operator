@@ -170,6 +170,17 @@ data sets.
 Issue structure, scope terms, release targets and tracking-issue rules are in
 [CONTRIBUTING.md - Issues](CONTRIBUTING.md#issues). In addition:
 
+- **Repository-local scope.** Each issue must be implementable, tested and closed
+  using this operator repository's own code and criteria. Do not make a sibling
+  repository's task or an organization-wide tracking issue a prerequisite.
+  Reference external APIs/projects only when needed as technical evidence.
+- **Issue drafting preflight.** Read the whole title and body before publishing:
+  remove contest/judging, assessment, submission, presentation/rehearsal and
+  event-frozen work instructions; preserve real revision evidence where relevant.
+  Use only commands verified in this repository's Makefile/CI (no invented
+  `make spec-*` targets), search for duplicates, and verify the resulting issue
+  contains local ownership, reproducible evidence and completion criteria.
+
 - **Before creating an issue**, check the latest `main`, open and recently
   closed issues and open PRs; update an existing issue when the problem is
   already tracked. Never file review remarks, already fixed problems or
