@@ -233,6 +233,10 @@ func createHADatabase(ctx context.Context, cli CLI, target string, ha HAConfig, 
 		return err
 	}
 	dir := filepath.Join(target, database)
+	// createdb registers the database in databases.txt itself, reading the
+	// file and writing it back; the manager's own writes of the file wait
+	// until it has ended, so that neither loses the other's line (#298).
+	databasesTxtMu.Lock()
 	out, err := cli.Run(ctx, "cubrid", "createdb",
 		"--db-volume-size="+ha.VolumeSize,
 		"--server-name="+hosts,
@@ -243,7 +247,9 @@ func createHADatabase(ctx context.Context, cli CLI, target string, ha HAConfig, 
 		if registered, regErr := registeredInDatabasesTxt(target, database); regErr == nil && !registered {
 			_ = root.RemoveAll(database)
 		}
+		databasesTxtMu.Unlock()
 		return fmt.Errorf("createdb failed: %w: %s", err, strings.TrimSpace(out))
 	}
+	databasesTxtMu.Unlock()
 	return clearOwned(target, database)
 }
