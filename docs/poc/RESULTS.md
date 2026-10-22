@@ -2596,7 +2596,7 @@ from the Operator's Broker configuration code or written by hand to match it)
 is not recorded either; only the settings listed under **Setup** are known.
 A rerun has to write both again.
 
-## POC-34 — how long `cubrid applyinfo` takes on a slave under write load, against the Instance Manager's 2 s budget (ADR-0006, #278) — **observation: at most 807 ms under load; the budget was exceeded only right after a member first became Ready**
+## POC-34 — how long `cubrid applyinfo` takes on a slave under write load, against the Instance Manager's 2 s budget (ADR-0006, #278) — **observation: at most 807 ms under load (858 ms once without load); the budget was exceeded only right after a member first became Ready**
 
 **Question.** The role answer of the Instance Manager reads the slave's
 replication with `cubrid applyinfo -L <copied log of the master> -a <db>`
@@ -2641,11 +2641,12 @@ as the Instance Manager's call does; it does not include the HTTP request.
    limit 50000` with a commit after each, until the table passed 600 000
    rows. It reached 627 000 rows (about 630 MB of row data) in 65 s
    (23:44:35–23:45:40 UTC on 2026-10-21); each bulk statement took 4–6 s
-   once the table was large. 380 samples per slave, 23:44:38–23:48:25,
-   covering the load and the backlog after it.
+   once the table was large. 380 samples per slave, from 23:44:38 to
+   23:48:25 (`lat-1`) and 23:48:46 (`lat-2`), covering the load and the
+   backlog after it.
 3. *Update*: two clients, each updating 10 000 rows' 1000-byte `pad` in one
    statement and committing, then waiting for the rest of 4 s, for 180 s:
-   89 statements, about 890 000 row updates (23:55:49–23:58:48). 480
+   90 statements, about 900 000 row updates (23:55:49–23:58:48). 480
    samples per slave, 23:55:30–00:00:22.
 
 **Results** (milliseconds; every run exited 0 and none was cut by the 20 s
@@ -2659,13 +2660,14 @@ as the Instance Manager's call does; it does not include the HTTP request.
 | Update, `lat-1` (other VM) | 480 | 57 | 94 | 152 | 285 | 0 | 0 |
 | Update, `lat-2` (master's VM) | 480 | 70 | 143 | 207 | 421 | 0 | 0 |
 
-The insert load left the slaves behind: about half a minute after it ended,
-`applyinfo` reported 13 226 (`lat-1`) and 19 269 (`lat-2`) delayed log
-pages, with `Fail count : 0`. `lat-1` caught up about 1 minute after the load
+The insert load left the slaves behind: 34 s after it ended (23:46:14),
+`applyinfo` reported 8 031 (`lat-1`) and 15 968 (`lat-2`) delayed log pages,
+with `Fail count : 0`, read every 10 s from then on. `lat-1` caught up about 1 minute after the load
 ended and `lat-2` about 2 minutes after it. During the update load the delay
 peaked at 426 pages on both slaves. Throughout both loads, the Operator's
-`ReplicationHealthy` was `True/AppliersProgressing` and `Ready`, `HAReady`
-and `PrimaryResolved` stayed `True` (conditions sampled every 2 s). A slave
+`ReplicationHealthy` was `True/AppliersProgressing`, and `Ready`,
+`PrimaryResolved` and `RoutingReady` stayed `True` (conditions sampled every
+2 s). A slave
 that is far behind but applying is reported as progressing, as designed; the
 delay itself is not part of the Condition.
 
@@ -2676,11 +2678,12 @@ bootstrap, before any client load: `Command failed`, `signal: killed`,
 `durationMs` 2109 and 3320. No later call failed (a failed call is logged
 at warning level; a successful read only at debug level). So the first read after a member starts its
 applier can take longer than 2 s, and that observation reports the
-replication as unknown once. The 3320 ms of the second shows that the
-command returned 1.3 s after its 2 s deadline: `applyinfo` is not one of the
+replication as unknown once. The second returned 1.3 s after its 2 s
+deadline; the cause is not established. `applyinfo` is not one of the
 utilities run in a process group of their own (#277), so the cancellation
-sends `SIGKILL` to the `cubrid` wrapper, and the call returns when that
-process has been reaped. No `applyinfo` or `cub_admin applyinfo` process was
+sends `SIGKILL` to the `cubrid` wrapper and the call returns once that
+process has been waited for; a slow end of the killed wrapper is a
+hypothesis only. No `applyinfo` or `cub_admin applyinfo` process was
 found running on either slave afterwards (`/proc` listing; only the
 `copylogdb` and `applylogdb` of each peer).
 
@@ -2690,10 +2693,22 @@ the master's disk; no tuning or cached reading is needed for a busy but
 healthy slave. The budget is reached right after a member starts, where an
 `Unknown` replication for one observation is the documented behavior
 (`docs/observability.md`). A read that is killed can return later than the
-budget, since the deadline cannot shorten the reaping of a killed process,
-so a role answer can take longer than its 4 s budget. The Operator gives up
+budget, as the second one did (cause not established), so a role answer
+can take longer than its 4 s budget. The Operator gives up
 on a role answer after 5 s (`NewHTTPRoleProber`); whether the role answers
 around these two reads were late was not recorded.
+
+An extra round of 600 samples per slave ran at 23:48–23:54 while its load
+client had failed to start (a script error), so it is not a load and is
+not in the table: its maxima were 181 ms (`lat-1`) and 858 ms (`lat-2`,
+one read at 23:48:28 with no delayed pages). The longest read of the whole
+run was therefore taken without client load; the tail on `lat-2` is not
+explained by the load alone.
+
+The pod Ready times, the Instance Manager log lines, the insert client's
+log and the `/proc` listing were read from the live cluster during the run
+and were not kept after it was removed; the sample files and condition
+timelines were kept by the author outside the repository.
 
 **Limits:** one run of each load on one lab and one engine; 2-vCPU VMs with
 node-local disks, not CSI or networked storage; no disk saturated to its
