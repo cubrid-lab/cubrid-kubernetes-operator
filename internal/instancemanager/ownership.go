@@ -208,8 +208,12 @@ func (s *Server) reclaimIncomplete(database string) error {
 	// What an earlier reclaim moved aside and did not finish removing goes
 	// first.
 	tomb := reclaimDir(database)
-	if err := removeTree(root, tomb); err != nil {
-		return fmt.Errorf("remove %s: %w", filepath.Join(target, tomb), err)
+	if _, err := root.Lstat(tomb); err == nil {
+		if err := removeTree(root, tomb); err != nil {
+			return fmt.Errorf("remove %s: %w", filepath.Join(target, tomb), err)
+		}
+		s.log().Info("Removed a database directory an earlier reclaim moved aside",
+			"event", "reclaim_leftover_removed", "path", filepath.Join(target, tomb))
 	}
 
 	data, err := root.ReadFile(markerPath(database))
@@ -261,6 +265,8 @@ func (s *Server) reclaimIncomplete(database string) error {
 	if err := removeTree(root, tomb); err != nil {
 		return fmt.Errorf("remove the unfinished %s: %w", where, err)
 	}
+	s.log().Info("Removed the unfinished database of a failed operation",
+		"event", "unfinished_database_removed", "path", where, "operation", id)
 	return nil
 }
 
@@ -269,7 +275,8 @@ func (s *Server) reclaimIncomplete(database string) error {
 func reclaimDir(database string) string { return ".reclaim-" + database }
 
 // removeTree removes a directory and everything in it; tests replace it to
-// stop a removal partway, as a crash would.
+// stop a removal partway, as a crash would, so a test that replaces it must
+// not run in parallel.
 var removeTree = func(root *os.Root, name string) error { return root.RemoveAll(name) }
 
 // adoptRestored takes over, for the restore operation id, the data a failed
