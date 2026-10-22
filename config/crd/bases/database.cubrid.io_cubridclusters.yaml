@@ -614,6 +614,14 @@ spec:
                     description: operationID is the Instance Manager restore operation
                       on targetMember.
                     type: string
+                  operationMissingSince:
+                    description: |-
+                      operationMissingSince is the time targetMember first answered, after
+                      the operation was last read, that it holds no record of operationID.
+                      The recovery ends Failed when the record stays missing for a bound
+                      from this time (ADR-0008); a read of the operation clears it.
+                    format: date-time
+                    type: string
                   phase:
                     description: phase is the recovery lifecycle phase.
                     type: string
