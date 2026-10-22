@@ -91,7 +91,7 @@ var _ = BeforeSuite(func() {
 	// An address outside the default 10.0.0.0/24 is accepted only when the
 	// range above took effect.
 	probe := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "service-range-probe", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "service-range-probe", Namespace: metav1.NamespaceDefault},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.0.255.10",
 			Ports:     []corev1.ServicePort{{Port: 80}},
