@@ -17,6 +17,7 @@ limitations under the License.
 package instancemanager
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,5 +214,188 @@ func TestRestore_MarksItsTargetWhileRestoredbRuns(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(marker); strings.TrimSpace(string(data)) != roots.Owner {
 		t.Errorf("marker after restoredb = %q, want it kept as %q", data, roots.Owner)
+	}
+}
+
+// A removal that stops partway, as a crash during reclaimIncomplete would, must
+// not leave a registered directory without its marker: the next attempt has
+// to be able to finish the reclaim instead of refusing an unowned database
+// (#298).
+func TestReclaimIncomplete_FinishesAfterARemovalStoppedPartway(t *testing.T) {
+	databases := t.TempDir()
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := leaveInterrupted(t, store, databases, OpRestore, OpFailed)
+	file := filepath.Join(databases, databasesTxt)
+	if err := os.WriteFile(file, []byte(otherDatabaseLine+dbName+"\t\t"+dir+"\thost\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(fakeCLI{}, "tok").WithOperationStore(store).WithRestoreRoots(RestoreRoots{Target: databases})
+
+	// The removal takes the marker first and stops there.
+	real := removeTree
+	t.Cleanup(func() { removeTree = real })
+	removeTree = func(root *os.Root, name string) error {
+		if _, err := root.Stat(name); os.IsNotExist(err) {
+			return nil
+		}
+		if err := root.Remove(filepath.Join(name, ownershipMarker)); err != nil {
+			t.Errorf("remove the marker inside %s: %v", name, err)
+		}
+		return errors.New("stopped partway")
+	}
+	if err := s.reclaimIncomplete(dbName); err == nil {
+		t.Fatal("reclaimIncomplete succeeded although its removal stopped")
+	}
+
+	// The next attempt, after a restart, finishes the reclaim.
+	removeTree = real
+	if err := s.reclaimIncomplete(dbName); err != nil {
+		t.Fatalf("reclaimIncomplete after the stopped removal: %v", err)
+	}
+	if hasExistingDB(databases, dbName) {
+		t.Errorf("%s is still there: the next restore or bootstrap refuses it", dir)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != otherDatabaseLine {
+		t.Errorf("databases.txt = %q, want only the other database's line", data)
+	}
+	entries, err := os.ReadDir(databases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != databasesTxt {
+			t.Errorf("%s was left in the database root", e.Name())
+		}
+	}
+}
+
+// Each state a crash inside reclaimIncomplete can leave is finished by the
+// next attempt: a marked directory whose registration is already gone, and a
+// directory already moved aside, whole or partly removed (#298).
+func TestReclaimIncomplete_FinishesFromEachCrashState(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		leave func(t *testing.T, databases, dir string)
+	}{
+		{"unregistered, still marked", func(*testing.T, string, string) {}},
+		{"moved aside whole", func(t *testing.T, databases, dir string) {
+			if err := os.Rename(dir, filepath.Join(databases, reclaimDir(dbName))); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"moved aside, marker removed", func(t *testing.T, databases, dir string) {
+			tomb := filepath.Join(databases, reclaimDir(dbName))
+			if err := os.Rename(dir, tomb); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(tomb, ownershipMarker)); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			databases := t.TempDir()
+			store, err := NewOperationStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := leaveInterrupted(t, store, databases, OpRestore, OpFailed)
+			file := filepath.Join(databases, databasesTxt)
+			if err := os.WriteFile(file, []byte(otherDatabaseLine), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			tc.leave(t, databases, dir)
+			s := NewServer(fakeCLI{}, "tok").WithOperationStore(store).WithRestoreRoots(RestoreRoots{Target: databases})
+
+			if err := s.reclaimIncomplete(dbName); err != nil {
+				t.Fatalf("reclaimIncomplete: %v", err)
+			}
+			entries, err := os.ReadDir(databases)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				if e.Name() != databasesTxt {
+					t.Errorf("%s was left in the database root", e.Name())
+				}
+			}
+			data, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != otherDatabaseLine {
+				t.Errorf("databases.txt = %q, want only the other database's line", data)
+			}
+		})
+	}
+}
+
+// A reclaim that refuses, or finds nothing to reclaim, changes no
+// registration: databases.txt is only edited once every guard has passed.
+func TestReclaimIncomplete_KeepsTheRegistrationWhenItRemovesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		state   OperationState
+		marker  func(id string) string
+		restore bool
+		refused bool
+	}{
+		{name: "completed operation", state: OpCompleted, marker: func(id string) string { return id + "\n" }},
+		{name: "no marker", marker: nil},
+		{name: "restored data", state: OpFailed, marker: func(id string) string { return id + "\n" }, restore: true, refused: true},
+		{name: "running operation", state: OpRestoring, marker: func(id string) string { return id + "\n" }, refused: true},
+		{name: "unknown operation", state: OpFailed, marker: func(string) string { return "op-" + strings.Repeat("0", 32) + "\n" }, refused: true},
+		{name: "unreadable marker", state: OpFailed, marker: func(string) string { return "not an id\n" }, refused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			databases := t.TempDir()
+			store, err := NewOperationStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := tc.state
+			if state == "" {
+				state = OpFailed
+			}
+			dir := leaveInterrupted(t, store, databases, OpRestore, state)
+			marker := filepath.Join(dir, ownershipMarker)
+			id := strings.TrimSpace(readFile(t, marker))
+			if tc.restore {
+				if _, err := store.Update(id, func(op *Operation) { op.Restored = &OperationArtifact{Database: dbName} }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.marker == nil {
+				if err := os.Remove(marker); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(marker, []byte(tc.marker(id)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			registered := otherDatabaseLine + dbName + "\t\t" + dir + "\thost\n"
+			file := filepath.Join(databases, databasesTxt)
+			if err := os.WriteFile(file, []byte(registered), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s := NewServer(fakeCLI{}, "tok").WithOperationStore(store).WithRestoreRoots(RestoreRoots{Target: databases})
+
+			err = s.reclaimIncomplete(dbName)
+			if tc.refused != (err != nil) {
+				t.Fatalf("reclaimIncomplete error = %v, want refused=%v", err, tc.refused)
+			}
+			if got := readFile(t, file); got != registered {
+				t.Errorf("databases.txt = %q, want it unchanged", got)
+			}
+			if _, err := os.Stat(filepath.Join(dir, dbName+"_vinf")); err != nil {
+				t.Errorf("the data was removed: %v", err)
+			}
+		})
 	}
 }

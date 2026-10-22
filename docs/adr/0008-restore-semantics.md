@@ -286,7 +286,15 @@ failed restores left on them and the Instance Manager's operation records.
 The Instance Manager then removes only a directory that carries the marker
 of an operation it recorded as `Failed` before it recorded restored data,
 and refuses to restore over anything else, which is left for a person
-(runbook below). To start from empty volumes, delete the PVCs of the old
+(runbook below). It removes such a directory in an order meant to leave
+every crash point to the next attempt: it unregisters the database first,
+while the marker still names the operation, then renames the directory to
+`.reclaim-<db>` and removes it there; the next attempt removes a
+`.reclaim-<db>` left behind. A `.reclaim-*` directory in the database root
+belongs to the Instance Manager and is removed without further checks
+(#298: unit tests of each intermediate state; no crash or power loss has
+been produced). To
+start from empty volumes, delete the PVCs of the old
 cluster once their data is known not to be needed, or create the cluster
 under another name.
 
