@@ -33,7 +33,12 @@ target builds the entry point (`test/lab/cmd/lab`) into
    one is refused. A run that finds the Lease is refused and told who holds the
    lab.
 
-When the command ends, the Lease is deleted, with its uid and
+While the run holds the lab, from the create until the release, it renews
+the Lease every sixth of `LAB_DURATION` (default `60s`, so every 10 seconds),
+by writing its `renewTime`. A renewal replaces the object the run last wrote,
+by its uid and resourceVersion, so it fails if anyone else wrote the Lease;
+the resourceVersion it returns is the one the next renewal and the release
+carry. When the command ends, the Lease is deleted, with its uid and that
 resourceVersion as preconditions: a Lease that replaced it during the run, or
 that another holder wrote in place, is left in place.
 
@@ -43,34 +48,43 @@ campaigns there. The canonical campaign launcher
 the same `cubrid-lab/campaign` Lease for 60 seconds and renews it every 10
 seconds, and refuses to start while any Lease exists in `cubrid-lab`; so
 while a lab run holds the lab, the launcher does not start, and the other way
-round. This entry point does not renew its Lease.
+round.
+
+A run whose Lease is lost no longer holds the lab, and stops: it says why,
+sends SIGTERM to the command's process group, and SIGKILL two seconds later
+if anything of it is left, and exits 1. The Lease is lost when a renewal finds
+it removed (NotFound) or written by someone else (Conflict); the run then
+deletes nothing, since the Lease is no longer its own. A renewal that fails
+otherwise, for example while the API server cannot be reached, is tried again
+at the next one; but when none succeeds within `LAB_DURATION` of the last one,
+the Lease may have ended and the next run may take the lab, so it is lost too.
+The release is then still sent, with its preconditions, so a Lease left as the
+run wrote it is removed and any other is left in place.
 
 Ctrl-C, SIGTERM and SIGHUP (a closed terminal) are handled for the whole run.
 Before the command starts, one stops the run after the current step, releasing
-the Lease if it was taken. While the command runs, each one is passed on once
+the Lease if it was taken. While the command runs, the first one is passed on
 to the command and everything it started, which run in a process group of
 their own, so the command can clean up; a second Ctrl-C would make `go test`
 and Ginkgo skip their cleanup. The Lease is released, and the copy removed,
 only when no process is left in that group: a `sh -c` without a trap ends at
 once on a signal while what it started may still clean up with kubectl, and a
 job left in the background still runs after the command. Until then the run
-says it is waiting, and passes signals on to the group. A job that a
-non-interactive shell started in the background (`&`) ignores Ctrl-C, so
-Ctrl-C does not end that wait and the wait has no limit; end such a job with
-`kill -TERM -- -<pgid>` (the group the waiting message names). Since the Lease
-is not renewed, a run that outlasts `LAB_DURATION` looks ended to the next
-user; keep `LAB_DURATION` above what the command and its jobs take. A process
-that left the group (`setsid`) is not waited for. The exit code is the command's, or 128
-plus the number of the signal that ended it.
+says it is waiting, and signals still reach the group. A job that a
+non-interactive shell started in the background (`&`) ignores Ctrl-C, so a
+repeated signal escalates: the second sends SIGTERM to the group, and the third
+and any later one SIGKILL; the run says what it sends. A process that left the
+group (`setsid`) is not waited for. The exit code is the command's, or 128
+plus the number of the signal that ended it, or 1 when the Lease was lost.
 
-`LAB_DURATION` (default `2h`) is how long the run is expected to take. A
-Lease ends its duration after its last renewal (`renewTime`, or `acquireTime`
-when it has none). A Lease past its end is not taken over, since whether its
-campaign still runs cannot be told from the Lease. When its holder is a run
-of this entry point (`user@host/pid/time`), the refusal says so and gives the
-command that removes it; remove it only after making sure no campaign runs.
-Any other holder's Lease, such as the launcher's, is only named: ask its
-holder, or follow the recovery of the tool that took it.
+`LAB_DURATION` is how long the Lease lasts without a renewal, in whole
+seconds. A Lease ends its duration after its last renewal (`renewTime`, or
+`acquireTime` when it has none). A Lease past its end is not taken over, since
+whether its campaign still runs cannot be told from the Lease. When its holder
+is a run of this entry point (`user@host/pid/time`), the refusal says so and
+gives the command that removes it; remove it only after making sure no
+campaign runs. Any other holder's Lease, such as the launcher's, is only
+named: ask its holder, or follow the recovery of the tool that took it.
 
 ## Marking a cluster as a lab
 

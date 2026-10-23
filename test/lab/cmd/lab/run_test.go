@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -36,15 +37,19 @@ const (
 
 // fakeLab is a kubectl stand-in, a shell script, for one lab cluster. It logs
 // every call, one line each: its pid, its process group, and its arguments,
-// separated by tabs; it writes the delete options it gets to deleteOptions.
+// separated by tabs; it writes the delete options it gets to deleteOptions,
+// and appends every renewal it accepts to renewals, one per line.
 type fakeLab struct {
-	dir, kubectl, log, deleteOptions string
+	dir, kubectl, log, deleteOptions, renewals string
 }
 
 // newFakeLab writes the script. marker is what the lab marker holds. create
 // is how the create of the Lease goes: "ok", "exists" (another run holds the
-// lab), or "block" (it stores the Lease, then waits for the file go).
-func newFakeLab(t *testing.T, marker, create string) *fakeLab {
+// lab), or "block" (it stores the Lease, then waits for the file go). renew is
+// how a renewal goes: "ok", which takes one that carries the uid and the
+// current resourceVersion and raises the version, "conflict" (someone else
+// wrote the Lease), or "down" (the API server cannot be reached).
+func newFakeLab(t *testing.T, marker, create, renew string) *fakeLab {
 	t.Helper()
 	dir := t.TempDir()
 	f := &fakeLab{
@@ -52,9 +57,10 @@ func newFakeLab(t *testing.T, marker, create string) *fakeLab {
 		kubectl:       filepath.Join(dir, "kubectl"),
 		log:           filepath.Join(dir, "calls"),
 		deleteOptions: filepath.Join(dir, "delete-options"),
+		renewals:      filepath.Join(dir, "renewals"),
 	}
 	script := fmt.Sprintf(`#!/bin/sh
-dir=%q marker=%q create=%q
+dir=%q marker=%q create=%q renew=%q
 {
 	printf '%%s\t%%s' "$$" "$(cut -d' ' -f5 /proc/$$/stat)"
 	for a; do printf '\t%%s' "$a"; done
@@ -75,7 +81,25 @@ case "$*" in
 		: > "$dir/created"
 		while ! [ -e "$dir/go" ]; do sleep 0.01; done ;;
 	esac
+	echo 7 > "$dir/version"
 	printf 'uid-1 7' ;;
+*" replace "*)
+	body=$(cat)
+	v=$(cat "$dir/version")
+	case $renew:$body in
+	ok:*'"resourceVersion":"'"$v"'"'*'"uid":"uid-1"'*) ;;
+	down:*)
+		echo 'Unable to connect to the server: dial tcp 10.0.0.1:6443: i/o timeout' >&2
+		exit 1 ;;
+	*)
+		printf '%%s %%s\n' 'Error from server (Conflict): Operation cannot be fulfilled on' \
+			'leases.coordination.k8s.io "campaign": the object has been modified' >&2
+		exit 1 ;;
+	esac
+	v=$((v+1))
+	echo "$v" > "$dir/version"
+	printf '%%s\n' "$body" >> "$dir/renewals"
+	printf '{"metadata":{"uid":"uid-1","resourceVersion":"%%s"}}' "$v" ;;
 *"get lease"*)
 	printf '{"metadata":{"uid":"uid-0","resourceVersion":"3"},'
 	printf '"spec":{"holderIdentity":"other","leaseDurationSeconds":3600,"acquireTime":"2026-10-15T06:00:00.000000Z"}}' ;;
@@ -85,7 +109,7 @@ case "$*" in
 	echo "unexpected call: $*" >&2
 	exit 1 ;;
 esac
-`, dir, marker, create)
+`, dir, marker, create, renew)
 	if err := os.WriteFile(f.kubectl, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +172,12 @@ func callerEnviron(t *testing.T) []string {
 }
 
 func labArgs(command ...string) []string {
-	return append([]string{"-context", labCtx, "-target", labA, "-duration", "1h", "--"}, command...)
+	return labArgsFor(time.Hour, command...)
+}
+
+// labArgsFor runs the command with a Lease of the given duration.
+func labArgsFor(duration time.Duration, command ...string) []string {
+	return append([]string{"-context", labCtx, "-target", labA, "-duration", duration.String(), "--"}, command...)
 }
 
 // copyOf returns the pinned copy every call after the first names, and checks
@@ -189,7 +218,7 @@ func requireRemoved(t *testing.T, pinned string) {
 }
 
 func TestRunHoldsTheLabThroughThePinnedCopy(t *testing.T) {
-	f := newFakeLab(t, labA, "ok")
+	f := newFakeLab(t, labA, "ok", "ok")
 	signals := newSignalSource()
 	seen := filepath.Join(t.TempDir(), "seen")
 	command := `printf '%s\n%s\n' "$KUBECONFIG" "$LAB_CONTEXT" > "$0"; cat "$KUBECONFIG" >> "$0"`
@@ -234,7 +263,7 @@ func TestRunStopsBeforeTheCommandWhenTheLabIsRefused(t *testing.T) {
 		{"held by another run", labA, "exists", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeLab(t, tc.marker, tc.create)
+			f := newFakeLab(t, tc.marker, tc.create, "ok")
 			ran := filepath.Join(t.TempDir(), "ran")
 			code := run(labArgs("sh", "-c", `: > "$0"`, ran), callerEnviron(t), f.kubectl, newSignalSource().notify)
 			if code != 1 {
@@ -259,7 +288,7 @@ func TestRunStopsBeforeTheCommandWhenTheLabIsRefused(t *testing.T) {
 // A signal while the command runs reaches it, and the run releases the Lease
 // and removes the copy once the command has ended.
 func TestRunReleasesTheLabAfterASignalDuringTheCommand(t *testing.T) {
-	f := newFakeLab(t, labA, "ok")
+	f := newFakeLab(t, labA, "ok", "ok")
 	signals := newSignalSource()
 	ready := filepath.Join(t.TempDir(), "ready")
 	done := make(chan int, 1)
@@ -287,7 +316,7 @@ func TestRunReleasesTheLabAfterASignalDuringTheCommand(t *testing.T) {
 // A signal that arrives while the Lease is being taken stops the run before
 // the command, and the Lease is still released.
 func TestRunReleasesTheLabAfterASignalBeforeTheCommand(t *testing.T) {
-	f := newFakeLab(t, labA, "block")
+	f := newFakeLab(t, labA, "block", "ok")
 	signals := newSignalSource()
 	ran := filepath.Join(t.TempDir(), "ran")
 	done := make(chan int, 1)
@@ -321,7 +350,7 @@ func TestRunReleasesTheLabAfterASignalBeforeTheCommand(t *testing.T) {
 // may still be cleaning up, with kubectl: the Lease and the copy stay until
 // all of it has ended.
 func TestRunHoldsTheLabUntilEverythingTheCommandStartedHasEnded(t *testing.T) {
-	f := newFakeLab(t, labA, "ok")
+	f := newFakeLab(t, labA, "ok", "ok")
 	signals := newSignalSource()
 	dir := t.TempDir()
 	ready, seen := filepath.Join(dir, "ready"), filepath.Join(dir, "seen")
@@ -372,4 +401,142 @@ func waitFor(t *testing.T, path string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// A run renews its Lease while the command runs, each renewal carrying the
+// resourceVersion the last one returned, and releases the Lease with the
+// latest one.
+func TestRunRenewsTheLeaseWhileTheCommandRuns(t *testing.T) {
+	f := newFakeLab(t, labA, "ok", "ok")
+	code := run(labArgsFor(time.Second, "sleep", "1.5"), callerEnviron(t), f.kubectl, newSignalSource().notify)
+	if code != 0 {
+		t.Fatalf("run() = %d, want 0", code)
+	}
+	out, _ := os.ReadFile(f.renewals)
+	renewals := strings.Count(string(out), "\n")
+	if renewals < 2 {
+		t.Fatalf("the Lease was renewed %d times during a command that outlasted it, want at least 2", renewals)
+	}
+	version, _ := os.ReadFile(filepath.Join(f.dir, "version"))
+	options, _ := os.ReadFile(f.deleteOptions)
+	want := `"resourceVersion":"` + strings.TrimSpace(string(version)) + `"`
+	if !strings.Contains(string(options), want) || !strings.Contains(string(options), `"uid":"uid-1"`) {
+		t.Fatalf("the release carried %s, want the uid and the version of the last renewal (%s)", options, want)
+	}
+	requireRemoved(t, copyOf(t, f.calls(t)))
+}
+
+// A run whose Lease was written by someone else no longer holds the lab: it
+// stops the command's group, with SIGKILL when SIGTERM is not enough, exits
+// non-zero, and deletes nothing.
+func TestRunStopsTheCommandWhenTheLeaseIsLost(t *testing.T) {
+	f := newFakeLab(t, labA, "ok", "conflict")
+	leader := filepath.Join(t.TempDir(), "leader")
+	done := make(chan int, 1)
+	go func() {
+		done <- run(labArgsFor(time.Second, "sh", "-c", `echo $$ > "$0"; trap '' TERM; while :; do sleep 0.05; done`, leader),
+			callerEnviron(t), f.kubectl, newSignalSource().notify)
+	}()
+	killGroupOf(t, leader)
+	select {
+	case code := <-done:
+		if code != exitLost {
+			t.Fatalf("run() = %d, want %d", code, exitLost)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the command still ran after the Lease was lost")
+	}
+	if f.released() {
+		t.Error("a Lease that was no longer this run's was deleted")
+	}
+	requireRemoved(t, copyOf(t, f.calls(t)))
+}
+
+// A Lease that no renewal reached within its duration may have ended, so the
+// run no longer holds the lab; it may also still be as the run wrote it, so
+// the release is sent, with the preconditions that keep it from deleting
+// anyone else's.
+func TestRunStopsTheCommandWhenNoRenewalSucceedsInTime(t *testing.T) {
+	f := newFakeLab(t, labA, "ok", "down")
+	leader := filepath.Join(t.TempDir(), "leader")
+	done := make(chan int, 1)
+	go func() {
+		done <- run(labArgsFor(time.Second, "sh", "-c", `echo $$ > "$0"; sleep 30`, leader),
+			callerEnviron(t), f.kubectl, newSignalSource().notify)
+	}()
+	killGroupOf(t, leader)
+	select {
+	case code := <-done:
+		if code != exitLost {
+			t.Fatalf("run() = %d, want %d", code, exitLost)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the command still ran after the Lease's duration passed without a renewal")
+	}
+	options, _ := os.ReadFile(f.deleteOptions)
+	if !strings.Contains(string(options), `"uid":"uid-1"`) || !strings.Contains(string(options), `"resourceVersion":"7"`) {
+		t.Errorf("the release carried %q, want the uid and resourceVersion of the create", options)
+	}
+}
+
+// While the run waits for a job the command left in the background, which a
+// non-interactive shell starts with SIGINT ignored, a repeated signal ends
+// the wait: the second sends SIGTERM to the group, the third SIGKILL. The
+// Lease is released after.
+func TestARepeatedSignalEndsTheWaitForBackgroundJobs(t *testing.T) {
+	for _, tc := range []struct {
+		name, job string
+		signals   int
+	}{
+		{"SIGINT ignored", `sleep 30`, 2},
+		{"SIGINT and SIGTERM ignored", `trap '' TERM; sleep 30`, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeLab(t, labA, "ok", "ok")
+			signals := newSignalSource()
+			leader := filepath.Join(t.TempDir(), "leader")
+			done := make(chan int, 1)
+			go func() {
+				done <- run(labArgs("sh", "-c", `(`+tc.job+`) & echo $$ > "$0"; exit 0`, leader),
+					callerEnviron(t), f.kubectl, signals.notify)
+			}()
+			c := <-signals.ch
+			pid := killGroupOf(t, leader)
+			waitUntil(t, func() bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) })
+			for i := 1; i < tc.signals; i++ {
+				c <- syscall.SIGINT
+				select {
+				case <-done:
+					t.Fatalf("signal %d ended the wait, want signal %d to", i, tc.signals)
+				case <-time.After(500 * time.Millisecond):
+				}
+			}
+			c <- syscall.SIGINT
+			select {
+			case code := <-done:
+				if code != 0 {
+					t.Fatalf("run() = %d, want the command's 0", code)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("signal %d did not end the wait", tc.signals)
+			}
+			if !f.released() {
+				t.Error("the Lease was not released")
+			}
+		})
+	}
+}
+
+// killGroupOf waits for the command to write its pid to path, and returns
+// it; whatever the test ends with, nothing of its process group is left.
+func killGroupOf(t *testing.T, path string) int {
+	t.Helper()
+	waitUntil(t, func() bool { got, _ := os.ReadFile(path); return strings.HasSuffix(string(got), "\n") })
+	got, _ := os.ReadFile(path)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(got)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	return pid
 }
