@@ -43,17 +43,22 @@ the manager and Instance Manager images of the head commit of every push to
 
 - `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager:main-<full sha>`
 - `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:main-<full sha>`
+- `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/workload-client:main-<full sha>`,
+  the test-only SQL workload client of the
+  [scenario contract](testing/scenario-contract.md). A lab scenario runs it as
+  its client, as the Kind E2E does. It is never part of a release, and nothing
+  under `config/` refers to it.
 
 They are built from the same Dockerfiles and build arguments as
-`make docker-build` and `make docker-build-instance-manager`, for linux/amd64
-only, and carry the `org.opencontainers.image.source`, `revision` and
-`created` labels. The job summary of each run lists both digests; pin an
+`make docker-build`, `make docker-build-instance-manager` and
+`make docker-build-workload`, for linux/amd64 only, and carry the `org.opencontainers.image.source`, `revision` and
+`created` labels. The job summary of each run lists the three digests; pin an
 image by digest when a record must name exactly what ran. A manual run
 (`workflow_dispatch`) builds only a commit that is on `main`. No `latest` or
 other mutable tag is pushed, and pull requests never push images. A tag is
 never overwritten; a re-run of a commit that already has images fails. A
-commit has images only if its run succeeded: a failed run may have pushed one
-image and not the other.
+commit has images only if its run succeeded: a failed run may have pushed some
+of the images and not the others.
 
 These are development images, not releases: they carry no compatibility or
 support claim. Release candidates, versioned tags, signing and publication
