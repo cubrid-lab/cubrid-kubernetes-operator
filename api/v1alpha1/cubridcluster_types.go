@@ -542,8 +542,10 @@ type DatabaseStatus struct {
 type DatabaseSeeding struct {
 	// member is the member the database is copied to.
 	Member string `json:"member"`
-	// source is the member it is copied from: the member that was last
-	// observed as the master among the members that hold the database.
+	// source is the member it is copied from. For the first peer it is the
+	// member that holds the database; for every later member it is the
+	// member that was last observed as the master among the members that
+	// hold the database.
 	Source string `json:"source"`
 	// round counts how often the source changed before the restore was
 	// started. Every round has a backup of its own.

@@ -134,6 +134,32 @@ func (r *CubridClusterReconciler) stepOperationMissing(cluster *databasev1alpha1
 		member, step, id, bootstrapOperationMissingWait, at.UTC().Format(time.RFC3339)))
 }
 
+// reasonRecordedOperationMismatch is the BootstrapReady reason of a step
+// whose recorded operation, read by its ID, is not an operation of the step.
+const reasonRecordedOperationMismatch = "RecordedOperationMismatch"
+
+// recordedOperationMatches reports whether op, read by the ID recorded for a
+// step, is an operation of kind on database, and says why not otherwise. An
+// operation that names no database is not compared by it. A mismatch is set
+// as the condition: nothing is started, no attempt is used, and the
+// operation is left for a person.
+func recordedOperationMatches(cluster *databasev1alpha1.CubridCluster, op instancemanager.Operation,
+	kind instancemanager.OperationKind, database, member, step string) bool {
+	why := ""
+	switch {
+	case op.Kind != kind:
+		why = fmt.Sprintf("it is a %s operation", op.Kind)
+	case op.Database != "" && op.Database != database:
+		why = "it is an operation on database " + op.Database
+	default:
+		return true
+	}
+	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonRecordedOperationMismatch, fmt.Sprintf(
+		"the operation %s recorded for the %s of database %s on %s is not one: %s; nothing is started, "+
+			"and the operation is left for a person", op.ID, step, database, member, why))
+	return false
+}
+
 // databaseStatus returns the status entry of database, adding it when absent.
 func databaseStatus(cluster *databasev1alpha1.CubridCluster, database string) *databasev1alpha1.DatabaseStatus {
 	for i := range cluster.Status.Databases {
@@ -182,6 +208,10 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 			r.stepOperationMissing(cluster, status, &status.BootstrapOperationMissingSince, member, "HA bootstrap", id, err,
 				"createdb may still be running on "+member+", or have left data there",
 				"the database is not recorded as created, and is left for a person: check "+member+" before relying on its data")
+			return
+		}
+		if err == nil && !recordedOperationMatches(cluster, op, instancemanager.OpHABootstrap, database, member, "HA bootstrap") {
+			status.BootstrapOperationMissingSince = nil
 			return
 		}
 	} else {
@@ -408,9 +438,17 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 	sourceRecorded, restoreStarted := true, seeding != nil && seeding.RestoreOperationID != ""
 	artifact := ""
 	if len(status.SeededMembers) == 0 {
-		if seeding == nil || seeding.Source != holder {
+		switch {
+		case seeding == nil:
 			seeding = &databasev1alpha1.DatabaseSeeding{Member: peer, Source: holder}
-			restoreStarted = false
+		case seeding.Source != holder:
+			// The record and its operations are kept: they contradict how a
+			// first peer is copied, and are left for a person.
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedSourceContradicted", fmt.Sprintf(
+				"the copy of database %s to %s is recorded with %s as its source, but the first peer is copied only "+
+					"from %s, which holds the database; nothing is started, and the record is left for a person",
+				database, peer, seeding.Source, holder))
+			return false
 		}
 	} else {
 		if !restoreStarted {
@@ -472,12 +510,8 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		// A restore that was started has its backup; the source is not asked
 		// again, so that it need not be reachable while the member is
 		// restored. The restore may have been followed when it was recorded.
-		id := seeding.RestoreOperationID
-		restore, err = r.Restore.GetOperation(ctx, peer, cluster.Namespace, id)
-		if errors.Is(err, errOperationMissing) {
-			r.stepOperationMissing(cluster, status, &seeding.OperationMissingSince, peer, "seed restore", id, err,
-				"restoredb may still be running on "+peer+", or have left data there",
-				peer+" is not recorded as seeded, and is left for a person: check it before relying on its data")
+		var polled bool
+		if restore, polled, err = r.recordedSeedRestore(ctx, cluster, status, peer); !polled {
 			return false
 		}
 		followed = true
@@ -547,6 +581,28 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 	}
 }
 
+// recordedSeedRestore polls the restore recorded for the copy to peer. It
+// reports false when the member holds no record of it, or the operation it
+// reads contradicts the step; the condition says so. Any other failed read
+// is returned.
+func (r *CubridClusterReconciler) recordedSeedRestore(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, peer string) (instancemanager.Operation, bool, error) {
+	seeding := status.Seeding
+	id := seeding.RestoreOperationID
+	restore, err := r.Restore.GetOperation(ctx, peer, cluster.Namespace, id)
+	if errors.Is(err, errOperationMissing) {
+		r.stepOperationMissing(cluster, status, &seeding.OperationMissingSince, peer, "seed restore", id, err,
+			"restoredb may still be running on "+peer+", or have left data there",
+			peer+" is not recorded as seeded, and is left for a person: check it before relying on its data")
+		return restore, false, nil
+	}
+	if err == nil && !recordedOperationMatches(cluster, restore, instancemanager.OpRestore, status.Name, peer, "seed restore") {
+		seeding.OperationMissingSince = nil
+		return restore, false, nil
+	}
+	return restore, true, err
+}
+
 // seedBackup takes the seed backup of artifact on source, for peer, and
 // reports whether it has completed. The condition says what it waits for
 // otherwise; a backup that failed ends the attempt. Once the backup was
@@ -566,6 +622,10 @@ func (r *CubridClusterReconciler) seedBackup(ctx context.Context, cluster *datab
 			r.stepOperationMissing(cluster, status, &seeding.OperationMissingSince, source, "seed backup", id, err,
 				"backupdb may still be running on "+source+" and upload to s3://"+path.Join(bucket, prefix),
 				peer+" is not recorded as seeded, and is left for a person: check "+source+" and that prefix")
+			return false
+		}
+		if err == nil && !recordedOperationMatches(cluster, backup, instancemanager.OpBackup, database, source, "seed backup") {
+			seeding.OperationMissingSince = nil
 			return false
 		}
 	} else {

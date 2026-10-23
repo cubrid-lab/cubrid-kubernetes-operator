@@ -279,7 +279,12 @@ have left data there. In each case the peer is not recorded as seeded, and
 nothing is restored over it; a person checks the member before relying on
 its data. A seed restore that is polled seeds the member only when what it
 restored is this step's backup, as a followed one (`SeedRestoreSourceMismatch`
-otherwise). A step whose operation ends `Failed` is started again under the
+otherwise). An operation read by its recorded ID that is of another kind or
+on another database than the step's (`RecordedOperationMismatch`), and a
+record of the copy to the first peer that names another source than the
+member that holds the database (`SeedSourceContradicted`), contradict the
+record: nothing is started, no attempt is used, and they are left for a
+person. A step whose operation ends `Failed` is started again under the
 next attempt's key as before, without the recorded operation.
 
 A key names one request (#302). The key of a seed backup and of a seed

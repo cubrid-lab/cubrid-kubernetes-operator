@@ -788,8 +788,10 @@ spec:
                           type: integer
                         source:
                           description: |-
-                            source is the member it is copied from: the member that was last
-                            observed as the master among the members that hold the database.
+                            source is the member it is copied from. For the first peer it is the
+                            member that holds the database; for every later member it is the
+                            member that was last observed as the master among the members that
+                            hold the database.
                           type: string
                       required:
                       - member
