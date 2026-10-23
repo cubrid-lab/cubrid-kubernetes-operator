@@ -2718,3 +2718,277 @@ limit (the VMs kept 9 GB or more free), no CPU limits on the members, no
 long-running open transaction (#249), no stalled applier. Times on a
 different disk or with more data can differ. The seed backup the cluster
 wrote to the lab's object store under `cubrid-test/lat-278` was not removed.
+
+## POC-35 — which log files CUBRID 11.4 writes in an HA member and a Broker, what moves them, and what bounds them (#252) — **observation: every size limit tried was enforced; each kept one `.bak` except the Broker's access log, whose timestamped copies, like the server's per-start-minute files, were never removed during the run**
+
+**Question.** Before the log directory of a database Pod or a Broker Pod is
+chosen (#252, "Storage safety"), which log files does CUBRID 11.4 write, which
+setting moves each of them, is a configured size limit really enforced, and
+what accumulates when a member restarts again and again?
+
+**Environment (2026-10-23):** native linux/amd64 host (6 CPUs), Docker 29.2.1.
+`cubrid/cubrid:11.4`
+(`cubrid/cubrid@sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`),
+`cubrid_rel`: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`. The plain engine image
+was used, not the Instance Manager image; the Broker ran the repository's
+`build/instance-manager/broker-entrypoint.sh` (mounted read-only). Every data
+and log directory was a size-capped `tmpfs` Docker volume (256 MiB to 1 GiB),
+kept mounted across container restarts by a holder container, so no generator
+could fill the host disk; only `$CUBRID/conf`, `$CUBRID/var` and `/tmp` were
+in the containers' own layers. All volumes were `tmpfs`, not ext4 or another
+block file system; that matters most for the full-volume result in section 4.
+
+**Setup.**
+
+- *HA pair* (POC-13's recipe): containers `h-0` and `h-1` on one network,
+  CUBRID run as `cubrid` (UID 1000) through `docker exec`, `hosts: files dns`
+  in `/etc/nsswitch.conf` as in the Instance Manager image, the image's own
+  `cubrid.conf` (which the Operator does not generate) plus `ha_mode=on`, and
+  `cubrid_ha.conf` with `ha_node_list=cubrid@h-0:h-1`, `ha_db_list=appdb`,
+  `ha_port_id=59901`. Data volume at `/var/lib/cubrid`
+  (`CUBRID_DATABASES=/var/lib/cubrid/databases`), a separate volume mounted at
+  `$CUBRID/log` (`/home/cubrid/CUBRID/log`) and one at `/logs`. `createdb
+  --db-volume-size=64M --log-volume-size=64M --server-name=h-0:h-1` and
+  `heartbeat start` on `h-0`; `backupdb -C -l 0 appdb@localhost`, `restoredb
+  -u` and `heartbeat start` on `h-1`. `h-0` master, `h-1` slave, a row
+  written on `h-0` read on `h-1`.
+- *Standalone server* `sa` (same image, data and `$CUBRID/log` on their own
+  volumes), for the size tests that need a server restart.
+- *Broker* `broker-rw`: `broker-entrypoint.sh` with `BROKER_ACCESS_MODE=rw` and
+  a `cubrid_broker_rw.conf` written to match `generateBrokerConf("rw", 5)`
+  (`ADMIN_LOG_FILE=log/broker/cubrid_broker.log`, `[%RW]` on 33000,
+  `MIN/MAX_NUM_APPL_SERVER=2/5`, `LOG_DIR=log/broker/sql_log`,
+  `ERROR_LOG_DIR=log/broker/error_log`, `SQL_LOG=ON`, `ACCESS_MODE=RW`) and a
+  `databases.txt` naming `h-0:h-1`. Client: the image's `broker_tester`.
+
+### 1. Inventory
+
+What appeared under `$CUBRID/log` once the pair was formed and the Broker had
+served one query (paths relative to `$CUBRID/log`; `<db>` = `appdb`):
+
+| Writer | File | Seen in |
+|---|---|---|
+| `cub_server` error log | `server/<db>_<YYYYMMDD>_<HHMM>.err` (+ `server/<db>_latest.err` symlink) | member |
+| `cub_server` access log (one entry per client connect/disconnect, about 270 B each) | `server/<db>_<YYYYMMDD>_<HHMM>.access` (+ `_latest` symlink) | member |
+| `cub_server` event log | `server/<db>_<YYYYMMDD>_<HHMM>.event` (+ `_latest` symlink); 0 B throughout | member |
+| `cub_server` slow-query trace, only with `sql_trace_slow` set | `server/<db>_sql_trace_<YYYYMMDD>_<HHMM>.log` | `sa` |
+| `cub_master` (heartbeat) | `<hostname>_master.err` | member |
+| log copier | `<db>@<peer>_copylogdb.err`, one per peer | member (master and slave: `heartbeat status` listed a copier and an applier for the peer on both) |
+| log applier | `<db>@localhost_applylogdb_<db>_<peer>.err`, one per peer | member (as above) |
+| `cub_pl` (stored-procedure JVM) | `pl/<db>_pl.log` (about 330 B per start), `pl/<db>_pl.err`, `pl/<db>_pl.access`, `pl/<db>_pl.log.lck` | member |
+| `cubrid` utility wrapper | `cubrid_utility.log`: two lines per command, including every `cubrid heartbeat status` and `cubrid applyinfo` | member and Broker |
+| each utility | `<db>_<utility>.err` / `.access` (`createdb`, `restoredb`, `paramdump`, `applyinfo`), `<db>@localhost_backupdb.err` | member |
+| (empty, created by the utilities) | `cub_client.err`, `cub_server.err`, `cub_server.access` | member and Broker |
+| `csql` | `csql.err` in the **current directory** of the `csql` process (`/tmp` here), not under `$CUBRID/log` | member |
+| Broker admin log | `broker/cubrid_broker.log` (one line per `start`/`stop`/`info`) | Broker |
+| CAS SQL log, per CAS index | `broker/sql_log/rw_<n>.sql.log` (about 1 KB per connect + query) | Broker |
+| CAS slow-query log, per CAS index | `broker/sql_log/rw_<n>.slow.log` (`SLOW_LOG=ON` by default); failed statements were written here too | Broker |
+| CAS error log, per CAS index | `broker/error_log/rw_<n>.err` (written on the first connection: a `-1139` handshake refusal from the slave, then the connection to the master) | Broker |
+| Broker access log | `broker/rw.access`, only with `ACCESS_LOG=ON` (default `OFF`, which is what the Operator's configuration gets) | Broker |
+
+Not log files in this sense, and not under `$CUBRID/log`: the database's own
+log volumes (`<db>_lgat`, `<db>_lgar_t`, `<db>_lginf`, `<db>_lgat__lock`) in
+the database directory, the copied logs in `<CUBRID_DATABASES>/<db>_<peer>/`,
+and `$CUBRID/var` (`CUBRID_SOCK/`, `pl/pl_<db>.info`, and, on a slave once it
+had applied something, `APPLYLOGDB/<db>`, the applier lock file of POC-21).
+Effective defaults read with `cubrid paramdump` and `cubrid broker info`:
+`error_log_size=536870912` (512 MiB), `error_log_level=notification`,
+`ha_enable_sql_logging=n`, `ddl_audit_log=n`, `sql_trace_slow=-1`;
+Broker `SQL_LOG_MAX_SIZE=10240` (KB, as `broker info` prints it), `LOG_BACKUP=OFF`, `ACCESS_LOG=OFF`,
+`ACCESS_LOG_MAX_SIZE=10240K`, `SLOW_LOG=ON`, `SLOW_LOG_DIR` = `LOG_DIR`.
+
+### 2. Moving them
+
+- **Everything under `$CUBRID/log`, at once:** a volume mounted at
+  `/home/cubrid/CUBRID/log` held every file in the table above (except
+  `csql.err`) for the whole run, on the members and on the Broker. No setting
+  or environment variable was found that moves the `cub_master`, copier,
+  applier, utility or `cub_pl` files on their own (none in `paramdump`; the
+  only `CUBRID_*` names in `libcubrid.so`/`libcubridcs.so` are statement
+  types and `CUBRID_SOCK`/`CUBRID_MSG_LANG`/`CUBRID_TAILOR_RULE`).
+- **`cubrid.conf` `error_log`:** tested only on `h-1` (slave when `error_log`
+  was set, master during its three container restarts in section 4): with
+  `error_log=/logs/server/appdb.err`, `cub_server` created `/logs/server/` itself and wrote
+  `appdb.err` and `appdb.access` there, with `appdb_latest.*` symlinks. The
+  `.event` file did **not** follow: each start still created
+  `$CUBRID/log/server/appdb_<date>_<time>.event`. The copier, applier,
+  `cub_master` and `appdb_applyinfo.err` stayed in `$CUBRID/log`.
+- **Broker:** with `ADMIN_LOG_FILE=/blogs/admin/cubrid_broker.log`,
+  `LOG_DIR=/blogs/sql_log`, `ERROR_LOG_DIR=/blogs/error_log`,
+  `SLOW_LOG_DIR=/blogs/slow_log`, `ACCESS_LOG=ON`, `ACCESS_LOG_DIR=/blogs/access`,
+  `cubrid broker start` created every directory and each file went to its
+  directory. `cubrid_utility.log` stayed in `$CUBRID/log`.
+
+### 3. Size limits
+
+Generators: 1,500–60,000 duplicate-key `INSERT`s (about 97 B of server error
+log each), 600–9,900 short connections, 1,200 `cubrid heartbeat status`
+calls, 300 slow queries with `sql_trace_slow=1`, and, for the HA processes,
+their own steady writes (the applier on a member writes a `-1040` notice
+about every 12 s: 11,962 B in about 6.5 min on the master, roughly 1.8 KB per
+minute). Of the `error_log_size` values tried, 0, 512, 2,000, 4,096, 4,097,
+5,000, 6,000, 7,000 and 7,999 were refused ("Value is out of range") and
+the values tried from 8,000 up were accepted; values from 1 to 4,095 other than those were
+not tried.
+
+| File | Limit set | Observed |
+|---|---|---|
+| `server/<db>_…err` | `error_log_size=100000` | rotated to `.err.bak` at 100,327 B; after 60,000 more errors still one `.bak` (100,292 B) and the live file under the limit |
+| `server/<db>_…access` | same | rotated to `.access.bak` (100,169 B); one copy |
+| `server/<db>_sql_trace_…log` | same | `.log.bak` 100,125 B; one copy |
+| `csql.err` (in cwd) | same | `.err.bak` 100,352 B; one copy |
+| `cubrid_utility.log` | same | `.log.bak` 100,012 B after 1,200 calls; one copy |
+| `h-0_master.err`, copier, applier `.err` | `error_log_size=8000` | each rotated at its next write after passing 8,000 B (`.bak` 8,245 / 8,282 / 8,149 B), replacing the larger `.bak` left by the start rotation below; the applier rotated again 3 min later (`.bak` 8,214 B); one copy each |
+| same, at start | lowered from 512 MiB to 8,000 | a file already larger than the new limit was moved to `.bak` when its process started |
+| CAS `rw_<n>.err` | `error_log_size=8000` (the Broker container's `cubrid.conf`) | `.err.bak` 8,082 B; one copy |
+| CAS `rw_<n>.sql.log`, `rw_<n>.slow.log` | `SQL_LOG_MAX_SIZE=100` (KB) | `.sql.log.bak` 101,283 B (later 101,374 and 101,464 B), `.slow.log.bak` 101,106 B; one copy each. These lie between 100 × 1,000 and 100 × 1,024 B, so whether the unit is 1,000 or 1,024 bytes is not determined |
+| Broker `rw.access` | `ACCESS_LOG_MAX_SIZE=100K` | rotated to `rw.access.<YYYYMMDDHHMMSS>` (103,428–103,465 B); after 9,900 connections **four** rotated files were kept and none was removed during the run: timestamped copies, not one `.bak` |
+
+So a file of one fixed name was bounded by about twice its limit (the live
+file plus one `.bak`; under `error_log_size` the live file passed the limit by
+up to about 350 B before rotating, under `SQL_LOG_MAX_SIZE` by up to about
+1.5 KB if the unit is 1,000 B). The exception is the Broker access log. `cub_master` and the applier keep their own write position: bytes
+appended to their files from outside were overwritten instead of counted,
+so only their own writes were used as evidence.
+
+### 4. Restarts
+
+- **Standalone server, `sa`:** the first start (07:23) made set `_0723`; four
+  `cubrid server stop`/`start` within one minute appended to one new set
+  `_0724`; five restarts about 64 s apart (07:25:46, 07:26:50, 07:27:54,
+  07:28:58, 07:30:02) made `_0725` to `_0728` and `_0730` (`.err` + `.access`
+  + `.event` each; no `_0729`, since no start fell in that minute). The restart
+  with `sql_trace_slow=1` made `_0734` and the full-volume restart below
+  `_0736`: nine `appdb` sets. Ten failed starts in one minute (a second
+  database `faildb` whose `_lgat` had been moved away; `cubrid server start`
+  exit 1 each time) wrote 7,660 B into one `faildb_20261023_0735.err`, about
+  766 B per failed start: a tenth set. No set was removed during the run.
+- **HA member, container restarts:** `docker restart poc252-h0` and `cubrid
+  heartbeat start`, four times about 77 s apart (07:29:59, 07:31:15, 07:32:32,
+  07:33:49), left one new set per restart (`_0729`, `_0731`, `_0732`, `_0733`;
+  `_0729` also holds a restart made before the container restarts), each
+  about 3.7 KB `.err` + 0.6 KB `.access` + 0 B `.event`, alongside the
+  earlier `_0720` (createdb), `_0727` (the first failover, section 5) and
+  `_0728`: seven sets on `h-0`. `_0728` and part of `_0729` come from the
+  heartbeat and `cubrid service` stops and starts at 07:28–07:29 that changed
+  `error_log_size`; which start went into which set was not recorded. The copier, applier,
+  `cub_master`, `cubrid_utility.log` and `pl/<db>_pl.log` kept their names
+  and were appended to. With `error_log=/logs/server/appdb.err` on `h-1`,
+  three container restarts appended to the one `appdb.err`/`appdb.access`
+  and only added a 0 B `.event` file each. Process IDs do not appear in any
+  file name.
+- **Broker:** three container restarts appended to the same `rw_<n>.sql.log`
+  and `.err` files (nothing truncated, no new names) and added two lines each
+  to `cubrid_broker.log` and four to `cubrid_utility.log`.
+- **Log volume full:** with the `sa` log volume filled to 100 % by a 255 MiB
+  file, the running server kept committing writes, and `cubrid server stop`
+  then `cubrid server start` still brought it up and it committed a write;
+  the new `.err` file stayed 0 B and the previous one was cut at 4,096 B.
+
+**Estimate.** Let *E* be `error_log_size` and *P* the number of peers. Only
+*P* = 1 was observed; the per-peer counts below are taken from the file names.
+Measured with *E* from 8,000 to 100,000 B, a file of one fixed name held at
+most about 2*E*; that it holds for larger *E* is an extrapolation. On a member:
+
+- fixed names: `cub_master` (1), copier (*P*), applier (*P*),
+  `cubrid_utility.log` (1): about (2 + 2*P*) × 2*E*; the per-utility
+  `.err` files and `pl/` stayed under 15 KB each (no bound shown);
+- per start minute, with the default `error_log`: `.err` + `.access` up to
+  2 × 2*E* (plus 2*E* for `sql_trace` if enabled); no setting tried limited
+  the number of start minutes.
+
+With the defaults (*E* = 512 MiB) and *P* = 2 (three members; only *P* = 1
+observed), that is up to 6 GiB for the fixed names, plus up to 2 GiB for every
+minute in which the server started; no removal of old sets was seen, so the
+number of sets was limited only by the number of start minutes. With the
+defaults, rotation happens at 512 MiB, so one file name may hold about 1 GiB
+(512 MiB live plus 512 MiB `.bak`). The sizes seen per start were far
+smaller: about 4.3 KB per restart that came up, about 0.8 KB per failed start.
+If starts are spaced by a 5-minute back-off cap, there are at most 288 a day,
+about 1.2 MB a day at those sizes (this spacing was not observed); what can
+exhaust a volume is one process that writes errors continuously, up to about
+4*E* per start minute. With a fixed `error_log` name and *E* set, the server's
+files become two more fixed names, leaving (2 + 2*P* + 2) × 2*E* (e.g. *E* =
+10 MiB, *P* = 2: 160 MiB), plus one 0 B `.event` file per start minute and
+`pl/<db>_pl.log`, whose bound was not shown (`$CUBRID/vm/logging.properties`
+sets `java.util.logging.FileHandler.limit = 50000` and `count = 1` for a
+`%h/java%u.log` pattern; whether that governs `pl/<db>_pl.log` was not
+checked).
+
+A Broker with the Operator's configuration (`MAX_NUM_APPL_SERVER=5`): per CAS
+index `sql.log` and `slow.log` up to 2 × `SQL_LOG_MAX_SIZE` each, so 5 × about 40 MiB
+= about 200 MiB with the default 10,240 KB; CAS `.err` up to 5 × 2*E* (5 GiB with
+the default *E*, 100 MiB with *E* = 10 MiB); `cubrid_utility.log` up to 2*E*;
+`cubrid_broker.log`, a line of about 25 B per `start`/`stop`/`info`, bound
+not shown. A bound on the number of access-log files holds only with
+`ACCESS_LOG=OFF`, the default the Operator's configuration gets.
+
+### 5. `$CUBRID/var`
+
+All of the above ran with `$CUBRID/log` on its own volume and `$CUBRID/var`
+left in the container's file system. The applier's lock file
+`$CUBRID/var/APPLYLOGDB/appdb` was created there on the slave as before (POC-21),
+and `cubrid heartbeat status` showed one master and one slave after each of
+two failovers and seven container restarts (rows were compared only once,
+before them). The failovers: (1) at 07:27, `cubrid heartbeat stop` then
+`start` on `h-0`, then master; about 20 s later `h-1` was master and `h-0`
+slave. (2) During the three container restarts of `h-1`, then master
+(07:36:13, 07:37:29, 07:38:47, each followed by `heartbeat start`); after
+them `h-0` was master and `h-1` slave. When in that window the role changed
+was not recorded. During the four `h-0` restarts (07:29–07:33) `h-0` stayed
+slave.
+Nothing about moving the logs required moving `$CUBRID/var`. (In these Docker
+restarts the container's writable layer, and so `$CUBRID/var`, was kept; in a
+new Pod container it is not, which is POC-21's subject, not this one's.)
+
+**Consequence (feeds #252).** Every size limit tried was enforced on every file
+kind tried, with one `.bak`, except `ACCESS_LOG_MAX_SIZE`, which kept
+timestamped copies. Moving is possible either per file (`error_log`, the
+Broker's directories) or, for everything CUBRID writes under `$CUBRID/log`,
+only by mounting a volume there. Two kinds of file were never removed during
+the run, and no setting tried limited their number: the server's
+`<db>_<date>_<time>` files, a new set per start minute (up to ten sets on
+`sa`; a fixed `error_log` name stops this for `.err` and `.access`, not for
+`.event`), and the Broker's rotated access logs (four files; none with
+`ACCESS_LOG=OFF`, the default). With the defaults, rotation is at 512 MiB, so
+one file name may hold about 1 GiB, extrapolated from limits of 8,000 to
+100,000 B.
+
+**What this does not show.**
+
+- The bound of `.event` files (all were 0 B), of `pl/<db>_pl.log`,
+  `cubrid_broker.log` and the per-utility `.err` files: none was driven
+  near a limit. `cub_pl`'s Java logging configuration
+  (`$CUBRID/vm/logging.properties`, `FileHandler.limit = 50000`) was read, not
+  tested.
+- Whether old server log sets are ever removed after a longer time or more
+  files: only ten sets on `sa` (nine `appdb`, one `faildb`) and seven on
+  `h-0` were observed (a count of `*.event` names gave 12 and 8, which
+  included the `_latest.event` symlinks).
+- Restarts of `cub_server` inside one container, by `cub_master`'s heartbeat
+  or by the Instance Manager, which kubelet back-off does not space: how fast
+  such restarts can repeat, and so how many start-minute sets they create,
+  was not measured.
+- A log directory on the same volume as the database: what a full shared
+  volume does to `_lgat`/`_lgar` archiving, to the copied logs in
+  `<db>_<peer>/` or to volume extension was not tested.
+- More than one peer (*P* > 1): only a two-member pair was run.
+- `error_log_size` near the default 512 MiB, `LOG_BACKUP=ON`, `SQL_LOG2`,
+  `ha_enable_sql_logging`, `ddl_audit_log`, `cubrid manager` logs: not tested.
+- Core files: no process crashed; where a core would go (the host's
+  `core_pattern`, a process's working directory) was not examined.
+- The working directory of the Instance Manager's `csql` or other client calls,
+  where a `csql.err` would land: not examined.
+- An HA member, or a Broker, whose log volume is full: only the standalone
+  server was run with a full log volume, for one stop and start.
+- Kubernetes: no Pod, `emptyDir`, PVC, `subPath` mount, back-off timing or
+  Instance Manager image; restarts were `docker restart` with the writable
+  layer kept, and container restarts were not a node or Pod deletion.
+- One host, one run of each test, one engine/image; not a general CUBRID
+  guarantee.
+
+All containers (`poc252-h0`, `poc252-h1`, `poc252-sa`, `poc252-b`,
+`poc252-holder`), the eleven `poc252-*` volumes and the `poc252-net` network
+were removed afterwards; `docker ps -a`, `docker volume ls` and `docker network
+ls` listed no `poc252` resource, and the containers that were there before
+were unchanged.
