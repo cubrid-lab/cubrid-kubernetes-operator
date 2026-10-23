@@ -1080,7 +1080,7 @@ because they move the master.
 
 - **Level:** real database on a multi-node Kind cluster; VM lab for the
   variant `no-spare-node`. The suite's Kind cluster has one node
-  (`make setup-test-e2e`), and no multi-node Kind configuration is in the repository.
+  (`hack/run-e2e.sh` creates it with `kind create cluster`), and no multi-node Kind configuration is in the repository.
 - **Variants:** `drain-slave-node`, `drain-master-node`, and `no-spare-node`
   (the drained node's Pod has nowhere to be scheduled).
 - **Fault confirmed by:** the node is cordoned and its member Pod was evicted

@@ -85,17 +85,23 @@ Only `make manifests`, `make generate`, `make fmt`, `make lint-fix` and
 `make build`, `make run` and the checks above leave them as they are, so
 regenerate before testing a change to `*_types.go` or kubebuilder markers.
 
-For the existing Kind E2E suite, use a disposable cluster name:
+The Kind E2E suite runs on a cluster of its own:
 
 ```bash
 make test-e2e KIND_CLUSTER=cubrid-contributor-e2e
-# If the test fails before automatic cleanup:
+# Keep a cluster between runs: create it once, then opt in to reusing it.
+make setup-test-e2e KIND_CLUSTER=cubrid-contributor-e2e
+make test-e2e KIND_CLUSTER=cubrid-contributor-e2e E2E_REUSE_CLUSTER=1
 make cleanup-test-e2e KIND_CLUSTER=cubrid-contributor-e2e
 ```
 
-The target builds the manager image and the images its groups need, creates/reuses the named Kind cluster,
-and deletes that cluster after a successful run. Never reuse a valuable
-cluster name. The suite has independent groups: the manager itself, the wiring
+The target builds the manager image and the images its groups need. It
+creates the named Kind cluster and deletes it when the run ends: after a pass,
+a failure or a timeout, and after Ctrl-C or SIGTERM, which reach the suite
+first so it can clean up (`hack/run-e2e.sh`). If a cluster with exactly that
+name already exists, the run refuses to start rather than use, and then
+delete, a cluster it did not create; with `E2E_REUSE_CLUSTER=1` it runs against
+that cluster and keeps it. Never point `KIND_CLUSTER` at a valuable cluster. The suite has independent groups: the manager itself, the wiring
 scenario with a fake Instance Manager (label `fake-instance-manager`, no
 CUBRID), S00 with the real CUBRID image (labels `db` and `S00`), and the HA
 group on the real image (labels `db` and `ha-bootstrap`; each scenario step is
