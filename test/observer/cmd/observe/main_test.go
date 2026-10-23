@@ -81,6 +81,7 @@ func TestRunRefusesAnIncompleteSelection(t *testing.T) {
 		"window too narrow": {append(validArgs(dir), "-interval", "10s", "-window", "15s"), "-window"},
 		"window under 1 s":  {append(validArgs(dir), "-interval", "200ms", "-window", "400ms"), "-window"},
 		"positional":        {append(validArgs(dir), "extra"), "positional"},
+		"no scrape timeout": {append(validArgs(dir), "-scrape-timeout", "0s"), "-scrape-timeout"},
 	} {
 		if err := run(context.Background(), tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("run() with %s = %v, want an error naming %s", name, err, tc.want)

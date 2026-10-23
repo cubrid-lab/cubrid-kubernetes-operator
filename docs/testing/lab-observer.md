@@ -80,7 +80,7 @@ taken, so it survives a run that is stopped. Each line has:
 | `at` | When the tick began, on this host's clock |
 | `status` | When the read was answered (`readAt`), `lastObservedTime`, `currentPrimary`, the Conditions with their `lastTransitionTime`, and the members; or the error of the read |
 | `operator` | The manager's Pods: uid, node, readiness, whether it is being deleted, its container's start and restart count |
-| `events` | Events new or changed since the last tick: those about the cluster, its Pods and the manager's Pods, and every Event in the Operator's namespace when that is not the cluster's |
+| `events` | Events new or changed since the last tick: those about the cluster, its Pods, every manager Pod seen during the run and the manager's ReplicaSets and Deployment, and every Event in the Operator's namespace when that is not the cluster's |
 | `metrics` | The raw samples of each series, with the time Prometheus scraped them, and the port-forward's `notes`; or the error of the query |
 | `verdict` | `healthy`, or `not-healthy` with every reason |
 
@@ -126,8 +126,10 @@ scraped while a Condition held one value must mirror that value:
 A scrape Prometheus stamped at T is judged only when all of these hold:
 - A status read was answered by T minus the tolerance (`5s`, for the clocks of
   this host, Prometheus and the manager).
-- Another read began at T plus the tolerance plus the scrape timeout (`10s`,
-  Prometheus' default) or later. The manager gathers a scrape's gauges after
+- Another read began at T plus the tolerance plus the scrape timeout
+  (`-scrape-timeout`, default `10s`, Prometheus' default; the lab's
+  Prometheus and its ServiceMonitor for the manager set none, checked on
+  2026-10-23) or later. The manager gathers a scrape's gauges after
   Prometheus stamps it, up to the scrape timeout later, so a status written in
   that time may already be in the gauge.
 - Both reads carry the Condition with the same status and the same

@@ -125,6 +125,7 @@ func (f *forwarder) ensure(ctx context.Context) (string, error) {
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
 			if m := forwardedPort.FindStringSubmatch(sc.Text()); m != nil {
+				f.note("port-forward to prometheus started")
 				select {
 				case ports <- m[1]:
 				default:
@@ -140,7 +141,6 @@ func (f *forwarder) ensure(ctx context.Context) (string, error) {
 	defer timer.Stop()
 	listening := func(port string) (string, error) {
 		f.url, f.done, f.cancel = "http://127.0.0.1:"+port, done, cancel
-		f.note("port-forward to prometheus started")
 		return f.url, nil
 	}
 	select {

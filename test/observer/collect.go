@@ -37,6 +37,9 @@ type MetricsSource interface {
 	Range(ctx context.Context, selector string, window time.Duration, at time.Time) ([]Series, error)
 }
 
+// kindPod is the involvedObject kind of a Pod's Events.
+const kindPod = "Pod"
+
 // readTimeout bounds each read of a tick, so that one source that does not
 // answer delays the others by at most this much.
 const readTimeout = 10 * time.Second
@@ -51,6 +54,9 @@ type Collector struct {
 	// OperatorNamespace and OperatorLabels select the manager's Pods.
 	OperatorNamespace string
 	OperatorLabels    map[string]string
+	// OperatorDeployment names the manager Deployment, whose ReplicaSets'
+	// Events are recorded in a shared namespace.
+	OperatorDeployment string
 	// UpSelector selects Prometheus' up series of the manager's target.
 	UpSelector string
 	// Window is how far back each query reads raw samples.
@@ -61,6 +67,9 @@ type Collector struct {
 	sleep func(context.Context, time.Duration) error
 	// seen holds the resourceVersion of each Event already recorded.
 	seen map[string]string
+	// managers holds every manager Pod seen in the run, so that Events about
+	// a Pod already gone are still recorded.
+	managers map[string]bool
 }
 
 // ClusterSelector selects every series the manager exports for a cluster of
@@ -99,7 +108,13 @@ func (c *Collector) Collect(ctx context.Context) Sample {
 	s := Sample{At: c.now()}
 	s.Status = c.readStatus(ctx)
 	s.Operator = c.readOperator(ctx)
-	s.Events, s.EventsError = c.readEvents(ctx, s.Operator.Pods)
+	if c.managers == nil {
+		c.managers = map[string]bool{}
+	}
+	for _, p := range s.Operator.Pods {
+		c.managers[p.Name] = true
+	}
+	s.Events, s.EventsError = c.readEvents(ctx)
 	s.Metrics = c.readMetrics(ctx, s.At)
 	return s
 }
@@ -166,9 +181,9 @@ func (c *Collector) readOperator(ctx context.Context) OperatorReading {
 }
 
 // readEvents returns the Events that are new or changed since the last tick
-// about the cluster, its Pods and the manager's Pods, and in the Operator's
-// own namespace, when it is not the cluster's, about anything.
-func (c *Collector) readEvents(ctx context.Context, managers []Pod) ([]Event, string) {
+// about the cluster, its Pods, the manager's Pods and its ReplicaSets, and in
+// the Operator's own namespace, when it is not the cluster's, about anything.
+func (c *Collector) readEvents(ctx context.Context) ([]Event, string) {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
 	if c.seen == nil {
@@ -183,7 +198,7 @@ func (c *Collector) readEvents(ctx context.Context, managers []Pod) ([]Event, st
 			continue
 		}
 		for _, e := range events.Items {
-			if !c.about(ns, e.InvolvedObject, managers) || c.seen[string(e.UID)] == e.ResourceVersion {
+			if !c.about(ns, e.InvolvedObject) || c.seen[string(e.UID)] == e.ResourceVersion {
 				continue
 			}
 			c.seen[string(e.UID)] = e.ResourceVersion
@@ -201,19 +216,21 @@ func (c *Collector) readEvents(ctx context.Context, managers []Pod) ([]Event, st
 	return out, strings.Join(errs, "; ")
 }
 
-func (c *Collector) about(ns string, obj corev1.ObjectReference, managers []Pod) bool {
+func (c *Collector) about(ns string, obj corev1.ObjectReference) bool {
 	if ns == c.OperatorNamespace && ns != c.Namespace {
 		return true
 	}
-	for _, p := range managers {
-		if obj.Kind == "Pod" && obj.Name == p.Name {
-			return true
-		}
+	if obj.Kind == kindPod && c.managers[obj.Name] {
+		return true
+	}
+	if c.OperatorDeployment != "" && (obj.Kind == "ReplicaSet" && strings.HasPrefix(obj.Name, c.OperatorDeployment+"-") ||
+		obj.Kind == "Deployment" && obj.Name == c.OperatorDeployment) {
+		return true
 	}
 	switch obj.Kind {
 	case "CubridCluster":
 		return obj.Name == c.Cluster
-	case "Pod":
+	case kindPod:
 		return strings.HasPrefix(obj.Name, c.Cluster+"-")
 	}
 	return false

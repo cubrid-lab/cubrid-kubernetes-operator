@@ -279,9 +279,9 @@ func TestCollectRecordsTheManagerPodsEventsInASharedNamespace(t *testing.T) {
 	mgr := managerPod("mgr-a", true, false)
 	mgr.Namespace = "db"
 	mgrEvent := event("killing", "")
-	mgrEvent.InvolvedObject = corev1.ObjectReference{Kind: "Pod", Name: "mgr-a"}
+	mgrEvent.InvolvedObject = corev1.ObjectReference{Kind: kindPod, Name: "mgr-a"}
 	unrelated := event("unrelated", "")
-	unrelated.InvolvedObject = corev1.ObjectReference{Kind: "Pod", Name: "web-0"}
+	unrelated.InvolvedObject = corev1.ObjectReference{Kind: kindPod, Name: "web-0"}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(observedCluster(), mgr, mgrEvent, unrelated).Build()
 	col := newCollector(c, &fakeMetrics{})
 	col.OperatorNamespace = "db"
@@ -343,4 +343,29 @@ func (s *slowMetrics) Range(context.Context, string, time.Duration, time.Time) (
 		s.advance = nil
 	}
 	return nil, nil
+}
+
+func TestCollectKeepsRecordingAManagerPodsEventsAfterThePodIsGone(t *testing.T) {
+	mgr := managerPod("mgr-a", true, false)
+	mgr.Namespace = "db"
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(observedCluster(), mgr).Build()
+	col := newCollector(c, &fakeMetrics{})
+	col.OperatorNamespace, col.OperatorDeployment = "db", "mgr"
+	col.Collect(context.Background()) // sees mgr-a
+	if err := c.Delete(context.Background(), mgr); err != nil {
+		t.Fatal(err)
+	}
+	killing := event("killing", "")
+	killing.InvolvedObject = corev1.ObjectReference{Kind: kindPod, Name: "mgr-a"}
+	created := event("created", "")
+	created.InvolvedObject = corev1.ObjectReference{Kind: "ReplicaSet", Name: "mgr-6745f55f46"}
+	for _, e := range []*corev1.Event{killing, created} {
+		if err := c.Create(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := col.Collect(context.Background()).Events
+	if len(got) != 2 {
+		t.Fatalf("events = %+v, want the gone Pod's and its ReplicaSet's", got)
+	}
 }

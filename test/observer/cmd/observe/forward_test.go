@@ -98,3 +98,21 @@ func TestForwarderNotesEachStartAndEnd(t *testing.T) {
 		t.Fatalf("notes drained twice = %q, want each once", again)
 	}
 }
+
+func TestForwarderNotesTheStartBeforeTheEnd(t *testing.T) {
+	starts := 0
+	f := &forwarder{start: scripted(`echo "Forwarding from 127.0.0.1:41237 -> 9090"; exit 1`, &starts),
+		ready: 5 * time.Second}
+	defer f.Close()
+	if _, err := f.ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !f.exited() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	notes := f.DrainNotes()
+	if len(notes) != 2 || !strings.Contains(notes[0], "started") || !strings.Contains(notes[1], "ended") {
+		t.Fatalf("notes = %q, want started, then ended", notes)
+	}
+}

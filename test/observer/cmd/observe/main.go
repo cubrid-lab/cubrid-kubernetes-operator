@@ -76,7 +76,7 @@ type config struct {
 	prometheusNamespace, prometheusService            string
 	prometheusPort                                    int
 	commit, level, evidenceDir                        string
-	interval, duration, window                        time.Duration
+	interval, duration, window, scrapeTimeout         time.Duration
 }
 
 var fullCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -100,6 +100,9 @@ func (c config) validate() error {
 	}
 	if c.interval <= 0 || c.duration <= 0 || c.window < 2*c.interval || c.window < time.Second {
 		return errors.New("-interval and -duration must be positive, and -window at least two intervals and 1s")
+	}
+	if c.scrapeTimeout <= 0 {
+		return errors.New("-scrape-timeout must be positive")
 	}
 	if c.prometheusPort <= 0 || c.prometheusPort > 65535 {
 		return errors.New("-prometheus-port must be a port number")
@@ -154,6 +157,8 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.interval, "interval", 2*time.Second, "time between samples")
 	flags.DurationVar(&cfg.duration, "duration", 5*time.Minute, "how long to observe")
 	flags.DurationVar(&cfg.window, "window", 90*time.Second, "how far back each Prometheus query reads raw samples")
+	flags.DurationVar(&cfg.scrapeTimeout, "scrape-timeout", 10*time.Second,
+		"Prometheus' scrape timeout for the manager's target (its scrape_timeout)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -218,9 +223,11 @@ func run(ctx context.Context, args []string) (runErr error) {
 	col := &observer.Collector{
 		Client: runner.Client, Metrics: fwd, Namespace: cfg.namespace, Cluster: cfg.cluster,
 		OperatorNamespace: cfg.operatorNamespace, OperatorLabels: deploy.Spec.Selector.MatchLabels,
-		UpSelector: fmt.Sprintf(`up{namespace=%q,job=%q}`, cfg.operatorNamespace, cfg.metricsJob),
-		Window:     cfg.window, Rules: observer.DefaultRules(),
+		OperatorDeployment: cfg.operatorDeployment,
+		UpSelector:         fmt.Sprintf(`up{namespace=%q,job=%q}`, cfg.operatorNamespace, cfg.metricsJob),
+		Window:             cfg.window, Rules: observer.DefaultRules(),
 	}
+	col.Rules.ScrapeTimeout = cfg.scrapeTimeout
 
 	if err := os.MkdirAll(cfg.evidenceDir, 0o700); err != nil {
 		return err
