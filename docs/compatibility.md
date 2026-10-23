@@ -38,8 +38,9 @@ See [DESIGN.md §20 "Cluster Providers"](../DESIGN.md).
 ## Development images
 
 The `Development Images` workflow (`.github/workflows/dev-images.yml`) builds
-the manager and Instance Manager images of the head commit of every push to
-`main` and pushes them to GHCR, tagged with the full commit SHA:
+the manager and Instance Manager images, and the test-only workload client, of
+the head commit of every push to `main` and pushes them to GHCR, tagged with
+the full commit SHA:
 
 - `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager:main-<full sha>`
 - `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager:main-<full sha>`
@@ -51,9 +52,11 @@ the manager and Instance Manager images of the head commit of every push to
 
 They are built from the same Dockerfiles and build arguments as
 `make docker-build`, `make docker-build-instance-manager` and
-`make docker-build-workload`, for linux/amd64 only, and carry the `org.opencontainers.image.source`, `revision` and
-`created` labels. The job summary of each run lists the three digests; pin an
-image by digest when a record must name exactly what ran. A manual run
+`make docker-build-workload`, for linux/amd64 only, and carry the
+`org.opencontainers.image.source`, `revision` and `created` labels; the
+workload client also carries a `description` that says it is test-only. The
+job summary of each run lists the three digests; pin an image by digest when a
+record must name exactly what ran. A manual run
 (`workflow_dispatch`) builds only a commit that is on `main`. No `latest` or
 other mutable tag is pushed, and pull requests never push images. A tag is
 never overwritten; a re-run of a commit that already has images fails. A
