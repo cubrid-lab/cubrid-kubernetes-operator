@@ -10,8 +10,10 @@ WORKDIR /workspace
 COPY go.mod go.mod
 COPY go.sum go.sum
 # cache deps before building and copying source so that we don't need to re-download as much
-# and so that source changes don't invalidate our downloaded layer
-RUN go mod download
+# and so that source changes don't invalidate our downloaded layer.
+# The script retries a download that the Go proxy cuts off (#544).
+COPY build/go-mod-download.sh /usr/local/bin/go-mod-download.sh
+RUN go-mod-download.sh
 
 # Copy the Go source (relies on .dockerignore to filter)
 COPY . .

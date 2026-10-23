@@ -12,7 +12,9 @@ ARG CUBRID_IMAGE=cubrid/cubrid:11.4
 FROM --platform=${BUILDPLATFORM} ${GO_IMAGE} AS build
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+# Retries a download that the Go proxy cuts off (#544).
+COPY build/go-mod-download.sh /usr/local/bin/go-mod-download.sh
+RUN go-mod-download.sh
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY api/ api/

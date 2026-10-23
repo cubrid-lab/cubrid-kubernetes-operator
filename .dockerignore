@@ -11,9 +11,10 @@
 !internal
 **/*_test.go
 
-# Go module files
+# Go module files, and the script that downloads the modules
 !go.mod
 !go.sum
+!build/go-mod-download.sh
 
 # The Instance Manager image's entrypoint
 !build/instance-manager/entrypoint.sh

@@ -9,7 +9,9 @@ ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+# Retries a download that the Go proxy cuts off (#544).
+COPY build/go-mod-download.sh /usr/local/bin/go-mod-download.sh
+RUN go-mod-download.sh
 COPY api/ api/
 COPY internal/ internal/
 COPY test/fakeim/ test/fakeim/
