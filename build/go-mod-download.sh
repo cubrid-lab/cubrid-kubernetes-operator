@@ -15,16 +15,17 @@ attempts=${GO_MOD_DOWNLOAD_ATTEMPTS:-3}
 backoff=${GO_MOD_DOWNLOAD_BACKOFF:-5}
 # Both are checked as strings, so no value can make a later comparison or
 # arithmetic fail and leave the loop without its bound; leading zeros, which
-# the shell would read as octal, are refused.
+# the shell would read as octal, are refused. The digits are spelled out: in
+# some shells and locales a range such as [1-9] matches other digits too.
 case "$attempts" in
-[1-9] | 10) ;;
+[123456789] | 10) ;;
 *)
 	echo "GO_MOD_DOWNLOAD_ATTEMPTS must be a number from 1 to 10, not '$attempts'" >&2
 	exit 2
 	;;
 esac
 case "$backoff" in
-0 | [1-9] | [1-9][0-9] | [1-9][0-9][0-9]) ;;
+0 | [123456789] | [123456789][0123456789] | [123456789][0123456789][0123456789]) ;;
 *)
 	echo "GO_MOD_DOWNLOAD_BACKOFF must be a number of seconds from 0 to 999, not '$backoff'" >&2
 	exit 2
@@ -36,7 +37,8 @@ while :; do
 	if go mod download; then
 		exit 0
 	fi
-	if [ "$i" -ge "$attempts" ]; then
+	# Written so that a comparison that fails gives up too.
+	if ! [ "$i" -lt "$attempts" ]; then
 		echo "go mod download failed $attempts times; giving up" >&2
 		exit 1
 	fi

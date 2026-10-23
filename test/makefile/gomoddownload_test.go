@@ -117,6 +117,12 @@ exit 1
 
 func runGoModDownload(t *testing.T, succeedOn int, env ...string) (code, calls int, out string) {
 	t.Helper()
+	return runGoModDownloadIn(t, "sh", succeedOn, env...)
+}
+
+// runGoModDownloadIn runs build/go-mod-download.sh with the given shell.
+func runGoModDownloadIn(t *testing.T, shell string, succeedOn int, env ...string) (code, calls int, out string) {
+	t.Helper()
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(goModStandIn), 0o700); err != nil {
 		t.Fatal(err)
@@ -125,7 +131,7 @@ func runGoModDownload(t *testing.T, succeedOn int, env ...string) (code, calls i
 	// A run without a bound fails the test instead of hanging it.
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", filepath.Join(repoRoot(), "build", "go-mod-download.sh"))
+	cmd := exec.CommandContext(ctx, shell, filepath.Join(repoRoot(), "build", "go-mod-download.sh"))
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"CALLS="+log, "SUCCEED_ON="+strconv.Itoa(succeedOn), "GO_MOD_DOWNLOAD_BACKOFF=0")
 	cmd.Env = append(cmd.Env, env...)
@@ -179,6 +185,24 @@ func TestGoModDownload_RefusesABadSetting(t *testing.T) {
 		code, calls, out := runGoModDownload(t, 1, setting)
 		if code != 2 || calls != 0 || !strings.Contains(out, message) {
 			t.Errorf("%s: exit %d after %d calls, want 2 before any call with %q\n%s", setting, code, calls, message, out)
+		}
+	}
+}
+
+// In bash with a UTF-8 locale a range such as [1-9] also matches other
+// digits, such as the full-width "１", which no test or comparison accepts as a
+// number; the script refuses them too, and a comparison that fails ends the
+// loop instead of leaving it without a bound.
+func TestGoModDownload_RefusesANonASCIIDigit(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not installed")
+	}
+	for _, setting := range []string{"GO_MOD_DOWNLOAD_ATTEMPTS=\uff11", "GO_MOD_DOWNLOAD_BACKOFF=\uff11"} {
+		message := strings.SplitN(setting, "=", 2)[0] + " must be"
+		code, calls, out := runGoModDownloadIn(t, "bash", 1, "LC_ALL=en_US.UTF-8", setting)
+		if code != 2 || calls != 0 || !strings.Contains(out, message) {
+			t.Errorf("bash, en_US.UTF-8, %s: exit %d after %d calls, want 2 before any call with %q\n%s",
+				setting, code, calls, message, out)
 		}
 	}
 }
