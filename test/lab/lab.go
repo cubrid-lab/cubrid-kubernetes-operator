@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -123,6 +124,10 @@ type Lock struct {
 	// since.
 	uid     string
 	version string
+	// sent are the renewTimes this run wrote since version was last
+	// confirmed, that one included: a write the API server stored although
+	// kubectl failed leaves one of them in the Lease.
+	sent []time.Time
 }
 
 // Acquire creates the campaign Lease for holder, so that a second campaign on
@@ -161,7 +166,8 @@ func (t Target) Acquire(
 			return nil, fmt.Errorf("context %q: the campaign Lease was created without a uid and a resourceVersion: %q",
 				t.Context, out)
 		}
-		return &Lock{target: t, holder: holder, seconds: seconds, acquired: now, uid: meta[0], version: meta[1]}, nil
+		return &Lock{target: t, holder: holder, seconds: seconds, acquired: now, uid: meta[0], version: meta[1],
+			sent: []time.Time{micro(now)}}, nil
 	}
 	if strings.Contains(err.Error(), "AlreadyExists") {
 		return nil, t.held(ctx, k, holder, now)
@@ -171,7 +177,7 @@ func (t Target) Acquire(
 	switch {
 	case readErr == nil && l.Spec.Holder == holder && l.Metadata.UID != "" && l.Metadata.ResourceVersion != "":
 		return &Lock{target: t, holder: holder, seconds: l.Spec.Seconds, acquired: l.Spec.Acquired,
-			uid: l.Metadata.UID, version: l.Metadata.ResourceVersion}, nil
+			uid: l.Metadata.UID, version: l.Metadata.ResourceVersion, sent: []time.Time{l.Spec.Renewed}}, nil
 	case readErr == nil && l.Spec.Holder != "":
 		return nil, fmt.Errorf("context %q: creating the campaign Lease: %w; %w", t.Context, err, t.describe(l, now))
 	default:
@@ -179,6 +185,11 @@ func (t Target) Acquire(
 			"whether the Lease exists is unknown, check with: kubectl --context %s -n %s get lease %s",
 			t.Context, err, t.Context, Namespace, LeaseName)
 	}
+}
+
+// micro is t as a Lease holds it.
+func micro(t time.Time) time.Time {
+	return t.UTC().Truncate(time.Microsecond)
 }
 
 // leaseManifest is the campaign Lease with metadata, to which it adds the
@@ -259,65 +270,112 @@ func (t Target) describe(l leaseObject, now time.Time) error {
 // anyone else wrote the Lease since; the resourceVersion it returns is the
 // one the next Renew and Release carry.
 //
-// The error wraps ErrLost when the Lease was removed or written by someone
-// else. Any other error leaves the Lease as it was, still this run's.
+// A Conflict is also what a write of this run causes that the API server
+// stored although kubectl failed, leaving this run an old resourceVersion; so
+// on a Conflict the Lease is read, and when it is still this run's (see
+// adopt), the write is made again on its resourceVersion.
+//
+// The error wraps ErrLost when the Lease is gone or someone else wrote it.
+// Any other error leaves the Lease this run's, as it was or renewed.
 func (l *Lock) Renew(ctx context.Context, k Kubectl, now time.Time) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	manifest, err := leaseManifest(map[string]any{"uid": l.uid, "resourceVersion": l.version}, map[string]any{
-		"holderIdentity":       l.holder,
-		"leaseDurationSeconds": l.seconds,
-		"acquireTime":          l.acquired.UTC().Format(microTime),
-		"renewTime":            now.UTC().Format(microTime),
-	})
-	if err != nil {
-		return err
+	now = micro(now)
+	l.sent = append(l.sent, now)
+	for adopted := false; ; adopted = true {
+		manifest, err := leaseManifest(map[string]any{"uid": l.uid, "resourceVersion": l.version}, map[string]any{
+			"holderIdentity":       l.holder,
+			"leaseDurationSeconds": l.seconds,
+			"acquireTime":          l.acquired.UTC().Format(microTime),
+			"renewTime":            now.Format(microTime),
+		})
+		if err != nil {
+			return err
+		}
+		out, err := l.target.kubectl(ctx, k, string(manifest), "replace", "--raw", leasePath, "-f", "-")
+		switch {
+		case err == nil:
+		case strings.Contains(err.Error(), "(NotFound)"):
+			return fmt.Errorf("%w: it was removed while the run held it", ErrLost)
+		case strings.Contains(err.Error(), "(Conflict)"):
+			ours, err := l.adopt(ctx, k)
+			switch {
+			case err != nil:
+				return fmt.Errorf("renewing the campaign Lease: reading it after a Conflict: %w", err)
+			case !ours:
+				return fmt.Errorf("%w: it is gone, or no longer the object this run wrote (uid %s, resourceVersion %s)",
+					ErrLost, l.uid, l.version)
+			case adopted:
+				return errors.New("renewing the campaign Lease: it changed again while this run renewed it")
+			}
+			continue
+		default:
+			return fmt.Errorf("renewing the campaign Lease: %w", err)
+		}
+		var renewed leaseObject
+		if err := json.Unmarshal([]byte(out), &renewed); err != nil || renewed.Metadata.ResourceVersion == "" {
+			return fmt.Errorf("the renewed campaign Lease came back without a resourceVersion: %q", out)
+		}
+		l.version, l.sent = renewed.Metadata.ResourceVersion, []time.Time{now}
+		return nil
 	}
-	out, err := l.target.kubectl(ctx, k, string(manifest), "replace", "--raw", leasePath, "-f", "-")
+}
+
+// adopt reads the Lease after a Conflict. When it still carries this run's
+// uid and holder, and a renewTime this run wrote, nobody else wrote it since
+// this run did: its resourceVersion becomes the one to carry, and adopt
+// returns true. A Lease that is gone, or that anyone else wrote, returns
+// false. The caller holds l.mu.
+func (l *Lock) adopt(ctx context.Context, k Kubectl) (bool, error) {
+	got, err := l.target.lease(ctx, k)
 	switch {
-	case err == nil:
-	case strings.Contains(err.Error(), "(NotFound)"):
-		return fmt.Errorf("%w: it was removed while the run held it", ErrLost)
-	case strings.Contains(err.Error(), "(Conflict)"):
-		return fmt.Errorf("%w: it is no longer the object this run wrote (uid %s, resourceVersion %s)",
-			ErrLost, l.uid, l.version)
-	default:
-		return fmt.Errorf("renewing the campaign Lease: %w", err)
+	case err != nil && strings.Contains(err.Error(), "(NotFound)"):
+		return false, nil
+	case err != nil:
+		return false, err
+	case got.Metadata.UID != l.uid || got.Spec.Holder != l.holder || got.Metadata.ResourceVersion == "" ||
+		!slices.ContainsFunc(l.sent, got.Spec.Renewed.Equal):
+		return false, nil
 	}
-	var renewed leaseObject
-	if err := json.Unmarshal([]byte(out), &renewed); err != nil || renewed.Metadata.ResourceVersion == "" {
-		return fmt.Errorf("the renewed campaign Lease came back without a resourceVersion: %q", out)
-	}
-	l.version = renewed.Metadata.ResourceVersion
-	return nil
+	l.version, l.sent = got.Metadata.ResourceVersion, []time.Time{got.Spec.Renewed}
+	return true, nil
 }
 
 // Release deletes the Lease, but only the object this run last wrote, as it
 // wrote it: the delete carries its uid and resourceVersion as preconditions,
 // so a Lease that someone removed and another run created since, or that
-// another holder wrote in place, is left alone, and nothing is read before
-// the delete that could change under it.
+// another holder wrote in place, is left alone, and nothing read before the
+// delete can change under it. On a Conflict the Lease is read, as by Renew,
+// and when it is still this run's the delete is made again on its
+// resourceVersion.
 func (l *Lock) Release(ctx context.Context, k Kubectl) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	options, err := json.Marshal(map[string]any{
-		"apiVersion":    "v1",
-		"kind":          "DeleteOptions",
-		"preconditions": map[string]any{"uid": l.uid, "resourceVersion": l.version},
-	})
-	if err != nil {
-		return err
-	}
-	_, err = l.target.kubectl(ctx, k, string(options), "delete", "--raw", leasePath, "-f", "-")
-	switch {
-	case err == nil:
-		return nil
-	case strings.Contains(err.Error(), "(NotFound)"):
-		return fmt.Errorf("the campaign Lease of %q was removed while the run held it", l.holder)
-	case strings.Contains(err.Error(), "(Conflict)"):
-		return fmt.Errorf("the campaign Lease is no longer the one %q wrote (uid %s, resourceVersion %s); left in place",
-			l.holder, l.uid, l.version)
-	default:
-		return fmt.Errorf("deleting the campaign Lease: %w", err)
+	for adopted := false; ; adopted = true {
+		options, err := json.Marshal(map[string]any{
+			"apiVersion":    "v1",
+			"kind":          "DeleteOptions",
+			"preconditions": map[string]any{"uid": l.uid, "resourceVersion": l.version},
+		})
+		if err != nil {
+			return err
+		}
+		_, err = l.target.kubectl(ctx, k, string(options), "delete", "--raw", leasePath, "-f", "-")
+		switch {
+		case err == nil:
+			return nil
+		case strings.Contains(err.Error(), "(NotFound)"):
+			return fmt.Errorf("the campaign Lease of %q was removed while the run held it", l.holder)
+		case strings.Contains(err.Error(), "(Conflict)"):
+			if !adopted {
+				if ours, err := l.adopt(ctx, k); err == nil && ours {
+					continue
+				}
+			}
+			return fmt.Errorf("the campaign Lease is no longer the one %q wrote (uid %s, resourceVersion %s); left in place",
+				l.holder, l.uid, l.version)
+		default:
+			return fmt.Errorf("deleting the campaign Lease: %w", err)
+		}
 	}
 }

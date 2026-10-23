@@ -50,16 +50,27 @@ seconds, and refuses to start while any Lease exists in `cubrid-lab`; so
 while a lab run holds the lab, the launcher does not start, and the other way
 round.
 
+A renewal or the release that meets a Conflict reads the Lease, since a write
+of this run that the API server stored although kubectl failed (a timeout,
+for example) leaves the run an old resourceVersion. When the Lease still
+carries the run's uid and holder and a `renewTime` the run sent, the run
+takes its resourceVersion and goes on. Otherwise the Lease is lost: it was
+written by someone else, or removed, and perhaps created again (the API
+server reports a removed Lease as a Conflict on the uid, not as NotFound).
+The run then deletes nothing, since the Lease is no longer its own.
+
+A renewal that fails otherwise, for example while the API server cannot be
+reached, is tried again at the next one. When none succeeds within
+`LAB_DURATION` of the last one, even while one is still in flight, the Lease
+may have ended and the next run may take the lab, so it is lost too. The
+release is then still sent, with its preconditions, so a Lease left as the
+run wrote it is removed and any other is left in place.
+
 A run whose Lease is lost no longer holds the lab, and stops: it says why,
 sends SIGTERM to the command's process group, and SIGKILL two seconds later
-if anything of it is left, and exits 1. The Lease is lost when a renewal finds
-it removed (NotFound) or written by someone else (Conflict); the run then
-deletes nothing, since the Lease is no longer its own. A renewal that fails
-otherwise, for example while the API server cannot be reached, is tried again
-at the next one; but when none succeeds within `LAB_DURATION` of the last one,
-the Lease may have ended and the next run may take the lab, so it is lost too.
-The release is then still sent, with its preconditions, so a Lease left as the
-run wrote it is removed and any other is left in place.
+if anything of it is left, and exits 1. So after the last renewal, the
+command can outlast the Lease's end by about those two seconds, plus the
+difference between this host's clock and the API server's.
 
 Ctrl-C, SIGTERM and SIGHUP (a closed terminal) are handled for the whole run.
 Before the command starts, one stops the run after the current step, releasing

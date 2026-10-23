@@ -41,7 +41,9 @@ type fakeCluster struct {
 	// createErr, when set, fails the next create after storing the Lease, as
 	// a timeout after the API server stored it would.
 	createErr error
-	calls     [][]string
+	// renewErr, when set, fails the next renewal after storing it.
+	renewErr error
+	calls    [][]string
 }
 
 func (f *fakeCluster) kubectl(_ context.Context, stdin string, args ...string) (string, error) {
@@ -99,15 +101,23 @@ func (f *fakeCluster) kubectl(_ context.Context, stdin string, args ...string) (
 		if err := json.Unmarshal([]byte(stdin), &obj); err != nil {
 			return "", err
 		}
+		// As the API server answers: a uid in the body is a precondition, so a
+		// removed Lease is a Conflict, not NotFound.
 		switch {
-		case f.lease == nil:
-			return "", errors.New(`Error from server (NotFound): leases.coordination.k8s.io "campaign" not found`)
-		case obj.Metadata.UID != f.uid || obj.Metadata.ResourceVersion != f.resourceVersion():
+		case f.lease == nil || obj.Metadata.UID != f.uid:
+			return "", fmt.Errorf(`Error from server (Conflict): Operation cannot be fulfilled on `+
+				`leases.coordination.k8s.io "campaign": Precondition failed: `+
+				`UID in precondition: %s, UID in object meta: %s`, obj.Metadata.UID, f.uid)
+		case obj.Metadata.ResourceVersion != f.resourceVersion():
 			return "", errors.New(`Error from server (Conflict): Operation cannot be fulfilled on ` +
 				`leases.coordination.k8s.io "campaign": the object has been modified; ` +
 				`please apply your changes to the latest version and try again`)
 		}
 		f.update(obj.Spec)
+		if err := f.renewErr; err != nil {
+			f.renewErr = nil
+			return "", err
+		}
 		out, _ := json.Marshal(map[string]any{
 			"metadata": map[string]any{"uid": f.uid, "resourceVersion": f.resourceVersion()},
 			"spec":     f.lease,
@@ -530,6 +540,87 @@ func TestRenewOfALeaseNoLongerThisRunsIsLost(t *testing.T) {
 	}
 	if err := lock.Renew(ctx, f.kubectl, t0.Add(20*time.Second)); err != nil {
 		t.Fatalf("the renewal after the failed one: %v", err)
+	}
+}
+
+// A renewal the API server stored although kubectl failed, as after a
+// timeout, leaves the run a stale resourceVersion. The Conflict that follows
+// is not a loss when the Lease still carries this run's uid, holder and a
+// renewTime it sent: the run takes the Lease's resourceVersion and goes on,
+// and so does a release.
+func TestAStoredButFailedRenewalIsNotALoss(t *testing.T) {
+	ctx := context.Background()
+	target := Target{Context: labCtx, Name: labA}
+	timeout := errors.New("Unable to connect to the server: net/http: request canceled (Client.Timeout exceeded)")
+
+	f := &fakeCluster{context: labCtx, marker: labA}
+	lock, err := target.Acquire(ctx, f.kubectl, "mine", time.Minute, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.renewErr = timeout
+	if err := lock.Renew(ctx, f.kubectl, t0.Add(10*time.Second)); err == nil || errors.Is(err, ErrLost) {
+		t.Fatalf("Renew() = %v, want an error that is not ErrLost", err)
+	}
+	now := t0.Add(20 * time.Second)
+	if err := lock.Renew(ctx, f.kubectl, now); err != nil {
+		t.Fatalf("the renewal after a stored but failed one: %v", err)
+	}
+	if got := f.lease["renewTime"]; got != now.Format(microTime) {
+		t.Fatalf("the Lease has renewTime %v, want %s", got, now.Format(microTime))
+	}
+	if err := lock.Release(ctx, f.kubectl); err != nil || f.lease != nil {
+		t.Fatalf("Release() = %v, Lease %v; want it deleted", err, f.lease)
+	}
+
+	// The release right after such a renewal deletes the Lease too.
+	f = &fakeCluster{context: labCtx, marker: labA}
+	if lock, err = target.Acquire(ctx, f.kubectl, "mine", time.Minute, t0); err != nil {
+		t.Fatal(err)
+	}
+	f.renewErr = timeout
+	_ = lock.Renew(ctx, f.kubectl, t0.Add(10*time.Second))
+	if err := lock.Release(ctx, f.kubectl); err != nil || f.lease != nil {
+		t.Fatalf("Release() after a stored but failed renewal = %v, Lease %v; want it deleted", err, f.lease)
+	}
+}
+
+// After a stored but failed renewal, a Lease that someone else wrote since,
+// or that is gone, is still lost, and a release leaves it alone.
+func TestAStoredButFailedRenewalDoesNotHideALoss(t *testing.T) {
+	ctx := context.Background()
+	target := Target{Context: labCtx, Name: labA}
+	for _, tc := range []struct {
+		name   string
+		change func(f *fakeCluster)
+	}{
+		{"written by another holder", func(f *fakeCluster) { f.update(spec(otherHolder, 60, t0, t0)) }},
+		{"written with this holder but not by this run", func(f *fakeCluster) {
+			f.update(spec("mine", 60, t0, t0.Add(time.Hour)))
+		}},
+		{"removed", func(f *fakeCluster) { f.lease = nil }},
+		{"removed and created again", func(f *fakeCluster) { f.store(spec("mine", 60, t0, t0.Add(10*time.Second))) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeCluster{context: labCtx, marker: labA}
+			lock, err := target.Acquire(ctx, f.kubectl, "mine", time.Minute, t0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.renewErr = errors.New("timeout")
+			_ = lock.Renew(ctx, f.kubectl, t0.Add(10*time.Second))
+			tc.change(f)
+			before, lease := f.resourceVersion(), f.lease
+			if err := lock.Renew(ctx, f.kubectl, t0.Add(20*time.Second)); !errors.Is(err, ErrLost) {
+				t.Fatalf("Renew() = %v, want ErrLost", err)
+			}
+			if err := lock.Release(ctx, f.kubectl); err == nil {
+				t.Fatal("the release of a lost Lease succeeded")
+			}
+			if f.resourceVersion() != before || (lease != nil && f.lease == nil) {
+				t.Fatal("a Lease that is no longer this run's was written or deleted")
+			}
+		})
 	}
 }
 

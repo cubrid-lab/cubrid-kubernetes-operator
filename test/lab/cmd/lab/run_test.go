@@ -37,7 +37,8 @@ const (
 
 // fakeLab is a kubectl stand-in, a shell script, for one lab cluster. It logs
 // every call, one line each: its pid, its process group, and its arguments,
-// separated by tabs; it writes the delete options it gets to deleteOptions,
+// separated by tabs; it writes the delete options it takes to deleteOptions,
+// taking only those that carry the uid and the current resourceVersion,
 // and appends every renewal it accepts to renewals, one per line.
 type fakeLab struct {
 	dir, kubectl, log, deleteOptions, renewals string
@@ -47,8 +48,12 @@ type fakeLab struct {
 // is how the create of the Lease goes: "ok", "exists" (another run holds the
 // lab), or "block" (it stores the Lease, then waits for the file go). renew is
 // how a renewal goes: "ok", which takes one that carries the uid and the
-// current resourceVersion and raises the version, "conflict" (someone else
-// wrote the Lease), or "down" (the API server cannot be reached).
+// current resourceVersion and raises the version, "flaky", which also stores
+// the first one but fails it, as a timeout after the API server stored it
+// would, "conflict" (someone else wrote the Lease), "down" (the API server
+// cannot be reached), or "hang" (kubectl hangs, its children holding its
+// output, one of them in a session of its own). A get of the Lease returns
+// the last renewal stored, or else another holder's Lease.
 func newFakeLab(t *testing.T, marker, create, renew string) *fakeLab {
 	t.Helper()
 	dir := t.TempDir()
@@ -86,11 +91,20 @@ case "$*" in
 *" replace "*)
 	body=$(cat)
 	v=$(cat "$dir/version")
-	case $renew:$body in
-	ok:*'"resourceVersion":"'"$v"'"'*'"uid":"uid-1"'*) ;;
-	down:*)
+	case $renew in
+	down)
 		echo 'Unable to connect to the server: dial tcp 10.0.0.1:6443: i/o timeout' >&2
 		exit 1 ;;
+	hang)
+		echo $$ > "$dir/hung"
+		setsid sleep 30 &
+		echo $! >> "$dir/hung"
+		sleep 30 &
+		sleep 30
+		exit 1 ;;
+	esac
+	case $renew:$body in
+	ok:*'"resourceVersion":"'"$v"'"'*'"uid":"uid-1"'* | flaky:*'"resourceVersion":"'"$v"'"'*'"uid":"uid-1"'*) ;;
 	*)
 		printf '%%s %%s\n' 'Error from server (Conflict): Operation cannot be fulfilled on' \
 			'leases.coordination.k8s.io "campaign": the object has been modified' >&2
@@ -99,12 +113,31 @@ case "$*" in
 	v=$((v+1))
 	echo "$v" > "$dir/version"
 	printf '%%s\n' "$body" >> "$dir/renewals"
+	printf '%%s' "$body" | sed 's/"resourceVersion":"[0-9]*"/"resourceVersion":"'"$v"'"/' > "$dir/lease"
+	if [ "$renew" = flaky ] && ! [ -e "$dir/flaked" ]; then
+		: > "$dir/flaked"
+		echo 'Unable to connect to the server: net/http: request canceled (Client.Timeout exceeded)' >&2
+		exit 1
+	fi
 	printf '{"metadata":{"uid":"uid-1","resourceVersion":"%%s"}}' "$v" ;;
 *"get lease"*)
+	if [ -e "$dir/lease" ]; then
+		cat "$dir/lease"
+		exit
+	fi
 	printf '{"metadata":{"uid":"uid-0","resourceVersion":"3"},'
 	printf '"spec":{"holderIdentity":"other","leaseDurationSeconds":3600,"acquireTime":"2026-10-15T06:00:00.000000Z"}}' ;;
 *" delete "*)
-	cat > "$dir/delete-options" ;;
+	options=$(cat)
+	v=$(cat "$dir/version")
+	case $options in
+	*'"resourceVersion":"'"$v"'"'*'"uid":"uid-1"'*) ;;
+	*)
+		printf '%%s %%s\n' 'Error from server (Conflict): Operation cannot be fulfilled on' \
+			'leases.coordination.k8s.io "campaign": Precondition failed' >&2
+		exit 1 ;;
+	esac
+	printf '%%s' "$options" > "$dir/delete-options" ;;
 *)
 	echo "unexpected call: $*" >&2
 	exit 1 ;;
@@ -408,7 +441,7 @@ func waitFor(t *testing.T, path string) {
 // latest one.
 func TestRunRenewsTheLeaseWhileTheCommandRuns(t *testing.T) {
 	f := newFakeLab(t, labA, "ok", "ok")
-	code := run(labArgsFor(time.Second, "sleep", "1.5"), callerEnviron(t), f.kubectl, newSignalSource().notify)
+	code := run(labArgsFor(3*time.Second, "sleep", "1.5"), callerEnviron(t), f.kubectl, newSignalSource().notify)
 	if code != 0 {
 		t.Fatalf("run() = %d, want 0", code)
 	}
@@ -426,6 +459,58 @@ func TestRunRenewsTheLeaseWhileTheCommandRuns(t *testing.T) {
 	requireRemoved(t, copyOf(t, f.calls(t)))
 }
 
+// A renewal the API server stored although kubectl failed is not a loss: the
+// run finds it in the Lease, goes on renewing from it, and releases the Lease.
+func TestRunKeepsALeaseWhoseRenewalWasStoredThoughItFailed(t *testing.T) {
+	f := newFakeLab(t, labA, "ok", "flaky")
+	code := run(labArgsFor(3*time.Second, "sleep", "1.5"), callerEnviron(t), f.kubectl, newSignalSource().notify)
+	if code != 0 {
+		t.Fatalf("run() = %d, want 0", code)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "flaked")); err != nil {
+		t.Fatal("no renewal was stored and failed")
+	}
+	version, _ := os.ReadFile(filepath.Join(f.dir, "version"))
+	options, _ := os.ReadFile(f.deleteOptions)
+	if want := `"resourceVersion":"` + strings.TrimSpace(string(version)) + `"`; !strings.Contains(string(options), want) {
+		t.Fatalf("the release carried %q, want %s", options, want)
+	}
+}
+
+// A kubectl that hangs, with children that hold its output, does not hold
+// the run past the Lease's end: the run stops the command once the Lease's
+// duration has passed without a renewal.
+func TestRunStopsTheCommandWhenARenewalHangs(t *testing.T) {
+	f := newFakeLab(t, labA, "ok", "hang")
+	t.Cleanup(func() {
+		got, _ := os.ReadFile(filepath.Join(f.dir, "hung"))
+		if pids := strings.Fields(string(got)); len(pids) == 2 {
+			group, _ := strconv.Atoi(pids[0])
+			stray, _ := strconv.Atoi(pids[1])
+			_ = syscall.Kill(-group, syscall.SIGKILL)
+			_ = syscall.Kill(stray, syscall.SIGKILL)
+		}
+	})
+	leader := filepath.Join(t.TempDir(), "leader")
+	done := make(chan int, 1)
+	go func() {
+		done <- run(labArgsFor(3*time.Second, "sh", "-c", `echo $$ > "$0"; sleep 30`, leader),
+			callerEnviron(t), f.kubectl, newSignalSource().notify)
+	}()
+	killGroupOf(t, leader)
+	select {
+	case code := <-done:
+		if code != exitLost {
+			t.Fatalf("run() = %d, want %d", code, exitLost)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the command still ran after the Lease's duration passed during a renewal that hung")
+	}
+	if !f.released() {
+		t.Error("the release was not sent")
+	}
+}
+
 // A run whose Lease was written by someone else no longer holds the lab: it
 // stops the command's group, with SIGKILL when SIGTERM is not enough, exits
 // non-zero, and deletes nothing.
@@ -434,8 +519,9 @@ func TestRunStopsTheCommandWhenTheLeaseIsLost(t *testing.T) {
 	leader := filepath.Join(t.TempDir(), "leader")
 	done := make(chan int, 1)
 	go func() {
-		done <- run(labArgsFor(time.Second, "sh", "-c", `echo $$ > "$0"; trap '' TERM; while :; do sleep 0.05; done`, leader),
-			callerEnviron(t), f.kubectl, newSignalSource().notify)
+		command := `echo $$ > "$0"; trap '' TERM; while :; do sleep 0.05; done`
+		done <- run(labArgsFor(3*time.Second, "sh", "-c", command, leader), callerEnviron(t), f.kubectl,
+			newSignalSource().notify)
 	}()
 	killGroupOf(t, leader)
 	select {
@@ -461,7 +547,7 @@ func TestRunStopsTheCommandWhenNoRenewalSucceedsInTime(t *testing.T) {
 	leader := filepath.Join(t.TempDir(), "leader")
 	done := make(chan int, 1)
 	go func() {
-		done <- run(labArgsFor(time.Second, "sh", "-c", `echo $$ > "$0"; sleep 30`, leader),
+		done <- run(labArgsFor(3*time.Second, "sh", "-c", `echo $$ > "$0"; sleep 30`, leader),
 			callerEnviron(t), f.kubectl, newSignalSource().notify)
 	}()
 	killGroupOf(t, leader)

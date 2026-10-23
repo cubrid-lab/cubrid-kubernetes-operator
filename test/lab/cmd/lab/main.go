@@ -65,6 +65,10 @@ import (
 // still gets its own time.
 const callTimeout = time.Minute
 
+// kubectlWaitDelay is how long a kubectl call that was cancelled may take to
+// release its output.
+const kubectlWaitDelay = time.Second
+
 // exitLost is the exit code of a run that lost its Lease, whatever the
 // command's: the run stopped the command.
 const exitLost = 1
@@ -171,37 +175,52 @@ func run(args, environ []string, kubectlPath string, notify func(chan<- os.Signa
 }
 
 // renew renews the Lease every sixth of its duration, from acquired on, until
-// stop is closed, and then returns nil. When the Lease is lost, it says so,
-// calls lose and returns why: an error that wraps lab.ErrLost when the Lease
-// was removed or someone else wrote it, any other when no renewal succeeded
-// within its duration of the last one. Each renewal gets the time left until
-// then, so a call that hangs cannot carry the run past the Lease's end.
+// stop is closed, and then returns nil, cancelling a renewal still in flight.
+// When the Lease is lost, it says so, calls lose and returns why: an error
+// that wraps lab.ErrLost when the Lease is gone or someone else wrote it, any
+// other when no renewal succeeded within its duration of the last one. The
+// end of that duration is a timer of its own, so a renewal that hangs does
+// not carry the run past it.
 func renew(
 	k lab.Kubectl, lock *lab.Lock, duration time.Duration, acquired time.Time, stop <-chan struct{}, lose func(),
 ) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	ticker := time.NewTicker(duration / 6)
 	defer ticker.Stop()
-	last := acquired
+	end := time.NewTimer(time.Until(acquired.Add(duration)))
+	defer end.Stop()
+	type renewal struct {
+		at  time.Time
+		err error
+	}
+	// Room for the one renewal in flight, which may end after renew returns.
+	renewed := make(chan renewal, 1)
+	inFlight := false
+	var err error
 	for {
 		select {
 		case <-stop:
 			return nil
 		case <-ticker.C:
-		}
-		now := time.Now()
-		ctx, cancel := context.WithDeadline(context.Background(), last.Add(duration))
-		err := lock.Renew(ctx, k, now)
-		cancel()
-		switch {
-		case err == nil:
-			last = now
+			if !inFlight {
+				inFlight = true
+				go func(now time.Time) { renewed <- renewal{now, lock.Renew(ctx, k, now)} }(time.Now())
+			}
 			continue
-		case errors.Is(err, lab.ErrLost):
-		case time.Now().Before(last.Add(duration)):
-			fmt.Fprintf(os.Stderr, "lab: %v; retrying\n", err)
-			continue
-		default:
-			err = fmt.Errorf("the campaign Lease was not renewed within %s: %w", duration, err)
+		case r := <-renewed:
+			inFlight = false
+			switch {
+			case r.err == nil:
+				end.Reset(time.Until(r.at.Add(duration)))
+				continue
+			case !errors.Is(r.err, lab.ErrLost):
+				fmt.Fprintf(os.Stderr, "lab: %v; retrying\n", r.err)
+				continue
+			}
+			err = r.err
+		case <-end.C:
+			err = fmt.Errorf("the campaign Lease was not renewed within %s", duration)
 		}
 		fmt.Fprintf(os.Stderr, "lab: %v; the run no longer holds the lab, stopping the command\n", err)
 		lose()
@@ -432,6 +451,10 @@ func runKubectl(ctx context.Context, path, stdin string, args ...string) (string
 	// call short, for example a create the API server has already stored; the
 	// relay stops the run after the call instead.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// When ctx ends, the call's whole group is killed, and what still holds
+	// its output after kubectlWaitDelay, having left the group, is cut off.
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = kubectlWaitDelay
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
