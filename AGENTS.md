@@ -113,6 +113,26 @@ title becomes the commit title. The `PR title` check enforces it.
 
 Preserve actual contributor authorship and existing credits.
 
+## Unified PR Review Policy
+
+Use identical change and review criteria regardless of whether work is
+human-authored or developed with OpenCode, Codex, Claude Code, ChatGPT,
+Copilot or another agent. No AI-specific Oracle/Copilot review is
+mandatory. Optional AI reviews are **advisory**.
+
+1. Scope one independently verifiable issue and change with relevant
+   success/failure tests, documentation and safety invariants.
+2. Use the **required GitHub Actions CI** result on the final PR head as
+   authoritative for lint, generated manifests, unit/envtest and relevant
+   Kind E2E scenarios. Local checks are useful but not a separate merge
+   gate; manual cluster/VM evidence remains required where documented.
+3. The reviewer checks scenario contract, safety, tests, security,
+   reconciliation and recovery behavior; AI feedback is only supporting
+   context.
+4. Preserve the existing **two-maintainer independent review**, high-risk
+   safety/HA/backup and release checks, and final maintainer merge
+   decision. No CI result or AI summary grants automatic approval.
+
 ## Working on an Issue
 
 Follow [CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow).

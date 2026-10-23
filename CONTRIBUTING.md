@@ -208,14 +208,28 @@ the implementation.
   maintainer reaches the lab is in
   [Reaching the multi-VM lab](./docs/testing/lab-access.md).
 
+## Unified PR Review Policy
+
+The same review process applies to human-only and AI-assisted
+contributions (OpenCode, Codex, Claude Code, ChatGPT, Copilot, etc.).
+GitHub Actions required CI on the final head provides the authoritative
+automated results; local test runs are encouraged and should be reported
+accurately, but are not a separate merge gate. The applicable Kind,
+three-VM and safety/recovery scenario evidence remains required according
+to [Testing expectations](#testing-expectations). Optional Oracle,
+Copilot or `agent-review` observations are advisory only, never a
+tool-specific approval route. Existing independent two-maintainer review,
+safety-invariant assessment and maintainer merge decisions remain
+unchanged for **every** implementation method.
+
 ## Pull requests
 
 - One logical change per PR; keep the diff focused and explain the motivation
   in the PR description.
-- `make build` and `make verify` (check-generated, format-check, vet, lint
-  and test) must pass (`make lint-fix` applies gofmt/golangci-lint fixes); CI
-  runs Lint, Tests (`make verify`), and E2E. Report the commands actually run with their results, and the checks
-  not run with reasons.
+- GitHub Actions CI must pass the applicable build and `make verify` checks
+  (check-generated, format-check, vet, lint and test) plus selected E2E.
+  Local `make build` and `make verify` are recommended; report any local runs,
+  results and checks not run with reasons. CI remains the authoritative record.
 - Add or update tests for behavior changes.
 - After editing `*_types.go` or kubebuilder markers, run
   `make manifests generate` and commit the regenerated files in the same PR.
