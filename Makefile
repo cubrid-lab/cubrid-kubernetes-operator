@@ -241,11 +241,19 @@ docker-buildx: container-tool ## Build and push docker image for the manager for
 	rm -f Dockerfile.cross; \
 	exit $$status
 
+# Render config/default with the manager image set to ${IMG} through a throwaway
+# overlay under the ignored dist/ directory, so no tracked file is edited.
+define kustomize-build-with-image
+overlay="$$(mktemp -d dist/overlay.XXXXXX)" && trap 'rm -rf "$$overlay"' EXIT && \
+	printf 'resources:\n- ../../config/default\n' > "$$overlay/kustomization.yaml" && \
+	(cd "$$overlay" && "$(KUSTOMIZE)" edit set image controller=${IMG}) && \
+	"$(KUSTOMIZE)" build "$$overlay"
+endef
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
+	$(call kustomize-build-with-image) > dist/install.yaml
 
 ##@ Deployment
 
@@ -265,8 +273,8 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
+	mkdir -p dist
+	$(call kustomize-build-with-image) | "$(KUBECTL)" apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.

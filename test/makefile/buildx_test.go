@@ -66,15 +66,7 @@ func runBuildx(t *testing.T, failEnv string) (code int, out string, calls []stri
 	log := filepath.Join(t.TempDir(), "calls")
 	cmd := exec.Command("make", "-C", dir, "-f", filepath.Join(repo, "Makefile"), "docker-buildx",
 		"CONTAINER_TOOL="+tool, "IMG=registry.invalid/operator:test")
-	// The caller's make flags (MAKEFLAGS=i, -n, ...) must not reach this make.
-	for _, kv := range os.Environ() {
-		switch strings.SplitN(kv, "=", 2)[0] {
-		case "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", "GNUMAKEFLAGS", "MAKEFILES":
-		default:
-			cmd.Env = append(cmd.Env, kv)
-		}
-	}
-	cmd.Env = append(cmd.Env, "CALLS="+log)
+	cmd.Env = append(childMakeEnv(), "CALLS="+log)
 	if failEnv != "" {
 		cmd.Env = append(cmd.Env, failEnv+"=1")
 	}
@@ -142,4 +134,18 @@ func TestDockerBuildx_ReportsTheBuildsExitStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// childMakeEnv returns the environment without the caller's make flags
+// (MAKEFLAGS=i, -n, ...), which must not reach the make under test.
+func childMakeEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		switch strings.SplitN(kv, "=", 2)[0] {
+		case "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", "GNUMAKEFLAGS", "MAKEFILES":
+		default:
+			env = append(env, kv)
+		}
+	}
+	return env
 }
