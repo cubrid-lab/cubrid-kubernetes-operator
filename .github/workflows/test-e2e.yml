@@ -48,9 +48,7 @@ jobs:
         timeout-minutes: 70
         env:
           E2E_EVIDENCE_DIR: ${{ github.workspace }}/e2e-evidence
-        run: |
-          go mod tidy
-          make test-e2e
+        run: make test-e2e
 
       # Kept for failed runs too: the record says what ran and on which images.
       - name: Upload the scenario evidence

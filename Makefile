@@ -62,25 +62,52 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
-.PHONY: verify
-verify: manifests generate fmt ## Fail if generated files, formatting or go.mod/go.sum differ from what is committed. It does not run vet: 'make test' and 'make lint' do.
-	go mod tidy
-	@# Regenerating rewrites the boilerplate year (YEAR defaults to the current
-	@# year), so a header that differs only in its copyright year is ignored;
-	@# otherwise every PR would fail each January.
-	@git diff --exit-code -I'^Copyright [0-9]{4}\.$$' || { \
+.PHONY: format-check
+format-check: ## Fail if a Go file is not gofmt-formatted; it writes nothing ('make fmt' formats).
+	@files="$$(go list -f '{{$$d := .Dir}}{{range .GoFiles}}{{$$d}}/{{.}} {{end}}{{range .CgoFiles}}{{$$d}}/{{.}} {{end}}{{range .TestGoFiles}}{{$$d}}/{{.}} {{end}}{{range .XTestGoFiles}}{{$$d}}/{{.}} {{end}}{{range .IgnoredGoFiles}}{{$$d}}/{{.}} {{end}}' ./...)"; \
+	unformatted="$$(gofmt -l $$files | sed 's|^$(CURDIR)/||')"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "$$unformatted"; \
+		echo "error: the files above are not gofmt-formatted. Run 'make fmt', then commit the result." >&2; \
+		exit 1; \
+	fi
+
+# check-generated regenerates, formats and tidies a temporary copy of the
+# working tree (its tracked and untracked, not ignored, files) and compares that
+# copy with the git index, as 'git diff' would, so it never writes the working
+# tree. Run it on a clean checkout or after committing.
+# Regenerating rewrites the boilerplate year (YEAR defaults to the current
+# year), so a header that differs only in its copyright year is ignored;
+# otherwise every PR would fail each January.
+# git diff does not see files that controller-gen creates for a new type, so
+# untracked files under api and config fail too.
+.PHONY: check-generated
+check-generated: controller-gen ## Fail if generated files, formatting or go.mod/go.sum differ from what is committed. It does not change the working tree.
+	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+	git ls-files -z --cached --others --exclude-standard | \
+		while IFS= read -r -d '' f; do if [ -e "$$f" ] || [ -L "$$f" ]; then printf '%s\0' "$$f"; fi; done | \
+		tar --null -T - -cf - | { mkdir "$$tmp/tree" && tar -xf - -C "$$tmp/tree"; }; \
+	cp "$$(git rev-parse --git-path index)" "$$tmp/index"; \
+	gitdir="$$(git rev-parse --absolute-git-dir)"; \
+	cd "$$tmp/tree"; \
+	$(MAKE) --no-print-directory manifests generate fmt LOCALBIN="$(LOCALBIN)" CONTROLLER_GEN="$(CONTROLLER_GEN)" YEAR="$(YEAR)"; \
+	go mod tidy; \
+	gitc() { GIT_INDEX_FILE="$$tmp/index" git --git-dir="$$gitdir" --work-tree="$$tmp/tree" "$$@"; }; \
+	gitc diff --exit-code -I'^Copyright [0-9]{4}\.$$' || { \
 		echo "error: the files above differ from what is committed. Run 'go mod tidy' and 'make manifests generate fmt', then commit the result." >&2; \
-		exit 1; }
-	@# git diff does not see files that controller-gen creates for a new type.
-	@untracked="$$(git ls-files --others --exclude-standard -- api config)"; \
+		exit 1; }; \
+	untracked="$$(gitc ls-files --others --exclude-standard -- api config)"; \
 	if [ -n "$$untracked" ]; then \
 		echo "$$untracked"; \
 		echo "error: the generated files above are not committed." >&2; \
 		exit 1; \
 	fi
 
+.PHONY: verify
+verify: check-generated format-check vet lint test ## Run every non-E2E check: check-generated, format-check, vet, lint and test. CI runs it.
+
 .PHONY: test
-test: manifests generate fmt vet setup-envtest ## Run tests.
+test: vet setup-envtest ## Run tests. It does not regenerate or format: run make manifests generate fmt, or make check-generated.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
@@ -123,7 +150,7 @@ setup-test-e2e: container-tool kind ## Set up a Kind cluster for e2e tests if it
 	esac
 
 .PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
+test-e2e: setup-test-e2e vet ## Run the e2e tests. Expected an isolated environment using Kind.
 	$(if $(filter file,$(origin E2E_EVIDENCE_DIR)),rm -rf '$(E2E_EVIDENCE_DIR)')
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL) \
 		E2E_EVIDENCE_DIR='$(E2E_EVIDENCE_DIR)' go test -tags=e2e ./test/e2e/ -v -timeout $(E2E_GO_TIMEOUT) -ginkgo.timeout=$(E2E_SUITE_TIMEOUT) -ginkgo.grace-period=$(E2E_GRACE_PERIOD) -ginkgo.v $(if $(E2E_LABEL_FILTER),-ginkgo.label-filter='$(E2E_LABEL_FILTER)')
@@ -174,11 +201,11 @@ security: govulncheck ## Run govulncheck; fails on a reachable vulnerability.
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet ## Build manager binary.
+build: vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
 .PHONY: run
-run: manifests generate fmt vet ## Run a controller from your host.
+run: vet ## Run a controller from your host.
 	go run ./cmd/main.go --zap-devel
 
 .PHONY: container-tool

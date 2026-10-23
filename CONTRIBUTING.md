@@ -71,11 +71,19 @@ make build        # compile
 make test         # unit + envtest (downloads envtest binaries on first run)
 make lint         # golangci-lint
 make security     # govulncheck at the version pinned in the Makefile (reachable vulnerabilities)
-make manifests generate   # regenerate CRDs/RBAC/DeepCopy after API changes
-make verify       # fail if generated files, formatting or go.mod/go.sum are not committed (CI runs this)
+make manifests generate fmt   # regenerate CRDs/RBAC/DeepCopy and format after API changes
+go mod tidy       # tidy go.mod/go.sum after import or dependency changes
+make check-generated   # fail if generated files, formatting or go.mod/go.sum are not committed
+make format-check # fail if a Go file is not gofmt-formatted
+make verify       # check-generated, format-check, vet, lint and test (CI runs this)
 make run          # run the operator against your current kubecontext
 make test-e2e     # Kind-based e2e (isolated cluster)
 ```
+
+Only `make manifests`, `make generate`, `make fmt`, `make lint-fix` and
+`go mod tidy` rewrite tracked files. `make test`, `make test-e2e`,
+`make build`, `make run` and the checks above leave them as they are, so
+regenerate before testing a change to `*_types.go` or kubebuilder markers.
 
 For the existing Kind E2E suite, use a disposable cluster name:
 
@@ -196,19 +204,21 @@ the implementation.
 
 - One logical change per PR; keep the diff focused and explain the motivation
   in the PR description.
-- `make build`, `make test`, `make lint` and `make verify` must pass
-  (`make lint-fix` applies gofmt/golangci-lint fixes); CI runs Lint, Tests
-  (which includes `make verify`), and E2E. Report the commands actually run with their results, and the checks
+- `make build` and `make verify` (check-generated, format-check, vet, lint
+  and test) must pass (`make lint-fix` applies gofmt/golangci-lint fixes); CI
+  runs Lint, Tests (`make verify`), and E2E. Report the commands actually run with their results, and the checks
   not run with reasons.
 - Add or update tests for behavior changes.
 - After editing `*_types.go` or kubebuilder markers, run
   `make manifests generate` and commit the regenerated files in the same PR.
 - After changing imports or dependencies, run `go mod tidy` and commit
   `go.mod`/`go.sum`.
-- `make verify` checks both rules above: it regenerates, formats and tidies,
-  then fails if anything differs from what is committed. A header that
-  differs only in its copyright year is ignored. It compares against your
-  working tree, so run it on a clean checkout or after committing.
+- `make check-generated` (part of `make verify`) checks both rules above: it
+  regenerates, formats and tidies a temporary copy of the working tree, then
+  fails if anything differs from what is committed, or if a file under `api`
+  or `config` is untracked. A header that differs only in its copyright year
+  is ignored. It never writes the working tree, but it compares the working
+  tree with the git index, so run it on a clean checkout or after committing.
 - Update the relevant ADR/`DESIGN.md`/`ROADMAP.md` when behavior or decisions
   change.
 - Reference the issue in the PR body (`Closes #123` / `Refs #123`), not in the

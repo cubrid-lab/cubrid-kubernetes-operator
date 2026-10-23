@@ -227,11 +227,13 @@ completed POC issues just because integrated validation remains pending.
 make manifests  # Regenerate CRDs/RBAC from markers
 make generate   # Regenerate DeepCopy methods
 ```
+`make test`, `make build` and `make run` do not regenerate; run these first.
 
 **After editing `*.go` files:**
 ```
 make lint-fix   # Auto-fix code style
 make test       # Run unit tests
+make verify     # check-generated, format-check, vet, lint and test, as CI runs them
 ```
 
 **When a feature graduates from planned to implemented:**
