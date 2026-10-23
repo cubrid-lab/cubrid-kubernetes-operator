@@ -80,11 +80,13 @@ func TestPrometheusRangeReportsAFailedQuery(t *testing.T) {
 		body   string
 		want   string
 	}{
-		"server error":     {http.StatusServiceUnavailable, `upstream down`, "503"},
-		"query error":      {http.StatusBadRequest, `{"status":"error","errorType":"bad_data","error":"parse error"}`, "parse error"},
-		"not a matrix":     {http.StatusOK, `{"status":"success","data":{"resultType":"vector","result":[]}}`, "vector"},
-		"value not number": {http.StatusOK, `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1,"x"]]}]}}`, "x"},
-		"not json":         {http.StatusOK, `<html>`, "decode"},
+		"server error": {http.StatusServiceUnavailable, `upstream down`, "503"},
+		"query error": {http.StatusBadRequest,
+			`{"status":"error","errorType":"bad_data","error":"parse error"}`, "parse error"},
+		"not a matrix": {http.StatusOK, `{"status":"success","data":{"resultType":"vector","result":[]}}`, "vector"},
+		"value not number": {http.StatusOK,
+			`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1,"x"]]}]}}`, "x"},
+		"not json": {http.StatusOK, `<html>`, "decode"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := prometheusAnswering(t, tc.status, tc.body, nil)

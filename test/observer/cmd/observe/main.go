@@ -174,10 +174,11 @@ func run(ctx context.Context, args []string) (runErr error) {
 		return errors.New("the selected context is not the expected cluster: its kube-system UID differs")
 	}
 	var deploy appsv1.Deployment
-	if err := runner.Client.Get(ctx, client.ObjectKey{Namespace: cfg.operatorNamespace, Name: cfg.operatorDeployment}, &deploy); err != nil {
+	deployKey := client.ObjectKey{Namespace: cfg.operatorNamespace, Name: cfg.operatorDeployment}
+	if err := runner.Client.Get(ctx, deployKey, &deploy); err != nil {
 		return fmt.Errorf("could not read the manager Deployment: %w", err)
 	}
-	if deploy.Spec.Selector == nil || len(deploy.Spec.Selector.MatchLabels) == 0 || len(deploy.Spec.Selector.MatchExpressions) != 0 {
+	if sel := deploy.Spec.Selector; sel == nil || len(sel.MatchLabels) == 0 || len(sel.MatchExpressions) != 0 {
 		return errors.New("the manager Deployment's selector is not a plain label match")
 	}
 	managerImage := ""

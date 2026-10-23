@@ -63,16 +63,19 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+// primaryMember is the member the test status names as master.
+const primaryMember = "ha-1"
+
 func observedCluster() *databasev1alpha1.CubridCluster {
 	observed := metav1.NewTime(at(-5))
 	return &databasev1alpha1.CubridCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "ha", Namespace: "db"},
 		Status: databasev1alpha1.CubridClusterStatus{
-			CurrentPrimary:   "ha-1",
+			CurrentPrimary:   primaryMember,
 			LastObservedTime: &observed,
 			Instances: []databasev1alpha1.InstanceStatus{
 				{Name: "ha-0", Role: "slave", Ready: true, LastObservedTime: &observed},
-				{Name: "ha-1", Role: "master", Ready: true, LastObservedTime: &observed},
+				{Name: primaryMember, Role: "master", Ready: true, LastObservedTime: &observed},
 			},
 			Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "ClusterReady",
 				LastTransitionTime: metav1.NewTime(at(-60))}},
@@ -127,7 +130,8 @@ func TestCollectReadsStatusManagerPodsEventsAndMetrics(t *testing.T) {
 		event("e1", "ha", 1, "1"), event("other", "other-cluster", 1, "1"),
 	).Build()
 	m := &fakeMetrics{series: map[string][]Series{
-		`{__name__=~"cubrid_(cluster|instance)_.+",namespace="db",cluster="ha"}`: {gaugeSeries("cubrid_cluster_ready", 1, -10)},
+		`{__name__=~"cubrid_(cluster|instance)_.+",namespace="db",cluster="ha"}`: {
+			gaugeSeries("cubrid_cluster_ready", 1, -10)},
 		`up{namespace="op"}`: {upSeries(1, -10)},
 	}}
 	col := newCollector(c, m)
@@ -137,10 +141,12 @@ func TestCollectReadsStatusManagerPodsEventsAndMetrics(t *testing.T) {
 		t.Errorf("At = %v, want %v", s.At, t0)
 	}
 	st := s.Status
-	if !st.Read || st.Error != "" || st.CurrentPrimary != "ha-1" || st.LastObservedTime == nil || !st.LastObservedTime.Equal(at(-5)) {
+	if !st.Read || st.Error != "" || st.CurrentPrimary != primaryMember ||
+		st.LastObservedTime == nil || !st.LastObservedTime.Equal(at(-5)) {
 		t.Errorf("status = %+v, want the cluster's status", st)
 	}
-	if got := st.Conditions["Ready"]; got.Status != "True" || got.Reason != "ClusterReady" || !got.LastTransitionTime.Equal(at(-60)) {
+	if got := st.Conditions["Ready"]; got.Status != "True" || got.Reason != "ClusterReady" ||
+		!got.LastTransitionTime.Equal(at(-60)) {
 		t.Errorf("Ready = %+v, want True/ClusterReady since -60s", got)
 	}
 	if len(st.Instances) != 2 || st.Instances[1].Role != "master" || !st.Instances[1].Ready {
@@ -151,7 +157,8 @@ func TestCollectReadsStatusManagerPodsEventsAndMetrics(t *testing.T) {
 	}
 	for _, p := range s.Operator.Pods {
 		want := p.Name == "mgr-b"
-		if p.Ready != want || p.Deleting == want || p.Restarts != 2 || p.StartedAt == nil || p.UID == "" || p.Node != "node-1" {
+		if p.Ready != want || p.Deleting == want || p.Restarts != 2 || p.StartedAt == nil || p.UID == "" ||
+			p.Node != "node-1" {
 			t.Errorf("pod = %+v, want ready=%v deleting=%v with its container start and restarts", p, want, !want)
 		}
 	}

@@ -222,7 +222,9 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // judges it, and writes it to w as one redacted JSON line as soon as it is
 // taken, so that what was observed survives a run that is stopped. It
 // returns the samples taken, and the context's error when it was cancelled.
-func Run(ctx context.Context, c *Collector, interval, duration time.Duration, w io.Writer, r *evidence.Redactor) ([]Sample, error) {
+func Run(
+	ctx context.Context, c *Collector, interval, duration time.Duration, w io.Writer, r *evidence.Redactor,
+) ([]Sample, error) {
 	rules := c.Rules
 	if rules == (Rules{}) {
 		rules = DefaultRules()

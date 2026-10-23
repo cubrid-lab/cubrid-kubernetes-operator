@@ -26,8 +26,6 @@ var t0 = time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
 
 func at(seconds float64) time.Time { return t0.Add(time.Duration(seconds * float64(time.Second))) }
 
-func ptime(t time.Time) *time.Time { return &t }
-
 // healthyStatus is a status read at the given time whose observation is
 // observedAgo old and whose five Conditions are True since t0.
 func healthyStatus(read float64, observedAgo float64) StatusReading {
@@ -35,7 +33,7 @@ func healthyStatus(read float64, observedAgo float64) StatusReading {
 	for _, c := range HealthConditions {
 		conds[c] = Condition{Status: "True", LastTransitionTime: t0.Add(-time.Hour)}
 	}
-	return StatusReading{Read: true, LastObservedTime: ptime(at(read - observedAgo)), Conditions: conds}
+	return StatusReading{Read: true, LastObservedTime: new(at(read - observedAgo)), Conditions: conds}
 }
 
 func gaugeSeries(name string, value float64, sampled ...float64) Series {
@@ -81,14 +79,17 @@ func TestJudgeHealthyOnlyWithFreshStatusAndMeasuredMetrics(t *testing.T) {
 		want   string
 	}{
 		"status older than the reader's 60 s": {func(s *Sample) { s.Status = healthyStatus(100, 61) }, "status stale"},
-		"status never observed":               {func(s *Sample) { s.Status.LastObservedTime = nil }, "status has no lastObservedTime"},
-		"status read failed":                  {func(s *Sample) { s.Status = StatusReading{Error: "timeout"} }, "status unavailable"},
+		"status never observed": {func(s *Sample) { s.Status.LastObservedTime = nil },
+			"status has no lastObservedTime"},
+		"status read failed": {func(s *Sample) { s.Status = StatusReading{Error: "timeout"} },
+			"status unavailable"},
 		"a Condition is False": {func(s *Sample) {
 			c := s.Status.Conditions["RoutingReady"]
 			c.Status = "False"
 			s.Status.Conditions["RoutingReady"] = c
 		}, "RoutingReady is False"},
-		"a Condition is missing": {func(s *Sample) { delete(s.Status.Conditions, "PrimaryResolved") }, "PrimaryResolved is missing"},
+		"a Condition is missing": {func(s *Sample) { delete(s.Status.Conditions, "PrimaryResolved") },
+			"PrimaryResolved is missing"},
 		"Prometheus could not be queried": {func(s *Sample) {
 			s.Metrics = MetricsReading{Error: "connection refused"}
 		}, "metrics unavailable"},
@@ -185,7 +186,8 @@ func TestCheckDoesNotJudgeAMetricScrapedAcrossATransition(t *testing.T) {
 	recent.Conditions["RoutingReady"] = c
 	afterRecent := healthyStatus(40, 5)
 	afterRecent.Conditions["RoutingReady"] = c
-	if got := Check([]Sample{{At: at(10), Status: recent}, scraped, {At: at(40), Status: afterRecent}}, rules); len(got) != 0 {
+	window := []Sample{{At: at(10), Status: recent}, scraped, {At: at(40), Status: afterRecent}}
+	if got := Check(window, rules); len(got) != 0 {
 		t.Fatalf("Check() = %q, want none within the tolerance of the last change", got)
 	}
 }
@@ -219,7 +221,8 @@ func TestCheckFindsAnObservationTimeNewerThanTheStatusHolds(t *testing.T) {
 	rules := DefaultRules()
 	after := Sample{At: at(40), Status: healthyStatus(40, 20)} // holds at(20)
 	ok := gaugeSeries("cubrid_cluster_last_observation_timestamp_seconds", float64(at(20).Unix()), 25)
-	if got := Check([]Sample{{Metrics: MetricsReading{Queried: true, Series: []Series{ok}}}, after}, rules); len(got) != 0 {
+	held := Sample{Metrics: MetricsReading{Queried: true, Series: []Series{ok}}}
+	if got := Check([]Sample{held, after}, rules); len(got) != 0 {
 		t.Fatalf("Check() = %q, want none for the time the status holds", got)
 	}
 	ahead := gaugeSeries("cubrid_cluster_last_observation_timestamp_seconds", float64(at(30).Unix()), 25)

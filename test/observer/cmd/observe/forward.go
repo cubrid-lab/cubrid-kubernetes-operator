@@ -173,7 +173,9 @@ func (f *forwarder) Close() {
 }
 
 // Range queries Prometheus through the port-forward.
-func (f *forwarder) Range(ctx context.Context, selector string, window time.Duration, at time.Time) ([]observer.Series, error) {
+func (f *forwarder) Range(
+	ctx context.Context, selector string, window time.Duration, at time.Time,
+) ([]observer.Series, error) {
 	url, err := f.ensure(ctx)
 	if err != nil {
 		return nil, err

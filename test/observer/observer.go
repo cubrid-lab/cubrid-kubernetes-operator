@@ -424,7 +424,8 @@ func Check(samples []Sample, rules Rules) []string {
 			continue
 		}
 		if cond == "ReplicationHealthy" && cb.Status == "Unknown" {
-			contradictions = append(contradictions, fmt.Sprintf("%s%s=%g scraped at %s, but %s was Unknown since %s, which has no sample (%s)",
+			contradictions = append(contradictions, fmt.Sprintf(
+				"%s%s=%g scraped at %s, but %s was Unknown since %s, which has no sample (%s)",
 				p.name, p.labels, p.Value, scraped, cond, cb.LastTransitionTime.UTC().Format(time.RFC3339), reads))
 			continue
 		}
@@ -461,7 +462,8 @@ func Summarize(samples []Sample, rules Rules) Summary {
 	s.Contradictions = Check(samples, rules)
 	switch {
 	case len(s.Contradictions) > 0:
-		s.Verdict, s.Reason = VerdictFailed, fmt.Sprintf("%d contradictions between metrics and status", len(s.Contradictions))
+		s.Verdict = VerdictFailed
+		s.Reason = fmt.Sprintf("%d contradictions between metrics and status", len(s.Contradictions))
 	case s.Counts[Healthy] == 0:
 		s.Verdict, s.Reason = VerdictIncomplete, "no sample showed a fresh status and measured metrics that agree"
 	default:
