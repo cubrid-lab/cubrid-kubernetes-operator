@@ -2,7 +2,9 @@ name: Development Images
 
 # Builds the manager and Instance Manager images of a main commit and pushes
 # them to GHCR as main-<full sha> (#449), so that the lab and anyone else can
-# run a given commit. These are development images, not releases: release
+# run a given commit. With them it pushes the test-only SQL workload client
+# (test/workload/client), so that a lab scenario can run the client the Kind
+# E2E runs (#554); that image is never a release image. These are development images, not releases: release
 # candidates, versioned tags, signing and SBOMs belong to #123 and #124, and an
 # ordinary merge still never publishes a release (#94). No mutable tag is
 # pushed. linux/amd64 only: the official CUBRID image has no other
@@ -104,12 +106,36 @@ jobs:
         env:
           TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          for img in manager instance-manager; do
+          for img in manager instance-manager workload-client; do
             if docker buildx imagetools inspect "$REGISTRY/$img:$TAG" > /dev/null 2>&1; then
               echo "::error::$REGISTRY/$img:$TAG already exists; development image tags are never overwritten"
               exit 1
             fi
           done
+
+      # Same Dockerfile and context as `make docker-build-workload`. Test-only:
+      # no manifest under config/ and no release artifact refers to it. Built
+      # first: it fetches its driver from Maven Central, the most likely build
+      # to fail, and a failure here leaves no image behind for the commit,
+      # whose re-run the guard above would otherwise refuse.
+      - name: Build and push the test-only workload client image
+        id: workload-client
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: test/workload/client/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ env.REGISTRY }}/workload-client:${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+            org.opencontainers.image.description=Test-only SQL workload client; not a release image
+          cache-from: type=gha,scope=workload-client
+          cache-to: type=gha,scope=workload-client,mode=max
 
       # Same Dockerfile, context and build arguments as `make docker-build`
       # (BASE_IMAGE left at its default). Provenance and SBOM attestations are
@@ -160,6 +186,7 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
           MANAGER_DIGEST: ${{ steps.manager.outputs.digest }}
           IM_DIGEST: ${{ steps.instance-manager.outputs.digest }}
+          WORKLOAD_DIGEST: ${{ steps.workload-client.outputs.digest }}
         run: |
           {
             echo "## Development images of $SHA"
@@ -170,4 +197,5 @@ jobs:
             echo "|---|---|---|"
             echo "| \`$REGISTRY/manager\` | \`$TAG\` | ${MANAGER_DIGEST:-(not pushed)} |"
             echo "| \`$REGISTRY/instance-manager\` | \`$TAG\` | ${IM_DIGEST:-(not pushed)} |"
+            echo "| \`$REGISTRY/workload-client\` (test-only) | \`$TAG\` | ${WORKLOAD_DIGEST:-(not pushed)} |"
           } >> "$GITHUB_STEP_SUMMARY"
