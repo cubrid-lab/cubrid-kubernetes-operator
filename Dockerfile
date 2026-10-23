@@ -13,7 +13,7 @@ COPY go.sum go.sum
 # and so that source changes don't invalidate our downloaded layer.
 # The script retries a download that the Go proxy cuts off (#544).
 COPY build/go-mod-download.sh /usr/local/bin/go-mod-download.sh
-RUN go-mod-download.sh
+RUN sh /usr/local/bin/go-mod-download.sh
 
 # Copy the Go source (relies on .dockerignore to filter)
 COPY . .
