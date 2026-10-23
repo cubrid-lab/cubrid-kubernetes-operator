@@ -238,7 +238,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		By("backing up the peer, and recording it as the source before the restore is started")
 		status := reconcileOnce(f)
 		Expect(status.SeededMembers).To(Equal([]string{f.peer}))
-		Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
 		Expect(f.seed.restores).NotTo(HaveKey(f.last), "the restore was started before its source was recorded")
 		Expect(backupsOn(f, f.first)).To(HaveLen(1))
 		Expect(backupsOn(f, f.peer)).To(HaveLen(1))
@@ -282,7 +282,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		f.prober.answers[f.peer] = answersSlave
 
 		status := reconcileOnce(f)
-		Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first}))
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first}))
 		Expect(backupsOn(f, f.first)).To(HaveLen(2), "one backup for the first peer and one for the last member")
 		reconcileOnce(f)
 		Expect(backupsOn(f, f.peer)).To(BeEmpty())
@@ -311,7 +311,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 			f.prober.answers[f.first] = answersSlave
 			f.prober.answers[f.peer] = answersMaster
 			status := reconcileOnce(f)
-			Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
+			Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
 		},
 		Entry("the first member does not answer", "src-wait-absent", doesNotAnswer, answersMaster),
 		Entry("the peer does not answer", "src-wait-peer", answersMasterNotYetActive, doesNotAnswer),
@@ -328,7 +328,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		f.seed.backupStates = map[string]instancemanager.OperationState{f.peer: instancemanager.OpRunningBackup}
 
 		status := reconcileOnce(f)
-		Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
 		Expect(backupsOn(f, f.peer)).To(HaveLen(1))
 		Expect(reason(f)).To(Equal("SeedBackupInProgress"))
 
@@ -336,7 +336,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		f.prober.answers[f.first] = answersMasterNotYetActive
 		f.prober.answers[f.peer] = answersSlave
 		status = reconcileOnce(f)
-		Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first, Round: 1}))
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first, Round: 1}))
 		Expect(backupsOn(f, f.first)).To(HaveLen(2), "the first peer's backup and a new one for the last member")
 		Expect(f.seed.restores).NotTo(HaveKey(f.last))
 
@@ -354,7 +354,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		f.prober.answers[f.first] = answersSlave
 		f.prober.answers[f.peer] = answersMaster
 		status := reconcileOnce(f)
-		Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
 		Expect(backupsOn(f, f.peer)).To(HaveLen(1), "the peer's backup is complete")
 
 		By("the first member becoming master before the restore is started")
@@ -363,7 +363,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		status = reconcileOnce(f)
 		Expect(f.seed.restores).NotTo(HaveKey(f.last),
 			"the last member was restored from a member that is no longer the master")
-		Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first, Round: 1}))
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first, Round: 1}))
 
 		status = reconcileOnce(f)
 		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.first))
@@ -382,7 +382,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		for range 2 {
 			status := reconcileOnce(f)
 			Expect(f.seed.restores).NotTo(HaveKey(f.last))
-			Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
+			Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
 			Expect(status.BootstrapAttempts).To(BeZero())
 			Expect(reason(f)).To(Equal("SeedSourceNotResolved"))
 		}
@@ -415,7 +415,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		f.prober.answers[f.peer] = answersMaster
 		f.seed.backupStates[f.peer] = instancemanager.OpCompleted
 		status := reconcileOnce(f)
-		Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer, Round: 2}))
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer, Round: 2}))
 		Expect(prefixesOn(f, f.peer)).To(HaveLen(2),
 			"the backup the peer took before the other member was master must not be used again")
 
@@ -471,7 +471,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
 
 		status := reconcileOnce(f)
-		Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first}))
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first}))
 		Expect(f.seed.restores).NotTo(HaveKey(f.last), "a restore was started on the word of another member's record")
 	})
 
@@ -492,7 +492,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		f.prober.answers[f.peer] = answersSlave
 		f.seed.restore[f.last] = instancemanager.OpRestoring
 		status = reconcileOnce(f)
-		Expect(status.Seeding).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first}))
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first}))
 		reconcileOnce(f)
 		Expect(f.seed.restoreKeys[f.last]).NotTo(Equal(failedKey))
 		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.first))
