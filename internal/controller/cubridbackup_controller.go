@@ -71,8 +71,15 @@ const (
 	// stayed missing past it, and the backup is Failed.
 	reasonRecordedOperationMissing = "RecordedOperationMissing"
 	reasonRecordedOperationLost    = "RecordedOperationLost"
-	reasonRecordedTargetUnverified = "RecordedTargetUnverified"
-	reasonObjectStorageWaitExpired = "ObjectStorageWaitExpired"
+	// reasonRecordedOperationMismatch: the operation read by the ID recorded
+	// for a step of the HA bootstrap is of another kind or on another
+	// database. reasonSeedSourceContradicted: the copy to the first peer is
+	// recorded with another source than the member that holds the database.
+	// Either ends the database Failed for a person.
+	reasonRecordedOperationMismatch = "RecordedOperationMismatch"
+	reasonSeedSourceContradicted    = "SeedSourceContradicted"
+	reasonRecordedTargetUnverified  = "RecordedTargetUnverified"
+	reasonObjectStorageWaitExpired  = "ObjectStorageWaitExpired"
 
 	// objectStorageEnvPrefix starts the names of the manager's object-storage
 	// environment (objectStorageEnv).

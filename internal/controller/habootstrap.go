@@ -119,12 +119,10 @@ func (r *CubridClusterReconciler) stepOperationMissing(cluster *databasev1alpha1
 	}
 	at := (*since).Time
 	if r.now().Sub(at) > bootstrapOperationMissingWait {
-		status.Phase = databasePhaseFailed
-		msg := fmt.Sprintf("%s has held no record of the %s operation %s since %s, for %s or longer (%v). A missing "+
-			"record does not show that the %s ended: %s. It is not started again; %s (ADR-0010)",
-			member, step, id, at.UTC().Format(time.RFC3339), bootstrapOperationMissingWait, err, step, running, left)
-		setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonRecordedOperationLost, msg)
-		r.statusEvent(cluster, corev1.EventTypeWarning, reasonRecordedOperationLost, msg)
+		r.bootstrapStopped(cluster, status, reasonRecordedOperationLost, fmt.Sprintf(
+			"%s has held no record of the %s operation %s since %s, for %s or longer (%v). A missing record does "+
+				"not show that the %s ended: %s. The %s is not started again; %s",
+			member, step, id, at.UTC().Format(time.RFC3339), bootstrapOperationMissingWait, err, step, running, step, left))
 		return
 	}
 	// The answer is left out of this message: it carries the ID of each
@@ -134,29 +132,44 @@ func (r *CubridClusterReconciler) stepOperationMissing(cluster *databasev1alpha1
 		member, step, id, bootstrapOperationMissingWait, at.UTC().Format(time.RFC3339)))
 }
 
-// reasonRecordedOperationMismatch is the BootstrapReady reason of a step
-// whose recorded operation, read by its ID, is not an operation of the step.
-const reasonRecordedOperationMismatch = "RecordedOperationMismatch"
+// bootstrapRemedy is what a person does about a database whose bootstrap
+// stopped on a recorded operation or record it cannot rely on.
+const bootstrapRemedy = "delete and create the CubridCluster again to bootstrap it anew. Do not clear the " +
+	"recorded operation or the seeding record in the status by hand: the step would be started again under " +
+	"the same key (ADR-0010)"
+
+// bootstrapStopped ends the bootstrap of a database as Failed for reason,
+// without using an attempt: the step is not started again, and the database
+// waits for a person. msg ends with what that person checks; the remedy is
+// added to it.
+func (r *CubridClusterReconciler) bootstrapStopped(cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, reason, msg string) {
+	status.Phase = databasePhaseFailed
+	msg += ", and " + bootstrapRemedy
+	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
+	r.statusEvent(cluster, corev1.EventTypeWarning, reason, msg)
+}
 
 // recordedOperationMatches reports whether op, read by the ID recorded for a
-// step, is an operation of kind on database, and says why not otherwise. An
-// operation that names no database is not compared by it. A mismatch is set
-// as the condition: nothing is started, no attempt is used, and the
-// operation is left for a person.
-func recordedOperationMatches(cluster *databasev1alpha1.CubridCluster, op instancemanager.Operation,
-	kind instancemanager.OperationKind, database, member, step string) bool {
+// step on member, is an operation of kind on the database of status. An
+// operation that names no database is not compared by it. A mismatch does
+// not show what the step did, so the database is stopped for a person, with
+// no attempt used and nothing started.
+func (r *CubridClusterReconciler) recordedOperationMatches(cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, op instancemanager.Operation, kind instancemanager.OperationKind, member, step string) bool {
 	why := ""
 	switch {
 	case op.Kind != kind:
-		why = fmt.Sprintf("it is a %s operation", op.Kind)
-	case op.Database != "" && op.Database != database:
-		why = "it is an operation on database " + op.Database
+		why = fmt.Sprintf("a %s operation", op.Kind)
+	case op.Database != "" && op.Database != status.Name:
+		why = "an operation on database " + op.Database
 	default:
 		return true
 	}
-	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonRecordedOperationMismatch, fmt.Sprintf(
-		"the operation %s recorded for the %s of database %s on %s is not one: %s; nothing is started, "+
-			"and the operation is left for a person", op.ID, step, database, member, why))
+	r.bootstrapStopped(cluster, status, reasonRecordedOperationMismatch, fmt.Sprintf(
+		"%s answers for the %s operation %s recorded for database %s with %s. It does not show whether the %s "+
+			"ran or ended. The %s is not started again; check %s before relying on its data",
+		member, step, op.ID, status.Name, why, step, step, member))
 	return false
 }
 
@@ -207,10 +220,10 @@ func (r *CubridClusterReconciler) reconcileHABootstrap(ctx context.Context, clus
 		if errors.Is(err, errOperationMissing) {
 			r.stepOperationMissing(cluster, status, &status.BootstrapOperationMissingSince, member, "HA bootstrap", id, err,
 				"createdb may still be running on "+member+", or have left data there",
-				"the database is not recorded as created, and is left for a person: check "+member+" before relying on its data")
+				"the database is not recorded as created; check "+member+" before relying on its data")
 			return
 		}
-		if err == nil && !recordedOperationMatches(cluster, op, instancemanager.OpHABootstrap, database, member, "HA bootstrap") {
+		if err == nil && !r.recordedOperationMatches(cluster, status, op, instancemanager.OpHABootstrap, member, "HA bootstrap") {
 			status.BootstrapOperationMissingSince = nil
 			return
 		}
@@ -444,10 +457,11 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		case seeding.Source != holder:
 			// The record and its operations are kept: they contradict how a
 			// first peer is copied, and are left for a person.
-			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedSourceContradicted", fmt.Sprintf(
+			r.bootstrapStopped(cluster, status, reasonSeedSourceContradicted, fmt.Sprintf(
 				"the copy of database %s to %s is recorded with %s as its source, but the first peer is copied only "+
-					"from %s, which holds the database; nothing is started, and the record is left for a person",
-				database, peer, seeding.Source, holder))
+					"from %s, which holds the database. %s is not recorded as seeded, and the copy is not started "+
+					"again; check %s before relying on its data",
+				database, peer, seeding.Source, holder, peer, peer))
 			return false
 		}
 	} else {
@@ -593,10 +607,10 @@ func (r *CubridClusterReconciler) recordedSeedRestore(ctx context.Context, clust
 	if errors.Is(err, errOperationMissing) {
 		r.stepOperationMissing(cluster, status, &seeding.OperationMissingSince, peer, "seed restore", id, err,
 			"restoredb may still be running on "+peer+", or have left data there",
-			peer+" is not recorded as seeded, and is left for a person: check it before relying on its data")
+			peer+" is not recorded as seeded; check it before relying on its data")
 		return restore, false, nil
 	}
-	if err == nil && !recordedOperationMatches(cluster, restore, instancemanager.OpRestore, status.Name, peer, "seed restore") {
+	if err == nil && !r.recordedOperationMatches(cluster, status, restore, instancemanager.OpRestore, peer, "seed restore") {
 		seeding.OperationMissingSince = nil
 		return restore, false, nil
 	}
@@ -621,10 +635,10 @@ func (r *CubridClusterReconciler) seedBackup(ctx context.Context, cluster *datab
 		if errors.Is(err, errOperationMissing) {
 			r.stepOperationMissing(cluster, status, &seeding.OperationMissingSince, source, "seed backup", id, err,
 				"backupdb may still be running on "+source+" and upload to s3://"+path.Join(bucket, prefix),
-				peer+" is not recorded as seeded, and is left for a person: check "+source+" and that prefix")
+				peer+" is not recorded as seeded; check "+source+" and that prefix")
 			return false
 		}
-		if err == nil && !recordedOperationMatches(cluster, backup, instancemanager.OpBackup, database, source, "seed backup") {
+		if err == nil && !r.recordedOperationMatches(cluster, status, backup, instancemanager.OpBackup, source, "seed backup") {
 			seeding.OperationMissingSince = nil
 			return false
 		}

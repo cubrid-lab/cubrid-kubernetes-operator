@@ -283,9 +283,16 @@ otherwise). An operation read by its recorded ID that is of another kind or
 on another database than the step's (`RecordedOperationMismatch`), and a
 record of the copy to the first peer that names another source than the
 member that holds the database (`SeedSourceContradicted`), contradict the
-record: nothing is started, no attempt is used, and they are left for a
-person. A step whose operation ends `Failed` is started again under the
-next attempt's key as before, without the recorded operation.
+record and do not show what the step did. Like a lost record, each ends
+the database `Failed` at once with a Warning Event, uses up no attempt and
+starts nothing; the message names the member and the operation or record.
+In all three cases the step is not started again, and the way out is to
+check the member before relying on its data, then delete and create the
+CubridCluster again. Do not clear a recorded operation or the seeding
+record in the status by hand: the step would then be started again under
+the same key, which is what #534 prevents. A step whose operation ends
+`Failed` is started again under the next attempt's key as before, without
+the recorded operation.
 
 A key names one request (#302). The key of a seed backup and of a seed
 restore carries the step, the attempt and the member; for a member after the

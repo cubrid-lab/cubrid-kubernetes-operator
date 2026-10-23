@@ -537,7 +537,7 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 		Expect(boot.keys).To(HaveLen(1))
 	})
 
-	It("leaves a polled HA bootstrap of another kind or database for a person (#534)", func() {
+	It("stops the database for a person on a polled HA bootstrap of another kind or database (#534)", func() {
 		for name, edit := range map[string]func(*instancemanager.Operation){
 			"boot-kind": func(op *instancemanager.Operation) { op.Kind = instancemanager.OpRestore },
 			"boot-db":   func(op *instancemanager.Operation) { op.Database = anotherDatabase },
@@ -548,15 +548,20 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			reconcileOnce(r, key)
 			boot.pollEdit = edit
 			boot.state = instancemanager.OpCompleted
-			for range 2 {
-				got := reconcileOnce(r, key)
-				Expect(boot.keys).To(HaveLen(1), name)
-				Expect(got.Status.Databases[0].PrimaryCreated).To(BeFalse(), name)
-				Expect(got.Status.Databases[0].Phase).To(Equal(databasePhaseCreating), name)
-				Expect(got.Status.Databases[0].BootstrapAttempts).To(BeZero(), name)
-				cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
-				Expect(cond.Reason).To(Equal("RecordedOperationMismatch"), name)
-			}
+			got := reconcileOnce(r, key)
+			Expect(got.Status.Databases[0].PrimaryCreated).To(BeFalse(), name)
+			Expect(got.Status.Databases[0].Phase).To(Equal(databasePhaseFailed), name)
+			Expect(got.Status.Databases[0].BootstrapAttempts).To(BeZero(), name)
+			cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
+			Expect(cond.Reason).To(Equal(reasonRecordedOperationMismatch), name)
+			Expect(cond.Message).To(And(ContainSubstring(name+"-0"), ContainSubstring("op-ha-"),
+				ContainSubstring("not started again"), ContainSubstring("delete and create the CubridCluster again")), name)
+			Expect(drain(r.Recorder.(*record.FakeRecorder))).To(ContainElement(And(
+				ContainSubstring("Warning"), ContainSubstring(reasonRecordedOperationMismatch))), name)
+			polls := len(boot.polls)
+			reconcileOnce(r, key)
+			Expect(boot.keys).To(HaveLen(1), name)
+			Expect(boot.polls).To(HaveLen(polls), name)
 		}
 	})
 
@@ -1278,7 +1283,7 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			// The first peer is copied only from the member that holds the
 			// database. A record that names another source contradicts that
 			// and is left for a person, with its operations (#534).
-			It("keeps a first peer's record that names another source, and starts nothing", func() {
+			It("stops the database on a first peer's record that names another source, and starts nothing", func() {
 				const n = "seed-first-other"
 				seed := &fakeSeedClient{backupState: instancemanager.OpRunningBackup,
 					restore: map[string]instancemanager.OperationState{n + "-1": instancemanager.OpRestoring}}
@@ -1293,15 +1298,21 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 				recorded.Source = n + "-2"
 				Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
 				seed.backupState = instancemanager.OpCompleted
-				for range 2 {
+				for i := range 2 {
 					got = reconcileOnce(r, key)
 					Expect(seed.backupOn).To(HaveLen(1), "a seed backup was started")
 					Expect(seed.restoreOn).To(BeEmpty(), "a seed restore was started")
 					Expect(got.Status.Databases[0].Seeding).To(Equal(recorded), "the recorded copy was replaced")
 					Expect(got.Status.Databases[0].BootstrapAttempts).To(BeZero())
+					Expect(got.Status.Databases[0].Phase).To(Equal(databasePhaseFailed))
 					cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
-					Expect(cond.Reason).To(Equal("SeedSourceContradicted"))
-					Expect(cond.Message).To(And(ContainSubstring(n+"-2"), ContainSubstring(n+"-0")))
+					Expect(cond.Reason).To(Equal(reasonSeedSourceContradicted))
+					Expect(cond.Message).To(And(ContainSubstring(n+"-1"), ContainSubstring(n+"-2"), ContainSubstring(n+"-0"),
+						ContainSubstring("not started again"), ContainSubstring("delete and create the CubridCluster again")))
+					if i == 0 {
+						Expect(drain(r.Recorder.(*record.FakeRecorder))).To(ContainElement(And(
+							ContainSubstring("Warning"), ContainSubstring(reasonSeedSourceContradicted))))
+					}
 				}
 			})
 
@@ -1343,15 +1354,22 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 					backups, restores := len(seed.backupOn), len(seed.restoreOn)
 					seed.pollEdit = edit
 					seed.restore[name+"-1"] = instancemanager.OpCompleted
-					for range 2 {
+					drain(r.Recorder.(*record.FakeRecorder))
+					for i := range 2 {
 						got := reconcileOnce(r, key)
 						Expect(seed.backupOn).To(HaveLen(backups), name)
 						Expect(seed.restoreOn).To(HaveLen(restores), name)
 						Expect(got.Status.Databases[0].SeededMembers).To(BeEmpty(), name)
 						Expect(got.Status.Databases[0].BootstrapAttempts).To(BeZero(), name)
-						Expect(got.Status.Databases[0].Phase).NotTo(Equal(databasePhaseFailed), name)
+						Expect(got.Status.Databases[0].Phase).To(Equal(databasePhaseFailed), name)
 						cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
-						Expect(cond.Reason).To(Equal("RecordedOperationMismatch"), name)
+						Expect(cond.Reason).To(Equal(reasonRecordedOperationMismatch), name)
+						Expect(cond.Message).To(And(ContainSubstring("op-"), ContainSubstring("not started again"),
+							ContainSubstring("delete and create the CubridCluster again")), name)
+						if i == 0 {
+							Expect(drain(r.Recorder.(*record.FakeRecorder))).To(ContainElement(And(
+								ContainSubstring("Warning"), ContainSubstring(reasonRecordedOperationMismatch))), name)
+						}
 					}
 				}
 			})
