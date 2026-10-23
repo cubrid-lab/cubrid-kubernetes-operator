@@ -249,6 +249,39 @@ up to three attempts for the whole bootstrap
 waits for a person. A member that was seeded is recorded in
 `status.databases[].seededMembers` and never restored over.
 
+A member that lost its record (#534). A key addresses the same operation
+only while the member keeps its operation store: a member whose store was
+lost or replaced answers a keyed start of a step it ran before as new. So
+every step records its operation once it was started and from then on only
+polls it (`GET /v1/operations/{id}`), as a recovery restore does (ADR-0008):
+the HA bootstrap in `status.databases[].bootstrapOperationID`, the seed
+backup of a copy in `status.databases[].seeding.backupOperationID`, and the
+seed restore in `status.databases[].seeding.restoreOperationID`, also for
+the first peer, whose copy is recorded in `status.databases[].seeding` with
+the member that holds the database as its source. Once the seed restore is
+recorded the seed backup is not asked for again, so no backup rewrites the
+seed prefix while the restore reads it. A backup belongs to its round: a
+change of source before the restore was started records a new copy, whose
+backup is started under its own key. When the member answers that it holds
+no record of the recorded operation (`404`), the step reports
+`BootstrapReady=False`, `RecordedOperationMissing`, uses up no attempt, and
+waits 30 minutes from `bootstrapOperationMissingSince` or
+`seeding.operationMissingSince`, which only a read of the operation clears,
+so an operator restart or a failure to ask in between does not reset it. A
+missing record does not show that the step ended, so the step is never
+started again: after 30 minutes the database is `Failed` with
+`RecordedOperationLost`, and the message names the member and the
+operation. For the HA bootstrap, `createdb` may still run on the member or
+have left data there, and the database is not recorded as created. For the
+seed backup, `backupdb` may still run on the source and upload under the
+seed prefix. For the seed restore, `restoredb` may still run on the peer or
+have left data there. In each case the peer is not recorded as seeded, and
+nothing is restored over it; a person checks the member before relying on
+its data. A seed restore that is polled seeds the member only when what it
+restored is this step's backup, as a followed one (`SeedRestoreSourceMismatch`
+otherwise). A step whose operation ends `Failed` is started again under the
+next attempt's key as before, without the recorded operation.
+
 A key names one request (#302). The key of a seed backup and of a seed
 restore carries the step, the attempt and the member; for a member after the
 first it also carries the source and the round

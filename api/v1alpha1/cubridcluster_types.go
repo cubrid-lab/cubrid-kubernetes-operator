@@ -515,16 +515,26 @@ type DatabaseStatus struct {
 	// +listType=set
 	// +optional
 	SeededMembers []string `json:"seededMembers,omitempty"`
-	// seeding is the copy to one member that the HA bootstrap is making after
-	// the first peer has joined. Its source is recorded before the restore on
-	// that member is started, so that a restore in progress keeps its source
-	// when the master changes meanwhile.
+	// seeding is the copy to one member that the HA bootstrap is making. For
+	// a member after the first peer its source is recorded before the restore
+	// on that member is started, so that a restore in progress keeps its
+	// source when the master changes meanwhile.
 	// +optional
 	Seeding *DatabaseSeeding `json:"seeding,omitempty"`
 	// bootstrapAttempts counts the bootstrap steps that failed and were
 	// started again. The bootstrap stops as Failed when it reaches the limit.
 	// +optional
 	BootstrapAttempts int32 `json:"bootstrapAttempts,omitempty"`
+	// bootstrapOperationID is the HA bootstrap operation on the member the
+	// database is created on, once it was started in this attempt. From then
+	// on it is only polled, never started again.
+	// +optional
+	BootstrapOperationID string `json:"bootstrapOperationID,omitempty"`
+	// bootstrapOperationMissingSince is when the member first answered that
+	// it holds no record of bootstrapOperationID. Only a read of the
+	// operation clears it.
+	// +optional
+	BootstrapOperationMissingSince *metav1.Time `json:"bootstrapOperationMissingSince,omitempty"`
 }
 
 // DatabaseSeeding is one copy of the database to a member during the HA
@@ -540,9 +550,20 @@ type DatabaseSeeding struct {
 	// +optional
 	Round int32 `json:"round,omitempty"`
 	// restoreOperationID is the restore on the member, once it was started.
-	// From then on the source is kept.
+	// From then on the source is kept, the restore is only polled, and no
+	// seed backup is asked for again.
 	// +optional
 	RestoreOperationID string `json:"restoreOperationID,omitempty"`
+	// backupOperationID is the seed backup on the source for this copy and
+	// round, once it was started. From then on it is only polled, never
+	// started again.
+	// +optional
+	BackupOperationID string `json:"backupOperationID,omitempty"`
+	// operationMissingSince is when the member first answered that it holds
+	// no record of the recorded operation of this copy. Only a read of the
+	// operation clears it.
+	// +optional
+	OperationMissingSince *metav1.Time `json:"operationMissingSince,omitempty"`
 }
 
 // CubridClusterStatus defines the observed state of CubridCluster.
