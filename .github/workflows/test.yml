@@ -41,6 +41,16 @@ jobs:
       - name: Verify generated files, formatting, vet, lint and tests
         run: make verify
 
+      # None of the checks above may write a tracked or unignored file.
+      - name: Check that make verify left the workspace unchanged
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            git diff
+            echo "error: make verify changed the workspace." >&2
+            exit 1
+          fi
+
       # A stale generated file must fail check-generated and leave the
       # workspace as it was.
       - name: Check that check-generated reports a stale CRD and writes nothing
