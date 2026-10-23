@@ -41,12 +41,13 @@ child=
 
 delete_cluster() {
 	local status=$?
+	# Ignored first, so no further signal can end the run before the cluster is
+	# deleted. kind is in the terminal's foreground process group, so a second
+	# Ctrl-C would reach it; ignored signals stay ignored in it.
+	trap '' INT TERM HUP
 	if [ -z "$created" ]; then
 		return
 	fi
-	# kind is in the terminal's foreground process group, so a second Ctrl-C
-	# would reach it; ignored signals stay ignored in it.
-	trap '' INT TERM HUP
 	echo "Deleting Kind cluster '$KIND_CLUSTER' created by this run..."
 	if ! "$KIND" delete cluster --name "$KIND_CLUSTER"; then
 		echo "error: could not delete Kind cluster '$KIND_CLUSTER'; delete it with '$KIND delete cluster --name $KIND_CLUSTER'." >&2
