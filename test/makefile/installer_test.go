@@ -59,13 +59,7 @@ func TestBuildInstaller_LeavesConfigUnchanged(t *testing.T) {
 	cmd := exec.Command("make", "-C", dir, "-f", filepath.Join(repo, "Makefile"),
 		"-o", "manifests", "-o", "generate", "-o", tool, "build-installer",
 		"KUSTOMIZE="+tool, "IMG=example.com/manager:test")
-	for _, kv := range os.Environ() {
-		switch strings.SplitN(kv, "=", 2)[0] {
-		case "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", "GNUMAKEFLAGS", "MAKEFILES":
-		default:
-			cmd.Env = append(cmd.Env, kv)
-		}
-	}
+	cmd.Env = childMakeEnv()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("make build-installer: %v\n%s", err, out)
 	}

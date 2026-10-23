@@ -48,14 +48,7 @@ func runSecurity(t *testing.T, vulnExit string) (code int, out string, calls str
 	// -o keeps make from installing govulncheck over the stand-in.
 	cmd := exec.Command("make", "-C", dir, "-f", filepath.Join(repo, "Makefile"), "-o", tool, "security",
 		"GOVULNCHECK="+tool)
-	for _, kv := range os.Environ() {
-		switch strings.SplitN(kv, "=", 2)[0] {
-		case "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", "GNUMAKEFLAGS", "MAKEFILES":
-		default:
-			cmd.Env = append(cmd.Env, kv)
-		}
-	}
-	cmd.Env = append(cmd.Env, "CALLS="+log, "VULN_EXIT="+vulnExit)
+	cmd.Env = append(childMakeEnv(), "CALLS="+log, "VULN_EXIT="+vulnExit)
 	output, err := cmd.CombinedOutput()
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		code = exit.ExitCode()
