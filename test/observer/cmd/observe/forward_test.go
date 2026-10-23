@@ -75,3 +75,26 @@ func TestForwarderReportsAPortForwardThatNeverListens(t *testing.T) {
 		t.Fatal("ensure() of a port-forward that prints nothing = nil error, want a timeout")
 	}
 }
+
+func TestForwarderNotesEachStartAndEnd(t *testing.T) {
+	starts := 0
+	script := `echo "Forwarding from 127.0.0.1:41236 -> 9090"; echo "lost connection to pod" >&2; exit 1`
+	f := &forwarder{start: scripted(script, &starts),
+		ready: 5 * time.Second}
+	defer f.Close()
+	if _, err := f.ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !f.exited() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	notes := strings.Join(f.DrainNotes(), "\n")
+	if !strings.Contains(notes, "started") || !strings.Contains(notes, "ended") ||
+		!strings.Contains(notes, "lost connection to pod") {
+		t.Fatalf("notes = %q, want the start, the end and what kubectl said", notes)
+	}
+	if again := f.DrainNotes(); len(again) != 0 {
+		t.Fatalf("notes drained twice = %q, want each once", again)
+	}
+}

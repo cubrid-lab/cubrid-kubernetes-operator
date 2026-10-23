@@ -22,6 +22,13 @@ import (
 	"time"
 )
 
+// The gauge and labels the tests name most.
+const (
+	readyGauge     = "cubrid_cluster_ready"
+	labelCluster   = "cluster"
+	labelNamespace = "namespace"
+)
+
 var t0 = time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
 
 func at(seconds float64) time.Time { return t0.Add(time.Duration(seconds * float64(time.Second))) }
@@ -42,7 +49,7 @@ func gaugeSeries(name string, value float64, sampled ...float64) Series {
 
 // podGauge is a gauge as the manager Pod pod exported it.
 func podGauge(pod, name string, value float64, sampled ...float64) Series {
-	s := Series{Name: name, Labels: map[string]string{"namespace": "ns", "cluster": "ha", "pod": pod}}
+	s := Series{Name: name, Labels: map[string]string{labelNamespace: "db", labelCluster: "ha", "pod": pod}}
 	for _, ts := range sampled {
 		s.Samples = append(s.Samples, Point{At: at(ts), Value: value})
 	}
@@ -53,7 +60,7 @@ func upSeries(value float64, sampled ...float64) Series { return podUp("manager-
 
 func podUp(pod string, value float64, sampled ...float64) Series {
 	s := podGauge(pod, "up", value, sampled...)
-	s.Labels = map[string]string{"namespace": "op", "pod": pod}
+	s.Labels = map[string]string{labelNamespace: "op", "pod": pod}
 	return s
 }
 
@@ -137,15 +144,15 @@ func TestClassifyMetricNeverReadsAMissingValueAsZero(t *testing.T) {
 	if got := ClassifyLatest(nil, now, rules); got.State != Absent || got.Value != nil {
 		t.Fatalf("ClassifyLatest(no series) = %+v, want absent without a value", got)
 	}
-	empty := Series{Name: "cubrid_cluster_ready"}
+	empty := Series{Name: readyGauge}
 	if got := ClassifyLatest(&empty, now, rules); got.State != Absent || got.Value != nil {
 		t.Fatalf("ClassifyLatest(series without samples) = %+v, want absent without a value", got)
 	}
-	old := gaugeSeries("cubrid_cluster_ready", 1, 10)
+	old := gaugeSeries(readyGauge, 1, 10)
 	if got := ClassifyLatest(&old, now, rules); got.State != Stale {
 		t.Fatalf("ClassifyLatest(sample 90 s old) = %+v, want stale", got)
 	}
-	zero := gaugeSeries("cubrid_cluster_ready", 0, 90)
+	zero := gaugeSeries(readyGauge, 0, 90)
 	got := ClassifyLatest(&zero, now, rules)
 	if got.State != Measured || got.Value == nil || *got.Value != 0 {
 		t.Fatalf("ClassifyLatest(a measured 0) = %+v, want measured 0", got)
@@ -273,5 +280,113 @@ func TestSummarizeFailsOnAContradiction(t *testing.T) {
 	s := Summarize([]Sample{healthy, wrong, after}, rules)
 	if s.Verdict != VerdictFailed || len(s.Contradictions) != 1 {
 		t.Fatalf("Summarize() = %+v, want failed with one contradiction", s)
+	}
+}
+
+func routingGaugeAt(value float64) Sample {
+	const scraped = 25
+	return Sample{At: at(scraped + 1), Metrics: MetricsReading{Queried: true,
+		Series: []Series{gaugeSeries("cubrid_cluster_routing_ready", value, scraped)}}}
+}
+
+func TestCheckJudgesAScrapeOnlyBetweenReadsFarEnoughAway(t *testing.T) {
+	rules := DefaultRules()
+	wrong := routingGaugeAt(0)
+	cases := map[string]struct {
+		before, after Sample
+		want          int
+	}{
+		"reads well apart from the scrape": {
+			Sample{At: at(10), Status: healthyStatus(10, 5)}, Sample{At: at(40), Status: healthyStatus(40, 5)}, 1},
+		"reads within the clock tolerance": {
+			Sample{At: at(21), Status: healthyStatus(21, 5)}, Sample{At: at(29), Status: healthyStatus(29, 5)}, 0},
+		// The manager gathers a scrape's gauges after Prometheus stamps it, up
+		// to the scrape timeout later; a write in between is in the gauge.
+		"a read after the scrape but within its timeout": {
+			Sample{At: at(10), Status: healthyStatus(10, 5)}, Sample{At: at(37), Status: healthyStatus(37, 5)}, 0},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := Check([]Sample{tc.before, wrong, tc.after}, rules); len(got) != tc.want {
+				t.Fatalf("Check() = %q, want %d contradictions", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckPlacesAStatusReadAtItsAnswerOnTheEarlierSide(t *testing.T) {
+	rules := DefaultRules()
+	// The tick began before the scrape, but the read was answered after it:
+	// it may hold a write the gauge did not see yet.
+	slow := Sample{At: at(10), Status: healthyStatus(10, 5)}
+	slow.Status.ReadAt = new(at(26))
+	after := Sample{At: at(40), Status: healthyStatus(40, 5)}
+	if got := Check([]Sample{slow, routingGaugeAt(0), after}, rules); len(got) != 0 {
+		t.Fatalf("Check() = %q, want none with no read answered before the scrape", got)
+	}
+}
+
+func TestCheckSkipsAConditionThatChangedAndChangedBack(t *testing.T) {
+	rules := DefaultRules()
+	before := Sample{At: at(10), Status: healthyStatus(10, 5)}
+	after := Sample{At: at(40), Status: healthyStatus(40, 5)}
+	c := after.Status.Conditions["RoutingReady"]
+	c.LastTransitionTime = at(33) // True, False, True again
+	after.Status.Conditions["RoutingReady"] = c
+	if got := Check([]Sample{before, routingGaugeAt(0), after}, rules); len(got) != 0 {
+		t.Fatalf("Check() = %q, want none across two transitions", got)
+	}
+}
+
+func TestCheckReportsAGaugeForAConditionTheStatusDoesNotCarry(t *testing.T) {
+	rules := DefaultRules()
+	before := Sample{At: at(10), Status: healthyStatus(10, 5)}
+	after := Sample{At: at(40), Status: healthyStatus(40, 5)}
+	delete(before.Status.Conditions, "RoutingReady")
+	delete(after.Status.Conditions, "RoutingReady")
+	got := Check([]Sample{before, routingGaugeAt(1), after}, rules)
+	if len(got) != 1 || !strings.Contains(got[0], "carried no RoutingReady") {
+		t.Fatalf("Check() = %q, want one contradiction for a gauge without its Condition", got)
+	}
+}
+
+func TestCheckAllowsTheObservationTimeUpToTheSecondTheStatusHolds(t *testing.T) {
+	rules := DefaultRules()
+	after := Sample{At: at(40), Status: healthyStatus(40, 20)} // holds at(20), whole seconds
+	for value, want := range map[float64]int{
+		float64(at(20).Unix()) + 0.999: 0, // the status keeps whole seconds of the same time
+		float64(at(21).Unix()):         1,
+	} {
+		g := gaugeSeries(lastObservationGauge, value, 25)
+		held := Sample{Metrics: MetricsReading{Queried: true, Series: []Series{g}}}
+		if got := Check([]Sample{held, after}, rules); len(got) != want {
+			t.Errorf("Check(observation %f) = %q, want %d contradictions", value, got, want)
+		}
+	}
+}
+
+func TestJudgeMeasuresTheStatusAgeWhenTheReadWasAnswered(t *testing.T) {
+	rules := DefaultRules()
+	s := Sample{At: at(100), Status: healthyStatus(100, 55), Metrics: healthyMetrics(80)}
+	s.Status.ReadAt = new(at(108)) // 63 s after the observation when it arrived
+	if v := Judge(s, rules); v.State == Healthy || !strings.Contains(strings.Join(v.Reasons, ";"), "status stale") {
+		t.Fatalf("Judge() = %+v, want stale measured at the answer", v)
+	}
+}
+
+func TestJudgeRefusesAnObservationTimeInTheFuture(t *testing.T) {
+	rules := DefaultRules()
+	s := Sample{At: at(100), Status: healthyStatus(100, -30), Metrics: healthyMetrics(80)}
+	if v := Judge(s, rules); v.State == Healthy || !strings.Contains(strings.Join(v.Reasons, ";"), "future") {
+		t.Fatalf("Judge() = %+v, want an observation time 30 s ahead refused", v)
+	}
+}
+
+func TestJudgeTakesNoGaugeFromAnotherManagerPodScrapedAtTheSameTime(t *testing.T) {
+	rules := DefaultRules()
+	s := Sample{At: at(100), Status: healthyStatus(100, 10), Metrics: healthyMetrics(80)}
+	s.Metrics.Up = []Series{podUp("manager-b", 1, 80)}
+	if v := Judge(s, rules); v.State == Healthy || !strings.Contains(strings.Join(v.Reasons, ";"), "manager-b") {
+		t.Fatalf("Judge() = %+v, want manager-a's gauges not counted for manager-b's scrape", v)
 	}
 }

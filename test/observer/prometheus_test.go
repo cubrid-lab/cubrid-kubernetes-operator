@@ -65,7 +65,7 @@ func TestPrometheusRangeReturnsEveryRawSampleWithItsScrapeTime(t *testing.T) {
 		t.Fatalf("Range() = %+v, want two series", got)
 	}
 	ready := got[0]
-	if ready.Name != "cubrid_cluster_ready" || ready.Labels["__name__"] != "" || ready.Labels["cluster"] != "ha" {
+	if ready.Name != readyGauge || ready.Labels["__name__"] != "" || ready.Labels["cluster"] != "ha" {
 		t.Fatalf("series = %+v, want the name taken out of the labels", ready)
 	}
 	if len(ready.Samples) != 2 || ready.Samples[1].Value != 0 ||

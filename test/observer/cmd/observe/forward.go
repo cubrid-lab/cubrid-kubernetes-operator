@@ -37,9 +37,10 @@ var forwardedPort = regexp.MustCompile(`^Forwarding from 127\.0\.0\.1:(\d+) -> `
 // forwarder reaches Prometheus through kubectl port-forward, which goes
 // through the kubelet: the lab's API server cannot reach the Pod network, so
 // its service proxy cannot be used. A port-forward that ended, for example
-// because the Prometheus Pod was replaced, is started again at the next
-// query; the query that finds it ended fails, and its tick records the
-// metrics as unavailable.
+// because the Prometheus Pod was replaced, is started again by the next
+// query, which then goes on; a query in flight when it ended fails, and its
+// tick records the metrics as unavailable. Each start and end is noted, and
+// the next tick records the notes.
 type forwarder struct {
 	// start returns the port-forward command, bound to ctx.
 	start func(context.Context) *exec.Cmd
@@ -51,6 +52,24 @@ type forwarder struct {
 	url    string
 	done   chan struct{}
 	cancel context.CancelFunc
+
+	notesMu sync.Mutex
+	notes   []string
+}
+
+func (f *forwarder) note(format string, args ...any) {
+	f.notesMu.Lock()
+	defer f.notesMu.Unlock()
+	f.notes = append(f.notes, time.Now().UTC().Format(time.RFC3339Nano)+" "+fmt.Sprintf(format, args...))
+}
+
+// DrainNotes returns the starts and ends noted since the last call.
+func (f *forwarder) DrainNotes() []string {
+	f.notesMu.Lock()
+	defer f.notesMu.Unlock()
+	n := f.notes
+	f.notes = nil
+	return n
 }
 
 type boundedBuffer struct {
@@ -112,12 +131,16 @@ func (f *forwarder) ensure(ctx context.Context) (string, error) {
 				}
 			}
 		}
-		_ = cmd.Wait()
+		err := cmd.Wait()
+		if pctx.Err() == nil {
+			f.note("port-forward to prometheus ended (%v): %s", err, stderr.String())
+		}
 	}()
 	timer := time.NewTimer(f.ready)
 	defer timer.Stop()
 	listening := func(port string) (string, error) {
 		f.url, f.done, f.cancel = "http://127.0.0.1:"+port, done, cancel
+		f.note("port-forward to prometheus started")
 		return f.url, nil
 	}
 	select {

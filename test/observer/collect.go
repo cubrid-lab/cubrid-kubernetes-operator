@@ -63,9 +63,27 @@ type Collector struct {
 	seen map[string]string
 }
 
-// ClusterSelector selects every series the manager exports for the cluster.
+// ClusterSelector selects every series the manager exports for a cluster of
+// the name. The namespace is matched after the query, since it is in one of
+// two labels (see inNamespace).
 func (c *Collector) ClusterSelector() string {
-	return fmt.Sprintf(`{__name__=~"cubrid_(cluster|instance)_.+",namespace=%q,cluster=%q}`, c.Namespace, c.Cluster)
+	return fmt.Sprintf(`{__name__=~"cubrid_(cluster|instance)_.+",cluster=%q}`, c.Cluster)
+}
+
+// inNamespace reports whether a series is of the cluster's namespace. A
+// ServiceMonitor with honorLabels keeps the metric's own namespace label;
+// without it, Prometheus sets namespace to the target's, the Operator's, and
+// moves the metric's own to exported_namespace.
+func (c *Collector) inNamespace(labels map[string]string) bool {
+	if ns, ok := labels["exported_namespace"]; ok {
+		return ns == c.Namespace
+	}
+	return labels["namespace"] == c.Namespace
+}
+
+// noter is a MetricsSource that reports what happened to it between reads.
+type noter interface {
+	DrainNotes() []string
 }
 
 func (c *Collector) now() time.Time {
@@ -81,7 +99,7 @@ func (c *Collector) Collect(ctx context.Context) Sample {
 	s := Sample{At: c.now()}
 	s.Status = c.readStatus(ctx)
 	s.Operator = c.readOperator(ctx)
-	s.Events, s.EventsError = c.readEvents(ctx)
+	s.Events, s.EventsError = c.readEvents(ctx, s.Operator.Pods)
 	s.Metrics = c.readMetrics(ctx, s.At)
 	return s
 }
@@ -90,12 +108,14 @@ func (c *Collector) readStatus(ctx context.Context) StatusReading {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
 	var cluster databasev1alpha1.CubridCluster
-	if err := c.Client.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: c.Cluster}, &cluster); err != nil {
-		return StatusReading{Error: err.Error()}
+	err := c.Client.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: c.Cluster}, &cluster)
+	answered := c.now()
+	if err != nil {
+		return StatusReading{Error: err.Error(), ReadAt: &answered}
 	}
 	st := cluster.Status
-	r := StatusReading{Read: true, CurrentPrimary: st.CurrentPrimary, LastObservedTime: timeOf(st.LastObservedTime),
-		Conditions: map[string]Condition{}}
+	r := StatusReading{Read: true, ReadAt: &answered, CurrentPrimary: st.CurrentPrimary,
+		LastObservedTime: timeOf(st.LastObservedTime), Conditions: map[string]Condition{}}
 	for _, cond := range st.Conditions {
 		r.Conditions[cond.Type] = Condition{Status: string(cond.Status), Reason: cond.Reason,
 			LastTransitionTime: cond.LastTransitionTime.UTC()}
@@ -145,9 +165,10 @@ func (c *Collector) readOperator(ctx context.Context) OperatorReading {
 	return r
 }
 
-// readEvents returns the Events about the cluster, its Pods and the
-// manager's Pods that are new or changed since the last tick.
-func (c *Collector) readEvents(ctx context.Context) ([]Event, string) {
+// readEvents returns the Events that are new or changed since the last tick
+// about the cluster, its Pods and the manager's Pods, and in the Operator's
+// own namespace, when it is not the cluster's, about anything.
+func (c *Collector) readEvents(ctx context.Context, managers []Pod) ([]Event, string) {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
 	if c.seen == nil {
@@ -162,7 +183,7 @@ func (c *Collector) readEvents(ctx context.Context) ([]Event, string) {
 			continue
 		}
 		for _, e := range events.Items {
-			if !c.about(ns, e.InvolvedObject) || c.seen[string(e.UID)] == e.ResourceVersion {
+			if !c.about(ns, e.InvolvedObject, managers) || c.seen[string(e.UID)] == e.ResourceVersion {
 				continue
 			}
 			c.seen[string(e.UID)] = e.ResourceVersion
@@ -180,9 +201,14 @@ func (c *Collector) readEvents(ctx context.Context) ([]Event, string) {
 	return out, strings.Join(errs, "; ")
 }
 
-func (c *Collector) about(ns string, obj corev1.ObjectReference) bool {
+func (c *Collector) about(ns string, obj corev1.ObjectReference, managers []Pod) bool {
 	if ns == c.OperatorNamespace && ns != c.Namespace {
 		return true
+	}
+	for _, p := range managers {
+		if obj.Kind == "Pod" && obj.Name == p.Name {
+			return true
+		}
 	}
 	switch obj.Kind {
 	case "CubridCluster":
@@ -196,13 +222,27 @@ func (c *Collector) about(ns string, obj corev1.ObjectReference) bool {
 func (c *Collector) readMetrics(ctx context.Context, at time.Time) MetricsReading {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
-	series, err := c.Metrics.Range(ctx, c.ClusterSelector(), c.Window, at)
+	r := c.queryMetrics(ctx, at)
+	if n, ok := c.Metrics.(noter); ok {
+		r.Notes = n.DrainNotes()
+	}
+	return r
+}
+
+func (c *Collector) queryMetrics(ctx context.Context, at time.Time) MetricsReading {
+	all, err := c.Metrics.Range(ctx, c.ClusterSelector(), c.Window, at)
 	if err != nil {
 		return MetricsReading{Error: err.Error()}
 	}
 	up, err := c.Metrics.Range(ctx, c.UpSelector, c.Window, at)
 	if err != nil {
 		return MetricsReading{Error: err.Error()}
+	}
+	series := []Series{}
+	for _, s := range all {
+		if c.inNamespace(s.Labels) {
+			series = append(series, s)
+		}
 	}
 	return MetricsReading{Queried: true, Series: series, Up: up}
 }
@@ -220,8 +260,11 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 
 // Run takes a sample every interval, from now until duration has passed,
 // judges it, and writes it to w as one redacted JSON line as soon as it is
-// taken, so that what was observed survives a run that is stopped. It
-// returns the samples taken, and the context's error when it was cancelled.
+// taken, so that what was observed survives a run that is stopped. A tick
+// that took longer than an interval is followed by the next interval
+// boundary, not by the ticks it missed, so that a slow fault does not cause a
+// burst of reads. It returns the samples taken, and the context's error when
+// it was cancelled.
 func Run(
 	ctx context.Context, c *Collector, interval, duration time.Duration, w io.Writer, r *evidence.Redactor,
 ) ([]Sample, error) {
@@ -235,7 +278,7 @@ func Run(
 	}
 	start := c.now()
 	var samples []Sample
-	for n := 1; ; n++ {
+	for n := int64(1); ; n++ {
 		s := c.Collect(ctx)
 		s.Verdict = Judge(s, rules)
 		samples = append(samples, s)
@@ -246,11 +289,12 @@ func Run(
 		if _, err := w.Write(append(r.Redact(line), '\n')); err != nil {
 			return samples, err
 		}
+		n = max(n, int64(c.now().Sub(start)/interval)+1)
 		next := start.Add(time.Duration(n) * interval)
 		if next.Sub(start) > duration {
 			return samples, nil
 		}
-		if err := sleep(ctx, next.Sub(c.now())); err != nil {
+		if err := sleep(ctx, max(0, next.Sub(c.now()))); err != nil {
 			return samples, err
 		}
 	}

@@ -41,6 +41,13 @@ type fakeMetrics struct {
 	queries []string
 	series  map[string][]Series
 	err     error
+	notes   []string
+}
+
+func (f *fakeMetrics) DrainNotes() []string {
+	n := f.notes
+	f.notes = nil
+	return n
 }
 
 func (f *fakeMetrics) Range(_ context.Context, selector string, window time.Duration, _ time.Time) ([]Series, error) {
@@ -106,14 +113,16 @@ func managerPod(name string, ready bool, deleting bool) *corev1.Pod {
 	return p
 }
 
-func event(name, object string, count int32, rv string) *corev1.Event {
+func event(name, object string) *corev1.Event {
 	return &corev1.Event{
-		ObjectMeta:     metav1.ObjectMeta{Name: name, Namespace: "db", UID: types.UID("e-" + name), ResourceVersion: rv},
+		ObjectMeta:     metav1.ObjectMeta{Name: name, Namespace: "db", UID: types.UID("e-" + name)},
 		InvolvedObject: corev1.ObjectReference{Kind: "CubridCluster", Name: object},
-		Type:           corev1.EventTypeNormal, Reason: "Observed", Message: "m-" + name, Count: count,
+		Type:           corev1.EventTypeNormal, Reason: "Observed", Message: "m-" + name, Count: 1,
 		LastTimestamp: metav1.NewTime(at(-2)),
 	}
 }
+
+const clusterSelector = `{__name__=~"cubrid_(cluster|instance)_.+",cluster="ha"}`
 
 func newCollector(c client.Client, m MetricsSource) *Collector {
 	return &Collector{
@@ -127,11 +136,10 @@ func newCollector(c client.Client, m MetricsSource) *Collector {
 func TestCollectReadsStatusManagerPodsEventsAndMetrics(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(
 		observedCluster(), managerPod("mgr-a", false, true), managerPod("mgr-b", true, false),
-		event("e1", "ha", 1, "1"), event("other", "other-cluster", 1, "1"),
+		event("e1", "ha"), event("other", "other-cluster"),
 	).Build()
 	m := &fakeMetrics{series: map[string][]Series{
-		`{__name__=~"cubrid_(cluster|instance)_.+",namespace="db",cluster="ha"}`: {
-			gaugeSeries("cubrid_cluster_ready", 1, -10)},
+		clusterSelector:      {podGauge("manager-a", readyGauge, 1, -10)},
 		`up{namespace="op"}`: {upSeries(1, -10)},
 	}}
 	col := newCollector(c, m)
@@ -169,14 +177,14 @@ func TestCollectReadsStatusManagerPodsEventsAndMetrics(t *testing.T) {
 		t.Errorf("metrics = %+v, want the cluster's series and up", s.Metrics)
 	}
 	if want := []string{
-		`{__name__=~"cubrid_(cluster|instance)_.+",namespace="db",cluster="ha"}/1m30s`, `up{namespace="op"}/1m30s`,
+		clusterSelector + "/1m30s", `up{namespace="op"}/1m30s`,
 	}; strings.Join(m.queries, " ") != strings.Join(want, " ") {
 		t.Errorf("queries = %q, want %q", m.queries, want)
 	}
 }
 
 func TestCollectRecordsAnEventOnlyWhenItIsNewOrChanged(t *testing.T) {
-	ev := event("e1", "ha", 1, "1")
+	ev := event("e1", "ha")
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(observedCluster(), ev).Build()
 	col := newCollector(c, &fakeMetrics{})
 	if got := col.Collect(context.Background()).Events; len(got) != 1 {
@@ -246,4 +254,93 @@ func TestRunStopsWhenCancelled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || len(samples) != 1 {
 		t.Fatalf("Run() = %d samples, %v; want the one sample taken and context.Canceled", len(samples), err)
 	}
+}
+
+func TestCollectKeepsTheClusterNamespaceUnderEitherLabel(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(observedCluster()).Build()
+	// Without honorLabels, Prometheus puts the target's namespace in
+	// namespace and the metric's own in exported_namespace.
+	relabelled := gaugeSeries(readyGauge, 1, -10)
+	relabelled.Labels = map[string]string{labelNamespace: "op", "exported_namespace": "db", labelCluster: "ha"}
+	honoured := gaugeSeries("cubrid_cluster_ha_ready", 1, -10)
+	honoured.Labels = map[string]string{labelNamespace: "db", labelCluster: "ha"}
+	other := gaugeSeries(readyGauge, 1, -10)
+	other.Labels = map[string]string{labelNamespace: "op", "exported_namespace": "elsewhere", labelCluster: "ha"}
+	otherHonoured := gaugeSeries(readyGauge, 1, -10)
+	otherHonoured.Labels = map[string]string{labelNamespace: "elsewhere", labelCluster: "ha"}
+	m := &fakeMetrics{series: map[string][]Series{clusterSelector: {relabelled, honoured, other, otherHonoured}}}
+	got := newCollector(c, m).Collect(context.Background()).Metrics.Series
+	if len(got) != 2 || got[0].Name != readyGauge || got[1].Name != "cubrid_cluster_ha_ready" {
+		t.Fatalf("series = %+v, want only the two of namespace db", got)
+	}
+}
+
+func TestCollectRecordsTheManagerPodsEventsInASharedNamespace(t *testing.T) {
+	mgr := managerPod("mgr-a", true, false)
+	mgr.Namespace = "db"
+	mgrEvent := event("killing", "")
+	mgrEvent.InvolvedObject = corev1.ObjectReference{Kind: "Pod", Name: "mgr-a"}
+	unrelated := event("unrelated", "")
+	unrelated.InvolvedObject = corev1.ObjectReference{Kind: "Pod", Name: "web-0"}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(observedCluster(), mgr, mgrEvent, unrelated).Build()
+	col := newCollector(c, &fakeMetrics{})
+	col.OperatorNamespace = "db"
+	got := col.Collect(context.Background()).Events
+	if len(got) != 1 || got[0].Object != "Pod/mgr-a" {
+		t.Fatalf("events = %+v, want only the manager Pod's", got)
+	}
+}
+
+func TestCollectRecordsWhatTheMetricsSourceNoted(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(observedCluster()).Build()
+	m := &fakeMetrics{notes: []string{"port-forward ended"}}
+	col := newCollector(c, m)
+	if got := col.Collect(context.Background()).Metrics.Notes; len(got) != 1 || got[0] != "port-forward ended" {
+		t.Fatalf("notes = %q, want the source's note", got)
+	}
+	if got := col.Collect(context.Background()).Metrics.Notes; len(got) != 0 {
+		t.Fatalf("notes = %q, want each note recorded once", got)
+	}
+}
+
+func TestCollectRecordsWhenTheStatusReadWasAnswered(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(observedCluster()).Build()
+	col := newCollector(c, &fakeMetrics{})
+	now := t0
+	col.Now = func() time.Time { now = now.Add(time.Second); return now }
+	s := col.Collect(context.Background())
+	if s.Status.ReadAt == nil || !s.Status.ReadAt.After(s.At) {
+		t.Fatalf("status read at %v in a tick begun at %v, want the time it was answered", s.Status.ReadAt, s.At)
+	}
+}
+
+func TestRunSkipsTheTicksASlowTickMissed(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(observedCluster()).Build()
+	m := &slowMetrics{}
+	col := newCollector(c, m)
+	now := t0
+	col.Now = func() time.Time { return now }
+	m.advance = func() { now = now.Add(5 * time.Second) } // the first tick takes 5 s
+	col.sleep = func(ctx context.Context, d time.Duration) error { now = now.Add(d); return nil }
+	samples, err := Run(context.Background(), col, 2*time.Second, 10*time.Second, &bytes.Buffer{}, evidence.NewRedactor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := make([]string, 0, len(samples))
+	for _, s := range samples {
+		starts = append(starts, s.At.Sub(t0).String())
+	}
+	if got, want := strings.Join(starts, " "), "0s 6s 8s 10s"; got != want {
+		t.Fatalf("ticks began at %s, want %s: no catch-up burst after a slow tick", got, want)
+	}
+}
+
+type slowMetrics struct{ advance func() }
+
+func (s *slowMetrics) Range(context.Context, string, time.Duration, time.Time) ([]Series, error) {
+	if s.advance != nil {
+		s.advance()
+		s.advance = nil
+	}
+	return nil, nil
 }

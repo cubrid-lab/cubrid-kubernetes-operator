@@ -44,6 +44,22 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/observer"
 )
 
+// targetHandle is the snapshot of the selected context that run reads through.
+type targetHandle interface {
+	Runner() (*installed.Runner, error)
+	Kubectl(ctx context.Context, args ...string) *exec.Cmd
+	Close() error
+}
+
+// openTarget is replaced in tests.
+var openTarget = func(path, contextName string) (targetHandle, error) {
+	t, err := installed.OpenTarget(path, contextName)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
@@ -82,8 +98,8 @@ func (c config) validate() error {
 	if !fullCommit.MatchString(c.commit) {
 		return errors.New("-commit must be the full commit of the installed Operator")
 	}
-	if c.interval <= 0 || c.duration <= 0 || c.window < 2*c.interval {
-		return errors.New("-interval and -duration must be positive, and -window at least two intervals")
+	if c.interval <= 0 || c.duration <= 0 || c.window < 2*c.interval || c.window < time.Second {
+		return errors.New("-interval and -duration must be positive, and -window at least two intervals and 1s")
 	}
 	if c.prometheusPort <= 0 || c.prometheusPort > 65535 {
 		return errors.New("-prometheus-port must be a port number")
@@ -157,7 +173,7 @@ func run(ctx context.Context, args []string) (runErr error) {
 		return err
 	}
 
-	target, err := installed.OpenTarget(cfg.kubeconfig, cfg.context)
+	target, err := openTarget(cfg.kubeconfig, cfg.context)
 	if err != nil {
 		return err
 	}
@@ -193,7 +209,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 			return target.Kubectl(ctx, "-n", cfg.prometheusNamespace, "port-forward", "--address", "127.0.0.1",
 				"service/"+cfg.prometheusService, ":"+strconv.Itoa(cfg.prometheusPort))
 		},
-		ready: 15 * time.Second,
+		// Shorter than a read's timeout, so that a port-forward that does not
+		// listen is reported as such rather than as the read's deadline.
+		ready: 8 * time.Second,
 		http:  &http.Client{Timeout: 10 * time.Second},
 	}
 	defer fwd.Close()

@@ -61,15 +61,20 @@ const (
 type Rules struct {
 	StatusMaxAge time.Duration `json:"statusMaxAge"`
 	MetricMaxAge time.Duration `json:"metricMaxAge"`
-	Tolerance    time.Duration `json:"tolerance"`
+	// Tolerance covers the clock difference between this host, Prometheus
+	// and the manager.
+	Tolerance time.Duration `json:"tolerance"`
+	// ScrapeTimeout is how long after Prometheus stamps a scrape the manager
+	// may still gather its gauges: Prometheus' scrape_timeout.
+	ScrapeTimeout time.Duration `json:"scrapeTimeout"`
 }
 
 // DefaultRules returns the rules of docs/observability.md: the reader's
 // 60 seconds for the status, and for a metric two of the lab's 30-second
-// scrape intervals plus a margin. Tolerance covers the clock difference
-// between this host, Prometheus and the manager.
+// scrape intervals plus a margin. The scrape timeout is Prometheus' default.
 func DefaultRules() Rules {
-	return Rules{StatusMaxAge: 60 * time.Second, MetricMaxAge: 75 * time.Second, Tolerance: 5 * time.Second}
+	return Rules{StatusMaxAge: 60 * time.Second, MetricMaxAge: 75 * time.Second, Tolerance: 5 * time.Second,
+		ScrapeTimeout: 10 * time.Second}
 }
 
 // Point is one raw sample of a series, at the time Prometheus scraped it.
@@ -91,6 +96,9 @@ type MetricsReading struct {
 	Error   string   `json:"error,omitempty"`
 	Up      []Series `json:"up,omitempty"`
 	Series  []Series `json:"series,omitempty"`
+	// Notes are what the source reported since the last tick, such as a
+	// port-forward that ended or was started again.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // Condition is one status Condition as read.
@@ -110,8 +118,10 @@ type Instance struct {
 
 // StatusReading is the CubridCluster's status as read.
 type StatusReading struct {
-	Read             bool                 `json:"read"`
-	Error            string               `json:"error,omitempty"`
+	Read  bool   `json:"read"`
+	Error string `json:"error,omitempty"`
+	// ReadAt is when the read was answered; the tick's At is when it began.
+	ReadAt           *time.Time           `json:"readAt,omitempty"`
 	LastObservedTime *time.Time           `json:"lastObservedTime,omitempty"`
 	CurrentPrimary   string               `json:"currentPrimary,omitempty"`
 	Conditions       map[string]Condition `json:"conditions,omitempty"`
@@ -204,12 +214,29 @@ func latestOf(series []Series) *Series {
 	return newest
 }
 
+// answered is when a sample's status read was answered, or when its tick
+// began for a sample recorded without that time.
+func answered(s Sample) time.Time {
+	if s.Status.ReadAt != nil {
+		return *s.Status.ReadAt
+	}
+	return s.At
+}
+
+func ptrTime(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
+}
+
 // Judge returns whether a sample shows a healthy cluster: a status observed
-// within StatusMaxAge with the five Conditions True, a manager whose last
-// scrape succeeded within MetricMaxAge, and in that scrape the gauges that
-// mirror the Conditions, each 1. Every
-// other reading is not healthy, and the reasons say why: a stale status, a
-// failed read and a missing series are never taken for a healthy one.
+// at most StatusMaxAge before the read was answered, and not ahead of it by
+// more than Tolerance, with the five Conditions True; a manager whose last
+// scrape succeeded within MetricMaxAge; and in that scrape the gauges that
+// mirror the Conditions, each 1. Every other reading is not healthy, and the
+// reasons say why: a stale status, a failed read and a missing series are
+// never taken for a healthy one.
 func Judge(s Sample, rules Rules) Verdict {
 	var reasons []string
 	st := s.Status
@@ -219,10 +246,14 @@ func Judge(s Sample, rules Rules) Verdict {
 	case !st.Read:
 		reasons = append(reasons, "status not read")
 	default:
-		if st.LastObservedTime == nil {
+		age := answered(s).Sub(ptrTime(st.LastObservedTime))
+		switch {
+		case st.LastObservedTime == nil:
 			reasons = append(reasons, "status has no lastObservedTime")
-		} else if age := s.At.Sub(*st.LastObservedTime); age > rules.StatusMaxAge {
+		case age > rules.StatusMaxAge:
 			reasons = append(reasons, fmt.Sprintf("status stale: lastObservedTime is %s old", age.Round(time.Second)))
+		case age < -rules.Tolerance:
+			reasons = append(reasons, fmt.Sprintf("status lastObservedTime is %s in the future", (-age).Round(time.Second)))
 		}
 		for _, c := range HealthConditions {
 			cond, ok := st.Conditions[c]
@@ -351,95 +382,110 @@ const lastObservationGauge = "cubrid_cluster_last_observation_timestamp_seconds"
 
 // Check returns each contradiction between a metric and the status. The
 // manager sets its gauges from the status it wrote, so a gauge scraped while
-// its Condition held one value must mirror it. A scrape is judged only where
-// the observer read the status on both sides of it, at least Tolerance away,
-// and both reads carry the Condition with the same status and the same
-// lastTransitionTime, older than the scrape by Tolerance: otherwise the
-// gauge may mirror a write the observer did not see. The observation time a
-// gauge carries must not be newer than the status read after it, since the
-// time only moves forward.
+// its Condition held one value must mirror it. A scrape stamped at T is
+// judged only between two status reads: one answered by T-Tolerance, and one
+// begun after T+Tolerance+ScrapeTimeout, since the manager gathers the
+// gauges after Prometheus stamps the scrape. Both reads must carry the
+// Condition with the same status and the same lastTransitionTime, older than
+// T by Tolerance: otherwise the gauge may mirror a write the observer did not
+// see. The observation time a gauge carries must not be newer than the
+// status read after it, since the time only moves forward.
 func Check(samples []Sample, rules Rules) []string {
-	var statuses []Sample
+	r := statusReads{rules: rules}
 	for _, s := range samples {
 		if s.Status.Read && s.Status.Error == "" {
-			statuses = append(statuses, s)
+			r.reads = append(r.reads, s)
 		}
 	}
-	slices.SortStableFunc(statuses, func(a, b Sample) int { return a.At.Compare(b.At) })
-	before := func(t time.Time) *Sample {
-		var found *Sample
-		for i := range statuses {
-			if statuses[i].At.After(t.Add(-rules.Tolerance)) {
-				break
-			}
-			found = &statuses[i]
-		}
-		return found
-	}
-	after := func(t time.Time) *Sample {
-		for i := range statuses {
-			if !statuses[i].At.Before(t.Add(rules.Tolerance)) {
-				return &statuses[i]
-			}
-		}
-		return nil
-	}
-
 	contradictions := []string{}
 	for _, p := range rawPoints(samples) {
-		scraped := p.At.UTC().Format(time.RFC3339Nano)
+		var found string
 		if p.name == lastObservationGauge {
-			a := after(p.At)
-			if a == nil || a.Status.LastObservedTime == nil {
-				continue
-			}
-			if held := a.Status.LastObservedTime.Unix(); p.Value >= float64(held+1) {
-				contradictions = append(contradictions, fmt.Sprintf(
-					"%s%s=%g scraped at %s is newer than the lastObservedTime %s the status held at %s",
-					p.name, p.labels, p.Value, scraped, a.Status.LastObservedTime.UTC().Format(time.RFC3339),
-					a.At.UTC().Format(time.RFC3339Nano)))
-			}
-			continue
+			found = r.checkObservationTime(p)
+		} else if i := slices.Index(conditionGauges, p.name); i >= 0 {
+			found = r.checkCondition(p, HealthConditions[i])
 		}
-		i := slices.Index(conditionGauges, p.name)
-		if i < 0 {
-			continue
-		}
-		cond := HealthConditions[i]
-		b, a := before(p.At), after(p.At)
-		if b == nil || a == nil {
-			continue
-		}
-		cb, okb := b.Status.Conditions[cond]
-		ca, oka := a.Status.Conditions[cond]
-		reads := fmt.Sprintf("read at %s and %s", b.At.UTC().Format(time.RFC3339Nano), a.At.UTC().Format(time.RFC3339Nano))
-		switch {
-		case !okb && !oka:
-			contradictions = append(contradictions, fmt.Sprintf("%s%s=%g scraped at %s, but the status carried no %s (%s)",
-				p.name, p.labels, p.Value, scraped, cond, reads))
-			continue
-		case !okb || !oka || cb.Status != ca.Status || !cb.LastTransitionTime.Equal(ca.LastTransitionTime):
-			continue
-		case cb.LastTransitionTime.After(p.At.Add(-rules.Tolerance)):
-			continue
-		}
-		if cond == "ReplicationHealthy" && cb.Status == "Unknown" {
-			contradictions = append(contradictions, fmt.Sprintf(
-				"%s%s=%g scraped at %s, but %s was Unknown since %s, which has no sample (%s)",
-				p.name, p.labels, p.Value, scraped, cond, cb.LastTransitionTime.UTC().Format(time.RFC3339), reads))
-			continue
-		}
-		want := 0.0
-		if cb.Status == "True" {
-			want = 1
-		}
-		if p.Value != want {
-			contradictions = append(contradictions, fmt.Sprintf("%s%s=%g scraped at %s, but %s was %s since %s (%s)",
-				p.name, p.labels, p.Value, scraped, cond, cb.Status, cb.LastTransitionTime.UTC().Format(time.RFC3339), reads))
+		if found != "" {
+			contradictions = append(contradictions, found)
 		}
 	}
 	return contradictions
 }
+
+// statusReads are the successful status reads of a run.
+type statusReads struct {
+	rules Rules
+	reads []Sample
+}
+
+// before is the last read answered by t-Tolerance.
+func (r statusReads) before(t time.Time) *Sample {
+	var found *Sample
+	for i := range r.reads {
+		if done := answered(r.reads[i]); !done.After(t.Add(-r.rules.Tolerance)) &&
+			(found == nil || done.After(answered(*found))) {
+			found = &r.reads[i]
+		}
+	}
+	return found
+}
+
+// after is the first read begun at t+Tolerance+ScrapeTimeout or later.
+func (r statusReads) after(t time.Time) *Sample {
+	var found *Sample
+	for i := range r.reads {
+		if begun := r.reads[i].At; !begun.Before(t.Add(r.rules.Tolerance+r.rules.ScrapeTimeout)) &&
+			(found == nil || begun.Before(found.At)) {
+			found = &r.reads[i]
+		}
+	}
+	return found
+}
+
+func (r statusReads) checkObservationTime(p point) string {
+	a := r.after(p.At)
+	if a == nil || a.Status.LastObservedTime == nil {
+		return ""
+	}
+	if held := a.Status.LastObservedTime.Unix(); p.Value < float64(held+1) {
+		return ""
+	}
+	return fmt.Sprintf("%s%s=%g scraped at %s is newer than the lastObservedTime %s the status held at %s",
+		p.name, p.labels, p.Value, stamp(p.At), a.Status.LastObservedTime.UTC().Format(time.RFC3339), stamp(a.At))
+}
+
+func (r statusReads) checkCondition(p point, cond string) string {
+	b, a := r.before(p.At), r.after(p.At)
+	if b == nil || a == nil {
+		return ""
+	}
+	cb, okb := b.Status.Conditions[cond]
+	ca, oka := a.Status.Conditions[cond]
+	scraped := fmt.Sprintf("%s%s=%g scraped at %s", p.name, p.labels, p.Value, stamp(p.At))
+	reads := fmt.Sprintf("read at %s and %s", stamp(b.At), stamp(a.At))
+	switch {
+	case !okb && !oka:
+		return fmt.Sprintf("%s, but the status carried no %s (%s)", scraped, cond, reads)
+	case !okb || !oka || cb.Status != ca.Status || !cb.LastTransitionTime.Equal(ca.LastTransitionTime):
+		return ""
+	case cb.LastTransitionTime.After(p.At.Add(-r.rules.Tolerance)):
+		return ""
+	}
+	since := cb.LastTransitionTime.UTC().Format(time.RFC3339)
+	if cond == "ReplicationHealthy" && cb.Status == "Unknown" {
+		return fmt.Sprintf("%s, but %s was Unknown since %s, which has no sample (%s)", scraped, cond, since, reads)
+	}
+	want := 0.0
+	if cb.Status == "True" {
+		want = 1
+	}
+	if p.Value == want {
+		return ""
+	}
+	return fmt.Sprintf("%s, but %s was %s since %s (%s)", scraped, cond, cb.Status, since, reads)
+}
+
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
 // Summary is the result of a run.
 type Summary struct {

@@ -13,7 +13,7 @@ separate steps.
 go build -o bin/observe ./test/observer/cmd/observe
 make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/observe \
   -kubeconfig "$KUBECONFIG" -context "$LAB_CONTEXT" \
-  -cluster-uid "$(kubectl get ns kube-system -o jsonpath={.metadata.uid})" \
+  -cluster-uid "$LAB_CLUSTER_UID" \
   -namespace <namespace> -cluster <cluster> \
   -operator-namespace <operator namespace> -operator-deployment <manager Deployment> \
   -prometheus-namespace <namespace> -prometheus-service <Prometheus Service> \
@@ -24,8 +24,19 @@ make test-lab LAB_CONTEXT=<context> LAB_TARGET=<lab> LAB_COMMAND='bin/observe \
 Run it under `make test-lab` ([lab runs](lab-runs.md)) whenever a fault is
 caused while it observes, so that the campaign Lease covers both. The
 kubeconfig context is snapshotted as in the
-[installed smoke](installed-smoke.md), and a cluster whose `kube-system` UID
-is not `-cluster-uid` is refused before anything is read.
+[installed smoke](installed-smoke.md).
+
+`-cluster-uid` is the `kube-system` namespace UID that the lab's private
+inventory records, as for the installed smoke. Never read it from the cluster
+you are about to observe: that check would always match. A cluster whose UID
+differs is refused before anything else is read.
+
+The account needs:
+- read access to the `CubridCluster`, Pods and Events in the cluster's
+  namespace, and to the manager's Deployment, Pods and Events in the
+  Operator's namespace;
+- `get` on the Prometheus Service, and `create` on `pods/portforward` in its
+  namespace.
 
 ## Metrics come from Prometheus
 
@@ -39,13 +50,21 @@ records three things the observer needs:
 
 The observer reaches that Prometheus through `kubectl port-forward` to
 `-prometheus-service`. The lab's API server cannot reach the Pod network, so
-its service proxy does not work there. A port-forward that ends, for example
-when the Prometheus Pod is replaced, is started again at the next tick, and
-the tick that found it ended records the metrics as unavailable.
+its service proxy does not work there. A port-forward can end, for example
+when the Prometheus Pod is replaced:
+- The next query starts it again and goes on.
+- A query that was in flight when it ended fails, and its tick records the
+  metrics as unavailable.
+- Each start and end, with what kubectl printed, goes into the `notes` of the
+  next tick's metrics.
 
 Each tick reads, for the window `-window` (default 90 s) before it, the raw
 samples of:
-- every `cubrid_cluster_*` and `cubrid_instance_*` series of the cluster;
+- every `cubrid_cluster_*` and `cubrid_instance_*` series of the cluster. The
+  cluster's namespace is matched after the query. It is the series'
+  `exported_namespace` label when the ServiceMonitor does not set
+  `honorLabels`, since Prometheus then puts the target's namespace in
+  `namespace`; otherwise it is `namespace`;
 - `up` of the job `-metrics-job` (default `<operator-deployment>-metrics-service`).
 
 A range query returns stored samples without Prometheus' staleness handling,
@@ -59,15 +78,17 @@ taken, so it survives a run that is stopped. Each line has:
 | Field | Content |
 |---|---|
 | `at` | When the tick began, on this host's clock |
-| `status` | `lastObservedTime`, `currentPrimary`, the Conditions with their `lastTransitionTime`, and the members; or the error of the read |
+| `status` | When the read was answered (`readAt`), `lastObservedTime`, `currentPrimary`, the Conditions with their `lastTransitionTime`, and the members; or the error of the read |
 | `operator` | The manager's Pods: uid, node, readiness, whether it is being deleted, its container's start and restart count |
-| `events` | Events about the cluster, its Pods and the Operator's namespace that are new or changed since the last tick |
-| `metrics` | The raw samples of each series, with the time Prometheus scraped them; or the error of the query |
+| `events` | Events new or changed since the last tick: those about the cluster, its Pods and the manager's Pods, and every Event in the Operator's namespace when that is not the cluster's |
+| `metrics` | The raw samples of each series, with the time Prometheus scraped them, and the port-forward's `notes`; or the error of the query |
 | `verdict` | `healthy`, or `not-healthy` with every reason |
 
 A tick is `healthy` only when all of these hold:
-- The status was read, its `lastObservedTime` is at most 60 seconds old (the
-  reader rule of [observability](../observability.md#freshness)), and
+- The status was read, and its `lastObservedTime` is at most 60 seconds older
+  than when the read was answered (the reader rule of
+  [observability](../observability.md#freshness)), and not more than 5
+  seconds ahead of it. Its
   `Ready`, `HAReady`, `PrimaryResolved`, `RoutingReady` and
   `ReplicationHealthy` are `True`.
 - Prometheus answered, and the manager's last scrape in the window succeeded
@@ -86,9 +107,12 @@ then. Taking them would have read a deleted manager's values as current.
 
 Each reading that fails one of these is a reason: a failed read, a stale
 status, a gauge missing from the last scrape, an old scrape, a 0, a failed
-scrape. None of them is
-read as a healthy value or as 0. A standalone cluster has no
-`lastObservedTime`, so it is never `healthy` here.
+scrape. None of them is read as a healthy value or as 0.
+
+Two setups are never `healthy` here:
+- A standalone cluster: it has no `lastObservedTime`.
+- A manager with more than one replica, when the replica scraped last is not
+  the leader: it exports no `cubrid_*` gauge.
 
 ## Contradictions
 
@@ -99,14 +123,23 @@ scraped while a Condition held one value must mirror that value:
 - no sample at all while `ReplicationHealthy` is `Unknown` or the Condition is
   missing.
 
-A scrape is judged only when all of these hold:
-- the observer read the status on both sides of it, at least `5s` away (the
-  tolerance for the clocks of this host, Prometheus and the manager);
-- both reads carry the Condition with the same status and the same
-  `lastTransitionTime`;
-- that time is older than the scrape by the tolerance.
+A scrape Prometheus stamped at T is judged only when all of these hold:
+- A status read was answered by T minus the tolerance (`5s`, for the clocks of
+  this host, Prometheus and the manager).
+- Another read began at T plus the tolerance plus the scrape timeout (`10s`,
+  Prometheus' default) or later. The manager gathers a scrape's gauges after
+  Prometheus stamps it, up to the scrape timeout later, so a status written in
+  that time may already be in the gauge.
+- Both reads carry the Condition with the same status and the same
+  `lastTransitionTime`.
+- That time is older than T by the tolerance.
 
-Otherwise the gauge may mirror a write the observer did not see. Also, the
+Otherwise the gauge may mirror a write the observer did not see.
+
+Every target's scrapes are judged, also those of a manager Pod that is being
+replaced. A former leader that still served its gauges after the new leader
+changed a Condition would be reported. The lab runs did not show one;
+controller-runtime ends a manager that loses its leader lease. Also, the
 observation time `cubrid_cluster_last_observation_timestamp_seconds` carries
 must not be newer than the `lastObservedTime` the status holds after the
 scrape, since that time only moves forward.
