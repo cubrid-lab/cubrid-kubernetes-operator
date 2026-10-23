@@ -28,6 +28,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/lab"
 )
 
 func TestExitCodeFollowsTheShell(t *testing.T) {
@@ -258,5 +260,36 @@ exit 7`
 				t.Fatalf("the signal was delivered as %q, want once to the shell and once to its child", lines)
 			}
 		})
+	}
+}
+
+// The Lease is lost once its duration has passed without a renewal, even
+// while a renewal is still in flight and does not return.
+func TestRenewLosesTheLeaseWhileARenewalHangs(t *testing.T) {
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	k := func(_ context.Context, _ string, args ...string) (string, error) {
+		if slices.Contains(args, "create") {
+			return "uid-1 7", nil
+		}
+		<-hang
+		return "", errors.New("hung")
+	}
+	acquired := time.Now()
+	lock, err := (lab.Target{Context: labCtx, Name: labA}).Acquire(context.Background(), k, "h", time.Second, acquired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lost := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- renew(k, lock, time.Second, acquired, make(chan struct{}), func() { close(lost) }) }()
+	select {
+	case err := <-done:
+		if err == nil || errors.Is(err, lab.ErrLost) {
+			t.Fatalf("renew() = %v, want a renewal timeout", err)
+		}
+		<-lost
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Lease was not lost while a renewal hung past its end")
 	}
 }

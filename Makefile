@@ -171,7 +171,9 @@ cleanup-test-e2e: kind ## Delete the Kind cluster KIND_CLUSTER, for one that set
 # pinned to LAB_CONTEXT. `make test-e2e` never uses the lab.
 LAB_CONTEXT ?=
 LAB_TARGET ?=
-LAB_DURATION ?= 2h
+# LAB_DURATION is how long the Lease lasts without a renewal; the run renews it
+# every sixth of that while it holds the lab.
+LAB_DURATION ?= 60s
 LAB_COMMAND ?= kubectl get nodes
 # The whole of LAB_COMMAND, `&&`, `;` and `|` included, runs under the Lease,
 # as one `sh -c`. Every LAB_ value is passed as written ($(value ...),

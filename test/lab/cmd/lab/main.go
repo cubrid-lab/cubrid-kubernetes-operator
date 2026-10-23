@@ -25,13 +25,20 @@ limitations under the License.
 // the copy, and releases the Lease when the command ends. Switching or
 // redefining contexts during the run cannot redirect the run or the release.
 //
+// The Lease lasts -duration, and is renewed every sixth of that until it is
+// released. When it is lost, because it was removed or someone else wrote
+// it, or because no renewal succeeded within its duration of the last one,
+// the run no longer holds the lab: it stops the command's process group with
+// SIGTERM, and SIGKILL after killGrace, and exits with exitLost.
+//
 // SIGINT, SIGTERM and SIGHUP are handled from the start. One that arrives
 // before the command starts stops the run there, after releasing the Lease if
-// it was taken. During the command, each one is passed on once to the
+// it was taken. During the command, the first one is passed on to the
 // command's process group, so a `sh -c` command and everything it started
-// get it. The Lease is released, and the copy removed, only when no process
-// is left in that group: the command, what it started, and what it left in
-// the background.
+// get it; the second sends SIGTERM to the group, and any later one SIGKILL.
+// The Lease is released, and the copy removed, only when no process is left
+// in that group: the command, what it started, and what it left in the
+// background.
 package main
 
 import (
@@ -58,6 +65,18 @@ import (
 // still gets its own time.
 const callTimeout = time.Minute
 
+// kubectlWaitDelay is how long a kubectl call that was cancelled may take to
+// release its output.
+const kubectlWaitDelay = time.Second
+
+// exitLost is the exit code of a run that lost its Lease, whatever the
+// command's: the run stopped the command.
+const exitLost = 1
+
+// killGrace is how long the command's process group has to end on SIGTERM
+// after the Lease is lost, before it gets SIGKILL.
+const killGrace = 2 * time.Second
+
 // handled are the signals the entry point owns for its whole run.
 var handled = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP}
 
@@ -82,7 +101,8 @@ func run(args, environ []string, kubectlPath string, notify func(chan<- os.Signa
 	flags := flag.NewFlagSet("lab", flag.ContinueOnError)
 	flags.StringVar(&target.Context, "context", "", "kubectl context of the lab (required)")
 	flags.StringVar(&target.Name, "target", "", "name of the lab the context must lead to (required)")
-	duration := flags.Duration("duration", 2*time.Hour, "how long the campaign is expected to take at most")
+	duration := flags.Duration("duration", time.Minute,
+		"how long the campaign Lease lasts without a renewal, in whole seconds; it is renewed every sixth of that")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -112,12 +132,17 @@ func run(args, environ []string, kubectlPath string, notify func(chan<- os.Signa
 		return code
 	}
 
-	lock, err := target.Acquire(ctx, kubectl, holder(), *duration, time.Now())
+	acquired := time.Now()
+	lock, err := target.Acquire(ctx, kubectl, holder(), *duration, acquired)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "lab:", err)
 		return 1
 	}
 	fmt.Fprintf(os.Stderr, "lab: %q (context %q) is held for this run\n", target.Name, target.Context)
+	stopRenewing, lost := make(chan struct{}), make(chan error, 1)
+	go func() {
+		lost <- renew(kubectl, lock, duration.Truncate(time.Second), acquired, stopRenewing, relay.lose)
+	}()
 
 	code, stop := relay.stopped()
 	if !stop {
@@ -126,6 +151,16 @@ func run(args, environ []string, kubectlPath string, notify func(chan<- os.Signa
 			"LAB_CONTEXT="+target.Context,
 			"LAB_TARGET="+target.Name,
 		))
+	}
+	close(stopRenewing)
+	if err := <-lost; err != nil {
+		code = exitLost
+		if errors.Is(err, lab.ErrLost) {
+			// Not this run's any more: there is nothing of it to delete.
+			return code
+		}
+		// Not renewed in time, but possibly still as this run wrote it: the
+		// release deletes it only then.
 	}
 
 	if err := lock.Release(ctx, kubectl); err != nil {
@@ -139,14 +174,75 @@ func run(args, environ []string, kubectlPath string, notify func(chan<- os.Signa
 	return code
 }
 
+// renew renews the Lease every sixth of its duration, from acquired on, until
+// stop is closed, and then returns nil, cancelling a renewal still in flight.
+// When the Lease is lost, it says so, calls lose and returns why: an error
+// that wraps lab.ErrLost when the Lease is gone or someone else wrote it, any
+// other when no renewal succeeded within its duration of the last one. The
+// end of that duration is a timer of its own, so a renewal that hangs does
+// not carry the run past it; and each renewal is given up after a third of
+// the duration, so that one slow call leaves time for the next.
+func renew(
+	k lab.Kubectl, lock *lab.Lock, duration time.Duration, acquired time.Time, stop <-chan struct{}, lose func(),
+) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticker := time.NewTicker(duration / 6)
+	defer ticker.Stop()
+	end := time.NewTimer(time.Until(acquired.Add(duration)))
+	defer end.Stop()
+	type renewal struct {
+		at  time.Time
+		err error
+	}
+	// Room for the one renewal in flight, which may end after renew returns.
+	renewed := make(chan renewal, 1)
+	inFlight := false
+	var err error
+	for {
+		select {
+		case <-stop:
+			return nil
+		case <-ticker.C:
+			if !inFlight {
+				inFlight = true
+				go func(now time.Time) {
+					call, cancel := context.WithTimeout(ctx, duration/3)
+					defer cancel()
+					renewed <- renewal{now, lock.Renew(call, k, now)}
+				}(time.Now())
+			}
+			continue
+		case r := <-renewed:
+			inFlight = false
+			switch {
+			case r.err == nil:
+				end.Reset(time.Until(r.at.Add(duration)))
+				continue
+			case !errors.Is(r.err, lab.ErrLost):
+				fmt.Fprintf(os.Stderr, "lab: %v; retrying\n", r.err)
+				continue
+			}
+			err = r.err
+		case <-end.C:
+			err = fmt.Errorf("the campaign Lease was not renewed within %s", duration)
+		}
+		fmt.Fprintf(os.Stderr, "lab: %v; the run no longer holds the lab, stopping the command\n", err)
+		lose()
+		return err
+	}
+}
+
 // relay owns the signals of the entry point for its whole life: before the
 // command runs it records the first one, so that the run stops at the next
-// step; while the command runs it passes each one on to the command's process
-// group.
+// step; while the command runs it passes the first one on to the command's
+// process group, and turns later ones into SIGTERM, then SIGKILL.
 type relay struct {
 	mu       sync.Mutex
 	received os.Signal
 	group    int // the command's process group while it runs, else 0
+	relayed  int // the signals that arrived while it ran
+	lost     bool
 }
 
 func newRelay(signals <-chan os.Signal) *relay {
@@ -158,19 +254,63 @@ func newRelay(signals <-chan os.Signal) *relay {
 				r.received = sig
 			}
 			group := r.group
-			r.mu.Unlock()
 			if group > 0 {
-				_ = syscall.Kill(-group, sig.(syscall.Signal))
+				r.relayed++
 			}
+			n := r.relayed
+			r.mu.Unlock()
+			if group == 0 {
+				continue
+			}
+			send := sig.(syscall.Signal)
+			switch n {
+			case 1:
+				fmt.Fprintf(os.Stderr, "lab: passing %v on to process group %d; "+
+					"a second signal sends it SIGTERM, a third SIGKILL\n", sig, group)
+			case 2:
+				send = syscall.SIGTERM
+				fmt.Fprintf(os.Stderr, "lab: %v again; sending SIGTERM to process group %d\n", sig, group)
+			default:
+				send = syscall.SIGKILL
+				fmt.Fprintf(os.Stderr, "lab: %v again; sending SIGKILL to process group %d\n", sig, group)
+			}
+			_ = syscall.Kill(-group, send)
 		}
 	}()
 	return r
 }
 
-// stopped reports whether a signal has arrived, and the exit code for it.
+// lose records that the run no longer holds the lab, so that the command does
+// not start, and stops the command's process group if it runs: SIGTERM now,
+// SIGKILL after killGrace if the group is still there.
+func (r *relay) lose() {
+	r.mu.Lock()
+	r.lost = true
+	group := r.group
+	r.mu.Unlock()
+	if group == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "lab: sending SIGTERM to process group %d\n", group)
+	_ = syscall.Kill(-group, syscall.SIGTERM)
+	time.AfterFunc(killGrace, func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.group == group {
+			fmt.Fprintf(os.Stderr, "lab: sending SIGKILL to process group %d\n", group)
+			_ = syscall.Kill(-group, syscall.SIGKILL)
+		}
+	})
+}
+
+// stopped reports whether a signal has arrived, or the Lease is lost, and the
+// exit code for it.
 func (r *relay) stopped() (int, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.lost {
+		return exitLost, true
+	}
 	if r.received == nil {
 		return 0, false
 	}
@@ -190,8 +330,8 @@ func (r *relay) stopped() (int, bool) {
 // The command has ended only when its whole process group has: a `sh -c`
 // without a trap ends at once on a signal while the commands it started may
 // still be cleaning up, and a job it left in the background still runs.
-// Until then, signals are still passed on to the group. A process that left
-// the group (setsid, setpgid) is not waited for.
+// Until then, signals still reach the group, and a repeated one ends it. A
+// process that left the group (setsid, setpgid) is not waited for.
 func (r *relay) run(command []string, env []string) int {
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -199,6 +339,10 @@ func (r *relay) run(command []string, env []string) int {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	r.mu.Lock()
+	if r.lost {
+		r.mu.Unlock()
+		return exitLost
+	}
 	if r.received != nil {
 		// A signal arrived after the last check: do not start.
 		sig := r.received
@@ -219,7 +363,8 @@ func (r *relay) run(command []string, env []string) int {
 	group := cmd.Process.Pid
 	for told := false; groupExists(group); time.Sleep(50 * time.Millisecond) {
 		if !told {
-			fmt.Fprintf(os.Stderr, "lab: the command ended; waiting for the processes it started (process group %d)\n", group)
+			fmt.Fprintf(os.Stderr, "lab: the command ended; waiting for the processes it started (process group %d); "+
+				"a second signal sends them SIGTERM, a third SIGKILL\n", group)
 			told = true
 		}
 	}
@@ -311,6 +456,10 @@ func runKubectl(ctx context.Context, path, stdin string, args ...string) (string
 	// call short, for example a create the API server has already stored; the
 	// relay stops the run after the call instead.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// When ctx ends, the call's whole group is killed, and what still holds
+	// its output after kubectlWaitDelay, having left the group, is cut off.
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = kubectlWaitDelay
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
