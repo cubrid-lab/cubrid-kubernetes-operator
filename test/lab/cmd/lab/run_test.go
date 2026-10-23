@@ -51,7 +51,8 @@ type fakeLab struct {
 // current resourceVersion and raises the version, "flaky", which also stores
 // the first one but fails it, as a timeout after the API server stored it
 // would, "conflict" (someone else wrote the Lease), "down" (the API server
-// cannot be reached), or "hang" (kubectl hangs, its children holding its
+// cannot be reached), "stall", which takes the first one only after 30s and
+// any later one at once, or "hang" (kubectl hangs, its children holding its
 // output, one of them in a session of its own). A get of the Lease returns
 // the last renewal stored, or else another holder's Lease.
 func newFakeLab(t *testing.T, marker, create, renew string) *fakeLab {
@@ -95,6 +96,11 @@ case "$*" in
 	down)
 		echo 'Unable to connect to the server: dial tcp 10.0.0.1:6443: i/o timeout' >&2
 		exit 1 ;;
+	stall)
+		if ! [ -e "$dir/stalled" ]; then
+			: > "$dir/stalled"
+			sleep 30
+		fi ;;
 	hang)
 		echo $$ > "$dir/hung"
 		setsid sleep 30 &
@@ -104,7 +110,12 @@ case "$*" in
 		exit 1 ;;
 	esac
 	case $renew:$body in
-	ok:*'"resourceVersion":"'"$v"'"'*'"uid":"uid-1"'* | flaky:*'"resourceVersion":"'"$v"'"'*'"uid":"uid-1"'*) ;;
+	conflict:*) ;;
+	*'"resourceVersion":"'"$v"'"'*'"uid":"uid-1"'*)
+		ok=1 ;;
+	esac
+	case $ok in
+	1) ;;
 	*)
 		printf '%%s %%s\n' 'Error from server (Conflict): Operation cannot be fulfilled on' \
 			'leases.coordination.k8s.io "campaign": the object has been modified' >&2
@@ -474,6 +485,22 @@ func TestRunKeepsALeaseWhoseRenewalWasStoredThoughItFailed(t *testing.T) {
 	options, _ := os.ReadFile(f.deleteOptions)
 	if want := `"resourceVersion":"` + strings.TrimSpace(string(version)) + `"`; !strings.Contains(string(options), want) {
 		t.Fatalf("the release carried %q, want %s", options, want)
+	}
+}
+
+// A renewal that stalls is given up after a third of the Lease's duration,
+// so the next one, which succeeds, comes in time and the run keeps the lab.
+func TestRunKeepsTheLeaseAfterARenewalThatStalledOnce(t *testing.T) {
+	f := newFakeLab(t, labA, "ok", "stall")
+	code := run(labArgsFor(3*time.Second, "sleep", "4"), callerEnviron(t), f.kubectl, newSignalSource().notify)
+	if code != 0 {
+		t.Fatalf("run() = %d, want 0", code)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "stalled")); err != nil {
+		t.Fatal("no renewal stalled")
+	}
+	if !f.released() {
+		t.Error("the Lease was not released")
 	}
 }
 

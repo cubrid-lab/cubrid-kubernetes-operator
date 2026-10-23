@@ -180,7 +180,8 @@ func run(args, environ []string, kubectlPath string, notify func(chan<- os.Signa
 // that wraps lab.ErrLost when the Lease is gone or someone else wrote it, any
 // other when no renewal succeeded within its duration of the last one. The
 // end of that duration is a timer of its own, so a renewal that hangs does
-// not carry the run past it.
+// not carry the run past it; and each renewal is given up after a third of
+// the duration, so that one slow call leaves time for the next.
 func renew(
 	k lab.Kubectl, lock *lab.Lock, duration time.Duration, acquired time.Time, stop <-chan struct{}, lose func(),
 ) error {
@@ -205,7 +206,11 @@ func renew(
 		case <-ticker.C:
 			if !inFlight {
 				inFlight = true
-				go func(now time.Time) { renewed <- renewal{now, lock.Renew(ctx, k, now)} }(time.Now())
+				go func(now time.Time) {
+					call, cancel := context.WithTimeout(ctx, duration/3)
+					defer cancel()
+					renewed <- renewal{now, lock.Renew(call, k, now)}
+				}(time.Now())
 			}
 			continue
 		case r := <-renewed:

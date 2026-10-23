@@ -54,7 +54,10 @@ A renewal or the release that meets a Conflict reads the Lease, since a write
 of this run that the API server stored although kubectl failed (a timeout,
 for example) leaves the run an old resourceVersion. When the Lease still
 carries the run's uid and holder and a `renewTime` the run sent, the run
-takes its resourceVersion and goes on. Otherwise the Lease is lost: it was
+takes its resourceVersion and goes on. So an edit that keeps the holder and
+`renewTime`, such as `kubectl annotate` or a change of `leaseDurationSeconds`,
+is taken back as the run's, and the next renewal writes the run's spec over
+it. Otherwise the Lease is lost: it was
 written by someone else, or removed, and perhaps created again (the API
 server reports a removed Lease as a Conflict on the uid, not as NotFound).
 The run then deletes nothing, since the Lease is no longer its own.
