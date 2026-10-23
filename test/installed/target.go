@@ -135,7 +135,10 @@ func (t *Target) Runner() (*Runner, error) {
 	return &Runner{Client: c, Command: t.command, Redactor: t.redactor}, nil
 }
 
-func (t *Target) command(ctx context.Context, args ...string) (string, error) {
+// Kubectl returns a kubectl command bound to this target's snapshot, in a
+// process group of its own that is killed when ctx ends, for a caller that
+// needs the process itself, such as a port-forward.
+func (t *Target) Kubectl(ctx context.Context, args ...string) *exec.Cmd {
 	prefix := make([]string, 0, 4+len(args))
 	prefix = append(prefix, "--kubeconfig", t.path, "--context", t.contextName)
 	cmd := exec.CommandContext(ctx, "kubectl", append(prefix, args...)...)
@@ -151,6 +154,11 @@ func (t *Target) command(ctx context.Context, args ...string) (string, error) {
 		return nil
 	}
 	cmd.WaitDelay = time.Second
+	return cmd
+}
+
+func (t *Target) command(ctx context.Context, args ...string) (string, error) {
+	cmd := t.Kubectl(ctx, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("kubectl failed: %s: %s", err, t.redactor.Redact(output))
