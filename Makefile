@@ -117,6 +117,11 @@ test: vet setup-envtest ## Run tests. It does not regenerate or format: run make
 # CertManager is installed by default; skip with:
 # - CERT_MANAGER_INSTALL_SKIP=true
 KIND_CLUSTER ?= cubrid-kubernetes-operator-test-e2e
+# make test-e2e creates the Kind cluster KIND_CLUSTER and deletes it when the
+# run ends, also after a failure, a timeout or Ctrl-C (hack/run-e2e.sh). It
+# refuses to start when a cluster with that name exists; E2E_REUSE_CLUSTER=1
+# runs against that cluster instead and keeps it.
+E2E_REUSE_CLUSTER ?=
 # E2E_LABEL_FILTER selects scenarios by Ginkgo label, e.g. E2E_LABEL_FILTER=S00
 # for one scenario or E2E_LABEL_FILTER='!db' to leave out the real-database ones.
 # E2E_EVIDENCE_DIR receives the run's evidence: summary.json, junit.xml and each
@@ -140,24 +145,23 @@ E2E_GRACE_PERIOD ?= 1m
 E2E_GO_TIMEOUT ?= 58m
 
 .PHONY: setup-test-e2e
-setup-test-e2e: container-tool kind ## Set up a Kind cluster for e2e tests if it does not exist
-	@case "$$($(KIND) get clusters)" in \
-		*"$(KIND_CLUSTER)"*) \
-			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
-		*) \
-			echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
-			$(KIND) create cluster --name $(KIND_CLUSTER) --image $(KIND_NODE_IMAGE) ;; \
-	esac
+setup-test-e2e: container-tool kind ## Create the Kind cluster KIND_CLUSTER if it does not exist, for E2E_REUSE_CLUSTER=1 runs
+	@if $(KIND) get clusters | grep -Fqx -- '$(KIND_CLUSTER)'; then \
+		echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation."; \
+	else \
+		echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
+		$(KIND) create cluster --name '$(KIND_CLUSTER)' --image '$(KIND_NODE_IMAGE)'; \
+	fi
 
 .PHONY: test-e2e
-test-e2e: setup-test-e2e vet ## Run the e2e tests. Expected an isolated environment using Kind.
+test-e2e: container-tool kind vet ## Run the e2e tests on a Kind cluster the run creates and deletes (E2E_REUSE_CLUSTER=1 uses an existing one and keeps it).
 	$(if $(filter file,$(origin E2E_EVIDENCE_DIR)),rm -rf '$(E2E_EVIDENCE_DIR)')
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL) \
-		E2E_EVIDENCE_DIR='$(E2E_EVIDENCE_DIR)' go test -tags=e2e ./test/e2e/ -v -timeout $(E2E_GO_TIMEOUT) -ginkgo.timeout=$(E2E_SUITE_TIMEOUT) -ginkgo.grace-period=$(E2E_GRACE_PERIOD) -ginkgo.v $(if $(E2E_LABEL_FILTER),-ginkgo.label-filter='$(E2E_LABEL_FILTER)')
-	$(MAKE) cleanup-test-e2e
+		E2E_REUSE_CLUSTER='$(E2E_REUSE_CLUSTER)' E2E_EVIDENCE_DIR='$(E2E_EVIDENCE_DIR)' \
+		hack/run-e2e.sh go test -tags=e2e ./test/e2e/ -v -timeout $(E2E_GO_TIMEOUT) -ginkgo.timeout=$(E2E_SUITE_TIMEOUT) -ginkgo.grace-period=$(E2E_GRACE_PERIOD) -ginkgo.v $(if $(E2E_LABEL_FILTER),-ginkgo.label-filter='$(E2E_LABEL_FILTER)')
 
 .PHONY: cleanup-test-e2e
-cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests
+cleanup-test-e2e: kind ## Delete the Kind cluster KIND_CLUSTER, for one that setup-test-e2e created
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
 # A lab run is started by hand only, against the shared multi-VM lab; see
