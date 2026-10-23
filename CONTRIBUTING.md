@@ -101,7 +101,9 @@ a failure or a timeout, and after Ctrl-C or SIGTERM, which reach the suite
 first so it can clean up (`hack/run-e2e.sh`). If a cluster with exactly that
 name already exists, the run refuses to start rather than use, and then
 delete, a cluster it did not create; with `E2E_REUSE_CLUSTER=1` it runs against
-that cluster and keeps it. Never point `KIND_CLUSTER` at a valuable cluster. The suite has independent groups: the manager itself, the wiring
+that cluster and keeps it (without one, it creates and deletes its own as
+usual). A run whose cluster could not be deleted fails and names the command
+that deletes it. Never point `KIND_CLUSTER` at a valuable cluster. The suite has independent groups: the manager itself, the wiring
 scenario with a fake Instance Manager (label `fake-instance-manager`, no
 CUBRID), S00 with the real CUBRID image (labels `db` and `S00`), and the HA
 group on the real image (labels `db` and `ha-bootstrap`; each scenario step is

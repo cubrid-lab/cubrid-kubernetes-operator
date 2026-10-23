@@ -30,15 +30,22 @@ import (
 )
 
 // kindStandIn keeps the cluster names in $CLUSTERS, one per line, and records
-// each create and delete in $CALLS.
+// each create and delete in $CALLS. With $KIND_CREATE_FAILS set, a create
+// adds the cluster and then fails, as when another run created it first; with
+// $KIND_DELETE_FAILS set, a delete fails. A delete first writes "deleting" to
+// $DELETING and waits for $DELETE_DELAY seconds.
 const kindStandIn = `#!/bin/sh
 case "$1 $2" in
 "get clusters") cat "$CLUSTERS" ;;
 "create cluster")
 	echo "create $4" >> "$CALLS"
-	echo "$4" >> "$CLUSTERS" ;;
+	echo "$4" >> "$CLUSTERS"
+	[ -z "$KIND_CREATE_FAILS" ] || exit 1 ;;
 "delete cluster")
+	echo deleting > "$DELETING"
+	sleep "${DELETE_DELAY:-0}"
 	echo "delete $4" >> "$CALLS"
+	[ -z "$KIND_DELETE_FAILS" ] || exit 1
 	grep -vx "$4" "$CLUSTERS" > "$CLUSTERS.new"
 	mv "$CLUSTERS.new" "$CLUSTERS" ;;
 esac
@@ -50,6 +57,8 @@ type e2eRun struct {
 	clusters string
 	calls    string
 	marker   string
+	deleting string
+	pgid     string
 	cmd      *exec.Cmd
 }
 
@@ -64,6 +73,8 @@ func newE2ERun(t *testing.T, existing []string, reuse string, command ...string)
 		clusters: filepath.Join(dir, "clusters"),
 		calls:    filepath.Join(dir, "calls"),
 		marker:   filepath.Join(dir, "marker"),
+		deleting: filepath.Join(dir, "deleting"),
+		pgid:     filepath.Join(dir, "pgid"),
 	}
 	list := ""
 	for _, c := range existing {
@@ -79,9 +90,82 @@ func newE2ERun(t *testing.T, existing []string, reuse string, command ...string)
 	r.cmd = exec.Command(script, command...)
 	r.cmd.Env = append(os.Environ(), "KIND="+kind, "KIND_CLUSTER="+e2eCluster,
 		"KIND_NODE_IMAGE=kindest/node:test", "E2E_REUSE_CLUSTER="+reuse,
-		"CLUSTERS="+r.clusters, "CALLS="+r.calls, "MARKER="+r.marker)
+		"CLUSTERS="+r.clusters, "CALLS="+r.calls, "MARKER="+r.marker,
+		"DELETING="+r.deleting, "PGID="+r.pgid)
+	// The script, and the kind it runs, get a process group of their own, so
+	// a test can signal them as a terminal would and kill what is left.
+	r.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	r.cmd.WaitDelay = 15 * time.Second
+	t.Cleanup(func() {
+		if r.cmd.Process != nil {
+			_ = syscall.Kill(-r.cmd.Process.Pid, syscall.SIGKILL)
+		}
+		if pgid, err := strconv.Atoi(r.read(t, r.pgid)); err == nil && pgid > 1 {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+	})
 	return r
 }
+
+// start starts the run and waits until its command has written "started" to
+// $MARKER.
+func (r *e2eRun) start(t *testing.T) {
+	t.Helper()
+	if err := r.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	r.waitFor(t, r.marker, "started")
+}
+
+func (r *e2eRun) waitFor(t *testing.T, path, content string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for r.read(t, path) != content {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s did not become %q", filepath.Base(path), content)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// wait waits, with a deadline, for the started run to end and returns its exit
+// code.
+func (r *e2eRun) wait(t *testing.T) int {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- r.cmd.Wait() }()
+	select {
+	case err := <-done:
+		return r.exitCode(t, err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("hack/run-e2e.sh did not end")
+		return 0
+	}
+}
+
+// sigintIgnored reports whether this process ignores SIGINT, as a job that a
+// non-interactive shell starts in the background does; its children then
+// cannot trap SIGINT.
+func sigintIgnored() bool {
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return false
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if mask, ok := strings.CutPrefix(line, "SigIgn:"); ok {
+			bits, err := strconv.ParseUint(strings.TrimSpace(mask), 16, 64)
+			return err == nil && bits&(1<<(uint(syscall.SIGINT)-1)) != 0
+		}
+	}
+	return false
+}
+
+// signalCommand is a command that writes its process group to $PGID, waits for
+// a signal and, on one, records whether the cluster still exists.
+const signalCommand = `echo $$ > "$PGID"
+trap 'grep -x ` + e2eCluster + ` "$CLUSTERS" > "$MARKER"; exit 9' INT TERM HUP
+echo started > "$MARKER"
+while :; do sleep 0.05; done`
 
 func (r *e2eRun) exitCode(t *testing.T, err error) int {
 	t.Helper()
@@ -166,28 +250,17 @@ func TestRunE2E_ReusesAndKeepsAClusterOnRequest(t *testing.T) {
 // A signal reaches the command, which can clean up, and the cluster is deleted
 // after the command has ended.
 func TestRunE2E_DeletesTheClusterOnASignal(t *testing.T) {
-	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
-		// The command records the signal it got, after which the stand-in
-		// still has to be able to see the cluster.
-		r := newE2ERun(t, nil, "", "sh", "-c",
-			`trap 'grep -x `+e2eCluster+` "$CLUSTERS" > "$MARKER"; exit 9' INT TERM
-			echo started > "$MARKER"
-			while :; do sleep 0.05; done`)
-		if err := r.cmd.Start(); err != nil {
-			t.Fatal(err)
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		if sig == syscall.SIGINT && sigintIgnored() {
+			t.Log("SIGINT is ignored in this process, so the script cannot trap it; skipping SIGINT")
+			continue
 		}
-		deadline := time.Now().Add(10 * time.Second)
-		for r.read(t, r.marker) != "started" {
-			if time.Now().After(deadline) {
-				t.Fatal("the command did not start")
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
+		r := newE2ERun(t, nil, "", "sh", "-c", signalCommand)
+		r.start(t)
 		if err := r.cmd.Process.Signal(sig); err != nil {
 			t.Fatal(err)
 		}
-		code := r.exitCode(t, r.cmd.Wait())
-		if want := 128 + int(sig); code != want {
+		if code, want := r.wait(t), 128+int(sig); code != want {
 			t.Errorf("%v: exit code = %d, want %d", sig, code, want)
 		}
 		if got := r.read(t, r.marker); got != e2eCluster {
@@ -196,6 +269,57 @@ func TestRunE2E_DeletesTheClusterOnASignal(t *testing.T) {
 		if got := r.read(t, r.calls); got != "create "+e2eCluster+"\ndelete "+e2eCluster {
 			t.Errorf("%v: kind calls = %q, want a create and a delete", sig, got)
 		}
+	}
+}
+
+// A second Ctrl-C while the cluster is being deleted, which reaches kind as
+// well, does not stop the deletion.
+func TestRunE2E_FinishesTheDeletionOnASecondSignal(t *testing.T) {
+	r := newE2ERun(t, nil, "", "sh", "-c", signalCommand)
+	r.cmd.Env = append(r.cmd.Env, "DELETE_DELAY=1")
+	r.start(t)
+	if err := syscall.Kill(-r.cmd.Process.Pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	r.waitFor(t, r.deleting, "deleting")
+	if err := syscall.Kill(-r.cmd.Process.Pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if code := r.wait(t); code != 128+int(syscall.SIGTERM) {
+		t.Errorf("exit code = %d, want %d", code, 128+int(syscall.SIGTERM))
+	}
+	if got := r.read(t, r.clusters); got != "" {
+		t.Errorf("clusters left = %q, want the run's cluster deleted", got)
+	}
+}
+
+// A create that fails by itself is not cleaned up: the cluster may be another
+// run's, created between the check and the create.
+func TestRunE2E_LeavesAClusterItFailedToCreate(t *testing.T) {
+	r := newE2ERun(t, nil, "", "sh", "-c", `echo ran > "$MARKER"`)
+	r.cmd.Env = append(r.cmd.Env, "KIND_CREATE_FAILS=1")
+	code, out := r.run(t)
+	if code == 0 {
+		t.Errorf("run exited 0 although the create failed\n%s", out)
+	}
+	if got := r.read(t, r.calls); got != "create "+e2eCluster {
+		t.Errorf("kind calls = %q, want only the create\n%s", got, out)
+	}
+	if got := r.read(t, r.marker); got != "" {
+		t.Errorf("the command ran")
+	}
+}
+
+// A passing run whose cluster could not be deleted fails.
+func TestRunE2E_FailsWhenTheDeletionFails(t *testing.T) {
+	r := newE2ERun(t, nil, "", "true")
+	r.cmd.Env = append(r.cmd.Env, "KIND_DELETE_FAILS=1")
+	code, out := r.run(t)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "could not delete Kind cluster") {
+		t.Errorf("output does not report the failed deletion:\n%s", out)
 	}
 }
 
