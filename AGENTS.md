@@ -59,12 +59,14 @@ Ensure you run them against a dedicated [Kind](https://kind.sigs.k8s.io/) cluste
 ### Issue Labeling (cubrid-lab org standard)
 Write GitHub issues, PRs and comments in English.
 
-Every issue MUST carry exactly one `priority: <value>` label and exactly one
+Every newly opened issue first carries `status: needs triage`. Completed
+triage assigns exactly one `priority: <value>` and exactly one
 `size: <value>` label, alongside a type label
 (`bug`/`enhancement`/`documentation`/`testing`/`chore`/`ci`/…). These must be
 GitHub labels, not just text in the issue title or body. Agents and workflows
-creating issues through CLI/API must supply the canonical title and labels at
-creation.
+creating issues through CLI/API must supply the title and the intake
+`status: needs triage` label at creation. Type, priority and size are confirmed
+during review.
 
 Use the following exact names, with **one space after the colon**:
 
@@ -89,10 +91,9 @@ does not count toward size; estimate from the hand-written change.
 Rules:
 
 1. **Size reflects effort, not importance** — a one-line fix for a critical bug is still `size: XS`.
-2. **Assign both `priority:` and `size:` at creation.** If scope or impact is
-   uncertain, use a provisional estimate, explain the uncertainty in the body,
-   and add `status: needs triage`. Refine the estimates during triage rather
-   than omitting either required label.
+2. **Finalize both `priority:` and `size:` after triage.** If evidence or
+   impact is uncertain, keep `status: needs triage`; provisional values do
+   not signal that the review is complete.
 3. **`good first issue` should be `size: XS` or `size: S`.**
 4. **`size: XL` is a signal to split**, not a green light to start a sprawling change.
 
@@ -160,6 +161,34 @@ mandatory. Optional AI reviews are **advisory**.
 
 This is a maintainer coordination routine, not a new CI/merge gate or
 permission to take an assigned task without a handoff.
+
+## Issue triage lifecycle
+
+Every new issue in this repository starts with `status: needs triage`.
+Issue forms set it immediately, and the `issues: opened` workflow covers
+external submissions. Agents using `GITHUB_TOKEN` must set the label at
+creation because their issue events may not retrigger the workflow.
+
+1. **Verify:** establish facts, unknowns and impact; compare existing/open
+   issues and PRs to reject duplicate or invalid work; check local type,
+   scope, phase, owner, acceptance and actual safety dependencies.
+2. **Prioritize:** inspect **all currently open issues** in this repository,
+   including paginated issues, Critical HA/write safety and High backup,
+   recovery, real-VM-lab prerequisites and release blockers. Distinguish
+   impact priority from execution readiness. Explain changes to existing
+   labels when the relative order changes.
+3. **Size:** apply exactly one `priority: critical/high/medium/low` and one
+   existing `size: XS/S/M/L/XL`; separate overlarge implementations from
+   their parent acceptance issue. Preserve `phase:`, safety/release scope,
+   assignees and the two-maintainer review requirement.
+4. **Verify actual labels:** fetch the saved GitHub issue after changes and
+   check type, priority, size, evidence, duplicates and decision. Only then
+   remove `status: needs triage`. Keep it for unresolved investigations,
+   incomplete evidence or pending ADR decisions.
+
+Never auto-assign priority or auto-clear triage based solely on label count.
+Kind evidence is not proof of VM-fault safety; no existing merge, test or
+release gate is weakened by this issue-intake procedure.
 
 ## Working on an Issue
 
