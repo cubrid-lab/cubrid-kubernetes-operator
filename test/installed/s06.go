@@ -513,8 +513,9 @@ func (h *haRun) stopBackgroundClients(ctx context.Context) error {
 		pid := "/tmp/" + id + ".pid"
 		// The client's parent is the container's PID 1, sleep, which reaps
 		// no child: a stopped client stays a zombie, which kill -0 still
-		// finds. A zombie, or no process, is a stopped client.
-		out, err := h.clientRun(ctx, fmt.Sprintf(`p=$(cat %s); kill "$p" 2>/dev/null; `+
+		// finds. A zombie, no process, or no pid file (a client never started)
+		// is a stopped client.
+		out, err := h.clientRun(ctx, fmt.Sprintf(`p=$(cat %s 2>/dev/null); [ -n "$p" ] || { echo stopped; exit 0; }; kill "$p" 2>/dev/null; `+
 			`for i in 1 2 3 4 5 6 7 8 9 10; do s=$(cut -d' ' -f3 "/proc/$p/stat" 2>/dev/null); `+
 			`if [ -z "$s" ] || [ "$s" = Z ]; then echo stopped; exit 0; fi; sleep 1; done; echo running`, pid))
 		if err != nil {
