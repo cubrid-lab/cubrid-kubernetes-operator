@@ -82,9 +82,12 @@ type s06Record struct {
 	MembersAfter  []imageIdentity `json:"membersAfter"`
 	// ClockOffsets is each node's clock minus the run's, read through a Pod
 	// on it before the fault, in seconds.
-	ClockOffsets    map[string]float64 `json:"clockOffsetsSeconds,omitempty"`
-	ClientsStopped  bool               `json:"clientsStopped"`
-	NotAcknowledged *int               `json:"operationsNotAcknowledgedAfterFault,omitempty"`
+	ClockOffsets   map[string]float64 `json:"clockOffsetsSeconds,omitempty"`
+	ClientsStopped bool               `json:"clientsStopped"`
+	// ImageChanged is set when the replacement runs another image: the
+	// environment changed, which blocks S06.
+	ImageChanged    bool `json:"imageChanged,omitempty"`
+	NotAcknowledged *int `json:"operationsNotAcknowledgedAfterFault,omitempty"`
 }
 
 // maxClockOffset is the largest difference between a node's clock and the
@@ -137,7 +140,9 @@ func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 	defer func() {
 		if clientsStarted && !rec.ClientsStopped {
 			// Clients left writing would change the rows after the verdict.
-			if err := h.stopBackgroundClients(ctx); err != nil && result.Result == evidence.Pass {
+			err := h.stopBackgroundClients(ctx)
+			rec.ClientsStopped = err == nil
+			if err != nil && result.Result == evidence.Pass {
 				result.Result, result.Reason = evidence.Fail, "stop the clients: "+err.Error()
 			}
 		}
@@ -150,7 +155,9 @@ func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 	}()
 	end := func(r evidence.Result, format string, args ...any) evidence.Scenario {
 		result.Result, result.Reason = r, fmt.Sprintf(format, args...)
-		if ctx.Err() != nil && r == evidence.Fail {
+		// A run that ended before S06 was judged is blocked, unless it had
+		// already seen something that must never happen.
+		if ctx.Err() != nil && r == evidence.Fail && len(result.NeverEvents) == 0 {
 			result.Result, result.Reason = evidence.Blocked, "the run ended before S06 was judged: "+result.Reason
 		}
 		return result
@@ -193,8 +200,13 @@ func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 	}
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
-	if outcome.Result != evidence.Pass {
-		return end(outcome.Result, "%s", outcome.Reason)
+	switch {
+	case rec.ImageChanged:
+		return end(evidence.Blocked, "the environment changed: %s", outcome.Reason)
+	case outcome.Result != evidence.Pass:
+		// The flow's own verdict: a broken expectation stays a failure.
+		result.Result, result.Reason = outcome.Result, outcome.Reason
+		return result
 	}
 	back := outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)
 	result.Limits = map[string]string{"operator_resync_limit": h.cfg.ResyncLimit.String(),
@@ -210,7 +222,9 @@ func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 		return end(evidence.Blocked, "the run ended during the stable period: %v", ctx.Err())
 	case <-time.After(h.cfg.StablePeriod + 2*time.Second):
 	}
-	clients, err := h.observeAfterS06(ctx, &result, &rec, outcome.FaultIssuedAt)
+	// The clients stamp their answers with their node's clock.
+	clientFaultAt := outcome.FaultIssuedAt.Add(time.Duration(rec.ClockOffsets[h.rec.Client.Node] * float64(time.Second)))
+	clients, err := h.observeAfterS06(ctx, &result, &rec, clientFaultAt)
 	if err != nil {
 		return end(evidence.Fail, "%v", err)
 	}
@@ -338,7 +352,10 @@ func (h *haRun) clockOffsets(ctx context.Context) (map[string]float64, error) {
 			return offsets, err
 		}
 	}
-	if h.rec.Client != nil {
+	if h.rec.Client == nil {
+		return offsets, errors.New("the workload client's node is not known")
+	}
+	{
 		if err := read(h.rec.Client.Node, func() (string, error) { return h.clientRun(ctx, "date +%s.%N") }); err != nil {
 			return offsets, err
 		}
@@ -375,6 +392,7 @@ func (h *haRun) replacementObserved(ctx context.Context, rec *s06Record, goneAt 
 		return false, nil
 	}
 	if manager.Pods[0].ImageID != rec.ManagerBefore.ImageID {
+		rec.ImageChanged = true
 		return false, fmt.Errorf("the replacement manager runs %s, not %s", manager.Pods[0].ImageID,
 			rec.ManagerBefore.ImageID)
 	}
@@ -493,8 +511,12 @@ func (h *haRun) stopBackgroundClients(ctx context.Context) error {
 	var errs []error
 	for _, id := range s06Clients {
 		pid := "/tmp/" + id + ".pid"
-		out, err := h.clientRun(ctx, fmt.Sprintf("kill $(cat %[1]s) 2>/dev/null; for i in 1 2 3 4 5 6 7 8 9 10; do "+
-			"kill -0 $(cat %[1]s) 2>/dev/null || { echo stopped; exit 0; }; sleep 1; done; echo running", pid))
+		// The client's parent is the container's PID 1, sleep, which reaps
+		// no child: a stopped client stays a zombie, which kill -0 still
+		// finds. A zombie, or no process, is a stopped client.
+		out, err := h.clientRun(ctx, fmt.Sprintf(`p=$(cat %s); kill "$p" 2>/dev/null; `+
+			`for i in 1 2 3 4 5 6 7 8 9 10; do s=$(cut -d' ' -f3 "/proc/$p/stat" 2>/dev/null); `+
+			`if [ -z "$s" ] || [ "$s" = Z ]; then echo stopped; exit 0; fi; sleep 1; done; echo running`, pid))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("client %s: %w", id, err))
 		} else if strings.TrimSpace(out) != "stopped" {

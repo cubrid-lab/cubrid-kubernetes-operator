@@ -457,3 +457,38 @@ func TestRunS06RestartWaitsForAStatusLaterThanTheLeaseAcquisition(t *testing.T) 
 		t.Fatalf("RunHA() error = %v, want no status later than the Lease acquisition", err)
 	}
 }
+
+func TestRunS06RestartFailsWhenAClientDoesNotStop(t *testing.T) {
+	cfg := testS06Config(t)
+	f := newS06Fixture(t, cfg)
+	f.stopAnswer = "running"
+	err := f.runner.RunHA(t.Context(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "still running") {
+		t.Fatalf("RunHA() error = %v, want the client that did not stop", err)
+	}
+}
+
+func TestRunS06RestartIsBlockedWhenTheReplacementRunsAnotherImage(t *testing.T) {
+	cfg := testS06Config(t)
+	f := newS06Fixture(t, cfg)
+	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		f.startReplacement(ctx, c)
+		pod := &corev1.Pod{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: cfg.OperatorNamespace, Name: testReplacementPod}, pod); err != nil {
+			t.Error(err)
+			return
+		}
+		pod.Status.ContainerStatuses[0].ImageID = "containerd://sha256:" + strings.Repeat("e", 64)
+		if err := c.Status().Update(ctx, pod); err != nil {
+			t.Error(err)
+		}
+		f.takeLease(ctx, c)
+		f.writeStatus(ctx, c)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	if _, _, s06 := s06Scenario(t, cfg.EvidenceDir); s06.Result != evidence.Blocked {
+		t.Fatalf("S06 = %+v, want blocked by the changed image", s06)
+	}
+}

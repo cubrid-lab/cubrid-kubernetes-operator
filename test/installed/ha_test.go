@@ -17,6 +17,7 @@ limitations under the License.
 package installed
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -108,6 +109,8 @@ type haFixture struct {
 	// stops of background clients.
 	clockSkew time.Duration
 	kills     int
+	// stopAnswer is what stopping a client prints; empty means "stopped".
+	stopAnswer string
 
 	writes  []string
 	deletes []string
@@ -373,11 +376,12 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 		return "", nil
 	case strings.HasPrefix(script, "date "):
 		return f.clock(), nil
-	case strings.HasPrefix(script, "kill "):
+	case strings.HasPrefix(script, "p=$(cat /tmp/"):
 		f.mu.Lock()
 		f.kills++
+		answer := f.stopAnswer
 		f.mu.Unlock()
-		return "stopped\n", nil
+		return cmp.Or(answer, "stopped") + "\n", nil
 	case strings.HasPrefix(script, `grep -c '"acknowledged"'`):
 		return "12\n", nil
 	case strings.HasPrefix(script, "sleep 1; cat /tmp/"):
