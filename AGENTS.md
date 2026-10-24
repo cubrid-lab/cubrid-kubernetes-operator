@@ -57,49 +57,45 @@ The e2e tests are designed to validate the solution in an isolated environment (
 Ensure you run them against a dedicated [Kind](https://kind.sigs.k8s.io/) cluster (not your “real” dev/prod cluster).
 
 ### Issue Labeling (cubrid-lab org standard)
-Write GitHub issues, PRs and comments in English.
 
-Every issue MUST carry exactly one `priority: <value>` label and exactly one
-`size: <value>` label, alongside a type label
-(`bug`/`enhancement`/`documentation`/`testing`/`chore`/`ci`/…). These must be
-GitHub labels, not just text in the issue title or body. Agents and workflows
-creating issues through CLI/API must supply the canonical title and labels at
-creation.
+Every new GitHub issue begins with `status: needs triage`, even if
+priority/size was prefilled. An issue-opened workflow adds the label to human
+reports. A creator using `GITHUB_TOKEN` must explicitly include that label
+because its events do not trigger other GitHub Actions workflows. Issue type
+(`bug`, `testing`, `enhancement`, `documentation`, etc.) remains separate
+from priority, size and any existing phase/area metadata.
 
-Use the following exact names, with **one space after the colon**:
+Before a maintainer or authorized triager removes the triage label:
 
-- **Priority**: `priority: critical` | `priority: high` | `priority: medium` | `priority: low`
-- **Size**: `size: XS` | `size: S` | `size: M` | `size: L` | `size: XL`
+1. Establish problem validity and available evidence, check duplicate open
+   and closed issues and competing PRs, repository scope, issue type,
+   dependencies, non-goals, and verifiable completion criteria. Record
+   unknowns; close invalid/duplicate work with a reason, not a false fix.
+2. Compare this issue's impact against **every open issue in this repository**.
+   Re-evaluate relative priority, respecting confirmed safety, recovery,
+   release and validation dependencies. Do not automatically promote a
+   newly created issue over an older, more urgent defect.
+3. Assign exactly one `priority: critical`, `priority: high`,
+   `priority: medium` or `priority: low` for urgency/impact.
+4. Assign exactly one `size: small` (focused task),
+   `size: medium` (contained multi-file task) or `size: large`
+   (cross-cutting task). Split a very large implementation into
+   independently reviewable sub-issues, keeping the parent issue's acceptance
+   separate. Most `good first issue` tasks should be `size: small`.
+5. Re-fetch actual GitHub labels and verify the type, one priority,
+   one size, relative backlog assessment and recorded blockers. Only then
+   remove `status: needs triage`. A workflow must not auto-score issues or
+   auto-remove the triage state based on labels alone.
 
-Do NOT introduce variants such as `priority:high`, `priority-high`, `P0`/`P1`/`P2`
-or `size:S`. Reuse the repository's canonical labels; if a required label is
-missing, create it with the exact name above before filing the issue.
+For already-open issues, map legacy XS/S → small, M → medium and
+L/XL → large, without changing owner, priority, phase/area, history or
+release acceptance. If labels are missing or ambiguous, leave the issue
+pending individual review. Existing CI checks and independent approvals are
+unchanged.
 
-| Label | Meaning | Rough guide |
-|-------|---------|-------------|
-| `size: XS` | Trivial change | < ~10 lines; single-file typo/config/one-liner |
-| `size: S` | Small change (hours) | One Go file or one focused function; a single test or doc page |
-| `size: M` | Medium change (one to two days) | A few files in one package; a new `_test.go` suite, a bug fix with a regression test, a CI job |
-| `size: L` | Large change | Cross-cutting change across packages (API types + controller + Instance Manager); split into independently reviewable PRs |
-| `size: XL` | Very large | Consider splitting into smaller issues before starting |
-
-Generated output (`**/zz_generated.*.go`, `config/crd/bases/*`, `config/rbac/role.yaml`)
-does not count toward size; estimate from the hand-written change.
-
-Rules:
-
-1. **Size reflects effort, not importance** — a one-line fix for a critical bug is still `size: XS`.
-2. **Assign both `priority:` and `size:` at creation.** If scope or impact is
-   uncertain, use a provisional estimate, explain the uncertainty in the body,
-   and add `status: needs triage`. Refine the estimates during triage rather
-   than omitting either required label.
-3. **`good first issue` should be `size: XS` or `size: S`.**
-4. **`size: XL` is a signal to split**, not a green light to start a sprawling change.
-
-Each issue SHOULD also carry one `phase:` label classifying which roadmap stage
-the work belongs to (a classification, not a status — status lives only in
-`ROADMAP.md`):
-- **Phase**: `phase: 0-decisions` | `phase: 1-foundation` | `phase: 2-ha` | `phase: 3-recovery` | `phase: 4-backup` | `phase: 5-hardening`
+Keep the existing `phase:` label for the actual roadmap stage; it is not a
+priority, a verification result or an authorization to skip real lab evidence.
+Generated `zz_generated` and CRD/RBAC output should not inflate effort estimates.
 
 ### Issue, PR and Commit Titles
 Issue titles, pull request titles and commit subjects follow
@@ -138,7 +134,7 @@ mandatory. Optional AI reviews are **advisory**.
 Follow [CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow).
 In short:
 
-1. Pick a sub-issue sized `size: S` or `size: M`. A `size: L` issue is a
+1. Pick a sub-issue sized `size: small` or `size: medium`. A `size: large` issue is a
    tracking issue: do not implement it directly. Read the issue's dependencies
    and file pointers ("Depends on", "Where to look", "Related work") first,
    and check for an open PR on the same issue. Confirm availability and set the actual implementer as the GitHub
