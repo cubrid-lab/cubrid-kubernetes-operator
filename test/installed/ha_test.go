@@ -104,6 +104,10 @@ type haFixture struct {
 	replacement    func(ctx context.Context, c client.WithWatch)
 	// backgroundHistory returns what a background client recorded.
 	backgroundHistory func(id string) string
+	// clockSkew is added to the clock the nodes report; kills counts the
+	// stops of background clients.
+	clockSkew time.Duration
+	kills     int
 
 	writes  []string
 	deletes []string
@@ -205,6 +209,9 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 func (f *haFixture) reconcile(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error {
 	cluster.Status.ObservedGeneration = 1
 	cluster.Status.CurrentPrimary = f.primary
+	// The status the manager wrote before the run.
+	before := metav1.NewTime(time.Now().Add(-time.Minute).Truncate(time.Second))
+	cluster.Status.LastObservedTime = &before
 	if f.bootstrapFailed {
 		cluster.Status.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName,
 			Phase: string(databasev1alpha1.BootstrapFailed)}}
@@ -322,6 +329,9 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 	if len(args) < 9 || args[0] != "-n" || args[1] != f.cfg.Namespace || args[2] != "exec" || args[4] != "-c" {
 		f.t.Fatalf("unexpected command %q", args)
 	}
+	if args[7] == "date" {
+		return f.clock(), nil
+	}
 	pod, container, script := args[3], args[5], args[9]
 	if pod == clientPodName {
 		if container != clientContainer {
@@ -359,8 +369,15 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 	switch {
 	case strings.HasPrefix(script, "workload init"):
 		return f.initOutput, f.initErr
-	case strings.Contains(script, "nohup workload run"), strings.HasPrefix(script, "kill "):
+	case strings.Contains(script, "nohup workload run"):
 		return "", nil
+	case strings.HasPrefix(script, "date "):
+		return f.clock(), nil
+	case strings.HasPrefix(script, "kill "):
+		f.mu.Lock()
+		f.kills++
+		f.mu.Unlock()
+		return "stopped\n", nil
 	case strings.HasPrefix(script, `grep -c '"acknowledged"'`):
 		return "12\n", nil
 	case strings.HasPrefix(script, "sleep 1; cat /tmp/"):
@@ -915,4 +932,10 @@ func (f *haFixture) setPrimary(ctx context.Context, primary string) error {
 	}
 	cluster.Status.CurrentPrimary = primary
 	return f.store.Update(ctx, cluster)
+}
+
+// clock is a node's date +%s.%N.
+func (f *haFixture) clock() string {
+	now := time.Now().Add(f.clockSkew)
+	return fmt.Sprintf("%d.%09d\n", now.Unix(), now.Nanosecond())
 }

@@ -128,38 +128,60 @@ With `-fault operator-restart` the run goes on after LAB01 passed, on the
 same cluster, with S06 `restart` of the scenario contract. The lane is then
 `lab-installed-ha-s06`, and it requires both LAB01 and S06/restart.
 
-1. Two clients start writing through `<cluster>-rw` in the background, each
-   until ten operations are acknowledged.
-2. The run deletes the installed manager's Pod, with no grace period and with
+1. The run reads each member's node clock and the client's through their
+   Pods, and is blocked when one is more than a second off its own: it
+   compares its times with the status and container times the cluster
+   writes. The offsets are recorded. The manager's own node is read only
+   when a member or the client runs there.
+2. Two clients start writing through `<cluster>-rw` in the background. They
+   run until the run stops them; the fault waits until each has ten
+   operations acknowledged.
+3. Right before the fault, the run checks again that the manager Pod is the
+   one LAB01 checked, the starting conditions are `True` and the master is
+   the same. Otherwise S06 is blocked.
+4. The run deletes the installed manager's Pod, with no grace period and with
    that Pod's UID as a precondition. The Pod is the one verified through
    Deployment, ReplicaSet and Pod ownership. The fault is confirmed when that
    Pod no longer exists.
-3. The run waits for all of these to hold together:
-   - the Deployment's replacement Pod is available;
+5. The run waits for all of these to hold together:
+   - the Deployment's replacement Pod is available, with the same runtime
+     image as the old one;
+   - the replacement holds the manager's leader Lease (`-leader-lease`,
+     default `91d4fe35.cubrid.io`);
    - `status.lastObservedTime` is later than the moment the old Pod was
-     confirmed gone, and later than the start of the replacement's
-     container, so the status is the replacement's own;
+     confirmed gone, than the start of the replacement's container, and than
+     the moment the replacement acquired the Lease. A killed process can
+     outlive its Pod object, and it holds the Lease until the Lease expires,
+     so only a time after all three is the replacement's own;
    - the status names the same master, with the starting conditions `True`;
    - CUBRID reports the same master.
 
    A different master fails the run at once. The time from the fault to
    this point (`operatorBackWithin`) must be within `-resync-limit`
    (`operator_resync_limit`, default 2 minutes).
-4. The clients keep running for `-stable-period` (`stable_period`, default
+6. The clients keep running for `-stable-period` (`stable_period`, default
    30 seconds) and are then stopped. After the fault:
    - no client answer may be a failure or unknown;
    - each client must be acknowledged without interruption for at least the
      stable period.
 
-   An operation a client was stopped in has no answer. The data rules allow
+   The run confirms that both clients stopped, also when it ends early. An
+   operation a client was stopped in has no answer. The data rules allow
    it either way.
-5. Every member must still be the same Pod and container, and CUBRID must
+7. Every member must still be the same Pod and container, and CUBRID must
    report the same master.
-6. The data rules must hold on every member and both Services, over
+8. The data rules must hold on every member and both Services, over
    everything every client recorded.
 
+A run that ends, for example at its `-timeout`, before S06 is judged leaves
+S06 blocked, not failed. The default `-timeout` of 30 minutes covers LAB01
+and S06 on the lab, which took about 10 minutes there; the fault flow alone
+may wait up to 2 minutes for each client's start and for the fault to be
+confirmed, and five times `-resync-limit` for the outcome.
+
 This adds one write outside the run namespace: the deletion of the manager's
-Pod. The account needs `delete` on Pods in the Operator's namespace. The
+Pod. The account needs `delete` on Pods and `get` on Leases in the Operator's
+namespace. The
 Deployment, which the lab's GitOps keeps, starts the replacement; the run
 does not touch the Deployment.
 

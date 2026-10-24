@@ -108,6 +108,8 @@ type HAConfig struct {
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
 	// first fresh status (operator_resync_limit).
 	StablePeriod, ResyncLimit time.Duration
+	// LeaderLease is the manager's leader election Lease in its namespace.
+	LeaderLease string
 }
 
 func (c HAConfig) validate() error {
@@ -131,8 +133,9 @@ func (c HAConfig) validate() error {
 	if c.Fault != "" && c.Fault != FaultOperatorRestart {
 		return fmt.Errorf("fault must be empty or %s", FaultOperatorRestart)
 	}
-	if c.Fault != "" && (c.StablePeriod <= 0 || c.ResyncLimit <= 0) {
-		return errors.New("a fault needs a positive stable period and resync limit")
+	if c.Fault != "" && (c.StablePeriod <= 0 || c.ResyncLimit <= 0 ||
+		len(validation.IsDNS1123Subdomain(c.LeaderLease)) != 0) {
+		return errors.New("a fault needs a positive stable period and resync limit, and the leader Lease")
 	}
 	if c.Operations < 1 || c.Operations > maxOperations || c.DataCheckWithin <= 0 || c.StableFor < 0 {
 		return fmt.Errorf("operations must be 1 to %d, the data check window positive and the stable period "+
@@ -271,8 +274,9 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				runErr = errors.Join(runErr, fmt.Errorf("scoped cleanup: %w", cleanupErr))
 			}
 		}
-		if err := h.writeJSON(haRecordFile, h.rec); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("write HA evidence: %w", err))
+		recordErr := h.writeJSON(haRecordFile, h.rec)
+		if recordErr != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("write HA evidence: %w", recordErr))
 		}
 		scenario.Evidence = h.files
 		if counts := h.rec.Operations; counts != nil {
@@ -281,7 +285,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				Unknown: counts[workload.Unknown]}
 		}
 		scenario.Measurements = h.measurements()
-		if h.labPassed && cleanupErr == nil {
+		if h.labPassed && cleanupErr == nil && recordErr == nil {
 			scenario.Result = evidence.Pass
 			scenario.Reason = "LAB01's starting state, a subset of S01's, held for the stable period, and the data " +
 				"rules held on every member and both Services"

@@ -74,6 +74,8 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"S06: how long the clients must stay acknowledged after the fault (stable_period)")
 	flags.DurationVar(&cfg.ResyncLimit, "resync-limit", 2*time.Minute,
 		"S06: bound for the replacement manager's first fresh status (operator_resync_limit)")
+	flags.StringVar(&cfg.LeaderLease, "leader-lease", "91d4fe35.cubrid.io",
+		"S06: the manager's leader election Lease in its namespace")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")
