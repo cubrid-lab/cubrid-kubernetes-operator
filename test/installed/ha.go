@@ -138,9 +138,9 @@ type seedRecord struct {
 
 // startingState is S01's starting state as the run observed it.
 type startingState struct {
-	Master           string   `json:"master"`
-	Slaves           []string `json:"slaves"`
-	CurrentPrimary   string   `json:"currentPrimary"`
+	Master         string   `json:"master"`
+	Slaves         []string `json:"slaves"`
+	CurrentPrimary string   `json:"currentPrimary"`
 	// FormationSeconds is set for the starting state only; the roles read at
 	// the end leave it out.
 	FormationSeconds float64 `json:"formationSeconds,omitempty"`
