@@ -1,0 +1,95 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// Command ha runs LAB01 against an installed Operator: a three-member HA
+// cluster in a fresh namespace, S01's starting state, the SQL workload client
+// and the data rules on every member and both Services (docs/testing/installed-ha.md).
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/installed"
+)
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	if err := run(ctx, os.Args[1:]); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, args []string) (runErr error) {
+	flags := flag.NewFlagSet("installed-ha", flag.ContinueOnError)
+	var path, targetContext string
+	var cfg installed.HAConfig
+	flags.StringVar(&path, "kubeconfig", "", "explicit target kubeconfig (credentials stay private)")
+	flags.StringVar(&targetContext, "context", "", "explicit context to snapshot")
+	flags.StringVar(&cfg.ClusterUID, "cluster-uid", "", "expected kube-system namespace UID")
+	flags.StringVar(&cfg.Namespace, "namespace", "", "explicit fresh run namespace (cubrid-lab-*)")
+	flags.StringVar(&cfg.OperatorNamespace, "operator-namespace", "", "namespace of the installed Operator")
+	flags.StringVar(&cfg.OperatorDeployment, "operator-deployment", "", "installed manager Deployment name")
+	flags.StringVar(&cfg.OperatorImage, "operator-image", "", "expected digest or main-commit manager image")
+	flags.StringVar(&cfg.InstanceManagerImage, "instance-manager-image", "",
+		"expected digest or main-commit database image")
+	flags.StringVar(&cfg.WorkloadImage, "workload-image", "", "SQL workload client image, pinned by digest")
+	flags.StringVar(&cfg.Commit, "commit", "", "full selected source revision")
+	flags.StringVar(&cfg.StorageClass, "storage-class", "", "explicit StorageClass for the 2Gi data volumes")
+	flags.StringVar(&cfg.SeedEndpoint, "seed-endpoint", "", "object store host[:port] the members are seeded through")
+	flags.StringVar(&cfg.SeedBucket, "seed-bucket", "", "bucket for the seed backups")
+	flags.BoolVar(&cfg.SeedInsecure, "seed-insecure", false, "reach the object store over plain HTTP")
+	flags.StringVar(&cfg.SeedSecretNamespace, "seed-secret-namespace", "", "namespace of the object store Secret")
+	flags.StringVar(&cfg.SeedSecret, "seed-secret", "", "Secret with accessKey and secretKey, copied into the run")
+	flags.IntVar(&cfg.Operations, "operations", 200, "workload operations through the read-write Service")
+	flags.DurationVar(&cfg.DataCheckWithin, "data-check-within", 2*time.Minute,
+		"how long after the workload the data rules may take to hold")
+	flags.DurationVar(&cfg.StableFor, "stable-for", 15*time.Second,
+		"how long the starting state must keep holding before the workload starts")
+	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
+	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
+	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")
+	flags.DurationVar(&cfg.CleanupTimeout, "cleanup-timeout", 5*time.Minute, "independent cleanup deadline")
+	flags.DurationVar(&cfg.Poll, "poll", 3*time.Second, "polling interval")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 || (cfg.Level != "kind" && cfg.Level != "vm-lab") {
+		return errors.New("choose kind or vm-lab explicitly and provide no positional command")
+	}
+	cfg.NamespaceMode = installed.FreshNamespace
+	target, err := installed.OpenTarget(path, targetContext)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, target.Close()) }()
+	runner, err := target.Runner()
+	if err != nil {
+		return err
+	}
+	return runner.RunHA(ctx, cfg)
+}

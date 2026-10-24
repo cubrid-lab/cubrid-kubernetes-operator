@@ -49,6 +49,9 @@ const (
 	testManagerPodName = "manager-pod"
 	testReplacementUID = "replacement"
 	testBeforeCluster  = "before-cluster"
+	// testRunNamespaceUID is the UID the fake API server gives the run namespace.
+	testRunNamespaceUID = "run-namespace"
+	testVersionJSON     = `{"serverVersion":{"gitVersion":"v1.37.0"}}`
 )
 
 func testConfig(t *testing.T) Config {
@@ -136,7 +139,7 @@ func TestRunDoesNotOwnAnExistingNamespace(t *testing.T) {
 		return nil
 	}}, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Namespace, UID: "someone-else"}})
 	r := Runner{Client: c, Command: func(context.Context, ...string) (string, error) {
-		return `{"serverVersion":{"gitVersion":"v1.37.0"}}`, nil
+		return testVersionJSON, nil
 	}}
 	if err := r.Run(t.Context(), cfg); err == nil {
 		t.Fatal("an existing namespace must refuse the smoke")
@@ -180,7 +183,7 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 				if value.Name != f.cfg.Namespace {
 					t.Fatalf("runner wrote shared namespace %s", value.Name)
 				}
-				value.UID = "run-namespace"
+				value.UID = testRunNamespaceUID
 				f.writes = append(f.writes, testNamespaceAction)
 				return c.Create(ctx, value, opts...)
 			case *databasev1alpha1.CubridCluster:
@@ -266,7 +269,7 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 			}
 			options := (&client.DeleteOptions{}).ApplyOptions(opts)
 			if options.Preconditions == nil || options.Preconditions.UID == nil ||
-				*options.Preconditions.UID != "run-namespace" {
+				*options.Preconditions.UID != testRunNamespaceUID {
 				t.Fatal("namespace delete did not carry the saved UID precondition")
 			}
 			if ctx.Err() != nil {
@@ -338,7 +341,7 @@ func createAll(ctx context.Context, c client.WithWatch, objects ...client.Object
 func (f *fixture) answer(t *testing.T, args []string) (string, error) {
 	t.Helper()
 	if len(args) == 3 && args[0] == "version" {
-		return `{"serverVersion":{"gitVersion":"v1.37.0"}}`, nil
+		return testVersionJSON, nil
 	}
 	if len(args) < 8 || args[0] != "-n" || args[1] != f.cfg.Namespace || args[2] != "exec" ||
 		args[3] != clusterName+"-0" || args[4] != "-c" || args[5] != databaseContainer || args[6] != "--" {

@@ -120,7 +120,8 @@ removes them at the end, which on a lab would delete every `CubridCluster`
 it has. It refuses to start there anyway, since its current context is not a
 Kind cluster (`utils.RequireKindContext`, #440). A command that uses the
 Operator already installed on the lab, such as the LAB00 SQL smoke
-([installed-smoke.md](installed-smoke.md)), can run under it: the Lease it
+([installed-smoke.md](installed-smoke.md)), or the LAB01 three-member HA run
+([installed-ha.md](installed-ha.md)), can run under it: the Lease it
 takes is the `cubrid-lab/campaign` Lease that smoke's documentation asks the
-launcher to hold. Lab scenarios beyond LAB00, and starting a lab run from CI,
-are follow-ups of #122. How to reach the lab is in [lab-access.md](lab-access.md).
+launcher to hold. Lab scenarios that cause a fault, which build on LAB01, and
+starting a lab run from CI, are follow-ups of #122. How to reach the lab is in [lab-access.md](lab-access.md).

@@ -121,6 +121,17 @@ separate from S00 installation or S00–S15 qualification, and do not establish
 CSI or VM-fault behavior. Namespace cleanup does not certify deletion of
 retained backend volumes.
 
+The three-member HA run with an installed Operator (`lab-installed-ha` /
+LAB01, [installed-ha.md](docs/testing/installed-ha.md), #546) creates an HA
+cluster in a fresh namespace, waits for a subset of S01's starting state,
+runs the SQL workload client and checks the data rules on every member and
+both Services. On 2026-10-24 it passed twice on the VM lab (manager
+`d6df2ac`, k3s `v1.36.5+k3s1`, CUBRID `11.4.6.1963`, `local-path`), once
+from the final harness commit; it needed the lab's object store to admit
+run namespaces (terraform-zadara-k8s #51), and a first attempt before that
+change failed at the seed upload. LAB01 injects no fault and is not an S01
+result at the VM-lab level.
+
 A [manual VM-lab run on 2026-10-21](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210)
 moved the lab to main `9c6ae9c1ef97eae29c13dff7a272d1082715c9e2` through the
 private GitOps repository (images from

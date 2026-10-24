@@ -42,6 +42,29 @@ func Run(run Runner, sql string) (string, error) {
 	return out, nil
 }
 
+// quotedValue matches one string value in csql's result table.
+var quotedValue = regexp.MustCompile(`^\s*'(.*)'\s*$`)
+
+// Values returns the values of a query that returns one string column, from
+// csql's output. They follow the line of "=" under the column title; the
+// title itself is the text of the expression and may be quoted too.
+func Values(out string) ([]string, error) {
+	_, table, found := strings.Cut(out, "\n==")
+	if !found {
+		if strings.Contains(out, "There are no results.") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("no result table in the output of csql:\n%s", out)
+	}
+	var values []string
+	for line := range strings.SplitSeq(table, "\n") {
+		if m := quotedValue.FindStringSubmatch(line); m != nil {
+			values = append(values, m[1])
+		}
+	}
+	return values, nil
+}
+
 // s00Table is the table the S00 checks write and read.
 const s00Table = "s00_check"
 
