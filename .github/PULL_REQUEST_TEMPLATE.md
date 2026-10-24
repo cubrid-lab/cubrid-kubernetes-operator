@@ -69,6 +69,13 @@ Reason the test was not written first, if that applies:
 
 Optional AI review (tool/findings; separate from executed tests):
 
+## Related PRs and Dependencies
+
+<!-- For this repository use Supersedes #N, Depends on #N, Parallel to #N
+     with a reason, or None. Confirm lab/recovery prerequisite status at merge. -->
+Related PRs and precedence: None
+Unresolved decision or dependency: None
+
 ## Related Issues
 
 <!-- Closes #123 for the issue this PR finishes. Refs #456 for its tracking issue. Issue numbers go here, not in the PR title. -->
