@@ -132,6 +132,18 @@ run namespaces (terraform-zadara-k8s #51), and a first attempt before that
 change failed at the seed upload. LAB01 injects no fault and is not an S01
 result at the VM-lab level.
 
+S06 `restart` runs on top of it (`lab-installed-ha-s06`, `-fault
+operator-restart`, #546): two clients write through `-rw` while the installed
+manager's Pod is deleted without a grace period, and the replacement must
+write a status of its own, under the leader Lease, naming the same master
+within `operator_resync_limit`. On 2026-10-24 it passed once on the VM lab
+from the reviewed harness: the replacement's status came 23.3 s after the
+fault, no client operation failed, no member restarted, and the data rules
+held; the observer ran alongside and found no contradictions. An earlier
+run passed before the Lease and clock checks existed, and one failed on the
+harness's own client-stop check, since fixed. One run is not a baseline, and
+the applier fail count, which the Kind step checks, is not checked there.
+
 A [manual VM-lab run on 2026-10-21](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210)
 moved the lab to main `9c6ae9c1ef97eae29c13dff7a272d1082715c9e2` through the
 private GitOps repository (images from

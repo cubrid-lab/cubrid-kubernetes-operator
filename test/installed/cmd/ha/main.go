@@ -16,7 +16,8 @@ limitations under the License.
 
 // Command ha runs LAB01 against an installed Operator: a three-member HA
 // cluster in a fresh namespace, S01's starting state, the SQL workload client
-// and the data rules on every member and both Services (docs/testing/installed-ha.md).
+// and the data rules on every member and both Services, and with
+// -fault operator-restart S06 restart after it (docs/testing/installed-ha.md).
 package main
 
 import (
@@ -67,6 +68,14 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"how long after the workload the data rules may take to hold")
 	flags.DurationVar(&cfg.StableFor, "stable-for", 15*time.Second,
 		"how long the starting state must keep holding before the workload starts")
+	flags.StringVar(&cfg.Fault, "fault", "",
+		"scenario after LAB01: empty for none, or operator-restart for S06 restart (deletes the manager Pod)")
+	flags.DurationVar(&cfg.StablePeriod, "stable-period", 30*time.Second,
+		"S06: how long the clients must stay acknowledged after the fault (stable_period)")
+	flags.DurationVar(&cfg.ResyncLimit, "resync-limit", 2*time.Minute,
+		"S06: bound for the replacement manager's first fresh status (operator_resync_limit)")
+	flags.StringVar(&cfg.LeaderLease, "leader-lease", "91d4fe35.cubrid.io",
+		"S06: the manager's leader election Lease in its namespace")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")

@@ -100,6 +100,16 @@ type HAConfig struct {
 	// StableFor is how long the starting state must keep holding, with the
 	// same master, slaves and Pods, before the workload starts.
 	StableFor time.Duration
+	// Fault selects a scenario after LAB01: empty for none, or
+	// FaultOperatorRestart for S06 restart, which deletes the installed
+	// manager's Pod.
+	Fault string
+	// StablePeriod is how long the clients must stay acknowledged after the
+	// fault (stable_period); ResyncLimit bounds the replacement manager's
+	// first fresh status (operator_resync_limit).
+	StablePeriod, ResyncLimit time.Duration
+	// LeaderLease is the manager's leader election Lease in its namespace.
+	LeaderLease string
 }
 
 func (c HAConfig) validate() error {
@@ -119,6 +129,13 @@ func (c HAConfig) validate() error {
 	if len(validation.IsDNS1123Label(c.SeedSecretNamespace)) != 0 ||
 		len(validation.IsDNS1123Subdomain(c.SeedSecret)) != 0 || c.SeedSecretNamespace == c.Namespace {
 		return errors.New("the seed Secret must be named, outside the run namespace")
+	}
+	if c.Fault != "" && c.Fault != FaultOperatorRestart {
+		return fmt.Errorf("fault must be empty or %s", FaultOperatorRestart)
+	}
+	if c.Fault != "" && (c.StablePeriod <= 0 || c.ResyncLimit <= 0 ||
+		len(validation.IsDNS1123Subdomain(c.LeaderLease)) != 0) {
+		return errors.New("a fault needs a positive stable period and resync limit, and the leader Lease")
 	}
 	if c.Operations < 1 || c.Operations > maxOperations || c.DataCheckWithin <= 0 || c.StableFor < 0 {
 		return fmt.Errorf("operations must be 1 to %d, the data check window positive and the stable period "+
@@ -188,6 +205,10 @@ type haRun struct {
 	members  []string
 	history  strings.Builder
 	files    []string
+	// labPassed is set once LAB01's checks have passed.
+	labPassed bool
+	// s06 is the result of S06 restart, once it ran.
+	s06 *evidence.Scenario
 }
 
 // RunHA creates a three-member HA cluster in a fresh namespace through the
@@ -231,13 +252,20 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		Notes: []string{"Three-member HA cluster against an installed Operator; no fault and no S00-S15 qualification",
 			"Commit is selected by the campaign; actual runtime image identities are recorded separately",
 			"Namespace cleanup does not certify deletion of retained backend volumes or of the seed backups"}}
-	requirements := []evidence.Requirement{{ID: haScenarioID}}
+	lane, requirements := haLane, []evidence.Requirement{{ID: haScenarioID}}
+	if cfg.Fault == FaultOperatorRestart {
+		lane = s06Lane
+		requirements = append(requirements, evidence.Requirement{ID: s06ID, Variant: s06Variant})
+		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S06 restart: the " +
+			"manager Pod is deleted without a grace period; no other S00-S15 qualification"
+	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
 	var owned *corev1.Namespace
 	defer func() {
+		var cleanupErr error
 		if owned != nil {
-			cleanupErr := r.cleanupRun(cfg.Config, owned, nil)
+			cleanupErr = r.cleanupRun(cfg.Config, owned, nil)
 			cleaned := cleanupErr == nil
 			scenario.CleanupSucceeded = &cleaned
 			h.rec.Cleanup = "complete"
@@ -246,8 +274,9 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				runErr = errors.Join(runErr, fmt.Errorf("scoped cleanup: %w", cleanupErr))
 			}
 		}
-		if err := h.writeJSON(haRecordFile, h.rec); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("write HA evidence: %w", err))
+		recordErr := h.writeJSON(haRecordFile, h.rec)
+		if recordErr != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("write HA evidence: %w", recordErr))
 		}
 		scenario.Evidence = h.files
 		if counts := h.rec.Operations; counts != nil {
@@ -256,7 +285,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				Unknown: counts[workload.Unknown]}
 		}
 		scenario.Measurements = h.measurements()
-		if runErr == nil {
+		if h.labPassed && cleanupErr == nil && recordErr == nil {
 			scenario.Result = evidence.Pass
 			scenario.Reason = "LAB01's starting state, a subset of S01's, held for the stable period, and the data " +
 				"rules held on every member and both Services"
@@ -267,9 +296,15 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 			scenario.Reason = runErr.Error()
 		}
 		summary.Record(scenario)
+		if h.s06 != nil {
+			summary.Record(*h.s06)
+		} else if cfg.Fault == FaultOperatorRestart {
+			summary.Settle(evidence.Requirement{ID: s06ID, Variant: s06Variant}, evidence.Blocked,
+				"S06 starts from LAB01's checked state, and LAB01 did not pass")
+		}
 		summary.FinishedAt = time.Now().UTC()
 		runErr = errors.Join(runErr, summary.Conclude(cfg.EvidenceDir, h.redactor,
-			evidence.Lane{Name: haLane, Required: requirements}))
+			evidence.Lane{Name: lane, Required: requirements}))
 		if runErr != nil {
 			runErr = errors.New(string(h.redactor.Redact([]byte(runErr.Error()))))
 		}
@@ -278,7 +313,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		if err := h.writeJSON(haRecordFile, h.rec); err != nil {
 			return err
 		}
-		return summary.Checkpoint(cfg.EvidenceDir, h.redactor, haLane, time.Now())
+		return summary.Checkpoint(cfg.EvidenceDir, h.redactor, lane, time.Now())
 	}
 	if err := checkpoint(); err != nil {
 		return err
@@ -300,7 +335,19 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	if err := checkpoint(); err != nil {
 		return err
 	}
-	return h.run(ctx, &summary.Environment, checkpoint)
+	if err := h.run(ctx, &summary.Environment, checkpoint); err != nil {
+		return err
+	}
+	h.labPassed = true
+	if cfg.Fault != FaultOperatorRestart {
+		return nil
+	}
+	s06 := h.runS06(ctx)
+	h.s06 = &s06
+	if s06.Result != evidence.Pass {
+		return fmt.Errorf("S06/%s: %s", s06Variant, s06.Reason)
+	}
+	return nil
 }
 
 func (h *haRun) run(ctx context.Context, env *evidence.Environment, checkpoint func() error) error {
@@ -333,7 +380,7 @@ func (h *haRun) run(ctx context.Context, env *evidence.Environment, checkpoint f
 	if err != nil {
 		return err
 	}
-	if err := h.checkData(ctx, answered); err != nil {
+	if err := h.checkData(ctx, answered, haDataCheckFile); err != nil {
 		return err
 	}
 	return h.checkIdentities(ctx)
@@ -816,7 +863,7 @@ func (h *haRun) stopper(r workload.Report) (string, workload.Violation, bool) {
 // both Services. While the only violations are rows a member lacks, they
 // are read again until the rules hold or DataCheckWithin has passed since
 // the workload's last answer. The last report read is kept in any case.
-func (h *haRun) checkData(ctx context.Context, answered time.Time) error {
+func (h *haRun) checkData(ctx context.Context, answered time.Time, file string) error {
 	history, err := workload.ReadHistory(strings.NewReader(h.history.String()))
 	if err != nil {
 		return err
@@ -826,7 +873,7 @@ func (h *haRun) checkData(ctx context.Context, answered time.Time) error {
 		if report == nil {
 			return nil
 		}
-		return h.writeJSON(haDataCheckFile, struct {
+		return h.writeJSON(file, struct {
 			Operations map[string]int `json:"operations"`
 			workload.Report
 		}{history.Counts, *report})
