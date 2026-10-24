@@ -36,6 +36,7 @@ import (
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
@@ -160,9 +161,6 @@ func (r *haRun) master(ctx context.Context) (string, []string, error) {
 	return masters[0], slaves, nil
 }
 
-// quotedValue matches one string value in csql's result table.
-var quotedValue = regexp.MustCompile(`^\s*'(.*)'\s*$`)
-
 // memberValues runs a query that returns one string column on a member, with
 // csql inside its Pod, and returns the values.
 func (r *haRun) memberValues(ctx context.Context, pod, query string) ([]string, error) {
@@ -170,29 +168,12 @@ func (r *haRun) memberValues(ctx context.Context, pod, query string) ([]string, 
 	if err != nil {
 		return nil, err
 	}
-	// The values follow the line of "=" under the column title. The title
-	// itself is the text of the expression and may be quoted too.
-	_, table, found := strings.Cut(out, "\n==")
-	if !found {
-		if strings.Contains(out, "There are no results.") {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("no result table in the output of csql:\n%s", out)
-	}
-	var values []string
-	for _, line := range strings.Split(table, "\n") {
-		if m := quotedValue.FindStringSubmatch(line); m != nil {
-			values = append(values, m[1])
-		}
-	}
-	return values, nil
+	return sqlcheck.Values(out)
 }
 
 // memberRows reads the ledger rows a member holds, not through a Broker.
 func (r *haRun) memberRows(ctx context.Context, pod string) ([]workload.Row, error) {
-	values, err := r.memberValues(ctx, pod, `SELECT '{"opId":"' || op_id || '","client":"' || client_id ||`+
-		` '","seq":' || CAST(seq AS VARCHAR) || ',"amount":' || CAST(amount AS VARCHAR) ||`+
-		` ',"note":"' || note || '"}' AS v FROM ledger ORDER BY client_id, seq;`)
+	values, err := r.memberValues(ctx, pod, workload.LedgerQuery)
 	if err != nil {
 		return nil, err
 	}

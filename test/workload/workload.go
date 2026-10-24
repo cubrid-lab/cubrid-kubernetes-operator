@@ -153,6 +153,12 @@ func (r Report) FirstViolation(order []string, prefix string) (member string, fi
 	return pick.member, pick.v, len(all)
 }
 
+// LedgerQuery returns every ledger row as one JSON line of a Row, for a
+// client such as csql that reads a member directly, not through a Broker.
+const LedgerQuery = `SELECT '{"opId":"' || op_id || '","client":"' || client_id ||` +
+	` '","seq":' || CAST(seq AS VARCHAR) || ',"amount":' || CAST(amount AS VARCHAR) ||` +
+	` ',"note":"' || note || '"}' AS v FROM ledger ORDER BY client_id, seq;`
+
 // Data rules, as they appear in a Violation.
 const (
 	RuleMissing           = "missing"

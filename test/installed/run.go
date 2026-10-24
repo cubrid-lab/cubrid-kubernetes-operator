@@ -50,6 +50,9 @@ const (
 	databaseName      = "appdb"
 	databaseContainer = "cubrid"
 	recordFile        = "LAB00/record.json"
+	// installedManagedBy labels the namespace an installed command creates,
+	// and the lab's object store admits that label (installed-ha.md).
+	installedManagedBy = "cubrid-installed-smoke"
 )
 
 // NamespaceMode selects who owns the namespace lifecycle.
@@ -510,7 +513,7 @@ func (r *Runner) prepareNamespace(ctx context.Context, cfg Config, rec *record) 
 		return nil, borrowed, nil
 	} else {
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Namespace, Labels: map[string]string{
-			"app.kubernetes.io/managed-by": "cubrid-installed-smoke", "app.kubernetes.io/instance": rec.RunID,
+			"app.kubernetes.io/managed-by": installedManagedBy, "app.kubernetes.io/instance": rec.RunID,
 			"pod-security.kubernetes.io/enforce": "restricted"}}}
 		if err := r.Client.Create(ctx, ns); err != nil {
 			return nil, nil, fmt.Errorf("create fresh run namespace (no cleanup authority granted): %w", err)
