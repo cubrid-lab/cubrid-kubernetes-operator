@@ -111,8 +111,8 @@ what the marker shows, a slave that stopped applying.
 
 **Data rules.** The rules of the scenario contract are checked against the
 client's history, on each member read directly with `csql` and through both
-Services. Rows a member lacks can mean a slave that has not applied the last
-rows yet. While those are the only violations, the rows are read again until
+Services. Rows a slave or the read-only Service lacks can mean a slave that
+has not applied the last rows yet. While those are the only violations, the rows are read again until
 the rules hold or `-data-check-within` passes. Any other violation, such as a
 rolled-back row or wrong values, fails the run at once. The last report read
 is kept in every case.
@@ -132,7 +132,7 @@ The evidence directory holds `summary.json`, `junit.xml` and these files:
 - `LAB01/data-check.json`: the last data-rule report.
 
 `formationSeconds` runs from the return of the request that created the
-cluster until the run first saw the whole starting state. Each reading takes
+cluster until the reading that began the stable period that held. Each reading takes
 three `kubectl exec` calls and is repeated every `-poll`, so it is an upper
 bound. `dataRulesHeldAfterSeconds`
 runs from the client's last answer until the data rules held everywhere.

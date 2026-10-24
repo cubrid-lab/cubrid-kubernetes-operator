@@ -859,3 +859,44 @@ func TestRunHARefusesASeedSecretWithoutBothKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestRunHAStartsTheStablePeriodOverWhenTheMasterChanges(t *testing.T) {
+	cfg := testHAConfig(t)
+	cfg.StableFor = 100 * time.Millisecond
+	cfg.Poll = 10 * time.Millisecond
+	cfg.Timeout = 5 * time.Second
+	f := newHAFixture(t, cfg)
+	// After the first full reading the master moves once, with the status.
+	go func() {
+		for {
+			f.mu.Lock()
+			read := f.heartbeats
+			if read >= haMemberCount {
+				f.roles[testHAPrimary], f.roles[testMemberHA0] = roleSlave, roleMaster
+				f.mu.Unlock()
+				if err := f.setPrimary(t.Context(), testMemberHA0); err != nil {
+					t.Error(err)
+				}
+				return
+			}
+			f.mu.Unlock()
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() error = %v", err)
+	}
+	if rec := readHARecord(t, cfg.EvidenceDir); rec.StartingState.Master != testMemberHA0 {
+		t.Fatalf("starting state = %+v, want the master after the move", rec.StartingState)
+	}
+}
+
+// setPrimary writes status.currentPrimary as the Operator would.
+func (f *haFixture) setPrimary(ctx context.Context, primary string) error {
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := f.store.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
+		return err
+	}
+	cluster.Status.CurrentPrimary = primary
+	return f.store.Update(ctx, cluster)
+}

@@ -71,6 +71,10 @@ const (
 	roleSlave     = "slave"
 )
 
+// databasePhaseFailed is the status.databases[].phase of a bootstrap that
+// failed and is not tried again (DatabaseStatus.Phase).
+const databasePhaseFailed = "Failed"
+
 // startingConditions are the conditions S01's starting state needs True.
 var startingConditions = []string{"Ready", "HAReady", "PrimaryResolved", "RoutingReady"}
 
@@ -252,7 +256,8 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		scenario.Measurements = h.measurements()
 		if runErr == nil {
 			scenario.Result = evidence.Pass
-			scenario.Reason = "S01's starting state was reached and the data rules held on every member and both Services"
+			scenario.Reason = "LAB01's starting state, a subset of S01's, held for the stable period, and the data " +
+				"rules held on every member and both Services"
 		} else {
 			if owned != nil {
 				scenario.Result = evidence.Fail
@@ -531,7 +536,7 @@ func (h *haRun) startingState(ctx context.Context, created *databasev1alpha1.Cub
 // a bootstrap that failed as an error: it does not start again by itself.
 func clusterReady(cluster *databasev1alpha1.CubridCluster) (string, error) {
 	for _, db := range cluster.Status.Databases {
-		if db.Phase == string(databasev1alpha1.BootstrapFailed) {
+		if db.Phase == databasePhaseFailed {
 			reason := "no reason recorded"
 			if c := meta.FindStatusCondition(cluster.Status.Conditions, "BootstrapReady"); c != nil {
 				reason = c.Reason + ": " + c.Message
@@ -778,10 +783,31 @@ func (h *haRun) runWorkload(ctx context.Context) (time.Time, error) {
 }
 
 // lagging is a violation a slave that has not applied the last rows yet
-// can cause: a row it lacks. Every other violation fails at once.
-func lagging(v workload.Violation) bool {
-	return v.Rule == workload.RuleMissing ||
-		(v.Rule == workload.RuleMembersDiverge && strings.HasPrefix(v.Detail, "present on "))
+// can cause: a row a slave, or the read-only Service in front of the slaves,
+// lacks. Every other violation fails at once, a row the master or the
+// read-write Service lacks among them.
+func (h *haRun) lagging(member string, v workload.Violation) bool {
+	if v.Rule == workload.RuleMembersDiverge {
+		return strings.HasPrefix(v.Detail, "present on ")
+	}
+	return v.Rule == workload.RuleMissing && (member == "ro" || slices.Contains(h.rec.StartingState.Slaves, member))
+}
+
+// stopper returns the first violation that lag cannot explain, if any.
+func (h *haRun) stopper(r workload.Report) (string, workload.Violation, bool) {
+	for _, name := range slices.Sorted(maps.Keys(r.Members)) {
+		for _, v := range r.Members[name].Violations {
+			if !h.lagging(name, v) {
+				return name, v, true
+			}
+		}
+	}
+	for _, v := range r.Diverged {
+		if !h.lagging("", v) {
+			return "", v, true
+		}
+	}
+	return "", workload.Violation{}, false
 }
 
 // checkData applies the data rules to every member, read directly, and to
@@ -817,13 +843,12 @@ func (h *haRun) checkData(ctx context.Context, answered time.Time) error {
 			}
 		}
 		final := time.Since(answered) >= h.cfg.DataCheckWithin || ctx.Err() != nil
-		if readErr == nil && !final {
-			for _, v := range append(slices.Concat(memberViolations(*report)...), report.Diverged...) {
-				if !lagging(v) {
-					final = true
-					break
-				}
-			}
+		var stopMember string
+		var stopViolation workload.Violation
+		stopped := false
+		if readErr == nil {
+			stopMember, stopViolation, stopped = h.stopper(*report)
+			final = final || stopped
 		}
 		if final {
 			if err := keep(); err != nil {
@@ -833,6 +858,9 @@ func (h *haRun) checkData(ctx context.Context, answered time.Time) error {
 				return errors.Join(fmt.Errorf("read the ledger rows: %w", readErr), ctx.Err())
 			}
 			member, v, total := report.FirstViolation(append(slices.Clone(h.members), "rw", "ro"), "")
+			if stopped {
+				member, v = stopMember, stopViolation
+			}
 			return errors.Join(fmt.Errorf("the data rules did not hold: %s on %s for %s: %s (%d violations in all)",
 				v.Rule, cmp.Or(member, "the members"), v.OpID, v.Detail, total), readErr)
 		}
@@ -846,14 +874,6 @@ func (h *haRun) checkData(ctx context.Context, answered time.Time) error {
 // readSlack is how long one reading of the rows may take beyond the data
 // check window.
 const readSlack = 30 * time.Second
-
-func memberViolations(r workload.Report) [][]workload.Violation {
-	out := make([][]workload.Violation, 0, len(r.Members))
-	for _, name := range slices.Sorted(maps.Keys(r.Members)) {
-		out = append(out, r.Members[name].Violations)
-	}
-	return out
-}
 
 // readRows reads the ledger rows of every member, not through a Broker, and
 // through both Services.
