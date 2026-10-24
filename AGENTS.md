@@ -133,6 +133,34 @@ mandatory. Optional AI reviews are **advisory**.
    safety/HA/backup and release checks, and final maintainer merge
    decision. No CI result or AI summary grants automatic approval.
 
+## PR overlap, priority, and readiness
+
+- Before starting a PR, compare the assigned issue's decision, acceptance,
+  phase prerequisites and owner against related open PRs and recent changes
+  already merged to `main`. Name `Supersedes #N`, `Depends on #N` or
+  `Parallel to #N` and the reason in the PR, or explicitly say `None`.
+- Before merging, recheck `main`, overlapping PRs, required Go/Kind checks
+  and any required *real VM-lab/SQL* evidence. A green Kind job or an AI
+  summary cannot satisfy a real fault, recovery or release gate. An unresolved
+  safety/ADR decision stops only dependent changes; independent validated
+  work may still proceed.
+- After a canonical change merges, reconcile displaced PRs and linked child
+  issues promptly. Close a superseded PR with its replacement link or
+  document remaining independent scope. Do not close tracking issues until
+  their own scenario-level acceptance is verified. Preserve actual ownership
+  and contributor discussion.
+- When a policy or execution plan changes, compare active issues, labels,
+  PR instructions and templates against the recorded decision. Fix stale
+  prerequisites and contradictory priorities or document a narrow follow-up.
+- A `priority:` label expresses impact and urgency, a `size:` label effort,
+  and the next executable task also depends on readiness, agreed dependencies
+  and phase safety. Prioritize Critical write-safety/HA and High recovery
+  evidence ahead of optional cleanup without bypassing lab prerequisites.
+  Record exceptions in the repository-local issue, not a shared tracker.
+
+This is a maintainer coordination routine, not a new CI/merge gate or
+permission to take an assigned task without a handoff.
+
 ## Working on an Issue
 
 Follow [CONTRIBUTING.md - Development workflow](CONTRIBUTING.md#development-workflow).
