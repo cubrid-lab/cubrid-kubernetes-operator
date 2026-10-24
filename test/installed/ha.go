@@ -141,7 +141,9 @@ type startingState struct {
 	Master           string   `json:"master"`
 	Slaves           []string `json:"slaves"`
 	CurrentPrimary   string   `json:"currentPrimary"`
-	FormationSeconds float64  `json:"formationSeconds"`
+	// FormationSeconds is set for the starting state only; the roles read at
+	// the end leave it out.
+	FormationSeconds float64 `json:"formationSeconds,omitempty"`
 }
 
 type haRecord struct {
