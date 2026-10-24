@@ -98,6 +98,12 @@ type haFixture struct {
 	foreignStatefulSet bool
 	// clientCreatedAt counts heartbeat readings before the client was created.
 	heartbeats, heartbeatsBeforeClient int
+	// managerDeleted is set when the manager Pod was deleted; replacement
+	// says what the fake Operator does then.
+	managerDeleted bool
+	replacement    func(ctx context.Context, c client.WithWatch)
+	// backgroundHistory returns what a background client recorded.
+	backgroundHistory func(id string) string
 
 	writes  []string
 	deletes []string
@@ -174,6 +180,9 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 			}
 		},
 		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if pod, ok := obj.(*corev1.Pod); ok && pod.Namespace == cfg.OperatorNamespace {
+				return f.deleteManager(ctx, c, pod, opts...)
+			}
 			ns, ok := obj.(*corev1.Namespace)
 			if !ok || ns.Name != cfg.Namespace {
 				t.Fatalf("runner deleted %T %s", obj, obj.GetName())
@@ -350,6 +359,13 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 	switch {
 	case strings.HasPrefix(script, "workload init"):
 		return f.initOutput, f.initErr
+	case strings.Contains(script, "nohup workload run"), strings.HasPrefix(script, "kill "):
+		return "", nil
+	case strings.HasPrefix(script, `grep -c '"acknowledged"'`):
+		return "12\n", nil
+	case strings.HasPrefix(script, "sleep 1; cat /tmp/"):
+		id := strings.TrimSuffix(strings.TrimPrefix(script, "sleep 1; cat /tmp/"), ".jsonl")
+		return f.backgroundHistory(id), nil
 	case strings.Contains(script, "RO_JDBC_URL") && strings.Contains(script, "workload run"):
 		return roRefusalHistory(f.roRefusal), nil
 	case strings.Contains(script, "workload run"):

@@ -122,6 +122,51 @@ the starting state, so none was replaced or restarted. CUBRID must report
 the same master and slaves, and `status.currentPrimary` the same master.
 The manager must still be the same Pods.
 
+## S06 restart
+
+With `-fault operator-restart` the run goes on after LAB01 passed, on the
+same cluster, with S06 `restart` of the scenario contract. The lane is then
+`lab-installed-ha-s06`, and it requires both LAB01 and S06/restart.
+
+1. Two clients start writing through `<cluster>-rw` in the background, each
+   until ten operations are acknowledged.
+2. The run deletes the installed manager's Pod, with no grace period and with
+   that Pod's UID as a precondition. The Pod is the one verified through
+   Deployment, ReplicaSet and Pod ownership. The fault is confirmed when that
+   Pod no longer exists.
+3. The run waits for all of these to hold together:
+   - the Deployment's replacement Pod is available;
+   - `status.lastObservedTime` is later than the moment the old Pod was
+     confirmed gone, and later than the start of the replacement's
+     container, so the status is the replacement's own;
+   - the status names the same master, with the starting conditions `True`;
+   - CUBRID reports the same master.
+
+   A different master fails the run at once. The time from the fault to
+   this point (`operatorBackWithin`) must be within `-resync-limit`
+   (`operator_resync_limit`, default 2 minutes).
+4. The clients keep running for `-stable-period` (`stable_period`, default
+   30 seconds) and are then stopped. After the fault:
+   - no client answer may be a failure or unknown;
+   - each client must be acknowledged without interruption for at least the
+     stable period.
+
+   An operation a client was stopped in has no answer. The data rules allow
+   it either way.
+5. Every member must still be the same Pod and container, and CUBRID must
+   report the same master.
+6. The data rules must hold on every member and both Services, over
+   everything every client recorded.
+
+This adds one write outside the run namespace: the deletion of the manager's
+Pod. The account needs `delete` on Pods in the Operator's namespace. The
+Deployment, which the lab's GitOps keeps, starts the replacement; the run
+does not touch the Deployment.
+
+S06 does not check the slaves' applier fail count, which the Kind step does.
+Run the [observer](lab-observer.md) on the same cluster during the run, so
+that the status and metrics are followed outside the run's own checks.
+
 ## Evidence
 
 The evidence directory holds `summary.json`, `junit.xml` and these files:
@@ -130,6 +175,12 @@ The evidence directory holds `summary.json`, `junit.xml` and these files:
   Secret's source, operation counts and cleanup;
 - `LAB01/history.jsonl`: the client's history;
 - `LAB01/data-check.json`: the last data-rule report.
+- with `-fault operator-restart`, `S06/restart/record.json` (the master, the
+  manager before and after, when the old Pod was gone, when the replacement
+  started and the status time it wrote, the members before and after),
+  `S06/restart/timeline.jsonl` (the fault flow) and
+  `S06/restart/data-check.json`. The clients' operations are in
+  `LAB01/history.jsonl` with the rest.
 
 `formationSeconds` runs from the return of the request that created the
 cluster until the reading that began the stable period that held. Each reading takes
