@@ -172,12 +172,13 @@ func (w window) length() string {
 }
 
 // startClient starts a workload client that keeps writing through the
-// read-write Service until it is stopped, and waits until ten of its
-// operations were acknowledged.
+// read-write Service, and every fourth operation reads its last acknowledged
+// write back (#294), until it is stopped. It waits until ten of its operations
+// were acknowledged.
 func (r *haRun) startClient(id string) {
 	file := "/tmp/" + id
 	_, err := r.client(context.Background(), fmt.Sprintf("CLIENT_ID=%s OPS=100000 INTERVAL_MS=100 ROLLBACK_EVERY=7"+
-		" nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", id, file))
+		" READ_EVERY=4 nohup workload run > %[2]s.jsonl 2> %[2]s.err & echo $! > %[2]s.pid", id, file))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	r.mu.Lock()
 	r.running[id] = true

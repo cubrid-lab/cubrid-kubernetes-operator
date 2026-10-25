@@ -39,12 +39,17 @@ import java.time.Instant;
  *
  * <p>Settings come from the environment: JDBC_URL (required), DB_USER (default dba), DB_PASSWORD,
  * CLIENT_ID (default c1), OPS (default 20), START_SEQ (default 1), INTERVAL_MS (default 0),
- * ROLLBACK_EVERY (default 5: every fifth operation is rolled back; 0 for none), ENDPOINT (default
- * rw, copied into the history).
+ * ROLLBACK_EVERY (default 5: every fifth operation is rolled back; 0 for none), READ_EVERY (default
+ * 0 for none: with N, every Nth operation reads back the row of the client's last acknowledged
+ * insert instead of writing; it takes precedence over ROLLBACK_EVERY), ENDPOINT (default rw, copied
+ * into the history).
  */
 public final class Workload {
   /** The note of a row that is written and then rolled back. */
   static final String ROLLED_BACK_NOTE = "must-not-exist";
+
+  /** Starts the error of a read that found its row missing or different (test/workload). */
+  static final String READ_MISMATCH = "read mismatch:";
 
   private static final PrintStream OUT = new PrintStream(System.out, true, StandardCharsets.UTF_8);
 
@@ -54,6 +59,13 @@ public final class Workload {
   private final String client = env("CLIENT_ID", "c1");
   private final String endpoint = env("ENDPOINT", "rw");
   private Connection connection;
+
+  /** The last acknowledged insert of this client: its operation ID, sequence, amount and note. */
+  private String lastOpId;
+
+  private int lastSeq;
+  private int lastAmount;
+  private String lastNote;
 
   public static void main(String[] args) throws Exception {
     if (args.length == 0) {
@@ -118,9 +130,14 @@ public final class Workload {
     int start = Integer.parseInt(env("START_SEQ", "1"));
     long interval = Long.parseLong(env("INTERVAL_MS", "0"));
     int rollbackEvery = Integer.parseInt(env("ROLLBACK_EVERY", "5"));
+    int readEvery = Integer.parseInt(env("READ_EVERY", "0"));
     for (int seq = start; seq < start + ops; seq++) {
       boolean rollback = rollbackEvery > 0 && seq % rollbackEvery == 0;
-      operation(seq, rollback);
+      if (readEvery > 0 && seq % readEvery == 0 && lastOpId != null) {
+        read(seq);
+      } else {
+        operation(seq, rollback);
+      }
       if (interval > 0) {
         Thread.sleep(interval);
       }
@@ -163,10 +180,53 @@ public final class Workload {
     try {
       connection.commit();
       event(seq, op, opId, "acknowledged", 0, null, null);
+      lastOpId = opId;
+      lastSeq = seq;
+      lastAmount = amount;
+      lastNote = note;
     } catch (SQLException e) {
       discard();
       event(seq, op, opId, "unknown", 0, null, describe(e));
     }
+  }
+
+  /**
+   * Reads back the row of the last acknowledged insert and compares it with what was sent. It is
+   * acknowledged only when the row is there with those values. A row that is missing or differs
+   * fails with an error that starts with READ_MISMATCH; a SQL error fails with the error.
+   */
+  private void read(int seq) {
+    String op = "read";
+    String opId = String.format("%s-%06d", client, seq);
+    String target = lastOpId;
+    event(seq, op, opId, "attempted", lastAmount, lastNote, null, target);
+    String mismatch;
+    try {
+      Connection c = connect();
+      try (PreparedStatement s =
+          c.prepareStatement("SELECT client_id, seq, amount, note FROM ledger WHERE op_id = ?")) {
+        s.setString(1, target);
+        try (ResultSet r = s.executeQuery()) {
+          if (!r.next()) {
+            mismatch = target + " not found";
+          } else {
+            String found = r.getString(1) + "/" + r.getInt(2) + "/" + r.getInt(3) + "/" + r.getString(4);
+            String sent = client + "/" + lastSeq + "/" + lastAmount + "/" + lastNote;
+            mismatch = found.equals(sent) ? null : target + " has " + found + ", sent " + sent;
+          }
+        }
+      }
+      c.commit();
+    } catch (SQLException e) {
+      discard();
+      event(seq, op, opId, "failed", 0, null, describe(e));
+      return;
+    }
+    if (mismatch != null) {
+      event(seq, op, opId, "failed", 0, null, READ_MISMATCH + " " + mismatch);
+      return;
+    }
+    event(seq, op, opId, "acknowledged", 0, null, null);
   }
 
   private void dump() throws SQLException {
@@ -228,6 +288,18 @@ public final class Workload {
 
   private void event(
       int seq, String op, String opId, String event, int amount, String note, String error) {
+    event(seq, op, opId, event, amount, note, error, null);
+  }
+
+  private void event(
+      int seq,
+      String op,
+      String opId,
+      String event,
+      int amount,
+      String note,
+      String error,
+      String target) {
     StringBuilder line = new StringBuilder(160);
     line.append("{\"t\":").append(quote(Instant.now().toString()));
     line.append(",\"client\":").append(quote(client));
@@ -239,6 +311,9 @@ public final class Workload {
     if (note != null) {
       line.append(",\"amount\":").append(amount);
       line.append(",\"note\":").append(quote(note));
+    }
+    if (target != null) {
+      line.append(",\"target\":").append(quote(target));
     }
     if (error != null) {
       line.append(",\"error\":").append(quote(error));
