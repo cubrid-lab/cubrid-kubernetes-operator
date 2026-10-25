@@ -210,7 +210,12 @@ is refused before anything is done.
   environment; the `CubridBackup` names only the bucket and the prefix.
 - `-backup-limit` (default 15 minutes) is the value of `backup_limit` for
   this run. The scenario contract leaves `backup_limit` unset.
-- `-object-store-service` is the object store's Service. The run opens
+- `-object-store-service` is the object store's Service. It must be the
+  Service the cluster's `spec.objectStorage` endpoint (`-seed-endpoint`)
+  names: `<service>.<namespace>`, with `.svc` or `.svc.cluster.local` or
+  neither, and the same port (80 or 443 when the endpoint has none). Another
+  Service blocks S11 before anything is downloaded: the run would check
+  another store than the backup wrote to. The run opens
   `kubectl port-forward` to it through its target snapshot, only for its own
   download. The port-forward ends on every path out of S11, and its output
   is read to the end so that kubectl never blocks writing it. With
@@ -265,23 +270,36 @@ is refused before anything is done.
    the manifest does not name are recorded, not failed: a restore reads only
    what the manifest names.
 5. **Credentials.** Neither key of the seed Secret may be in any status the
-   run recorded while it waited, in the backup's status at the end, in the
-   manifest, or in any Event of the run namespace. The run looks for each key
+   run read while it waited, the whole status at every reading, in the
+   backup's status at the end, in the manifest, or in any Event of the run
+   namespace. The run looks for each key
    in every encoding the evidence redaction removes (`evidence.SecretForms`:
    as it is, URL- and JSON-escaped, and in the four base64 alphabets). One
-   found must never happen. The Operator's logs are not read; the record
-   says so.
+   found must never happen, also when the backup then fails or cannot be
+   read. The Operator's logs are not read; the record says so.
 
 The artifact is left in the bucket for S12; the record says so. Deleting the
 namespace removes the `CubridBackup`, not the artifact.
 
 A run that ends, for example at its `-timeout`, before S11 is judged leaves
 S11 blocked, not failed. So does an API error while the run reads the
-backup, such as a refused `get`; a port-forward or a client that cannot be
-opened; and a list of the Events that is refused: the run could not check.
-S11 fails when the backup ends `Failed`, is replaced, or passes
-`-backup-limit`. When the record cannot be written, a pass becomes a
-failure and a blocked S11 stays blocked.
+backup, such as a refused `get`, or readings that keep failing, for example
+with `503`, until `-backup-limit` passes, so that the phase at the limit is
+not known; a port-forward or a client that cannot be opened; and a list of
+the Events that is refused: the run could not check. S11 fails when the
+backup ends `Failed`, is replaced, or is read but neither `Completed` nor
+`Failed` when `-backup-limit` passes.
+
+What was confirmed stays: when the run has already found something that
+must never happen or an artifact that does not match, an error that stops a
+later check, such as a reset connection to the store or a refused list of
+the Events, is added to the reason of the failure; it does not turn it into
+a blocked S11. `objectsNotInManifest` is `unknown` unless the attempt prefix
+was listed.
+
+When `S11/complete/record.json` or `S11/complete/manifest.json` cannot be
+written, a pass becomes a failure, and a blocked or failed S11 keeps its
+result, with the file that could not be written added to the reason.
 `-timeout` must cover LAB01 and `-backup-limit`.
 
 The account needs, beyond LAB01's:

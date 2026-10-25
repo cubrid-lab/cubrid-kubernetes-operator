@@ -117,6 +117,8 @@ type haFixture struct {
 	backupCreated func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error
 	backupRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	marker        func(script string) (string, error)
+	// eventsErr answers a list of Events.
+	eventsErr error
 
 	writes  []string
 	deletes []string
@@ -200,6 +202,12 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				t.Fatalf("runner attempted a forbidden write: %T", obj)
 				return errors.New("forbidden write")
 			}
+		},
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*corev1.EventList); ok && f.eventsErr != nil {
+				return f.eventsErr
+			}
+			return c.List(ctx, list, opts...)
 		},
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
 			opts ...client.GetOption) error {

@@ -55,6 +55,11 @@ const (
 	testClusterUID     = "ha-cluster"
 	// testCredential is in every refusal of a credential found.
 	testCredential = "credential"
+	// testReset, testUnreadable and testForbidden are in the reasons of a
+	// store error, a missing object and a refused request.
+	testReset      = "connection reset"
+	testUnreadable = "could not be read"
+	testForbidden  = "forbidden"
 )
 
 func testS11Config(t *testing.T) HAConfig {
@@ -64,6 +69,8 @@ func testS11Config(t *testing.T) HAConfig {
 	cfg.BackupBucket = testBackupBucket
 	cfg.BackupLimit = 5 * time.Second
 	cfg.ObjectStoreService = "object-store/seaweedfs:8333"
+	// The members reach the same Service the run port-forwards to.
+	cfg.SeedEndpoint = "seaweedfs.object-store.svc:8333"
 	return cfg
 }
 
@@ -424,7 +431,7 @@ func TestRunS11CompleteFailsOnTheArtifact(t *testing.T) {
 			a.objects[testFirstBackupKey] = bytes.Repeat([]byte("w"), 1000)
 		}, want: "sha256"},
 		"object missing": {tamper: func(a *fakeArtifact) { delete(a.objects, testFirstBackupKey) },
-			want: "could not be read"},
+			want: testUnreadable},
 		"cluster UID": {tamper: func(a *fakeArtifact) { a.manifest.ClusterUID = "another-cluster" },
 			want: "clusterUID"},
 		"source instance": {tamper: func(a *fakeArtifact) { a.manifest.SourceInstance = testHAPrimary },
@@ -666,7 +673,7 @@ func TestRunS11CompleteIsBlockedWhenTheArtifactCannotBeChecked(t *testing.T) {
 				}
 				return nil
 			}
-		}, want: "connection reset"},
+		}, want: testReset},
 		"the manifest cannot be read": {getErr: func(context.CancelFunc) func(context.Context, string) error {
 			return func(_ context.Context, key string) error {
 				if strings.HasSuffix(key, "/manifest.json") {
@@ -735,7 +742,7 @@ func TestRunS11CompleteIsBlockedByAnAPIErrorReadingTheBackup(t *testing.T) {
 		return nil
 	}
 	err := f.runner.RunHA(t.Context(), cfg)
-	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+	if err == nil || !strings.Contains(err.Error(), testForbidden) {
 		t.Fatalf("RunHA() error = %v, want the refused reading", err)
 	}
 	if _, _, s11 := s11Scenario(t, cfg.EvidenceDir); s11.Result != evidence.Blocked {
@@ -774,5 +781,193 @@ func TestRunS11CompleteStaysBlockedWhenItsEvidenceCannotBeWritten(t *testing.T) 
 	_, _, s11 := s11Scenario(t, cfg.EvidenceDir)
 	if s11.Result != evidence.Blocked || !strings.Contains(s11.Reason, "write S11 evidence") {
 		t.Fatalf("S11 = %+v, want blocked, with the evidence that could not be written", s11)
+	}
+}
+
+func TestRunS11CompleteIsBlockedWhenTheBackupCannotBeRead(t *testing.T) {
+	cfg := testS11Config(t)
+	cfg.BackupLimit = 100 * time.Millisecond
+	f := newS11Fixture(t, cfg)
+	f.onRead = func(int) error { return apierrors.NewServiceUnavailable("etcd is unavailable") }
+	err := f.runner.RunHA(t.Context(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "etcd is unavailable") {
+		t.Fatalf("RunHA() error = %v, want the reading that failed", err)
+	}
+	if _, _, s11 := s11Scenario(t, cfg.EvidenceDir); s11.Result != evidence.Blocked {
+		t.Fatalf("S11 = %+v, want blocked: the backup was never read", s11)
+	}
+}
+
+func TestRunS11CompleteKeepsAConfirmedFailureWhenAFurtherCheckCannotFinish(t *testing.T) {
+	reset := func(_ context.Context, key string) error {
+		if strings.HasSuffix(key, "/backup/appdb_bkvinf") {
+			return errors.New("connection reset by peer")
+		}
+		return nil
+	}
+	forbidden := apierrors.NewForbidden(corev1.Resource("events"), "", errors.New("RBAC"))
+	for name, tc := range map[string]struct {
+		tamper    func(*fakeArtifact)
+		getErr    func(context.Context, string) error
+		eventsErr error
+		want      []string
+		never     bool
+	}{
+		"missing object, then a store error": {tamper: func(a *fakeArtifact) { delete(a.objects, testFirstBackupKey) },
+			getErr: reset, want: []string{testUnreadable, testReset}, never: true},
+		"checksum mismatch, then a store error": {tamper: func(a *fakeArtifact) {
+			a.objects[testFirstBackupKey] = bytes.Repeat([]byte("w"), 1000)
+		}, getErr: reset, want: []string{"does not match", testReset}},
+		"missing object, then the Events refused": {tamper: func(a *fakeArtifact) {
+			delete(a.objects, testFirstBackupKey)
+		}, eventsErr: forbidden, want: []string{testUnreadable, testForbidden}, never: true},
+		"checksum mismatch, then the Events refused": {tamper: func(a *fakeArtifact) {
+			a.objects[testFirstBackupKey] = bytes.Repeat([]byte("w"), 1000)
+		}, eventsErr: forbidden, want: []string{"does not match", testForbidden}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS11Config(t)
+			f := newS11Fixture(t, cfg)
+			f.tamper, f.store.getErr, f.eventsErr = tc.tamper, tc.getErr, tc.eventsErr
+			if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+				t.Fatal("RunHA() passed")
+			}
+			_, _, s11 := s11Scenario(t, cfg.EvidenceDir)
+			if s11.Result != evidence.Fail || (len(s11.NeverEvents) > 0) != tc.never {
+				t.Fatalf("S11 = %+v, want the confirmed failure kept", s11)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(s11.Reason, want) {
+					t.Fatalf("S11 reason = %q, want %q", s11.Reason, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRunS11CompleteDoesNotCountObjectsOutsideAManifestItDidNotList(t *testing.T) {
+	cfg := testS11Config(t)
+	f := newS11Fixture(t, cfg)
+	f.tamper = func(a *fakeArtifact) { a.uri = strings.Replace(a.uri, testBackupBucket, "another-bucket", 1) }
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	if _, _, s11 := s11Scenario(t, cfg.EvidenceDir); s11.Measurements["objectsNotInManifest"] != evidence.Unknown {
+		t.Fatalf("S11 measurements = %v, want objectsNotInManifest unknown", s11.Measurements)
+	}
+}
+
+func TestRunS11CompleteFailsOnACredentialInAStatusFieldOfAnEarlierPhase(t *testing.T) {
+	cfg := testS11Config(t)
+	f := newS11Fixture(t, cfg)
+	// Not a field of the recorded phases, and gone from the final status.
+	f.tamperPhase = func(s *databasev1alpha1.CubridBackupStatus) {
+		s.OperationRef = ""
+		if s.Phase == databasev1alpha1.BackupPhaseRunning {
+			s.OperationRef = "op-" + testAccessKey
+		}
+	}
+	err := f.runner.RunHA(t.Context(), cfg)
+	if err == nil || !strings.Contains(err.Error(), testCredential) {
+		t.Fatalf("RunHA() error = %v, want the credential in the Running status", err)
+	}
+	requireNoSecretInEvidence(t, cfg.EvidenceDir)
+}
+
+func TestRunS11CompleteIsBlockedWhenTheObjectStoreServiceIsNotTheClusters(t *testing.T) {
+	for name, service := range map[string]string{
+		"another Service":   "object-store/minio:8333",
+		"another namespace": "storage/seaweedfs:8333",
+		"another port":      "object-store/seaweedfs:9000",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS11Config(t)
+			cfg.ObjectStoreService = service
+			f := newS11Fixture(t, cfg)
+			f.runner.forward = func(context.Context, string, string, string) (string, func(), error) {
+				t.Error("port-forward to a Service the cluster does not use")
+				return "", nil, errors.New("not expected")
+			}
+			err := f.runner.RunHA(t.Context(), cfg)
+			if err == nil || !strings.Contains(err.Error(), "spec.objectStorage") {
+				t.Fatalf("RunHA() error = %v, want the Service the cluster does not use", err)
+			}
+			if _, _, s11 := s11Scenario(t, cfg.EvidenceDir); s11.Result != evidence.Blocked {
+				t.Fatalf("S11 = %+v, want blocked", s11)
+			}
+		})
+	}
+}
+
+func TestRunS11CompleteStaysBlockedWhenTheManifestCannotBeWritten(t *testing.T) {
+	cfg := testS11Config(t)
+	f := newS11Fixture(t, cfg)
+	// The Events cannot be listed: S11 is blocked after the manifest was read.
+	f.eventsErr = apierrors.NewForbidden(corev1.Resource("events"), "", errors.New("RBAC"))
+	forward := f.runner.forward
+	f.runner.forward = func(ctx context.Context, namespace, service, port string) (string, func(), error) {
+		if err := os.MkdirAll(filepath.Join(cfg.EvidenceDir, s11ManifestFile, "in-the-way"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return forward(ctx, namespace, service, port)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	_, _, s11 := s11Scenario(t, cfg.EvidenceDir)
+	if s11.Result != evidence.Blocked || !strings.Contains(s11.Reason, "write the manifest") {
+		t.Fatalf("S11 = %+v, want blocked, with the manifest that could not be written", s11)
+	}
+}
+
+func TestRunS11CompleteFailsWhenTheManifestOfAPassCannotBeWritten(t *testing.T) {
+	cfg := testS11Config(t)
+	f := newS11Fixture(t, cfg)
+	forward := f.runner.forward
+	f.runner.forward = func(ctx context.Context, namespace, service, port string) (string, func(), error) {
+		if err := os.MkdirAll(filepath.Join(cfg.EvidenceDir, s11ManifestFile, "in-the-way"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return forward(ctx, namespace, service, port)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	_, _, s11 := s11Scenario(t, cfg.EvidenceDir)
+	if s11.Result != evidence.Fail || !strings.Contains(s11.Reason, "write the manifest") {
+		t.Fatalf("S11 = %+v, want a failure, with the manifest that could not be written", s11)
+	}
+}
+
+func TestRunS11CompleteReportsACredentialSeenBeforeTheBackupEnded(t *testing.T) {
+	for name, tc := range map[string]struct {
+		phases []databasev1alpha1.CubridBackupPhase
+		onRead func(read int) error
+	}{
+		"then Failed": {phases: []databasev1alpha1.CubridBackupPhase{databasev1alpha1.BackupPhaseRunning,
+			databasev1alpha1.BackupPhaseFailed}},
+		"then unreadable": {phases: []databasev1alpha1.CubridBackupPhase{databasev1alpha1.BackupPhaseRunning},
+			onRead: func(read int) error {
+				if read > 1 {
+					return apierrors.NewServiceUnavailable("etcd is unavailable")
+				}
+				return nil
+			}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS11Config(t)
+			cfg.BackupLimit = 200 * time.Millisecond
+			f := newS11Fixture(t, cfg)
+			f.phases, f.onRead = tc.phases, tc.onRead
+			f.tamperPhase = func(s *databasev1alpha1.CubridBackupStatus) { s.OperationRef = "op-" + testAccessKey }
+			if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+				t.Fatal("RunHA() passed")
+			}
+			_, _, s11 := s11Scenario(t, cfg.EvidenceDir)
+			if s11.Result != evidence.Fail || len(s11.NeverEvents) == 0 ||
+				!strings.Contains(s11.NeverEvents[0], testCredential) {
+				t.Fatalf("S11 = %+v, want a failure with the credential that must never be in a status", s11)
+			}
+		})
 	}
 }
