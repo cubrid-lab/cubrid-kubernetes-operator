@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -57,11 +58,26 @@ esac
 
 // brokerFixture runs broker-entrypoint.sh with a stand-in for the cubrid CLI.
 type brokerFixture struct {
-	t     *testing.T
-	root  string
-	tools string
-	calls string
-	env   map[string]string
+	t        *testing.T
+	root     string
+	procRoot string
+	tools    string
+	calls    string
+	env      map[string]string
+}
+
+// addProcess adds a process with the given command name to the script's
+// process list, and returns its directory.
+func (f *brokerFixture) addProcess(pid int, comm string) string {
+	f.t.Helper()
+	dir := filepath.Join(f.procRoot, strconv.Itoa(pid))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "comm"), []byte(comm+"\n"), 0o644); err != nil {
+		f.t.Fatal(err)
+	}
+	return dir
 }
 
 func newBrokerFixture(t *testing.T) *brokerFixture {
@@ -90,8 +106,15 @@ func newBrokerFixture(t *testing.T) *brokerFixture {
 	write(filepath.Join(conf, "cubrid_broker_rw.conf"), brokerConfRW, 0o644)
 	write(filepath.Join(conf, "cubrid_broker_ro.conf"), brokerConfRO, 0o644)
 	write(filepath.Join(conf, "databases.txt"), brokerDBsTxt, 0o644)
-	f := &brokerFixture{t: t, root: root, tools: writeTools(t, root, nil), calls: filepath.Join(root, "calls")}
+	// The script's process list: empty, so no Broker runs until a test adds one.
+	procRoot := filepath.Join(root, "proc")
+	if err := os.MkdirAll(procRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &brokerFixture{t: t, root: root, procRoot: procRoot, tools: writeTools(t, root, nil),
+		calls: filepath.Join(root, "calls")}
 	f.env = map[string]string{
+		"BROKER_PROC_ROOT":      procRoot,
 		"CUBRID":                filepath.Join(root, "cubrid"),
 		envDatabases:            filepath.Join(root, "databases"),
 		"BROKER_CONF_DIR":       conf,
@@ -179,6 +202,44 @@ func TestBrokerEntrypoint_StartsWhateverAnEarlierBrokerLeft(t *testing.T) {
 				t.Errorf("calls = %q, want them to end with %q", calls, callBrokerUp)
 			}
 		})
+	}
+}
+
+// The script watches its Broker in the process list it is given: it keeps
+// running while a cub_broker is listed, whatever else is listed, and exits
+// non-zero once the Broker is gone (#524).
+func TestBrokerEntrypoint_WatchesTheBrokerInItsProcessList(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addProcess(7, "cub_master")
+	f.addProcess(8, "cub_broker_x")
+	broker := f.addProcess(42, "cub_broker")
+	cmd := f.command()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	// Several check intervals (0.2 s) with the Broker listed.
+	select {
+	case err := <-exited:
+		t.Fatalf("the script stopped while its Broker was listed: %v\n%s", err, out.String())
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if err := os.RemoveAll(broker); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-exited:
+		if err == nil {
+			t.Fatalf("the script exited 0 after its Broker went away:\n%s", out.String())
+		}
+	case <-time.After(exitLimit):
+		t.Fatalf("the script did not notice that its Broker went away:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "not running any more") {
+		t.Errorf("output does not say why it stopped:\n%s", out.String())
 	}
 }
 

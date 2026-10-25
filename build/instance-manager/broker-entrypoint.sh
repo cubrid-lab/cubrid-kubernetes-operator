@@ -16,6 +16,9 @@ die() { echo "[broker-entrypoint] ERROR: $*" >&2; exit 1; }
 BROKER_CONF_DIR="${BROKER_CONF_DIR:-/etc/cubrid-broker}"
 BROKER_ACCESS_MODE="${BROKER_ACCESS_MODE:-}"
 BROKER_CHECK_INTERVAL="${BROKER_CHECK_INTERVAL:-5}"
+# Where the Broker's processes are looked for. Only the tests change it, so
+# that the processes of the machine they run on do not count (#524).
+BROKER_PROC_ROOT="${BROKER_PROC_ROOT:-/proc}"
 [ -n "${CUBRID_DATABASES:-}" ] || die "CUBRID_DATABASES is not set"
 case "${BROKER_ACCESS_MODE}" in
   rw|ro) ;;
@@ -63,7 +66,7 @@ fi
 cubrid broker start
 
 broker_running() {
-  grep -qx cub_broker /proc/[0-9]*/comm 2>/dev/null
+  grep -qx cub_broker "${BROKER_PROC_ROOT}"/[0-9]*/comm 2>/dev/null
 }
 
 while [ "${terminating}" = "0" ]; do
