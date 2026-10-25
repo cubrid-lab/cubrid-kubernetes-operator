@@ -3345,7 +3345,7 @@ known.
 
 ---
 
-## POC-37 — which applier value advances on a healthy slave while a transaction stays open on the master, and stops on a slave whose applier is stuck (ADR-0006, #249) — **observation: `final_lsa` and `last_access_time` in `db_ha_apply_info` advanced on a healthy slave during an open transaction and stopped on a stuck applier, while the copied log's EOF kept advancing; the master's log carried other commits about every 6 s throughout, even idle, so whether `final_lsa` advances through an open transaction alone is not known; the insert counter stayed 0 during the open transaction**
+## POC-37 — which applier value advances on a healthy slave while a transaction stays open on the master, and stops on a slave whose applier is stuck (ADR-0006, #249) — **observation: `final_lsa` in `db_ha_apply_info` advanced on a healthy slave through an open transaction's own records, also with no other commit in the master's log (part D), and stopped on a stuck applier while the copied log's EOF kept advancing; `last_access_time` stopped with it; the insert counter stayed 0 during the open transaction; the master's other commits come from its own applier**
 
 **Question (#249).** `ReplicationHealthy` calls a slave stalled when log pages
 wait to be applied and the applier's counters have not advanced between two
@@ -3441,8 +3441,7 @@ For the log copied from `h-1`, sampled from 19:26:16 to 19:27:51:
   - A fresh pair with no client and no Broker still logged them.
     - While its slave was sampled every 5 s (saved), `commit_counter` went from 4 to 17 between 19:34:54 and 19:35:51.
     - Then, with nothing sampling between two reads (read during the run, not saved), it went from 19 to 35 between 19:36:03 and 19:37:34, about one every 6 s, and `final_lsa` moved from 147\|9512 to 148\|6688.
-  - Their source was not identified.
-  - A master without them was not available in this setup. So whether `final_lsa` advances through an open transaction **alone** is not known. On a master like this one, which keeps committing, a healthy slave's `final_lsa` kept moving and a stuck slave's did not.
+  - Part D below identifies their source and repeats part A without them.
 - **Rule this suggests (not tested as a rule):** a slave is stalled when the copied log's EOF is past `final_lsa` and `final_lsa` has not changed over the window.
 - **`last_access_time` also passed.** A working applier rewrote it every few seconds and stopped doing so in parts B and C. No sample had it change while the log stood still, so it shows that the applier works, not whether it keeps up.
 - **The counters are not a progress signal.** In part A, `insert_counter` stayed 0 for the whole open transaction. `commit_counter` rose only because of other commits, so it says nothing about the open transaction.
@@ -3455,5 +3454,38 @@ For the log copied from `h-1`, sampled from 19:26:16 to 19:27:51:
 - Part C reproduces POC-17's state once.
 - The window, the write rates and the transaction length are those above, not a sizing of the rule.
 - Whether `db_ha_apply_info` is readable through the Instance Manager's access to the slave, and at what cost, was not tried.
-- The source of the master's background commits, and a master without them, were not examined. Until they are, the suggested rule rests on this kind of master.
+- Part D removes the master's other commits by stopping its applier with a signal, which is not a state CUBRID reaches by itself.
+
+**Part D (2026-10-26): where the master's other commits come from, and part A without them.**
+
+On a new pair built the same way:
+- **Source:** `cubrid tranlist appdb@localhost` on the master listed two clients: `copylogdb` from `h-1`, and `applylogdb` from `h-0` itself, the master's own applier for the slave's copied log. The latter was shown at times as `COMMITTED`.
+- **Its row:** on the master, `db_ha_apply_info` holds that applier's row for `appdb_h-1`, whose `last_access_time` was rewritten about every 10 s.
+- **Pausing it:** `kill -STOP` on the master's `applylogdb` stopped the slave's `commit_counter`, which stayed at 24 for 60 s. It rose to 32 within 30 s of `kill -CONT`. While it was stopped, the slave's `final_lsa` still moved, from 147\|64 to 147\|2992, with no commit.
+
+So the other commits in parts A and B were the master's own applier recording its progress. Every member of a group runs such an applier for each peer's log.
+
+**Part A repeated without them.**
+1. The master's applier was stopped at 20:26:56.
+2. The client inserted 200 padded rows every 5 s for 16 rounds in one transaction, from 20:27:18 to the commit at 20:28:39 (81 s).
+3. The applier was resumed at 20:29:26.
+
+On the slave (`samples-partD`):
+
+| Time (UTC) | `final_lsa` | `required_lsa` | `insert_counter` | `commit_counter` |
+|---|---|---|---|---|
+| 20:27:17 (before) | 148\|15016 | 148\|15016 | 0 | 41 |
+| 20:27:48 (open) | 198\|13976 | 148\|15112 | 0 | 41 |
+| 20:28:35 (open) | 283\|13664 | 148\|15112 | 0 | 41 |
+| 20:28:41 (committed) | 300\|8 | 300\|8 | 3200 | 42 |
+
+With no other commit in the master's log (`commit_counter` 41 throughout), `final_lsa` still advanced by about 8 to 17 pages per sample through the open transaction's own records. At the commit, `commit_counter` rose by exactly 1 and `insert_counter` by 3200.
+
+**What part D changes.** `final_lsa` advances through an open transaction alone. The confound of part A does not explain it. The suggested rule stands:
+- a slave is stalled when the copied EOF is past `final_lsa` and `final_lsa` has not changed over the window;
+- `last_access_time` shows whether the applier works at all.
+
+In a running group, the master's own applier also commits every few seconds. Even a master with no client keeps the slave's `final_lsa` and `commit_counter` moving.
+
+Part D is one run on one pair. The rule is still not tested as a rule.
 
