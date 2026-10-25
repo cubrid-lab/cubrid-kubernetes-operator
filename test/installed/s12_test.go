@@ -93,9 +93,9 @@ type s12Fixture struct {
 	normalWrites   []string
 }
 
-func newS12Fixture(t *testing.T, cfg HAConfig) *s12Fixture {
+func newS12Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) *s12Fixture {
 	t.Helper()
-	f := &s12Fixture{s11Fixture: newS11Fixture(t, cfg),
+	f := &s12Fixture{s11Fixture: newS11Fixture(t, cfg, extra...),
 		bootPhases: []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapPreparing,
 			databasev1alpha1.BootstrapRestoring, databasev1alpha1.BootstrapSeedingReplicas,
 			databasev1alpha1.BootstrapComplete}}

@@ -142,6 +142,10 @@ type haFixture struct {
 	wrongTargetRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	clusterDeleted     func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster,
 		opts ...client.DeleteOption) error
+	// restartCreated and restartRead play the Operator for the cluster of S12
+	// operator-restart, as restoreCreated and restoreRead do.
+	restartCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
+	restartRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	// markerAnswer, when it returns true, answers a read of the marker table
 	// in place of markersOf.
 	markerAnswer func(pod string) (string, error, bool)
@@ -289,6 +293,8 @@ func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key cl
 		return f.tamperedRead(ctx, c, key)
 	case key.Name == s12WrongTargetClusterName && f.wrongTargetRead != nil:
 		return f.wrongTargetRead(ctx, c, key)
+	case key.Name == s12RestartClusterName && f.restartRead != nil:
+		return f.restartRead(ctx, c, key)
 	}
 	return nil
 }
@@ -310,6 +316,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 		}
 		f.writes = append(f.writes, "tampered-cluster")
 		return f.tamperedCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s12RestartClusterName {
+		if f.restartCreated == nil {
+			f.t.Fatalf("runner created %s without S12 operator-restart", cluster.Name)
+		}
+		f.writes = append(f.writes, "restart-cluster")
+		return f.restartCreated(ctx, c, cluster)
 	}
 	if cluster.Name == s12WrongTargetClusterName {
 		if f.wrongTargetCreated == nil {
@@ -449,7 +462,7 @@ func (f *haFixture) rowsOf(name string) []workload.Row {
 	defer f.mu.Unlock()
 	f.reads[name]++
 	rows := slices.Clone(f.rows)
-	if strings.HasPrefix(name, s12ClusterName+"-") {
+	if strings.HasPrefix(name, s12ClusterName+"-") || strings.HasPrefix(name, s12RestartClusterName+"-") {
 		rows = slices.Clone(f.restoredRows)
 	}
 	if n, lacking := f.missing[name]; lacking && (f.missingReads == 0 || f.reads[name] <= f.missingReads) {
@@ -582,6 +595,10 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 			defer f.afterRun(ctx)
 		}
 		return f.history, nil
+	case strings.Contains(script, s12RestartClusterName+"-ro") && strings.Contains(script, "workload dump"):
+		return strings.Join(jsonLines(f.rowsOf(s12RestartClusterName+"-ro")), "\n"), nil
+	case strings.Contains(script, s12RestartClusterName+"-rw") && strings.Contains(script, "workload dump"):
+		return strings.Join(jsonLines(f.rowsOf(s12RestartClusterName+"-rw")), "\n"), nil
 	case strings.Contains(script, s12ClusterName+"-ro") && strings.Contains(script, "workload dump"):
 		return strings.Join(jsonLines(f.rowsOf(s12ClusterName+"-ro")), "\n"), nil
 	case strings.Contains(script, s12ClusterName+"-rw") && strings.Contains(script, "workload dump"):

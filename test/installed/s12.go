@@ -169,8 +169,8 @@ type s12Record struct {
 	Residue           string          `json:"residue"`
 }
 
-// validateS12 checks the inputs of S12 exact, tampered and wrong-target,
-// when they are selected.
+// validateS12 checks the inputs of S12 exact, tampered, wrong-target and
+// operator-restart, when they are selected.
 func (c HAConfig) validateS12() error {
 	if c.RestoreTampered && !c.Restore {
 		return errors.New("-restore-tampered needs -restore: S12 tampered follows S12 exact")
@@ -180,6 +180,9 @@ func (c HAConfig) validateS12() error {
 	}
 	if c.RestoreWrongTarget && c.RestoreTampered {
 		return errors.New("-restore-wrong-target and -restore-tampered select different lanes; a run takes one of them")
+	}
+	if err := c.validateS12OperatorRestart(); err != nil {
+		return err
 	}
 	if !c.Restore {
 		return nil
@@ -288,6 +291,7 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	if err != nil {
 		return err
 	}
+	h.s12Expected = expected
 	cluster, err := h.createRestored(ctx, s12ClusterName, s12SecretName, rec.SeedPrefix, rec.ArtifactURI)
 	if err != nil {
 		return err
@@ -295,7 +299,7 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	created := time.Now()
 	createdAt := created.UTC()
 	rec.ClusterUID, rec.CreatedAt = string(cluster.UID), &createdAt
-	roles, readyAt, err := h.waitRestored(ctx, cluster, rec, result)
+	roles, readyAt, err := h.waitRestored(ctx, cluster, created, rec, result)
 	if err != nil {
 		return err
 	}
@@ -307,10 +311,10 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	if err := h.checkHANodes(ctx, roles, rec, result); err != nil {
 		return err
 	}
-	if err := h.checkRestoredData(ctx, expected, roles, rec, result); err != nil {
+	if err := h.checkRestoredData(ctx, expected, roles, rec, result, s12DataCheckFile); err != nil {
 		return err
 	}
-	if err := h.normalWriteS12(ctx, roles, rec); err != nil {
+	if err := h.normalWriteS12(ctx, roles, rec, s12Marker); err != nil {
 		return err
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
@@ -437,12 +441,12 @@ func (h *haRun) createRestored(ctx context.Context, name, secretName, seedPrefix
 // waitRestored reads the restored cluster until it is Ready with its
 // bootstrap Complete, its members Ready and owned, its Brokers available,
 // one master and two slaves by CUBRID and status.currentPrimary naming the
-// master, for at most RestoreLimit. Each change of the bootstrap is
-// recorded, and every status read is searched for a credential. A Ready
-// cluster whose bootstrap is not Complete must never happen.
-func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.CubridCluster, rec *s12Record,
-	result *evidence.Scenario) (*startingState, time.Time, error) {
-	wctx, cancel := context.WithTimeout(ctx, h.cfg.RestoreLimit)
+// master, until RestoreLimit has passed since createdAt. Each change of the
+// bootstrap is recorded, and every status read is searched for a credential.
+// A Ready cluster whose bootstrap is not Complete must never happen.
+func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.CubridCluster, createdAt time.Time,
+	rec *s12Record, result *evidence.Scenario) (*startingState, time.Time, error) {
+	wctx, cancel := context.WithDeadline(ctx, createdAt.Add(h.cfg.RestoreLimit))
 	defer cancel()
 	// readErr is the last reading's error, nil once a reading succeeded.
 	var readErr error
@@ -500,21 +504,9 @@ func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.Cubr
 // its roles once everything holds, or what does not hold yet.
 func (h *haRun) restoredReading(ctx context.Context, cluster *databasev1alpha1.CubridCluster, rec *s12Record,
 	result *evidence.Scenario) (*startingState, string, error) {
-	phase := ""
-	if boot := cluster.Status.Bootstrap; boot != nil {
-		phase = string(boot.Phase)
-	}
-	recordBootstrap(cluster, &rec.Bootstrap)
-	rec.Credentials.StatusesChecked++
-	if err := h.lookForCredentials(&rec.Credentials.FoundIn, "the restored cluster's status read in bootstrap "+
-		"phase "+cmp.Or(phase, noBootstrapPhase), cluster.Status); err != nil {
+	phase, err := h.restoredStatus(cluster, rec, result)
+	if err != nil {
 		return nil, "", err
-	}
-	if ready := meta.FindStatusCondition(cluster.Status.Conditions, startingConditions[0]); ready != nil &&
-		ready.Status == metav1.ConditionTrue && phase != string(databasev1alpha1.BootstrapComplete) {
-		event := fmt.Sprintf("the restored cluster reported Ready while its bootstrap phase was %q", phase)
-		result.NeverEvents = append(result.NeverEvents, event)
-		return nil, "", restoreVerdict{errors.New(event)}
 	}
 	switch phase {
 	case string(databasev1alpha1.BootstrapFailed):
@@ -547,6 +539,30 @@ func (h *haRun) restoredReading(ctx context.Context, cluster *databasev1alpha1.C
 	}
 	rec.Members = members
 	return state, "", nil
+}
+
+// restoredStatus records the status of one reading of the restored cluster,
+// searches it for a credential and returns its bootstrap phase. Ready True
+// while the bootstrap is not Complete must never happen.
+func (h *haRun) restoredStatus(cluster *databasev1alpha1.CubridCluster, rec *s12Record, result *evidence.Scenario) (
+	string, error) {
+	phase := ""
+	if boot := cluster.Status.Bootstrap; boot != nil {
+		phase = string(boot.Phase)
+	}
+	recordBootstrap(cluster, &rec.Bootstrap)
+	rec.Credentials.StatusesChecked++
+	if err := h.lookForCredentials(&rec.Credentials.FoundIn, "the restored cluster's status read in bootstrap "+
+		"phase "+cmp.Or(phase, noBootstrapPhase), cluster.Status); err != nil {
+		return phase, err
+	}
+	if ready := meta.FindStatusCondition(cluster.Status.Conditions, startingConditions[0]); ready != nil &&
+		ready.Status == metav1.ConditionTrue && phase != string(databasev1alpha1.BootstrapComplete) {
+		event := fmt.Sprintf("the restored cluster reported Ready while its bootstrap phase was %q", phase)
+		result.NeverEvents = append(result.NeverEvents, event)
+		return phase, restoreVerdict{errors.New(event)}
+	}
+	return phase, nil
 }
 
 // recordBootstrap adds a restored cluster's bootstrap to phases when it
@@ -587,7 +603,7 @@ func bootstrapReason(cluster *databasev1alpha1.CubridCluster) string {
 // never happen: the new cluster would depend on a Secret of the source. A Pod
 // template names Secrets of its own namespace only.
 func (h *haRun) checkRestoredSecrets(ctx context.Context, rec *s12Record, result *evidence.Scenario) error {
-	restored, err := h.secretsOf(ctx, s12ClusterName)
+	restored, err := h.secretsOf(ctx, rec.Cluster)
 	if err != nil {
 		return err
 	}
@@ -659,21 +675,20 @@ func secretNames(spec *corev1.PodSpec) []string {
 	return names
 }
 
-// restoredDumps read the ledger through each Service of the restored
-// cluster.
-func (h *haRun) restoredDumps() map[string]string {
+// restoredDumps read the ledger through each Service of a restored cluster.
+func (h *haRun) restoredDumps(cluster string) map[string]string {
 	return map[string]string{
-		"rw": fmt.Sprintf(`JDBC_URL="%s" workload dump`, h.jdbcURL(s12ClusterName, "rw", 33000)),
-		"ro": fmt.Sprintf(`JDBC_URL="%s" workload dump`, h.jdbcURL(s12ClusterName, "ro", 33001))}
+		"rw": fmt.Sprintf(`JDBC_URL="%s" workload dump`, h.jdbcURL(cluster, "rw", 33000)),
+		"ro": fmt.Sprintf(`JDBC_URL="%s" workload dump`, h.jdbcURL(cluster, "ro", 33001))}
 }
 
 // checkRestoredData applies the data rules of the history as it stood at the
 // known point to the restored members and Services, then looks for S11's
 // marker on every restored member. A row written after the backup is a row
 // no operation of that history has: the rules report it as unexpected, and
-// the run names it.
+// the run names it. The last report is kept in file.
 func (h *haRun) checkRestoredData(ctx context.Context, expected string, roles *startingState, rec *s12Record,
-	result *evidence.Scenario) error {
+	result *evidence.Scenario, file string) error {
 	history, err := workload.ReadHistory(strings.NewReader(expected))
 	if err != nil {
 		return err
@@ -689,9 +704,9 @@ func (h *haRun) checkRestoredData(ctx context.Context, expected string, roles *s
 	check := &s12DataCheck{HistoryEvents: len(events), Acknowledged: history.Counts[workload.Acknowledged],
 		PostBackupRowsPresent: []string{}}
 	rec.DataCheck = check
-	members := clusterMembers(s12ClusterName)
-	target := dataTarget{members: members, dumps: h.restoredDumps(), slaves: roles.Slaves}
-	report, held, err := h.checkDataOf(ctx, expected, target, time.Now(), s12DataCheckFile)
+	members := clusterMembers(rec.Cluster)
+	target := dataTarget{members: members, dumps: h.restoredDumps(rec.Cluster), slaves: roles.Slaves}
+	report, held, err := h.checkDataOf(ctx, expected, target, time.Now(), file)
 	if report != nil {
 		check.PostBackupRowsPresent = postBackupRows(*report, full)
 		result.Measurements["postBackupRowsPresent"] = len(check.PostBackupRowsPresent)
@@ -837,28 +852,28 @@ func (h *haRun) memberState(ctx context.Context, pod string) string {
 // not an answer of the database.
 var workloadFailed = regexp.MustCompile(`(?m)^command terminated with exit code 1\s*$`)
 
-// normalWriteS12 writes a marker through the restored cluster's read-write
+// normalWriteS12 writes marker through the restored cluster's read-write
 // Service and reads it back on every restored member. Only the workload's
 // own failure fails S12: any other error kept the run from writing.
-func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s12Record) error {
-	write := &s12NormalWrite{Marker: s12Marker, ReadBackOn: []string{}, MissingOn: []string{}}
+func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s12Record, marker string) error {
+	write := &s12NormalWrite{Marker: marker, ReadBackOn: []string{}, MissingOn: []string{}}
 	rec.NormalWrite = write
-	service := s12ClusterName + "-rw"
+	service := rec.Cluster + "-rw"
 	out, err := h.clientRun(ctx, fmt.Sprintf(`JDBC_URL="%s" workload marker %s %s 2>&1`,
-		h.jdbcURL(s12ClusterName, "rw", 33000), s12Marker, h.rec.RunID))
+		h.jdbcURL(rec.Cluster, "rw", 33000), marker, h.rec.RunID))
 	switch {
 	case err != nil && (ctx.Err() != nil || !workloadFailed.MatchString(out)):
-		return fmt.Errorf("write marker %s through %s: %w", s12Marker, service, err)
+		return fmt.Errorf("write marker %s through %s: %w", marker, service, err)
 	case err != nil:
-		return restoreVerdict{fmt.Errorf("the marker %s written through %s failed: %w: %s", s12Marker, service, err,
+		return restoreVerdict{fmt.Errorf("the marker %s written through %s failed: %w: %s", marker, service, err,
 			strings.TrimSpace(out))}
-	case !strings.Contains(out, "marker "+s12Marker+" written"):
-		return restoreVerdict{fmt.Errorf("the marker %s written through %s was not acknowledged: %s", s12Marker,
+	case !strings.Contains(out, "marker "+marker+" written"):
+		return restoreVerdict{fmt.Errorf("the marker %s written through %s was not acknowledged: %s", marker,
 			service, strings.TrimSpace(out))}
 	}
 	write.Acknowledged = true
-	members := clusterMembers(s12ClusterName)
-	missing, _, err := h.waitMarker(ctx, members, roles.Master, s12Marker, h.rec.RunID)
+	members := clusterMembers(rec.Cluster)
+	missing, _, err := h.waitMarker(ctx, members, roles.Master, marker, h.rec.RunID)
 	if err != nil {
 		return err
 	}
@@ -866,14 +881,14 @@ func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s
 	write.ReadBackOn = slices.DeleteFunc(members, func(m string) bool { return slices.Contains(missing, m) })
 	if len(missing) > 0 {
 		return restoreVerdict{fmt.Errorf("the marker %s written through %s is not on restored member(s) %s",
-			s12Marker, service, strings.Join(missing, ", "))}
+			marker, service, strings.Join(missing, ", "))}
 	}
 	return nil
 }
 
 // checkSourceS12 requires the source as LAB01 left it: the same member Pods
 // and containers, the same master by CUBRID and status.currentPrimary, no
-// marker written through the restored cluster, and the data rules over the
+// marker written through a restored cluster, and the data rules over the
 // whole history, writes after the backup included. It records what it read
 // in source and the source's data check in dataFile.
 func (h *haRun) checkSourceS12(ctx context.Context, source *s12Source, dataFile string) error {
@@ -896,9 +911,12 @@ func (h *haRun) checkSourceS12(ctx context.Context, source *s12Source, dataFile 
 		if err != nil {
 			return fmt.Errorf("read the source's marker table: %w", err)
 		}
-		if _, ok := table[s12Marker]; ok {
-			return restoreVerdict{fmt.Errorf("the source changed: the marker %s written through %s-rw is on %s",
-				s12Marker, s12ClusterName, pod)}
+		for _, written := range []struct{ marker, cluster string }{{s12Marker, s12ClusterName},
+			{s12RestartMarker, s12RestartClusterName}} {
+			if _, ok := table[written.marker]; ok {
+				return restoreVerdict{fmt.Errorf("the source changed: the marker %s written through %s-rw is on %s",
+					written.marker, written.cluster, pod)}
+			}
 		}
 	}
 	if _, _, err := h.checkDataOf(ctx, h.history.String(), h.sourceTarget(), time.Now(),
@@ -961,7 +979,7 @@ func (h *haRun) sourceRoles(ctx context.Context, source *s12Source) error {
 func (h *haRun) checkHANodes(ctx context.Context, restored *startingState, rec *s12Record,
 	result *evidence.Scenario) error {
 	rec.HANodes = map[string][]string{}
-	for _, c := range []struct{ cluster, pod string }{{s12ClusterName, restored.Master},
+	for _, c := range []struct{ cluster, pod string }{{rec.Cluster, restored.Master},
 		{haClusterName, h.rec.StartingState.Master}} {
 		out, err := h.member(ctx, c.pod, "bash", "-c", heartbeatStatus)
 		if err != nil {

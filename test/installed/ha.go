@@ -108,9 +108,11 @@ type HAConfig struct {
 	Fault string
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
-	// first fresh status (operator_resync_limit).
+	// first fresh status (operator_resync_limit), and in S12 operator-restart
+	// its return.
 	StablePeriod, ResyncLimit time.Duration
-	// LeaderLease is the manager's leader election Lease in its namespace.
+	// LeaderLease is the manager's leader election Lease in its namespace,
+	// for S06 restart and S12 operator-restart.
 	LeaderLease string
 	// BackupBucket selects S11 complete after LAB01: a CubridBackup of the
 	// run's database to this bucket. It cannot be combined with Fault.
@@ -138,6 +140,12 @@ type HAConfig struct {
 	// cluster of the same name, which hold a database. It needs Restore and
 	// cannot be combined with RestoreTampered.
 	RestoreWrongTarget bool
+	// RestoreOperatorRestart selects S12 operator-restart after S12 exact:
+	// S11's artifact restored into another new cluster while the manager's
+	// Pod is deleted during the restore. It needs Restore, ResyncLimit and
+	// LeaderLease, and cannot be combined with RestoreTampered or
+	// RestoreWrongTarget.
+	RestoreOperatorRestart bool
 }
 
 func (c HAConfig) validate() error {
@@ -264,8 +272,11 @@ type haRun struct {
 	s11    *evidence.Scenario
 	s11Rec *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
-	// tampered and s12WrongTarget that of S12 wrong-target.
-	s12, s12Tampered, s12WrongTarget *evidence.Scenario
+	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
+	// S12 operator-restart. s12Expected is the history at S11's known point
+	// that S12 exact took.
+	s12, s12Tampered, s12WrongTarget, s12Restart *evidence.Scenario
+	s12Expected                                  string
 	// scenario names the scenario whose reads run now, for lostSessions, and
 	// reads counts the csql reads each scenario made.
 	scenario string
@@ -347,6 +358,14 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				"exact and S12 wrong-target: a full backup to object storage, restored into a new cluster in the " +
 				"run namespace, and refused by a cluster created over the retained volumes of another that hold a " +
 				"database; no other S00-S15 qualification"
+		}
+		if cfg.RestoreOperatorRestart {
+			lane = s12RestartLane
+			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12RestartVariant})
+			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
+				"exact and S12 operator-restart: a full backup to object storage, restored into a new cluster in " +
+				"the run namespace, and into another while the manager Pod is deleted without a grace period " +
+				"during its restore; no other S00-S15 qualification"
 		}
 	case cfg.BackupBucket != "":
 		lane = s11Lane
@@ -487,6 +506,16 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12WrongTargetVariant}, evidence.Blocked,
 			"S12 wrong-target follows S12 exact, and S12 exact did not pass")
 	}
+	switch {
+	case h.s12Restart != nil:
+		summary.Record(*h.s12Restart)
+	case h.cfg.RestoreOperatorRestart && h.s12 == nil:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12RestartVariant}, evidence.Blocked,
+			"S12 operator-restart follows S12 exact, and S12 exact did not run")
+	case h.cfg.RestoreOperatorRestart:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12RestartVariant}, evidence.Blocked,
+			"S12 operator-restart follows S12 exact, and S12 exact did not pass")
+	}
 }
 
 // afterLAB01 runs the scenario selected to follow LAB01, if any.
@@ -511,6 +540,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 		h.s12 = &s12
 		if s12.Result != evidence.Pass {
 			return fmt.Errorf("S12/%s: %s", s12Variant, s12.Reason)
+		}
+		if h.cfg.RestoreOperatorRestart {
+			restart := h.runS12OperatorRestart(ctx)
+			h.s12Restart = &restart
+			if restart.Result != evidence.Pass {
+				return fmt.Errorf("S12/%s: %s", s12RestartVariant, restart.Reason)
+			}
 		}
 		if h.cfg.RestoreWrongTarget {
 			wrong := h.runS12WrongTarget(ctx)
