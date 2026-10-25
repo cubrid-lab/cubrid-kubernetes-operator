@@ -261,6 +261,8 @@ func haBootstrapScenario() {
 			_, err = utils.Run(exec.Command("kubectl", "label", "--overwrite", "ns", haNamespace,
 				"pod-security.kubernetes.io/enforce=restricted"))
 			Expect(err).NotTo(HaveOccurred())
+			// A credential like any other: kept out of the evidence (#91).
+			redactor.Add(objectStorageSecretKey)
 			_, err = kubectl("create", "secret", "generic", "object-storage",
 				"--from-literal=accessKey=e2e", "--from-literal=secretKey="+objectStorageSecretKey)
 			Expect(err).NotTo(HaveOccurred())

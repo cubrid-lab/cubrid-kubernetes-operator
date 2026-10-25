@@ -24,6 +24,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -157,7 +158,10 @@ func (r *haRun) rbacChecks(dbServiceAccount string) []rbacCheck {
 }
 
 // canI asks the API server whether c.as may do what c names. kubectl answers
-// "yes" with exit code 0 and "no" with exit code 1; anything else is an error.
+// "yes" with exit code 0 and "no" with exit code 1 on standard output;
+// warnings go to standard error. Anything else is an error, never a "no".
+// A check without a namespace is asked across all namespaces, which is also
+// how kubectl asks for a cluster-scoped resource without warning.
 func canI(c rbacCheck) (bool, error) {
 	args := []string{"auth", "can-i", c.verb, c.resource, "--as", c.as}
 	if c.subresource != "" {
@@ -165,16 +169,23 @@ func canI(c rbacCheck) (bool, error) {
 	}
 	if c.namespace != "" {
 		args = append(args, "-n", c.namespace)
+	} else {
+		args = append(args, "--all-namespaces")
 	}
-	out, err := exec.Command("kubectl", args...).CombinedOutput()
-	answer := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	cmd := exec.Command("kubectl", args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	answer := strings.TrimSpace(lines[len(lines)-1])
+	var exit *exec.ExitError
 	switch {
-	case answer == "yes" && err == nil:
+	case err == nil && answer == "yes":
 		return true, nil
-	case strings.HasPrefix(answer, "no"):
+	case errors.As(err, &exit) && exit.ExitCode() == 1 && (answer == "no" || strings.HasPrefix(answer, "no - ")):
 		return false, nil
 	default:
-		return false, fmt.Errorf("kubectl %s: %v: %s", strings.Join(args, " "), err, out)
+		return false, fmt.Errorf("kubectl %s: %v: %s %s", strings.Join(args, " "), err, out, stderr.String())
 	}
 }
 
