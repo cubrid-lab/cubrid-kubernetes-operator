@@ -262,7 +262,7 @@ func haBootstrapScenario() {
 				"pod-security.kubernetes.io/enforce=restricted"))
 			Expect(err).NotTo(HaveOccurred())
 			_, err = kubectl("create", "secret", "generic", "object-storage",
-				"--from-literal=accessKey=e2e", "--from-literal=secretKey=e2e-secret")
+				"--from-literal=accessKey=e2e", "--from-literal=secretKey="+objectStorageSecretKey)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("creating a three-member HA CubridCluster")

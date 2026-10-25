@@ -1098,7 +1098,11 @@ it needs more.
   admit that namespace to the Instance Manager port with a NetworkPolicy of
   its own and call the backup, restore-preparation and shutdown endpoints
   with no token, with a wrong token and with the valid token, also with
-  headers that claim a loopback origin.
+  headers that claim a loopback origin. Then search the CubridCluster, the
+  events, the Pod descriptions, the ConfigMaps and the operator's and members'
+  logs for the token and for the object-storage secret key (a value unique to
+  the run), and ask the API server (`kubectl auth can-i`) what the manager's
+  service account and the DB Pods' service account may do (#91).
 - **The Operator must** (ADR-0003, #272): keep a NetworkPolicy that admits
   only the operator to the Instance Manager port and only the cluster's own
   Pods to the database ports; reject every `/v1` request without the valid
@@ -1107,7 +1111,13 @@ it needs more.
 - **Expected:** the direct connections time out (Kind's network plugin
   enforces NetworkPolicy; a plugin that does not would admit them); the
   unauthorized requests are rejected and cause no backup, no restore and no
-  shutdown; the valid request succeeds.
+  shutdown; the valid request succeeds. The manager may read Secrets, create
+  StatefulSets and NetworkPolicies, delete Pods and update the cluster's
+  status, as `config/rbac/role.yaml` grants; it may not create Pods, exec or
+  attach into them, delete PVCs, Secrets or namespaces, or create, bind or
+  escalate cluster roles, or impersonate. The DB Pods' service account may not
+  read Secrets, list Pods, read the cluster or exec. `S14/rbac.txt` keeps the
+  answers and both accounts' `auth can-i --list`.
 - **Must never happen:** a side effect from a rejected request; a token, a
   database password or an object-storage credential in a log, in `status`, in
   an event or in an evidence file.
