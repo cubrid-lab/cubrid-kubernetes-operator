@@ -45,6 +45,11 @@ const (
 	s12RecordFile          = "S12/exact/record.json"
 	s12DataCheckFile       = "S12/exact/data-check.json"
 	s12SourceDataCheckFile = "S12/exact/source-data-check.json"
+	// s12ExpectedHistoryFile is the history at the known point, which the
+	// restored cluster is checked against; s12PostBackupFile is what the
+	// writes after the backup recorded.
+	s12ExpectedHistoryFile = "S12/exact/expected-history.jsonl"
+	s12PostBackupFile      = "S12/exact/post-backup-history.jsonl"
 	// s12ClusterName is the cluster restored from S11's artifact, in the run
 	// namespace.
 	s12ClusterName = "ha-restore"
@@ -307,6 +312,9 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 func (h *haRun) postBackupWrites(ctx context.Context, rec *s12Record) (string, error) {
 	known := rec.KnownPoint
 	expected := h.history.String()
+	if err := h.write(s12ExpectedHistoryFile, []byte(expected)); err != nil {
+		return "", err
+	}
 	before, err := workload.ReadHistory(strings.NewReader(expected))
 	if err != nil {
 		return "", err
@@ -330,6 +338,9 @@ func (h *haRun) postBackupWrites(ctx context.Context, rec *s12Record) (string, e
 		s12PostBackupClient, s12PostBackupOperations))
 	h.history.WriteString(out)
 	if err := h.write(haHistoryFile, []byte(h.history.String())); err != nil {
+		return "", err
+	}
+	if err := h.write(s12PostBackupFile, []byte(out)); err != nil {
 		return "", err
 	}
 	if runErr != nil {
@@ -757,14 +768,16 @@ func (h *haRun) markerTable(ctx context.Context, pod string) (map[string]string,
 	return table, nil
 }
 
-// remoteExit is how kubectl exec reports a command that ran in the container
-// and exited with an error: the workload's own answer, as against a
-// failure to reach the container.
-const remoteExit = "command terminated with exit code"
+// workloadFailed is how kubectl exec reports the workload's own failure: it
+// exits 1 on an SQL error, a failed JDBC connection among them. Any other
+// exit code, such as 2 for a usage error, 126 or 127 for a command the shell
+// could not run, or 137 for a killed process, and any error without one, is
+// not an answer of the database.
+var workloadFailed = regexp.MustCompile(`(?m)^command terminated with exit code 1\s*$`)
 
 // normalWriteS12 writes a marker through the restored cluster's read-write
 // Service and reads it back on every restored member. Only the workload's
-// own failure fails S12: a kubectl or API error kept the run from writing.
+// own failure fails S12: any other error kept the run from writing.
 func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s12Record) error {
 	write := &s12NormalWrite{Marker: s12Marker, ReadBackOn: []string{}, MissingOn: []string{}}
 	rec.NormalWrite = write
@@ -772,7 +785,7 @@ func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s
 	out, err := h.clientRun(ctx, fmt.Sprintf(`JDBC_URL="%s" workload marker %s %s 2>&1`,
 		h.jdbcURL(s12ClusterName, "rw", 33000), s12Marker, h.rec.RunID))
 	switch {
-	case err != nil && (ctx.Err() != nil || !strings.Contains(out, remoteExit)):
+	case err != nil && (ctx.Err() != nil || !workloadFailed.MatchString(out)):
 		return fmt.Errorf("write marker %s through %s: %w", s12Marker, service, err)
 	case err != nil:
 		return restoreVerdict{fmt.Errorf("the marker %s written through %s failed: %w: %s", s12Marker, service, err,

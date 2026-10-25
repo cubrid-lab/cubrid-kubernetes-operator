@@ -652,7 +652,7 @@ func TestRunS12ExactIsBlockedUnlessEveryWriteAfterTheBackupIsAcknowledged(t *tes
 func TestPostBackupWritesRefusesAHistoryThatIsNotTheKnownPoint(t *testing.T) {
 	history, _ := fakeClientWorkload("c1", 3)
 	// No client command may run: the run has no Runner here.
-	h := &haRun{}
+	h := &haRun{cfg: testS12Config(t), redactor: evidence.NewRedactor()}
 	h.history.WriteString(history)
 	rec := &s12Record{KnownPoint: &s11KnownPoint{Acknowledged: 2, LastAcknowledged: testThirdOpID}}
 	if _, err := h.postBackupWrites(t.Context(), rec); err == nil || !strings.Contains(err.Error(), "known point") {
@@ -828,15 +828,66 @@ func TestRunHARefusesAnIncompleteS12Configuration(t *testing.T) {
 }
 
 func TestRunS12ExactIsBlockedWhenTheNormalWriteCannotBeSent(t *testing.T) {
+	for name, out := range map[string]string{
+		"container not reached": "error: unable to upgrade connection: container not found (\"client\")\n",
+		"killed":                "command terminated with exit code 137\n",
+		"command not found":     "sh: workload: not found\ncommand terminated with exit code 127\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12Config(t)
+			f := newS12Fixture(t, cfg)
+			f.normalWriteAnswer = func() (string, error) {
+				return out, errors.New("kubectl failed: exit status 1: " + out)
+			}
+			s12, err := s12Of(t, f, t.Context())
+			if err == nil || s12.Result != evidence.Blocked {
+				t.Fatalf("S12 = %+v, want blocked: the workload did not answer", s12)
+			}
+		})
+	}
+}
+
+func TestRunS12ExactIsBlockedWithoutAnHANodeList(t *testing.T) {
 	cfg := testS12Config(t)
 	f := newS12Fixture(t, cfg)
-	f.normalWriteAnswer = func() (string, error) {
-		out := "error: unable to upgrade connection: container not found (\"client\")\n"
-		return out, errors.New("kubectl failed: exit status 1: " + out)
+	f.haNodes = func(pod string, nodes []string) []string {
+		if pod == testRestoreMaster {
+			return nil
+		}
+		return nodes
 	}
 	s12, err := s12Of(t, f, t.Context())
-	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "unable to upgrade") {
-		t.Fatalf("S12 = %+v, want blocked: the write never reached the workload", s12)
+	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "lists no node") {
+		t.Fatalf("S12 = %+v, want blocked: no node list to check", s12)
+	}
+}
+
+func TestRunS12ExactKeepsTheHistoriesItWasJudgedAgainst(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	s12, err := s12Of(t, f, t.Context())
+	if err != nil {
+		t.Fatalf("RunHA() error = %v", err)
+	}
+	read := func(rel string) string {
+		if !slices.Contains(s12.Evidence, rel) {
+			t.Fatalf("S12 evidence = %v, want %s", s12.Evidence, rel)
+		}
+		data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	expected, post := read("S12/exact/expected-history.jsonl"), read("S12/exact/post-backup-history.jsonl")
+	all, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, haHistoryFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected+post != string(all) || strings.Contains(expected, s12PostBackupClient) ||
+		!strings.Contains(post, `"client":"`+s12PostBackupClient+`"`) || !strings.Contains(expected, testROOpID) {
+		t.Fatalf("expected history = %q, post-backup = %q; want LAB01's history and the writes after the backup",
+			expected, post)
 	}
 }
 

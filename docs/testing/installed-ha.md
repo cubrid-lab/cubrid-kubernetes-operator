@@ -439,9 +439,13 @@ pass, S12 is blocked and nothing of it is done.
 7. **A normal write.** The client writes the marker row `s12`, with the run
    ID, through `ha-restore-rw`. It must be acknowledged and then be on every
    restored member, with the same wait for a slave. A failure the workload
-   itself answered, which kubectl reports as `command terminated with exit
-   code`, fails S12. Any other error of `kubectl exec`, such as a container
-   it cannot reach, kept the write from being sent and blocks S12.
+   itself answered fails S12: it exits 1 on an SQL error, a failed JDBC
+   connection among them, which kubectl reports as `command terminated with
+   exit code 1`. Any other exit code (2 for a usage error, 126 or 127 for a
+   command the shell could not run, 137 for a killed process) and any other
+   error of `kubectl exec`, such as a container it cannot reach, kept the
+   write from being answered and block S12. The marker of S11 and the writes
+   after the backup block S11 or S12 on any error, whatever the exit code.
 8. **The source.** The source's members must still be the Pods and
    containers LAB01 recorded at its end. CUBRID and `status.currentPrimary`
    must name the same master: the roles are read again until
@@ -533,7 +537,11 @@ directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs.
   written after the backup that were found and S11's marker on each member,
   the normal write, the source at the end, and where credentials were looked
   for), `S12/exact/data-check.json`, the last report of the restored
-  cluster's data check, and `S12/exact/source-data-check.json`, the source's.
+  cluster's data check, `S12/exact/source-data-check.json`, the source's,
+  `S12/exact/expected-history.jsonl`, the history at the known point that
+  the restored cluster was checked against, and
+  `S12/exact/post-backup-history.jsonl`, what the writes after the backup
+  recorded. Both histories are redacted like every evidence file.
   The writes after the backup are in `LAB01/history.jsonl` with the rest;
   LAB01's operation counts leave them out. S06's clients, by contrast, are
   counted in LAB01's operations as well as S06's.
