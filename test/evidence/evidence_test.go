@@ -17,6 +17,7 @@ limitations under the License.
 package evidence
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"os"
@@ -831,5 +832,53 @@ func TestRequireEmptyDir(t *testing.T) {
 
 	if err := RequireEmptyDir(filepath.Join(used, "summary.json")); err == nil {
 		t.Error("a file was accepted as the evidence directory")
+	}
+}
+
+// Leaks finds a registered credential in any file under the evidence
+// directory, raw or in an encoding Redact removes, and names only the files
+// (#587).
+func TestLeaks(t *testing.T) {
+	const secret = "s3cr3t-object-store-key"
+	r := NewRedactor(secret)
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("summary.json", `{"result":"pass"}`)
+	write("S14/result.txt", "places that showed the credential: 0\n")
+	write("S03/history.jsonl", `{"error":"[REDACTED]"}`+"\n")
+	leaks, err := r.Leaks(dir)
+	if err != nil || len(leaks) != 0 {
+		t.Fatalf("clean evidence: leaks %v, err %v", leaks, err)
+	}
+
+	write("S05/timeline.jsonl", `{"detail":"key `+secret+`"}`+"\n")
+	write("S06/data.b64", base64.StdEncoding.EncodeToString([]byte(secret)))
+	leaks, err = r.Leaks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"S05/timeline.jsonl", "S06/data.b64"}; !slices.Equal(leaks, want) {
+		t.Fatalf("leaks %v, want %v", leaks, want)
+	}
+	for _, l := range leaks {
+		if strings.Contains(l, secret) {
+			t.Fatalf("a leak report shows the credential: %q", l)
+		}
+	}
+
+	if leaks, err := NewRedactor().Leaks(dir); err != nil || len(leaks) != 0 {
+		t.Fatalf("no registered credential: leaks %v, err %v", leaks, err)
+	}
+	if _, err := r.Leaks(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("a missing evidence directory was not an error")
 	}
 }

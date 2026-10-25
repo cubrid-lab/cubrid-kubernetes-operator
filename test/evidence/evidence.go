@@ -468,6 +468,37 @@ func SecretForms(s string) []string {
 	return forms
 }
 
+// Leaks returns the files under dir, relative to it and sorted, that hold a
+// credential registered with Add, raw or in one of the encodings Redact
+// removes (#587). It names files only, never the credential. The evidence
+// should have passed through Redact; this checks that it did.
+func (r *Redactor) Leaks(dir string) ([]string, error) {
+	r.mu.Lock()
+	secrets := slices.Clone(r.secrets)
+	r.mu.Unlock()
+	leaks := []string{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		if slices.ContainsFunc(secrets, func(s string) bool { return strings.Contains(text, s) }) {
+			rel, err := filepath.Rel(dir, path)
+			if err != nil {
+				return err
+			}
+			leaks = append(leaks, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	slices.Sort(leaks)
+	return leaks, err
+}
+
 // Redact returns data with credentials replaced by "[REDACTED]".
 func (r *Redactor) Redact(data []byte) []byte {
 	text := string(data)

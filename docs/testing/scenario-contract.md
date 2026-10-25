@@ -1120,7 +1120,10 @@ it needs more.
   answers and both accounts' `auth can-i --list`.
 - **Must never happen:** a side effect from a rejected request; a token, a
   database password or an object-storage credential in a log, in `status`, in
-  an event or in an evidence file.
+  an event or in an evidence file. At the end of the run, every evidence file is
+  searched for the credentials the run registered with the redactor (the
+  Instance Manager tokens and the object-storage secret key), raw and in the
+  encodings the redactor removes; a file that holds one fails the run (#587).
 - **Data check:** the data rules still hold after the rejected requests.
 - **Limits:** none beyond the request timeout.
 - **Source note:** no outside test was read; the contract comes from
