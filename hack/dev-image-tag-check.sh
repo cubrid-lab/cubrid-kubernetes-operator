@@ -10,15 +10,16 @@
 #   token denied                     for an image named in BOOTSTRAP_IMAGES
 #                                    only (a first publication): absent if the
 #                                    GitHub packages API answers 404 for it.
+#   anything else                    unknown: retried, then refused.
+# A failed request, a timeout, a server error or an answer it does not
+# recognize is never read as absence.
+#
 # GHCR also answers DENIED for refused credentials, not only for a package that
 # does not exist, so a denied token alone never means absence. What the
 # packages API answers the workflow's GITHUB_TOKEN for a package it may not
 # see is not observed; the opt-in limits that path to a deliberate first
 # publication, and an image left in BOOTSTRAP_IMAGES after its package exists
 # (its tag answers MANIFEST_UNKNOWN) stops the run until it is removed.
-#   anything else                    unknown: retried, then refused.
-# A failed request, a timeout, a server error or an answer it does not
-# recognize is never read as absence.
 #
 # Environment:
 #   REPOSITORY      image path prefix, e.g. cubrid-lab/cubrid-kubernetes-operator
@@ -86,7 +87,8 @@ in_bootstrap() {
   [[ " ${BOOTSTRAP_IMAGES:-} " == *" $1 "* ]]
 }
 
-# check prints exists, absent, stale-bootstrap or unknown for one image, with the reason for
+# check prints exists, absent, stale-bootstrap or unknown for one
+# image, with the reason for
 # unknown on stderr.
 check() {
   local img=$1 code token
@@ -100,6 +102,8 @@ check() {
         echo unknown
         return
       fi
+      # The runner reads workflow commands from stderr too.
+      echo "::add-mask::$token" >&2
       ;;
     401 | 403)
       local refusal
@@ -162,7 +166,7 @@ for img in $IMAGES; do
         break
         ;;
       stale-bootstrap)
-        echo "::error::$REPOSITORY/$img exists; remove $img from BOOTSTRAP_IMAGES before publishing again"
+        echo "::error::$REPOSITORY/$img answers MANIFEST_UNKNOWN, so its package exists or needs no bootstrap; remove $img from BOOTSTRAP_IMAGES"
         exit 1
         ;;
     esac

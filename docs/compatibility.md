@@ -65,7 +65,8 @@ registry or network error, a refused login, an answer it does not recognize).
 It publishes only a tag the registry answers "manifest unknown" or "name
 unknown" for. If the registry refuses the workflow's token for a new package
 instead, the image must be named in the workflow's `BOOTSTRAP_IMAGES` for its
-first publication and removed after it (`hack/dev-image-tag-check.sh`). The
+first publication and removed in the next merge: until it is, every run
+stops before any push (`hack/dev-image-tag-check.sh`). The
 check is taken from the workflow's own commit, also when a manual run builds
 an older commit. A
 commit has images only if its run succeeded: a failed run may have pushed some

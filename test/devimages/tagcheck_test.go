@@ -273,7 +273,9 @@ func TestTagCheck(t *testing.T) {
 					t.Errorf("token requests %d, want %d", got, c.wantTries)
 				}
 			}
-			if strings.Contains(out, secret) || strings.Contains(out, bearer) {
+			// The registry token appears only in the runner's mask command.
+			shown := strings.ReplaceAll(out, "::add-mask::"+bearer, "")
+			if strings.Contains(shown, secret) || strings.Contains(shown, bearer) {
 				t.Errorf("output holds a credential:\n%s", out)
 			}
 		})
