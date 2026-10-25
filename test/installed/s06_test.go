@@ -232,6 +232,8 @@ func TestRunS06RestartPassesWhenTheReplacementWritesAFreshStatus(t *testing.T) {
 			t.Fatalf("S06 evidence = %v, want %s", s06.Evidence, rel)
 		}
 	}
+	requireOwnEvidence(t, lab, haScenarioID)
+	requireOwnEvidence(t, s06, "S06/restart")
 	requireNamespaceGone(t, f)
 }
 

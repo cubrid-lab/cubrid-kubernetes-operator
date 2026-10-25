@@ -115,7 +115,7 @@ type haFixture struct {
 	// before it is stored; backupRead before each reading of it; marker runs
 	// workload marker.
 	backupCreated func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error
-	backupRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey)
+	backupRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	marker        func(script string) (string, error)
 
 	writes  []string
@@ -204,7 +204,9 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
 			opts ...client.GetOption) error {
 			if _, ok := obj.(*databasev1alpha1.CubridBackup); ok && f.backupRead != nil {
-				f.backupRead(ctx, c, key)
+				if err := f.backupRead(ctx, c, key); err != nil {
+					return err
+				}
 			}
 			return c.Get(ctx, key, obj, opts...)
 		},
@@ -472,6 +474,17 @@ func requireNoSecretInEvidence(t *testing.T, dir string) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// requireOwnEvidence fails unless every file a scenario lists is under its
+// own directory.
+func requireOwnEvidence(t *testing.T, scenario evidence.Scenario, dir string) {
+	t.Helper()
+	for _, rel := range scenario.Evidence {
+		if !strings.HasPrefix(rel, dir+"/") {
+			t.Fatalf("%s evidence = %v, want only files under %s/", scenario.Name(), scenario.Evidence, dir)
+		}
 	}
 }
 

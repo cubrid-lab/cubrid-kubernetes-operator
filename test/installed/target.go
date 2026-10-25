@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -187,6 +188,9 @@ func startForward(ctx context.Context, start func(context.Context) *exec.Cmd, re
 				}
 			}
 		}
+		// A line too long for the scanner ends it: the rest is read and
+		// dropped, so that kubectl never blocks on a full pipe.
+		_, _ = io.Copy(io.Discard, stdout)
 		_ = cmd.Wait()
 	}()
 	stop := func() {

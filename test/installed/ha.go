@@ -307,7 +307,10 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		if recordErr != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("write HA evidence: %w", recordErr))
 		}
-		scenario.Evidence = h.files
+		// The files of a scenario after LAB01 are its own.
+		scenario.Evidence = slices.DeleteFunc(slices.Clone(h.files), func(f string) bool {
+			return !strings.HasPrefix(f, haScenarioID+"/")
+		})
 		if counts := h.rec.Operations; counts != nil {
 			scenario.Operations = &evidence.Operations{Attempted: counts[workload.Attempted],
 				Acknowledged: counts[workload.Acknowledged], Failed: counts[workload.Failed],

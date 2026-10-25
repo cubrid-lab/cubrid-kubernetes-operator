@@ -173,3 +173,29 @@ func TestStartForwardFailsWhenTheProcessEndsBeforeItListens(t *testing.T) {
 		t.Fatalf("startForward() = %q, %v; want the process's error", addr, err)
 	}
 }
+
+func TestStartForwardKeepsReadingTheProcessOutput(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "done")
+	// A line longer than the scanner takes, then more output: kubectl must
+	// not block on a full pipe.
+	script := `echo 'Forwarding from 127.0.0.1:41234 -> 8333'; head -c 300000 /dev/zero | tr '\0' x; echo; ` +
+		`touch "$0"; exec sleep 60`
+	_, stop, err := startForward(t.Context(), func(ctx context.Context) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "sh", "-c", script, marker)
+		// As Target.Kubectl: the pipeline outlives a killed sh.
+		cmd.WaitDelay = time.Second
+		return cmd
+	}, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the port-forward blocked writing its output")
+		}
+	}
+}

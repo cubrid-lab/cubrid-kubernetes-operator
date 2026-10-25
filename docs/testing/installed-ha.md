@@ -212,7 +212,8 @@ is refused before anything is done.
   this run. The scenario contract leaves `backup_limit` unset.
 - `-object-store-service` is the object store's Service. The run opens
   `kubectl port-forward` to it through its target snapshot, only for its own
-  download. The port-forward ends on every path out of S11. With
+  download. The port-forward ends on every path out of S11, and its output
+  is read to the end so that kubectl never blocks writing it. With
   `-seed-insecure` the run's client speaks plain HTTP; without it, HTTPS to
   `127.0.0.1`, which a certificate for the Service's name does not cover.
 
@@ -236,13 +237,15 @@ is refused before anything is done.
 4. **The artifact, downloaded by the run.** The run does not use the
    Operator's or the Instance Manager's verification. With its own client and
    the seed Secret's keys it checks:
-   - `status.artifact.uri` is `s3://<backup bucket>/<key>/manifest.json`, with
-     the key under the run's prefix;
-   - `manifest.json` can be read. It is parsed with
+   - `status.artifact.uri` is
+     `s3://<backup bucket>/<prefix>/<cluster UID>/<database>/<backup UID>/attempt-<32 hex digits>/manifest.json`,
+     the key the controller writes for this backup;
+   - `manifest.json` can be read and is at most 16 MiB. It is parsed with
      `instancemanager.ParseManifest`; the run then checks it itself:
      `manifestVersion`, `database`, `clusterUID` (the cluster's UID, also in
      `status.clusterUID`), level 0, `sourceInstance` equal to
-     `status.targetInstance`, `sourceRole` equal to `status.targetRole` and to
+     `status.targetInstance` and one of the cluster's members, `sourceRole`
+     equal to `status.targetRole` and to
      `slave`, or `master` when `fallbackUsed`;
    - `cubridVersion` is the cluster's `spec.version` (`11.4`), and the engine
      version that `cubrid_rel` reported on the master during LAB01 is within
@@ -251,31 +254,48 @@ is refused before anything is done.
    - `BackupManifest.Digest()` of the parsed manifest, and the sha256 of the
      stored file, are both `status.artifact.manifestDigest`;
    - the sum of the sizes the manifest lists is `status.artifact.sizeBytes`;
-   - every object the manifest names has a clean key below `backup/`, can
-     be read, and has the size and sha256 the manifest lists. The run
-     streams each object.
+   - every object the manifest names has a clean key below `backup/`, named
+     once, can be read, and has the size and sha256 the manifest lists. The
+     run streams each object.
 
-   An object the manifest names that cannot be read, or a manifest that
-   cannot be read, must never happen. Objects under the attempt prefix that
+   A manifest or an object it names that the store answers it does not hold
+   (`NoSuchKey`, `NoSuchBucket` or 404) must never happen. Any other error
+   of the store or the port-forward, and any error after the run's context
+   ended, means the run could not check: S11 is blocked, not failed. Objects under the attempt prefix that
    the manifest does not name are recorded, not failed: a restore reads only
    what the manifest names.
-5. **Credentials.** Neither key of the seed Secret, as it is or
-   base64-encoded, may be in the backup's status, in the manifest, or in any
-   Event of the run namespace. One found must never happen.
+5. **Credentials.** Neither key of the seed Secret may be in any status the
+   run recorded while it waited, in the backup's status at the end, in the
+   manifest, or in any Event of the run namespace. The run looks for each key
+   in every encoding the evidence redaction removes (`evidence.SecretForms`:
+   as it is, URL- and JSON-escaped, and in the four base64 alphabets). One
+   found must never happen. The Operator's logs are not read; the record
+   says so.
 
 The artifact is left in the bucket for S12; the record says so. Deleting the
 namespace removes the `CubridBackup`, not the artifact.
 
 A run that ends, for example at its `-timeout`, before S11 is judged leaves
-S11 blocked, not failed. So does a port-forward or a client that cannot be
-opened, and a list of the Events that is refused: the run could not check.
+S11 blocked, not failed. So does an API error while the run reads the
+backup, such as a refused `get`; a port-forward or a client that cannot be
+opened; and a list of the Events that is refused: the run could not check.
+S11 fails when the backup ends `Failed`, is replaced, or passes
+`-backup-limit`. When the record cannot be written, a pass becomes a
+failure and a blocked S11 stays blocked.
 `-timeout` must cover LAB01 and `-backup-limit`.
 
 The account needs, beyond LAB01's:
-- `create`, `get`, `list` and `watch` on `cubridbackups` and `list` on Events
-  in the run namespace;
-- `get` on Services and Pods and `create` on `pods/portforward` in the object
-  store's namespace;
+- `create` and `get` on `cubridbackups` and `list` on Events in the run
+  namespace;
+- in the object store's namespace, what `kubectl port-forward service/<name>`
+  uses: `get` on Services, to read the Service's selector and port; `list` on
+  Pods, to pick a Pod the selector matches (`watch` only while none matches,
+  which here is a blocked S11 anyway); `get` on Pods; and `create` on
+  `pods/portforward`. kubectl 1.30 and later open the port-forward over
+  WebSockets, a `GET` upgrade, which an API server authorizes as `get`,
+  `create` or both depending on its version, so grant both on
+  `pods/portforward`. These verbs follow from kubectl's requests; they were
+  not checked against the lab's API server;
 - `get` on the seed Secret, as before.
 
 S11 here does not check:
@@ -286,7 +306,9 @@ S11 here does not check:
 
 ## Evidence
 
-The evidence directory holds `summary.json`, `junit.xml` and these files:
+The evidence directory holds `summary.json`, `junit.xml` and these files.
+Each scenario in `summary.json` lists only the files under its own
+directory: LAB01 its `LAB01/` files, S06 and S11 theirs.
 - `LAB01/record.json`: identities before and after, the starting state with
   the time it took to form, the roles at the end, the seed prefix and the
   Secret's source, operation counts and cleanup;
