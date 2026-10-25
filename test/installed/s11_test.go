@@ -723,9 +723,11 @@ func TestRunS11CompleteIsBlockedWithoutTheObjectStore(t *testing.T) {
 			if err := f.runner.RunHA(t.Context(), cfg); err == nil {
 				t.Fatal("RunHA() passed")
 			}
-			if _, _, s11 := s11Scenario(t, cfg.EvidenceDir); s11.Result != evidence.Blocked {
+			_, _, s11 := s11Scenario(t, cfg.EvidenceDir)
+			if s11.Result != evidence.Blocked {
 				t.Fatalf("S11 = %+v, want blocked", s11)
 			}
+			requireNothingDownloaded(t, s11)
 			f.requireForwardStopped(t)
 		})
 	}
@@ -750,7 +752,7 @@ func TestRunS11CompleteIsBlockedByAnAPIErrorReadingTheBackup(t *testing.T) {
 	}
 }
 
-func TestRunS11CompleteFailsOnAManifestOverTheLimit(t *testing.T) {
+func TestRunS11CompleteIsBlockedByAManifestOverTheRunsLimit(t *testing.T) {
 	limit := maxManifestSize
 	maxManifestSize = 100
 	t.Cleanup(func() { maxManifestSize = limit })
@@ -760,8 +762,9 @@ func TestRunS11CompleteFailsOnAManifestOverTheLimit(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "larger than 100 bytes") {
 		t.Fatalf("RunHA() error = %v, want the manifest over the limit", err)
 	}
-	if _, _, s11 := s11Scenario(t, cfg.EvidenceDir); s11.Result != evidence.Fail {
-		t.Fatalf("S11 = %+v, want a failure", s11)
+	// The limit is the run's, not the contract's.
+	if _, _, s11 := s11Scenario(t, cfg.EvidenceDir); s11.Result != evidence.Blocked {
+		t.Fatalf("S11 = %+v, want blocked", s11)
 	}
 }
 
@@ -892,9 +895,11 @@ func TestRunS11CompleteIsBlockedWhenTheObjectStoreServiceIsNotTheClusters(t *tes
 			if err == nil || !strings.Contains(err.Error(), "spec.objectStorage") {
 				t.Fatalf("RunHA() error = %v, want the Service the cluster does not use", err)
 			}
-			if _, _, s11 := s11Scenario(t, cfg.EvidenceDir); s11.Result != evidence.Blocked {
+			_, _, s11 := s11Scenario(t, cfg.EvidenceDir)
+			if s11.Result != evidence.Blocked {
 				t.Fatalf("S11 = %+v, want blocked", s11)
 			}
+			requireNothingDownloaded(t, s11)
 		})
 	}
 }
@@ -969,5 +974,47 @@ func TestRunS11CompleteReportsACredentialSeenBeforeTheBackupEnded(t *testing.T) 
 				t.Fatalf("S11 = %+v, want a failure with the credential that must never be in a status", s11)
 			}
 		})
+	}
+}
+
+// requireNothingDownloaded fails unless the download measurements of a run
+// that downloaded nothing are unknown.
+func requireNothingDownloaded(t *testing.T, s11 evidence.Scenario) {
+	t.Helper()
+	for _, name := range []string{"objectsVerified", "artifactBytes"} {
+		if s11.Measurements[name] != evidence.Unknown {
+			t.Fatalf("S11 measurements = %v, want %s unknown: nothing was downloaded", s11.Measurements, name)
+		}
+	}
+}
+
+func TestRunS11CompleteStaysFailedWhenTheRunEndsAfterTheBackupFailed(t *testing.T) {
+	cfg := testS11Config(t)
+	f := newS11Fixture(t, cfg)
+	f.phases = []databasev1alpha1.CubridBackupPhase{databasev1alpha1.BackupPhaseRunning,
+		databasev1alpha1.BackupPhaseFailed}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// The reading that returns Failed is the last; the run ends with it.
+	f.onRead = func(read int) error {
+		if read == 2 {
+			cancel()
+		}
+		return nil
+	}
+	if err := f.runner.RunHA(ctx, cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	if _, _, s11 := s11Scenario(t, cfg.EvidenceDir); s11.Result != evidence.Fail ||
+		!strings.Contains(s11.Reason, "ended Failed") {
+		t.Fatalf("S11 = %+v, want the Failed backup kept a failure", s11)
+	}
+}
+
+func TestLookForCredentialsRefusesAKeyTooShortToSearch(t *testing.T) {
+	h := &haRun{accessKey: "abc", secretKey: testSecretKey}
+	found := &s11Credentials{FoundIn: []string{}}
+	if err := h.lookForCredentials(found, "the status", map[string]string{"message": "abc"}); err == nil {
+		t.Fatalf("lookForCredentials() = nil, found %v; want a key too short to be searched refused", found.FoundIn)
 	}
 }

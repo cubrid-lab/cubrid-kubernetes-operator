@@ -98,7 +98,8 @@ func splitService(s string) (namespace, service, port string, err error) {
 // unchecked.
 var errObjectNotFound = errors.New("the object store holds no such object")
 
-// maxManifestSize bounds the manifest the run reads.
+// maxManifestSize bounds the manifest the run reads. A larger one blocks
+// S11: the bound is the run's, not the contract's.
 var maxManifestSize int64 = 16 << 20
 
 // objectStore reads an S3-compatible store. S11 verifies the artifact with
@@ -204,8 +205,10 @@ type s11Verification struct {
 	// NotInManifest lists objects under the attempt prefix that the manifest
 	// does not name, besides manifest.json.
 	NotInManifest []string `json:"objectsNotInManifest"`
-	// Listed is set once the attempt prefix was listed.
-	Listed bool `json:"listed"`
+	// Listed is set once the attempt prefix was listed, ObjectsChecked once
+	// the manifest was parsed and its objects were being downloaded.
+	Listed         bool `json:"listed"`
+	ObjectsChecked bool `json:"objectsChecked"`
 	// Unreadable lists the manifest and the objects it names that could not
 	// be read: what must never happen.
 	Unreadable []string `json:"unreadable"`
@@ -293,6 +296,10 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 		"objectsVerified": evidence.Unknown, "artifactBytes": evidence.Unknown,
 		"objectsNotInManifest": evidence.Unknown}
 	rec.Credentials = &s11Credentials{FoundIn: []string{}}
+	if _, err := h.holdsCredential(nil); err != nil {
+		return end(evidence.Blocked, "%v; S11 could not tell whether a credential is in a status, the manifest or "+
+			"an Event", err)
+	}
 	known, err := h.knownPoint(ctx)
 	rec.KnownPoint = known
 	if err != nil {
@@ -313,15 +320,18 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 			cmp.Or(errorText(err), readyReason(backup))
 		return result
 	}
+	// What the backup was seen to do is a verdict, also when the run ends
+	// right after: it is not routed through end.
 	switch {
 	case errors.As(err, new(backupVerdict)):
-		return end(evidence.Fail, "%v", err)
+		result.Result, result.Reason = evidence.Fail, err.Error()
+		return result
 	case err != nil:
 		// The backup could not be read: S11 could not be judged.
 		return end(evidence.Blocked, "read the CubridBackup: %v", err)
-	}
-	if backup.Status.Phase == databasev1alpha1.BackupPhaseFailed {
-		return end(evidence.Fail, "the backup ended Failed: %s", readyReason(backup))
+	case backup.Status.Phase == databasev1alpha1.BackupPhaseFailed:
+		result.Result, result.Reason = evidence.Fail, "the backup ended Failed: "+readyReason(backup)
+		return result
 	}
 	within := rec.Phases[len(rec.Phases)-1].At.Sub(requested)
 	rec.CompletedWithin = within.Round(time.Millisecond).String()
@@ -341,7 +351,10 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 		}
 	}
 	v := rec.Verification
-	result.Measurements["objectsVerified"], result.Measurements["artifactBytes"] = v.ObjectsVerified, v.BytesDownloaded
+	if v.ObjectsChecked {
+		result.Measurements["objectsVerified"] = v.ObjectsVerified
+		result.Measurements["artifactBytes"] = v.BytesDownloaded
+	}
 	if v.Listed {
 		result.Measurements["objectsNotInManifest"] = len(v.NotInManifest)
 	}
@@ -542,8 +555,8 @@ func (h *haRun) verifyS11Artifact(ctx context.Context, backup *databasev1alpha1.
 	manifest, err := download(ctx, store, h.cfg.BackupBucket, key)
 	switch {
 	case errors.Is(err, errManifestTooLarge):
-		v.Problems = append(v.Problems, fmt.Sprintf("%s: %v", key, err))
-		return nil, nil
+		// A limit of the run, not of the contract: the run could not check.
+		return nil, fmt.Errorf("read %s: %w", key, err)
 	case err != nil:
 		return nil, unreadable(ctx, v, key, err)
 	}
@@ -579,6 +592,7 @@ func unreadable(ctx context.Context, v *s11Verification, key string, err error) 
 // attempt prefix. It stops at the first error that is not a missing object.
 func (h *haRun) verifyS11Objects(ctx context.Context, store objectStore, m instancemanager.BackupManifest,
 	attempt string, v *s11Verification) error {
+	v.ObjectsChecked = true
 	listed := map[string]bool{}
 	for _, obj := range m.Objects {
 		if ctx.Err() != nil {
@@ -831,15 +845,26 @@ func (h *haRun) lookForCredentials(found *s11Credentials, where string, v any) e
 	if err != nil {
 		return err
 	}
-	if h.holdsCredential(data) && !slices.Contains(found.FoundIn, where) {
+	holds, err := h.holdsCredential(data)
+	if err != nil {
+		return err
+	}
+	if holds && !slices.Contains(found.FoundIn, where) {
 		found.FoundIn = append(found.FoundIn, where)
 	}
 	return nil
 }
 
-func (h *haRun) holdsCredential(data []byte) bool {
-	forms := append(evidence.SecretForms(h.accessKey), evidence.SecretForms(h.secretKey)...)
-	return slices.ContainsFunc(forms, func(form string) bool { return strings.Contains(string(data), form) })
+// holdsCredential reports whether data holds a key of the object store. A
+// key too short for evidence.SecretForms cannot be searched for: the run
+// does not claim it found none.
+func (h *haRun) holdsCredential(data []byte) (bool, error) {
+	access, secret := evidence.SecretForms(h.accessKey), evidence.SecretForms(h.secretKey)
+	if len(access) == 0 || len(secret) == 0 {
+		return false, errors.New("a key of the seed Secret is too short to be searched for")
+	}
+	forms := append(access, secret...)
+	return slices.ContainsFunc(forms, func(form string) bool { return strings.Contains(string(data), form) }), nil
 }
 
 // checkS11Credentials looks for the object store's keys in the backup's
@@ -851,7 +876,11 @@ func (h *haRun) checkS11Credentials(ctx context.Context, created *databasev1alph
 	if manifest != nil {
 		found.ManifestChecked = true
 		// As stored, not as JSON text of it.
-		if h.holdsCredential(manifest) {
+		holds, err := h.holdsCredential(manifest)
+		if err != nil {
+			return err
+		}
+		if holds {
 			found.FoundIn = append(found.FoundIn, "manifest.json")
 		}
 	}

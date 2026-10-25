@@ -245,7 +245,9 @@ is refused before anything is done.
    - `status.artifact.uri` is
      `s3://<backup bucket>/<prefix>/<cluster UID>/<database>/<backup UID>/attempt-<32 hex digits>/manifest.json`,
      the key the controller writes for this backup;
-   - `manifest.json` can be read and is at most 16 MiB. It is parsed with
+   - `manifest.json` can be read. The run reads at most 16 MiB of it; a
+     larger manifest blocks S11, since that bound is the run's, not the
+     contract's. It is parsed with
      `instancemanager.ParseManifest`; the run then checks it itself:
      `manifestVersion`, `database`, `clusterUID` (the cluster's UID, also in
      `status.clusterUID`), level 0, `sourceInstance` equal to
@@ -276,7 +278,8 @@ is refused before anything is done.
    in every encoding the evidence redaction removes (`evidence.SecretForms`:
    as it is, URL- and JSON-escaped, and in the four base64 alphabets). One
    found must never happen, also when the backup then fails or cannot be
-   read. The Operator's logs are not read; the record says so.
+   read. A key shorter than four bytes cannot be searched for: S11 is then
+   blocked, never passed. The Operator's logs are not read; the record says so.
 
 The artifact is left in the bucket for S12; the record says so. Deleting the
 namespace removes the `CubridBackup`, not the artifact.
@@ -288,14 +291,16 @@ with `503`, until `-backup-limit` passes, so that the phase at the limit is
 not known; a port-forward or a client that cannot be opened; and a list of
 the Events that is refused: the run could not check. S11 fails when the
 backup ends `Failed`, is replaced, or is read but neither `Completed` nor
-`Failed` when `-backup-limit` passes.
+`Failed` when `-backup-limit` passes. A backup seen `Failed`, replaced or
+over the limit stays failed even when the run ends right after.
 
 What was confirmed stays: when the run has already found something that
 must never happen or an artifact that does not match, an error that stops a
 later check, such as a reset connection to the store or a refused list of
 the Events, is added to the reason of the failure; it does not turn it into
 a blocked S11. `objectsNotInManifest` is `unknown` unless the attempt prefix
-was listed.
+was listed, and `objectsVerified` and `artifactBytes` are `unknown` unless
+the manifest was parsed and its objects were downloaded.
 
 When `S11/complete/record.json` or `S11/complete/manifest.json` cannot be
 written, a pass becomes a failure, and a blocked or failed S11 keeps its

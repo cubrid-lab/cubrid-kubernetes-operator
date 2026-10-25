@@ -152,6 +152,24 @@ func (t *Target) forward(ctx context.Context, namespace, service, port string) (
 	}, forwardReady)
 }
 
+// forwardStderr bounds what a port-forward's error output keeps.
+const forwardStderr = 64 << 10
+
+// headBuffer keeps the first max bytes written to it and drops the rest.
+type headBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (b *headBuffer) Write(p []byte) (int, error) {
+	if room := b.max - b.buf.Len(); room > 0 {
+		b.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+func (b *headBuffer) String() string { return b.buf.String() }
+
 // forwardedPort is the line kubectl port-forward prints once it listens.
 var forwardedPort = regexp.MustCompile(`^Forwarding from 127\.0\.0\.1:(\d+) -> `)
 
@@ -169,8 +187,8 @@ func startForward(ctx context.Context, start func(context.Context) *exec.Cmd, re
 		return "", nil, err
 	}
 	// Read only after the process ended.
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := &headBuffer{max: forwardStderr}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return "", nil, err

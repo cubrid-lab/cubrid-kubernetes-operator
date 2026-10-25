@@ -18,6 +18,7 @@ package installed
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -197,5 +198,14 @@ func TestStartForwardKeepsReadingTheProcessOutput(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("the port-forward blocked writing its output")
 		}
+	}
+}
+
+func TestStartForwardKeepsAPartOfALargeError(t *testing.T) {
+	_, _, err := startForward(t.Context(), func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "head -c 1048576 /dev/zero | tr '\\0' e >&2; exit 1")
+	}, 10*time.Second)
+	if err == nil || len(err.Error()) > 70<<10 {
+		t.Fatalf("startForward() error has %d bytes, want the process's error cut to a part", len(fmt.Sprint(err)))
 	}
 }
