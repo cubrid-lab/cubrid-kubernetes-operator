@@ -1013,8 +1013,8 @@ func TestRunS11CompleteStaysFailedWhenTheRunEndsAfterTheBackupFailed(t *testing.
 
 func TestLookForCredentialsRefusesAKeyTooShortToSearch(t *testing.T) {
 	h := &haRun{accessKey: "abc", secretKey: testSecretKey}
-	found := &s11Credentials{FoundIn: []string{}}
-	if err := h.lookForCredentials(found, "the status", map[string]string{"message": "abc"}); err == nil {
-		t.Fatalf("lookForCredentials() = nil, found %v; want a key too short to be searched refused", found.FoundIn)
+	found := []string{}
+	if err := h.lookForCredentials(&found, "the status", map[string]string{"message": "abc"}); err == nil {
+		t.Fatalf("lookForCredentials() = nil, found %v; want a key too short to be searched refused", found)
 	}
 }
