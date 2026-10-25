@@ -538,11 +538,11 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 	return "", nil
 }
 
-// heartbeat is cubrid heartbeat status on a member: its own role, the nodes
-// of its cluster with their roles, and the state of its processes.
 // testApplyinfoOutput is what the fake applyinfo of a member prints.
 const testApplyinfoOutput = " *** Applied Info. *** \n Committed page : 145 | 432\n Insert count : 3\n"
 
+// heartbeat is cubrid heartbeat status on a member: its own role, the nodes
+// of its cluster with their roles, and the state of its processes.
 func (f *haFixture) heartbeat(pod string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
