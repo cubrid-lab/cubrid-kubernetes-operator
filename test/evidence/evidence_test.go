@@ -17,6 +17,7 @@ limitations under the License.
 package evidence
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"os"
@@ -831,5 +832,76 @@ func TestRequireEmptyDir(t *testing.T) {
 
 	if err := RequireEmptyDir(filepath.Join(used, "summary.json")); err == nil {
 		t.Error("a file was accepted as the evidence directory")
+	}
+}
+
+// Leaks finds a registered credential in any file under the evidence
+// directory, raw or in an encoding Redact removes, and names only the files
+// (#587).
+func TestLeaks(t *testing.T) {
+	const secret = "s3cr3t-object-store-key"
+	r := NewRedactor(secret)
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("summary.json", `{"result":"pass"}`)
+	write("S14/result.txt", "places that showed the credential: 0\n")
+	write("S03/history.jsonl", `{"error":"[REDACTED]"}`+"\n")
+	leaks, err := r.Leaks(dir)
+	if err != nil || len(leaks) != 0 {
+		t.Fatalf("clean evidence: leaks %v, err %v", leaks, err)
+	}
+
+	write("S05/timeline.jsonl", `{"detail":"key `+secret+`"}`+"\n")
+	write("S06/data.b64", base64.StdEncoding.EncodeToString([]byte(secret)))
+	leaks, err = r.Leaks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"S05/timeline.jsonl", "S06/data.b64"}; !slices.Equal(leaks, want) {
+		t.Fatalf("leaks %v, want %v", leaks, want)
+	}
+	for _, l := range leaks {
+		if strings.Contains(l, secret) {
+			t.Fatalf("a leak report shows the credential: %q", l)
+		}
+	}
+
+	// The escaped forms of a value with characters that URL and JSON encode.
+	odd := NewRedactor(`a/b"c-secret value`)
+	escaped := t.TempDir()
+	for name, form := range map[string]string{"url.txt": "a%2Fb%22c-secret+value", "json.txt": `a/b\"c-secret value`} {
+		if err := os.WriteFile(filepath.Join(escaped, name), []byte("x "+form+" y"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if leaks, err := odd.Leaks(escaped); err != nil || !slices.Equal(leaks, []string{"json.txt", "url.txt"}) {
+		t.Fatalf("escaped forms: leaks %v, err %v", leaks, err)
+	}
+
+	// A link is refused, since it could point outside the evidence.
+	if err := os.Symlink(filepath.Join(dir, "summary.json"), filepath.Join(dir, "link.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Leaks(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("a link in the evidence: err %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "link.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if leaks, err := NewRedactor().Leaks(dir); err != nil || len(leaks) != 0 {
+		t.Fatalf("no registered credential: leaks %v, err %v", leaks, err)
+	}
+	if _, err := r.Leaks(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("a missing evidence directory was not an error")
 	}
 }

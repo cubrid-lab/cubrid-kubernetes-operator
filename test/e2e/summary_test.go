@@ -259,5 +259,27 @@ func concludeRun() error {
 		problems = append(problems, fmt.Sprintf(
 			"the suite's deadline passed during %s: the steps after it did not run", timedOutStep))
 	}
+	problems = append(problems, credentialLeaks(evidenceDir())...)
 	return runSummary.Conclude(evidenceDir(), redactor, runLane(), problems...)
+}
+
+// credentialLeaks is a problem for each evidence file of the run that holds a
+// credential the run registered with the redactor, such as the Instance
+// Manager tokens and the object-storage secret key (#587), and one if the
+// files could not be searched. It names the files only. It runs before
+// Conclude writes summary.json and junit.xml, which pass through the same
+// redactor.
+func credentialLeaks(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	leaks, err := redactor.Leaks(dir)
+	if err != nil {
+		return []string{fmt.Sprintf("the evidence could not be searched for credentials: %v", err)}
+	}
+	problems := make([]string, 0, len(leaks))
+	for _, file := range leaks {
+		problems = append(problems, "the evidence file "+file+" holds a credential of the run")
+	}
+	return problems
 }

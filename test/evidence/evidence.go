@@ -25,6 +25,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -466,6 +467,48 @@ func SecretForms(s string) []string {
 			base64.URLEncoding.EncodeToString([]byte(s)), base64.RawURLEncoding.EncodeToString([]byte(s)))
 	}
 	return forms
+}
+
+// Leaks returns the files under dir, relative to it and sorted, that hold a
+// credential registered with Add, raw or in one of the encodings Redact
+// removes (#587). It names files only, never the credential. The evidence
+// should have passed through Redact; this checks that it did.
+func (r *Redactor) Leaks(dir string) ([]string, error) {
+	r.mu.Lock()
+	secrets := slices.Clone(r.secrets)
+	r.mu.Unlock()
+	leaks := []string{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir():
+			return nil
+		case !d.Type().IsRegular():
+			// A link or device could hide a file outside the evidence; the
+			// writers here make none.
+			return fmt.Errorf("%s is not a regular file", path)
+		}
+		data, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			// A temporary file renamed or removed by a late writer.
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		if slices.ContainsFunc(secrets, func(s string) bool { return strings.Contains(text, s) }) {
+			rel, err := filepath.Rel(dir, path)
+			if err != nil {
+				return err
+			}
+			leaks = append(leaks, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	slices.Sort(leaks)
+	return leaks, err
 }
 
 // Redact returns data with credentials replaced by "[REDACTED]".
