@@ -591,7 +591,8 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	// the primary as not resolved: open question Q2 of the contract.
 	acknowledgedWhileUnresolved := 0
 	for _, e := range events {
-		if e.Event == workload.Acknowledged && !unresolved.from.IsZero() && e.T.After(unresolved.from) &&
+		if e.Event == workload.Acknowledged && e.Op == workload.OpInsert && !unresolved.from.IsZero() &&
+			e.T.After(unresolved.from) &&
 			(unresolved.to.IsZero() || e.T.Before(unresolved.to)) {
 			acknowledgedWhileUnresolved++
 		}

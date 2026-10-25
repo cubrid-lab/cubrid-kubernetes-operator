@@ -380,7 +380,9 @@ reads the row of the client's last acknowledged insert back through the same
 connection and compares it with what was sent. It is `acknowledged` only when
 the row is there with those values. A row that is missing or differs is
 `failed` with an error that starts with `read mismatch:`; any other error is
-`failed` with the driver's message. A read writes nothing. The fault scenarios
+`failed` with the driver's message. A read writes nothing. A
+scenario's operation counts (`attempted`, `acknowledged`, ...) include its
+reads and rollbacks. The fault scenarios
 on Kind (S03, S05, S06) run their clients with `READ_EVERY=4` (#294).
 
 ### Operation outcomes
@@ -582,7 +584,8 @@ the operation ID of the row it reads back:
 ```json
 {"t":"2026-10-25T14:25:13.057Z","client":"c3","seq":3,"op":"read","opId":"c3-000003","endpoint":"rw","event":"attempted","amount":75,"note":"c3-2","target":"c3-000002"}
 ```
- A `failed` or `unknown` line carries `error` with the driver's
+
+A `failed` or `unknown` line carries `error` with the driver's
 message. Timestamps are the client's clock in UTC.
 
 An operation whose `attempted` line has no later line (the client stopped

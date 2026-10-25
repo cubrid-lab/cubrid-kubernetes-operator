@@ -210,13 +210,22 @@ public final class Workload {
           if (!r.next()) {
             mismatch = target + " not found";
           } else {
-            String found = r.getString(1) + "/" + r.getInt(2) + "/" + r.getInt(3) + "/" + r.getString(4);
+            String found =
+                r.getString(1) + "/" + r.getInt(2) + "/" + r.getInt(3) + "/" + r.getString(4);
             String sent = client + "/" + lastSeq + "/" + lastAmount + "/" + lastNote;
             mismatch = found.equals(sent) ? null : target + " has " + found + ", sent " + sent;
           }
         }
       }
-      c.commit();
+      try {
+        c.commit();
+      } catch (SQLException e) {
+        // What the SELECT found stays the evidence, also when ending the read fails.
+        discard();
+        String error = mismatch != null ? READ_MISMATCH + " " + mismatch : describe(e);
+        event(seq, op, opId, "failed", 0, null, error);
+        return;
+      }
     } catch (SQLException e) {
       discard();
       event(seq, op, opId, "failed", 0, null, describe(e));
