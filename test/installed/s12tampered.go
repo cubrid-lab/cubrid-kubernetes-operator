@@ -84,6 +84,9 @@ type s12Copy struct {
 	ObjectsNotMatching []string `json:"objectsNotMatchingManifest"`
 	ManifestUnchanged  bool     `json:"manifestUnchanged"`
 	SourceUnchanged    bool     `json:"sourceUnchanged"`
+	// SourceUnchangedAtEnd is S11's manifest read once more after the
+	// refusal, with the digest S11 recorded.
+	SourceUnchangedAtEnd bool `json:"sourceUnchangedAtEnd"`
 	// Removed is set once every object of the copy was removed.
 	Removed bool `json:"removed"`
 }
@@ -177,7 +180,8 @@ func (h *haRun) runS12Tampered(ctx context.Context) (result evidence.Scenario) {
 		result.Result = evidence.Pass
 		result.Reason = "the cluster created from a copy of S11's artifact with one byte of " + rec.Copy.TamperedKey +
 			" changed ended its bootstrap Failed within restore_limit, for that object's checksum mismatch, and " +
-			"was never Ready or Complete; the source and S11's artifact were unchanged; no credential was in its " +
+			"was never Ready or Complete; the source was unchanged and S11's manifest kept its recorded digest; no " +
+			"credential was in its " +
 			"status and no Secret of the source in its Pods; the Operator's logs were not checked"
 	}
 	return result
@@ -216,6 +220,9 @@ func (h *haRun) tamperedSteps(ctx context.Context, result *evidence.Scenario, re
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
 	if err := h.checkSourceS12(ctx, rec.Source, s12TamperedSourceDataCheckFile); err != nil {
+		return err
+	}
+	if err := h.checkS11ManifestAtEnd(ctx, s11, rec.Copy); err != nil {
 		return err
 	}
 	final := &databasev1alpha1.CubridCluster{}
@@ -505,6 +512,28 @@ func (h *haRun) checkTamperedSecrets(ctx context.Context, rec *s12TamperedRecord
 	return nil
 }
 
+// checkS11ManifestAtEnd reads S11's manifest once more after the refusal: a
+// digest other than the one S11 recorded means S11's artifact changed while
+// the cluster restored from the copy ran, which fails S12 tampered. A read
+// that fails blocks it.
+func (h *haRun) checkS11ManifestAtEnd(ctx context.Context, s11 *s11Record, c *s12Copy) error {
+	store, stop, err := h.openS11Store(ctx)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	manifest, err := download(ctx, store, h.cfg.BackupBucket, s11.Verification.ManifestKey)
+	if err != nil {
+		return fmt.Errorf("read S11's manifest %s at the end: %w", s11.Verification.ManifestKey, err)
+	}
+	c.SourceUnchangedAtEnd = sha256Of(manifest) == c.SourceManifestDigest
+	if !c.SourceUnchangedAtEnd {
+		return restoreVerdict{fmt.Errorf("S11's manifest %s no longer has the digest S11 recorded, %s, after the "+
+			"cluster restored from the copy ran", s11.Verification.ManifestKey, c.SourceManifestDigest)}
+	}
+	return nil
+}
+
 // removeCopy removes the keys of the copy the run wrote, with a budget of
 // its own so that a run that ended still removes them, and records whether
 // the prefix is empty after it. What it leaves is the residue; it does not
@@ -525,8 +554,10 @@ func (h *haRun) removeCopy(ctx context.Context, keys []string, rec *s12TamperedR
 			return err
 		}
 		defer stop()
+		// The manifest, written last, goes first: no reader sees a manifest
+		// that names objects already removed.
 		var errs []error
-		for _, key := range keys {
+		for _, key := range slices.Backward(keys) {
 			if err := store.Remove(rctx, h.cfg.BackupBucket, key); err != nil {
 				errs = append(errs, fmt.Errorf("remove %s: %w", key, err))
 			}

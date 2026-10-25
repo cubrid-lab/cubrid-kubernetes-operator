@@ -591,14 +591,18 @@ nothing of it is done. `ha-restore` is left as S12 `exact` left it.
 6. **The source.** As step 8 of S12 `exact`: the same member Pods and
    containers, the same master by CUBRID and `status.currentPrimary`, no
    marker `s12` on a source member, and the data rules over the whole
-   history. Any difference fails S12 `tampered`.
+   history. Any difference fails S12 `tampered`. Then S11's manifest is read
+   once more: a digest other than the one S11 recorded fails S12 `tampered`,
+   since S11's artifact changed while `ha-tampered` ran; a read that fails
+   blocks it. Its objects are not read again.
 7. **Credentials.** Neither key of the seed Secret may be in any status of
    `ha-tampered` the run read, at every reading and once at the end. That
    last reading must also still show the refusal; one that does not fails
    S12 `tampered`.
 8. **Removal.** On every path out of S12 `tampered`, also when the run
-   ended, the run removes each key of the copy it wrote, with
-   `-cleanup-timeout` as its own budget, and lists the prefix again. The
+   ended, the run removes each key of the copy it wrote, the manifest
+   first, with `-cleanup-timeout` as its own budget, and lists the prefix
+   again. The
    record says whether the copy was removed and, if not, what may be left.
    Removing it does not judge S12 `tampered`.
 

@@ -161,12 +161,12 @@ func (f *s12TamperedFixture) advanceTampered(ctx context.Context, c client.WithW
 			metav1.ConditionTrue, "RecoveryComplete", "restore completed on "+testTamperedMember
 		ready = metav1.ConditionTrue
 	case attempt < 3:
-		why := "object " + f.mismatched[0] + " checksum mismatch"
+		why := testRefusalCause(f.mismatched[0])
 		s.Bootstrap.Attempts, s.Bootstrap.OperationID = int32(attempt), ""
 		boot.Reason, boot.Message = "RestoreFailedRetrying", "on "+testTamperedMember+": "+why+
 			fmt.Sprintf("; starting attempt %d of 3", attempt+1)
 	default:
-		why := "object " + f.mismatched[0] + " checksum mismatch"
+		why := testRefusalCause(f.mismatched[0])
 		s.Bootstrap.Phase, s.Bootstrap.Attempts, s.Bootstrap.OperationID = databasev1alpha1.BootstrapFailed, 2, ""
 		boot.Reason, boot.Message = s12RefusedReason, "on "+testTamperedMember+": "+why+"; giving up after 3 attempts"
 	}
@@ -335,7 +335,7 @@ func requireTamperedRecord(t *testing.T, f *s12TamperedFixture) {
 		t.Fatalf("bootstrap = %+v, want each attempt and the Failed phase", rec.Bootstrap)
 	}
 	if rec.ClusterUID != testTamperedUID || rec.RefusedWithin == "" || !strings.HasPrefix(rec.Refusal,
-		s12RefusedReason+": on "+testTamperedMember+": object "+testFirstBackupKey+" checksum mismatch") {
+		s12RefusedReason+": on "+testTamperedMember+": "+testRefusalCause(testFirstBackupKey)) {
 		t.Fatalf("record = %+v, want the cluster and the refusal", rec)
 	}
 	if !slices.Contains(rec.SecretsReferenced, testTamperedSecret) || slices.Contains(rec.SecretsReferenced,
@@ -580,5 +580,42 @@ func TestRunS12WithoutRestoreTamperedKeepsItsLane(t *testing.T) {
 	}
 	if f.tampered != nil {
 		t.Fatal("S12 tampered ran without -restore-tampered")
+	}
+}
+
+// testRefusalCause is the failure reason of a restore whose object key does
+// not match its checksum, as the Instance Manager words it (restore.go,
+// server.go) and the Operator passes it on.
+func testRefusalCause(key string) string {
+	return "restore failed: artifact verification failed: object " + key + " checksum mismatch"
+}
+
+func TestRunS12TamperedFailsWhenS11sArtifactChangesDuringTheRestore(t *testing.T) {
+	cfg := testS12TamperedConfig(t)
+	f := newS12TamperedFixture(t, cfg)
+	f.afterTamperedCreated = func(context.Context, client.WithWatch) {
+		s11 := readS11Record(t, cfg.EvidenceDir)
+		key := strings.TrimPrefix(s11.Artifact.URI, "s3://"+testBackupBucket+"/")
+		f.store.put(testBackupBucket, key, append(slices.Clone(f.store.objects[testBackupBucket+"/"+key]), ' '))
+	}
+	tampered, err := tamperedOf(t, f, t.Context())
+	if err == nil || tampered.Result != evidence.Fail || !strings.Contains(tampered.Reason, "S11's manifest") {
+		t.Fatalf("S12 tampered = %+v, want a fail: S11's artifact changed after the cluster was created", tampered)
+	}
+}
+
+func TestRunS12TamperedRemovesTheCopysManifestFirst(t *testing.T) {
+	cfg := testS12TamperedConfig(t)
+	f := newS12TamperedFixture(t, cfg)
+	var removed []string
+	f.store.removeErr = func(key string) error {
+		removed = append(removed, key)
+		return nil
+	}
+	if tampered, err := tamperedOf(t, f, t.Context()); err != nil || tampered.Result != evidence.Pass {
+		t.Fatalf("S12 tampered = %+v, error %v; want a pass", tampered, err)
+	}
+	if len(removed) < 2 || path.Base(removed[0]) != instancemanager.ManifestObjectName {
+		t.Fatalf("removed = %v, want the copy's manifest removed before its objects", removed)
 	}
 }
