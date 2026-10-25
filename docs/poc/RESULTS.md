@@ -3486,12 +3486,12 @@ On the slave:
 | 20:28:41 (committed) | 300\|8 | 300\|8 | 3200 | 42 |
 
 - **No other commit reached the log during the transaction.** `commit_counter` stayed at 41 in every sample from 20:27:02 to the commit, and at 42 after it until 20:29:12. It had gone from 39 to 41 between 20:26:56 and 20:27:02, at the stop, most likely commits already in the log.
-- **`final_lsa` advanced anyway.** It moved about 8 to 10 pages per 5 s sample, 3 and 16 around a short apply lag from 20:27:54 to 20:28:09, and 135 pages from 20:27:17 to 20:28:35. At the commit, `commit_counter` rose by exactly 1 and `insert_counter` by 3200.
+- **`final_lsa` advanced anyway.** It moved about 8 to 10 pages per 5 s sample, and 16, 3 and 14 around a short apply lag from 20:27:54 to 20:28:14, and 135 pages from 20:27:17 to 20:28:35. At the commit, `commit_counter` rose by exactly 1 and `insert_counter` by 3200.
 - **The idle log also creeps without commits.** `final_lsa` moved from 148\|14296 to 148\|15016 (720 bytes in 15 s) before the transaction, and from 312\|9752 to 312\|11000 (1248 bytes in 26 s) after it. Small non-commit records of unknown source still reach the log.
 - **Why the advance is the transaction's:**
-  - It is about four orders of magnitude larger than that creep.
+  - It is several hundred times that creep: about 28 KB/s against about 48 B/s, assuming the 16 KB log pages the offsets suggest.
   - It starts within one sample of the first insert, and drops back to creep after the commit.
-  - `required_lsa` was held at 148\|15112, the transaction's first record, for the whole open window, and jumped to 300\|8 at the commit.
+  - `required_lsa` was held at 148\|15112, most likely the transaction's first record, for the whole open window, and jumped to 300\|8 at the commit.
 
 **What part D changes.**
 - `final_lsa` advanced through an open transaction with no other commit in the master's log. The confound of part A does not explain it.
