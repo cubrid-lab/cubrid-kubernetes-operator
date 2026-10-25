@@ -21,7 +21,10 @@ package e2e
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -106,6 +109,84 @@ func (r *haRun) tokenPlaces() map[string][]string {
 		places["the log of "+member] = []string{"-n", r.namespace, "logs", member, "--tail=-1"}
 	}
 	return places
+}
+
+// objectStorageSecretKey is the secret key of the HA cluster's object-storage
+// Secret: unique to the run, so that S14 can look for it (#91). The mock
+// object store does not check it.
+var objectStorageSecretKey = func() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return "e2e-objstore-" + hex.EncodeToString(b)
+}()
+
+// rbacCheck is one question to the API server about what a service account
+// may do, and the answer the deployed RBAC must give.
+type rbacCheck struct {
+	as, namespace, verb, resource, subresource string
+	allowed                                    bool
+}
+
+// rbacChecks are what the manager and the DB Pods' service account must and
+// must not be allowed (#91): the manager's ClusterRole is config/rbac/role.yaml,
+// and the DB Pods' service account is given nothing.
+func (r *haRun) rbacChecks(dbServiceAccount string) []rbacCheck {
+	manager := "system:serviceaccount:" + namespace + ":cubrid-kubernetes-operator-controller-manager"
+	db := "system:serviceaccount:" + r.namespace + ":" + dbServiceAccount
+	ns := r.namespace
+	return []rbacCheck{
+		{manager, ns, "get", "secrets", "", true},
+		{manager, ns, "create", "statefulsets", "", true},
+		{manager, ns, "delete", "pods", "", true},
+		{manager, ns, "patch", "cubridclusters", "status", true},
+		{manager, ns, "create", "networkpolicies", "", true},
+		{manager, ns, "create", "pods", "", false},
+		{manager, ns, "create", "pods", "exec", false},
+		{manager, ns, "create", "pods", "attach", false},
+		{manager, ns, "delete", "persistentvolumeclaims", "", false},
+		{manager, ns, "delete", "secrets", "", false},
+		{manager, "", "delete", "namespaces", "", false},
+		{manager, "", "create", "clusterrolebindings", "", false},
+		{manager, "", "escalate", "clusterroles", "", false},
+		{manager, "", "bind", "clusterroles", "", false},
+		{manager, ns, "impersonate", "serviceaccounts", "", false},
+		{db, ns, "get", "secrets", "", false},
+		{db, ns, "list", "pods", "", false},
+		{db, ns, "get", "cubridclusters", "", false},
+		{db, ns, "create", "pods", "exec", false},
+	}
+}
+
+// canI asks the API server whether c.as may do what c names. kubectl answers
+// "yes" with exit code 0 and "no" with exit code 1 on standard output;
+// warnings go to standard error. Anything else is an error, never a "no".
+// A check without a namespace is asked across all namespaces, which is also
+// how kubectl asks for a cluster-scoped resource without warning.
+func canI(c rbacCheck) (bool, error) {
+	args := []string{"auth", "can-i", c.verb, c.resource, "--as", c.as}
+	if c.subresource != "" {
+		args = append(args, "--subresource", c.subresource)
+	}
+	if c.namespace != "" {
+		args = append(args, "-n", c.namespace)
+	} else {
+		args = append(args, "--all-namespaces")
+	}
+	cmd := exec.Command("kubectl", args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	answer := strings.TrimSpace(lines[len(lines)-1])
+	var exit *exec.ExitError
+	switch {
+	case err == nil && answer == "yes":
+		return true, nil
+	case errors.As(err, &exit) && exit.ExitCode() == 1 && (answer == "no" || strings.HasPrefix(answer, "no - ")):
+		return false, nil
+	default:
+		return false, fmt.Errorf("kubectl %s: %v: %s %s", strings.Join(args, " "), err, out, stderr.String())
+	}
 }
 
 // s14Step registers S14 (authentication and Secrets) of the scenario
@@ -287,12 +368,36 @@ func s14Step(r *haRun) {
 			Expect(log).To(ContainSubstring(`"reason":"WrongToken"`), "log of %s", member)
 		}
 
-		By("looking for the token where it must not be")
+		By("looking for the token and the object-storage secret key where they must not be")
 		places := r.tokenPlaces()
 		for where, args := range places {
 			out, err := utils.Run(exec.Command("kubectl", args...))
 			Expect(err).NotTo(HaveOccurred(), where)
 			Expect(strings.Contains(out, instanceManagerToken)).To(BeFalse(), "the token is shown in %s", where)
+			Expect(strings.Contains(out, objectStorageSecretKey)).To(BeFalse(),
+				"the object-storage secret key is shown in %s", where)
+		}
+
+		By("asking the API server what the manager and the DB Pods' service account may do")
+		dbServiceAccount, err := r.kubectl(context.Background(), "get", "pod", master,
+			"-o", "jsonpath={.spec.serviceAccountName}")
+		Expect(err).NotTo(HaveOccurred())
+		dbServiceAccount = strings.TrimSpace(dbServiceAccount)
+		Expect(dbServiceAccount).NotTo(BeEmpty())
+		checks := r.rbacChecks(dbServiceAccount)
+		var granted strings.Builder
+		for _, c := range checks {
+			allowed, err := canI(c)
+			Expect(err).NotTo(HaveOccurred())
+			fmt.Fprintf(&granted, "%s %s %s/%s in %q: %t\n", c.as, c.verb, c.resource, c.subresource, c.namespace,
+				allowed)
+			Expect(allowed).To(Equal(c.allowed), "%s %s %s/%s in %q", c.as, c.verb, c.resource, c.subresource,
+				c.namespace)
+		}
+		for _, as := range []string{checks[0].as, checks[len(checks)-1].as} {
+			list, err := utils.Run(exec.Command("kubectl", "auth", "can-i", "--list", "-n", r.namespace, "--as", as))
+			Expect(err).NotTo(HaveOccurred())
+			fmt.Fprintf(&granted, "\n%s may, in %s:\n%s", as, r.namespace, list)
 		}
 
 		// Worded so that the redactor, which removes what follows the word
@@ -303,19 +408,26 @@ func s14Step(r *haRun) {
 			requests, master, len(places))
 		summary = fmt.Sprintf("connections from another namespace dropped: %d (ports 9090 and 1523, 2 members)\n",
 			dropped) + summary
+		summary += fmt.Sprintf("places that showed the object-storage secret key: 0\n"+
+			"RBAC answers checked: %d, all as config/rbac/role.yaml grants\n", len(checks))
 		files := r.evidenceFiles("S14", report)
 		if f := writeScenarioFile("S14/result.txt", []byte(summary)); f != "" {
+			files = append(files, f)
+		}
+		if f := writeScenarioFile("S14/rbac.txt", []byte(granted.String())); f != "" {
 			files = append(files, f)
 		}
 		result = evidence.Scenario{
 			ID: "S14", Result: evidence.Pass,
 			Measurements: map[string]any{
-				"connectionsDropped":  dropped,
-				"requestsRefused":     requests,
-				"requestsAccepted":    2,
-				"placesSearched":      len(places),
-				"tokenFound":          0,
-				"acknowledgedMissing": report.AcknowledgedMissing,
+				"connectionsDropped":       dropped,
+				"requestsRefused":          requests,
+				"requestsAccepted":         2,
+				"placesSearched":           len(places),
+				"tokenFound":               0,
+				"objectStorageSecretFound": 0,
+				"rbacChecks":               len(checks),
+				"acknowledgedMissing":      report.AcknowledgedMissing,
 			},
 			Evidence: files,
 		}
