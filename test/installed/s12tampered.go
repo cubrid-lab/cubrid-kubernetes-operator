@@ -150,7 +150,7 @@ func (h *haRun) runS12Tampered(ctx context.Context) (result evidence.Scenario) {
 			return !strings.HasPrefix(f, "S12/"+s12TamperedVariant+"/")
 		})
 	}()
-	result.Limits = map[string]string{"restore_limit": h.cfg.RestoreLimit.String()}
+	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String()}
 	result.Measurements = map[string]any{"refusedWithin": evidence.Unknown, "attempts": evidence.Unknown}
 	err := h.tamperedSteps(ctx, &result, &rec, &written)
 	// A credential found in any status read is a failure, whichever step
@@ -429,7 +429,7 @@ func (h *haRun) waitRefused(ctx context.Context, created *databasev1alpha1.Cubri
 		return time.Time{}, fmt.Errorf("the cluster restored from the tampered copy could not be read before "+
 			"restore_limit %s passed: %w", h.cfg.RestoreLimit, readErr)
 	case ctx.Err() == nil && wctx.Err() != nil:
-		phase, reason := "none", "no BootstrapReady condition"
+		phase, reason := noBootstrapPhase, noBootstrapCondition
 		if n := len(rec.Bootstrap); n > 0 {
 			last := rec.Bootstrap[n-1]
 			phase = last.Phase
@@ -457,7 +457,7 @@ func (h *haRun) tamperedReading(cluster *databasev1alpha1.CubridCluster, key, wh
 	recordBootstrap(cluster, &rec.Bootstrap)
 	rec.Credentials.StatusesChecked++
 	if err := h.lookForCredentials(&rec.Credentials.FoundIn, "the tampered cluster's "+where+" in bootstrap "+
-		"phase "+cmp.Or(phase, "none"), cluster.Status); err != nil {
+		"phase "+cmp.Or(phase, noBootstrapPhase), cluster.Status); err != nil {
 		return false, err
 	}
 	var events []string
@@ -488,27 +488,36 @@ func (h *haRun) tamperedReading(cluster *databasev1alpha1.CubridCluster, key, wh
 }
 
 // checkTamperedSecrets records the Secrets the Pod template of the cluster's
-// StatefulSet names. One that a Pod template of the source also names must
-// never happen: the new cluster would depend on a Secret of the source.
+// StatefulSet names, as checkStatefulSetSecrets checks them.
 func (h *haRun) checkTamperedSecrets(ctx context.Context, rec *s12TamperedRecord, result *evidence.Scenario) error {
+	return h.checkStatefulSetSecrets(ctx, s12TamperedClusterName, "the cluster restored from the tampered copy",
+		&rec.SecretsReferenced, result)
+}
+
+// checkStatefulSetSecrets records in referenced the Secrets the Pod template
+// of cluster's StatefulSet names. One that a Pod template of the source also
+// names must never happen: the new cluster, which what describes, would
+// depend on a Secret of the source.
+func (h *haRun) checkStatefulSetSecrets(ctx context.Context, cluster, what string, referenced *[]string,
+	result *evidence.Scenario) error {
 	sts := &appsv1.StatefulSet{}
-	key := client.ObjectKey{Namespace: h.cfg.Namespace, Name: s12TamperedClusterName}
+	key := client.ObjectKey{Namespace: h.cfg.Namespace, Name: cluster}
 	if err := h.Client.Get(ctx, key, sts); err != nil {
-		return fmt.Errorf("read the StatefulSet of %s: %w", s12TamperedClusterName, err)
+		return fmt.Errorf("read the StatefulSet of %s: %w", cluster, err)
 	}
 	names := secretNames(&sts.Spec.Template.Spec)
 	slices.Sort(names)
-	rec.SecretsReferenced = slices.Compact(names)
+	*referenced = slices.Compact(names)
 	source, err := h.secretsOf(ctx, haClusterName)
 	if err != nil {
 		return err
 	}
-	shared := slices.DeleteFunc(slices.Clone(rec.SecretsReferenced), func(name string) bool {
+	shared := slices.DeleteFunc(slices.Clone(*referenced), func(name string) bool {
 		return !slices.Contains(source, name)
 	})
 	if len(shared) > 0 {
-		result.NeverEvents = append(result.NeverEvents, "the Pods of the cluster restored from the tampered copy "+
-			"name Secrets of the source cluster: "+strings.Join(shared, ", "))
+		result.NeverEvents = append(result.NeverEvents, "the Pods of "+what+" name Secrets of the source cluster: "+
+			strings.Join(shared, ", "))
 	}
 	return nil
 }

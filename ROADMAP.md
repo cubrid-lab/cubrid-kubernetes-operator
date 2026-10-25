@@ -172,9 +172,10 @@ after the data checks had held, a `csql` read on a restored member returned
 its row and then lost its session (`-199`, `-111`) 10 to 17 s after the
 restored cluster became ready, once on the master and once on a slave; the
 cause is unknown and tracked on #238 (POC-36 measured about 3% of plain `csql`
-reads aborted this way on a running slave). The `wrong-target` variant,
-interruptions and restarts during the restore, and the Operator's logs are not
-covered.
+reads aborted this way on a running slave). Since #575 the harness reads
+such a lost session once more and records it per scenario (`lostSessions`), so
+it no longer blocks a run. Interruptions and restarts during the restore, and
+the Operator's logs, are not covered.
 
 S12 `tampered` follows S12 `exact` on the same run
 (`lab-installed-ha-s12-tampered`, `-restore-tampered`, #121): a copy of S11's
@@ -191,6 +192,19 @@ source member after the refusal, and in the second S12 `exact` was blocked by
 it, so `tampered` did not run. The refused cluster's volume afterwards, a
 changed manifest or a missing object, and the Operator's logs and Events are
 not covered.
+
+S12 `wrong-target` also follows S12 `exact` (`lab-installed-ha-s12-wrong-target`,
+`-restore-wrong-target`, #121): a third cluster is formed, takes a marker row
+and is deleted with its PVCs kept (`Retain`); a recovery cluster of the same
+name over those PVCs, naming S11's artifact, must end its bootstrap `Failed`
+with `RestoreFailed` and the Instance Manager's guard (`target ... already
+holds database ...; refusing to overwrite (ADR-0008)`) within `restore_limit`,
+never `Ready` or `Complete`, on the same PVCs, and its members must still hold
+the marker and not S11's. On 2026-10-25 it passed three times on the VM lab
+(manager `d6df2ac`), the last from the merged harness, refused in 1 min 3 s to
+1 min 24 s after three attempts; one earlier run was blocked in S12 `exact` by
+#238 before #575. A normal cluster over retained PVCs (S13 `retain`) is not
+covered; the code suggests it would refuse to seed its other members (#90).
 
 A [manual VM-lab run on 2026-10-21](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210)
 moved the lab to main `9c6ae9c1ef97eae29c13dff7a272d1082715c9e2` through the
@@ -411,10 +425,11 @@ unverified (#86, #87).
 
 **Implementation:** Backup API/controller, artifact handling and recovery
 bootstrap code are merged.
-**Live validation:** On the VM lab, S11 `complete`, S12 `exact` and S12
-`tampered` passed (see above), with S12 runs blocked by a lost SQL session
-(#238). The interrupted backup and restore variants, `wrong-target`, restarts
-during a restore and the Operator's logs remain unverified (#88, #89, #121).
+**Live validation:** On the VM lab, S11 `complete` and S12 `exact`,
+`tampered` and `wrong-target` passed (see above); a lost SQL session (#238)
+blocked S12 runs until the harness read it again (#575). The interrupted backup
+and restore variants, restarts during a restore and the Operator's logs remain
+unverified (#88, #89, #121).
 
 - `CubridBackup`
 - backup execution implementation

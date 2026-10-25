@@ -62,6 +62,12 @@ const (
 	s12PostBackupOperations = 20
 	// s12SecretName is the restored cluster's own copy of the seed Secret.
 	s12SecretName = "object-storage-restore"
+	// restoreLimitName is the limit S12's variants are bound by.
+	restoreLimitName = "restore_limit"
+	// noBootstrapPhase and noBootstrapCondition name a bootstrap phase and a
+	// BootstrapReady condition that were not seen.
+	noBootstrapPhase     = "none"
+	noBootstrapCondition = "no BootstrapReady condition"
 	// bootstrapReadyCondition is the condition that holds a cluster's
 	// bootstrap reason.
 	bootstrapReadyCondition = "BootstrapReady"
@@ -163,11 +169,17 @@ type s12Record struct {
 	Residue           string          `json:"residue"`
 }
 
-// validateS12 checks the inputs of S12 exact and tampered, when they are
-// selected.
+// validateS12 checks the inputs of S12 exact, tampered and wrong-target,
+// when they are selected.
 func (c HAConfig) validateS12() error {
 	if c.RestoreTampered && !c.Restore {
 		return errors.New("-restore-tampered needs -restore: S12 tampered follows S12 exact")
+	}
+	if c.RestoreWrongTarget && !c.Restore {
+		return errors.New("-restore-wrong-target needs -restore: S12 wrong-target follows S12 exact")
+	}
+	if c.RestoreWrongTarget && c.RestoreTampered {
+		return errors.New("-restore-wrong-target and -restore-tampered select different lanes; a run takes one of them")
 	}
 	if !c.Restore {
 		return nil
@@ -218,7 +230,7 @@ func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 			return !strings.HasPrefix(f, "S12/")
 		})
 	}()
-	result.Limits = map[string]string{"restore_limit": h.cfg.RestoreLimit.String()}
+	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String()}
 	result.Measurements = map[string]any{"restoredWithin": evidence.Unknown,
 		"dataRulesHeldAfterSeconds": evidence.Unknown, "postBackupRowsPresent": evidence.Unknown}
 	err := h.s12Steps(ctx, &result, &rec)
@@ -473,7 +485,7 @@ func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.Cubr
 		return nil, time.Time{}, fmt.Errorf("the restored cluster could not be read before restore_limit %s "+
 			"passed: %w", h.cfg.RestoreLimit, readErr)
 	case ctx.Err() == nil && wctx.Err() != nil:
-		phase := "none"
+		phase := noBootstrapPhase
 		if n := len(rec.Bootstrap); n > 0 {
 			phase = rec.Bootstrap[n-1].Phase
 		}
@@ -495,7 +507,7 @@ func (h *haRun) restoredReading(ctx context.Context, cluster *databasev1alpha1.C
 	recordBootstrap(cluster, &rec.Bootstrap)
 	rec.Credentials.StatusesChecked++
 	if err := h.lookForCredentials(&rec.Credentials.FoundIn, "the restored cluster's status read in bootstrap "+
-		"phase "+cmp.Or(phase, "none"), cluster.Status); err != nil {
+		"phase "+cmp.Or(phase, noBootstrapPhase), cluster.Status); err != nil {
 		return nil, "", err
 	}
 	if ready := meta.FindStatusCondition(cluster.Status.Conditions, startingConditions[0]); ready != nil &&
@@ -567,7 +579,7 @@ func bootstrapReason(cluster *databasev1alpha1.CubridCluster) string {
 	if c := meta.FindStatusCondition(cluster.Status.Conditions, bootstrapReadyCondition); c != nil {
 		return c.Reason + ": " + c.Message
 	}
-	return "no BootstrapReady condition"
+	return noBootstrapCondition
 }
 
 // checkRestoredSecrets records the Secrets the restored cluster's Pod
