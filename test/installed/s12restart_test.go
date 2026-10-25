@@ -19,6 +19,7 @@ package installed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -77,6 +78,13 @@ type s12RestartFixture struct {
 	// too.
 	dropRestartMarkerOn string
 	misrouteRestart     bool
+	// onRestoring runs once, at the first reading in Restoring before the
+	// manager Pod was deleted, with the API server's client. replaceAt
+	// recreates ha-restart with another UID before that reading.
+	// restartWriteAnswer answers the marker written through ha-restart.
+	onRestoring        func(ctx context.Context, c client.WithWatch)
+	replaceAt          int
+	restartWriteAnswer func() (string, error)
 
 	restartCluster            *databasev1alpha1.CubridCluster
 	restartReads, restartStep int
@@ -120,6 +128,10 @@ func newS12RestartFixture(t *testing.T, cfg HAConfig) *s12RestartFixture {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.restartWrites = append(f.restartWrites, script)
+		if f.restartWriteAnswer != nil {
+			out, err := f.restartWriteAnswer()
+			return out, err, true
+		}
 		return "marker " + s12RestartMarker + " written\n", nil, true
 	}
 	f.markersOf = func(pod string) []string {
@@ -151,8 +163,25 @@ func (f *s12RestartFixture) advanceRestart(ctx context.Context, c client.WithWat
 	if phase != databasev1alpha1.BootstrapRestoring || deleted || f.noHold {
 		f.restartStep++
 	}
-	tamper := f.tamperRestart
+	tamper, onRestoring := f.tamperRestart, f.onRestoring
+	if phase == databasev1alpha1.BootstrapRestoring && !deleted {
+		f.onRestoring = nil
+	} else {
+		onRestoring = nil
+	}
 	f.mu.Unlock()
+	if onRestoring != nil {
+		onRestoring(ctx, c)
+	}
+	if read == f.replaceAt {
+		if err := c.Delete(ctx, cluster); err != nil {
+			f.t.Error(err)
+		}
+		cluster.UID, cluster.ResourceVersion = testRestartUID+"-again", ""
+		if err := c.Create(ctx, cluster); err != nil {
+			f.t.Error(err)
+		}
+	}
 	now := metav1.NewTime(time.Now().Truncate(time.Second))
 	status := metav1.ConditionFalse
 	if phase == databasev1alpha1.BootstrapComplete {
@@ -250,6 +279,21 @@ func TestRunS12OperatorRestartPassesWhenTheRestoreSurvivesTheRestart(t *testing.
 	}
 	if summary := readSummary(t, cfg.EvidenceDir); !summary.Passed || restart.Result != evidence.Pass {
 		t.Fatalf("summary = %+v, want every scenario passed", summary)
+	}
+	if f.managerDeletes != 1 {
+		t.Fatalf("manager Pod deleted %d times, want once", f.managerDeletes)
+	}
+	// summary.json keeps no reason for a pass: the reason is built from the
+	// record.
+	reason := restartPassReason(readRestartRecord(t, cfg.EvidenceDir).Restart)
+	for _, want := range []string{"Restoring with operation " + testRestartOp, "Restoring at the takeover",
+		"kept operation " + testRestartOp + " under attempt 0 with 0 retries"} {
+		if !strings.Contains(reason, want) {
+			t.Fatalf("S12 operator-restart reason = %q, want %q", reason, want)
+		}
+	}
+	if restart.Measurements["phaseAtTakeover"] != "Restoring" {
+		t.Fatalf("measurements = %v, want the phase at the takeover", restart.Measurements)
 	}
 	if strings.Join(f.writes, ",") != "namespace,secret,cluster,client,backup,secret,restore-cluster,secret,"+
 		"restart-cluster" || !f.managerDeleted {
@@ -454,7 +498,7 @@ func TestRunS12OperatorRestartFailsWhenTheRestoreIsStartedAgainSilently(t *testi
 	}
 }
 
-func TestRunS12OperatorRestartAcceptsARetryWithItsReason(t *testing.T) {
+func TestRunS12OperatorRestartIsBlockedWhenARetryReplacedTheOperation(t *testing.T) {
 	cfg := testS12RestartConfig(t)
 	f := newS12RestartFixture(t, cfg)
 	var retried int
@@ -473,8 +517,10 @@ func TestRunS12OperatorRestartAcceptsARetryWithItsReason(t *testing.T) {
 		}
 	}
 	restart, err := restartOf(t, f, t.Context())
-	if err != nil || restart.Result != evidence.Pass {
-		t.Fatalf("S12 operator-restart = %+v, %v; want a pass: the status gave the attempt's reason", restart, err)
+	if err == nil || restart.Result != evidence.Blocked ||
+		!strings.Contains(restart.Reason, "a failed attempt replaced the operation") {
+		t.Fatalf("S12 operator-restart = %+v, %v; want blocked: the retry left the restart's effect unobserved",
+			restart, err)
 	}
 	rec := readRestartRecord(t, cfg.EvidenceDir)
 	if r := rec.Restart; len(r.Retries) != 1 || r.Retries[0].From != 0 || r.Retries[0].To != 1 ||
@@ -612,4 +658,126 @@ func TestRunHARefusesAnInvalidS12OperatorRestartConfiguration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunS12OperatorRestartIsBlockedWhenTheOldManagerAdvancedBeforeTheTakeover(t *testing.T) {
+	cfg := testS12RestartConfig(t)
+	f := newS12RestartFixture(t, cfg)
+	// The old process wrote SeedingReplicas after the deletion, and the
+	// replacement acquires the Lease later than the readings that show it.
+	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		f.startReplacement(ctx, c)
+		f.takeLeaseAt(ctx, c, time.Now().Add(time.Hour))
+	}
+	f.tamperRestart = func(_ int, deleted bool, s *databasev1alpha1.CubridClusterStatus) {
+		if deleted && s.Bootstrap.Phase == databasev1alpha1.BootstrapRestoring {
+			s.Bootstrap.Phase = databasev1alpha1.BootstrapSeedingReplicas
+		}
+	}
+	restart, err := restartOf(t, f, t.Context())
+	if err == nil || restart.Result != evidence.Blocked ||
+		!strings.Contains(restart.Reason, "advanced the restore before the replacement led") {
+		t.Fatalf("S12 operator-restart = %+v, want blocked: the restore moved on before the takeover", restart)
+	}
+	seeding := string(databasev1alpha1.BootstrapSeedingReplicas)
+	if restart.Measurements["phaseAtTakeover"] != seeding {
+		t.Fatalf("measurements = %v, want the phase at the takeover", restart.Measurements)
+	}
+	if rec := readRestartRecord(t, cfg.EvidenceDir); rec.Restart.PhaseAtTakeover != seeding {
+		t.Fatalf("restart = %+v, want the phase at the takeover recorded", rec.Restart)
+	}
+}
+
+func TestRunS12OperatorRestartIsBlockedWhenTheManagerIsNotLAB01s(t *testing.T) {
+	for name, change := range map[string]func(f *s12RestartFixture) func(context.Context, client.WithWatch){
+		"two manager Pods": func(f *s12RestartFixture) func(context.Context, client.WithWatch) {
+			return f.startReplacement
+		},
+		"another manager Pod": func(f *s12RestartFixture) func(context.Context, client.WithWatch) {
+			return func(ctx context.Context, c client.WithWatch) {
+				pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: testManagerPodName,
+					Namespace: f.cfg.OperatorNamespace}}
+				if err := c.Delete(ctx, pod); err != nil {
+					f.t.Error(err)
+				}
+				f.startReplacement(ctx, c)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12RestartConfig(t)
+			f := newS12RestartFixture(t, cfg)
+			f.onRestoring = change(f)
+			restart, err := restartOf(t, f, t.Context())
+			// observeManager refuses two Pods itself; another one is not
+			// LAB01's.
+			if err == nil || restart.Result != evidence.Blocked ||
+				!strings.Contains(restart.Reason, "starting_state_not_verified") {
+				t.Fatalf("S12 operator-restart = %+v, want blocked by the manager guard", restart)
+			}
+			if f.managerDeletes != 0 {
+				t.Fatalf("manager Pod deleted %d times, want none", f.managerDeletes)
+			}
+		})
+	}
+}
+
+func TestRestartStepsNeedsExactlyOneManagerPod(t *testing.T) {
+	for name, pods := range map[string][]imageIdentity{"none": nil, "two": {{Pod: "a"}, {Pod: "b"}}} {
+		t.Run(name, func(t *testing.T) {
+			h := &haRun{accessKey: testAccessKey, secretKey: testSecretKey, s12Expected: "history",
+				s11Rec: &s11Record{KnownPoint: &s11KnownPoint{},
+					Artifact: &databasev1alpha1.CubridBackupArtifact{URI: "s3://b/p/manifest.json"}}}
+			h.rec.OperatorAfter.Pods = pods
+			rec := &s12RestartRecord{Restart: &s12Restart{}}
+			err := h.restartSteps(t.Context(), &evidence.Scenario{Measurements: map[string]any{}}, rec)
+			if err == nil || !strings.Contains(err.Error(), "exactly one manager Pod") || errors.As(err, new(restoreVerdict)) {
+				t.Fatalf("restartSteps() = %v, want blocked: S12 operator-restart needs exactly one manager Pod", err)
+			}
+		})
+	}
+}
+
+func TestRunS12OperatorRestartFailsWhenTheClusterIsReplaced(t *testing.T) {
+	for name, at := range map[string]func(f *s12RestartFixture) int{
+		"while waiting for Restoring": func(*s12RestartFixture) int { return 1 },
+		// The reading right before the restart is the third; the first after
+		// it the fourth.
+		"while the manager is away": func(*s12RestartFixture) int { return 4 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12RestartConfig(t)
+			f := newS12RestartFixture(t, cfg)
+			f.replaceAt = at(f)
+			restart, err := restartOf(t, f, t.Context())
+			requireRestartFailure(t, restart, err, "the restored cluster was replaced")
+		})
+	}
+}
+
+func TestRunS12OperatorRestartFailsOnABootstrapFailedWhileTheManagerIsAway(t *testing.T) {
+	cfg := testS12RestartConfig(t)
+	f := newS12RestartFixture(t, cfg)
+	f.tamperRestart = func(_ int, deleted bool, s *databasev1alpha1.CubridClusterStatus) {
+		if deleted {
+			s.Bootstrap.Phase = databasev1alpha1.BootstrapFailed
+			s.Conditions[0].Reason, s.Conditions[0].Message = s12RefusedReason, "restoredb failed: exit status 1"
+		}
+	}
+	restart, err := restartOf(t, f, t.Context())
+	requireRestartFailure(t, restart, err, "ended Failed", "exit status 1")
+	if f.managerDeletes != 1 {
+		t.Fatalf("manager Pod deleted %d times, want once", f.managerDeletes)
+	}
+}
+
+func TestRunS12OperatorRestartStaysFailedOverTheResyncLimitWhenALaterStepIsBlocked(t *testing.T) {
+	cfg := testS12RestartConfig(t)
+	cfg.ResyncLimit = time.Nanosecond
+	f := newS12RestartFixture(t, cfg)
+	f.restartWriteAnswer = func() (string, error) {
+		return "", errors.New("command terminated with exit code 137")
+	}
+	restart, err := restartOf(t, f, t.Context())
+	requireRestartFailure(t, restart, err, "over operator_resync_limit", "exit code 137")
 }

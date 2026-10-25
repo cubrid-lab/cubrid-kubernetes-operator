@@ -105,6 +105,7 @@ type haFixture struct {
 	// managerDeleted is set when the manager Pod was deleted; replacement
 	// says what the fake Operator does then.
 	managerDeleted bool
+	managerDeletes int
 	replacement    func(ctx context.Context, c client.WithWatch)
 	// backgroundHistory returns what a background client recorded.
 	backgroundHistory func(id string) string

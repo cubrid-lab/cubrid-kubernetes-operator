@@ -235,7 +235,7 @@ func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 	}()
 	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String()}
 	result.Measurements = map[string]any{"restoredWithin": evidence.Unknown,
-		"dataRulesHeldAfterSeconds": evidence.Unknown, "postBackupRowsPresent": evidence.Unknown}
+		dataRulesHeldMeasurement: evidence.Unknown, "postBackupRowsPresent": evidence.Unknown}
 	err := h.s12Steps(ctx, &result, &rec)
 	// A credential found in any status read is a failure, whichever step
 	// ended S12.
@@ -719,7 +719,7 @@ func (h *haRun) checkRestoredData(ctx context.Context, expected string, roles *s
 		return err
 	}
 	check.Held = true
-	result.Measurements["dataRulesHeldAfterSeconds"] = held.Seconds()
+	result.Measurements[dataRulesHeldMeasurement] = held.Seconds()
 	known := rec.KnownPoint
 	missing, found, err := h.waitMarker(ctx, members, roles.Master, known.Marker, known.MarkerValue)
 	check.Markers = found

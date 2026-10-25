@@ -814,18 +814,20 @@ nothing of it is done. `ha-restore` is left as S12 `exact` left it.
 
 What the Operator guarantees, and the variant checks
 (`internal/controller/bootstrap.go`):
-- The recovery's restore is started under an idempotency key derived from
-  the cluster's UID, the manifest URI, the target member and the attempt
-  (`recoveryIdempotencyKey`). The Operator records the operation's ID in
-  `status.bootstrap.operationID` in the same status update that first
-  reports a phase for it, so a phase `Restoring` always comes with it
-  (`reconcileRecovery`, `setRestoreProgress`), and polls that operation
-  while it is recorded. If that status update was lost, the next start
-  under the same key and request returns the Instance Manager's existing
-  operation and starts nothing (`restorePrepare` in
-  `internal/instancemanager/server.go`, `FindOrCreate` in `opstore.go`). A
-  restarted manager therefore follows the restore that runs and starts no
-  second one.
+- The Operator follows the operation recorded in
+  `status.bootstrap.operationID`: while one is recorded it polls that
+  operation by its ID and starts none (`reconcileRecovery`,
+  `GetOperation`). It records the ID in the same status update that first
+  reports a phase for that operation (`setRestoreProgress`), so a phase
+  `Restoring` comes with an ID, except after a failed attempt: the phase
+  then stays as it was with the ID cleared until the next start. A
+  restarted manager reads the recorded ID and follows that restore.
+- Background, not checked here: a restore is started under an idempotency
+  key derived from the cluster's UID, the manifest URI, the target member
+  and the attempt (`recoveryIdempotencyKey`). If the status update after a
+  start was lost, the next start under the same key and request returns the
+  Instance Manager's existing operation and starts nothing (`restorePrepare`
+  in `internal/instancemanager/server.go`, `FindOrCreate` in `opstore.go`).
 - A second restore is started only after a failed attempt: the Operator
   raises `status.bootstrap.attempts`, clears the operation and sets the
   `BootstrapReady` reason `RestoreFailedRetrying` (`restoreAttemptFailed`).
@@ -871,7 +873,17 @@ What the Operator guarantees, and the variant checks
    - No replacement within five times `-resync-limit` (at least two seconds)
      fails it. One back later than `-resync-limit` (`operatorBackWithin`, by
      the run's clock, from the deletion to the reading that saw it back)
-     fails it at the end, after the other checks.
+     fails it, also when a later step blocks.
+   - **The takeover.** The bootstrap of the last reading at or before the
+     Lease's `acquireTime` (`phaseAtTakeover`, also a measurement, and
+     `operationIDAtTakeover`) must still be `Restoring` with the operation of
+     the restart. With no grace period the deleted process may still write
+     until its Lease expires; a bootstrap past `Restoring`, or with another
+     operation, means the old manager advanced the restore before the
+     replacement led, and what the replacement resumed was not observed:
+     the variant is blocked. The readings are timed by the run's clock and
+     the Lease by the manager's; their offset is not measured, so the reading
+     chosen is off by that much.
 5. **Wait for the restored cluster.** As step 3 of S12 `exact`, until
    `-restore-limit` has passed since the cluster's creation.
 6. **Secrets, HA membership, restored data, a normal write, the source and
@@ -884,11 +896,15 @@ What the Operator guarantees, and the variant checks
      is a restore started again without a failed attempt: it must never
      happen.
    - `attempts` that rise on a reading with the `BootstrapReady` reason
-     `RestoreFailedRetrying` are a retry, recorded with its message; another
-     operation after it is allowed. `attempts` that rise without a reading of
-     that reason leave the cause unknown and block the variant: the Operator
-     sets the reason with the counter, and the run's readings may have
-     missed it.
+     `RestoreFailedRetrying` are a retry, recorded with its message. Its
+     restore is not started twice, but when the operation at the end is not
+     the one at the restart, the variant is blocked: a failed attempt
+     replaced the operation, and whether the restart preserved it was not
+     observed. `attempts` that rise without a reading of that reason leave
+     the cause unknown and block the variant: the Operator sets the reason
+     with the counter, and it lasts about one reconcile, until the next start
+     reports progress (`restorePollAfter`, 10 seconds, or sooner on another
+     event), so a fast retry may be missed between two readings.
    - `attempts` that fall, and `BootstrapReady` `True` while the phase is not
      `Complete`, must never happen.
    - `operationID` before (at the restart) and after (the last reading that
@@ -898,9 +914,12 @@ What the Operator guarantees, and the variant checks
 As in S12 `exact`, a refused or failing API read, a `kubectl exec` or `csql`
 that cannot read the data, and a run that ends before S12 `operator-restart`
 is judged block it; what was seen stays a failure, with that error added to
-the reason. `restoredWithin`, `operatorBackWithin`, `operationIDUnchanged`,
-`attemptsAdded`, `dataRulesHeldAfterSeconds` and `postBackupRowsPresent` are
-`unknown` until measured.
+the reason. `restoredWithin`, `operatorBackWithin`, `phaseAtTakeover`,
+`operationIDUnchanged`, `attemptsAdded`, `dataRulesHeldAfterSeconds` and
+`postBackupRowsPresent` are `unknown` until measured. A pass's reason names
+the phase and operation at the restart and at the takeover, the time the
+manager took to come back, and the operation, attempt and retries at the
+end, as recorded.
 
 Besides S12 `exact`'s, the account needs what S06 `restart` needs: `delete`
 on Pods and `get` on Leases in the Operator's namespace. The Deployment
@@ -916,6 +935,10 @@ S12 `operator-restart` here does not check:
   reading of `Restoring`; the Instance Manager's operation may have moved on
   before the deletion took effect, and the record says which phase was read
   after it;
+- a restart between the start of a restore and the status update that
+  records its operation, which the replacement resolves through the
+  idempotency key (`operationOfKey` in `internal/controller/imclient.go`):
+  the restart follows a reading that already holds the operation;
 - a restart of the Instance Manager, a killed member or an object store that
   becomes unreachable during the restore;
 - that the restored database was not restored twice on the member: only
@@ -991,7 +1014,8 @@ variant other than `exact` only those under `S12/<variant>/`.
   past `Preparing`, the phase, `operationID` and `attempts` at the restart,
   the phase read after it, when it was issued, when the old Pod was gone,
   when the replacement started and acquired the Lease and when the run saw
-  it back, `operationID` and `attempts` after, and the retries),
+  it back, the phase and operation at the takeover, `operationID` and
+  `attempts` after, and the retries),
   `S12/operator-restart/timeline.jsonl` (the fault flow),
   `S12/operator-restart/data-check.json` and
   `S12/operator-restart/source-data-check.json`.

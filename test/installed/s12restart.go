@@ -89,6 +89,10 @@ type s12Restart struct {
 	OperationIDBefore string `json:"operationIDBefore,omitempty"`
 	AttemptsBefore    *int32 `json:"attemptsBefore,omitempty"`
 	PhaseAfterRestart string `json:"phaseAfterRestart,omitempty"`
+	// PhaseAtTakeover and OperationIDAtTakeover are the bootstrap of the last
+	// reading at or before the replacement acquired the Lease.
+	PhaseAtTakeover       string `json:"phaseAtTakeover,omitempty"`
+	OperationIDAtTakeover string `json:"operationIDAtTakeover,omitempty"`
 	// RestartedAt is when the deletion was issued, GoneAt when the old Pod
 	// was confirmed gone, BackAt the reading that saw the replacement running
 	// and holding the Lease, all by the run's clock. ReplacementStartedAt and
@@ -178,7 +182,7 @@ func (h *haRun) runS12OperatorRestart(ctx context.Context) (result evidence.Scen
 	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String(),
 		"operator_resync_limit": h.cfg.ResyncLimit.String()}
 	result.Measurements = map[string]any{"restoredWithin": evidence.Unknown, "operatorBackWithin": evidence.Unknown,
-		"operationIDUnchanged": evidence.Unknown, "attemptsAdded": evidence.Unknown,
+		"operationIDUnchanged": evidence.Unknown, "attemptsAdded": evidence.Unknown, "phaseAtTakeover": evidence.Unknown,
 		dataRulesHeldMeasurement: evidence.Unknown, "postBackupRowsPresent": evidence.Unknown}
 	err := h.restartSteps(ctx, &result, &rec)
 	// What the bootstrap showed is judged whichever step ended the variant.
@@ -209,14 +213,7 @@ func (h *haRun) runS12OperatorRestart(ctx context.Context) (result evidence.Scen
 	case never != "":
 		result.Result, result.Reason = evidence.Fail, never
 	default:
-		result.Result = evidence.Pass
-		result.Reason = "the manager Pod was deleted while the cluster restored from S11's artifact was Restoring, " +
-			"and the replacement ran the same image and held the leader Lease within operator_resync_limit; the " +
-			"cluster reported Ready within restore_limit only after its bootstrap completed, with BootstrapReady " +
-			"never True before, and kept its restore operation; its members and Services held exactly the rows " +
-			"acknowledged before the known point and S11's marker, no row written after the backup, and took a " +
-			"normal write; the source was unchanged; no credential was in its status and no Secret of the source " +
-			"in its Pods; the Operator's logs were not checked"
+		result.Result, result.Reason = evidence.Pass, restartPassReason(rec.Restart)
 	}
 	return result
 }
@@ -251,9 +248,23 @@ func (h *haRun) restartSteps(ctx context.Context, result *evidence.Scenario, rec
 		return err
 	}
 	back, err := h.restartDuringRestore(ctx, cluster, rec, result)
-	if err != nil {
-		return err
+	// A manager back too late stays a failure whatever a later step finds.
+	var late error
+	if back > h.cfg.ResyncLimit {
+		late = restoreVerdict{fmt.Errorf("the replacement manager was back %s after its Pod was deleted, over "+
+			"operator_resync_limit %s", back.Round(time.Millisecond), h.cfg.ResyncLimit)}
 	}
+	if err != nil {
+		return errors.Join(late, err)
+	}
+	return errors.Join(late, h.afterRestart(ctx, cluster, created, expected, rec, result))
+}
+
+// afterRestart runs the steps of S12 operator-restart after the manager is
+// back, as S12 exact's after its restored cluster was created, and returns
+// the first error.
+func (h *haRun) afterRestart(ctx context.Context, cluster *databasev1alpha1.CubridCluster, created time.Time,
+	expected string, rec *s12RestartRecord, result *evidence.Scenario) error {
 	roles, readyAt, err := h.waitRestored(ctx, cluster, created, &rec.s12Record, result)
 	if err != nil {
 		return err
@@ -286,11 +297,24 @@ func (h *haRun) restartSteps(ctx context.Context, result *evidence.Scenario, rec
 		final.Status); err != nil {
 		return err
 	}
-	if back > h.cfg.ResyncLimit {
-		return restoreVerdict{fmt.Errorf("the replacement manager was back %s after its Pod was deleted, over "+
-			"operator_resync_limit %s", back.Round(time.Millisecond), h.cfg.ResyncLimit)}
-	}
 	return nil
+}
+
+// restartPassReason is the reason of a pass, from what the run recorded.
+func restartPassReason(r *s12Restart) string {
+	attempts := int32(0)
+	if r.AttemptsAfter != nil {
+		attempts = *r.AttemptsAfter
+	}
+	return fmt.Sprintf("the manager Pod was deleted while the cluster restored from S11's artifact was %s with "+
+		"operation %s, and the replacement ran the same image and held the leader Lease %s later, within "+
+		"operator_resync_limit; the bootstrap was %s at the takeover; the cluster reported Ready within "+
+		"restore_limit only after its bootstrap completed, with BootstrapReady never True before, and kept "+
+		"operation %s under attempt %d with %d retries; its members and Services held exactly the rows "+
+		"acknowledged before the known point and S11's marker, no row written after the backup, and took a "+
+		"normal write; the source was unchanged; no credential was in its status and no Secret of the source in "+
+		"its Pods; the Operator's logs were not checked", r.PhaseAtRestart, r.OperationIDBefore, r.BackWithin,
+		r.PhaseAtTakeover, r.OperationIDAfter, attempts, len(r.Retries))
 }
 
 // waitRestoring reads the restored cluster until a reading shows its
@@ -425,7 +449,43 @@ func (h *haRun) restartDuringRestore(ctx context.Context, cluster *databasev1alp
 	back := outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)
 	r.BackWithin = back.Round(time.Millisecond).String()
 	result.Measurements["operatorBackWithin"] = r.BackWithin
+	if err := takeover(rec, result); err != nil {
+		return back, err
+	}
 	return back, nil
+}
+
+// takeover records the bootstrap of the last reading at or before the
+// replacement acquired the Lease, by the run's clock against the Lease's
+// time. The deleted process may still write until its Lease expires: a
+// bootstrap past Restoring, or with another operation than at the restart,
+// then shows the old manager advanced the restore, and what the replacement
+// resumed was not observed, which blocks the variant.
+func takeover(rec *s12RestartRecord, result *evidence.Scenario) error {
+	r := rec.Restart
+	if r.LeaseAcquiredAt == nil {
+		return errors.New("the time the replacement acquired the Lease is not known")
+	}
+	acquired := *r.LeaseAcquiredAt
+	var at *s12Phase
+	for i := range rec.Bootstrap {
+		if rec.Bootstrap[i].At.After(acquired) {
+			break
+		}
+		at = &rec.Bootstrap[i]
+	}
+	if at == nil {
+		return fmt.Errorf("no reading of the restored cluster was taken at or before the replacement acquired the "+
+			"Lease at %s", acquired.Format(time.RFC3339Nano))
+	}
+	r.PhaseAtTakeover, r.OperationIDAtTakeover = cmp.Or(at.Phase, noBootstrapPhase), at.OperationID
+	result.Measurements["phaseAtTakeover"] = r.PhaseAtTakeover
+	if at.Phase != string(databasev1alpha1.BootstrapRestoring) || at.OperationID != r.OperationIDBefore {
+		return fmt.Errorf("the old manager advanced the restore before the replacement led: at the takeover the "+
+			"bootstrap was %s with operation %q, at the restart %s with %q", r.PhaseAtTakeover, at.OperationID,
+			r.PhaseAtRestart, r.OperationIDBefore)
+	}
+	return nil
 }
 
 // beforeRestart requires the manager Pod LAB01 checked and a reading of the
@@ -529,7 +589,7 @@ func (h *haRun) managerBack(ctx context.Context, r *s12Restart) (bool, error) {
 
 // judgeRestartBootstrap judges the bootstrap the readings recorded, in order.
 // The Operator records a restore's operation with the first phase it reports
-// for it, follows it by its idempotency key after a restart, and starts a
+// for it, polls it by that recorded ID after a restart, and starts a
 // second one only after an attempt failed, with the reason
 // RestoreFailedRetrying and the attempt counter raised
 // (internal/controller/bootstrap.go). So an operation that becomes another
@@ -537,7 +597,9 @@ func (h *haRun) managerBack(ctx context.Context, r *s12Restart) (bool, error) {
 // falls is a lost attempt, and BootstrapReady True before Complete a bootstrap
 // reported done before its recovery work; each must never happen. An attempt
 // counter that rose without a reading of that reason leaves the cause
-// unknown, which blocks the variant. The operation before and after the
+// unknown, and a retry that left another operation at the end leaves the
+// restart's effect on the operation unobserved; both block the variant. The
+// operation before and after the
 // restart, the attempts and the retries are recorded.
 func judgeRestartBootstrap(rec *s12RestartRecord, result *evidence.Scenario) error {
 	r := rec.Restart
@@ -581,9 +643,16 @@ func judgeRestartBootstrap(rec *s12RestartRecord, result *evidence.Scenario) err
 		result.Measurements["attemptsAdded"] = *r.AttemptsAfter - *r.AttemptsBefore
 	}
 	result.NeverEvents = append(result.NeverEvents, events...)
+	var errs []error
 	if len(unexplained) > 0 {
-		return fmt.Errorf("the restored cluster's bootstrap attempts rose %s, and no reading showed the reason %s: "+
-			"the cause is unknown", strings.Join(unexplained, ", "), s12RetryReason)
+		errs = append(errs, fmt.Errorf("the restored cluster's bootstrap attempts rose %s, and no reading showed the "+
+			"reason %s: the cause is unknown", strings.Join(unexplained, ", "), s12RetryReason))
 	}
-	return nil
+	// A retry with its reason is no restore started twice, but the operation
+	// that ran through the restart is not the one that completed.
+	if len(r.Retries) > 0 && r.OperationIDBefore != "" && r.OperationIDAfter != r.OperationIDBefore {
+		errs = append(errs, fmt.Errorf("a failed attempt replaced the operation %s with %s; whether the restart "+
+			"preserved it was not observed", r.OperationIDBefore, r.OperationIDAfter))
+	}
+	return errors.Join(errs...)
 }

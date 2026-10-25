@@ -91,6 +91,7 @@ func (f *haFixture) deleteManager(ctx context.Context, c client.WithWatch, pod *
 	}
 	f.mu.Lock()
 	f.managerDeleted = true
+	f.managerDeletes++
 	f.mu.Unlock()
 	if f.replacement != nil {
 		f.replacement(ctx, c)
