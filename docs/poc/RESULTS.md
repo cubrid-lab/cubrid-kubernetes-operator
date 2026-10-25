@@ -2995,7 +2995,7 @@ were unchanged.
 
 ---
 
-## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; a local HA pair without the Instance Manager aborted none of 2,400, with or without an `applyinfo` loop, and none of 900 on its slave while it applied a write load from the master; the cause is not known**
+## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; a local HA pair without the Instance Manager aborted none of 2,400, with or without an `applyinfo` loop, and none of 900 on its slave while it applied a write load from the master or its backlog; the cause is not known**
 
 **Question.** In VM-lab runs of S12 (#568, #573), a `csql` read on an HA
 member sometimes printed its result and `Committed.`, together with
@@ -3205,8 +3205,9 @@ members started on 2026-10-23), counted by client name.
 - On each slave about 4% of the `applyinfo` sessions ended with the server
   interrupting their transaction, and 5 of the 201 `csql` sessions of this
   POC's trials did as well, about the rate at which those trials were
-  aborted. On the master, which receives almost no `applyinfo`, no client
-  session was interrupted that way.
+  aborted. On the master, which receives almost no `applyinfo`, no
+  `applyinfo` or `csql` session was interrupted that way (two `copylogdb`
+  sessions were).
 - So the interrupted sessions are not particular to `applyinfo`: it is the
   client that connects most often to a slave. What makes a slave's server
   interrupt about one session in 25 is not known; the local pair above, whose
@@ -3287,8 +3288,9 @@ between trials); the `applyinfo` loop is that section's `-a` loop
   transaction index 3, also with `applylogdb` applying and the `applyinfo`
   loop running.
 
-**What this shows.** On this local pair, a slave applying about 15 inserted
-rows per second, behind and catching up, interrupted no client session and
+**What this shows.** On this local pair, a slave whose master inserted about
+15 rows per second and which applied about 8 to 9 per second, behind and
+catching up, interrupted no client session and
 aborted no new `csql` read, with or without an `applyinfo -a` loop. So
 applying the master's changes, on its own, did not produce the lab's
 interrupted sessions here; the hypothesis that the standby interrupts client
@@ -3325,13 +3327,15 @@ Read-only, under the lab Lease, 2026-10-25: on `cubrid-test/ha-0`, each
 error log was matched, by pid and date, to that client's `-972 ... was
 connected` entry in the access log. 657 interrupted sessions matched. The
 server interrupted the transaction **6 to 40 ms after the client connected**
-(10th percentile 7 ms, median 9 ms, 90th percentile 14 ms), with the
-`-1066 Session expired` line at the same time. The Instance Manager's 2 s
+(10th percentile 7 ms, median 9 ms, 90th percentile 14 ms), with a
+`-1066 Session expired` line at the same time for 586 of the 657. The
+Instance Manager's 2 s
 `replicationBudget`, the readiness probe's 5 s timeout
 (`timeoutSeconds: 5`, every 5 s) and the server's `session_state_timeout` are
 all much longer, and the Instance Manager's `applyinfo` connections came
-about every 10 s (median gap 10.3 s), one at a time. So these sessions are
-not ended by a timeout or a kill of the Instance Manager's. The logs do not
+about every 10 s (15,709 in about 44 hours), one at a time. So a timeout of
+the Instance Manager's or of the server is unlikely to be what ends them; a
+kill on the client's side within milliseconds is not excluded. The logs do not
 tell whether the server cut each session off within milliseconds of its
 connection or the client ended it that soon without a normal disconnect, after
 which the server cleaned it up; either way about one new session in 25 on this
