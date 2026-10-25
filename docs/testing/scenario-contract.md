@@ -1021,9 +1021,11 @@ it needs more.
   the variant. Another operation after a failed attempt (`RestoreFailedRetrying`
   and a higher `attempts`) is no restore started twice, but whether the
   restart preserved the operation was then not observed: the variant is
-  `blocked`, as it is when the restart cannot be placed while the bootstrap
-  is `Restoring`, or when the bootstrap moved on before the replacement
-  holds the leader Lease.
+  `blocked` unless it is also a restore started twice (then it fails). It is
+  `blocked` as well when the restart cannot be placed while the bootstrap is
+  `Restoring`, or when a reading up to the replacement's Lease acquisition,
+  bounded for the offset between the run's and the Operator's clocks, shows
+  the bootstrap moved on.
 - **Must never happen:** an existing database overwritten; a cluster reported
   `Ready` with data that differs from the backup; the new cluster depending
   on a Secret of the source cluster. In `operator-restart` also: the restore

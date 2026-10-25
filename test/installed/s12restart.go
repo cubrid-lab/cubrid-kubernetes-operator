@@ -93,6 +93,16 @@ type s12Restart struct {
 	// reading at or before the replacement acquired the Lease.
 	PhaseAtTakeover       string `json:"phaseAtTakeover,omitempty"`
 	OperationIDAtTakeover string `json:"operationIDAtTakeover,omitempty"`
+	// LeaseRenewedAt is the Lease's renewTime at the read that saw the
+	// replacement back, LeaseClockLag the run's time of that read minus it,
+	// an upper bound of how far the run's clock is ahead of the manager's.
+	// TakeoverCutoff is the Lease's acquireTime plus that bound, if positive.
+	LeaseRenewedAt *time.Time `json:"leaseRenewedAt,omitempty"`
+	LeaseClockLag  string     `json:"leaseClockLag,omitempty"`
+	TakeoverCutoff *time.Time `json:"takeoverCutoff,omitempty"`
+	// restartReading is the index in the record's bootstrap of the reading
+	// at the restart.
+	restartReading int
 	// RestartedAt is when the deletion was issued, GoneAt when the old Pod
 	// was confirmed gone, BackAt the reading that saw the replacement running
 	// and holding the Lease, all by the run's clock. ReplacementStartedAt and
@@ -183,6 +193,7 @@ func (h *haRun) runS12OperatorRestart(ctx context.Context) (result evidence.Scen
 		"operator_resync_limit": h.cfg.ResyncLimit.String()}
 	result.Measurements = map[string]any{"restoredWithin": evidence.Unknown, "operatorBackWithin": evidence.Unknown,
 		"operationIDUnchanged": evidence.Unknown, "attemptsAdded": evidence.Unknown, "phaseAtTakeover": evidence.Unknown,
+		"leaseClockLag": evidence.Unknown, "takeoverCutoff": evidence.Unknown,
 		dataRulesHeldMeasurement: evidence.Unknown, "postBackupRowsPresent": evidence.Unknown}
 	err := h.restartSteps(ctx, &result, &rec)
 	// What the bootstrap showed is judged whichever step ended the variant.
@@ -301,20 +312,27 @@ func (h *haRun) afterRestart(ctx context.Context, cluster *databasev1alpha1.Cubr
 }
 
 // restartPassReason is the reason of a pass, from what the run recorded.
+// The readings are -poll apart, so a change between the last of them and the
+// acquisition is not seen.
 func restartPassReason(r *s12Restart) string {
 	attempts := int32(0)
 	if r.AttemptsAfter != nil {
 		attempts = *r.AttemptsAfter
 	}
+	cutoff := evidence.Unknown
+	if r.TakeoverCutoff != nil {
+		cutoff = r.TakeoverCutoff.Format(time.RFC3339Nano)
+	}
 	return fmt.Sprintf("the manager Pod was deleted while the cluster restored from S11's artifact was %s with "+
-		"operation %s, and the replacement ran the same image and held the leader Lease %s later, within "+
-		"operator_resync_limit; the bootstrap was %s at the takeover; the cluster reported Ready within "+
+		"operation %s, and the replacement ran the same image and held the leader Lease, back %s after the "+
+		"deletion, within operator_resync_limit; in every reading up to the Lease's acquireTime plus the measured "+
+		"clock bound (%s), the bootstrap was at most %s with operation %s; the cluster reported Ready within "+
 		"restore_limit only after its bootstrap completed, with BootstrapReady never True before, and kept "+
 		"operation %s under attempt %d with %d retries; its members and Services held exactly the rows "+
 		"acknowledged before the known point and S11's marker, no row written after the backup, and took a "+
 		"normal write; the source was unchanged; no credential was in its status and no Secret of the source in "+
 		"its Pods; the Operator's logs were not checked", r.PhaseAtRestart, r.OperationIDBefore, r.BackWithin,
-		r.PhaseAtTakeover, r.OperationIDAfter, attempts, len(r.Retries))
+		cutoff, r.PhaseAtTakeover, r.OperationIDBefore, r.OperationIDAfter, attempts, len(r.Retries))
 }
 
 // waitRestoring reads the restored cluster until a reading shows its
@@ -450,42 +468,69 @@ func (h *haRun) restartDuringRestore(ctx context.Context, cluster *databasev1alp
 	r.BackWithin = back.Round(time.Millisecond).String()
 	result.Measurements["operatorBackWithin"] = r.BackWithin
 	if err := takeover(rec, result); err != nil {
+		// The phase at the takeover is recorded either way.
+		result.Measurements["phaseAtTakeover"] = cmp.Or(r.PhaseAtTakeover, evidence.Unknown)
 		return back, err
 	}
 	return back, nil
 }
 
-// takeover records the bootstrap of the last reading at or before the
-// replacement acquired the Lease, by the run's clock against the Lease's
-// time. The deleted process may still write until its Lease expires: a
-// bootstrap past Restoring, or with another operation than at the restart,
-// then shows the old manager advanced the restore, and what the replacement
-// resumed was not observed, which blocks the variant.
+// takeover judges the readings of the restored cluster from the one at the
+// restart until the replacement led. The Lease's acquireTime is by the
+// manager's clock and the readings by the run's; the run's clock is ahead by
+// at most leaseClockLag, the run's time of its Lease read minus the Lease's
+// renewTime, since that read came after the renewal. Every reading at or
+// before acquireTime plus that bound, when positive, is judged: one that
+// names an operation must be at most Restoring with the restart's operation.
+// Readings after the true takeover can only block, never pass. With no grace
+// period the deleted process may still write until its Lease expires, so a
+// reading past Restoring, or with another operation, shows the old manager
+// advanced the restore, and what the replacement resumed was not observed,
+// which blocks the variant. The readings are -poll apart: a change between
+// the last of them and the acquisition is not seen.
 func takeover(rec *s12RestartRecord, result *evidence.Scenario) error {
 	r := rec.Restart
-	if r.LeaseAcquiredAt == nil {
-		return errors.New("the time the replacement acquired the Lease is not known")
+	if r.LeaseAcquiredAt == nil || r.LeaseRenewedAt == nil || r.BackAt == nil {
+		return errors.New("the takeover could not be placed on the run's clock: the Lease's acquireTime or " +
+			"renewTime was not read")
 	}
-	acquired := *r.LeaseAcquiredAt
-	var at *s12Phase
-	for i := range rec.Bootstrap {
-		if rec.Bootstrap[i].At.After(acquired) {
-			break
+	lag := r.BackAt.Sub(*r.LeaseRenewedAt)
+	cutoff := r.LeaseAcquiredAt.Add(max(lag, 0))
+	r.LeaseClockLag, r.TakeoverCutoff = lag.Round(time.Millisecond).String(), &cutoff
+	result.Measurements["leaseClockLag"] = r.LeaseClockLag
+	result.Measurements["takeoverCutoff"] = cutoff.Format(time.RFC3339Nano)
+	if r.restartReading < 0 || r.restartReading >= len(rec.Bootstrap) {
+		return errors.New("the takeover could not be placed: the reading at the restart is not recorded")
+	}
+	var last *s12Phase
+	for i := r.restartReading; i < len(rec.Bootstrap) && !rec.Bootstrap[i].At.After(cutoff); i++ {
+		p := &rec.Bootstrap[i]
+		last = p
+		switch p.Phase {
+		case "", string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
+		default:
+			return advancedBeforeTakeover(r, p)
 		}
-		at = &rec.Bootstrap[i]
+		if p.OperationID != "" && p.OperationID != r.OperationIDBefore {
+			return advancedBeforeTakeover(r, p)
+		}
 	}
-	if at == nil {
-		return fmt.Errorf("no reading of the restored cluster was taken at or before the replacement acquired the "+
-			"Lease at %s", acquired.Format(time.RFC3339Nano))
-	}
-	r.PhaseAtTakeover, r.OperationIDAtTakeover = cmp.Or(at.Phase, noBootstrapPhase), at.OperationID
+	// The reading at the restart was taken before the deletion, so one is
+	// always at or before the cutoff.
+	r.PhaseAtTakeover, r.OperationIDAtTakeover = cmp.Or(last.Phase, noBootstrapPhase), last.OperationID
 	result.Measurements["phaseAtTakeover"] = r.PhaseAtTakeover
-	if at.Phase != string(databasev1alpha1.BootstrapRestoring) || at.OperationID != r.OperationIDBefore {
-		return fmt.Errorf("the old manager advanced the restore before the replacement led: at the takeover the "+
-			"bootstrap was %s with operation %q, at the restart %s with %q", r.PhaseAtTakeover, at.OperationID,
-			r.PhaseAtRestart, r.OperationIDBefore)
-	}
 	return nil
+}
+
+// advancedBeforeTakeover records p as the bootstrap at the takeover and
+// returns the error that blocks the variant.
+func advancedBeforeTakeover(r *s12Restart, p *s12Phase) error {
+	r.PhaseAtTakeover, r.OperationIDAtTakeover = cmp.Or(p.Phase, noBootstrapPhase), p.OperationID
+	return fmt.Errorf("the old manager advanced the restore before the replacement led: a reading at %s, by the "+
+		"run's clock at or before the Lease's acquireTime plus the clock bound (%s), showed the bootstrap %s with "+
+		"operation %q, at the restart %s with %q", p.At.Format(time.RFC3339Nano),
+		r.TakeoverCutoff.Format(time.RFC3339Nano), r.PhaseAtTakeover, p.OperationID, r.PhaseAtRestart,
+		r.OperationIDBefore)
 }
 
 // beforeRestart requires the manager Pod LAB01 checked and a reading of the
@@ -515,6 +560,7 @@ func (h *haRun) beforeRestart(ctx context.Context, created *databasev1alpha1.Cub
 	}
 	attempts := cluster.Status.Bootstrap.Attempts
 	r.PhaseAtRestart, r.OperationIDBefore, r.AttemptsBefore = phase, cluster.Status.Bootstrap.OperationID, &attempts
+	r.restartReading = len(rec.Bootstrap) - 1
 	return nil
 }
 
@@ -584,6 +630,10 @@ func (h *haRun) managerBack(ctx context.Context, r *s12Restart) (bool, error) {
 	acquired, backAt := lease.Spec.AcquireTime.UTC(), time.Now().UTC()
 	r.ManagerAfter, r.ReplacementStartedAt = &manager.Pods[0], &started
 	r.LeaseHolder, r.LeaseAcquiredAt, r.BackAt = *lease.Spec.HolderIdentity, &acquired, &backAt
+	if lease.Spec.RenewTime != nil {
+		renewed := lease.Spec.RenewTime.UTC()
+		r.LeaseRenewedAt = &renewed
+	}
 	return true, nil
 }
 

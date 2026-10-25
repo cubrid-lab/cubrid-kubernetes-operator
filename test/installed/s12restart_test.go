@@ -286,7 +286,9 @@ func TestRunS12OperatorRestartPassesWhenTheRestoreSurvivesTheRestart(t *testing.
 	// summary.json keeps no reason for a pass: the reason is built from the
 	// record.
 	reason := restartPassReason(readRestartRecord(t, cfg.EvidenceDir).Restart)
-	for _, want := range []string{"Restoring with operation " + testRestartOp, "Restoring at the takeover",
+	for _, want := range []string{"Restoring with operation " + testRestartOp, "after the deletion",
+		"in every reading up to the Lease's acquireTime plus the measured clock bound",
+		"the bootstrap was at most Restoring with operation " + testRestartOp,
 		"kept operation " + testRestartOp + " under attempt 0 with 0 retries"} {
 		if !strings.Contains(reason, want) {
 			t.Fatalf("S12 operator-restart reason = %q, want %q", reason, want)
@@ -535,9 +537,14 @@ func TestRunS12OperatorRestartIsBlockedWhenARetryReplacedTheOperation(t *testing
 func TestRunS12OperatorRestartIsBlockedByAnAttemptWithoutItsReason(t *testing.T) {
 	cfg := testS12RestartConfig(t)
 	f := newS12RestartFixture(t, cfg)
+	// From the second reading after the deletion, past the takeover: the
+	// first is taken before the run sees the replacement back.
+	var afterDeletion int
 	f.tamperRestart = func(_ int, deleted bool, s *databasev1alpha1.CubridClusterStatus) {
 		if deleted {
-			s.Bootstrap.Attempts, s.Bootstrap.OperationID = 1, testRestartOp2
+			if afterDeletion++; afterDeletion > 1 {
+				s.Bootstrap.Attempts, s.Bootstrap.OperationID = 1, testRestartOp2
+			}
 		}
 	}
 	restart, err := restartOf(t, f, t.Context())
@@ -780,4 +787,60 @@ func TestRunS12OperatorRestartStaysFailedOverTheResyncLimitWhenALaterStepIsBlock
 	}
 	restart, err := restartOf(t, f, t.Context())
 	requireRestartFailure(t, restart, err, "over operator_resync_limit", "exit code 137")
+}
+
+func TestRunS12OperatorRestartBoundsTheTakeoverByTheClockOffset(t *testing.T) {
+	cfg := testS12RestartConfig(t)
+	f := newS12RestartFixture(t, cfg)
+	// The replacement acquires the Lease 200ms after the deletion, and the
+	// manager's clock is 100ms behind the run's, so its acquireTime falls
+	// after the reading at the restart by the run's clock. The old process
+	// wrote SeedingReplicas before that acquisition; the run reads it after
+	// the acquireTime by its own clock.
+	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		f.startReplacement(ctx, c)
+		time.Sleep(200 * time.Millisecond)
+		f.takeLeaseAt(ctx, c, time.Now().Add(-100*time.Millisecond))
+	}
+	f.tamperRestart = func(_ int, deleted bool, s *databasev1alpha1.CubridClusterStatus) {
+		if deleted && s.Bootstrap.Phase == databasev1alpha1.BootstrapRestoring {
+			s.Bootstrap.Phase = databasev1alpha1.BootstrapSeedingReplicas
+		}
+	}
+	restart, err := restartOf(t, f, t.Context())
+	if err == nil || restart.Result != evidence.Blocked ||
+		!strings.Contains(restart.Reason, "advanced the restore before the replacement led") {
+		t.Fatalf("S12 operator-restart = %+v, want blocked: the run's clock is ahead of the Lease's", restart)
+	}
+	if lag, ok := restart.Measurements["leaseClockLag"].(string); !ok || lag == evidence.Unknown {
+		t.Fatalf("measurements = %v, want the Lease's clock lag", restart.Measurements)
+	}
+	if rec := readRestartRecord(t, cfg.EvidenceDir); rec.Restart.LeaseClockLag == "" ||
+		rec.Restart.TakeoverCutoff == nil {
+		t.Fatalf("restart = %+v, want the clock lag and the cutoff recorded", rec.Restart)
+	}
+}
+
+func TestRunS12OperatorRestartIsBlockedWithoutTheLeasesRenewTime(t *testing.T) {
+	cfg := testS12RestartConfig(t)
+	f := newS12RestartFixture(t, cfg)
+	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		f.startReplacement(ctx, c)
+		f.takeLease(ctx, c)
+		lease := &coordinationv1.Lease{}
+		key := client.ObjectKey{Namespace: f.cfg.OperatorNamespace, Name: testLeaderLease}
+		if err := c.Get(ctx, key, lease); err != nil {
+			f.t.Error(err)
+			return
+		}
+		lease.Spec.RenewTime = nil
+		if err := c.Update(ctx, lease); err != nil {
+			f.t.Error(err)
+		}
+	}
+	restart, err := restartOf(t, f, t.Context())
+	if err == nil || restart.Result != evidence.Blocked ||
+		!strings.Contains(restart.Reason, "could not be placed on the run's clock") {
+		t.Fatalf("S12 operator-restart = %+v, want blocked: no renewTime to bound the clocks", restart)
+	}
 }

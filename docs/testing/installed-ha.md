@@ -874,16 +874,25 @@ What the Operator guarantees, and the variant checks
      fails it. One back later than `-resync-limit` (`operatorBackWithin`, by
      the run's clock, from the deletion to the reading that saw it back)
      fails it, also when a later step blocks.
-   - **The takeover.** The bootstrap of the last reading at or before the
-     Lease's `acquireTime` (`phaseAtTakeover`, also a measurement, and
-     `operationIDAtTakeover`) must still be `Restoring` with the operation of
-     the restart. With no grace period the deleted process may still write
-     until its Lease expires; a bootstrap past `Restoring`, or with another
-     operation, means the old manager advanced the restore before the
-     replacement led, and what the replacement resumed was not observed:
-     the variant is blocked. The readings are timed by the run's clock and
-     the Lease by the manager's; their offset is not measured, so the reading
-     chosen is off by that much.
+   - **The takeover.** The readings are timed by the run's clock and the
+     Lease by the manager's. When the run reads the Lease that shows the
+     replacement back, it records `leaseClockLag`, the run's time of that
+     read minus the Lease's `renewTime` (also a measurement). The read came
+     after the renewal, so the run's clock is ahead of the manager's by at
+     most that much. Every reading from the one at the restart up to the
+     Lease's `acquireTime` plus that bound, when positive (`takeoverCutoff`,
+     also a measurement), is judged: one that names an operation must be at
+     most `Restoring` with the operation of the restart. Readings after the
+     true takeover can only block, never pass. With no grace period the
+     deleted process may still write until its Lease expires; a reading past
+     `Restoring`, or with another operation, means the old manager advanced
+     the restore before the replacement led, and what the replacement
+     resumed was not observed: the variant is blocked. Without a Lease read
+     with a `renewTime` it is blocked too ("the takeover could not be placed
+     on the run's clock"). The last reading judged, or the one that blocked,
+     is recorded as `phaseAtTakeover` (also a measurement) and
+     `operationIDAtTakeover`. The readings are `-poll` apart, so a change
+     between the last of them and the acquisition is not seen.
 5. **Wait for the restored cluster.** As step 3 of S12 `exact`, until
    `-restore-limit` has passed since the cluster's creation.
 6. **Secrets, HA membership, restored data, a normal write, the source and
@@ -900,7 +909,8 @@ What the Operator guarantees, and the variant checks
      restore is not started twice, but when the operation at the end is not
      the one at the restart, the variant is blocked: a failed attempt
      replaced the operation, and whether the restart preserved it was not
-     observed. `attempts` that rise without a reading of that reason leave
+     observed, unless it is also a restore started twice (then it fails).
+     `attempts` that rise without a reading of that reason leave
      the cause unknown and block the variant: the Operator sets the reason
      with the counter, and it lasts about one reconcile, until the next start
      reports progress (`restorePollAfter`, 10 seconds, or sooner on another
@@ -914,12 +924,16 @@ What the Operator guarantees, and the variant checks
 As in S12 `exact`, a refused or failing API read, a `kubectl exec` or `csql`
 that cannot read the data, and a run that ends before S12 `operator-restart`
 is judged block it; what was seen stays a failure, with that error added to
-the reason. `restoredWithin`, `operatorBackWithin`, `phaseAtTakeover`,
-`operationIDUnchanged`, `attemptsAdded`, `dataRulesHeldAfterSeconds` and
-`postBackupRowsPresent` are `unknown` until measured. A pass's reason names
-the phase and operation at the restart and at the takeover, the time the
-manager took to come back, and the operation, attempt and retries at the
-end, as recorded.
+the reason. `restoredWithin`, `operatorBackWithin`, `leaseClockLag`,
+`takeoverCutoff`, `phaseAtTakeover`, `operationIDUnchanged`,
+`attemptsAdded`, `dataRulesHeldAfterSeconds` and `postBackupRowsPresent`
+are `unknown` until measured. A pass's reason is built from the record: the
+phase and operation at the restart, how long after the deletion the
+replacement was back, that in every reading up to the Lease's
+`acquireTime` plus the measured clock bound (the cutoff) the bootstrap was
+at most `Restoring` with that operation, and the operation, attempt and
+retries at the end. The readings are `-poll` apart, so a change between the
+last of them and the acquisition is not seen.
 
 Besides S12 `exact`'s, the account needs what S06 `restart` needs: `delete`
 on Pods and `get` on Leases in the Operator's namespace. The Deployment
@@ -1014,7 +1028,8 @@ variant other than `exact` only those under `S12/<variant>/`.
   past `Preparing`, the phase, `operationID` and `attempts` at the restart,
   the phase read after it, when it was issued, when the old Pod was gone,
   when the replacement started and acquired the Lease and when the run saw
-  it back, the phase and operation at the takeover, `operationID` and
+  it back, the Lease's `renewTime`, `leaseClockLag` and `takeoverCutoff`, the
+  phase and operation at the takeover, `operationID` and
   `attempts` after, and the retries),
   `S12/operator-restart/timeline.jsonl` (the fault flow),
   `S12/operator-restart/data-check.json` and
