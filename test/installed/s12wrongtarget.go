@@ -156,6 +156,7 @@ func wrongTargetGuards() []string {
 // or a check that cannot be made, before S12 wrong-target is judged blocks
 // it; what was seen to break stays a failure.
 func (h *haRun) runS12WrongTarget(ctx context.Context) (result evidence.Scenario) {
+	defer h.inScenario(s12ID+"/"+s12WrongTargetVariant, &result)()
 	result = evidence.Scenario{ID: s12ID, Variant: s12WrongTargetVariant, Result: evidence.Fail, NeverEvents: []string{}}
 	rec := s12WrongTargetRecord{Cluster: s12WrongTargetClusterName, SeedPrefix: h.rec.Seed.Prefix + "/wt-seed",
 		SecretRef: s12WrongTargetSecretName, RecoverySecretRef: s12WrongTargetRecoverySecretName,

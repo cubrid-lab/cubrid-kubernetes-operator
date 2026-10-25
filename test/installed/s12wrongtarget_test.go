@@ -775,3 +775,12 @@ func TestRunS12WrongTargetWaitsForTheExistingDataToAnswer(t *testing.T) {
 		t.Fatalf("existing data = %+v, want the reads that failed first recorded", rec.ExistingData)
 	}
 }
+
+func TestRunS12WrongTargetCountsItsLostSessions(t *testing.T) {
+	cfg := testS12WrongTargetConfig(t)
+	f := newS12WrongTargetFixture(t, cfg)
+	wrong, err := wrongTargetOf(t, f, t.Context())
+	if err != nil || wrong.Result != evidence.Pass || wrong.Measurements["lostSessions"] != float64(0) {
+		t.Fatalf("S12 wrong-target = %+v, error %v; want a pass with no lost session counted", wrong, err)
+	}
+}
