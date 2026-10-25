@@ -126,8 +126,13 @@ type HAConfig struct {
 	// from S11's artifact. It needs BackupBucket.
 	Restore bool
 	// RestoreLimit bounds the restored cluster from its creation until it is
-	// Ready (restore_limit).
+	// Ready (restore_limit), and the cluster restored from the tampered copy
+	// until its restore is refused.
 	RestoreLimit time.Duration
+	// RestoreTampered selects S12 tampered after S12 exact: a copy of S11's
+	// artifact with one byte changed, restored into another new cluster. It
+	// needs Restore.
+	RestoreTampered bool
 }
 
 func (c HAConfig) validate() error {
@@ -236,8 +241,9 @@ type haRun struct {
 	// s11 is the result of S11 complete, once it ran, and s11Rec its record.
 	s11    *evidence.Scenario
 	s11Rec *s11Record
-	// s12 is the result of S12 exact, once it ran.
-	s12 *evidence.Scenario
+	// s12 is the result of S12 exact, once it ran, and s12Tampered that of
+	// S12 tampered.
+	s12, s12Tampered *evidence.Scenario
 	// engineVersion is the engine version cubrid_rel reported on the master.
 	engineVersion string
 	// accessKey and secretKey are the seed Secret's values. They go to the
@@ -300,6 +306,14 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 			"S00-S15 qualification"
 		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket; the restored "+
 			"cluster's seed backups are left under the run's prefix")
+		if cfg.RestoreTampered {
+			lane = s12TamperedLane
+			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12TamperedVariant})
+			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
+				"exact and S12 tampered: a full backup to object storage, restored into a new cluster in the run " +
+				"namespace, and a copy of it with one byte changed refused by another; no other S00-S15 " +
+				"qualification"
+		}
 	case cfg.BackupBucket != "":
 		lane = s11Lane
 		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant})
@@ -413,6 +427,16 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12Variant}, evidence.Blocked,
 			"S12 restores S11's artifact, and S11 did not pass")
 	}
+	switch {
+	case h.s12Tampered != nil:
+		summary.Record(*h.s12Tampered)
+	case h.cfg.RestoreTampered && h.s12 == nil:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12TamperedVariant}, evidence.Blocked,
+			"S12 tampered follows S12 exact, and S12 exact did not run")
+	case h.cfg.RestoreTampered:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12TamperedVariant}, evidence.Blocked,
+			"S12 tampered follows S12 exact, and S12 exact did not pass")
+	}
 }
 
 // afterLAB01 runs the scenario selected to follow LAB01, if any.
@@ -437,6 +461,14 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 		h.s12 = &s12
 		if s12.Result != evidence.Pass {
 			return fmt.Errorf("S12/%s: %s", s12Variant, s12.Reason)
+		}
+		if !h.cfg.RestoreTampered {
+			return nil
+		}
+		tampered := h.runS12Tampered(ctx)
+		h.s12Tampered = &tampered
+		if tampered.Result != evidence.Pass {
+			return fmt.Errorf("S12/%s: %s", s12TamperedVariant, tampered.Reason)
 		}
 	}
 	return nil
@@ -687,7 +719,7 @@ func clusterReady(cluster *databasev1alpha1.CubridCluster) (string, error) {
 	for _, db := range cluster.Status.Databases {
 		if db.Phase == databasePhaseFailed {
 			reason := "no reason recorded"
-			if c := meta.FindStatusCondition(cluster.Status.Conditions, "BootstrapReady"); c != nil {
+			if c := meta.FindStatusCondition(cluster.Status.Conditions, bootstrapReadyCondition); c != nil {
 				reason = c.Reason + ": " + c.Message
 			}
 			return "", fmt.Errorf("the bootstrap of database %s failed: %s", db.Name, reason)

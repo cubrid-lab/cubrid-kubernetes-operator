@@ -74,12 +74,16 @@ func testS11Config(t *testing.T) HAConfig {
 	return cfg
 }
 
-// fakeStore is an object store in memory, keyed by bucket/key. getErr, when
-// set, answers a Get first.
+// fakeStore is an object store in memory, keyed by bucket/key. getErr,
+// putErr and removeErr, when set, answer a Get, Put or Remove first;
+// afterPut runs after a Put stored its object.
 type fakeStore struct {
-	mu      sync.Mutex
-	objects map[string][]byte
-	getErr  func(ctx context.Context, key string) error
+	mu        sync.Mutex
+	objects   map[string][]byte
+	getErr    func(ctx context.Context, key string) error
+	putErr    func(key string) error
+	removeErr func(key string) error
+	afterPut  func(key string)
 }
 
 func (s *fakeStore) put(bucket, key string, data []byte) {
@@ -101,6 +105,38 @@ func (s *fakeStore) Get(ctx context.Context, bucket, key string) (io.ReadCloser,
 		return nil, fmt.Errorf("get %s/%s: %w", bucket, key, errObjectNotFound)
 	}
 	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (s *fakeStore) Put(_ context.Context, bucket, key string, r io.Reader, size int64) error {
+	if s.putErr != nil {
+		if err := s.putErr(key); err != nil {
+			return err
+		}
+	}
+	data, err := io.ReadAll(io.LimitReader(r, size))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) != size {
+		return fmt.Errorf("put %s/%s: %d bytes of %d", bucket, key, len(data), size)
+	}
+	s.put(bucket, key, data)
+	if s.afterPut != nil {
+		s.afterPut(key)
+	}
+	return nil
+}
+
+func (s *fakeStore) Remove(_ context.Context, bucket, key string) error {
+	if s.removeErr != nil {
+		if err := s.removeErr(key); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.objects, bucket+"/"+key)
+	return nil
 }
 
 func (s *fakeStore) List(_ context.Context, bucket, prefix string) ([]string, error) {

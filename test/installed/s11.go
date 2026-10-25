@@ -102,11 +102,16 @@ var errObjectNotFound = errors.New("the object store holds no such object")
 // S11: the bound is the run's, not the contract's.
 var maxManifestSize int64 = 16 << 20
 
-// objectStore reads an S3-compatible store. S11 verifies the artifact with
-// a client of its own, not through the Operator or the Instance Manager.
+// objectStore reads an S3-compatible store and writes to it. S11 verifies
+// the artifact with a client of its own, not through the Operator or the
+// Instance Manager; S12 tampered writes and removes its copy of it with the
+// same client.
 type objectStore interface {
 	Get(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 	List(ctx context.Context, bucket, prefix string) ([]string, error)
+	// Put stores size bytes of r under key; Remove removes key.
+	Put(ctx context.Context, bucket, key string, r io.Reader, size int64) error
+	Remove(ctx context.Context, bucket, key string) error
 }
 
 type minioStore struct{ client *minio.Client }
@@ -159,6 +164,15 @@ func (s minioStore) List(ctx context.Context, bucket, prefix string) ([]string, 
 		keys = append(keys, obj.Key)
 	}
 	return keys, nil
+}
+
+func (s minioStore) Put(ctx context.Context, bucket, key string, r io.Reader, size int64) error {
+	_, err := s.client.PutObject(ctx, bucket, key, r, size, minio.PutObjectOptions{})
+	return err
+}
+
+func (s minioStore) Remove(ctx context.Context, bucket, key string) error {
+	return s.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
 }
 
 // s11KnownPoint is where the client history stood when the backup was

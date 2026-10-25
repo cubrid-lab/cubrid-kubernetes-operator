@@ -12,7 +12,7 @@ installed:
 5. Remove the namespace.
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`
-and S12 `exact` build on. It
+and S12 `exact` and `tampered` build on. It
 injects no fault. A pass is not an S01 result at the VM-lab level, and it
 does not qualify any of S00 to S15.
 
@@ -490,9 +490,10 @@ Pods, are scheduled whatever they use. Whether their memory fits beside each
 other on the lab was not measured; a run that runs short would show it as a
 member that does not become Ready, which fails S12 at `-restore-limit`.
 
-S12 here does not check:
-- the variants `wrong-target` (a target volume that already holds a
-  database) and `tampered` (one byte of the artifact changed);
+S12 `exact` here does not check:
+- the variant `wrong-target` (a target volume that already holds a
+  database); `tampered` (one byte of the artifact changed) runs only with
+  `-restore-tampered`, below;
 - the interruptions of a restore: a killed member or Instance Manager, a
   restarted Operator or an object store that becomes unreachable while the
   restore runs;
@@ -508,6 +509,116 @@ S12 here does not check:
 The restored cluster is left to the namespace cleanup. Its seed backups under
 `lab-runs/<run ID>/restore-seed` stay in the seed bucket, and S11's artifact
 in `-backup-bucket`.
+
+## S12 tampered
+
+With `-restore-tampered` as well as `-restore`, the run goes on after S12
+`exact` passed with S12 `tampered` of the scenario contract: a copy of S11's
+artifact with one byte changed must be refused by a new cluster. The lane is
+then `lab-installed-ha-s12-tampered`, and it requires LAB01, S11/complete,
+S12/exact and S12/tampered. `-restore-tampered` without `-restore` is refused
+before anything is done.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -restore -restore-tampered [-restore-limit 20m]
+```
+
+- `-restore-limit` bounds this variant too: from the return of the request
+  that created the cluster until the reading that saw the refusal.
+- The keys of the seed Secret must also be able to delete objects in
+  `-backup-bucket`: the run writes the copy under
+  `lab-runs/<run ID>/tampered/` with its own client and removes it at the
+  end. Before, the run itself only read that bucket with them.
+- `-timeout` must also cover the copy, which reads the whole artifact once
+  and the copy back once, and three restore attempts.
+
+S12 `tampered` starts only from S12 `exact` that passed. When S12 `exact`
+did not run or did not pass, S12 `tampered` is blocked with that cause and
+nothing of it is done. `ha-restore` is left as S12 `exact` left it.
+
+1. **The copy.** Through the port-forward to `-object-store-service` and
+   with its own client, as S11 downloads the artifact, the run reads S11's
+   `manifest.json`, which must still have the digest S11 recorded, and
+   copies each object it lists to `lab-runs/<run ID>/tampered/<key>` in
+   `-backup-bucket`. Of the first listed object with at least one byte, the
+   byte at offset `size / 2` is inverted as it is copied; every other byte
+   and object is copied as it is. Each object read from S11's artifact must
+   have the size and SHA-256 the manifest lists. The manifest is copied last,
+   unchanged. No manifest identity check involves the artifact's prefix, so
+   the copy is the same backup except for that byte.
+2. **The run's own check.** The run reads the copy back: its manifest must
+   be S11's, byte for byte; exactly the changed object must not match the
+   manifest, with the SHA-256 the run wrote, and every other object must.
+   S11's manifest, read again, must still have the digest S11 recorded; S11's
+   objects were checked as they were read for the copy. A copy that cannot
+   be written, read or checked, or an S11 artifact that no longer matches,
+   blocks S12 `tampered` before any cluster is created.
+3. **The cluster.** The run creates the `CubridCluster` `ha-tampered` in the
+   run namespace with the source's spec, as S12 `exact` creates
+   `ha-restore`, and:
+   - `spec.bootstrap.recovery.manifestUri`: the copy's
+     `s3://<backup bucket>/lab-runs/<run ID>/tampered/manifest.json`;
+   - `spec.objectStorage`: the seed endpoint and bucket, the prefix
+     `lab-runs/<run ID>/tampered-seed`, and a Secret of its own,
+     `object-storage-tampered`: a third copy of the seed Secret's two keys,
+     which only `ha-tampered` names. No suffix the Operator uses begins with
+     `tampered-`, so no name of `ha-tampered` is one of `ha`'s or
+     `ha-restore`'s.
+4. **Wait for the refusal.** The run reads `ha-tampered` every `-poll` for at
+   most `-restore-limit` and records each change of the bootstrap, as S12
+   `exact` does; `attempts` shows each restore attempt. It passes on the
+   reading where `status.bootstrap.phase` is `Failed` and the
+   `BootstrapReady` reason is `RestoreFailed` with a message that contains
+   `object <key> checksum mismatch` for the changed object's manifest key:
+   the Operator's restore gave up after its last attempt for that cause
+   (`restoreAttemptFailed` in `internal/controller/bootstrap.go`).
+   - `Ready` `True` at any reading, and a bootstrap phase `Complete`, must
+     never happen and fail S12 `tampered` at once: a cluster restored from
+     data that differs from the backup.
+   - `Failed` with another reason, or a message that does not name that
+     object's checksum mismatch, fails it, with the reason and message.
+   - A cluster read but not refused when `-restore-limit` passes fails it,
+     with the last phase and `BootstrapReady` reason. When the readings kept
+     failing until then, it is blocked.
+   - `refusedWithin` runs from the return of the create request to the
+     reading that saw the refusal, an upper bound; `attempts` is
+     `status.bootstrap.attempts` at that reading.
+5. **Secrets.** The Secrets the Pod template of `ha-tampered`'s StatefulSet
+   names must not include one that a Pod template of the source names, as in
+   S12 `exact`. Its Broker Deployments are not read: the run does not rely
+   on their existence while the bootstrap has failed.
+6. **The source.** As step 8 of S12 `exact`: the same member Pods and
+   containers, the same master by CUBRID and `status.currentPrimary`, no
+   marker `s12` on a source member, and the data rules over the whole
+   history. Any difference fails S12 `tampered`. Then S11's manifest is read
+   once more: a digest other than the one S11 recorded fails S12 `tampered`,
+   since S11's artifact changed while `ha-tampered` ran; a read that fails
+   blocks it. Its objects are not read again.
+7. **Credentials.** Neither key of the seed Secret may be in any status of
+   `ha-tampered` the run read, at every reading and once at the end. That
+   last reading must also still show the refusal; one that does not fails
+   S12 `tampered`.
+8. **Removal.** On every path out of S12 `tampered`, also when the run
+   ended, the run removes each key of the copy it wrote, the manifest
+   first, with `-cleanup-timeout` as its own budget, and lists the prefix
+   again. The
+   record says whether the copy was removed and, if not, what may be left.
+   Removing it does not judge S12 `tampered`.
+
+As in S12 `exact`, a refused or failing API read, a `kubectl exec` or `csql`
+that cannot read the source, and a run that ends before S12 `tampered` is
+judged block it; what was seen stays a failure, with that error added to the
+reason. `refusedWithin` and `attempts` are `unknown` until measured.
+
+S12 `tampered` here does not check:
+- that the target volume of `ha-tampered` is unchanged or empty after the
+  refused attempts: the Instance Manager removes what its own failed restore
+  left (ADR-0008), and the run does not read the volume;
+- a change elsewhere than one byte of one object: a changed manifest, a
+  missing object or a changed size;
+- the Operator's logs and Events of `ha-tampered`, and what the Operator
+  does with `ha-tampered` after the last reading.
 
 ## Evidence
 
@@ -548,6 +659,18 @@ directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs.
   The writes after the backup are in `LAB01/history.jsonl` with the rest;
   LAB01's operation counts leave them out. S06's clients, by contrast, are
   counted in LAB01's operations as well as S06's.
+- with `-restore-tampered`, `S12/tampered/record.json` (the copy: S11's
+  artifact URI and digest, the copy's URI and prefix, the changed object's
+  key, the offset, the byte before and after and the SHA-256 before and
+  after, the objects that match the manifest and those that do not, whether
+  S11's manifest was unchanged when the copy was checked
+  (`sourceUnchanged`) and after the refusal (`sourceUnchangedAtEnd`), and
+  whether the copy was removed; the
+  cluster's name, UID, seed prefix and Secret, every bootstrap change
+  observed, `refusedWithin`, the refusal's reason and message, the Secrets
+  its Pods name, the source at the end, where credentials were looked for,
+  and what is left) and `S12/tampered/source-data-check.json`, the source's
+  data check.
 
 `formationSeconds` runs from the return of the request that created the
 cluster until the reading that began the stable period that held. Each reading takes
@@ -558,8 +681,9 @@ runs from the client's last answer until the data rules held everywhere.
 ## Cleanup
 
 The run deletes its namespace with a UID precondition and waits until it is
-gone, as the smoke does. That removes the cluster, the restored cluster of
-S12, their PVCs, the client and the copied Secrets. It does not remove:
+gone, as the smoke does. That removes the cluster, the restored clusters of
+S12, their PVCs, the client and the copied Secrets. S12 `tampered` removes
+its copy of the artifact itself. It does not remove:
 - the seed backups under `lab-runs/<run ID>` in the bucket, the restored
   cluster's among them, and S11's artifact in the backup bucket;
 - a backend volume that the StorageClass retains.
