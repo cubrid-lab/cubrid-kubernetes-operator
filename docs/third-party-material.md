@@ -59,6 +59,42 @@ To repeat the list for the current `go.mod`:
 GOOS=linux go list -deps -f '{{with .Module}}{{.Path}}@{{.Version}}{{end}}' ./cmd/... | sort -u
 ```
 
+## Image components (2026-10-26, commit `d6eab59`)
+
+What each image the project builds contains besides this repository's code,
+read from the images themselves (#91). Licenses are as the components state
+them; nothing here was reviewed by counsel.
+
+| Image | Base | Components that are not this repository's code |
+|---|---|---|
+| Manager (`Dockerfile`) | `gcr.io/distroless/static:nonroot`, `sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99` on the date above | The 102 Go modules linked into the manager, `./cmd` (below). The base's Debian packages `base-files`, `ca-certificates`, `media-types`, `netbase`, `tzdata` and `tzdata-legacy`, each with its `copyright` file under `/usr/share/doc`. |
+| Instance Manager (`build/instance-manager/Dockerfile`) | `cubrid/cubrid:11.4`, `sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791` on the date above | The 19 Go modules linked into `./cmd/instance-manager`, a subset of the manager's; of those that ship a `NOTICE` (below), only `minio-go/v7` and `go.yaml.in/yaml/v3`. CUBRID 11.4.6, whose `COPYING` reads: "CUBRID Server Engine is under Apache License 2.0 and CUBRID APIs and Connectors are under BSD License", and "CUBRID is registered trademark of CUBRID Corporation". CUBRID's `3rdparty` directory carries license files for Adoptium Temurin (and its assembly exception), libedit, libexpat, libjansson, libodbc, libopenssl, libtbb, lz4, rapidjson and re2. Rocky Linux 8.10 with 224 RPM packages. Counted by package, their declared licenses name GPLv2+ (56 packages), GPLv3+ (28), LGPLv2+ (51), BSD (63), MIT (36) and MPLv2.0 (9); among them are `bash` and `glibc`. |
+| Workload client, test-only (`test/workload/client/Dockerfile`) | `eclipse-temurin:17-jre`, `sha256:e04fa72be13b257a59fdec6dc14af78c8f80f035d3c1ed4e03e45552a231d4c8` locally on the date above | The CUBRID JDBC driver 11.3.2.0053 (BSD-3-Clause, see the table above). The Temurin JRE is GPLv2 with the Classpath Exception. The base is Ubuntu 26.04.1 with 140 packages, among them GPL-licensed `bash` and `coreutils`. The image is pushed as a development image (#554) and is never part of a release. |
+
+**Go modules, recounted.** At `d6eab59`, the manager links 102 modules besides
+this one, and the Instance Manager 19 of them. Classified by the first license
+file of each, the manager's counts are unchanged since the check above: 63
+Apache-2.0, 22 BSD, 16 MIT and 1 ISC, with no copyleft. The same 11 ship a
+`NOTICE` file, some at newer versions: `minio-go/v7@v7.4.1`,
+`prometheus/client_golang@v1.25.0`, `prometheus/client_model@v0.6.3`,
+`prometheus/common@v0.72.0` and `prometheus/procfs@v0.22.0`.
+
+**Against the terms #19 set.** The project's Apache-2.0 license covers this
+repository's source only.
+- The images also redistribute their bases' operating-system packages, under
+  those packages' own terms.
+- The Instance Manager image redistributes GPL and LGPL packages from Rocky
+  Linux, and the workload client image GPL packages from Ubuntu. The GPL and
+  LGPL ask whoever distributes these binaries to offer their corresponding
+  source. Rocky Linux and Ubuntu publish their sources, but this project has
+  not yet arranged or documented how it meets that.
+- The development images already pushed to the public GHCR packages (#449)
+  carry the same bases.
+- The CUBRID name is a trademark of CUBRID Corporation. The images name
+  CUBRID only to identify the software they contain.
+- Neither the manager nor the Instance Manager image includes the `NOTICE`
+  texts of its linked Go modules yet.
+
 ## Still required before publishing images
 
 Source publication needs nothing more. Published container images do:
@@ -66,9 +102,14 @@ Source publication needs nothing more. Published container images do:
 - Include the license and `NOTICE` texts of the linked modules in the manager
   and Instance Manager images, generated from the dependency set of the
   release commit (#123).
-- Record the digest of the `cubrid/cubrid` base image and review its
-  redistribution terms. The CUBRID binaries and the CUBRID name keep their
-  own terms; this repository's license does not cover them.
+- Record the digest of the `cubrid/cubrid` base image of the release and
+  review its redistribution terms. The CUBRID binaries and the CUBRID name
+  keep their own terms; this repository's license does not cover them. The
+  components found on 2026-10-26 are listed above.
+- Decide how the GPL and LGPL operating-system packages of the images' bases
+  have their corresponding source made available (for example by pointing to
+  the base distribution's source of the recorded digests), and document it
+  with the release (#123).
 
 For new reuse, provide the origin URL and revision, the license, the copied
 paths and the modifications in the PR.
