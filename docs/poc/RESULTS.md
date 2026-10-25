@@ -3189,3 +3189,26 @@ table either.
 
 The containers `poc238-h-0` and `poc238-h-1`, their volumes and the network
 `poc238-net` were removed afterwards.
+
+### Which sessions the lab's servers interrupt
+
+Read-only, under the lab Lease, 2026-10-25 08:00Z: the current server error
+log and access log of each member of `cubrid-test/ha` (written since the
+members started on 2026-10-23), counted by client name.
+
+| Member | Role | Connections in the access log | `-982` Set interrupt / `-1066` Session expired |
+|---|---|---|---|
+| `ha-0` | slave | 15,709 `applyinfo`, 201 `csql` (this POC's trials), 76 `copylogdb`, 2 `applylogdb`, 1 Broker CAS, 1 `backupdb` | `applyinfo`: 651 / 580; `csql`: 5 / 1 |
+| `ha-2` | slave | 15,600 `applyinfo`, 100 `copylogdb`, 5 Broker CAS, 2 `applylogdb`, 1 `csql` | `applyinfo`: 630 / 557; `copylogdb`: 1 / 0 |
+| `ha-1` | master | 115 `copylogdb`, 12 `applyinfo`, 2 Broker CAS, 2 `csql`, 2 `applylogdb` | `copylogdb`: 2 / 0 |
+
+- On each slave about 4% of the `applyinfo` sessions ended with the server
+  interrupting their transaction, and 5 of the 201 `csql` sessions of this
+  POC's trials did as well, about the rate at which those trials were
+  aborted. On the master, which receives almost no `applyinfo`, no client
+  session was interrupted that way.
+- So the interrupted sessions are not particular to `applyinfo`: it is the
+  client that connects most often to a slave. What makes a slave's server
+  interrupt about one session in 25 is not known; the local pair above, whose
+  slave had nothing to apply during its trials, interrupted none.
+
