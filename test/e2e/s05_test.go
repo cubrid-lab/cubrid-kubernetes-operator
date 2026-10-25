@@ -326,21 +326,24 @@ func (r *haRun) s05(variant string) {
 	if timeline != "" {
 		files = append(files, timeline)
 	}
+	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt, clients...)
 	result = judged(evidence.Scenario{
 		ID: "S05", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
 		Measurements: map[string]any{
 			// The slowest client: the fault until its writes were
 			// acknowledged again without interruption.
-			"recoveryTime":             recovery.Round(time.Millisecond).String(),
-			"brokersAvailableWithin":   outcome.OutcomeAt.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String(),
-			"newConnectionAfterFault":  newConnection,
-			"shortestStableFor":        minStable.Round(time.Millisecond).String(),
-			"clientsInterrupted":       interrupted,
-			"clientsNotInterrupted":    len(clients) - interrupted,
-			"acknowledgedMissing":      report.AcknowledgedMissing,
-			"outcomeUnknown":           operations.Unknown,
-			"databaseFailoverObserved": false,
+			"recoveryTime":               recovery.Round(time.Millisecond).String(),
+			"brokersAvailableWithin":     outcome.OutcomeAt.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String(),
+			"newConnectionAfterFault":    newConnection,
+			"shortestStableFor":          minStable.Round(time.Millisecond).String(),
+			"clientsInterrupted":         interrupted,
+			"clientsNotInterrupted":      len(clients) - interrupted,
+			"acknowledgedMissing":        report.AcknowledgedMissing,
+			"observedDataLossWindow":     lossWindow,
+			"observedDataLossResolution": lossResolution,
+			"outcomeUnknown":             operations.Unknown,
+			"databaseFailoverObserved":   false,
 		},
 		Operations: &operations,
 		Evidence:   files,

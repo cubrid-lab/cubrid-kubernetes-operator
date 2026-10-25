@@ -426,8 +426,20 @@ present, it must be present exactly once and with the values that were sent.
   A client that does not read is judged on its writes alone. Any `failed` or
   `unknown` outcome interrupts (`workload.Recovery`).
 - **Observed data loss (observed RPO).** The number of `acknowledged`
-  operations missing after recovery, and the time between the oldest of them
-  and the start of the fault.
+  operations missing after recovery (`acknowledgedMissing`), and the time
+  between the oldest of them and the start of the fault
+  (`observedDataLossWindow`; `0s` when none is missing). The window is taken
+  only from acknowledged inserts (`workload.ObservedLoss`). It is `unknown`,
+  with the reason, when no member was checked, when no write was acknowledged
+  before the fault, or when the oldest missing write was acknowledged after
+  the fault. `observedDataLossResolution` is how long before the fault the last
+  write was acknowledged: a loss of writes acknowledged within it could not be
+  seen. `unknown` operations are never counted as lost. Only the writes of the
+  scenario's own clients count; a missing write of an earlier step's client
+  leaves the window `unknown`. Acknowledgement times are the client's clock
+  and the fault time the test runner's, so both measurements assume the two
+  agree: on Kind they share the host's clock, and a run on other machines must
+  record their skew.
 - A measurement that could not be taken is reported as `unknown`, with the
   reason, and never as zero. Zero means "measured, and it was zero".
 
@@ -480,6 +492,7 @@ reader can tell what to expect.
       "measurements": {
         "recoveryTime": "21.4s",
         "acknowledgedMissing": 0,
+        "observedDataLossResolution": "84ms",
         "outcomeUnknown": 2,
         "observedDataLossWindow": "0s"
       },
