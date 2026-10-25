@@ -221,6 +221,15 @@ func TestBrokerEntrypoint_WatchesTheBrokerInItsProcessList(t *testing.T) {
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
+	// The window counts from the start of the Broker, after which the script
+	// watches it.
+	deadline := time.Now().Add(exitLimit)
+	for index(f.recorded(), callBrokerUp) < 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the Broker was not started:\n%s", out.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	// Several check intervals (0.2 s) with the Broker listed.
 	select {
 	case err := <-exited:
