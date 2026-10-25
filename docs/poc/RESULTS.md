@@ -2995,7 +2995,7 @@ were unchanged.
 
 ---
 
-## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: about 2–3% of `csql` reads on a long-running slave were aborted, every one on transaction index 6, with or without an `applyinfo` of the run's own; killing `applyinfo` is not needed; the cause is not known**
+## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; the cause is not known**
 
 **Question.** In VM-lab runs of S12 (#568, #573), a `csql` read on an HA
 member sometimes printed its result and `Committed.`, together with
@@ -3028,7 +3028,7 @@ or `CODE = -111`, and the transaction index in that line is recorded. Arms:
 
 | Arm | Before each `csql` |
 |---|---|
-| `kill` | `cubrid applyinfo -L /var/lib/cubrid/databases/appdb_ha-1 -a appdb` started in its own process group (`set -m`), its group sent SIGKILL 50–600 ms later, then waited for |
+| `kill` | `cubrid applyinfo -L /var/lib/cubrid/databases/appdb_ha-1 -a appdb` started in its own process group (`set -m`), its group sent SIGKILL 50–600 ms later, then waited for. In 1 of the 30 trials the signal came while `applyinfo` still ran (exit 137); in the other 29 it had ended by itself |
 | `control` | the same `applyinfo`, left to end by itself |
 | `after` | the same `applyinfo`, left to end by itself (a second run, with timestamps) |
 | `none` | nothing; 0.3 s between trials |
@@ -3046,18 +3046,23 @@ during every arm.
 | `after` | 60 | 1 | 6 |
 | local standalone, a `csql` killed with SIGKILL in a 3 s statement, then a new `csql` after 0–4 s | 34 | 0 | — |
 
-- In the four aborted trials of `kill`, `applyinfo` had ended by itself
-  (exit 0) before the signal; none of the aborts followed a killed
-  `applyinfo`.
+- In the three aborted trials of `kill`, `applyinfo` had ended by itself
+  (exit 0) before the signal; the one trial in which it was killed was not
+  aborted. Killing was not tested further: `applyinfo` usually ended within
+  50 ms. The rate per arm (3 of 30 in `kill`) is too small a sample to
+  tell the arms apart.
 - `ha-0`'s server log (`appdb_20261023_1142.err`) holds the pair
   `NOTIFICATION -982 ... Tran = 6, CLIENT = ha-0:applyinfo(<pid>)
   Set interrupt to the transaction 6.` and `ERROR -1066 ... Tran = 6, CLIENT =
   ha-0:applyinfo(<pid>) Session expired.` for its `applyinfo` connections,
-  about every 10 s, back to 2026-10-24 (the last 300 such lines: 158 `-982`,
-  142 `-1066`, all `ha-0:applyinfo`, all transaction 6). An `applyinfo -a`
+  at intervals from about 10 s to several minutes (the last 300 such lines,
+  2026-10-24 18:46 to 2026-10-25 05:26: 158 `-982` and 142 `-1066`, so not
+  every interrupt was followed by a `Session expired` in that window; all
+  `ha-0:applyinfo`, all transaction 6). An `applyinfo -a`
   that ends by itself leaves its session to the server this way.
 - The aborts did not follow those lines closely: the nearest one came 0.7 s,
-  3.2 s and 8.3 s before the three timed aborts, while 7 of 137 reads that
+  3.2 s and 8.3 s before the three timed aborts (the server's `Time:` stamps
+  and the script's `date -u` both read UTC on the member), while 7 of 137 reads that
   were not aborted started within 0.2 s before one.
 - The output order differs between occurrences: the errors before the
   result, or after `Committed.`. In every occurrence the result was complete.
@@ -3066,8 +3071,8 @@ during every arm.
 
 **What this shows.** On a slave that runs normally, a new client session is
 aborted with `-199`/`-111` in a few percent of connections, always with the
-transaction index that `applyinfo` uses there. Killing `applyinfo` is not the
-trigger. That the cause is `applyinfo`'s session handling is a hypothesis: the
+transaction index that `applyinfo` uses there, also when no `applyinfo` was
+killed. Whether a killed `applyinfo` adds to it was not measured. That the cause is `applyinfo`'s session handling is a hypothesis: the
 shared transaction index points to it, the timing does not show it, and the
 abort was not produced without `applyinfo` running, since the Instance
 Manager's own runs could not be stopped on this member. Whether a write
