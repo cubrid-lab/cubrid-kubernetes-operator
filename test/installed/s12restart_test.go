@@ -48,6 +48,10 @@ const (
 	// reason of a running restore and the phase of a created database.
 	testRestoreInProgress = "RestoreInProgress"
 	testDatabaseCreated   = "Created"
+	// testSeedInProgress and testPeersSeeded are the BootstrapReady reasons
+	// of the seeding and of a completed recovery.
+	testSeedInProgress = "SeedRestoreInProgress"
+	testPeersSeeded    = "PeersSeeded"
 )
 
 func testS12RestartConfig(t *testing.T) HAConfig {
@@ -196,9 +200,9 @@ func (f *s12RestartFixture) advanceRestart(ctx context.Context, c client.WithWat
 		Message: "restoredb is running on " + testRestartMaster, LastTransitionTime: now}
 	switch phase {
 	case databasev1alpha1.BootstrapSeedingReplicas:
-		boot.Reason, boot.Message = "SeedRestoreInProgress", "copying to the other members"
+		boot.Reason, boot.Message = testSeedInProgress, "copying to the other members"
 	case databasev1alpha1.BootstrapComplete:
-		boot.Reason, boot.Message = "PeersSeeded", "database appdb was restored on "+testRestartMaster+
+		boot.Reason, boot.Message = testPeersSeeded, "database appdb was restored on "+testRestartMaster+
 			" and copied to the other members"
 		s.CurrentPrimary = testRestartMaster
 		s.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName, Phase: testDatabaseCreated, PrimaryCreated: true,

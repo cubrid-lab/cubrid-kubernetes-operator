@@ -12,9 +12,8 @@ installed:
 5. Remove the namespace.
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`
-and S12 `exact`, `tampered`, `wrong-target` and `operator-restart` build on.
-It
-injects no fault. A pass is not an S01 result at the VM-lab level, and it
+and S12 `exact`, `tampered`, `wrong-target`, `operator-restart` and
+`instance-manager-restart` build on. It injects no fault. A pass is not an S01 result at the VM-lab level, and it
 does not qualify any of S00 to S15.
 
 It shares its inputs, target snapshot, manager identity checks and namespace
@@ -518,7 +517,8 @@ S12 `exact` here does not check:
 - the interruptions of a restore: a killed member or Instance Manager, a
   restarted Operator or an object store that becomes unreachable while the
   restore runs; a restarted Operator runs only with
-  `-restore-operator-restart`, below;
+  `-restore-operator-restart`, and a killed Instance Manager on the target
+  member only with `-restore-instance-manager-restart`, below;
 - an artifact taken on the master: S11 takes the backup on a slave
   (`PreferStandby`), and a restore into a new cluster accepts an artifact
   taken on either role (`restoreExpectation` in
@@ -960,12 +960,220 @@ S12 `operator-restart` here does not check:
   records its operation, which the replacement resolves through the
   idempotency key (`operationOfKey` in `internal/controller/imclient.go`):
   the restart follows a reading that already holds the operation;
-- a restart of the Instance Manager, a killed member or an object store that
-  becomes unreachable during the restore;
+- a restart of the Instance Manager (that runs only with
+  `-restore-instance-manager-restart`, below), a killed member or an object
+  store that becomes unreachable during the restore;
 - that the restored database was not restored twice on the member: only
   the status's operation and attempts are read, not the Instance Manager's
   operation records or the volume;
 - the Operator's logs and Events of `ha-restart`.
+
+## S12 instance-manager-restart
+
+With `-restore-instance-manager-restart` as well as `-restore`, the run goes
+on after S12 `exact` passed with S12 `instance-manager-restart` of the
+scenario contract: S11's artifact is restored into another new cluster, and
+the Instance Manager on the restore's target member is killed while that
+restore runs. The lane is then `lab-installed-ha-s12-instance-manager-restart`,
+and it requires LAB01, S11/complete, S12/exact and
+S12/instance-manager-restart. `-restore-instance-manager-restart` without
+`-restore`, or with `-restore-tampered`, `-restore-wrong-target` or
+`-restore-operator-restart`, is refused before anything is done.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -restore -restore-instance-manager-restart [-restore-limit 20m]
+```
+
+- `-restore-limit` bounds this cluster as it bounds `ha-restore`: from the
+  return of the request that created it until the reading that saw it
+  Ready, the kill, the container's restart and the retried restore included.
+  It also bounds the wait for the container to run again.
+- `-timeout` must also cover a third three-member cluster's restore, a
+  second attempt of it, and its checks.
+
+S12 `instance-manager-restart` starts only from S12 `exact` that passed.
+When S12 `exact` did not run or did not pass, it is blocked with that cause
+and nothing of it is done.
+
+**The fault.** The Instance Manager is not a container of its own: the
+image's entrypoint shell stays PID 1 of the member's database container and
+runs the manager as its child, waits for it and exits with its status
+(`build/instance-manager/entrypoint.sh`, the header's item 5 and the end of
+the script). So a crashed manager is a container restart: the shell exits,
+and the kubelet starts the container again on the same Pod and volume. The
+member Pod does not share its process namespace, and when PID 1 of a PID
+namespace ends, Linux ends every other process in it (pid_namespaces(7)), so
+`restoredb` and its worker, which outlives a signal to `cubrid` (POC-27),
+end with the container; this run does not observe that. The run kills the manager process with `SIGKILL`, as a crash would
+end it: `kubectl exec` into the target member's `cubrid` container runs a
+script that finds the one process whose parent is PID 1 and whose command
+line is `/usr/local/bin/instance-manager` alone (the entrypoint's other uses
+of that binary carry an argument), and kills it; it kills nothing when it
+finds none or more than one. A `SIGKILL` to PID 1 from inside the container
+would be ignored, and deleting the Pod would also replace the Pod and, with
+no grace period, let its old container outlive the start of the next one
+(#357, #472): neither is this fault.
+
+What the product guarantees, and the variant checks:
+- The Instance Manager's operation records are on the member's data volume
+  (`IM_OPERATIONS_DIR`, `/var/lib/cubrid/operations`,
+  `internal/controller/cubridcluster_controller.go`). A record is written,
+  synced and renamed into place before its ID is answered
+  (`FindOrCreate`, `writeLocked` in `internal/instancemanager/opstore.go`),
+  so a container restart that keeps the volume keeps it.
+- At its start the Instance Manager fails every record that had not ended,
+  with the reason `manager restarted while operation was in progress`
+  (`NewOperationStore`, `reconcileOnStart`): an operation interrupted by a
+  restart is never completed silently and never restarted.
+- The entrypoint starts no database that carries the ownership marker
+  (`<db>/.im-operation`); the manager writes it before `restoredb`
+  (`registerRestoreTarget` in `restore.go`) and clears it only after
+  `Completed` is recorded (`runRestore` in `server.go`). A restore recorded
+  as `Completed` whose marker is left is started at the manager's start
+  (`ResumeCompletedRestores`).
+- The Operator polls the operation recorded in `status.bootstrap.operationID`
+  (`reconcileRecovery` in `internal/controller/bootstrap.go`). While the
+  manager does not answer the phase and the operation stay. When it answers
+  `Failed`, the Operator ends the attempt with the `BootstrapReady` reason
+  `RestoreFailedRetrying`, a message that carries the manager's reason,
+  raises `attempts` and clears the operation (`restoreAttemptFailed`), and
+  starts the next attempt under the next attempt's idempotency key, which
+  creates a new operation (`recoveryIdempotencyKey`, `FindOrCreate`). After
+  `maxBootstrapAttempts` (3, `internal/controller/habootstrap.go`) failed
+  attempts the recovery is `Failed`.
+- Before the next attempt restores, the Instance Manager takes over the data
+  a failed restore of the same request had recorded as restored
+  (`adoptRestored`, a kill while the restored database was being started),
+  or else removes what its own failed operation left: only a directory whose
+  marker names a `Failed` operation of its store (`reclaimIncomplete` in
+  `ownership.go`, ADR-0008).
+- A target that answers that it holds no record of the operation is waited
+  for, for 30 minutes, and then fails the recovery; the restore is not
+  started again (`restoreOperationMissing`, #457).
+
+1. **The cluster.** The run creates the `CubridCluster` `ha-imrestart` in the
+   run namespace with the source's spec and S11's `status.artifact.uri`, as
+   S12 `exact` creates `ha-restore`, with the prefix
+   `lab-runs/<run ID>/imrestart-seed` and a Secret of its own,
+   `object-storage-imrestart`. No suffix the Operator uses begins with
+   `imrestart-`, so no name of `ha-imrestart` is one of the other clusters'.
+2. **Wait for Restoring.** As step 2 of S12 `operator-restart`: until a
+   reading shows `status.bootstrap.phase` `Restoring` with an `operationID`.
+   A first phase past `Preparing` other than `Restoring` blocks the variant
+   ("the restart could not be placed during the restore") and nothing is
+   killed; `Failed`, or no `Restoring` within `-restore-limit`, fails it.
+3. **Right before the kill.** The run reads the cluster once more and
+   requires `Restoring` with an operation; that reading's phase,
+   `operationID`, `attempts` and `BootstrapReady` message (which says whether
+   `restoredb` runs or the restored database is being started) are recorded
+   as the state at the kill. It then requires the target member that
+   `status.bootstrap.targetMember` names to be a member of `ha-imrestart`, a
+   Pod of its StatefulSet, which the cluster owns, with its `cubrid`
+   container running, and records the Pod's UID and the container's ID,
+   restart count and start. A phase that is no longer `Restoring`, or a
+   target that is not this cluster's, blocks the variant without a kill.
+4. **The kill.** Through the fault flow, the run reads the Pod again and
+   issues the kill only when its UID, container ID and restart count are
+   those of step 3: `kubectl exec` carries no precondition, so a container
+   replaced between that read and the exec is not excluded. What the command
+   answered is recorded; the container may end before it answers. A script
+   that finds no single Instance Manager kills nothing and blocks the
+   variant (`fault_injection_failed`). The kill is confirmed when the Pod's
+   `cubrid` container is seen ended or restarted (another container ID or a
+   higher restart count), within two minutes or `-restore-limit`, whichever
+   is shorter; otherwise the variant is blocked (`fault_not_confirmed`). The
+   ended container's exit code and finish time are recorded (137 is
+   expected: the shell exits with the killed manager's status).
+5. **The member back.** The run waits, until `-restore-limit` has passed
+   since the cluster's creation, for the `cubrid` container to run again:
+   another container than the killed one, running, with a higher restart
+   count, on the same Pod. It reads and records `ha-imrestart` while it
+   waits; the first phase read after the kill is recorded
+   (`phaseAfterRestart`). `memberBackWithin` is measured from the kill to
+   the reading that saw it running. A Pod with another UID blocks the
+   variant: the Pod was replaced, which is not this fault. A container that
+   does not run again in time fails it.
+6. **Wait for the restored cluster.** As step 3 of S12 `exact`, until
+   `-restore-limit` has passed since the cluster's creation. The target
+   member is then read again: a Pod with another UID blocks the variant,
+   and a restart count that is not exactly one above the one at the kill
+   fails it (`containerRestarts`): the container did not stay up after one
+   kill.
+7. **Secrets, HA membership, restored data, a normal write, the source and
+   credentials.** As steps 4 to 9 of S12 `exact`, on `ha-imrestart`: its
+   data check goes to `S12/instance-manager-restart/data-check.json`, the
+   marker it is written is `s12imr`, and the source must hold neither `s12`,
+   `s12or` nor `s12imr`. The data check is what shows that no partial
+   database was served and no data of the interrupted attempt is mixed in:
+   every member and both Services must hold exactly the rows acknowledged
+   before the known point. The status is read once more at the end and
+   recorded.
+8. **The bootstrap, judged over every reading in order.** These must never
+   happen: `BootstrapReady` `True` while the phase is not `Complete`;
+   `attempts` that fall, or that reach 3; an `operationID` that becomes
+   another while `attempts` stays the same (a restore started twice); a
+   reading with the reason `RecordedOperationMissing`: the record was on the
+   volume before its ID was answered, so the restart lost it, and the
+   Operator would wait 30 minutes and fail the recovery. `attempts` that
+   rise on a reading with the reason `RestoreFailedRetrying` are a retry,
+   recorded with its message; `attempts` that rise without it leave the
+   cause unknown and block the variant, as in S12 `operator-restart`. Once
+   the cluster completed, after the kill:
+   - exactly one retry, from the `attempts` at the kill to the next, whose
+     message names the Instance Manager's restart, and an operation at the
+     end other than the one at the kill: the expected outcome;
+   - no retry and the operation of the kill at the end: the operation had
+     completed before the kill took effect, and the kill did not interrupt
+     the restore; the variant is blocked;
+   - a first retry with another message: the attempt the kill interrupted
+     ended for another reason, and whether the restart ended it was not
+     observed; the variant is blocked;
+   - a second retry: the retried restore failed as well; the variant fails;
+   - the operation of the kill at the end after a retry: the operation the
+     kill ended was answered for the next attempt; the variant fails.
+
+   The `BootstrapReady` reasons after the kill, each change once, the
+   operations under each `attempts`, the retries, and `operationID` and
+   `attempts` before and after are recorded; `operationIDChanged`,
+   `attemptsAdded` and `retriesAfterKill` are measured from them.
+
+As in S12 `exact`, a refused or failing API read, a `kubectl exec` or `csql`
+that cannot read the data, and a run that ends before S12
+`instance-manager-restart` is judged block it; what was seen stays a
+failure, with that error added to the reason. `restoredWithin`,
+`memberBackWithin`, `containerRestarts`, `operationIDChanged`,
+`attemptsAdded`, `retriesAfterKill`, `dataRulesHeldAfterSeconds` and
+`postBackupRowsPresent` are `unknown` until measured. A pass's reason is
+built from the record: the target member, the phase, operation and message
+at the kill, how long after it the container ran again, and the operation
+and attempt that completed.
+
+Besides S12 `exact`'s, the account needs `create` on `pods/exec` in the run
+namespace, which LAB01's reads already use; the kill runs as the
+container's own user, the manager's, and needs no privilege.
+
+Three clusters, nine DB Pods and their Brokers, share the lab's workers while
+`ha-imrestart` restores; whether they fit was not measured, as for two in S12
+`exact`.
+
+S12 `instance-manager-restart` here does not check:
+- the kill at another point of the flow: before `restoredb` is admitted,
+  while the backup is verified and downloaded (`Preparing`), during
+  `SeedingReplicas`, or between `Completed` and the status that records it.
+  The kill follows a reading of `Restoring`; the message at the kill says
+  whether `restoredb` ran or the database was being started, but the
+  Instance Manager's operation may have moved on before the kill took
+  effect;
+- whether the next attempt removed the failed attempt's data
+  (`reclaimIncomplete`) or took it over (`adoptRestored`): the Instance
+  Manager's logs, operation records and the volume are not read; only the
+  data the members and Services return is;
+- a kill of the Instance Manager on another member, a killed or deleted
+  member Pod, a restarted node, or an object store that becomes unreachable
+  during the restore;
+- that the other members' containers did not restart;
+- the Operator's logs and Events of `ha-imrestart`.
 
 ## Evidence
 
@@ -1041,6 +1249,20 @@ variant other than `exact` only those under `S12/<variant>/`.
   `S12/operator-restart/timeline.jsonl` (the fault flow),
   `S12/operator-restart/data-check.json` and
   `S12/operator-restart/source-data-check.json`.
+- with `-restore-instance-manager-restart`,
+  `S12/instance-manager-restart/record.json` (as S12 `exact`'s record for
+  `ha-imrestart`, without the writes after the backup, and the restart: the
+  phase first past `Preparing`; the target member, its Pod UID, its
+  container's ID, restart count and start before and after; the phase,
+  `operationID`, `attempts` and message at the kill; what the kill command
+  answered; when the kill was issued, when the container was seen ended,
+  its exit code and finish time, when the run saw it running again, and
+  the restart count at the end; the phase read after the kill, the reasons
+  after it, the operations under each attempt, `operationID` and
+  `attempts` after, and the retries),
+  `S12/instance-manager-restart/timeline.jsonl` (the fault flow),
+  `S12/instance-manager-restart/data-check.json` and
+  `S12/instance-manager-restart/source-data-check.json`.
 
 `formationSeconds` runs from the return of the request that created the
 cluster until the reading that began the stable period that held. Each reading takes

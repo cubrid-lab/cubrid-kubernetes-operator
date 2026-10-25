@@ -61,6 +61,11 @@ const (
 	// dataRulesHeldMeasurement is the measurement of how long the data rules
 	// took to hold.
 	dataRulesHeldMeasurement = "dataRulesHeldAfterSeconds"
+	// restoredWithinMeasurement is the measurement of how long the restored
+	// cluster took to be Ready, and postBackupRowsMeasurement the number of
+	// rows written after the backup that it held.
+	restoredWithinMeasurement = "restoredWithin"
+	postBackupRowsMeasurement = "postBackupRowsPresent"
 )
 
 // s12Retry is a restore attempt the status showed ending, with the reason
@@ -191,10 +196,11 @@ func (h *haRun) runS12OperatorRestart(ctx context.Context) (result evidence.Scen
 	}()
 	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String(),
 		"operator_resync_limit": h.cfg.ResyncLimit.String()}
-	result.Measurements = map[string]any{"restoredWithin": evidence.Unknown, "operatorBackWithin": evidence.Unknown,
+	result.Measurements = map[string]any{restoredWithinMeasurement: evidence.Unknown,
+		"operatorBackWithin":   evidence.Unknown,
 		"operationIDUnchanged": evidence.Unknown, "attemptsAdded": evidence.Unknown, "phaseAtTakeover": evidence.Unknown,
 		"leaseClockLag": evidence.Unknown, "takeoverCutoff": evidence.Unknown,
-		dataRulesHeldMeasurement: evidence.Unknown, "postBackupRowsPresent": evidence.Unknown}
+		dataRulesHeldMeasurement: evidence.Unknown, postBackupRowsMeasurement: evidence.Unknown}
 	err := h.restartSteps(ctx, &result, &rec)
 	// What the bootstrap showed is judged whichever step ended the variant.
 	if judged := judgeRestartBootstrap(&rec, &result); err == nil {
@@ -255,7 +261,8 @@ func (h *haRun) restartSteps(ctx context.Context, result *evidence.Scenario, rec
 	created := time.Now()
 	createdAt := created.UTC()
 	rec.ClusterUID, rec.CreatedAt = string(cluster.UID), &createdAt
-	if err := h.waitRestoring(ctx, cluster, created, rec, result); err != nil {
+	if err := h.waitRestoring(ctx, cluster, created, &rec.s12Record, &rec.Restart.PhaseFirstPastPreparing,
+		result); err != nil {
 		return err
 	}
 	back, err := h.restartDuringRestore(ctx, cluster, rec, result)
@@ -281,7 +288,7 @@ func (h *haRun) afterRestart(ctx context.Context, cluster *databasev1alpha1.Cubr
 		return err
 	}
 	rec.RestoredWithin = readyAt.Sub(created).Round(time.Millisecond).String()
-	result.Measurements["restoredWithin"] = rec.RestoredWithin
+	result.Measurements[restoredWithinMeasurement] = rec.RestoredWithin
 	if err := h.checkRestoredSecrets(ctx, &rec.s12Record, result); err != nil {
 		return err
 	}
@@ -339,9 +346,10 @@ func restartPassReason(r *s12Restart) string {
 // bootstrap Restoring with an operation, until RestoreLimit has passed since
 // createdAt. A reading that shows it past Restoring first means the restart
 // cannot be placed during the restore, which blocks the variant. Each reading
-// is recorded and checked as S12 exact's.
+// is recorded and checked as S12 exact's, and the first phase past Preparing
+// goes to firstPast.
 func (h *haRun) waitRestoring(ctx context.Context, created *databasev1alpha1.CubridCluster, createdAt time.Time,
-	rec *s12RestartRecord, result *evidence.Scenario) error {
+	rec *s12Record, firstPast *string, result *evidence.Scenario) error {
 	wctx, cancel := context.WithDeadline(ctx, createdAt.Add(h.cfg.RestoreLimit))
 	defer cancel()
 	// readErr is the last reading's error, nil once a reading succeeded.
@@ -359,7 +367,7 @@ func (h *haRun) waitRestoring(ctx context.Context, created *databasev1alpha1.Cub
 			return false, err
 		}
 		readErr = nil
-		phase, err := h.restoredStatus(cluster, &rec.s12Record, result)
+		phase, err := h.restoredStatus(cluster, rec, result)
 		if err != nil {
 			return false, err
 		}
@@ -370,8 +378,8 @@ func (h *haRun) waitRestoring(ctx context.Context, created *databasev1alpha1.Cub
 			return false, restoreVerdict{fmt.Errorf("the restored cluster's bootstrap ended Failed: %s",
 				bootstrapReason(cluster))}
 		}
-		if rec.Restart.PhaseFirstPastPreparing == "" {
-			rec.Restart.PhaseFirstPastPreparing = phase
+		if *firstPast == "" {
+			*firstPast = phase
 		}
 		switch {
 		case phase == string(databasev1alpha1.BootstrapRestoring) && cluster.Status.Bootstrap.OperationID != "":
@@ -435,7 +443,7 @@ func (h *haRun) restartDuringRestore(ctx context.Context, cluster *databasev1alp
 				goneAt = time.Now().UTC()
 				r.GoneAt = &goneAt
 			}
-			if err := h.readDuringRestart(ctx, cluster, rec, result); err != nil {
+			if err := h.readDuringRestart(ctx, cluster, &rec.s12Record, &r.PhaseAfterRestart, result); err != nil {
 				seen = err
 				return false, err
 			}
@@ -571,9 +579,10 @@ func (h *haRun) beforeRestart(ctx context.Context, created *databasev1alpha1.Cub
 // readDuringRestart reads and records the restored cluster while the
 // manager is away. A cluster that cannot be read is not judged here: the
 // manager's return is the outcome. A replaced cluster, a bootstrap Failed and
-// what S12 exact's readings must never see are verdicts.
+// what S12 exact's readings must never see are verdicts. The first phase read
+// goes to phaseAfter.
 func (h *haRun) readDuringRestart(ctx context.Context, created *databasev1alpha1.CubridCluster,
-	rec *s12RestartRecord, result *evidence.Scenario) error {
+	rec *s12Record, phaseAfter *string, result *evidence.Scenario) error {
 	cluster, err := h.readRestarted(ctx, created)
 	if err != nil {
 		if errors.As(err, new(restoreVerdict)) {
@@ -581,12 +590,12 @@ func (h *haRun) readDuringRestart(ctx context.Context, created *databasev1alpha1
 		}
 		return nil
 	}
-	phase, err := h.restoredStatus(cluster, &rec.s12Record, result)
+	phase, err := h.restoredStatus(cluster, rec, result)
 	if err != nil {
 		return err
 	}
-	if rec.Restart.PhaseAfterRestart == "" {
-		rec.Restart.PhaseAfterRestart = cmp.Or(phase, noBootstrapPhase)
+	if *phaseAfter == "" {
+		*phaseAfter = cmp.Or(phase, noBootstrapPhase)
 	}
 	if phase == string(databasev1alpha1.BootstrapFailed) {
 		return restoreVerdict{fmt.Errorf("the restored cluster's bootstrap ended Failed: %s", bootstrapReason(cluster))}

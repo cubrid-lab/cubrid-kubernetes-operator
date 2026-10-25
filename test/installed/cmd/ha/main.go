@@ -19,7 +19,7 @@ limitations under the License.
 // and the data rules on every member and both Services, and with
 // -fault operator-restart S06 restart after it, or with -backup-bucket S11
 // complete, and with -restore also S12 exact, followed by S12 tampered,
-// wrong-target or operator-restart when selected
+// wrong-target, operator-restart or instance-manager-restart when selected
 // (docs/testing/installed-ha.md).
 package main
 
@@ -100,6 +100,10 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"scenario after S12 exact: S12 operator-restart, S11's artifact restored into another new cluster while "+
 			"the manager Pod is deleted during the restore; needs -restore, not with -restore-tampered or "+
 			"-restore-wrong-target")
+	flags.BoolVar(&cfg.RestoreInstanceManagerRestart, "restore-instance-manager-restart", false,
+		"scenario after S12 exact: S12 instance-manager-restart, S11's artifact restored into another new cluster "+
+			"while the Instance Manager of the restore's target member is killed during the restore; needs "+
+			"-restore, not with -restore-tampered, -restore-wrong-target or -restore-operator-restart")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")

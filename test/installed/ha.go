@@ -146,6 +146,12 @@ type HAConfig struct {
 	// LeaderLease, and cannot be combined with RestoreTampered or
 	// RestoreWrongTarget.
 	RestoreOperatorRestart bool
+	// RestoreInstanceManagerRestart selects S12 instance-manager-restart
+	// after S12 exact: S11's artifact restored into another new cluster while
+	// the Instance Manager of the restore's target member is killed during
+	// the restore. It needs Restore, and cannot be combined with
+	// RestoreTampered, RestoreWrongTarget or RestoreOperatorRestart.
+	RestoreInstanceManagerRestart bool
 }
 
 func (c HAConfig) validate() error {
@@ -273,10 +279,10 @@ type haRun struct {
 	s11Rec *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
-	// S12 operator-restart. s12Expected is the history at S11's known point
-	// that S12 exact took.
-	s12, s12Tampered, s12WrongTarget, s12Restart *evidence.Scenario
-	s12Expected                                  string
+	// S12 operator-restart, s12IMRestart that of S12 instance-manager-restart.
+	// s12Expected is the history at S11's known point that S12 exact took.
+	s12, s12Tampered, s12WrongTarget, s12Restart, s12IMRestart *evidence.Scenario
+	s12Expected                                                string
 	// scenario names the scenario whose reads run now, for lostSessions, and
 	// reads counts the csql reads each scenario made.
 	scenario string
@@ -366,6 +372,14 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				"exact and S12 operator-restart: a full backup to object storage, restored into a new cluster in " +
 				"the run namespace, and into another while the manager Pod is deleted without a grace period " +
 				"during its restore; no other S00-S15 qualification"
+		}
+		if cfg.RestoreInstanceManagerRestart {
+			lane = s12IMRestartLane
+			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12IMRestartVariant})
+			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
+				"exact and S12 instance-manager-restart: a full backup to object storage, restored into a new " +
+				"cluster in the run namespace, and into another while the Instance Manager of the restore's target " +
+				"member is killed during its restore; no other S00-S15 qualification"
 		}
 	case cfg.BackupBucket != "":
 		lane = s11Lane
@@ -516,6 +530,16 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12RestartVariant}, evidence.Blocked,
 			"S12 operator-restart follows S12 exact, and S12 exact did not pass")
 	}
+	switch {
+	case h.s12IMRestart != nil:
+		summary.Record(*h.s12IMRestart)
+	case h.cfg.RestoreInstanceManagerRestart && h.s12 == nil:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12IMRestartVariant}, evidence.Blocked,
+			"S12 instance-manager-restart follows S12 exact, and S12 exact did not run")
+	case h.cfg.RestoreInstanceManagerRestart:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12IMRestartVariant}, evidence.Blocked,
+			"S12 instance-manager-restart follows S12 exact, and S12 exact did not pass")
+	}
 }
 
 // afterLAB01 runs the scenario selected to follow LAB01, if any.
@@ -546,6 +570,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 			h.s12Restart = &restart
 			if restart.Result != evidence.Pass {
 				return fmt.Errorf("S12/%s: %s", s12RestartVariant, restart.Reason)
+			}
+		}
+		if h.cfg.RestoreInstanceManagerRestart {
+			restart := h.runS12InstanceManagerRestart(ctx)
+			h.s12IMRestart = &restart
+			if restart.Result != evidence.Pass {
+				return fmt.Errorf("S12/%s: %s", s12IMRestartVariant, restart.Reason)
 			}
 		}
 		if h.cfg.RestoreWrongTarget {
