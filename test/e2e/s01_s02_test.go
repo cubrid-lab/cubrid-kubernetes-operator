@@ -136,6 +136,21 @@ func (r *haRun) historyText() string {
 	return r.history
 }
 
+// observedLoss returns the observed data loss window of a fault issued at
+// faultAt, from the run's history and the data check (#294), or unknown with
+// its reason, and how long before the fault the last write was acknowledged.
+func (r *haRun) observedLoss(report workload.Report, faultAt time.Time) (window, resolution string) {
+	history, err := workload.ReadHistory(strings.NewReader(r.historyText()))
+	if err != nil {
+		return "unknown: " + err.Error(), evidence.Unknown
+	}
+	loss := workload.ObservedLoss(history, report, faultAt)
+	if !loss.Measured {
+		return loss.String(), evidence.Unknown
+	}
+	return loss.String(), loss.Resolution.Round(time.Millisecond).String()
+}
+
 // master asks CUBRID on every member for its role and returns the one master
 // and the slaves. Any other distribution of roles is an error.
 func (r *haRun) master(ctx context.Context) (string, []string, error) {

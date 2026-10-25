@@ -481,3 +481,74 @@ func TestCheck_Reads(t *testing.T) {
 		t.Fatalf("a history without reads: %+v", report)
 	}
 }
+
+// lossHistory is client c1 writing c1-1 to c1-4 one second apart from base,
+// c1-3 with an unknown outcome and c1-4 rolled back, then c1-5 after the
+// fault.
+func lossHistory(t *testing.T, base time.Time) History {
+	t.Helper()
+	var b strings.Builder
+	write := func(seq int, op, outcome string, at time.Time) {
+		id := fmt.Sprintf("c1-%d", seq)
+		for _, e := range []Event{
+			{T: at, Client: "c1", Seq: seq, Op: op, OpID: id, Event: Attempted, Amount: seq, Note: id},
+			{T: at, Client: "c1", Seq: seq, Op: op, OpID: id, Event: outcome},
+		} {
+			data, err := json.Marshal(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b.Write(append(data, '\n'))
+		}
+	}
+	write(1, OpInsert, Acknowledged, base)
+	write(2, OpInsert, Acknowledged, base.Add(time.Second))
+	write(3, OpInsert, Unknown, base.Add(2*time.Second))
+	write(4, OpRollback, Acknowledged, base.Add(3*time.Second))
+	write(5, OpInsert, Acknowledged, base.Add(10*time.Second))
+	h, err := ReadHistory(strings.NewReader(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// The observed loss window is measured only from acknowledged writes: zero
+// when none is missing and a write was acknowledged before the fault, the time
+// from the oldest missing one to the fault otherwise, and unknown, with its
+// reason, when the history cannot show it (#294).
+func TestObservedLoss(t *testing.T) {
+	base := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	fault := base.Add(5 * time.Second)
+	h := lossHistory(t, base)
+	lossRow := func(seq int) Row {
+		id := fmt.Sprintf("c1-%d", seq)
+		return Row{OpID: id, Client: "c1", Seq: seq, Amount: seq, Note: id}
+	}
+	all := []Row{lossRow(1), lossRow(2), lossRow(5)}
+	tests := map[string]struct {
+		members map[string][]Row
+		fault   time.Time
+		want    string
+	}{
+		"nothing missing": {map[string][]Row{memberA: all}, fault, "0s"},
+		"the newest write before the fault is missing": {map[string][]Row{memberA: {lossRow(1), lossRow(5)}}, fault, "4s"},
+		"the oldest is missing on one member": {
+			map[string][]Row{memberA: all, memberB: {lossRow(2), lossRow(5)}}, fault, "5s"},
+		"a write after the fault is missing": {map[string][]Row{memberA: {lossRow(1), lossRow(2)}}, fault,
+			"unknown: the oldest missing write was acknowledged after the fault"},
+		"no write before the fault": {map[string][]Row{memberA: all}, base.Add(-time.Second),
+			"unknown: no write was acknowledged before the fault"},
+		"no member checked": {map[string][]Row{}, fault, "unknown: no member was checked"},
+	}
+	for name, tc := range tests {
+		loss := ObservedLoss(h, Check(h, tc.members), tc.fault)
+		if got := loss.String(); got != tc.want {
+			t.Errorf("%s: %s, want %s", name, got, tc.want)
+		}
+	}
+	// The resolution is how long before the fault the last write was acknowledged.
+	if loss := ObservedLoss(h, Check(h, map[string][]Row{memberA: all}), fault); loss.Resolution != 4*time.Second {
+		t.Errorf("resolution %s, want 4s", loss.Resolution)
+	}
+}

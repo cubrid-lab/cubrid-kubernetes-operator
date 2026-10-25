@@ -298,6 +298,7 @@ func (r *haRun) s06Restart() {
 		files = append(files, timeline)
 	}
 	back := outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)
+	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt)
 	result = judged(evidence.Scenario{
 		ID: "S06", Variant: s06Restart,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
@@ -308,12 +309,14 @@ func (r *haRun) s06Restart() {
 			// cluster that observation is written within
 			// observationWriteInterval of the replacement's first
 			// reconcile, so this is an upper bound of the resync.
-			"operatorBackWithin":        back.Round(time.Millisecond).String(),
-			"operationsNotAcknowledged": notAcknowledged,
-			"shortestStableFor":         minStable.Round(time.Millisecond).String(),
-			"membersRestarted":          0,
-			"acknowledgedMissing":       report.AcknowledgedMissing,
-			"databaseFailoverObserved":  false,
+			"operatorBackWithin":         back.Round(time.Millisecond).String(),
+			"operationsNotAcknowledged":  notAcknowledged,
+			"shortestStableFor":          minStable.Round(time.Millisecond).String(),
+			"membersRestarted":           0,
+			"acknowledgedMissing":        report.AcknowledgedMissing,
+			"observedDataLossWindow":     lossWindow,
+			"observedDataLossResolution": lossResolution,
+			"databaseFailoverObserved":   false,
 		},
 		Operations: &operations,
 		Evidence:   files,
@@ -499,6 +502,7 @@ func (r *haRun) s06Absent() {
 	if timeline != "" {
 		files = append(files, timeline)
 	}
+	lossWindow, lossResolution := r.observedLoss(report, masterDeletedAt)
 	result = judged(evidence.Scenario{
 		ID: "S06", Variant: s06Absent,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
@@ -512,10 +516,12 @@ func (r *haRun) s06Absent() {
 			"lastObservedAgeBeforeAbsence": ageBeforeAbsence.Round(time.Second).String(),
 			// After it was started again: until the status named the new
 			// master with every condition True.
-			"operatorResyncTime":       resync.Round(time.Millisecond).String(),
-			"membersRestartedOnReturn": 0,
-			"acknowledgedMissing":      report.AcknowledgedMissing,
-			"outcomeUnknown":           history.Counts[workload.Unknown],
+			"operatorResyncTime":         resync.Round(time.Millisecond).String(),
+			"membersRestartedOnReturn":   0,
+			"acknowledgedMissing":        report.AcknowledgedMissing,
+			"observedDataLossWindow":     lossWindow,
+			"observedDataLossResolution": lossResolution,
+			"outcomeUnknown":             history.Counts[workload.Unknown],
 		},
 		Operations: &evidence.Operations{
 			Attempted: history.Counts[workload.Attempted], Acknowledged: history.Counts[workload.Acknowledged],

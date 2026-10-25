@@ -87,6 +87,9 @@ type Operation struct {
 	// Target is the operation whose row a read reads back.
 	Target  string
 	Outcome string
+	// AcknowledgedAt is when the client recorded the acknowledgement, for an
+	// acknowledged operation.
+	AcknowledgedAt time.Time
 	// Error is what the client recorded with the outcome; it is empty for an
 	// acknowledged one.
 	Error string
@@ -239,6 +242,9 @@ func ReadHistory(r io.Reader) (History, error) {
 			answered[e.OpID] = true
 			op.Outcome = e.Event
 			op.Error = e.Error
+			if e.Event == Acknowledged {
+				op.AcknowledgedAt = e.T
+			}
 			h.Operations[e.OpID] = op
 		default:
 			return History{}, fmt.Errorf("history line %d: event %q is not attempted, acknowledged, failed or unknown",
@@ -462,6 +468,73 @@ func ReadEvents(r io.Reader) ([]Event, error) {
 		events = append(events, e)
 	}
 	return events, scanner.Err()
+}
+
+// LossWindow is the observed data loss window of a fault (observed RPO in
+// docs/testing/scenario-contract.md).
+type LossWindow struct {
+	// Measured is false when the history cannot show the window; Reason says
+	// why.
+	Measured bool
+	Reason   string
+	// Window is the time from the oldest acknowledged write that is missing
+	// to the fault, and zero when none is missing.
+	Window time.Duration
+	// Resolution is how long before the fault the last write was
+	// acknowledged: a loss of writes acknowledged within it could not be seen.
+	Resolution time.Duration
+}
+
+func (l LossWindow) String() string {
+	if !l.Measured {
+		return "unknown: " + l.Reason
+	}
+	return l.Window.String()
+}
+
+// ObservedLoss measures the loss window of a fault issued at faultAt from the
+// history and its data check (#294). It is measured only from acknowledged
+// writes: it needs a member checked and a write acknowledged before the
+// fault, and a missing write acknowledged after the fault leaves it unknown.
+// Operations with an unknown outcome are never counted as lost.
+func ObservedLoss(h History, r Report, faultAt time.Time) LossWindow {
+	if len(r.Members) == 0 {
+		return LossWindow{Reason: "no member was checked"}
+	}
+	var lastBefore time.Time
+	for _, op := range h.Operations {
+		at := op.AcknowledgedAt
+		if op.Op == OpInsert && !at.IsZero() && !at.After(faultAt) && at.After(lastBefore) {
+			lastBefore = at
+		}
+	}
+	if lastBefore.IsZero() {
+		return LossWindow{Reason: "no write was acknowledged before the fault"}
+	}
+	var oldest time.Time
+	for _, check := range r.Members {
+		for _, v := range check.Violations {
+			if v.Rule != RuleMissing {
+				continue
+			}
+			at := h.Operations[v.OpID].AcknowledgedAt
+			if at.IsZero() {
+				return LossWindow{Reason: "a missing write has no acknowledgement time"}
+			}
+			if oldest.IsZero() || at.Before(oldest) {
+				oldest = at
+			}
+		}
+	}
+	loss := LossWindow{Measured: true, Resolution: faultAt.Sub(lastBefore)}
+	if oldest.IsZero() {
+		return loss
+	}
+	if oldest.After(faultAt) {
+		return LossWindow{Reason: "the oldest missing write was acknowledged after the fault"}
+	}
+	loss.Window = faultAt.Sub(oldest)
+	return loss
 }
 
 // Recovery reads from the events of one client when it recovered from a

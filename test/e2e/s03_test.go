@@ -597,20 +597,23 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			acknowledgedWhileUnresolved++
 		}
 	}
+	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt)
 	result = judged(evidence.Scenario{
 		ID: "S03", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
 		Measurements: map[string]any{
-			"recoveryTime":           recovery.Round(time.Millisecond).String(),
-			"masterBefore":           master,
-			"masterAfter":            newMaster,
-			"sameMemberMasterAgain":  newMaster == master,
-			"stableFor":              stable.Round(time.Millisecond).String(),
-			"electionObservedWithin": since(electedAt),
-			"operatorNoticedWithin":  since(noticedAt),
-			"allMembersBackWithin":   since(outcome.OutcomeAt),
-			"acknowledgedMissing":    report.AcknowledgedMissing,
-			"outcomeUnknown":         history.Counts[workload.Unknown],
+			"recoveryTime":               recovery.Round(time.Millisecond).String(),
+			"masterBefore":               master,
+			"masterAfter":                newMaster,
+			"sameMemberMasterAgain":      newMaster == master,
+			"stableFor":                  stable.Round(time.Millisecond).String(),
+			"electionObservedWithin":     since(electedAt),
+			"operatorNoticedWithin":      since(noticedAt),
+			"allMembersBackWithin":       since(outcome.OutcomeAt),
+			"acknowledgedMissing":        report.AcknowledgedMissing,
+			"observedDataLossWindow":     lossWindow,
+			"observedDataLossResolution": lossResolution,
+			"outcomeUnknown":             history.Counts[workload.Unknown],
 			// From samples taken every few seconds during the wait.
 			"primaryUnresolvedFor":               unresolved.length(),
 			"routingNotReadyFor":                 notRouting.length(),
