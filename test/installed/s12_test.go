@@ -989,3 +989,45 @@ func TestRunS12ExactFailsWhenTheNormalWriteReachedTheSource(t *testing.T) {
 		t.Fatalf("S12 = %+v, want the marker on the source failed", s12)
 	}
 }
+
+func TestRunS12ExactKeepsTheMemberStateWhenAMarkerReadFails(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	const dropped = "Server no longer responding.... Invalid argument"
+	f.markerAnswer = func(pod string) (string, error, bool) {
+		if pod != "ha-restore-2" {
+			return "", nil, false
+		}
+		return dropped + "\n", errors.New("kubectl failed: exit status 1"), true
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, dropped) {
+		t.Fatalf("S12 = %+v, want blocked: the marker could not be read", s12)
+	}
+	if !strings.Contains(s12.Reason, "HA-Node Info (current ha-restore-2, state slave)") ||
+		!strings.Contains(s12.Reason, "restarts of ha-restore-2: ") {
+		t.Fatalf("S12 reason = %q, want the state of ha-restore-2 when its read failed", s12.Reason)
+	}
+}
+
+func TestRunS12ExactFailsOnACredentialEvenWhenALaterStepCannotBeMade(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.tamperRestore = func(read int, s *databasev1alpha1.CubridClusterStatus) {
+		if read == 1 {
+			s.Conditions[0].Message = "downloading with " + testSecretKey
+		}
+	}
+	// The step after the restored cluster is ready cannot be made.
+	f.haNodes = func(pod string, nodes []string) []string {
+		if pod == testRestoreMaster {
+			return nil
+		}
+		return nodes
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail || len(s12.NeverEvents) == 0 ||
+		!strings.Contains(s12.NeverEvents[0], testCredential) || !strings.Contains(s12.Reason, "lists no node") {
+		t.Fatalf("S12 = %+v, want the credential as a never-event and the step that could not be made", s12)
+	}
+}

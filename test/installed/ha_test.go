@@ -127,6 +127,9 @@ type haFixture struct {
 	restoreRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	clientHook     func(script string) (string, error, bool)
 	markersOf      func(pod string) []string
+	// markerAnswer, when it returns true, answers a read of the marker table
+	// in place of markersOf.
+	markerAnswer func(pod string) (string, error, bool)
 	// restoredRows, once set, are the rows of the restored cluster's members
 	// and Services.
 	restoredRows []workload.Row
@@ -451,8 +454,13 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 		var b strings.Builder
 		b.WriteString("=== <Result of SELECT Command in Line 1> ===\n\n  v\n======\n")
 		f.mu.Lock()
-		markersOf := f.markersOf
+		markersOf, answer := f.markersOf, f.markerAnswer
 		f.mu.Unlock()
+		if answer != nil {
+			if out, err, done := answer(pod); done {
+				return out, err
+			}
+		}
 		for _, line := range markersOf(pod) {
 			b.WriteString("  '" + line + "'\n")
 		}

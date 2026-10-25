@@ -463,7 +463,10 @@ pass, S12 is blocked and nothing of it is done.
 A run that ends before S12 is judged, a refused or failing API read, a
 `kubectl exec` or `csql` that cannot read the rows, the markers or the HA
 node list, and a history that does not match S11's known point leave S12
-blocked, not failed.
+blocked, not failed. When a member's marker table cannot be read, the reason
+also holds that member's container restarts, its `cubrid heartbeat status`,
+the HA mode of its server and the end of its newest server logs, as read
+right after the failure.
 What was seen stays: a bootstrap seen `Failed`, a never-event, a data
 violation that lag cannot explain or a source that changed stay failures
 when a later check cannot be made, with that error added to the reason. Only

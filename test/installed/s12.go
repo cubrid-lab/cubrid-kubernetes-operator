@@ -214,6 +214,11 @@ func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 	result.Measurements = map[string]any{"restoredWithin": evidence.Unknown,
 		"dataRulesHeldAfterSeconds": evidence.Unknown, "postBackupRowsPresent": evidence.Unknown}
 	err := h.s12Steps(ctx, &result, &rec)
+	// A credential found in any status read is a failure, whichever step
+	// ended S12.
+	if found := rec.Credentials.FoundIn; len(found) > 0 {
+		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
+	}
 	if post := rec.PostBackup; post != nil {
 		result.Operations = &evidence.Operations{Attempted: post.Operations[workload.Attempted],
 			Acknowledged: post.Operations[workload.Acknowledged], Failed: post.Operations[workload.Failed],
@@ -294,9 +299,6 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	if err := h.lookForCredentials(&rec.Credentials.FoundIn, "the restored cluster's status at the end",
 		final.Status); err != nil {
 		return err
-	}
-	if found := rec.Credentials.FoundIn; len(found) > 0 {
-		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
 	}
 	return nil
 }
@@ -753,7 +755,7 @@ func (h *haRun) waitMarker(ctx context.Context, members []string, master, name, 
 func (h *haRun) markerTable(ctx context.Context, pod string) (map[string]string, error) {
 	out, err := sqlcheck.Run(h.csql(ctx, pod), markerQuery)
 	if err != nil {
-		return nil, fmt.Errorf("read the marker table on %s: %w", pod, err)
+		return nil, fmt.Errorf("read the marker table on %s: %w\n%s", pod, err, h.memberState(ctx, pod))
 	}
 	rows, err := sqlcheck.Values(out)
 	if err != nil {
@@ -766,6 +768,36 @@ func (h *haRun) markerTable(ctx context.Context, pod string) (map[string]string,
 		}
 	}
 	return table, nil
+}
+
+// memberStateScript prints what CUBRID reports on a member: its heartbeat
+// status, the HA mode of its server and the end of its newest server logs.
+const memberStateScript = `PATH="${CUBRID}/bin:${PATH}"; cubrid heartbeat status 2>&1; ` +
+	`cubrid changemode ` + databaseName + `@localhost 2>&1; ` +
+	`for f in $(ls -t "${CUBRID}"/log/server/*.err 2>/dev/null | head -n 2); do echo "== $f"; tail -n 20 "$f"; done`
+
+// memberState describes a member right after a read on it failed, so that a
+// failure the run cannot judge still shows what the member was doing: the
+// restarts of its containers and what CUBRID reports there. What cannot be
+// read is said so.
+func (h *haRun) memberState(ctx context.Context, pod string) string {
+	var b strings.Builder
+	current := &corev1.Pod{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: pod}, current); err != nil {
+		fmt.Fprintf(&b, "restarts of %s: unknown: %v\n", pod, err)
+	} else {
+		restarts := make([]string, 0, len(current.Status.ContainerStatuses))
+		for _, c := range current.Status.ContainerStatuses {
+			restarts = append(restarts, fmt.Sprintf("%s=%d", c.Name, c.RestartCount))
+		}
+		fmt.Fprintf(&b, "restarts of %s: %s\n", pod, strings.Join(restarts, " "))
+	}
+	out, err := h.member(ctx, pod, "bash", "-c", memberStateScript)
+	if err != nil {
+		fmt.Fprintf(&b, "state of %s could not be read in full: %v\n", pod, err)
+	}
+	b.WriteString(out)
+	return b.String()
 }
 
 // workloadFailed is how kubectl exec reports the workload's own failure: it
