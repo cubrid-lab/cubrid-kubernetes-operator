@@ -357,7 +357,7 @@ func (f *fixture) answer(t *testing.T, args []string) (string, error) {
 	}
 	statement := args[len(args)-1]
 	if strings.HasPrefix(statement, "CREATE TABLE") {
-		match := regexp.MustCompile(`VALUES \(1, '([^']+)'\)`).FindStringSubmatch(statement)
+		match := regexp.MustCompile(`SELECT 1, '([^']+)' FROM db_root`).FindStringSubmatch(statement)
 		if len(match) != 2 {
 			t.Fatalf("unexpected SQL write: %s", statement)
 		}
