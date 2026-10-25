@@ -10,6 +10,12 @@
 #   token denied                     for an image named in BOOTSTRAP_IMAGES
 #                                    only (a first publication): absent if the
 #                                    GitHub packages API answers 404 for it.
+# GHCR also answers DENIED for refused credentials, not only for a package that
+# does not exist, so a denied token alone never means absence. What the
+# packages API answers the workflow's GITHUB_TOKEN for a package it may not
+# see is not observed; the opt-in limits that path to a deliberate first
+# publication, and an image left in BOOTSTRAP_IMAGES after its package exists
+# (its tag answers MANIFEST_UNKNOWN) stops the run until it is removed.
 #   anything else                    unknown: retried, then refused.
 # A failed request, a timeout, a server error or an answer it does not
 # recognize is never read as absence.
@@ -24,7 +30,9 @@
 #   REGISTRY_URL    default https://ghcr.io
 #   BOOTSTRAP_IMAGES images whose package may not exist yet; set it in the
 #                   change that adds an image and remove it once published.
-#                   For any other image a refused token is unknown.
+#                   It is needed only if the registry refuses a token for a
+#                   missing package. For any other image a refused token is
+#                   unknown.
 #   API_URL         default https://api.github.com
 #   ATTEMPTS        default 3; RETRY_DELAY default 5 (seconds)
 set -euo pipefail
@@ -35,6 +43,9 @@ API_URL=${API_URL:-https://api.github.com}
 ATTEMPTS=${ATTEMPTS:-3}
 RETRY_DELAY=${RETRY_DELAY:-5}
 org=${REPOSITORY%%/*}
+# Image index and manifest types first; any other type is still an answer
+# about the tag, never a reason to read it as absent.
+accept='application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json, */*;q=0.1'
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -70,7 +81,12 @@ package_absent() {
   esac
 }
 
-# check prints exists, absent or unknown for one image, with the reason for
+# in_bootstrap succeeds when the image is named in BOOTSTRAP_IMAGES.
+in_bootstrap() {
+  [[ " ${BOOTSTRAP_IMAGES:-} " == *" $1 "* ]]
+}
+
+# check prints exists, absent, stale-bootstrap or unknown for one image, with the reason for
 # unknown on stderr.
 check() {
   local img=$1 code token
@@ -88,7 +104,7 @@ check() {
     401 | 403)
       local refusal
       refusal=$(detail)
-      if [[ " ${BOOTSTRAP_IMAGES:-} " == *" $img "* ]] && grep -q '"DENIED"' "$work/body" &&
+      if in_bootstrap "$img" && grep -q '"DENIED"' "$work/body" &&
         package_absent "$img"; then
         echo absent
       else
@@ -104,16 +120,19 @@ check() {
       ;;
   esac
   code=$(request -I -H "Authorization: Bearer $token" \
-    -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+    -H "Accept: $accept" \
     "$REGISTRY_URL/v2/$REPOSITORY/$img/manifests/$TAG")
   case $code in
     200) echo exists ;;
     404)
       # A HEAD answer has no body: ask again with GET for the error code.
       code=$(request -H "Authorization: Bearer $token" \
-        -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+        -H "Accept: $accept" \
         "$REGISTRY_URL/v2/$REPOSITORY/$img/manifests/$TAG")
-      if [ "$code" = 404 ] && grep -Eq '"(MANIFEST_UNKNOWN|NAME_UNKNOWN)"' "$work/body"; then
+      if [ "$code" = 404 ] && grep -q '"MANIFEST_UNKNOWN"' "$work/body" && in_bootstrap "$img"; then
+        # The package exists, so the image no longer needs the bootstrap.
+        echo stale-bootstrap
+      elif [ "$code" = 404 ] && grep -Eq '"(MANIFEST_UNKNOWN|NAME_UNKNOWN)"' "$work/body"; then
         echo absent
       elif [ "$code" = 200 ]; then
         echo exists
@@ -141,6 +160,10 @@ for img in $IMAGES; do
       absent)
         echo "$REPOSITORY/$img:$TAG is absent"
         break
+        ;;
+      stale-bootstrap)
+        echo "::error::$REPOSITORY/$img exists; remove $img from BOOTSTRAP_IMAGES before publishing again"
+        exit 1
         ;;
     esac
     if [ "$attempt" -ge "$ATTEMPTS" ]; then

@@ -67,6 +67,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The tag check of this workflow's own commit, not of the commit being
+      # built: a manual run of an older commit has no such script, or an older
+      # one. The image builds ignore this directory (.dockerignore).
+      - name: Clone the tag check
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .tag-check
+          sparse-checkout: hack/dev-image-tag-check.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Resolve the commit and check that it is on main
         id: meta
         env:
@@ -101,10 +113,11 @@ jobs:
       # mutable base images would change the bytes under the same tag, so a
       # re-run of a commit that already has images fails here. Only a tag the
       # registry answers "manifest unknown" for is built, or, for an image
-      # listed in BOOTSTRAP_IMAGES (add it with a new image, remove it once
-      # published), a package the registry refuses and the packages API answers
-      # 404 for. A lookup that fails or answers anything else stops the run
-      # before any push (#462). See hack/dev-image-tag-check.sh.
+      # listed in BOOTSTRAP_IMAGES (add it with a new image if the registry
+      # refuses a token for the missing package, remove it once published), a
+      # package the packages API answers 404 for. A lookup that fails or
+      # answers anything else stops the run before any push (#462). See
+      # hack/dev-image-tag-check.sh.
       - name: Refuse to overwrite an existing tag
         env:
           TAG: ${{ steps.meta.outputs.tag }}
@@ -113,7 +126,7 @@ jobs:
           BOOTSTRAP_IMAGES: ""
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: hack/dev-image-tag-check.sh
+        run: .tag-check/hack/dev-image-tag-check.sh
 
       # Same Dockerfile and context as `make docker-build-workload`. Test-only:
       # no manifest under config/ and no release artifact refers to it. Built

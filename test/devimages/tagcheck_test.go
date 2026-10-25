@@ -126,6 +126,10 @@ func (r *registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		// The script reads the body of a 404 with a GET after the HEAD: give
 		// it the answer of that HEAD.
+		r.seen["get/"+img]++
+		if r.seen["get/"+img] > r.seen["head/"+img] {
+			r.authErr = append(r.authErr, "manifest GET without a HEAD before it")
+		}
 		r.seen["head/"+img]--
 		a = r.next("head", img, r.manifest)
 	case strings.HasPrefix(req.URL.Path, "/api/orgs/cubrid-lab/packages/container/"):
@@ -229,6 +233,12 @@ func TestTagCheck(t *testing.T) {
 		{name: "token denied, packages API refuses", bootstrap: testImage,
 			token: []answer{{403, denied}}, packages: []answer{{403, `{"message":"Resource not accessible by integration"}`}},
 			wantExit: 1, wantOut: outUnknown, wantTries: 3},
+		{name: "image left in the bootstrap list after its package exists", bootstrap: testImage,
+			token: tokenOK(), manifest: []answer{{404, unknownTag}},
+			wantExit: 1, wantOut: "remove manager from BOOTSTRAP_IMAGES", wantTries: 1},
+		{name: "bootstrap image whose package the registry does not know", bootstrap: testImage,
+			token: tokenOK(), manifest: []answer{{404, unknownPkg}},
+			wantExit: 0, wantOut: outAbsent},
 		{name: "token 401 without DENIED", bootstrap: testImage, token: []answer{{401, `unauthorized`}},
 			packages: []answer{{404, `{}`}}, wantExit: 1, wantOut: outUnknown},
 		{name: "token endpoint unavailable", token: []answer{{503, `unavailable`}},
@@ -307,15 +317,25 @@ func TestTagCheckNoAnswer(t *testing.T) {
 	}
 }
 
-// The workflow runs this script, with the three images, before its first push.
+// The workflow runs this script, taken from the workflow's own commit, with the
+// three images, before its first push.
 func TestWorkflowRunsTheCheckBeforeAnyPush(t *testing.T) {
 	_, here, _, _ := runtime.Caller(0)
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(here), "..", "..", ".github", "workflows", "dev-images.yml"))
+	repo := filepath.Join(filepath.Dir(here), "..", "..")
+	data, err := os.ReadFile(filepath.Join(repo, ".github", "workflows", "dev-images.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	wf := string(data)
-	check := strings.Index(wf, "run: hack/dev-image-tag-check.sh")
+	clone := strings.Index(wf, "ref: ${{ github.workflow_sha }}")
+	if clone < 0 || !strings.Contains(wf, "path: .tag-check") ||
+		!strings.Contains(wf, "sparse-checkout: hack/dev-image-tag-check.sh") {
+		t.Error("the check is not cloned from the workflow's own commit into .tag-check")
+	}
+	check := strings.Index(wf, "run: .tag-check/hack/dev-image-tag-check.sh")
+	if clone > check {
+		t.Error("the check runs before it is cloned")
+	}
 	push := strings.Index(wf, "push: true")
 	if check < 0 || push < 0 || check > push {
 		t.Fatalf("check at %d, first push at %d", check, push)
@@ -325,5 +345,13 @@ func TestWorkflowRunsTheCheckBeforeAnyPush(t *testing.T) {
 	}
 	if strings.Contains(wf, "imagetools inspect") {
 		t.Error("the workflow still decides absence from imagetools inspect")
+	}
+	// The step runs the script directly, not through bash.
+	info, err := os.Stat(filepath.Join(repo, "hack", "dev-image-tag-check.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Error("hack/dev-image-tag-check.sh is not executable")
 	}
 }

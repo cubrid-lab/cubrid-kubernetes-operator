@@ -62,9 +62,12 @@ other mutable tag is pushed, and pull requests never push images. A tag is
 never overwritten; a re-run of a commit that already has images fails. The
 run also stops before any push when it cannot tell whether a tag exists (a
 registry or network error, a refused login, an answer it does not recognize).
-It publishes only a tag the registry answers "manifest unknown" for, or the
-first image of a new package named in the workflow's `BOOTSTRAP_IMAGES`
-(`hack/dev-image-tag-check.sh`). A
+It publishes only a tag the registry answers "manifest unknown" or "name
+unknown" for. If the registry refuses the workflow's token for a new package
+instead, the image must be named in the workflow's `BOOTSTRAP_IMAGES` for its
+first publication and removed after it (`hack/dev-image-tag-check.sh`). The
+check is taken from the workflow's own commit, also when a manual run builds
+an older commit. A
 commit has images only if its run succeeded: a failed run may have pushed some
 of the images and not the others.
 
