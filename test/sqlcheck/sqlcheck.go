@@ -70,8 +70,9 @@ const s00Table = "s00_check"
 
 // WriteRow creates the table and commits one row with the given marker. It
 // is safe to retry: an earlier attempt that created the table, or also wrote
-// the row, leaves one row after the retry, never a second (#591). ReadRow
-// checks the marker.
+// the row, leaves one row after the retry, never a second (#591). A table
+// or row left by something else is not refused here: ReadRow then finds the
+// other marker.
 func WriteRow(run Runner, marker string) error {
 	_, err := Run(run, fmt.Sprintf(
 		"CREATE TABLE IF NOT EXISTS %s (id INT PRIMARY KEY, marker VARCHAR(64)); "+

@@ -134,6 +134,22 @@ func TestSQLChecksWriteRowRetry(t *testing.T) {
 	}
 }
 
+// A row left by something else is not overwritten, and ReadRow then refuses
+// it for its marker.
+func TestSQLChecksWriteRowKeepsAnOldRow(t *testing.T) {
+	s := &s00Store{table: true, rows: 1}
+	if err := WriteRow(s.run, "marker-123"); err != nil {
+		t.Fatal(err)
+	}
+	if s.rows != 1 {
+		t.Fatalf("rows %d, want the old one only", s.rows)
+	}
+	if err := ReadRow(func(string) (string, error) { return "1 'old-marker'\n1 row selected", nil },
+		"marker-123"); err == nil {
+		t.Fatal("ReadRow accepted the old row")
+	}
+}
+
 func TestSQLChecksReadRow(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

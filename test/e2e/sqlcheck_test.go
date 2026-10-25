@@ -48,7 +48,8 @@ func runSQL(run sqlRunner, sql string) (string, error) {
 // s00Table is the table the S00 checks write and read.
 const s00Table = "s00_check"
 
-// writeS00Row creates the table and commits one row with the given marker.
+// writeS00Row writes the S00 row with sqlcheck.WriteRow, which is safe to
+// retry (#591).
 func writeS00Row(run sqlRunner, marker string) error {
 	return sqlcheck.WriteRow(run, marker)
 }
