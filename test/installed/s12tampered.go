@@ -123,6 +123,7 @@ type s12TamperedRecord struct {
 // made, before S12 tampered is judged blocks it; what was seen to break stays
 // a failure.
 func (h *haRun) runS12Tampered(ctx context.Context) (result evidence.Scenario) {
+	defer h.inScenario(s12ID+"/"+s12TamperedVariant, &result)()
 	result = evidence.Scenario{ID: s12ID, Variant: s12TamperedVariant, Result: evidence.Fail, NeverEvents: []string{}}
 	rec := s12TamperedRecord{Cluster: s12TamperedClusterName, SeedPrefix: h.rec.Seed.Prefix + "/tampered-seed",
 		SecretRef: s12TamperedSecretName, Bootstrap: []s12Phase{}, SecretsReferenced: []string{},

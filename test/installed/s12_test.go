@@ -497,8 +497,9 @@ func TestRunS12ExactFailsWhenTheBootstrapFailed(t *testing.T) {
 	if rec := readS12Record(t, cfg.EvidenceDir); len(rec.Bootstrap) != 2 || rec.Bootstrap[1].Phase != "Failed" {
 		t.Fatalf("bootstrap = %+v, want the Failed phase recorded", rec.Bootstrap)
 	}
-	if s12.Measurements["restoredWithin"] != evidence.Unknown {
-		t.Fatalf("S12 measurements = %v, want restoredWithin unknown", s12.Measurements)
+	if s12.Measurements["restoredWithin"] != evidence.Unknown ||
+		s12.Measurements["lostSessions"] != evidence.Unknown {
+		t.Fatalf("S12 measurements = %v, want restoredWithin and lostSessions unknown: S12 read nothing", s12.Measurements)
 	}
 }
 
@@ -1076,5 +1077,97 @@ func TestRunS12ExactReportsAMemberStateThatCannotBeRead(t *testing.T) {
 		strings.Count(s12.Reason, "state timed out") != 1 ||
 		!strings.Contains(s12.Reason, "state of ha-restore-2 could not be read in full") {
 		t.Fatalf("S12 = %+v, want blocked with the read error and the state that could not be read, once", s12)
+	}
+}
+
+// testLostSession is what csql printed when its session was lost after the
+// read answered (#238, POC-36).
+const testLostSession = "=== <Result of SELECT Command in Line 1> ===\n\n  v\n======\n  's11=x'\n\n" +
+	"1 row selected. (0.004000 sec) Committed. (0.000000 sec) \n\n" +
+	"Time: 10/25/26 07:10:39.992 - ERROR *** file network_cl.c, line 177 ERROR CODE = -199, Tran = 6, EID = 2\n" +
+	"Server no longer responding.... Invalid argument\n\n" +
+	"Time: 10/25/26 07:10:39.992 - ERROR *** file transaction_cl.c, line 600 ERROR CODE = -111, Tran = 6, EID = 3\n" +
+	"Your transaction has been aborted by the system due to server failure or mode change.\n"
+
+func TestRunS12ExactReadsAMarkerTableAgainAfterALostSession(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	lost := 0
+	f.markerAnswer = func(pod string) (string, error, bool) {
+		if pod != testRestoreSlave || lost > 0 {
+			return "", nil, false
+		}
+		lost++
+		return testLostSession, nil, true
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err != nil || s12.Result != evidence.Pass {
+		t.Fatalf("S12 = %+v, error %v; want a pass: the read was made again", s12, err)
+	}
+	var rec haRecord
+	data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, haRecordFile))
+	if err != nil || json.Unmarshal(data, &rec) != nil {
+		t.Fatalf("LAB01 record = %s, %v", data, err)
+	}
+	if len(rec.LostSessions) != 1 || rec.LostSessions[0].Pod != testRestoreSlave ||
+		rec.LostSessions[0].Scenario != s12ID+"/"+s12Variant || rec.LostSessions[0].Again != "answered" ||
+		len(rec.LostSessions[0].Errors) != 2 || !strings.Contains(rec.LostSessions[0].Errors[0], "-199") ||
+		!strings.HasPrefix(rec.LostSessions[0].Query, "SELECT") {
+		t.Fatalf("lost sessions = %+v, want the one of S12 exact on %s", rec.LostSessions, testRestoreSlave)
+	}
+	if s12.Measurements["lostSessions"] != float64(1) {
+		t.Fatalf("S12 measurements = %v, want the lost session counted", s12.Measurements)
+	}
+	// LAB01 read the ledger with csql and lost nothing; S11 made no csql read.
+	scenarios := s12Scenarios(t, cfg.EvidenceDir)
+	if scenarios[0].Measurements["lostSessions"] != float64(0) ||
+		scenarios[1].Measurements["lostSessions"] != evidence.Unknown {
+		t.Fatalf("LAB01 = %v, S11 = %v; want 0 and unknown lost sessions", scenarios[0].Measurements,
+			scenarios[1].Measurements)
+	}
+	if summary := readSummary(t, cfg.EvidenceDir); !slices.ContainsFunc(summary.Notes, func(n string) bool {
+		return strings.Contains(n, "#238")
+	}) {
+		t.Fatalf("summary notes = %v, want the lost session named", summary.Notes)
+	}
+}
+
+func TestRunS12ExactIsBlockedWhenTheReadIsLostTwice(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.markerAnswer = func(pod string) (string, error, bool) {
+		if pod != testRestoreSlave {
+			return "", nil, false
+		}
+		return testLostSession, nil, true
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "-199") {
+		t.Fatalf("S12 = %+v, want blocked: the read was lost again", s12)
+	}
+	var rec haRecord
+	data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, haRecordFile))
+	if err != nil || json.Unmarshal(data, &rec) != nil {
+		t.Fatalf("LAB01 record = %s, %v", data, err)
+	}
+	if len(rec.LostSessions) != 1 || rec.LostSessions[0].Again != "the session was lost again" {
+		t.Fatalf("lost sessions = %+v, want one read made twice", rec.LostSessions)
+	}
+}
+
+func TestSessionLostNeedsBothErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		out  string
+		want bool
+	}{
+		"both":         {testLostSession, true},
+		"-199 alone":   {"ERROR CODE = -199, Tran = 6, EID = 2\nServer no longer responding", false},
+		"-111 alone":   {"ERROR CODE = -111, Tran = 6, EID = 3\nYour transaction has been aborted", false},
+		"another code": {"ERROR CODE = -1990, Tran = 6\nERROR CODE = -1110, Tran = 6", false},
+		"a clean read": {"=== <Result of SELECT Command in Line 1> ===\n\n1 row selected.", false},
+	} {
+		if got := sessionLost(tc.out); got != tc.want {
+			t.Errorf("%s: sessionLost = %v, want %v", name, got, tc.want)
+		}
 	}
 }

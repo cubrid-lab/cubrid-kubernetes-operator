@@ -118,6 +118,19 @@ the rules hold or `-data-check-within` passes. Any other violation, such as a
 rolled-back row or wrong values, fails the run at once. The last report read
 is kept in every case.
 
+**Lost sessions.** A `csql` read on a member, of the ledger here or of the
+marker table in S11 and S12, whose output holds both `ERROR CODE = -199` and
+`ERROR CODE = -111` lost its session to the server (#238, POC-36). The run
+makes that read once more and takes the second answer as the read's: a
+second loss, or any other error, is handled as any `csql` error is, and the
+check is blocked or fails as before. Each such read is recorded in
+`LAB01/record.json` under `lostSessions` (time, scenario, member, the first
+line of the query, the error lines, the size of the output and how the
+second read answered), each scenario counts its own as the measurement
+`lostSessions` (`unknown` for a scenario that made no `csql` read), and the
+summary's notes give the total. Only reads go through
+this path; a write is never made twice.
+
 **At the end.** Each member must still be the same Pod and container as at
 the starting state, so none was replaced or restarted. CUBRID must report
 the same master and slaves, and `status.currentPrimary` the same master.
