@@ -3438,7 +3438,9 @@ For the log copied from `h-1`, sampled from 19:26:16 to 19:27:51:
 
 - **`final_lsa` passed both tests here.** The applier's position, `db_ha_apply_info.final_lsa`, advanced on a healthy slave while a transaction stayed open on the master (part A). It did not advance on a slave whose applier was stopped (part B) or stuck as in POC-17 (part C). In both, the copied log's EOF kept advancing.
 - **But other commits continued throughout part A.** `commit_counter` rose from 74 to 199 during the open transaction, and `committed_lsa` trailed `final_lsa` by a few dozen bytes in most samples. The applier may have moved `final_lsa` to the last of those commits rather than through the open transaction's own records. Those commits are not the client's.
-  - A fresh pair with no client, no Broker and no sampling still logged them: `commit_counter` went from 19 to 35 between 19:36:03 and 19:37:34, about one every 6 s, and `final_lsa` moved from 147\|9512 to 148\|6688.
+  - A fresh pair with no client and no Broker still logged them.
+    - While its slave was sampled every 5 s (saved), `commit_counter` went from 4 to 17 between 19:34:54 and 19:35:51.
+    - Then, with nothing sampling between two reads (read during the run, not saved), it went from 19 to 35 between 19:36:03 and 19:37:34, about one every 6 s, and `final_lsa` moved from 147\|9512 to 148\|6688.
   - Their source was not identified.
   - A master without them was not available in this setup. So whether `final_lsa` advances through an open transaction **alone** is not known. On a master like this one, which keeps committing, a healthy slave's `final_lsa` kept moving and a stuck slave's did not.
 - **Rule this suggests (not tested as a rule):** a slave is stalled when the copied log's EOF is past `final_lsa` and `final_lsa` has not changed over the window.
