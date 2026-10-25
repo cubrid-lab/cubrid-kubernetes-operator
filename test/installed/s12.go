@@ -228,7 +228,10 @@ func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 	switch {
 	case errors.As(err, new(restoreVerdict)) || errors.As(err, new(dataViolation)):
 		result.Result, result.Reason = evidence.Fail, err.Error()
-		if never != "" && !slices.Contains(result.NeverEvents, err.Error()) {
+		switch {
+		case slices.Contains(result.NeverEvents, err.Error()):
+			result.Reason = never
+		case never != "":
 			result.Reason = never + "; " + err.Error()
 		}
 	case err != nil && never != "":
@@ -772,9 +775,13 @@ func (h *haRun) markerTable(ctx context.Context, pod string) (map[string]string,
 
 // memberStateScript prints what CUBRID reports on a member: its heartbeat
 // status, the HA mode of its server and the end of its newest server logs.
-const memberStateScript = `PATH="${CUBRID}/bin:${PATH}"; cubrid heartbeat status 2>&1; ` +
-	`cubrid changemode ` + databaseName + `@localhost 2>&1; ` +
-	`for f in $(ls -t "${CUBRID}"/log/server/*.err 2>/dev/null | head -n 2); do echo "== $f"; tail -n 20 "$f"; done`
+// Each command is bounded, since a server that stopped answering a read may
+// not answer these either.
+const memberStateScript = `PATH="${CUBRID}/bin:${PATH}"; ` +
+	`timeout 15 cubrid heartbeat status 2>&1 | head -n 40; ` +
+	`timeout 15 cubrid changemode ` + databaseName + `@localhost 2>&1 | head -n 5; ` +
+	`echo "== server logs"; set -- $(ls -t "${CUBRID}"/log/server/*.err 2>/dev/null | head -n 2); ` +
+	`[ $# -eq 0 ] && echo "(none)"; for f; do echo "== $f"; tail -n 20 "$f"; done`
 
 // memberState describes a member right after a read on it failed, so that a
 // failure the run cannot judge still shows what the member was doing: the
@@ -792,11 +799,12 @@ func (h *haRun) memberState(ctx context.Context, pod string) string {
 		}
 		fmt.Fprintf(&b, "restarts of %s: %s\n", pod, strings.Join(restarts, " "))
 	}
-	out, err := h.member(ctx, pod, "bash", "-c", memberStateScript)
-	if err != nil {
+	// A failed command's error holds its output.
+	if out, err := h.member(ctx, pod, "bash", "-c", memberStateScript); err != nil {
 		fmt.Fprintf(&b, "state of %s could not be read in full: %v\n", pod, err)
+	} else {
+		b.WriteString(out)
 	}
-	b.WriteString(out)
 	return b.String()
 }
 

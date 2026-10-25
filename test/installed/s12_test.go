@@ -1031,3 +1031,50 @@ func TestRunS12ExactFailsOnACredentialEvenWhenALaterStepCannotBeMade(t *testing.
 		t.Fatalf("S12 = %+v, want the credential as a never-event and the step that could not be made", s12)
 	}
 }
+
+func TestRunS12ExactNamesEveryNeverEventInItsReason(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.tamperRestore = func(read int, s *databasev1alpha1.CubridClusterStatus) {
+		if read == 1 {
+			s.Conditions[0].Message = "downloading with " + testSecretKey
+		}
+		if s.Bootstrap.Phase == databasev1alpha1.BootstrapRestoring {
+			for i := range s.Conditions {
+				if s.Conditions[i].Type == startingConditions[0] {
+					s.Conditions[i].Status = metav1.ConditionTrue
+				}
+			}
+		}
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail || len(s12.NeverEvents) != 2 ||
+		!strings.Contains(s12.Reason, testCredential) || !strings.Contains(s12.Reason, "Restoring") {
+		t.Fatalf("S12 = %+v, want both never-events in its reason", s12)
+	}
+}
+
+func TestRunS12ExactReportsAMemberStateThatCannotBeRead(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.markerAnswer = func(pod string) (string, error, bool) {
+		if pod != "ha-restore-2" {
+			return "", nil, false
+		}
+		return "", errors.New("kubectl failed: exit status 1: Server no longer responding"), true
+	}
+	inner := f.runner.Command
+	f.runner.Command = func(ctx context.Context, args ...string) (string, error) {
+		if script := args[len(args)-1]; strings.Contains(script, "changemode") && args[3] == "ha-restore-2" {
+			// As Target.command reports it: the output, and the error with it.
+			return "state timed out\n", errors.New("kubectl failed: exit status 124: state timed out")
+		}
+		return inner(ctx, args...)
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "Server no longer responding") ||
+		strings.Count(s12.Reason, "state timed out") != 1 ||
+		!strings.Contains(s12.Reason, "state of ha-restore-2 could not be read in full") {
+		t.Fatalf("S12 = %+v, want blocked with the read error and the state that could not be read, once", s12)
+	}
+}
