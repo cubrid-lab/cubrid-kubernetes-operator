@@ -1,6 +1,6 @@
 <!-- CUBRID-LAB-ICON:START -->
 <p align="center">
-  <a href="https://github.com/cubrid-lab/brand"><img src="https://raw.githubusercontent.com/cubrid-lab/brand/572addda0f5403a455c27ec742eacd315f9ff929/dist/icons/cubrid-kubernetes-operator.svg" alt="CUBRID Lab Operator icon (Go)" width="120"></a>
+  <a href="https://github.com/cubrid-lab/brand"><img src="https://raw.githubusercontent.com/cubrid-lab/brand/8aa81b79f00ae936b03a9546f14f514c5e2554a7/dist/icons/cubrid-kubernetes-operator.svg" alt="CUBRID Lab Operator icon (Go)" width="120"></a>
 </p>
 <!-- CUBRID-LAB-ICON:END -->
 
