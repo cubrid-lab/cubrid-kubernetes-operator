@@ -45,6 +45,10 @@ const (
 	unknownTag = `{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}`
 	unknownPkg = `{"errors":[{"code":"NAME_UNKNOWN","message":"repository name not known"}]}`
 	denied     = `{"errors":[{"code":"DENIED","message":"requested access to the resource is denied"}]}`
+
+	testImage  = "manager"
+	outAbsent  = "is absent"
+	outUnknown = "Could not tell"
 )
 
 // answer is one stand-in response.
@@ -210,36 +214,36 @@ func TestTagCheck(t *testing.T) {
 		{name: "existing tag", token: tokenOK(), manifest: []answer{{200, manifest}},
 			wantExit: 1, wantOut: "already exists", wantTries: 1},
 		{name: "absent tag", token: tokenOK(), manifest: []answer{{404, unknownTag}},
-			wantExit: 0, wantOut: "is absent"},
+			wantExit: 0, wantOut: outAbsent},
 		{name: "absent package in the registry", token: tokenOK(), manifest: []answer{{404, unknownPkg}},
-			wantExit: 0, wantOut: "is absent"},
-		{name: "first publication: token denied, package not found", bootstrap: "manager",
+			wantExit: 0, wantOut: outAbsent},
+		{name: "first publication: token denied, package not found", bootstrap: testImage,
 			token: []answer{{403, denied}}, packages: []answer{{404, `{"message":"Package not found."}`}},
-			wantExit: 0, wantOut: "is absent"},
+			wantExit: 0, wantOut: outAbsent},
 		{name: "token denied, package not found, image not declared new",
 			token: []answer{{403, denied}}, packages: []answer{{404, `{"message":"Package not found."}`}},
-			wantExit: 1, wantOut: "Could not tell", wantTries: 3},
-		{name: "token denied for a declared new package that exists", bootstrap: "other manager",
+			wantExit: 1, wantOut: outUnknown, wantTries: 3},
+		{name: "token denied for a declared new package that exists", bootstrap: "other " + testImage,
 			token: []answer{{403, denied}}, packages: []answer{{200, `{"name":"x"}`}},
-			wantExit: 1, wantOut: "Could not tell", wantTries: 3},
-		{name: "token denied, packages API refuses", bootstrap: "manager",
+			wantExit: 1, wantOut: outUnknown, wantTries: 3},
+		{name: "token denied, packages API refuses", bootstrap: testImage,
 			token: []answer{{403, denied}}, packages: []answer{{403, `{"message":"Resource not accessible by integration"}`}},
-			wantExit: 1, wantOut: "Could not tell", wantTries: 3},
-		{name: "token 401 without DENIED", bootstrap: "manager", token: []answer{{401, `unauthorized`}},
-			packages: []answer{{404, `{}`}}, wantExit: 1, wantOut: "Could not tell"},
+			wantExit: 1, wantOut: outUnknown, wantTries: 3},
+		{name: "token 401 without DENIED", bootstrap: testImage, token: []answer{{401, `unauthorized`}},
+			packages: []answer{{404, `{}`}}, wantExit: 1, wantOut: outUnknown},
 		{name: "token endpoint unavailable", token: []answer{{503, `unavailable`}},
 			wantExit: 1, wantOut: "answered 503", wantTries: 3},
 		{name: "token answer without a token", token: []answer{{200, `{}`}},
 			wantExit: 1, wantOut: "has no token"},
 		{name: "manifest server error", token: tokenOK(), manifest: []answer{{503, `unavailable`}},
-			wantExit: 1, wantOut: "Could not tell", wantTries: 3},
+			wantExit: 1, wantOut: outUnknown, wantTries: 3},
 		{name: "manifest unauthorized", token: tokenOK(), manifest: []answer{{401, denied}},
-			wantExit: 1, wantOut: "Could not tell"},
+			wantExit: 1, wantOut: outUnknown},
 		{name: "404 without a registry error code", token: tokenOK(), manifest: []answer{{404, `<html>not found</html>`}},
 			wantExit: 1, wantOut: "without a recognized error code"},
 		{name: "a transient error, then absent", token: tokenOK(),
 			manifest: []answer{{502, `bad gateway`}, {404, unknownTag}},
-			wantExit: 0, wantOut: "is absent", wantTries: 2},
+			wantExit: 0, wantOut: outAbsent, wantTries: 2},
 		{name: "a transient error, then present", token: tokenOK(),
 			manifest: []answer{{502, `bad gateway`}, {200, manifest}},
 			wantExit: 1, wantOut: "already exists"},
@@ -247,15 +251,15 @@ func TestTagCheck(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRegistry()
-			r.token["manager"] = c.token
-			r.manifest["manager"] = c.manifest
-			r.packages["manager"] = c.packages
-			code, out := runWith(t, serve(t, r), c.bootstrap, "manager")
+			r.token[testImage] = c.token
+			r.manifest[testImage] = c.manifest
+			r.packages[testImage] = c.packages
+			code, out := runWith(t, serve(t, r), c.bootstrap, testImage)
 			if code != c.wantExit || !strings.Contains(out, c.wantOut) {
 				t.Fatalf("exit %d, want %d with %q; output:\n%s", code, c.wantExit, c.wantOut, out)
 			}
 			if c.wantTries > 0 {
-				if got := r.count("token", "manager"); got != c.wantTries {
+				if got := r.count("token", testImage); got != c.wantTries {
 					t.Errorf("token requests %d, want %d", got, c.wantTries)
 				}
 			}
@@ -297,8 +301,8 @@ func TestTagCheckNoAnswer(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
-	code, out := run(t, url, "manager")
-	if code != 1 || !strings.Contains(out, "Could not tell") {
+	code, out := run(t, url, testImage)
+	if code != 1 || !strings.Contains(out, outUnknown) {
 		t.Fatalf("exit %d; output:\n%s", code, out)
 	}
 }
