@@ -68,12 +68,17 @@ func Values(out string) ([]string, error) {
 // s00Table is the table the S00 checks write and read.
 const s00Table = "s00_check"
 
-// WriteRow creates the table and commits one row with the given marker.
+// WriteRow creates the table and commits one row with the given marker. It
+// is safe to retry: an earlier attempt that created the table, or also wrote
+// the row, leaves one row after the retry, never a second (#591). A table
+// or row left by something else is not refused here: ReadRow then finds the
+// other marker.
 func WriteRow(run Runner, marker string) error {
 	_, err := Run(run, fmt.Sprintf(
-		"CREATE TABLE %s (id INT PRIMARY KEY, marker VARCHAR(64)); "+
-			"INSERT INTO %s VALUES (1, '%s'); COMMIT;",
-		s00Table, s00Table, marker))
+		"CREATE TABLE IF NOT EXISTS %s (id INT PRIMARY KEY, marker VARCHAR(64)); "+
+			"INSERT INTO %s (id, marker) SELECT 1, '%s' FROM db_root "+
+			"WHERE NOT EXISTS (SELECT 1 FROM %s WHERE id = 1); COMMIT;",
+		s00Table, s00Table, marker, s00Table))
 	return err
 }
 

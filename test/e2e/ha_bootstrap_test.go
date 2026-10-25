@@ -409,8 +409,16 @@ spec:
 
 		It("replicates a row written on the master to both slaves", Label(haSetup), func() {
 			By("writing on the master")
+			// Each failed attempt is printed: Eventually reports only the
+			// last error, and the first is the one that tells why (#591).
+			attempt := 0
 			Eventually(func() error {
-				return writeS00Row(csqlInPod(context.Background(), haNamespace, first, database), marker)
+				attempt++
+				err := writeS00Row(csqlInPod(context.Background(), haNamespace, first, database), marker)
+				if err != nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "write on the master, attempt %d: %v\n", attempt, err)
+				}
+				return err
 			}, 3*time.Minute, 5*time.Second).Should(Succeed())
 
 			By("reading on each slave")

@@ -34,7 +34,7 @@ func TestSQLChecks(t *testing.T) {
 	}, "marker-123"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(script, "INSERT INTO "+s00Table+" VALUES (1, 'marker-123'); COMMIT;") {
+	if !strings.Contains(script, "INSERT INTO "+s00Table+" (id, marker) SELECT 1, 'marker-123' FROM db_root") {
 		t.Fatalf("unexpected write SQL: %q", script)
 	}
 	if err := readS00Row(func(sql string) (string, error) {
