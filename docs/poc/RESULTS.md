@@ -18,8 +18,9 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > POC-17, POC-23, POC-25, POC-26, POC-27, POC-28, POC-29 and POC-31 ran on native
 > linux/amd64 hosts (part 1 of POC-28 in Kind on such a host), and
 > POC-19, POC-21 and POC-22 in the Kind e2e workflow; POC-32 and POC-33 state
-> theirs; POC-37 ran in Docker on a native linux/amd64 host; POC-34 ran on the VM lab, with the Operator's derivative image of the
-> same engine build, and its timings are of those VMs only. Each states its own
+> theirs; POC-34 ran on the VM lab, with the Operator's derivative image of the
+> same engine build, and its timings are of those VMs only; POC-37 ran in
+> Docker on a native linux/amd64 host. Each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
 > general CUBRID guarantee. The raw observations below are kept as recorded;
 > where a later POC contradicts one, a note says so. The current reading of
@@ -3344,7 +3345,7 @@ known.
 
 ---
 
-## POC-37 — which applier value advances on a healthy slave while a transaction stays open on the master, and stops on a slave whose applier is stuck (ADR-0006, #249) — **observation: `final_lsa` and `last_access_time` in `db_ha_apply_info` advance on a healthy slave during an open transaction and stop on a stuck applier, while the copied log's EOF keeps advancing; the insert counter stops during an open transaction on a healthy slave too**
+## POC-37 — which applier value advances on a healthy slave while a transaction stays open on the master, and stops on a slave whose applier is stuck (ADR-0006, #249) — **observation: `final_lsa` and `last_access_time` in `db_ha_apply_info` advanced on a healthy slave during an open transaction and stopped on a stuck applier, while the copied log's EOF kept advancing; the master's log carried other commits about every 6 s throughout, even idle, so whether `final_lsa` advances through an open transaction alone is not known; the insert counter stayed 0 during the open transaction**
 
 **Question (#249).** `ReplicationHealthy` calls a slave stalled when log pages
 wait to be applied and the applier's counters have not advanced between two
@@ -3355,7 +3356,10 @@ transaction is open, and does not advance on a slave in the state of POC-17?
 
 **Environment (2026-10-25/26).** Native linux/amd64 host (6 CPUs), Docker
 29.2.1, `cubrid/cubrid:11.4` (`sha256:1248b77ad398…`, engine 11.4.6.1963),
-containers built fresh for each part with the POC-36 recipe:
+containers built fresh for each part with the POC-36 recipe. The figures
+below come from the saved samples and logs; the "67 times", the row counts of
+part C and the environment were read with commands during the run and not
+saved:
 - one Docker network and one volume per member at `/var/lib/cubrid`;
 - `ha_mode=on`, `ha_copy_sync_mode` `sync` for every member;
 - the master created with `createdb`, and the other members restored from its
@@ -3387,12 +3391,12 @@ On `h-1`:
 | 19:11:51 (committed) | 463\|9360 | 463\|9224 | 463\|9360 | 6000 | 206 | 0 |
 
 - **While the transaction was open:**
-  - `final_lsa` and `committed_lsa` advanced every sample, by about 8 to 18 pages.
+  - `final_lsa` and `committed_lsa` advanced every sample, by about 6 to 18 pages.
   - `required_lsa` stayed at the transaction's first record.
   - `insert_counter` stayed 0.
   - `commit_counter` still rose, from 71 to 199, from other commits in the master's log.
-  - `last_access_time` was rewritten every sample, also before the first insert, when nothing was written.
-  - The applying delay was 0 pages, and 5 to 9 pages for four samples.
+  - `last_access_time` was rewritten every sample.
+  - The applying delay was 0 pages, and 5 to 9 pages for five samples.
 - **At the commit:** the 6000 inserts were applied together.
 
 **Part B: the same slave with its applier stopped.**
@@ -3412,7 +3416,7 @@ On `h-1`:
   1. `cubrid heartbeat stop` on the slave `h-2`, which exited 0.
   2. `kill -9` on every CUBRID process of `h-0`, with 0 left.
   3. `h-1` became `master` / `registered_and_active` and committed a row.
-  4. `cubrid heartbeat start` on `h-0` and on `h-2`, both exiting 0.
+  4. `cubrid heartbeat start` on `h-0` and on `h-2`, both reporting `success`.
 - **State reached:**
   - Both returned as `slave` / `registered_and_standby`.
   - `$CUBRID/var/APPLYLOGDB/appdb` on `h-2` named the old master's log (`appdb_h-0`).
@@ -3424,19 +3428,23 @@ For the log copied from `h-1`, sampled from 19:26:16 to 19:27:51:
 
 | | `h-0` (returned, healthy) | `h-2` (POC-17 state) |
 |---|---|---|
-| `final_lsa` | 151\|10488 to 153\|9976, a few hundred bytes behind the copied EOF in every sample | **151\|56 in every sample** |
+| `final_lsa` | 151\|10488 to 153\|9976, within about 1.2 KB of the copied EOF (once one page boundary behind) in every sample | **151\|56 in every sample** |
 | `insert_counter` | 1 to 17 | **0** |
 | `last_access_time` | rewritten every sample | **19:25:26.662 in every sample** |
-| Copied log EOF | 151\|10584 to 153\|10072 | 151\|10584 to 153\|10072, the same |
-| Applying delay (pages) | 0, once 1 | 1 to 2 |
+| Copied log EOF | 151\|10584 to 153\|10072 | the same range, sampled moments apart |
+| Applying delay (pages) | 0, once 1 | 0 to 2 |
 
 **Findings.**
 
-- **`final_lsa` passes both tests.** The applier's position, `db_ha_apply_info.final_lsa`, advanced on a healthy slave while a transaction stayed open on the master (part A). It did not advance on a slave whose applier was stopped (part B) or stuck as in POC-17 (part C). In both, the copied log's EOF kept advancing.
+- **`final_lsa` passed both tests here.** The applier's position, `db_ha_apply_info.final_lsa`, advanced on a healthy slave while a transaction stayed open on the master (part A). It did not advance on a slave whose applier was stopped (part B) or stuck as in POC-17 (part C). In both, the copied log's EOF kept advancing.
+- **But other commits continued throughout part A.** `commit_counter` rose from 74 to 199 during the open transaction, and `committed_lsa` trailed `final_lsa` by a few dozen bytes in most samples. The applier may have moved `final_lsa` to the last of those commits rather than through the open transaction's own records. Those commits are not the client's.
+  - A fresh pair with no client, no Broker and no sampling still logged them: `commit_counter` went from 19 to 35 between 19:36:03 and 19:37:34, about one every 6 s, and `final_lsa` moved from 147\|9512 to 148\|6688.
+  - Their source was not identified.
+  - A master without them was not available in this setup. So whether `final_lsa` advances through an open transaction **alone** is not known. On a master like this one, which keeps committing, a healthy slave's `final_lsa` kept moving and a stuck slave's did not.
 - **Rule this suggests (not tested as a rule):** a slave is stalled when the copied log's EOF is past `final_lsa` and `final_lsa` has not changed over the window.
-- **`last_access_time` also passes.** It was rewritten every few seconds by a working applier, including when nothing was written, and stopped with it in parts B and C. It shows whether the applier works at all, not whether it keeps up.
-- **The counters are not a progress signal.** In part A, `insert_counter` stayed 0 for the whole open transaction while `commit_counter` rose from other commits. So the counters can neither show that a slave keeps up nor, through other commits, that it is stuck on one open transaction.
-- **The page delay is weak at a low write rate.** In part C, "Delayed log page count" stayed at 1 to 2 pages while the slave lacked 19 rows. A rule based on the number of pages waiting would miss a stuck slave under a light load.
+- **`last_access_time` also passed.** A working applier rewrote it every few seconds and stopped doing so in parts B and C. No sample had it change while the log stood still, so it shows that the applier works, not whether it keeps up.
+- **The counters are not a progress signal.** In part A, `insert_counter` stayed 0 for the whole open transaction. `commit_counter` rose only because of other commits, so it says nothing about the open transaction.
+- **The page delay is weak at a low write rate.** In part C, "Delayed log page count" stayed at 0 to 2 pages while the slave lacked 19 rows. A rule based on the number of pages waiting would miss a stuck slave under a light load.
 - **Reading the values needs SQL or `applyinfo`.** `final_lsa` and `last_access_time` come from `db_ha_apply_info`, an SQL query on the slave. The copied EOF comes from `cubrid applyinfo`. `applyinfo` with `-a` does not print the applier's position.
 
 **Limits.**
@@ -3445,4 +3453,5 @@ For the log copied from `h-1`, sampled from 19:26:16 to 19:27:51:
 - Part C reproduces POC-17's state once.
 - The window, the write rates and the transaction length are those above, not a sizing of the rule.
 - Whether `db_ha_apply_info` is readable through the Instance Manager's access to the slave, and at what cost, was not tried.
+- The source of the master's background commits, and a master without them, were not examined. Until they are, the suggested rule rests on this kind of master.
 
