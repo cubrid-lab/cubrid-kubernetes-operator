@@ -875,6 +875,29 @@ func TestLeaks(t *testing.T) {
 		}
 	}
 
+	// The escaped forms of a value with characters that URL and JSON encode.
+	odd := NewRedactor(`a/b"c-secret value`)
+	escaped := t.TempDir()
+	for name, form := range map[string]string{"url.txt": "a%2Fb%22c-secret+value", "json.txt": `a/b\"c-secret value`} {
+		if err := os.WriteFile(filepath.Join(escaped, name), []byte("x "+form+" y"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if leaks, err := odd.Leaks(escaped); err != nil || !slices.Equal(leaks, []string{"json.txt", "url.txt"}) {
+		t.Fatalf("escaped forms: leaks %v, err %v", leaks, err)
+	}
+
+	// A link is refused, since it could point outside the evidence.
+	if err := os.Symlink(filepath.Join(dir, "summary.json"), filepath.Join(dir, "link.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Leaks(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("a link in the evidence: err %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "link.json")); err != nil {
+		t.Fatal(err)
+	}
+
 	if leaks, err := NewRedactor().Leaks(dir); err != nil || len(leaks) != 0 {
 		t.Fatalf("no registered credential: leaks %v, err %v", leaks, err)
 	}

@@ -266,7 +266,9 @@ func concludeRun() error {
 // credentialLeaks is a problem for each evidence file of the run that holds a
 // credential the run registered with the redactor, such as the Instance
 // Manager tokens and the object-storage secret key (#587), and one if the
-// files could not be searched. It names the files only.
+// files could not be searched. It names the files only. It runs before
+// Conclude writes summary.json and junit.xml, which pass through the same
+// redactor.
 func credentialLeaks(dir string) []string {
 	if dir == "" {
 		return nil

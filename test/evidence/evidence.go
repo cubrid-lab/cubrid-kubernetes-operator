@@ -25,6 +25,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -478,10 +479,21 @@ func (r *Redactor) Leaks(dir string) ([]string, error) {
 	r.mu.Unlock()
 	leaks := []string{}
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || !d.Type().IsRegular() {
+		switch {
+		case err != nil:
 			return err
+		case d.IsDir():
+			return nil
+		case !d.Type().IsRegular():
+			// A link or device could hide a file outside the evidence; the
+			// writers here make none.
+			return fmt.Errorf("%s is not a regular file", path)
 		}
 		data, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			// A temporary file renamed or removed by a late writer.
+			return nil
+		}
 		if err != nil {
 			return err
 		}
