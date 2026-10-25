@@ -62,6 +62,9 @@ const (
 	s12PostBackupOperations = 20
 	// s12SecretName is the restored cluster's own copy of the seed Secret.
 	s12SecretName = "object-storage-restore"
+	// bootstrapReadyCondition is the condition that holds a cluster's
+	// bootstrap reason.
+	bootstrapReadyCondition = "BootstrapReady"
 	// heartbeatStatus prints CUBRID's HA state on a member.
 	heartbeatStatus = `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`
 )
@@ -160,8 +163,12 @@ type s12Record struct {
 	Residue           string          `json:"residue"`
 }
 
-// validateS12 checks the inputs of S12 exact, when it is selected.
+// validateS12 checks the inputs of S12 exact and tampered, when they are
+// selected.
 func (c HAConfig) validateS12() error {
+	if c.RestoreTampered && !c.Restore {
+		return errors.New("-restore-tampered needs -restore: S12 tampered follows S12 exact")
+	}
 	if !c.Restore {
 		return nil
 	}
@@ -268,11 +275,13 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	if err != nil {
 		return err
 	}
-	cluster, err := h.createRestored(ctx, rec)
+	cluster, err := h.createRestored(ctx, s12ClusterName, s12SecretName, rec.SeedPrefix, rec.ArtifactURI)
 	if err != nil {
 		return err
 	}
 	created := time.Now()
+	createdAt := created.UTC()
+	rec.ClusterUID, rec.CreatedAt = string(cluster.UID), &createdAt
 	roles, readyAt, err := h.waitRestored(ctx, cluster, rec, result)
 	if err != nil {
 		return err
@@ -291,7 +300,8 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	if err := h.normalWriteS12(ctx, roles, rec); err != nil {
 		return err
 	}
-	if err := h.checkSourceS12(ctx, rec); err != nil {
+	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
+	if err := h.checkSourceS12(ctx, rec.Source, s12SourceDataCheckFile); err != nil {
 		return err
 	}
 	final := &databasev1alpha1.CubridCluster{}
@@ -377,38 +387,37 @@ func (h *haRun) postBackupWrites(ctx context.Context, rec *s12Record) (string, e
 	return expected, nil
 }
 
-// createRestored creates the restored cluster in the run namespace: the
-// source's spec, restored from S11's artifact, seeding its members under a
-// prefix of its own with a copy of the seed Secret of its own, which no Pod
-// of the source names. None of the
-// names the Operator derives from it is one of the source's (ADR-0004):
-// they all start with the cluster's name and a hyphen.
-func (h *haRun) createRestored(ctx context.Context, rec *s12Record) (*databasev1alpha1.CubridCluster, error) {
+// createRestored creates a restored cluster in the run namespace: the
+// source's spec, restored from the artifact manifestURI names, seeding its
+// members under seedPrefix with secretName, a copy of the seed Secret of its
+// own, which no Pod of the source names. None of the names the Operator
+// derives from it is one of the source's (ADR-0004): they all start with the
+// cluster's name and a hyphen.
+func (h *haRun) createRestored(ctx context.Context, name, secretName, seedPrefix, manifestURI string) (
+	*databasev1alpha1.CubridCluster, error) {
 	if err := h.guard(ctx); err != nil {
 		return nil, err
 	}
 	// The values are the seed Secret's, which the redactor already removes.
 	h.redactor.Add(h.accessKey)
 	h.redactor.Add(h.secretKey)
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: s12SecretName, Namespace: h.cfg.Namespace},
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: h.cfg.Namespace},
 		Type: corev1.SecretTypeOpaque, Data: map[string][]byte{seedAccessKey: []byte(h.accessKey),
 			seedSecretKey: []byte(h.secretKey)}}
 	if err := h.Client.Create(ctx, secret); err != nil {
-		return nil, fmt.Errorf("copy the seed Secret for the restored cluster: %w", err)
+		return nil, fmt.Errorf("copy the seed Secret for %s: %w", name, err)
 	}
 	cluster := &databasev1alpha1.CubridCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: s12ClusterName, Namespace: h.cfg.Namespace},
-		Spec:       h.clusterSpec(rec.SeedPrefix, s12SecretName)}
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: h.cfg.Namespace},
+		Spec:       h.clusterSpec(seedPrefix, secretName)}
 	cluster.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
-		Recovery: &databasev1alpha1.RecoverySource{ManifestURI: rec.ArtifactURI}}
+		Recovery: &databasev1alpha1.RecoverySource{ManifestURI: manifestURI}}
 	if err := h.Client.Create(ctx, cluster); err != nil {
-		return nil, fmt.Errorf("create the restored cluster: %w", err)
+		return nil, fmt.Errorf("create the cluster %s: %w", name, err)
 	}
 	if cluster.UID == "" {
-		return nil, errors.New("created restored cluster has no observed UID")
+		return nil, fmt.Errorf("created cluster %s has no observed UID", name)
 	}
-	created := time.Now().UTC()
-	rec.ClusterUID, rec.CreatedAt = string(cluster.UID), &created
 	return cluster, nil
 }
 
@@ -482,7 +491,7 @@ func (h *haRun) restoredReading(ctx context.Context, cluster *databasev1alpha1.C
 	if boot := cluster.Status.Bootstrap; boot != nil {
 		phase = string(boot.Phase)
 	}
-	recordBootstrap(cluster, rec)
+	recordBootstrap(cluster, &rec.Bootstrap)
 	rec.Credentials.StatusesChecked++
 	if err := h.lookForCredentials(&rec.Credentials.FoundIn, "the restored cluster's status read in bootstrap "+
 		"phase "+cmp.Or(phase, "none"), cluster.Status); err != nil {
@@ -527,10 +536,10 @@ func (h *haRun) restoredReading(ctx context.Context, cluster *databasev1alpha1.C
 	return state, "", nil
 }
 
-// recordBootstrap records the restored cluster's bootstrap when it changed:
-// its phase, attempts, target, operation, manifest, or the type, status or
-// reason of a condition.
-func recordBootstrap(cluster *databasev1alpha1.CubridCluster, rec *s12Record) {
+// recordBootstrap adds a restored cluster's bootstrap to phases when it
+// changed: its phase, attempts, target, operation, manifest, or the type,
+// status or reason of a condition.
+func recordBootstrap(cluster *databasev1alpha1.CubridCluster, phases *[]s12Phase) {
 	seen := s12Phase{At: time.Now().UTC(), Conditions: slices.Clone(cluster.Status.Conditions)}
 	if seen.Conditions == nil {
 		seen.Conditions = []metav1.Condition{}
@@ -547,14 +556,14 @@ func recordBootstrap(cluster *databasev1alpha1.CubridCluster, rec *s12Record) {
 		}
 		return k.String()
 	}
-	if n := len(rec.Bootstrap); n == 0 || key(rec.Bootstrap[n-1]) != key(seen) {
-		rec.Bootstrap = append(rec.Bootstrap, seen)
+	if n := len(*phases); n == 0 || key((*phases)[n-1]) != key(seen) {
+		*phases = append(*phases, seen)
 	}
 }
 
 // bootstrapReason is the reason and message of the BootstrapReady condition.
 func bootstrapReason(cluster *databasev1alpha1.CubridCluster) string {
-	if c := meta.FindStatusCondition(cluster.Status.Conditions, "BootstrapReady"); c != nil {
+	if c := meta.FindStatusCondition(cluster.Status.Conditions, bootstrapReadyCondition); c != nil {
 		return c.Reason + ": " + c.Message
 	}
 	return "no BootstrapReady condition"
@@ -852,10 +861,9 @@ func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s
 // checkSourceS12 requires the source as LAB01 left it: the same member Pods
 // and containers, the same master by CUBRID and status.currentPrimary, no
 // marker written through the restored cluster, and the data rules over the
-// whole history, writes after the backup included.
-func (h *haRun) checkSourceS12(ctx context.Context, rec *s12Record) error {
-	source := &s12Source{MembersAfter: []imageIdentity{}}
-	rec.Source = source
+// whole history, writes after the backup included. It records what it read
+// in source and the source's data check in dataFile.
+func (h *haRun) checkSourceS12(ctx context.Context, source *s12Source, dataFile string) error {
 	members, restarted, err := h.membersUnchanged(ctx, h.rec.MembersAfter)
 	if members != nil {
 		source.MembersAfter = members
@@ -881,7 +889,7 @@ func (h *haRun) checkSourceS12(ctx context.Context, rec *s12Record) error {
 		}
 	}
 	if _, _, err := h.checkDataOf(ctx, h.history.String(), h.sourceTarget(), time.Now(),
-		s12SourceDataCheckFile); err != nil {
+		dataFile); err != nil {
 		if errors.As(err, new(dataViolation)) {
 			return dataViolation{fmt.Errorf("the source changed: %w", err)}
 		}

@@ -87,6 +87,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"scenario after S11: S12 exact, a new cluster restored from S11's artifact; needs -backup-bucket")
 	flags.DurationVar(&cfg.RestoreLimit, "restore-limit", 20*time.Minute,
 		"S12: bound from the restored cluster's creation until it is Ready (restore_limit)")
+	flags.BoolVar(&cfg.RestoreTampered, "restore-tampered", false,
+		"scenario after S12 exact: S12 tampered, a copy of S11's artifact with one byte changed must be "+
+			"refused by a new cluster; needs -restore")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")

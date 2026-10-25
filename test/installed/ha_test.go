@@ -52,6 +52,9 @@ const (
 	testMemberHA0  = "ha-0"
 	testSeedSecret = "seed-credentials"
 	testROOpID     = "ro-000001"
+	// testConditionReason is the reason of a condition the fixtures report
+	// without one of the Operator's.
+	testConditionReason = "Test"
 )
 
 func testHAConfig(t *testing.T) HAConfig {
@@ -127,6 +130,10 @@ type haFixture struct {
 	restoreRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	clientHook     func(script string) (string, error, bool)
 	markersOf      func(pod string) []string
+	// tamperedCreated and tamperedRead play the Operator for the cluster
+	// restored from the tampered copy, as restoreCreated and restoreRead do.
+	tamperedCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
+	tamperedRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	// markerAnswer, when it returns true, answers a read of the marker table
 	// in place of markersOf.
 	markerAnswer func(pod string) (string, error, bool)
@@ -233,8 +240,8 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 					return err
 				}
 			}
-			if _, ok := obj.(*databasev1alpha1.CubridCluster); ok && key.Name == s12ClusterName && f.restoreRead != nil {
-				if err := f.restoreRead(ctx, c, key); err != nil {
+			if _, ok := obj.(*databasev1alpha1.CubridCluster); ok {
+				if err := f.readRestored(ctx, c, key); err != nil {
 					return err
 				}
 			}
@@ -262,8 +269,19 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 	return f
 }
 
+// readRestored plays the Operator before a reading of a restored cluster.
+func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+	switch {
+	case key.Name == s12ClusterName && f.restoreRead != nil:
+		return f.restoreRead(ctx, c, key)
+	case key.Name == s12TamperedClusterName && f.tamperedRead != nil:
+		return f.tamperedRead(ctx, c, key)
+	}
+	return nil
+}
+
 // createCluster stores a cluster the run creates and plays the Operator: the
-// HA cluster is formed at once, the restored cluster is S12's fixture's.
+// HA cluster is formed at once, the restored clusters are S12's fixtures'.
 func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster,
 	opts ...client.CreateOption) error {
 	if cluster.Name == s12ClusterName {
@@ -272,6 +290,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 		}
 		f.writes = append(f.writes, "restore-cluster")
 		return f.restoreCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s12TamperedClusterName {
+		if f.tamperedCreated == nil {
+			f.t.Fatalf("runner created a cluster from a tampered artifact without S12 tampered")
+		}
+		f.writes = append(f.writes, "tampered-cluster")
+		return f.tamperedCreated(ctx, c, cluster)
 	}
 	cluster.UID = "ha-cluster"
 	cluster.Generation = 1
@@ -293,12 +318,12 @@ func (f *haFixture) reconcile(ctx context.Context, c client.WithWatch, cluster *
 	if f.bootstrapFailed {
 		cluster.Status.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName,
 			Phase: string(databasev1alpha1.BootstrapFailed)}}
-		cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{Type: "BootstrapReady",
+		cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{Type: bootstrapReadyCondition,
 			Status: metav1.ConditionFalse, Reason: "SeedBackupFailed", Message: "upload failed: connection refused"})
 	}
 	for _, condition := range startingConditions {
 		cluster.Status.Conditions = append(cluster.Status.Conditions,
-			metav1.Condition{Type: condition, Status: metav1.ConditionTrue, Reason: "Test"})
+			metav1.Condition{Type: condition, Status: metav1.ConditionTrue, Reason: testConditionReason})
 	}
 	if err := c.Update(ctx, cluster); err != nil {
 		return err

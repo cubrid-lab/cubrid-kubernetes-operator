@@ -126,6 +126,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s06` | The installed-Operator HA command with `-fault operator-restart` | LAB01, then S06 (`restart`) on the same cluster: the installed manager's Pod deleted without a grace period | none |
 | `lab-installed-ha-s11` | The installed-Operator HA command with `-backup-bucket` | LAB01, then S11 (`complete`) on the same cluster: a full backup to object storage, its artifact downloaded and checked by the run | none |
 | `lab-installed-ha-s12` | The installed-Operator HA command with `-backup-bucket` and `-restore` | LAB01, S11 (`complete`), then S12 (`exact`): S11's artifact restored into a new cluster in the run namespace and checked against the history truncated at S11's known point | none |
+| `lab-installed-ha-s12-tampered` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-tampered` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`tampered`): a copy of S11's artifact with one byte changed, whose restore into another new cluster must be refused for that object's checksum | none |
 
 `lab-installed-smoke` is a connection baseline. Its `passed` verdict applies
 to LAB00 and establishes neither S00 installation validation nor S00–S15
@@ -142,9 +143,11 @@ kill a Pod or cut the object store, so they are not ruled out by the
 environment, only not run by this command. The lane does not read the
 Operator's logs for credentials and does not restore the artifact (S12).
 
-`lab-installed-ha-s12` requires S12 `exact` only. `wrong-target` and
-`tampered` are not part of the lane, rather than `not_applicable`: the lab
-does not rule them out, this command does not run them.
+`lab-installed-ha-s12` requires S12 `exact` only, and
+`lab-installed-ha-s12-tampered` S12 `exact` and `tampered`.
+`wrong-target` is part of neither, and `tampered` not of
+`lab-installed-ha-s12`, rather than `not_applicable`: the lab does not rule
+them out, the command does not run them in that lane.
 
 `lab-preallocated-component-smoke` is a distinct component result. Its successful
 owned-workload cleanup is not fresh LAB00 namespace cleanup or private campaign

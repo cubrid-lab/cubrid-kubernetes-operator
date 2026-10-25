@@ -154,7 +154,7 @@ func (f *s12Fixture) advanceRestore(ctx context.Context, c client.WithWatch, key
 	s.Bootstrap = &databasev1alpha1.BootstrapStatus{Mode: "Recovery", Phase: phase,
 		ManifestURI: cluster.Spec.Bootstrap.Recovery.ManifestURI, TargetMember: testRestoreMaster,
 		OperationID: "restore-op"}
-	boot := metav1.Condition{Type: "BootstrapReady", Status: status, Reason: "RestoreInProgress",
+	boot := metav1.Condition{Type: bootstrapReadyCondition, Status: status, Reason: "RestoreInProgress",
 		Message: "restoredb is running on " + testRestoreMaster, LastTransitionTime: now}
 	switch phase {
 	case databasev1alpha1.BootstrapComplete:
@@ -163,11 +163,11 @@ func (f *s12Fixture) advanceRestore(ctx context.Context, c client.WithWatch, key
 		s.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName, Phase: "Created", PrimaryCreated: true,
 			HAConfigured: true}}
 	case databasev1alpha1.BootstrapFailed:
-		boot.Reason, boot.Message = "RestoreFailed", "on ha-restore-0: restoredb failed: exit status 1"
+		boot.Reason, boot.Message = s12RefusedReason, "on ha-restore-0: restoredb failed: exit status 1"
 	}
 	s.Conditions = []metav1.Condition{boot}
 	for _, condition := range startingConditions {
-		s.Conditions = append(s.Conditions, metav1.Condition{Type: condition, Status: status, Reason: "Test",
+		s.Conditions = append(s.Conditions, metav1.Condition{Type: condition, Status: status, Reason: testConditionReason,
 			LastTransitionTime: now})
 	}
 	if tamper != nil {
@@ -490,7 +490,7 @@ func TestRunS12ExactFailsWhenTheBootstrapFailed(t *testing.T) {
 	f.bootPhases = []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapRestoring,
 		databasev1alpha1.BootstrapFailed}
 	s12, err := s12Of(t, f, t.Context())
-	if err == nil || s12.Result != evidence.Fail || !strings.Contains(s12.Reason, "RestoreFailed") ||
+	if err == nil || s12.Result != evidence.Fail || !strings.Contains(s12.Reason, s12RefusedReason) ||
 		!strings.Contains(s12.Reason, "exit status 1") {
 		t.Fatalf("S12 = %+v, want a failure with the bootstrap's reason", s12)
 	}
