@@ -130,6 +130,13 @@ type haFixture struct {
 	// restoredRows, once set, are the rows of the restored cluster's members
 	// and Services.
 	restoredRows []workload.Row
+	// heartbeatRole, with f.mu held, answers the role a member's heartbeat
+	// status reports in place of roles; haNodes the nodes it lists in place
+	// of its cluster's members.
+	heartbeatRole func(pod, role string) string
+	haNodes       func(pod string, nodes []string) []string
+	// secrets are the Secrets the run created, in order.
+	secrets []*corev1.Secret
 
 	writes  []string
 	deletes []string
@@ -164,7 +171,10 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				f.writes = append(f.writes, "namespace")
 				return c.Create(ctx, value, opts...)
 			case *corev1.Secret:
-				f.secret = value.DeepCopy()
+				if f.secret == nil {
+					f.secret = value.DeepCopy()
+				}
+				f.secrets = append(f.secrets, value.DeepCopy())
 				f.writes = append(f.writes, "secret")
 				return c.Create(ctx, value, opts...)
 			case *databasev1alpha1.CubridCluster:
@@ -434,13 +444,7 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 	}
 	switch {
 	case strings.Contains(script, "heartbeat status"):
-		f.mu.Lock()
-		f.heartbeats++
-		role := f.roles[pod]
-		f.mu.Unlock()
-		state := map[string]string{roleMaster: "registered_and_active", roleSlave: "registered_and_standby"}[role]
-		return fmt.Sprintf(" HA-Node Info (current %s, state %s)\n HA-Process Info (master 1, state %s)\n   %s\n",
-			pod, role, role, state), nil
+		return f.heartbeat(pod), nil
 	case strings.Contains(script, "cubrid_rel"):
 		return "CUBRID 11.4 (11.4.6.1963-0e7d3c1)", nil
 	case strings.Contains(script, "csql") && strings.Contains(args[len(args)-1], "FROM marker"):
@@ -463,6 +467,30 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 	}
 	f.t.Fatalf("unexpected member command %q", args)
 	return "", nil
+}
+
+// heartbeat is cubrid heartbeat status on a member: its own role, the nodes
+// of its cluster with their roles, and the state of its processes.
+func (f *haFixture) heartbeat(pod string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.heartbeats++
+	role := f.roles[pod]
+	if f.heartbeatRole != nil {
+		role = f.heartbeatRole(pod, role)
+	}
+	nodes := clusterMembers(pod[:strings.LastIndex(pod, "-")])
+	if f.haNodes != nil {
+		nodes = f.haNodes(pod, nodes)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, " HA-Node Info (current %s, state %s)\n", pod, role)
+	for i, node := range nodes {
+		fmt.Fprintf(&b, "   Node %s (priority %d, state %s)\n", node, i+1, f.roles[node])
+	}
+	state := map[string]string{roleMaster: "registered_and_active", roleSlave: "registered_and_standby"}[role]
+	fmt.Fprintf(&b, " HA-Process Info (master 1, state %s)\n   %s\n", role, state)
+	return b.String()
 }
 
 func (f *haFixture) clientCommand(ctx context.Context, script string) (string, error) {

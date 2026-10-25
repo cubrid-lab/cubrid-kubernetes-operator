@@ -350,24 +350,30 @@ requires LAB01, S11/complete and S12/exact. `-restore` without
 S12 starts only from S11 `complete` that passed. When LAB01 or S11 did not
 pass, S12 is blocked and nothing of it is done.
 
-1. **Writes after the backup.** The run takes the client history through
-   S11's known point: every event up to and including the acknowledgement of
-   the last operation acknowledged before the backup was requested
-   (`lastAcknowledgedOpId`). Its acknowledged operations must be S11's count;
-   otherwise S12 is blocked. The client then runs 20 operations as client
+1. **Writes after the backup.** The run takes the client history as it
+   stands before these writes. No client runs between LAB01's workload and
+   them, and S11's marker goes to the marker table, so this is the history
+   at S11's known point, whole: an operation with an unknown outcome at its
+   end stays in it and may be present or absent after the restore. Its
+   acknowledged operations and the last of them must be S11's
+   (`acknowledgedBefore`, `lastAcknowledgedOpId`); otherwise the history
+   changed and S12 is blocked. The client then runs 20 operations as client
    `s12p` through the source's `<cluster>-rw`, every fifth rolled back. They
    are added to `LAB01/history.jsonl` and must all be acknowledged; otherwise
    S12 is blocked: its starting state, rows written after the backup, was not
-   reached. These rows are not in the backup.
+   reached. These rows are not in the backup. They are S12's operations in
+   `summary.json`; LAB01's record and operations count LAB01's own client
+   only.
 2. **The restored cluster.** The run creates the `CubridCluster` `ha-restore`
    in the run namespace with the source's spec (version, Instance Manager
    image, database, three members, HA, StorageClass and size), and:
    - `spec.bootstrap.recovery.manifestUri`: S11's `status.artifact.uri`;
    - `spec.objectStorage`: the seed endpoint and `-seed-insecure`, the seed
-     bucket, the prefix `lab-runs/<run ID>/restore-seed`, and the run's copy
-     of the seed Secret, `object-storage`, in the run namespace. The run
-     created that Secret; neither cluster owns it. The Instance Manager reads
-     the artifact from `-backup-bucket` with it.
+     bucket, the prefix `lab-runs/<run ID>/restore-seed`, and a Secret of its
+     own, `object-storage-restore`: a second copy of the seed Secret's two
+     keys in the run namespace, which only `ha-restore` names. The source
+     keeps `object-storage`. The Instance Manager reads the artifact from
+     `-backup-bucket` with it.
 
    The second cluster shares the run namespace. Every name the Operator
    derives from a cluster begins with the cluster's name and a hyphen: the
@@ -404,18 +410,24 @@ pass, S12 is blocked and nothing of it is done.
    - `restoredWithin` runs from the return of the create request to the
      reading that saw everything hold, so it is an upper bound.
 4. **Secrets.** The run lists the Secrets that the Pod templates of the
-   restored StatefulSet and Broker Deployments name. One that a Pod template
-   of the source also names, other than `object-storage`, such as
-   `ha-im-token`, must never happen: the new cluster would depend on a Secret
-   of the source. A Pod template names Secrets of its own namespace only.
-5. **Restored data.** The data rules are checked against the history
+   restored StatefulSet and Broker Deployments name. Any that a Pod template
+   of the source also names, such as `ha-im-token` or `object-storage`, must
+   never happen: the new cluster would depend on a Secret of the source
+   cluster. A Pod template names Secrets of its own namespace only.
+5. **HA membership.** `cubrid heartbeat status` on the master of each
+   cluster must list exactly that cluster's members as its nodes
+   (`Node <name> (priority ...` lines): `ha-restore-0` to `-2` for the
+   restored cluster, `ha-0` to `-2` for the source. A node of the other
+   cluster must never happen: the clusters would share HA membership. A
+   status that lists no node blocks S12. The lists are recorded.
+6. **Restored data.** The data rules are checked against the history
    through the known point, on each restored member with `csql` and through
    `ha-restore-rw` and `ha-restore-ro`, as LAB01 checks them. Rows a slave or
    the read-only Service lacks are read again until `-data-check-within`
    passes; any other violation fails at once. So:
    - an operation acknowledged before the known point and missing fails
      S12;
-   - a row of the writes after the backup has no operation in that history:
+   - a row of the writes after the backup has no operation in the history:
      the rules report it as `unexpected`, and the reason names it as a row
      written after the backup (`postBackupRowsPresent`);
    - a rolled-back row, wrong values or a row applied twice fail as in
@@ -424,27 +436,34 @@ pass, S12 is blocked and nothing of it is done.
    Then S11's marker row (`s11`, the run ID) must be on every restored
    member. A slave that lacks it is read again within `-data-check-within`;
    the master that lacks it fails S12 at once.
-6. **A normal write.** The client writes the marker row `s12`, with the run
+7. **A normal write.** The client writes the marker row `s12`, with the run
    ID, through `ha-restore-rw`. It must be acknowledged and then be on every
-   restored member, with the same wait for a slave. Otherwise S12 fails.
-7. **The source.** The source's members must still be the Pods and
-   containers LAB01 recorded at its end; CUBRID and `status.currentPrimary`
-   must name the same master; and the data rules must hold on the source's
-   members and Services over the whole history, the writes after the backup
+   restored member, with the same wait for a slave. A failure the workload
+   itself answered, which kubectl reports as `command terminated with exit
+   code`, fails S12. Any other error of `kubectl exec`, such as a container
+   it cannot reach, kept the write from being sent and blocks S12.
+8. **The source.** The source's members must still be the Pods and
+   containers LAB01 recorded at its end. CUBRID and `status.currentPrimary`
+   must name the same master: the roles are read again until
+   `-data-check-within` passes, so that one reading in which a member answers
+   otherwise does not fail S12; what still differs then fails it, and members
+   that could not be asked block it. The marker `s12` must not be in the
+   marker table of any source member: there it would be a write meant for
+   the restored cluster. And the data rules must hold on the source's members
+   and Services over the whole history, the writes after the backup
    included. Any difference fails S12.
-8. **Credentials.** Neither key of the seed Secret may be in any status of
+9. **Credentials.** Neither key of the seed Secret may be in any status of
    the restored cluster the run read, at every reading and once at the end,
    in any encoding the redaction removes. One found must never happen.
 
 A run that ends before S12 is judged, a refused or failing API read, a
-`kubectl exec` or `csql` that cannot read the rows or the markers, and a
-history that does not match S11's known point leave S12 blocked, not failed.
+`kubectl exec` or `csql` that cannot read the rows, the markers or the HA
+node list, and a history that does not match S11's known point leave S12
+blocked, not failed.
 What was seen stays: a bootstrap seen `Failed`, a never-event, a data
 violation that lag cannot explain or a source that changed stay failures
 when a later check cannot be made, with that error added to the reason. Only
-lagging violations when the run ends are not confirmed, and block S12. A
-normal write that fails through `kubectl exec` is indistinguishable from one
-CUBRID refused: both fail S12.
+lagging violations when the run ends are not confirmed, and block S12.
 
 `restoredWithin`, `dataRulesHeldAfterSeconds` and `postBackupRowsPresent`
 are `unknown` until measured. When `S12/exact/record.json` cannot be written,
@@ -453,7 +472,9 @@ the file added to the reason.
 
 The account needs nothing beyond S11's: S12 creates a `CubridCluster` and
 reads `cubridclusters`, StatefulSets, Deployments and Pods and runs
-`pods/exec` in the run namespace, as LAB01 does. It reads no Secret.
+`pods/exec` in the run namespace, as LAB01 does, and creates the restored
+cluster's Secret, as LAB01 creates its own. It reads no Secret there; the
+keys it copies are those it read from the seed Secret for LAB01.
 
 The lab's three workers have 2 vCPU and 8 GiB each. Neither the clusters the
 run creates nor the Broker Deployments set resource requests
@@ -507,12 +528,15 @@ directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs.
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and
   Secret, every bootstrap change observed, `restoredWithin`, its members and
-  roles, the Secrets its Pods name, the data check's summary with the rows
+  roles, the Secrets its Pods name, each cluster's HA node list, the data
+  check's summary with the rows
   written after the backup that were found and S11's marker on each member,
   the normal write, the source at the end, and where credentials were looked
   for), `S12/exact/data-check.json`, the last report of the restored
   cluster's data check, and `S12/exact/source-data-check.json`, the source's.
-  The writes after the backup are in `LAB01/history.jsonl` with the rest.
+  The writes after the backup are in `LAB01/history.jsonl` with the rest;
+  LAB01's operation counts leave them out. S06's clients, by contrast, are
+  counted in LAB01's operations as well as S06's.
 
 `formationSeconds` runs from the return of the request that created the
 cluster until the reading that began the stable period that held. Each reading takes
@@ -524,7 +548,7 @@ runs from the client's last answer until the data rules held everywhere.
 
 The run deletes its namespace with a UID precondition and waits until it is
 gone, as the smoke does. That removes the cluster, the restored cluster of
-S12, their PVCs, the client and the copied Secret. It does not remove:
+S12, their PVCs, the client and the copied Secrets. It does not remove:
 - the seed backups under `lab-runs/<run ID>` in the bucket, the restored
   cluster's among them, and S11's artifact in the backup bucket;
 - a backend volume that the StorageClass retains.

@@ -19,9 +19,9 @@ package installed
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -55,7 +55,14 @@ const (
 	// the source after the backup.
 	s12PostBackupClient     = "s12p"
 	s12PostBackupOperations = 20
+	// s12SecretName is the restored cluster's own copy of the seed Secret.
+	s12SecretName = "object-storage-restore"
+	// heartbeatStatus prints CUBRID's HA state on a member.
+	heartbeatStatus = `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`
 )
+
+// haNodeLine is a node line of cubrid heartbeat status (POC-13 shape E).
+var haNodeLine = regexp.MustCompile(`(?m)^\s*Node (\S+) \(priority`)
 
 // s12PostBackup is where the client history stood after the writes through
 // the source that followed the backup.
@@ -84,8 +91,8 @@ type s12Phase struct {
 
 // s12DataCheck summarizes the data check of the restored cluster.
 type s12DataCheck struct {
-	// HistoryEvents and Acknowledged are the events of the history truncated
-	// at the known point, and the acknowledged operations among them.
+	// HistoryEvents and Acknowledged are the events of the history as it
+	// stood at the known point, and the acknowledged operations among them.
 	HistoryEvents int  `json:"historyEvents"`
 	Acknowledged  int  `json:"acknowledged"`
 	Held          bool `json:"held"`
@@ -134,6 +141,9 @@ type s12Record struct {
 	RestoredWithin string          `json:"restoredWithin,omitempty"`
 	Members        []imageIdentity `json:"members"`
 	Roles          *startingState  `json:"roles,omitempty"`
+	// HANodes is the node list cubrid heartbeat status reports on one member
+	// of each cluster, by cluster.
+	HANodes map[string][]string `json:"haNodes,omitempty"`
 	// SecretsReferenced are the Secrets the restored cluster's Pod templates
 	// name.
 	SecretsReferenced []string        `json:"secretsReferenced"`
@@ -162,32 +172,6 @@ func (c HAConfig) validateS12() error {
 	return nil
 }
 
-// historyThrough returns the lines of history up to and including the
-// acknowledgement of opID: what the client was told before the known point.
-// An attempt of opID, or any other event of it, does not end it.
-func historyThrough(history, opID string) (string, error) {
-	if opID == "" {
-		return "", errors.New("the known point names no acknowledged operation")
-	}
-	var b strings.Builder
-	line := 0
-	for text := range strings.SplitAfterSeq(history, "\n") {
-		line++
-		b.WriteString(text)
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		var e workload.Event
-		if err := json.Unmarshal([]byte(text), &e); err != nil {
-			return "", fmt.Errorf("history line %d: %w", line, err)
-		}
-		if e.OpID == opID && e.Event == workload.Acknowledged {
-			return b.String(), nil
-		}
-	}
-	return "", fmt.Errorf("the history holds no acknowledgement of %s", opID)
-}
-
 // restoreVerdict is an error that judges the restore, as against one that
 // kept the run from checking it.
 type restoreVerdict struct{ error }
@@ -202,10 +186,10 @@ type restoreVerdict struct{ error }
 func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 	result = evidence.Scenario{ID: s12ID, Variant: s12Variant, Result: evidence.Fail, NeverEvents: []string{}}
 	rec := s12Record{Cluster: s12ClusterName, SeedPrefix: h.rec.Seed.Prefix + "/restore-seed",
-		SecretRef: seedSecretName, Bootstrap: []s12Phase{}, Members: []imageIdentity{}, SecretsReferenced: []string{},
+		SecretRef: s12SecretName, Bootstrap: []s12Phase{}, Members: []imageIdentity{}, SecretsReferenced: []string{},
 		Credentials: &s12Credentials{FoundIn: []string{}},
-		Notes: []string{"the restored cluster uses the run's copy of the seed Secret, object-storage, which the " +
-			"run created in its namespace and neither cluster owns", "the Operator's logs were not checked"},
+		Notes: []string{"the restored cluster uses a copy of the seed Secret of its own, " + s12SecretName +
+			"; the source uses " + seedSecretName, "the Operator's logs were not checked"},
 		Residue: "the restored cluster's seed backups under its seed prefix are not removed by this run; the " +
 			"cluster goes with the namespace"}
 	defer func() {
@@ -225,6 +209,11 @@ func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 	result.Measurements = map[string]any{"restoredWithin": evidence.Unknown,
 		"dataRulesHeldAfterSeconds": evidence.Unknown, "postBackupRowsPresent": evidence.Unknown}
 	err := h.s12Steps(ctx, &result, &rec)
+	if post := rec.PostBackup; post != nil {
+		result.Operations = &evidence.Operations{Attempted: post.Operations[workload.Attempted],
+			Acknowledged: post.Operations[workload.Acknowledged], Failed: post.Operations[workload.Failed],
+			Unknown: post.Operations[workload.Unknown]}
+	}
 	never := strings.Join(result.NeverEvents, "; ")
 	switch {
 	case errors.As(err, new(restoreVerdict)) || errors.As(err, new(dataViolation)):
@@ -262,7 +251,7 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 		return errors.New("S11 recorded no known point or artifact to restore")
 	}
 	rec.KnownPoint, rec.ArtifactURI, rec.ManifestDigest = s11.KnownPoint, s11.Artifact.URI, s11.Artifact.ManifestDigest
-	truncated, err := h.postBackupWrites(ctx, rec)
+	expected, err := h.postBackupWrites(ctx, rec)
 	if err != nil {
 		return err
 	}
@@ -280,7 +269,10 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	if err := h.checkRestoredSecrets(ctx, rec, result); err != nil {
 		return err
 	}
-	if err := h.checkRestoredData(ctx, truncated, roles, rec, result); err != nil {
+	if err := h.checkHANodes(ctx, roles, rec, result); err != nil {
+		return err
+	}
+	if err := h.checkRestoredData(ctx, expected, roles, rec, result); err != nil {
 		return err
 	}
 	if err := h.normalWriteS12(ctx, roles, rec); err != nil {
@@ -304,23 +296,35 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	return nil
 }
 
-// postBackupWrites truncates the history at S11's known point, then writes
-// through the source, so that rows written after the backup exist, and
-// returns the truncated history. The writes must all be acknowledged: they
-// are part of S12's starting state.
+// postBackupWrites takes the history as it stands, which is where it stood
+// at S11's known point: no client runs between LAB01's workload and these
+// writes, and S11's marker goes to the marker table. Its acknowledged
+// operations must be the known point's. It then writes through the source,
+// so that rows written after the backup exist, and returns that history:
+// what the restored cluster must hold, an operation with an unknown outcome
+// allowed either way. The writes must all be acknowledged: they are part of
+// S12's starting state.
 func (h *haRun) postBackupWrites(ctx context.Context, rec *s12Record) (string, error) {
 	known := rec.KnownPoint
-	truncated, err := historyThrough(h.history.String(), known.LastAcknowledged)
-	if err != nil {
-		return "", fmt.Errorf("truncate the history at S11's known point: %w", err)
-	}
-	before, err := workload.ReadHistory(strings.NewReader(truncated))
+	expected := h.history.String()
+	before, err := workload.ReadHistory(strings.NewReader(expected))
 	if err != nil {
 		return "", err
 	}
-	if n := before.Counts[workload.Acknowledged]; n != known.Acknowledged {
-		return "", fmt.Errorf("the history through %s holds %d acknowledged operations, S11's known point %d",
-			known.LastAcknowledged, n, known.Acknowledged)
+	snapshot, err := workload.ReadEvents(strings.NewReader(expected))
+	if err != nil {
+		return "", err
+	}
+	last := ""
+	for _, e := range snapshot {
+		if e.Event == workload.Acknowledged {
+			last = e.OpID
+		}
+	}
+	if n := before.Counts[workload.Acknowledged]; n != known.Acknowledged || last != known.LastAcknowledged {
+		return "", fmt.Errorf("the history holds %d acknowledged operations, the last %q, and S11's known point %d, "+
+			"the last %q: the history changed after the known point", n, last, known.Acknowledged,
+			known.LastAcknowledged)
 	}
 	out, runErr := h.clientRun(ctx, fmt.Sprintf("CLIENT_ID=%s OPS=%d ROLLBACK_EVERY=5 workload run 2>/tmp/%[1]s.err",
 		s12PostBackupClient, s12PostBackupOperations))
@@ -340,11 +344,7 @@ func (h *haRun) postBackupWrites(ctx context.Context, rec *s12Record) (string, e
 	if err != nil {
 		return "", err
 	}
-	all, err := workload.ReadHistory(strings.NewReader(h.history.String()))
-	if err != nil {
-		return "", err
-	}
-	h.rec.Operations = all.Counts
+	// LAB01's operation counts stay its own client's; these are S12's.
 	post := &s12PostBackup{Client: s12PostBackupClient, Operations: written.Counts,
 		Acknowledged: written.Counts[workload.Acknowledged], HistoryEvents: len(events)}
 	for _, e := range events {
@@ -358,21 +358,31 @@ func (h *haRun) postBackupWrites(ctx context.Context, rec *s12Record) (string, e
 			"failed %d, unknown %d)", post.Acknowledged, s12PostBackupOperations, written.Counts[workload.Attempted],
 			written.Counts[workload.Failed], written.Counts[workload.Unknown])
 	}
-	return truncated, nil
+	return expected, nil
 }
 
 // createRestored creates the restored cluster in the run namespace: the
 // source's spec, restored from S11's artifact, seeding its members under a
-// prefix of its own with the run's copy of the seed Secret. None of the
+// prefix of its own with a copy of the seed Secret of its own, which no Pod
+// of the source names. None of the
 // names the Operator derives from it is one of the source's (ADR-0004):
 // they all start with the cluster's name and a hyphen.
 func (h *haRun) createRestored(ctx context.Context, rec *s12Record) (*databasev1alpha1.CubridCluster, error) {
 	if err := h.guard(ctx); err != nil {
 		return nil, err
 	}
+	// The values are the seed Secret's, which the redactor already removes.
+	h.redactor.Add(h.accessKey)
+	h.redactor.Add(h.secretKey)
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: s12SecretName, Namespace: h.cfg.Namespace},
+		Type: corev1.SecretTypeOpaque, Data: map[string][]byte{seedAccessKey: []byte(h.accessKey),
+			seedSecretKey: []byte(h.secretKey)}}
+	if err := h.Client.Create(ctx, secret); err != nil {
+		return nil, fmt.Errorf("copy the seed Secret for the restored cluster: %w", err)
+	}
 	cluster := &databasev1alpha1.CubridCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: s12ClusterName, Namespace: h.cfg.Namespace},
-		Spec:       h.clusterSpec(rec.SeedPrefix)}
+		Spec:       h.clusterSpec(rec.SeedPrefix, s12SecretName)}
 	cluster.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 		Recovery: &databasev1alpha1.RecoverySource{ManifestURI: rec.ArtifactURI}}
 	if err := h.Client.Create(ctx, cluster); err != nil {
@@ -535,10 +545,9 @@ func bootstrapReason(cluster *databasev1alpha1.CubridCluster) string {
 }
 
 // checkRestoredSecrets records the Secrets the restored cluster's Pod
-// templates name. One that a Pod template of the source names, other than the
-// run's copy of the seed Secret, must never happen: the new cluster would
-// depend on a Secret of the source. A Pod template names Secrets of its own
-// namespace only.
+// templates name. One that a Pod template of the source also names must
+// never happen: the new cluster would depend on a Secret of the source. A Pod
+// template names Secrets of its own namespace only.
 func (h *haRun) checkRestoredSecrets(ctx context.Context, rec *s12Record, result *evidence.Scenario) error {
 	restored, err := h.secretsOf(ctx, s12ClusterName)
 	if err != nil {
@@ -550,7 +559,7 @@ func (h *haRun) checkRestoredSecrets(ctx context.Context, rec *s12Record, result
 		return err
 	}
 	shared := slices.DeleteFunc(slices.Clone(restored), func(name string) bool {
-		return name == seedSecretName || !slices.Contains(source, name)
+		return !slices.Contains(source, name)
 	})
 	if len(shared) > 0 {
 		result.NeverEvents = append(result.NeverEvents, "the restored cluster's Pods name Secrets of the source "+
@@ -620,18 +629,18 @@ func (h *haRun) restoredDumps() map[string]string {
 		"ro": fmt.Sprintf(`JDBC_URL="%s" workload dump`, h.jdbcURL(s12ClusterName, "ro", 33001))}
 }
 
-// checkRestoredData applies the data rules of the history truncated at the
+// checkRestoredData applies the data rules of the history as it stood at the
 // known point to the restored members and Services, then looks for S11's
 // marker on every restored member. A row written after the backup is a row
-// no operation of the truncated history has: the rules report it as
-// unexpected, and the run names it.
-func (h *haRun) checkRestoredData(ctx context.Context, truncated string, roles *startingState, rec *s12Record,
+// no operation of that history has: the rules report it as unexpected, and
+// the run names it.
+func (h *haRun) checkRestoredData(ctx context.Context, expected string, roles *startingState, rec *s12Record,
 	result *evidence.Scenario) error {
-	history, err := workload.ReadHistory(strings.NewReader(truncated))
+	history, err := workload.ReadHistory(strings.NewReader(expected))
 	if err != nil {
 		return err
 	}
-	events, err := workload.ReadEvents(strings.NewReader(truncated))
+	events, err := workload.ReadEvents(strings.NewReader(expected))
 	if err != nil {
 		return err
 	}
@@ -644,7 +653,7 @@ func (h *haRun) checkRestoredData(ctx context.Context, truncated string, roles *
 	rec.DataCheck = check
 	members := clusterMembers(s12ClusterName)
 	target := dataTarget{members: members, dumps: h.restoredDumps(), slaves: roles.Slaves}
-	report, held, err := h.checkDataOf(ctx, truncated, target, time.Now(), s12DataCheckFile)
+	report, held, err := h.checkDataOf(ctx, expected, target, time.Now(), s12DataCheckFile)
 	if report != nil {
 		check.PostBackupRowsPresent = postBackupRows(*report, full)
 		result.Measurements["postBackupRowsPresent"] = len(check.PostBackupRowsPresent)
@@ -706,18 +715,12 @@ func (h *haRun) waitMarker(ctx context.Context, members []string, master, name, 
 		found := map[string]string{}
 		var missing []string
 		for _, pod := range members {
-			out, err := sqlcheck.Run(h.csql(ctx, pod), markerQuery)
+			table, err := h.markerTable(ctx, pod)
 			if err != nil {
-				return nil, found, fmt.Errorf("read the marker table on %s: %w", pod, err)
+				return nil, found, err
 			}
-			rows, err := sqlcheck.Values(out)
-			if err != nil {
-				return nil, found, fmt.Errorf("read the marker table on %s: %w", pod, err)
-			}
-			for _, row := range rows {
-				if n, v, ok := strings.Cut(row, "="); ok && n == name {
-					found[pod] = v
-				}
+			if v, ok := table[name]; ok {
+				found[pod] = v
 			}
 			if v, ok := found[pod]; !ok || v != value {
 				missing = append(missing, pod)
@@ -735,8 +738,33 @@ func (h *haRun) waitMarker(ctx context.Context, members []string, master, name, 
 	}
 }
 
+// markerTable reads the marker table of a member, by name.
+func (h *haRun) markerTable(ctx context.Context, pod string) (map[string]string, error) {
+	out, err := sqlcheck.Run(h.csql(ctx, pod), markerQuery)
+	if err != nil {
+		return nil, fmt.Errorf("read the marker table on %s: %w", pod, err)
+	}
+	rows, err := sqlcheck.Values(out)
+	if err != nil {
+		return nil, fmt.Errorf("read the marker table on %s: %w", pod, err)
+	}
+	table := map[string]string{}
+	for _, row := range rows {
+		if n, v, ok := strings.Cut(row, "="); ok {
+			table[n] = v
+		}
+	}
+	return table, nil
+}
+
+// remoteExit is how kubectl exec reports a command that ran in the container
+// and exited with an error: the workload's own answer, as against a
+// failure to reach the container.
+const remoteExit = "command terminated with exit code"
+
 // normalWriteS12 writes a marker through the restored cluster's read-write
-// Service and reads it back on every restored member.
+// Service and reads it back on every restored member. Only the workload's
+// own failure fails S12: a kubectl or API error kept the run from writing.
 func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s12Record) error {
 	write := &s12NormalWrite{Marker: s12Marker, ReadBackOn: []string{}, MissingOn: []string{}}
 	rec.NormalWrite = write
@@ -744,7 +772,7 @@ func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s
 	out, err := h.clientRun(ctx, fmt.Sprintf(`JDBC_URL="%s" workload marker %s %s 2>&1`,
 		h.jdbcURL(s12ClusterName, "rw", 33000), s12Marker, h.rec.RunID))
 	switch {
-	case err != nil && ctx.Err() != nil:
+	case err != nil && (ctx.Err() != nil || !strings.Contains(out, remoteExit)):
 		return fmt.Errorf("write marker %s through %s: %w", s12Marker, service, err)
 	case err != nil:
 		return restoreVerdict{fmt.Errorf("the marker %s written through %s failed: %w: %s", s12Marker, service, err,
@@ -769,8 +797,9 @@ func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s
 }
 
 // checkSourceS12 requires the source as LAB01 left it: the same member Pods
-// and containers, the same master by CUBRID and status.currentPrimary, and
-// the data rules over the whole history, writes after the backup included.
+// and containers, the same master by CUBRID and status.currentPrimary, no
+// marker written through the restored cluster, and the data rules over the
+// whole history, writes after the backup included.
 func (h *haRun) checkSourceS12(ctx context.Context, rec *s12Record) error {
 	source := &s12Source{MembersAfter: []imageIdentity{}}
 	rec.Source = source
@@ -785,23 +814,18 @@ func (h *haRun) checkSourceS12(ctx context.Context, rec *s12Record) error {
 	if restarted > 0 {
 		return restoreVerdict{fmt.Errorf("the source changed: %d of its members were replaced or restarted", restarted)}
 	}
-	roles, unmet, err := h.roles(ctx)
-	switch {
-	case err != nil:
-		return fmt.Errorf("read the source's roles: %w", err)
-	case strings.HasPrefix(unmet, "cubrid heartbeat status failed"):
-		return fmt.Errorf("read the source's roles: %s", unmet)
-	case unmet != "":
-		return restoreVerdict{fmt.Errorf("the source changed: %s", unmet)}
+	if err := h.sourceRoles(ctx, source); err != nil {
+		return err
 	}
-	cluster := &databasev1alpha1.CubridCluster{}
-	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
-		return fmt.Errorf("read the source cluster: %w", err)
-	}
-	source.Master, source.CurrentPrimary = roles.Master, cluster.Status.CurrentPrimary
-	if want := h.rec.StartingState.Master; roles.Master != want || source.CurrentPrimary != want {
-		return restoreVerdict{fmt.Errorf("the source changed: CUBRID reports %s as master and status.currentPrimary "+
-			"is %q, %s at LAB01's end", roles.Master, source.CurrentPrimary, want)}
+	for _, pod := range h.members {
+		table, err := h.markerTable(ctx, pod)
+		if err != nil {
+			return fmt.Errorf("read the source's marker table: %w", err)
+		}
+		if _, ok := table[s12Marker]; ok {
+			return restoreVerdict{fmt.Errorf("the source changed: the marker %s written through %s-rw is on %s",
+				s12Marker, s12ClusterName, pod)}
+		}
 	}
 	if _, _, err := h.checkDataOf(ctx, h.history.String(), h.sourceTarget(), time.Now(),
 		s12SourceDataCheckFile); err != nil {
@@ -811,5 +835,77 @@ func (h *haRun) checkSourceS12(ctx context.Context, rec *s12Record) error {
 		return fmt.Errorf("check the source's data: %w", err)
 	}
 	source.DataRulesHeld = true
+	return nil
+}
+
+// sourceRoles reads the source's roles and status until CUBRID reports the
+// master of LAB01's end, with status.currentPrimary naming it, or
+// DataCheckWithin has passed: one reading taken while a member answers
+// otherwise is not a change of the source. What still differs then fails S12,
+// unless the members could not be asked.
+func (h *haRun) sourceRoles(ctx context.Context, source *s12Source) error {
+	want := h.rec.StartingState.Master
+	start := time.Now()
+	for {
+		roles, unmet, err := h.roles(ctx)
+		if err != nil {
+			return fmt.Errorf("read the source's roles: %w", err)
+		}
+		cluster := &databasev1alpha1.CubridCluster{}
+		key := client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}
+		if err := h.Client.Get(ctx, key, cluster); err != nil {
+			return fmt.Errorf("read the source cluster: %w", err)
+		}
+		problem, unasked := unmet, strings.HasPrefix(unmet, "cubrid heartbeat status failed")
+		if unmet == "" {
+			source.Master, source.CurrentPrimary = roles.Master, cluster.Status.CurrentPrimary
+			if roles.Master != want || source.CurrentPrimary != want {
+				problem = fmt.Sprintf("CUBRID reports %s as master and status.currentPrimary is %q, %s at LAB01's end",
+					roles.Master, source.CurrentPrimary, want)
+			}
+		}
+		if problem == "" {
+			return nil
+		}
+		if time.Since(start) >= h.cfg.DataCheckWithin || ctx.Err() != nil {
+			if unasked || ctx.Err() != nil {
+				return errors.Join(fmt.Errorf("read the source's roles: %s", problem), ctx.Err())
+			}
+			return restoreVerdict{fmt.Errorf("the source changed: %s", problem)}
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(h.cfg.Poll):
+		}
+	}
+}
+
+// checkHANodes reads the node list cubrid heartbeat status reports on the
+// master of each cluster. A node of the other cluster, or a list that is not
+// the cluster's own members, must never happen: the clusters would share HA
+// membership.
+func (h *haRun) checkHANodes(ctx context.Context, restored *startingState, rec *s12Record,
+	result *evidence.Scenario) error {
+	rec.HANodes = map[string][]string{}
+	for _, c := range []struct{ cluster, pod string }{{s12ClusterName, restored.Master},
+		{haClusterName, h.rec.StartingState.Master}} {
+		out, err := h.member(ctx, c.pod, "bash", "-c", heartbeatStatus)
+		if err != nil {
+			return fmt.Errorf("read the HA node list on %s: %w", c.pod, err)
+		}
+		nodes := []string{}
+		for _, m := range haNodeLine.FindAllStringSubmatch(out, -1) {
+			nodes = append(nodes, m[1])
+		}
+		slices.Sort(nodes)
+		rec.HANodes[c.cluster] = nodes
+		if len(nodes) == 0 {
+			return fmt.Errorf("cubrid heartbeat status on %s lists no node", c.pod)
+		}
+		if want := clusterMembers(c.cluster); !slices.Equal(nodes, want) {
+			result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("cross-cluster HA membership: CUBRID on %s "+
+				"lists the nodes %s, not %s", c.pod, strings.Join(nodes, ", "), strings.Join(want, ", ")))
+		}
+	}
 	return nil
 }

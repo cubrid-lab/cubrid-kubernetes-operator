@@ -43,8 +43,8 @@ const (
 	testRestoreUID    = "restore-cluster"
 	testRestoreMaster = "ha-restore-0"
 	testRestoreSlave  = "ha-restore-2"
-	testFirstOpID     = "c1-000001"
 	testThirdOpID     = "c1-000003"
+	testRestoreSecret = "object-storage-restore"
 	testRestarted     = "containerd://restarted"
 )
 
@@ -83,6 +83,9 @@ type s12Fixture struct {
 	// changes what the writes after the backup recorded.
 	wrongMarkerOn     string
 	postBackupHistory func(string) string
+	// misroute puts the marker written through the restored cluster on the
+	// source's members too.
+	misroute bool
 
 	restored       *databasev1alpha1.CubridCluster
 	restoreReads   int
@@ -216,7 +219,8 @@ func (f *s12Fixture) markerRows(pod string) []string {
 	case len(f.markers) == 1 && pod != f.dropMarkerOn:
 		rows = append(rows, s11Marker+"="+strings.Fields(f.markers[0])[3])
 	}
-	if len(f.normalWrites) > 0 && pod != f.dropNormalOn {
+	restored := strings.HasPrefix(pod, s12ClusterName+"-")
+	if len(f.normalWrites) > 0 && pod != f.dropNormalOn && (restored || f.misroute) {
 		_, rest, _ := strings.Cut(f.normalWrites[0], "workload marker "+s12Marker+" ")
 		rows = append(rows, s12Marker+"="+strings.Fields(rest)[0])
 	}
@@ -276,7 +280,7 @@ func TestRunS12ExactPassesWithTheRestoredData(t *testing.T) {
 		s12.Variant != s12Variant {
 		t.Fatalf("summary = %+v, want every scenario passed", summary)
 	}
-	if strings.Join(f.writes, ",") != "namespace,secret,cluster,client,backup,restore-cluster" {
+	if strings.Join(f.writes, ",") != "namespace,secret,cluster,client,backup,secret,restore-cluster" {
 		t.Fatalf("writes = %v", f.writes)
 	}
 	for _, rel := range []string{s12RecordFile, s12DataCheckFile, s12SourceDataCheckFile} {
@@ -292,7 +296,52 @@ func TestRunS12ExactPassesWithTheRestoredData(t *testing.T) {
 	requireS12Writes(t, f)
 	requireS12Record(t, f)
 	requireS12DataChecks(t, cfg)
+	requireHANodes(t, cfg)
 	requireNamespaceGone(t, f.haFixture)
+}
+
+func TestRunS12KeepsLAB01sOperationsItsOwn(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	s12, err := s12Of(t, f, t.Context())
+	if err != nil {
+		t.Fatalf("RunHA() error = %v", err)
+	}
+	requireOwnOperations(t, cfg, s12)
+}
+
+// requireOwnOperations fails unless LAB01 counts its own client's operations
+// and S12 those written after the backup.
+func requireOwnOperations(t *testing.T, cfg HAConfig, s12 evidence.Scenario) {
+	t.Helper()
+	lab := s12Scenarios(t, cfg.EvidenceDir)[0]
+	if ops := lab.Operations; ops == nil || ops.Attempted != cfg.Operations+1 || ops.Acknowledged != cfg.Operations {
+		t.Fatalf("LAB01 operations = %+v, want LAB01's client only", lab.Operations)
+	}
+	if n := readHARecord(t, cfg.EvidenceDir).Operations[workload.Attempted]; n != cfg.Operations+1 {
+		t.Fatalf("LAB01 record attempted = %d, want LAB01's client only", n)
+	}
+	if ops := s12.Operations; ops == nil || ops.Attempted != s12PostBackupOperations ||
+		ops.Acknowledged != s12PostBackupOperations {
+		t.Fatalf("S12 operations = %+v, want the writes after the backup", s12.Operations)
+	}
+}
+
+// requireHANodes fails unless the record holds each cluster's own node list.
+func requireHANodes(t *testing.T, cfg HAConfig) {
+	t.Helper()
+	var rec struct {
+		HANodes map[string][]string `json:"haNodes"`
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, s12RecordFile))
+	if err != nil || json.Unmarshal(data, &rec) != nil {
+		t.Fatalf("S12 record = %s, %v", data, err)
+	}
+	for _, cluster := range []string{haClusterName, s12ClusterName} {
+		if !slices.Equal(rec.HANodes[cluster], clusterMembers(cluster)) {
+			t.Fatalf("HA nodes = %v, want each cluster's own members", rec.HANodes)
+		}
+	}
 }
 
 // requireRestoredSpec checks the restored cluster the run created.
@@ -310,8 +359,13 @@ func requireRestoredSpec(t *testing.T, f *s12Fixture) {
 	storage := got.Spec.ObjectStorage
 	if storage == nil || storage.Endpoint != f.cfg.SeedEndpoint || storage.Insecure != f.cfg.SeedInsecure ||
 		storage.Bucket != f.cfg.SeedBucket || storage.Prefix != "lab-runs/"+lab01.RunID+"/restore-seed" ||
-		storage.CredentialsSecretRef.Name != seedSecretName {
-		t.Fatalf("objectStorage = %+v, want the seed store, the run's own Secret and a prefix of its own", storage)
+		storage.CredentialsSecretRef.Name != testRestoreSecret {
+		t.Fatalf("objectStorage = %+v, want the seed store, a Secret and a prefix of its own", storage)
+	}
+	if len(f.secrets) != 2 || f.secrets[1].Name != testRestoreSecret ||
+		string(f.secrets[1].Data[seedAccessKey]) != testAccessKey ||
+		string(f.secrets[1].Data[seedSecretKey]) != testSecretKey {
+		t.Fatalf("Secrets = %v, want the seed Secret copied again for the restored cluster", f.secrets)
 	}
 	if got.Spec.Version != source.Spec.Version || *got.Spec.Image != *source.Spec.Image ||
 		!slices.Equal(got.Spec.Databases, source.Spec.Databases) || got.Spec.Topology != source.Spec.Topology ||
@@ -610,7 +664,8 @@ func TestRunS12ExactFailsWhenANormalWriteFails(t *testing.T) {
 	for name, change := range map[string]func(*s12Fixture){
 		"refused": func(f *s12Fixture) {
 			f.normalWriteAnswer = func() (string, error) {
-				return "code -1: connection refused", errors.New("exit status 1")
+				return "Exception in thread \"main\" java.sql.SQLException: connection refused\n" +
+					"command terminated with exit code 1\n", errors.New("kubectl failed: exit status 1")
 			}
 		},
 		"not acknowledged": func(f *s12Fixture) {
@@ -772,42 +827,114 @@ func TestRunHARefusesAnIncompleteS12Configuration(t *testing.T) {
 	}
 }
 
-func TestHistoryThrough(t *testing.T) {
-	history, _ := fakeClientWorkload("c1", 3)
-	ro := roRefusalHistory("code -581: updates are disabled")
-	lines := strings.SplitAfter(history, "\n")
-	for name, tc := range map[string]struct {
-		history, opID, want string
-	}{
-		"the first operation":     {history: history + ro, opID: testFirstOpID, want: strings.Join(lines[:2], "")},
-		"the last acknowledged":   {history: history + ro, opID: testThirdOpID, want: history},
-		"blank lines are skipped": {history: "\n" + history, opID: "c1-000002", want: "\n" + strings.Join(lines[:4], "")},
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, err := historyThrough(tc.history, tc.opID)
-			if err != nil || got != tc.want {
-				t.Fatalf("historyThrough() = %q, %v; want %q", got, err, tc.want)
-			}
-		})
+func TestRunS12ExactIsBlockedWhenTheNormalWriteCannotBeSent(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.normalWriteAnswer = func() (string, error) {
+		out := "error: unable to upgrade connection: container not found (\"client\")\n"
+		return out, errors.New("kubectl failed: exit status 1: " + out)
 	}
-	// Only the acknowledgement ends it: the attempt of a later operation
-	// that shares its ID prefix does not.
-	interleaved := strings.Join([]string{lines[0], lines[2], lines[1], lines[3]}, "")
-	if got, err := historyThrough(interleaved, testFirstOpID); err != nil || got != strings.Join([]string{lines[0],
-		lines[2], lines[1]}, "") {
-		t.Fatalf("historyThrough() = %q, %v; want through the acknowledgement of c1-000001", got, err)
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "unable to upgrade") {
+		t.Fatalf("S12 = %+v, want blocked: the write never reached the workload", s12)
 	}
-	for name, tc := range map[string]struct{ history, opID string }{
-		"no such operation":   {history: history, opID: "c1-000009"},
-		"only attempted":      {history: lines[0], opID: testFirstOpID},
-		"failed, not acked":   {history: ro, opID: testROOpID},
-		"no operation ID":     {history: history, opID: ""},
-		"a line that is junk": {history: "{not json\n" + history, opID: testFirstOpID},
+}
+
+func TestPostBackupWritesKeepsAnOperationWithAnUnknownOutcome(t *testing.T) {
+	at := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
+	history, rows := fakeClientWorkload("c1", 3)
+	row := workload.Row{OpID: "c1-000004", Client: "c1", Seq: 4, Amount: 149, Note: "c1-4"}
+	for _, e := range []workload.Event{
+		{T: at, Client: "c1", Seq: 4, Op: workload.OpInsert, OpID: row.OpID, Endpoint: "rw", Event: workload.Attempted,
+			Amount: row.Amount, Note: row.Note},
+		{T: at, Client: "c1", Seq: 4, Op: workload.OpInsert, OpID: row.OpID, Endpoint: "rw", Event: workload.Unknown,
+			Error: "connection reset"},
 	} {
-		t.Run(name, func(t *testing.T) {
-			if got, err := historyThrough(tc.history, tc.opID); err == nil {
-				t.Fatalf("historyThrough() = %q, want an error", got)
-			}
-		})
+		data, _ := json.Marshal(e)
+		history += string(data) + "\n"
+	}
+	post, _ := fakeClientWorkload(s12PostBackupClient, s12PostBackupOperations)
+	cfg := testS12Config(t)
+	h := &haRun{Runner: &Runner{Command: func(context.Context, ...string) (string, error) { return post, nil }},
+		cfg: cfg, redactor: evidence.NewRedactor(), guard: func(context.Context) error { return nil }}
+	h.history.WriteString(history)
+	rec := &s12Record{KnownPoint: &s11KnownPoint{Acknowledged: 3, LastAcknowledged: testThirdOpID}}
+	expected, err := h.postBackupWrites(t.Context(), rec)
+	if err != nil {
+		t.Fatalf("postBackupWrites() error = %v", err)
+	}
+	parsed, err := workload.ReadHistory(strings.NewReader(expected))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, restored := range map[string][]workload.Row{"committed": append(slices.Clone(rows), row),
+		"not committed": rows} {
+		if report := workload.Check(parsed, map[string][]workload.Row{testRestoreMaster: restored}); !report.OK {
+			t.Fatalf("%s: report = %+v, want an operation with an unknown outcome allowed either way", name, report)
+		}
+	}
+}
+
+func TestRunS12ExactFailsWhenTheRestoredClusterUsesTheSourcesStorageSecret(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.afterRestoreCreated = func(ctx context.Context, c client.WithWatch) {
+		sts := &appsv1.StatefulSet{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: cfg.Namespace, Name: s12ClusterName}, sts); err != nil {
+			f.t.Fatal(err)
+		}
+		sts.Spec.Template.Spec.Containers[0].Env[1].ValueFrom.SecretKeyRef.Name = seedSecretName
+		if err := c.Update(ctx, sts); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail || len(s12.NeverEvents) == 0 ||
+		!strings.Contains(s12.NeverEvents[0], seedSecretName) {
+		t.Fatalf("S12 = %+v, want the source's object store Secret named as a never-event", s12)
+	}
+}
+
+func TestRunS12ExactRereadsATransientSourceRole(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	flipped := false
+	f.heartbeatRole = func(pod, role string) string {
+		if pod == testMemberHA0 && len(f.normalWrites) > 0 && !flipped {
+			flipped = true
+			return "unknown"
+		}
+		return role
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err != nil || s12.Result != evidence.Pass || !flipped {
+		t.Fatalf("S12 = %+v, error %v; want a pass after one transient reading", s12, err)
+	}
+}
+
+func TestRunS12ExactFailsOnCrossClusterHAMembership(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.haNodes = func(pod string, nodes []string) []string {
+		if pod == testRestoreMaster {
+			return append(nodes, testHAPrimary)
+		}
+		return nodes
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail || len(s12.NeverEvents) == 0 ||
+		!strings.Contains(s12.NeverEvents[0], "HA membership") || !strings.Contains(s12.NeverEvents[0], testHAPrimary) {
+		t.Fatalf("S12 = %+v, want the shared HA membership as a never-event", s12)
+	}
+}
+
+func TestRunS12ExactFailsWhenTheNormalWriteReachedTheSource(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.misroute = true
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail || !strings.Contains(s12.Reason, "source") ||
+		!strings.Contains(s12.Reason, s12Marker) {
+		t.Fatalf("S12 = %+v, want the marker on the source failed", s12)
 	}
 }

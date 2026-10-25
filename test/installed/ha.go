@@ -546,7 +546,7 @@ func (h *haRun) createCluster(ctx context.Context) (*databasev1alpha1.CubridClus
 	}
 	cluster := &databasev1alpha1.CubridCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: haClusterName, Namespace: h.cfg.Namespace},
-		Spec:       h.clusterSpec(h.rec.Seed.Prefix)}
+		Spec:       h.clusterSpec(h.rec.Seed.Prefix, seedSecretName)}
 	if err := h.Client.Create(ctx, cluster); err != nil {
 		return nil, fmt.Errorf("create the HA cluster: %w", err)
 	}
@@ -558,8 +558,8 @@ func (h *haRun) createCluster(ctx context.Context) (*databasev1alpha1.CubridClus
 }
 
 // clusterSpec is the spec of a three-member HA cluster of the run, seeded
-// through the seed store under prefix with the run's copy of the seed Secret.
-func (h *haRun) clusterSpec(prefix string) databasev1alpha1.CubridClusterSpec {
+// through the seed store under prefix with secret, a copy of the seed Secret.
+func (h *haRun) clusterSpec(prefix, secret string) databasev1alpha1.CubridClusterSpec {
 	return databasev1alpha1.CubridClusterSpec{
 		Version: haCubridVersion, Image: &databasev1alpha1.CubridImage{Repository: h.cfg.InstanceManagerImage},
 		Databases:        []databasev1alpha1.CubridDatabase{{Name: databaseName}},
@@ -567,7 +567,7 @@ func (h *haRun) clusterSpec(prefix string) databasev1alpha1.CubridClusterSpec {
 		HighAvailability: databasev1alpha1.CubridHighAvailability{Enabled: true},
 		ObjectStorage: &databasev1alpha1.CubridObjectStorage{Endpoint: h.cfg.SeedEndpoint,
 			Insecure: h.cfg.SeedInsecure, Bucket: h.cfg.SeedBucket, Prefix: prefix,
-			CredentialsSecretRef: corev1.LocalObjectReference{Name: seedSecretName}},
+			CredentialsSecretRef: corev1.LocalObjectReference{Name: secret}},
 		Storage: databasev1alpha1.CubridStorage{Data: databasev1alpha1.CubridStorageSpec{
 			Size: resource.MustParse("2Gi"), StorageClassName: &h.cfg.StorageClass}}}
 }
@@ -728,7 +728,7 @@ func (h *haRun) rolesOf(ctx context.Context, members []string) (*startingState, 
 	state := &startingState{Slaves: []string{}}
 	var masters []string
 	for _, pod := range members {
-		out, err := h.member(ctx, pod, "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
+		out, err := h.member(ctx, pod, "bash", "-c", heartbeatStatus)
 		if err != nil {
 			// The run's deadline is not a member's failure.
 			if ctx.Err() != nil {
