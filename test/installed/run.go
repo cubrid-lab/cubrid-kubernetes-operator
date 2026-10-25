@@ -116,6 +116,9 @@ type record struct {
 	RetainedPVCs          []pvcIdentity   `json:"retainedPVCs"`
 	FixtureReusable       *bool           `json:"fixtureReusable,omitempty"`
 	ResetRequired         *bool           `json:"resetRequired,omitempty"`
+	// ManagerChangedAtCleanup is set when preallocated cleanup saw a manager
+	// incarnation other than the recorded one and cleaned up all the same.
+	ManagerChangedAtCleanup bool `json:"managerChangedAtCleanup,omitempty"`
 }
 
 func (c Config) validate() error {

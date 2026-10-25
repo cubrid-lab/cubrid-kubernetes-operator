@@ -662,3 +662,146 @@ func TestFreshModeRejectsBorrowedInputsAndSameNamespace(t *testing.T) {
 		})
 	}
 }
+
+// restartManager changes the installed manager's incarnation the way a restart
+// does: a new container, a new Pod, a rollout to a new ReplicaSet, a Pod that
+// is not ready yet, or, for the negative cases, a replaced Deployment and a new
+// manager Pod that mounts a PVC.
+func restartManager(t *testing.T, f *fixture, kind string) {
+	t.Helper()
+	// The store under the runner's client: the fixture refuses the runner's
+	// own Pod and ReplicaSet writes.
+	ctx, c, ns := t.Context(), f.store, f.cfg.OperatorNamespace
+	pod := &corev1.Pod{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: testManagerPodName}, pod); err != nil {
+		t.Fatal(err)
+	}
+	replacePod := func(rs string, rsUID types.UID, volumes ...corev1.Volume) {
+		t.Helper()
+		if err := c.Delete(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+		next := pod.DeepCopy()
+		next.ResourceVersion, next.Name, next.UID = "", testManagerPodName+"-2", testManagerPodName+"-2"
+		next.OwnerReferences = []metav1.OwnerReference{owner("ReplicaSet", rs, rsUID)}
+		next.Spec.Volumes = volumes
+		next.Status.ContainerStatuses[0].ContainerID = "containerd://manager-container-2"
+		if err := c.Create(ctx, next); err != nil {
+			t.Fatal(err)
+		}
+	}
+	switch kind {
+	case "container":
+		pod.Status.ContainerStatuses[0].ContainerID = "containerd://manager-container-2"
+		pod.Status.ContainerStatuses[0].RestartCount = 1
+		if err := c.Status().Update(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+	case "unready":
+		pod.Status.Conditions[0].Status = corev1.ConditionFalse
+		if err := c.Status().Update(ctx, pod); err != nil {
+			t.Fatal(err)
+		}
+	case testPodKind:
+		replacePod("manager-rs", "replicaset")
+	case "rollout":
+		rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "manager-rs-2", Namespace: ns, UID: "replicaset-2",
+			OwnerReferences: []metav1.OwnerReference{owner("Deployment", f.cfg.OperatorDeployment, "deployment")}}}
+		if err := c.Create(ctx, rs); err != nil {
+			t.Fatal(err)
+		}
+		replacePod(rs.Name, rs.UID)
+	case testPVCMount:
+		replacePod("manager-rs", "replicaset", corev1.Volume{Name: "data", VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}})
+	case testReplacedDeployment:
+		deployment := &appsv1.Deployment{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: f.cfg.OperatorDeployment}, deployment); err != nil {
+			t.Fatal(err)
+		}
+		deployment.UID = testReplacementUID
+		if err := c.Update(ctx, deployment); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("unknown manager change %s", kind)
+	}
+}
+
+// A manager that restarts during the run fails the run, but the created CR is
+// still deleted by its UID and its workloads are awaited, and the record says
+// the manager changed (#507). The manager may share the smoke's namespace or
+// not.
+func TestPreallocatedCleanupAfterAManagerRestart(t *testing.T) {
+	for _, sameNamespace := range []bool{false, true} {
+		for _, kind := range []string{"container", testPodKind, "rollout", "unready"} {
+			t.Run(fmt.Sprintf("same-namespace=%t/%s", sameNamespace, kind), func(t *testing.T) {
+				f := preallocatedManagerFixture(t, sameNamespace)
+				f.commandHook = func(_ context.Context, args []string) (string, error) {
+					out, err := f.answer(t, args)
+					if strings.HasPrefix(args[len(args)-1], "CREATE TABLE") {
+						restartManager(t, f, kind)
+					}
+					return out, err
+				}
+				err := f.runner.Run(t.Context(), f.cfg)
+				if err == nil {
+					t.Fatal("a run whose manager restarted passed")
+				}
+				if f.deletes != 1 {
+					t.Fatalf("the created CR was not deleted once by its UID: deletes=%d err=%v", f.deletes, err)
+				}
+				summary := readSummary(t, f.cfg.EvidenceDir)
+				if cleaned := summary.Scenarios[0].CleanupSucceeded; cleaned == nil || !*cleaned {
+					t.Fatalf("cleanup did not succeed: %v", err)
+				}
+				if rec := readRecord(t, f.cfg.EvidenceDir); !rec.ManagerChangedAtCleanup || rec.Cleanup != "complete" {
+					t.Fatalf("record: managerChangedAtCleanup=%t cleanup=%q", rec.ManagerChangedAtCleanup, rec.Cleanup)
+				}
+			})
+		}
+	}
+}
+
+// Cleanup still refuses a replaced manager Deployment, and a new manager Pod
+// that mounts a PVC in the smoke's namespace.
+func TestPreallocatedCleanupRefusesAReplacedOrWritingManager(t *testing.T) {
+	cases := []struct {
+		kind          string
+		sameNamespace bool
+	}{{testReplacedDeployment, false}, {testReplacedDeployment, true}, {testPVCMount, true}}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("same-namespace=%t/%s", c.sameNamespace, c.kind), func(t *testing.T) {
+			f := preallocatedManagerFixture(t, c.sameNamespace)
+			f.commandHook = func(_ context.Context, args []string) (string, error) {
+				out, err := f.answer(t, args)
+				if strings.HasPrefix(args[len(args)-1], "CREATE TABLE") {
+					restartManager(t, f, c.kind)
+				}
+				return out, err
+			}
+			if err := f.runner.Run(t.Context(), f.cfg); err == nil {
+				t.Fatal("the run passed")
+			}
+			if f.deletes != 0 {
+				t.Fatal("cleanup deleted the CR beside a replaced or writing manager")
+			}
+			if cleaned := readSummary(t, f.cfg.EvidenceDir).Scenarios[0].CleanupSucceeded; cleaned == nil || *cleaned {
+				t.Fatal("cleanup was reported as succeeded")
+			}
+		})
+	}
+}
+
+func preallocatedManagerFixture(t *testing.T, sameNamespace bool) *fixture {
+	t.Helper()
+	if !sameNamespace {
+		return preallocatedFixture(t)
+	}
+	cfg := testConfig(t)
+	cfg.NamespaceMode = PreallocatedNamespace
+	cfg.NamespaceUID, cfg.OwnerConfigMap, cfg.OwnerUID, cfg.OwnerNonce = testBorrowedUID, testOwnerName, testOwnerUID,
+		ownerNonceKey
+	cfg.OperatorNamespace = cfg.Namespace
+	return newPreallocatedFixture(t, cfg)
+}
