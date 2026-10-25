@@ -3136,32 +3136,36 @@ error log lines written during each arm were kept.
 | 2 | slave `h-1` | `-L … -a appdb` | 600 | 0 | 190 (190) | none |
 | 2 | master `h-0` | `-L … -a appdb` | 300 | 0 | 97 (97) | none |
 
-- No trial was aborted: 0 of 2,400, every `csql` exit 0. Had the rate been
-  the lab's 7 in 200, an arm of 200 would have had no abort with a
-  probability of about 0.1 %, the arm of 600 with less than 10⁻⁹; so on this
-  pair the rate was lower than on the lab slave. Which difference matters (Instance Manager, Broker,
-  three members, uptime of days, k3s) is not known.
-- The `Set interrupt` / `Session expired` pair that the lab slave logs for
-  its `applyinfo` connections, at intervals of about 10 s to minutes, did not appear for any of the 616
-  `applyinfo` runs here, also with `session_state_timeout=60` and runs
-  for more than three minutes. The server access log shows one connection per
-  `applyinfo -a` run and none for the runs without `-a`, which read only the
-  copied log; so the arms without `-a` put no session on the server. As in the
-  lab, `applyinfo` and `csql` took the same transaction index (on pair 2's
-  slave: index 1 for 188 of the 190 `applyinfo` connections and for 1,161 of
-  the 1,302 `csql` connections, the rest index 3 or 4).
+- No trial was aborted: 0 of 2,400, every `csql` exit 0. Had the rate been the
+  lab's 7 in 200, an arm of 200 would have had no abort with a probability of
+  about 0.1 %, the arm of 600 with less than 10⁻⁹; so on this pair the rate
+  was lower than on the lab slave. Which difference matters (Instance Manager,
+  Broker, three members, uptime of days, k3s) is not known.
+- The `Set interrupt` / `Session expired` pair that the lab slave logs for its
+  `applyinfo` connections, at intervals of about 10 s to minutes, did not
+  appear for any of the 616 `applyinfo` runs here, also with
+  `session_state_timeout=60` and runs for more than three minutes. The server
+  access log shows one connection per `applyinfo -a` run and none for the runs
+  without `-a`, which read only the copied log; so the arms without `-a` put
+  no session on the server. As in the lab, `applyinfo` and `csql` took the
+  same transaction index (on pair 2's slave, as counted from its server access
+  log during the run: index 1 for 188 of the 190 `applyinfo` connections and
+  for 1,161 of the 1,302 `csql` connections, the rest index 3 or 4; that log
+  was not kept, and pair 1's logs show index 3 for both).
 - The pair did appear once for another utility: on pair 1's master,
   `-982 ... Tran = 2, CLIENT = h-0:backupdb(<pid>) Set interrupt to the
-  transaction 2.` and `-1066 ... Session expired.` 44 s after a
-  `backupdb -C` that had ended with exit 0, with the default
-  `session_state_timeout`. No trial ran then.
+  transaction 2.` and `-1066 ... Session expired.`, 44 s after that
+  `backupdb -C` connected and about 0.2 s after its active-log backup
+  finished (`-1088`), with the default `session_state_timeout`. No trial ran
+  then.
 
-**What this shows.** On this local pair, running `applyinfo -a` once a second on the slave or the master did not abort a new `csql`
-session, and neither did `applyinfo` without `-a` or nothing at all. It does not reproduce the lab abort, so it
-cannot tell whether `applyinfo` is needed for it: it removes no candidate
-cause and confirms none. That the lab's `applyinfo` sessions end through the
-server's session expiry while those here did not is a difference in the
-observation, not an explanation of it. Whether the session expiry that
+**What this shows.** On this local pair, running `applyinfo -a` once a second
+on the slave or the master did not abort a new `csql` session, and neither did
+`applyinfo` without `-a` or nothing at all. It does not reproduce the lab
+abort, so it cannot tell whether `applyinfo` is needed for it: it removes no
+candidate cause and confirms none. That the lab's `applyinfo` sessions end
+through the server's session expiry while those here did not is a difference
+in the observation, not an explanation of it. Whether the session expiry that
 interrupts a transaction index can interrupt a new client that took that index
 in the meantime is a hypothesis that this run neither produced nor ruled out.
 
