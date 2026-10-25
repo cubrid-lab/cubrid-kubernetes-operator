@@ -163,6 +163,22 @@ func TestParseApplyConvergence_Positions(t *testing.T) {
 	}
 }
 
+func TestLSABefore(t *testing.T) {
+	for _, tc := range []struct {
+		a, b LSA
+		want bool
+	}{
+		{LSA{Page: 145, Offset: 16032}, LSA{Page: 146, Offset: 0}, true},
+		{LSA{Page: 146, Offset: 2640}, LSA{Page: 146, Offset: 2688}, true},
+		{LSA{Page: 146, Offset: 2688}, LSA{Page: 146, Offset: 2688}, false},
+		{LSA{Page: 147, Offset: 0}, LSA{Page: 146, Offset: 16000}, false},
+	} {
+		if got := tc.a.Before(tc.b); got != tc.want {
+			t.Errorf("%+v before %+v = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
 // roleCLI answers by the CUBRID command, and records the applyinfo call.
 type roleCLI struct {
 	heartbeat string

@@ -95,7 +95,8 @@ var (
 )
 
 // copiedActiveHeading starts the part of the output about the copied log
-// itself; with -v the applier's part before it has a "Last EOF LSA" too.
+// itself. The EOF LSA is read only after it, besides the anchored expression,
+// so that no "EOF LSA" of another part can be taken for the copied log's.
 const copiedActiveHeading = "Copied Active Info"
 
 // applyDelayHeading starts the part of the output about pages that were
