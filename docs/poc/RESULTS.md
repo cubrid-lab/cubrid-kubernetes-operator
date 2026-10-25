@@ -2995,7 +2995,7 @@ were unchanged.
 
 ---
 
-## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; a local HA pair without the Instance Manager aborted none of 2,400, with or without an `applyinfo` loop; the cause is not known**
+## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; a local HA pair without the Instance Manager aborted none of 2,400, with or without an `applyinfo` loop, and none of 900 on its slave while it applied a write load from the master; the cause is not known**
 
 **Question.** In VM-lab runs of S12 (#568, #573), a `csql` read on an HA
 member sometimes printed its result and `Committed.`, together with
@@ -3212,3 +3212,108 @@ members started on 2026-10-23), counted by client name.
   interrupt about one session in 25 is not known; the local pair above, whose
   slave had nothing to apply during its trials, interrupted none.
 
+### Local HA pair with a write load on the master
+
+**Question.** The local pair above interrupted no session, but its slave had
+nothing to apply during the trials. Are new `csql` sessions on a slave
+interrupted or aborted while its `applylogdb` applies the master's changes?
+
+**Environment (2026-10-25):** the host, Docker and image of "Local HA pair
+without the Instance Manager" (`cubrid/cubrid@sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
+`CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`, Docker 29.2.1); no Instance Manager,
+no Broker.
+
+**Setup.** A third pair, new containers `poc238w-h-0` and `poc238w-h-1`, new
+volumes and network, built with the recipe of that section and
+`ha_copy_sync_mode=sync:sync`, default `session_state_timeout` (21600, read
+back with `paramdump -S`). `heartbeat status` showed `h-0` master
+(`registered_and_active`) and `h-1` slave (`registered_and_standby`) before
+and after the run. On the master a table
+`t (id INT AUTO_INCREMENT PRIMARY KEY, v INT, pad VARCHAR(200))`.
+
+The write load was six loops in the master's container, each running
+`csql -u dba appdb@localhost -c "INSERT INTO t(v,pad) VALUES <10 rows of 150 bytes>;
+UPDATE t SET v=v+1 WHERE id IN (SELECT id FROM t ORDER BY id DESC LIMIT 5);"`
+(two auto-committed statements), 0.1 s between runs, from 08:09:59Z (one
+loop; six from about 08:11Z) to 08:18:21Z. Each run's start, end, exit code
+and whether it reported `10 rows affected` were recorded: 723 runs, all exit 0
+with 10 rows; a run took 1.4–12 s, median 3.1 s (one run timed by hand
+spent most of it in its commits). That is about 1.5
+runs, 3 commits and 15 inserted rows per second during the arms below.
+
+Apply was confirmed by `SELECT COUNT(*), MAX(id), SUM(v) FROM t` on both
+members and `cubrid applyinfo -L <copied log> -a appdb` on the slave between
+the arms. The slave applied throughout but fell behind: rows on master / slave
+were 3,732 / 2,152 after arm `a`, 5,302 / 3,102 after `b`, 7,232 / 4,242 after
+`m`, `Delayed log page count` rising from 1 to 239, and `Insert count` equal to
+the slave's rows each time. It applied about 8–9 rows per second, also after
+the load stopped (arm `d`), and caught up at 08:25Z: 7,232 rows on both, the
+same `SUM(v)`, 7,232 inserts and 10,848 updates applied.
+
+A trial is the one of the sections above (`csql ... -c "SELECT 1"`, 30 s
+timeout, aborted when its output holds `CODE = -199` or `CODE = -111`, 0.3 s
+between trials); the `applyinfo` loop is that section's `-a` loop
+(10 s timeout, 1 s apart).
+
+**Results.**
+
+| Arm | Member | Write load | `applyinfo -a` loop | Trials | Aborted | `applyinfo` runs (exit 0) | `csql` connections in the server access log during the arm | `-982` / `-1066` lines during the arm |
+|---|---|---|---|---:|---:|---:|---:|---|
+| `c` 1 | slave `h-1` | off, nothing to apply | none | 150 | 0 | — | 150 | 0 / 0 |
+| `a` | slave `h-1` | on (149 runs ended in the arm) | none | 300 | 0 | — | 300 | 0 / 0 |
+| `b` | slave `h-1` | on (156) | yes | 300 | 0 | 97 (97) | 300 | 0 / 0 |
+| `m` | master `h-0` | on (156) | yes | 300 | 0 | 99 (99) | 456 (300 trials, 156 writer runs) | 1 / 1, a trial's `csql` |
+| `d` | slave `h-1` | off, slave still applying the backlog | none | 300 | 0 | — | 300 | 0 / 0 |
+| `c` 2 | slave `h-1` | off, caught up | none | 150 | 0 | — | 150 | 0 / 0 |
+
+- No trial was aborted: 0 of 1,200 on the slave, 0 of 900 of them while it was
+  applying, 0 of 300 on the master; every `csql` exit 0. Had the rate been the
+  lab's 7 in 200, an arm of 300 would have had no abort with a probability of
+  about 2·10⁻⁵.
+- Whole server logs, counted by client as in the lab section. The slave's
+  access log holds 1,235 `csql` connections (the 1,200 trials and the checks
+  between the arms), 110 `applyinfo` (the 97 of arm `b` and the checks), one
+  `applylogdb` and one `copylogdb` of the master; its error log holds no
+  `-982`, `-1066`, `-199` or `-111` line. The master's access log holds 1,037
+  `csql` connections (the 723 writer runs, 300 trials and checks), 99
+  `applyinfo`, one `backupdb`, one `applylogdb` and one `copylogdb` of the
+  slave; its error log holds two pairs of `-982 Set interrupt to the
+  transaction N` and `-1066 Session expired`, both for a `csql`: a writer run
+  (transaction 3, 08:11:03.917Z, 15 ms before that run ended with exit 0 and
+  its 10 rows) and a trial of arm `m` (transaction 10, 5 ms after it connected
+  and 13 ms before it ended, exit 0, not aborted). They were matched to the
+  run and the trial by time; process ids were not recorded by the scripts.
+- On the slave every trial of `a`, `c` and `d` and all but one of `b` took
+  transaction index 3, also with `applylogdb` applying and the `applyinfo`
+  loop running.
+
+**What this shows.** On this local pair, a slave applying about 15 inserted
+rows per second, behind and catching up, interrupted no client session and
+aborted no new `csql` read, with or without an `applyinfo -a` loop. So
+applying the master's changes, on its own, did not produce the lab's
+interrupted sessions here; the hypothesis that the standby interrupts client
+sessions while `applylogdb` applies is not supported by this run, and is not
+ruled out for the lab's members, whose difference from this pair (Instance
+Manager, Broker, three members, uptime of days, k3s, the lab's write pattern)
+remains unexplained. Interrupted sessions occurred twice here, on the master,
+for `csql` sessions ending normally without an error to the client, so a
+`-982`/`-1066` pair in the server log is not by itself an aborted client. The
+cause of the lab's aborts is still not known.
+
+**Not tested here:** the lab's write rate or pattern (its writes come through
+a Broker), a slave that keeps up with the master, `ha_copy_sync_mode` other
+than `sync`, more than one slave, the Instance Manager's own `applyinfo`, and
+runs longer than about 17 minutes.
+
+**What did not work.** The first build attempt ran `createdb` without
+creating the database directory first (`Specified directory ... does not
+exist`); its containers and volumes were removed and the pair built again.
+`csql` run through `docker exec` without a shell reported
+`Database "appdb@localhost" is unknown`, so every command ran through
+`sh -c`; that was not investigated.
+
+The per-arm `trials.tsv`, `applyinfo.tsv`, each writer loop's `writes.tsv`,
+the snapshots, both members' full `$CUBRID/log` (server error and access
+logs), the scripts and the counting script's output were kept with the run.
+The containers `poc238w-h-0` and `poc238w-h-1`, their volumes and the network
+`poc238w-net` were removed afterwards.
