@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-34, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-36, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -2992,3 +2992,91 @@ All containers (`poc252-h0`, `poc252-h1`, `poc252-sa`, `poc252-b`,
 were removed afterwards; `docker ps -a`, `docker volume ls` and `docker network
 ls` listed no `poc252` resource, and the containers that were there before
 were unchanged.
+
+---
+
+## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: about 2–3% of `csql` reads on a long-running slave were aborted, every one on transaction index 6, with or without an `applyinfo` of the run's own; killing `applyinfo` is not needed; the cause is not known**
+
+**Question.** In VM-lab runs of S12 (#568, #573), a `csql` read on an HA
+member sometimes printed its result and `Committed.`, together with
+`ERROR CODE = -199 ... Server no longer responding.... Invalid argument` and
+`ERROR CODE = -111 ... Your transaction has been aborted by the system due to
+server failure or mode change`. In one of them the member's server log showed,
+2.6 s earlier, `Set interrupt to the transaction 5` and `Session expired` for
+the client `<member>:applyinfo`, on the transaction index the aborted `csql`
+then had. The Instance Manager runs `cubrid applyinfo -L <copied log of the
+master> -a <db>` for each role answer of a slave, and kills its process group
+with SIGKILL when the 2 s `replicationBudget` runs out
+(`internal/instancemanager/server.go`, `cli.go`). Does killing `applyinfo`, or
+`applyinfo` at all, abort the next client?
+
+**Environment (2026-10-25):** VM lab (`vm-lab`), k3s, node-local `local-path`
+volumes. The lab's own HA `CubridCluster` `cubrid-test/ha` (three members,
+`appdb`), running since 2026-10-23 11:40Z, master `ha-1`; the trials ran in
+the `cubrid` container of the slave `ha-0` (node `cubrid-k8s-worker-1`), Instance
+Manager image
+`instance-manager@sha256:ae3f34596346494cc17a4843ff88a85afdae985581335b19d232935c2ef77bcd`,
+installed manager `d6df2ac`, engine `11.4.6.1963`. The lab Lease was held for
+each part, and the run was announced on #122. Nothing was written or
+restarted. A local comparison used `cubrid/cubrid:11.4` standalone in Docker
+(`CUBRID_DB=appdb`, `CUBRID_COMPONENTS=SERVER`), with no HA and so no
+`applyinfo`.
+
+**Setup.** One trial is one `csql -u dba appdb@localhost -c "SELECT 1"` in the
+member's container; it counts as aborted when its output holds `CODE = -199`
+or `CODE = -111`, and the transaction index in that line is recorded. Arms:
+
+| Arm | Before each `csql` |
+|---|---|
+| `kill` | `cubrid applyinfo -L /var/lib/cubrid/databases/appdb_ha-1 -a appdb` started in its own process group (`set -m`), its group sent SIGKILL 50–600 ms later, then waited for |
+| `control` | the same `applyinfo`, left to end by itself |
+| `after` | the same `applyinfo`, left to end by itself (a second run, with timestamps) |
+| `none` | nothing; 0.3 s between trials |
+
+The Instance Manager kept running its own `applyinfo` for its role answers
+during every arm.
+
+**Results.**
+
+| Arm | Trials | Aborted | Transaction index of the aborted ones |
+|---|---:|---:|---|
+| `control` | 30 | 1 | 6 |
+| `kill` | 30 | 3 | 6, 6, 6 |
+| `none` | 80 | 2 | 6, 6 |
+| `after` | 60 | 1 | 6 |
+| local standalone, a `csql` killed with SIGKILL in a 3 s statement, then a new `csql` after 0–4 s | 34 | 0 | — |
+
+- In the four aborted trials of `kill`, `applyinfo` had ended by itself
+  (exit 0) before the signal; none of the aborts followed a killed
+  `applyinfo`.
+- `ha-0`'s server log (`appdb_20261023_1142.err`) holds the pair
+  `NOTIFICATION -982 ... Tran = 6, CLIENT = ha-0:applyinfo(<pid>)
+  Set interrupt to the transaction 6.` and `ERROR -1066 ... Tran = 6, CLIENT =
+  ha-0:applyinfo(<pid>) Session expired.` for its `applyinfo` connections,
+  about every 10 s, back to 2026-10-24 (the last 300 such lines: 158 `-982`,
+  142 `-1066`, all `ha-0:applyinfo`, all transaction 6). An `applyinfo -a`
+  that ends by itself leaves its session to the server this way.
+- The aborts did not follow those lines closely: the nearest one came 0.7 s,
+  3.2 s and 8.3 s before the three timed aborts, while 7 of 137 reads that
+  were not aborted started within 0.2 s before one.
+- The output order differs between occurrences: the errors before the
+  result, or after `Committed.`. In every occurrence the result was complete.
+- Locally, the killed `csql` produced `Set interrupt to the transaction <n>`
+  as well, and no new client was aborted.
+
+**What this shows.** On a slave that runs normally, a new client session is
+aborted with `-199`/`-111` in a few percent of connections, always with the
+transaction index that `applyinfo` uses there. Killing `applyinfo` is not the
+trigger. That the cause is `applyinfo`'s session handling is a hypothesis: the
+shared transaction index points to it, the timing does not show it, and the
+abort was not produced without `applyinfo` running, since the Instance
+Manager's own runs could not be stopped on this member. Whether a write
+through a Broker connection to a slave, or to a master, is affected in the
+same way was not tested; the read-only Broker's Service routes to slaves.
+
+**Not tested here:** a member without the Instance Manager's `applyinfo`
+(an HA pair in Docker, as POC-13); `applyinfo` without `-a`; a master;
+clients other than `csql`; how the server assigns transaction indexes.
+
+The trial scripts ran from `/tmp` in the container and were removed
+afterwards; the local container `poc36` was removed.
