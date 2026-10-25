@@ -58,9 +58,12 @@ type Event struct {
 	OpID     string    `json:"opId"`
 	Endpoint string    `json:"endpoint,omitempty"`
 	Event    string    `json:"event"`
-	// Amount and Note are the values sent; they are on the attempted line.
+	// Amount and Note are the values sent; they are on the attempted line. For
+	// a read they are the values expected of the row read back, and Target is
+	// that row's operation ID.
 	Amount int    `json:"amount,omitempty"`
 	Note   string `json:"note,omitempty"`
+	Target string `json:"target,omitempty"`
 	Error  string `json:"error,omitempty"`
 }
 
@@ -75,12 +78,14 @@ type Row struct {
 
 // Operation is what the history says about one client operation.
 type Operation struct {
-	OpID    string
-	Client  string
-	Seq     int
-	Op      string
-	Amount  int
-	Note    string
+	OpID   string
+	Client string
+	Seq    int
+	Op     string
+	Amount int
+	Note   string
+	// Target is the operation whose row a read reads back.
+	Target  string
 	Outcome string
 	// Error is what the client recorded with the outcome; it is empty for an
 	// acknowledged one.
@@ -114,12 +119,16 @@ type Report struct {
 	AcknowledgedMissing int                    `json:"acknowledgedMissing"`
 	Members             map[string]MemberCheck `json:"members"`
 	Diverged            []Violation            `json:"diverged"`
+	// ReadMismatches are the client's reads that found the row they read back
+	// missing or different during the run.
+	ReadMismatches []Violation `json:"readMismatches"`
 }
 
 // FirstViolation returns the first violation of the report whose operation
 // ID starts with prefix, or else the first one. Violations are taken of the
 // members and endpoints named in order, then of the others in name order,
-// then of the divergence between them, where member is empty. total counts
+// then of the divergence between them and the read mismatches, where member
+// is empty. total counts
 // every violation; it is 0 when there is none.
 func (r Report) FirstViolation(order []string, prefix string) (member string, first Violation, total int) {
 	names := slices.Clone(order)
@@ -139,6 +148,9 @@ func (r Report) FirstViolation(order []string, prefix string) (member string, fi
 		}
 	}
 	for _, v := range r.Diverged {
+		all = append(all, found{"", v})
+	}
+	for _, v := range r.ReadMismatches {
 		all = append(all, found{"", v})
 	}
 	if len(all) == 0 {
@@ -167,7 +179,13 @@ const (
 	RuleRolledBackPresent = "rolled_back_present"
 	RuleUnexpected        = "unexpected"
 	RuleMembersDiverge    = "members_diverge"
+	RuleReadMismatch      = "read_mismatch"
 )
+
+// ReadMismatch starts the error the client records for a read that found the
+// row it reads back missing or different (client/Workload.java). Any other
+// failed read failed to read, and is no data violation.
+const ReadMismatch = "read mismatch:"
 
 type clientSeq struct {
 	client string
@@ -208,7 +226,7 @@ func ReadHistory(r io.Reader) (History, error) {
 			}
 			sequences[key] = e.OpID
 			h.Operations[e.OpID] = Operation{OpID: e.OpID, Client: e.Client, Seq: e.Seq, Op: e.Op,
-				Amount: e.Amount, Note: e.Note, Outcome: Unknown}
+				Amount: e.Amount, Note: e.Note, Target: e.Target, Outcome: Unknown}
 		case Acknowledged, Failed, Unknown:
 			op, seen := h.Operations[e.OpID]
 			if !seen {
@@ -268,7 +286,7 @@ func CheckReadOnlyRefusal(h History) error {
 // endpoint. An operation with an unknown outcome may be present or absent;
 // it is counted and is never reported as missing.
 func Check(h History, members map[string][]Row) Report {
-	report := Report{Members: map[string]MemberCheck{}, Diverged: []Violation{}}
+	report := Report{Members: map[string]MemberCheck{}, Diverged: []Violation{}, ReadMismatches: readMismatches(h)}
 	missing := map[string]bool{}
 	present := map[string]map[string]Row{}
 	for name, rows := range members {
@@ -284,7 +302,7 @@ func Check(h History, members map[string][]Row) Report {
 	report.AcknowledgedMissing = len(missing)
 	report.Diverged = diverged(present)
 
-	report.OK = len(members) > 0 && len(report.Diverged) == 0
+	report.OK = len(members) > 0 && len(report.Diverged) == 0 && len(report.ReadMismatches) == 0
 	for _, check := range report.Members {
 		if len(check.Violations) > 0 {
 			report.OK = false
@@ -314,6 +332,8 @@ func checkMember(h History, rows []Row) (MemberCheck, map[string]Row) {
 			violate(RuleRolledBackPresent, row.OpID, "a row with the rollback note exists")
 		case !known:
 			violate(RuleUnexpected, row.OpID, "no client operation has this ID")
+		case op.Op == OpRead:
+			violate(RuleUnexpected, row.OpID, "a read writes no row")
 		case op.Op == OpRollback:
 			violate(RuleRolledBackPresent, row.OpID, "the client rolled this change back")
 		case op.Outcome == Failed:
@@ -346,6 +366,19 @@ func checkMember(h History, rows []Row) (MemberCheck, map[string]Row) {
 		}
 	}
 	return check, found
+}
+
+// readMismatches lists the reads that found the row they read back missing or
+// different.
+func readMismatches(h History) []Violation {
+	out := []Violation{}
+	for _, id := range slices.Sorted(maps.Keys(h.Operations)) {
+		op := h.Operations[id]
+		if op.Op == OpRead && op.Outcome == Failed && strings.HasPrefix(op.Error, ReadMismatch) {
+			out = append(out, Violation{Rule: RuleReadMismatch, OpID: id, Detail: op.Error})
+		}
+	}
+	return out
 }
 
 // diverged lists the operations whose row is not the same on every member.
@@ -432,29 +465,37 @@ func ReadEvents(r io.Reader) ([]Event, error) {
 }
 
 // Recovery reads from the events of one client when it recovered from a
-// fault issued at faultAt. recoveredAt is the first acknowledged operation
-// after which no operation failed or had an unknown outcome, and stable is
-// how long the client went on being acknowledged after it. ok is false when
-// the last answer the client received after the fault was not an
-// acknowledgement, or when it received none.
+// fault issued at faultAt (#294). Only a committed write (an acknowledged
+// insert) and, for a client that reads at all, a verified read (an
+// acknowledged read) are progress; an acknowledged rollback committed nothing
+// and is neither progress nor an interruption. Any failed or unknown outcome
+// is an interruption. recoveredAt is the first time after the last
+// interruption by which the client had a committed write and, if it reads, a
+// verified read; stable is how long it went on progressing after that. ok is
+// false when the client did not recover in that sense, including when its
+// last answer after the fault was a failure or unknown.
 func Recovery(events []Event, faultAt time.Time) (recoveredAt time.Time, stable time.Duration, ok bool) {
-	var lastAcknowledged time.Time
+	reads := slices.ContainsFunc(events, func(e Event) bool { return e.Op == OpRead })
+	var wrote, read bool
+	var lastProgress time.Time
 	for _, e := range events {
 		if !e.T.After(faultAt) {
 			continue
 		}
-		switch e.Event {
-		case Acknowledged:
-			if !ok {
+		switch {
+		case e.Event == Failed || e.Event == Unknown:
+			wrote, read, ok = false, false, false
+		case e.Event == Acknowledged && (e.Op == OpInsert || e.Op == OpRead):
+			wrote = wrote || e.Op == OpInsert
+			read = read || e.Op == OpRead
+			lastProgress = e.T
+			if !ok && wrote && (read || !reads) {
 				recoveredAt, ok = e.T, true
 			}
-			lastAcknowledged = e.T
-		case Failed, Unknown:
-			ok = false
 		}
 	}
 	if !ok {
 		return time.Time{}, 0, false
 	}
-	return recoveredAt, lastAcknowledged.Sub(recoveredAt), true
+	return recoveredAt, lastProgress.Sub(recoveredAt), true
 }

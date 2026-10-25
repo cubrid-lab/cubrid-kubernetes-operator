@@ -17,6 +17,7 @@ limitations under the License.
 package workload
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -31,6 +32,11 @@ const (
 	unknownOp = "c1-4"
 	// firstOp is the first operation of the history.
 	firstOp = "c1-1"
+	// secondOp is the second operation of the history.
+	secondOp = "c1-2"
+	// verifiedRead and failedRead are reads of readHistory.
+	verifiedRead = "c1-3"
+	failedRead   = "c1-5"
 )
 
 // historyFile is a run of client c1: 1 and 2 acknowledged, 3 failed, 4 with an
@@ -252,13 +258,17 @@ func TestReadEvents(t *testing.T) {
 	}
 }
 
-// events builds a history of one event per second from a base time: a for
-// acknowledged, f for failed, u for unknown, - for an attempt.
+// eventsOf builds a history of one event per second from a base time: a for
+// an acknowledged insert, r for an acknowledged read, b for an acknowledged
+// rollback, f for a failed insert, x for a failed read, u for an insert with an
+// unknown outcome, - for an attempt.
 func eventsOf(base time.Time, pattern string) []Event {
-	kinds := map[rune]string{'a': Acknowledged, 'f': Failed, 'u': Unknown, '-': Attempted}
+	kinds := map[rune][2]string{'a': {OpInsert, Acknowledged}, 'r': {OpRead, Acknowledged},
+		'b': {OpRollback, Acknowledged}, 'f': {OpInsert, Failed}, 'x': {OpRead, Failed}, 'u': {OpInsert, Unknown},
+		'-': {OpInsert, Attempted}}
 	out := make([]Event, 0, len(pattern))
 	for i, c := range pattern {
-		out = append(out, Event{T: base.Add(time.Duration(i) * time.Second), Event: kinds[c]})
+		out = append(out, Event{T: base.Add(time.Duration(i) * time.Second), Op: kinds[c][0], Event: kinds[c][1]})
 	}
 	return out
 }
@@ -279,6 +289,17 @@ func TestRecovery(t *testing.T) {
 		"still failing at the end":               {"aaaffaaf", false, 0, 0},
 		"no answer after the fault":              {"aaa---", false, 0, 0},
 		"a failure before the fault is not seen": {"faaaaa", true, 3, 2 * time.Second},
+		// #294: a rollback commits nothing, so its acknowledgement is not
+		// recovery, and it does not interrupt one either.
+		"only rollbacks after the fault":        {"aaafbbbb", false, 0, 0},
+		"rollbacks between committed writes":    {"aaafabab", true, 4, 2 * time.Second},
+		"ends with a rollback after the writes": {"aaafaab", true, 4, time.Second},
+		// A client that reads must also have read its writes back.
+		"reads and writes after the fault":       {"aararfarar", true, 7, 2 * time.Second},
+		"writes only, although the client reads": {"arafaaaa", false, 0, 0},
+		"a failed read interrupts it":            {"araarxaa", false, 0, 0},
+		"a failed read, then reads again":        {"ararxarar", true, 6, 2 * time.Second},
+		"reads only, although the client writes": {"aafrrr", false, 0, 0},
 	}
 	for name, tc := range tests {
 		at, stable, ok := Recovery(eventsOf(base, tc.pattern), fault)
@@ -383,5 +404,80 @@ func TestReport_FirstViolationPrefersThePrefix(t *testing.T) {
 	if member, v, _ := report.FirstViolation([]string{memberB, memberA}, "gate2-"); member != memberB ||
 		v.Rule != RuleMissing {
 		t.Errorf("FirstViolation = %s %+v, want the first violation when none has the prefix", member, v)
+	}
+}
+
+// readHistory is the history of client c1 that wrote c1-1 and c1-2 and then
+// read c1-2 back three times: verified, found missing, and failed for a SQL
+// error. writesOnly cuts it before the reads.
+func readHistory(t *testing.T, writesOnly bool) string {
+	t.Helper()
+	base := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
+	events := []Event{
+		{Seq: 1, Op: OpInsert, OpID: firstOp, Event: Attempted, Amount: 10, Note: "n1"},
+		{Seq: 1, Op: OpInsert, OpID: firstOp, Event: Acknowledged},
+		{Seq: 2, Op: OpInsert, OpID: secondOp, Event: Attempted, Amount: 20, Note: "n2"},
+		{Seq: 2, Op: OpInsert, OpID: secondOp, Event: Acknowledged},
+		{Seq: 3, Op: OpRead, OpID: verifiedRead, Event: Attempted, Amount: 20, Note: "n2", Target: secondOp},
+		{Seq: 3, Op: OpRead, OpID: verifiedRead, Event: Acknowledged},
+		{Seq: 4, Op: OpRead, OpID: unknownOp, Event: Attempted, Amount: 20, Note: "n2", Target: secondOp},
+		{Seq: 4, Op: OpRead, OpID: unknownOp, Event: Failed, Error: ReadMismatch + " c1-2 not found"},
+		{Seq: 5, Op: OpRead, OpID: failedRead, Event: Attempted, Amount: 20, Note: "n2", Target: secondOp},
+		{Seq: 5, Op: OpRead, OpID: failedRead, Event: Failed, Error: "code -111: aborted"},
+	}
+	if writesOnly {
+		events = events[:4]
+	}
+	var b strings.Builder
+	for i, e := range events {
+		e.T, e.Client = base.Add(time.Duration(i)*time.Second), "c1"
+		data, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Write(append(data, '\n'))
+	}
+	return b.String()
+}
+
+// A read that found the row it reads back missing or different is a violation
+// of the run; a read that failed for any other reason is not. A read writes no
+// row, so a row with a read's operation ID is unexpected (#294).
+func TestCheck_Reads(t *testing.T) {
+	h, err := ReadHistory(strings.NewReader(readHistory(t, false)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op := h.Operations[verifiedRead]; op.Op != OpRead || op.Target != secondOp || op.Outcome != Acknowledged {
+		t.Fatalf("read operation = %+v", op)
+	}
+	report := Check(h, map[string][]Row{memberA: good()})
+	if report.OK {
+		t.Fatal("a read mismatch passed the data check")
+	}
+	if len(report.ReadMismatches) != 1 || report.ReadMismatches[0].OpID != unknownOp ||
+		report.ReadMismatches[0].Rule != RuleReadMismatch {
+		t.Fatalf("read mismatches = %+v", report.ReadMismatches)
+	}
+	if v := report.Members[memberA].Violations; len(v) != 0 {
+		t.Fatalf("member violations = %+v", v)
+	}
+	if _, first, total := report.FirstViolation(nil, ""); total != 1 || first.OpID != unknownOp {
+		t.Fatalf("first violation %+v of %d", first, total)
+	}
+
+	withRead := append(good(), Row{OpID: verifiedRead, Client: "c1", Seq: 3, Amount: 20, Note: "n2"})
+	got := rules(Check(h, map[string][]Row{memberA: withRead}).Members[memberA])
+	if !strings.Contains(got, RuleUnexpected) {
+		t.Fatalf("a row with a read's operation ID: rules %q", got)
+	}
+
+	// The same writes without the reads judge as before.
+	h, err = ReadHistory(strings.NewReader(readHistory(t, true)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report := Check(h, map[string][]Row{memberA: good()}); !report.OK || len(report.ReadMismatches) != 0 {
+		t.Fatalf("a history without reads: %+v", report)
 	}
 }

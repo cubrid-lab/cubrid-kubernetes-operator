@@ -375,6 +375,16 @@ commit was sent means nothing was committed: `failed`. An error from the
 commit itself leaves the outcome open, because the server may have committed
 before the answer was lost: `unknown`.
 
+With `READ_EVERY=N`, every Nth operation is a read instead (`op` `read`): it
+reads the row of the client's last acknowledged insert back through the same
+connection and compares it with what was sent. It is `acknowledged` only when
+the row is there with those values. A row that is missing or differs is
+`failed` with an error that starts with `read mismatch:`; any other error is
+`failed` with the driver's message. A read writes nothing. A
+scenario's operation counts (`attempted`, `acknowledged`, ...) include its
+reads and rollbacks. The fault scenarios
+on Kind (S03, S05, S06) run their clients with `READ_EVERY=4` (#294).
+
 ### Operation outcomes
 
 The client records every operation in the history with one outcome:
@@ -399,6 +409,7 @@ consistent, and through each endpoint:
 | No row exists whose `op_id` is not in the history. | **Unexpected row.** |
 | A row that is present has the values that were sent, also for an `unknown` operation. | **Wrong values.** |
 | All members expected to be consistent return the same set of rows. | **Members diverge.** |
+| No read found the row it reads back missing or different (`read mismatch:`). | **Read mismatch.** |
 
 An `unknown` operation may be present or absent; both are correct. It is
 reported in its own count and is never counted as missing data. If it is
@@ -409,7 +420,11 @@ present, it must be present exactly once and with the values that were sent.
 - **Recovery time (RTO).** The time from the start of the fault (the moment
   the injection command was issued) until the first moment after which a
   write and a read through the read-write endpoint succeed without
-  interruption for the scenario's `stable_period`.
+  interruption for the scenario's `stable_period`. Only an acknowledged insert
+  (a committed write) and an acknowledged read (a verified read) count; an
+  acknowledged rollback committed nothing and neither counts nor interrupts.
+  A client that does not read is judged on its writes alone. Any `failed` or
+  `unknown` outcome interrupts (`workload.Recovery`).
 - **Observed data loss (observed RPO).** The number of `acknowledged`
   operations missing after recovery, and the time between the oldest of them
   and the start of the fault.
@@ -563,7 +578,14 @@ edited afterwards:
 `event` is `attempted`, `acknowledged`, `failed` or `unknown`. The `attempted`
 line carries the values that are sent (`amount`, `note`), so that the check
 compares the database with what the client recorded and computes nothing
-itself. A `failed` or `unknown` line carries `error` with the driver's
+itself. A read's `attempted` line carries the values it expects and `target`,
+the operation ID of the row it reads back:
+
+```json
+{"t":"2026-10-25T14:25:13.057Z","client":"c3","seq":3,"op":"read","opId":"c3-000003","endpoint":"rw","event":"attempted","amount":75,"note":"c3-2","target":"c3-000002"}
+```
+
+A `failed` or `unknown` line carries `error` with the driver's
 message. Timestamps are the client's clock in UTC.
 
 An operation whose `attempted` line has no later line (the client stopped
