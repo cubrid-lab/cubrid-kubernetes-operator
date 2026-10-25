@@ -995,7 +995,7 @@ func TestRunS12ExactKeepsTheMemberStateWhenAMarkerReadFails(t *testing.T) {
 	f := newS12Fixture(t, cfg)
 	const dropped = "Server no longer responding.... Invalid argument"
 	f.markerAnswer = func(pod string) (string, error, bool) {
-		if pod != "ha-restore-2" {
+		if pod != testRestoreSlave {
 			return "", nil, false
 		}
 		return dropped + "\n", errors.New("kubectl failed: exit status 1"), true
@@ -1058,14 +1058,14 @@ func TestRunS12ExactReportsAMemberStateThatCannotBeRead(t *testing.T) {
 	cfg := testS12Config(t)
 	f := newS12Fixture(t, cfg)
 	f.markerAnswer = func(pod string) (string, error, bool) {
-		if pod != "ha-restore-2" {
+		if pod != testRestoreSlave {
 			return "", nil, false
 		}
 		return "", errors.New("kubectl failed: exit status 1: Server no longer responding"), true
 	}
 	inner := f.runner.Command
 	f.runner.Command = func(ctx context.Context, args ...string) (string, error) {
-		if script := args[len(args)-1]; strings.Contains(script, "changemode") && args[3] == "ha-restore-2" {
+		if script := args[len(args)-1]; strings.Contains(script, "changemode") && args[3] == testRestoreSlave {
 			// As Target.command reports it: the output, and the error with it.
 			return "state timed out\n", errors.New("kubectl failed: exit status 124: state timed out")
 		}
