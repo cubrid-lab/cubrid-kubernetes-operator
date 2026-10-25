@@ -392,8 +392,10 @@ unverified (#86, #87).
 
 **Implementation:** Backup API/controller, artifact handling and recovery
 bootstrap code are merged.
-**Live validation:** Integrated backup and new-cluster restore with exact data
-verification remain unverified (#88, #89).
+**Live validation:** On the VM lab, S11 `complete` and S12 `exact` passed
+(see above), with two S12 runs blocked by a lost SQL session (#238). The
+interrupted backup and restore variants, `wrong-target`, `tampered`, restarts
+during a restore and the Operator's logs remain unverified (#88, #89, #121).
 
 - `CubridBackup`
 - backup execution implementation
