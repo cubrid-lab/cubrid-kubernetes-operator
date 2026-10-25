@@ -3458,7 +3458,7 @@ For the log copied from `h-1`, sampled from 19:26:16 to 19:27:51:
 
 **Part D (2026-10-26): where the master's other commits come from, and part A without them.**
 
-On a new pair built the same way:
+On a new pair built the same way. The `tranlist` output and the paused-applier counts were read with commands during the run and not saved; the table below is from saved samples.
 - **Source:** `cubrid tranlist appdb@localhost` on the master listed two clients: `copylogdb` from `h-1`, and `applylogdb` from `h-0` itself, the master's own applier for the slave's copied log. The latter was shown at times as `COMMITTED`.
 - **Its row:** on the master, `db_ha_apply_info` holds that applier's row for `appdb_h-1`, whose `last_access_time` was rewritten about every 10 s.
 - **Pausing it:** `kill -STOP` on the master's `applylogdb` stopped the slave's `commit_counter`, which stayed at 24 for 60 s. It rose to 32 within 30 s of `kill -CONT`. While it was stopped, the slave's `final_lsa` still moved, from 147\|64 to 147\|2992, with no commit.
@@ -3470,7 +3470,7 @@ So the other commits in parts A and B were the master's own applier recording it
 2. The client inserted 200 padded rows every 5 s for 16 rounds in one transaction, from 20:27:18 to the commit at 20:28:39 (81 s).
 3. The applier was resumed at 20:29:26.
 
-On the slave (`samples-partD`):
+On the slave:
 
 | Time (UTC) | `final_lsa` | `required_lsa` | `insert_counter` | `commit_counter` |
 |---|---|---|---|---|
