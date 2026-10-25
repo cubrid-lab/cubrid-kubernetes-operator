@@ -261,8 +261,10 @@ type haRun struct {
 	// s12 is the result of S12 exact, once it ran, and s12Tampered that of
 	// S12 tampered.
 	s12, s12Tampered *evidence.Scenario
-	// scenario names the scenario whose reads run now, for lostSessions.
+	// scenario names the scenario whose reads run now, for lostSessions, and
+	// reads counts the csql reads each scenario made.
 	scenario string
+	reads    map[string]int
 	// engineVersion is the engine version cubrid_rel reported on the master.
 	engineVersion string
 	// accessKey and secretKey are the seed Secret's values. They go to the
@@ -1174,6 +1176,10 @@ func (h *haRun) csqlRead(ctx context.Context, pod string) sqlcheck.Runner {
 			return h.member(ctx, pod, "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`,
 				databaseName+"@localhost", sql)
 		}
+		if h.reads == nil {
+			h.reads = map[string]int{}
+		}
+		h.reads[h.scenario]++
 		out, err := run()
 		if err != nil || !sessionLost(out) {
 			return out, err
@@ -1248,8 +1254,12 @@ func (h *haRun) inScenario(name string, result *evidence.Scenario) func() {
 	}
 }
 
-// lostIn counts the reads of a scenario that lost their session.
-func (h *haRun) lostIn(name string) int {
+// lostIn counts the reads of a scenario that lost their session, unknown
+// when the scenario made no csql read.
+func (h *haRun) lostIn(name string) any {
+	if h.reads[name] == 0 {
+		return evidence.Unknown
+	}
 	n := 0
 	for _, lost := range h.rec.LostSessions {
 		if lost.Scenario == name {

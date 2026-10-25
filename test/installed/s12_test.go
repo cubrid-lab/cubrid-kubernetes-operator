@@ -497,8 +497,9 @@ func TestRunS12ExactFailsWhenTheBootstrapFailed(t *testing.T) {
 	if rec := readS12Record(t, cfg.EvidenceDir); len(rec.Bootstrap) != 2 || rec.Bootstrap[1].Phase != "Failed" {
 		t.Fatalf("bootstrap = %+v, want the Failed phase recorded", rec.Bootstrap)
 	}
-	if s12.Measurements["restoredWithin"] != evidence.Unknown {
-		t.Fatalf("S12 measurements = %v, want restoredWithin unknown", s12.Measurements)
+	if s12.Measurements["restoredWithin"] != evidence.Unknown ||
+		s12.Measurements["lostSessions"] != evidence.Unknown {
+		t.Fatalf("S12 measurements = %v, want restoredWithin and lostSessions unknown: S12 read nothing", s12.Measurements)
 	}
 }
 
@@ -1117,10 +1118,12 @@ func TestRunS12ExactReadsAMarkerTableAgainAfterALostSession(t *testing.T) {
 	if s12.Measurements["lostSessions"] != float64(1) {
 		t.Fatalf("S12 measurements = %v, want the lost session counted", s12.Measurements)
 	}
-	for _, sc := range s12Scenarios(t, cfg.EvidenceDir)[:2] {
-		if sc.Measurements["lostSessions"] != float64(0) {
-			t.Fatalf("%s measurements = %v, want no lost session of its own", sc.ID, sc.Measurements)
-		}
+	// LAB01 read the ledger with csql and lost nothing; S11 made no csql read.
+	scenarios := s12Scenarios(t, cfg.EvidenceDir)
+	if scenarios[0].Measurements["lostSessions"] != float64(0) ||
+		scenarios[1].Measurements["lostSessions"] != evidence.Unknown {
+		t.Fatalf("LAB01 = %v, S11 = %v; want 0 and unknown lost sessions", scenarios[0].Measurements,
+			scenarios[1].Measurements)
 	}
 	if summary := readSummary(t, cfg.EvidenceDir); !slices.ContainsFunc(summary.Notes, func(n string) bool {
 		return strings.Contains(n, "#238")

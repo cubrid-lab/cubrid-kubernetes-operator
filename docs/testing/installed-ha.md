@@ -127,7 +127,8 @@ check is blocked or fails as before. Each such read is recorded in
 `LAB01/record.json` under `lostSessions` (time, scenario, member, the first
 line of the query, the error lines, the size of the output and how the
 second read answered), each scenario counts its own as the measurement
-`lostSessions`, and the summary's notes give the total. Only reads go through
+`lostSessions` (`unknown` for a scenario that made no `csql` read), and the
+summary's notes give the total. Only reads go through
 this path; a write is never made twice.
 
 **At the end.** Each member must still be the same Pod and container as at
