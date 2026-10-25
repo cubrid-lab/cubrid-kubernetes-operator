@@ -326,7 +326,7 @@ func restartPassReason(r *s12Restart) string {
 	return fmt.Sprintf("the manager Pod was deleted while the cluster restored from S11's artifact was %s with "+
 		"operation %s, and the replacement ran the same image and held the leader Lease, back %s after the "+
 		"deletion, within operator_resync_limit; in every reading up to the Lease's acquireTime plus the measured "+
-		"clock bound (%s), the bootstrap was at most %s with operation %s; the cluster reported Ready within "+
+		"clock bound (%s), none showed a phase past %s or an operation other than %s; the cluster reported Ready within "+
 		"restore_limit only after its bootstrap completed, with BootstrapReady never True before, and kept "+
 		"operation %s under attempt %d with %d retries; its members and Services held exactly the rows "+
 		"acknowledged before the known point and S11's marker, no row written after the backup, and took a "+
@@ -515,8 +515,12 @@ func takeover(rec *s12RestartRecord, result *evidence.Scenario) error {
 			return advancedBeforeTakeover(r, p)
 		}
 	}
-	// The reading at the restart was taken before the deletion, so one is
-	// always at or before the cutoff.
+	// The reading at the restart was taken before the deletion, so one is at
+	// or before the cutoff unless a clock stepped.
+	if last == nil {
+		return errors.New("the takeover could not be placed: no reading is at or before the Lease's acquireTime " +
+			"plus the clock bound, so a clock may have stepped")
+	}
 	r.PhaseAtTakeover, r.OperationIDAtTakeover = cmp.Or(last.Phase, noBootstrapPhase), last.OperationID
 	result.Measurements["phaseAtTakeover"] = r.PhaseAtTakeover
 	return nil

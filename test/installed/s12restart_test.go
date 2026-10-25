@@ -288,7 +288,7 @@ func TestRunS12OperatorRestartPassesWhenTheRestoreSurvivesTheRestart(t *testing.
 	reason := restartPassReason(readRestartRecord(t, cfg.EvidenceDir).Restart)
 	for _, want := range []string{"Restoring with operation " + testRestartOp, "after the deletion",
 		"in every reading up to the Lease's acquireTime plus the measured clock bound",
-		"the bootstrap was at most Restoring with operation " + testRestartOp,
+		"none showed a phase past Restoring or an operation other than " + testRestartOp,
 		"kept operation " + testRestartOp + " under attempt 0 with 0 retries"} {
 		if !strings.Contains(reason, want) {
 			t.Fatalf("S12 operator-restart reason = %q, want %q", reason, want)
@@ -842,5 +842,32 @@ func TestRunS12OperatorRestartIsBlockedWithoutTheLeasesRenewTime(t *testing.T) {
 	if err == nil || restart.Result != evidence.Blocked ||
 		!strings.Contains(restart.Reason, "could not be placed on the run's clock") {
 		t.Fatalf("S12 operator-restart = %+v, want blocked: no renewTime to bound the clocks", restart)
+	}
+}
+
+func TestRunS12OperatorRestartIsBlockedWhenNoReadingPrecedesTheTakeover(t *testing.T) {
+	cfg := testS12RestartConfig(t)
+	f := newS12RestartFixture(t, cfg)
+	// A clock that stepped: the Lease's acquireTime falls an hour before every
+	// reading, while its renewTime is an hour after the run's read, so the
+	// bound adds nothing and no reading is at or before the cutoff.
+	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		f.startReplacement(ctx, c)
+		f.takeLeaseAt(ctx, c, time.Now().Add(-time.Hour))
+		lease := &coordinationv1.Lease{}
+		key := client.ObjectKey{Namespace: f.cfg.OperatorNamespace, Name: testLeaderLease}
+		if err := c.Get(ctx, key, lease); err != nil {
+			f.t.Error(err)
+			return
+		}
+		renew := metav1.NewMicroTime(time.Now().Add(time.Hour))
+		lease.Spec.RenewTime = &renew
+		if err := c.Update(ctx, lease); err != nil {
+			f.t.Error(err)
+		}
+	}
+	restart, err := restartOf(t, f, t.Context())
+	if err == nil || restart.Result != evidence.Blocked || !strings.Contains(restart.Reason, "no reading") {
+		t.Fatalf("S12 operator-restart = %+v, want blocked: no reading is at or before the takeover", restart)
 	}
 }
