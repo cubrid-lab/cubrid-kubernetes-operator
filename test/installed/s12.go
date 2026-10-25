@@ -196,6 +196,7 @@ type restoreVerdict struct{ error }
 // source must be unchanged. A run that ends, or a check that cannot be made,
 // before S12 is judged blocks it; what was seen to break stays a failure.
 func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
+	defer h.inScenario(s12ID+"/"+s12Variant, &result)()
 	result = evidence.Scenario{ID: s12ID, Variant: s12Variant, Result: evidence.Fail, NeverEvents: []string{}}
 	rec := s12Record{Cluster: s12ClusterName, SeedPrefix: h.rec.Seed.Prefix + "/restore-seed",
 		SecretRef: s12SecretName, Bootstrap: []s12Phase{}, Members: []imageIdentity{}, SecretsReferenced: []string{},
@@ -765,7 +766,7 @@ func (h *haRun) waitMarker(ctx context.Context, members []string, master, name, 
 
 // markerTable reads the marker table of a member, by name.
 func (h *haRun) markerTable(ctx context.Context, pod string) (map[string]string, error) {
-	out, err := sqlcheck.Run(h.csql(ctx, pod), markerQuery)
+	out, err := sqlcheck.Run(h.csqlRead(ctx, pod), markerQuery)
 	if err != nil {
 		return nil, fmt.Errorf("read the marker table on %s: %w\n%s", pod, err, h.memberState(ctx, pod))
 	}

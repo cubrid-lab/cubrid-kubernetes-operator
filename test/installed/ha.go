@@ -222,18 +222,23 @@ type haRecord struct {
 	DataRulesHeldAfterSeconds *float64 `json:"dataRulesHeldAfterSeconds,omitempty"`
 	Cleanup                   string   `json:"cleanup"`
 	CleanupScope              string   `json:"cleanupScope"`
-	// LostSessions are the csql reads whose session was lost after the read
-	// answered, which the run made again (#238).
+	// LostSessions are the csql reads whose session was lost, which the run
+	// made again (#238).
 	LostSessions []lostSession `json:"lostSessions,omitempty"`
 }
 
 // lostSession is one csql read on a member whose output held both errors of
-// a session the server dropped (POC-36): the time, the member and csql's
-// output.
+// a session the server dropped (POC-36): when, in which scenario, on which
+// member, the first line of the query, the error lines and the size of csql's
+// output, and how the read made again answered.
 type lostSession struct {
-	At     time.Time `json:"at"`
-	Pod    string    `json:"pod"`
-	Output string    `json:"output"`
+	At          time.Time `json:"at"`
+	Scenario    string    `json:"scenario"`
+	Pod         string    `json:"pod"`
+	Query       string    `json:"query"`
+	Errors      []string  `json:"errors"`
+	OutputBytes int       `json:"outputBytes"`
+	Again       string    `json:"again"`
 }
 
 // haRun is the state of one HA run.
@@ -256,6 +261,8 @@ type haRun struct {
 	// s12 is the result of S12 exact, once it ran, and s12Tampered that of
 	// S12 tampered.
 	s12, s12Tampered *evidence.Scenario
+	// scenario names the scenario whose reads run now, for lostSessions.
+	scenario string
 	// engineVersion is the engine version cubrid_rel reported on the master.
 	engineVersion string
 	// accessKey and secretKey are the seed Secret's values. They go to the
@@ -282,7 +289,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	if err := evidence.RequireEmptyDir(cfg.EvidenceDir); err != nil {
 		return err
 	}
-	h := &haRun{Runner: r, cfg: cfg, redactor: r.Redactor}
+	h := &haRun{Runner: r, cfg: cfg, redactor: r.Redactor, scenario: haScenarioID}
 	if h.redactor == nil {
 		h.redactor = evidence.NewRedactor()
 	}
@@ -362,6 +369,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				Unknown: counts[workload.Unknown]}
 		}
 		scenario.Measurements = h.measurements()
+		scenario.Measurements["lostSessions"] = h.lostIn(haScenarioID)
 		if h.labPassed && cleanupErr == nil && recordErr == nil {
 			scenario.Result = evidence.Pass
 			scenario.Reason = "LAB01's starting state, a subset of S01's, held for the stable period, and the data " +
@@ -374,7 +382,8 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		}
 		if n := len(h.rec.LostSessions); n > 0 {
 			summary.Notes = append(summary.Notes, fmt.Sprintf("%d csql read(s) on a member lost their session "+
-				"after the read answered and were made again (#238); %s lists them", n, haRecordFile))
+				"and were made once more (#238); %s lists them, and each scenario counts its own as lostSessions",
+				n, haRecordFile))
 		}
 		summary.Record(scenario)
 		h.recordAfterLAB01(&summary)
@@ -1131,7 +1140,7 @@ const readSlack = 30 * time.Second
 func (h *haRun) readRowsOf(ctx context.Context, target dataTarget) (map[string][]workload.Row, error) {
 	rows := map[string][]workload.Row{}
 	for _, pod := range target.members {
-		out, err := sqlcheck.Run(h.csql(ctx, pod), workload.LedgerQuery)
+		out, err := sqlcheck.Run(h.csqlRead(ctx, pod), workload.LedgerQuery)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", pod, err)
 		}
@@ -1155,10 +1164,11 @@ func (h *haRun) readRowsOf(ctx context.Context, target dataTarget) (map[string][
 	return rows, nil
 }
 
-// csql runs SQL with csql on a member, not through a Broker. A read whose
-// output holds both errors of a session the server dropped (#238, POC-36) is
-// recorded and made once more; a second loss is the answer.
-func (h *haRun) csql(ctx context.Context, pod string) sqlcheck.Runner {
+// csqlRead runs a query with csql on a member, not through a Broker. It is for
+// reads only: a query whose output holds both errors of a session the server
+// dropped (#238, POC-36) is recorded and run once more, which a write must
+// never be. The second answer is the read's, whatever it is.
+func (h *haRun) csqlRead(ctx context.Context, pod string) sqlcheck.Runner {
 	return func(sql string) (string, error) {
 		run := func() (string, error) {
 			return h.member(ctx, pod, "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`,
@@ -1168,13 +1178,24 @@ func (h *haRun) csql(ctx context.Context, pod string) sqlcheck.Runner {
 		if err != nil || !sessionLost(out) {
 			return out, err
 		}
-		h.rec.LostSessions = append(h.rec.LostSessions, lostSession{At: time.Now().UTC(), Pod: pod, Output: out})
-		return run()
+		lost := lostSession{At: time.Now().UTC(), Scenario: h.scenario, Pod: pod, Query: firstLine(sql),
+			Errors: errorLines(out), OutputBytes: len(out)}
+		again, err := run()
+		switch {
+		case err != nil:
+			lost.Again = "the read failed: " + err.Error()
+		case sessionLost(again):
+			lost.Again = "the session was lost again"
+		default:
+			lost.Again = "answered"
+		}
+		h.rec.LostSessions = append(h.rec.LostSessions, lost)
+		return again, err
 	}
 }
 
 // lostSessionErrors are the two errors csql prints when the server dropped
-// its session, whatever it answered before.
+// its session, before or after the result.
 var lostSessionErrors = []*regexp.Regexp{
 	regexp.MustCompile(`ERROR CODE = -199\b`),
 	regexp.MustCompile(`ERROR CODE = -111\b`),
@@ -1189,6 +1210,53 @@ func sessionLost(out string) bool {
 		}
 	}
 	return true
+}
+
+// errorLines are the lines of csql's output that name an error code, each with
+// the message line after it.
+func errorLines(out string) []string {
+	lines := strings.Split(out, "\n")
+	var found []string
+	for i, line := range lines {
+		if strings.Contains(line, "ERROR CODE = ") {
+			if i+1 < len(lines) {
+				line += " | " + strings.TrimSpace(lines[i+1])
+			}
+			found = append(found, strings.TrimSpace(line))
+		}
+	}
+	return found
+}
+
+// firstLine is the first line of s.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return line
+}
+
+// inScenario names the scenario whose reads follow, for the lost sessions it
+// records, and returns a function that sets the scenario's lostSessions
+// measurement and names LAB01 again.
+func (h *haRun) inScenario(name string, result *evidence.Scenario) func() {
+	h.scenario = name
+	return func() {
+		if result.Measurements == nil {
+			result.Measurements = map[string]any{}
+		}
+		result.Measurements["lostSessions"] = h.lostIn(name)
+		h.scenario = haScenarioID
+	}
+}
+
+// lostIn counts the reads of a scenario that lost their session.
+func (h *haRun) lostIn(name string) int {
+	n := 0
+	for _, lost := range h.rec.LostSessions {
+		if lost.Scenario == name {
+			n++
+		}
+	}
+	return n
 }
 
 // dumps read the ledger through each Service.

@@ -118,6 +118,18 @@ the rules hold or `-data-check-within` passes. Any other violation, such as a
 rolled-back row or wrong values, fails the run at once. The last report read
 is kept in every case.
 
+**Lost sessions.** A `csql` read on a member, of the ledger here or of the
+marker table in S11 and S12, whose output holds both `ERROR CODE = -199` and
+`ERROR CODE = -111` lost its session to the server (#238, POC-36). The run
+makes that read once more and takes the second answer as the read's: a
+second loss, or any other error, is handled as any `csql` error is, and the
+check is blocked or fails as before. Each such read is recorded in
+`LAB01/record.json` under `lostSessions` (time, scenario, member, the first
+line of the query, the error lines, the size of the output and how the
+second read answered), each scenario counts its own as the measurement
+`lostSessions`, and the summary's notes give the total. Only reads go through
+this path; a write is never made twice.
+
 **At the end.** Each member must still be the same Pod and container as at
 the starting state, so none was replaced or restarted. CUBRID must report
 the same master and slaves, and `status.currentPrimary` the same master.
@@ -466,12 +478,7 @@ node list, and a history that does not match S11's known point leave S12
 blocked, not failed. When a member's marker table cannot be read, the reason
 also holds that member's container restarts, its `cubrid heartbeat status`,
 the HA mode of its server and the end of its newest server logs, as read
-right after the failure. A `csql` read on a member, of the ledger or the
-marker table, whose output holds both `ERROR CODE = -199` and
-`ERROR CODE = -111` lost its session to the server (#238, POC-36): the run
-records it in `LAB01/record.json` (`lostSessions`: time, member, output),
-names the count in the summary's notes and makes the read once more. A
-second loss is the read's answer.
+right after the failure.
 What was seen stays: a bootstrap seen `Failed`, a never-event, a data
 violation that lag cannot explain or a source that changed stay failures
 when a later check cannot be made, with that error added to the reason. Only

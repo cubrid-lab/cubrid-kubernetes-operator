@@ -133,6 +133,7 @@ func (f managerPodKill) Remove(context.Context) error { return nil }
 // restarted, and no role may move; and the data rules must hold. A run that
 // ends before its outcome is judged is blocked, not failed.
 func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
+	defer h.inScenario(s06ID+"/"+s06Variant, &result)()
 	result = evidence.Scenario{ID: s06ID, Variant: s06Variant, Result: evidence.Fail, NeverEvents: []string{}}
 	rec := s06Record{Master: h.rec.StartingState.Master, MembersBefore: h.rec.MembersAfter,
 		MembersAfter: []imageIdentity{}}

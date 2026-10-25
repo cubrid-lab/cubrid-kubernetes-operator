@@ -273,6 +273,7 @@ type s11Record struct {
 // the manifest or the Events of the run namespace. A run that ends before
 // S11 is judged is blocked, not failed.
 func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
+	defer h.inScenario(s11ID+"/"+s11Variant, &result)()
 	result = evidence.Scenario{ID: s11ID, Variant: s11Variant, Result: evidence.Fail, NeverEvents: []string{}}
 	rec := s11Record{Backup: s11BackupName, Bucket: h.cfg.BackupBucket, Prefix: h.rec.Seed.Prefix + "/backups",
 		ObjectStoreService: h.cfg.ObjectStoreService, Phases: []s11Phase{}, EngineVersion: h.engineVersion,

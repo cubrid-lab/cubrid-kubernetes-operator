@@ -1109,8 +1109,18 @@ func TestRunS12ExactReadsAMarkerTableAgainAfterALostSession(t *testing.T) {
 		t.Fatalf("LAB01 record = %s, %v", data, err)
 	}
 	if len(rec.LostSessions) != 1 || rec.LostSessions[0].Pod != testRestoreSlave ||
-		!strings.Contains(rec.LostSessions[0].Output, "ERROR CODE = -199") {
-		t.Fatalf("lost sessions = %+v, want the one on %s", rec.LostSessions, testRestoreSlave)
+		rec.LostSessions[0].Scenario != s12ID+"/"+s12Variant || rec.LostSessions[0].Again != "answered" ||
+		len(rec.LostSessions[0].Errors) != 2 || !strings.Contains(rec.LostSessions[0].Errors[0], "-199") ||
+		!strings.HasPrefix(rec.LostSessions[0].Query, "SELECT") {
+		t.Fatalf("lost sessions = %+v, want the one of S12 exact on %s", rec.LostSessions, testRestoreSlave)
+	}
+	if s12.Measurements["lostSessions"] != float64(1) {
+		t.Fatalf("S12 measurements = %v, want the lost session counted", s12.Measurements)
+	}
+	for _, sc := range s12Scenarios(t, cfg.EvidenceDir)[:2] {
+		if sc.Measurements["lostSessions"] != float64(0) {
+			t.Fatalf("%s measurements = %v, want no lost session of its own", sc.ID, sc.Measurements)
+		}
 	}
 	if summary := readSummary(t, cfg.EvidenceDir); !slices.ContainsFunc(summary.Notes, func(n string) bool {
 		return strings.Contains(n, "#238")
@@ -1131,5 +1141,30 @@ func TestRunS12ExactIsBlockedWhenTheReadIsLostTwice(t *testing.T) {
 	s12, err := s12Of(t, f, t.Context())
 	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "-199") {
 		t.Fatalf("S12 = %+v, want blocked: the read was lost again", s12)
+	}
+	var rec haRecord
+	data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, haRecordFile))
+	if err != nil || json.Unmarshal(data, &rec) != nil {
+		t.Fatalf("LAB01 record = %s, %v", data, err)
+	}
+	if len(rec.LostSessions) != 1 || rec.LostSessions[0].Again != "the session was lost again" {
+		t.Fatalf("lost sessions = %+v, want one read made twice", rec.LostSessions)
+	}
+}
+
+func TestSessionLostNeedsBothErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		out  string
+		want bool
+	}{
+		"both":         {testLostSession, true},
+		"-199 alone":   {"ERROR CODE = -199, Tran = 6, EID = 2\nServer no longer responding", false},
+		"-111 alone":   {"ERROR CODE = -111, Tran = 6, EID = 3\nYour transaction has been aborted", false},
+		"another code": {"ERROR CODE = -1990, Tran = 6\nERROR CODE = -1110, Tran = 6", false},
+		"a clean read": {"=== <Result of SELECT Command in Line 1> ===\n\n1 row selected.", false},
+	} {
+		if got := sessionLost(tc.out); got != tc.want {
+			t.Errorf("%s: sessionLost = %v, want %v", name, got, tc.want)
+		}
 	}
 }
