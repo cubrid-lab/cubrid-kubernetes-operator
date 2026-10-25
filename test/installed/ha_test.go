@@ -505,6 +505,8 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 		f.t.Fatalf("member command in container %s", container)
 	}
 	switch {
+	case strings.Contains(script, "applyinfo"):
+		return testApplyinfoOutput, nil
 	case strings.Contains(script, "heartbeat status"):
 		return f.heartbeat(pod), nil
 	case strings.Contains(script, "cubrid_rel"):
@@ -538,6 +540,9 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 
 // heartbeat is cubrid heartbeat status on a member: its own role, the nodes
 // of its cluster with their roles, and the state of its processes.
+// testApplyinfoOutput is what the fake applyinfo of a member prints.
+const testApplyinfoOutput = " *** Applied Info. *** \n Committed page : 145 | 432\n Insert count : 3\n"
+
 func (f *haFixture) heartbeat(pod string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

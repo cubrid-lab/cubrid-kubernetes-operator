@@ -460,6 +460,13 @@ pass, S12 is blocked and nothing of it is done.
    error of `kubectl exec`, such as a container it cannot reach, kept the
    write from being answered and block S12. The marker of S11 and the writes
    after the backup block S11 or S12 on any error, whatever the exit code.
+   For a member that does not hold the acknowledged row when the wait ends
+   (#416), the record keeps, under `normalWrite.missingState`, its
+   replication as the cluster's status reports it (`source`,
+   `appliedChanges`, `delayedPages`, `failCount`, `stalledSince`), the
+   `ReplicationHealthy` condition, the member's own `cubrid applyinfo -L
+   <copied log of the master> -a` (bounded to 15 s) and the member state
+   above; the reason names the status line.
 8. **The source.** The source's members must still be the Pods and
    containers LAB01 recorded at its end. CUBRID and `status.currentPrimary`
    must name the same master: the roles are read again until

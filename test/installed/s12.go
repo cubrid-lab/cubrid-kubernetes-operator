@@ -123,6 +123,9 @@ type s12NormalWrite struct {
 	Acknowledged bool     `json:"acknowledged"`
 	ReadBackOn   []string `json:"readBackOn"`
 	MissingOn    []string `json:"missingOn"`
+	// MissingState is, for each member in MissingOn, its replication as the
+	// cluster's status and the member's applyinfo reported it, and its state.
+	MissingState map[string]string `json:"missingState,omitempty"`
 }
 
 // s12Source is the source cluster as S12 read it at its end.
@@ -880,10 +883,63 @@ func (h *haRun) normalWriteS12(ctx context.Context, roles *startingState, rec *s
 	write.MissingOn = append(write.MissingOn, missing...)
 	write.ReadBackOn = slices.DeleteFunc(members, func(m string) bool { return slices.Contains(missing, m) })
 	if len(missing) > 0 {
-		return restoreVerdict{fmt.Errorf("the marker %s written through %s is not on restored member(s) %s",
-			marker, service, strings.Join(missing, ", "))}
+		write.MissingState = map[string]string{}
+		var replication []string
+		for _, pod := range missing {
+			status, state := h.replicationState(ctx, rec.Cluster, pod, roles.Master)
+			write.MissingState[pod] = state
+			replication = append(replication, status)
+		}
+		return restoreVerdict{fmt.Errorf("the marker %s written through %s is not on restored member(s) %s; %s",
+			marker, service, strings.Join(missing, ", "), strings.Join(replication, "; "))}
 	}
 	return nil
+}
+
+// applyinfoScript prints what a member's applier reports for the master's
+// copied log, bounded as memberStateScript is. $1 is the master; $0 names
+// the script.
+const applyinfoScript = `PATH="${CUBRID}/bin:${PATH}"; ` +
+	`timeout 15 cubrid applyinfo -L "/var/lib/cubrid/databases/` + databaseName + `_$1" -a ` + databaseName +
+	` 2>&1 | head -n 40`
+
+// replicationState describes a member that lacks a row written through its
+// cluster (#416): its replication as the cluster's status reports it, the
+// ReplicationHealthy condition, the member's own applyinfo for the master's
+// log and memberState. It returns a one-line summary of the status and the
+// whole description. What cannot be read is said so.
+func (h *haRun) replicationState(ctx context.Context, cluster, pod, master string) (string, string) {
+	summary := "replication in status of " + pod + ": unknown"
+	current := &databasev1alpha1.CubridCluster{}
+	var b strings.Builder
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: cluster}, current); err != nil {
+		fmt.Fprintf(&b, "%s (the cluster could not be read: %v)\n", summary, err)
+	} else {
+		summary = "replication in status of " + pod + ": none reported"
+		for _, instance := range current.Status.Instances {
+			if r := instance.Replication; instance.Name == pod && r != nil {
+				stalled := "not stalled"
+				if r.StalledSince != nil {
+					stalled = "stalled since " + r.StalledSince.UTC().Format(time.RFC3339)
+				}
+				summary = fmt.Sprintf("replication in status of %s: source %s, appliedChanges %d, delayedPages %d, "+
+					"failCount %d, %s", pod, r.Source, r.AppliedChanges, r.DelayedPages, r.FailCount, stalled)
+			}
+		}
+		healthy := "no ReplicationHealthy condition"
+		if c := meta.FindStatusCondition(current.Status.Conditions, "ReplicationHealthy"); c != nil {
+			healthy = fmt.Sprintf("ReplicationHealthy=%s %s: %s", c.Status, c.Reason, c.Message)
+		}
+		fmt.Fprintf(&b, "%s\n%s\n", summary, healthy)
+	}
+	fmt.Fprintf(&b, "applyinfo of %s for %s's log:\n", pod, master)
+	if out, err := h.member(ctx, pod, "bash", "-c", applyinfoScript, "applyinfo", master); err != nil {
+		fmt.Fprintf(&b, "could not be read: %v\n", err)
+	} else {
+		b.WriteString(out)
+	}
+	b.WriteString(h.memberState(ctx, pod))
+	return summary, b.String()
 }
 
 // checkSourceS12 requires the source as LAB01 left it: the same member Pods

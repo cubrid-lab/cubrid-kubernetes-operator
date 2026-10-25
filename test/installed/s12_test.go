@@ -1171,3 +1171,30 @@ func TestSessionLostNeedsBothErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestRunS12ExactRecordsTheStateOfAMemberThatLacksTheNormalWrite(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.dropNormalOn = testRestoreSlave
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail {
+		t.Fatalf("S12 = %+v, want a failure: the normal write is not on %s", s12, testRestoreSlave)
+	}
+	rec := readS12Record(t, cfg.EvidenceDir)
+	state := rec.NormalWrite.MissingState[testRestoreSlave]
+	for _, want := range []string{"applyinfo of " + testRestoreSlave, testApplyinfoOutput, "replication in status",
+		"ReplicationHealthy", "HA-Node Info (current " + testRestoreSlave} {
+		if !strings.Contains(state, want) {
+			t.Fatalf("state of %s = %q, want %q", testRestoreSlave, state, want)
+		}
+	}
+	if !strings.Contains(s12.Reason, "replication in status") {
+		t.Fatalf("S12 reason = %q, want the member's replication named", s12.Reason)
+	}
+	// The master's name reaches the script as $1.
+	if !slices.ContainsFunc(f.ran, func(cmd string) bool {
+		return strings.Contains(cmd, "cubrid applyinfo") && strings.HasSuffix(cmd, " applyinfo "+testRestoreMaster)
+	}) {
+		t.Fatalf("commands = %q, want applyinfo run with the master %s as $1", f.ran, testRestoreMaster)
+	}
+}
