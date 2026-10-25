@@ -504,9 +504,9 @@ other on the lab was not measured; a run that runs short would show it as a
 member that does not become Ready, which fails S12 at `-restore-limit`.
 
 S12 `exact` here does not check:
-- the variant `wrong-target` (a target volume that already holds a
-  database); `tampered` (one byte of the artifact changed) runs only with
-  `-restore-tampered`, below;
+- the variants `wrong-target` (a target volume that already holds a
+  database) and `tampered` (one byte of the artifact changed): they run only
+  with `-restore-wrong-target` and `-restore-tampered`, below;
 - the interruptions of a restore: a killed member or Instance Manager, a
   restarted Operator or an object store that becomes unreachable while the
   restore runs;
@@ -633,6 +633,153 @@ S12 `tampered` here does not check:
 - the Operator's logs and Events of `ha-tampered`, and what the Operator
   does with `ha-tampered` after the last reading.
 
+## S12 wrong-target
+
+With `-restore-wrong-target` as well as `-restore`, the run goes on after S12
+`exact` passed with S12 `wrong-target` of the scenario contract: S11's
+artifact restored into a new cluster whose target volume already holds a
+database must be refused, and that database must be left as it was. The
+lane is then `lab-installed-ha-s12-wrong-target`, and it requires LAB01,
+S11/complete, S12/exact and S12/wrong-target. `-restore-wrong-target`
+without `-restore`, or with `-restore-tampered`, is refused before anything
+is done: each lane names one set of required variants, and a run reports
+one lane, so the two variants run in separate runs.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -restore -restore-wrong-target [-restore-limit 20m]
+```
+
+- `-restore-limit` bounds the refusal: from the return of the request that
+  created the cluster restored over the volumes until the reading that saw
+  the refusal. The forming of the first cluster and its removal have no
+  limit of their own; `-timeout` bounds them.
+- `-timeout` must also cover the forming of a third three-member cluster,
+  its removal, three restore attempts and the reads after them.
+
+S12 `wrong-target` starts only from S12 `exact` that passed. When S12
+`exact` did not run or did not pass, S12 `wrong-target` is blocked with that
+cause and nothing of it is done. `ha-restore` is left as S12 `exact` left
+it.
+
+1. **The volumes that hold a database.** The run creates the
+   `CubridCluster` `ha-wt` in the run namespace with the source's spec and
+   no `spec.bootstrap`, so the Operator creates its database (ADR-0010), and
+   with `spec.objectStorage` the seed endpoint and bucket, the prefix
+   `lab-runs/<run ID>/wt-seed` and a Secret of its own,
+   `object-storage-wt`: another copy of the seed Secret's two keys, which
+   only `ha-wt` names. No suffix the Operator uses begins with `wt-`, so no
+   name of `ha-wt` is one of `ha`'s, `ha-restore`'s or `ha-tampered`'s. The
+   run then:
+   - reads it every `-poll` until one reading has it formed as S12 `exact`
+     waits for `ha-restore`: the status has observed its generation and
+     `Ready`, `HAReady`, `PrimaryResolved` and `RoutingReady` are `True`,
+     each member Pod is Ready and owned through its StatefulSet, both Broker
+     Deployments are available, `cubrid heartbeat status` reports one master
+     and two slaves, and `status.currentPrimary` names that master;
+   - creates the workload's tables through `ha-wt-rw` (`workload init`),
+     writes the marker row `s12wt`, with the run ID, through it, and reads it
+     back on every member, a slave again within `-data-check-within`. No
+     member may hold S11's marker `s11`, which would make the backup's data
+     impossible to tell from `ha-wt`'s;
+   - records the PVCs `data-ha-wt-0` to `-2` (name, UID, volume and phase);
+   - deletes `ha-wt` with its UID as a precondition and background
+     propagation, and reads every `-poll` until `ha-wt`, its StatefulSet, its
+     member Pods and its Broker Deployments are gone. The rest of what it
+     owns (Services, ConfigMaps, Secrets, NetworkPolicies) is left to the
+     garbage collector;
+   - reads the PVCs again: they must still be there, not being deleted, with
+     the same UIDs. `spec.storage.retentionPolicy` is left at its default,
+     `Retain`, so the StatefulSet's `whenDeleted` is `Retain`
+     (`pvcRetentionPolicy` in `internal/controller/cubridcluster_controller.go`).
+
+   Any failure up to here, a PVC removed with the cluster among them, blocks
+   S12 `wrong-target`: its starting state, volumes that hold a database, was
+   not reached. A PVC removed under `Retain` is a failure of S13, which this
+   lane does not judge.
+2. **The cluster over the volumes.** The run creates the `CubridCluster`
+   `ha-wt` again, with the same spec and
+   `spec.bootstrap.recovery.manifestUri` S11's `status.artifact.uri`, and a
+   Secret of its own, `object-storage-wt-recovery`. Its StatefulSet has the
+   same name and claim template, so its members bind the retained PVCs. In a
+   recovery bootstrap the entrypoint creates no database, but it starts one
+   that is registered on the volume (`build/instance-manager/entrypoint.sh`):
+   the members run the first `ha-wt`'s database while its restore is asked
+   for.
+3. **Wait for the refusal.** The run reads the cluster every `-poll` for at
+   most `-restore-limit` and records each change of the bootstrap, as S12
+   `tampered` does. It passes on the reading where `status.bootstrap.phase`
+   is `Failed` and the `BootstrapReady` reason is `RestoreFailed` with a
+   message that contains one of the two failures of the Instance Manager's
+   wrong-target guard (`Restore` in `internal/instancemanager/restore.go`,
+   as `runRestore` in `server.go` records it):
+   - `restore failed: target /var/lib/cubrid/databases already holds
+     database "appdb"; refusing to overwrite (ADR-0008)`, when the
+     database's directory exists on the volume, which is expected here; or
+   - `restore failed: database "appdb" is already registered in
+     /var/lib/cubrid/databases/databases.txt; refusing to overwrite
+     (ADR-0008)`, when only its registration is there.
+
+   The Operator starts the restore on `ha-wt-0`, counts each refusal as a
+   failed attempt (`RestoreFailedRetrying`, `on ha-wt-0: <failure>; starting
+   attempt <n> of 3`), and after the third ends the bootstrap `Failed` with
+   `on ha-wt-0: <failure>; giving up after 3 attempts`
+   (`restoreAttemptFailed` in `internal/controller/bootstrap.go`).
+   - `Ready` `True` at any reading, and a bootstrap phase `Complete`, must
+     never happen and fail S12 `wrong-target` at once.
+   - `Failed` with another reason, or a message without either failure,
+     fails it, with the reason and message.
+   - A cluster read but not refused when `-restore-limit` passes fails it,
+     with the last phase and `BootstrapReady` reason. When the readings kept
+     failing until then, it is blocked.
+   - `refusedWithin` runs from the return of the create request to the
+     reading that saw the refusal, an upper bound; `attempts` is
+     `status.bootstrap.attempts` at that reading.
+4. **The same volumes.** The PVCs are read again: they must be those of
+   step 1, by UID. Another or a missing one blocks S12 `wrong-target`: the
+   refusal was not one of a volume that holds a database.
+5. **Secrets.** As in S12 `tampered`, the Secrets the Pod template of the
+   StatefulSet names must not include one that a Pod template of the source
+   names.
+6. **The existing data.** The run reads the marker table on every member of
+   the refused cluster with `csql`, as CUBRID serves it from the volumes.
+   Each must hold `s12wt` with the run ID, a slave read again within
+   `-data-check-within`, and none S11's marker `s11`. A marker that is
+   missing, or S11's that is there, must never happen: the existing database
+   was changed. A table that cannot be read blocks S12 `wrong-target`, with
+   the member's state as in S12 `exact`.
+7. **The source.** As step 8 of S12 `exact`; any difference fails S12
+   `wrong-target`.
+8. **Credentials.** Neither key of the seed Secret may be in any status of
+   either `ha-wt` the run read, at every reading and once at the end. That
+   last reading must also still show the refusal; one that does not fails
+   S12 `wrong-target`.
+
+As in S12 `exact`, a refused or failing API read, a `kubectl exec` or `csql`
+that cannot read the data, and a run that ends before S12 `wrong-target` is
+judged block it; what was seen stays a failure, with that error added to the
+reason. `refusedWithin` and `attempts` are `unknown` until measured.
+
+Besides S12 `exact`'s, the account deletes a `CubridCluster` and reads
+PersistentVolumeClaims in the run namespace.
+
+A cluster created without a recovery over the retained PVCs, to read the
+data back through the Operator, is not used: its HA bootstrap finds the
+database registered on `ha-wt-0`, and the copy to the other members is
+restored into volumes that hold the database, which the same guard refuses
+(`reconcileSeeding` in `internal/controller/habootstrap.go`). That is S13
+`retain`, which this lane does not judge.
+
+S12 `wrong-target` here does not check:
+- every row of the existing database: only the marker written through the
+  first `ha-wt` and the absence of S11's;
+- the volumes themselves, or what the Instance Manager's refused attempts
+  left on them besides the database;
+- a target that holds only a registration or only some files, or a database
+  of another name;
+- the Operator's logs and Events of either `ha-wt`, and what the Operator
+  does with the refused cluster after the last reading.
+
 ## Evidence
 
 The evidence directory holds `summary.json`, `junit.xml` and these files.
@@ -684,6 +831,16 @@ directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs.
   its Pods name, the source at the end, where credentials were looked for,
   and what is left) and `S12/tampered/source-data-check.json`, the source's
   data check.
+- with `-restore-wrong-target`, `S12/wrong-target/record.json` (the first
+  `ha-wt`: its UID, roles and members, the marker and where it was read
+  back, the members that held S11's marker, its PVCs, when it was deleted,
+  how long it took to go and whether the PVCs were retained; S11's artifact
+  URI; the second `ha-wt`'s UID, every bootstrap change observed,
+  `refusedWithin`, the refusal's reason and message, the PVCs after the
+  refusal and whether they are the same; the existing data's markers; the
+  Secrets its Pods name, the source at the end, where credentials were
+  looked for, and what is left) and
+  `S12/wrong-target/source-data-check.json`, the source's data check.
 
 `formationSeconds` runs from the return of the request that created the
 cluster until the reading that began the stable period that held. Each reading takes
@@ -695,7 +852,8 @@ runs from the client's last answer until the data rules held everywhere.
 
 The run deletes its namespace with a UID precondition and waits until it is
 gone, as the smoke does. That removes the cluster, the restored clusters of
-S12, their PVCs, the client and the copied Secrets. S12 `tampered` removes
+S12, their PVCs, `ha-wt`'s retained PVCs among them, the client and the
+copied Secrets. S12 `tampered` removes
 its copy of the artifact itself. It does not remove:
 - the seed backups under `lab-runs/<run ID>` in the bucket, the restored
   cluster's among them, and S11's artifact in the backup bucket;

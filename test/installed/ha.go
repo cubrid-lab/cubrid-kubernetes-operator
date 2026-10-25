@@ -126,13 +126,18 @@ type HAConfig struct {
 	// from S11's artifact. It needs BackupBucket.
 	Restore bool
 	// RestoreLimit bounds the restored cluster from its creation until it is
-	// Ready (restore_limit), and the cluster restored from the tampered copy
-	// until its restore is refused.
+	// Ready (restore_limit), and the clusters restored from the tampered copy
+	// and over volumes that hold a database until their restore is refused.
 	RestoreLimit time.Duration
 	// RestoreTampered selects S12 tampered after S12 exact: a copy of S11's
 	// artifact with one byte changed, restored into another new cluster. It
 	// needs Restore.
 	RestoreTampered bool
+	// RestoreWrongTarget selects S12 wrong-target after S12 exact: S11's
+	// artifact restored into a new cluster over the retained volumes of a
+	// cluster of the same name, which hold a database. It needs Restore and
+	// cannot be combined with RestoreTampered.
+	RestoreWrongTarget bool
 }
 
 func (c HAConfig) validate() error {
@@ -258,9 +263,9 @@ type haRun struct {
 	// s11 is the result of S11 complete, once it ran, and s11Rec its record.
 	s11    *evidence.Scenario
 	s11Rec *s11Record
-	// s12 is the result of S12 exact, once it ran, and s12Tampered that of
-	// S12 tampered.
-	s12, s12Tampered *evidence.Scenario
+	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
+	// tampered and s12WrongTarget that of S12 wrong-target.
+	s12, s12Tampered, s12WrongTarget *evidence.Scenario
 	// scenario names the scenario whose reads run now, for lostSessions, and
 	// reads counts the csql reads each scenario made.
 	scenario string
@@ -334,6 +339,14 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				"exact and S12 tampered: a full backup to object storage, restored into a new cluster in the run " +
 				"namespace, and a copy of it with one byte changed refused by another; no other S00-S15 " +
 				"qualification"
+		}
+		if cfg.RestoreWrongTarget {
+			lane = s12WrongTargetLane
+			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12WrongTargetVariant})
+			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
+				"exact and S12 wrong-target: a full backup to object storage, restored into a new cluster in the " +
+				"run namespace, and refused by a cluster created over the retained volumes of another that hold a " +
+				"database; no other S00-S15 qualification"
 		}
 	case cfg.BackupBucket != "":
 		lane = s11Lane
@@ -464,6 +477,16 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12TamperedVariant}, evidence.Blocked,
 			"S12 tampered follows S12 exact, and S12 exact did not pass")
 	}
+	switch {
+	case h.s12WrongTarget != nil:
+		summary.Record(*h.s12WrongTarget)
+	case h.cfg.RestoreWrongTarget && h.s12 == nil:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12WrongTargetVariant}, evidence.Blocked,
+			"S12 wrong-target follows S12 exact, and S12 exact did not run")
+	case h.cfg.RestoreWrongTarget:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12WrongTargetVariant}, evidence.Blocked,
+			"S12 wrong-target follows S12 exact, and S12 exact did not pass")
+	}
 }
 
 // afterLAB01 runs the scenario selected to follow LAB01, if any.
@@ -488,6 +511,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 		h.s12 = &s12
 		if s12.Result != evidence.Pass {
 			return fmt.Errorf("S12/%s: %s", s12Variant, s12.Reason)
+		}
+		if h.cfg.RestoreWrongTarget {
+			wrong := h.runS12WrongTarget(ctx)
+			h.s12WrongTarget = &wrong
+			if wrong.Result != evidence.Pass {
+				return fmt.Errorf("S12/%s: %s", s12WrongTargetVariant, wrong.Reason)
+			}
 		}
 		if !h.cfg.RestoreTampered {
 			return nil

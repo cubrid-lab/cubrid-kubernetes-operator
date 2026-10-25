@@ -512,16 +512,7 @@ func TestRunS12TamperedIsBlockedWhenS12ExactDidNotPass(t *testing.T) {
 func TestRunS12TamperedFailsWhenTheSourceChanged(t *testing.T) {
 	cfg := testS12TamperedConfig(t)
 	f := newS12TamperedFixture(t, cfg)
-	f.afterTamperedCreated = func(ctx context.Context, c client.WithWatch) {
-		pod := &corev1.Pod{}
-		if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: testMemberLast}, pod); err != nil {
-			f.t.Fatal(err)
-		}
-		pod.Status.ContainerStatuses[0].ContainerID = testRestarted
-		if err := c.Status().Update(ctx, pod); err != nil {
-			f.t.Fatal(err)
-		}
-	}
+	f.afterTamperedCreated = f.restartSourceMember
 	tampered, err := tamperedOf(t, f, t.Context())
 	if err == nil || tampered.Result != evidence.Fail || !strings.Contains(tampered.Reason, "source") ||
 		!strings.Contains(tampered.Reason, "restarted") {
@@ -580,6 +571,19 @@ func TestRunS12WithoutRestoreTamperedKeepsItsLane(t *testing.T) {
 	}
 	if f.tampered != nil {
 		t.Fatal("S12 tampered ran without -restore-tampered")
+	}
+}
+
+// restartSourceMember gives the source's last member a new container, as a
+// restart would.
+func (f *haFixture) restartSourceMember(ctx context.Context, c client.WithWatch) {
+	pod := &corev1.Pod{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: testMemberLast}, pod); err != nil {
+		f.t.Fatal(err)
+	}
+	pod.Status.ContainerStatuses[0].ContainerID = testRestarted
+	if err := c.Status().Update(ctx, pod); err != nil {
+		f.t.Fatal(err)
 	}
 }
 

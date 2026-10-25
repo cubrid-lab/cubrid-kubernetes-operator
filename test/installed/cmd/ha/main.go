@@ -90,6 +90,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.BoolVar(&cfg.RestoreTampered, "restore-tampered", false,
 		"scenario after S12 exact: S12 tampered, a copy of S11's artifact with one byte changed must be "+
 			"refused by a new cluster; needs -restore")
+	flags.BoolVar(&cfg.RestoreWrongTarget, "restore-wrong-target", false,
+		"scenario after S12 exact: S12 wrong-target, S11's artifact must be refused by a new cluster over the "+
+			"retained volumes of another that hold a database; needs -restore, not with -restore-tampered")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")

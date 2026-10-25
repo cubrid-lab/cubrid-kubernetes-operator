@@ -134,6 +134,14 @@ type haFixture struct {
 	// restored from the tampered copy, as restoreCreated and restoreRead do.
 	tamperedCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
 	tamperedRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	// wrongTargetCreated and wrongTargetRead play the Operator for the
+	// clusters of S12 wrong-target, as restoreCreated and restoreRead do;
+	// clusterDeleted plays the API server and the garbage collector when the
+	// run deletes one of them.
+	wrongTargetCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
+	wrongTargetRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	clusterDeleted     func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster,
+		opts ...client.DeleteOption) error
 	// markerAnswer, when it returns true, answers a read of the marker table
 	// in place of markersOf.
 	markerAnswer func(pod string) (string, error, bool)
@@ -251,6 +259,9 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 			if pod, ok := obj.(*corev1.Pod); ok && pod.Namespace == cfg.OperatorNamespace {
 				return f.deleteManager(ctx, c, pod, opts...)
 			}
+			if cluster, ok := obj.(*databasev1alpha1.CubridCluster); ok && f.clusterDeleted != nil {
+				return f.clusterDeleted(ctx, c, cluster, opts...)
+			}
 			ns, ok := obj.(*corev1.Namespace)
 			if !ok || ns.Name != cfg.Namespace {
 				t.Fatalf("runner deleted %T %s", obj, obj.GetName())
@@ -276,6 +287,8 @@ func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key cl
 		return f.restoreRead(ctx, c, key)
 	case key.Name == s12TamperedClusterName && f.tamperedRead != nil:
 		return f.tamperedRead(ctx, c, key)
+	case key.Name == s12WrongTargetClusterName && f.wrongTargetRead != nil:
+		return f.wrongTargetRead(ctx, c, key)
 	}
 	return nil
 }
@@ -297,6 +310,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 		}
 		f.writes = append(f.writes, "tampered-cluster")
 		return f.tamperedCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s12WrongTargetClusterName {
+		if f.wrongTargetCreated == nil {
+			f.t.Fatalf("runner created %s without S12 wrong-target", cluster.Name)
+		}
+		f.writes = append(f.writes, "wrong-target-cluster")
+		return f.wrongTargetCreated(ctx, c, cluster)
 	}
 	cluster.UID = "ha-cluster"
 	cluster.Generation = 1
