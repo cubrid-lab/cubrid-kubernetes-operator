@@ -252,7 +252,7 @@ func TestServer_Convergence_ReadsOnlyThisMembersCopiedLogs(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("convergence of a copied log = %d (%s), want 200", rr.Code, strings.TrimSpace(rr.Body.String()))
 	}
-	if ran := f.cli.recorded(); len(ran) != 1 || ran[0] != "cubrid applyinfo -L "+want+" -a "+dbName {
+	if ran := f.cli.recorded(); len(ran) != 1 || ran[0] != "cubrid applyinfo -L "+want+" -a -v "+dbName {
 		t.Errorf("commands = %v, want one applyinfo on %s", ran, want)
 	}
 }

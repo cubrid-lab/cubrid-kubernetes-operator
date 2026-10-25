@@ -52,8 +52,28 @@ type ApplyConvergence struct {
 	// from one that kept running. The value is opaque and is only compared
 	// for equality. Empty when the process or its start time was not found.
 	Applier string `json:"applier,omitempty"`
+	// FinalLSA is the applier's position in the copied log ("Final LSA") and
+	// CopiedEOF the end of the copied log ("EOF LSA" of "Copied Active
+	// Info"), both printed by applyinfo with -v. On a healthy slave FinalLSA
+	// follows the copied log also through a transaction that stays open on
+	// the master; on a stuck applier it stops while CopiedEOF goes on
+	// (docs/poc/RESULTS.md, POC-37). Nil when not printed.
+	FinalLSA  *LSA `json:"finalLSA,omitempty"`
+	CopiedEOF *LSA `json:"copiedEOF,omitempty"`
 	// Reason explains Available=false or a non-converged verdict.
 	Reason string `json:"reason,omitempty"`
+}
+
+// LSA is a CUBRID log sequence address: a log page and an offset in it.
+// Addresses compare by page, then offset.
+type LSA struct {
+	Page   int64 `json:"page"`
+	Offset int64 `json:"offset"`
+}
+
+// Before reports whether a comes before b in the log.
+func (a LSA) Before(b LSA) bool {
+	return a.Page < b.Page || (a.Page == b.Page && a.Offset < b.Offset)
 }
 
 // Converged is a conservative verdict: applyinfo parsed, no apply failures, and
@@ -70,20 +90,26 @@ var (
 	reCommitCount  = regexp.MustCompile(`Commit count\s*:\s*(\d+)`)
 	reFailCount    = regexp.MustCompile(`Fail count\s*:\s*(\d+)`)
 	reDelayedPages = regexp.MustCompile(`Delayed log page count\s*:\s*(\d+)`)
+	reFinalLSA     = regexp.MustCompile(`(?m)^Final LSA\s*:\s*(\d+)\s*\|\s*(\d+)`)
+	reEOFLSA       = regexp.MustCompile(`(?m)^EOF LSA\s*:\s*(\d+)\s*\|\s*(\d+)`)
 )
+
+// copiedActiveHeading starts the part of the output about the copied log
+// itself; with -v the applier's part before it has a "Last EOF LSA" too.
+const copiedActiveHeading = "Copied Active Info"
 
 // applyDelayHeading starts the part of the output about pages that were
 // copied and are not applied yet. With -r the output has a part of the same
 // form before it, about pages that are not copied yet (POC-20).
 const applyDelayHeading = "Delay in Applying Copied Log"
 
-// ApplyConvergenceStatus runs `cubrid applyinfo -L <copied-log-path> -a <db>`
+// ApplyConvergenceStatus runs `cubrid applyinfo -L <copied-log-path> -a -v <db>`
 // against the copied log of the master and parses the apply-pipeline counters.
 // copiedLogPath is the local `<db>_<master>` copy-log directory. A command
 // failure or an unparseable "Applied Info" block yields Available=false — never
 // a fabricated "converged".
 func ApplyConvergenceStatus(ctx context.Context, cli CLI, db, copiedLogPath string) ApplyConvergence {
-	out, err := cli.Run(ctx, "cubrid", "applyinfo", "-L", copiedLogPath, "-a", db)
+	out, err := cli.Run(ctx, "cubrid", "applyinfo", "-L", copiedLogPath, "-a", "-v", db)
 	if err != nil {
 		return ApplyConvergence{Available: false, Reason: "applyinfo failed: " + err.Error()}
 	}
@@ -110,10 +136,28 @@ func parseApplyConvergence(out string) ApplyConvergence {
 		FailCount:        mustAtoi(fail[1]),
 		DelayedPageCount: mustAtoi(delayed[1]),
 	}
+	c.FinalLSA = lsaField(reFinalLSA, out)
+	if _, copied, found := strings.Cut(out, copiedActiveHeading); found {
+		c.CopiedEOF = lsaField(reEOFLSA, copied)
+	}
 	if !c.Converged() {
 		c.Reason = "apply pipeline not converged (failCount>0 or delayed pages remain)"
 	}
 	return c
+}
+
+// lsaField returns the address the expression finds, or nil.
+func lsaField(re *regexp.Regexp, out string) *LSA {
+	m := re.FindStringSubmatch(out)
+	if m == nil {
+		return nil
+	}
+	page, err1 := strconv.ParseInt(m[1], 10, 64)
+	offset, err2 := strconv.ParseInt(m[2], 10, 64)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	return &LSA{Page: page, Offset: offset}
 }
 
 func atoiField(re *regexp.Regexp, out string) int {
