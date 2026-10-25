@@ -206,6 +206,24 @@ the marker and not S11's. On 2026-10-25 it passed three times on the VM lab
 #238 before #575. A normal cluster over retained PVCs (S13 `retain`) is not
 covered; the code suggests it would refuse to seed its other members (#90).
 
+S12 `operator-restart`, a lab-only variant (`lab-installed-ha-s12-operator-restart`,
+`-restore-operator-restart`, #121), deletes the installed manager Pod without a
+grace period while another restored cluster is `Restoring`, and requires the
+replacement back within `operator_resync_limit`, the Operator to follow the
+operation recorded in `status.bootstrap.operationID` (no restore started again,
+`BootstrapReady` never `True` before `Complete`), the restore not already moved
+on when the replacement led, by a bound on the clock offset, and then what S12
+`exact` requires. On 2026-10-25 it passed twice on the VM lab (manager
+`d6df2ac`): the manager was back in 24 to 39 s, the next status showed the same
+operation in `SeedingReplicas` with no new attempt, and the restore completed
+about 2 minutes later. Of the other runs, one of the final harness was blocked
+in S12 `exact` by #238 (two lost sessions in a row on one member), and one
+failed in S12 `exact`: an acknowledged write through the read-write Service was
+not on one seeded slave within 2 minutes while the data rules had held there,
+the pattern of #416. A restart between the start of a restore and its status
+write, an Instance Manager restart and restarts at other points of the flow are
+not covered.
+
 A [manual VM-lab run on 2026-10-21](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210)
 moved the lab to main `9c6ae9c1ef97eae29c13dff7a272d1082715c9e2` through the
 private GitOps repository (images from
@@ -426,10 +444,12 @@ unverified (#86, #87).
 **Implementation:** Backup API/controller, artifact handling and recovery
 bootstrap code are merged.
 **Live validation:** On the VM lab, S11 `complete` and S12 `exact`,
-`tampered` and `wrong-target` passed (see above); a lost SQL session (#238)
-blocked S12 runs until the harness read it again (#575). The interrupted backup
-and restore variants, restarts during a restore and the Operator's logs remain
-unverified (#88, #89, #121).
+`tampered`, `wrong-target` and `operator-restart` passed (see above); a lost SQL
+session (#238) blocked S12 runs until the harness read it again (#575), and one
+S12 `exact` run failed on a seeded slave that applied nothing (#416). The
+interrupted backup and restore variants, Instance Manager restarts and restarts
+at other points of a restore, and the Operator's logs remain unverified (#88,
+#89, #121).
 
 - `CubridBackup`
 - backup execution implementation

@@ -91,6 +91,7 @@ func (f *haFixture) deleteManager(ctx context.Context, c client.WithWatch, pod *
 	}
 	f.mu.Lock()
 	f.managerDeleted = true
+	f.managerDeletes++
 	f.mu.Unlock()
 	if f.replacement != nil {
 		f.replacement(ctx, c)
@@ -137,7 +138,7 @@ func (f *haFixture) takeLeaseAt(ctx context.Context, c client.WithWatch, at time
 	}
 	holder := testReplacementPod + "_new"
 	acquired := metav1.NewMicroTime(at)
-	lease.Spec.HolderIdentity, lease.Spec.AcquireTime = &holder, &acquired
+	lease.Spec.HolderIdentity, lease.Spec.AcquireTime, lease.Spec.RenewTime = &holder, &acquired, &acquired
 	if err := c.Update(ctx, lease); err != nil {
 		f.t.Error(err)
 	}

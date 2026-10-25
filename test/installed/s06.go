@@ -196,7 +196,7 @@ func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 			return done, err
 		},
 	})
-	if err := h.writeTimeline(outcome.Timeline); err != nil {
+	if err := h.writeTimeline(s06TimelineFile, outcome.Timeline); err != nil {
 		return end(evidence.Fail, "write the timeline: %v", err)
 	}
 	result.FaultConfirmed = &outcome.FaultConfirmed
@@ -439,8 +439,8 @@ func (h *haRun) replacementObserved(ctx context.Context, rec *s06Record, goneAt 
 	return true, nil
 }
 
-// writeTimeline stores the fault flow's steps as JSON lines.
-func (h *haRun) writeTimeline(steps []faults.Step) error {
+// writeTimeline stores the fault flow's steps as JSON lines in file.
+func (h *haRun) writeTimeline(file string, steps []faults.Step) error {
 	var b strings.Builder
 	for _, step := range steps {
 		data, err := json.Marshal(step)
@@ -449,7 +449,7 @@ func (h *haRun) writeTimeline(steps []faults.Step) error {
 		}
 		b.Write(append(data, '\n'))
 	}
-	return h.write(s06TimelineFile, []byte(b.String()))
+	return h.write(file, []byte(b.String()))
 }
 
 // membersUnchanged reads the members again and counts those whose Pod or

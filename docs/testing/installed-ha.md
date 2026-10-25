@@ -12,7 +12,8 @@ installed:
 5. Remove the namespace.
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`
-and S12 `exact` and `tampered` build on. It
+and S12 `exact`, `tampered`, `wrong-target` and `operator-restart` build on.
+It
 injects no fault. A pass is not an S01 result at the VM-lab level, and it
 does not qualify any of S00 to S15.
 
@@ -509,7 +510,8 @@ S12 `exact` here does not check:
   with `-restore-wrong-target` and `-restore-tampered`, below;
 - the interruptions of a restore: a killed member or Instance Manager, a
   restarted Operator or an object store that becomes unreachable while the
-  restore runs;
+  restore runs; a restarted Operator runs only with
+  `-restore-operator-restart`, below;
 - an artifact taken on the master: S11 takes the backup on a slave
   (`PreferStandby`), and a restore into a new cluster accepts an artifact
   taken on either role (`restoreExpectation` in
@@ -780,11 +782,190 @@ S12 `wrong-target` here does not check:
 - the Operator's logs and Events of either `ha-wt`, and what the Operator
   does with the refused cluster after the last reading.
 
+## S12 operator-restart
+
+With `-restore-operator-restart` as well as `-restore`, the run goes on after
+S12 `exact` passed with S12 `operator-restart` of the scenario contract:
+S11's artifact is restored into another new cluster, and the installed
+manager's Pod is deleted while that restore runs. The lane is then
+`lab-installed-ha-s12-operator-restart`, and it requires LAB01,
+S11/complete, S12/exact and S12/operator-restart.
+`-restore-operator-restart` without `-restore`, with `-restore-tampered` or
+`-restore-wrong-target`, or without a positive `-resync-limit` and a
+`-leader-lease`, is refused before anything is done.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -restore -restore-operator-restart [-restore-limit 20m] [-resync-limit 2m] \
+  [-leader-lease 91d4fe35.cubrid.io]
+```
+
+- `-restore-limit` bounds this cluster as it bounds `ha-restore`: from the
+  return of the request that created it until the reading that saw it
+  Ready, the restart included.
+- `-resync-limit` (`operator_resync_limit`) bounds the manager's return:
+  from the deletion to the reading that saw the replacement back.
+- `-timeout` must also cover a third three-member cluster's restore and its
+  checks.
+
+S12 `operator-restart` starts only from S12 `exact` that passed. When S12
+`exact` did not run or did not pass, it is blocked with that cause and
+nothing of it is done. `ha-restore` is left as S12 `exact` left it.
+
+What the Operator guarantees, and the variant checks
+(`internal/controller/bootstrap.go`):
+- The Operator follows the operation recorded in
+  `status.bootstrap.operationID`: while one is recorded it polls that
+  operation by its ID and starts none (`reconcileRecovery`,
+  `GetOperation`). It records the ID in the same status update that first
+  reports a phase for that operation (`setRestoreProgress`), so a phase
+  `Restoring` comes with an ID, except after a failed attempt: the phase
+  then stays as it was with the ID cleared until the next start. A
+  restarted manager reads the recorded ID and follows that restore.
+- Background, not checked here: a restore is started under an idempotency
+  key derived from the cluster's UID, the manifest URI, the target member
+  and the attempt (`recoveryIdempotencyKey`). If the status update after a
+  start was lost, the next start under the same key and request returns the
+  Instance Manager's existing operation and starts nothing (`restorePrepare`
+  in `internal/instancemanager/server.go`, `FindOrCreate` in `opstore.go`).
+- A second restore is started only after a failed attempt: the Operator
+  raises `status.bootstrap.attempts`, clears the operation and sets the
+  `BootstrapReady` reason `RestoreFailedRetrying` (`restoreAttemptFailed`).
+  An operation the Instance Manager no longer holds is waited for, not
+  started again (`restoreOperationMissing`, #457).
+- `BootstrapReady` becomes `True` in the reconcile that sets the phase
+  `Complete`, after the last member was seeded (`reconcileSeeding` in
+  `internal/controller/habootstrap.go`, `reconcileRecoverySeeding`).
+
+1. **The cluster.** The run creates the `CubridCluster` `ha-restart` in the
+   run namespace with the source's spec and S11's `status.artifact.uri`, as
+   S12 `exact` creates `ha-restore`, with the prefix
+   `lab-runs/<run ID>/restart-seed` and a Secret of its own,
+   `object-storage-restart`. No suffix the Operator uses begins with
+   `restart-`, so no name of `ha-restart` is one of the other clusters'.
+2. **Wait for Restoring.** The run reads it every `-poll`, records each
+   change of the bootstrap and checks each status as S12 `exact` does, until
+   a reading shows `status.bootstrap.phase` `Restoring` with an
+   `operationID`. The first phase past `Preparing` is recorded
+   (`phaseFirstPastPreparing`).
+   - A first phase past `Preparing` other than `Restoring`, such as
+     `SeedingReplicas` or `Complete`, means the restore went by too fast to
+     place the restart in it: S12 `operator-restart` is blocked ("the restart
+     could not be placed during the restore"), not passed, and the manager is
+     not touched.
+   - `Failed` fails it, and no `Restoring` within `-restore-limit` fails it,
+     as in S12 `exact`.
+3. **The restart.** Through the same fault flow as S06 `restart`, the run
+   first requires the manager Pod LAB01 checked and one more reading in phase
+   `Restoring` with an operation. Another manager Pod, or a phase that is no
+   longer `Restoring`, blocks the variant without a restart. That reading's
+   phase, `operationID` and `attempts` are recorded as the state at the
+   restart. The run then deletes the manager's Pod with no grace period and
+   its UID as a precondition, and the deletion is confirmed when that Pod is
+   gone.
+4. **The manager back.** The run waits until the Deployment's replacement
+   Pod, one Pod that is not the deleted one, runs the same runtime image with
+   its `manager` container running, and holds the leader Lease. It reads and
+   records `ha-restart` while it waits; the first phase read after the
+   deletion is recorded (`phaseAfterRestart`).
+   - A replacement on another image blocks the variant: the environment
+     changed.
+   - No replacement within five times `-resync-limit` (at least two seconds)
+     fails it. One back later than `-resync-limit` (`operatorBackWithin`, by
+     the run's clock, from the deletion to the reading that saw it back)
+     fails it, also when a later step blocks.
+   - **The takeover.** The readings are timed by the run's clock and the
+     Lease by the manager's. When the run reads the Lease that shows the
+     replacement back, it records `leaseClockLag`, the run's time of that
+     read minus the Lease's `renewTime` (also a measurement). The read came
+     after the renewal, so the run's clock is ahead of the manager's by at
+     most that much. Every reading from the one at the restart up to the
+     Lease's `acquireTime` plus that bound, when positive (`takeoverCutoff`,
+     also a measurement), is judged: one that names an operation must be at
+     most `Restoring` with the operation of the restart. Readings after the
+     true takeover can only block, never pass. With no grace period the
+     deleted process may still write until its Lease expires; a reading past
+     `Restoring`, or with another operation, means the old manager advanced
+     the restore before the replacement led, and what the replacement
+     resumed was not observed: the variant is blocked. Without a Lease read
+     with a `renewTime` it is blocked too ("the takeover could not be placed
+     on the run's clock"). The last reading judged, or the one that blocked,
+     is recorded as `phaseAtTakeover` (also a measurement) and
+     `operationIDAtTakeover`. The readings are `-poll` apart, so a change
+     between the last of them and the acquisition is not seen.
+5. **Wait for the restored cluster.** As step 3 of S12 `exact`, until
+   `-restore-limit` has passed since the cluster's creation.
+6. **Secrets, HA membership, restored data, a normal write, the source and
+   credentials.** As steps 4 to 9 of S12 `exact`, on `ha-restart`: its data
+   check goes to `S12/operator-restart/data-check.json`, the marker it is
+   written is `s12or`, and the source must hold neither `s12` nor `s12or`.
+   The status is read once more at the end and recorded.
+7. **The bootstrap, judged over every reading in order.**
+   - An `operationID` that becomes another while `attempts` stays the same
+     is a restore started again without a failed attempt: it must never
+     happen.
+   - `attempts` that rise on a reading with the `BootstrapReady` reason
+     `RestoreFailedRetrying` are a retry, recorded with its message. Its
+     restore is not started twice, but when the operation at the end is not
+     the one at the restart, the variant is blocked: a failed attempt
+     replaced the operation, and whether the restart preserved it was not
+     observed, unless it is also a restore started twice (then it fails).
+     `attempts` that rise without a reading of that reason leave
+     the cause unknown and block the variant: the Operator sets the reason
+     with the counter, and it lasts about one reconcile, until the next start
+     reports progress (`restorePollAfter`, 10 seconds, or sooner on another
+     event), so a fast retry may be missed between two readings.
+   - `attempts` that fall, and `BootstrapReady` `True` while the phase is not
+     `Complete`, must never happen.
+   - `operationID` before (at the restart) and after (the last reading that
+     names one) and `attempts` before and after are recorded;
+     `operationIDUnchanged` and `attemptsAdded` are measured from them.
+
+As in S12 `exact`, a refused or failing API read, a `kubectl exec` or `csql`
+that cannot read the data, and a run that ends before S12 `operator-restart`
+is judged block it; what was seen stays a failure, with that error added to
+the reason. `restoredWithin`, `operatorBackWithin`, `leaseClockLag`,
+`takeoverCutoff`, `phaseAtTakeover`, `operationIDUnchanged`,
+`attemptsAdded`, `dataRulesHeldAfterSeconds` and `postBackupRowsPresent`
+are `unknown` until measured. A pass's reason is built from the record: the
+phase and operation at the restart, how long after the deletion the
+replacement was back, that in every reading up to the Lease's
+`acquireTime` plus the measured clock bound (the cutoff) the bootstrap was
+at most `Restoring` with that operation, and the operation, attempt and
+retries at the end. The readings are `-poll` apart, so a change between the
+last of them and the acquisition is not seen.
+
+Besides S12 `exact`'s, the account needs what S06 `restart` needs: `delete`
+on Pods and `get` on Leases in the Operator's namespace. The Deployment
+starts the replacement; the run does not touch the Deployment.
+
+Three clusters, nine DB Pods and their Brokers, share the lab's workers while
+`ha-restart` restores; whether they fit was not measured, as for two in S12
+`exact`.
+
+S12 `operator-restart` here does not check:
+- the restart at another point of the flow: before `restoredb`, during
+  `SeedingReplicas`, or before `Complete` is written. The restart follows a
+  reading of `Restoring`; the Instance Manager's operation may have moved on
+  before the deletion took effect, and the record says which phase was read
+  after it;
+- a restart between the start of a restore and the status update that
+  records its operation, which the replacement resolves through the
+  idempotency key (`operationOfKey` in `internal/controller/imclient.go`):
+  the restart follows a reading that already holds the operation;
+- a restart of the Instance Manager, a killed member or an object store that
+  becomes unreachable during the restore;
+- that the restored database was not restored twice on the member: only
+  the status's operation and attempts are read, not the Instance Manager's
+  operation records or the volume;
+- the Operator's logs and Events of `ha-restart`.
+
 ## Evidence
 
 The evidence directory holds `summary.json`, `junit.xml` and these files.
 Each scenario in `summary.json` lists only the files under its own
-directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs.
+directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs, and each S12
+variant other than `exact` only those under `S12/<variant>/`.
 - `LAB01/record.json`: identities before and after, the starting state with
   the time it took to form, the roles at the end, the seed prefix and the
   Secret's source, operation counts and cleanup;
@@ -841,6 +1022,18 @@ directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs.
   Secrets its Pods name, the source at the end, where credentials were
   looked for, and what is left) and
   `S12/wrong-target/source-data-check.json`, the source's data check.
+- with `-restore-operator-restart`, `S12/operator-restart/record.json` (as
+  S12 `exact`'s record for `ha-restart`, without the writes after the
+  backup, and the restart: the manager before and after, the phase first
+  past `Preparing`, the phase, `operationID` and `attempts` at the restart,
+  the phase read after it, when it was issued, when the old Pod was gone,
+  when the replacement started and acquired the Lease and when the run saw
+  it back, the Lease's `renewTime`, `leaseClockLag` and `takeoverCutoff`, the
+  phase and operation at the takeover, `operationID` and
+  `attempts` after, and the retries),
+  `S12/operator-restart/timeline.jsonl` (the fault flow),
+  `S12/operator-restart/data-check.json` and
+  `S12/operator-restart/source-data-check.json`.
 
 `formationSeconds` runs from the return of the request that created the
 cluster until the reading that began the stable period that held. Each reading takes

@@ -128,6 +128,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s12` | The installed-Operator HA command with `-backup-bucket` and `-restore` | LAB01, S11 (`complete`), then S12 (`exact`): S11's artifact restored into a new cluster in the run namespace and checked against the history truncated at S11's known point | none |
 | `lab-installed-ha-s12-tampered` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-tampered` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`tampered`): a copy of S11's artifact with one byte changed, whose restore into another new cluster must be refused for that object's checksum | none |
 | `lab-installed-ha-s12-wrong-target` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-wrong-target` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`wrong-target`): S11's artifact restored into a cluster created over the retained PVCs of a deleted cluster of the same name, which hold its database; the restore must be refused for that target and the database left with its own marker and without S11's | none |
+| `lab-installed-ha-s12-operator-restart` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-operator-restart` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`operator-restart`): S11's artifact restored into another new cluster while the installed manager's Pod is deleted without a grace period during the restore; the restore must complete as `exact` does, under the operation recorded at the restart | none |
 
 `lab-installed-smoke` is a connection baseline. Its `passed` verdict applies
 to LAB00 and establishes neither S00 installation validation nor S00–S15
@@ -145,11 +146,13 @@ environment, only not run by this command. The lane does not read the
 Operator's logs for credentials and does not restore the artifact (S12).
 
 `lab-installed-ha-s12` requires S12 `exact` only,
-`lab-installed-ha-s12-tampered` S12 `exact` and `tampered`, and
-`lab-installed-ha-s12-wrong-target` S12 `exact` and `wrong-target`. A variant
-a lane does not name is not part of it, rather than `not_applicable`: the
-lab does not rule it out, the command does not run it in that lane. The
-command runs `tampered` and `wrong-target` in separate runs, one lane each.
+`lab-installed-ha-s12-tampered` S12 `exact` and `tampered`,
+`lab-installed-ha-s12-wrong-target` S12 `exact` and `wrong-target`, and
+`lab-installed-ha-s12-operator-restart` S12 `exact` and `operator-restart`. A
+variant a lane does not name is not part of it, rather than
+`not_applicable`: the lab does not rule it out, the command does not run it
+in that lane. The command runs `tampered`, `wrong-target` and
+`operator-restart` in separate runs, one lane each.
 
 `lab-preallocated-component-smoke` is a distinct component result. Its successful
 owned-workload cleanup is not fresh LAB00 namespace cleanup or private campaign
@@ -998,17 +1001,40 @@ it needs more.
   whose artifact does not match its digest.
 - **Variants:** `exact` (the restore succeeds), `wrong-target` (the target
   volume already holds a database), `tampered` (one byte of the artifact is
-  changed).
+  changed), and, in the lab lane only, `operator-restart` (the Operator's Pod
+  is deleted without a grace period while the restore runs: after a reading
+  of `status.bootstrap.phase` `Restoring`).
 - **Expected, `exact`:** the new cluster holds exactly the rows that were
   acknowledged before the marker, the marker itself, and no row written after
   the backup finished.
 - **Expected, `wrong-target` and `tampered`:** the restore is refused with a
   status that names the reason, and the existing data is unchanged.
+- **Expected, `operator-restart`:** the replacement Operator runs the same
+  image and holds the leader Lease within `operator_resync_limit`, and the
+  restore then completes as in `exact`, within `restore_limit` of the
+  cluster's creation. The Operator follows the operation recorded in
+  `status.bootstrap.operationID` (ADR-0008; it polls that operation by its
+  ID, `reconcileRecovery` in `internal/controller/bootstrap.go`), so the
+  operation recorded at the restart is the one that completes, and the
+  bootstrap the replacement takes over is still `Restoring` with it. Another
+  operation under the same `attempts` is a restore started twice and fails
+  the variant. Another operation after a failed attempt (`RestoreFailedRetrying`
+  and a higher `attempts`) is no restore started twice, but whether the
+  restart preserved the operation was then not observed: the variant is
+  `blocked` unless it is also a restore started twice (then it fails). It is
+  `blocked` as well when the restart cannot be placed while the bootstrap is
+  `Restoring`, or when a reading up to the replacement's Lease acquisition,
+  bounded for the offset between the run's and the Operator's clocks, shows
+  the bootstrap moved on.
 - **Must never happen:** an existing database overwritten; a cluster reported
   `Ready` with data that differs from the backup; the new cluster depending
-  on a Secret of the source cluster.
+  on a Secret of the source cluster. In `operator-restart` also: the restore
+  started again without a failed attempt (another operation under the same
+  `attempts`), `attempts` falling, and `BootstrapReady` `True` before the
+  bootstrap is `Complete`.
 - **Data check:** the data rules against the history truncated at the marker.
-- **Limits:** `restore_limit`.
+- **Limits:** `restore_limit`; in `operator-restart` also
+  `operator_resync_limit`.
 
 ### S13: deletion and retention
 

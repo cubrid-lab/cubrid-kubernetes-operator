@@ -18,7 +18,9 @@ limitations under the License.
 // cluster in a fresh namespace, S01's starting state, the SQL workload client
 // and the data rules on every member and both Services, and with
 // -fault operator-restart S06 restart after it, or with -backup-bucket S11
-// complete, and with -restore also S12 exact (docs/testing/installed-ha.md).
+// complete, and with -restore also S12 exact, followed by S12 tampered,
+// wrong-target or operator-restart when selected
+// (docs/testing/installed-ha.md).
 package main
 
 import (
@@ -74,9 +76,10 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.StablePeriod, "stable-period", 30*time.Second,
 		"S06: how long the clients must stay acknowledged after the fault (stable_period)")
 	flags.DurationVar(&cfg.ResyncLimit, "resync-limit", 2*time.Minute,
-		"S06: bound for the replacement manager's first fresh status (operator_resync_limit)")
+		"S06: bound for the replacement manager's first fresh status, S12 operator-restart: for its return "+
+			"(operator_resync_limit)")
 	flags.StringVar(&cfg.LeaderLease, "leader-lease", "91d4fe35.cubrid.io",
-		"S06: the manager's leader election Lease in its namespace")
+		"S06 and S12 operator-restart: the manager's leader election Lease in its namespace")
 	flags.StringVar(&cfg.BackupBucket, "backup-bucket", "",
 		"scenario after LAB01: S11 complete, a full backup to this bucket; not with -fault")
 	flags.DurationVar(&cfg.BackupLimit, "backup-limit", 15*time.Minute,
@@ -93,6 +96,10 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.BoolVar(&cfg.RestoreWrongTarget, "restore-wrong-target", false,
 		"scenario after S12 exact: S12 wrong-target, S11's artifact must be refused by a new cluster over the "+
 			"retained volumes of another that hold a database; needs -restore, not with -restore-tampered")
+	flags.BoolVar(&cfg.RestoreOperatorRestart, "restore-operator-restart", false,
+		"scenario after S12 exact: S12 operator-restart, S11's artifact restored into another new cluster while "+
+			"the manager Pod is deleted during the restore; needs -restore, not with -restore-tampered or "+
+			"-restore-wrong-target")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")
