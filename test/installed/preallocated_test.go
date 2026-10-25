@@ -30,6 +30,7 @@ import (
 	"time"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -81,6 +82,8 @@ const (
 	testReplacedDeployment = "replaced-deployment"
 	testReplacedReplicaSet = "replaced-replicaset"
 	testReplacedPod        = "replaced-pod"
+	testOtherImage         = "other-image"
+	testTemplateImage      = "template-image"
 )
 
 const (
@@ -676,7 +679,7 @@ func restartManager(t *testing.T, f *fixture, kind string) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: testManagerPodName}, pod); err != nil {
 		t.Fatal(err)
 	}
-	replacePod := func(rs string, rsUID types.UID, volumes ...corev1.Volume) {
+	replacePod := func(rs string, rsUID types.UID, image string, volumes ...corev1.Volume) {
 		t.Helper()
 		if err := c.Delete(ctx, pod); err != nil {
 			t.Fatal(err)
@@ -685,6 +688,7 @@ func restartManager(t *testing.T, f *fixture, kind string) {
 		next.ResourceVersion, next.Name, next.UID = "", testManagerPodName+"-2", testManagerPodName+"-2"
 		next.OwnerReferences = []metav1.OwnerReference{owner("ReplicaSet", rs, rsUID)}
 		next.Spec.Volumes = volumes
+		next.Spec.Containers[0].Image = image
 		next.Status.ContainerStatuses[0].ContainerID = "containerd://manager-container-2"
 		if err := c.Create(ctx, next); err != nil {
 			t.Fatal(err)
@@ -703,23 +707,38 @@ func restartManager(t *testing.T, f *fixture, kind string) {
 			t.Fatal(err)
 		}
 	case testPodKind:
-		replacePod("manager-rs", "replicaset")
+		replacePod("manager-rs", "replicaset", f.cfg.OperatorImage)
+	case testOtherImage:
+		replacePod("manager-rs", "replicaset", "example.com/manager:other")
+	case testHostPath:
+		replacePod("manager-rs", "replicaset", f.cfg.OperatorImage, corev1.Volume{Name: "host",
+			VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib"}}})
 	case "rollout":
 		rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "manager-rs-2", Namespace: ns, UID: "replicaset-2",
 			OwnerReferences: []metav1.OwnerReference{owner("Deployment", f.cfg.OperatorDeployment, "deployment")}}}
 		if err := c.Create(ctx, rs); err != nil {
 			t.Fatal(err)
 		}
-		replacePod(rs.Name, rs.UID)
+		replacePod(rs.Name, rs.UID, f.cfg.OperatorImage)
 	case testPVCMount:
-		replacePod("manager-rs", "replicaset", corev1.Volume{Name: "data", VolumeSource: corev1.VolumeSource{
-			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}})
+		replacePod("manager-rs", "replicaset", f.cfg.OperatorImage, corev1.Volume{Name: "data",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}})
 	case testReplacedDeployment:
 		deployment := &appsv1.Deployment{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: f.cfg.OperatorDeployment}, deployment); err != nil {
 			t.Fatal(err)
 		}
 		deployment.UID = testReplacementUID
+		if err := c.Update(ctx, deployment); err != nil {
+			t.Fatal(err)
+		}
+	case testTemplateImage:
+		deployment := &appsv1.Deployment{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: f.cfg.OperatorDeployment}, deployment); err != nil {
+			t.Fatal(err)
+		}
+		deployment.Spec.Template.Spec.Containers[0].Image = "example.com/manager:other"
 		if err := c.Update(ctx, deployment); err != nil {
 			t.Fatal(err)
 		}
@@ -763,13 +782,22 @@ func TestPreallocatedCleanupAfterAManagerRestart(t *testing.T) {
 	}
 }
 
-// Cleanup still refuses a replaced manager Deployment, and a new manager Pod
-// that mounts a PVC in the smoke's namespace.
+// Cleanup still refuses a replaced manager Deployment or one that declares
+// another image, and, in the smoke's namespace, a new manager Pod that runs
+// another image or mounts a PVC or a hostPath.
 func TestPreallocatedCleanupRefusesAReplacedOrWritingManager(t *testing.T) {
 	cases := []struct {
 		kind          string
 		sameNamespace bool
-	}{{testReplacedDeployment, false}, {testReplacedDeployment, true}, {testPVCMount, true}}
+		reason        string
+	}{
+		{testReplacedDeployment, false, "Deployment was replaced"},
+		{testReplacedDeployment, true, "Deployment was replaced"},
+		{testTemplateImage, false, "no longer declares the candidate image"},
+		{testPVCMount, true, "could mount retained data"},
+		{testHostPath, true, "could mount retained data"},
+		{testOtherImage, true, "does not run the candidate image"},
+	}
 	for _, c := range cases {
 		t.Run(fmt.Sprintf("same-namespace=%t/%s", c.sameNamespace, c.kind), func(t *testing.T) {
 			f := preallocatedManagerFixture(t, c.sameNamespace)
@@ -789,6 +817,9 @@ func TestPreallocatedCleanupRefusesAReplacedOrWritingManager(t *testing.T) {
 			if cleaned := readSummary(t, f.cfg.EvidenceDir).Scenarios[0].CleanupSucceeded; cleaned == nil || *cleaned {
 				t.Fatal("cleanup was reported as succeeded")
 			}
+			if rec := readRecord(t, f.cfg.EvidenceDir); !strings.Contains(rec.Cleanup, c.reason) {
+				t.Fatalf("cleanup refused for another reason: %q, want %q", rec.Cleanup, c.reason)
+			}
 		})
 	}
 }
@@ -804,4 +835,39 @@ func preallocatedManagerFixture(t *testing.T, sameNamespace bool) *fixture {
 		ownerNonceKey
 	cfg.OperatorNamespace = cfg.Namespace
 	return newPreallocatedFixture(t, cfg)
+}
+
+// A manager that restarts only while cleanup waits for the workloads to stop
+// does not stop that cleanup, but it still fails the run.
+func TestPreallocatedManagerRestartDuringCleanupFailsTheRun(t *testing.T) {
+	for _, sameNamespace := range []bool{false, true} {
+		t.Run(fmt.Sprintf("same-namespace=%t", sameNamespace), func(t *testing.T) {
+			f := preallocatedManagerFixture(t, sameNamespace)
+			f.deleteHook = func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if err := c.Delete(ctx, obj, opts...); err != nil {
+					return err
+				}
+				restartManager(t, f, testPodKind)
+				for _, child := range append([]client.Object{&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: clusterName,
+					Namespace: f.cfg.Namespace}}, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0",
+					Namespace: f.cfg.Namespace}}}, brokerTier(f.cfg.Namespace, obj.GetUID())...) {
+					if err := c.Delete(ctx, child); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			err := f.runner.Run(t.Context(), f.cfg)
+			if err == nil || !strings.Contains(err.Error(), "incarnation changed before cleanup completed") {
+				t.Fatalf("a manager restart during cleanup did not fail the run: %v", err)
+			}
+			summary := readSummary(t, f.cfg.EvidenceDir)
+			if summary.Passed || summary.Scenarios[0].Result == evidence.Pass {
+				t.Fatal("the run passed")
+			}
+			if cleaned := summary.Scenarios[0].CleanupSucceeded; f.deletes != 1 || cleaned == nil || !*cleaned {
+				t.Fatalf("cleanup did not finish: deletes=%d", f.deletes)
+			}
+		})
+	}
 }

@@ -162,14 +162,18 @@ disappear through Kubernetes garbage collection and normal Pod termination. It n
 force-deletes Pods or falls back to deletion by name. An ownership change before
 cleanup blocks deletion; an observed replacement during cleanup is preserved and
 fails the run. The manager is the exception: the run requires its recorded
-incarnation, but cleanup requires only the recorded manager Deployment UID. A
-manager that restarted during the run (a new container, a new Pod, a rollout to
-a new ReplicaSet of the same Deployment, or a Pod not yet ready) fails the run,
-and cleanup still UID-deletes the created CR and waits for its workloads; the
-record then sets `managerChangedAtCleanup=true`. In the same namespace, the
-manager's Pods must still belong to that Deployment and mount no PVC. A replaced
-manager Deployment still blocks deletion. Failure to observe stopped workloads within the cleanup deadline
-fails the component lane.
+incarnation, but cleanup requires only the recorded manager Deployment UID,
+still declaring the candidate image. After a manager restart (a new container,
+a new Pod, a rollout to a new ReplicaSet of the same Deployment, or a Pod not
+yet ready), before or during cleanup, cleanup still UID-deletes the created CR
+and waits for its workloads; the record sets `managerChangedAtCleanup=true`
+and the run fails. In the same namespace, a manager Pod must belong to a
+ReplicaSet of that Deployment, run the candidate image and have only
+projected, ConfigMap, Secret, emptyDir or downward-API volumes. A replaced
+manager Deployment, or one that declares another image, still blocks deletion.
+So does a ReplicaSet deleted between the Pod and ReplicaSet reads, whose Pod
+then looks unidentified. Failure to observe stopped workloads within the
+cleanup deadline fails the component lane.
 
 The confined runner needs a namespaced Role with get/list for Pods, ConfigMaps,
 PVCs and apps Deployments/ReplicaSets/StatefulSets; list for apps DaemonSets, core

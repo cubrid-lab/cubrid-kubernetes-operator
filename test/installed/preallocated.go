@@ -181,10 +181,10 @@ func (g *namespaceGuard) check(ctx context.Context) error {
 }
 
 // checkManager requires the manager the run recorded. During cleanup it requires
-// only the recorded Deployment: deleting the created CR by its UID does not
-// depend on which incarnation of the manager runs, and a manager that
-// restarted during the run must not leave the smoke cluster behind (#507).
-// The run itself has already failed in that case.
+// only the recorded Deployment, still declaring the candidate image: deleting
+// the created CR by its UID does not depend on which incarnation of the
+// manager runs, and a manager that restarted during the run must not leave the
+// smoke cluster behind (#507). A changed incarnation still fails the run.
 func (g *namespaceGuard) checkManager(ctx context.Context) error {
 	if !g.cleaning {
 		current, err := g.runner.observeManager(ctx, g.cfg)
@@ -205,11 +205,32 @@ func (g *namespaceGuard) checkManager(ctx context.Context) error {
 		!deployment.DeletionTimestamp.IsZero() {
 		return errors.New("candidate manager Deployment was replaced; resources preserved")
 	}
+	if managerImage(deployment.Spec.Template.Spec) != g.cfg.OperatorImage {
+		return errors.New("candidate manager Deployment no longer declares the candidate image; resources preserved")
+	}
 	if current, err := g.runner.observeManager(ctx, g.cfg); err != nil ||
 		!slices.Equal(current.Pods, g.rec.Operator.Pods) {
 		g.managerChanged = true
 	}
 	return nil
+}
+
+// managerImage returns the image of the manager container of spec.
+func managerImage(spec corev1.PodSpec) string {
+	for _, c := range spec.Containers {
+		if c.Name == managerContainer {
+			return c.Image
+		}
+	}
+	return ""
+}
+
+// managerVolume reports whether volume is one a manager Pod may have during
+// cleanup: no PVC, hostPath, CSI, ephemeral or other storage that could reach
+// the retained data.
+func managerVolume(volume corev1.Volume) bool {
+	s := volume.VolumeSource
+	return s.Projected != nil || s.ConfigMap != nil || s.Secret != nil || s.EmptyDir != nil || s.DownwardAPI != nil
 }
 
 // managerSet reports whether a ReplicaSet of the given name and UID is one the
@@ -356,14 +377,14 @@ func (g *namespaceGuard) checkStatefulSets(ctx context.Context) (*appsv1.Statefu
 func (g *namespaceGuard) checkPods(pods *corev1.PodList) error {
 	for i := range pods.Items {
 		obj := &pods.Items[i]
-		manager := false
-		if g.cfg.Namespace == g.cfg.OperatorNamespace && g.cleaning {
-			// Any Pod of the recorded Deployment's ReplicaSets, ready or not,
-			// whatever its container: it still may not mount a PVC.
-			manager = len(obj.OwnerReferences) == 1 && soleController(obj, "ReplicaSet",
-				obj.OwnerReferences[0].Name, g.cleanupSets[obj.OwnerReferences[0].Name])
+		manager, err := g.cleanupManagerPod(obj)
+		if err != nil {
+			return err
 		}
-		if g.cfg.Namespace == g.cfg.OperatorNamespace && !manager {
+		if manager {
+			continue
+		}
+		if g.cfg.Namespace == g.cfg.OperatorNamespace {
 			for _, known := range g.rec.Operator.Pods {
 				if obj.Name == known.Pod && string(obj.UID) == known.UID && len(obj.OwnerReferences) == 1 &&
 					soleController(obj, "ReplicaSet", obj.OwnerReferences[0].Name, g.managerSets[obj.OwnerReferences[0].Name]) {
@@ -415,6 +436,24 @@ func (g *namespaceGuard) checkPods(pods *corev1.PodList) error {
 	}
 
 	return nil
+}
+
+// cleanupManagerPod reports whether, during cleanup, obj is a Pod of a
+// ReplicaSet of the recorded manager Deployment in the smoke's namespace,
+// ready or not. Such a Pod must run the candidate image and have only manager
+// volumes.
+func (g *namespaceGuard) cleanupManagerPod(obj *corev1.Pod) (bool, error) {
+	if !g.cleaning || g.cfg.Namespace != g.cfg.OperatorNamespace || len(obj.OwnerReferences) != 1 ||
+		!soleController(obj, "ReplicaSet", obj.OwnerReferences[0].Name, g.cleanupSets[obj.OwnerReferences[0].Name]) {
+		return false, nil
+	}
+	if managerImage(obj.Spec) != g.cfg.OperatorImage {
+		return false, errors.New("manager Pod does not run the candidate image; writer ambiguity")
+	}
+	if slices.ContainsFunc(obj.Spec.Volumes, func(v corev1.Volume) bool { return !managerVolume(v) }) {
+		return false, errors.New("candidate manager Pod could mount retained data; writer ambiguity")
+	}
+	return true, nil
 }
 
 // brokerVolume reports whether volume is one a Broker Pod has on a real
