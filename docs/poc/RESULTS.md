@@ -3331,8 +3331,10 @@ server interrupted the transaction **6 to 40 ms after the client connected**
 (`timeoutSeconds: 5`, every 5 s) and the server's `session_state_timeout` are
 all much longer, and the Instance Manager's `applyinfo` connections came
 about every 10 s (median gap 10.3 s), one at a time. So these sessions are
-not ended by a timeout or a kill of the Instance Manager's: about one new
-session in 25 on this slave is cut off by the server within milliseconds of
-its connection. Why, and why the local pairs above never did it, is not
+not ended by a timeout or a kill of the Instance Manager's. The logs do not
+tell whether the server cut each session off within milliseconds of its
+connection or the client ended it that soon without a normal disconnect, after
+which the server cleaned it up; either way about one new session in 25 on this
+slave ends like this. Why, and why the local pairs above never did, is not
 known.
 
