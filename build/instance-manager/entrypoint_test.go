@@ -462,15 +462,17 @@ const entrypointMarker = "entrypoint-createdb\n"
 func (f *fixture) killed(cmd *exec.Cmd, out *bytes.Buffer) {
 	f.t.Helper()
 	pidFile := f.calls + ".createdb.pid"
-	waitFor(f.t, func() bool { _, err := os.Stat(pidFile); return err == nil }, out)
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		f.t.Fatal(err)
-	}
+	// The shell creates the file before echo writes the pid into it: wait
+	// for the pid, not for the file.
 	var pid int
-	if _, err := fmt.Sscan(string(data), &pid); err != nil {
-		f.t.Fatalf("createdb pid %q: %v", data, err)
-	}
+	waitFor(f.t, func() bool {
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			return false
+		}
+		_, err = fmt.Sscan(string(data), &pid)
+		return err == nil
+	}, out)
 	_ = cmd.Process.Kill()
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	_ = waitExit(cmd)
