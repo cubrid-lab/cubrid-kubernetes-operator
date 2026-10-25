@@ -122,6 +122,12 @@ type HAConfig struct {
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.
 	ObjectStoreService string
+	// Restore selects S12 exact after S11 complete: a new cluster restored
+	// from S11's artifact. It needs BackupBucket.
+	Restore bool
+	// RestoreLimit bounds the restored cluster from its creation until it is
+	// Ready (restore_limit).
+	RestoreLimit time.Duration
 }
 
 func (c HAConfig) validate() error {
@@ -150,6 +156,9 @@ func (c HAConfig) validate() error {
 		return errors.New("a fault needs a positive stable period and resync limit, and the leader Lease")
 	}
 	if err := c.validateS11(); err != nil {
+		return err
+	}
+	if err := c.validateS12(); err != nil {
 		return err
 	}
 	if c.Operations < 1 || c.Operations > maxOperations || c.DataCheckWithin <= 0 || c.StableFor < 0 {
@@ -224,8 +233,11 @@ type haRun struct {
 	labPassed bool
 	// s06 is the result of S06 restart, once it ran.
 	s06 *evidence.Scenario
-	// s11 is the result of S11 complete, once it ran.
-	s11 *evidence.Scenario
+	// s11 is the result of S11 complete, once it ran, and s11Rec its record.
+	s11    *evidence.Scenario
+	s11Rec *s11Record
+	// s12 is the result of S12 exact, once it ran.
+	s12 *evidence.Scenario
 	// engineVersion is the engine version cubrid_rel reported on the master.
 	engineVersion string
 	// accessKey and secretKey are the seed Secret's values. They go to the
@@ -256,9 +268,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	if h.redactor == nil {
 		h.redactor = evidence.NewRedactor()
 	}
-	for i := range haMemberCount {
-		h.members = append(h.members, fmt.Sprintf("%s-%d", haClusterName, i))
-	}
+	h.members = clusterMembers(haClusterName)
 	runID := string(uuid.NewUUID())
 	h.rec = haRecord{RunID: runID, Namespace: cfg.Namespace, SelectedCommit: cfg.Commit,
 		ExpectedOperatorImage: cfg.OperatorImage, ExpectedInstanceImage: cfg.InstanceManagerImage,
@@ -281,6 +291,15 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		requirements = append(requirements, evidence.Requirement{ID: s06ID, Variant: s06Variant})
 		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S06 restart: the " +
 			"manager Pod is deleted without a grace period; no other S00-S15 qualification"
+	case cfg.Restore:
+		lane = s12Lane
+		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant},
+			evidence.Requirement{ID: s12ID, Variant: s12Variant})
+		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete and S12 " +
+			"exact: a full backup to object storage, restored into a new cluster in the run namespace; no other " +
+			"S00-S15 qualification"
+		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket; the restored "+
+			"cluster's seed backups are left under the run's prefix")
 	case cfg.BackupBucket != "":
 		lane = s11Lane
 		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant})
@@ -328,18 +347,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 			scenario.Reason = runErr.Error()
 		}
 		summary.Record(scenario)
-		if h.s06 != nil {
-			summary.Record(*h.s06)
-		} else if cfg.Fault == FaultOperatorRestart {
-			summary.Settle(evidence.Requirement{ID: s06ID, Variant: s06Variant}, evidence.Blocked,
-				"S06 starts from LAB01's checked state, and LAB01 did not pass")
-		}
-		if h.s11 != nil {
-			summary.Record(*h.s11)
-		} else if cfg.BackupBucket != "" {
-			summary.Settle(evidence.Requirement{ID: s11ID, Variant: s11Variant}, evidence.Blocked,
-				"S11 starts from LAB01's checked state, and LAB01 did not pass")
-		}
+		h.recordAfterLAB01(&summary)
 		summary.FinishedAt = time.Now().UTC()
 		runErr = errors.Join(runErr, summary.Conclude(cfg.EvidenceDir, h.redactor,
 			evidence.Lane{Name: lane, Required: requirements}))
@@ -380,6 +388,33 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	return h.afterLAB01(ctx)
 }
 
+// recordAfterLAB01 records the scenarios selected to follow LAB01, and
+// settles as blocked those that did not run.
+func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
+	if h.s06 != nil {
+		summary.Record(*h.s06)
+	} else if h.cfg.Fault == FaultOperatorRestart {
+		summary.Settle(evidence.Requirement{ID: s06ID, Variant: s06Variant}, evidence.Blocked,
+			"S06 starts from LAB01's checked state, and LAB01 did not pass")
+	}
+	if h.s11 != nil {
+		summary.Record(*h.s11)
+	} else if h.cfg.BackupBucket != "" {
+		summary.Settle(evidence.Requirement{ID: s11ID, Variant: s11Variant}, evidence.Blocked,
+			"S11 starts from LAB01's checked state, and LAB01 did not pass")
+	}
+	switch {
+	case h.s12 != nil:
+		summary.Record(*h.s12)
+	case h.cfg.Restore && h.s11 == nil:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12Variant}, evidence.Blocked,
+			"S12 restores S11's artifact, and LAB01 did not pass")
+	case h.cfg.Restore:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12Variant}, evidence.Blocked,
+			"S12 restores S11's artifact, and S11 did not pass")
+	}
+}
+
 // afterLAB01 runs the scenario selected to follow LAB01, if any.
 func (h *haRun) afterLAB01(ctx context.Context) error {
 	switch {
@@ -394,6 +429,14 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 		h.s11 = &s11
 		if s11.Result != evidence.Pass {
 			return fmt.Errorf("S11/%s: %s", s11Variant, s11.Reason)
+		}
+		if !h.cfg.Restore {
+			return nil
+		}
+		s12 := h.runS12(ctx)
+		h.s12 = &s12
+		if s12.Result != evidence.Pass {
+			return fmt.Errorf("S12/%s: %s", s12Variant, s12.Reason)
 		}
 	}
 	return nil
@@ -503,16 +546,7 @@ func (h *haRun) createCluster(ctx context.Context) (*databasev1alpha1.CubridClus
 	}
 	cluster := &databasev1alpha1.CubridCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: haClusterName, Namespace: h.cfg.Namespace},
-		Spec: databasev1alpha1.CubridClusterSpec{
-			Version: haCubridVersion, Image: &databasev1alpha1.CubridImage{Repository: h.cfg.InstanceManagerImage},
-			Databases:        []databasev1alpha1.CubridDatabase{{Name: databaseName}},
-			Topology:         databasev1alpha1.CubridTopology{PromotableMembers: haMemberCount},
-			HighAvailability: databasev1alpha1.CubridHighAvailability{Enabled: true},
-			ObjectStorage: &databasev1alpha1.CubridObjectStorage{Endpoint: h.cfg.SeedEndpoint,
-				Insecure: h.cfg.SeedInsecure, Bucket: h.cfg.SeedBucket, Prefix: h.rec.Seed.Prefix,
-				CredentialsSecretRef: corev1.LocalObjectReference{Name: seedSecretName}},
-			Storage: databasev1alpha1.CubridStorage{Data: databasev1alpha1.CubridStorageSpec{
-				Size: resource.MustParse("2Gi"), StorageClassName: &h.cfg.StorageClass}}}}
+		Spec:       h.clusterSpec(h.rec.Seed.Prefix)}
 	if err := h.Client.Create(ctx, cluster); err != nil {
 		return nil, fmt.Errorf("create the HA cluster: %w", err)
 	}
@@ -521,6 +555,21 @@ func (h *haRun) createCluster(ctx context.Context) (*databasev1alpha1.CubridClus
 	}
 	h.rec.ClusterUID = string(cluster.UID)
 	return cluster, nil
+}
+
+// clusterSpec is the spec of a three-member HA cluster of the run, seeded
+// through the seed store under prefix with the run's copy of the seed Secret.
+func (h *haRun) clusterSpec(prefix string) databasev1alpha1.CubridClusterSpec {
+	return databasev1alpha1.CubridClusterSpec{
+		Version: haCubridVersion, Image: &databasev1alpha1.CubridImage{Repository: h.cfg.InstanceManagerImage},
+		Databases:        []databasev1alpha1.CubridDatabase{{Name: databaseName}},
+		Topology:         databasev1alpha1.CubridTopology{PromotableMembers: haMemberCount},
+		HighAvailability: databasev1alpha1.CubridHighAvailability{Enabled: true},
+		ObjectStorage: &databasev1alpha1.CubridObjectStorage{Endpoint: h.cfg.SeedEndpoint,
+			Insecure: h.cfg.SeedInsecure, Bucket: h.cfg.SeedBucket, Prefix: prefix,
+			CredentialsSecretRef: corev1.LocalObjectReference{Name: seedSecretName}},
+		Storage: databasev1alpha1.CubridStorage{Data: databasev1alpha1.CubridStorageSpec{
+			Size: resource.MustParse("2Gi"), StorageClassName: &h.cfg.StorageClass}}}
 }
 
 // member runs a command in a member's database container.
@@ -659,12 +708,26 @@ func clusterReady(cluster *databasev1alpha1.CubridCluster) (string, error) {
 	return "", nil
 }
 
-// roles asks CUBRID on every member for its role. One active master and
-// standby slaves are a state; anything else is what does not hold.
+// clusterMembers names the member Pods of a three-member cluster.
+func clusterMembers(cluster string) []string {
+	members := make([]string, 0, haMemberCount)
+	for i := range haMemberCount {
+		members = append(members, fmt.Sprintf("%s-%d", cluster, i))
+	}
+	return members
+}
+
+// roles asks CUBRID on every member of the HA cluster for its role.
 func (h *haRun) roles(ctx context.Context) (*startingState, string, error) {
+	return h.rolesOf(ctx, h.members)
+}
+
+// rolesOf asks CUBRID on every member named for its role. One active master
+// and standby slaves are a state; anything else is what does not hold.
+func (h *haRun) rolesOf(ctx context.Context, members []string) (*startingState, string, error) {
 	state := &startingState{Slaves: []string{}}
 	var masters []string
-	for _, pod := range h.members {
+	for _, pod := range members {
 		out, err := h.member(ctx, pod, "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
 		if err != nil {
 			// The run's deadline is not a member's failure.
@@ -700,8 +763,8 @@ func heartbeatRole(pod, out string) string {
 	return ""
 }
 
-// memberIdentities returns each member's Pod identity once every member is
-// Ready, owned through the cluster's StatefulSet.
+// memberIdentities returns each member's Pod identity once every member of
+// the cluster is Ready, owned through the cluster's StatefulSet.
 func (h *haRun) memberIdentities(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (
 	[]imageIdentity, string, error) {
 	sts := &appsv1.StatefulSet{}
@@ -715,7 +778,7 @@ func (h *haRun) memberIdentities(ctx context.Context, cluster *databasev1alpha1.
 		return nil, "", errors.New("the database StatefulSet does not belong to the HA cluster")
 	}
 	identities := make([]imageIdentity, 0, haMemberCount)
-	for _, name := range h.members {
+	for _, name := range clusterMembers(cluster.Name) {
 		pod := &corev1.Pod{}
 		if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, pod); err != nil {
 			if apierrors.IsNotFound(err) || retryable(err) {
@@ -739,7 +802,7 @@ func (h *haRun) memberIdentities(ctx context.Context, cluster *databasev1alpha1.
 func (h *haRun) brokersAvailable(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (string, error) {
 	for _, mode := range []string{"rw", "ro"} {
 		deployment := &appsv1.Deployment{}
-		name := haClusterName + "-broker-" + mode
+		name := cluster.Name + "-broker-" + mode
 		if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, deployment); err != nil {
 			if apierrors.IsNotFound(err) || retryable(err) {
 				return name + " could not be read: " + err.Error(), nil
@@ -761,10 +824,7 @@ func (h *haRun) brokersAvailable(ctx context.Context, cluster *databasev1alpha1.
 // clientPod runs the workload client without privileges or an API token. It
 // sleeps; the run executes the client's commands in it.
 func (h *haRun) clientPod() *corev1.Pod {
-	jdbc := func(mode string, port int) string {
-		return fmt.Sprintf("jdbc:cubrid:%s-%s.%s.svc:%d:%s:::?connectTimeout=10&queryTimeout=30",
-			haClusterName, mode, h.cfg.Namespace, port, databaseName)
-	}
+	jdbc := func(mode string, port int) string { return h.jdbcURL(haClusterName, mode, port) }
 	no, yes, user, grace := false, true, int64(clientUser), int64(1)
 	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clientPodName, Namespace: h.cfg.Namespace,
 		Labels: map[string]string{"app.kubernetes.io/name": clientPodName,
@@ -781,6 +841,12 @@ func (h *haRun) clientPod() *corev1.Pod {
 				SecurityContext: &corev1.SecurityContext{RunAsNonRoot: &yes, RunAsUser: &user,
 					AllowPrivilegeEscalation: &no,
 					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}}}}}
+}
+
+// jdbcURL is the JDBC URL of a cluster's Service of the access mode.
+func (h *haRun) jdbcURL(cluster, mode string, port int) string {
+	return fmt.Sprintf("jdbc:cubrid:%s-%s.%s.svc:%d:%s:::?connectTimeout=10&queryTimeout=30",
+		cluster, mode, h.cfg.Namespace, port, databaseName)
 }
 
 // clientStuck are the reasons a client container waits that do not pass
@@ -882,42 +948,75 @@ func (h *haRun) runWorkload(ctx context.Context) (time.Time, error) {
 	return answered, nil
 }
 
+// dataTarget is a cluster whose rows a data check reads: its members, read
+// directly, its Services, read through the client, and the members CUBRID
+// reports as slaves.
+type dataTarget struct {
+	members []string
+	dumps   map[string]string
+	slaves  []string
+}
+
+// sourceTarget is the HA cluster LAB01 formed.
+func (h *haRun) sourceTarget() dataTarget {
+	return dataTarget{members: h.members, dumps: dumps, slaves: h.rec.StartingState.Slaves}
+}
+
 // lagging is a violation a slave that has not applied the last rows yet
 // can cause: a row a slave, or the read-only Service in front of the slaves,
 // lacks. Every other violation fails at once, a row the master or the
 // read-write Service lacks among them.
-func (h *haRun) lagging(member string, v workload.Violation) bool {
+func (t dataTarget) lagging(member string, v workload.Violation) bool {
 	if v.Rule == workload.RuleMembersDiverge {
 		return strings.HasPrefix(v.Detail, "present on ")
 	}
-	return v.Rule == workload.RuleMissing && (member == "ro" || slices.Contains(h.rec.StartingState.Slaves, member))
+	return v.Rule == workload.RuleMissing && (member == "ro" || slices.Contains(t.slaves, member))
 }
 
 // stopper returns the first violation that lag cannot explain, if any.
-func (h *haRun) stopper(r workload.Report) (string, workload.Violation, bool) {
+func (t dataTarget) stopper(r workload.Report) (string, workload.Violation, bool) {
 	for _, name := range slices.Sorted(maps.Keys(r.Members)) {
 		for _, v := range r.Members[name].Violations {
-			if !h.lagging(name, v) {
+			if !t.lagging(name, v) {
 				return name, v, true
 			}
 		}
 	}
 	for _, v := range r.Diverged {
-		if !h.lagging("", v) {
+		if !t.lagging("", v) {
 			return "", v, true
 		}
 	}
 	return "", workload.Violation{}, false
 }
 
-// checkData applies the data rules to every member, read directly, and to
-// both Services. While the only violations are rows a member lacks, they
-// are read again until the rules hold or DataCheckWithin has passed since
-// the workload's last answer. The last report read is kept in any case.
+// dataViolation is a data check that read the rows and found the rules
+// broken, as against one that could not read them.
+type dataViolation struct{ error }
+
+// checkData applies the data rules to the HA cluster against the run's whole
+// history and records how long they took to hold.
 func (h *haRun) checkData(ctx context.Context, answered time.Time, file string) error {
-	history, err := workload.ReadHistory(strings.NewReader(h.history.String()))
+	_, held, err := h.checkDataOf(ctx, h.history.String(), h.sourceTarget(), answered, file)
+	if err == nil {
+		seconds := held.Seconds()
+		h.rec.DataRulesHeldAfterSeconds = &seconds
+	}
+	return err
+}
+
+// checkDataOf applies the data rules of history to every member of target,
+// read directly, and to its Services. While the only violations are rows a
+// member lacks, they are read again until the rules hold or DataCheckWithin
+// has passed since answered. The last report read is kept in file in any
+// case and returned. A report that breaks the rules is a dataViolation, unless
+// the run ended while only lag could explain it; held is the time from
+// answered until the rules held.
+func (h *haRun) checkDataOf(ctx context.Context, historyText string, target dataTarget, answered time.Time,
+	file string) (*workload.Report, time.Duration, error) {
+	history, err := workload.ReadHistory(strings.NewReader(historyText))
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	var report *workload.Report
 	keep := func() error {
@@ -931,38 +1030,42 @@ func (h *haRun) checkData(ctx context.Context, answered time.Time, file string) 
 	}
 	for {
 		readCtx, cancel := context.WithTimeout(ctx, max(h.cfg.DataCheckWithin-time.Since(answered), 0)+readSlack)
-		rows, readErr := h.readRows(readCtx)
+		rows, readErr := h.readRowsOf(readCtx, target)
 		cancel()
 		if readErr == nil {
 			checked := workload.Check(history, rows)
 			report = &checked
 			if checked.OK {
-				held := time.Since(answered).Seconds()
-				h.rec.DataRulesHeldAfterSeconds = &held
-				return keep()
+				return report, time.Since(answered), keep()
 			}
 		}
-		final := time.Since(answered) >= h.cfg.DataCheckWithin || ctx.Err() != nil
+		passed := time.Since(answered) >= h.cfg.DataCheckWithin
+		final := passed || ctx.Err() != nil
 		var stopMember string
 		var stopViolation workload.Violation
 		stopped := false
 		if readErr == nil {
-			stopMember, stopViolation, stopped = h.stopper(*report)
+			stopMember, stopViolation, stopped = target.stopper(*report)
 			final = final || stopped
 		}
 		if final {
 			if err := keep(); err != nil {
-				return err
+				return report, 0, err
 			}
 			if report == nil || (readErr != nil && ctx.Err() != nil) {
-				return errors.Join(fmt.Errorf("read the ledger rows: %w", readErr), ctx.Err())
+				return report, 0, errors.Join(fmt.Errorf("read the ledger rows: %w", readErr), ctx.Err())
 			}
-			member, v, total := report.FirstViolation(append(slices.Clone(h.members), "rw", "ro"), "")
+			member, v, total := report.FirstViolation(append(slices.Clone(target.members), "rw", "ro"), "")
 			if stopped {
 				member, v = stopMember, stopViolation
 			}
-			return errors.Join(fmt.Errorf("the data rules did not hold: %s on %s for %s: %s (%d violations in all)",
+			broken := errors.Join(fmt.Errorf("the data rules did not hold: %s on %s for %s: %s (%d violations in all)",
 				v.Rule, cmp.Or(member, "the members"), v.OpID, v.Detail, total), readErr)
+			// Only lag explains what was read when the run ended: not confirmed.
+			if !stopped && (!passed || ctx.Err() != nil) {
+				return report, 0, broken
+			}
+			return report, 0, dataViolation{broken}
 		}
 		select {
 		case <-ctx.Done():
@@ -975,16 +1078,12 @@ func (h *haRun) checkData(ctx context.Context, answered time.Time, file string) 
 // check window.
 const readSlack = 30 * time.Second
 
-// readRows reads the ledger rows of every member, not through a Broker, and
-// through both Services.
-func (h *haRun) readRows(ctx context.Context) (map[string][]workload.Row, error) {
+// readRowsOf reads the ledger rows of every member of target, not through a
+// Broker, and through its Services.
+func (h *haRun) readRowsOf(ctx context.Context, target dataTarget) (map[string][]workload.Row, error) {
 	rows := map[string][]workload.Row{}
-	for _, pod := range h.members {
-		csql := func(sql string) (string, error) {
-			return h.member(ctx, pod, "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`,
-				databaseName+"@localhost", sql)
-		}
-		out, err := sqlcheck.Run(csql, workload.LedgerQuery)
+	for _, pod := range target.members {
+		out, err := sqlcheck.Run(h.csql(ctx, pod), workload.LedgerQuery)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", pod, err)
 		}
@@ -996,8 +1095,8 @@ func (h *haRun) readRows(ctx context.Context) (map[string][]workload.Row, error)
 			return nil, fmt.Errorf("%s: %w", pod, err)
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(dumps)) {
-		out, err := h.clientRun(ctx, dumps[name]+" 2>/tmp/dump.err")
+	for _, name := range slices.Sorted(maps.Keys(target.dumps)) {
+		out, err := h.clientRun(ctx, target.dumps[name]+" 2>/tmp/dump.err")
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
@@ -1006,6 +1105,14 @@ func (h *haRun) readRows(ctx context.Context) (map[string][]workload.Row, error)
 		}
 	}
 	return rows, nil
+}
+
+// csql runs SQL with csql on a member, not through a Broker.
+func (h *haRun) csql(ctx context.Context, pod string) sqlcheck.Runner {
+	return func(sql string) (string, error) {
+		return h.member(ctx, pod, "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`,
+			databaseName+"@localhost", sql)
+	}
 }
 
 // dumps read the ledger through each Service.

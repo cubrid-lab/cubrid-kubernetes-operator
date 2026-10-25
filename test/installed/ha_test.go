@@ -119,6 +119,17 @@ type haFixture struct {
 	marker        func(script string) (string, error)
 	// eventsErr answers a list of Events.
 	eventsErr error
+	// restoreCreated plays the Operator when the run creates the restored
+	// cluster, restoreRead before each reading of it; clientHook answers a
+	// client command first when it returns true; markersOf is what the marker
+	// table of a member holds.
+	restoreCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
+	restoreRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	clientHook     func(script string) (string, error, bool)
+	markersOf      func(pod string) []string
+	// restoredRows, once set, are the rows of the restored cluster's members
+	// and Services.
+	restoredRows []workload.Row
 
 	writes  []string
 	deletes []string
@@ -157,14 +168,7 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				f.writes = append(f.writes, "secret")
 				return c.Create(ctx, value, opts...)
 			case *databasev1alpha1.CubridCluster:
-				value.UID = "ha-cluster"
-				value.Generation = 1
-				f.cluster = value.DeepCopy()
-				f.writes = append(f.writes, "cluster")
-				if err := c.Create(ctx, value, opts...); err != nil {
-					return err
-				}
-				return f.reconcile(ctx, c, value)
+				return f.createCluster(ctx, c, value, opts...)
 			case *corev1.Pod:
 				if value.Name != clientPodName {
 					t.Fatalf("runner created an unexpected Pod %s", value.Name)
@@ -216,6 +220,11 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 					return err
 				}
 			}
+			if _, ok := obj.(*databasev1alpha1.CubridCluster); ok && key.Name == s12ClusterName && f.restoreRead != nil {
+				if err := f.restoreRead(ctx, c, key); err != nil {
+					return err
+				}
+			}
 			return c.Get(ctx, key, obj, opts...)
 		},
 		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
@@ -240,6 +249,27 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 	return f
 }
 
+// createCluster stores a cluster the run creates and plays the Operator: the
+// HA cluster is formed at once, the restored cluster is S12's fixture's.
+func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster,
+	opts ...client.CreateOption) error {
+	if cluster.Name == s12ClusterName {
+		if f.restoreCreated == nil {
+			f.t.Fatalf("runner created a restored cluster without S12")
+		}
+		f.writes = append(f.writes, "restore-cluster")
+		return f.restoreCreated(ctx, c, cluster)
+	}
+	cluster.UID = "ha-cluster"
+	cluster.Generation = 1
+	f.cluster = cluster.DeepCopy()
+	f.writes = append(f.writes, "cluster")
+	if err := c.Create(ctx, cluster, opts...); err != nil {
+		return err
+	}
+	return f.reconcile(ctx, c, cluster)
+}
+
 // reconcile creates what the Operator would for the cluster, formed.
 func (f *haFixture) reconcile(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error {
 	cluster.Status.ObservedGeneration = 1
@@ -260,16 +290,33 @@ func (f *haFixture) reconcile(ctx context.Context, c client.WithWatch, cluster *
 	if err := c.Update(ctx, cluster); err != nil {
 		return err
 	}
-	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: haClusterName, Namespace: f.cfg.Namespace,
-		UID: "ha-sts", OwnerReferences: []metav1.OwnerReference{owner("CubridCluster", haClusterName, cluster.UID)}}}
-	if f.foreignStatefulSet {
-		sts.OwnerReferences = []metav1.OwnerReference{owner("CubridCluster", haClusterName, "someone-else")}
+	return f.createChildren(ctx, c, cluster)
+}
+
+// createChildren creates the StatefulSet, the member Pods and the Broker
+// Deployments of a cluster, formed. The members read the cluster's token
+// Secret and its object store Secret.
+func (f *haFixture) createChildren(ctx context.Context, c client.WithWatch,
+	cluster *databasev1alpha1.CubridCluster) error {
+	name := cluster.Name
+	secret := func(env, secret string) corev1.EnvVar {
+		return corev1.EnvVar{Name: env, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secret}, Key: "token"}}}
 	}
-	objects := []client.Object{sts}
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.cfg.Namespace,
+		UID: types.UID(name + "-sts"), OwnerReferences: []metav1.OwnerReference{owner("CubridCluster", name, cluster.UID)}},
+		Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: databaseContainer, Env: []corev1.EnvVar{secret("IM_TOKEN", name+"-im-token"),
+				secret("S3_ACCESS_KEY", cluster.Spec.ObjectStorage.CredentialsSecretRef.Name)}}}}}}}
+	if f.foreignStatefulSet {
+		sts.OwnerReferences = []metav1.OwnerReference{owner("CubridCluster", name, "someone-else")}
+	}
+	objects := make([]client.Object, 0, 1+haMemberCount+2)
+	objects = append(objects, sts)
 	for i := range haMemberCount {
-		name := fmt.Sprintf("%s-%d", haClusterName, i)
+		name := fmt.Sprintf("%s-%d", cluster.Name, i)
 		objects = append(objects, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.cfg.Namespace,
-			UID: types.UID(name), OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", haClusterName, sts.UID)}},
+			UID: types.UID(name), OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", cluster.Name, sts.UID)}},
 			Spec: corev1.PodSpec{NodeName: fmt.Sprintf("node-%d", i+1),
 				Containers: []corev1.Container{{Name: databaseContainer, Image: f.cfg.InstanceManagerImage}}},
 			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
@@ -280,8 +327,8 @@ func (f *haFixture) reconcile(ctx context.Context, c client.WithWatch, cluster *
 	}
 	for _, mode := range []string{"rw", "ro"} {
 		objects = append(objects, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-			Name: haClusterName + "-broker-" + mode, Namespace: f.cfg.Namespace, UID: types.UID(mode),
-			OwnerReferences: []metav1.OwnerReference{owner("CubridCluster", haClusterName, cluster.UID)}},
+			Name: name + "-broker-" + mode, Namespace: f.cfg.Namespace, UID: types.UID(name + "-" + mode),
+			OwnerReferences: []metav1.OwnerReference{owner("CubridCluster", name, cluster.UID)}},
 			Status: appsv1.DeploymentStatus{Replicas: 2, UpdatedReplicas: 2, AvailableReplicas: 2}})
 	}
 	return createAll(ctx, c, objects...)
@@ -290,26 +337,31 @@ func (f *haFixture) reconcile(ctx context.Context, c client.WithWatch, cluster *
 // fakeWorkload returns the history of a run of ops operations by client c1,
 // every fifth rolled back, and the rows it leaves.
 func fakeWorkload(ops int) (string, []workload.Row) {
+	return fakeClientWorkload("c1", ops)
+}
+
+// fakeClientWorkload is fakeWorkload of client id.
+func fakeClientWorkload(id string, ops int) (string, []workload.Row) {
 	var lines []string
 	var rows []workload.Row
 	at := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
 	for seq := 1; seq <= ops; seq++ {
-		op, note := workload.OpInsert, fmt.Sprintf("c1-%d", seq)
+		op, note := workload.OpInsert, fmt.Sprintf("%s-%d", id, seq)
 		if seq%5 == 0 {
 			op, note = workload.OpRollback, workload.RolledBackNote
 		}
-		id := fmt.Sprintf("c1-%06d", seq)
+		opID := fmt.Sprintf("%s-%06d", id, seq)
 		amount := seq*37%1000 + 1
 		for _, e := range []workload.Event{
-			{T: at, Client: "c1", Seq: seq, Op: op, OpID: id, Endpoint: "rw", Event: workload.Attempted,
+			{T: at, Client: id, Seq: seq, Op: op, OpID: opID, Endpoint: "rw", Event: workload.Attempted,
 				Amount: amount, Note: note},
-			{T: at, Client: "c1", Seq: seq, Op: op, OpID: id, Endpoint: "rw", Event: workload.Acknowledged},
+			{T: at, Client: id, Seq: seq, Op: op, OpID: opID, Endpoint: "rw", Event: workload.Acknowledged},
 		} {
 			data, _ := json.Marshal(e)
 			lines = append(lines, string(data))
 		}
 		if op == workload.OpInsert {
-			rows = append(rows, workload.Row{OpID: id, Client: "c1", Seq: seq, Amount: amount, Note: note})
+			rows = append(rows, workload.Row{OpID: opID, Client: id, Seq: seq, Amount: amount, Note: note})
 		}
 	}
 	return strings.Join(lines, "\n") + "\n", rows
@@ -339,6 +391,9 @@ func (f *haFixture) rowsOf(name string) []workload.Row {
 	defer f.mu.Unlock()
 	f.reads[name]++
 	rows := slices.Clone(f.rows)
+	if strings.HasPrefix(name, s12ClusterName+"-") {
+		rows = slices.Clone(f.restoredRows)
+	}
 	if n, lacking := f.missing[name]; lacking && (f.missingReads == 0 || f.reads[name] <= f.missingReads) {
 		rows = slices.Delete(rows, n, n+1)
 	}
@@ -388,6 +443,16 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 			pod, role, role, state), nil
 	case strings.Contains(script, "cubrid_rel"):
 		return "CUBRID 11.4 (11.4.6.1963-0e7d3c1)", nil
+	case strings.Contains(script, "csql") && strings.Contains(args[len(args)-1], "FROM marker"):
+		var b strings.Builder
+		b.WriteString("=== <Result of SELECT Command in Line 1> ===\n\n  v\n======\n")
+		f.mu.Lock()
+		markersOf := f.markersOf
+		f.mu.Unlock()
+		for _, line := range markersOf(pod) {
+			b.WriteString("  '" + line + "'\n")
+		}
+		return b.String(), nil
 	case strings.Contains(script, "csql") && strings.Contains(args[len(args)-1], "FROM ledger"):
 		var b strings.Builder
 		b.WriteString("=== <Result of SELECT Command in Line 1> ===\n\n  v\n======\n")
@@ -401,6 +466,11 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 }
 
 func (f *haFixture) clientCommand(ctx context.Context, script string) (string, error) {
+	if f.clientHook != nil {
+		if out, err, done := f.clientHook(script); done {
+			return out, err
+		}
+	}
 	switch {
 	case strings.HasPrefix(script, "workload init"):
 		return f.initOutput, f.initErr
@@ -431,6 +501,10 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 			defer f.afterRun(ctx)
 		}
 		return f.history, nil
+	case strings.Contains(script, s12ClusterName+"-ro") && strings.Contains(script, "workload dump"):
+		return strings.Join(jsonLines(f.rowsOf(s12ClusterName+"-ro")), "\n"), nil
+	case strings.Contains(script, s12ClusterName+"-rw") && strings.Contains(script, "workload dump"):
+		return strings.Join(jsonLines(f.rowsOf(s12ClusterName+"-rw")), "\n"), nil
 	case strings.Contains(script, "RO_JDBC_URL") && strings.Contains(script, "workload dump"):
 		return strings.Join(jsonLines(f.rowsOf("ro")), "\n"), nil
 	case strings.Contains(script, "workload dump"):

@@ -18,7 +18,7 @@ limitations under the License.
 // cluster in a fresh namespace, S01's starting state, the SQL workload client
 // and the data rules on every member and both Services, and with
 // -fault operator-restart S06 restart after it, or with -backup-bucket S11
-// complete (docs/testing/installed-ha.md).
+// complete, and with -restore also S12 exact (docs/testing/installed-ha.md).
 package main
 
 import (
@@ -83,6 +83,10 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"S11: bound from the backup request until Completed or Failed (backup_limit)")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
 		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
+	flags.BoolVar(&cfg.Restore, "restore", false,
+		"scenario after S11: S12 exact, a new cluster restored from S11's artifact; needs -backup-bucket")
+	flags.DurationVar(&cfg.RestoreLimit, "restore-limit", 20*time.Minute,
+		"S12: bound from the restored cluster's creation until it is Ready (restore_limit)")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")

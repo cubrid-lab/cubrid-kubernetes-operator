@@ -266,6 +266,7 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 	// writeErr is the manifest's copy that could not be written.
 	var writeErr error
 	defer func() {
+		h.s11Rec = &rec
 		// A pass without its evidence is a failure; a blocked or failed S11
 		// keeps its result, with the evidence that could not be written.
 		if err := h.writeJSON(s11RecordFile, rec); err != nil {
@@ -497,7 +498,8 @@ func (h *haRun) waitBackup(ctx context.Context, created *databasev1alpha1.Cubrid
 		}
 		// Every status read, whole, not only what a phase records.
 		rec.Credentials.StatusesChecked++
-		if err := h.lookForCredentials(rec.Credentials, "the status read in phase "+string(s.Phase), s); err != nil {
+		if err := h.lookForCredentials(&rec.Credentials.FoundIn, "the status read in phase "+string(s.Phase),
+			s); err != nil {
 			return false, err
 		}
 		return s.Phase == databasev1alpha1.BackupPhaseCompleted || s.Phase == databasev1alpha1.BackupPhaseFailed, nil
@@ -837,10 +839,10 @@ func downloadSum(ctx context.Context, store objectStore, bucket, key string) (st
 	return hex.EncodeToString(hash.Sum(nil)), n, err
 }
 
-// lookForCredentials records where when v, as JSON, holds a key of the
+// lookForCredentials adds where to found when v, as JSON, holds a key of the
 // object store in any encoding the evidence redactor removes
 // (evidence.SecretForms).
-func (h *haRun) lookForCredentials(found *s11Credentials, where string, v any) error {
+func (h *haRun) lookForCredentials(found *[]string, where string, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -849,8 +851,8 @@ func (h *haRun) lookForCredentials(found *s11Credentials, where string, v any) e
 	if err != nil {
 		return err
 	}
-	if holds && !slices.Contains(found.FoundIn, where) {
-		found.FoundIn = append(found.FoundIn, where)
+	if holds && !slices.Contains(*found, where) {
+		*found = append(*found, where)
 	}
 	return nil
 }
@@ -888,7 +890,7 @@ func (h *haRun) checkS11Credentials(ctx context.Context, created *databasev1alph
 	if err := h.Client.Get(ctx, client.ObjectKeyFromObject(created), backup); err != nil {
 		return err
 	}
-	if err := h.lookForCredentials(found, "the CubridBackup's status", backup.Status); err != nil {
+	if err := h.lookForCredentials(&found.FoundIn, "the CubridBackup's status", backup.Status); err != nil {
 		return err
 	}
 	found.StatusChecked = true
@@ -901,7 +903,7 @@ func (h *haRun) checkS11Credentials(ctx context.Context, created *databasev1alph
 		if event.InvolvedObject.UID == created.UID {
 			found.BackupEvents++
 		}
-		if err := h.lookForCredentials(found, "Event "+event.Name, event); err != nil {
+		if err := h.lookForCredentials(&found.FoundIn, "Event "+event.Name, event); err != nil {
 			return err
 		}
 	}

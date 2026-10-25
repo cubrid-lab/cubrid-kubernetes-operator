@@ -125,6 +125,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha` | The [installed-Operator HA command](installed-ha.md), under an authorized launcher on its explicitly selected environment | LAB01: create a new three-member HA cluster, reach the common starting state, run the workload client and check the data rules on every member and both Services, verify scoped cleanup | none |
 | `lab-installed-ha-s06` | The installed-Operator HA command with `-fault operator-restart` | LAB01, then S06 (`restart`) on the same cluster: the installed manager's Pod deleted without a grace period | none |
 | `lab-installed-ha-s11` | The installed-Operator HA command with `-backup-bucket` | LAB01, then S11 (`complete`) on the same cluster: a full backup to object storage, its artifact downloaded and checked by the run | none |
+| `lab-installed-ha-s12` | The installed-Operator HA command with `-backup-bucket` and `-restore` | LAB01, S11 (`complete`), then S12 (`exact`): S11's artifact restored into a new cluster in the run namespace and checked against the history truncated at S11's known point | none |
 
 `lab-installed-smoke` is a connection baseline. Its `passed` verdict applies
 to LAB00 and establishes neither S00 installation validation nor S00–S15
@@ -140,6 +141,10 @@ variants are not part of the lane, rather than `not_applicable`: the lab can
 kill a Pod or cut the object store, so they are not ruled out by the
 environment, only not run by this command. The lane does not read the
 Operator's logs for credentials and does not restore the artifact (S12).
+
+`lab-installed-ha-s12` requires S12 `exact` only. `wrong-target` and
+`tampered` are not part of the lane, rather than `not_applicable`: the lab
+does not rule them out, this command does not run them.
 
 `lab-preallocated-component-smoke` is a distinct component result. Its successful
 owned-workload cleanup is not fresh LAB00 namespace cleanup or private campaign
