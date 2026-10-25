@@ -932,10 +932,9 @@ func (h *haRun) replicationState(ctx context.Context, cluster, pod, master strin
 		}
 		fmt.Fprintf(&b, "%s\n%s\n", summary, healthy)
 	}
-	switch {
-	case pod == master:
+	if pod == master {
 		fmt.Fprintf(&b, "applyinfo of %s: not read, the master applies no log\n", pod)
-	default:
+	} else {
 		fmt.Fprintf(&b, "applyinfo of %s for %s's log:\n", pod, master)
 		if out, err := h.member(ctx, pod, "bash", "-c", applyinfoScript, "applyinfo", master); err != nil {
 			fmt.Fprintf(&b, "could not be read: %v\n", err)
