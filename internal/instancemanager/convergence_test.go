@@ -125,6 +125,60 @@ func TestParseApplyConvergence_RealOutput(t *testing.T) {
 	}
 }
 
+// With -v, applyinfo also prints the applier's position in the copied log and
+// the end of that log, which tell an applier that keeps up through an open
+// transaction from one that is stuck (POC-37, #249). The fixture is the real
+// output of a healthy slave of cubrid/cubrid:11.4 (11.4.6). Without -v the
+// applier's position is not printed and stays unset.
+func TestParseApplyConvergence_Positions(t *testing.T) {
+	c := parseApplyConvergence(applyinfoOutput(t, "applyinfo-verbose.txt"))
+	if !c.Available || c.CommitCount != 8 || c.FailCount != 0 || c.DelayedPageCount != 0 {
+		t.Fatalf("counters = %+v", c)
+	}
+	if c.FinalLSA == nil || *c.FinalLSA != (LSA{Page: 146, Offset: 2640}) {
+		t.Errorf("final LSA = %+v, want 146|2640", c.FinalLSA)
+	}
+	if c.CopiedEOF == nil || *c.CopiedEOF != (LSA{Page: 146, Offset: 2688}) {
+		t.Errorf("copied EOF = %+v, want 146|2688", c.CopiedEOF)
+	}
+	// The copied log's EOF, not the applier's "Last EOF LSA" before it,
+	// which the real output happens to give the same value.
+	other := strings.Replace(applyinfoOutput(t, "applyinfo-verbose.txt"), "Last EOF LSA                   : 146 | 2688",
+		"Last EOF LSA                   : 100 | 1", 1)
+	if c := parseApplyConvergence(other); c.CopiedEOF == nil || *c.CopiedEOF != (LSA{Page: 146, Offset: 2688}) {
+		t.Errorf("copied EOF read from the applier's line: %+v", c.CopiedEOF)
+	}
+	// Without -v the copied log's EOF is printed too, the applier's
+	// position is not.
+	for _, name := range []string{"applyinfo-local.txt", "applyinfo-stalled.txt", "applyinfo-with-remote.txt"} {
+		if c := parseApplyConvergence(applyinfoOutput(t, name)); c.FinalLSA != nil || c.CopiedEOF == nil {
+			t.Errorf("%s: final LSA %+v, copied EOF %+v from output without -v", name, c.FinalLSA, c.CopiedEOF)
+		}
+	}
+	// A field printed without its numbers is no position.
+	broken := strings.Replace(applyinfoOutput(t, "applyinfo-verbose.txt"), "Final LSA                      : 146 | 2640",
+		"Final LSA                      : ", 1)
+	if c := parseApplyConvergence(broken); c.FinalLSA != nil || !c.Available {
+		t.Errorf("a final LSA without numbers: %+v", c)
+	}
+}
+
+func TestLSABefore(t *testing.T) {
+	for _, tc := range []struct {
+		a, b LSA
+		want bool
+	}{
+		{LSA{Page: 145, Offset: 16032}, LSA{Page: 146, Offset: 0}, true},
+		{LSA{Page: 146, Offset: 2640}, LSA{Page: 146, Offset: 2688}, true},
+		{LSA{Page: 146, Offset: 2688}, LSA{Page: 146, Offset: 2688}, false},
+		{LSA{Page: 147, Offset: 0}, LSA{Page: 146, Offset: 16000}, false},
+	} {
+		if got := tc.a.Before(tc.b); got != tc.want {
+			t.Errorf("%+v before %+v = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
 // roleCLI answers by the CUBRID command, and records the applyinfo call.
 type roleCLI struct {
 	heartbeat string
@@ -170,7 +224,7 @@ func TestServer_Role_ReportsReplicationOfASlave(t *testing.T) {
 	if !r.Available || r.Source != "ha-0" || r.DelayedPageCount != 43 || r.AppliedChanges != 0 || r.FailCount != 0 {
 		t.Errorf("replication = %+v", r)
 	}
-	if got := strings.Join(cli.applyArgs, " "); got != "applyinfo -L /var/lib/cubrid/databases/appdb_ha-0 -a appdb" {
+	if got := strings.Join(cli.applyArgs, " "); got != "applyinfo -L /var/lib/cubrid/databases/appdb_ha-0 -a -v appdb" {
 		t.Errorf("applyinfo was run as %q", got)
 	}
 }

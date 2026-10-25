@@ -1,0 +1,48 @@
+
+ *** Applied Info. *** 
+DB creation time               : 10:20:34.000 PM 10/25/2026
+Last committed LSA             : 146 | 2552
+Last committed replog LSA      : 145 | 12480
+Last append LSA                : 146 | 2688
+Last EOF LSA                   : 146 | 2688
+Final LSA                      : 146 | 2640
+Required LSA                   : 146 | 2640
+Log record time                : 10:23:27.000 PM 10/25/2026
+Log committed time             : 10:23:28.000 PM 10/25/2026
+Last access time               : 10:23:28.367 PM 10/25/2026
+Insert count                   : 0
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 0
+Commit count                   : 8
+Fail count                     : 0
+Start time                     : 10:22:48.637 PM 10/25/2026
+
+ *** Copied Active Info. *** 
+Magic                          : CUBRID/LogActive
+DB name                        : appdb
+DB creation time               : 10:20:34.000 PM 10/25/2026 (1792966834)
+Vol creation time              : 10:20:34.000 PM 10/25/2026 (1792966834)
+EOF LSA                        : 146 | 2688
+Append LSA                     : 146 | 2688
+HA server state                : active
+CUBRID release                 : 11.4.6
+DB iopagesize                  : 16384
+DB logpagesize                 : 16384
+Is log shutdown                : 1
+Next transaction identifier    : 27
+Number of pages                : 4095
+Charset                        : 3 (iso88591)
+Logical pageid                 : 0
+CHKPT LSA                      : 145 | 10248
+Next archive pageid            : 0
+Next archive physical pageid   : 1
+Next archive number            : 0
+HA file status                 : SYNCHRONIZED
+HA promotion time              : 10:22:47.000 PM 10/25/2026 (1792966967)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
