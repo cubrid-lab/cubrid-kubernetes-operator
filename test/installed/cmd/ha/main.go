@@ -17,7 +17,8 @@ limitations under the License.
 // Command ha runs LAB01 against an installed Operator: a three-member HA
 // cluster in a fresh namespace, S01's starting state, the SQL workload client
 // and the data rules on every member and both Services, and with
-// -fault operator-restart S06 restart after it (docs/testing/installed-ha.md).
+// -fault operator-restart S06 restart after it, or with -backup-bucket S11
+// complete (docs/testing/installed-ha.md).
 package main
 
 import (
@@ -76,6 +77,12 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"S06: bound for the replacement manager's first fresh status (operator_resync_limit)")
 	flags.StringVar(&cfg.LeaderLease, "leader-lease", "91d4fe35.cubrid.io",
 		"S06: the manager's leader election Lease in its namespace")
+	flags.StringVar(&cfg.BackupBucket, "backup-bucket", "",
+		"scenario after LAB01: S11 complete, a full backup to this bucket; not with -fault")
+	flags.DurationVar(&cfg.BackupLimit, "backup-limit", 15*time.Minute,
+		"S11: bound from the backup request until Completed or Failed (backup_limit)")
+	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
+		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")

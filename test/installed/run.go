@@ -79,6 +79,13 @@ type Runner struct {
 	Client   client.Client
 	Command  func(context.Context, ...string) (string, error)
 	Redactor *evidence.Redactor
+	// forward opens a port-forward to port of a Service and returns the local
+	// address and a func that ends it (Target.forward). S11 reaches the
+	// object store through it.
+	forward func(ctx context.Context, namespace, service, port string) (string, func(), error)
+	// openStore returns the run's own client of the object store at endpoint;
+	// nil selects minio-go.
+	openStore func(endpoint, accessKey, secretKey string, secure bool) (objectStore, error)
 }
 
 type sqlStep struct {

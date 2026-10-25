@@ -111,6 +111,14 @@ type haFixture struct {
 	kills     int
 	// stopAnswer is what stopping a client prints; empty means "stopped".
 	stopAnswer string
+	// backupCreated plays the Operator when the run creates a CubridBackup,
+	// before it is stored; backupRead before each reading of it; marker runs
+	// workload marker.
+	backupCreated func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error
+	backupRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	marker        func(script string) (string, error)
+	// eventsErr answers a list of Events.
+	eventsErr error
 
 	writes  []string
 	deletes []string
@@ -181,10 +189,34 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				f.client = value.DeepCopy()
 				f.writes = append(f.writes, "client")
 				return c.Create(ctx, value, opts...)
+			case *databasev1alpha1.CubridBackup:
+				if f.backupCreated == nil {
+					t.Fatalf("runner created a CubridBackup without S11")
+				}
+				f.writes = append(f.writes, "backup")
+				if err := f.backupCreated(ctx, c, value); err != nil {
+					return err
+				}
+				return c.Create(ctx, value, opts...)
 			default:
 				t.Fatalf("runner attempted a forbidden write: %T", obj)
 				return errors.New("forbidden write")
 			}
+		},
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*corev1.EventList); ok && f.eventsErr != nil {
+				return f.eventsErr
+			}
+			return c.List(ctx, list, opts...)
+		},
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption) error {
+			if _, ok := obj.(*databasev1alpha1.CubridBackup); ok && f.backupRead != nil {
+				if err := f.backupRead(ctx, c, key); err != nil {
+					return err
+				}
+			}
+			return c.Get(ctx, key, obj, opts...)
 		},
 		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 			if pod, ok := obj.(*corev1.Pod); ok && pod.Namespace == cfg.OperatorNamespace {
@@ -382,6 +414,8 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 		answer := f.stopAnswer
 		f.mu.Unlock()
 		return cmp.Or(answer, "stopped") + "\n", nil
+	case strings.HasPrefix(script, "workload marker ") && f.marker != nil:
+		return f.marker(script)
 	case strings.HasPrefix(script, `grep -c '"acknowledged"'`):
 		return "12\n", nil
 	case strings.HasPrefix(script, "sleep 1; cat /tmp/"):
@@ -448,6 +482,17 @@ func requireNoSecretInEvidence(t *testing.T, dir string) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// requireOwnEvidence fails unless every file a scenario lists is under its
+// own directory.
+func requireOwnEvidence(t *testing.T, scenario evidence.Scenario, dir string) {
+	t.Helper()
+	for _, rel := range scenario.Evidence {
+		if !strings.HasPrefix(rel, dir+"/") {
+			t.Fatalf("%s evidence = %v, want only files under %s/", scenario.Name(), scenario.Evidence, dir)
+		}
 	}
 }
 

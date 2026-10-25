@@ -441,18 +441,7 @@ func (r *Redactor) Add(secrets ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, s := range secrets {
-		if len(s) < minSecretLength {
-			continue
-		}
-		quoted, _ := json.Marshal(s)
-		variants := []string{s, url.QueryEscape(s), url.PathEscape(s), string(quoted[1 : len(quoted)-1])}
-		// The base64 of a short value is short enough to occur by chance.
-		if len(s) >= minEncodedSecretLength {
-			variants = append(variants,
-				base64.StdEncoding.EncodeToString([]byte(s)), base64.RawStdEncoding.EncodeToString([]byte(s)),
-				base64.URLEncoding.EncodeToString([]byte(s)), base64.RawURLEncoding.EncodeToString([]byte(s)))
-		}
-		for _, v := range variants {
+		for _, v := range SecretForms(s) {
 			if !slices.Contains(r.secrets, v) {
 				r.secrets = append(r.secrets, v)
 			}
@@ -460,6 +449,23 @@ func (r *Redactor) Add(secrets ...string) {
 	}
 	// Longest first, so that a value containing another is removed whole.
 	slices.SortFunc(r.secrets, func(a, b string) int { return len(b) - len(a) })
+}
+
+// SecretForms returns a secret value and the encodings Redactor removes it
+// in, or nothing for a value shorter than four characters.
+func SecretForms(s string) []string {
+	if len(s) < minSecretLength {
+		return nil
+	}
+	quoted, _ := json.Marshal(s)
+	forms := []string{s, url.QueryEscape(s), url.PathEscape(s), string(quoted[1 : len(quoted)-1])}
+	// The base64 of a short value is short enough to occur by chance.
+	if len(s) >= minEncodedSecretLength {
+		forms = append(forms,
+			base64.StdEncoding.EncodeToString([]byte(s)), base64.RawStdEncoding.EncodeToString([]byte(s)),
+			base64.URLEncoding.EncodeToString([]byte(s)), base64.RawURLEncoding.EncodeToString([]byte(s)))
+	}
+	return forms
 }
 
 // Redact returns data with credentials replaced by "[REDACTED]".

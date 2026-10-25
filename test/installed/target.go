@@ -17,13 +17,18 @@ limitations under the License.
 package installed
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -132,7 +137,100 @@ func (t *Target) Runner() (*Runner, error) {
 	if err != nil {
 		return nil, errors.New("could not initialize the selected Kubernetes client")
 	}
-	return &Runner{Client: c, Command: t.command, Redactor: t.redactor}, nil
+	return &Runner{Client: c, Command: t.command, Redactor: t.redactor, forward: t.forward}, nil
+}
+
+// forwardReady bounds how long a port-forward may take to listen.
+const forwardReady = 30 * time.Second
+
+// forward opens kubectl port-forward to port of a Service through this
+// target's snapshot, on a free port of 127.0.0.1. It goes through the
+// kubelet: the lab's API server cannot reach the Pod network.
+func (t *Target) forward(ctx context.Context, namespace, service, port string) (string, func(), error) {
+	return startForward(ctx, func(ctx context.Context) *exec.Cmd {
+		return t.Kubectl(ctx, "-n", namespace, "port-forward", "--address", "127.0.0.1", "service/"+service, ":"+port)
+	}, forwardReady)
+}
+
+// forwardStderr bounds what a port-forward's error output keeps.
+const forwardStderr = 64 << 10
+
+// headBuffer keeps the first max bytes written to it and drops the rest.
+type headBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (b *headBuffer) Write(p []byte) (int, error) {
+	if room := b.max - b.buf.Len(); room > 0 {
+		b.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+func (b *headBuffer) String() string { return b.buf.String() }
+
+// forwardedPort is the line kubectl port-forward prints once it listens.
+var forwardedPort = regexp.MustCompile(`^Forwarding from 127\.0\.0\.1:(\d+) -> `)
+
+// startForward starts the port-forward start returns and waits until it
+// listens. It returns the local address and a func that ends the process
+// and waits for it; the process also ends with ctx. On an error the
+// process has already ended.
+func startForward(ctx context.Context, start func(context.Context) *exec.Cmd, ready time.Duration) (
+	string, func(), error) {
+	pctx, cancel := context.WithCancel(ctx)
+	cmd := start(pctx)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return "", nil, err
+	}
+	// Read only after the process ended.
+	stderr := &headBuffer{max: forwardStderr}
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return "", nil, err
+	}
+	done := make(chan struct{})
+	ports := make(chan string, 1)
+	go func() {
+		defer close(done)
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			if m := forwardedPort.FindStringSubmatch(sc.Text()); m != nil {
+				select {
+				case ports <- m[1]:
+				default:
+				}
+			}
+		}
+		// A line too long for the scanner ends it: the rest is read and
+		// dropped, so that kubectl never blocks on a full pipe.
+		_, _ = io.Copy(io.Discard, stdout)
+		_ = cmd.Wait()
+	}()
+	stop := func() {
+		cancel()
+		<-done
+	}
+	timer := time.NewTimer(ready)
+	defer timer.Stop()
+	select {
+	case port := <-ports:
+		return "127.0.0.1:" + port, stop, nil
+	case <-done:
+		cancel()
+		return "", nil, fmt.Errorf("the port-forward ended before it listened: %s", strings.TrimSpace(stderr.String()))
+	case <-timer.C:
+		stop()
+		return "", nil, fmt.Errorf("the port-forward did not listen within %s: %s", ready,
+			strings.TrimSpace(stderr.String()))
+	case <-ctx.Done():
+		stop()
+		return "", nil, ctx.Err()
+	}
 }
 
 // Kubectl returns a kubectl command bound to this target's snapshot, in a

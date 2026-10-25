@@ -18,7 +18,9 @@ package installed
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,5 +148,64 @@ func TestTargetRejectsImplicitOrMissingContexts(t *testing.T) {
 			_ = target.Close()
 			t.Fatal("implicit or missing target was accepted")
 		}
+	}
+}
+
+func TestStartForwardReturnsThePortAndEndsTheProcess(t *testing.T) {
+	var cmd *exec.Cmd
+	addr, stop, err := startForward(t.Context(), func(ctx context.Context) *exec.Cmd {
+		cmd = exec.CommandContext(ctx, "sh", "-c", "echo 'Forwarding from 127.0.0.1:41234 -> 8333'; exec sleep 60")
+		return cmd
+	}, 10*time.Second)
+	if err != nil || addr != "127.0.0.1:41234" {
+		t.Fatalf("startForward() = %q, %v; want the forwarded port", addr, err)
+	}
+	stop()
+	if cmd.ProcessState == nil {
+		t.Fatal("the port-forward still runs after stop")
+	}
+}
+
+func TestStartForwardFailsWhenTheProcessEndsBeforeItListens(t *testing.T) {
+	addr, stop, err := startForward(t.Context(), func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "echo 'error: services \"seaweedfs\" not found' >&2; exit 1")
+	}, 10*time.Second)
+	if err == nil || stop != nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("startForward() = %q, %v; want the process's error", addr, err)
+	}
+}
+
+func TestStartForwardKeepsReadingTheProcessOutput(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "done")
+	// A line longer than the scanner takes, then more output: kubectl must
+	// not block on a full pipe.
+	script := `echo 'Forwarding from 127.0.0.1:41234 -> 8333'; head -c 300000 /dev/zero | tr '\0' x; echo; ` +
+		`touch "$0"; exec sleep 60`
+	_, stop, err := startForward(t.Context(), func(ctx context.Context) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "sh", "-c", script, marker)
+		// As Target.Kubectl: the pipeline outlives a killed sh.
+		cmd.WaitDelay = time.Second
+		return cmd
+	}, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the port-forward blocked writing its output")
+		}
+	}
+}
+
+func TestStartForwardKeepsAPartOfALargeError(t *testing.T) {
+	_, _, err := startForward(t.Context(), func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "head -c 1048576 /dev/zero | tr '\\0' e >&2; exit 1")
+	}, 10*time.Second)
+	if err == nil || len(err.Error()) > 70<<10 {
+		t.Fatalf("startForward() error has %d bytes, want the process's error cut to a part", len(fmt.Sprint(err)))
 	}
 }
