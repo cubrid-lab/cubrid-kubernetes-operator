@@ -11,7 +11,8 @@ installed:
 4. Check the data rules on every member and through both Services.
 5. Remove the namespace.
 
-LAB01 is the base that lab scenarios such as S06 `restart` build on. It
+LAB01 is the base that lab scenarios such as S06 `restart` and S11
+`complete` build on. It
 injects no fault. A pass is not an S01 result at the VM-lab level, and it
 does not qualify any of S00 to S15.
 
@@ -189,6 +190,100 @@ S06 does not check the slaves' applier fail count, which the Kind step does.
 Run the [observer](lab-observer.md) on the same cluster during the run, so
 that the status and metrics are followed outside the run's own checks.
 
+## S11 complete
+
+With `-backup-bucket <bucket>`, the run goes on after LAB01 passed, on the
+same cluster, with S11 `complete` of the scenario contract. The lane is then
+`lab-installed-ha-s11`, and it requires both LAB01 and S11/complete. A run
+takes one scenario after LAB01, so `-backup-bucket` together with `-fault`
+is refused before anything is done.
+
+```sh
+  ... -backup-bucket <bucket> [-backup-limit 15m] \
+  -object-store-service <namespace>/<service>:<port>   # e.g. object-store/seaweedfs:8333
+```
+
+- `-backup-bucket` must exist and be writable with the keys of the seed
+  Secret: the Operator does not create it. The backup reaches the store the
+  way the seed backups do, through the cluster's `spec.objectStorage`
+  (endpoint and the copied `object-storage` Secret) in the members'
+  environment; the `CubridBackup` names only the bucket and the prefix.
+- `-backup-limit` (default 15 minutes) is the value of `backup_limit` for
+  this run. The scenario contract leaves `backup_limit` unset.
+- `-object-store-service` is the object store's Service. The run opens
+  `kubectl port-forward` to it through its target snapshot, only for its own
+  download. The port-forward ends on every path out of S11. With
+  `-seed-insecure` the run's client speaks plain HTTP; without it, HTTPS to
+  `127.0.0.1`, which a certificate for the Service's name does not cover.
+
+1. **Known point.** The run records where the client history stands: the
+   number of acknowledged operations and the last acknowledged operation ID.
+   No client runs between LAB01's workload and the backup, so this does not
+   move. It then writes a `marker` row named `s11`, with the run ID as its
+   value, through `<cluster>-rw` (`workload marker`). A marker that is not
+   acknowledged blocks S11. S12 restores the artifact and compares it with
+   this point.
+2. **Request.** The run creates the `CubridBackup` `s11-complete` for the
+   run's cluster and database, to `-backup-bucket` under the prefix
+   `lab-runs/<run ID>/backups`, with the default target `PreferStandby`.
+3. **Wait.** It reads the backup every `-poll` until it is `Completed` or
+   `Failed`, and records each change of the phase, `targetInstance`,
+   `targetRole`, `fallbackUsed` and the conditions, with the time it saw it.
+   `Failed` fails S11 with the `Ready` reason. So does a backup that is
+   neither within `-backup-limit` from the request: that is the contract's
+   limit. `backupCompletedWithin` runs from the return of the request to the
+   reading that saw `Completed`, so it is an upper bound.
+4. **The artifact, downloaded by the run.** The run does not use the
+   Operator's or the Instance Manager's verification. With its own client and
+   the seed Secret's keys it checks:
+   - `status.artifact.uri` is `s3://<backup bucket>/<key>/manifest.json`, with
+     the key under the run's prefix;
+   - `manifest.json` can be read. It is parsed with
+     `instancemanager.ParseManifest`; the run then checks it itself:
+     `manifestVersion`, `database`, `clusterUID` (the cluster's UID, also in
+     `status.clusterUID`), level 0, `sourceInstance` equal to
+     `status.targetInstance`, `sourceRole` equal to `status.targetRole` and to
+     `slave`, or `master` when `fallbackUsed`;
+   - `cubridVersion` is the cluster's `spec.version` (`11.4`), and the engine
+     version that `cubrid_rel` reported on the master during LAB01 is within
+     it. The Operator does not fill `status.artifact.cubridVersion`; when it
+     is empty the record says so, and when it is set it must be the same;
+   - `BackupManifest.Digest()` of the parsed manifest, and the sha256 of the
+     stored file, are both `status.artifact.manifestDigest`;
+   - the sum of the sizes the manifest lists is `status.artifact.sizeBytes`;
+   - every object the manifest names has a clean key below `backup/`, can
+     be read, and has the size and sha256 the manifest lists. The run
+     streams each object.
+
+   An object the manifest names that cannot be read, or a manifest that
+   cannot be read, must never happen. Objects under the attempt prefix that
+   the manifest does not name are recorded, not failed: a restore reads only
+   what the manifest names.
+5. **Credentials.** Neither key of the seed Secret, as it is or
+   base64-encoded, may be in the backup's status, in the manifest, or in any
+   Event of the run namespace. One found must never happen.
+
+The artifact is left in the bucket for S12; the record says so. Deleting the
+namespace removes the `CubridBackup`, not the artifact.
+
+A run that ends, for example at its `-timeout`, before S11 is judged leaves
+S11 blocked, not failed. So does a port-forward or a client that cannot be
+opened, and a list of the Events that is refused: the run could not check.
+`-timeout` must cover LAB01 and `-backup-limit`.
+
+The account needs, beyond LAB01's:
+- `create`, `get`, `list` and `watch` on `cubridbackups` and `list` on Events
+  in the run namespace;
+- `get` on Services and Pods and `create` on `pods/portforward` in the object
+  store's namespace;
+- `get` on the seed Secret, as before.
+
+S11 here does not check:
+- the Operator's logs for credentials. They are not read, so that part of
+  the never-happen list is unverified;
+- the restore of the artifact (S12, #89);
+- the interrupted variants `interrupted-pod` and `interrupted-upload`.
+
 ## Evidence
 
 The evidence directory holds `summary.json`, `junit.xml` and these files:
@@ -203,6 +298,12 @@ The evidence directory holds `summary.json`, `junit.xml` and these files:
   `S06/restart/timeline.jsonl` (the fault flow) and
   `S06/restart/data-check.json`. The clients' operations are in
   `LAB01/history.jsonl` with the rest.
+- with `-backup-bucket`, `S11/complete/record.json` (the known point and
+  marker, the backup's name and UID, every phase observed, the artifact's
+  URI, digest, size and version, the result for each object and the totals,
+  `backupCompletedWithin`, where credentials were looked for, and what is
+  left in the bucket) and `S11/complete/manifest.json`, the manifest as the
+  run downloaded it. It holds no credential; the run checks that.
 
 `formationSeconds` runs from the return of the request that created the
 cluster until the reading that began the stable period that held. Each reading takes

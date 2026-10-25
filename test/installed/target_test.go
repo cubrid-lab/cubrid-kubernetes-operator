@@ -19,6 +19,7 @@ package installed
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,5 +147,29 @@ func TestTargetRejectsImplicitOrMissingContexts(t *testing.T) {
 			_ = target.Close()
 			t.Fatal("implicit or missing target was accepted")
 		}
+	}
+}
+
+func TestStartForwardReturnsThePortAndEndsTheProcess(t *testing.T) {
+	var cmd *exec.Cmd
+	addr, stop, err := startForward(t.Context(), func(ctx context.Context) *exec.Cmd {
+		cmd = exec.CommandContext(ctx, "sh", "-c", "echo 'Forwarding from 127.0.0.1:41234 -> 8333'; exec sleep 60")
+		return cmd
+	}, 10*time.Second)
+	if err != nil || addr != "127.0.0.1:41234" {
+		t.Fatalf("startForward() = %q, %v; want the forwarded port", addr, err)
+	}
+	stop()
+	if cmd.ProcessState == nil {
+		t.Fatal("the port-forward still runs after stop")
+	}
+}
+
+func TestStartForwardFailsWhenTheProcessEndsBeforeItListens(t *testing.T) {
+	addr, stop, err := startForward(t.Context(), func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "echo 'error: services \"seaweedfs\" not found' >&2; exit 1")
+	}, 10*time.Second)
+	if err == nil || stop != nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("startForward() = %q, %v; want the process's error", addr, err)
 	}
 }

@@ -69,6 +69,8 @@ const (
 	maxOperations = 100000
 	roleMaster    = "master"
 	roleSlave     = "slave"
+	// haCubridVersion is the cluster's spec.version.
+	haCubridVersion = "11.4"
 )
 
 // databasePhaseFailed is the status.databases[].phase of a bootstrap that
@@ -110,6 +112,16 @@ type HAConfig struct {
 	StablePeriod, ResyncLimit time.Duration
 	// LeaderLease is the manager's leader election Lease in its namespace.
 	LeaderLease string
+	// BackupBucket selects S11 complete after LAB01: a CubridBackup of the
+	// run's database to this bucket. It cannot be combined with Fault.
+	BackupBucket string
+	// BackupLimit bounds the backup from its request until Completed or
+	// Failed (backup_limit).
+	BackupLimit time.Duration
+	// ObjectStoreService is the object store's Service as
+	// <namespace>/<service>:<port>. The run downloads the artifact through a
+	// port-forward to it, with its own client.
+	ObjectStoreService string
 }
 
 func (c HAConfig) validate() error {
@@ -136,6 +148,9 @@ func (c HAConfig) validate() error {
 	if c.Fault != "" && (c.StablePeriod <= 0 || c.ResyncLimit <= 0 ||
 		len(validation.IsDNS1123Subdomain(c.LeaderLease)) != 0) {
 		return errors.New("a fault needs a positive stable period and resync limit, and the leader Lease")
+	}
+	if err := c.validateS11(); err != nil {
+		return err
 	}
 	if c.Operations < 1 || c.Operations > maxOperations || c.DataCheckWithin <= 0 || c.StableFor < 0 {
 		return fmt.Errorf("operations must be 1 to %d, the data check window positive and the stable period "+
@@ -209,6 +224,13 @@ type haRun struct {
 	labPassed bool
 	// s06 is the result of S06 restart, once it ran.
 	s06 *evidence.Scenario
+	// s11 is the result of S11 complete, once it ran.
+	s11 *evidence.Scenario
+	// engineVersion is the engine version cubrid_rel reported on the master.
+	engineVersion string
+	// accessKey and secretKey are the seed Secret's values. They go to the
+	// redactor and to the run's own object store client, nowhere else.
+	accessKey, secretKey string
 }
 
 // RunHA creates a three-member HA cluster in a fresh namespace through the
@@ -253,11 +275,18 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 			"Commit is selected by the campaign; actual runtime image identities are recorded separately",
 			"Namespace cleanup does not certify deletion of retained backend volumes or of the seed backups"}}
 	lane, requirements := haLane, []evidence.Requirement{{ID: haScenarioID}}
-	if cfg.Fault == FaultOperatorRestart {
+	switch {
+	case cfg.Fault == FaultOperatorRestart:
 		lane = s06Lane
 		requirements = append(requirements, evidence.Requirement{ID: s06ID, Variant: s06Variant})
 		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S06 restart: the " +
 			"manager Pod is deleted without a grace period; no other S00-S15 qualification"
+	case cfg.BackupBucket != "":
+		lane = s11Lane
+		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant})
+		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete: a full " +
+			"backup to object storage, downloaded and checked by the run; no other S00-S15 qualification"
+		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket for S12")
 	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
@@ -302,6 +331,12 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 			summary.Settle(evidence.Requirement{ID: s06ID, Variant: s06Variant}, evidence.Blocked,
 				"S06 starts from LAB01's checked state, and LAB01 did not pass")
 		}
+		if h.s11 != nil {
+			summary.Record(*h.s11)
+		} else if cfg.BackupBucket != "" {
+			summary.Settle(evidence.Requirement{ID: s11ID, Variant: s11Variant}, evidence.Blocked,
+				"S11 starts from LAB01's checked state, and LAB01 did not pass")
+		}
 		summary.FinishedAt = time.Now().UTC()
 		runErr = errors.Join(runErr, summary.Conclude(cfg.EvidenceDir, h.redactor,
 			evidence.Lane{Name: lane, Required: requirements}))
@@ -339,13 +374,24 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		return err
 	}
 	h.labPassed = true
-	if cfg.Fault != FaultOperatorRestart {
-		return nil
-	}
-	s06 := h.runS06(ctx)
-	h.s06 = &s06
-	if s06.Result != evidence.Pass {
-		return fmt.Errorf("S06/%s: %s", s06Variant, s06.Reason)
+	return h.afterLAB01(ctx)
+}
+
+// afterLAB01 runs the scenario selected to follow LAB01, if any.
+func (h *haRun) afterLAB01(ctx context.Context) error {
+	switch {
+	case h.cfg.Fault == FaultOperatorRestart:
+		s06 := h.runS06(ctx)
+		h.s06 = &s06
+		if s06.Result != evidence.Pass {
+			return fmt.Errorf("S06/%s: %s", s06Variant, s06.Reason)
+		}
+	case h.cfg.BackupBucket != "":
+		s11 := h.runS11(ctx)
+		h.s11 = &s11
+		if s11.Result != evidence.Pass {
+			return fmt.Errorf("S11/%s: %s", s11Variant, s11.Reason)
+		}
 	}
 	return nil
 }
@@ -367,6 +413,7 @@ func (h *haRun) run(ctx context.Context, env *evidence.Environment, checkpoint f
 		return fmt.Errorf("observe engine version: %w", err)
 	}
 	env.EngineVersion = instancemanager.ParseEngineVersion(engine)
+	h.engineVersion = env.EngineVersion
 	if !strings.HasPrefix(env.EngineVersion, "11.4.") {
 		return errors.New("the expected CUBRID 11.4 engine version was not observed")
 	}
@@ -434,6 +481,7 @@ func (h *haRun) copySeedSecret(ctx context.Context) error {
 		h.redactor.Add(string(value))
 		data[name] = value
 	}
+	h.accessKey, h.secretKey = string(data[seedAccessKey]), string(data[seedSecretKey])
 	if err := h.guard(ctx); err != nil {
 		return err
 	}
@@ -453,7 +501,7 @@ func (h *haRun) createCluster(ctx context.Context) (*databasev1alpha1.CubridClus
 	cluster := &databasev1alpha1.CubridCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: haClusterName, Namespace: h.cfg.Namespace},
 		Spec: databasev1alpha1.CubridClusterSpec{
-			Version: "11.4", Image: &databasev1alpha1.CubridImage{Repository: h.cfg.InstanceManagerImage},
+			Version: haCubridVersion, Image: &databasev1alpha1.CubridImage{Repository: h.cfg.InstanceManagerImage},
 			Databases:        []databasev1alpha1.CubridDatabase{{Name: databaseName}},
 			Topology:         databasev1alpha1.CubridTopology{PromotableMembers: haMemberCount},
 			HighAvailability: databasev1alpha1.CubridHighAvailability{Enabled: true},
