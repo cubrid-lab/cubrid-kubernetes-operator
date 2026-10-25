@@ -3317,3 +3317,22 @@ the snapshots, both members' full `$CUBRID/log` (server error and access
 logs), the scripts and the counting script's output were kept with the run.
 The containers `poc238w-h-0` and `poc238w-h-1`, their volumes and the network
 `poc238w-net` were removed afterwards.
+
+### When the lab's server interrupts those sessions
+
+Read-only, under the lab Lease, 2026-10-25: on `cubrid-test/ha-0`, each
+`-982 Set interrupt` line for a `ha-0:applyinfo(<pid>)` client in the server
+error log was matched, by pid and date, to that client's `-972 ... was
+connected` entry in the access log. 657 interrupted sessions matched. The
+server interrupted the transaction **6 to 40 ms after the client connected**
+(10th percentile 7 ms, median 9 ms, 90th percentile 14 ms), with the
+`-1066 Session expired` line at the same time. The Instance Manager's 2 s
+`replicationBudget`, the readiness probe's 5 s timeout
+(`timeoutSeconds: 5`, every 5 s) and the server's `session_state_timeout` are
+all much longer, and the Instance Manager's `applyinfo` connections came
+about every 10 s (median gap 10.3 s), one at a time. So these sessions are
+not ended by a timeout or a kill of the Instance Manager's: about one new
+session in 25 on this slave is cut off by the server within milliseconds of
+its connection. Why, and why the local pairs above never did it, is not
+known.
+
