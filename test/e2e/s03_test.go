@@ -597,7 +597,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			acknowledgedWhileUnresolved++
 		}
 	}
-	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt)
+	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt, client)
 	result = judged(evidence.Scenario{
 		ID: "S03", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,

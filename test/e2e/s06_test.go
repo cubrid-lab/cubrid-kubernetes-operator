@@ -298,7 +298,7 @@ func (r *haRun) s06Restart() {
 		files = append(files, timeline)
 	}
 	back := outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)
-	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt)
+	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt, clients...)
 	result = judged(evidence.Scenario{
 		ID: "S06", Variant: s06Restart,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
@@ -380,10 +380,13 @@ func (r *haRun) s06Absent() {
 			// With no Operator: delete the master Pod, once.
 			if masterDeletedAt.IsZero() {
 				kill := podDeletion{namespace: r.namespace, pod: master, uid: masterUID}
+				// Taken before the deletion is sent, as faults.Run takes
+				// FaultIssuedAt before Inject.
+				issuedAt := time.Now()
 				if err := kill.Inject(ctx); err != nil {
 					return false, fmt.Errorf("deleting the master Pod: %w", err)
 				}
-				masterDeletedAt = time.Now()
+				masterDeletedAt = issuedAt
 			}
 			pods, err := operatorPods(ctx)
 			if err != nil {
@@ -502,7 +505,7 @@ func (r *haRun) s06Absent() {
 	if timeline != "" {
 		files = append(files, timeline)
 	}
-	lossWindow, lossResolution := r.observedLoss(report, masterDeletedAt)
+	lossWindow, lossResolution := r.observedLoss(report, masterDeletedAt, client)
 	result = judged(evidence.Scenario{
 		ID: "S06", Variant: s06Absent,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,

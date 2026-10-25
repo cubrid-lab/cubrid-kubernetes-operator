@@ -326,7 +326,7 @@ func (r *haRun) s05(variant string) {
 	if timeline != "" {
 		files = append(files, timeline)
 	}
-	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt)
+	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt, clients...)
 	result = judged(evidence.Scenario{
 		ID: "S05", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,

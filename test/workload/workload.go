@@ -496,15 +496,19 @@ func (l LossWindow) String() string {
 // history and its data check (#294). It is measured only from acknowledged
 // writes: it needs a member checked and a write acknowledged before the
 // fault, and a missing write acknowledged after the fault leaves it unknown.
-// Operations with an unknown outcome are never counted as lost.
-func ObservedLoss(h History, r Report, faultAt time.Time) LossWindow {
+// Operations with an unknown outcome are never counted as lost. With clients
+// named, only their writes are the fault's: a missing write of another client
+// leaves the window unknown, as it was lost to something else. The times are
+// the client's clock and faultAt the caller's, so both are assumed to agree.
+func ObservedLoss(h History, r Report, faultAt time.Time, clients ...string) LossWindow {
+	ours := func(op Operation) bool { return len(clients) == 0 || slices.Contains(clients, op.Client) }
 	if len(r.Members) == 0 {
 		return LossWindow{Reason: "no member was checked"}
 	}
 	var lastBefore time.Time
 	for _, op := range h.Operations {
 		at := op.AcknowledgedAt
-		if op.Op == OpInsert && !at.IsZero() && !at.After(faultAt) && at.After(lastBefore) {
+		if op.Op == OpInsert && ours(op) && !at.IsZero() && !at.After(faultAt) && at.After(lastBefore) {
 			lastBefore = at
 		}
 	}
@@ -517,7 +521,11 @@ func ObservedLoss(h History, r Report, faultAt time.Time) LossWindow {
 			if v.Rule != RuleMissing {
 				continue
 			}
-			at := h.Operations[v.OpID].AcknowledgedAt
+			op := h.Operations[v.OpID]
+			if !ours(op) {
+				return LossWindow{Reason: "a write of another client (" + op.Client + ") is missing"}
+			}
+			at := op.AcknowledgedAt
 			if at.IsZero() {
 				return LossWindow{Reason: "a missing write has no acknowledgement time"}
 			}

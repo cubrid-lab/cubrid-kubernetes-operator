@@ -137,14 +137,15 @@ func (r *haRun) historyText() string {
 }
 
 // observedLoss returns the observed data loss window of a fault issued at
-// faultAt, from the run's history and the data check (#294), or unknown with
-// its reason, and how long before the fault the last write was acknowledged.
-func (r *haRun) observedLoss(report workload.Report, faultAt time.Time) (window, resolution string) {
+// faultAt to the writes of the given clients, from the run's history and the
+// data check (#294), or unknown with its reason, and how long before the fault
+// the last of their writes was acknowledged.
+func (r *haRun) observedLoss(report workload.Report, faultAt time.Time, clients ...string) (window, resolution string) {
 	history, err := workload.ReadHistory(strings.NewReader(r.historyText()))
 	if err != nil {
 		return "unknown: " + err.Error(), evidence.Unknown
 	}
-	loss := workload.ObservedLoss(history, report, faultAt)
+	loss := workload.ObservedLoss(history, report, faultAt, clients...)
 	if !loss.Measured {
 		return loss.String(), evidence.Unknown
 	}

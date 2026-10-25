@@ -434,7 +434,12 @@ present, it must be present exactly once and with the values that were sent.
   before the fault, or when the oldest missing write was acknowledged after
   the fault. `observedDataLossResolution` is how long before the fault the last
   write was acknowledged: a loss of writes acknowledged within it could not be
-  seen. `unknown` operations are never counted as lost.
+  seen. `unknown` operations are never counted as lost. Only the writes of the
+  scenario's own clients count; a missing write of an earlier step's client
+  leaves the window `unknown`. Acknowledgement times are the client's clock
+  and the fault time the test runner's, so both measurements assume the two
+  agree: on Kind they share the host's clock, and a run on other machines must
+  record their skew.
 - A measurement that could not be taken is reported as `unknown`, with the
   reason, and never as zero. Zero means "measured, and it was zero".
 
