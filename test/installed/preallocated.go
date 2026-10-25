@@ -69,6 +69,11 @@ type namespaceGuard struct {
 	managerSets    map[string]types.UID
 	requireStorage bool
 	cleaning       bool
+	// cleanupSets holds the manager ReplicaSets of the recorded Deployment seen
+	// by the current cleanup inventory.
+	cleanupSets map[string]types.UID
+	// managerChanged records that cleanup saw another manager incarnation.
+	managerChanged bool
 }
 
 func (g *namespaceGuard) epoch(ctx context.Context) error {
@@ -144,13 +149,8 @@ func (g *namespaceGuard) check(ctx context.Context) error {
 	if err := g.epoch(ctx); err != nil {
 		return err
 	}
-	currentManager, err := g.runner.observeManager(ctx, g.cfg)
-	if err != nil {
+	if err := g.checkManager(ctx); err != nil {
 		return err
-	}
-	if currentManager.DeploymentUID != g.rec.Operator.DeploymentUID || !slices.Equal(currentManager.Pods,
-		g.rec.Operator.Pods) {
-		return errors.New("candidate manager identity changed")
 	}
 
 	// Pods are read before their controllers: a controller creates its parent
@@ -178,6 +178,69 @@ func (g *namespaceGuard) check(ctx context.Context) error {
 	}
 
 	return g.epoch(ctx)
+}
+
+// checkManager requires the manager the run recorded. During cleanup it requires
+// only the recorded Deployment, still declaring the candidate image: deleting
+// the created CR by its UID does not depend on which incarnation of the
+// manager runs, and a manager that restarted during the run must not leave the
+// smoke cluster behind (#507). A changed incarnation still fails the run.
+func (g *namespaceGuard) checkManager(ctx context.Context) error {
+	if !g.cleaning {
+		current, err := g.runner.observeManager(ctx, g.cfg)
+		if err != nil {
+			return err
+		}
+		if current.DeploymentUID != g.rec.Operator.DeploymentUID || !slices.Equal(current.Pods, g.rec.Operator.Pods) {
+			return errors.New("candidate manager identity changed")
+		}
+		return nil
+	}
+	deployment := &appsv1.Deployment{}
+	key := client.ObjectKey{Namespace: g.cfg.OperatorNamespace, Name: g.cfg.OperatorDeployment}
+	if err := g.runner.Client.Get(ctx, key, deployment); err != nil {
+		return fmt.Errorf("observe installed manager: %w", err)
+	}
+	if string(deployment.UID) != g.rec.Operator.DeploymentUID || g.rec.Operator.DeploymentUID == "" ||
+		!deployment.DeletionTimestamp.IsZero() {
+		return errors.New("candidate manager Deployment was replaced; resources preserved")
+	}
+	if managerImage(deployment.Spec.Template.Spec) != g.cfg.OperatorImage {
+		return errors.New("candidate manager Deployment no longer declares the candidate image; resources preserved")
+	}
+	if current, err := g.runner.observeManager(ctx, g.cfg); err != nil ||
+		!slices.Equal(current.Pods, g.rec.Operator.Pods) {
+		g.managerChanged = true
+	}
+	return nil
+}
+
+// managerImage returns the image of the manager container of spec.
+func managerImage(spec corev1.PodSpec) string {
+	for _, c := range spec.Containers {
+		if c.Name == managerContainer {
+			return c.Image
+		}
+	}
+	return ""
+}
+
+// managerVolume reports whether volume is one a manager Pod may have during
+// cleanup: no PVC, hostPath, CSI, ephemeral or other storage that could reach
+// the retained data.
+func managerVolume(volume corev1.Volume) bool {
+	s := volume.VolumeSource
+	return s.Projected != nil || s.ConfigMap != nil || s.Secret != nil || s.EmptyDir != nil || s.DownwardAPI != nil
+}
+
+// managerSet reports whether a ReplicaSet of the given name and UID is one the
+// manager may run Pods from: one of those seen at the first inventory, or,
+// during cleanup, any ReplicaSet the recorded Deployment solely controls.
+func (g *namespaceGuard) managerSet(name string, uid types.UID) bool {
+	if uid == "" {
+		return false
+	}
+	return g.managerSets[name] == uid || (g.cleaning && g.cleanupSets[name] == uid)
 }
 
 func (g *namespaceGuard) checkClusters(ctx context.Context) error {
@@ -240,6 +303,7 @@ func (g *namespaceGuard) checkManagerWorkloads(ctx context.Context) error {
 			g.managerSets[obj.Name] = obj.UID
 		}
 	}
+	g.cleanupSets = map[string]types.UID{}
 	for i := range sets.Items {
 		obj := &sets.Items[i]
 		if g.brokerChain(obj) {
@@ -248,8 +312,12 @@ func (g *namespaceGuard) checkManagerWorkloads(ctx context.Context) error {
 			}
 			continue
 		}
-		if g.managerSets[obj.Name] != obj.UID || !soleController(obj, "Deployment", g.cfg.OperatorDeployment,
-			types.UID(g.rec.Operator.DeploymentUID)) {
+		owned := g.cfg.Namespace == g.cfg.OperatorNamespace && soleController(obj, "Deployment",
+			g.cfg.OperatorDeployment, types.UID(g.rec.Operator.DeploymentUID))
+		if owned && g.cleaning {
+			g.cleanupSets[obj.Name] = obj.UID
+		}
+		if !owned || !g.managerSet(obj.Name, obj.UID) {
 			return errors.New("candidate ReplicaSet was replaced or is unidentified")
 		}
 	}
@@ -309,7 +377,13 @@ func (g *namespaceGuard) checkStatefulSets(ctx context.Context) (*appsv1.Statefu
 func (g *namespaceGuard) checkPods(pods *corev1.PodList) error {
 	for i := range pods.Items {
 		obj := &pods.Items[i]
-		manager := false
+		manager, err := g.cleanupManagerPod(obj)
+		if err != nil {
+			return err
+		}
+		if manager {
+			continue
+		}
 		if g.cfg.Namespace == g.cfg.OperatorNamespace {
 			for _, known := range g.rec.Operator.Pods {
 				if obj.Name == known.Pod && string(obj.UID) == known.UID && len(obj.OwnerReferences) == 1 &&
@@ -362,6 +436,24 @@ func (g *namespaceGuard) checkPods(pods *corev1.PodList) error {
 	}
 
 	return nil
+}
+
+// cleanupManagerPod reports whether, during cleanup, obj is a Pod of a
+// ReplicaSet of the recorded manager Deployment in the smoke's namespace,
+// ready or not. Such a Pod must run the candidate image and have only manager
+// volumes.
+func (g *namespaceGuard) cleanupManagerPod(obj *corev1.Pod) (bool, error) {
+	if !g.cleaning || g.cfg.Namespace != g.cfg.OperatorNamespace || len(obj.OwnerReferences) != 1 ||
+		!soleController(obj, "ReplicaSet", obj.OwnerReferences[0].Name, g.cleanupSets[obj.OwnerReferences[0].Name]) {
+		return false, nil
+	}
+	if managerImage(obj.Spec) != g.cfg.OperatorImage {
+		return false, errors.New("manager Pod does not run the candidate image; writer ambiguity")
+	}
+	if slices.ContainsFunc(obj.Spec.Volumes, func(v corev1.Volume) bool { return !managerVolume(v) }) {
+		return false, errors.New("candidate manager Pod could mount retained data; writer ambiguity")
+	}
+	return true, nil
 }
 
 // brokerVolume reports whether volume is one a Broker Pod has on a real
@@ -432,6 +524,7 @@ func (g *namespaceGuard) checkClaims(ctx context.Context, databaseSet *appsv1.St
 
 func (g *namespaceGuard) cleanup(ctx context.Context, poll time.Duration) error {
 	g.cleaning = true
+	defer func() { g.rec.ManagerChangedAtCleanup = g.managerChanged }()
 	if err := g.check(ctx); err != nil {
 		return err
 	}

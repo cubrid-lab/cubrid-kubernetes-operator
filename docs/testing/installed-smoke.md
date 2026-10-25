@@ -124,7 +124,8 @@ external ownership flags in fresh mode are rejected.
 The runner rechecks namespace UID/non-termination and marker UID, immutability,
 nonce and non-termination before creation, on each readiness poll, before every
 database command and throughout cleanup. The manager must retain its observed
-Deployment/ReplicaSet/Pod and runtime identities. Initial inventory rejects every
+Deployment/ReplicaSet/Pod and runtime identities until cleanup, which
+requires only its Deployment (below). Initial inventory rejects every
 existing CubridCluster, CubridBackup, StatefulSet, PVC and unidentified Pod,
 Deployment, ReplicaSet, DaemonSet, ReplicationController, Job or CronJob, even
 when a controller currently has no Pods. A same-namespace manager is permitted only
@@ -160,8 +161,19 @@ StatefulSet, DB Pod and every Broker Deployment, ReplicaSet and Pod to
 disappear through Kubernetes garbage collection and normal Pod termination. It never deletes the namespace or PVC, removes finalizers,
 force-deletes Pods or falls back to deletion by name. An ownership change before
 cleanup blocks deletion; an observed replacement during cleanup is preserved and
-fails the run. Failure to observe stopped workloads within the cleanup deadline
-fails the component lane.
+fails the run. The manager is the exception: the run requires its recorded
+incarnation, but cleanup requires only the recorded manager Deployment UID,
+still declaring the candidate image. After a manager restart (a new container,
+a new Pod, a rollout to a new ReplicaSet of the same Deployment, or a Pod not
+yet ready), before or during cleanup, cleanup still UID-deletes the created CR
+and waits for its workloads; the record sets `managerChangedAtCleanup=true`
+and the run fails. In the same namespace, a manager Pod must belong to a
+ReplicaSet of that Deployment, run the candidate image and have only
+projected, ConfigMap, Secret, emptyDir or downward-API volumes. A replaced
+manager Deployment, or one that declares another image, still blocks deletion.
+So does a ReplicaSet deleted between the Pod and ReplicaSet reads, whose Pod
+then looks unidentified. Failure to observe stopped workloads within the
+cleanup deadline fails the component lane.
 
 The confined runner needs a namespaced Role with get/list for Pods, ConfigMaps,
 PVCs and apps Deployments/ReplicaSets/StatefulSets; list for apps DaemonSets, core

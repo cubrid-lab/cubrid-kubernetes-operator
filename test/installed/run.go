@@ -116,6 +116,25 @@ type record struct {
 	RetainedPVCs          []pvcIdentity   `json:"retainedPVCs"`
 	FixtureReusable       *bool           `json:"fixtureReusable,omitempty"`
 	ResetRequired         *bool           `json:"resetRequired,omitempty"`
+	// ManagerChangedAtCleanup is set when preallocated cleanup saw a manager
+	// incarnation other than the recorded one. The run then fails.
+	ManagerChangedAtCleanup bool `json:"managerChangedAtCleanup,omitempty"`
+}
+
+// recordCleanup records the cleanup outcome and returns what fails the run
+// because of it. Preallocated cleanup tolerates another manager incarnation;
+// the run does not.
+func recordCleanup(rec *record, cleanupErr error) error {
+	rec.Cleanup = "complete"
+	var err error
+	if cleanupErr != nil {
+		rec.Cleanup = cleanupErr.Error()
+		err = fmt.Errorf("scoped cleanup: %w", cleanupErr)
+	}
+	if rec.ManagerChangedAtCleanup {
+		err = errors.Join(err, errors.New("candidate manager incarnation changed before cleanup completed"))
+	}
+	return err
 }
 
 func (c Config) validate() error {
@@ -251,12 +270,7 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 			cleanupErr := r.cleanupRun(cfg, owned, borrowed)
 			cleaned := cleanupErr == nil
 			scenario.CleanupSucceeded = &cleaned
-			rec.Cleanup = "complete"
-
-			if cleanupErr != nil {
-				rec.Cleanup = cleanupErr.Error()
-				runErr = errors.Join(runErr, fmt.Errorf("scoped cleanup: %w", cleanupErr))
-			}
+			runErr = errors.Join(runErr, recordCleanup(&rec, cleanupErr))
 		}
 		if err := writeRecord(); err != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("write connection evidence: %w", err))
