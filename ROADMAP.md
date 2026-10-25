@@ -165,13 +165,32 @@ three restored members and both Services against the history at the known
 point with no row written after the backup, S11's marker and a new write on
 every restored member, the source unchanged, and no credential in any status
 it read. On 2026-10-25 it ran seven times on the VM lab (manager `d6df2ac`):
-five passed, the last from the merged harness, with the restored cluster
-`Ready` 2 min 40 s to 2 min 58 s after creation. Two were blocked, not failed:
+five passed, the last from the merged harness code; in the last three passes
+the restored cluster was `Ready` 2 min 40 s to 2 min 58 s after creation, as
+the run measures it. Two were blocked, not failed:
 after the data checks had held, a `csql` read on a restored member returned
-its row and then lost its session (`-199`, `-111`) 10 to 17 s after `Ready`,
-once on the master and once on a slave; the cause is unknown and tracked on
-#238. The `wrong-target` and `tampered` variants, interruptions and restarts
-during the restore, and the Operator's logs are not covered.
+its row and then lost its session (`-199`, `-111`) 10 to 17 s after the
+restored cluster became ready, once on the master and once on a slave; the
+cause is unknown and tracked on #238 (POC-36 measured about 3% of plain `csql`
+reads aborted this way on a running slave). The `wrong-target` variant,
+interruptions and restarts during the restore, and the Operator's logs are not
+covered.
+
+S12 `tampered` follows S12 `exact` on the same run
+(`lab-installed-ha-s12-tampered`, `-restore-tampered`, #121): a copy of S11's
+artifact with one byte of one object changed, the manifest unchanged, is
+checked by the run, and a new cluster created from it must end its bootstrap
+`Failed` with `RestoreFailed` naming that object's checksum mismatch within
+`restore_limit`, never `Ready` or `Complete`, with the source unchanged, S11's
+manifest still at its recorded digest and no credential in any status read;
+the copy is removed. On 2026-10-25 it ran three times on the VM lab (manager
+`d6df2ac`): the Operator refused the copy 1 min 12 s after creation, after
+three restore attempts, in both runs that reached it, and the last, from the
+merged harness, passed. The first was blocked by the lost session of #238 on a
+source member after the refusal, and in the second S12 `exact` was blocked by
+it, so `tampered` did not run. The refused cluster's volume afterwards, a
+changed manifest or a missing object, and the Operator's logs and Events are
+not covered.
 
 A [manual VM-lab run on 2026-10-21](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210)
 moved the lab to main `9c6ae9c1ef97eae29c13dff7a272d1082715c9e2` through the
@@ -392,9 +411,9 @@ unverified (#86, #87).
 
 **Implementation:** Backup API/controller, artifact handling and recovery
 bootstrap code are merged.
-**Live validation:** On the VM lab, S11 `complete` and S12 `exact` passed
-(see above), with two S12 runs blocked by a lost SQL session (#238). The
-interrupted backup and restore variants, `wrong-target`, `tampered`, restarts
+**Live validation:** On the VM lab, S11 `complete`, S12 `exact` and S12
+`tampered` passed (see above), with S12 runs blocked by a lost SQL session
+(#238). The interrupted backup and restore variants, `wrong-target`, restarts
 during a restore and the Operator's logs remain unverified (#88, #89, #121).
 
 - `CubridBackup`

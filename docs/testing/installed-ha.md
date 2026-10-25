@@ -663,7 +663,9 @@ directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs.
   artifact URI and digest, the copy's URI and prefix, the changed object's
   key, the offset, the byte before and after and the SHA-256 before and
   after, the objects that match the manifest and those that do not, whether
-  S11's manifest was unchanged and whether the copy was removed; the
+  S11's manifest was unchanged when the copy was checked
+  (`sourceUnchanged`) and after the refusal (`sourceUnchangedAtEnd`), and
+  whether the copy was removed; the
   cluster's name, UID, seed prefix and Secret, every bootstrap change
   observed, `refusedWithin`, the refusal's reason and message, the Secrets
   its Pods name, the source at the end, where credentials were looked for,
