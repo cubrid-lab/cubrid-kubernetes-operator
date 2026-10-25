@@ -2995,7 +2995,7 @@ were unchanged.
 
 ---
 
-## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; the cause is not known**
+## POC-36 — how often a new client session on an HA slave is aborted with `-199`/`-111`, and whether `cubrid applyinfo` is involved (#238) — **observation: 7 of 200 `csql` reads on a long-running slave were aborted, every one on transaction index 6, also without an `applyinfo` of the run's own, so killing `applyinfo` is not needed for it; a local HA pair without the Instance Manager aborted none of 2,400, with or without an `applyinfo` loop; the cause is not known**
 
 **Question.** In VM-lab runs of S12 (#568, #573), a `csql` read on an HA
 member sometimes printed its result and `Committed.`, together with
@@ -3079,9 +3079,109 @@ Manager's own runs could not be stopped on this member. Whether a write
 through a Broker connection to a slave, or to a master, is affected in the
 same way was not tested; the read-only Broker's Service routes to slaves.
 
-**Not tested here:** a member without the Instance Manager's `applyinfo`
-(an HA pair in Docker, as POC-13); `applyinfo` without `-a`; a master;
-clients other than `csql`; how the server assigns transaction indexes.
+**Not tested here:** clients other than `csql`; how the server assigns
+transaction indexes. A member without the Instance Manager's `applyinfo`,
+`applyinfo` without `-a` and a master were tried on a local pair only (next
+section).
 
 The trial scripts ran from `/tmp` in the container and were removed
 afterwards; the local container `poc36` was removed.
+
+### Local HA pair without the Instance Manager
+
+**Question.** Are new `csql` sessions on a slave aborted when nothing else
+connects, and when a loop runs `cubrid applyinfo` about once a second, on an
+HA pair that has no Instance Manager?
+
+**Environment (2026-10-25):** native linux/amd64 host (6 CPUs), Docker 29.2.1,
+`cubrid/cubrid:11.4`
+(`cubrid/cubrid@sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`),
+`cubrid_rel`: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`. The plain engine image,
+no Instance Manager and no Broker.
+
+**Setup.** POC-13's recipe, as in POC-35: containers `h-0` and `h-1` on one
+network (entrypoint replaced by `sleep`), CUBRID run as `cubrid` through
+`docker exec`, `hosts: files dns`, the image's `cubrid.conf` plus
+`ha_mode=on`, `cubrid_ha.conf` with `ha_node_list=cubrid@h-0:h-1`,
+`ha_db_list=appdb`, `ha_port_id=59901`, data on a volume at
+`/var/lib/cubrid`. `createdb --db-volume-size=64M --log-volume-size=64M
+--server-name=h-0:h-1` and `heartbeat start` on `h-0`; `backupdb -C -l 0`,
+`restoredb -u` (the database was still empty and read-only) and
+`heartbeat start` on `h-1`. `heartbeat status` showed `h-0` master
+(`registered_and_active`) and `h-1` slave (`registered_and_standby`), and a
+row written on `h-0` was read on `h-1`. Two pairs were built this way: pair 1
+with the default `session_state_timeout=21600`, pair 2, new containers and
+volumes, with `session_state_timeout=60` in `cubrid.conf` on both members (read
+back with `cubrid paramdump`), so that a session left behind would expire
+during the run.
+
+A trial is the one of the lab part: `csql -u dba appdb@localhost -c "SELECT 1"`
+(30 s timeout), aborted when its output holds `CODE = -199` or `CODE = -111`,
+0.3 s between trials. In the `applyinfo` arms a loop in the same container ran
+`cubrid applyinfo -L <copied log of the peer> -a appdb` (or the same without
+`-a`), each with a 10 s timeout and 1 s apart, from 2 s before the first trial
+to the last; each run's start, end and exit code were recorded. The server
+error log lines written during each arm were kept.
+
+**Results.**
+
+| Pair | Member | `applyinfo` | Trials | Aborted | `applyinfo` runs (exit 0) | `-982`/`-1066`/`-199`/`-111` lines in the server log during the arm |
+|---|---|---|---:|---:|---:|---|
+| 1 | slave `h-1` | none | 200 | 0 | — | none |
+| 1 | slave `h-1` | `-L … -a appdb` | 200 | 0 | 66 (66) | none |
+| 1 | slave `h-1` | `-L … appdb` | 200 | 0 | 67 (67) | none |
+| 1 | master `h-0` | `-L … -a appdb` | 200 | 0 | 66 (66) | none |
+| 2 | slave `h-1` | none | 300 | 0 | — | none |
+| 2 | slave `h-1` | `-L … appdb` | 400 | 0 | 130 (130) | none |
+| 2 | slave `h-1` | `-L … -a appdb` | 600 | 0 | 190 (190) | none |
+| 2 | master `h-0` | `-L … -a appdb` | 300 | 0 | 97 (97) | none |
+
+- No trial was aborted: 0 of 2,400, every `csql` exit 0. Had the rate been
+  the lab's 7 in 200, an arm of 200 would have had no abort with a
+  probability of about 0.1 %, the arm of 600 with less than 10⁻⁹; so on this
+  pair the rate was lower than on the lab slave. Which difference matters (Instance Manager, Broker,
+  three members, uptime of days, k3s) is not known.
+- The `Set interrupt` / `Session expired` pair that the lab slave logs for
+  its `applyinfo` connections, at intervals of about 10 s to minutes, did not appear for any of the 616
+  `applyinfo` runs here, also with `session_state_timeout=60` and runs
+  for more than three minutes. The server access log shows one connection per
+  `applyinfo -a` run and none for the runs without `-a`, which read only the
+  copied log; so the arms without `-a` put no session on the server. As in the
+  lab, `applyinfo` and `csql` took the same transaction index (on pair 2's
+  slave: index 1 for 188 of the 190 `applyinfo` connections and for 1,161 of
+  the 1,302 `csql` connections, the rest index 3 or 4).
+- The pair did appear once for another utility: on pair 1's master,
+  `-982 ... Tran = 2, CLIENT = h-0:backupdb(<pid>) Set interrupt to the
+  transaction 2.` and `-1066 ... Session expired.` 44 s after a
+  `backupdb -C` that had ended with exit 0, with the default
+  `session_state_timeout`. No trial ran then.
+
+**What this shows.** On this local pair, running `applyinfo -a` once a second on the slave or the master did not abort a new `csql`
+session, and neither did `applyinfo` without `-a` or nothing at all. It does not reproduce the lab abort, so it
+cannot tell whether `applyinfo` is needed for it: it removes no candidate
+cause and confirms none. That the lab's `applyinfo` sessions end through the
+server's session expiry while those here did not is a difference in the
+observation, not an explanation of it. Whether the session expiry that
+interrupts a transaction index can interrupt a new client that took that index
+in the meantime is a hypothesis that this run neither produced nor ruled out.
+
+**Not tested here:** the Instance Manager's own `applyinfo` (its environment,
+working directory and 2 s kill), a Broker, three members, a member running for
+days, more than one `applyinfo` at a time, a killed `applyinfo`.
+
+**What did not work.** On pair 1, `cubrid heartbeat stop` on the slave (to
+apply `session_state_timeout=60`) did not end within 120 s: the server log said
+`Server status is DOWN` but `cub_server` stayed, and a `heartbeat start` then
+failed with `CUBRID heartbeat feature is being deactivated`. After the
+container was restarted, the slave came back as `slave` but its applier stayed
+at the same applied position and two later rows were not replicated; seeded
+again with `restoreslave -u -s master -m h-0` from a new backup it was still
+not applying after more than two minutes. That was not investigated: pair 2
+was built new instead. On that restarted slave 300 more trials without
+`applyinfo` were not aborted either; they are not in the table. A first
+no-`-a` arm passed no database name, so every `applyinfo` ended with its usage
+text (exit 1) without connecting; it was repeated correctly and is not in the
+table either.
+
+The containers `poc238-h-0` and `poc238-h-1`, their volumes and the network
+`poc238-net` were removed afterwards.
