@@ -466,7 +466,12 @@ node list, and a history that does not match S11's known point leave S12
 blocked, not failed. When a member's marker table cannot be read, the reason
 also holds that member's container restarts, its `cubrid heartbeat status`,
 the HA mode of its server and the end of its newest server logs, as read
-right after the failure.
+right after the failure. A `csql` read on a member, of the ledger or the
+marker table, whose output holds both `ERROR CODE = -199` and
+`ERROR CODE = -111` lost its session to the server (#238, POC-36): the run
+records it in `LAB01/record.json` (`lostSessions`: time, member, output),
+names the count in the summary's notes and makes the read once more. A
+second loss is the read's answer.
 What was seen stays: a bootstrap seen `Failed`, a never-event, a data
 violation that lag cannot explain or a source that changed stay failures
 when a later check cannot be made, with that error added to the reason. Only
