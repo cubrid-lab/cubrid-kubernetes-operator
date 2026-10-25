@@ -73,11 +73,11 @@ them; nothing here was reviewed by counsel.
 
 **Go modules, recounted.** At `d6eab59`, the manager links 102 modules besides
 this one, and the Instance Manager 19 of them. Classified by the first license
-file of each, the manager's counts are unchanged since the check above: 63 Apache-2.0, 22 BSD, 16 MIT and 1 ISC, with
-no copyleft. The same 11 ship a `NOTICE` file, some at newer versions:
-`minio-go/v7@v7.4.1`, `prometheus/client_golang@v1.25.0`,
-`prometheus/client_model@v0.6.3`, `prometheus/common@v0.72.0` and
-`prometheus/procfs@v0.22.0`.
+file of each, the manager's counts are unchanged since the check above: 63
+Apache-2.0, 22 BSD, 16 MIT and 1 ISC, with no copyleft. The same 11 ship a
+`NOTICE` file, some at newer versions: `minio-go/v7@v7.4.1`,
+`prometheus/client_golang@v1.25.0`, `prometheus/client_model@v0.6.3`,
+`prometheus/common@v0.72.0` and `prometheus/procfs@v0.22.0`.
 
 **Against the terms #19 set.** The project's Apache-2.0 license covers this
 repository's source only.
@@ -92,7 +92,8 @@ repository's source only.
   carry the same bases.
 - The CUBRID name is a trademark of CUBRID Corporation. The images name
   CUBRID only to identify the software they contain.
-- Neither image includes the `NOTICE` texts of the linked Go modules yet.
+- Neither the manager nor the Instance Manager image includes the `NOTICE`
+  texts of its linked Go modules yet.
 
 ## Still required before publishing images
 
