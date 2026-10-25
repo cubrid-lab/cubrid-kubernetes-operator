@@ -93,6 +93,9 @@ type s12ExistingData struct {
 	MarkerOn    []string `json:"markerOn"`
 	MissingOn   []string `json:"missingOn"`
 	S11MarkerOn []string `json:"s11MarkerOn"`
+	// FirstReadError is the first error of a marker table that did not
+	// answer yet, while the members still joined after the refusal.
+	FirstReadError string `json:"firstReadError,omitempty"`
 }
 
 // s12WrongTargetRecord is the evidence of S12 wrong-target besides the
@@ -686,6 +689,37 @@ func (h *haRun) checkSameVolumes(ctx context.Context, rec *s12WrongTargetRecord)
 	return nil
 }
 
+// waitMarkerTables reads the marker table of every member until all of them
+// answer in one round, for at most DataCheckWithin: the members of the
+// refused cluster start heartbeat together, and one that is still joining
+// does not answer yet. The first error is kept; the last one is returned when
+// a member never answered.
+func (h *haRun) waitMarkerTables(ctx context.Context, members []string, data *s12ExistingData) error {
+	start := time.Now()
+	for {
+		var err error
+		for _, pod := range members {
+			if _, err = h.markerTable(ctx, pod); err != nil {
+				break
+			}
+		}
+		if err == nil {
+			return nil
+		}
+		if data.FirstReadError == "" {
+			data.FirstReadError = err.Error()
+		}
+		if time.Since(start) >= h.cfg.DataCheckWithin {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(h.cfg.Poll):
+		}
+	}
+}
+
 // checkExistingData reads the marker table of every member of the refused
 // cluster, which CUBRID serves from the volumes: each must hold the marker
 // written through the first ha-wt, and none S11's marker. Otherwise the
@@ -696,6 +730,9 @@ func (h *haRun) checkExistingData(ctx context.Context, known *s11KnownPoint, rec
 	data := &s12ExistingData{MarkerOn: []string{}, MissingOn: []string{}, S11MarkerOn: []string{}}
 	rec.ExistingData = data
 	members := clusterMembers(s12WrongTargetClusterName)
+	if err := h.waitMarkerTables(ctx, members, data); err != nil {
+		return fmt.Errorf("read the existing data on the refused cluster: %w", err)
+	}
 	missing, _, err := h.waitMarker(ctx, members, "", s12WrongTargetMarker, h.rec.RunID)
 	if err != nil {
 		return fmt.Errorf("read the existing data on the refused cluster: %w", err)

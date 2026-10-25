@@ -99,6 +99,9 @@ type s12WrongTargetFixture struct {
 	// refusal.
 	markerWriteAnswer func() (string, error)
 	existingReadErr   error
+	// existingReadFailures fail the first reads of the marker table after
+	// the refusal, as a member that is still joining answers.
+	existingReadFailures int
 
 	formed, recovery *databasev1alpha1.CubridCluster
 	recoveryReads    int
@@ -132,8 +135,16 @@ func newS12WrongTargetFixture(t *testing.T, cfg HAConfig) *s12WrongTargetFixture
 	f.markerAnswer = func(pod string) (string, error, bool) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if f.existingReadErr != nil && f.recovery != nil && strings.HasPrefix(pod, s12WrongTargetClusterName+"-") {
+		if f.recovery == nil || !strings.HasPrefix(pod, s12WrongTargetClusterName+"-") {
+			return "", nil, false
+		}
+		if f.existingReadErr != nil {
 			return "", f.existingReadErr, true
+		}
+		if f.existingReadFailures > 0 {
+			f.existingReadFailures--
+			return "ERROR: Failed to connect to database server, 'appdb', on the following host(s): localhost\n",
+				errors.New("command terminated with exit code 1"), true
 		}
 		return "", nil, false
 	}
@@ -748,5 +759,19 @@ func TestRunS12WithoutRestoreWrongTargetKeepsItsLane(t *testing.T) {
 	}
 	if f.formed != nil || f.recovery != nil {
 		t.Fatal("S12 wrong-target ran without -restore-wrong-target")
+	}
+}
+
+func TestRunS12WrongTargetWaitsForTheExistingDataToAnswer(t *testing.T) {
+	cfg := testS12WrongTargetConfig(t)
+	f := newS12WrongTargetFixture(t, cfg)
+	f.existingReadFailures = 2
+	wrong, err := wrongTargetOf(t, f, t.Context())
+	if err != nil || wrong.Result != evidence.Pass {
+		t.Fatalf("S12 wrong-target = %+v, error %v; want a pass once every member answered", wrong, err)
+	}
+	if rec := readWrongTargetRecord(t, cfg.EvidenceDir); rec.ExistingData == nil ||
+		!strings.Contains(rec.ExistingData.FirstReadError, "Failed to connect") {
+		t.Fatalf("existing data = %+v, want the reads that failed first recorded", rec.ExistingData)
 	}
 }
