@@ -59,7 +59,12 @@ job summary of each run lists the three digests; pin an image by digest when a
 record must name exactly what ran. A manual run
 (`workflow_dispatch`) builds only a commit that is on `main`. No `latest` or
 other mutable tag is pushed, and pull requests never push images. A tag is
-never overwritten; a re-run of a commit that already has images fails. A
+never overwritten; a re-run of a commit that already has images fails. The
+run also stops before any push when it cannot tell whether a tag exists (a
+registry or network error, a refused login, an answer it does not recognize).
+It publishes only a tag the registry answers "manifest unknown" for, or the
+first image of a new package named in the workflow's `BOOTSTRAP_IMAGES`
+(`hack/dev-image-tag-check.sh`). A
 commit has images only if its run succeeded: a failed run may have pushed some
 of the images and not the others.
 
