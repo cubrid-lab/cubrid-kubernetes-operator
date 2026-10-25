@@ -6,6 +6,19 @@ through Architecture Decision Records (ADRs).
 
 ## Early external contributions
 
+An outside contributor may **report**, investigate, reproduce or discuss a
+problem and propose a scoped change without first receiving GitHub issue
+assignment or installing any coding agent. The assignment and confirmation
+requirements below govern starting **implementation of an accepted Operator
+task** during incubation, not filing an issue or offering evidence.
+
+Unlike a generic library, the Operator coordinates live HA, data integrity,
+backup/restore and a shared validation lab. Its issue handoff and independent
+two-maintainer scenario/safety review remain repository-specific safeguards;
+GitHub CI, a passing Kind simulation or an optional AI review cannot replace
+required SQL/VM-failure evidence. Contributors should indicate unrun checks
+accurately. These safeguards do not introduce an AI-tool-specific review route.
+
 Contributions are welcome during incubation. Start with bug reproduction,
 installation feedback, documentation, examples, tests, or a focused fix with
 an agreed acceptance criterion. The two maintainers retain responsibility for
