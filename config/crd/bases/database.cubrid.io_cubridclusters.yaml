@@ -403,6 +403,25 @@ spec:
                 - credentialsSecretRef
                 - endpoint
                 type: object
+              placement:
+                description: |-
+                  placement configures where the DB Pods run. Omitted, each member of an
+                  HA cluster requires a node of its own.
+                properties:
+                  memberSpread:
+                    default: Required
+                    description: |-
+                      memberSpread decides whether the members of an HA cluster must run on
+                      different nodes (kubernetes.io/hostname). Required, the default, keeps
+                      a member Pending rather than put it next to another; Preferred lets
+                      them share a node. A standalone cluster has one member and no
+                      placement rule. Changing it applies to a member when its Pod is next
+                      replaced; running Pods are not moved.
+                    enum:
+                    - Required
+                    - Preferred
+                    type: string
+                type: object
               resources:
                 description: resources sets container resource requirements for the
                   DB pods.
