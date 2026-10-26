@@ -342,6 +342,9 @@ spec:
     bucket: seed
     credentialsSecretRef:
       name: object-storage
+  # Kind has a single node: let the members share it (#90).
+  placement:
+    memberSpread: Preferred
   storage:
     data:
       size: 100Mi

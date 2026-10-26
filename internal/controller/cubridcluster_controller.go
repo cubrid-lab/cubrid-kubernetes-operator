@@ -831,6 +831,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 	return corev1.PodSpec{
 		Volumes:        volumes,
 		InitContainers: initContainers,
+		Affinity:       memberAffinity(cluster),
 		// terminationGracePeriodSeconds >= 120s for ordered HA shutdown (ADR-0003).
 		TerminationGracePeriodSeconds: &gracePeriod,
 		SecurityContext: &corev1.PodSecurityContext{
@@ -886,6 +887,29 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 			SecurityContext: security,
 		}},
 	}
+}
+
+// memberAffinity keeps the members of an HA cluster on different nodes, so
+// that one node's failure takes at most one member (#90). Required, the
+// default, is a scheduling rule: a member with no node of its own stays
+// Pending. Preferred is a scheduler preference only. A standalone cluster
+// gets none. The rule selects this cluster's own DB Pods only.
+func memberAffinity(cluster *databasev1alpha1.CubridCluster) *corev1.Affinity {
+	if cluster.Spec.Topology.PromotableMembers < 2 {
+		return nil
+	}
+	term := corev1.PodAffinityTerm{
+		TopologyKey:   corev1.LabelHostname,
+		LabelSelector: &metav1.LabelSelector{MatchLabels: labelsFor(cluster)},
+	}
+	if p := cluster.Spec.Placement; p != nil && p.MemberSpread == databasev1alpha1.MemberSpreadPreferred {
+		return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{Weight: 100, PodAffinityTerm: term}},
+		}}
+	}
+	return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{term},
+	}}
 }
 
 // instanceManagerEnv is the environment the Instance Manager image's
