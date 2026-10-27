@@ -226,7 +226,13 @@ func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 	// The clients stamp their answers with their node's clock.
 	clientFaultAt := outcome.FaultIssuedAt.Add(time.Duration(rec.ClockOffsets[h.rec.Client.Node] * float64(time.Second)))
 	clients, err := h.observeAfterS06(ctx, &result, &rec, clientFaultAt)
-	if err != nil {
+	switch never := strings.Join(result.NeverEvents, "; "); {
+	case err != nil && never != "":
+		// What was seen stays a failure when a later check cannot be made.
+		return end(evidence.Fail, "%s; %v", never, err)
+	case errors.As(err, new(membersNotObserved)):
+		return end(evidence.Blocked, "%v", err)
+	case err != nil:
 		return end(evidence.Fail, "%v", err)
 	}
 	if err := h.checkData(ctx, time.Now(), s06DataCheckFile); err != nil {
@@ -274,17 +280,17 @@ func (h *haRun) observeAfterS06(ctx context.Context, result *evidence.Scenario, 
 			clients.notAcknowledged, clients.notRecovered))
 	}
 
-	members, restarted, err := h.membersUnchanged(ctx, rec.MembersBefore)
+	members, changed, err := h.membersUnchanged(ctx, rec.MembersBefore)
 	if members != nil {
 		rec.MembersAfter = members
 	}
 	if err != nil {
 		return clients, err
 	}
-	result.Measurements["membersRestarted"] = restarted
-	if restarted > 0 {
-		result.NeverEvents = append(result.NeverEvents,
-			fmt.Sprintf("%d members were replaced or restarted by the manager's restart", restarted))
+	result.Measurements["membersRestarted"] = len(changed)
+	if len(changed) > 0 {
+		result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("%d members were replaced or restarted by "+
+			"the manager's restart: %s", len(changed), strings.Join(changed, "; ")))
 	}
 	roles, unmet, err := h.roles(ctx)
 	if err != nil || unmet != "" {
@@ -454,55 +460,65 @@ func (h *haRun) writeTimeline(file string, steps []faults.Step) error {
 	return h.write(file, []byte(b.String()))
 }
 
-// membersUnchanged reads the members again and counts those whose Pod or
-// container differs from before. When a member is not Ready, it counts the
-// member Pods replaced, or whose database container is another, since; with
-// none, the members are not known. A member whose container it could not see
-// is then not counted, so the count is a lower bound.
-func (h *haRun) membersUnchanged(ctx context.Context, before []imageIdentity) ([]imageIdentity, int, error) {
+// membersNotObserved is an error that kept the members from being compared
+// with before: nothing was seen to change.
+type membersNotObserved struct{ error }
+
+// membersUnchanged reads the members again and names those whose Pod or
+// container differs from before, with what it now is. When a member is not
+// Ready, it names the member Pods replaced, or whose database container is
+// another, since; with none, the members were not observed. A member whose
+// container it could not see is then not named, so the list is a lower bound.
+func (h *haRun) membersUnchanged(ctx context.Context, before []imageIdentity) ([]imageIdentity, []string, error) {
 	cluster := &databasev1alpha1.CubridCluster{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
-		return nil, 0, err
+		return nil, nil, membersNotObserved{err}
 	}
 	members, unmet, err := h.memberIdentities(ctx, cluster)
 	if err != nil {
-		return members, 0, err
+		return members, nil, err
 	}
+	changed := []string{}
 	if unmet != "" {
 		// A member Pod that is gone or has another UID was replaced, and one
 		// with another database container restarted, Ready or not. Only a Pod
 		// that could not be read leaves the members unknown.
-		replaced := 0
 		var readErr error
 		for _, was := range before {
 			pod := &corev1.Pod{}
 			err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: was.Pod}, pod)
 			switch {
-			case apierrors.IsNotFound(err) || (err == nil && string(pod.UID) != was.UID):
-				replaced++
+			case apierrors.IsNotFound(err):
+				changed = append(changed, was.Pod+" is gone")
+			case err == nil && string(pod.UID) != was.UID:
+				changed = append(changed, fmt.Sprintf("%s has Pod UID %s, was %s", was.Pod, pod.UID, was.UID))
 			case err != nil:
 				readErr = err
 			default:
 				for _, c := range pod.Status.ContainerStatuses {
 					if c.Name == databaseContainer && c.ContainerID != "" && c.ContainerID != was.ContainerID {
-						replaced++
+						changed = append(changed, fmt.Sprintf("%s has container %s, was %s", was.Pod, c.ContainerID,
+							was.ContainerID))
 					}
 				}
 			}
 		}
-		if replaced > 0 {
-			return members, replaced, nil
+		if len(changed) > 0 {
+			return members, changed, nil
 		}
-		return members, 0, errors.Join(fmt.Errorf("a member could not be observed after the restart: %s", unmet),
-			readErr)
+		return members, nil, membersNotObserved{errors.Join(fmt.Errorf("a member could not be observed after the "+
+			"restart: %s", unmet), readErr)}
 	}
-	restarted := 0
 	for i, was := range before {
-		if members[i] != was {
-			restarted++
+		switch now := members[i]; {
+		case now.UID != was.UID:
+			changed = append(changed, fmt.Sprintf("%s has Pod UID %s, was %s", was.Pod, now.UID, was.UID))
+		case now != was:
+			changed = append(changed, fmt.Sprintf("%s has container %s with image %s on %s, was %s with %s on %s",
+				was.Pod, now.ContainerID, now.ImageID, now.Node, was.ContainerID, was.ImageID, was.Node))
 		}
 	}
-	return members, restarted, nil
+	return members, changed, nil
 }
 
 // startBackgroundClient starts a client that keeps writing through the

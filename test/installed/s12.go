@@ -560,8 +560,9 @@ func (h *haRun) restoredReading(ctx context.Context, cluster *databasev1alpha1.C
 	} else if unmet != "" {
 		return nil, unmet, false, nil
 	}
-	// Only these two name an object with unread; a condition's message,
-	// which clusterReady passes on, is not searched for it.
+	// Only these and rolesOf name what could not be read with unread; a
+	// condition's message, which clusterReady passes on, is not searched for
+	// it.
 	members, unmet, err := h.memberIdentities(ctx, cluster)
 	if unmet != "" || err != nil {
 		return nil, unmet, strings.Contains(unmet, unread), err
@@ -571,7 +572,7 @@ func (h *haRun) restoredReading(ctx context.Context, cluster *databasev1alpha1.C
 	}
 	state, unmet, err := h.rolesOf(ctx, clusterMembers(cluster.Name))
 	if unmet != "" || err != nil {
-		return nil, unmet, false, err
+		return nil, unmet, strings.Contains(unmet, unread), err
 	}
 	state.CurrentPrimary = cluster.Status.CurrentPrimary
 	if state.CurrentPrimary != state.Master {
@@ -1027,16 +1028,18 @@ func (h *haRun) replicationState(ctx context.Context, cluster, pod, master strin
 // whole history, writes after the backup included. It records what it read
 // in source and the source's data check in dataFile.
 func (h *haRun) checkSourceS12(ctx context.Context, source *s12Source, dataFile string) error {
-	members, restarted, err := h.membersUnchanged(ctx, h.rec.MembersAfter)
+	members, changed, err := h.membersUnchanged(ctx, h.rec.MembersAfter)
 	if members != nil {
 		source.MembersAfter = members
 	}
 	if err != nil {
 		return fmt.Errorf("read the source's members: %w", err)
 	}
+	restarted := len(changed)
 	source.Restarted = &restarted
 	if restarted > 0 {
-		return restoreVerdict{fmt.Errorf("the source changed: %d of its members were replaced or restarted", restarted)}
+		return restoreVerdict{fmt.Errorf("the source changed: %d of its members were replaced or restarted: %s",
+			restarted, strings.Join(changed, "; "))}
 	}
 	if err := h.sourceRoles(ctx, source); err != nil {
 		return err
@@ -1083,7 +1086,8 @@ func (h *haRun) sourceRoles(ctx context.Context, source *s12Source) error {
 		if err := h.Client.Get(ctx, key, cluster); err != nil {
 			return fmt.Errorf("read the source cluster: %w", err)
 		}
-		problem, unasked := unmet, strings.HasPrefix(unmet, "cubrid heartbeat status failed")
+		problem := unmet
+		unasked := strings.HasPrefix(unmet, "cubrid heartbeat status failed") || strings.Contains(unmet, unread)
 		if unmet == "" {
 			source.Master, source.CurrentPrimary = roles.Master, cluster.Status.CurrentPrimary
 			if roles.Master != want || source.CurrentPrimary != want {

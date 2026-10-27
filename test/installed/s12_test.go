@@ -1262,7 +1262,7 @@ func TestRunS12ExactFailsWhenASourceMemberWasReplacedButIsNotReady(t *testing.T)
 	}
 	s12, err := s12Of(t, f, t.Context())
 	if err == nil || s12.Result != evidence.Fail || !strings.Contains(s12.Reason, "the source changed") ||
-		!strings.Contains(s12.Reason, "replaced") {
+		!strings.Contains(s12.Reason, testMemberLast+" has Pod UID replaced-member") {
 		t.Fatalf("S12 = %+v, want a failure: a source member has a new UID, Ready or not", s12)
 	}
 	if rec := readS12Record(t, cfg.EvidenceDir); rec.Source == nil || rec.Source.Restarted == nil ||
@@ -1351,6 +1351,13 @@ func TestRunS12ExactFailsWhileTheRestoredMasterIsToBeActive(t *testing.T) {
 		}
 		return state
 	}
+	var markerReads []string
+	f.markerAnswer = func(pod string) (string, error, bool) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		markerReads = append(markerReads, pod)
+		return "", nil, false
+	}
 	s12, err := s12Of(t, f, t.Context())
 	if err == nil || s12.Result != evidence.Fail || !strings.Contains(s12.Reason, "not Ready within restore_limit") ||
 		!strings.Contains(s12.Reason, testRestoreMaster+" is neither an active master") {
@@ -1361,6 +1368,11 @@ func TestRunS12ExactFailsWhileTheRestoredMasterIsToBeActive(t *testing.T) {
 	for name, n := range f.haFixture.reads {
 		if strings.HasPrefix(name, s12ClusterName+"-") {
 			t.Fatalf("%s was read %d times; want no data read from a cluster that was not Ready", name, n)
+		}
+	}
+	for _, pod := range markerReads {
+		if strings.HasPrefix(pod, s12ClusterName+"-") {
+			t.Fatalf("the marker table of %s was read; want none of a cluster that was not Ready", pod)
 		}
 	}
 	if rec := readS12Record(t, cfg.EvidenceDir); rec.DataCheck != nil || rec.NormalWrite != nil {
@@ -1456,5 +1468,37 @@ func TestRunS12ExactIsBlockedWhenTheLimitCutsAReadingAfterUnreadOnes(t *testing.
 	s12, err := s12Of(t, f, t.Context())
 	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "etcd is unavailable") {
 		t.Fatalf("S12 = %+v, want blocked: the last reading made could not read a member Pod", s12)
+	}
+}
+
+func TestRunS12ExactJudgesAFailedHeartbeatStatusByWhetherItRan(t *testing.T) {
+	for name, tc := range map[string]struct {
+		out    string
+		result evidence.Result
+		want   string
+	}{
+		// kubectl could not reach the container: nothing was asked.
+		"the exec did not reach the member": {out: "error: unable to upgrade connection: container not found " +
+			"(\"cubrid\")\n", result: evidence.Blocked, want: "unable to upgrade connection"},
+		// The command ran in the member and failed: what it answered was seen.
+		"the command ran and failed": {out: "++ cubrid master is not running.\ncommand terminated with exit code 1\n",
+			result: evidence.Fail, want: "not Ready within restore_limit"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12Config(t)
+			cfg.RestoreLimit = 300 * time.Millisecond
+			f := newS12Fixture(t, cfg)
+			f.bootPhases = []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapComplete}
+			f.memberHook = func(_ context.Context, pod, script string) (string, error, bool) {
+				if pod != testRestoreMaster || !strings.Contains(script, "heartbeat status") {
+					return "", nil, false
+				}
+				return tc.out, errors.New("kubectl failed: exit status 1: " + tc.out), true
+			}
+			s12, err := s12Of(t, f, t.Context())
+			if err == nil || s12.Result != tc.result || !strings.Contains(s12.Reason, tc.want) {
+				t.Fatalf("S12 = %+v, want %s with %q", s12, tc.result, tc.want)
+			}
+		})
 	}
 }
