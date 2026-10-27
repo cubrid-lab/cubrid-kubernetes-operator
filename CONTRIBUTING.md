@@ -281,8 +281,7 @@ unchanged for **every** implementation method.
 
 ## Pull request and commit titles
 
-This rule covers issue titles, pull request titles and commit subjects in every
-cubrid-lab repository. Pull requests are squash-merged and the pull request
+This section covers pull request titles and commit subjects in this repository. Issue titles use a type-only prefix (`feat:`, `bug:`, etc.) without a required scope; see the [organization writing standard](https://github.com/cubrid-lab/.github/blob/main/docs/ISSUE_PR_COMMIT_STANDARD.md). Pull requests are squash-merged and the pull request
 title becomes the commit title on `main`, so the pull request title is the one
 that must be right. The `PR title` check enforces it.
 
@@ -479,9 +478,7 @@ create more issues.
 
 ### Reporting a bug
 
-Keep the issue form's prefilled title prefix; for a custom issue, pick the type from
-[Pull request and commit titles](#pull-request-and-commit-titles), for example
-`fix(broker): ...`. Write issues, PRs and comments in English.
+Use a type-only issue title such as `bug: prevent an invalid broker rollout` or `feat: support custom placement`. Leave module scopes to PRs and commits. Write issues, PRs and comments in English.
 
 A bug report is also a record of evidence. Say how often the behavior was
 seen, attach what you have (status and Conditions, Events, logs, SQL results;
