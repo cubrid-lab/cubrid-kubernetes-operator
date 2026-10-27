@@ -221,8 +221,20 @@ in S12 `exact` by #238 (two lost sessions in a row on one member), and one
 failed in S12 `exact`: an acknowledged write through the read-write Service was
 not on one seeded slave within 2 minutes while the data rules had held there,
 the pattern of #416. A restart between the start of a restore and its status
-write, an Instance Manager restart and restarts at other points of the flow are
-not covered.
+write and restarts at other points of the flow are not covered.
+
+S12 `instance-manager-restart`, a lab-only variant
+(`lab-installed-ha-s12-instance-manager-restart`,
+`-restore-instance-manager-restart`, #121), kills the Instance Manager of the
+restore's target member while another restored cluster is `Restoring`, which
+restarts that member's container on the same Pod and volume, and requires
+exactly one retry naming the manager's restart, a new operation that
+completes, one container restart, and then what S12 `exact` requires. On
+2026-10-26 it passed on the VM lab (manager `d6df2ac`): the container was back
+in 3.4 s, the Operator reported `manager restarted while operation was in
+progress; starting attempt 2 of 3`, and the new operation restored, seeded both
+peers and completed 3 min 26 s after creation. Whether the retry removed or
+took over the killed attempt's data is not read.
 
 A [manual VM-lab run on 2026-10-21](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210)
 moved the lab to main `9c6ae9c1ef97eae29c13dff7a272d1082715c9e2` through the
@@ -444,12 +456,12 @@ unverified (#86, #87).
 **Implementation:** Backup API/controller, artifact handling and recovery
 bootstrap code are merged.
 **Live validation:** On the VM lab, S11 `complete` and S12 `exact`,
-`tampered`, `wrong-target` and `operator-restart` passed (see above); a lost SQL
+`tampered`, `wrong-target`, `operator-restart` and `instance-manager-restart`
+passed (see above); a lost SQL
 session (#238) blocked S12 runs until the harness read it again (#575), and one
 S12 `exact` run failed on a seeded slave that applied nothing (#416). The
-interrupted backup and restore variants, Instance Manager restarts and restarts
-at other points of a restore, and the Operator's logs remain unverified (#88,
-#89, #121).
+interrupted backup and restore variants, restarts at other points of a
+restore, and the Operator's logs remain unverified (#88, #89, #121).
 
 - `CubridBackup`
 - backup execution implementation

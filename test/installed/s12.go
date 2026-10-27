@@ -172,8 +172,8 @@ type s12Record struct {
 	Residue           string          `json:"residue"`
 }
 
-// validateS12 checks the inputs of S12 exact, tampered, wrong-target and
-// operator-restart, when they are selected.
+// validateS12 checks the inputs of S12 exact, tampered, wrong-target,
+// operator-restart and instance-manager-restart, when they are selected.
 func (c HAConfig) validateS12() error {
 	if c.RestoreTampered && !c.Restore {
 		return errors.New("-restore-tampered needs -restore: S12 tampered follows S12 exact")
@@ -185,6 +185,9 @@ func (c HAConfig) validateS12() error {
 		return errors.New("-restore-wrong-target and -restore-tampered select different lanes; a run takes one of them")
 	}
 	if err := c.validateS12OperatorRestart(); err != nil {
+		return err
+	}
+	if err := c.validateS12InstanceManagerRestart(); err != nil {
 		return err
 	}
 	if !c.Restore {
@@ -237,8 +240,8 @@ func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 		})
 	}()
 	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String()}
-	result.Measurements = map[string]any{"restoredWithin": evidence.Unknown,
-		dataRulesHeldMeasurement: evidence.Unknown, "postBackupRowsPresent": evidence.Unknown}
+	result.Measurements = map[string]any{restoredWithinMeasurement: evidence.Unknown,
+		dataRulesHeldMeasurement: evidence.Unknown, postBackupRowsMeasurement: evidence.Unknown}
 	err := h.s12Steps(ctx, &result, &rec)
 	// A credential found in any status read is a failure, whichever step
 	// ended S12.
@@ -307,7 +310,7 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 		return err
 	}
 	rec.RestoredWithin = readyAt.Sub(created).Round(time.Millisecond).String()
-	result.Measurements["restoredWithin"] = rec.RestoredWithin
+	result.Measurements[restoredWithinMeasurement] = rec.RestoredWithin
 	if err := h.checkRestoredSecrets(ctx, rec, result); err != nil {
 		return err
 	}
@@ -712,7 +715,7 @@ func (h *haRun) checkRestoredData(ctx context.Context, expected string, roles *s
 	report, held, err := h.checkDataOf(ctx, expected, target, time.Now(), file)
 	if report != nil {
 		check.PostBackupRowsPresent = postBackupRows(*report, full)
-		result.Measurements["postBackupRowsPresent"] = len(check.PostBackupRowsPresent)
+		result.Measurements[postBackupRowsMeasurement] = len(check.PostBackupRowsPresent)
 	}
 	if err != nil {
 		if present := check.PostBackupRowsPresent; len(present) > 0 && errors.As(err, new(dataViolation)) {
@@ -972,7 +975,7 @@ func (h *haRun) checkSourceS12(ctx context.Context, source *s12Source, dataFile 
 			return fmt.Errorf("read the source's marker table: %w", err)
 		}
 		for _, written := range []struct{ marker, cluster string }{{s12Marker, s12ClusterName},
-			{s12RestartMarker, s12RestartClusterName}} {
+			{s12RestartMarker, s12RestartClusterName}, {s12IMRestartMarker, s12IMRestartClusterName}} {
 			if _, ok := table[written.marker]; ok {
 				return restoreVerdict{fmt.Errorf("the source changed: the marker %s written through %s-rw is on %s",
 					written.marker, written.cluster, pod)}

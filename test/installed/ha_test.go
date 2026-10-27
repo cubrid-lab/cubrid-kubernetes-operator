@@ -147,6 +147,14 @@ type haFixture struct {
 	// operator-restart, as restoreCreated and restoreRead do.
 	restartCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
 	restartRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	// imRestartCreated and imRestartRead play the Operator for the cluster of
+	// S12 instance-manager-restart; memberHook answers a member command first
+	// when it returns true.
+	imRestartCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
+	imRestartRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	memberHook       func(ctx context.Context, pod, script string) (string, error, bool)
+	// podRead runs before each read of a Pod; its error is the read's.
+	podRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	// markerAnswer, when it returns true, answers a read of the marker table
 	// in place of markersOf.
 	markerAnswer func(pod string) (string, error, bool)
@@ -248,15 +256,8 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 		},
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
 			opts ...client.GetOption) error {
-			if _, ok := obj.(*databasev1alpha1.CubridBackup); ok && f.backupRead != nil {
-				if err := f.backupRead(ctx, c, key); err != nil {
-					return err
-				}
-			}
-			if _, ok := obj.(*databasev1alpha1.CubridCluster); ok {
-				if err := f.readRestored(ctx, c, key); err != nil {
-					return err
-				}
+			if err := f.beforeGet(ctx, c, key, obj); err != nil {
+				return err
 			}
 			return c.Get(ctx, key, obj, opts...)
 		},
@@ -285,6 +286,23 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 	return f
 }
 
+// beforeGet plays the Operator and the kubelet before a read of obj.
+func (f *haFixture) beforeGet(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object) error {
+	switch obj.(type) {
+	case *databasev1alpha1.CubridBackup:
+		if f.backupRead != nil {
+			return f.backupRead(ctx, c, key)
+		}
+	case *databasev1alpha1.CubridCluster:
+		return f.readRestored(ctx, c, key)
+	case *corev1.Pod:
+		if f.podRead != nil {
+			return f.podRead(ctx, c, key)
+		}
+	}
+	return nil
+}
+
 // readRestored plays the Operator before a reading of a restored cluster.
 func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
 	switch {
@@ -296,6 +314,8 @@ func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key cl
 		return f.wrongTargetRead(ctx, c, key)
 	case key.Name == s12RestartClusterName && f.restartRead != nil:
 		return f.restartRead(ctx, c, key)
+	case key.Name == s12IMRestartClusterName && f.imRestartRead != nil:
+		return f.imRestartRead(ctx, c, key)
 	}
 	return nil
 }
@@ -324,6 +344,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 		}
 		f.writes = append(f.writes, "restart-cluster")
 		return f.restartCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s12IMRestartClusterName {
+		if f.imRestartCreated == nil {
+			f.t.Fatalf("runner created %s without S12 instance-manager-restart", cluster.Name)
+		}
+		f.writes = append(f.writes, "imrestart-cluster")
+		return f.imRestartCreated(ctx, c, cluster)
 	}
 	if cluster.Name == s12WrongTargetClusterName {
 		if f.wrongTargetCreated == nil {
@@ -463,7 +490,8 @@ func (f *haFixture) rowsOf(name string) []workload.Row {
 	defer f.mu.Unlock()
 	f.reads[name]++
 	rows := slices.Clone(f.rows)
-	if strings.HasPrefix(name, s12ClusterName+"-") || strings.HasPrefix(name, s12RestartClusterName+"-") {
+	if strings.HasPrefix(name, s12ClusterName+"-") || strings.HasPrefix(name, s12RestartClusterName+"-") ||
+		strings.HasPrefix(name, s12IMRestartClusterName+"-") {
 		rows = slices.Clone(f.restoredRows)
 	}
 	if n, lacking := f.missing[name]; lacking && (f.missingReads == 0 || f.reads[name] <= f.missingReads) {
@@ -503,6 +531,14 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 	}
 	if container != databaseContainer {
 		f.t.Fatalf("member command in container %s", container)
+	}
+	f.mu.Lock()
+	memberHook := f.memberHook
+	f.mu.Unlock()
+	if memberHook != nil {
+		if out, err, done := memberHook(ctx, pod, script); done {
+			return out, err
+		}
 	}
 	switch {
 	case strings.Contains(script, "applyinfo"):
@@ -601,14 +637,8 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 			defer f.afterRun(ctx)
 		}
 		return f.history, nil
-	case strings.Contains(script, s12RestartClusterName+"-ro") && strings.Contains(script, "workload dump"):
-		return strings.Join(jsonLines(f.rowsOf(s12RestartClusterName+"-ro")), "\n"), nil
-	case strings.Contains(script, s12RestartClusterName+"-rw") && strings.Contains(script, "workload dump"):
-		return strings.Join(jsonLines(f.rowsOf(s12RestartClusterName+"-rw")), "\n"), nil
-	case strings.Contains(script, s12ClusterName+"-ro") && strings.Contains(script, "workload dump"):
-		return strings.Join(jsonLines(f.rowsOf(s12ClusterName+"-ro")), "\n"), nil
-	case strings.Contains(script, s12ClusterName+"-rw") && strings.Contains(script, "workload dump"):
-		return strings.Join(jsonLines(f.rowsOf(s12ClusterName+"-rw")), "\n"), nil
+	case strings.Contains(script, "workload dump") && restoredService(script) != "":
+		return strings.Join(jsonLines(f.rowsOf(restoredService(script))), "\n"), nil
 	case strings.Contains(script, "RO_JDBC_URL") && strings.Contains(script, "workload dump"):
 		return strings.Join(jsonLines(f.rowsOf("ro")), "\n"), nil
 	case strings.Contains(script, "workload dump"):
@@ -616,6 +646,19 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 	}
 	f.t.Fatalf("unexpected client command %q", script)
 	return "", nil
+}
+
+// restoredService is the Service of a restored cluster a client script
+// names, or empty.
+func restoredService(script string) string {
+	for _, cluster := range []string{s12IMRestartClusterName, s12RestartClusterName, s12ClusterName} {
+		for _, mode := range []string{"ro", "rw"} {
+			if strings.Contains(script, cluster+"-"+mode) {
+				return cluster + "-" + mode
+			}
+		}
+	}
+	return ""
 }
 
 func readHARecord(t *testing.T, dir string) haRecord {
