@@ -257,7 +257,7 @@ func TestPartitionCleanupFailures(t *testing.T) {
 		}, "the network was not seen restored"},
 		{"the counting rules stay", func(n *fakeNet) { n.ignoreUnobserve = true }, "rules left after the removal"},
 		{"the injection lands after the removal", func(n *fakeNet) { n.lateInject = true },
-			"drop rules found after the network was seen restored"},
+			"drop rules found again after they were removed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -552,5 +552,33 @@ func replacePod(t *testing.T, env Env, namespace, name string) {
 	pod.ResourceVersion, pod.UID = "", types.UID("another")
 	if err := env.Client.Create(context.Background(), pod); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A Prepare cancelled from outside, as by a SIGTERM, still takes away the
+// counting rules it installed.
+func TestPartitionCancelledPrepareRemovesItsRules(t *testing.T) {
+	n := newFakeNet(testPods)
+	// The Operator sends nothing, so Prepare waits for it.
+	p := &Partition{Env: testEnv(t, n), Target: member(target), Cuts: []Cut{{operator(), Both}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	if err := p.Prepare(ctx); err == nil {
+		t.Fatal("a cancelled Prepare succeeded")
+	}
+	if left := n.installed(testPods[target]); len(left) > 0 {
+		t.Errorf("the cancelled Prepare left %v", left)
+	}
+}
+
+// A Pod that is replaced is reported as a change of the environment.
+func TestReplacedPodIsAChange(t *testing.T) {
+	n := newFakeNet(testPods)
+	env := testEnv(t, n)
+	replacePod(t, env, operatorNS, operatorPod)
+	_, err := currentPod(context.Background(), env, operator())
+	var changed *PodChangedError
+	if !errors.As(err, &changed) || !changed.Endpoint.NoEnter {
+		t.Fatalf("currentPod of a replaced manager Pod returned %v", err)
 	}
 }

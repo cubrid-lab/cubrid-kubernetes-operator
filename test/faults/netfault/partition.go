@@ -385,7 +385,11 @@ func (p *Partition) Prepare(ctx context.Context) (err error) {
 	var installed []Endpoint
 	defer func() {
 		if err != nil && len(installed) > 0 {
-			err = errors.Join(err, p.removeObservers(ctx, installed))
+			// Also when ctx was cancelled, as by a SIGTERM: the counting
+			// rules must not be left behind.
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.reserve())
+			defer cancel()
+			err = errors.Join(err, p.removeObservers(cleanup, installed))
 		}
 	}()
 	for _, e := range p.endpoints() {
@@ -626,12 +630,15 @@ func (p *Partition) Remove(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("%s: drop rules left after the removal: %v", e.Name, left))
 		}
 	}
+	restored := false
 	if len(errs) == 0 {
 		wait, cancel := p.beforeReserve(ctx)
 		if err := p.snapshot(wait); err != nil {
 			errs = append(errs, err)
 		} else if err := p.waitOpen(wait, PhaseRemoved, p.paths()); err != nil {
 			errs = append(errs, fmt.Errorf("the network was not seen restored: %w", err))
+		} else {
+			restored = true
 		}
 		cancel()
 	}
@@ -644,7 +651,11 @@ func (p *Partition) Remove(ctx context.Context) error {
 			continue
 		}
 		if late := dropLeft(r); len(late) > 0 {
-			errs = append(errs, fmt.Errorf("%s: drop rules found after the network was seen restored: %v", e.Name, late))
+			when := "after the network was seen restored"
+			if !restored {
+				when = "again after they were removed"
+			}
+			errs = append(errs, fmt.Errorf("%s: drop rules found %s: %v", e.Name, when, late))
 			if left, err := p.removeDrops(ctx, e); err != nil || len(left) > 0 {
 				errs = append(errs, fmt.Errorf("%s: drop rules left: %v %w", e.Name, left, err))
 			}

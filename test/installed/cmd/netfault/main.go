@@ -168,6 +168,11 @@ func (c config) validate() error {
 	if c.hold <= 0 || c.confirm <= 0 || c.cleanup <= 0 || c.poll <= 0 {
 		errs = append(errs, errors.New("every time limit must be set"))
 	}
+	if c.confirm <= netfault.DefaultReserve || c.cleanup <= netfault.DefaultReserve {
+		// A wait ends that long before its limit, for the steps after it.
+		errs = append(errs, fmt.Errorf("-confirm-limit and -cleanup-limit must be longer than %s",
+			netfault.DefaultReserve))
+	}
 	return errors.Join(errs...)
 }
 
@@ -240,7 +245,7 @@ func runVariant(ctx context.Context, cfg config, env netfault.Env, variant strin
 	// confirmation that cannot decide yet is asked again; one that sees the
 	// fault gone or too wide breaks the expectation.
 	var confirmedAt time.Time
-	var undecided error
+	var undecided, operatorChanged error
 	o := faults.Run(ctx, faults.Scenario{Fault: fault, Limits: limits, Before: fault.Prepare,
 		Check: func(ctx context.Context) (bool, error) {
 			if confirmedAt.IsZero() {
@@ -254,9 +259,17 @@ func runVariant(ctx context.Context, cfg config, env netfault.Env, variant strin
 				undecided = err
 				return false, nil
 			}
+			if changed := (*netfault.PodChangedError)(nil); errors.As(err, &changed) && changed.Endpoint.NoEnter {
+				operatorChanged = err
+			}
 			return held, err
 		}})
-	if o.Result == evidence.Fail && strings.HasPrefix(o.Reason, "time_limit_exceeded") && undecided != nil {
+	switch {
+	case o.Result == evidence.Fail && operatorChanged != nil:
+		// The manager Pod was replaced: the environment changed, and the
+		// fault says nothing about it.
+		o.Result, o.Reason = evidence.Blocked, "environment_changed: "+operatorChanged.Error()
+	case o.Result == evidence.Fail && strings.HasPrefix(o.Reason, "time_limit_exceeded") && undecided != nil:
 		// Not observed is not a failure.
 		o.Result, o.Reason = evidence.Blocked, "hold_not_observed: "+undecided.Error()
 	}

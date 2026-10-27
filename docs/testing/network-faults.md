@@ -45,7 +45,7 @@ The rules drop packets by Pod IP, in iptables chains of the faults' own.
 - **The filter.** A `u32` filter sends only packets to the peer's Pod IP to
   band 4.
 
-### Removal
+### The ephemeral container stays
 
 An ephemeral container cannot be removed. It only sleeps, and the faults
 remove every rule and qdisc they installed.
@@ -64,10 +64,9 @@ remove every rule and qdisc they installed.
 A command that succeeded is not taken as a fault that took effect.
 
 - **Wrong target.** Every Pod the fault names, including the Operator's,
-  must still have the UID and IP the run chose:
-  - before the faults attach and prepare;
-  - before they inject into a member;
-  - at every confirmation.
+  must still have the UID and IP the run chose, when the faults prepare and
+  at every confirmation. Before they attach to or inject into a member, that
+  member is checked again.
 
   An entered member's ephemeral container must also be in a namespace that
   holds the Pod's IP (`ip -o -4 addr show dev eth0`). Otherwise the step

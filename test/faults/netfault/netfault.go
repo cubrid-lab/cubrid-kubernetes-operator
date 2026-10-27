@@ -42,6 +42,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -209,21 +210,37 @@ func debugContainer(image string) corev1.EphemeralContainer {
 	}}
 }
 
-// currentPod returns the endpoint's Pod, and an error when it is not the Pod
-// the endpoint names: another UID, another IP, or being deleted.
+// PodChangedError says that an endpoint's Pod is no longer the one the run
+// chose: gone, replaced, at another IP, or being deleted. The environment
+// changed under the run.
+type PodChangedError struct {
+	Endpoint Endpoint
+	Detail   string
+}
+
+func (e *PodChangedError) Error() string { return e.Endpoint.Name + ": " + e.Detail }
+
+// currentPod returns the endpoint's Pod, and a *PodChangedError when it is
+// not the Pod the endpoint names: gone, another UID, another IP, or being
+// deleted.
 func currentPod(ctx context.Context, env Env, e Endpoint) (*corev1.Pod, error) {
 	pod := &corev1.Pod{}
-	if err := env.Client.Get(ctx, client.ObjectKey{Namespace: e.Namespace, Name: e.Pod}, pod); err != nil {
-		return nil, fmt.Errorf("%s: read Pod %s/%s: %w", e.Name, e.Namespace, e.Pod, err)
+	err := env.Client.Get(ctx, client.ObjectKey{Namespace: e.Namespace, Name: e.Pod}, pod)
+	changed := func(format string, args ...any) error {
+		return &PodChangedError{Endpoint: e, Detail: fmt.Sprintf("Pod %s/%s ", e.Namespace, e.Pod) +
+			fmt.Sprintf(format, args...)}
 	}
 	switch {
+	case apierrors.IsNotFound(err):
+		return nil, changed("is gone")
+	case err != nil:
+		return nil, fmt.Errorf("%s: read Pod %s/%s: %w", e.Name, e.Namespace, e.Pod, err)
 	case string(pod.UID) != e.UID:
-		return nil, fmt.Errorf("%s: Pod %s/%s has UID %s, not %s: it was replaced", e.Name, e.Namespace, e.Pod,
-			pod.UID, e.UID)
+		return nil, changed("has UID %s, not %s: it was replaced", pod.UID, e.UID)
 	case pod.Status.PodIP != e.IP:
-		return nil, fmt.Errorf("%s: Pod %s/%s has IP %q, not %s", e.Name, e.Namespace, e.Pod, pod.Status.PodIP, e.IP)
+		return nil, changed("has IP %q, not %s", pod.Status.PodIP, e.IP)
 	case pod.DeletionTimestamp != nil:
-		return nil, fmt.Errorf("%s: Pod %s/%s is being deleted", e.Name, e.Namespace, e.Pod)
+		return nil, changed("is being deleted")
 	case pod.Spec.HostNetwork || pod.Status.PodIP == pod.Status.HostIP:
 		// Its namespace is the node's: a rule there would cut the node, and
 		// a rule on its IP would cut everything from the node.

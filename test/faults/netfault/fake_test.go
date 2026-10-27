@@ -112,7 +112,11 @@ var (
 	delayArg = regexp.MustCompile(`^: netfault delay (\S+) (\d+)`)
 )
 
-func (n *fakeNet) kubectl(_ context.Context, args ...string) (string, error) {
+func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		// kubectl is killed with its context.
+		return "", err
+	}
 	if len(args) != 10 || args[2] != "exec" || args[5] != Container || args[8] != "-c" {
 		return "", fmt.Errorf("unexpected kubectl call %q", args)
 	}
@@ -137,18 +141,7 @@ func (n *fakeNet) kubectl(_ context.Context, args ...string) (string, error) {
 	case "addr":
 		return fmt.Sprintf("2: eth0    inet %s/24 brd 10.42.1.255 scope global eth0\\       valid_lft forever\n", ns.ip), nil
 	case "rules":
-		if ns.pending != nil && ns.removed {
-			if ns.readsSinceRemove++; ns.readsSinceRemove >= 2 {
-				n.install(ns, ns.pending)
-				ns.pending = nil
-			}
-		}
-		for src, dst := range n.senders {
-			if dst == ns.ip {
-				n.packet(nil, src, ns)
-			}
-		}
-		return n.save(ns), nil
+		return n.rules(ns), nil
 	case "observe":
 		ns.removed = false
 		ns.input = append(ns.input, chainSeen)
@@ -192,6 +185,24 @@ func (n *fakeNet) kubectl(_ context.Context, args ...string) (string, error) {
 		return "", nil
 	}
 	return "", fmt.Errorf("unexpected script %q", script)
+}
+
+// rules answers iptables-save. A late injection lands on the second
+// reading after the removal, and every sender that is not entered sends one
+// packet first.
+func (n *fakeNet) rules(ns *fakeNS) string {
+	if ns.pending != nil && ns.removed {
+		if ns.readsSinceRemove++; ns.readsSinceRemove >= 2 {
+			n.install(ns, ns.pending)
+			ns.pending = nil
+		}
+	}
+	for src, dst := range n.senders {
+		if dst == ns.ip {
+			n.packet(nil, src, ns)
+		}
+	}
+	return n.save(ns)
 }
 
 func (n *fakeNet) connects(ns *fakeNS, addr, count string) (string, error) {
