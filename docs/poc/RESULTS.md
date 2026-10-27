@@ -3562,7 +3562,7 @@ process list, and its whole `$CUBRID/log`.
 files are kept under `runs/` as `t0`, `x01-…` and `x02-…`:
 - `t0`: the first trial, whose poller stopped before the writes. See the late writes below.
 - `x01`: the script hung after the reads. Rows were read on `h-1` after 20.1 s and on `h-2` after 22.7 s.
-- `x02`: a first `k01` whose kill hit the polling shell instead of the applier. Rows were read after 9.3 and 9.0 s.
+- `x02`: a first `k01` in which no applier was killed. The pid search picked a short-lived process (pid 2478), and `kill` reported `kill: (2478) - No such process` (`run.log`). Rows were read after 9.3 and 9.0 s.
 
 The raw files are under `poc416/runs/<run>/` of this session's scratchpad:
 - `events.txt`;
@@ -3574,46 +3574,51 @@ The raw files are under `poc416/runs/<run>/` of this session's scratchpad:
 
 The tables below were produced by `bin/table.py` from those files.
 
-**Base formations.** "Lock file first seen" is the first poll sample with the
-file, in seconds after the write command returned. "Rows read" is when the
-3 rows were first read. "Final" is the final `applyinfo` for `appdb_h-0`:
+**Base formations.** Both time columns are in seconds after the write
+command returned (the `writes rc` event, logged when `csql` exited). "Lock
+file first seen" is the first poll sample with the file. "Rows read" is when
+the 3 rows were first read. Polls were about 1.1 s apart and reads about
+1 s apart, so either can trail the event it records by that much. "Final" is the final `applyinfo` for `appdb_h-0`:
 the insert count and the delayed log pages.
 
 | Run | `h-1` to `h-2` heartbeat start (s) | lock file first seen (`h-1` / `h-2`) | rows read (`h-1` / `h-2`) | final insert, delayed pages (`h-1` / `h-2`) |
 |---|---|---|---|---|
-| r01 | 21.0 | 10.9 / 11.7 | 9.9 / 10.4 | 3, 0 / 3, 0 |
-| r02 | 20.3 | 17.9 / 19.1 | 15.8 / 17.5 | 3, 0 / 3, 0 |
-| r03 | 20.3 | 6.8 / 6.9 | 5.6 / 5.6 | 3, 0 / 3, 0 |
-| r04 | 20.2 | 13.6 / 13.6 | 11.8 / 11.8 | 3, 0 / 3, 0 |
-| r05 | 21.4 | 8.5 / 8.5 | 8.3 / 8.5 | 3, 0 / 3, 0 |
-| r06 | 19.9 | 10.0 / 8.9 | 8.5 / 8.5 | 3, 0 / 3, 0 |
-| r07 | 20.0 | 6.9 / 6.9 | 6.7 / 8.5 | 3, 0 / 3, 0 |
-| r08 | 22.8 | 10.8 / 11.6 | 9.0 / 10.9 | 3, 0 / 3, 0 |
-| r09 | 20.9 | 64.6 / 66.6 | **60.1 / 67.1** | 3, 1 / 3, 1 |
-| r10 | 21.3 | 18.7 / 22.9 | 17.4 / 20.3 | 3, 0 / 3, 0 |
-| r11 | 21.2 | 11.0 / 11.5 | 10.8 / 11.4 | 3, 0 / 3, 0 |
-| r12 | 20.2 | 7.0 / 7.7 | 4.6 / 8.1 | 3, 0 / 3, 0 |
-| r13 | 20.4 | 6.9 / 6.9 | 6.5 / 5.1 | 3, 0 / 3, 0 |
-| r14 | 21.0 | 8.5 / 8.6 | 7.3 / 5.8 | 3, 0 / 3, 0 |
-| r15 | 21.2 | 7.4 / 7.4 | 6.0 / 6.6 | 3, 0 / 3, 0 |
-| r16 | 21.2 | 6.9 / 6.9 | 4.8 / 6.3 | 3, 0 / 3, 0 |
-| r17 | 21.3 | 5.3 / 5.2 | 5.7 / 5.5 | 3, 0 / 3, 0 |
-| r18 | 21.6 | 7.0 / 7.0 | 4.5 / 4.6 | 3, 0 / 3, 0 |
-| r19 | 20.8 | 5.6 / 6.7 | 5.0 / 6.1 | 3, 0 / 3, 0 |
-| r20 | 20.5 | 7.1 / 7.1 | 5.1 / 6.8 | 3, 0 / 3, 0 |
+| r01 | 21.0 | 7.1 / 7.8 | 9.9 / 10.4 | 3, 0 / 3, 0 |
+| r02 | 20.3 | 12.5 / 13.7 | 15.8 / 17.5 | 3, 0 / 3, 0 |
+| r03 | 20.3 | 4.4 / 4.5 | 5.6 / 5.6 | 3, 0 / 3, 0 |
+| r04 | 20.2 | 7.9 / 7.9 | 11.8 / 11.8 | 3, 0 / 3, 0 |
+| r05 | 21.4 | 4.4 / 4.4 | 8.3 / 8.5 | 3, 0 / 3, 0 |
+| r06 | 19.9 | 6.5 / 5.4 | 8.5 / 8.5 | 3, 0 / 3, 0 |
+| r07 | 20.0 | 3.7 / 3.7 | 6.7 / 8.5 | 3, 0 / 3, 0 |
+| r08 | 22.8 | 7.0 / 7.7 | 9.0 / 10.9 | 3, 0 / 3, 0 |
+| r09 | 20.9 | 55.4 / 57.5 | **60.1 / 67.1** | 3, 1 / 3, 1 |
+| r10 | 21.3 | 14.6 / 18.8 | 17.4 / 20.3 | 3, 0 / 3, 0 |
+| r11 | 21.2 | 7.2 / 7.7 | 10.8 / 11.4 | 3, 0 / 3, 0 |
+| r12 | 20.2 | 2.4 / 3.1 | 4.6 / 8.1 | 3, 0 / 3, 0 |
+| r13 | 20.4 | 3.9 / 3.9 | 6.5 / 5.1 | 3, 0 / 3, 0 |
+| r14 | 21.0 | 4.9 / 5.0 | 7.3 / 5.8 | 3, 0 / 3, 0 |
+| r15 | 21.2 | 4.9 / 4.9 | 6.0 / 6.6 | 3, 0 / 3, 0 |
+| r16 | 21.2 | 3.7 / 3.7 | 4.8 / 6.3 | 3, 0 / 3, 0 |
+| r17 | 21.3 | 2.7 / 2.6 | 5.7 / 5.5 | 3, 0 / 3, 0 |
+| r18 | 21.6 | 4.0 / 4.0 | 4.5 / 4.6 | 3, 0 / 3, 0 |
+| r19 | 20.8 | 3.1 / 4.2 | 5.0 / 6.1 | 3, 0 / 3, 0 |
+| r20 | 20.5 | 3.6 / 3.6 | 5.1 / 6.8 | 3, 0 / 3, 0 |
 
 In every base formation, on both slaves:
 - **Before the first write:** the lock file did not exist, through the 90 s idle period and through the other slave's join.
 - **From the first write on:** every sample with the file showed 52 bytes, `<pid>        appdb /var/lib/cubrid/databases/appdb_h-0`.
   - The pid was alive and was `cub_admin applylogdb -L …/appdb_h-0`, the master-log applier.
-  - That process held the file open.
-  - `/proc/locks` never listed the file's inode.
+  - That process held the file open in every such sample.
+  - In no sample did `/proc/locks` list the file's inode. Samples were about 1.1 s apart.
+  - `/proc/locks` did list POSIX locks on the containers' overlay file system: `r01/h-1-final.txt` shows one on inode 25690294 of device `00:3c`, the device of the lock file. A kernel lock on the file would have shown up the same way.
 - **Error logs:** no `applylogdb` log on any member had an `Unable to mount disk volume ".../APPLYLOGDB/appdb"` line.
-- **Master-log applier:** it logged `unregistered` to `working` once and nothing after.
+- **Master-log applier:** its only change of apply state was `unregistered` to `working`.
+  - Before it, it logged `Unable to mount log disk volume/file ".../appdb_h-0/appdb_lgat"` 1 to 13 times, until the master's log had been copied, and `-1038` "log applier started".
+  - After it, 37 of the 60 logs had the master's HA state change from `to-be-active` to `active`. In the other 23, `idle` to `active` came before `working`.
 - **Applier of the other slave's log:**
   - It logged `Unable to mount log disk volume/file ".../appdb_h-<n>/appdb_lgat"` until that peer's log had been copied once (POC-13).
-  - Then `unregistered` to `done`, and a repeated `recovering` to `done`.
-  - It never named the lock file.
+  - Then `unregistered` to `done`, and a repeated `recovering` to `done`. In 4 of the 60 logs the first change was `unregistered` to `recovering` instead: `h-2`'s log for `appdb_h-1` in `r04`, `r06`, `r08` and `w02`.
+  - It never named the lock file in its error log, and was never seen to write the file.
 - **Final state:**
   - `Fail count` 0 for both copied logs.
   - Heartbeat showed `h-0` master with `registered_and_active` and both slaves `registered_and_standby`, every process `registered`.
@@ -3646,31 +3651,40 @@ In every base formation, on both slaves:
 - **Neither applier was refused:** in these 10 formations, as in the base ones, no `applylogdb` log had an `APPLYLOGDB` "in use" line.
 - **POC-17's state was not reached:** the file named a dead process for over a minute, but it named the log of the current master, so the master's new applier was not refused.
 
-**Late writes, cause not known.** In `r09` both slaves read the rows 60.1 and
-67.1 s after the write, against 2.2 to 20.3 s in every other formation. The
-trial `t0` showed the same:
+**Late writes, cause not known.** In `r09` the slaves read the rows 60.1 s
+(`h-1`) and 67.1 s (`h-2`) after the write. By this entry's 60 s rule the rows
+did not arrive in time on either slave. In every other counted formation they
+arrived within 2.2 to 20.3 s. The trial `t0` showed the same:
 - On `h-1` the table was still unknown 62 s after the write. `h-1`'s final `applyinfo` about 90 s after the write showed the 3 inserts.
 - `h-2` first read the rows after 88.7 s.
 
-In `r09`, on both slaves, during the delay:
-- The copied log's EOF advanced from page 146 to page 148 within about 45 s of the write. "Delayed log page count" was 1 or 2.
-- The master-log applier kept rewriting `last_access_time`. Its `final_lsa` crept within page 146 at the same pace on both slaves: from 146\|7088 to 146\|10976 on `h-1`. It passed into page 147 only at about 04:34:20, about 50 s after the write command returned.
-- Its error log had no line, and the lock file was absent.
-- On `h-0`, the write command took 9.1 s (`CREATE TABLE` 4.4 s and its commit 2.7 s).
+What the raw files show for `r09` and `t0`:
+- **The writes were slow.** On `h-0` the write command took 9.1 s in `r09` (`CREATE TABLE` 4.4 s and its commit 2.7 s) and 9.8 s in `t0`, against 2.3 to 5.7 s in every other counted formation.
+- **Both pollers paused together.** In `r09` the pollers of `h-1` and `h-2` both paused for 7.96 s from the same moment, 04:32:37, about 44 s before the write. That was the longest gap of either poller in the run.
+- **The idle log had not grown as far.** At the end of the idle period `r09`'s copied EOF was still on page 146 on `h-1`. In every other base formation it was on page 147.
+- **The appliers already trailed before the write.** In the last samples before the write, at 04:33:19 on `h-1` and 04:33:17 on `h-2`, `final_lsa` was 146\|7088 and 146\|6992, about 3.8 KB behind the copied EOF of 146\|10880 and 146\|10784. The write began at 04:33:21.
 
-Both slaves were late together, so the master's side or the host is the more
-likely place to look. This is not shown. Whether this is related to #416's
+During the delay, on both slaves:
+- The copied log's EOF advanced to page 148 within about 45 s of the write. "Delayed log page count" was 1 or 2.
+- The master-log applier kept rewriting `last_access_time`. Its `final_lsa` crept within page 146 at the same pace on both slaves, on `h-1` up to 146\|10976. It passed into page 147 only at about 04:34:20, about 50 s after the write command returned.
+- Its error log had no line, and the lock file was absent.
+- On `h-1`, the `db_ha_apply_info` row of the applier for `appdb_h-2` advanced: `commit_counter` went from 55 to 71 between 04:33:06 and 04:33:31. That applier was never seen to touch the lock file.
+
+Both slaves were late together, and the slow writes and the shared poller
+pause point more to the host than to the master's side. This is an
+observation, not a shown cause. The cause stays unknown. Whether this is related to #416's
 stalls of 2 minutes or more is not known. Here both slaves applied the rows
 by themselves. That fits hypothesis 4 of #416 ("a slow start") better than
 hypothesis 1, but it was not examined further.
 
 **What this shows.**
 - **The race was not reproduced.** In 30 formations seeded with the Instance Manager's commands, the applier lock file on a slave was held only by that slave's master-log applier, named only the master's log, and refused nothing. That includes 20 with no change, 5 with the master-log applier killed while idle and 5 with it killed after a write.
-- **The other slave's applier never took the file.** On both slaves, including the one that joined last, that applier never wrote the file and never logged a refusal. The part of hypothesis 1 that "Not shown" names, an applier for a standby's log taking the lock, was not observed in any of 60 slave observations.
+- **The other slave's applier was never seen to take the file.** On both slaves, including the one that joined last, that applier was never seen to write the file and never logged a refusal. The part of hypothesis 1 that "Not shown" names, an applier for a standby's log taking the lock, was not observed in any of 60 slave observations.
 - **The file appears only with the first applied write.** Before it, the file was absent, as POC-35 saw. A master that stays idle while both slaves join leaves no file for anyone to race for.
-- **A pid in the file was not enough to block an applier.** No process held the file under a kernel lock (`/proc/locks`). The live master-log applier held it open, and a killed one left only its pid and log name behind. The file named a dead process for over a minute in variant (a'), and an applier for the same log still started, applied and rewrote the file.
+- **A pid in the file was not enough to block an applier.** In no sample did a process hold the file under a kernel lock (`/proc/locks`). The live master-log applier held it open, and a killed one left only its pid and log name behind. The file named a dead process for over a minute in variant (a'), and an applier for the same log still started, applied and rewrote the file.
   - How CUBRID decides "in use" is not established here. A reading not confirmed in its source: it compares the log name in the file, as in POC-16/17, and the content and the dead pid are not checked as a kernel lock would be.
-- **The lab baseline differs from these files.** The coordinator's read on the VM lab's healthy slave `cubrid-test/ha-0` found the file at 0 bytes with no lock and no process holding it open. Every sample here with the file showed 52 bytes and the live master-log applier holding it open.
+- **The lab baseline differs from these files.** PR #600's read-only check of the VM lab's healthy slave `cubrid-test/ha-0`, on 2026-10-27, found the file at 0 bytes, mtime 2026-10-24 11:01:06Z. It had no lock in `/proc/locks`, and no process held it open. Every sample here with the file showed 52 bytes and the live master-log applier holding it open.
+  - Whether a 0-byte file blocks an applier was not tested.
   - A file the live applier does not hold open is a state these runs did not produce.
   - What leads there was not examined. One candidate is a member that has run for days with restarts of its appliers.
   - A check on the lab should therefore record the file's content and size, and which process holds it open. Size alone is not enough.
@@ -3681,11 +3695,12 @@ it. In 30 formations it never happened, and the mechanism it needs (the other
 slave's applier taking the file) was never seen. This is the behavior of one
 image in 30 formations on one host, not a guarantee of CUBRID. The following
 still stand as possible causes:
-- a race at a timing these runs did not reach. Here the gap between the joins was about 20 s. On Kind (#416) the second slave was observed 51 s after the first was restored, and the master was busier;
+- a race at a timing these runs did not reach. Here the gap between the joins was about 20 s. On Kind (#416) the second slave was observed 51 s after the first was restored, and #416 records that `hab-1` had applied 2 changes (`appliedChanges: 2`);
 - a state reached only on a long-running member, the lab's empty file;
 - hypotheses 2 to 4. The late writes of `r09` and `t0` are the only stall-like behavior this setup produced.
 
 **Not tested.**
+- The same formations without the pollers' own load. On each slave the poller ran `cubrid applyinfo` and `cubrid heartbeat status` about once a second, in every sample, and a `csql` query of `db_ha_apply_info` in every fifth sample.
 - Pods, the Instance Manager's own process, the Operator's timing between seeding steps, and the Operator's `cubrid.conf`. The image's own `cubrid.conf` was used, with `data_buffer_size=512M`.
 - Object-storage staging of the backup. The backup was read from a directory shared with the host.
 - A master under write load while the slaves join. A master that changed during seeding (POC-23).
