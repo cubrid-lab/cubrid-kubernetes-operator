@@ -449,6 +449,11 @@ unverified. RW/RO access through the Broker Services works on Kind in CI.
 
 **Implementation:** Recovery decision paths and ambiguous-primary detection
 are merged; engine failure/partition behavior has manual POC evidence.
+The test-only network faults for S07 and S08 are merged: a partition between
+members in one or both directions, and a delay to one peer, each confirmed by
+observed traffic and proven removed. They were run on the VM lab against a
+three-member cluster (#114, POC-39). That covers only the fault controls; how
+CUBRID and the Operator react to them is not yet run (#115).
 **Live validation:** SQL quarantine, real rejoin and explicit rebuild remain
 unverified (#86, #87).
 
