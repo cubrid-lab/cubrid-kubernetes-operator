@@ -3839,7 +3839,7 @@ implemented to be tested.
   - `git log d6df2ac..origin/main` touches product code in two commits only: #593 (`4ac13fd`), with which the Instance Manager reports `finalLSA` and `copiedEOF` and the controller does not use them yet, and #579 (`5391ddb`), a `BROKER_PROC_ROOT` knob used only by tests. Neither changes primary resolution, condition reasons or replication health. An Instance Manager at `main` would add the two LSA fields to `status.instances`.
 - The workload client `…/workload-client@sha256:43449bafbfec8734c3b9c0df23e7d623ab4bc1aba805231031ef2ef4a66e7cdb` (JDBC `11.3.2.0053`), the image of the lab's LAB01 runs.
 - The fault container `docker.io/nicolaka/netshoot@sha256:7f08c4aff13ff61a35d30e30c5c1ea8396eac6ab4ce19fd02d5a4b3b5d0d09a2` (`netfault.Image`).
-- The harness: `test/faults/netfault` at `ce6b34d`, driven by a copy of `bin/netfault` kept outside the repository (see Departures). Every run passed `-confirm-limit 5m` (the flag exists; its default is 2 minutes) and `-cleanup-limit 3m`. The scripts that created the clusters, polled and wrote ran outside the repository too. The script of each run from p115-4 on was kept as a frozen copy; the scripts of p115-1 to p115-3 were not kept, and differ from p115-4's in the additions this entry names (the repeated row reads, the condition messages, the manager's log).
+- The harness: `test/faults/netfault` at `ce6b34d`, driven by a copy of `bin/netfault` kept outside the repository (see Departures). Every run passed `-confirm-limit 5m` (the flag exists; its default is 2 minutes) and `-cleanup-limit 3m`. The scripts that created the clusters, polled and wrote ran outside the repository too. The script of each run from p115-4 on was kept as a frozen copy; the scripts of p115-1 to p115-3 were not kept, and lacked the repeated row reads. The condition messages and the manager's log were added from p115-7 on.
 - Each run under the `cubrid-lab/campaign` Lease (`bin/lab`), announced on #122, in a namespace of its own (`cubrid-lab-p115-<n>`, Pod Security `enforce=privileged`, `warn` and `audit` `restricted`), removed at the end. The seed backups under `lab-runs/p115-<n>` were left in the seed bucket.
 
 **The cluster, each run.** A new `CubridCluster` `ha` with the spec of
@@ -3879,7 +3879,7 @@ worker).
   - a variant `oneway-all`: a cut `out` from the target to every peer, with every peer-to-peer path kept (case 2);
   - a variant `isolate-all`: `isolate`, plus a cut `in` from each Broker Pod named by `-brokers` (p115-10 only);
   - `-hook`: a command run once, after the hold was seen holding and before the removal (the `during` row reads);
-  - three lines printing the hook's and the removal's start times.
+  - four lines printing the hook's start and end, the removal's start and the run's end.
 
   The confirmation and removal of the faults are the package's own.
 
@@ -3900,7 +3900,7 @@ worker).
 
 | Run | Case | Fault (UTC) | Notes |
 |---|---|---|---|
-| p115-1 | 1 | — | **Not run.** The ephemeral containers took about 80 s to start, and the preparation, still at the 2-minute default, ran out before every path was seen open (`starting_state_not_verified`). No drop rule was installed (the fault was never injected); its record still says `cleanupSucceeded: false`. |
+| p115-1 | 1 | — | **Not run.** The ephemeral containers took about 80 s to start, and the preparation, still at the 2-minute default, ran out before every path was seen open (`starting_state_not_verified`). No drop rule was installed (the fault was never injected); its log says cleanup succeeded false (the JSON record has `cleanupSucceeded: null`). |
 | p115-2 | 1 | 11:32:20 | Rows read up to 195 s after the removal began (no repeated reads yet) |
 | p115-3 | 1 | — | **Not run.** Stopped by SIGTERM during the cluster's creation, because its script was edited while it ran. Later runs used a frozen copy of the script. |
 | p115-4 | 1 | 11:47:28 | |
