@@ -282,9 +282,9 @@ unchanged for **every** implementation method.
 ## Pull request and commit titles
 
 This conventional-commit rule covers pull request titles and commit subjects in every
-cubrid-lab repository. Issue titles follow the simpler human-readable rule below. Pull requests are squash-merged and the pull request
-title becomes the commit title on `main`, so the pull request title is the one
-that must be right. The `PR title` check enforces it.
+cubrid-lab repository. Issue titles follow the simpler human-readable rule below.
+Pull requests are squash-merged, and the pull request title becomes the commit
+title on `main`, so the pull request title is the one that must be right. The `PR title` check enforces it.
 
 ```text
 type: description
@@ -353,7 +353,6 @@ their messages meaningful and keep any `Co-authored-by:` trailers intact.
 - If implementation/verification exceeds two days, split independently reviewable S/M deliverables into linked issues and make the L/XL parent an outcome/coordination tracker. Do not divide an atomic safety or data-integrity change merely to produce more issues. Preserve owner, release constraints and links.
 - Put the detailed outcome of a lab run in its specific scenario issue or durable result document; a coordination parent carries only a concise verdict and link. Keep prior comments and authored evidence, and distinguish the most recent verified state from historical plans.
 - **Use UTC for all new timestamps** in issues, PR discussions, evidence, reproduction steps and sample logs: `2026-10-27 14:35 UTC` for prose and `2026-10-27T14:35:00Z` for machine-readable records. Include dates and offsets when important; do not supply timezone-free clock readings. Convert older KST timestamps only when the exact instant and offset are known; otherwise preserve and label the historical timezone rather than inventing a UTC conversion.
-
 
 ### Before opening an issue
 
@@ -488,10 +487,10 @@ create more issues.
 
 ### Reporting a bug
 
-Keep the issue form's prefilled title prefix; for a custom issue, pick the type from
-[Pull request and commit titles](#pull-request-and-commit-titles), for example
-`bug: the Broker read-only Service selects the wrong Pods`. PR titles use `fix(broker): ...`.
-Write issues, PRs and comments in English.
+Keep the issue form's prefilled title prefix; for a custom issue, use the
+[human-readable issue rule](#human-readable-issue-titles-scope-and-utc-evidence),
+for example `bug: the Broker read-only Service selects the wrong Pods`.
+PR titles use `fix(broker): ...`. Write issues, PRs and comments in English.
 
 A bug report is also a record of evidence. Say how often the behavior was
 seen, attach what you have (status and Conditions, Events, logs, SQL results;
