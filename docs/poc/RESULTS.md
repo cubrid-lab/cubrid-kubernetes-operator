@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-39, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-40, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -21,7 +21,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > theirs; POC-34 ran on the VM lab, with the Operator's derivative image of the
 > same engine build, and its timings are of those VMs only; POC-37 and POC-38
 > ran in Docker on a native linux/amd64 host; POC-39 ran on the VM lab, with
-> plain Pods and no CUBRID. Each states its own
+> plain Pods and no CUBRID; POC-40 ran on the VM lab, with the installed
+> Operator and its derivative image. Each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
 > general CUBRID guarantee. The raw observations below are kept as recorded;
 > where a later POC contradicts one, a note says so. The current reading of
@@ -3815,3 +3816,274 @@ Only two Pods and two nodes were used.
 - No CUBRID traffic, no Operator and no NetworkPolicy were present.
 - Whether the Operator's traffic reaches a member with the Operator Pod's
   own IP, as a rule on that IP needs, was not tried here.
+
+---
+
+## POC-40 — what CUBRID, the Brokers and the installed Operator do when the master is partitioned on the VM lab, before a write-quarantine policy (#115, #113) — **observation: in 8 confirmed runs, `ha-1` called itself master 7 to 11 s after the fault, but its server was never seen `registered_and_active`; the isolated old master stayed active, the Brokers stayed on it, and every write through `-rw` was acknowledged and landed on it alone; the Operator reported `PrimaryResolved=False` (incomplete, then ambiguous), never `MultiplePrimariesObserved`, and kept `Ready=True`; on healing `ha-1` demoted itself and no acknowledged write was lost, but a slave was still missing the rows written since the fault minutes later while the status reported it healthy; `ha_ping_hosts` set by hand did not make the isolated master demote**
+
+**Question (#115, #113).** The maintainer decision on #113 keeps the Operator
+from choosing a quarantine policy, and keeps ADR-0005 from being amended,
+until three cases have been run on the three-member VM lab: a symmetric
+partition, an asymmetric partition and a stale master. The direction to
+confirm or refute: keep the Brokers following CUBRID, and block the write
+path only when two masters or no master are observed; "one master seen, a
+slave not observable" is shown and does not block. What do CUBRID's roles,
+the Operator's status and SQL through the read-write Service do in those
+cases, and what do the members hold after the partition ends? This entry is
+an observation. It judges no case, and it is not S07 or S08: no quarantine is
+implemented to be tested.
+
+**Environment (2026-10-27, 11:18Z to 14:17Z).**
+- The VM lab: k3s `v1.36.5+k3s1`, containerd `2.3.4-k3s1.36`, flannel, kernel `6.8.0-142-generic`, one server and three workers, `local-path` storage.
+- The installed Operator, deployed by the lab's GitOps owner from commit `d6df2acc1436e355d7c2edfd37fc9367f29782b6`: manager `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/manager@sha256:5fe016e2afb5805754405af8665c34ab40c4b6b43f4bb7dc8ea48d5b13bbf9b5`, its default Instance Manager image `…/instance-manager@sha256:ae3f34596346494cc17a4843ff88a85afdae985581335b19d232935c2ef77bcd` (CUBRID `11.4.6.1963`), which the Brokers run too. The manager Pod was not touched and was the same Pod in every run.
+  - `git log d6df2ac..origin/main` touches product code in two commits only: #593 (`4ac13fd`), with which the Instance Manager reports `finalLSA` and `copiedEOF` and the controller does not use them yet, and #579 (`5391ddb`), a `BROKER_PROC_ROOT` knob used only by tests. Neither changes primary resolution, condition reasons or replication health. An Instance Manager at `main` would add the two LSA fields to `status.instances`.
+- The workload client `…/workload-client@sha256:43449bafbfec8734c3b9c0df23e7d623ab4bc1aba805231031ef2ef4a66e7cdb` (JDBC `11.3.2.0053`), the image of the lab's LAB01 runs.
+- The fault container `docker.io/nicolaka/netshoot@sha256:7f08c4aff13ff61a35d30e30c5c1ea8396eac6ab4ce19fd02d5a4b3b5d0d09a2` (`netfault.Image`).
+- The harness: `test/faults/netfault` at `ce6b34d`, driven by a copy of `bin/netfault` kept outside the repository (see Departures). Every run passed `-confirm-limit 5m` (the flag exists; its default is 2 minutes) and `-cleanup-limit 3m`. The scripts that created the clusters, polled and wrote ran outside the repository too. The script of each run from p115-4 on was kept as a frozen copy; the scripts of p115-1 to p115-3 were not kept, and lacked the repeated row reads. The condition messages and the manager's log were added from p115-7 on.
+- Each run under the `cubrid-lab/campaign` Lease (`bin/lab`), announced on #122, in a namespace of its own (`cubrid-lab-p115-<n>`, Pod Security `enforce=privileged`, `warn` and `audit` `restricted`), removed at the end. The seed backups under `lab-runs/p115-<n>` were left in the seed bucket.
+
+**The cluster, each run.** A new `CubridCluster` `ha` with the spec of
+`test/installed`: three promotable members, HA on, database `appdb`, seeded
+through the lab's object store, 2Gi `local-path` volumes. The generated
+`cubrid_ha.conf` holds `ha_node_list=cubrid@ha-0:ha-1:ha-2`, `ha_db_list`
+and `ha_port_id` only. The Operator rendered two read-write and two read-only
+Brokers, whose `databases.txt` lists the members in the order `ha-0`, `ha-1`,
+`ha-2`. In every run `ha-0` formed as the master, and the members, Brokers
+and client were spread over the three workers (twice two members shared a
+worker).
+
+**What was recorded, with UTC timestamps.**
+- **Roles:** `cubrid heartbeat status` inside each member, through `kubectl exec`: median interval 1.3 s, gaps up to 4 s. The exec goes through the kubelet, which the cut does not touch, so the isolated member could still be read.
+- **The Operator's view:** the `CubridCluster` status about every 1.2 s (`currentPrimary`, `lastObservedTime`, the conditions with reason and transition time, `status.instances`, and from run 7 on the messages of `PrimaryResolved` and `ReplicationHealthy`), the namespace's Events at the end, and from run 7 on the manager's log lines for the namespace.
+- **Brokers:** `cubrid broker status -f` in both read-write Broker Pods every 2 to 3 s, which names the database host of each CAS.
+- **Writes**, through `ha-rw:33000` with `connectTimeout=10&queryTimeout=30`, by the workload client in a Pod of the namespace:
+  - **already-open sessions** `o1` and `o2`: one `workload run` each, one insert every 250 ms on one JDBC connection, which the client keeps until an operation on it fails;
+  - **new connections** `n1` and `n2`: a loop that starts a new JVM, so a new JDBC connection, for each insert.
+
+  Every operation records `attempted` and then `acknowledged`, `failed` or `unknown`, with its time.
+- **Rows:** `select op_id from ledger` with `csql` on each member itself (`appdb@localhost`), right before the cut was removed (`during`), then 75 s and about 165 s after the removal began. From run 4 on, the reads were repeated every 45 s until the members held the same rows, or six more times.
+- **CUBRID's logs:** the last 300 lines of each `$CUBRID/log/*.err` and `server/*.err` of each member, at the end. In the long runs these do not reach back to the fault: p115-6 and p115-11 do not hold `ha-1`'s `[Failover]` lines (p115-11's `ha-1` `master.err` starts at 14:04:56).
+- **Time zero** of every delay below is `fault_issued`, when `bin/netfault` began the injection. From the writes, the drops took effect within about 2.2 s of it. The probes' confirmation (`fault_confirmed`) came 20 to 25 s later, so the counts start that much before the cut was confirmed.
+
+**Departures from the real setup.**
+- **The partition is made inside the members' network namespaces** by `test/faults/netfault` (POC-39, [network faults](../testing/network-faults.md)). It drops packets by Pod IP:
+  - a cut between two members is dropped at the receiver's INPUT;
+  - the master's traffic to the Operator Pod is dropped in the master's OUTPUT.
+
+  Nothing on a node or in the Operator Pod was changed.
+- **The Brokers and the client are not cut.** `isolate` cuts the master from the slaves and the Operator only. The Brokers could reach every member throughout, which a node or zone partition would not give. A run that also cut the Brokers is not counted (run 10, below).
+- **The pollers' own load.** About three `kubectl exec` a second into the members, and one a second into the Brokers.
+- **The installed Operator is older than this harness.** `d6df2ac`, not `main`.
+- **Q3:** `ha_ping_hosts` was added by hand inside two throwaway clusters (below).
+- **The fault driver is a copy of `bin/netfault`, not in the repository.** Its diff from `test/installed/cmd/netfault`:
+  - a variant `oneway-all`: a cut `out` from the target to every peer, with every peer-to-peer path kept (case 2);
+  - a variant `isolate-all`: `isolate`, plus a cut `in` from each Broker Pod named by `-brokers` (p115-10 only);
+  - `-hook`: a command run once, after the hold was seen holding and before the removal (the `during` row reads);
+  - four lines printing the hook's start and end, the removal's start and the run's end.
+
+  The confirmation and removal of the faults are the package's own.
+
+**The cases.**
+1. **Symmetric partition, master isolated:** `isolate` on `ha-0`. Its packets are dropped both ways with `ha-1`, `ha-2` and the Operator Pod. `ha-1` ↔ `ha-2` stays open. Held 60 s after the confirmation, which came 24 to 25 s after the injection. So `ha-0` was cut for 106 to 108 s before the removal began, and the probes saw every path open 27 to 29 s later.
+2. **Asymmetric partition, master → slaves only (`oneway-all`, the copy's variant).** `ha-0`'s packets to `ha-1` and to `ha-2` are dropped at the receivers. `ha-1` → `ha-0`, `ha-2` → `ha-0` and `ha-1` ↔ `ha-2` must stay open, and the Operator is not cut. Held as in case 1: 100 s before the removal began.
+   - **Why this direction:** the slaves stop hearing the master, which is what starts a failover. The master still hears both slaves, and later the promoted one, and the Operator can still reach all three members. This is the direction in which two masters could be visible at once, to `ha-0` and to the Operator, while the network still carries the slaves' traffic to the old master.
+   - The reverse, slaves → master dropped, leaves the slaves hearing the master. It was expected to start no failover, and it was not run.
+3. **Stale master.** ADR-0005 section 4, row "Master isolated, slave reachable", says CUBRID promotes per `ha_node_list`, and the old master is "stale only once it returns as master or two masters seen". Defined here:
+   - the master is isolated as in case 1;
+   - the cut is held well past the moment a slave reports itself master in `cubrid heartbeat status`: 226 s (run 6) and 948 s (run 11) before the removal began;
+   - the cut is then removed, and the old master returns.
+
+   What it does on its return, and what happened to the writes it took meanwhile, is the observation.
+4. **Q3:** case 1, with `ha_ping_hosts` set by hand (below).
+
+**Runs.**
+
+| Run | Case | Fault (UTC) | Notes |
+|---|---|---|---|
+| p115-1 | 1 | — | **Not run.** The ephemeral containers took about 80 s to start, and the preparation, still at the 2-minute default, ran out before every path was seen open (`starting_state_not_verified`). No drop rule was installed (the fault was never injected); its log says cleanup succeeded false (the JSON record has `cleanupSucceeded: null`). |
+| p115-2 | 1 | 11:32:20 | Rows read up to 195 s after the removal began (no repeated reads yet) |
+| p115-3 | 1 | — | **Not run.** Stopped by SIGTERM during the cluster's creation, because its script was edited while it ran. Later runs used a frozen copy of the script. |
+| p115-4 | 1 | 11:47:28 | |
+| p115-5 | 2 | 12:03:47 | |
+| p115-6 | 3 | 12:19:39 | Held 180 s after the confirmation |
+| p115-7 | 1 + Q3 | 12:39:30 | Ping host: the Operator Pod's IP |
+| p115-8 | 2 | 12:57:04 | |
+| p115-9 | 1 + Q3 | 13:13:14 | Ping host: `ha-2`'s Pod IP |
+| p115-10 | 3, Brokers cut too | 13:31:30 | **Not run as a case:** the fault was not confirmed (below) |
+| p115-11 | 3 | 13:52:40 | Held 900 s after the confirmation |
+
+In every counted run, `bin/netfault`'s probes confirmed the cut (`pass`),
+read back exactly the fault's rules, and saw every path open again after the
+removal (`cleanupSucceeded: true`). Every Pod kept its UID, and no container
+restarted. After the removal, the Pod IPs, the Operator Pod and the member
+Pods were the same as before.
+
+**Timeline, seconds after the injection.** Polled values: each is the first
+reading that showed the state, so it can be up to one polling interval late.
+
+| Run | Case | `ha-0` sees the slaves `unknown` | `ha-1` reports itself master | `ha-1`'s server becomes active | `PrimaryResolved` not `True` | Removal began | `ha-1` slave again (after the removal) | `PrimaryResolved=True` again (after the removal) |
+|---|---|---|---|---|---|---|---|---|
+| p115-2 | 1 | 4.3 | 10.0 | never | 13.6 | 106.5 | +3.3 | +9.4 |
+| p115-4 | 1 | 6.8 | 8.6 | never | 12.4 | 105.9 | +1.8 | +9.1 |
+| p115-7 | 1 + Q3 | 5.4 | 9.0 | never | 15.2 | 108.0 | +4.1 | +9.2 |
+| p115-9 | 1 + Q3 | 6.6 | 10.4 | never | 9.1 | 108.3 | +3.7 | +13.4 |
+| p115-5 | 2 | — (sees `ha-1` as master from 8.7) | 8.9 | never | 11.8 | 99.6 | +2.4 | +5.1 |
+| p115-8 | 2 | — (sees `ha-1` as master from 7.4) | 7.3 | never | 4.2 | 99.9 | +2.7 | +9.4 |
+| p115-6 | 3 | 4.9 | 9.8 | never | 12.5 | 226.2 | +2.9 | +9.2 |
+| p115-11 | 3 | 4.9 | 9.9 | never | 8.4 | 948.5 | +2.7 | +13.2 |
+
+**Roles (all counted runs).**
+- **`ha-0`, the old master**, reported `current ha-0, state master` with its server `registered_and_active` in every reading, before, during and after the cut. It never demoted itself.
+  - In case 1 its `master.err` logged, every 3 to 4 s, `[Failback] [Diagnosis] The master node has failed to receive heartbeat messages from all other slave nodes, resulting in a network partition`, followed by `[Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid, making it impossible to determine the network partition`.
+  - In case 2 it logged nothing of the kind. For the whole cut it listed `ha-1` as `master` next to itself.
+- **`ha-1`, the highest-priority slave:**
+  - logged `[Failover] [Diagnosis] … failed to receive heartbeat messages from the master node (ha-0)`, then `[Failover] [Success] Current node has been successfully promoted to master` (seen in the logs of the six 60-s runs; the kept log lines of p115-6 and p115-11 start later);
+  - from then on reported `current ha-1, state master`, with its server `registered_and_to_be_active` in every heartbeat reading until the removal. "Never active" below means that no reading showed it `registered_and_active`; the readings were 1.3 s apart (median), at most 4 s;
+  - heartbeat sent the server a changemode request to `active` every 5 s, and every answer was `to-be-active` (in the logs that reach the fault). In the heartbeat readings the server stayed `to-be-active` until the removal: 948 s in run 11.
+  - Why the server stayed `to-be-active` was not investigated. A hypothesis: it waits for the old master's log, which its copier could not receive while the cut held; a deleted Pod (S03) resets those connections, and a dropped packet does not.
+- **`ha-2`** stayed `slave` / `registered_and_standby`.
+- **After the removal:**
+  - 1 to 2 s in, each member listed both `ha-0` and `ha-1` as master;
+  - `ha-1` logged `[Failback] [Diagnosis] Multiple master nodes (ha-1, ha-0) are detected` and `[Failback] [Success] Current node has been successfully demoted to slave`;
+  - heartbeat restarted its `cub_server` (`Process failure detected`, `Restart the process`), and it was `registered_and_standby` 4 to 13 s after the removal began;
+  - `ha-0` stayed master. This matches POC-6, where the higher-priority node kept the master role on healing.
+- **Two masters**, in the sense of two members reporting `state master`, lasted from 7 to 11 s after the injection until 1.8 to 4.1 s after the removal began, in every run. Two servers `registered_and_active` at once were never seen.
+
+**The Operator's view (all counted runs).**
+- **`PrimaryResolved`, `HAReady` and `RoutingReady`** changed together:
+  - first `False` / `PrimaryObservationIncomplete`, with `currentPrimary` cleared;
+  - in all runs except p115-5, 11 to 15 s later `False` / `AmbiguousPrimaryObservation` (p115-5 went to `AmbiguousPrimaryObservation` at once);
+  - back to `True` / `SinglePrimaryObserved` on `ha-0`, with `RoutingReady=True` (`PrimaryResolved`), 5 to 13 s after the removal began.
+- **`MultiplePrimariesObserved` was never reported**, although CUBRID listed two masters from 7 to 11 s after the injection until the removal.
+- **`status.instances`:**
+  - `ha-0` and `ha-1` were `unknown`, and `ha-2` stayed `slave`;
+  - in case 2 (p115-8), `ha-0` was `master` at the first reading after the fault, and `unknown` 11 s later.
+- **The manager's log** gave the reasons (runs 7, 8, 9 and 11):
+  - `ha-0` in case 1: `Get "http://ha-0…:9090/v1/role": context deadline exceeded`;
+  - `ha-0` in case 2, which the Operator could reach: `the role master contradicts the HA node list`;
+  - `ha-1`, at its first change: `the node list does not contain the current node 'ha-1'`, `no HA-Node Info line (heartbeat not running or empty output)` or `a master whose server is not registered_and_active`.
+- **`PrimaryResolved`'s message** was `no single authoritative primary observed`.
+- **Other conditions:**
+  - `Ready=True` (`ClusterReady`), `WriteEndpointReady=True`, `ReadEndpointReady=True` and `BrokerReady=True` throughout;
+  - `ReplicationHealthy` mostly `True` (`AppliersProgressing`), with short `Unknown` (`ReplicationNotObserved`) readings.
+- **Events:**
+  - `PrimaryUnresolved` at the first change (`Primary is no longer resolved (PrimaryObservationIncomplete); it was ha-0`, and `(AmbiguousPrimaryObservation)` in p115-5);
+  - `PrimaryResolved` (`Primary resolved: ha-0`) after the removal;
+  - a readiness probe failure of `ha-1` (`HTTP probe failed with statuscode: 503`) whose last occurrence was 5 to 11 s after the injection, about when it reported itself master. Whether `ha-1`'s Pod stayed not Ready during the cut was not recorded.
+- **The Operator promoted, fenced, deleted and restarted nothing.**
+
+**Writes and where they landed.** Counted from the injection (`fault_issued`)
+until the probes saw every path open again. This counting window is longer
+than the cut as used elsewhere here (injection to the start of the removal,
+up to 948 s):
+
+| Run | Case | Cut, injection to seen open (s) | New connections `n1`+`n2` | Already-open `o1`+`o2` | Failed or unknown | Rows on `ha-0` / `ha-1` / `ha-2` before the removal |
+|---|---|---|---|---|---|---|
+| p115-2 | 1 | 134.9 | 295 acknowledged | 831 acknowledged | 0 | 1269 / 352 / 352 |
+| p115-4 | 1 | 133.6 | 350 | 796 | 0 | 1475 / 543 / 543 |
+| p115-7 | 1 + Q3 | 136.8 | 310 | 865 | 0 | 1692 / 793 / 793 |
+| p115-9 | 1 + Q3 | 137.4 | 332 | 886 | 0 | 1376 / 441 / 441 |
+| p115-5 | 2 | 124.1 | 337 | 779 | 0 | 1232 / 310 / 310 |
+| p115-8 | 2 | 124.9 | 278 | 763 | 0 | 1488 / 679 / 681 |
+| p115-6 | 3 | 253.9 | 553 | 1624 | 0 | 2311 / 378 / 378 |
+| p115-11 | 3 | 977.6 | 2328 | 6558 | 0 | 9206 / 584 / 584 |
+
+- **Every write was acknowledged**, before, during and after the cut. That holds for every client of every counted run, and for 10,526 acknowledged operations in run 11 alone. No operation failed, and none was unknown. The only operations without an answer are the last of an open session, killed when the writers were stopped.
+- **The writes during the cut landed on `ha-0` alone.** In the reads just before the removal, every row acknowledged more than 2.2 s after the injection was issued was on `ha-0` alone; 4 to 10 rows acknowledged just after it reached both slaves (in p115-8, two reached `ha-2` only, acknowledged 1.7 s after the fault). In every reading of every counted run, every CAS of both read-write Brokers named `ha-0` as its database host.
+- **Q6, the already-open session.** `o1` and `o2` kept their first JDBC connection to the Broker and kept writing to the isolated old master for the whole cut, up to 948 s before the removal began, with no error. The partition did not end them. Which CAS-to-server connection served each session was not observed, only that every CAS named `ha-0`. Here that window was not a stale write: `ha-0` stayed the master, and the writes were kept (below), on one copy only (see the last section).
+
+**Data after the partition ended.** Rows on each member, read on the member,
+at the last reading, and the acknowledged rows each member lacked:
+
+| Run | Case | Last reading, after the removal began | Acknowledged | Missing on `ha-0` | Missing on `ha-1` | Missing on `ha-2` | Slave count over the readings |
+|---|---|---|---|---|---|---|---|
+| p115-2 | 1 | 194 s | 2450 | 0 | 0 | 851 | `ha-2`: 352, then 1599; still rising |
+| p115-4 | 1 | 467 s | 2734 | 0 | 2191 | 0 | `ha-1`: 543 in all 8 readings |
+| p115-7 | 1 + Q3 | 468 s | 3249 | 0 | 2456 | 0 | `ha-1`: 793 in all 8 |
+| p115-9 | 1 + Q3 | 468 s | 2947 | 0 | 0 | 2506 | `ha-2`: 441 in all 8 |
+| p115-5 | 2 | 464 s | 2463 | 0 | 0 | 2153 | `ha-2`: 310 in all 8 |
+| p115-8 | 2 | 464 s | 3068 | 0 | 2389 | 2387 | `ha-1` 679 and `ha-2` 681 in all 8 |
+| p115-6 | 3 | 466 s | 3815 | 0 | 0 | 3437 | `ha-2`: 378 in all 8 |
+| p115-11 | 3 | 469 s | 10526 | 0 | 9942 | 0 | `ha-1`: 584 in all 8 |
+
+- **`ha-0` held every acknowledged row in every run.** At the last reading, no row was on a slave and not on `ha-0`, so the data had not diverged. No acknowledged row was missing from all members.
+- **`csql` read errors.** 19 of 198 per-member reads ended with `-199` / `-111` or `-581`. In p115-9 `after5`, the read of `ha-0` hit `-199` / `-111` and returned 2,946 rows, without `o1-000289`, which `ha-1` held; the reads before and after it both returned 2,947. The cause is not known. #238 tracks lost `csql` sessions on slaves; here one happened on the master.
+- **In every counted run, at least one slave lacked the rows written since the fault at the last reading.**
+  - In seven runs it held exactly the rows it had at the fault in every reading, from 75 s to 469 s after the removal began.
+  - In p115-2, `ha-2` was still catching up when the run ended.
+  - It was the demoted `ha-1` in four runs and `ha-2` in five, counting p115-2 (both in p115-8). Where only one slave was stuck, the other held every acknowledged row by the reading 165 s (p115-7 and p115-11: 210 s) after the removal began.
+- **What the stuck slave reported.** It was `slave` / `registered_and_standby`, with its `Applylogdb` and `Copylogdb` processes `registered` in `cubrid heartbeat status`.
+  - In p115-4, `ha-1`'s applier log for `ha-0`'s log ends at the removal, with `-191` / `-199` / `-111` (`Cannot connect to server … Server no longer responding … Your transaction has been aborted …`). Its copier log for `ha-0` has nothing after the fault.
+  - Why it did not resume was not found. It looks like POC-21's state (Q9), but that is a hypothesis, not a finding.
+- **The cluster status did not report it.** At the end of every run, with a slave missing 851 to 9942 acknowledged rows:
+  - `PrimaryResolved`, `HAReady`, `ReplicationHealthy` and `Ready` were all `True`;
+  - `ReplicationHealthy`'s message was `every observed slave applies the master's log`.
+  - The gap was visible in `status.instances`, not in the conditions: at the end of p115-4, `replication.appliedChanges` was 546 for `ha-1` against 2,738 for `ha-2`.
+  - In the uncounted p115-10, `ReplicationHealthy` did turn `False` (`ReplicationStalled`) for about 50 s, about 2 minutes after the removal began. So the stall detector fired there, and not in the counted runs, where the slave's copier received nothing.
+
+  Had `ha-0` failed then, CUBRID would be expected to promote a slave per `ha_node_list` (ADR-0005). In p115-4, p115-7, p115-8 and p115-11 that is `ha-1`, which lacked those rows. This was not tried.
+
+**Q3: `ha_ping_hosts` (departure).** The generated configuration does not
+set it, and no field of the `CubridCluster` does. In the two throwaway
+clusters of p115-7 and p115-9, after formation and before the cut:
+1. `ha_ping_hosts=<IP>` was appended to each member's installed `$CUBRID/conf/cubrid_ha.conf`;
+2. `cubrid heartbeat reload` ran on each member and answered `success`;
+3. `cubrid heartbeat status` then showed `HA-Ping Host Info (PING check enabled)` with the host `SUCCESS` on each member. `ping` from the database container worked as UID 1000.
+
+The Operator's ConfigMap was not changed, and a container restart would have
+dropped the edit. None happened.
+- **p115-7.** The ping host was the Operator Pod's IP. During the cut, the master's packets to it were dropped in the master's own OUTPUT, so the ping failed locally, at once.
+- **p115-9.** The ping host was `ha-2`'s Pod IP. The master's packets to it were dropped at `ha-2`'s INPUT, so the ping timed out. A member as the ping host is a stand-in for a gateway the isolated master cannot reach.
+- **What happened** (`master.err` of `ha-0`, both runs):
+  - every 3 to 4 s, `[Failback] [Diagnosis] … network partition`, then `PING failed for host <IP>`, then `[Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid …`;
+  - in p115-9 the status showed `PING check disabled` with the host `FAILURE` 1 s after the injection, then `PING check enabled`, still `FAILURE`, 5 s later, until the removal.
+- **`ha-0` did not demote.** It stayed `registered_and_active` and acknowledged every write, as in the runs without ping hosts.
+- With one ping host that fails only during the cut, this build treated the failure as "no valid host" rather than as proof of isolation. Whether several ping hosts, or `ha_tcp_ping_hosts`, which the binary also has, would make it demote was not tested. So Q3 is answered for this configuration only.
+
+**p115-10, not run as a case.** Case 3 with the read-write Brokers cut too: their packets to `ha-0` dropped at `ha-0`'s INPUT (`isolate-all`, the copy's other variant).
+- The fault was not confirmed (`fault_not_confirmed`). The other direction of each one-way cut, `ha-0` → Broker, has to be seen open, and its probe stayed undecided for 5 minutes.
+- A likely reason, not checked: the probe is a TCP connect to port 1523 counted at the receiver, and the Broker's NetworkPolicy does not admit that port.
+- The rules were removed and seen removed. The run is not counted.
+- Its records show the clients' writes failing, first with timeouts (`-21141`, `-21024`) about 11 s after the injection, then with `-581` (`Attempted to update the database when updates are disabled`) from about 12 s until the removal, and acknowledged again afterwards. Without a confirmed fault, that is not evidence of the case.
+
+**What this means for the proposed direction (#113).** These are eight runs
+of one build on one lab, not a general CUBRID behavior.
+- **"Keep the Brokers following CUBRID":** supported for availability, not for durability.
+  - The Brokers stayed on the one server that was `registered_and_active`, the old master. Blocking the write path during the cut would have stopped writes for up to 948 s.
+  - Those writes, and the writes for minutes after healing, had a single copy, on `ha-0`. They were not lost only because `ha-0` did not fail: had it failed, `ha-1` would be expected to be promoted (above), and in four runs `ha-1` lacked them.
+  - ADR-0005 section 4, row "Master isolated, slave reachable", expects the RW Brokers to seek the new master. Here they stayed on the old master, because the promoted slave never became active and the old master stayed active.
+- **"Block only when two masters or no master are observed":** these runs did not reach that branch as the rule states it.
+  - The Operator observed neither two masters nor zero masters. It observed `unknown` members (`PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`), and never `MultiplePrimariesObserved` or `NoPrimaryObserved`.
+  - So the rule needs to say what an incomplete or ambiguous observation does. If it blocks, it blocks a working master. If it does not, the case it guards was not produced here.
+- **Two heartbeat masters are not two writable masters.** CUBRID's heartbeat reported two masters from 7 to 11 s after the injection until the removal, but the promoted one was never seen `registered_and_active`. No write was routed to it, so whether it would have accepted one was not tried.
+  - Counting masters by the heartbeat role would see two masters here. Counting servers that are `registered_and_active` would see one.
+  - The Instance Manager already treats `a master whose server is not registered_and_active` as no role.
+- **"One master seen, a slave not observable":** case 2 came closest. The Operator could reach `ha-0`, but `ha-0`'s own node list named `ha-1` as master, so it reported `ha-0` as `unknown`, not as one master.
+- **Not produced:** two `registered_and_active` servers (POC-6's split brain in Docker), or a promoted slave that took writes. So the hazard the blocking branch is meant for was not produced, and these runs neither confirm nor refute that blocking there is right.
+- **The hazard that was produced is after the partition, not during it.** A slave left without the rows written since the fault while the status reports `HAReady`, `ReplicationHealthy` and `Ready` as `True`. A quarantine rule based on the master count does not cover it. ADR-0006 and #229 are where it belongs.
+
+**Not tested.**
+- **Partitions:**
+  - the reverse asymmetric direction (slaves → master);
+  - `slave-isolated`;
+  - a cut of the Brokers or of the client from the old master (p115-10 was not confirmed);
+  - a partition between nodes rather than Pods.
+- **Durations:**
+  - a cut longer than 948 s, long enough for TCP connections to time out by themselves, which might let `ha-1`'s server become active;
+  - a cut shorter than the promotion (under 7 s).
+- **The stuck slave:**
+  - whether it would ever have caught up (each run ended at most 469 s after the removal);
+  - a failover while it was behind;
+  - the cause.
+- **Q3:**
+  - more than one ping host;
+  - `ha_tcp_ping_hosts`;
+  - ping hosts set before the members formed;
+  - a real gateway as the ping host.
+- **Other setups:**
+  - the Operator at `main`;
+  - an enforced quarantine (none exists);
+  - S08's replication lag and repeated failures;
+  - any run without the pollers' load;
+  - repetition beyond two runs of each case, and the same placement of members across runs.
+- **Delays:** the detection and recovery delays are polled values from these runs, not limits.
