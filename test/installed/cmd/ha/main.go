@@ -104,6 +104,14 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"scenario after S12 exact: S12 instance-manager-restart, S11's artifact restored into another new cluster "+
 			"while the Instance Manager of the restore's target member is killed during the restore; needs "+
 			"-restore, not with -restore-tampered, -restore-wrong-target or -restore-operator-restart")
+	flags.StringVar(&cfg.RestoreInstanceManagerRestartAt, "restore-instance-manager-restart-at",
+		installed.IMRestartAtRestoring,
+		"S12 instance-manager-restart: where the kill is placed, each a lane of its own: "+
+			installed.IMRestartAtRestoring+" (a reading of Restoring with an operation), "+
+			installed.IMRestartAtPreparing+" (a reading of Preparing with an operation, read no further than "+
+			"Downloading) or "+installed.IMRestartAtSeeding+" (a reading of SeedingReplicas with a seed restore "+
+			"recorded; the member being seeded is killed); a value other than "+installed.IMRestartAtRestoring+
+			" needs -restore-instance-manager-restart")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")

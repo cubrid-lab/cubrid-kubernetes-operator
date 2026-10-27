@@ -236,6 +236,17 @@ progress; starting attempt 2 of 3`, and the new operation restored, seeded both
 peers and completed 3 min 26 s after creation. Whether the retry removed or
 took over the killed attempt's data is not read.
 
+Two more lab-only placements of that kill (`-restore-instance-manager-restart-at`,
+#121) passed on the VM lab on 2026-10-27. At `preparing` the target's Instance
+Manager was killed while the bootstrap was `Preparing`; one retry and a new
+operation completed, and the killed operation's own record held no restored
+artifact. That shows `restoredb` had not succeeded, not that it had not
+started: the Instance Manager reports `Restoring` before it verifies or
+downloads the backup (#598). At `seeding` the peer being seeded was killed;
+exactly one seed retry with a new seed operation completed, and the restore was
+not run again. Kills during `Starting`, before a durable `Completed`, on the
+seed source and during the seed backup are not covered.
+
 A [manual VM-lab run on 2026-10-21](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/122#issuecomment-6328187210)
 moved the lab to main `9c6ae9c1ef97eae29c13dff7a272d1082715c9e2` through the
 private GitOps repository (images from

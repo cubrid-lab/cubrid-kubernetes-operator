@@ -353,6 +353,32 @@ func restartPassReason(r *s12Restart) string {
 // goes to firstPast.
 func (h *haRun) waitRestoring(ctx context.Context, created *databasev1alpha1.CubridCluster, createdAt time.Time,
 	rec *s12Record, firstPast *string, result *evidence.Scenario) error {
+	return h.waitPlaced(ctx, created, createdAt, rec, firstPast, result, "restore did not start",
+		func(cluster *databasev1alpha1.CubridCluster, phase string) (bool, error) {
+			switch {
+			case phase == string(databasev1alpha1.BootstrapPreparing):
+				return false, nil
+			case phase == string(databasev1alpha1.BootstrapRestoring) && cluster.Status.Bootstrap.OperationID != "":
+				return true, nil
+			case phase == string(databasev1alpha1.BootstrapRestoring):
+				// A failed attempt clears the operation; the next one starts.
+				return false, nil
+			}
+			return false, fmt.Errorf("the restart could not be placed during the restore: the bootstrap was first "+
+				"seen %s, not Restoring", phase)
+		})
+}
+
+// waitPlaced reads the restored cluster until placed reports a reading of
+// it, in a bootstrap phase that is neither empty nor Failed, as the one a
+// fault follows, until RestoreLimit has passed since createdAt; an error of
+// placed ends the wait. A bootstrap Failed fails the variant, and so does the
+// limit passing first, with what the cluster did not do (late). Each reading
+// is recorded and checked as S12 exact's, and the first phase past Preparing
+// goes to firstPast.
+func (h *haRun) waitPlaced(ctx context.Context, created *databasev1alpha1.CubridCluster, createdAt time.Time,
+	rec *s12Record, firstPast *string, result *evidence.Scenario, late string,
+	placed func(cluster *databasev1alpha1.CubridCluster, phase string) (bool, error)) error {
 	wctx, cancel := context.WithDeadline(ctx, createdAt.Add(h.cfg.RestoreLimit))
 	defer cancel()
 	// readErr is the last reading's error, nil once a reading succeeded.
@@ -375,24 +401,16 @@ func (h *haRun) waitRestoring(ctx context.Context, created *databasev1alpha1.Cub
 			return false, err
 		}
 		switch phase {
-		case "", string(databasev1alpha1.BootstrapPreparing):
+		case "":
 			return false, nil
 		case string(databasev1alpha1.BootstrapFailed):
 			return false, restoreVerdict{fmt.Errorf("the restored cluster's bootstrap ended Failed: %s",
 				bootstrapReason(cluster))}
 		}
-		if *firstPast == "" {
+		if *firstPast == "" && phase != string(databasev1alpha1.BootstrapPreparing) {
 			*firstPast = phase
 		}
-		switch {
-		case phase == string(databasev1alpha1.BootstrapRestoring) && cluster.Status.Bootstrap.OperationID != "":
-			return true, nil
-		case phase == string(databasev1alpha1.BootstrapRestoring):
-			// A failed attempt clears the operation; the next one starts.
-			return false, nil
-		}
-		return false, fmt.Errorf("the restart could not be placed during the restore: the bootstrap was first "+
-			"seen %s, not Restoring", phase)
+		return placed(cluster, phase)
 	})
 	switch {
 	case err == nil:
@@ -405,8 +423,8 @@ func (h *haRun) waitRestoring(ctx context.Context, created *databasev1alpha1.Cub
 		if n := len(rec.Bootstrap); n > 0 {
 			phase = rec.Bootstrap[n-1].Phase
 		}
-		return restoreVerdict{fmt.Errorf("the restored cluster's restore did not start within restore_limit %s; its "+
-			"last bootstrap phase was %q", h.cfg.RestoreLimit, phase)}
+		return restoreVerdict{fmt.Errorf("the restored cluster's %s within restore_limit %s; its last bootstrap "+
+			"phase was %q", late, h.cfg.RestoreLimit, phase)}
 	}
 	return err
 }

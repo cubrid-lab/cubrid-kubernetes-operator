@@ -38,6 +38,14 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
+// The evidence files of S12 instance-manager-restart at restoring.
+var (
+	s12IMRestartRecordFile          = "S12/" + imRestartVariant(IMRestartAtRestoring) + "/record.json"
+	s12IMRestartTimelineFile        = "S12/" + imRestartVariant(IMRestartAtRestoring) + "/timeline.jsonl"
+	s12IMRestartDataCheckFile       = "S12/" + imRestartVariant(IMRestartAtRestoring) + "/data-check.json"
+	s12IMRestartSourceDataCheckFile = "S12/" + imRestartVariant(IMRestartAtRestoring) + "/source-data-check.json"
+)
+
 const (
 	testIMRestartUID    = "imrestart-cluster"
 	testIMRestartTarget = "ha-imrestart-0"
@@ -69,6 +77,25 @@ type imStatus struct {
 	message  string
 }
 
+// imSeed is the first database's seeding the fake Operator reports at one
+// reading: its attempts, the member being seeded and its seed restore, the
+// members seeded, and, before the kill, the BootstrapReady reason and message
+// in place of the restore's.
+type imSeed struct {
+	attempts        int32
+	member, op      string
+	seeded          []string
+	reason, message string
+}
+
+// seedAt is seeds[i], the last for a later i, or nil.
+func seedAt(seeds []*imSeed, i int) *imSeed {
+	if len(seeds) == 0 {
+		return nil
+	}
+	return seeds[min(i, len(seeds)-1)]
+}
+
 // s12IMRestartFixture plays, after S12 exact, an Operator that restores
 // S11's artifact into ha-imrestart and keeps its bootstrap Restoring until
 // the target member's Instance Manager is killed, then reports what
@@ -78,12 +105,17 @@ type imStatus struct {
 type s12IMRestartFixture struct {
 	*s12Fixture
 	// beforeKill are the phases reported until the kill, one per reading,
-	// the last kept; Restoring is kept until the kill unless noHold is set.
-	// afterKill are the statuses of the readings after it, the last kept.
-	// tamper changes the status of a reading.
+	// the last kept; the one at holdStep is kept until the kill unless noHold
+	// is set. afterKill are the statuses of the readings after it, the last
+	// kept. beforeSeed and afterSeed, where set, are the first database's
+	// seeding of the reading at the same place. tamper changes the status of
+	// a reading.
 	beforeKill []databasev1alpha1.BootstrapPhase
+	holdStep   int
 	noHold     bool
 	afterKill  []imStatus
+	beforeSeed []*imSeed
+	afterSeed  []*imSeed
 	tamper     func(read int, killed bool, s *databasev1alpha1.CubridClusterStatus)
 	// killAnswer answers the kill command; refuse leaves the Pod as it was.
 	// noRestart leaves the container running; endOnly ends it without a new
@@ -96,11 +128,17 @@ type s12IMRestartFixture struct {
 	extraRestarts int32
 	replacePod    bool
 	// exitCode and exitReason are the ended container's, 137 and Error
-	// unless set; retryEvent, when set, is the message of a
-	// RestoreFailedRetrying Event of ha-imrestart recorded at the kill.
-	exitCode   int32
-	exitReason string
-	retryEvent string
+	// unless set; retryEvent, when set, is the message of an Event of
+	// ha-imrestart recorded at the kill, with the reason retryEventReason,
+	// RestoreFailedRetrying unless set.
+	exitCode         int32
+	exitReason       string
+	retryEvent       string
+	retryEventReason string
+	// opRecord answers the read of an Instance Manager's operation record;
+	// recordReads counts those reads.
+	opRecord    func(pod, script string) (string, error)
+	recordReads int
 	// dropMarkerOnIM is a member without the marker written through
 	// ha-imrestart.
 	dropMarkerOnIM string
@@ -119,7 +157,7 @@ func newS12IMRestartFixture(t *testing.T, cfg HAConfig) *s12IMRestartFixture {
 	t.Helper()
 	f := &s12IMRestartFixture{s12Fixture: newS12Fixture(t, cfg),
 		beforeKill: []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapPreparing,
-			databasev1alpha1.BootstrapRestoring},
+			databasev1alpha1.BootstrapRestoring}, holdStep: 1,
 		afterKill: []imStatus{
 			{databasev1alpha1.BootstrapRestoring, 0, testIMRestartOp, testIMUnavailable, "connection refused"},
 			{databasev1alpha1.BootstrapRestoring, 1, "", s12RetryReason, testIMRetryMessage},
@@ -171,6 +209,18 @@ func newS12IMRestartFixture(t *testing.T, cfg HAConfig) *s12IMRestartFixture {
 // kill plays the kubelet when the run kills a member's Instance Manager: the
 // database container ends with exit code 137 and runs again on the same Pod.
 func (f *s12IMRestartFixture) kill(ctx context.Context, pod, script string) (string, error, bool) {
+	if strings.Contains(script, imOperationsDir) {
+		f.mu.Lock()
+		f.recordReads++
+		answer := f.opRecord
+		f.mu.Unlock()
+		if answer == nil {
+			f.t.Errorf("operation record read on %s without an answer", pod)
+			return "", errors.New("no record"), true
+		}
+		out, err := answer(pod, script)
+		return out, err, true
+	}
 	if !strings.Contains(script, "kill -KILL") {
 		return "", nil, false
 	}
@@ -223,7 +273,7 @@ func (f *s12IMRestartFixture) kill(ctx context.Context, pod, script string) (str
 		event := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: s12IMRestartClusterName + ".retry",
 			Namespace: f.cfg.Namespace}, InvolvedObject: corev1.ObjectReference{Kind: "CubridCluster",
 			Name: s12IMRestartClusterName, UID: testIMRestartUID}, Type: corev1.EventTypeWarning,
-			Reason: s12RetryReason, Message: f.retryEvent}
+			Reason: cmp.Or(f.retryEventReason, s12RetryReason), Message: f.retryEvent}
 		if err := c.Create(ctx, event); err != nil {
 			f.t.Error(err)
 		}
@@ -249,13 +299,24 @@ func (f *s12IMRestartFixture) advanceIMRestart(ctx context.Context, c client.Wit
 	f.mu.Lock()
 	f.imReads++
 	read, killed := f.imReads, f.killed
-	st := imStatus{phase: f.beforeKill[min(f.imStep, len(f.beforeKill)-1)], op: testIMRestartOp,
-		reason: testRestoreInProgress, message: "restoredb is running on " + testIMRestartTarget}
+	step := min(f.imStep, len(f.beforeKill)-1)
+	st := imStatus{phase: f.beforeKill[step], op: testIMRestartOp, reason: testRestoreInProgress,
+		message: "restoredb is running on " + testIMRestartTarget}
+	if st.phase == databasev1alpha1.BootstrapPreparing {
+		st.message = "the backup is being verified and downloaded on " + testIMRestartTarget
+	}
+	seed := seedAt(f.beforeSeed, step)
 	if killed {
-		st = f.afterKill[min(f.imAfter, len(f.afterKill)-1)]
+		after := min(f.imAfter, len(f.afterKill)-1)
+		st, seed = f.afterKill[after], seedAt(f.afterSeed, after)
 		f.imAfter++
-	} else if st.phase != databasev1alpha1.BootstrapRestoring || f.noHold {
-		f.imStep++
+	} else {
+		if seed != nil && seed.reason != "" {
+			st.reason, st.message = seed.reason, seed.message
+		}
+		if f.imStep != f.holdStep || f.noHold {
+			f.imStep++
+		}
 	}
 	tamper := f.tamper
 	f.mu.Unlock()
@@ -279,6 +340,16 @@ func (f *s12IMRestartFixture) advanceIMRestart(ctx context.Context, c client.Wit
 		s.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName, Phase: testDatabaseCreated,
 			PrimaryCreated: true, HAConfigured: true}}
 	}
+	if seed != nil {
+		db := databasev1alpha1.DatabaseStatus{Name: databaseName, Phase: testDatabaseCreated, PrimaryCreated: true,
+			HAConfigured: st.phase == databasev1alpha1.BootstrapComplete, BootstrapAttempts: seed.attempts,
+			SeededMembers: seed.seeded}
+		if seed.member != "" {
+			db.Seeding = &databasev1alpha1.DatabaseSeeding{Member: seed.member, Source: testIMRestartTarget,
+				RestoreOperationID: seed.op}
+		}
+		s.Databases = []databasev1alpha1.DatabaseStatus{db}
+	}
 	s.Conditions = []metav1.Condition{boot}
 	for _, condition := range startingConditions {
 		s.Conditions = append(s.Conditions, metav1.Condition{Type: condition, Status: status, Reason: testConditionReason,
@@ -293,13 +364,15 @@ func (f *s12IMRestartFixture) advanceIMRestart(ctx context.Context, c client.Wit
 	return nil
 }
 
-func imRestartScenarios(t *testing.T, dir string) []evidence.Scenario {
+// imRestartScenarios returns the scenarios of the run, requiring the lane
+// and the variant of the placement cfg selects.
+func imRestartScenarios(t *testing.T, cfg HAConfig) []evidence.Scenario {
 	t.Helper()
-	summary := readSummary(t, dir)
-	if summary.Lane != s12IMRestartLane || len(summary.Scenarios) != 4 || summary.Scenarios[3].ID != s12ID ||
-		summary.Scenarios[3].Variant != s12IMRestartVariant {
-		t.Fatalf("summary = %+v, want LAB01, S11/complete, S12/exact and S12/instance-manager-restart in lane %s",
-			summary, s12IMRestartLane)
+	lane, variant := imRestartLane(cfg.imRestartAt()), imRestartVariant(cfg.imRestartAt())
+	summary := readSummary(t, cfg.EvidenceDir)
+	if summary.Lane != lane || len(summary.Scenarios) != 4 || summary.Scenarios[3].ID != s12ID ||
+		summary.Scenarios[3].Variant != variant {
+		t.Fatalf("summary = %+v, want LAB01, S11/complete, S12/exact and S12/%s in lane %s", summary, variant, lane)
 	}
 	return summary.Scenarios
 }
@@ -309,22 +382,24 @@ func imRestartScenarios(t *testing.T, dir string) []evidence.Scenario {
 func imRestartOf(t *testing.T, f *s12IMRestartFixture) (evidence.Scenario, error) {
 	t.Helper()
 	err := f.runner.RunHA(t.Context(), f.cfg)
-	scenarios := imRestartScenarios(t, f.cfg.EvidenceDir)
+	scenarios := imRestartScenarios(t, f.cfg)
 	for _, s := range scenarios[:3] {
 		if s.Result != evidence.Pass {
 			t.Fatalf("%s = %+v; want LAB01, S11 and S12 exact passed", s.Name(), s)
 		}
 	}
 	requireOwnEvidence(t, scenarios[2], "S12/exact")
-	requireOwnEvidence(t, scenarios[3], "S12/instance-manager-restart")
+	requireOwnEvidence(t, scenarios[3], "S12/"+imRestartVariant(f.cfg.imRestartAt()))
 	requireNoSecretInEvidence(t, f.cfg.EvidenceDir)
 	return scenarios[3], err
 }
 
-func readIMRestartRecord(t *testing.T, dir string) s12IMRestartRecord {
+// readIMRestartRecord reads the record of the variant cfg selects.
+func readIMRestartRecord(t *testing.T, cfg HAConfig) s12IMRestartRecord {
 	t.Helper()
 	var rec s12IMRestartRecord
-	data, err := os.ReadFile(filepath.Join(dir, s12IMRestartRecordFile))
+	data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, "S12", imRestartVariant(cfg.imRestartAt()),
+		"record.json"))
 	if err != nil || json.Unmarshal(data, &rec) != nil || rec.IMRestart == nil {
 		t.Fatalf("S12 instance-manager-restart record = %s, %v", data, err)
 	}
@@ -362,7 +437,7 @@ func TestRunS12InstanceManagerRestartPassesWhenTheRetryCompletesTheRestore(t *te
 		"imrestart-cluster" {
 		t.Fatalf("writes = %v", f.writes)
 	}
-	rec := readIMRestartRecord(t, cfg.EvidenceDir)
+	rec := readIMRestartRecord(t, cfg)
 	reason := imRestartPassReason(rec.IMRestart)
 	for _, want := range []string{"Instance Manager on " + testIMRestartTarget + " was killed",
 		"Restoring with operation " + testIMRestartOp, "ran again on the same Pod",
@@ -478,7 +553,7 @@ func TestRunS12InstanceManagerRestartIsBlockedWhenTheKillCannotBePlaced(t *testi
 			if f.imKills != 0 {
 				t.Fatal("the Instance Manager was killed although the restore was not Restoring")
 			}
-			if rec := readIMRestartRecord(t, cfg.EvidenceDir); rec.IMRestart.KilledAt != nil {
+			if rec := readIMRestartRecord(t, cfg); rec.IMRestart.KilledAt != nil {
 				t.Fatalf("restart = %+v, want no kill recorded", rec.IMRestart)
 			}
 		})
@@ -711,7 +786,7 @@ func TestRunS12InstanceManagerRestartFailsWhenTheRetriedRestoreFailsAgain(t *tes
 	restart, err := imRestartOf(t, f)
 	requireIMRestart(t, restart, err, evidence.Fail, "the restore failed again after the attempt the kill ended",
 		"restoredb failed")
-	if rec := readIMRestartRecord(t, cfg.EvidenceDir); len(rec.IMRestart.Retries) != 2 {
+	if rec := readIMRestartRecord(t, cfg); len(rec.IMRestart.Retries) != 2 {
 		t.Fatalf("retries = %+v, want both", rec.IMRestart.Retries)
 	}
 }
@@ -811,7 +886,7 @@ func TestRunS12InstanceManagerRestartTakesTheRetryFromItsEvent(t *testing.T) {
 				requireIMRestart(t, restart, err, evidence.Blocked, "cause is unknown")
 				return
 			}
-			r := readIMRestartRecord(t, cfg.EvidenceDir).IMRestart
+			r := readIMRestartRecord(t, cfg).IMRestart
 			if len(r.Retries) != 1 || r.Retries[0].Message != testIMRetryMessage ||
 				!r.Retries[0].FromEvent {
 				t.Fatalf("retries = %+v, want the one the Event recorded", r.Retries)
@@ -880,7 +955,7 @@ func TestRunS12InstanceManagerRestartIsBlockedWhenS12ExactDidNotPass(t *testing.
 	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
 		t.Fatal("RunHA() passed")
 	}
-	scenarios := imRestartScenarios(t, cfg.EvidenceDir)
+	scenarios := imRestartScenarios(t, cfg)
 	if restart := scenarios[3]; restart.Result != evidence.Blocked ||
 		!strings.Contains(restart.Reason, "S12 exact did not pass") {
 		t.Fatalf("S12 instance-manager-restart = %+v, want blocked by S12 exact", restart)
