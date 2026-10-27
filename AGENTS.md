@@ -102,16 +102,27 @@ the work belongs to (a classification, not a status — status lives only in
 - **Phase**: `phase: 0-decisions` | `phase: 1-foundation` | `phase: 2-ha` | `phase: 3-recovery` | `phase: 4-backup` | `phase: 5-hardening`
 
 ### Issue, PR and Commit Titles
-Issue titles, pull request titles and commit subjects follow
-[CONTRIBUTING.md - Pull request and commit titles](CONTRIBUTING.md#pull-request-and-commit-titles):
-`type(scope)!: description` with types `feat`, `fix`, `docs`, `test`, `perf`,
-`refactor`, `ci`, `build`, `chore`, `style`, `revert`; English, lowercase start
-unless the first word is an API name, acronym, or proper noun; no trailing
-period, no issue numbers in pull request titles (use `Closes #N` /
-`Refs #N` in the body). Pull requests are squash-merged and the pull request
-title becomes the commit title. The `PR title` check enforces it.
 
-Preserve actual contributor authorship and existing credits.
+For **issues**, describe one human-readable problem or outcome with a simple
+type prefix: `bug:`, `feat:`, `test:`, `docs:`, `ci:` or `chore:`.
+Do not require an internal scenario code or component scope in the title.
+For **PRs and commits**, keep the existing Conventional Commit syntax
+`type(scope)!: description`, including `fix:` for a bug fix. See
+[CONTRIBUTING.md — issue titles and UTC evidence](CONTRIBUTING.md#human-readable-issue-titles-scope-and-utc-evidence)
+and [PR title rules](CONTRIBUTING.md#pull-request-and-commit-titles).
+
+Agent checklist before writing or updating an issue:
+1. Search related open/closed issues and open PRs; prefer an existing owner and
+   do not duplicate a completed implementation.
+2. Keep the body current, scoped and independently verifiable; put run logs in
+   the owning scenario issue, not a broad parent.
+3. Split implementation larger than two days into S/M issues when safe.
+   L/XL issues coordinate children and retain explicit closure criteria.
+4. Use **UTC**, e.g. `2026-10-27 14:35 UTC` or `2026-10-27T14:35:00Z`,
+   for every **new** time in issues, PRs and evidence. Preserve the
+   timezone of historical records when a conversion cannot be proven.
+5. Preserve author credit, label metadata, dependencies, safety invariants,
+   release boundaries and existing independent maintainer review.
 
 ## Unified PR Review Policy
 
