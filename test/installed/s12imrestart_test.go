@@ -38,6 +38,14 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
+// The evidence files of S12 instance-manager-restart at restoring.
+var (
+	s12IMRestartRecordFile          = "S12/" + imRestartVariant(IMRestartAtRestoring) + "/record.json"
+	s12IMRestartTimelineFile        = "S12/" + imRestartVariant(IMRestartAtRestoring) + "/timeline.jsonl"
+	s12IMRestartDataCheckFile       = "S12/" + imRestartVariant(IMRestartAtRestoring) + "/data-check.json"
+	s12IMRestartSourceDataCheckFile = "S12/" + imRestartVariant(IMRestartAtRestoring) + "/source-data-check.json"
+)
+
 const (
 	testIMRestartUID    = "imrestart-cluster"
 	testIMRestartTarget = "ha-imrestart-0"

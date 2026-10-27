@@ -503,3 +503,32 @@ func TestKilledOperationScriptNamesOnlyTheTwoDirectories(t *testing.T) {
 		}
 	}
 }
+
+func TestRunS12InstanceManagerRestartPreparingIsBlockedByAnotherOperationsRecord(t *testing.T) {
+	f := newS12IMRestartPreparingFixture(t)
+	f.opRecord = func(string, string) (string, error) {
+		return testOpRecord(t, instancemanager.Operation{ID: testIMRestartOp2, State: instancemanager.OpFailed,
+			FailureReason: s12IMRestartedReason, Restored: &instancemanager.OperationArtifact{
+				ManifestURI: "s3://bucket/run/manifest.json"}}, "present"), nil
+	}
+	restart, err := imRestartOf(t, f)
+	requireIMRestart(t, restart, err, evidence.Blocked, "is of operation \""+testIMRestartOp2+"\"")
+	if m := restart.Measurements; m["restoredAtKill"] != evidence.Unknown || m["stagingLeftAtEnd"] != evidence.Unknown {
+		t.Fatalf("measurements = %v, want restoredAtKill and stagingLeftAtEnd unknown for another operation's record",
+			m)
+	}
+}
+
+func TestIMRestartSeedingPassReasonMarksAnInferredAttempt(t *testing.T) {
+	before, after := int32(0), int32(1)
+	r := &s12IMRestart{Pod: testIMPeer, SeedAttemptsBefore: &before}
+	if reason := imRestartSeedingPassReason(r); !strings.Contains(reason, "seeding attempt 1 (inferred) (seed "+
+		"restore operation unknown)") {
+		t.Fatalf("reason = %q, want the attempt marked inferred", reason)
+	}
+	r.SeedAttemptsAfter, r.SeedRestoreOperationIDAfter = &after, testIMSeedOp2
+	if reason := imRestartSeedingPassReason(r); strings.Contains(reason, "inferred") ||
+		!strings.Contains(reason, "seeding attempt 1 (seed restore operation "+testIMSeedOp2+")") {
+		t.Fatalf("reason = %q, want the attempt read", reason)
+	}
+}

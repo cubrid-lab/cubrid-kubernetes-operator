@@ -1256,7 +1256,9 @@ What the product does:
   `Operation.Restored` in `operation.go`). So `Preparing` in the status does
   not show that the download still runs: at the kill the verification, the
   download or `restoredb` may run. What the variant establishes is that
-  `restoredb` had not succeeded, from the operation's record. (The comment of
+  `restoredb` had not succeeded, from the operation's record (`restored`
+  absent), not that it had not started: `restoredb` may have been running
+  when the kill ended it. (The comment of
   `setRestoreProgress` says the phase stays `Preparing` while the backup is
   verified and downloaded; with these states it stays `Preparing` only until
   the Operator reads the operation again.)
@@ -1277,7 +1279,7 @@ What differs from the steps above:
   blocks the variant ("the kill could not be placed while the restore was
   Preparing") and nothing is killed. The window lasts until the Operator's
   next read of the operation, so a `-poll` that is not short against 10
-  seconds may miss it.
+  seconds may miss it. Use `-poll 1s` for this lane.
 - **Right before the kill** (step 3): the reading must be `Preparing` with an
   operation; anything else blocks without a kill.
 - **The bootstrap** (step 8), judged as at `restoring`, and also: a reading
@@ -1288,7 +1290,12 @@ What differs from the steps above:
   ends the attempt without changing the phase (`restoreAttemptFailed`), so
   that answer was read before the kill took effect. A first reading after the
   kill already `Restoring`, `SeedingReplicas` or `Complete`, with no retry
-  after it, blocks it too.
+  after it, blocks it too. A `Restoring` that the Operator wrote between the
+  reading right before the kill and the kill, and replaced before the next
+  reading, is not seen: that the Operator had read the operation no further
+  than `Downloading` at the kill, as a pass's reason says, holds only as far
+  as the readings show, which takes a short `-poll` (1s). The record check
+  below is the evidence the variant rests on.
 - **The killed operation's record**, last, after the data, the source and the
   credentials were checked, so that what the data showed is judged whatever
   the record says: one `kubectl exec` on the target prints
