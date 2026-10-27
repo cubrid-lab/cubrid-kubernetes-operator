@@ -7,7 +7,8 @@ body:
     attributes:
       value: |
         Keep the `feat:` title prefix. Search open and recently closed issues
-        first. You do not need to apply labels; maintainers assign priority,
+        first. Use UTC for any new timestamps (e.g. 2026-10-27T14:35:00Z).
+        You do not need to apply labels; maintainers assign priority,
         size and phase after triage.
 
         A change to the CRD, HA safety, data lifecycle, backup/restore
