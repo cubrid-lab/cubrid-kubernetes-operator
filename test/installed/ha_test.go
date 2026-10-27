@@ -541,6 +541,8 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 		}
 	}
 	switch {
+	case strings.Contains(script, "APPLYLOGDB"):
+		return testAppliersOutput, nil
 	case strings.Contains(script, "applyinfo"):
 		return testApplyinfoOutput, nil
 	case strings.Contains(script, "heartbeat status"):
@@ -573,6 +575,9 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 	f.t.Fatalf("unexpected member command %q", args)
 	return "", nil
 }
+
+// testAppliersOutput is what the fake applier state of a member prints.
+const testAppliersOutput = "== applier lock /home/cubrid/CUBRID/var/APPLYLOGDB/appdb\n/var/lib/cubrid/databases/appdb_ha-restore-1 288\n"
 
 // testApplyinfoOutput is what the fake applyinfo of a member prints.
 const testApplyinfoOutput = " *** Applied Info. *** \n Committed page : 145 | 432\n Insert count : 3\n"

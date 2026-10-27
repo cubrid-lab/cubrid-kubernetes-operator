@@ -906,11 +906,28 @@ const applyinfoScript = `PATH="${CUBRID}/bin:${PATH}"; ` +
 	`timeout 15 cubrid applyinfo -L "/var/lib/cubrid/databases/` + databaseName + `_$1" -a ` + databaseName +
 	` 2>&1 | head -n 40`
 
+// appliersScript prints a member's applier lock, the database's file under
+// $CUBRID/var/APPLYLOGDB that one log applier holds at a time (POC-16, POC-17,
+// POC-21), the applylogdb processes that run with whether each holds that file
+// open, the locks /proc/locks lists on it, and the end of their newest error
+// logs: whether the applier of the master's copied log or another one
+// holds the lock (#416). Each part says when there is nothing.
+const appliersScript = `L="${CUBRID}/var/APPLYLOGDB/` + databaseName + `"; echo "== applier lock $L"; ` +
+	`if [ -f "$L" ]; then ls -l --time-style=full-iso "$L"; i=$(stat -c %i "$L"); ` +
+	`echo "locks on inode $i:"; grep -E ":$i " /proc/locks || echo "(none)"; else echo "(none)"; fi; ` +
+	`echo "== applylogdb processes, and whether each holds the lock open"; n=0; ` +
+	`for p in /proc/[0-9]*; do c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null); case "$c" in "cub_admin applylogdb"*) ` +
+	`h=no; for fd in "$p"/fd/*; do [ "$(readlink "$fd" 2>/dev/null)" = "$L" ] && h=yes; done; ` +
+	`echo "${p#/proc/} holds=$h $c"; n=$((n+1));; esac; done; [ "$n" -eq 0 ] && echo "(none)"; ` +
+	`echo "== applylogdb logs"; set -- $(ls -t "${CUBRID}"/log/*applylogdb*.err 2>/dev/null | head -n 4); ` +
+	`[ $# -eq 0 ] && echo "(none)"; for f; do echo "== $f"; tail -n 15 "$f"; done`
+
 // replicationState describes a member that lacks a row written through its
 // cluster (#416): its replication as the cluster's status reports it, the
 // ReplicationHealthy condition, the member's own applyinfo for the master's
-// log and memberState. It returns a one-line summary of the status and the
-// whole description. What cannot be read is said so.
+// log, its applier lock and appliers, and memberState. It returns a one-line
+// summary of the status and the whole description. What cannot be read is
+// said so.
 func (h *haRun) replicationState(ctx context.Context, cluster, pod, master string) (string, string) {
 	summary := "replication in status of " + pod + ": unknown"
 	current := &databasev1alpha1.CubridCluster{}
@@ -941,6 +958,11 @@ func (h *haRun) replicationState(ctx context.Context, cluster, pod, master strin
 		fmt.Fprintf(&b, "applyinfo of %s for %s's log:\n", pod, master)
 		if out, err := h.member(ctx, pod, "bash", "-c", applyinfoScript, "applyinfo", master); err != nil {
 			fmt.Fprintf(&b, "could not be read: %v\n", err)
+		} else {
+			b.WriteString(out)
+		}
+		if out, err := h.member(ctx, pod, "bash", "-c", appliersScript); err != nil {
+			fmt.Fprintf(&b, "the appliers of %s could not be read: %v\n", pod, err)
 		} else {
 			b.WriteString(out)
 		}
