@@ -912,12 +912,13 @@ const applyinfoScript = `PATH="${CUBRID}/bin:${PATH}"; ` +
 // open, the locks /proc/locks lists on it, and the end of their newest error
 // logs: whether the applier of the master's copied log or another one
 // holds the lock (#416). Each part says when there is nothing.
-const appliersScript = `L="${CUBRID}/var/APPLYLOGDB/` + databaseName + `"; echo "== applier lock $L"; ` +
-	`if [ -f "$L" ]; then ls -l --time-style=full-iso "$L"; i=$(stat -c %i "$L"); ` +
-	`echo "locks on inode $i:"; grep -E ":$i " /proc/locks || echo "(none)"; else echo "(none)"; fi; ` +
+const appliersScript = `L="${CUBRID}/var/APPLYLOGDB/` + databaseName + `"; echo "== applier lock $L"; i=; ` +
+	`if [ -f "$L" ]; then ls -l --time-style=full-iso "$L"; i=$(stat -L -c %i "$L" 2>/dev/null); fi; ` +
+	`if [ -z "$i" ]; then echo "(none)"; else echo "locks on inode $i:"; ` +
+	`grep -E ":$i " /proc/locks || echo "(none)"; fi; ` +
 	`echo "== applylogdb processes, and whether each holds the lock open"; n=0; ` +
-	`for p in /proc/[0-9]*; do c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null); case "$c" in "cub_admin applylogdb"*) ` +
-	`h=no; for fd in "$p"/fd/*; do [ "$(readlink "$fd" 2>/dev/null)" = "$L" ] && h=yes; done; ` +
+	`for p in /proc/[0-9]*; do c=$( { tr '\0' ' ' < "$p/cmdline"; } 2>/dev/null); case "$c" in "cub_admin applylogdb"*) ` +
+	`h=no; for fd in "$p"/fd/*; do [ -n "$i" ] && [ "$(stat -L -c %i "$fd" 2>/dev/null)" = "$i" ] && h=yes; done; ` +
 	`echo "${p#/proc/} holds=$h $c"; n=$((n+1));; esac; done; [ "$n" -eq 0 ] && echo "(none)"; ` +
 	`echo "== applylogdb logs"; set -- $(ls -t "${CUBRID}"/log/*applylogdb*.err 2>/dev/null | head -n 4); ` +
 	`[ $# -eq 0 ] && echo "(none)"; for f; do echo "== $f"; tail -n 15 "$f"; done`

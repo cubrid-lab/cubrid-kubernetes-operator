@@ -541,7 +541,7 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 		}
 	}
 	switch {
-	case strings.Contains(script, "APPLYLOGDB"):
+	case strings.Contains(script, "== applier lock"):
 		return testAppliersOutput, nil
 	case strings.Contains(script, "applyinfo"):
 		return testApplyinfoOutput, nil

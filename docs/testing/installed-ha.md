@@ -468,9 +468,7 @@ pass, S12 is blocked and nothing of it is done.
    `$CUBRID/var/APPLYLOGDB/<db>` (the file, the locks `/proc/locks` lists on
    it, and which `applylogdb` process holds it open), the `applylogdb`
    processes and the end of their newest error logs, and the member state
-   above; the reason names the status line. On a healthy lab slave on
-   2026-10-27 the lock file was empty, held open by neither applier and not
-   locked.
+   above; the reason names the status line.
 8. **The source.** The source's members must still be the Pods and
    containers LAB01 recorded at its end. CUBRID and `status.currentPrimary`
    must name the same master: the roles are read again until
