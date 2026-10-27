@@ -1182,7 +1182,8 @@ func TestRunS12ExactRecordsTheStateOfAMemberThatLacksTheNormalWrite(t *testing.T
 	}
 	rec := readS12Record(t, cfg.EvidenceDir)
 	state := rec.NormalWrite.MissingState[testRestoreSlave]
-	for _, want := range []string{"applyinfo of " + testRestoreSlave, testApplyinfoOutput, "replication in status",
+	for _, want := range []string{"applyinfo of " + testRestoreSlave, testApplyinfoOutput, testAppliersOutput,
+		"replication in status",
 		"ReplicationHealthy", "HA-Node Info (current " + testRestoreSlave} {
 		if !strings.Contains(state, want) {
 			t.Fatalf("state of %s = %q, want %q", testRestoreSlave, state, want)
