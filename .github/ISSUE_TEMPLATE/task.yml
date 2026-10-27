@@ -9,6 +9,8 @@ body:
         Keep a title prefix that matches the work, for example `chore:`,
         `docs:`, `refactor:` or `ci:`. You do not need to apply labels;
         maintainers assign priority, size and phase after triage.
+        Keep the task independently reviewable and split unrelated work.
+        Use UTC for new evidence and timestamps (2026-10-27T14:35:00Z).
 
   - type: textarea
     id: problem
