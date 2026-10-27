@@ -130,6 +130,8 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s12-wrong-target` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-wrong-target` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`wrong-target`): S11's artifact restored into a cluster created over the retained PVCs of a deleted cluster of the same name, which hold its database; the restore must be refused for that target and the database left with its own marker and without S11's | none |
 | `lab-installed-ha-s12-operator-restart` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-operator-restart` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`operator-restart`): S11's artifact restored into another new cluster while the installed manager's Pod is deleted without a grace period during the restore; the restore must complete as `exact` does, under the operation recorded at the restart | none |
 | `lab-installed-ha-s12-instance-manager-restart` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-instance-manager-restart` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart`): S11's artifact restored into another new cluster while the Instance Manager of the restore's target member is killed during the restore, which restarts that member's database container on the same Pod and volume; the interrupted attempt must end with one retry and the restore complete as `exact` does, under the next attempt's operation | none |
+| `lab-installed-ha-s12-instance-manager-restart-preparing` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at preparing` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-preparing`): as `instance-manager-restart`, with the kill after a reading of the bootstrap `Preparing` with its operation; the target's record of the killed operation must show that `restoredb` had not succeeded | none |
+| `lab-installed-ha-s12-instance-manager-restart-seeding` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at seeding` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-seeding`): S11's artifact restored into another new cluster, and the Instance Manager of a member being seeded from the restored one killed during its seed restore; the seed attempt must end with one seed retry, the restore must not run again, and the cluster complete as `exact` does | none |
 
 `lab-installed-smoke` is a connection baseline. Its `passed` verdict applies
 to LAB00 and establishes neither S00 installation validation nor S00–S15
@@ -148,14 +150,18 @@ Operator's logs for credentials and does not restore the artifact (S12).
 
 `lab-installed-ha-s12` requires S12 `exact` only,
 `lab-installed-ha-s12-tampered` S12 `exact` and `tampered`,
-`lab-installed-ha-s12-wrong-target` S12 `exact` and `wrong-target`, and
+`lab-installed-ha-s12-wrong-target` S12 `exact` and `wrong-target`,
 `lab-installed-ha-s12-operator-restart` S12 `exact` and `operator-restart`,
-and `lab-installed-ha-s12-instance-manager-restart` S12 `exact` and
-`instance-manager-restart`. A variant a lane does not name is not part of it,
-rather than `not_applicable`: the lab does not rule it out, the command does
-not run it in that lane. The command runs `tampered`, `wrong-target`,
-`operator-restart` and `instance-manager-restart` in separate runs, one lane
-each.
+`lab-installed-ha-s12-instance-manager-restart` S12 `exact` and
+`instance-manager-restart`, and
+`lab-installed-ha-s12-instance-manager-restart-preparing` and
+`lab-installed-ha-s12-instance-manager-restart-seeding` S12 `exact` and the
+variant their name ends with. A variant a lane does
+not name is not part of it, rather than `not_applicable`: the lab does not
+rule it out, the command does not run it in that lane. The command runs
+`tampered`, `wrong-target`, `operator-restart` and each placement of
+`instance-manager-restart` in separate runs, one lane each: a pass at one
+placement is no evidence for another.
 
 `lab-preallocated-component-smoke` is a distinct component result. Its successful
 owned-workload cleanup is not fresh LAB00 namespace cleanup or private campaign
@@ -1044,7 +1050,12 @@ it needs more.
   of `status.bootstrap.phase` `Restoring`) and `instance-manager-restart`
   (the Instance Manager on the restore's target member is killed with
   `SIGKILL` after such a reading; it runs as the child of the database
-  container's PID 1, so the container restarts on the same Pod and volume).
+  container's PID 1, so the container restarts on the same Pod and volume),
+  `instance-manager-restart-preparing` (the same kill after a reading of the
+  bootstrap `Preparing` with its operation) and
+  `instance-manager-restart-seeding` (the same kill on a member being seeded
+  from the restored one, after a reading of `SeedingReplicas` with a seed
+  restore recorded for that member).
 - **Expected, `exact`:** the new cluster holds exactly the rows that were
   acknowledged before the marker, the marker itself, and no row written after
   the backup finished.
@@ -1091,6 +1102,47 @@ it needs more.
   the restart, and when no retry follows and the operation of the kill
   completes, or the first reading after the kill is already past
   `Restoring`: the kill then did not interrupt a running restore.
+- **Expected, `instance-manager-restart-preparing`:** as
+  `instance-manager-restart`. The Operator records the operation with the
+  state its start answered, `Pending`, which shows as `Preparing` until it
+  reads the operation again (`reconcileRecovery`, `setRestoreProgress` in
+  `internal/controller/bootstrap.go`). The Instance Manager records its
+  operation `Restoring` before it verifies and downloads the backup, and
+  records the restored artifact only once `restoredb` succeeded (`runRestore`
+  in `internal/instancemanager/server.go`, `Operation.Restored`), so the
+  phase does not tell the download from `restoredb`: the target's record of
+  the killed operation, read once the cluster is Ready, must be `Failed` by
+  the restart without a restored artifact, so `restoredb` had not
+  succeeded. It is `blocked` when the kill cannot be placed while the
+  bootstrap is `Preparing` with an operation, when a reading after the kill
+  under that attempt and operation shows a phase past `Preparing` (an answer
+  read before the kill took effect), and when the record cannot be read, is
+  another operation's, did not fail by the restart, or holds a restored
+  artifact; otherwise as `instance-manager-restart`. A staging directory
+  left on the target is recorded, not judged.
+- **Expected, `instance-manager-restart-seeding`:** the killed member's
+  container runs again on the same Pod, restarted once, within
+  `restore_limit`, and the cluster completes as in `exact`. Once the restore
+  is recorded as complete on its target, the Operator only seeds the other
+  members and never polls or starts the restore again (`reconcileRecovery`);
+  the Instance Manager fails the seed restore at its start
+  (`reconcileOnStart`), and the Operator ends the seed attempt with
+  `SeedRestoreFailedRetrying`, raises `status.databases[].bootstrapAttempts`
+  (not `status.bootstrap.attempts`) and seeds the member again under the next
+  attempt's key (`seedMember`, `bootstrapStepFailed` in
+  `internal/controller/habootstrap.go`). So exactly one seed retry follows
+  the kill, on that member, its message naming the Instance Manager's
+  restart. A second seed retry, or the seed restore of the kill recorded for
+  the member under the next attempt, fails the variant. It is `blocked` when
+  the kill cannot be placed during a seed restore of a member other than the
+  restore's target, when the seed restore had ended before the kill (no seed
+  retry and the member seeded), when the first seed retry names another
+  reason or member, when the database's attempts rise without a seed retry
+  reason and no Event of the Operator's names the restart on that member,
+  and in the cases `instance-manager-restart` is blocked for the kill and the
+  container. The member being seeded is the one killed, not the seed source:
+  its database was never served, and the Operator's seed retry is built for
+  its interruption; the source's container is the restored master's.
 - **Must never happen:** an existing database overwritten; a cluster reported
   `Ready` with data that differs from the backup; the new cluster depending
   on a Secret of the source cluster. In `operator-restart` also: the restore
@@ -1101,11 +1153,17 @@ it needs more.
   that constant only), the target answering that
   it holds no record of the restore operation (`RecordedOperationMissing`:
   the record was on the volume before its ID was answered), and the target
-  member's container restarting more than once after one kill.
+  member's container restarting more than once after one kill. In
+  `instance-manager-restart-preparing` also: those of
+  `instance-manager-restart`. In `instance-manager-restart-seeding` also:
+  those of `instance-manager-restart` for the killed member, a retry of the
+  restore after the kill (it had completed), the database's attempts falling
+  or reaching the Operator's limit of 3, and a member's seed restore becoming
+  another under the same database attempts.
 - **Data check:** the data rules against the history truncated at the marker.
 - **Limits:** `restore_limit`; in `operator-restart` also
-  `operator_resync_limit`. In `instance-manager-restart`, `restore_limit`
-  also bounds the container's return.
+  `operator_resync_limit`. In every `instance-manager-restart` variant,
+  `restore_limit` also bounds the container's return.
 
 ### S13: deletion and retention
 

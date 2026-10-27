@@ -101,6 +101,15 @@ type s12Phase struct {
 	OperationID  string             `json:"operationID,omitempty"`
 	ManifestURI  string             `json:"manifestUri,omitempty"`
 	Conditions   []metav1.Condition `json:"conditions"`
+	// DatabaseAttempts, SeedMember, SeedRestoreOperationID and SeededMembers
+	// are of the status of the spec's first database: the attempts of its
+	// bootstrap steps (status.databases[].bootstrapAttempts, which seeding
+	// raises, not status.bootstrap.attempts), the member being seeded, the
+	// seed restore recorded for it, and the members seeded so far.
+	DatabaseAttempts       int32    `json:"databaseAttempts,omitempty"`
+	SeedMember             string   `json:"seedMember,omitempty"`
+	SeedRestoreOperationID string   `json:"seedRestoreOperationID,omitempty"`
+	SeededMembers          []string `json:"seededMembers,omitempty"`
 }
 
 // s12DataCheck summarizes the data check of the restored cluster.
@@ -572,8 +581,9 @@ func (h *haRun) restoredStatus(cluster *databasev1alpha1.CubridCluster, rec *s12
 }
 
 // recordBootstrap adds a restored cluster's bootstrap to phases when it
-// changed: its phase, attempts, target, operation, manifest, or the type,
-// status or reason of a condition.
+// changed: its phase, attempts, target, operation, manifest, the first
+// database's attempts and seeding, or the type, status or reason of a
+// condition.
 func recordBootstrap(cluster *databasev1alpha1.CubridCluster, phases *[]s12Phase) {
 	seen := s12Phase{At: time.Now().UTC(), Conditions: slices.Clone(cluster.Status.Conditions)}
 	if seen.Conditions == nil {
@@ -583,9 +593,22 @@ func recordBootstrap(cluster *databasev1alpha1.CubridCluster, phases *[]s12Phase
 		seen.Phase, seen.Attempts, seen.TargetMember = string(boot.Phase), boot.Attempts, boot.TargetMember
 		seen.OperationID, seen.ManifestURI = boot.OperationID, boot.ManifestURI
 	}
+	if len(cluster.Spec.Databases) > 0 {
+		for _, db := range cluster.Status.Databases {
+			if db.Name != cluster.Spec.Databases[0].Name {
+				continue
+			}
+			seen.DatabaseAttempts, seen.SeededMembers = db.BootstrapAttempts, slices.Clone(db.SeededMembers)
+			if db.Seeding != nil {
+				seen.SeedMember, seen.SeedRestoreOperationID = db.Seeding.Member, db.Seeding.RestoreOperationID
+			}
+		}
+	}
 	key := func(p s12Phase) string {
 		var k strings.Builder
-		fmt.Fprintf(&k, "%s|%d|%s|%s|%s", p.Phase, p.Attempts, p.TargetMember, p.OperationID, p.ManifestURI)
+		fmt.Fprintf(&k, "%s|%d|%s|%s|%s|%d|%s|%s|%s", p.Phase, p.Attempts, p.TargetMember, p.OperationID,
+			p.ManifestURI, p.DatabaseAttempts, p.SeedMember, p.SeedRestoreOperationID,
+			strings.Join(p.SeededMembers, ","))
 		for _, c := range p.Conditions {
 			fmt.Fprintf(&k, "|%s=%s:%s", c.Type, c.Status, c.Reason)
 		}
