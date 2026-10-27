@@ -908,7 +908,8 @@ it needs more.
   Operator), `slave-isolated`, and `asymmetric` (traffic is dropped in one
   direction only).
 - **Fault confirmed by:** a probe sent across the partition is dropped, in
-  each direction the variant names.
+  each direction the variant names, and the paths the variant leaves open
+  are probed open ([network faults](network-faults.md)).
 - **CUBRID was observed to** (POC-6): end with two masters holding different
   data under a symmetric partition, and after the partition ends to settle
   the *roles* but not reconcile the *data*. The manual describes
@@ -941,7 +942,9 @@ it needs more.
   converged.
 - **Fault confirmed by:** the lag is measured before the first failure (the
   slave is missing rows the master acknowledged), and each failure is
-  confirmed as in S03.
+  confirmed as in S03. A network delay from the master to the slave
+  ([network faults](network-faults.md)) is one way to make it lag; the delay
+  is measured, and the lag is still measured by the missing rows.
 - **CUBRID is expected to:** unknown for the second failure; no source was
   read. See Q4.
 - **The Operator must** (ADR-0005, ADR-0006): promote nothing; not report a

@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-38, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-39, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -20,7 +20,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > POC-19, POC-21 and POC-22 in the Kind e2e workflow; POC-32 and POC-33 state
 > theirs; POC-34 ran on the VM lab, with the Operator's derivative image of the
 > same engine build, and its timings are of those VMs only; POC-37 and POC-38
-> ran in Docker on a native linux/amd64 host. Each states its own
+> ran in Docker on a native linux/amd64 host; POC-39 ran on the VM lab, with
+> plain Pods and no CUBRID. Each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
 > general CUBRID guarantee. The raw observations below are kept as recorded;
 > where a later POC contradicts one, a note says so. The current reading of
@@ -3710,3 +3711,107 @@ still stand as possible causes:
 - Runs longer than about 3.5 minutes per formation, and members that ran for days.
 - The cause of the late writes in `r09` and `t0`.
 - CUBRID's source or manual on what `APPLYLOGDB/<db>` holds and how "in use" is decided.
+
+## POC-39 — whether a NET_ADMIN ephemeral container can cut and delay one Pod's traffic on the VM lab, by direction, without touching the node or the kubelet's probes (#114) — **observation: yes, under Pod Security `privileged` only; restricted and baseline refused the container; iptables (nf_tables) and tc netem worked in the Pod's namespace on kernel 6.8.0-142; a drop rule there cut traffic to a Pod on another node, counting rules at the receiver told the two directions apart where a TCP connect could not, the kubelet's TCP probes kept passing, and a 300 ms netem delay to one peer added 300 ms to that peer only**
+
+**Question (#114).** S07 and S08 need traffic between chosen members cut in
+one or both directions, and delayed. The database container cannot do it: it
+runs as UID 1000 with every capability dropped and has neither iptables nor
+tc. Can an ephemeral container with NET_ADMIN, which shares the Pod's network
+namespace, do it on the VM lab, and can the run see which direction is cut?
+
+**Environment (2026-10-27).** The VM lab: k3s v1.36.5 with flannel, four
+nodes, kernel 6.8.0-142-generic. Two runs under the `cubrid-lab/campaign`
+Lease, each in a namespace of its own (`cubrid-lab-netpoc-1`, then
+`cubrid-lab-netpoc-2`), removed at the end. The output below is from the
+second run, read from its saved log.
+
+- **Pods:** `a` on `cubrid-k8s-worker-1` and `b` on `cubrid-k8s-worker-2`,
+  each with the database Pod's security settings: UID and GID 1000,
+  `runAsNonRoot`, every capability dropped, no privilege escalation,
+  `RuntimeDefault` seccomp.
+- **Main container:** `docker.io/nicolaka/netshoot@sha256:7f08c4af…` (v0.14),
+  with `socat` listening on TCP 1523. Liveness and readiness probes were
+  `tcpSocket` on 1523 every 2 s, failing after two misses.
+- **Ephemeral container:** the same image, `sleep`, `runAsUser: 0`,
+  `runAsNonRoot: false`, capabilities `drop: [ALL]`, `add: [NET_ADMIN,
+  NET_RAW]`. It was added through the `pods/ephemeralcontainers`
+  subresource (`kubectl patch --subresource=ephemeralcontainers`).
+
+**Departures from the real setup.** No CUBRID, no Operator and no
+NetworkPolicy: the main containers were `socat` listeners, not database
+members. The probes were `tcpSocket`, not the members' `httpGet` on 9090.
+Only two Pods and two nodes were used.
+
+**Results.**
+
+1. **Pod Security.**
+   - Under `enforce=restricted` the API server refused the container:
+     `violates PodSecurity "restricted:latest": unrestricted capabilities
+     (... "NET_ADMIN", "NET_RAW" ...), runAsNonRoot != true ..., runAsUser=0`.
+   - Under `enforce=baseline`: `non-default capabilities (... "NET_ADMIN",
+     "NET_RAW" ...)`.
+   - Under `enforce=privileged` (with `warn=restricted`) it was admitted
+     with the same text as a warning, and ran in 1 to 2 s on both Pods.
+2. **Tools.** In the ephemeral container: `uid=0`, `iptables v1.8.11
+   (nf_tables)`, `tc utility, iproute2-6.15.0`, and `ip -o -4 addr show`
+   listed the Pod's IP on `eth0`. The Pod's namespace had empty filter and
+   raw tables and the qdisc `noqueue`. In the main container, as UID 1000,
+   `iptables -S` failed with `Permission denied (you must be root)` and
+   `tc qdisc add` with `Operation not permitted`.
+3. **Cutting a path between two nodes.** In each Pod's namespace, INPUT
+   jumped to a drop chain and then to a counting chain with one `-s <peer>
+   -j RETURN` rule; OUTPUT jumped to a drop chain. A probe was three TCP
+   connects from the sender to the receiver's port 1523, with the
+   receiver's count of the sender's packets read before and after.
+
+   | State | `a`→`b` connect | `b`→`a` connect | `a`'s packets counted at `b` | `b`'s packets counted at `a` |
+   |---|---|---|---|---|
+   | No rule | connected, 0.6 ms | connected, 0.6 ms | 8 → 20 | 20 → 32 |
+   | `a` OUTPUT drops to `b` | no answer (curl 28) | no answer (curl 28) | 32 → 32 | 34 → 40 |
+   | Also `a` INPUT drops from `b` | no answer | no answer | 32 → 32 | 40 → 40 |
+   | Rules flushed | connected, 0.6 ms | connected, 0.6 ms | 40 → 52 | 60 → 72 |
+
+   - With only `a`'s OUTPUT rule, a TCP connect failed in **both**
+     directions, since every handshake needs both. The counts at the
+     receivers still showed `b`'s packets reaching `a` and none of `a`'s
+     reaching `b`.
+   - The drop rules' own counters read 20 packets in OUTPUT after the first
+     step, and 28 in OUTPUT and 8 in INPUT after the second.
+4. **The kubelet's probes.** Twenty seconds into the two-way cut, `a` was
+   Ready with 0 restarts, and so was `b` at the end. The rules name only the
+   peer's Pod IP, and the kubelet's probes come from the node.
+5. **Delay.** On `a`: a `prio` qdisc with four bands, `netem delay 300ms` on
+   band 4, and a `u32` filter that sends only packets to `b`'s IP there.
+   Five connects each, in seconds:
+
+   | | `a`→`b`:1523 | `a`→kube-dns:53 |
+   |---|---|---|
+   | Before | 0.0005 to 0.0017 | 0.0009 to 0.0011 |
+   | With the delay | 0.3005 to 0.3009 | 0.0008 to 0.0009 |
+   | After `tc qdisc del dev eth0 root` | 0.0004 to 0.0016 | — |
+
+   After the removal, `tc qdisc show dev eth0` showed `noqueue` again and
+   `tc filter show` showed nothing.
+6. **An ephemeral container that targets a container dies with it.** In the
+   first run, the container was added with `targetContainerName: main`.
+   The main containers were crash-looping for a reason not looked into,
+   most likely the `socat` HTTP stand-in for the probes. The ephemeral
+   containers ended with exit code 137 within 6 s of starting, and every
+   later `kubectl exec` into them failed with `container not found`. The
+   second run left `targetContainerName` out, and its containers kept
+   running to the end. That they died *because* they shared the main
+   container's processes is a likely reading, not a tested one.
+
+**What this means for the controls (#114).**
+- A run that uses them needs its namespace at Pod Security `privileged`.
+- The ephemeral container should not name a target container.
+- Rules on the peer's Pod IP leave the kubelet's probes alone.
+- One direction can be confirmed only by counting at the receiver, never by
+  a TCP connect.
+
+**Limits.**
+- One run of each step, on two Pods.
+- No CUBRID traffic, no Operator and no NetworkPolicy were present.
+- Whether the Operator's traffic reaches a member with the Operator Pod's
+  own IP, as a rule on that IP needs, was not tried here.
