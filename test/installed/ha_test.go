@@ -153,8 +153,10 @@ type haFixture struct {
 	imRestartCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
 	imRestartRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	memberHook       func(ctx context.Context, pod, script string) (string, error, bool)
-	// podRead runs before each read of a Pod; its error is the read's.
-	podRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	// podRead and deploymentRead run before each read of a Pod and of a
+	// Deployment; the error is the read's.
+	podRead        func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	deploymentRead func(key client.ObjectKey) error
 	// markerAnswer, when it returns true, answers a read of the marker table
 	// in place of markersOf.
 	markerAnswer func(pod string) (string, error, bool)
@@ -166,6 +168,9 @@ type haFixture struct {
 	// of its cluster's members.
 	heartbeatRole func(pod, role string) string
 	haNodes       func(pod string, nodes []string) []string
+	// processState, with f.mu held, answers the HA process state a member's
+	// heartbeat status reports in place of the one of its role.
+	processState func(pod, state string) string
 	// secrets are the Secrets the run created, in order.
 	secrets []*corev1.Secret
 
@@ -298,6 +303,10 @@ func (f *haFixture) beforeGet(ctx context.Context, c client.WithWatch, key clien
 	case *corev1.Pod:
 		if f.podRead != nil {
 			return f.podRead(ctx, c, key)
+		}
+	case *appsv1.Deployment:
+		if f.deploymentRead != nil {
+			return f.deploymentRead(key)
 		}
 	}
 	return nil
@@ -603,6 +612,9 @@ func (f *haFixture) heartbeat(pod string) string {
 		fmt.Fprintf(&b, "   Node %s (priority %d, state %s)\n", node, i+1, f.roles[node])
 	}
 	state := map[string]string{roleMaster: "registered_and_active", roleSlave: "registered_and_standby"}[role]
+	if f.processState != nil {
+		state = f.processState(pod, state)
+	}
 	fmt.Fprintf(&b, " HA-Process Info (master 1, state %s)\n   %s\n", role, state)
 	return b.String()
 }

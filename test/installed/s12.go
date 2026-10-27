@@ -19,6 +19,7 @@ package installed
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -232,7 +233,9 @@ func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 		SecretRef: s12SecretName, Bootstrap: []s12Phase{}, Members: []imageIdentity{}, SecretsReferenced: []string{},
 		Credentials: &s12Credentials{FoundIn: []string{}},
 		Notes: []string{"the restored cluster uses a copy of the seed Secret of its own, " + s12SecretName +
-			"; the source uses " + seedSecretName, "the Operator's logs were not checked"},
+			"; the source uses " + seedSecretName, "the Operator's logs were not checked",
+			"use of the source's Secrets is checked in the restored cluster's Pod templates only: the Operator " +
+				"itself using one, for example to download the artifact, would not be seen"},
 		Residue: "the restored cluster's seed backups under its seed prefix are not removed by this run; the " +
 			"cluster goes with the namespace"}
 	defer func() {
@@ -383,6 +386,21 @@ func (h *haRun) postBackupWrites(ctx context.Context, rec *s12Record) (string, e
 	}
 	out, runErr := h.clientRun(ctx, fmt.Sprintf("CLIENT_ID=%s OPS=%d ROLLBACK_EVERY=5 workload run 2>/tmp/%[1]s.err",
 		s12PostBackupClient, s12PostBackupOperations))
+	if runErr != nil {
+		// kubectl ends the output of a failed command with its own text, and a
+		// client that was stopped may leave a line unfinished: only the events
+		// the client recorded go to the history; runErr keeps the whole
+		// output. An operation without its answer stays attempted, with an
+		// unknown outcome.
+		var events strings.Builder
+		for line := range strings.Lines(out) {
+			var e workload.Event
+			if json.Unmarshal([]byte(line), &e) == nil && e.OpID != "" {
+				events.WriteString(strings.TrimRight(line, "\n") + "\n")
+			}
+		}
+		out = events.String()
+	}
 	h.history.WriteString(out)
 	if err := h.write(haHistoryFile, []byte(h.history.String())); err != nil {
 		return "", err
@@ -463,7 +481,8 @@ func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.Cubr
 	rec *s12Record, result *evidence.Scenario) (*startingState, time.Time, error) {
 	wctx, cancel := context.WithDeadline(ctx, createdAt.Add(h.cfg.RestoreLimit))
 	defer cancel()
-	// readErr is the last reading's error, nil once a reading succeeded.
+	// readErr is the last reading's error, nil once a reading was made in
+	// full; a reading the limit cut short keeps the one before.
 	var readErr error
 	var waiting string
 	var roles *startingState
@@ -480,13 +499,16 @@ func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.Cubr
 			}
 			return false, err
 		}
-		readErr = nil
 		if cluster.UID != created.UID {
 			return false, restoreVerdict{errors.New("the restored cluster was replaced")}
 		}
-		state, unmet, err := h.restoredReading(wctx, cluster, rec, result)
+		state, unmet, notRead, err := h.restoredReading(wctx, cluster, rec, result)
 		if err != nil && wctx.Err() != nil && !errors.As(err, new(restoreVerdict)) {
 			return false, nil
+		}
+		readErr = nil
+		if notRead {
+			readErr = errors.New(unmet)
 		}
 		if err != nil || unmet != "" {
 			waiting = unmet
@@ -501,8 +523,8 @@ func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.Cubr
 		return roles, readyAt, nil
 	case ctx.Err() == nil && wctx.Err() != nil && readErr != nil:
 		// The state at the limit is not known: the run could not judge.
-		return nil, time.Time{}, fmt.Errorf("the restored cluster could not be read before restore_limit %s "+
-			"passed: %w", h.cfg.RestoreLimit, readErr)
+		return nil, time.Time{}, fmt.Errorf("the restored cluster or its objects could not be read before "+
+			"restore_limit %s passed: %w", h.cfg.RestoreLimit, readErr)
 	case ctx.Err() == nil && wctx.Err() != nil:
 		phase := noBootstrapPhase
 		if n := len(rec.Bootstrap); n > 0 {
@@ -516,44 +538,49 @@ func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.Cubr
 }
 
 // restoredReading records one reading of the restored cluster and returns
-// its roles once everything holds, or what does not hold yet.
+// its roles once everything holds, or what does not hold yet and whether
+// that is a member Pod, the StatefulSet or a Broker Deployment that could not
+// be read, not a state that was seen.
 func (h *haRun) restoredReading(ctx context.Context, cluster *databasev1alpha1.CubridCluster, rec *s12Record,
-	result *evidence.Scenario) (*startingState, string, error) {
+	result *evidence.Scenario) (*startingState, string, bool, error) {
 	phase, err := h.restoredStatus(cluster, rec, result)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	switch phase {
 	case string(databasev1alpha1.BootstrapFailed):
-		return nil, "", restoreVerdict{fmt.Errorf("the restored cluster's bootstrap ended Failed: %s",
+		return nil, "", false, restoreVerdict{fmt.Errorf("the restored cluster's bootstrap ended Failed: %s",
 			bootstrapReason(cluster))}
 	case string(databasev1alpha1.BootstrapComplete):
 	default:
-		return nil, fmt.Sprintf("the bootstrap phase is %q", phase), nil
+		return nil, fmt.Sprintf("the bootstrap phase is %q", phase), false, nil
 	}
 	if unmet, err := clusterReady(cluster); err != nil {
-		return nil, "", restoreVerdict{err}
+		return nil, "", false, restoreVerdict{err}
 	} else if unmet != "" {
-		return nil, unmet, nil
+		return nil, unmet, false, nil
 	}
+	// Only these and rolesOf name what could not be read with unread; a
+	// condition's message, which clusterReady passes on, is not searched for
+	// it.
 	members, unmet, err := h.memberIdentities(ctx, cluster)
 	if unmet != "" || err != nil {
-		return nil, unmet, err
+		return nil, unmet, strings.Contains(unmet, unread), err
 	}
 	if unmet, err := h.brokersAvailable(ctx, cluster); unmet != "" || err != nil {
-		return nil, unmet, err
+		return nil, unmet, strings.Contains(unmet, unread), err
 	}
 	state, unmet, err := h.rolesOf(ctx, clusterMembers(cluster.Name))
 	if unmet != "" || err != nil {
-		return nil, unmet, err
+		return nil, unmet, strings.Contains(unmet, unread), err
 	}
 	state.CurrentPrimary = cluster.Status.CurrentPrimary
 	if state.CurrentPrimary != state.Master {
 		return nil, fmt.Sprintf("status.currentPrimary is %q and CUBRID reports %s as master",
-			state.CurrentPrimary, state.Master), nil
+			state.CurrentPrimary, state.Master), false, nil
 	}
 	rec.Members = members
-	return state, "", nil
+	return state, "", false, nil
 }
 
 // restoredStatus records the status of one reading of the restored cluster,
@@ -1001,16 +1028,18 @@ func (h *haRun) replicationState(ctx context.Context, cluster, pod, master strin
 // whole history, writes after the backup included. It records what it read
 // in source and the source's data check in dataFile.
 func (h *haRun) checkSourceS12(ctx context.Context, source *s12Source, dataFile string) error {
-	members, restarted, err := h.membersUnchanged(ctx, h.rec.MembersAfter)
+	members, changed, err := h.membersUnchanged(ctx, h.rec.MembersAfter)
 	if members != nil {
 		source.MembersAfter = members
 	}
 	if err != nil {
 		return fmt.Errorf("read the source's members: %w", err)
 	}
+	restarted := len(changed)
 	source.Restarted = &restarted
 	if restarted > 0 {
-		return restoreVerdict{fmt.Errorf("the source changed: %d of its members were replaced or restarted", restarted)}
+		return restoreVerdict{fmt.Errorf("the source changed: %d of its members were replaced or restarted: %s",
+			restarted, strings.Join(changed, "; "))}
 	}
 	if err := h.sourceRoles(ctx, source); err != nil {
 		return err
@@ -1057,7 +1086,8 @@ func (h *haRun) sourceRoles(ctx context.Context, source *s12Source) error {
 		if err := h.Client.Get(ctx, key, cluster); err != nil {
 			return fmt.Errorf("read the source cluster: %w", err)
 		}
-		problem, unasked := unmet, strings.HasPrefix(unmet, "cubrid heartbeat status failed")
+		problem := unmet
+		unasked := strings.HasPrefix(unmet, "cubrid heartbeat status failed") || strings.Contains(unmet, unread)
 		if unmet == "" {
 			source.Master, source.CurrentPrimary = roles.Master, cluster.Status.CurrentPrimary
 			if roles.Master != want || source.CurrentPrimary != want {

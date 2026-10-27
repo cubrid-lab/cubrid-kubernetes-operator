@@ -320,6 +320,113 @@ func TestRunS06RestartFailsWhenAMemberRestarted(t *testing.T) {
 	}
 }
 
+func TestRunS06RestartFailsWhenAMemberWasReplacedButIsNotReady(t *testing.T) {
+	cfg := testS06Config(t)
+	f := newS06Fixture(t, cfg)
+	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		for _, name := range []string{testMemberLast, testMemberHA0} {
+			pod := &corev1.Pod{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: cfg.Namespace, Name: name}, pod); err != nil {
+				t.Error(err)
+				return
+			}
+			if name == testMemberHA0 {
+				// Ready, with its database container restarted.
+				pod.Status.ContainerStatuses[0].ContainerID = testRestarted
+				if err := c.Status().Update(ctx, pod); err != nil {
+					t.Error(err)
+				}
+				continue
+			}
+			if err := c.Delete(ctx, pod); err != nil {
+				t.Error(err)
+				return
+			}
+			replaced := pod.DeepCopy()
+			replaced.ResourceVersion, replaced.UID = "", "replaced-member"
+			replaced.Status.Conditions[0].Status = corev1.ConditionFalse
+			if err := c.Create(ctx, replaced); err != nil {
+				t.Error(err)
+			}
+		}
+		f.startReplacement(ctx, c)
+		f.takeLease(ctx, c)
+		f.writeStatus(ctx, c)
+	}
+	err := f.runner.RunHA(t.Context(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "2 members were replaced or restarted") ||
+		!strings.Contains(err.Error(), testMemberLast+" has Pod UID replaced-member") ||
+		!strings.Contains(err.Error(), testMemberHA0+" has container "+testRestarted) {
+		t.Fatalf("RunHA() error = %v, want both members counted, the replaced one not Ready", err)
+	}
+	_, _, s06 := s06Scenario(t, cfg.EvidenceDir)
+	if s06.Result != evidence.Fail || s06.Measurements["membersRestarted"] != float64(2) {
+		t.Fatalf("S06 = %+v, want a failure with membersRestarted 2", s06)
+	}
+}
+
+func TestRunS06RestartIsBlockedWhenAnUnchangedMemberIsNotReady(t *testing.T) {
+	cfg := testS06Config(t)
+	f := newS06Fixture(t, cfg)
+	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		pod := &corev1.Pod{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: cfg.Namespace, Name: testMemberLast}, pod); err != nil {
+			t.Error(err)
+			return
+		}
+		// The same Pod and container, not Ready: nothing was seen to change.
+		pod.Status.Conditions[0].Status = corev1.ConditionFalse
+		if err := c.Status().Update(ctx, pod); err != nil {
+			t.Error(err)
+		}
+		f.startReplacement(ctx, c)
+		f.takeLease(ctx, c)
+		f.writeStatus(ctx, c)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	_, _, s06 := s06Scenario(t, cfg.EvidenceDir)
+	if s06.Result != evidence.Blocked || !strings.Contains(s06.Reason, "could not be observed") ||
+		s06.Measurements["membersRestarted"] != evidence.Unknown {
+		t.Fatalf("S06 = %+v, want blocked with membersRestarted unknown: the members were not observed", s06)
+	}
+}
+
+func TestRunS06RestartKeepsANeverEventWhenTheMembersCannotBeObserved(t *testing.T) {
+	cfg := testS06Config(t)
+	f := newS06Fixture(t, cfg)
+	f.backgroundHistory = func(id string) string {
+		history, rows := backgroundWorkload(id, map[int]bool{3: id == s06Clients[0]})
+		f.mu.Lock()
+		f.rows = append(f.rows, rows...)
+		f.mu.Unlock()
+		return history
+	}
+	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		pod := &corev1.Pod{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: cfg.Namespace, Name: testMemberLast}, pod); err != nil {
+			t.Error(err)
+			return
+		}
+		pod.Status.Conditions[0].Status = corev1.ConditionFalse
+		if err := c.Status().Update(ctx, pod); err != nil {
+			t.Error(err)
+		}
+		f.startReplacement(ctx, c)
+		f.takeLease(ctx, c)
+		f.writeStatus(ctx, c)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	_, _, s06 := s06Scenario(t, cfg.EvidenceDir)
+	if s06.Result != evidence.Fail || !strings.Contains(s06.Reason, "failed or stayed unanswered") ||
+		!strings.Contains(s06.Reason, "could not be observed") {
+		t.Fatalf("S06 = %+v, want a failure naming the never-event and the members not observed", s06)
+	}
+}
+
 func TestRunS06IsBlockedWhenLAB01Failed(t *testing.T) {
 	cfg := testS06Config(t)
 	f := newS06Fixture(t, cfg)

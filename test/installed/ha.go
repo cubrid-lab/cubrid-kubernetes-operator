@@ -802,6 +802,10 @@ func (h *haRun) waitStartingState(ctx context.Context, cluster *databasev1alpha1
 	return checkpoint()
 }
 
+// unread joins what could not be read to its retryable API error in what
+// does not hold: a reading that was not made, not a state that was seen.
+const unread = " could not be read: "
+
 // retryable is an API error that a later reading may not have.
 func retryable(err error) bool {
 	return apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || apierrors.IsTooManyRequests(err) ||
@@ -887,8 +891,14 @@ func (h *haRun) roles(ctx context.Context) (*startingState, string, error) {
 	return h.rolesOf(ctx, h.members)
 }
 
+// commandRan is how kubectl exec reports a command that ran in the container
+// and exited non-zero; an error without it is kubectl's own, such as an API
+// server or kubelet that could not be reached.
+var commandRan = regexp.MustCompile(`(?m)^command terminated with exit code \d+\s*$`)
+
 // rolesOf asks CUBRID on every member named for its role. One active master
-// and standby slaves are a state; anything else is what does not hold.
+// and standby slaves are a state; anything else is what does not hold, and an
+// exec that did not reach a member is named with unread.
 func (h *haRun) rolesOf(ctx context.Context, members []string) (*startingState, string, error) {
 	state := &startingState{Slaves: []string{}}
 	var masters []string
@@ -898,6 +908,11 @@ func (h *haRun) rolesOf(ctx context.Context, members []string) (*startingState, 
 			// The run's deadline is not a member's failure.
 			if ctx.Err() != nil {
 				return nil, "", ctx.Err()
+			}
+			// Without kubectl's exit code of the command, the exec did not
+			// reach the member: nothing was asked.
+			if !commandRan.MatchString(out) {
+				return nil, "cubrid heartbeat status on " + pod + unread + err.Error(), nil
 			}
 			return nil, fmt.Sprintf("cubrid heartbeat status failed on %s", pod), nil
 		}
@@ -929,13 +944,17 @@ func heartbeatRole(pod, out string) string {
 }
 
 // memberIdentities returns each member's Pod identity once every member of
-// the cluster is Ready, owned through the cluster's StatefulSet.
+// the cluster is Ready, owned through the cluster's StatefulSet. What does
+// not hold names an object that could not be read with unread.
 func (h *haRun) memberIdentities(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (
 	[]imageIdentity, string, error) {
 	sts := &appsv1.StatefulSet{}
 	if err := h.Client.Get(ctx, client.ObjectKeyFromObject(cluster), sts); err != nil {
-		if apierrors.IsNotFound(err) || retryable(err) {
-			return nil, "the StatefulSet could not be read: " + err.Error(), nil
+		if apierrors.IsNotFound(err) {
+			return nil, "the StatefulSet is not found", nil
+		}
+		if retryable(err) {
+			return nil, "the StatefulSet" + unread + err.Error(), nil
 		}
 		return nil, "", err
 	}
@@ -946,8 +965,11 @@ func (h *haRun) memberIdentities(ctx context.Context, cluster *databasev1alpha1.
 	for _, name := range clusterMembers(cluster.Name) {
 		pod := &corev1.Pod{}
 		if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, pod); err != nil {
-			if apierrors.IsNotFound(err) || retryable(err) {
-				return nil, name + " could not be read: " + err.Error(), nil
+			if apierrors.IsNotFound(err) {
+				return nil, name + " is not found", nil
+			}
+			if retryable(err) {
+				return nil, name + unread + err.Error(), nil
 			}
 			return nil, "", err
 		}
@@ -963,14 +985,18 @@ func (h *haRun) memberIdentities(ctx context.Context, cluster *databasev1alpha1.
 	return identities, "", nil
 }
 
-// brokersAvailable reports a Broker Deployment that is not fully available.
+// brokersAvailable reports a Broker Deployment that is not fully available,
+// or, with unread, one that could not be read.
 func (h *haRun) brokersAvailable(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (string, error) {
 	for _, mode := range []string{"rw", "ro"} {
 		deployment := &appsv1.Deployment{}
 		name := cluster.Name + "-broker-" + mode
 		if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, deployment); err != nil {
-			if apierrors.IsNotFound(err) || retryable(err) {
-				return name + " could not be read: " + err.Error(), nil
+			if apierrors.IsNotFound(err) {
+				return name + " is not found", nil
+			}
+			if retryable(err) {
+				return name + unread + err.Error(), nil
 			}
 			return "", err
 		}
