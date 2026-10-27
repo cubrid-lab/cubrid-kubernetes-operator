@@ -1241,3 +1241,220 @@ func TestRunS12ExactDoesNotReadAMastersApplierForTheNormalWrite(t *testing.T) {
 		t.Fatalf("commands = %q, want no applyinfo on the master", f.ran)
 	}
 }
+
+func TestRunS12ExactFailsWhenASourceMemberWasReplacedButIsNotReady(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.afterRestoreCreated = func(ctx context.Context, c client.WithWatch) {
+		pod := &corev1.Pod{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: testMemberLast}, pod); err != nil {
+			f.t.Fatal(err)
+		}
+		if err := c.Delete(ctx, pod); err != nil {
+			f.t.Fatal(err)
+		}
+		replaced := pod.DeepCopy()
+		replaced.ResourceVersion, replaced.UID = "", "replaced-member"
+		replaced.Status.Conditions[0].Status = corev1.ConditionFalse
+		if err := c.Create(ctx, replaced); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail || !strings.Contains(s12.Reason, "the source changed") ||
+		!strings.Contains(s12.Reason, "replaced") {
+		t.Fatalf("S12 = %+v, want a failure: a source member has a new UID, Ready or not", s12)
+	}
+	if rec := readS12Record(t, cfg.EvidenceDir); rec.Source == nil || rec.Source.Restarted == nil ||
+		*rec.Source.Restarted != 1 {
+		t.Fatalf("source = %+v, want one member replaced", rec.Source)
+	}
+}
+
+func TestRunS12ExactIsBlockedWhenASourceMemberCannotBeRead(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	f.podRead = func(_ context.Context, _ client.WithWatch, key client.ObjectKey) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if key.Name == testMemberLast && len(f.normalWrites) > 0 {
+			return apierrors.NewServiceUnavailable("etcd is unavailable")
+		}
+		return nil
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "etcd is unavailable") {
+		t.Fatalf("S12 = %+v, want blocked: the source member was not read", s12)
+	}
+}
+
+func TestRunS12ExactIsBlockedWhenTheRestoredChildrenCannotBeReadUntilTheLimit(t *testing.T) {
+	unavailable := apierrors.NewServiceUnavailable("etcd is unavailable")
+	for name, change := range map[string]func(*s12Fixture){
+		"a member Pod": func(f *s12Fixture) {
+			f.podRead = func(_ context.Context, _ client.WithWatch, key client.ObjectKey) error {
+				if strings.HasPrefix(key.Name, s12ClusterName+"-") {
+					return unavailable
+				}
+				return nil
+			}
+		},
+		"a Broker Deployment": func(f *s12Fixture) {
+			f.deploymentRead = func(key client.ObjectKey) error {
+				if strings.HasPrefix(key.Name, s12ClusterName+"-") {
+					return unavailable
+				}
+				return nil
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12Config(t)
+			cfg.RestoreLimit = 300 * time.Millisecond
+			f := newS12Fixture(t, cfg)
+			f.bootPhases = []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapComplete}
+			change(f)
+			s12, err := s12Of(t, f, t.Context())
+			if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "etcd is unavailable") ||
+				strings.Contains(s12.Reason, "not Ready within") {
+				t.Fatalf("S12 = %+v, want blocked: the state at restore_limit was not read", s12)
+			}
+		})
+	}
+}
+
+func TestRunS12ExactFailsWhenTheRestoredChildrenAreNotReadyAtTheLimit(t *testing.T) {
+	cfg := testS12Config(t)
+	cfg.RestoreLimit = 300 * time.Millisecond
+	f := newS12Fixture(t, cfg)
+	f.bootPhases = []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapComplete}
+	f.deploymentRead = func(key client.ObjectKey) error {
+		if strings.HasPrefix(key.Name, s12ClusterName+"-") {
+			return apierrors.NewNotFound(appsv1.Resource("deployments"), key.Name)
+		}
+		return nil
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail || !strings.Contains(s12.Reason, "not Ready within") {
+		t.Fatalf("S12 = %+v, want a failure: a Broker Deployment was read as absent", s12)
+	}
+}
+
+func TestRunS12ExactFailsWhileTheRestoredMasterIsToBeActive(t *testing.T) {
+	cfg := testS12Config(t)
+	cfg.RestoreLimit = 300 * time.Millisecond
+	f := newS12Fixture(t, cfg)
+	f.bootPhases = []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapComplete}
+	f.processState = func(pod, state string) string {
+		if pod == testRestoreMaster {
+			return "registered_and_to_be_active"
+		}
+		return state
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail || !strings.Contains(s12.Reason, "not Ready within restore_limit") ||
+		!strings.Contains(s12.Reason, testRestoreMaster+" is neither an active master") {
+		t.Fatalf("S12 = %+v, want a failure: the restored master never became active", s12)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for name, n := range f.haFixture.reads {
+		if strings.HasPrefix(name, s12ClusterName+"-") {
+			t.Fatalf("%s was read %d times; want no data read from a cluster that was not Ready", name, n)
+		}
+	}
+	if rec := readS12Record(t, cfg.EvidenceDir); rec.DataCheck != nil || rec.NormalWrite != nil {
+		t.Fatalf("record = %+v, want no data check and no normal write", rec)
+	}
+}
+
+func TestPostBackupWritesKeepsTheHistoryParseableAfterAFailedWrite(t *testing.T) {
+	const unknownOp, unansweredOp = "s12p-000003", "s12p-000004"
+	history, _ := fakeClientWorkload("c1", 3)
+	post, _ := fakeClientWorkload(s12PostBackupClient, 2)
+	at := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
+	for _, e := range []workload.Event{
+		{T: at, Client: s12PostBackupClient, Seq: 3, Op: workload.OpInsert, OpID: unknownOp, Endpoint: "rw",
+			Event: workload.Attempted, Amount: 7, Note: "s12p-3"},
+		{T: at, Client: s12PostBackupClient, Seq: 3, Op: workload.OpInsert, OpID: unknownOp, Endpoint: "rw",
+			Event: workload.Unknown, Error: testReset},
+		{T: at, Client: s12PostBackupClient, Seq: 4, Op: workload.OpInsert, OpID: unansweredOp, Endpoint: "rw",
+			Event: workload.Attempted, Amount: 8, Note: "s12p-4"},
+	} {
+		data, _ := json.Marshal(e)
+		post += string(data) + "\n"
+	}
+	// The client was killed while it wrote a line, and kubectl reports it.
+	answer := post + `{"t":"2026-10-24T00:00:00Z","client":"s12p","seq":5,"op":"ins` + "\n" +
+		"command terminated with exit code 137\n"
+	cfg := testS12Config(t)
+	h := &haRun{Runner: &Runner{Command: func(_ context.Context, args ...string) (string, error) {
+		// As Target.command, the error holds the output.
+		if strings.Contains(args[len(args)-1], "workload run") {
+			return answer, errors.New("kubectl failed: exit status 137: " + answer)
+		}
+		return "killed\n", nil
+	}}, cfg: cfg, redactor: evidence.NewRedactor(), guard: func(context.Context) error { return nil }}
+	h.history.WriteString(history)
+	rec := &s12Record{KnownPoint: &s11KnownPoint{Acknowledged: 3, LastAcknowledged: testThirdOpID}}
+	_, runErr := h.postBackupWrites(t.Context(), rec)
+	for _, rel := range []string{haHistoryFile, s12PostBackupFile} {
+		data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := workload.ReadHistory(strings.NewReader(string(data)))
+		if err != nil {
+			t.Fatalf("%s = %q: %v; want it parseable", rel, data, err)
+		}
+		for _, id := range []string{unknownOp, unansweredOp} {
+			if op, ok := parsed.Operations[id]; !ok || op.Outcome != workload.Unknown {
+				t.Fatalf("%s: operation %s = %+v, want it kept with an unknown outcome", rel, id, op)
+			}
+		}
+	}
+	if runErr == nil || !strings.Contains(runErr.Error(), "exit code 137") {
+		t.Fatalf("postBackupWrites() error = %v, want the failed write with kubectl's report", runErr)
+	}
+}
+
+func TestRunS12ExactNotesThatSourceSecretsAreCheckedInPodTemplatesOnly(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	if s12, err := s12Of(t, f, t.Context()); err != nil || s12.Result != evidence.Pass {
+		t.Fatalf("S12 = %+v, error %v; want a pass", s12, err)
+	}
+	rec := readS12Record(t, cfg.EvidenceDir)
+	if !slices.ContainsFunc(rec.Notes, func(n string) bool {
+		return strings.Contains(n, "Pod templates") && strings.Contains(n, "the Operator itself")
+	}) {
+		t.Fatalf("notes = %q, want the Pod-template-only check of the source's Secrets", rec.Notes)
+	}
+}
+
+func TestRunS12ExactIsBlockedWhenTheLimitCutsAReadingAfterUnreadOnes(t *testing.T) {
+	cfg := testS12Config(t)
+	cfg.RestoreLimit = 300 * time.Millisecond
+	f := newS12Fixture(t, cfg)
+	f.bootPhases = []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapComplete}
+	var podReads int
+	f.podRead = func(ctx context.Context, _ client.WithWatch, key client.ObjectKey) error {
+		if !strings.HasPrefix(key.Name, s12ClusterName+"-") {
+			return nil
+		}
+		f.mu.Lock()
+		podReads++
+		n := podReads
+		f.mu.Unlock()
+		if n <= 2 {
+			return apierrors.NewServiceUnavailable("etcd is unavailable")
+		}
+		// The next reading is still running when restore_limit passes.
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, "etcd is unavailable") {
+		t.Fatalf("S12 = %+v, want blocked: the last reading made could not read a member Pod", s12)
+	}
+}

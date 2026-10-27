@@ -320,6 +320,49 @@ func TestRunS06RestartFailsWhenAMemberRestarted(t *testing.T) {
 	}
 }
 
+func TestRunS06RestartFailsWhenAMemberWasReplacedButIsNotReady(t *testing.T) {
+	cfg := testS06Config(t)
+	f := newS06Fixture(t, cfg)
+	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		for _, name := range []string{testMemberLast, testMemberHA0} {
+			pod := &corev1.Pod{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: cfg.Namespace, Name: name}, pod); err != nil {
+				t.Error(err)
+				return
+			}
+			if name == testMemberHA0 {
+				// Ready, with its database container restarted.
+				pod.Status.ContainerStatuses[0].ContainerID = testRestarted
+				if err := c.Status().Update(ctx, pod); err != nil {
+					t.Error(err)
+				}
+				continue
+			}
+			if err := c.Delete(ctx, pod); err != nil {
+				t.Error(err)
+				return
+			}
+			replaced := pod.DeepCopy()
+			replaced.ResourceVersion, replaced.UID = "", "replaced-member"
+			replaced.Status.Conditions[0].Status = corev1.ConditionFalse
+			if err := c.Create(ctx, replaced); err != nil {
+				t.Error(err)
+			}
+		}
+		f.startReplacement(ctx, c)
+		f.takeLease(ctx, c)
+		f.writeStatus(ctx, c)
+	}
+	err := f.runner.RunHA(t.Context(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "2 members were replaced or restarted") {
+		t.Fatalf("RunHA() error = %v, want both members counted, the replaced one not Ready", err)
+	}
+	_, _, s06 := s06Scenario(t, cfg.EvidenceDir)
+	if s06.Result != evidence.Fail || s06.Measurements["membersRestarted"] != float64(2) {
+		t.Fatalf("S06 = %+v, want a failure with membersRestarted 2", s06)
+	}
+}
+
 func TestRunS06IsBlockedWhenLAB01Failed(t *testing.T) {
 	cfg := testS06Config(t)
 	f := newS06Fixture(t, cfg)

@@ -802,6 +802,10 @@ func (h *haRun) waitStartingState(ctx context.Context, cluster *databasev1alpha1
 	return checkpoint()
 }
 
+// unread joins what could not be read to its retryable API error in what
+// does not hold: a reading that was not made, not a state that was seen.
+const unread = " could not be read: "
+
 // retryable is an API error that a later reading may not have.
 func retryable(err error) bool {
 	return apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || apierrors.IsTooManyRequests(err) ||
@@ -929,13 +933,17 @@ func heartbeatRole(pod, out string) string {
 }
 
 // memberIdentities returns each member's Pod identity once every member of
-// the cluster is Ready, owned through the cluster's StatefulSet.
+// the cluster is Ready, owned through the cluster's StatefulSet. What does
+// not hold names an object that could not be read with unread.
 func (h *haRun) memberIdentities(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (
 	[]imageIdentity, string, error) {
 	sts := &appsv1.StatefulSet{}
 	if err := h.Client.Get(ctx, client.ObjectKeyFromObject(cluster), sts); err != nil {
-		if apierrors.IsNotFound(err) || retryable(err) {
-			return nil, "the StatefulSet could not be read: " + err.Error(), nil
+		if apierrors.IsNotFound(err) {
+			return nil, "the StatefulSet is not found", nil
+		}
+		if retryable(err) {
+			return nil, "the StatefulSet" + unread + err.Error(), nil
 		}
 		return nil, "", err
 	}
@@ -946,8 +954,11 @@ func (h *haRun) memberIdentities(ctx context.Context, cluster *databasev1alpha1.
 	for _, name := range clusterMembers(cluster.Name) {
 		pod := &corev1.Pod{}
 		if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, pod); err != nil {
-			if apierrors.IsNotFound(err) || retryable(err) {
-				return nil, name + " could not be read: " + err.Error(), nil
+			if apierrors.IsNotFound(err) {
+				return nil, name + " is not found", nil
+			}
+			if retryable(err) {
+				return nil, name + unread + err.Error(), nil
 			}
 			return nil, "", err
 		}
@@ -963,14 +974,18 @@ func (h *haRun) memberIdentities(ctx context.Context, cluster *databasev1alpha1.
 	return identities, "", nil
 }
 
-// brokersAvailable reports a Broker Deployment that is not fully available.
+// brokersAvailable reports a Broker Deployment that is not fully available,
+// or, with unread, one that could not be read.
 func (h *haRun) brokersAvailable(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (string, error) {
 	for _, mode := range []string{"rw", "ro"} {
 		deployment := &appsv1.Deployment{}
 		name := cluster.Name + "-broker-" + mode
 		if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: name}, deployment); err != nil {
-			if apierrors.IsNotFound(err) || retryable(err) {
-				return name + " could not be read: " + err.Error(), nil
+			if apierrors.IsNotFound(err) {
+				return name + " is not found", nil
+			}
+			if retryable(err) {
+				return name + unread + err.Error(), nil
 			}
 			return "", err
 		}

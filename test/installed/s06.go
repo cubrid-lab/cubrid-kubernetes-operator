@@ -275,7 +275,9 @@ func (h *haRun) observeAfterS06(ctx context.Context, result *evidence.Scenario, 
 	}
 
 	members, restarted, err := h.membersUnchanged(ctx, rec.MembersBefore)
-	rec.MembersAfter = members
+	if members != nil {
+		rec.MembersAfter = members
+	}
 	if err != nil {
 		return clients, err
 	}
@@ -453,7 +455,10 @@ func (h *haRun) writeTimeline(file string, steps []faults.Step) error {
 }
 
 // membersUnchanged reads the members again and counts those whose Pod or
-// container differs from before.
+// container differs from before. When a member is not Ready, it counts the
+// member Pods replaced, or whose database container is another, since; with
+// none, the members are not known. A member whose container it could not see
+// is then not counted, so the count is a lower bound.
 func (h *haRun) membersUnchanged(ctx context.Context, before []imageIdentity) ([]imageIdentity, int, error) {
 	cluster := &databasev1alpha1.CubridCluster{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
@@ -464,7 +469,32 @@ func (h *haRun) membersUnchanged(ctx context.Context, before []imageIdentity) ([
 		return members, 0, err
 	}
 	if unmet != "" {
-		return members, 0, fmt.Errorf("a member could not be observed after the restart: %s", unmet)
+		// A member Pod that is gone or has another UID was replaced, and one
+		// with another database container restarted, Ready or not. Only a Pod
+		// that could not be read leaves the members unknown.
+		replaced := 0
+		var readErr error
+		for _, was := range before {
+			pod := &corev1.Pod{}
+			err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: was.Pod}, pod)
+			switch {
+			case apierrors.IsNotFound(err) || (err == nil && string(pod.UID) != was.UID):
+				replaced++
+			case err != nil:
+				readErr = err
+			default:
+				for _, c := range pod.Status.ContainerStatuses {
+					if c.Name == databaseContainer && c.ContainerID != "" && c.ContainerID != was.ContainerID {
+						replaced++
+					}
+				}
+			}
+		}
+		if replaced > 0 {
+			return members, replaced, nil
+		}
+		return members, 0, errors.Join(fmt.Errorf("a member could not be observed after the restart: %s", unmet),
+			readErr)
 	}
 	restarted := 0
 	for i, was := range before {

@@ -184,7 +184,10 @@ same cluster, with S06 `restart` of the scenario contract. The lane is then
    operation a client was stopped in has no answer. The data rules allow
    it either way.
 7. Every member must still be the same Pod and container, and CUBRID must
-   report the same master.
+   report the same master. A member Pod that is gone or has another UID was
+   replaced, and one with another database container restarted, Ready or
+   not. When a member is not Ready, a container the run cannot see is not
+   counted, so `membersRestarted` is then a lower bound.
 8. The data rules must hold on every member and both Services, over
    everything every client recorded.
 
@@ -375,7 +378,12 @@ pass, S12 is blocked and nothing of it is done.
    `s12p` through the source's `<cluster>-rw`, every fifth rolled back. They
    are added to `LAB01/history.jsonl` and must all be acknowledged; otherwise
    S12 is blocked: its starting state, rows written after the backup, was not
-   reached. These rows are not in the backup. They are S12's operations in
+   reached. When the client command fails, only the events the client
+   recorded go to the history: kubectl's `command terminated with exit code
+   N` and a line the client left unfinished stay in the reason only, so the
+   history stays parseable, and an operation without its answer stays in it
+   with an unknown outcome. These rows are not in the backup. They are S12's
+   operations in
    `summary.json`; LAB01's record and operations count LAB01's own client
    only.
 2. **The restored cluster.** The run creates the `CubridCluster` `ha-restore`
@@ -418,16 +426,26 @@ pass, S12 is blocked and nothing of it is done.
    - `Ready` `True` while `status.bootstrap.phase` is not `Complete` must
      never happen and fails S12 at once.
    - A cluster read but not Ready when `-restore-limit` passes fails S12,
-     with the last phase and what did not hold. When the readings kept
-     failing until then, so that the state at the limit is not known, S12 is
-     blocked.
+     with the last phase and what did not hold. A master whose `cubrid
+     heartbeat status` reports `registered_and_to_be_active` is not yet
+     active (POC-13, POC-14 in `docs/poc/RESULTS.md`), so the wait goes on;
+     one still in that state at the limit fails S12 before any data is read.
+     When the last reading made in full could not read the cluster, or one
+     of its member Pods, StatefulSet or Broker Deployments, for a retryable
+     API error, the state at the limit is not known and S12 is blocked; a
+     reading the limit cut short does not count. An object read as absent is
+     a state that was seen, and so is a `cubrid heartbeat status` that
+     failed on a member.
    - `restoredWithin` runs from the return of the create request to the
      reading that saw everything hold, so it is an upper bound.
 4. **Secrets.** The run lists the Secrets that the Pod templates of the
    restored StatefulSet and Broker Deployments name. Any that a Pod template
    of the source also names, such as `ha-im-token` or `object-storage`, must
    never happen: the new cluster would depend on a Secret of the source
-   cluster. A Pod template names Secrets of its own namespace only.
+   cluster. A Pod template names Secrets of its own namespace only. Only
+   Pod templates are checked: the Operator itself using a Secret of the
+   source, for example to download the artifact, would not be seen. The
+   record's `notes` say so.
 5. **HA membership.** `cubrid heartbeat status` on the master of each
    cluster must list exactly that cluster's members as its nodes
    (`Node <name> (priority ...` lines): `ha-restore-0` to `-2` for the
@@ -471,7 +489,10 @@ pass, S12 is blocked and nothing of it is done.
    processes and the end of their newest error logs, and the member state
    above; the reason names the status line.
 8. **The source.** The source's members must still be the Pods and
-   containers LAB01 recorded at its end. CUBRID and `status.currentPrimary`
+   containers LAB01 recorded at its end. A member Pod that is gone, has
+   another UID or another database container changed and fails S12, Ready
+   or not. A member Pod that could not be read, or one that is not Ready but
+   keeps its UID and container, blocks S12 when no other member changed. CUBRID and `status.currentPrimary`
    must name the same master: the roles are read again until
    `-data-check-within` passes, so that one reading in which a member answers
    otherwise does not fail S12; what still differs then fails it, and members
