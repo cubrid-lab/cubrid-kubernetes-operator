@@ -1,5 +1,10 @@
 # cubrid-kubernetes-operator - AI Agent Guide
 
+## Organization-wide issue, PR, and commit writing
+
+Follow the [cubrid-lab writing standard](https://github.com/cubrid-lab/.github/blob/main/docs/ISSUE_PR_COMMIT_STANDARD.md). **Issue titles** use only a type prefix (for example, `feat: ...` or `bug: ...`); do not require a module scope. Describe the problem or goal in plain English, with reproducible evidence and verifiable acceptance criteria appropriate to the issue. **Triage** validates scope, duplicates, type, priority and size; **PRs and commits** retain the existing Conventional Commits format and PR CI validators. Keep issue goals distinct from implementation/PR evidence and avoid internal IDs, personal comments or agent bookkeeping in the title/body.
+
+
 ## Project Structure
 
 **Single-group layout (default):**
@@ -102,7 +107,7 @@ the work belongs to (a classification, not a status — status lives only in
 - **Phase**: `phase: 0-decisions` | `phase: 1-foundation` | `phase: 2-ha` | `phase: 3-recovery` | `phase: 4-backup` | `phase: 5-hardening`
 
 ### Issue, PR and Commit Titles
-Issue titles, pull request titles and commit subjects follow
+Pull request titles and commit subjects follow
 [CONTRIBUTING.md - Pull request and commit titles](CONTRIBUTING.md#pull-request-and-commit-titles):
 `type(scope)!: description` with types `feat`, `fix`, `docs`, `test`, `perf`,
 `refactor`, `ci`, `build`, `chore`, `style`, `revert`; English, lowercase start
