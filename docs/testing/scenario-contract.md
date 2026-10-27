@@ -1084,16 +1084,21 @@ it needs more.
   kill completing after a retry, fails the variant. It is `blocked` when the
   kill cannot be placed while the bootstrap is `Restoring`, when no single
   Instance Manager process is found, when the container is not seen ended
-  or restarted, when the Pod is replaced, when the first retry names another
-  reason, and when no retry follows and the operation of the kill completes:
-  the kill then did not interrupt a running restore.
+  or restarted, when it ended with another exit code than 137 or as
+  `OOMKilled`, when the Pod is replaced or cannot be read after the kill,
+  when the first retry names another reason, when `attempts` rise without
+  the reason `RestoreFailedRetrying` and no Event of the Operator's names
+  the restart, and when no retry follows and the operation of the kill
+  completes, or the first reading after the kill is already past
+  `Restoring`: the kill then did not interrupt a running restore.
 - **Must never happen:** an existing database overwritten; a cluster reported
   `Ready` with data that differs from the backup; the new cluster depending
   on a Secret of the source cluster. In `operator-restart` also: the restore
   started again without a failed attempt (another operation under the same
   `attempts`), `attempts` falling, and `BootstrapReady` `True` before the
   bootstrap is `Complete`. In `instance-manager-restart` also: those three,
-  `attempts` reaching the Operator's limit of 3, the target answering that
+  `attempts` reaching the Operator's limit of 3 (a guard against a change of
+  that constant only), the target answering that
   it holds no record of the restore operation (`RecordedOperationMissing`:
   the record was on the volume before its ID was answered), and the target
   member's container restarting more than once after one kill.

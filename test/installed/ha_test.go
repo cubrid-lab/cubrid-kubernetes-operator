@@ -153,8 +153,8 @@ type haFixture struct {
 	imRestartCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
 	imRestartRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	memberHook       func(ctx context.Context, pod, script string) (string, error, bool)
-	// podRead runs before each read of a Pod.
-	podRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey)
+	// podRead runs before each read of a Pod; its error is the read's.
+	podRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	// markerAnswer, when it returns true, answers a read of the marker table
 	// in place of markersOf.
 	markerAnswer func(pod string) (string, error, bool)
@@ -297,7 +297,7 @@ func (f *haFixture) beforeGet(ctx context.Context, c client.WithWatch, key clien
 		return f.readRestored(ctx, c, key)
 	case *corev1.Pod:
 		if f.podRead != nil {
-			f.podRead(ctx, c, key)
+			return f.podRead(ctx, c, key)
 		}
 	}
 	return nil

@@ -17,6 +17,7 @@ limitations under the License.
 package installed
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -94,6 +95,12 @@ type s12IMRestartFixture struct {
 	endOnly       bool
 	extraRestarts int32
 	replacePod    bool
+	// exitCode and exitReason are the ended container's, 137 and Error
+	// unless set; retryEvent, when set, is the message of a
+	// RestoreFailedRetrying Event of ha-imrestart recorded at the kill.
+	exitCode   int32
+	exitReason string
+	retryEvent string
 	// dropMarkerOnIM is a member without the marker written through
 	// ha-imrestart.
 	dropMarkerOnIM string
@@ -194,20 +201,30 @@ func (f *s12IMRestartFixture) kill(ctx context.Context, pod, script string) (str
 		}
 	} else if !f.noRestart {
 		finished := metav1.NewTime(time.Now().Truncate(time.Second))
+		code, reason := cmp.Or(f.exitCode, 137), cmp.Or(f.exitReason, "Error")
 		status := &current.Status.ContainerStatuses[0]
 		old := status.ContainerID
 		status.RestartCount += 1 + f.extraRestarts
 		status.LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
-			ExitCode: 137, Reason: "Error", ContainerID: old, FinishedAt: finished}}
+			ExitCode: code, Reason: reason, ContainerID: old, FinishedAt: finished}}
 		status.ContainerID = old + "-restarted"
 		status.State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: finished}}
 		if f.endOnly {
 			status.ContainerID, status.RestartCount, status.LastTerminationState = old, status.RestartCount-1,
 				corev1.ContainerState{}
-			status.State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137,
-				Reason: "Error", ContainerID: old, FinishedAt: finished}}
+			status.State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: code,
+				Reason: reason, ContainerID: old, FinishedAt: finished}}
 		}
 		if err := c.Status().Update(ctx, current); err != nil {
+			f.t.Error(err)
+		}
+	}
+	if f.retryEvent != "" {
+		event := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: s12IMRestartClusterName + ".retry",
+			Namespace: f.cfg.Namespace}, InvolvedObject: corev1.ObjectReference{Kind: "CubridCluster",
+			Name: s12IMRestartClusterName, UID: testIMRestartUID}, Type: corev1.EventTypeWarning,
+			Reason: s12RetryReason, Message: f.retryEvent}
+		if err := c.Create(ctx, event); err != nil {
 			f.t.Error(err)
 		}
 	}
@@ -513,35 +530,131 @@ func TestRunS12InstanceManagerRestartWhenTheKillDoesNotTakeEffect(t *testing.T) 
 	}
 }
 
-func TestRunS12InstanceManagerRestartIsBlockedWhenTheContainerChangedBeforeTheKill(t *testing.T) {
-	cfg := testS12IMRestartConfig(t)
-	f := newS12IMRestartFixture(t, cfg)
-	// The target is read once right before the kill and once more by the
-	// kill itself; between them its container restarts on its own.
+// onTargetRead changes the target member's Pod as stored, at its read number
+// at, before that read.
+func onTargetRead(f *s12IMRestartFixture, at int, change func(ctx context.Context, c client.WithWatch,
+	pod *corev1.Pod)) {
 	var reads int
-	f.podRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) {
+	f.podRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
 		if key.Name != testIMRestartTarget {
-			return
+			return nil
 		}
-		if reads++; reads != 2 {
-			return
+		if reads++; reads != at {
+			return nil
 		}
 		pod := &corev1.Pod{}
 		if err := c.Get(ctx, key, pod); err != nil {
 			f.t.Error(err)
-			return
+			return nil
 		}
-		pod.Status.ContainerStatuses[0].ContainerID += "-other"
-		pod.Status.ContainerStatuses[0].RestartCount++
-		if err := c.Status().Update(ctx, pod); err != nil {
-			f.t.Error(err)
-		}
+		change(ctx, c, pod)
+		return nil
 	}
+}
+
+// updatePodStatus stores pod's status.
+func updatePodStatus(ctx context.Context, t *testing.T, c client.WithWatch, pod *corev1.Pod) {
+	t.Helper()
+	if err := c.Status().Update(ctx, pod); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRunS12InstanceManagerRestartIsBlockedWhenTheTargetChangedBeforeTheKill(t *testing.T) {
+	// The target is read once right before the kill and once more by the
+	// kill itself; between them one thing about it changes.
+	for name, change := range map[string]func(ctx context.Context, c client.WithWatch, pod *corev1.Pod){
+		"the Pod's UID only": func(ctx context.Context, c client.WithWatch, pod *corev1.Pod) {
+			if err := c.Delete(ctx, pod); err != nil {
+				t.Error(err)
+			}
+			pod.UID, pod.ResourceVersion = types.UID(testIMRestartTarget+"-again"), ""
+			if err := c.Create(ctx, pod); err != nil {
+				t.Error(err)
+			}
+		},
+		"the container's ID only": func(ctx context.Context, c client.WithWatch, pod *corev1.Pod) {
+			pod.Status.ContainerStatuses[0].ContainerID += "-other"
+			updatePodStatus(ctx, t, c, pod)
+		},
+		"the restart count only": func(ctx context.Context, c client.WithWatch, pod *corev1.Pod) {
+			pod.Status.ContainerStatuses[0].RestartCount++
+			updatePodStatus(ctx, t, c, pod)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12IMRestartConfig(t)
+			f := newS12IMRestartFixture(t, cfg)
+			onTargetRead(f, 2, change)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, "fault_injection_failed",
+				"is not the one read right before the kill")
+			if f.imKills != 0 {
+				t.Fatalf("kills = %d, want none", f.imKills)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartIsBlockedWhenTheTargetIsNotTheStatefulSets(t *testing.T) {
+	cfg := testS12IMRestartConfig(t)
+	f := newS12IMRestartFixture(t, cfg)
+	onTargetRead(f, 1, func(ctx context.Context, c client.WithWatch, pod *corev1.Pod) {
+		pod.OwnerReferences = []metav1.OwnerReference{owner("StatefulSet", s12IMRestartClusterName, "someone-else")}
+		if err := c.Update(ctx, pod); err != nil {
+			t.Error(err)
+		}
+	})
 	restart, err := imRestartOf(t, f)
-	requireIMRestart(t, restart, err, evidence.Blocked, "fault_injection_failed",
-		"is not the one read right before the kill")
+	requireIMRestart(t, restart, err, evidence.Blocked, "starting_state_not_verified",
+		"does not belong to the restored cluster's StatefulSet")
 	if f.imKills != 0 {
 		t.Fatalf("kills = %d, want none", f.imKills)
+	}
+}
+
+func TestRunS12InstanceManagerRestartIsBlockedWhenThePodCannotBeReadAfterTheKill(t *testing.T) {
+	cfg := testS12IMRestartConfig(t)
+	f := newS12IMRestartFixture(t, cfg)
+	// The kill is confirmed on the third read; every read after it fails.
+	var reads int
+	f.podRead = func(_ context.Context, _ client.WithWatch, key client.ObjectKey) error {
+		if key.Name != testIMRestartTarget {
+			return nil
+		}
+		if reads++; reads > 3 {
+			return errors.New("connection refused")
+		}
+		return nil
+	}
+	f.endOnly = true
+	restart, err := imRestartOf(t, f)
+	requireIMRestart(t, restart, err, evidence.Blocked, "could not be read after the kill", "connection refused")
+}
+
+func TestRunS12InstanceManagerRestartIsBlockedWhenTheContainerEndedOtherwise(t *testing.T) {
+	for name, tc := range map[string]struct {
+		code   int32
+		reason string
+	}{
+		"another exit code": {code: 1, reason: "Error"},
+		"OOMKilled":         {code: 137, reason: "OOMKilled"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12IMRestartConfig(t)
+			f := newS12IMRestartFixture(t, cfg)
+			f.exitCode, f.exitReason = tc.code, tc.reason
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked,
+				"the container ended for another reason than the kill", tc.reason)
+		})
+	}
+}
+
+func TestIMKillScriptMatchesTheManagerByItsFullPath(t *testing.T) {
+	const binary = "/usr/local/bin/instance-manager"
+	if !strings.Contains(imKillScript, `[ "${argv[0]}" = `+binary+` ]`) || strings.Contains(imKillScript, "##*/") {
+		t.Fatalf("imKillScript = %q, want argv[0] compared with %s exactly", imKillScript, binary)
 	}
 }
 
@@ -551,6 +664,9 @@ func TestRunS12InstanceManagerRestartFailsOnMoreThanOneContainerRestart(t *testi
 	f.extraRestarts = 1
 	restart, err := imRestartOf(t, f)
 	requireIMRestart(t, restart, err, evidence.Fail, "restarted 2 times after one kill")
+	if len(restart.NeverEvents) != 1 || !strings.Contains(restart.NeverEvents[0], "restarted 2 times after one kill") {
+		t.Fatalf("never-events = %v, want the second restart", restart.NeverEvents)
+	}
 	if restart.Measurements["containerRestarts"] != float64(2) {
 		t.Fatalf("measurements = %v, want two restarts", restart.Measurements)
 	}
@@ -667,6 +783,51 @@ func TestRunS12InstanceManagerRestartIsBlockedByAnAttemptWithoutItsReason(t *tes
 	f.afterKill = slices.Delete(f.afterKill, 1, 2)
 	restart, err := imRestartOf(t, f)
 	requireIMRestart(t, restart, err, evidence.Blocked, "cause is unknown")
+}
+
+func TestRunS12InstanceManagerRestartTakesTheRetryFromItsEvent(t *testing.T) {
+	for name, tc := range map[string]struct {
+		event  string
+		result evidence.Result
+	}{
+		"the Event names the restart":   {event: testIMRetryMessage, result: evidence.Pass},
+		"the Event names another cause": {event: "on " + testIMRestartTarget + ": download failed", result: evidence.Blocked},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12IMRestartConfig(t)
+			f := newS12IMRestartFixture(t, cfg)
+			// The reading of RestoreFailedRetrying was missed between two
+			// readings; the Operator's Event of it is there.
+			f.afterKill = slices.Delete(f.afterKill, 1, 2)
+			f.retryEvent = tc.event
+			restart, err := imRestartOf(t, f)
+			if restart.Result != tc.result {
+				t.Fatalf("S12 instance-manager-restart = %+v, %v; want %s", restart, err, tc.result)
+			}
+			if tc.result == evidence.Blocked {
+				requireIMRestart(t, restart, err, evidence.Blocked, "cause is unknown")
+				return
+			}
+			r := readIMRestartRecord(t, cfg.EvidenceDir).IMRestart
+			if len(r.Retries) != 1 || r.Retries[0].Message != testIMRetryMessage ||
+				!r.Retries[0].FromEvent {
+				t.Fatalf("retries = %+v, want the one the Event recorded", r.Retries)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartIsBlockedWhenTheFirstReadingAfterTheKillIsPastRestoring(t *testing.T) {
+	cfg := testS12IMRestartConfig(t)
+	f := newS12IMRestartFixture(t, cfg)
+	// The restore had completed; the seeding that followed fails.
+	f.afterKill = []imStatus{
+		{databasev1alpha1.BootstrapSeedingReplicas, 0, testIMRestartOp, testSeedInProgress, "copying"},
+		{databasev1alpha1.BootstrapFailed, 0, testIMRestartOp, "SeedFailed", "seeding failed"},
+	}
+	restart, err := imRestartOf(t, f)
+	requireIMRestart(t, restart, err, evidence.Blocked, "the kill did not interrupt a restore",
+		"the first reading after it was SeedingReplicas", "seeding failed")
 }
 
 func TestRunS12InstanceManagerRestartFailsOnABootstrapFailedAfterTheKill(t *testing.T) {

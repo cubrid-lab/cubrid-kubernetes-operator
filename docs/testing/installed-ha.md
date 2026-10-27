@@ -1005,11 +1005,13 @@ and the kubelet starts the container again on the same Pod and volume. The
 member Pod does not share its process namespace, and when PID 1 of a PID
 namespace ends, Linux ends every other process in it (pid_namespaces(7)), so
 `restoredb` and its worker, which outlives a signal to `cubrid` (POC-27),
-end with the container; this run does not observe that. The run kills the manager process with `SIGKILL`, as a crash would
-end it: `kubectl exec` into the target member's `cubrid` container runs a
-script that finds the one process whose parent is PID 1 and whose command
-line is `/usr/local/bin/instance-manager` alone (the entrypoint's other uses
-of that binary carry an argument), and kills it; it kills nothing when it
+end with the container; this run does not observe that. The run kills the
+manager process with `SIGKILL`, as a crash would end it: `kubectl exec` into
+the target member's `cubrid` container runs a script that finds the one
+process whose parent is PID 1 and whose command line is exactly
+`/usr/local/bin/instance-manager`, one argument compared as a whole (the
+image's `IM_BIN`; the entrypoint's other uses of that binary carry an
+argument), and kills it; it kills nothing when it
 finds none or more than one. A `SIGKILL` to PID 1 from inside the container
 would be ignored, and deleting the Pod would also replace the Pod and, with
 no grace period, let its old container outlive the start of the next one
@@ -1083,8 +1085,12 @@ What the product guarantees, and the variant checks:
    `cubrid` container is seen ended or restarted (another container ID or a
    higher restart count), within two minutes or `-restore-limit`, whichever
    is shorter; otherwise the variant is blocked (`fault_not_confirmed`). The
-   ended container's exit code and finish time are recorded (137 is
-   expected: the shell exits with the killed manager's status).
+   ended container's exit code, the kubelet's reason and the finish time are
+   recorded. The shell exits with the killed manager's status, 137; another
+   code, a reason `OOMKilled` (the same code, the kernel's memory kill), or
+   no reported code blocks the variant ("the container ended for another
+   reason than the kill"), and what it ended with is recorded
+   (`endedOtherwise`).
 5. **The member back.** The run waits, until `-restore-limit` has passed
    since the cluster's creation, for the `cubrid` container to run again:
    another container than the killed one, running, with a higher restart
@@ -1093,13 +1099,18 @@ What the product guarantees, and the variant checks:
    (`phaseAfterRestart`). `memberBackWithin` is measured from the kill to
    the reading that saw it running. A Pod with another UID blocks the
    variant: the Pod was replaced, which is not this fault. A container that
-   does not run again in time fails it.
+   does not run again in time fails it, unless no read of the Pod succeeded
+   while the run waited: then whether it ran again is not known, and the
+   variant is blocked with the last read's error.
 6. **Wait for the restored cluster.** As step 3 of S12 `exact`, until
    `-restore-limit` has passed since the cluster's creation. The target
    member is then read again: a Pod with another UID blocks the variant,
    and a restart count that is not exactly one above the one at the kill
-   fails it (`containerRestarts`): the container did not stay up after one
-   kill.
+   (`containerRestarts`) must never happen: the container did not stay up
+   after one kill. The run then lists the Events of the namespace and
+   records the messages of the Operator's `RestoreFailedRetrying` Events of
+   `ha-imrestart` (`retryEvents`), or why they could not be read
+   (`eventsError`).
 7. **Secrets, HA membership, restored data, a normal write, the source and
    credentials.** As steps 4 to 9 of S12 `exact`, on `ha-imrestart`: its
    data check goes to `S12/instance-manager-restart/data-check.json`, the
@@ -1111,15 +1122,29 @@ What the product guarantees, and the variant checks:
    recorded.
 8. **The bootstrap, judged over every reading in order.** These must never
    happen: `BootstrapReady` `True` while the phase is not `Complete`;
-   `attempts` that fall, or that reach 3; an `operationID` that becomes
+   `attempts` that fall, or that reach 3 (the Operator raises `attempts`
+   only while it stays below `maxBootstrapAttempts`, 3, so this guard only
+   catches a change of that constant); an `operationID` that becomes
    another while `attempts` stays the same (a restore started twice); a
    reading with the reason `RecordedOperationMissing`: the record was on the
    volume before its ID was answered, so the restart lost it, and the
    Operator would wait 30 minutes and fail the recovery. `attempts` that
    rise on a reading with the reason `RestoreFailedRetrying` are a retry,
    recorded with its message; `attempts` that rise without it leave the
-   cause unknown and block the variant, as in S12 `operator-restart`. Once
-   the cluster completed, after the kill:
+   cause unknown and block the variant, as in S12 `operator-restart`. The
+   reason lasts only until the next reconcile, which can come at once: the
+   controller owns the StatefulSet (`SetupWithManager` in
+   `internal/controller/cubridcluster_controller.go`), whose status changes
+   when a member's container restarts and becomes ready again, and the retry
+   itself requeues after 10 seconds (`restorePollAfter`). With a
+   `-poll` that is not short against that, the rise may be read without its
+   reason. One such rise is still taken as the retry (recorded with
+   `fromEvent`) when it is by one, from the `attempts` at the kill, after
+   the kill, the operation at the end is another than the one at the kill,
+   and a recorded `RestoreFailedRetrying` Event of the cluster carries the
+   Instance Manager's restart in its message; otherwise it blocks. The Event
+   is matched by the cluster's UID, a cluster this run created, but not by
+   time. Once the cluster completed, after the kill:
    - exactly one retry, from the `attempts` at the kill to the next, whose
      message names the Instance Manager's restart, and an operation at the
      end other than the one at the kill: the expected outcome;
@@ -1132,6 +1157,12 @@ What the product guarantees, and the variant checks:
    - a second retry: the retried restore failed as well; the variant fails;
    - the operation of the kill at the end after a retry: the operation the
      kill ended was answered for the next attempt; the variant fails.
+
+   A first reading after the kill already past `Restoring` (`SeedingReplicas`
+   or `Complete`) with no retry after the kill means the kill did not
+   interrupt a restore: the variant is blocked, and what followed, such as a
+   seeding that ended `Failed`, is added to the reason without failing it,
+   unless a never-event was seen or the data differ from the backup.
 
    The `BootstrapReady` reasons after the kill, each change once, the
    operations under each `attempts`, the retries, and `operationID` and
@@ -1173,7 +1204,8 @@ S12 `instance-manager-restart` here does not check:
   member Pod, a restarted node, or an object store that becomes unreachable
   during the restore;
 - that the other members' containers did not restart;
-- the Operator's logs and Events of `ha-imrestart`.
+- the Operator's logs, and the Events of `ha-imrestart` other than
+  `RestoreFailedRetrying`.
 
 ## Evidence
 
@@ -1256,10 +1288,12 @@ variant other than `exact` only those under `S12/<variant>/`.
   container's ID, restart count and start before and after; the phase,
   `operationID`, `attempts` and message at the kill; what the kill command
   answered; when the kill was issued, when the container was seen ended,
-  its exit code and finish time, when the run saw it running again, and
-  the restart count at the end; the phase read after the kill, the reasons
-  after it, the operations under each attempt, `operationID` and
-  `attempts` after, and the retries),
+  its exit code, reason and finish time, how it ended when that was not the
+  kill's end, when the run saw it running again, and the restart count at
+  the end; the phase read after the kill, the reasons after it, the
+  operations under each attempt, `operationID` and `attempts` after, the
+  retries, each marked when it was taken from an Event, and the messages of
+  the `RestoreFailedRetrying` Events or why they could not be read),
   `S12/instance-manager-restart/timeline.jsonl` (the fault flow),
   `S12/instance-manager-restart/data-check.json` and
   `S12/instance-manager-restart/source-data-check.json`.

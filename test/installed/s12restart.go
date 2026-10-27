@@ -76,6 +76,9 @@ type s12Retry struct {
 	To      int32     `json:"toAttempts"`
 	Reason  string    `json:"reason"`
 	Message string    `json:"message,omitempty"`
+	// FromEvent is set for a retry that no reading showed, taken from the
+	// Operator's Event of it.
+	FromEvent bool `json:"fromEvent,omitempty"`
 }
 
 // s12Restart is the manager's restart during the restore and the restore

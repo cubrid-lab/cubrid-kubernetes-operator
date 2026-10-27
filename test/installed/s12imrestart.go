@@ -64,6 +64,14 @@ const (
 	// habootstrap.go): restoreAttemptFailed raises attempts only while
 	// attempts+1 is below it, so attempts stays below it.
 	s12MaxAttempts = 3
+	// sigkillExitCode is the status the entrypoint shell exits with when its
+	// manager was killed by SIGKILL, 128 + 9; oomKilledReason is the kubelet's
+	// reason for a container the kernel killed for memory, with the same code.
+	sigkillExitCode = 137
+	oomKilledReason = "OOMKilled"
+	// imBinary is the Instance Manager the entrypoint starts as its child,
+	// with no argument (IM_BIN in build/instance-manager/entrypoint.sh).
+	imBinary = "/usr/local/bin/instance-manager"
 	// imKillRefused starts the answer of imKillScript when it did not find
 	// exactly one Instance Manager process, and killed nothing.
 	imKillRefused = "instance-manager processes:"
@@ -75,14 +83,14 @@ const (
 // with no argument; its other uses of that binary (wait-volume-free,
 // shutdown) carry one (build/instance-manager/entrypoint.sh). The script
 // kills only the one process whose parent is PID 1 and whose command line is
-// that binary alone, and kills nothing when it finds none or more than one.
+// exactly imBinary, and kills nothing when it finds none or more than one.
 // It runs as the container's user, the manager's own. Once the manager is
 // gone the shell exits with its status, and the container ends.
 const imKillScript = `found=""; ` +
 	`for d in /proc/[0-9]*; do ` +
 	`s=$(cat "$d/stat" 2>/dev/null) || continue; read -r -a st <<< "${s##*) }"; [ "${st[1]}" = 1 ] || continue; ` +
 	`mapfile -d '' -t argv < "$d/cmdline" 2>/dev/null || continue; ` +
-	`[ "${#argv[@]}" = 1 ] && [ "${argv[0]##*/}" = instance-manager ] || continue; ` +
+	`[ "${#argv[@]}" = 1 ] && [ "${argv[0]}" = ` + imBinary + ` ] || continue; ` +
 	`found="$found ${d#/proc/}"; done; set -- $found; ` +
 	`if [ "$#" != 1 ]; then echo "` + imKillRefused + `${found:- none}"; exit 3; fi; ` +
 	`kill -KILL "$1" && echo "killed instance-manager $1"`
@@ -130,7 +138,15 @@ type s12IMRestart struct {
 	// ended container.
 	EndedAt    *time.Time `json:"containerEndedAt,omitempty"`
 	ExitCode   *int32     `json:"exitCode,omitempty"`
+	ExitReason string     `json:"exitReason,omitempty"`
 	FinishedAt *time.Time `json:"containerFinishedAt,omitempty"`
+	// EndedOtherwise says how the container ended when that was not the
+	// kill's end, exit code 137 without OOMKilled.
+	EndedOtherwise string `json:"endedOtherwise,omitempty"`
+	// readsAfterKill counts the reads of the Pod that succeeded while the run
+	// waited for the container, lastReadErr is the last that failed.
+	readsAfterKill int
+	lastReadErr    error
 	// ContainerAfter, RestartsAfter and StartedAfter are of the container
 	// that ran again, BackAt the reading that saw it running, and
 	// RestartsAtEnd the restart count once the cluster was Ready.
@@ -153,6 +169,13 @@ type s12IMRestart struct {
 	OperationIDAfter string       `json:"operationIDAfter,omitempty"`
 	AttemptsAfter    *int32       `json:"attemptsAfter,omitempty"`
 	Retries          []s12Retry   `json:"retries"`
+	// RetryEvents are the messages of the Operator's RestoreFailedRetrying
+	// Events of the cluster, read once it was Ready; EventsError is why they
+	// could not be read.
+	RetryEvents []string `json:"retryEvents"`
+	EventsError string   `json:"eventsError,omitempty"`
+	// retriesAfterKill counts the retries after the kill.
+	retriesAfterKill int
 }
 
 // s12IMRestartRecord is the evidence of S12 instance-manager-restart besides
@@ -207,10 +230,10 @@ func (h *haRun) runS12InstanceManagerRestart(ctx context.Context) (result eviden
 				"may have moved on before the kill took effect",
 			"whether the next attempt removed the failed attempt's data or took it over was not read: the Instance " +
 				"Manager's logs and operation records were not checked",
-			"the Operator's logs and Events of the cluster were not checked"},
+			"the Operator's logs, and its Events of the cluster other than RestoreFailedRetrying, were not checked"},
 		Residue: "the cluster's seed backups under its seed prefix are not removed by this run; the cluster goes " +
 			"with the namespace"},
-		IMRestart: &s12IMRestart{restartReading: -1, Reasons: []string{}, Attempts: []s12Attempt{},
+		IMRestart: &s12IMRestart{restartReading: -1, Reasons: []string{}, Attempts: []s12Attempt{}, RetryEvents: []string{},
 			Retries: []s12Retry{}}}
 	defer func() {
 		// A pass without its evidence is a failure; a blocked or failed S12
@@ -240,6 +263,15 @@ func (h *haRun) runS12InstanceManagerRestart(ctx context.Context) (result eviden
 	if found := rec.Credentials.FoundIn; len(found) > 0 {
 		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
 	}
+	if blocked := notInterrupted(rec.IMRestart); blocked != "" && len(result.NeverEvents) == 0 &&
+		!errors.As(err, new(dataViolation)) {
+		// What followed the kill is not this variant's to judge; data that
+		// differs from the backup stays a failure.
+		if err != nil {
+			blocked += "; then: " + err.Error()
+		}
+		err = errors.New(blocked)
+	}
 	never := strings.Join(result.NeverEvents, "; ")
 	switch {
 	case errors.As(err, new(restoreVerdict)) || errors.As(err, new(dataViolation)):
@@ -264,6 +296,19 @@ func (h *haRun) runS12InstanceManagerRestart(ctx context.Context) (result eviden
 		result.Result, result.Reason = evidence.Pass, imRestartPassReason(rec.IMRestart)
 	}
 	return result
+}
+
+// notInterrupted says why the kill did not interrupt a restore, when the
+// first reading after it was already past Restoring and no retry followed;
+// it is empty otherwise.
+func notInterrupted(r *s12IMRestart) string {
+	past := r.PhaseAfterRestart == string(databasev1alpha1.BootstrapSeedingReplicas) ||
+		r.PhaseAfterRestart == string(databasev1alpha1.BootstrapComplete)
+	if r.KilledAt == nil || !past || r.retriesAfterKill > 0 {
+		return ""
+	}
+	return fmt.Sprintf("the kill did not interrupt a restore: the first reading after it was %s, and no retry "+
+		"followed", r.PhaseAfterRestart)
 }
 
 // imRestartSteps runs the steps of S12 instance-manager-restart in order and
@@ -304,6 +349,7 @@ func (h *haRun) imRestartSteps(ctx context.Context, result *evidence.Scenario, r
 	}
 	rec.RestoredWithin = readyAt.Sub(created).Round(time.Millisecond).String()
 	result.Measurements[restoredWithinMeasurement] = rec.RestoredWithin
+	h.readRetryEvents(ctx, cluster, r)
 	if err := h.targetRestartsAtEnd(ctx, r, result); err != nil {
 		return err
 	}
@@ -387,11 +433,16 @@ func (h *haRun) killDuringRestore(ctx context.Context, cluster *databasev1alpha1
 		return err
 	}
 	switch {
+	case r.EndedOtherwise != "":
+		return fmt.Errorf("the container ended for another reason than the kill: %s", r.EndedOtherwise)
 	case seen != nil:
 		return seen
 	case r.PodReplaced:
 		return fmt.Errorf("the target member's Pod %s was replaced, not only its container restarted: %s", r.Pod,
 			outcome.Reason)
+	case outcome.Result == evidence.Fail && r.readsAfterKill == 0 && r.lastReadErr != nil:
+		return fmt.Errorf("the Pod %s could not be read after the kill was confirmed, so whether its container ran "+
+			"again is not known: %w", r.Pod, r.lastReadErr)
 	case outcome.Result == evidence.Fail:
 		return restoreVerdict{fmt.Errorf("the container of %s did not run again within restore_limit %s after its "+
 			"Instance Manager was killed: %s", r.Pod, h.cfg.RestoreLimit, outcome.Reason)}
@@ -534,9 +585,17 @@ func (f instanceManagerKill) Confirm(ctx context.Context) (bool, error) {
 		status.LastTerminationState.Terminated} {
 		if t != nil && (t.ContainerID == "" || t.ContainerID == f.r.ContainerBefore) {
 			code, finished := t.ExitCode, t.FinishedAt.UTC()
-			f.r.ExitCode, f.r.FinishedAt = &code, &finished
+			f.r.ExitCode, f.r.ExitReason, f.r.FinishedAt = &code, t.Reason, &finished
 			break
 		}
+	}
+	// The shell exits with the killed manager's status, 128 + SIGKILL. Any
+	// other end, or one the kubelet reports as OOMKilled, is not the kill's.
+	switch {
+	case f.r.ExitCode == nil:
+		f.r.EndedOtherwise = "its exit code was not reported"
+	case *f.r.ExitCode != sigkillExitCode || f.r.ExitReason == oomKilledReason:
+		f.r.EndedOtherwise = fmt.Sprintf("exit code %d, reason %q", *f.r.ExitCode, f.r.ExitReason)
 	}
 	return true, nil
 }
@@ -545,12 +604,16 @@ func (f instanceManagerKill) Remove(context.Context) error { return nil }
 
 // memberBack reports whether the target member's database container runs
 // again: another container than the killed one, running, with a higher
-// restart count, on the same Pod. A Pod with another UID is an error.
+// restart count, on the same Pod. A Pod with another UID is an error. A read
+// that fails is remembered, and the successful ones are counted.
 func (h *haRun) memberBack(ctx context.Context, r *s12IMRestart) (bool, error) {
 	pod := &corev1.Pod{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: r.Pod}, pod); err != nil {
+		// Not judged here; a wait in which no read succeeded blocks.
+		r.lastReadErr = err
 		return false, nil
 	}
+	r.readsAfterKill++
 	if string(pod.UID) != r.PodUID {
 		r.PodReplaced = true
 		return false, fmt.Errorf("the Pod %s was replaced", r.Pod)
@@ -563,6 +626,23 @@ func (h *haRun) memberBack(ctx context.Context, r *s12IMRestart) (bool, error) {
 	restarts, started, back := status.RestartCount, status.State.Running.StartedAt.UTC(), time.Now().UTC()
 	r.ContainerAfter, r.RestartsAfter, r.StartedAfter, r.BackAt = status.ContainerID, &restarts, &started, &back
 	return true, nil
+}
+
+// readRetryEvents records the messages of the Operator's RestoreFailedRetrying
+// Events of the cluster (restoreAttemptFailed in internal/controller/
+// bootstrap.go records one with the condition). An Event list that cannot
+// be read is recorded: the Events only back a retry the readings missed.
+func (h *haRun) readRetryEvents(ctx context.Context, cluster *databasev1alpha1.CubridCluster, r *s12IMRestart) {
+	events := &corev1.EventList{}
+	if err := h.Client.List(ctx, events, client.InNamespace(h.cfg.Namespace)); err != nil {
+		r.EventsError = err.Error()
+		return
+	}
+	for _, event := range events.Items {
+		if event.InvolvedObject.UID == cluster.UID && event.Reason == s12RetryReason {
+			r.RetryEvents = append(r.RetryEvents, event.Message)
+		}
+	}
 }
 
 // targetRestartsAtEnd reads the target member once the cluster is Ready and
@@ -586,8 +666,10 @@ func (h *haRun) targetRestartsAtEnd(ctx context.Context, r *s12IMRestart, result
 	added := restarts - *r.RestartsBefore
 	result.Measurements["containerRestarts"] = added
 	if added != 1 {
-		return restoreVerdict{fmt.Errorf("the database container of %s restarted %d times after one kill of its "+
-			"Instance Manager, not once", r.Pod, added)}
+		event := fmt.Sprintf("the database container of %s restarted %d times after one kill of its Instance "+
+			"Manager, not once", r.Pod, added)
+		result.NeverEvents = append(result.NeverEvents, event)
+		return restoreVerdict{errors.New(event)}
 	}
 	return nil
 }
@@ -648,6 +730,7 @@ func judgeIMRestartBootstrap(rec *s12IMRestartRecord, result *evidence.Scenario)
 // the kill.
 func scanIMRestartBootstrap(rec *s12IMRestartRecord) (events, unexplained []string, afterKill []s12Retry) {
 	r := rec.IMRestart
+	var rises []attemptRise
 	lastOp, opAttempts, attempts := "", int32(0), int32(0)
 	seen := map[string]bool{}
 	// once adds the event of kind the first time it is seen.
@@ -661,23 +744,11 @@ func scanIMRestartBootstrap(rec *s12IMRestartRecord) (events, unexplained []stri
 	afterKillReading := func(i int) bool { return r.KilledAt != nil && r.restartReading >= 0 && i > r.restartReading }
 	for i, p := range rec.Bootstrap {
 		boot := meta.FindStatusCondition(p.Conditions, bootstrapReadyCondition)
-		if boot != nil && boot.Status == metav1.ConditionTrue && p.Phase != string(databasev1alpha1.BootstrapComplete) {
-			once("early", fmt.Sprintf("the restored cluster reported BootstrapReady True (%s) while its "+
-				"bootstrap phase was %q", boot.Reason, cmp.Or(p.Phase, noBootstrapPhase)))
-		}
+		readingNeverEvents(p, boot, once)
 		if boot != nil && afterKillReading(i) {
 			if n := len(r.Reasons); n == 0 || r.Reasons[n-1] != boot.Reason {
 				r.Reasons = append(r.Reasons, boot.Reason)
 			}
-		}
-		if boot != nil && boot.Reason == s12OperationMissingReason {
-			once("missing", fmt.Sprintf("the target answered that it holds no record of the restore "+
-				"operation %q (%s): the Instance Manager's operation store on the member's volume lost a record it "+
-				"had answered for", p.OperationID, boot.Message))
-		}
-		if p.Attempts >= s12MaxAttempts {
-			once("beyond", fmt.Sprintf("the restored cluster's bootstrap attempts reached %d, beyond the "+
-				"Operator's %d attempts", p.Attempts, s12MaxAttempts))
 		}
 		switch {
 		case i > 0 && p.Attempts < attempts:
@@ -690,7 +761,7 @@ func scanIMRestartBootstrap(rec *s12IMRestartRecord) (events, unexplained []stri
 				afterKill = append(afterKill, retry)
 			}
 		case p.Attempts > attempts:
-			unexplained = append(unexplained, fmt.Sprintf("from %d to %d", attempts, p.Attempts))
+			rises = append(rises, attemptRise{index: i, at: p.At, from: attempts, to: p.Attempts})
 		}
 		attempts = p.Attempts
 		if p.OperationID == "" {
@@ -700,19 +771,82 @@ func scanIMRestartBootstrap(rec *s12IMRestartRecord) (events, unexplained []stri
 			events = append(events, fmt.Sprintf("the restore was started again without a failed attempt: the "+
 				"operation %s became %s under attempt %d", lastOp, p.OperationID, p.Attempts))
 		}
-		if n := len(r.Attempts); n == 0 || r.Attempts[n-1].Attempt != p.Attempts {
-			r.Attempts = append(r.Attempts, s12Attempt{Attempt: p.Attempts, Operations: []string{}})
-		}
-		if a := &r.Attempts[len(r.Attempts)-1]; !slices.Contains(a.Operations, p.OperationID) {
-			a.Operations = append(a.Operations, p.OperationID)
-		}
+		r.Attempts = withOperation(r.Attempts, p.Attempts, p.OperationID)
 		lastOp, opAttempts = p.OperationID, p.Attempts
 	}
 	if lastOp != "" {
 		after := opAttempts
 		r.OperationIDAfter, r.AttemptsAfter = lastOp, &after
 	}
+	if len(afterKill) == 0 && len(rises) == 1 && afterKillReading(rises[0].index) {
+		if retry := retryFromEvent(r, rises[0]); retry != nil {
+			afterKill, rises = append(afterKill, *retry), nil
+		}
+	}
+	for _, x := range rises {
+		unexplained = append(unexplained, fmt.Sprintf("from %d to %d", x.from, x.to))
+	}
+	r.retriesAfterKill = len(afterKill)
 	return events, unexplained, afterKill
+}
+
+// readingNeverEvents adds, through once, what one reading must never show:
+// BootstrapReady True before Complete, the reason RecordedOperationMissing,
+// and attempts at or beyond s12MaxAttempts.
+func readingNeverEvents(p s12Phase, boot *metav1.Condition, once func(kind, event string)) {
+	if boot != nil && boot.Status == metav1.ConditionTrue && p.Phase != string(databasev1alpha1.BootstrapComplete) {
+		once("early", fmt.Sprintf("the restored cluster reported BootstrapReady True (%s) while its "+
+			"bootstrap phase was %q", boot.Reason, cmp.Or(p.Phase, noBootstrapPhase)))
+	}
+	if boot != nil && boot.Reason == s12OperationMissingReason {
+		once("missing", fmt.Sprintf("the target answered that it holds no record of the restore "+
+			"operation %q (%s): the Instance Manager's operation store on the member's volume lost a record it "+
+			"had answered for", p.OperationID, boot.Message))
+	}
+	if p.Attempts >= s12MaxAttempts {
+		once("beyond", fmt.Sprintf("the restored cluster's bootstrap attempts reached %d, beyond the "+
+			"Operator's %d attempts", p.Attempts, s12MaxAttempts))
+	}
+}
+
+// withOperation adds operation under attempt to attempts, in order.
+func withOperation(attempts []s12Attempt, attempt int32, operation string) []s12Attempt {
+	if n := len(attempts); n == 0 || attempts[n-1].Attempt != attempt {
+		attempts = append(attempts, s12Attempt{Attempt: attempt, Operations: []string{}})
+	}
+	if a := &attempts[len(attempts)-1]; !slices.Contains(a.Operations, operation) {
+		a.Operations = append(a.Operations, operation)
+	}
+	return attempts
+}
+
+// attemptRise is a rise of attempts that no reading gave the reason of.
+type attemptRise struct {
+	index    int
+	at       time.Time
+	from, to int32
+}
+
+// retryFromEvent returns the retry x is, and records it, when the Operator's
+// Event of it names the restart. The reason RestoreFailedRetrying lasts until
+// the next reconcile, which may come at once, so a reading may miss it. x
+// must be the only rise after the kill, by one from the attempt at the kill,
+// with another operation at the end.
+func retryFromEvent(r *s12IMRestart, x attemptRise) *s12Retry {
+	if r.AttemptsBefore == nil || x.from != *r.AttemptsBefore || x.to != x.from+1 || r.OperationIDAfter == "" ||
+		r.OperationIDAfter == r.OperationIDBefore {
+		return nil
+	}
+	for _, message := range r.RetryEvents {
+		if strings.Contains(message, s12IMRestartedReason) {
+			retry := s12Retry{At: x.at, From: x.from, To: x.to, Reason: s12RetryReason, Message: message,
+				FromEvent: true}
+			r.Retries = append(r.Retries, retry)
+			slices.SortStableFunc(r.Retries, func(a, b s12Retry) int { return a.At.Compare(b.At) })
+			return &retry
+		}
+	}
+	return nil
 }
 
 // judgeKillRetries judges the retries after the kill of a restore that
@@ -733,10 +867,14 @@ func judgeKillRetries(r *s12IMRestart, afterKill []s12Retry) error {
 		}
 		return restoreVerdict{fmt.Errorf("the restore failed again after the attempt the kill ended: %s",
 			strings.Join(failed, "; "))}
-	case afterKill[0].From != *r.AttemptsBefore || !strings.Contains(afterKill[0].Message, s12IMRestartedReason):
-		return fmt.Errorf("the attempt the kill interrupted ended from attempt %d with %q, not with the "+
-			"Instance Manager's restart (%q) from attempt %d: whether the restart ended it was not observed",
-			afterKill[0].From, afterKill[0].Message, s12IMRestartedReason, *r.AttemptsBefore)
+	// The first retry after the kill starts from the attempts at the kill:
+	// the reading at the kill is the last one recorded before it, and attempts
+	// that change in between either fall, a never-event, or rise without the
+	// reason, which blocks (scanIMRestartBootstrap).
+	case !strings.Contains(afterKill[0].Message, s12IMRestartedReason):
+		return fmt.Errorf("the attempt the kill interrupted ended with %q, not with the Instance Manager's "+
+			"restart (%q): whether the restart ended it was not observed", afterKill[0].Message,
+			s12IMRestartedReason)
 	case r.OperationIDAfter == r.OperationIDBefore:
 		return restoreVerdict{fmt.Errorf("the operation %s the kill ended is the one that completed "+
 			"after the next attempt started", r.OperationIDBefore)}
