@@ -828,17 +828,21 @@ type attemptRise struct {
 }
 
 // retryFromEvent returns the retry x is, and records it, when the Operator's
-// Event of it names the restart. The reason RestoreFailedRetrying lasts until
-// the next reconcile, which may come at once, so a reading may miss it. x
-// must be the only rise after the kill, by one from the attempt at the kill,
-// with another operation at the end.
+// Event of it names the restart and the attempt x starts. The reason
+// RestoreFailedRetrying lasts until the next reconcile, which may come at
+// once, so a reading may miss it. x must be the only rise after the kill, by
+// one from the attempt at the kill, with another operation at the end. The
+// attempt number keeps an Event of an earlier retry of the same cluster from
+// standing for it: the Operator numbers attempts from 1 in its message
+// ("starting attempt 2 of 3" for attempts 1), and they only rise.
 func retryFromEvent(r *s12IMRestart, x attemptRise) *s12Retry {
 	if r.AttemptsBefore == nil || x.from != *r.AttemptsBefore || x.to != x.from+1 || r.OperationIDAfter == "" ||
 		r.OperationIDAfter == r.OperationIDBefore {
 		return nil
 	}
+	starting := fmt.Sprintf("starting attempt %d of ", x.to+1)
 	for _, message := range r.RetryEvents {
-		if strings.Contains(message, s12IMRestartedReason) {
+		if strings.Contains(message, s12IMRestartedReason) && strings.Contains(message, starting) {
 			retry := s12Retry{At: x.at, From: x.from, To: x.to, Reason: s12RetryReason, Message: message,
 				FromEvent: true}
 			r.Retries = append(r.Retries, retry)

@@ -792,6 +792,9 @@ func TestRunS12InstanceManagerRestartTakesTheRetryFromItsEvent(t *testing.T) {
 	}{
 		"the Event names the restart":   {event: testIMRetryMessage, result: evidence.Pass},
 		"the Event names another cause": {event: "on " + testIMRestartTarget + ": download failed", result: evidence.Blocked},
+		// An Event of another retry of the same cluster, with the same cause.
+		"the Event is of another attempt": {event: "on " + testIMRestartTarget + ": " + s12IMRestartedReason +
+			"; starting attempt 3 of 3", result: evidence.Blocked},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS12IMRestartConfig(t)

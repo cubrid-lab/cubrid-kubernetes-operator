@@ -1142,9 +1142,12 @@ What the product guarantees, and the variant checks:
    `fromEvent`) when it is by one, from the `attempts` at the kill, after
    the kill, the operation at the end is another than the one at the kill,
    and a recorded `RestoreFailedRetrying` Event of the cluster carries the
-   Instance Manager's restart in its message; otherwise it blocks. The Event
-   is matched by the cluster's UID, a cluster this run created, but not by
-   time. Once the cluster completed, after the kill:
+   Instance Manager's restart and the attempt that rise starts in its message
+   (`starting attempt <n> of`, which the Operator numbers from 1); otherwise
+   it blocks. The Event is matched by the cluster's UID, a cluster this run
+   created, and by that attempt number, so an Event of an earlier retry of
+   the cluster does not stand for it; it is not matched by time. Once the
+   cluster completed, after the kill:
    - exactly one retry, from the `attempts` at the kill to the next, whose
      message names the Instance Manager's restart, and an operation at the
      end other than the one at the kill: the expected outcome;
