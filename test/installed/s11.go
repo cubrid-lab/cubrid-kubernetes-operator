@@ -68,6 +68,10 @@ var s3Bucket = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
 // validateS11 checks the inputs of S11 complete, when it is selected.
 func (c HAConfig) validateS11() error {
+	if c.BackupMissingDestination && c.BackupBucket == "" {
+		return errors.New("-backup-missing-destination needs -backup-bucket: S11 missing-destination follows S11 " +
+			"complete")
+	}
 	if c.BackupBucket == "" {
 		return nil
 	}
@@ -76,6 +80,9 @@ func (c HAConfig) validateS11() error {
 	}
 	if !s3Bucket.MatchString(c.BackupBucket) || strings.Contains(c.BackupBucket, "..") || c.BackupLimit <= 0 {
 		return errors.New("S11 needs an S3 bucket name for the backups and a positive backup limit")
+	}
+	if c.BackupMissingDestination && c.Restore {
+		return errors.New("-backup-missing-destination and -restore select different lanes; a run takes one of them")
 	}
 	_, _, _, err := splitService(c.ObjectStoreService)
 	return err
@@ -105,10 +112,11 @@ var maxManifestSize int64 = 16 << 20
 // objectStore reads an S3-compatible store and writes to it. S11 verifies
 // the artifact with a client of its own, not through the Operator or the
 // Instance Manager; S12 tampered writes and removes its copy of it with the
-// same client.
+// same client, and S11 missing-destination asks it whether a bucket exists.
 type objectStore interface {
 	Get(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 	List(ctx context.Context, bucket, prefix string) ([]string, error)
+	BucketExists(ctx context.Context, bucket string) (bool, error)
 	// Put stores size bytes of r under key; Remove removes key.
 	Put(ctx context.Context, bucket, key string, r io.Reader, size int64) error
 	Remove(ctx context.Context, bucket, key string) error
@@ -164,6 +172,10 @@ func (s minioStore) List(ctx context.Context, bucket, prefix string) ([]string, 
 		keys = append(keys, obj.Key)
 	}
 	return keys, nil
+}
+
+func (s minioStore) BucketExists(ctx context.Context, bucket string) (bool, error) {
+	return s.client.BucketExists(ctx, bucket)
 }
 
 func (s minioStore) Put(ctx context.Context, bucket, key string, r io.Reader, size int64) error {
@@ -321,13 +333,13 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 	if err != nil {
 		return end(evidence.Blocked, "record the known point: %v", err)
 	}
-	backup, err := h.createBackup(ctx, rec.Prefix)
+	backup, err := h.createBackup(ctx, s11BackupName, h.cfg.BackupBucket, rec.Prefix)
 	if err != nil {
 		return end(evidence.Blocked, "%v", err)
 	}
 	requested := time.Now().UTC()
 	rec.BackupUID, rec.RequestedAt = string(backup.UID), &requested
-	backup, err = h.waitBackup(ctx, backup, &rec)
+	backup, err = h.waitBackup(ctx, backup, &rec.Phases, rec.Credentials)
 	if found := rec.Credentials.FoundIn; len(found) > 0 &&
 		(err != nil || backup.Status.Phase != databasev1alpha1.BackupPhaseCompleted) {
 		// A credential in a status must never happen, whatever came after it.
@@ -448,21 +460,22 @@ func (h *haRun) knownPoint(ctx context.Context) (*s11KnownPoint, error) {
 	return point, nil
 }
 
-// createBackup requests a full backup of the run's database to BackupBucket
-// under prefix. The target is left to its default, PreferStandby. The
-// Operator reaches the store with the cluster's spec.objectStorage: its
-// endpoint and the copied Secret, through the members' environment.
-func (h *haRun) createBackup(ctx context.Context, prefix string) (*databasev1alpha1.CubridBackup, error) {
+// createBackup requests the CubridBackup name, a full backup of the run's
+// database to bucket under prefix. The target is left to its default,
+// PreferStandby. The Operator reaches the store with the cluster's
+// spec.objectStorage: its endpoint and the copied Secret, through the
+// members' environment.
+func (h *haRun) createBackup(ctx context.Context, name, bucket, prefix string) (*databasev1alpha1.CubridBackup,
+	error) {
 	if err := h.guard(ctx); err != nil {
 		return nil, err
 	}
 	backup := &databasev1alpha1.CubridBackup{
-		ObjectMeta: metav1.ObjectMeta{Name: s11BackupName, Namespace: h.cfg.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: h.cfg.Namespace},
 		Spec: databasev1alpha1.CubridBackupSpec{ClusterRef: databasev1alpha1.LocalObjectRef{Name: haClusterName},
 			Database: databaseName, Destination: databasev1alpha1.CubridBackupDestination{
-				Type: databasev1alpha1.DestinationObjectStorage,
-				ObjectStorage: &databasev1alpha1.ObjectStorageDestination{Bucket: h.cfg.BackupBucket,
-					Prefix: prefix}}}}
+				Type:          databasev1alpha1.DestinationObjectStorage,
+				ObjectStorage: &databasev1alpha1.ObjectStorageDestination{Bucket: bucket, Prefix: prefix}}}}
 	if err := h.Client.Create(ctx, backup); err != nil {
 		return nil, fmt.Errorf("create the CubridBackup: %w", err)
 	}
@@ -473,14 +486,15 @@ func (h *haRun) createBackup(ctx context.Context, prefix string) (*databasev1alp
 }
 
 // waitBackup reads the backup until it is Completed or Failed, recording
-// each change, for at most BackupLimit from the request's return. Passing
-// the limit is a failure: it is the contract's limit.
+// each change in phases and searching every status read for a credential in
+// creds, for at most BackupLimit from the request's return. Passing the limit
+// is a failure: it is the contract's limit.
 // backupVerdict is an error that judges the backup, as against one that
 // kept the run from reading it.
 type backupVerdict struct{ error }
 
-func (h *haRun) waitBackup(ctx context.Context, created *databasev1alpha1.CubridBackup, rec *s11Record) (
-	*databasev1alpha1.CubridBackup, error) {
+func (h *haRun) waitBackup(ctx context.Context, created *databasev1alpha1.CubridBackup, phases *[]s11Phase,
+	creds *s11Credentials) (*databasev1alpha1.CubridBackup, error) {
 	wctx, cancel := context.WithTimeout(ctx, h.cfg.BackupLimit)
 	defer cancel()
 	backup := &databasev1alpha1.CubridBackup{}
@@ -508,12 +522,12 @@ func (h *haRun) waitBackup(ctx context.Context, created *databasev1alpha1.Cubrid
 		if seen.Conditions == nil {
 			seen.Conditions = []metav1.Condition{}
 		}
-		if n := len(rec.Phases); n == 0 || !samePhase(rec.Phases[n-1], seen) {
-			rec.Phases = append(rec.Phases, seen)
+		if n := len(*phases); n == 0 || !samePhase((*phases)[n-1], seen) {
+			*phases = append(*phases, seen)
 		}
 		// Every status read, whole, not only what a phase records.
-		rec.Credentials.StatusesChecked++
-		if err := h.lookForCredentials(&rec.Credentials.FoundIn, "the status read in phase "+string(s.Phase),
+		creds.StatusesChecked++
+		if err := h.lookForCredentials(&creds.FoundIn, "the status read in phase "+string(s.Phase),
 			s); err != nil {
 			return false, err
 		}

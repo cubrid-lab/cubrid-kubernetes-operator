@@ -74,15 +74,18 @@ func testS11Config(t *testing.T) HAConfig {
 	return cfg
 }
 
-// fakeStore is an object store in memory, keyed by bucket/key. getErr,
-// putErr and removeErr, when set, answer a Get, Put or Remove first;
-// afterPut runs after a Put stored its object.
+// fakeStore is an object store in memory, keyed by bucket/key. A bucket
+// exists when it holds an object or is in buckets. getErr, putErr,
+// removeErr and bucketErr, when set, answer a Get, Put, Remove or
+// BucketExists first; afterPut runs after a Put stored its object.
 type fakeStore struct {
 	mu        sync.Mutex
 	objects   map[string][]byte
+	buckets   []string
 	getErr    func(ctx context.Context, key string) error
 	putErr    func(key string) error
 	removeErr func(key string) error
+	bucketErr func(bucket string) error
 	afterPut  func(key string)
 }
 
@@ -137,6 +140,22 @@ func (s *fakeStore) Remove(_ context.Context, bucket, key string) error {
 	defer s.mu.Unlock()
 	delete(s.objects, bucket+"/"+key)
 	return nil
+}
+
+func (s *fakeStore) BucketExists(_ context.Context, bucket string) (bool, error) {
+	if s.bucketErr != nil {
+		if err := s.bucketErr(bucket); err != nil {
+			return false, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name := range s.objects {
+		if strings.HasPrefix(name, bucket+"/") {
+			return true, nil
+		}
+	}
+	return slices.Contains(s.buckets, bucket), nil
 }
 
 func (s *fakeStore) List(_ context.Context, bucket, prefix string) ([]string, error) {

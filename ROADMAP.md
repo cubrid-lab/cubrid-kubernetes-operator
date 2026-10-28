@@ -162,6 +162,19 @@ harness was changed to that, S11 failed on manager `fb6f345` (once, on
 (manager `fb6f345`): `Completed` on a standby in 12.0 s, both versions
 `11.4.6.1963`.
 
+S11 `missing-destination` follows S11 `complete` on the same run
+(`lab-installed-ha-s11-missing-destination`, `-backup-missing-destination`,
+#616): the run confirms with its own client that a bucket named after the run
+does not exist, requests a backup to it, and requires it `Failed` with
+`BackupFailed` and the Instance Manager's `upload failed: put <bucket>/...`
+within `backup_limit`, never `Completed` and without `status.artifact`, the
+bucket still absent at the end, the source unchanged and no credential in a
+status read or an Event; it deletes the `CubridBackup` it created. The harness
+is implemented, with unit tests on fake clients only; it has not run on the
+VM lab, so what the lab's object store answers a write to a missing bucket is
+not observed. Denied credentials, other invalid destinations and an
+interrupted upload are not covered.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after
