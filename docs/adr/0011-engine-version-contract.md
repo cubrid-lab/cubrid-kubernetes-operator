@@ -101,8 +101,8 @@ The checks run in this order, and the first that fails sets the reason:
 | No baseline yet, and not every expected member reports the same full version | `UpdateBlockedEngineVersionNotObserved` |
 | A baseline exists, and a member reports no fresh version | `UpdateBlockedEngineVersionUnknown` |
 | A baseline exists, and a member reports a series other than the baseline's | `UpdateBlockedMixedEngineVersions` |
-| The baseline's series differs from `spec.version` | `UpdateBlockedEngineUpgrade`, naming both versions |
 | `spec.version` cannot be reduced to a series | `UpdateBlockedUnverifiableEngineVersion` |
+| The baseline's series differs from `spec.version` | `UpdateBlockedEngineUpgrade`, naming both versions |
 
 Each sets `Updating=False` and replaces no Pod. The cluster keeps serving
 with the engine it runs: refusing to start, or stopping members, because of
@@ -114,9 +114,11 @@ correct `spec.version` to the baseline's series. Accepting an image of
 another series is an engine change (ADR-0009), outside this contract: the
 guard does not prevent it, because the approval does not wait for the
 guard (see above), and afterwards it reports
-`UpdateBlockedMixedEngineVersions` until the cluster is recreated. Before
-a baseline exists there is no data written by a recorded series, and the
-image can still be chosen.
+`UpdateBlockedMixedEngineVersions` until the members run the baseline's
+series again or the cluster is recreated. Before a baseline exists the
+operator has no recorded series to protect; once a database has been
+created or restored, an image of another series is still an engine change
+on that data, and the choice remains the user's.
 
 ### Backup and restore
 
@@ -155,10 +157,11 @@ A restore takes an artifact only from the target's own series:
 
 `accept-image` approves one change; it is not desired state. It names the
 exact image, so it approves only that image (including a later return to
-it), and leaving it in place after the change has no other effect. A typed field would make the
-approval part of the spec, where a GitOps tool keeps reapplying it and a
-reader takes it for configuration. A typed field is reconsidered with the
-next API version, together with an engine-upgrade API (ADR-0009 non-goals).
+it), and leaving it in place after the change has no other effect. A typed
+field would make the approval part of the spec, where a GitOps tool keeps
+reapplying it and a reader takes it for configuration. A typed field is
+reconsidered with the next API version, together with an engine-upgrade API
+(ADR-0009 non-goals).
 
 ## Consequences
 
