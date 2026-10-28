@@ -4,13 +4,13 @@ on:
   issues:
     types: [opened]
 
-permissions:
-  contents: read
-  issues: write
+permissions: {}
 
 jobs:
   intake:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
     timeout-minutes: 5
     steps:
       # Intake only; no severity inference or automated triage completion.
