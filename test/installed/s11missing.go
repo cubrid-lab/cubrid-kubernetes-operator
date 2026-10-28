@@ -47,6 +47,15 @@ const (
 	// Instance Manager ended Failed (failedBackup in
 	// internal/controller/cubridbackup_controller.go).
 	s11MissingReason = "BackupFailed"
+	// uploadFailed starts the failure reason of an operation whose upload
+	// failed (runBackup in internal/instancemanager/server.go).
+	uploadFailed = "upload failed: "
+	// stagingNotChecked ends the residue: the run does not read the member.
+	stagingNotChecked = "; the target member's staging directory after the failed upload is not checked"
+	// The kinds of the object store's answer the failure quotes.
+	storeErrorNoSuchBucket = "no-such-bucket"
+	storeErrorAccessDenied = "access-denied"
+	storeErrorOther        = "other"
 )
 
 // s11MissingBucket is what the run's own client found of the bucket that
@@ -80,8 +89,14 @@ type s11MissingRecord struct {
 	FailedWithin       string `json:"failedWithin,omitempty"`
 	StatusFailedWithin string `json:"statusFailedWithin,omitempty"`
 	// Failure is the Ready reason and message of the backup as it ended.
-	Failure  string                                 `json:"failure,omitempty"`
-	Artifact *databasev1alpha1.CubridBackupArtifact `json:"artifact,omitempty"`
+	// StoreError is the object store's answer as the failure quotes it,
+	// after "put <bucket>/<key>: ", and StoreErrorKind what it names:
+	// storeErrorNoSuchBucket, storeErrorAccessDenied or storeErrorOther. They
+	// are observations; the verdict does not depend on them.
+	Failure        string                                 `json:"failure,omitempty"`
+	StoreError     string                                 `json:"storeError,omitempty"`
+	StoreErrorKind string                                 `json:"storeErrorKind,omitempty"`
+	Artifact       *databasev1alpha1.CubridBackupArtifact `json:"artifact,omitempty"`
 	// ManagerBefore is the installed manager as LAB01 read it at its end,
 	// ManagerAfter as this variant read it at its end.
 	ManagerBefore *managerIdentity `json:"managerBefore,omitempty"`
@@ -130,9 +145,12 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 		Credentials: &s11Credentials{FoundIn: []string{}},
 		Notes: []string{"the run only asks the object store whether the bucket exists and lists it; it never " +
 			"creates, writes to or removes a bucket",
+			"the run asks with the seed Secret's keys, and the members write with the cluster's " +
+				"spec.objectStorage Secret, a copy of them; the verdict does not depend on the object store's " +
+				"error code (storeError), which is recorded until a lab run shows what the store answers",
 			"the Operator's and the Instance Manager's logs were not checked"},
 		Cleanup: "nothing to delete: the run created no CubridBackup", Residue: "nothing: the run wrote nothing " +
-			"to the object store"}
+			"to the object store" + stagingNotChecked}
 	var created *databasev1alpha1.CubridBackup
 	defer func() {
 		cleaned := h.deleteMissingBackup(ctx, created, &rec)
@@ -161,14 +179,15 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 	}
 	never := strings.Join(result.NeverEvents, "; ")
 	// The reason names each never-event once, then what else went wrong.
-	reason := never
+	parts := slices.Clone(result.NeverEvents)
 	if err != nil {
 		for part := range strings.SplitSeq(err.Error(), "\n") {
-			if part != "" && !strings.Contains(reason, part) {
-				reason = strings.TrimPrefix(reason+"; "+part, "; ")
+			if part != "" && !slices.Contains(parts, part) {
+				parts = append(parts, part)
 			}
 		}
 	}
+	reason := strings.Join(parts, "; ")
 	switch {
 	case errors.As(err, new(backupVerdict)) || errors.As(err, new(restoreVerdict)) ||
 		errors.As(err, new(dataViolation)):
@@ -186,7 +205,7 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 		result.Reason = "the backup to " + rec.Bucket.Name + ", which the run found absent before the request, " +
 			"ended Failed within backup_limit for its upload, never Completed and without status.artifact; the " +
 			"bucket was still absent at the end; the source was unchanged; no credential was in the statuses read " +
-			"or the Events; the Operator's logs were not checked"
+			"or the Events; the Operator's and the Instance Manager's logs were not checked"
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -218,7 +237,8 @@ func (h *haRun) missingSteps(ctx context.Context, result *evidence.Scenario, rec
 	errs := []error{h.judgeMissing(backup, err, requested, rec, result)}
 	errs = append(errs, h.missingAtEnd(ctx, rec.Bucket))
 	if b := rec.Bucket; b.CheckedAtEnd != nil && !b.AbsentAtEnd {
-		rec.Residue = "bucket " + b.Name + " exists at the end; the run did not create it and does not remove it"
+		rec.Residue = "bucket " + b.Name + " exists at the end; the run did not create it and does not remove it" +
+			stagingNotChecked
 	}
 	if err := h.checkS11Credentials(ctx, *created, nil, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
@@ -280,7 +300,11 @@ func (h *haRun) judgeMissing(backup *databasev1alpha1.CubridBackup, waitErr erro
 	}
 	if len(events) > 0 {
 		result.NeverEvents = append(result.NeverEvents, events...)
-		return backupVerdict{errors.New(strings.Join(events, "; "))}
+		errs := make([]error, 0, len(events))
+		for _, event := range events {
+			errs = append(errs, backupVerdict{errors.New(event)})
+		}
+		return errors.Join(errs...)
 	}
 	if waitErr != nil {
 		if errors.As(waitErr, new(backupVerdict)) {
@@ -290,11 +314,21 @@ func (h *haRun) judgeMissing(backup *databasev1alpha1.CubridBackup, waitErr erro
 		// be judged.
 		return fmt.Errorf("read the CubridBackup: %w", waitErr)
 	}
-	want := "upload failed: put " + rec.Bucket.Name + "/"
-	if c := meta.FindStatusCondition(s.Conditions, backupReady); c == nil || c.Reason != s11MissingReason ||
-		!strings.HasPrefix(c.Message, want) {
-		return backupVerdict{fmt.Errorf("the backup to the missing bucket ended Failed for another reason than "+
-			"%s %q: %s", s11MissingReason, want, readyReason(backup))}
+	c := meta.FindStatusCondition(s.Conditions, backupReady)
+	if c == nil || c.Reason != s11MissingReason || !strings.HasPrefix(c.Message, uploadFailed) {
+		// The backup ended before its upload, so the missing bucket was not
+		// exercised: S11 missing-destination could not be judged.
+		return fmt.Errorf("the backup to the missing bucket ended Failed before its upload, not with %s %q: %s",
+			s11MissingReason, uploadFailed, readyReason(backup))
+	}
+	want := uploadFailed + "put " + rec.Bucket.Name + "/"
+	if !strings.HasPrefix(c.Message, want) {
+		return backupVerdict{fmt.Errorf("the upload of the backup to the missing bucket failed for another reason "+
+			"than its destination, not with %q: %s", want, readyReason(backup))}
+	}
+	// The store's answer follows "upload failed: put <bucket>/<key>: ".
+	if _, answer, ok := strings.Cut(strings.TrimPrefix(c.Message, want), ": "); ok {
+		rec.StoreError, rec.StoreErrorKind = answer, storeErrorKind(answer)
 	}
 	rec.FailedWithin = rec.Phases[len(rec.Phases)-1].At.Sub(requested).Round(time.Millisecond).String()
 	result.Measurements["failedWithin"] = rec.FailedWithin
@@ -302,6 +336,20 @@ func (h *haRun) judgeMissing(backup *databasev1alpha1.CubridBackup, waitErr erro
 		rec.StatusFailedWithin = done.Sub(backup.CreationTimestamp.Time).String()
 	}
 	return nil
+}
+
+// storeErrorKind names what the object store's answer says: a bucket that
+// does not exist, a refused access, or something else. It is an observation:
+// the answer's words are the store's, and no lab run has shown them yet.
+func storeErrorKind(answer string) string {
+	lower := strings.ToLower(answer)
+	switch {
+	case strings.Contains(lower, "nosuchbucket") || strings.Contains(lower, "does not exist"):
+		return storeErrorNoSuchBucket
+	case strings.Contains(lower, "accessdenied") || strings.Contains(lower, "access denied"):
+		return storeErrorAccessDenied
+	}
+	return storeErrorOther
 }
 
 // missingAtEnd asks the object store again whether the bucket exists, and

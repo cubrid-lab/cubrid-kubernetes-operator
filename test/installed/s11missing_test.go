@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -228,6 +229,11 @@ func TestRunS11MissingDestinationPassesWhenTheBackupFails(t *testing.T) {
 	if summary := readSummary(t, cfg.EvidenceDir); !summary.Passed || missing.Result != evidence.Pass {
 		t.Fatalf("summary = %+v, want every scenario passed", summary)
 	}
+	// The summary keeps no reason for a pass; the record names both logs.
+	if notes := readMissingRecord(t, cfg.EvidenceDir).Notes; !slices.Contains(notes,
+		"the Operator's and the Instance Manager's logs were not checked") {
+		t.Fatalf("S11 missing-destination notes = %v, want both logs named as not checked", notes)
+	}
 	if strings.Join(f.writes, ",") != "namespace,secret,cluster,client,backup,backup" {
 		t.Fatalf("writes = %v", f.writes)
 	}
@@ -252,6 +258,9 @@ func TestRunS11MissingDestinationPassesWhenTheBackupFails(t *testing.T) {
 	// No bucket was created or written by the run.
 	if exists, _ := f.store.BucketExists(t.Context(), missingBucket(t, cfg.EvidenceDir)); exists {
 		t.Fatal("the missing bucket exists after the run")
+	}
+	if len(f.store.puts) != 0 || len(f.store.removes) != 0 {
+		t.Fatalf("the run wrote %v and removed %v in the object store; want nothing", f.store.puts, f.store.removes)
 	}
 	requireNamespaceGone(t, f.haFixture)
 }
@@ -286,6 +295,12 @@ func requireMissingRecord(t *testing.T, f *s11MissingFixture) {
 		rec.JudgedAt == nil || rec.RequestedAt.After(*rec.JudgedAt) || rec.FailedWithin == "" ||
 		rec.Artifact != nil || !strings.HasPrefix(rec.Failure, s11MissingReason+": upload failed: put "+b.Name+"/") {
 		t.Fatalf("record = %+v, want the request, the failure and the verdict", rec)
+	}
+	if rec.StoreError != "The specified bucket does not exist." || rec.StoreErrorKind != storeErrorNoSuchBucket {
+		t.Fatalf("store error = %q (%s), want the store's answer observed", rec.StoreError, rec.StoreErrorKind)
+	}
+	if !strings.Contains(rec.Residue, "staging directory") {
+		t.Fatalf("residue = %q, want the unchecked staging directory named", rec.Residue)
 	}
 	requireMissingChecks(t, rec, lab01)
 }
@@ -360,11 +375,21 @@ func TestRunS11MissingDestinationFailsWhenTheBucketIsCreated(t *testing.T) {
 	}
 }
 
-func TestRunS11MissingDestinationFailsWhenTheBackupFailsForAnotherReason(t *testing.T) {
-	for name, tc := range map[string]struct{ reason, message string }{
-		"backupdb": {reason: s11MissingReason, message: "backupdb failed: exit status 1"},
+func TestRunS11MissingDestinationJudgesAFailureByWhetherItReachedTheUpload(t *testing.T) {
+	for name, tc := range map[string]struct {
+		reason, message string
+		want            evidence.Result
+	}{
+		// The backup ended before its upload: the missing bucket was not
+		// exercised, so S11 missing-destination could not be judged.
+		"backupdb": {reason: s11MissingReason, message: "backupdb failed: exit status 1", want: evidence.Blocked},
+		"engine refused": {reason: s11MissingReason, message: "backup refused: the engine version of this member " +
+			"could not be read from cubrid_rel", want: evidence.Blocked},
 		"another Ready reason": {reason: "RecordedTargetNotStarted",
-			message: "the backup was not started on its recorded target ha-0"},
+			message: "the backup was not started on its recorded target ha-0", want: evidence.Blocked},
+		// The upload ran and failed, but not for its destination.
+		"upload verification": {reason: s11MissingReason, message: "upload failed: upload verification failed for " +
+			"lab-runs/x/backup/appdb_bk0v000 (size got=0 want=1 err=<nil>)", want: evidence.Fail},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS11MissingConfig(t)
@@ -375,11 +400,84 @@ func TestRunS11MissingDestinationFailsWhenTheBackupFailsForAnotherReason(t *test
 				}
 			}
 			missing, err := missingOf(t, f)
-			if err == nil || missing.Result != evidence.Fail || !strings.Contains(missing.Reason, tc.message) ||
+			if err == nil || missing.Result != tc.want || !strings.Contains(missing.Reason, tc.message) ||
 				len(missing.NeverEvents) != 0 {
-				t.Fatalf("S11 missing-destination = %+v, want a failure naming the other reason", missing)
+				t.Fatalf("S11 missing-destination = %+v, want %s naming the other reason", missing, tc.want)
+			}
+			if !slices.Equal(f.deleted, []string{s11MissingBackupName + "/" + testMissingUID}) {
+				t.Fatalf("deleted = %v, want the backup deleted", f.deleted)
 			}
 		})
+	}
+}
+
+func TestRunS11MissingDestinationFailsOnAnArtifactOfAFailedBackup(t *testing.T) {
+	cfg := testS11MissingConfig(t)
+	f := newS11MissingFixture(t, cfg)
+	f.tamperMissing = func(_ int, s *databasev1alpha1.CubridBackupStatus) {
+		if s.Phase == databasev1alpha1.BackupPhaseFailed {
+			s.Artifact = &databasev1alpha1.CubridBackupArtifact{URI: "s3://elsewhere/manifest.json"}
+		}
+	}
+	missing, err := missingOf(t, f)
+	if err == nil || missing.Result != evidence.Fail || len(missing.NeverEvents) != 1 ||
+		!strings.Contains(missing.NeverEvents[0], "status.artifact") ||
+		strings.Count(missing.Reason, "status.artifact") != 1 {
+		t.Fatalf("S11 missing-destination = %+v, want the artifact as one never-event, named once", missing)
+	}
+}
+
+func TestRunS11MissingDestinationIsBlockedWhenTheRunEndsDuringTheWait(t *testing.T) {
+	cfg := testS11MissingConfig(t)
+	cfg.BackupLimit = time.Minute
+	f := newS11MissingFixture(t, cfg)
+	f.missingPhases = f.missingPhases[:2]
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	f.onMissingRead = func(read int) error {
+		if read == 2 {
+			cancel()
+		}
+		return nil
+	}
+	if err := f.runner.RunHA(ctx, cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	missing := missingScenarios(t, cfg.EvidenceDir)[2]
+	if missing.Result != evidence.Blocked || !strings.Contains(missing.Reason, "the run ended") {
+		t.Fatalf("S11 missing-destination = %+v, want blocked: the run ended", missing)
+	}
+	if !slices.Equal(f.deleted, []string{s11MissingBackupName + "/" + testMissingUID}) ||
+		missing.CleanupSucceeded == nil || !*missing.CleanupSucceeded {
+		t.Fatalf("deleted = %v, S11 missing-destination = %+v; want the backup deleted after the run ended",
+			f.deleted, missing)
+	}
+}
+
+func TestRunS11MissingDestinationIsBlockedWhenTheManagerChanges(t *testing.T) {
+	cfg := testS11MissingConfig(t)
+	f := newS11MissingFixture(t, cfg)
+	f.onMissingRead = func(read int) error {
+		if read == 1 {
+			pod := &corev1.Pod{}
+			key := client.ObjectKey{Namespace: cfg.OperatorNamespace, Name: testManagerPodName}
+			if err := f.haFixture.store.Get(t.Context(), key, pod); err != nil {
+				t.Fatal(err)
+			}
+			pod.Status.ContainerStatuses[0].ContainerID = testRestarted
+			if err := f.haFixture.store.Status().Update(t.Context(), pod); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	}
+	missing, err := missingOf(t, f)
+	if err == nil || missing.Result != evidence.Blocked || !strings.Contains(missing.Reason, "manager") {
+		t.Fatalf("S11 missing-destination = %+v, want blocked by the changed manager", missing)
+	}
+	if rec := readMissingRecord(t, cfg.EvidenceDir); rec.ManagerAfter == nil ||
+		rec.ManagerAfter.Pods[0].ContainerID != testRestarted {
+		t.Fatalf("manager after = %+v, want the changed manager recorded", rec.ManagerAfter)
 	}
 }
 

@@ -87,6 +87,8 @@ type fakeStore struct {
 	removeErr func(key string) error
 	bucketErr func(bucket string) error
 	afterPut  func(key string)
+	// puts and removes are the bucket/keys the run wrote and removed.
+	puts, removes []string
 }
 
 func (s *fakeStore) put(bucket, key string, data []byte) {
@@ -116,6 +118,9 @@ func (s *fakeStore) Put(_ context.Context, bucket, key string, r io.Reader, size
 			return err
 		}
 	}
+	s.mu.Lock()
+	s.puts = append(s.puts, bucket+"/"+key)
+	s.mu.Unlock()
 	data, err := io.ReadAll(io.LimitReader(r, size))
 	if err != nil {
 		return err
@@ -138,6 +143,7 @@ func (s *fakeStore) Remove(_ context.Context, bucket, key string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.removes = append(s.removes, bucket+"/"+key)
 	delete(s.objects, bucket+"/"+key)
 	return nil
 }

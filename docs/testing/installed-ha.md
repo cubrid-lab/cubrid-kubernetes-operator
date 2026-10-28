@@ -12,10 +12,11 @@ installed:
 5. Remove the namespace.
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`
-and `missing-destination`, and S12 `exact`, `tampered`, `wrong-target`, `operator-restart`,
-`instance-manager-restart`, `instance-manager-restart-preparing` and
-`instance-manager-restart-seeding` build on. It injects no fault. A pass is not an S01 result at the VM-lab level, and it
-does not qualify any of S00 to S15.
+and `missing-destination`, and S12 `exact`, `tampered`, `wrong-target`,
+`operator-restart`, `instance-manager-restart`,
+`instance-manager-restart-preparing` and `instance-manager-restart-seeding`
+build on. It injects no fault. A pass is not an S01 result at the VM-lab
+level, and it does not qualify any of S00 to S15.
 
 It shares its inputs, target snapshot, manager identity checks and namespace
 ownership with the [installed smoke](installed-smoke.md); this page covers
@@ -407,9 +408,21 @@ store's and is not required.
    saw it, in UTC.
    - `Completed`, and a `status.artifact` in the backup's status as it
      ended, must never happen and fail S11 `missing-destination`.
-   - `Failed` with another reason than `BackupFailed`, or a message that
-     does not begin with `upload failed: put <bucket>/`, fails it, with the
-     reason and message: the backup failed, but not for its destination.
+   - `Failed` with another reason than `BackupFailed`, or with a message
+     that does not begin with `upload failed: `, such as
+     `backupdb failed: ...` or `backup refused: ...`, blocks it, with the
+     reason and message: the backup ended before its upload, so the missing
+     bucket was not exercised.
+   - `BackupFailed` with `upload failed: ` but not
+     `upload failed: put <bucket>/` fails it: the upload ran and failed, but
+     not for its destination.
+   - The object store's answer after `put <bucket>/<key>: ` is recorded as
+     `storeError`, with `storeErrorKind` `no-such-bucket`, `access-denied`
+     or `other`. The verdict does not depend on it until a lab run shows what
+     the store answers. The run asks whether the bucket exists with the seed
+     Secret's keys, while the members write with the cluster's
+     `spec.objectStorage` Secret, a copy of the same keys, so a refused
+     access would not tell the two apart by itself.
    - A backup read but neither `Completed` nor `Failed` when
      `-backup-limit` passes fails it, with its last phase. When the readings
      kept failing until then, it is blocked.
@@ -1579,7 +1592,8 @@ and S12 variant other than `complete` and `exact` only those under
   (the bucket's name, whether it was absent before the request and at the
   end, with the times, and what it held at the end if it existed; the
   backup's name, UID and prefix, the time of the request, every phase
-  observed, `failedWithin`, the failure's reason and message, the artifact
+  observed, `failedWithin`, the failure's reason and message, the object
+  store's answer it quotes (`storeError`, `storeErrorKind`), the artifact
   if one was reported, the manager before and after, the source at the end,
   where credentials were looked for, `judgedAt`, whether the backup was
   deleted, and what is left) and

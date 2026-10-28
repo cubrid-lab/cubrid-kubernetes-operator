@@ -1031,7 +1031,10 @@ it needs more.
 - **Expected:** `complete` ends as `Completed` with an artifact whose size and
   digest match the manifest. The interrupted variants end as `Completed`
   after a resume or as `Failed`; both are acceptable, and the run records
-  which. `missing-destination` ends as `Failed`.
+  which. `missing-destination` ends as `Failed` for its upload
+  (`BackupFailed`, `upload failed: put <bucket>/...`); a backup that ends
+  `Failed` before its upload did not exercise the missing bucket and leaves
+  the variant blocked.
 - **Must never happen:** `Completed` with a missing or unreadable artifact; a
   manifest that names files which do not exist; credentials in status, events
   or logs; `Completed`, or a `status.artifact`, for a backup whose
