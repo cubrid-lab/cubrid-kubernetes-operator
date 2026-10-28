@@ -4,8 +4,8 @@
 
 Accepted (POC-gated) — tracked in issue #321
 
-The backup and restore rules below are carried out by #276; the patch
-compatibility they assume is listed under Validation.
+The patch compatibility that the backup and restore rules assume is listed
+under Validation.
 
 ## Context
 
@@ -82,10 +82,10 @@ Everything the operator compares with it is reduced to that series.
 ### Format of `spec.version` and how it is compared
 
 `spec.version` names a series, `MAJOR.MINOR` (`11.4`). Every comparison
-reduces both sides to their series (`engineSeries`): `11.4.6.1963` and
-`11.4` are the same series, `11.2.x` is another. A value with more
-components is accepted and compared by its series; a value without a
-numeric major and minor cannot be compared and is reported as
+reduces both sides to their series (`instancemanager.EngineSeries`):
+`11.4.6.1963` and `11.4` are the same series, `11.2.x` is another. A value
+with more components is accepted and compared by its series; a value without
+a numeric major and minor cannot be compared and is reported as
 unverifiable. The API keeps accepting any non-empty string: a pattern added
 now would refuse objects already stored, and the comparison already reports
 what it cannot use.
@@ -152,6 +152,17 @@ A restore takes an artifact only from the target's own series:
   carries the declared `spec.version`, and is compared by series when it can
   be reduced to one. A restore across series is an engine upgrade and is
   refused (ADR-0009).
+- Data that an earlier attempt of the same restore left is not taken over
+  and started on an engine of another series than the one it was restored
+  with; it is kept for a person.
+
+A bootstrap step does not spend its attempts on a refusal that would repeat.
+The seed backup, a seed restore and the recovery restore wait, with the
+`BootstrapReady` reason `EngineVersionMismatch`, while their member was
+last observed running an engine of another series than `spec.version`.
+They go on once `spec.version` names the engine's series. A member whose
+engine has not been observed yet is not held: its Instance Manager checks
+for itself.
 
 ### Why the approval stays an annotation
 
