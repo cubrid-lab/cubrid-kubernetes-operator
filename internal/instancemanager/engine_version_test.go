@@ -26,6 +26,17 @@ import (
 	"testing"
 )
 
+// Engine versions of the tests below: the series the cluster declares,
+// another patch and another series of the pinned engine, and a version
+// without a series.
+const (
+	declaredSeries    = "11.4"
+	anotherPatch      = "11.4.7.2000"
+	otherSeriesEngine = "11.2.0.0480"
+	noSeries          = "latest"
+	backupContentSHA  = "0000"
+)
+
 // relCLI answers cubrid_rel with out and err and passes every other command
 // to CLI: the engine version is read from it, not taken as pinned (runTests).
 type relCLI struct {
@@ -45,8 +56,8 @@ func (c *relCLI) Run(ctx context.Context, name string, args ...string) (string, 
 
 func TestEngineSeries(t *testing.T) {
 	for in, want := range map[string]string{
-		"11.4": "11.4", reportedEngineVersion: "11.4", " 11.4.6 ": "11.4",
-		"11": "", "": "", "garbage": "", "11.": "", ".4": "", "v11.4": "", "11.x": "",
+		declaredSeries: declaredSeries, reportedEngineVersion: declaredSeries, " 11.4.6 ": declaredSeries,
+		"11": "", "": "", "11.x.6": "", "11.": "", ".4": "", "v11.4": "", "11.x": "",
 	} {
 		if got := EngineSeries(in); got != want {
 			t.Errorf("EngineSeries(%q) = %q, want %q", in, got, want)
@@ -61,16 +72,16 @@ func TestManifestVerify_ComparesTheEngineBySeries(t *testing.T) {
 		manifest, expected string
 		ok                 bool
 	}{
-		{reportedEngineVersion, "11.4", true},
-		{"11.4", reportedEngineVersion, true},
-		{"11.4.6", "11.4.7.2000", true},
-		{"11.2.0.0480", reportedEngineVersion, false},
+		{reportedEngineVersion, declaredSeries, true},
+		{declaredSeries, reportedEngineVersion, true},
+		{"11.4.6", anotherPatch, true},
+		{otherSeriesEngine, reportedEngineVersion, false},
 		{"", reportedEngineVersion, false},
-		{"latest", reportedEngineVersion, false},
-		{"latest", "latest", false},
+		{noSeries, reportedEngineVersion, false},
+		{noSeries, noSeries, false},
 	} {
 		m := BackupManifest{ManifestVersion: ManifestVersion, Database: dbName, CubridVersion: tc.manifest,
-			Objects: []ManifestObject{{Key: "backup/x", SizeBytes: 3, SHA256: "abc"}}}
+			Objects: []ManifestObject{{Key: "backup/" + stagedFileName, SizeBytes: 3, SHA256: backupContentSHA}}}
 		exp := goodManifestExpectation()
 		exp.CubridVersion = tc.expected
 		if err := m.Verify(exp); (err == nil) != tc.ok {
@@ -105,7 +116,7 @@ func runEngineBackup(t *testing.T, declared, rel string, relErr error) (Operatio
 // The manifest records the engine the member runs, read from cubrid_rel,
 // not the version the request declares (#276, ADR-0011).
 func TestServer_Backup_RecordsTheObservedEngineVersion(t *testing.T) {
-	final, _, objects := runEngineBackup(t, "11.4", cubridRelOut, nil)
+	final, _, objects := runEngineBackup(t, declaredSeries, cubridRelOut, nil)
 	if final.State != OpCompleted || final.Artifact == nil {
 		t.Fatalf("final = %s (%q), artifact %+v; want Completed", final.State, final.FailureReason, final.Artifact)
 	}
@@ -129,10 +140,10 @@ func TestServer_Backup_RefusesWithoutAKnownEngineOfTheDeclaredSeries(t *testing.
 		declared, rel string
 		relErr        error
 	}{
-		"cubrid_rel fails":        {"11.4", "", errors.New("exit status 127")},
-		"cubrid_rel has no build": {"11.4", "CUBRID 11.4.6", nil},
+		"cubrid_rel fails":        {declaredSeries, "", errors.New("exit status 127")},
+		"cubrid_rel has no build": {declaredSeries, "CUBRID 11.4.6", nil},
 		"another series":          {"11.2", cubridRelOut, nil},
-		"no series declared":      {"latest", cubridRelOut, nil},
+		"no series declared":      {noSeries, cubridRelOut, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			final, backupdb, objects := runEngineBackup(t, tc.declared, tc.rel, tc.relErr)
@@ -171,12 +182,12 @@ func TestRestore_RefusesAnEngineOfAnotherOrUnknownSeries(t *testing.T) {
 	for name, tc := range map[string]struct {
 		engine, declared, manifest string
 	}{
-		"member engine unknown":           {"", "11.4", testCubridVersion},
-		"member engine without a series":  {"garbage", "", testCubridVersion},
-		"member runs another series":      {"11.2.0.0480", "11.4", "11.2.0.0480"},
-		"artifact of another series":      {reportedEngineVersion, "11.4", "11.2.0.0480"},
-		"artifact without a version":      {reportedEngineVersion, "11.4", ""},
-		"artifact version without series": {reportedEngineVersion, "", "latest"},
+		"member engine unknown":           {"", declaredSeries, testCubridVersion},
+		"member engine without a series":  {"11.x.6", "", testCubridVersion},
+		"member runs another series":      {otherSeriesEngine, declaredSeries, otherSeriesEngine},
+		"artifact of another series":      {reportedEngineVersion, declaredSeries, otherSeriesEngine},
+		"artifact without a version":      {reportedEngineVersion, declaredSeries, ""},
+		"artifact version without series": {reportedEngineVersion, "", noSeries},
 	} {
 		t.Run(name, func(t *testing.T) {
 			objects, bucket, prefix := stageUploadedArtifact(t)
@@ -209,9 +220,9 @@ func TestRestore_AcceptsAnEngineOfTheSameSeries(t *testing.T) {
 	for name, tc := range map[string]struct {
 		engine, declared, manifest string
 	}{
-		"same full version":      {reportedEngineVersion, "11.4", reportedEngineVersion},
-		"another patch":          {"11.4.7.2000", "11.4", reportedEngineVersion},
-		"manifest of the series": {reportedEngineVersion, "11.4", "11.4"},
+		"same full version":      {reportedEngineVersion, declaredSeries, reportedEngineVersion},
+		"another patch":          {anotherPatch, declaredSeries, reportedEngineVersion},
+		"manifest of the series": {reportedEngineVersion, declaredSeries, declaredSeries},
 		"request declares none":  {reportedEngineVersion, "", reportedEngineVersion},
 	} {
 		t.Run(name, func(t *testing.T) {
