@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-41, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-42, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -22,7 +22,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > same engine build, and its timings are of those VMs only; POC-37 and POC-38
 > ran in Docker on a native linux/amd64 host; POC-39 ran on the VM lab, with
 > plain Pods and no CUBRID; POC-40 and POC-41 ran on the VM lab, with the
-> installed Operator and its derivative image. Each states its own
+> installed Operator and its derivative image; POC-42 ran in Docker on a
+> native linux/amd64 host. Each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
 > general CUBRID guarantee. The raw observations below are kept as recorded;
 > where a later POC contradicts one, a note says so. The current reading of
@@ -4306,3 +4307,77 @@ read can count fewer rows:
   - why the master's timeout order matched the stall in four of four;
   - why, in runs 2 and 4, the master's queued data and `FIN` on its `FIN-WAIT-1` socket did not move the stuck copier out of `ESTAB` after healing.
 - **A failover while a slave was stuck**, which POC-40 names as the data-loss risk.
+
+---
+
+## POC-42 — which value on the master gives the end of its log, to compare with a slave's copy of it (#623) — **observation: `cubrid applyinfo -r localhost <db>` on the master, without `-L`, prints the master's own active log, whose `EOF LSA` equalled a healthy slave's copied EOF at every sample; on an idle master both grew by about 150 bytes a second; with the slave's copier stopped, the master's `EOF LSA` went on for 8 pages while the copied EOF stayed fixed**
+
+**Question (#623).** POC-41 found a slave whose copier receives nothing:
+its copied log's EOF stays fixed and no page waits to be applied, so the
+apply stall rule cannot see it. To report it, the Operator needs a value on
+the master that gives the end of the master's log, in the same addresses as
+a slave's copied EOF, and that keeps advancing while the stuck slave's EOF
+does not. Which command gives it, and how does it move on an idle master?
+
+**Environment (2026-10-28 10:32Z to 10:39Z).** Native linux/amd64 host (6
+CPUs), Docker 29.2.1, `cubrid/cubrid:11.4`
+(`cubrid/cubrid@sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`),
+`cubrid_rel`: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`. The plain engine
+image, no Instance Manager and no Broker. One pair, POC-36's recipe:
+- containers `h-0` and `h-1` on one network, entrypoint replaced by `sleep`, CUBRID run as `cubrid` through `docker exec`, `hosts: files dns`;
+- `ha_mode=on`, `cubrid_ha.conf` with `ha_node_list=cubrid@h-0:h-1`, `ha_db_list=appdb`, `ha_port_id=59901`, `ha_copy_sync_mode=sync:sync`;
+- `createdb --db-volume-size=64M --log-volume-size=64M --server-name=h-0:h-1` and `heartbeat start` on `h-0`;
+- `backupdb -C -l 0` on `h-0`, copied to `h-1`; on `h-1` a `createdb` of the same name to register it in `databases.txt`, its volumes removed, `restoredb -u`, then `heartbeat start`.
+
+`heartbeat status` showed `h-0` master (`registered_and_active`) and `h-1`
+slave, with its copier and applier `registered`. The containers, volumes
+and network were removed afterwards.
+
+**The candidates.**
+- `cubrid applyinfo -r localhost appdb` on the master, without `-L`, printed one part, ` ***  Active Info. *** `, with `EOF LSA` and `Append LSA` of the master's active log (both `146 | 5472` at the first reading) and `HA server state : active`.
+  - `-r h-0`, the master's own host name, printed the same.
+  - `-a` without `-L` printed the usage and exited 1.
+- `cubrid applyinfo -L <copied log> -r h-0 -a -v appdb` on the slave printed the slave's copy ("Copied Active Info") and the master's log ("Active Info") together, and the "Delay in Copying Active Log". It reads the master over the network, from the slave. That is the path a cut between them breaks, so it was not used.
+- On the master, the copy of the master's log is not there to compare with; the slave's `applyinfo -L <copied log> -a -v` gives the copied EOF, as the Instance Manager reads it already.
+
+**Readings.** The master's `EOF LSA` by `applyinfo -r localhost` on `h-0`,
+and the copied EOF ("EOF LSA" under "Copied Active Info") by
+`applyinfo -L … -a -v` on `h-1`, read one after the other. Times are UTC.
+
+| Time | Master `EOF LSA` | Slave's copied EOF | State |
+|---|---|---|---|
+| 10:34:59 | 147 \| 1520 | 147 \| 1520 | idle (one `CREATE TABLE` just before) |
+| 10:35:19 | 147 \| 4832 | 147 \| 4832 | idle |
+| 10:35:39 | 147 \| 8048 | 147 \| 8048 | idle |
+| 10:36:00 | 147 \| 10784 | 147 \| 10784 | idle |
+| 10:36:20 | 147 \| 13472 | 147 \| 13472 | idle |
+| 10:36:40 | 148 \| 416 | 148 \| 416 | idle |
+| 10:37:11 | 149 \| 13352 | 148 \| 3632 | copier stopped (`kill -STOP` at about 10:37:00), 200 rows of 900 bytes inserted every 10 s on the master |
+| 10:37:21 | 151 \| 7528 | 148 \| 3632 | the same |
+| 10:37:31 | 153 \| 1800 | 148 \| 3632 | the same |
+| 10:37:41 | 154 \| 12400 | 148 \| 3632 | the same |
+| 10:37:51 | 156 \| 8472 | 148 \| 3632 | the same |
+| 10:38:02 | 156 \| 9048 | 156 \| 9048 | copier resumed (`kill -CONT`), no more inserts |
+| 10:38:12 | 156 \| 9528 | 156 \| 9528 | idle |
+| 10:38:22 | 156 \| 10008 | 156 \| 10008 | idle |
+
+`Append LSA` equalled `EOF LSA` on the master at every reading.
+
+**Findings.**
+- **The value:** the `EOF LSA` of `applyinfo -r localhost <db>` on the master. It is an address in the same log as the slave's copied EOF: on the healthy pair the two were equal at every reading, in this sync-mode pair.
+- **An idle master's log is not still.** With no client writing, it grew from 147|1520 to 148|416 in 101 s, about 150 bytes a second (16 KB log pages, `DB logpagesize : 16384`), and the copy followed it to the byte. So "idle" does not mean both ends unchanged: both move, together.
+- **A copier that receives nothing is visible against it.** With the copier stopped, the master's end went on from page 149 to 156 while the copied EOF stayed at 148|3632. It caught up within 10 s of the resume.
+- **The comparison is by page.** The two values are read on two members at slightly different moments, so on an idle master the slave's copy can be read a few bytes behind the master. In the same page that is no evidence of anything; a copy pages behind is.
+
+**Departures.** `kill -STOP` of the copier is a stand-in for POC-41's copier, which ran and held a session the master had closed. It shows the comparison, not the cause. Only one pair, one slave, sync mode.
+
+**Consequence for the Operator (#623).** The master's Instance Manager reads
+its log end with `applyinfo -r localhost <db>`, and the Operator reports a
+slave whose copy has not grown while the master's log ends pages past it
+(`LogCopyStalled`, docs/observability.md).
+
+**Not tested.**
+- On the VM lab: the master's `EOF LSA` going on while a slave is stuck as in POC-41. #623 asks for that with the POC-41 cut.
+- `ha_copy_sync_mode` `async` or `semisync`, where a healthy copy may run further behind.
+- A master under a sustained load, where a healthy copy can be pages behind at one reading; the rule needs the copy not to grow between two readings as well.
+- What `applyinfo -r localhost` costs on a busy master, and how long it takes.

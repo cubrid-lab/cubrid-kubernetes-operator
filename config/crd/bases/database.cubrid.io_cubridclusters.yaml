@@ -864,6 +864,32 @@ spec:
                             the Instance Manager could not identify the process; an empty value on
                             either side decides nothing.
                           type: string
+                        copiedEOF:
+                          description: |-
+                            copiedEOF is the end of this slave's copy of the master's log. It is
+                            kept only while copyDelayedPages is above 0, so that the next reading
+                            can tell whether the copy grew.
+                          properties:
+                            offset:
+                              description: offset is the byte offset in the page.
+                              format: int64
+                              type: integer
+                            page:
+                              description: page is the log page.
+                              format: int64
+                              type: integer
+                          required:
+                          - offset
+                          - page
+                          type: object
+                        copyDelayedPages:
+                          description: |-
+                            copyDelayedPages is how many log pages the master's log ends past the
+                            end of this slave's copy of it, as of the last reading that had both
+                            ends. A reading without the master's log end keeps it while the copy
+                            did not grow, and makes it 0 otherwise.
+                          format: int64
+                          type: integer
                         delayedPages:
                           description: delayedPages is the number of copied log pages
                             that are not applied yet.
@@ -874,6 +900,14 @@ spec:
                             could not apply.
                           format: int64
                           type: integer
+                        notReceivingSince:
+                          description: |-
+                            notReceivingSince is when the operator first saw pages of the master's
+                            log waiting to be copied while the end of this slave's copy had not
+                            moved since the reading before (docs/poc/RESULTS.md, POC-41). It is
+                            cleared as soon as the copy grows or no page waits to be copied.
+                          format: date-time
+                          type: string
                         observedAt:
                           description: |-
                             observedAt is when the operator last read these counters. A reading

@@ -162,8 +162,11 @@ func replicationTransitions(before, after *databasev1alpha1.CubridClusterStatus)
 		}}
 	}
 	event := "replication_stalled"
-	if now.Reason == reasonApplyFailures {
+	switch now.Reason {
+	case reasonApplyFailures:
 		event = "apply_failures"
+	case reasonLogCopyStalled:
+		event = "log_copy_stalled"
 	}
 	return []transition{{
 		Event: event, Reason: now.Reason, Warning: true,
@@ -203,6 +206,23 @@ func memberTransitions(before, after *databasev1alpha1.CubridClusterStatus) []tr
 			out = append(out, transition{
 				Event:   "member_replication_resumed",
 				Message: fmt.Sprintf("Member %s applies the master's log again", in.Name),
+				Fields:  []any{logKeyMember, in.Name},
+			})
+		}
+		wasNotReceiving := was.Replication != nil && was.Replication.NotReceivingSince != nil
+		isNotReceiving := in.Replication != nil && in.Replication.NotReceivingSince != nil
+		switch {
+		case !wasNotReceiving && isNotReceiving:
+			out = append(out, transition{
+				Event: "member_log_copy_stalled", Warning: true,
+				Message: fmt.Sprintf("Member %s has log pages waiting to be copied and its copy of the master's log did not grow since the last observation", in.Name),
+				Fields: []any{logKeyMember, in.Name, "copyDelayedPages", in.Replication.CopyDelayedPages,
+					"source", in.Replication.Source},
+			})
+		case wasNotReceiving && !isNotReceiving:
+			out = append(out, transition{
+				Event:   "member_log_copy_resumed",
+				Message: fmt.Sprintf("Member %s receives the master's log again", in.Name),
 				Fields:  []any{logKeyMember, in.Name},
 			})
 		}

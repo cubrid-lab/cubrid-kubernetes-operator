@@ -19,9 +19,11 @@ package instancemanager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +165,33 @@ func TestParseApplyConvergence_Positions(t *testing.T) {
 	}
 }
 
+// On an active master, `applyinfo -r localhost <db>` without -L prints the
+// master's own active log, whose EOF LSA is an address of the same log a
+// slave's copy reports as its EOF (docs/poc/RESULTS.md, POC-42). The fixture
+// is the real output of cubrid/cubrid:11.4 (11.4.6) on a master.
+func TestParseLogEnd(t *testing.T) {
+	if got := parseLogEnd(applyinfoOutput(t, "applyinfo-master-log-end.txt")); got == nil || *got != (LSA{Page: 159, Offset: 13000}) {
+		t.Errorf("log end = %+v, want 159|13000", got)
+	}
+	// With -L the output also holds the copied log; only the active log's
+	// part counts.
+	both := strings.Replace(applyinfoOutput(t, "applyinfo-on-master.txt"), "EOF LSA                        : 148 | 3376",
+		"EOF LSA                        : 100 | 1", 1)
+	if got := parseLogEnd(both); got == nil || *got != (LSA{Page: 148, Offset: 3376}) {
+		t.Errorf("log end beside a copied log = %+v, want the active log's 148|3376", got)
+	}
+	copiedOnly := strings.Replace(applyinfoOutput(t, "applyinfo-on-master.txt"), " ***  Active Info. *** ", "", 1)
+	for name, out := range map[string]string{
+		"only a copied log": copiedOnly,
+		"the usage text":    "applyinfo: display CUBRID HA Apply information.\nusage: cubrid applyinfo [OPTION] database-name\n",
+		"no output":         "",
+	} {
+		if got := parseLogEnd(out); got != nil {
+			t.Errorf("%s: log end = %+v, want none", name, got)
+		}
+	}
+}
+
 func TestLSABefore(t *testing.T) {
 	for _, tc := range []struct {
 		a, b LSA
@@ -229,6 +258,54 @@ func TestServer_Role_ReportsReplicationOfASlave(t *testing.T) {
 	}
 }
 
+// An active master's role answer carries the end of its own log, which the
+// Operator compares with each slave's copy of it (#623); no other answer does.
+func TestServer_Role_ReportsTheLogEndOfAnActiveMaster(t *testing.T) {
+	master := strings.NewReplacer("current ha-1, state slave", "current ha-0, state master",
+		"registered_and_standby", "registered_and_active").Replace(slaveHeartbeat)
+	notActive := strings.Replace(master, "registered_and_active", "registered", 1)
+	for name, tc := range map[string]struct {
+		heartbeat  string
+		configured bool
+		want       *LSA
+		wantArgs   string
+	}{
+		"an active master":               {master, true, &LSA{Page: 159, Offset: 13000}, "applyinfo -r localhost appdb"},
+		"a master not yet active":        {notActive, true, nil, ""},
+		"a master not told its database": {master, false, nil, ""},
+		"a slave":                        {slaveHeartbeat, true, nil, "applyinfo -L /var/lib/cubrid/databases/appdb_ha-0 -a -v appdb"},
+	} {
+		cli := &roleCLI{heartbeat: tc.heartbeat, applyinfo: applyinfoOutput(t, "applyinfo-master-log-end.txt")}
+		server := NewServer(cli, "tok")
+		if tc.configured {
+			server = server.WithReplication("appdb", "/var/lib/cubrid/databases")
+		}
+		rr := doReq(t, server.Handler(), "/v1/role", "tok", testRemoteAddr)
+		var st HAStatus
+		if err := json.Unmarshal(rr.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case tc.want == nil && st.LogEnd != nil:
+			t.Errorf("%s: log end = %+v, want none", name, st.LogEnd)
+		case tc.want != nil && (st.LogEnd == nil || *st.LogEnd != *tc.want):
+			t.Errorf("%s: log end = %+v, want %+v", name, st.LogEnd, *tc.want)
+		}
+		if got := strings.Join(cli.applyArgs, " "); got != tc.wantArgs {
+			t.Errorf("%s: applyinfo was run as %q, want %q", name, got, tc.wantArgs)
+		}
+	}
+}
+
+// A failed read of the master's log end gives none.
+func TestLogEndOf_FailedRead(t *testing.T) {
+	st := HAStatus{Role: RoleMaster, ServerActive: true}
+	cli := fakeCLI{err: errors.New("applyinfo: connection refused")}
+	if got := logEndOf(context.Background(), cli, st, "appdb"); got != nil {
+		t.Errorf("log end after a failed read = %+v, want none", got)
+	}
+}
+
 func TestServer_Role_NoReplicationWithoutAnApplier(t *testing.T) {
 	master := strings.NewReplacer("current ha-1, state slave", "current ha-0, state master",
 		"registered_and_standby", "registered_and_active").Replace(slaveHeartbeat)
@@ -261,7 +338,9 @@ func TestServer_Role_NoReplicationWithoutAnApplier(t *testing.T) {
 			!strings.Contains(st.Replication.Reason, tc.wantReason)):
 			t.Errorf("%s: replication = %+v, want it unavailable with a reason", name, st.Replication)
 		}
-		if tc.wantNil != (cli.applyArgs == nil) && tc.wantReason == "" {
+		// Only the read of a copied log counts here: an active master reads
+		// its own log's end (TestServer_Role_ReportsTheLogEndOfAnActiveMaster).
+		if tc.wantNil != !slices.Contains(cli.applyArgs, "-L") && tc.wantReason == "" {
 			t.Errorf("%s: applyinfo run = %v", name, cli.applyArgs)
 		}
 	}

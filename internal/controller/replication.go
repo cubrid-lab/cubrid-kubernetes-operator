@@ -51,6 +51,7 @@ const (
 	reasonAppliersProgressing    = "AppliersProgressing"
 	reasonReplicationStalled     = "ReplicationStalled"
 	reasonApplyFailures          = "ApplyFailures"
+	reasonLogCopyStalled         = "LogCopyStalled"
 	reasonReplicationNotObserved = "ReplicationNotObserved"
 )
 
@@ -64,6 +65,13 @@ type ReplicationObservation struct {
 	DelayedPages   int64
 	// Applier identifies the applier process; empty when it is not known.
 	Applier string
+	// CopiedEOF is the end of the slave's copy of the source's log; nil when
+	// the Instance Manager did not report it.
+	CopiedEOF *databasev1alpha1.LogAddress
+	// SourceLogEnd is the end of the source's own log, as the source's
+	// Instance Manager reported it in the same observation as an active
+	// master; nil when it was not read.
+	SourceLogEnd *databasev1alpha1.LogAddress
 }
 
 // nextReplication turns a reading of a slave's applier into the status of its
@@ -104,6 +112,7 @@ func nextReplication(prev *databasev1alpha1.InstanceReplication, obs *Replicatio
 		Source: obs.Source, AppliedChanges: obs.AppliedChanges, FailCount: obs.FailCount, DelayedPages: obs.DelayedPages,
 		Applier: obs.Applier, ObservedAt: &observedAt,
 	}
+	nextLogCopy(prev, obs, next, now)
 	// An identity that is not known on one side decides nothing: the
 	// counters alone are compared then, as for a manager that reports none.
 	sameApplier := prev != nil && (prev.Applier == "" || obs.Applier == "" || prev.Applier == obs.Applier)
@@ -131,14 +140,58 @@ func nextReplication(prev *databasev1alpha1.InstanceReplication, obs *Replicatio
 	return next
 }
 
+// nextLogCopy sets in next, the status of a slave's replication after the
+// reading obs, whether its copy of the master's log still grows (#623). The
+// apply stall cannot tell: a copier that receives nothing leaves no page
+// waiting to be applied (docs/poc/RESULTS.md, POC-41). Pages wait to be copied
+// when the master's own log, read from the master in the same observation,
+// ends on a later page than the slave's copy. Pages, not offsets, are
+// compared: an idle master's log still grows, and a healthy copy follows it
+// within the page (POC-42), so it is not stored at every reading. The copy is
+// not receiving when pages waited at the reading before as well and its end
+// did not move in between; the time that was first seen is kept until the
+// copy grows or no page waits. Without the master's log end nothing is
+// decided: a copy that did not grow keeps the series as it was, and one that
+// grew ends it.
+func nextLogCopy(prev *databasev1alpha1.InstanceReplication, obs *ReplicationObservation,
+	next *databasev1alpha1.InstanceReplication, now time.Time) {
+	if obs.CopiedEOF == nil {
+		return
+	}
+	// The end of the copy is kept only while pages wait to be copied.
+	grew := prev == nil || prev.Source != obs.Source || prev.CopiedEOF == nil || *prev.CopiedEOF != *obs.CopiedEOF
+	if obs.SourceLogEnd == nil {
+		if !grew {
+			next.CopiedEOF, next.CopyDelayedPages = prev.CopiedEOF.DeepCopy(), prev.CopyDelayedPages
+			next.NotReceivingSince = prev.NotReceivingSince.DeepCopy()
+		}
+		return
+	}
+	delayed := obs.SourceLogEnd.Page - obs.CopiedEOF.Page
+	if delayed <= 0 {
+		return
+	}
+	next.CopiedEOF, next.CopyDelayedPages = obs.CopiedEOF.DeepCopy(), delayed
+	switch {
+	case grew:
+	case prev.NotReceivingSince != nil:
+		next.NotReceivingSince = prev.NotReceivingSince.DeepCopy()
+	default:
+		since := metav1.NewTime(now)
+		next.NotReceivingSince = &since
+	}
+}
+
 // replicationCondition judges the slaves among instances whose applier was
 // read in this reconcile's observations obs: a slave whose applier failed to
 // apply a change, then one that has been stalled for replicationStallWindow,
-// make the condition False; a slave whose applier was not read, even with
-// its last reading kept, or no slave at all, leaves it Unknown.
+// then one whose copy of the master's log has not grown for that window
+// while pages waited to be copied, make the condition False; a slave whose
+// applier was not read, even with its last reading kept, or no slave at all,
+// leaves it Unknown.
 func replicationCondition(instances []databasev1alpha1.InstanceStatus, obs map[string]RoleObservation,
 	now time.Time) (metav1.ConditionStatus, string, string) {
-	var failing, stalled, unread []string
+	var failing, stalled, notReceiving, unread []string
 	slaves := 0
 	for _, in := range instances {
 		if in.Role != databasev1alpha1.RoleSlave {
@@ -152,6 +205,8 @@ func replicationCondition(instances []databasev1alpha1.InstanceStatus, obs map[s
 			failing = append(failing, in.Name)
 		case r.StalledSince != nil && now.Sub(r.StalledSince.Time) >= replicationStallWindow:
 			stalled = append(stalled, in.Name)
+		case r.NotReceivingSince != nil && now.Sub(r.NotReceivingSince.Time) >= replicationStallWindow:
+			notReceiving = append(notReceiving, in.Name)
 		}
 	}
 	switch {
@@ -162,6 +217,10 @@ func replicationCondition(instances []databasev1alpha1.InstanceStatus, obs map[s
 		return metav1.ConditionFalse, reasonReplicationStalled,
 			fmt.Sprintf("log pages have waited for %s or longer with nothing applied on: %s",
 				replicationStallWindow, strings.Join(stalled, ", "))
+	case len(notReceiving) > 0:
+		return metav1.ConditionFalse, reasonLogCopyStalled,
+			fmt.Sprintf("the copy of the master's log has not grown for %s or longer while pages of it waited to be copied, on: %s",
+				replicationStallWindow, strings.Join(notReceiving, ", "))
 	case slaves == 0:
 		return metav1.ConditionUnknown, reasonReplicationNotObserved, "no slave was observed"
 	case len(unread) > 0:

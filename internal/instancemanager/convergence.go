@@ -147,6 +147,37 @@ func parseApplyConvergence(out string) ApplyConvergence {
 	return c
 }
 
+// activeInfoHeading starts the part of applyinfo's output about a server's
+// own active log, which -r prints. The part about a copied log is headed
+// "Copied Active Info." and does not match.
+var activeInfoHeading = regexp.MustCompile(`(?m)^\s*\*+\s+Active Info\.`)
+
+// parseLogEnd returns the "EOF LSA" of the active log's part of applyinfo's
+// output, or nil when the output has no such part.
+func parseLogEnd(out string) *LSA {
+	loc := activeInfoHeading.FindStringIndex(out)
+	if loc == nil {
+		return nil
+	}
+	return lsaField(reEOFLSA, out[loc[1]:])
+}
+
+// logEndOf returns the end of an active master's own log: the EOF LSA of
+// `cubrid applyinfo -r localhost <db>`. It is an address of the same log a
+// slave's copy reports as its EOF, and it grows also while no client writes
+// (docs/poc/RESULTS.md, POC-42). Nil for any other member, for a member that
+// was not told its database, and when it could not be read.
+func logEndOf(ctx context.Context, cli CLI, st HAStatus, database string) *LSA {
+	if st.Role != RoleMaster || !st.ServerActive || database == "" {
+		return nil
+	}
+	out, err := cli.Run(ctx, "cubrid", "applyinfo", "-r", "localhost", database)
+	if err != nil {
+		return nil
+	}
+	return parseLogEnd(out)
+}
+
 // lsaField returns the address the expression finds, or nil.
 func lsaField(re *regexp.Regexp, out string) *LSA {
 	m := re.FindStringSubmatch(out)

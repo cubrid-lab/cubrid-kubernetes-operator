@@ -1,0 +1,11 @@
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 10:33:09.000 AM 10/28/2026 (1793183589)
+Vol creation time              : 10:33:09.000 AM 10/28/2026 (1793183589)
+EOF LSA                        : 159 | 13000
+Append LSA                     : 159 | 13000
+HA server state                : active
+HA promotion time              : 10:34:12.000 AM 10/28/2026 (1793183652)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
