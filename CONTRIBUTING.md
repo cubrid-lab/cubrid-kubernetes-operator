@@ -281,10 +281,10 @@ unchanged for **every** implementation method.
 
 ## Pull request and commit titles
 
-This rule covers issue titles, pull request titles and commit subjects in every
-cubrid-lab repository. Pull requests are squash-merged and the pull request
-title becomes the commit title on `main`, so the pull request title is the one
-that must be right. The `PR title` check enforces it.
+This conventional-commit rule covers pull request titles and commit subjects in every
+cubrid-lab repository. Issue titles follow the simpler human-readable rule below.
+Pull requests are squash-merged, and the pull request title becomes the commit
+title on `main`, so the pull request title is the one that must be right. The `PR title` check enforces it.
 
 ```text
 type: description
@@ -337,14 +337,26 @@ chore(deps): bump sigs.k8s.io/controller-runtime from 0.25.0 to 0.25.1
 feat(api)!: rename the CubridCluster topology field
 ```
 
-Issue forms prefill a type prefix; keep it and write the rest of the title the
-same way. A tracking issue (epic) uses the type of the work it tracks.
+Issue forms prefill a type prefix. Issue titles use the human-readable rule below;
+a tracking issue uses the type of the outcome it coordinates.
 
 Maintainers merge with **squash merge only** and keep the pull request title as
 the commit title. Branch commits are squashed into the commit body, so keep
 their messages meaningful and keep any `Co-authored-by:` trailers intact.
 
 ## Issues
+
+### Human-readable issue titles, scope, and UTC evidence
+
+These rules apply the
+[cubrid-lab issue, pull request and commit writing standard](https://github.com/cubrid-lab/.github/blob/main/docs/ISSUE_PR_COMMIT_STANDARD.md)
+to this repository; where this file is stricter, this file applies.
+
+- Lead with one plain-language problem or outcome, prefixed by a short type: `bug:`, `feat:`, `test:`, `docs:`, `ci:` or `chore:`. Other accurate types are allowed. An internal issue/test code, priority, phase, status or detailed component name must not replace the outcome. A component scope in parentheses is optional, not mandatory. For issues use `bug:` for observed defects; PRs and squash commits retain conventional `fix:`.
+- Keep the issue body **current**, rather than appending dated review notes above obsolete checklists. Use Problem, confirmed Evidence if relevant, Scope/Out of scope, checkable Done when, and Dependencies/Related work as needed. Use the shortest sections that establish independently verifiable work.
+- If implementation/verification exceeds two days, split independently reviewable S/M deliverables into linked issues and make the L/XL parent an outcome/coordination tracker. Do not divide an atomic safety or data-integrity change merely to produce more issues. Preserve owner, release constraints and links.
+- Put the detailed outcome of a lab run in its specific scenario issue or durable result document; a coordination parent carries only a concise verdict and link. Keep prior comments and authored evidence, and distinguish the most recent verified state from historical plans.
+- **Use UTC for all new timestamps** in issues, PR discussions, evidence, reproduction steps and sample logs: `2026-10-27 14:35 UTC` for prose and `2026-10-27T14:35:00Z` for machine-readable records. Include dates and offsets when important; do not supply timezone-free clock readings. Convert older KST timestamps only when the exact instant and offset are known; otherwise preserve and label the historical timezone rather than inventing a UTC conversion.
 
 ### Before opening an issue
 
@@ -479,9 +491,10 @@ create more issues.
 
 ### Reporting a bug
 
-Keep the issue form's prefilled title prefix; for a custom issue, pick the type from
-[Pull request and commit titles](#pull-request-and-commit-titles), for example
-`fix(broker): ...`. Write issues, PRs and comments in English.
+Keep the issue form's prefilled title prefix; for a custom issue, use the
+[human-readable issue rule](#human-readable-issue-titles-scope-and-utc-evidence),
+for example `bug: the Broker read-only Service selects the wrong Pods`.
+PR titles use `fix(broker): ...`. Write issues, PRs and comments in English.
 
 A bug report is also a record of evidence. Say how often the behavior was
 seen, attach what you have (status and Conditions, Events, logs, SQL results;

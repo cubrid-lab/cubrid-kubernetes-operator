@@ -12,7 +12,8 @@ body:
         issue; a disproved hypothesis is closed with its evidence.
 
         Keep the `test:` title prefix and phrase the title as what will be
-        found out. Leave out credentials, kubeconfigs and unredacted Secrets.
+        found out. Record all new experimental timestamps in UTC
+        (e.g. 2026-10-27T14:35:00Z). Leave out credentials, kubeconfigs and unredacted Secrets.
 
   - type: textarea
     id: question
