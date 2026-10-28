@@ -379,7 +379,8 @@ const reasonEngineVersionMismatch = "EngineVersionMismatch"
 // (ADR-0011). Such a step is not started and uses up no attempt; it goes on
 // once spec.version is corrected or the member runs an engine of the
 // declared series. A member whose engine has not been observed is not held:
-// its Instance Manager checks for itself.
+// its Instance Manager checks for itself, and a refusal it answers uses up an
+// attempt like any refused request.
 func engineSeriesHold(cluster *databasev1alpha1.CubridCluster, member string) (string, bool) {
 	for _, in := range cluster.Status.Instances {
 		if in.Name != member || in.ObservedEngineVersion == "" {
