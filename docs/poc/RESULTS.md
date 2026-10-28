@@ -23,7 +23,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > ran in Docker on a native linux/amd64 host; POC-39 ran on the VM lab, with
 > plain Pods and no CUBRID; POC-40 and POC-41 ran on the VM lab, with the
 > installed Operator and its derivative image; POC-42 ran in Docker on a
-> native linux/amd64 host. Each states its own
+> native linux/amd64 host, and its last part on the VM lab with the installed
+> Operator. Each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
 > general CUBRID guarantee. The raw observations below are kept as recorded;
 > where a later POC contradicts one, a note says so. The current reading of
@@ -4376,8 +4377,54 @@ its log end with `applyinfo -r localhost <db>`, and the Operator reports a
 slave whose copy has not grown while the master's log ends pages past it
 (`LogCopyStalled`, docs/observability.md).
 
+**On the VM lab, with the rule installed (run `p623-1`, 2026-10-28 12:27Z to 12:57Z).** One run of POC-41's `tcp1523` case, in both directions.
+
+*Environment.*
+- The VM lab (k3s `v1.36.5+k3s1`, `local-path`).
+- The installed Operator from main `fb6f345` (#624): manager `sha256:08b24b9e…`, its default Instance Manager `sha256:f6d427de…`, CUBRID `11.4.6.1963`. LAB00 passed on it first.
+- The same harness as POC-41: a new three-member cluster in its own namespace (`cubrid-lab-p623-1`), the two already-open writers and the two new-connection writers through `ha-rw`, the `CubridCluster` status read about once a second, and engine snapshots.
+- Each snapshot now also holds `applyinfo -r localhost appdb` on every member.
+- The `cubrid-lab/campaign` Lease was held, the run was announced on #122, and the namespace was removed at the end.
+
+*Departures.* As POC-41's per-flow cuts: iptables drop rules at each receiver's INPUT, in an ephemeral container (`p623`, the pinned netshoot) of each member, made by a script outside the repository. They were confirmed by the rules' counters and by what the members did, not by `bin/netfault`'s probes.
+
+*The cut.*
+- Issued at 12:31:55.7Z (t0); the rules were in place at 12:31:58.4Z.
+- Removed from 12:33:16.0Z to 12:33:23.5Z, and no rule was left on any member.
+- `ha-0` was the master throughout.
+
+| UTC | `ReplicationHealthy` | `ha-1` | `ha-2` |
+|---|---|---|---|
+| 12:29:02 to 12:32:16 | `True/AppliersProgressing` (173 samples, through the cut's first 20 s) | healthy | healthy |
+| 12:32:16 (t0+20.7 s) | `True` | `notReceivingSince` set; copy at 180\|13848, 10 pages waiting to be copied | the same |
+| 12:33:18 (t0+83 s) | `False/LogCopyStalled`, naming `ha-1, ha-2` (Warning Event `LogCopyStalled`) | still cut | still cut |
+| 12:33:49 (26 s after the removal ended) | `False/LogCopyStalled`, naming `ha-2` | `member_log_copy_resumed`: copying again | copy still 180\|13848 |
+| 12:33:49 to 12:50:52 | `False/LogCopyStalled` (977 samples) | caught up by r+200 s | copy fixed; pages waiting to be copied rose from 53 to more than 500 |
+| 12:49:39 to 12:50:56 | | | `cubrid heartbeat copylogdb stop`/`start appdb ha-0` |
+| 12:50:52 | `True/AppliersProgressing` (Event `ReplicationRecovered`) | | `member_log_copy_resumed` |
+
+*Engine snapshots.*
+- **The master's log end:** in all ten snapshots of `ha-0`, before, during and after the cut and under the writers' load, `EOF LSA` equalled `Append LSA`. It went from 180|3576 before the fault to 729|15392 at the end.
+- **The stuck copy:** `ha-2`'s copy of `ha-0`'s log ended at 180|13848 in every snapshot from `during` (12:33:13Z) to `end` (12:49:37Z). `Final LSA` equalled it, and the apply delay was 0 pages: POC-41's signature.
+- **The healthy copy:** in every snapshot after the removal, `ha-1`'s copy ended on the master's page. It was a few hundred bytes ahead or behind, because the members are read moments apart.
+
+*Rows*, read on each member:
+- At the end of the observation (r+912 s, writers stopped): `ha-0` 7,682, `ha-1` 7,682, `ha-2` 423, its count at the fault.
+- 90 s after the copier restart: `ha-2` 5,257. Its copy had reached the master's end, and 183 pages waited to be applied.
+- After a `cubrid heartbeat applylogdb stop`/`start` that followed, as in POC-41: `ha-2` 7,682.
+
+So the stall cleared with the copier restart and every row reached `ha-2`, but whether the applier restart was needed was again not determined.
+
+*What this shows.*
+- With the rule installed, the POC-41 state is reported as `ReplicationHealthy=False/LogCopyStalled` naming the stuck member, for the whole stall. POC-41 saw `True/AppliersProgressing` for the same state.
+- The other slave was cleared as soon as its copy grew again.
+- The condition turned `True` again once the copier was restarted.
+- During the cut both slaves were reported, correctly: neither received anything then.
+- No false report on the healthy cluster before the fault, or on `ha-1` after it.
+- One run, one lab and one engine build.
+
 **Not tested.**
-- On the VM lab: the master's `EOF LSA` going on while a slave is stuck as in POC-41. #623 asks for that with the POC-41 cut.
+- More than one run with the rule installed, a cut of only one slave, and the `isolate` case of POC-41.
 - `ha_copy_sync_mode` `async` or `semisync`, where a healthy copy may run further behind.
 - A master under a sustained load, where a healthy copy can be pages behind at one reading; the rule needs the copy not to grow between two readings as well.
 - What `applyinfo -r localhost` costs on a busy master, and how long it takes.
