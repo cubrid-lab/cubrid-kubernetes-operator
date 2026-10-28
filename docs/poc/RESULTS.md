@@ -4015,7 +4015,7 @@ at the last reading, and the acknowledged rows each member lacked:
 - **What the stuck slave reported.** It was `slave` / `registered_and_standby`, with its `Applylogdb` and `Copylogdb` processes `registered` in `cubrid heartbeat status`.
   - In p115-4, `ha-1`'s applier log for `ha-0`'s log ends at the removal, with `-191` / `-199` / `-111` (`Cannot connect to server … Server no longer responding … Your transaction has been aborted …`). Its copier log for `ha-0` has nothing after the fault.
   - Why it did not resume was not found. It looks like POC-21's state (Q9), but that is a hypothesis, not a finding.
-  - **Note (POC-41):** a later POC says otherwise. POC-41 found the stuck slave's copier holding a session the master had closed, so that it received nothing: its copied log's EOF was frozen, with Final equal to it and 0 delayed pages. That is not POC-21's state.
+  - **Note (POC-41):** POC-41 repeated this cut with engine snapshots. In its four stalls the stuck slave's copier held a session the master had closed, and received nothing: its copied log's EOF was frozen, Final equalled it, and 0 pages were delayed. That is not POC-21's state. That POC-40's stalls were the same is likely but was not shown.
 - **The cluster status did not report it.** At the end of every run, with a slave missing 851 to 9942 acknowledged rows:
   - `PrimaryResolved`, `HAReady`, `ReplicationHealthy` and `Ready` were all `True`;
   - `ReplicationHealthy`'s message was `every observed slave applies the master's log`.
@@ -4222,7 +4222,7 @@ below show that nothing new reached the slave's copied log.
 - **The two copiers differed during the cut.**
   - In all four stalls, the copier that later caught up had 56 unacknowledged bytes and a retransmission timer: `timer:(on,5.729ms,8)`, `(on,18sec,8)`, `(on,15sec,8)` and `(on,1min44sec,9)`.
   - The stuck copier had 0 bytes queued and only a keepalive timer.
-  - In run 5, the other copier's retransmission timer read 1 min 13 s at 01:15:45, so it was due at about 01:16:58; that copier reconnected at 01:17:01.6. The 6 to 106 s spread of the reconnections fits retransmission backoff.
+  - In run 5, the other copier's retransmission timer read 1 min 13 s at 01:15:45, so it was due at about 01:16:58; that copier reconnected at 01:17:01.6. The 6 to 106 s spread of the reconnections is consistent with retransmission backoff.
   - A hypothesis, not shown at packet level: a copier with a pending retransmission meets the master's reset after healing and reconnects, while an idle copier sends nothing and waits for keepalive.
 - **What the master logged.** In each TCP cut, its server log has `ERROR CODE = -1122` `Time out in receiving data` for both slaves' copiers. The timestamps have whole-second resolution (±1 s): t0+4.4 to 5.2 s and t0+9.4 to 10.2 s. The run 3 cut (heartbeat only) has no such line.
 - **What the copiers logged.**
@@ -4232,7 +4232,7 @@ below show that nothing new reached the slave's copied log.
 - **Writes.**
   - Every operation that got an answer was acknowledged. The counts were 13,880, 7,016, 4,529, 5,562 and 50,106.
   - In run 2, `o2-002258` was attempted at 00:15:34.817, as the writers were stopped, and never answered. It is on the master.
-  - At the start of each TCP cut, the already-open session paused for 4.4 to 6.0 s, until the master timed out the copiers.
+  - At the start of each TCP cut, the already-open session paused for 4.4 to 6.0 s, until the master timed out the first copier's session.
   - In the heartbeat-only cut, the longest gap of `o1` or `o2` within 5 minutes of the fault was 1.51 s, at t0−10.6 s, and the slowest write took 1.14 s.
   - The master held every row.
 
@@ -4248,7 +4248,7 @@ below show that nothing new reached the slave's copied log.
   - `ha-1` demoted itself on healing, and by the first reading, at r+111, both slaves were within 3 rows of the master, which was still being written to.
   - Nothing stalled through the observation, which ended at r+617.
   - The stall test did not work for `ha-1` in that run: its first read after the removal failed (`-191` / `-677`) and returned 0 rows, which the script stored as its count at the fault. The conclusion stands, since the later reads show 1,616 rows and rising.
-- So the stall followed the loss of the copier's TCP session, not the failover and failback. With two TCP runs and one heartbeat run, the sample is small.
+- In these runs the stall went with the loss of TCP 1523, not with the failover and failback. With two TCP runs and one heartbeat run, the sample is small.
 
 **4. Does a minimal action clear it?** Diagnostic only, on the stuck slave after the observation:
 - **A heartbeat restart of the copier (run 4).** `cubrid heartbeat copylogdb stop appdb ha-0`, 3 s, then `cubrid heartbeat copylogdb start appdb ha-0`. Both answered `success`.
@@ -4256,7 +4256,7 @@ below show that nothing new reached the slave's copied log.
   - 90 s after the start, `ha-2` held 5,025 of 5,562 rows, with EOF 586|8272 and Final 547|13576 advancing.
   - After a `cubrid heartbeat applylogdb stop`/`start` that followed, it held all 5,562. Whether that second step was needed was not determined.
 - **SIGTERM to the stuck `copylogdb` (run 2).** 90 s later the same process (pid 339) and the same socket were still there. It did not end the copier.
-- **SIGTERM to the stuck slave's `applylogdb` for the master's log (run 2).** Heartbeat restarted it, and it applied the few hundred bytes already copied, but no new row arrived. Restarting the applier does not clear it.
+- **SIGTERM to the stuck slave's `applylogdb` for the master's log (run 2).** Heartbeat restarted it, and it applied the few hundred bytes already copied, but no new row arrived. In this one run, restarting the applier did not clear it.
 - **Run 1's action did not run.** The script's process search matched itself and killed its own shell, so nothing was sent to the copier.
 - **Run 5's actions** ran after the slave had already recovered by itself, so they say nothing about the action.
 
@@ -4283,6 +4283,7 @@ read can count fewer rows:
 - **Signs that tell the two apart:**
   - this one: a frozen copied-log EOF with Final equal to it and 0 delayed pages, a copier socket with no counterpart on the master, and the master's `-1122` for that copier;
   - POC-28's: copying continues, and the appliers log `invalid replication record`.
+- **Detection:** the current stall rule cannot see this state, and neither can the rule proposed on #249, which starts a stall only when the copied log grows. #623 tracks reporting a slave whose copied log stops while the master's log advances.
 
 **Not tested.**
 - **On Kind:** #357's own case, a restarted master that loses its first packets for 1 to 3 s. POC-28 ran short TCP-only and UDP-only losses of 1.2 to 1.4 s without a stall. This entry ran no loss shorter than 90 s.
@@ -4302,5 +4303,6 @@ read can count fewer rows:
   - `cubrid heartbeat replication stop`/`start`.
 - **Causes:**
   - why the copier that caught up had unacknowledged bytes during the cut and the other did not;
-  - why the master's timeout order matched the stall in four of four.
+  - why the master's timeout order matched the stall in four of four;
+  - why, in runs 2 and 4, the master's queued data and `FIN` on its `FIN-WAIT-1` socket did not move the stuck copier out of `ESTAB` after healing.
 - **A failover while a slave was stuck**, which POC-40 names as the data-loss risk.
