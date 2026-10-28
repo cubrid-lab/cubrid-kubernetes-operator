@@ -1,0 +1,246 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package instancemanager
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// relCLI answers cubrid_rel with out and err and passes every other command
+// to CLI: the engine version is read from it, not taken as pinned (runTests).
+type relCLI struct {
+	CLI
+	out string
+	err error
+}
+
+func (*relCLI) answersCubridRel() {}
+
+func (c *relCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
+	if name == "cubrid_rel" {
+		return c.out, c.err
+	}
+	return c.CLI.Run(ctx, name, args...)
+}
+
+func TestEngineSeries(t *testing.T) {
+	for in, want := range map[string]string{
+		"11.4": "11.4", reportedEngineVersion: "11.4", " 11.4.6 ": "11.4",
+		"11": "", "": "", "garbage": "", "11.": "", ".4": "", "v11.4": "", "11.x": "",
+	} {
+		if got := EngineSeries(in); got != want {
+			t.Errorf("EngineSeries(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A manifest's engine version is compared by series (ADR-0011): another patch
+// of the series matches, another series or a version without one does not.
+func TestManifestVerify_ComparesTheEngineBySeries(t *testing.T) {
+	for _, tc := range []struct {
+		manifest, expected string
+		ok                 bool
+	}{
+		{reportedEngineVersion, "11.4", true},
+		{"11.4", reportedEngineVersion, true},
+		{"11.4.6", "11.4.7.2000", true},
+		{"11.2.0.0480", reportedEngineVersion, false},
+		{"", reportedEngineVersion, false},
+		{"latest", reportedEngineVersion, false},
+		{"latest", "latest", false},
+	} {
+		m := BackupManifest{ManifestVersion: ManifestVersion, Database: dbName, CubridVersion: tc.manifest,
+			Objects: []ManifestObject{{Key: "backup/x", SizeBytes: 3, SHA256: "abc"}}}
+		exp := goodManifestExpectation()
+		exp.CubridVersion = tc.expected
+		if err := m.Verify(exp); (err == nil) != tc.ok {
+			t.Errorf("manifest %q, expected %q: err = %v, want ok=%v", tc.manifest, tc.expected, err, tc.ok)
+		}
+	}
+}
+
+// runEngineBackup runs an asynchronous backup that declares declared, on a
+// member whose cubrid_rel answers rel and relErr, and returns the final
+// operation, the backupdb stand-in and the object store.
+func runEngineBackup(t *testing.T, declared, rel string, relErr error) (Operation, *writingCLI, *fakeObjectStore) {
+	t.Helper()
+	store, err := NewOperationStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOperationStore: %v", err)
+	}
+	objects := newFakeStore()
+	root := t.TempDir()
+	backupdb := newWritingCLI()
+	h := NewServer(&relCLI{CLI: backupdb, out: rel, err: relErr}, "tok").
+		WithOperationStore(store).WithObjectStore(objects).WithBackupStagingRoot(root).Handler()
+	upload := *testUpload
+	upload.CubridVersion = declared
+	body, _ := json.Marshal(BackupRequest{Database: dbName, Destination: filepath.Join(root, "uid-1"), Upload: &upload})
+	rr := postBackup(t, h, "key-1", string(body))
+	var op Operation
+	_ = json.Unmarshal(rr.Body.Bytes(), &op)
+	return pollUntilTerminal(t, h, op.ID), backupdb, objects
+}
+
+// The manifest records the engine the member runs, read from cubrid_rel,
+// not the version the request declares (#276, ADR-0011).
+func TestServer_Backup_RecordsTheObservedEngineVersion(t *testing.T) {
+	final, _, objects := runEngineBackup(t, "11.4", cubridRelOut, nil)
+	if final.State != OpCompleted || final.Artifact == nil {
+		t.Fatalf("final = %s (%q), artifact %+v; want Completed", final.State, final.FailureReason, final.Artifact)
+	}
+	if final.Artifact.CubridVersion != reportedEngineVersion {
+		t.Errorf("operation artifact cubridVersion = %q, want %q", final.Artifact.CubridVersion, reportedEngineVersion)
+	}
+	prefix := uploadedPrefix(t, final.Artifact.ManifestURI, testUpload.Bucket)
+	m, err := ParseManifest(objects.objects[testUpload.Bucket+"/"+prefix+"/"+ManifestObjectName])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.CubridVersion != reportedEngineVersion {
+		t.Errorf("manifest cubridVersion = %q, want the observed %q", m.CubridVersion, reportedEngineVersion)
+	}
+}
+
+// Without a known engine of the declared series no backupdb runs: the
+// artifact would be labeled with an engine that did not produce it.
+func TestServer_Backup_RefusesWithoutAKnownEngineOfTheDeclaredSeries(t *testing.T) {
+	for name, tc := range map[string]struct {
+		declared, rel string
+		relErr        error
+	}{
+		"cubrid_rel fails":        {"11.4", "", errors.New("exit status 127")},
+		"cubrid_rel has no build": {"11.4", "CUBRID 11.4.6", nil},
+		"another series":          {"11.2", cubridRelOut, nil},
+		"no series declared":      {"latest", cubridRelOut, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			final, backupdb, objects := runEngineBackup(t, tc.declared, tc.rel, tc.relErr)
+			if final.State != OpFailed || !strings.Contains(final.FailureReason, "backup refused") {
+				t.Fatalf("final = %s (%q), want Failed with backup refused", final.State, final.FailureReason)
+			}
+			if len(backupdb.dirs) != 0 {
+				t.Errorf("backupdb ran: %v", backupdb.dirs)
+			}
+			if len(objects.objects) != 0 {
+				t.Errorf("objects were uploaded: %d", len(objects.objects))
+			}
+		})
+	}
+}
+
+// withManifestVersion rewrites the engine version of the uploaded artifact
+// at bucket/prefix.
+func withManifestVersion(t *testing.T, objects *fakeObjectStore, bucket, prefix, version string) {
+	t.Helper()
+	key := bucket + "/" + prefix + "/" + ManifestObjectName
+	m, err := ParseManifest(objects.objects[key])
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.CubridVersion = version
+	if objects.objects[key], err = m.Marshal(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A restore is refused, before anything is staged, registered or run, unless
+// this member's engine, the declared version and the artifact's engine are
+// of one series (ADR-0011).
+func TestRestore_RefusesAnEngineOfAnotherOrUnknownSeries(t *testing.T) {
+	for name, tc := range map[string]struct {
+		engine, declared, manifest string
+	}{
+		"member engine unknown":           {"", "11.4", testCubridVersion},
+		"member engine without a series":  {"garbage", "", testCubridVersion},
+		"member runs another series":      {"11.2.0.0480", "11.4", "11.2.0.0480"},
+		"artifact of another series":      {reportedEngineVersion, "11.4", "11.2.0.0480"},
+		"artifact without a version":      {reportedEngineVersion, "11.4", ""},
+		"artifact version without series": {reportedEngineVersion, "", "latest"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			objects, bucket, prefix := stageUploadedArtifact(t)
+			withManifestVersion(t, objects, bucket, prefix, tc.manifest)
+			req := baseRestoreRequest(t, bucket, prefix)
+			req.ExpectedCubridVersion = tc.declared
+			roots := rootsFor(req)
+			roots.EngineVersion = tc.engine
+			cli := &restoreCLI{}
+			if _, err := Restore(context.Background(), cli, objects, roots, req); err == nil {
+				t.Fatal("Restore succeeded, want a refusal")
+			}
+			if len(cli.calls) != 0 {
+				t.Errorf("commands ran: %v", cli.calls)
+			}
+			if registered, _ := registeredInDatabasesTxt(req.TargetDir, dbName); registered {
+				t.Error("the database was registered")
+			}
+			if _, err := os.Stat(req.StagingDir); !os.IsNotExist(err) {
+				t.Errorf("staging directory is there (err=%v)", err)
+			}
+		})
+	}
+}
+
+// Another patch of the series is restored, and so is a manifest written by
+// an earlier manager, which carries the declared series; a request without a
+// declared version is checked against the member's engine alone.
+func TestRestore_AcceptsAnEngineOfTheSameSeries(t *testing.T) {
+	for name, tc := range map[string]struct {
+		engine, declared, manifest string
+	}{
+		"same full version":      {reportedEngineVersion, "11.4", reportedEngineVersion},
+		"another patch":          {"11.4.7.2000", "11.4", reportedEngineVersion},
+		"manifest of the series": {reportedEngineVersion, "11.4", "11.4"},
+		"request declares none":  {reportedEngineVersion, "", reportedEngineVersion},
+	} {
+		t.Run(name, func(t *testing.T) {
+			objects, bucket, prefix := stageUploadedArtifact(t)
+			withManifestVersion(t, objects, bucket, prefix, tc.manifest)
+			req := baseRestoreRequest(t, bucket, prefix)
+			req.ExpectedCubridVersion = tc.declared
+			roots := rootsFor(req)
+			roots.EngineVersion = tc.engine
+			cli := &restoreCLI{}
+			if _, err := Restore(context.Background(), cli, objects, roots, req); err != nil {
+				t.Fatalf("Restore: %v", err)
+			}
+			if len(cli.calls) != 1 || !strings.HasPrefix(cli.calls[0], "cubrid restoredb ") {
+				t.Errorf("calls = %v, want one restoredb", cli.calls)
+			}
+		})
+	}
+}
+
+// The manager restores with the engine version it reads itself: one that
+// cubrid_rel does not give fails the operation without a command.
+func TestServer_Restore_ReadsItsOwnEngineVersion(t *testing.T) {
+	steps := &stepCLI{}
+	final := runRestoreOperation(t, &relCLI{CLI: steps, err: errors.New("exit status 127")}, restoreMember{standalone: true})
+	if final.State != OpFailed || !strings.Contains(final.FailureReason, "engine version of this member is not known") {
+		t.Fatalf("final = %s (%q), want Failed for the unknown engine", final.State, final.FailureReason)
+	}
+	if calls := steps.recorded(); len(calls) != 0 {
+		t.Errorf("calls = %q, want none", calls)
+	}
+}

@@ -536,12 +536,19 @@ func (s *Server) engineVersion(ctx context.Context) string {
 	if s.version != "" {
 		return s.version
 	}
-	out, err := s.cli.Run(ctx, "cubrid_rel")
+	s.version = readEngineVersion(ctx, s.cli)
+	return s.version
+}
+
+// readEngineVersion reads the engine's full version from cubrid_rel, or ""
+// when it cannot. The package's tests replace it, so that their CLI
+// stand-ins, which do not answer cubrid_rel, run on the pinned engine.
+var readEngineVersion = func(ctx context.Context, cli CLI) string {
+	out, err := cli.Run(ctx, "cubrid_rel")
 	if err != nil {
 		return ""
 	}
-	s.version = ParseEngineVersion(out)
-	return s.version
+	return ParseEngineVersion(out)
 }
 
 // haStatus returns the full parsed HA view (role + topology).
@@ -725,6 +732,11 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			fail(notRecorded(OpRunningBackup, err))
 			return
 		}
+		engine, err := s.backupEngineVersion(ctx, req)
+		if err != nil {
+			fail("backup refused: " + err.Error())
+			return
+		}
 		if err := s.createBackupStaging(req.Destination); err != nil {
 			fail(err.Error())
 			return
@@ -752,7 +764,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			Manifest: BackupManifest{
 				Database:       req.Database,
 				ClusterUID:     req.Upload.ClusterUID,
-				CubridVersion:  req.Upload.CubridVersion,
+				CubridVersion:  engine,
 				Level:          req.Level,
 				SourceInstance: req.Upload.SourceInstance,
 				SourceRole:     req.Upload.SourceRole,
@@ -773,10 +785,33 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 				ManifestDigest: res.ManifestDigest,
 				SizeBytes:      res.SizeBytes,
 				Database:       req.Database,
+				CubridVersion:  engine,
 				Level:          req.Level,
 			}
 		})
 	}()
+}
+
+// backupEngineVersion returns the engine version a backup of req records in
+// its manifest: the one this member runs, read from cubrid_rel, never the
+// version the request declares (ADR-0011). It refuses the backup when that
+// version cannot be read, or when it and the declared one cannot be reduced
+// to a series or are of different series: the member then runs another
+// engine than its cluster declares, and the artifact would be mislabeled
+// either way.
+func (s *Server) backupEngineVersion(ctx context.Context, req BackupRequest) (string, error) {
+	engine := s.engineVersion(ctx)
+	if engine == "" {
+		return "", errors.New("the engine version of this member could not be read from cubrid_rel")
+	}
+	declared := ""
+	if req.Upload != nil {
+		declared = req.Upload.CubridVersion
+	}
+	if series := EngineSeries(engine); series == "" || series != EngineSeries(declared) {
+		return "", fmt.Errorf("this member runs engine %s, which is not of the declared version %q", engine, declared)
+	}
+	return engine, nil
 }
 
 // restorePrepare verifies + downloads + restoredb's a backup artifact into an
@@ -878,6 +913,7 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 		// the result could neither be registered for HA nor join it.
 		roots := s.restoreRoots
 		roots.Owner = id
+		roots.EngineVersion = s.engineVersion(ctx)
 		haMember := s.standaloneDB == ""
 		if haMember {
 			hosts, err := haHosts(s.ha.ConfPath)

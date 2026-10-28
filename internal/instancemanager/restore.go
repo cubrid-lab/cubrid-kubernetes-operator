@@ -39,8 +39,10 @@ type RestoreRequest struct {
 	// Bucket / Prefix locate the artifact (prefix holds manifest.json + backup/).
 	Bucket string `json:"bucket"`
 	Prefix string `json:"prefix"`
-	// ExpectedCubridVersion, when set, must equal the manifest's engine version
-	// (no cross-version restore in v1alpha1, ADR-0008/0009).
+	// ExpectedCubridVersion, when set, is the version the cluster declares
+	// (spec.version). The member's own engine must be of its series, and so
+	// must the manifest's engine version (no restore across series,
+	// ADR-0009, ADR-0011).
 	ExpectedCubridVersion string `json:"expectedCubridVersion,omitempty"`
 	// StagingDir is where downloaded objects land before restoredb.
 	StagingDir string `json:"stagingDir"`
@@ -65,13 +67,15 @@ type RestoreRequest struct {
 // follows that master from the position of its backup, so the backup must
 // have been taken on that master, as master, and, when the request names
 // it, in this cluster. A restore into a new cluster takes a backup of
-// another cluster, taken on a standby or the master.
-func restoreExpectation(req RestoreRequest) ManifestExpectation {
+// another cluster, taken on a standby or the master. engine is the version
+// of the engine that will restore it (RestoreRoots.EngineVersion), which the
+// artifact's engine version must share a series with.
+func restoreExpectation(req RestoreRequest, engine string) ManifestExpectation {
 	// A full backup is the only level a restore takes: restoredb of a level 1
 	// or 2 backup needs the backups it builds on, which an artifact does not
 	// carry, and the operator takes full backups only (CubridBackupFull).
 	fullBackup := 0
-	exp := ManifestExpectation{Database: req.Database, CubridVersion: req.ExpectedCubridVersion, Level: &fullBackup}
+	exp := ManifestExpectation{Database: req.Database, CubridVersion: engine, Level: &fullBackup}
 	if req.SeedFromMaster != "" {
 		exp.RequireSourceRole = string(RoleMaster)
 		exp.SourceInstance = req.SeedFromMaster
@@ -98,6 +102,10 @@ type RestoreRoots struct {
 	// attempt can tell an unfinished restore of its own from someone's data.
 	// Empty writes no marker.
 	Owner string
+	// EngineVersion is the version of the engine this member runs, as the
+	// manager read it from cubrid_rel. A restore is refused without it: the
+	// artifact's engine is compared with this one (ADR-0011).
+	EngineVersion string
 }
 
 // RestoreResult reports a completed restore (ADR-0008).
@@ -129,6 +137,9 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	if req.SeedFromMaster != "" && roots.Host == "" {
 		return RestoreResult{}, fmt.Errorf("seedFromMaster %q was given, but this member is not an HA member", req.SeedFromMaster)
 	}
+	if err := checkRestoreEngine(roots.EngineVersion, req.ExpectedCubridVersion); err != nil {
+		return RestoreResult{}, err
+	}
 
 	// ADR-0008 wrong-target guard: restore only into an empty target. A
 	// pre-existing DB volume, or the database already registered in the
@@ -159,7 +170,7 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	// Every object is read once, into the staging directory, and checked
 	// against the manifest as it is written: what restoredb reads below is
 	// what was verified, not a second copy (#195).
-	exp := restoreExpectation(req)
+	exp := restoreExpectation(req, roots.EngineVersion)
 	manifest, err := stageArtifact(ctx, store, req.Bucket, req.Prefix, exp, stagingDir)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("artifact verification failed: %w", err)
@@ -194,6 +205,22 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 		CubridVersion: manifest.CubridVersion,
 		ManifestURI:   fmt.Sprintf("s3://%s/%s", req.Bucket, path.Join(req.Prefix, ManifestObjectName)),
 	}, nil
+}
+
+// checkRestoreEngine refuses a restore on a member whose engine version is
+// not known or cannot be reduced to a series, and, when the request declares
+// a version, on one whose engine is of another series than declared
+// (ADR-0011). A request without a declared version is checked against the
+// member's engine alone, which the artifact is then compared with.
+func checkRestoreEngine(engine, declared string) error {
+	series := EngineSeries(engine)
+	if series == "" {
+		return fmt.Errorf("the engine version of this member is not known (%q); a restore needs it to check the artifact (ADR-0011)", engine)
+	}
+	if declared != "" && EngineSeries(declared) != series {
+		return fmt.Errorf("this member runs engine %s, which is not of the declared version %q", engine, declared)
+	}
+	return nil
 }
 
 // databasesTxt is CUBRID's database location file in $CUBRID_DATABASES.

@@ -178,6 +178,12 @@ type versionCLI struct {
 	relErr   error
 }
 
+// answersCubridRel marks a CLI stand-in whose own answer to cubrid_rel the
+// tests read, in place of the pinned engine (runTests).
+type answersCubridRel interface{ answersCubridRel() }
+
+func (*versionCLI) answersCubridRel() {}
+
 func (v *versionCLI) Run(_ context.Context, name string, _ ...string) (string, error) {
 	if name == "cubrid_rel" {
 		v.relCalls++

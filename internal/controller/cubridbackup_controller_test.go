@@ -73,8 +73,9 @@ func (f *fakeBackupClient) GetOperation(_ context.Context, _, _, _ string) (inst
 			ID:    opFake,
 			State: instancemanager.OpCompleted,
 			Artifact: &instancemanager.OperationArtifact{
-				ManifestURI: "s3://cubrid-backups/p/manifest.json",
-				Database:    demoDB,
+				ManifestURI:   "s3://cubrid-backups/p/manifest.json",
+				Database:      demoDB,
+				CubridVersion: fullEngineVersion,
 			},
 		}, nil
 	}
@@ -270,6 +271,8 @@ var _ = Describe("CubridBackup Controller", func() {
 		Expect(done.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseCompleted))
 		Expect(done.Status.Artifact).NotTo(BeNil())
 		Expect(done.Status.Artifact.URI).To(Equal("s3://cubrid-backups/p/manifest.json"))
+		// The engine the member observed, not spec.version (ADR-0011).
+		Expect(done.Status.Artifact.CubridVersion).To(Equal(fullEngineVersion))
 	})
 
 	// Each phase a backup reaches is recorded as one Event, when the status

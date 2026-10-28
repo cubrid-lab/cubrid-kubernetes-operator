@@ -326,8 +326,12 @@ remains a compatibility consideration, separate from ordinary artifact safety.
   and, when the request carries `expectedClusterUID` (the operator always
   sends it for a seed), whose `clusterUID` is that cluster's. A restore into
   a new cluster takes another cluster's full backup from a standby or the
-  master. The engine version is still compared as the declared string
-  (#321). A `PVC` destination (reserved; not run, see below) is **not
+  master. The engine version is compared by series (ADR-0011): the
+  manifest's `cubridVersion` is the full version the backup's member read
+  from `cubrid_rel`, a backup is refused when that version is unknown or
+  not of the declared series, and a restore is refused when the restoring
+  member's own engine is unknown, or when it, the declared version and the
+  manifest's version are not of one series. A `PVC` destination (reserved; not run, see below) is **not
   eligible** for ADR-0006 rebuild or disaster recovery.
 
 ### `CubridBackup` CR (v1alpha1)

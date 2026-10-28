@@ -67,7 +67,10 @@ func TestMain(m *testing.M) {
 // runTests runs the tests with an empty process list in place of /proc for
 // the staging scans of servers that name none: a CUBRID process of another
 // user on the host would otherwise hold every staging directory (#503).
-// Tests about holders give their server a process list of their own.
+// Tests about holders give their server a process list of their own. The
+// CLI stand-ins do not answer cubrid_rel, so they run on the pinned engine
+// (reportedEngineVersion); one that answers cubrid_rel itself
+// (answersCubridRel) is read as the real engine is.
 func runTests(m *testing.M) int {
 	proc, err := os.MkdirTemp("", "instancemanager-proc-")
 	if err != nil {
@@ -76,6 +79,13 @@ func runTests(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(proc) }()
 	defaultProcRoot = proc
+	realRead := readEngineVersion
+	readEngineVersion = func(ctx context.Context, cli CLI) string {
+		if _, ok := cli.(answersCubridRel); ok {
+			return realRead(ctx, cli)
+		}
+		return reportedEngineVersion
+	}
 	return m.Run()
 }
 
