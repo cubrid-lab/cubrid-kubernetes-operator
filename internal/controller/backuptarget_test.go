@@ -332,3 +332,64 @@ func TestSelectBackupTarget_StandbyNeedsFreshReplicationEvidence(t *testing.T) {
 		})
 	}
 }
+
+// A standby whose copy of the master's log has not grown for the stall
+// window while pages of it waited to be copied is not chosen, although it
+// has no page waiting to be applied (#291, POC-41). The copy is judged
+// against the master's log end in the same observations, as the cluster's
+// status is; without that end, a copy that did not grow keeps its series and
+// one that grew ends it.
+func TestSelectBackupTarget_StandbyCopyMustGrow(t *testing.T) {
+	members := []string{c0, c1, c2}
+	// copyAt is a standby whose copy of c0's log ends at page, with nothing
+	// waiting to be applied.
+	copyAt := func(page int64) RoleObservation {
+		o := slaveApplying(c0, 0)
+		o.Replication.CopiedEOF = &databasev1alpha1.LogAddress{Page: page}
+		return o
+	}
+	masterAt := func(page int64) RoleObservation {
+		o := obsMaster()
+		o.LogEnd = &databasev1alpha1.LogAddress{Page: page}
+		return o
+	}
+	// The reading before, 10 s ago, had c1's copy end at page 100 while
+	// pages waited to be copied since d ago.
+	notReceivingFor := func(d time.Duration) map[string]*databasev1alpha1.InstanceReplication {
+		since, read := metav1.NewTime(testNow.Add(-d)), metav1.NewTime(testNow.Add(-10*time.Second))
+		return map[string]*databasev1alpha1.InstanceReplication{
+			c1: {Source: c0, AppliedChanges: 10, CopiedEOF: &databasev1alpha1.LogAddress{Page: 100},
+				CopyDelayedPages: 5, NotReceivingSince: &since, ObservedAt: &read},
+		}
+	}
+	tests := []struct {
+		name        string
+		c0, c1      RoleObservation
+		history     map[string]*databasev1alpha1.InstanceReplication
+		wantStandby string
+	}{
+		{"not a standby whose copy has not grown for the stall window",
+			masterAt(105), copyAt(100), notReceivingFor(replicationStallWindow), c2},
+		{"a standby whose copy has not grown for less than the stall window",
+			masterAt(105), copyAt(100), notReceivingFor(replicationStallWindow / 2), c1},
+		{"a standby whose copy grew",
+			masterAt(105), copyAt(101), notReceivingFor(replicationStallWindow), c1},
+		{"a standby whose copy reached the master's log end",
+			masterAt(100), copyAt(100), notReceivingFor(replicationStallWindow), c1},
+		{"not a standby whose copy did not grow, the master's log end unread",
+			obsMaster(), copyAt(100), notReceivingFor(replicationStallWindow), c2},
+		{"a standby whose copy grew, the master's log end unread",
+			obsMaster(), copyAt(101), notReceivingFor(replicationStallWindow), c1},
+		{"a standby whose copy's end was not read",
+			masterAt(105), slaveApplying(c0, 0), notReceivingFor(replicationStallWindow), c1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := map[string]RoleObservation{c0: tc.c0, c1: tc.c1, c2: slaveApplying(c0, 50)}
+			got := selectBackupTarget(members, obs, tc.history, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
+			if !got.Selected || got.Instance != tc.wantStandby {
+				t.Errorf("StandbyOnly = %+v, want %s", got, tc.wantStandby)
+			}
+		})
+	}
+}

@@ -104,12 +104,18 @@ func selectBackupTarget(
 // best first (#291). A standby is eligible when, in this reconcile's
 // observations, it is authoritatively a slave (authoritativeSlaves), its
 // applier was read, it applies the log of the resolved primary, it has failed
-// no change, and the stall series this reading continues (nextReplication,
-// from the history the cluster's status records) has not reached
-// replicationStallWindow. Missing evidence never counts as caught up: a
-// standby whose applier could not be read, and every standby while the
-// primary is not resolved, is not eligible. Eligible standbys are ordered by
-// the log pages waiting to be applied, then by ordinal.
+// no change, and neither the stall series this reading continues nor the
+// series of its copy of the primary's log not growing, read against the
+// primary's log end in obs as the cluster's status is (nextReplication, from
+// the history that status records), has reached replicationStallWindow. A
+// copy that receives nothing leaves no page waiting to be applied
+// (docs/poc/RESULTS.md, POC-41), so the apply stall alone would keep such a
+// standby, and rank it first. A standby whose copy's end or primary's log
+// end was not read has no copy series and is not excluded by it. Missing
+// evidence of the applier never counts as caught up: a standby whose applier
+// could not be read, and every standby while the primary is not resolved, is
+// not eligible. Eligible standbys are ordered by the log pages waiting to be
+// applied, then by ordinal.
 //
 // A long transaction on the master can keep pages waiting with nothing
 // applied and so exclude a standby that is not behind (#249); that only
@@ -129,8 +135,11 @@ func eligibleStandbys(members []string, obs map[string]RoleObservation,
 		if r == nil || r.FailCount > 0 || r.Source != res.CurrentPrimary {
 			continue
 		}
-		if next := nextReplication(history[m], r, now); next.StalledSince != nil &&
-			now.Sub(next.StalledSince.Time) >= replicationStallWindow {
+		next := nextReplication(history[m], withSourceLogEnd(r, obs, now), now)
+		if next.StalledSince != nil && now.Sub(next.StalledSince.Time) >= replicationStallWindow {
+			continue
+		}
+		if next.NotReceivingSince != nil && now.Sub(next.NotReceivingSince.Time) >= replicationStallWindow {
 			continue
 		}
 		candidates = append(candidates, candidate{m, r.DelayedPages})
