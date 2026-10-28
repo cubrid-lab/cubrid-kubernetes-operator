@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-40, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-41, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -21,8 +21,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > theirs; POC-34 ran on the VM lab, with the Operator's derivative image of the
 > same engine build, and its timings are of those VMs only; POC-37 and POC-38
 > ran in Docker on a native linux/amd64 host; POC-39 ran on the VM lab, with
-> plain Pods and no CUBRID; POC-40 ran on the VM lab, with the installed
-> Operator and its derivative image. Each states its own
+> plain Pods and no CUBRID; POC-40 and POC-41 ran on the VM lab, with the
+> installed Operator and its derivative image. Each states its own
 > environment. Each POC is the behavior of one image in a few runs, not a
 > general CUBRID guarantee. The raw observations below are kept as recorded;
 > where a later POC contradicts one, a note says so. The current reading of
@@ -4015,6 +4015,7 @@ at the last reading, and the acknowledged rows each member lacked:
 - **What the stuck slave reported.** It was `slave` / `registered_and_standby`, with its `Applylogdb` and `Copylogdb` processes `registered` in `cubrid heartbeat status`.
   - In p115-4, `ha-1`'s applier log for `ha-0`'s log ends at the removal, with `-191` / `-199` / `-111` (`Cannot connect to server … Server no longer responding … Your transaction has been aborted …`). Its copier log for `ha-0` has nothing after the fault.
   - Why it did not resume was not found. It looks like POC-21's state (Q9), but that is a hypothesis, not a finding.
+  - **Note (POC-41):** POC-41 repeated this cut with engine snapshots. In its four stalls the stuck slave's copier held a session the master had closed, and received nothing: its copied log's EOF was frozen, Final equalled it, and 0 pages were delayed. That is not POC-21's state. That POC-40's stalls were the same is likely but was not shown.
 - **The cluster status did not report it.** At the end of every run, with a slave missing 851 to 9942 acknowledged rows:
   - `PrimaryResolved`, `HAReady`, `ReplicationHealthy` and `Ready` were all `True`;
   - `ReplicationHealthy`'s message was `every observed slave applies the master's log`.
@@ -4087,3 +4088,221 @@ of one build on one lab, not a general CUBRID behavior.
   - any run without the pollers' load;
   - repetition beyond two runs of each case, and the same placement of members across runs.
 - **Delays:** the detection and recovery delays are polled values from these runs, not limits.
+
+---
+
+## POC-41 — why a slave applies nothing after a partition is removed, which flow matters, and whether it recovers (#357) — **observation: in all four runs that cut TCP 1523 between the master and the slaves, one slave's `copylogdb` kept a connection the master had closed, received nothing, and its applier had nothing to apply; it recovered by itself once, about 2 h after the fault; a heartbeat restart of the copier resumed copying once; a heartbeat-only cut did not stall; from healing on, the status reported `HAReady` and `ReplicationHealthy` as `True` for the whole stall**
+
+**Question (#357).** POC-40 left a slave at its pre-fault row count for the
+rest of each run after a partition of the master was removed (7 of 8 runs),
+while the status reported it healthy. #357 asks why packet loss leaves a
+slave applying nothing, which flow matters, and whether the engine recovers
+by itself. This entry answers, in that order:
+1. whether the stuck slave recovers by itself, and when;
+2. what its engine processes show while it is stuck, next to the slave that caught up;
+3. which flow matters;
+4. whether a minimal action clears it.
+
+It is the behavior of one build in five runs on one lab, not a general CUBRID
+guarantee.
+
+**Environment (2026-10-27 23:09Z to 2026-10-28 03:24Z).** As POC-40:
+- the VM lab (k3s `v1.36.5+k3s1`, kernel `6.8.0-142-generic`, `local-path`);
+- the installed Operator from `d6df2acc1436e355d7c2edfd37fc9367f29782b6` (manager `sha256:5fe016e2…`), its default Instance Manager image `sha256:ae3f3459…` (CUBRID `11.4.6.1963`);
+- the workload client `sha256:43449baf…` and the fault image `netshoot@sha256:7f08c4af…`.
+
+POC-40's note on the gap between `d6df2ac` and `main` applies unchanged.
+- **Lab rules:** each run held the `cubrid-lab/campaign` Lease through `bin/lab`, was announced on #122, and ran in its own namespace (`cubrid-lab-p357-<n>`, Pod Security `enforce=privileged`, `warn` and `audit` `restricted`), removed at the end. The seed backups under `lab-runs/p357-<n>` were left in the seed bucket.
+- **TCP settings** of the member Pods' network namespaces, read inside them: `tcp_keepalive_time=7200`, `tcp_keepalive_intvl=75`, `tcp_keepalive_probes=9`, `tcp_retries2=15`.
+
+**The cluster, the writers and the polling** were POC-40's:
+- a new three-member cluster per run, with `ha-0` the master in every run;
+- two already-open sessions `o1` and `o2`, one insert every 250 ms each, and two new-connection loops `n1` and `n2`, through `ha-rw`;
+- `cubrid heartbeat status` in each member, median interval 1.3 to 1.4 s per run, gaps up to 4.1 s;
+- the `CubridCluster` status, median interval 1.07 to 1.09 s, now with `status.instances[].replication`;
+- the members' rows, read with `csql` on each member every 100 s.
+
+Added for this entry:
+- **Engine snapshots** of every member: before the fault, during it, right after the removal, every 200 s afterwards, at the end, and after each diagnostic action. Run 5 has 126 snapshot files.
+  - `snap.sh` reads the three members in parallel, so the master's and a slave's `ss` in one snapshot are within about 0.6 s of each other.
+  - Each holds:
+    - `cubrid heartbeat status`;
+    - `cubrid applyinfo -L <copied log> -a -v appdb` for each copied log (Final LSA, the copied log's EOF and Append LSA, last access time, delayed pages);
+    - `ls --full-time` of each copied-log directory;
+    - the `copylogdb`, `applylogdb`, `cub_server` and `cub_master` processes, from `/proc` (the image has no `ps`);
+    - `ss -tnpo` for port 1523, with each socket's process, send queue and timer.
+- **Whole logs:** a `tar` of each member's whole `$CUBRID/log`, at the end of the observation (before any diagnostic action) and at the very end. These are the files from the container's start, not a tail.
+  - A copier that heartbeat starts anew rewrites its `.err`. So in run 5 the final tarball holds only the new copiers' lines, and the earlier history is in the end-of-observation tarball.
+- **A local map** from member Pods to Pod IPs, to read `ss`. It is not published.
+
+**Time references.** Every time below is given in one of three forms:
+- **`t0+`:** seconds after the fault command was issued (`fault_issued` of `bin/netfault` for `isolate`; the first line of the manual script for the per-flow cuts);
+- **`r+`:** seconds after the removal began;
+- **UTC.**
+
+Each table column names its reference.
+
+**The cuts.**
+- **`isolate` (runs 1 and 5).** POC-40's case 1, by POC-40's copy of `bin/netfault`, held 60 s after the confirmation; the removal began at t0+108 s.
+  - `ha-0`'s packets are dropped both ways with `ha-1`, `ha-2` and the Operator Pod.
+  - It cuts every flow between the members: TCP 1523 (`cub_master`, which the copiers and the servers use) and UDP 59901 (heartbeat).
+- **`tcp1523` (runs 2 and 4).** Only TCP with source or destination port 1523 between `ha-0` and each slave, dropped at the receiver's INPUT. Heartbeat UDP and everything else stayed open.
+- **`udp59901` (run 3).** Only UDP with source or destination port 59901 between `ha-0` and each slave, dropped the same way.
+- **Timing of the per-flow cuts:**
+  - the rules went in one member at a time, the first from about t0+1.3 s, and all were in place at t0+2.6 to t0+3.8 s;
+  - the removal began at t0+90.4 to t0+91.7 s and took 4.8 to 8.2 s.
+
+**Departures from the real setup.**
+- **The per-flow cuts are not `bin/netfault`'s.**
+  - They were made by a script outside the repository, with `iptables -I INPUT … -m comment --comment p357 -j DROP` in an ephemeral container of its own (`p357`, the pinned netshoot, root with `NET_ADMIN` and `NET_RAW`, no target container) in each member.
+  - They were confirmed only by the rules' packet counters, read before the removal, and by what the members did. They were not confirmed by `bin/netfault`'s probes.
+  - Every rule was seen removed: `iptables-save` held no `p357` rule in any member afterwards.
+- **Run 2 cut TCP 1523 one way only.**
+  - A script error (two IPs joined without a separator) kept the master's rules from being installed, so only the master's packets to the slaves were dropped, at the slaves: from its port 1523 and to their port 1523.
+  - The slaves' rules dropped 95 and 12 packets.
+  - Run 4 repeats the case with both directions, with rules on all three members, which dropped 0 to 15 packets per rule.
+- **The `isolate` runs use POC-40's copy of `bin/netfault`, rebuilt** against `4db0af8` (`test/faults` is unchanged since `ce6b34d`). Its diff from `test/installed/cmd/netfault`:
+  - the variants `oneway-all` and `isolate-all`, neither used here;
+  - `-hook`, used here for a snapshot and a row read before the removal;
+  - four lines printing times.
+- **The pollers' own load**, as in POC-40, plus the snapshots. `applyinfo -a` reads the database.
+- **The member Pods were patched.** In runs 2 to 4, an ephemeral container (`p357`) was added to each.
+- **Diagnostic actions** were run on the stuck slave, after the observation, in the throwaway cluster only.
+- **The Operator's code and its objects** (the `CubridCluster` and what it renders) were not changed.
+
+**Runs.**
+
+| Run | Cut | Fault (UTC) | Removal began (t0+) | Roles during the cut | Stuck slave (rows at the fault) | Last stuck reading or end of stall (r+) | Other slave's copier reconnected (r+) |
+|---|---|---|---|---|---|---|---|
+| p357-1 | `isolate` | 23:14:09.5 | 108.4 | `ha-1` reported itself master, server `to_be_active`; demoted on healing | `ha-1` (593) | 2,094, end of the run; still stuck | `ha-2`, 6 |
+| p357-2 | `tcp1523`, master → slaves only | 23:58:46.8 | 90.4 | no change | `ha-2` (403) | 1,162, end of the run, after both actions; still stuck | `ha-1`, 21 |
+| p357-3 | `udp59901` | 00:27:39.2 | 91.7 | `ha-1` reported itself master, server `to_be_active`; demoted on healing | none | — | — |
+| p357-4 | `tcp1523`, both ways | 00:48:17.2 | 90.9 | no change | `ha-2` (392) | 680, the heartbeat restart of its copier | `ha-1`, 16 |
+| p357-5 | `isolate` | 01:13:27.6 | 108.5 | as p357-1 | `ha-2` (695) | **7,163, by itself** (03:14:38.7Z, t0+7,271) | `ha-1`, 106 |
+
+"Stuck" means that the slave's row count, read on the slave, stayed at its
+count at the fault while the master's grew. In every stall, the snapshots
+below show that nothing new reached the slave's copied log.
+
+**1. Does the stuck slave recover by itself, and when?**
+- **In run 5, yes, after about two hours.**
+  - `ha-2` held 695 rows in every reading up to 03:14:07.2 (t0+7,240), while the master grew to 49,528.
+  - At 03:14:38.69Z (t0+7,271, r+7,163), its `copylogdb` logged `Server no longer responding.... Invalid argument` and `change the state of HA server (appdb@ha-0) from 'active' to 'dead'`. It was the same process, pid 336, since its start.
+  - It reconnected 1.2 s later (`connected to database server 'appdb@ha-0'`, `from 'dead' to 'active'`). The next reading, at 03:15:49.8 (t0+7,342), held 874 rows.
+  - The writers were stopped at 03:15:50.7, 72 s after the recovery. 60 s after the stop, `ha-2` held 2,404 of 50,106 rows (`appliedChanges` 2,438). It was still catching up 6 minutes later, when the run ended (8,475 rows).
+  - The diagnostic actions of that run ran during this catch-up, so they show nothing.
+- **What the timers showed.** The stuck copier's socket stayed `ESTAB` with a keepalive timer.
+  - At 03:10:44.85 it read `keepalive,9.581ms`. At the same moment, other idle 1523 sockets fired and re-armed to 117 minutes: `ha-2:1523` ← `ha-1:42648` at 8.1 ms, and the Broker sockets on `ha-0`. So the event at about 03:10 is probably the timer's two-hour check, not a probe.
+  - At 03:14:08.6 it read `keepalive,,0`, still `ESTAB`, with probe count 0.
+  - Linux sends the first keepalive probe 7,200 s after the last received packet, which here is about 03:13:28. That a probe drew a reset from a master that no longer had the connection is a hypothesis. `ESTAB` with probe count 0 at 03:14:08 does not cleanly fit it either, and a packet capture is needed.
+- **In the other three stalls, no recovery** was seen within what was observed: r+2,094 (run 1), r+1,162 (run 2) and r+680 (run 4). The timers on their copiers' sockets read 82 to 105 minutes at the end.
+- **What the status reported.**
+  - From healing on, for the whole stall (two hours in run 5) and in every run, `HAReady`, `Ready` and `ReplicationHealthy` were `True` (`AppliersProgressing`, `every observed slave applies the master's log`).
+  - During the `isolate` cuts (runs 1 and 5) and the heartbeat cut (run 3), `HAReady` was `False`: `PrimaryObservationIncomplete`, then `AmbiguousPrimaryObservation` (run 3: `AmbiguousPrimaryObservation` only). It turned `True` again 6 to 9 s after the removal began.
+  - `ReplicationHealthy` was `Unknown` (`ReplicationNotObserved`) only on healing, for about 10 s each time, and in run 4 only at the cluster's formation.
+  - In the TCP-only cuts, `PrimaryResolved` stayed `True` throughout. In the heartbeat-only cut it was `False` (`AmbiguousPrimaryObservation`) during the cut, as in POC-40.
+  - The gap was visible only in `status.instances[].replication.appliedChanges`: 596 against 13,883 (run 1), 406 against 7,020 (run 2), 395 against 5,565 (run 4).
+  - A stall with 0 delayed pages cannot trip a stall detection based on delayed pages. That is why `ReplicationHealthy` stayed `True`: the check of #229 reports a slave that has log pages waiting and applies nothing, or whose applier failed.
+
+**2. What the stuck slave's engine shows, next to the slave that caught up.** In all four stalls:
+- **The copier receives nothing.**
+  - In `applyinfo` of the master's copied log on the stuck slave, the EOF LSA stayed at one value in every snapshot from the fault on: 196|11560 for 36 minutes in run 1, 178|14664 in run 2, 178|3520 in run 4, and 205|6576 for two hours in run 5.
+  - The copied active log's modification time froze about 1.0 to 1.5 s after t0 (run 4: 0.96 s). This timing is from the file's modification time, not from an EOF sample.
+- **The applier has nothing to apply.**
+  - Final LSA equalled that EOF, apart from a few hundred bytes in run 2 that a restart of its applier applied, with no row. The delayed page count was 0.
+  - On the slave that caught up, EOF and Final advanced in every snapshot.
+  - So this is "the copier receives nothing", not "the applier does not apply what was copied".
+- **The processes ran and were registered.** On the stuck slave, the `copylogdb` and `applylogdb` processes for the master's log existed in `/proc` with the same pids as before the fault, and `cubrid heartbeat status` listed both as `registered`. The member was `slave` / `registered_and_standby`.
+- **The master closed the session; the stuck copier still held it.**
+  - In the `during` snapshot of all four stalls, the master's socket to the stuck copier was `FIN-WAIT-1`, with 32,857 to 49,241 bytes unsent and a retransmission timer. That shows directly that the master had closed that session.
+  - The master's socket to the other copier was in `FIN-WAIT-1` too.
+  - In the `right` snapshots of runs 2 and 4 (00:00:23.2 and 00:49:56.9), the master still had that `FIN-WAIT-1` socket, with 49,241 and 32,857 bytes queued, 8 retransmissions, and timers of 12 s and 9 ms. In runs 1 and 5 it was gone by then.
+  - From the `after2` snapshot on (r+about 200 s), in every stall, no socket on `ha-0` had the stuck copier's port as its peer.
+  - The stuck copier itself had one TCP socket to `ha-0:1523`, `ESTAB`, with an empty send queue and a keepalive timer, in every snapshot.
+- **The two copiers differed during the cut.**
+  - In all four stalls, the copier that later caught up had 56 unacknowledged bytes and a retransmission timer: `timer:(on,5.729ms,8)`, `(on,18sec,8)`, `(on,15sec,8)` and `(on,1min44sec,9)`.
+  - The stuck copier had 0 bytes queued and only a keepalive timer.
+  - In run 5, the other copier's retransmission timer read 1 min 13 s at 01:15:45, so it was due at about 01:16:58; that copier reconnected at 01:17:01.6. The 6 to 106 s spread of the reconnections is consistent with retransmission backoff.
+  - A hypothesis, not shown at packet level: a copier with a pending retransmission meets the master's reset after healing and reconnects, while an idle copier sends nothing and waits for keepalive.
+- **What the master logged.** In each TCP cut, its server log has `ERROR CODE = -1122` `Time out in receiving data` for both slaves' copiers. The timestamps have whole-second resolution (±1 s): t0+4.4 to 5.2 s and t0+9.4 to 10.2 s. The run 3 cut (heartbeat only) has no such line.
+- **What the copiers logged.**
+  - The copier that caught up logged `Server no longer responding` and reconnected at r+6 to r+106.
+  - The stuck copier's `.err` has nothing after its last line before the fault (`from 'to-be-active' to 'active'`, at the cluster's formation), until the two-hour error of run 5 or the end of the run.
+- **Which copier stalled.** In all four stalls it was the one whose session the master timed out second, 5 s after the other. Four of four is a correlation; the cause is not known.
+- **Writes.**
+  - Every operation that got an answer was acknowledged. The counts were 13,880, 7,016, 4,529, 5,562 and 50,106.
+  - In run 2, `o2-002258` was attempted at 00:15:34.817, as the writers were stopped, and never answered. It is on the master.
+  - At the start of each TCP cut, the already-open session paused for 4.4 to 6.0 s, until the master timed out the first copier's session.
+  - In the heartbeat-only cut, the longest gap of `o1` or `o2` within 5 minutes of the fault was 1.51 s, at t0−10.6 s, and the slowest write took 1.14 s.
+  - The master held every row.
+
+**3. Which flow matters.**
+- **TCP 1523 alone reproduced the stall.** In runs 2 and 4:
+  - the heartbeat was not touched, no member changed role, and `PrimaryResolved` stayed `True`;
+  - yet one slave stalled, with every sign listed above.
+
+  In one run (run 2), dropping only the master's packets to the slaves was enough.
+- **The heartbeat cut alone did not.** In run 3:
+  - `ha-1` promoted itself to master (server `to_be_active`) at t0+11.6 s, as in POC-40;
+  - both slaves kept receiving and applying the master's log during the cut: 962 of the master's 964 rows just before the removal;
+  - `ha-1` demoted itself on healing, and by the first reading, at r+111, both slaves were within 3 rows of the master, which was still being written to.
+  - Nothing stalled through the observation, which ended at r+617.
+  - The stall test did not work for `ha-1` in that run: its first read after the removal failed (`-191` / `-677`) and returned 0 rows, which the script stored as its count at the fault. The conclusion stands, since the later reads show 1,616 rows and rising.
+- In these runs the stall went with the loss of TCP 1523, not with the failover and failback. With two TCP runs and one heartbeat run, the sample is small.
+
+**4. Does a minimal action clear it?** Diagnostic only, on the stuck slave after the observation:
+- **A heartbeat restart of the copier (run 4).** `cubrid heartbeat copylogdb stop appdb ha-0`, 3 s, then `cubrid heartbeat copylogdb start appdb ha-0`. Both answered `success`.
+  - A new copier (pid 8345) connected 65 s after the stop was issued.
+  - 90 s after the start, `ha-2` held 5,025 of 5,562 rows, with EOF 586|8272 and Final 547|13576 advancing.
+  - After a `cubrid heartbeat applylogdb stop`/`start` that followed, it held all 5,562. Whether that second step was needed was not determined.
+- **SIGTERM to the stuck `copylogdb` (run 2).** 90 s later the same process (pid 339) and the same socket were still there. It did not end the copier.
+- **SIGTERM to the stuck slave's `applylogdb` for the master's log (run 2).** Heartbeat restarted it, and it applied the few hundred bytes already copied, but no new row arrived. In this one run, restarting the applier did not clear it.
+- **Run 1's action did not run.** The script's process search matched itself and killed its own shell, so nothing was sent to the copier.
+- **Run 5's actions** ran after the slave had already recovered by itself, so they say nothing about the action.
+
+**How often it reproduced.**
+- With a TCP 1523 cut: 4 of 4 runs here (2 `isolate`, 2 `tcp1523`). In each, one slave of the two stalled and the other recovered.
+- POC-40 saw a stalled slave after 7 of 8 `isolate` and `oneway-all` cuts.
+- With a heartbeat-only cut: 0 of 1.
+
+**`csql` read errors.** 34 of 417 per-member row reads ended with `-199` /
+`-111`, `-581`, or `-191` / `-677` (while a demoted server restarted). Such a
+read can count fewer rows:
+- In run 4, the read right after the removal counted 391 rows on `ha-2`, not 392. The script's stall test then took the slave for progressing, so the observation ended at r+615 (the last reading), not r+900, and the action came at r+680.
+- In run 3, a read returned 0 rows (above).
+
+**What this means for #357.**
+- **On this lab**, without any NetworkPolicy, a loss of the TCP 1523 flow lasting 90 to 110 s left one slave's copier holding a session the master had ended.
+  - It received nothing, its applier applied nothing, and from healing on the Operator reported the replication as healthy.
+  - In the one run long enough, that lasted about two hours.
+- **Evidence against "the same mechanism" as #357's Kind failure:**
+  - #357's comment of 2026-10-12 shows `delayedPages` 11 and `ReplicationStalled` on Kind. Here delayed pages were 0.
+  - POC-28 saw the opposite signature: copying continued with copy delay 0, the appliers logged `invalid replication record`, and a 1.2 to 1.4 s TCP-only or UDP-only loss did not reproduce the stall.
+  - Also, there the master restarted and its first packets were lost for about a second. Here the master kept running, and the cut lasted 90 to 110 s.
+  - So this entry describes a second way for a slave to apply nothing, not the explanation of #357's Kind runs, which POC-28 reproduced with two servers on one volume under forced conditions.
+- **Signs that tell the two apart:**
+  - this one: a frozen copied-log EOF with Final equal to it and 0 delayed pages, a copier socket with no counterpart on the master, and the master's `-1122` for that copier;
+  - POC-28's: copying continues, and the appliers log `invalid replication record`.
+- **Detection:** the current stall rule cannot see this state, and neither can the rule proposed on #249, which starts a stall only when the copied log grows. #623 tracks reporting a slave whose copied log stops while the master's log advances.
+
+**Not tested.**
+- **On Kind:** #357's own case, a restarted master that loses its first packets for 1 to 3 s. POC-28 ran short TCP-only and UDP-only losses of 1.2 to 1.4 s without a stall. This entry ran no loss shorter than 90 s.
+- **Directions:**
+  - only the slaves' packets to the master on TCP 1523;
+  - only one slave cut;
+  - a cut of the heartbeat in one direction.
+- **Recovery:**
+  - more than one run long enough for the self-recovery;
+  - whether a shorter `tcp_keepalive_time` in the member's namespace shortens the stall;
+  - what CUBRID's own parameters, if any, do about an idle copier connection;
+  - a packet capture of the keepalive and of the reset, which the timing hypothesis above needs.
+- **Diagnostic actions:**
+  - repetition of the heartbeat restart of the copier (one run);
+  - whether it alone completes the catch-up;
+  - `kill -9` of the copier (run 5's ran after the self-recovery);
+  - `cubrid heartbeat replication stop`/`start`.
+- **Causes:**
+  - why the copier that caught up had unacknowledged bytes during the cut and the other did not;
+  - why the master's timeout order matched the stall in four of four;
+  - why, in runs 2 and 4, the master's queued data and `FIN` on its `FIN-WAIT-1` socket did not move the stuck copier out of `ESTAB` after healing.
+- **A failover while a slave was stuck**, which POC-40 names as the data-loss risk.
