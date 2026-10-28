@@ -597,8 +597,9 @@ documentation, presentations, and other maintainer-facing writing.
   wording rather than adding redundant follow-up comments.
 
 Issue and pull request titles and UTC timestamps follow
-[Issue, PR and Commit Titles](#issue-pr-and-commit-titles) and
-[CONTRIBUTING.md](CONTRIBUTING.md#pull-request-and-commit-titles); this
+[Issue, PR and Commit Titles](#issue-pr-and-commit-titles),
+[CONTRIBUTING.md — issue titles and UTC evidence](CONTRIBUTING.md#human-readable-issue-titles-scope-and-utc-evidence)
+and [PR title rules](CONTRIBUTING.md#pull-request-and-commit-titles); this
 section adds nothing to them.
 
 This is a shared writing convention, not a new CI check, reviewer approval,
