@@ -118,8 +118,12 @@ type HAConfig struct {
 	// run's database to this bucket. It cannot be combined with Fault.
 	BackupBucket string
 	// BackupLimit bounds the backup from its request until Completed or
-	// Failed (backup_limit).
+	// Failed (backup_limit), and in S11 missing-destination until Failed.
 	BackupLimit time.Duration
+	// BackupMissingDestination selects S11 missing-destination after S11
+	// complete: a CubridBackup of the run's database to a bucket that does
+	// not exist. It needs BackupBucket and cannot be combined with Restore.
+	BackupMissingDestination bool
 	// ObjectStoreService is the object store's Service as
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.
@@ -279,9 +283,10 @@ type haRun struct {
 	labPassed bool
 	// s06 is the result of S06 restart, once it ran.
 	s06 *evidence.Scenario
-	// s11 is the result of S11 complete, once it ran, and s11Rec its record.
-	s11    *evidence.Scenario
-	s11Rec *s11Record
+	// s11 is the result of S11 complete, once it ran, and s11Rec its record;
+	// s11Missing is that of S11 missing-destination.
+	s11, s11Missing *evidence.Scenario
+	s11Rec          *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
 	// S12 operator-restart, s12IMRestart that of S12 instance-manager-restart
@@ -394,6 +399,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete: a full " +
 			"backup to object storage, downloaded and checked by the run; no other S00-S15 qualification"
 		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket for S12")
+		lane, requirements = planS11MissingDestination(cfg, lane, requirements, &summary)
 	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
@@ -498,6 +504,16 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 			"S11 starts from LAB01's checked state, and LAB01 did not pass")
 	}
 	switch {
+	case h.s11Missing != nil:
+		summary.Record(*h.s11Missing)
+	case h.cfg.BackupMissingDestination && h.s11 == nil:
+		summary.Settle(evidence.Requirement{ID: s11ID, Variant: s11MissingVariant}, evidence.Blocked,
+			"S11 missing-destination follows S11 complete, and S11 complete did not run")
+	case h.cfg.BackupMissingDestination:
+		summary.Settle(evidence.Requirement{ID: s11ID, Variant: s11MissingVariant}, evidence.Blocked,
+			"S11 missing-destination follows S11 complete, and S11 complete did not pass")
+	}
+	switch {
 	case h.s12 != nil:
 		summary.Record(*h.s12)
 	case h.cfg.Restore && h.s11 == nil:
@@ -565,6 +581,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 		h.s11 = &s11
 		if s11.Result != evidence.Pass {
 			return fmt.Errorf("S11/%s: %s", s11Variant, s11.Reason)
+		}
+		if h.cfg.BackupMissingDestination {
+			missing := h.runS11MissingDestination(ctx)
+			h.s11Missing = &missing
+			if missing.Result != evidence.Pass {
+				return fmt.Errorf("S11/%s: %s", s11MissingVariant, missing.Reason)
+			}
 		}
 		if !h.cfg.Restore {
 			return nil

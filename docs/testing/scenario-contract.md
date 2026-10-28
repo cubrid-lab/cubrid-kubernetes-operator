@@ -125,6 +125,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha` | The [installed-Operator HA command](installed-ha.md), under an authorized launcher on its explicitly selected environment | LAB01: create a new three-member HA cluster, reach the common starting state, run the workload client and check the data rules on every member and both Services, verify scoped cleanup | none |
 | `lab-installed-ha-s06` | The installed-Operator HA command with `-fault operator-restart` | LAB01, then S06 (`restart`) on the same cluster: the installed manager's Pod deleted without a grace period | none |
 | `lab-installed-ha-s11` | The installed-Operator HA command with `-backup-bucket` | LAB01, then S11 (`complete`) on the same cluster: a full backup to object storage, its artifact downloaded and checked by the run | none |
+| `lab-installed-ha-s11-missing-destination` | The installed-Operator HA command with `-backup-bucket` and `-backup-missing-destination` | LAB01, S11 (`complete`), then S11 (`missing-destination`): a backup of the same cluster to a bucket the run found absent must end `Failed` for its upload, never `Completed` and without an artifact, with the bucket still absent at the end and the source unchanged | none |
 | `lab-installed-ha-s12` | The installed-Operator HA command with `-backup-bucket` and `-restore` | LAB01, S11 (`complete`), then S12 (`exact`): S11's artifact restored into a new cluster in the run namespace and checked against the history truncated at S11's known point | none |
 | `lab-installed-ha-s12-tampered` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-tampered` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`tampered`): a copy of S11's artifact with one byte changed, whose restore into another new cluster must be refused for that object's checksum | none |
 | `lab-installed-ha-s12-wrong-target` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-wrong-target` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`wrong-target`): S11's artifact restored into a cluster created over the retained PVCs of a deleted cluster of the same name, which hold its database; the restore must be refused for that target and the database left with its own marker and without S11's | none |
@@ -147,6 +148,9 @@ variants are not part of the lane, rather than `not_applicable`: the lab can
 kill a Pod or cut the object store, so they are not ruled out by the
 environment, only not run by this command. The lane does not read the
 Operator's logs for credentials and does not restore the artifact (S12).
+`lab-installed-ha-s11-missing-destination` requires S11 `complete` and
+`missing-destination`; the command runs it in a run of its own, not with
+S12.
 
 `lab-installed-ha-s12` requires S12 `exact` only,
 `lab-installed-ha-s12-tampered` S12 `exact` and `tampered`,
@@ -1015,7 +1019,9 @@ it needs more.
 - **Level:** real database on Kind.
 - **Variants:** `complete` (a backup runs to the end), `interrupted-pod` (the
   member's Pod is killed while the backup runs), `interrupted-upload` (the
-  object storage becomes unreachable during the upload).
+  object storage becomes unreachable during the upload), and, in the lab
+  lanes only, `missing-destination` (the backup's destination bucket does
+  not exist; no fault is issued).
 - **Fault confirmed by:** the backup's operation was in a running state when
   the fault was issued.
 - **The Operator must** (ADR-0007): report `Completed` only when the artifact
@@ -1025,10 +1031,14 @@ it needs more.
 - **Expected:** `complete` ends as `Completed` with an artifact whose size and
   digest match the manifest. The interrupted variants end as `Completed`
   after a resume or as `Failed`; both are acceptable, and the run records
-  which.
+  which. `missing-destination` ends as `Failed` for its upload
+  (`BackupFailed`, `upload failed: put <bucket>/...`); a backup that ends
+  `Failed` before its upload did not exercise the missing bucket and leaves
+  the variant blocked.
 - **Must never happen:** `Completed` with a missing or unreadable artifact; a
   manifest that names files which do not exist; credentials in status, events
-  or logs.
+  or logs; `Completed`, or a `status.artifact`, for a backup whose
+  destination bucket does not exist.
 - **Data check:** the artifact of every `Completed` backup is restored in S12
   and compared.
 - **Limits:** `backup_limit`.

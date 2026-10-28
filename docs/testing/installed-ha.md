@@ -12,10 +12,11 @@ installed:
 5. Remove the namespace.
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`
-and S12 `exact`, `tampered`, `wrong-target`, `operator-restart`,
-`instance-manager-restart`, `instance-manager-restart-preparing` and
-`instance-manager-restart-seeding` build on. It injects no fault. A pass is not an S01 result at the VM-lab level, and it
-does not qualify any of S00 to S15.
+and `missing-destination`, and S12 `exact`, `tampered`, `wrong-target`,
+`operator-restart`, `instance-manager-restart`,
+`instance-manager-restart-preparing` and `instance-manager-restart-seeding`
+build on. It injects no fault. A pass is not an S01 result at the VM-lab
+level, and it does not qualify any of S00 to S15.
 
 It shares its inputs, target snapshot, manager identity checks and namespace
 ownership with the [installed smoke](installed-smoke.md); this page covers
@@ -347,7 +348,123 @@ S11 here does not check:
 - the Operator's logs for credentials. They are not read, so that part of
   the never-happen list is unverified;
 - the restore of the artifact: that is S12 `exact`, with `-restore`;
-- the interrupted variants `interrupted-pod` and `interrupted-upload`.
+- the interrupted variants `interrupted-pod` and `interrupted-upload`;
+- a backup to a bucket that does not exist: that is S11
+  `missing-destination`, with `-backup-missing-destination`.
+
+## S11 missing-destination
+
+With `-backup-missing-destination` as well as `-backup-bucket`, the run goes
+on after S11 `complete` passed with S11 `missing-destination`: a backup of
+the same cluster to a bucket that does not exist must end `Failed`. The lane
+is then `lab-installed-ha-s11-missing-destination`, and it requires LAB01,
+S11/complete and S11/missing-destination. `-backup-missing-destination`
+without `-backup-bucket`, or with `-restore`, is refused before anything is
+done: a run takes one lane.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -backup-missing-destination [-backup-limit 15m]
+```
+
+- `-backup-limit` bounds this variant too: from the return of the request
+  until the reading that saw `Failed`.
+- The run never creates, writes to or removes a bucket. With the seed
+  Secret's keys it only asks the object store whether the bucket exists and,
+  if it does at the end, lists it.
+- `-timeout` must also cover a second `backupdb` on a member and
+  `-backup-limit`.
+
+S11 `missing-destination` starts only from S11 `complete` that passed. When
+S11 `complete` did not run or did not pass, it is blocked with that cause
+and nothing of it is done.
+
+What the product does with such a backup, as the code reads (not yet
+observed on the lab): the Instance Manager runs `backupdb`, then uploads
+every data object before the manifest (`UploadBackup` in
+`internal/instancemanager/upload.go`). The first `Put` to a bucket that does
+not exist fails; `MinioObjectStore.Put` reports it as
+`put <bucket>/<key>: ...`, and `runBackup` in
+`internal/instancemanager/server.go` ends the operation `Failed` with
+`upload failed: ` and that error, without a manifest. The Operator maps the
+`Failed` operation onto the backup in `failedBackup`
+(`internal/controller/cubridbackup_controller.go`): phase `Failed`, `Ready`
+reason `BackupFailed`, with the operation's reason as the message. Nothing
+creates a bucket. The text after `put <bucket>/<key>: ` is the object
+store's and is not required.
+
+1. **The bucket.** The bucket is `cubrid-lab-missing-<run ID>`. Through the
+   port-forward to `-object-store-service` and with its own client, as S11
+   downloads the artifact, the run asks whether it exists. One that exists,
+   or a store that cannot be asked, blocks S11 `missing-destination` before
+   anything is requested.
+2. **Request.** The run creates the `CubridBackup` `s11-missing-destination`
+   for the run's cluster and database, to that bucket under the prefix
+   `lab-runs/<run ID>/missing-destination`, with the default target
+   `PreferStandby`, and records the time the request returned.
+3. **Wait.** As in S11 `complete`, it reads the backup every `-poll` until
+   it is `Completed` or `Failed`, for at most `-backup-limit`, and records
+   each change of the phase, the target and the conditions with the time it
+   saw it, in UTC.
+   - `Completed`, and a `status.artifact` in the backup's status as it
+     ended, must never happen and fail S11 `missing-destination`.
+   - `Failed` with another reason than `BackupFailed`, or with a message
+     that does not begin with `upload failed: `, such as
+     `backupdb failed: ...` or `backup refused: ...`, blocks it, with the
+     reason and message: the backup ended before its upload, so the missing
+     bucket was not exercised.
+   - `BackupFailed` with `upload failed: ` but not
+     `upload failed: put <bucket>/` fails it: the upload ran and failed, but
+     not for its destination.
+   - The object store's answer after `put <bucket>/<key>: ` is recorded as
+     `storeError`, with `storeErrorKind` `no-such-bucket`, `access-denied`
+     or `other`. The verdict does not depend on it; in the one VM-lab run so
+     far, SeaweedFS answered `The specified bucket does not exist`
+     (`no-such-bucket`). The run asks whether the bucket exists with the seed
+     Secret's keys, while the members write with the cluster's
+     `spec.objectStorage` Secret, a copy of the same keys, so a refused
+     access would not tell the two apart by itself.
+   - A backup read but neither `Completed` nor `Failed` when
+     `-backup-limit` passes fails it, with its last phase. When the readings
+     kept failing until then, it is blocked.
+   - `failedWithin` runs from the return of the request to the reading that
+     saw `Failed`, an upper bound.
+4. **The bucket at the end.** The run asks again whether the bucket exists.
+   It must not: one that exists fails S11 `missing-destination`, and the run
+   lists it and records what it holds and whether a `manifest.json` is among
+   it. It does not remove it.
+5. **Credentials.** As in S11 `complete`: neither key of the seed Secret may
+   be in any status the run read, in the backup's status at the end, which
+   holds the failure's message, or in any Event of the run namespace. One
+   found must never happen.
+6. **The source.** As step 8 of S12 `exact`: the same member Pods and
+   containers, the same master by CUBRID and `status.currentPrimary`, and the
+   data rules over the whole history. Any difference fails S11
+   `missing-destination`.
+7. **The manager.** The installed manager is read again; one other than
+   LAB01 checked at its end, by Deployment UID and Pods, blocks S11
+   `missing-destination`. The record holds both.
+8. **Cleanup.** On every path out of S11 `missing-destination` after the
+   request, also when the run ended, the run deletes the `CubridBackup` it
+   created, with its UID as a precondition and `-cleanup-timeout` as its own
+   budget. The record says whether it was deleted; a deletion that fails is
+   recorded there and in the scenario's `cleanupSucceeded`, and the backup
+   goes with the namespace. It does not judge S11 `missing-destination`.
+
+The time of the verdict is recorded as `judgedAt`. As in S11 `complete`, a
+run that ends before S11 `missing-destination` is judged, an API error that
+keeps the run from reading the backup, the store, the Events or the source,
+and a port-forward or client that cannot be opened block it; what was seen
+stays a failure, with that error added to the reason.
+
+Beyond S11 `complete`'s, the account needs `delete` on `cubridbackups` in the
+run namespace.
+
+S11 `missing-destination` here does not check:
+- the Operator's and the Instance Manager's logs for credentials;
+- the member's staging directory after the failed upload;
+- denied credentials, another invalid destination, and a store that is
+  unreachable or fails partway through the upload.
 
 ## S12 exact
 
@@ -1452,8 +1569,9 @@ These placements here do not check:
 
 The evidence directory holds `summary.json`, `junit.xml` and these files.
 Each scenario in `summary.json` lists only the files under its own
-directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs, and each S12
-variant other than `exact` only those under `S12/<variant>/`.
+directory: LAB01 its `LAB01/` files, S06, S11 and S12 theirs, and each S11
+and S12 variant other than `complete` and `exact` only those under
+`S11/<variant>/` or `S12/<variant>/`.
 - `LAB01/record.json`: identities before and after, the starting state with
   the time it took to form, the roles at the end, the seed prefix and the
   Secret's source, operation counts and cleanup;
@@ -1471,6 +1589,16 @@ variant other than `exact` only those under `S12/<variant>/`.
   `backupCompletedWithin`, where credentials were looked for, and what is
   left in the bucket) and `S11/complete/manifest.json`, the manifest as the
   run downloaded it. It holds no credential; the run checks that.
+- with `-backup-missing-destination`, `S11/missing-destination/record.json`
+  (the bucket's name, whether it was absent before the request and at the
+  end, with the times, and what it held at the end if it existed; the
+  backup's name, UID and prefix, the time of the request, every phase
+  observed, `failedWithin`, the failure's reason and message, the object
+  store's answer it quotes (`storeError`, `storeErrorKind`), the artifact
+  if one was reported, the manager before and after, the source at the end,
+  where credentials were looked for, `judgedAt`, whether the backup was
+  deleted, and what is left) and
+  `S11/missing-destination/source-data-check.json`, the source's data check.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and
@@ -1563,7 +1691,8 @@ The run deletes its namespace with a UID precondition and waits until it is
 gone, as the smoke does. That removes the cluster, the restored clusters of
 S12, their PVCs, `ha-wt`'s retained PVCs among them, the client and the
 copied Secrets. S12 `tampered` removes
-its copy of the artifact itself. It does not remove:
+its copy of the artifact itself, and S11 `missing-destination` deletes its
+`CubridBackup` itself. It does not remove:
 - the seed backups under `lab-runs/<run ID>` in the bucket, the restored
   cluster's among them, and S11's artifact in the backup bucket;
 - a backend volume that the StorageClass retains.

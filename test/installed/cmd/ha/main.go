@@ -84,6 +84,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"scenario after LAB01: S11 complete, a full backup to this bucket; not with -fault")
 	flags.DurationVar(&cfg.BackupLimit, "backup-limit", 15*time.Minute,
 		"S11: bound from the backup request until Completed or Failed (backup_limit)")
+	flags.BoolVar(&cfg.BackupMissingDestination, "backup-missing-destination", false,
+		"scenario after S11 complete: S11 missing-destination, a backup to a bucket that does not exist must end "+
+			"Failed; needs -backup-bucket, not with -restore")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
 		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
 	flags.BoolVar(&cfg.Restore, "restore", false,

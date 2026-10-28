@@ -121,6 +121,9 @@ type haFixture struct {
 	backupCreated func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error
 	backupRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	marker        func(script string) (string, error)
+	// backupDeleted plays the API server when the run deletes a CubridBackup.
+	backupDeleted func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup,
+		opts ...client.DeleteOption) error
 	// eventsErr answers a list of Events.
 	eventsErr error
 	// restoreCreated plays the Operator when the run creates the restored
@@ -272,6 +275,9 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 			}
 			if cluster, ok := obj.(*databasev1alpha1.CubridCluster); ok && f.clusterDeleted != nil {
 				return f.clusterDeleted(ctx, c, cluster, opts...)
+			}
+			if backup, ok := obj.(*databasev1alpha1.CubridBackup); ok && f.backupDeleted != nil {
+				return f.backupDeleted(ctx, c, backup, opts...)
 			}
 			ns, ok := obj.(*corev1.Namespace)
 			if !ok || ns.Name != cfg.Namespace {
