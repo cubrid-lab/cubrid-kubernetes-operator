@@ -1432,7 +1432,9 @@ operation.
   → blocked (`UpdateBlockedEngineUpgrade` /
   `UpdateBlockedUnverifiableEngineVersion`), no pod deletion.
   `spec.version` is effectively immutable for an initialized cluster, HA
-  or standalone.
+  or standalone. The responsibility of `spec.image`, `spec.version` and
+  the `accept-image` annotation, the format of `spec.version` and the
+  behavior on a mismatch are decided in ADR-0011.
 - **Restart sequence:** slaves first; when only the master is outdated,
   **pause with `MasterUpdatePending`**. Updating the master requires
   **explicit planned-failover intent** → fail over to an updated slave →

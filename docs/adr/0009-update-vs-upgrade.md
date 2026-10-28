@@ -107,25 +107,25 @@ version with the role answer all the same, so the operator asks the member in
 every reconcile, records `instances[]` for it with the role `unknown`, the
 engine version and the Pod's readiness, and records the cluster's
 `observedEngineVersion` by the same rule as for an HA cluster with one
-expected member. The same guard then applies, with the same reasons: a
-member that has not reported a version is never taken as unchanged
+expected member. The same guard then applies, with the same reasons: a member
+that has not reported a version is never taken as unchanged
 (`UpdateBlockedEngineVersionNotObserved` before a baseline,
 `UpdateBlockedEngineVersionUnknown` after), and a `spec.version` of another
 series is `UpdateBlockedEngineUpgrade`. The comparison is the one described
 below, by series; the accepted format of `spec.version` and the behavior on a
-mismatch are decided in #321, and the standalone guard follows whatever that
-decides for an HA cluster. When the guard passes, `Updating` says whether the
-member runs the StatefulSet's update revision (`UpToDate`) or not
-(`AutomaticReplacementDisabled`); the operator never replaces the Pod of a
-standalone cluster, whatever `AutomaticReplacement` says. `status.update`
-(`desiredRevision`, `currentRevision`, `engineVersion`) is recorded as for an
-HA cluster. A single standalone member that is replaced by a Pod of another
-engine series reports `UpdateBlockedMixedEngineVersions`: the reason names
-a member that differs from the baseline, also when it is the only one. A
-standalone member is not observed periodically (#155), only when a reconcile
-runs, except that it is asked again every 30 seconds while its engine
-version is not known. When its Instance Manager refuses the cluster's token,
-the blocking message says so.
+mismatch are decided in [ADR-0011](0011-engine-version-contract.md), and the
+standalone guard follows it as an HA cluster does. When the guard passes,
+`Updating` says whether the member runs the StatefulSet's update revision
+(`UpToDate`) or not (`AutomaticReplacementDisabled`); the operator never
+replaces the Pod of a standalone cluster, whatever `AutomaticReplacement`
+says. `status.update` (`desiredRevision`, `currentRevision`, `engineVersion`)
+is recorded as for an HA cluster. A single standalone member that is replaced
+by a Pod of another engine series reports `UpdateBlockedMixedEngineVersions`:
+the reason names a member that differs from the baseline, also when it is the
+only one. A standalone member is not observed periodically (#155), only when
+a reconcile runs, except that it is asked again every 30 seconds while its
+engine version is not known. When its Instance Manager refuses the cluster's
+token, the blocking message says so.
 
 `ImageChangeNotAccepted` describes a pending image. Once the Pod template
 carries the image the spec asks for, the condition is removed when no other
