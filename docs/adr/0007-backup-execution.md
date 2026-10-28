@@ -102,11 +102,16 @@ waits if no slave is eligible. As implemented (#291,
 selection only on fresh evidence that it follows the master: it is
 authoritatively observed as a slave in this reconcile's observation, its
 log applier was read in the same observation, it applies the log of the
-resolved primary, it has failed no change (`failCount` 0), and the stall
-series that reading continues (from the cluster status' replication
-history) has not reached the 60 s stall window of `ReplicationHealthy`.
-Eligible slaves are ordered by the log pages waiting to be applied
-(`delayedPages`), then by ordinal. Missing evidence never counts as caught
+resolved primary, it has failed no change (`failCount` 0), and neither
+the stall series that reading continues nor the series of its copy of the
+primary's log not growing (`notReceivingSince`, POC-41; both from the
+cluster status' replication history, the copy read against the master's log
+end in the same observation) has reached the 60 s stall window of
+`ReplicationHealthy`. A copy that receives nothing leaves no page waiting to
+be applied, so the apply stall alone would keep such a slave. A slave whose
+copy's end, or whose master's log end, has not been read has no copy series
+and stays eligible by this rule. Eligible slaves are ordered by the log pages
+waiting to be applied (`delayedPages`), then by ordinal. Missing evidence never counts as caught
 up: a slave whose applier could not be read is not eligible, and no slave is
 eligible while the primary is not resolved, so `StandbyOnly` waits
 (`NoHealthyStandby`) and `PreferStandby` falls back to the master only under

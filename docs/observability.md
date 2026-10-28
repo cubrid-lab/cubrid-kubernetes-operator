@@ -600,8 +600,9 @@ of the master's log has not grown for 60 seconds while pages of it waited to
 be copied. The Operator only reports this and changes nothing. Such a slave
 lacks every change the master committed since its copy stopped, and CUBRID
 may still promote it if the master fails (ADR-0005), so act before relying
-on it. The choice of a standby for a `CubridBackup` does not yet leave it
-out (#291): a backup taken on it meanwhile lacks the same changes.
+on it. A `CubridBackup` does not choose it as its standby once its copy has
+not grown for that window (#291, ADR-0007); a backup whose target was
+already recorded keeps it, and is still started there.
 
 1. Confirm it on the slave. In its database container, run
    `cubrid applyinfo -L $CUBRID_DATABASES/<db>_<master> -a -v <db>` twice, a
