@@ -754,13 +754,15 @@ func (h *haRun) checkManifestIdentity(m instancemanager.BackupManifest,
 		add("the manifest's sourceRole %q, status.targetRole %q and fallbackUsed %t do not agree", m.SourceRole,
 			s.TargetRole, s.FallbackUsed)
 	}
-	// The manifest's cubridVersion is the cluster's spec.version; the engine
-	// reports the full version within it.
-	if m.CubridVersion != haCubridVersion {
-		add("the manifest's cubridVersion %q is not the cluster's spec.version %s", m.CubridVersion, haCubridVersion)
+	// The manifest's cubridVersion is the engine version the backup's member
+	// observed (#621, ADR-0011): every member runs the same image, so it is
+	// the version cubrid_rel reported on the master, of the cluster's
+	// spec.version series.
+	if !strings.HasPrefix(m.CubridVersion, haCubridVersion+".") {
+		add("the manifest's cubridVersion %q is not of the cluster's spec.version %s", m.CubridVersion, haCubridVersion)
 	}
-	if !strings.HasPrefix(h.engineVersion, m.CubridVersion+".") {
-		add("the engine version %s is not within the manifest's cubridVersion %q", h.engineVersion, m.CubridVersion)
+	if m.CubridVersion != h.engineVersion {
+		add("the manifest's cubridVersion %q is not the engine version %s", m.CubridVersion, h.engineVersion)
 	}
 	if artifact.CubridVersion != "" && artifact.CubridVersion != m.CubridVersion {
 		add("status.artifact.cubridVersion is %q, the manifest's %q", artifact.CubridVersion, m.CubridVersion)

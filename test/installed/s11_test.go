@@ -296,7 +296,7 @@ func (f *s11Fixture) upload(backup *databasev1alpha1.CubridBackup) *databasev1al
 		prefix: path.Join(backup.Spec.Destination.ObjectStorage.Prefix, testClusterUID, databaseName,
 			string(backup.UID), testAttempt),
 		manifest: instancemanager.BackupManifest{ManifestVersion: instancemanager.ManifestVersion,
-			Database: databaseName, ClusterUID: testClusterUID, CubridVersion: "11.4", SourceInstance: testBackupTarget,
+			Database: databaseName, ClusterUID: testClusterUID, CubridVersion: "11.4.6.1963", SourceInstance: testBackupTarget,
 			SourceRole: "slave", CreatedAt: time.Now().UTC().Format(time.RFC3339), OperationID: "op-1"}}
 	for _, key := range []string{testFirstBackupKey, "backup/appdb_bkvinf"} {
 		sum := sha256.Sum256(a.objects[key])
@@ -503,8 +503,12 @@ func TestRunS11CompleteFailsOnTheArtifact(t *testing.T) {
 		"fallback without the master": {tamperStatus: func(s *databasev1alpha1.CubridBackupStatus) {
 			s.FallbackUsed = true
 		}, want: "sourceRole"},
-		"cubridVersion": {tamper: func(a *fakeArtifact) { a.manifest.CubridVersion = "11.3" },
-			want: "cubridVersion \"11.3\" is not the cluster's spec.version"},
+		"cubridVersion of another series": {tamper: func(a *fakeArtifact) { a.manifest.CubridVersion = "11.3.6.1963" },
+			want: "cubridVersion \"11.3.6.1963\" is not of the cluster's spec.version"},
+		"cubridVersion of another build": {tamper: func(a *fakeArtifact) { a.manifest.CubridVersion = "11.4.6.2000" },
+			want: "is not the engine version 11.4.6.1963"},
+		"cubridVersion the series only": {tamper: func(a *fakeArtifact) { a.manifest.CubridVersion = "11.4" },
+			want: "is not the engine version 11.4.6.1963"},
 		"status cubridVersion": {tamperStatus: func(s *databasev1alpha1.CubridBackupStatus) {
 			s.Artifact.CubridVersion = "11.5"
 		}, want: "status.artifact.cubridVersion"},
