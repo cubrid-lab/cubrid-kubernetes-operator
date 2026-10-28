@@ -113,8 +113,8 @@ member that has not reported a version is never taken as unchanged
 `UpdateBlockedEngineVersionUnknown` after), and a `spec.version` of another
 series is `UpdateBlockedEngineUpgrade`. The comparison is the one described
 below, by series; the accepted format of `spec.version` and the behavior on a
-mismatch are decided in #321, and the standalone guard follows whatever that
-decides for an HA cluster. When the guard passes, `Updating` says whether the
+mismatch are decided in [ADR-0011](0011-engine-version-contract.md), and the
+standalone guard follows it as an HA cluster does. When the guard passes, `Updating` says whether the
 member runs the StatefulSet's update revision (`UpToDate`) or not
 (`AutomaticReplacementDisabled`); the operator never replaces the Pod of a
 standalone cluster, whatever `AutomaticReplacement` says. `status.update`
