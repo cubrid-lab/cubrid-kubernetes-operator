@@ -275,10 +275,11 @@ is refused before anything is done.
      `status.targetInstance` and one of the cluster's members, `sourceRole`
      equal to `status.targetRole` and to
      `slave`, or `master` when `fallbackUsed`;
-   - `cubridVersion` is the cluster's `spec.version` (`11.4`), and the engine
-     version that `cubrid_rel` reported on the master during LAB01 is within
-     it. The Operator does not fill `status.artifact.cubridVersion`; when it
-     is empty the record says so, and when it is set it must be the same;
+   - `cubridVersion` is the engine version that `cubrid_rel` reported on the
+     master during LAB01, which the backup's member records since #621
+     (ADR-0011), and it is of the cluster's `spec.version` series (`11.4.`);
+     `status.artifact.cubridVersion` must be the same (an empty one fails,
+     since the Operator fills it from #621 on);
    - `BackupManifest.Digest()` of the parsed manifest, and the sha256 of the
      stored file, are both `status.artifact.manifestDigest`;
    - the sum of the sizes the manifest lists is `status.artifact.sizeBytes`;

@@ -153,8 +153,14 @@ backup's status, the manifest or the namespace's Events. On 2026-10-25 it
 passed four times on the VM lab (manager `d6df2ac`), the last from the merged
 harness: each backup was taken on a standby and `Completed` in about 12 s,
 with one object of 5,256,192 bytes verified. The Operator's logs are not
-checked for credentials, the interrupted variants are not run, the controller
-does not fill `status.artifact.cubridVersion`.
+checked for credentials, and the interrupted variants are not run. Since #621
+the manifest and `status.artifact.cubridVersion` carry the engine version the
+backup's member observed, and the run requires it to be the version
+`cubrid_rel` reported on the master, of the `spec.version` series; until the
+harness was changed to that, S11 failed on manager `fb6f345` (once, on
+2026-10-28). With the change it passed once on the VM lab on 2026-10-28
+(manager `fb6f345`): `Completed` on a standby in 12.0 s, both versions
+`11.4.6.1963`.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
