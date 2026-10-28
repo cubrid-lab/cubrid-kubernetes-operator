@@ -53,6 +53,8 @@ const (
 	// testRunNamespaceUID is the UID the fake API server gives the run namespace.
 	testRunNamespaceUID = "run-namespace"
 	testVersionJSON     = `{"serverVersion":{"gitVersion":"v1.37.0"}}`
+	// testEngineVersion is the engine version the fake cubrid_rel reports.
+	testEngineVersion = "11.4.6.1963"
 )
 
 func testConfig(t *testing.T) Config {
@@ -380,7 +382,7 @@ func TestRunWritesSQLAndRetainsItsScopedEvidence(t *testing.T) {
 		summary.Scenarios[0].CleanupSucceeded == nil || !*summary.Scenarios[0].CleanupSucceeded {
 		t.Fatalf("successful SQL and cleanup were not recorded: %+v", summary)
 	}
-	if summary.Environment.OperatorImageDigest == "" || summary.Environment.EngineVersion != "11.4.6.1963" {
+	if summary.Environment.OperatorImageDigest == "" || summary.Environment.EngineVersion != testEngineVersion {
 		t.Fatalf("runtime identity was not observed: %+v", summary.Environment)
 	}
 }

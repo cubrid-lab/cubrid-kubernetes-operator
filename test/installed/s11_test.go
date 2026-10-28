@@ -296,8 +296,9 @@ func (f *s11Fixture) upload(backup *databasev1alpha1.CubridBackup) *databasev1al
 		prefix: path.Join(backup.Spec.Destination.ObjectStorage.Prefix, testClusterUID, databaseName,
 			string(backup.UID), testAttempt),
 		manifest: instancemanager.BackupManifest{ManifestVersion: instancemanager.ManifestVersion,
-			Database: databaseName, ClusterUID: testClusterUID, CubridVersion: "11.4.6.1963", SourceInstance: testBackupTarget,
-			SourceRole: "slave", CreatedAt: time.Now().UTC().Format(time.RFC3339), OperationID: "op-1"}}
+			Database: databaseName, ClusterUID: testClusterUID, CubridVersion: testEngineVersion,
+			SourceInstance: testBackupTarget,
+			SourceRole:     "slave", CreatedAt: time.Now().UTC().Format(time.RFC3339), OperationID: "op-1"}}
 	for _, key := range []string{testFirstBackupKey, "backup/appdb_bkvinf"} {
 		sum := sha256.Sum256(a.objects[key])
 		a.manifest.Objects = append(a.manifest.Objects, instancemanager.ManifestObject{Key: key,

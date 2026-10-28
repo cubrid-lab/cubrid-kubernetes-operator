@@ -762,7 +762,7 @@ func TestRunHAFormsTheClusterRunsTheWorkloadAndChecksEveryMember(t *testing.T) {
 		t.Fatalf("operations = %+v, want every workload write acknowledged and the read-only write refused",
 			scenario.Operations)
 	}
-	if summary.Environment.EngineVersion != "11.4.6.1963" || summary.Environment.CubridImageDigest == "" {
+	if summary.Environment.EngineVersion != testEngineVersion || summary.Environment.CubridImageDigest == "" {
 		t.Fatalf("environment = %+v, want the engine and image observed on the members", summary.Environment)
 	}
 
