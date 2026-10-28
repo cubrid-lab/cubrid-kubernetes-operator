@@ -456,6 +456,14 @@ type InstanceUnfinishedDatabase struct {
 	Message string `json:"message,omitempty"`
 }
 
+// LogAddress is a position in a CUBRID log: a log page and an offset in it.
+type LogAddress struct {
+	// page is the log page.
+	Page int64 `json:"page"`
+	// offset is the byte offset in the page.
+	Offset int64 `json:"offset"`
+}
+
 // InstanceReplication reports how a slave's log applier is doing (ADR-0006).
 // The values are the applier's own counters as last read; the operator
 // derives stalledSince from two readings in a row. A reconcile that could not
@@ -489,6 +497,23 @@ type InstanceReplication struct {
 	// pages still wait.
 	// +optional
 	StalledSince *metav1.Time `json:"stalledSince,omitempty"`
+	// copyDelayedPages is how many log pages the master's log ends past the
+	// end of this slave's copy of it, as of the last reading that had both
+	// ends. A reading without the master's log end keeps it while the copy
+	// did not grow, and makes it 0 otherwise.
+	// +optional
+	CopyDelayedPages int64 `json:"copyDelayedPages,omitempty"`
+	// copiedEOF is the end of this slave's copy of the master's log. It is
+	// kept only while copyDelayedPages is above 0, so that the next reading
+	// can tell whether the copy grew.
+	// +optional
+	CopiedEOF *LogAddress `json:"copiedEOF,omitempty"`
+	// notReceivingSince is when the operator first saw pages of the master's
+	// log waiting to be copied while the end of this slave's copy had not
+	// moved since the reading before (docs/poc/RESULTS.md, POC-41). It is
+	// cleared as soon as the copy grows or no page waits to be copied.
+	// +optional
+	NotReceivingSince *metav1.Time `json:"notReceivingSince,omitempty"`
 	// observedAt is when the operator last read these counters. A reading
 	// with the same values as the stored one advances it at most every 30
 	// seconds.

@@ -53,6 +53,10 @@ type HAStatus struct {
 	// log (docs/poc/RESULTS.md, POC-20); absent for any other role and for a
 	// member that was not told its database.
 	Replication *ApplyConvergence `json:"replication,omitempty"`
+	// LogEnd is the end of an active master's own log; absent for any other
+	// role, for a member that was not told its database, and when it could
+	// not be read.
+	LogEnd *LSA `json:"logEnd,omitempty"`
 	// Appliers are the log applier processes heartbeat lists.
 	Appliers []ApplierProcess `json:"appliers,omitempty"`
 	// Unfinished is set when the member's database carries the ownership

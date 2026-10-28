@@ -81,7 +81,7 @@ the fixed names below; free text belongs in `message`.
 | `Progressing` | The Operator is still working towards the spec: members are starting (`InstancesStarting`), a recovery bootstrap runs (`BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`), or a step failed and is retried (that step's reason) | `Reconciled` once the cluster is reconciled, also while more than one master is observed; `BootstrapRecoveryFailed`; `InvalidClusterName` |
 | `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member); `Unknown` with `RolesNotObserved` |
 | `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` or `RolesNotObserved` |
-| `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`; `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
+| `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`, `LogCopyStalled` (see [the runbook](#runbook-a-slave-whose-copy-of-the-masters-log-does-not-grow)); `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
 | `BrokerReady` | A Broker of each access mode is available | `BrokersNotAvailable`, `BrokerReconcileFailed` |
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
 | `RoutingReady` | HA: the primary is resolved and a read-write Broker is available (`PrimaryResolved`). Standalone: the member is ready, which means its server runs, and a read-write Broker is available (`StandaloneServerReady`); no primary is resolved for it | HA: the reason of `PrimaryResolved`, which comes first; `NoBrokerAvailable`; `Unknown` with `RolesNotObserved` or `BrokerReconcileFailed`. Standalone: `InstancesNotReady`, which comes first; `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
@@ -162,6 +162,28 @@ stalled (`cubrid_instance_replication_stalled` stays 1 and no
 `member_replication_resumed` is logged), but the 60-second window starts
 over, so a Condition that was `False` with `ReplicationStalled` for that
 slave turns `True` again (`ReplicationRecovered`) for at least one window.
+
+`ReplicationStalled` needs pages waiting to be applied, so it cannot see a
+slave whose log copier receives nothing: that slave has nothing to apply
+(docs/poc/RESULTS.md, POC-41). A second rule compares each slave's copy of
+the master's log (`copiedEOF`, read with `applyinfo` on the slave) with the
+end of the master's own log, which the master's Instance Manager reads with
+`cubrid applyinfo -r localhost <db>` in the same pass (POC-42).
+`status.instances[].replication.copyDelayedPages` is how many log pages the
+master's log ends past the copy. When pages wait to be copied at two
+readings in a row and the copy did not grow in between, `notReceivingSince`
+is set; after 60 seconds `ReplicationHealthy` is `False` with
+`LogCopyStalled`, which comes after `ApplyFailures` and `ReplicationStalled`.
+Pages are compared, not offsets: an idle master's log still grows slowly,
+and a healthy copy follows it within the page. So on an idle master the
+stall is seen only once the master's log reaches the next page, which at
+the idle rate of the local pair of POC-42 (about 150 bytes a second) takes
+up to about 110 seconds, before the 60-second window. A reading without the
+master's log end, because the master was not authoritatively observed or
+its Instance Manager reports none, decides nothing: a copy that did not grow
+keeps `notReceivingSince`, and one that grew ends it. An Instance Manager
+that does not report the end of a copied log or of the master's log leaves
+the rule out, and the slave is judged by the apply rules alone.
 
 ### What `RoutingReady=False` does not do
 
@@ -276,8 +298,9 @@ underscores.
 | `PrimaryResolved` becomes `False` | `PrimaryUnresolved`, with the Condition's reason in the message | Warning | `primary_unresolved` |
 | `PrimaryResolved` takes the reason `InstanceManagerTokenRefused` (when it was `True`, also `PrimaryUnresolved`) | `InstanceManagerTokenRefused`, naming the members, never the token | Warning | `instance_manager_token_refused` |
 | `PrimaryResolved` becomes `True` again | `PrimaryResolved` | Normal | `primary_resolved` |
-| `ReplicationHealthy` becomes `False` | `ReplicationStalled` or `ApplyFailures` | Warning | `replication_stalled`, `apply_failures` |
+| `ReplicationHealthy` becomes `False` | `ReplicationStalled`, `ApplyFailures` or `LogCopyStalled` | Warning | `replication_stalled`, `apply_failures`, `log_copy_stalled` |
 | `ReplicationHealthy` becomes `True` again | `ReplicationRecovered` | Normal | `replication_recovered` |
+| A slave's `notReceivingSince` is set, or cleared | none | | `member_log_copy_stalled` (warn, with `copyDelayedPages` and `source`), `member_log_copy_resumed` |
 | A member's role changes; a member first listed with the role `unknown`, as a standalone member always is, is no change | none | | `member_role_changed` |
 | A member whose role was known gives no answer that counts: its role becomes `unknown` | none | | `member_role_unobserved`, with `oldRole`, the `reason` and the `requestID` of the role query when one was sent (see below) |
 | A member begins to report an unfinished database, or reports it for another database, operation or state (see [Unfinished databases](#unfinished-databases)) | `UnfinishedDatabaseWaiting`, or `UnfinishedDatabaseRefused` when no operation of the Instance Manager takes it up now; the message names the member, the database and the operation | Normal; `UnfinishedDatabaseRefused` is a Warning | `member_database_unfinished`, with `member`, `database`, `operationID` and `state` |
@@ -569,6 +592,42 @@ the member as the user that owns the volume. A member that ends with
 `volume_wait_stopped` and a lock error other than a held lock (for example
 `invalid argument` on a sandboxed runtime without open file description
 locks) never starts there; that is by design.
+
+### Runbook: a slave whose copy of the master's log does not grow
+
+`ReplicationHealthy=False` with `LogCopyStalled` names the slaves whose copy
+of the master's log has not grown for 60 seconds while pages of it waited to
+be copied. The Operator only reports this and changes nothing. Such a slave
+lacks every change the master committed since its copy stopped, and CUBRID
+may still promote it if the master fails (ADR-0005), so act before relying
+on it. The choice of a standby for a `CubridBackup` does not yet leave it
+out (#291): a backup taken on it meanwhile lacks the same changes.
+
+1. Confirm it on the slave. In its database container, run
+   `cubrid applyinfo -L $CUBRID_DATABASES/<db>_<master> -a -v <db>` twice, a
+   minute apart: the `EOF LSA` under "Copied Active Info" stays the same, and
+   `Final LSA` equals it. On the master, `cubrid applyinfo -r localhost <db>`
+   shows an `EOF LSA` on a later page. `cubrid heartbeat status` on the slave
+   still lists its `Copylogdb` and `Applylogdb` as `registered`.
+2. Restart the slave's copier for the master's log, on the slave:
+   `cubrid heartbeat copylogdb stop <db> <master>`, then
+   `cubrid heartbeat copylogdb start <db> <master>`. In POC-41 the new
+   copier connected about a minute after the stop and copied again; a
+   `SIGTERM` to the stuck copier did not end it, and a restart of the applier
+   alone did not resume copying.
+3. Watch the Condition turn `True` (`AppliersProgressing`, with the Event
+   `ReplicationRecovered`) once the copy
+   grows, and `copyDelayedPages` fall. In POC-41 the applier then had to be
+   restarted as well (`cubrid heartbeat applylogdb stop <db> <master>` and
+   `start`) before every row arrived; whether that step is needed was not
+   determined, so check the slave's rows against the master's before
+   relying on it.
+
+This was seen after a loss of TCP port 1523 between the master and the
+slaves lasting 90 to 110 seconds, on one lab and one engine build
+(POC-41). It is not a general CUBRID guarantee, and its cause is a
+hypothesis there. If the copy does not grow after a copier restart, treat
+the slave as one that needs a rebuild (ADR-0006).
 
 ## Metrics
 

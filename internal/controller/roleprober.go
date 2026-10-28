@@ -63,6 +63,9 @@ type RoleObservation struct {
 	// Replication is what a slave's Instance Manager read from its log
 	// applier; nil for another role and when the applier could not be read.
 	Replication *ReplicationObservation
+	// LogEnd is the end of a master's own log as its Instance Manager read
+	// it; nil for another role and when it was not read.
+	LogEnd *databasev1alpha1.LogAddress
 	// Reason says why the answer gives no role that counts: the request that
 	// failed, the status the member answered, what its Instance Manager said
 	// of a role it does not report, or how the answer contradicts itself.
@@ -184,6 +187,14 @@ func (p *HTTPRoleProber) now() time.Time {
 	return time.Now()
 }
 
+// logAddress converts a log address the Instance Manager reported; nil stays nil.
+func logAddress(a *instancemanager.LSA) *databasev1alpha1.LogAddress {
+	if a == nil {
+		return nil
+	}
+	return &databasev1alpha1.LogAddress{Page: a.Page, Offset: a.Offset}
+}
+
 // observationFromStatus turns an Instance Manager answer into an observation,
 // flagging an answer that contradicts itself (ADR-0005): a master whose server
 // is not registered_and_active, a role that differs from the node's own line
@@ -209,7 +220,11 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 			FailCount:      int64(r.FailCount),
 			DelayedPages:   int64(r.DelayedPageCount),
 			Applier:        r.Applier,
+			CopiedEOF:      logAddress(r.CopiedEOF),
 		}
+	}
+	if st.Role == instancemanager.RoleMaster {
+		o.LogEnd = logAddress(st.LogEnd)
 	}
 	notYetActive := st.Role == instancemanager.RoleMaster && !st.ServerActive
 	contradictsNodeList := false

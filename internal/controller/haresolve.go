@@ -331,7 +331,7 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 		// restarting, or one observed in another role, has none.
 		var replication *databasev1alpha1.InstanceReplication
 		if role == databasev1alpha1.RoleSlave {
-			replication = nextReplication(before[m], obs[m].Replication, now)
+			replication = nextReplication(before[m], withSourceLogEnd(obs[m].Replication, obs, now), now)
 		}
 		out = append(out, databasev1alpha1.InstanceStatus{
 			Name:                  m,
@@ -345,6 +345,22 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 		})
 	}
 	return out
+}
+
+// withSourceLogEnd returns a copy of a slave's reading r that carries the end
+// of its source's own log, when the source answered in obs as an
+// authoritative master with a log end; otherwise r itself. r is not changed.
+func withSourceLogEnd(r *ReplicationObservation, obs map[string]RoleObservation, now time.Time) *ReplicationObservation {
+	if r == nil {
+		return nil
+	}
+	src, ok := obs[r.Source]
+	if !ok || src.Role != databasev1alpha1.RoleMaster || !authoritative(src, now) || src.LogEnd == nil {
+		return r
+	}
+	with := *r
+	with.SourceLogEnd = src.LogEnd.DeepCopy()
+	return &with
 }
 
 // holdObservationTimes puts the stored observation times back into status

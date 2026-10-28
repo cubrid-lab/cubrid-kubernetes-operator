@@ -485,8 +485,9 @@ const (
 	// it after five seconds (NewHTTPRoleProber), and a request it canceled
 	// carries no deadline here, so the answer sets its own.
 	roleBudget = 4 * time.Second
-	// replicationBudget bounds applyinfo within the role answer, so a slow
-	// applier leaves the replication unknown instead of losing the role.
+	// replicationBudget bounds applyinfo within the role answer, a slave's
+	// read of its applier or an active master's read of its log end, so a
+	// slow applyinfo leaves that value unknown instead of losing the role.
 	replicationBudget = 2 * time.Second
 )
 
@@ -522,6 +523,7 @@ func (s *Server) role(w http.ResponseWriter, r *http.Request) {
 	replCtx, cancelRepl := context.WithTimeout(ctx, replicationBudget)
 	defer cancelRepl()
 	st.Replication = replicationOf(replCtx, s.cli, st, s.replicationDB, s.databasesDir)
+	st.LogEnd = logEndOf(replCtx, s.cli, st, s.replicationDB)
 	s.logMissingApplier(ctx, st)
 	st.Unfinished = s.unfinishedDatabase()
 	writeJSON(w, http.StatusOK, st)

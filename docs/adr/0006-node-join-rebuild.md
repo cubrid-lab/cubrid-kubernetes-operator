@@ -314,7 +314,10 @@ implemented as a report, not yet as a gate.
   keeps none.
 - **Condition.** `ReplicationHealthy` is `False` with reason `ApplyFailures`
   when a slave's fail count is above zero, and with reason
-  `ReplicationStalled` when a slave has been stalled for 60 seconds. It is
+  `ReplicationStalled` when a slave has been stalled for 60 seconds, then
+  with reason `LogCopyStalled` when a slave's copy of the master's log has
+  not grown for 60 seconds while the master's own log ended pages past it
+  (#623, POC-41 and POC-42; see docs/observability.md). It is
   `Unknown` when no slave was observed or a slave's applier could not be
   read in this reconcile, also while its last reading is kept: a kept reading
   is history and says nothing about now (ADR-0005). Under intermittent read
