@@ -169,11 +169,16 @@ does not exist, requests a backup to it, and requires it `Failed` with
 `BackupFailed` and the Instance Manager's `upload failed: put <bucket>/...`
 within `backup_limit`, never `Completed` and without `status.artifact`, the
 bucket still absent at the end, the source unchanged and no credential in a
-status read or an Event; it deletes the `CubridBackup` it created. The harness
-is implemented, with unit tests on fake clients only; it has not run on the
-VM lab, so what the lab's object store answers a write to a missing bucket is
-not observed. Denied credentials, other invalid destinations and an
-interrupted upload are not covered.
+status read or an Event; it deletes the `CubridBackup` it created. On
+2026-10-28 it passed once on the VM lab (manager `fb6f345`, after S11
+`complete` on the same run): the backup was `Running` and then `Failed` 12.0 s
+after the request, with the store's answer `The specified bucket does not
+exist` (SeaweedFS); the bucket was still absent with no object, no credential
+was in 5 statuses or 81 Events, and the run deleted its `CubridBackup`. One
+run is not a baseline; the target member's staging directory afterwards and
+the Operator's and Instance Manager's logs were not checked. Denied
+credentials, other invalid destinations and an interrupted upload are not
+covered.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
