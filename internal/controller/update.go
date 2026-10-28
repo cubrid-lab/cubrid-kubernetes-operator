@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
 
 const conditionUpdating = "Updating"
@@ -68,14 +69,14 @@ const (
 // baseline (cluster not yet initialized) is not a change — there is nothing to
 // upgrade from.
 func classifyEngineChange(desired, observed string) UpdateClass {
-	want := engineSeries(desired)
+	want := instancemanager.EngineSeries(desired)
 	if want == "" {
 		return UpdateUnverifiable
 	}
 	if observed == "" {
 		return UpdateNone
 	}
-	got := engineSeries(observed)
+	got := instancemanager.EngineSeries(observed)
 	if got == "" {
 		return UpdateUnverifiable
 	}
@@ -83,30 +84,6 @@ func classifyEngineChange(desired, observed string) UpdateClass {
 		return UpdateEngineUpgradeBlocked
 	}
 	return UpdateNone
-}
-
-// engineSeries reduces an engine version to the series that spec.version
-// names: "11.4.6.1963" -> "11.4". The engine reports its full version while
-// the spec names a series, so the two are compared by series. A value without
-// a numeric major and minor yields "".
-func engineSeries(v string) string {
-	parts := strings.SplitN(strings.TrimSpace(v), ".", 3)
-	if len(parts) < 2 || !isDecimal(parts[0]) || !isDecimal(parts[1]) {
-		return ""
-	}
-	return parts[0] + "." + parts[1]
-}
-
-func isDecimal(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // reconcileUpdateGuard records the observed engine baseline and sets the
@@ -158,14 +135,14 @@ func (r *CubridClusterReconciler) reconcileUpdateGuard(cluster *databasev1alpha1
 // one of the baseline's series. Another patch of that series is not a mix; it
 // is what a compatible update in progress looks like (ADR-0009).
 func membersMatchBaseline(instances []databasev1alpha1.InstanceStatus, expected int, baseline string) (reason, msg string, ok bool) {
-	series := engineSeries(baseline)
+	series := instancemanager.EngineSeries(baseline)
 	reported := 0
 	for _, in := range instances {
 		if in.ObservedEngineVersion == "" {
 			return "UpdateBlockedEngineVersionUnknown",
 				"member " + in.Name + " has not reported its engine version in a fresh observation", false
 		}
-		if engineSeries(in.ObservedEngineVersion) != series {
+		if instancemanager.EngineSeries(in.ObservedEngineVersion) != series {
 			return "UpdateBlockedMixedEngineVersions",
 				"member " + in.Name + " runs engine " + in.ObservedEngineVersion + ", the cluster's baseline is " + baseline, false
 		}

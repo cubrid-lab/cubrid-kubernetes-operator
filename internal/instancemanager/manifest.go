@@ -47,7 +47,9 @@ type BackupManifest struct {
 	Database string `json:"database"`
 	// ClusterUID is the source CubridCluster UID (artifact-trust check).
 	ClusterUID string `json:"clusterUID"`
-	// CubridVersion is the engine version that produced the backup.
+	// CubridVersion is the engine version that produced the backup, as the
+	// member that ran backupdb read it from cubrid_rel (ADR-0011). A manifest
+	// written by an earlier manager carries the declared spec.version.
 	CubridVersion string `json:"cubridVersion"`
 	// Level is the CUBRID backup level (0 = full).
 	Level int `json:"level"`
@@ -120,8 +122,9 @@ func ParseManifest(data []byte) (BackupManifest, error) {
 type ManifestExpectation struct {
 	// Database, when set, must equal the manifest's database.
 	Database string
-	// CubridVersion, when set, must equal the manifest's engine version (no
-	// cross-version restore in v1alpha1, ADR-0009).
+	// CubridVersion, when set, must be of the manifest's engine series: no
+	// restore across series, which is an engine upgrade (ADR-0009, ADR-0011).
+	// A manifest version that cannot be reduced to a series never matches.
 	CubridVersion string
 	// Level, when set (non-nil), must equal the manifest's backup level.
 	Level *int
@@ -144,8 +147,10 @@ func (m BackupManifest) Verify(exp ManifestExpectation) error {
 	if exp.Database != "" && m.Database != exp.Database {
 		return fmt.Errorf("manifest database %q does not match expected %q", m.Database, exp.Database)
 	}
-	if exp.CubridVersion != "" && m.CubridVersion != exp.CubridVersion {
-		return fmt.Errorf("manifest cubridVersion %q does not match expected %q", m.CubridVersion, exp.CubridVersion)
+	if exp.CubridVersion != "" {
+		if series := EngineSeries(m.CubridVersion); series == "" || series != EngineSeries(exp.CubridVersion) {
+			return fmt.Errorf("manifest cubridVersion %q is not of the series of %q", m.CubridVersion, exp.CubridVersion)
+		}
 	}
 	if exp.Level != nil && m.Level != *exp.Level {
 		return fmt.Errorf("manifest level %d does not match expected %d", m.Level, *exp.Level)

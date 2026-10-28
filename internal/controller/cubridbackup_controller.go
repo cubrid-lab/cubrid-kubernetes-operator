@@ -523,6 +523,7 @@ func (r *CubridBackupReconciler) completed(ctx context.Context, backup *database
 			URI:            op.Artifact.ManifestURI,
 			ManifestDigest: op.Artifact.ManifestDigest,
 			SizeBytes:      op.Artifact.SizeBytes,
+			CubridVersion:  op.Artifact.CubridVersion,
 			Database:       op.Artifact.Database,
 			Level:          databasev1alpha1.CubridBackupFull,
 		}

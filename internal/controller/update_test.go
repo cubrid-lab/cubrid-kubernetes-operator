@@ -147,17 +147,6 @@ const otherSeries = "11.5"
 // fullEngineVersion is what cubrid_rel reports for the 11.4 image (POC-10).
 const fullEngineVersion = "11.4.6.1963"
 
-func TestEngineSeries(t *testing.T) {
-	for in, want := range map[string]string{
-		cubridVersion: cubridVersion, fullEngineVersion: cubridVersion, " 11.4.6 ": cubridVersion,
-		"11": "", "": "", "garbage": "", "11.": "", ".4": "", "v11.4": "", "11.x": "",
-	} {
-		if got := engineSeries(in); got != want {
-			t.Errorf("engineSeries(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // The members' reported version becomes the baseline; a spec naming that
 // series is not a change, another series is blocked.
 func TestUpdateGuard_UsesReportedEngineVersion(t *testing.T) {

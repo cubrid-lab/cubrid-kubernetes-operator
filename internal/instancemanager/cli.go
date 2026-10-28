@@ -374,6 +374,30 @@ func ParseEngineVersion(out string) string {
 	return m[1]
 }
 
+// EngineSeries reduces an engine version to the series that spec.version
+// names: "11.4.6.1963" -> "11.4" (ADR-0011). Versions are compared by
+// series: the engine reports its full version while the spec names a series.
+// A value without a numeric major and minor yields "".
+func EngineSeries(v string) string {
+	parts := strings.SplitN(strings.TrimSpace(v), ".", 3)
+	if len(parts) < 2 || !isDecimal(parts[0]) || !isDecimal(parts[1]) {
+		return ""
+	}
+	return parts[0] + "." + parts[1]
+}
+
+func isDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // serverStatusLine matches one running server in `cubrid server status`:
 // " Server appdb (rel 11.4.6, pid 14)" (docs/poc/RESULTS.md, POC-10).
 var serverStatusLine = regexp.MustCompile(`(?m)^\s*Server\s+(\S+)\s+\(rel [^,]+, pid \d+\)`)

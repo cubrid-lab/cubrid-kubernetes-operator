@@ -67,9 +67,10 @@ func baseRestoreRequest(t *testing.T, bucket, prefix string) RestoreRequest {
 	}
 }
 
-// rootsFor returns the roots baseRestoreRequest laid out.
+// rootsFor returns the roots baseRestoreRequest laid out, on the pinned
+// engine.
 func rootsFor(req RestoreRequest) RestoreRoots {
-	return RestoreRoots{Target: req.TargetDir, Staging: filepath.Dir(req.StagingDir)}
+	return RestoreRoots{Target: req.TargetDir, Staging: filepath.Dir(req.StagingDir), EngineVersion: reportedEngineVersion}
 }
 
 func TestRestore_HappyPath(t *testing.T) {
