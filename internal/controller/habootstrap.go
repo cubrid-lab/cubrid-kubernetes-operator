@@ -549,6 +549,10 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 				"database "+database+" will be copied to "+peer+" from "+source+", the master")
 			return false
 		}
+		if msg, held := engineSeriesHold(cluster, peer); held {
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonEngineVersionMismatch, msg)
+			return false
+		}
 		restore, err = r.Restore.StartRestore(ctx, peer, cluster.Namespace, restoreKey, restoreReq)
 		if err != nil {
 			restore, err = operationOfKey(ctx, err, instancemanager.OpRestore, restoreKey, func() (instancemanager.Operation, bool, error) {
@@ -646,6 +650,10 @@ func (r *CubridClusterReconciler) seedBackup(ctx context.Context, cluster *datab
 		staging := "seed-" + uid
 		if artifact != "" {
 			staging += "-" + peer
+		}
+		if msg, held := engineSeriesHold(cluster, source); held {
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonEngineVersionMismatch, msg)
+			return false
 		}
 		backupKey := bootstrapKey("seed-backup", cluster, status, artifact)
 		backup, err = r.Backup.StartBackup(ctx, source, cluster.Namespace, backupKey,

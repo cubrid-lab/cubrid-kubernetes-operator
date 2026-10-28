@@ -118,6 +118,10 @@ func (r *CubridClusterReconciler) reconcileRecovery(ctx context.Context, cluster
 
 	// Start once: begin the restore when no operation is recorded yet.
 	if cluster.Status.Bootstrap.OperationID == "" {
+		if msg, held := engineSeriesHold(cluster, target); held {
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonEngineVersionMismatch, msg)
+			return ctrl.Result{RequeueAfter: restorePollAfter}, true
+		}
 		req := instancemanager.RestoreRequest{
 			Database:              db,
 			Bucket:                bucket,
@@ -362,4 +366,31 @@ func parseManifestURI(uri string) (bucket, prefix string, err error) {
 	key := strings.TrimPrefix(uri, "s3://")
 	bucket, key, _ = strings.Cut(key, "/")
 	return bucket, strings.TrimSuffix(key, "/"+instancemanager.ManifestObjectName), nil
+}
+
+// reasonEngineVersionMismatch is the BootstrapReady reason while a backup or
+// restore of a bootstrap step waits for a member whose engine is not of the
+// series spec.version declares.
+const reasonEngineVersionMismatch = "EngineVersionMismatch"
+
+// engineSeriesHold reports why a backup or restore on member waits: the
+// engine the member was last observed running is not of the series
+// spec.version declares, so its Instance Manager would refuse the step
+// (ADR-0011). Such a step is not started and uses up no attempt; it goes on
+// once spec.version is corrected or the member runs an engine of the
+// declared series. A member whose engine has not been observed is not held:
+// its Instance Manager checks for itself.
+func engineSeriesHold(cluster *databasev1alpha1.CubridCluster, member string) (string, bool) {
+	for _, in := range cluster.Status.Instances {
+		if in.Name != member || in.ObservedEngineVersion == "" {
+			continue
+		}
+		series := instancemanager.EngineSeries(in.ObservedEngineVersion)
+		if series != "" && series == instancemanager.EngineSeries(cluster.Spec.Version) {
+			return "", false
+		}
+		return member + " runs engine " + in.ObservedEngineVersion + ", which is not of spec.version " +
+			cluster.Spec.Version + "; the step waits and uses up no attempt (ADR-0011)", true
+	}
+	return "", false
 }

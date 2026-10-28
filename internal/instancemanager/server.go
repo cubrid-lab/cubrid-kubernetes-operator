@@ -595,6 +595,12 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), s.timeouts.Backup)
 		defer cancel()
 		defer context.AfterFunc(s.opsCtx, cancel)()
+		if req.Upload != nil {
+			if _, err := s.backupEngineVersion(ctx, req); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: "backup refused: " + err.Error()})
+				return
+			}
+		}
 		if err := s.createBackupStaging(req.Destination); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: err.Error()})
 			return
@@ -808,7 +814,11 @@ func (s *Server) backupEngineVersion(ctx context.Context, req BackupRequest) (st
 	if req.Upload != nil {
 		declared = req.Upload.CubridVersion
 	}
-	if series := EngineSeries(engine); series == "" || series != EngineSeries(declared) {
+	series := EngineSeries(engine)
+	if series == "" {
+		return "", fmt.Errorf("the engine version %q that cubrid_rel gives has no series", engine)
+	}
+	if series != EngineSeries(declared) {
 		return "", fmt.Errorf("this member runs engine %s, which is not of the declared version %q", engine, declared)
 	}
 	return engine, nil
@@ -931,11 +941,22 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			fail(notRecorded(OpRestoring, err))
 			return
 		}
+		// Nothing is taken over, removed or restored on an engine the
+		// restore may not run on (ADR-0011).
+		if err := checkRestoreEngine(roots.EngineVersion, req.ExpectedCubridVersion); err != nil {
+			fail("restore refused: " + err.Error())
+			return
+		}
 		// Data that a failed attempt of this same request restored is taken
 		// over and started, never restored over.
 		restored, err := s.adoptRestored(id, req.Database)
 		if err != nil {
 			fail("restore failed: " + err.Error())
+			return
+		}
+		if restored != nil && EngineSeries(restored.CubridVersion) != EngineSeries(roots.EngineVersion) {
+			fail("restore refused: the data an earlier attempt restored is of engine " + restored.CubridVersion +
+				", not of the series of this member's engine " + roots.EngineVersion + "; it is kept and not started (ADR-0011)")
 			return
 		}
 		if restored == nil {

@@ -255,3 +255,47 @@ func TestServer_Restore_ReadsItsOwnEngineVersion(t *testing.T) {
 		t.Errorf("calls = %q, want none", calls)
 	}
 }
+
+// otherSeriesRelOut is cubrid_rel output of an engine of another series.
+const otherSeriesRelOut = "\nCUBRID 11.2 (11.2.0.0480-1a2b3c4) (64bit release build for Linux)\n\n"
+
+// A restore operation reads the engine from cubrid_rel: one of the declared
+// series restores, one of another series fails before any command.
+func TestServer_Restore_ChecksTheEngineCubridRelGives(t *testing.T) {
+	steps := &stepCLI{}
+	final := runRestoreOperation(t, &relCLI{CLI: steps, out: cubridRelOut}, restoreMember{standalone: true})
+	if final.State != OpCompleted {
+		t.Fatalf("final = %s (%q), want Completed", final.State, final.FailureReason)
+	}
+	steps = &stepCLI{}
+	final = runRestoreOperation(t, &relCLI{CLI: steps, out: otherSeriesRelOut}, restoreMember{standalone: true})
+	if final.State != OpFailed || !strings.Contains(final.FailureReason, "11.2.0.0480") {
+		t.Fatalf("final = %s (%q), want Failed naming the engine", final.State, final.FailureReason)
+	}
+	if calls := steps.recorded(); len(calls) != 0 {
+		t.Errorf("calls = %q, want none", calls)
+	}
+}
+
+// Data an earlier attempt restored is not taken over and started on an
+// engine of another series: it is kept, and nothing runs (ADR-0011).
+func TestServer_Restore_DoesNotTakeOverDataOfAnotherSeries(t *testing.T) {
+	f := newResumeFixture(t)
+	f.req.ExpectedCubridVersion = "" // so that only the member's engine is compared
+	f.start(&volumeCLI{stepCLI: stepCLI{failing: map[string]bool{stepServerStart: true}}, databases: f.databases})
+	failed := f.run("restore-1")
+	if failed.State != OpFailed {
+		t.Fatalf("first attempt = %s, want Failed", failed.State)
+	}
+
+	second := &volumeCLI{databases: f.databases}
+	f.start(&relCLI{CLI: second, out: otherSeriesRelOut})
+	final := f.run("restore-2")
+	if final.State != OpFailed || !strings.Contains(final.FailureReason, "an earlier attempt restored") {
+		t.Fatalf("retry = %s (%q), want Failed as refused", final.State, final.FailureReason)
+	}
+	if calls := second.recorded(); len(calls) != 0 {
+		t.Errorf("retry calls = %q, want none", calls)
+	}
+	f.wantRestoredDataKept()
+}

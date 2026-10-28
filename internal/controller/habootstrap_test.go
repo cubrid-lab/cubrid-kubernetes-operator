@@ -627,6 +627,29 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			}
 		})
 
+		// The Instance Manager refuses a backup on an engine of another series
+		// than spec.version (ADR-0011). The step waits instead of using up its
+		// attempts, and goes on once spec.version names the engine's series.
+		It("holds the seed backup while the source runs another engine series", func() {
+			seed := &fakeSeedClient{backupState: instancemanager.OpRunningBackup}
+			c := seededCluster("seed-engine")
+			c.Spec.Version = otherSeries
+			c.Status.Instances = []databasev1alpha1.InstanceStatus{{Name: "seed-engine-0", ObservedEngineVersion: fullEngineVersion}}
+			status := databaseStatus(c, "appdb")
+			r := reconcilerFor(seed)
+			r.reconcileSeeding(ctx, c, status, "seed-engine-0")
+			_, reason := bootstrapCondition(c)
+			Expect(reason).To(Equal(reasonEngineVersionMismatch))
+			Expect(seed.backupOn).To(BeEmpty())
+			Expect(status.BootstrapAttempts).To(BeZero())
+
+			c.Spec.Version = cubridVersion
+			r.reconcileSeeding(ctx, c, status, "seed-engine-0")
+			_, reason = bootstrapCondition(c)
+			Expect(reason).To(Equal("SeedBackupInProgress"))
+			Expect(seed.backupOn).NotTo(BeEmpty())
+		})
+
 		It("stops with a condition for a prefix that leads above the bucket", func() {
 			for _, prefix := range []string{"..", "../prod", "/../prod", "a/../.."} {
 				seed := &fakeSeedClient{backupState: instancemanager.OpRunningBackup}
