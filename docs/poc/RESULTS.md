@@ -4091,7 +4091,7 @@ of one build on one lab, not a general CUBRID behavior.
 
 ---
 
-## POC-41 — why a slave applies nothing after a partition is removed, which flow matters, and whether it recovers (#357) — **observation: in all four runs that cut TCP 1523 between the master and the slaves, one slave's `copylogdb` kept a connection the master had closed, received nothing, and its applier had nothing to apply; it recovered by itself once, about 2 h after the fault; a heartbeat restart of the copier cleared it once; a heartbeat-only cut did not stall; from healing on, the status reported `HAReady` and `ReplicationHealthy` as `True` for the whole stall**
+## POC-41 — why a slave applies nothing after a partition is removed, which flow matters, and whether it recovers (#357) — **observation: in all four runs that cut TCP 1523 between the master and the slaves, one slave's `copylogdb` kept a connection the master had closed, received nothing, and its applier had nothing to apply; it recovered by itself once, about 2 h after the fault; a heartbeat restart of the copier resumed copying once; a heartbeat-only cut did not stall; from healing on, the status reported `HAReady` and `ReplicationHealthy` as `True` for the whole stall**
 
 **Question (#357).** POC-40 left a slave at its pre-fault row count for the
 rest of each run after a partition of the master was removed (7 of 8 runs),
@@ -4245,7 +4245,7 @@ below show that nothing new reached the slave's copied log.
 - **The heartbeat cut alone did not.** In run 3:
   - `ha-1` promoted itself to master (server `to_be_active`) at t0+11.6 s, as in POC-40;
   - both slaves kept receiving and applying the master's log during the cut: 962 of the master's 964 rows just before the removal;
-  - `ha-1` demoted itself on healing, and both slaves held every row by the first reading, at r+111.
+  - `ha-1` demoted itself on healing, and by the first reading, at r+111, both slaves were within 3 rows of the master, which was still being written to.
   - Nothing stalled through the observation, which ended at r+617.
   - The stall test did not work for `ha-1` in that run: its first read after the removal failed (`-191` / `-677`) and returned 0 rows, which the script stored as its count at the fault. The conclusion stands, since the later reads show 1,616 rows and rising.
 - So the stall followed the loss of the copier's TCP session, not the failover and failback. With two TCP runs and one heartbeat run, the sample is small.
