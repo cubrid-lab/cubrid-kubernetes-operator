@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted — tracked in issue #321
+Accepted (POC-gated) — tracked in issue #321
+
+The backup and restore rules below are carried out by #276; the patch
+compatibility they assume is listed under Validation.
 
 ## Context
 
@@ -15,12 +18,13 @@ CUBRID engine:
 | `spec.version` | the engine compatibility the user declares; it does not choose the image |
 | `database.cubrid.io/accept-image` | the user's approval of an image change on an existing cluster (ADR-0009) |
 
-Each was introduced by a separate change (#97, #158, #181, #197, #305), and
-the contract between them was only implicit. Two gaps followed from that: the
-accepted format of `spec.version` and the behavior on a mismatch with the
-running engine were written nowhere, and a backup manifest recorded the
-declared `spec.version` as the engine that produced the backup (#276), which
-it is not.
+They were shaped by separate changes (the image by #97 and #305, the
+observed version by #158 and #181, the approval by #197), and the contract
+between them was only implicit. Two gaps followed from that: the accepted
+format of `spec.version` and the behavior on a mismatch with the running
+engine were written nowhere, and a backup manifest records the declared
+`spec.version` as the engine that produced the backup (#276), which it is
+not.
 
 ## Constraints
 
@@ -69,7 +73,11 @@ Everything the operator compares with it is reduced to that series.
   cluster's baseline (`status.observedEngineVersion`, ADR-0009).
 - **`accept-image` is the approval of a change.** On an existing cluster the
   Pod template takes a new image only when the annotation names exactly that
-  image (ADR-0009).
+  image (ADR-0009). The approval compares the image reference as a string.
+  It does not check the image's engine series, contents or digest, and it
+  does not wait for the update guard: under `OnDelete` the next Pod that is
+  recreated, by hand or after a failure, runs the accepted image. The guard
+  reports the engine only after a Pod runs it.
 
 ### Format of `spec.version` and how it is compared
 
@@ -86,45 +94,68 @@ what it cannot use.
 
 A mismatch is reported and blocks changes; it never stops the database.
 
+The checks run in this order, and the first that fails sets the reason:
+
 | Situation | Behavior |
 |---|---|
-| Members report a series other than `spec.version` | `Updating=False`, `UpdateBlockedEngineUpgrade`, naming both versions; no Pod is replaced |
-| `spec.version` cannot be reduced to a series | `Updating=False`, `UpdateBlockedUnverifiableEngineVersion` |
-| Not every member has reported a version | `UpdateBlockedEngineVersionNotObserved` before a baseline, `UpdateBlockedEngineVersionUnknown` after |
-| Members report different series | `UpdateBlockedMixedEngineVersions` |
+| No baseline yet, and not every expected member reports the same full version | `UpdateBlockedEngineVersionNotObserved` |
+| A baseline exists, and a member reports no fresh version | `UpdateBlockedEngineVersionUnknown` |
+| A baseline exists, and a member reports a series other than the baseline's | `UpdateBlockedMixedEngineVersions` |
+| The baseline's series differs from `spec.version` | `UpdateBlockedEngineUpgrade`, naming both versions |
+| `spec.version` cannot be reduced to a series | `UpdateBlockedUnverifiableEngineVersion` |
 
-The cluster keeps serving with the engine it runs: refusing to start, or
-stopping members, because of a declaration would trade availability for
-nothing the operator can repair. The user resolves a mismatch by correcting
-`spec.version` (the declaration) or by accepting an image of the declared
-series (the engine).
+Each sets `Updating=False` and replaces no Pod. The cluster keeps serving
+with the engine it runs: refusing to start, or stopping members, because of
+a declaration would trade availability for nothing the operator can repair.
+
+The baseline is fixed once recorded, and the data on the volumes was written
+by its series. So once a baseline exists, the remedy for a mismatch is to
+correct `spec.version` to the baseline's series. Accepting an image of
+another series is an engine change (ADR-0009), outside this contract: the
+guard does not prevent it, because the approval does not wait for the
+guard (see above), and afterwards it reports
+`UpdateBlockedMixedEngineVersions` until the cluster is recreated. Before
+a baseline exists there is no data written by a recorded series, and the
+image can still be chosen.
 
 ### Backup and restore
+
+A request carries the declaration (`spec.version`); the manifest carries
+what was observed.
 
 A backup records the engine that produced it, not the declaration:
 
 - The manifest's `cubridVersion` is the full version the Instance Manager of
   the member that runs `backupdb` reads from `cubrid_rel`.
-- A backup is refused before `backupdb` when that version cannot be read,
-  or when its series differs from the series the request declares. The
-  member then runs another engine than the cluster declares, and an artifact
-  labeled either way would be misleading.
+- A backup request always declares a version (the upload's
+  `cubridVersion`, which the request validation already requires). A
+  backup is refused before `backupdb` when the member's version cannot be
+  read, when either version cannot be reduced to a series, or when the two
+  series differ. The member then runs another engine than the cluster
+  declares, and an artifact labeled either way would be misleading.
 
 A restore takes an artifact only from the target's own series:
 
 - The restoring member reads its own engine version the same way. The
   restore is refused before anything is downloaded, registered or run when
-  that version cannot be read, or when its series differs from the
-  manifest's `cubridVersion` or from the series the request declares.
+  that version cannot be read or reduced to a series, or when the
+  manifest's `cubridVersion` is empty, cannot be reduced to a series, or is
+  of another series.
+- A request that declares a version (`expectedCubridVersion`; the operator
+  always sends it) is also refused when that version cannot be reduced to
+  a series or is of another series than the member's. A request without one
+  is checked against the member's engine alone: the member's observation is
+  the stronger evidence.
 - The comparison is by series. A manifest written before this decision
-  carries the declared series (`11.4`) and is compared the same way. A
-  restore across series is an engine upgrade and is refused (ADR-0009).
+  carries the declared `spec.version`, and is compared by series when it can
+  be reduced to one. A restore across series is an engine upgrade and is
+  refused (ADR-0009).
 
 ### Why the approval stays an annotation
 
 `accept-image` approves one change; it is not desired state. It names the
-exact image, so it cannot approve a later change by accident, and leaving it
-in place after the change has no effect. A typed field would make the
+exact image, so it approves only that image (including a later return to
+it), and leaving it in place after the change has no other effect. A typed field would make the
 approval part of the spec, where a GitOps tool keeps reapplying it and a
 reader takes it for configuration. A typed field is reconsidered with the
 next API version, together with an engine-upgrade API (ADR-0009 non-goals).
@@ -150,11 +181,15 @@ next API version, together with an engine-upgrade API (ADR-0009 non-goals).
 
 ## Validation
 
+Required before the backup and restore rules count as validated:
+
 - Unit tests of the series comparison and of the backup and restore checks,
   with a recording CLI that answers `cubrid_rel`.
 - Real engine: a backup on the pinned image records the full version read
   from `cubrid_rel`, and a restore of it on the same image is accepted.
-  Not run with two patch versions of a series, or across series.
+
+The POC gate: a restore across two patch versions of one series, which the
+series comparison allows on the assumption above.
 
 ## Revisit When
 
