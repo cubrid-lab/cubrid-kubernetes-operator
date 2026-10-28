@@ -104,7 +104,9 @@ the work belongs to (a classification, not a status — status lives only in
 ### Issue, PR and Commit Titles
 
 For **issues**, describe one human-readable problem or outcome with a simple
-type prefix: `bug:`, `feat:`, `test:`, `docs:`, `ci:` or `chore:`.
+type prefix: `bug:`, `feat:`, `test:`, `docs:`, `ci:` or `chore:`, as the
+[cubrid-lab writing standard](https://github.com/cubrid-lab/.github/blob/main/docs/ISSUE_PR_COMMIT_STANDARD.md)
+sets out.
 Do not require an internal scenario code or component scope in the title.
 For **PRs and commits**, keep the existing Conventional Commit syntax
 `type(scope)!: description`, including `fix:` for a bug fix. See
