@@ -324,7 +324,8 @@ func (f *s11Fixture) upload(backup *databasev1alpha1.CubridBackup) *databasev1al
 		f.store.put(bucket, a.prefix+"/"+key, content)
 	}
 	f.artifact = &databasev1alpha1.CubridBackupArtifact{URI: a.uri, ManifestDigest: digest,
-		SizeBytes: a.manifest.TotalSize(), Database: databaseName, Level: databasev1alpha1.CubridBackupFull}
+		SizeBytes: a.manifest.TotalSize(), CubridVersion: a.manifest.CubridVersion, Database: databaseName,
+		Level: databasev1alpha1.CubridBackupFull}
 	return f.artifact.DeepCopy()
 }
 
@@ -512,6 +513,9 @@ func TestRunS11CompleteFailsOnTheArtifact(t *testing.T) {
 		"status cubridVersion": {tamperStatus: func(s *databasev1alpha1.CubridBackupStatus) {
 			s.Artifact.CubridVersion = "11.5"
 		}, want: "status.artifact.cubridVersion"},
+		"status cubridVersion empty": {tamperStatus: func(s *databasev1alpha1.CubridBackupStatus) {
+			s.Artifact.CubridVersion = ""
+		}, want: "status.artifact.cubridVersion is \"\""},
 		"duplicate object key": {tamper: func(a *fakeArtifact) {
 			a.manifest.Objects = append(a.manifest.Objects, a.manifest.Objects[0])
 		}, want: "twice"},

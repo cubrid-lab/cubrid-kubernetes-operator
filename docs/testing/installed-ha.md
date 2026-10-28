@@ -278,8 +278,8 @@ is refused before anything is done.
    - `cubridVersion` is the engine version that `cubrid_rel` reported on the
      master during LAB01, which the backup's member records since #621
      (ADR-0011), and it is of the cluster's `spec.version` series (`11.4.`);
-     `status.artifact.cubridVersion` must be the same, and when it is empty
-     the record says so;
+     `status.artifact.cubridVersion` must be the same (an empty one fails,
+     since the Operator fills it from #621 on);
    - `BackupManifest.Digest()` of the parsed manifest, and the sha256 of the
      stored file, are both `status.artifact.manifestDigest`;
    - the sum of the sizes the manifest lists is `status.artifact.sizeBytes`;

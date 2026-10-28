@@ -588,10 +588,6 @@ func (h *haRun) verifyS11Artifact(ctx context.Context, backup *databasev1alpha1.
 	v.Objects, v.ManifestSizeBytes = len(parsed.Objects), parsed.TotalSize()
 	v.Problems = append(v.Problems, h.checkManifestIdentity(parsed, backup)...)
 	v.Problems = append(v.Problems, checkManifestIntegrity(parsed, artifact, v)...)
-	if artifact.CubridVersion == "" {
-		rec.Notes = append(rec.Notes, "status.artifact.cubridVersion is not reported; the manifest's cubridVersion "+
-			"was compared with the cluster's spec.version and the engine version instead")
-	}
 	return manifest, h.verifyS11Objects(ctx, store, parsed, path.Dir(key), v)
 }
 
@@ -764,7 +760,9 @@ func (h *haRun) checkManifestIdentity(m instancemanager.BackupManifest,
 	if m.CubridVersion != h.engineVersion {
 		add("the manifest's cubridVersion %q is not the engine version %s", m.CubridVersion, h.engineVersion)
 	}
-	if artifact.CubridVersion != "" && artifact.CubridVersion != m.CubridVersion {
+	// The controller copies the operation's version into the status (#621),
+	// so an empty one is a mismatch too.
+	if artifact.CubridVersion != m.CubridVersion {
 		add("status.artifact.cubridVersion is %q, the manifest's %q", artifact.CubridVersion, m.CubridVersion)
 	}
 	return problems
