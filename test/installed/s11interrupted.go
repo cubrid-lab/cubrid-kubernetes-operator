@@ -500,7 +500,8 @@ func (h *haRun) interruptedSteps(ctx context.Context, result *evidence.Scenario,
 	if err := h.standaloneAtEnd(ctx, made.cluster, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
 	}
-	if err := h.checkS11Logs(ctx, s11InterruptedClusterName, true, lastTarget(rec.Phases), *rec.RequestedAt, started,
+	if err := h.checkS11Logs(ctx, s11InterruptedClusterName, true, lastTarget(rec.Phases),
+		requestedOnServer(made.backup, *rec.RequestedAt), started,
 		rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}

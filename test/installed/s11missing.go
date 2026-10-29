@@ -249,7 +249,8 @@ func (h *haRun) missingSteps(ctx context.Context, result *evidence.Scenario, rec
 	if err := h.checkS11Credentials(ctx, *created, nil, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
 	}
-	if err := h.checkS11Logs(ctx, haClusterName, false, lastTarget(rec.Phases), requested, started,
+	if err := h.checkS11Logs(ctx, haClusterName, false, lastTarget(rec.Phases),
+		requestedOnServer(*created, requested), started,
 		rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}

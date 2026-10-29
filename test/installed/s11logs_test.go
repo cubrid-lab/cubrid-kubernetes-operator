@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
 
@@ -340,5 +341,41 @@ func TestS11LogsAreNotSearchedWithoutATarget(t *testing.T) {
 	if err == nil || errors.As(err, new(backupVerdict)) || !strings.Contains(err.Error(), "no status.targetInstance") ||
 		len(creds.FoundIn) != 0 {
 		t.Fatalf("checkS11Logs() = %v, want the Instance Manager's log named as not searched", err)
+	}
+}
+
+// The member must have existed before the request: a Pod created in the
+// request's second may be one replaced just after it.
+func TestS11LogsCountAPodCreatedInTheRequestsSecondAsAfterIt(t *testing.T) {
+	requested := time.Date(2026, 10, 29, 9, 0, 5, 400_000_000, time.UTC)
+	for name, tc := range map[string]struct {
+		created time.Time
+		want    bool
+	}{
+		"a second earlier":          {created: time.Date(2026, 10, 29, 9, 0, 4, 0, time.UTC), want: true},
+		"in the request's second":   {created: time.Date(2026, 10, 29, 9, 0, 5, 0, time.UTC), want: false},
+		"a second after the second": {created: time.Date(2026, 10, 29, 9, 0, 6, 0, time.UTC), want: false},
+	} {
+		if got := createdBefore(tc.created, requested); got != tc.want {
+			t.Errorf("%s: createdBefore(%s, %s) = %v, want %v", name, tc.created, requested, got, tc.want)
+		}
+	}
+}
+
+// The request's time is the API server's, which also sets the Pod's
+// creationTimestamp; the runner's time is used only without one.
+func TestS11LogsTakeTheRequestTimeFromTheAPIServer(t *testing.T) {
+	runner := time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)
+	server := runner.Add(-30 * time.Second)
+	backup := &databasev1alpha1.CubridBackup{}
+	if got := requestedOnServer(backup, runner); !got.Equal(runner) {
+		t.Fatalf("without a creationTimestamp: %s, want the runner's %s", got, runner)
+	}
+	if got := requestedOnServer(nil, runner); !got.Equal(runner) {
+		t.Fatalf("without a backup: %s, want the runner's %s", got, runner)
+	}
+	backup.CreationTimestamp = metav1.NewTime(server)
+	if got := requestedOnServer(backup, runner); !got.Equal(server) {
+		t.Fatalf("with a creationTimestamp: %s, want the server's %s", got, server)
 	}
 }

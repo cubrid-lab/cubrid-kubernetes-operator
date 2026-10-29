@@ -452,7 +452,8 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 			"not be read: "+strings.Join(v.Unreadable, "; "))
 	}
 	credErr := h.checkS11Credentials(ctx, backup, manifest, rec.Credentials)
-	logErr := h.checkS11Logs(ctx, haClusterName, false, lastTarget(rec.Phases), requested, started, rec.Credentials)
+	logErr := h.checkS11Logs(ctx, haClusterName, false, lastTarget(rec.Phases),
+		requestedOnServer(backup, requested), started, rec.Credentials)
 	if found := rec.Credentials.FoundIn; len(found) > 0 {
 		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
 	}

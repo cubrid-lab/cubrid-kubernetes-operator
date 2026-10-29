@@ -28,6 +28,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
 
 const (
@@ -140,6 +142,25 @@ func lastTarget(phases []s11Phase) string {
 // restarted is read the same way. A key found is added to creds.FoundIn
 // under the log's name, never the key. What could not be read, or was
 // truncated, is returned: the search is incomplete.
+// requestedOnServer is when the API server created backup, by its own clock,
+// which also sets a Pod's creationTimestamp; the runner's clock would let a
+// Pod replaced just after the request pass for the one the backup ran on.
+// fallback, the runner's time of the request, is used only for an object
+// without a creationTimestamp, which an API server never returns.
+func requestedOnServer(backup *databasev1alpha1.CubridBackup, fallback time.Time) time.Time {
+	if backup == nil || backup.CreationTimestamp.IsZero() {
+		return fallback
+	}
+	return backup.CreationTimestamp.Time
+}
+
+// createdBefore reports whether a Pod created at created existed before the
+// request at requested. A creationTimestamp is to the second: one in the
+// request's second counts as after it.
+func createdBefore(created, requested time.Time) bool {
+	return created.Before(requested.Truncate(time.Second))
+}
+
 func (h *haRun) checkS11Logs(ctx context.Context, cluster string, created bool, target string, requested,
 	started time.Time, creds *s11Credentials) error {
 	if creds.Logs == nil {
@@ -168,9 +189,7 @@ func (h *haRun) checkS11Logs(ctx context.Context, cluster string, created bool, 
 		if owner == nil || owner.Kind != kindStatefulSet || owner.Name != cluster {
 			return fmt.Errorf("the Pod is not controlled by the StatefulSet of %s", cluster)
 		}
-		// A creationTimestamp is to the second: one in the request's second
-		// counts as after it.
-		if !pod.CreationTimestamp.Time.Before(requested.Truncate(time.Second)) {
+		if !createdBefore(pod.CreationTimestamp.Time, requested) {
 			return fmt.Errorf("the Pod was created at %s, not before the backup was requested at %s, so the log "+
 				"of the Pod the backup ran on may be gone", pod.CreationTimestamp.UTC().Format(time.RFC3339),
 				requested.Format(time.RFC3339))
