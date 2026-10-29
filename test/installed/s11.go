@@ -78,6 +78,10 @@ func (c HAConfig) validateS11() error {
 		return errors.New("-backup-denied-credentials needs -backup-bucket: S11 denied-credentials follows S11 " +
 			"complete")
 	}
+	if c.BackupInterruptedUpload && c.BackupBucket == "" {
+		return errors.New("-backup-interrupted-upload needs -backup-bucket: S11 interrupted-upload follows S11 " +
+			"complete")
+	}
 	if c.BackupBucket == "" {
 		return nil
 	}
@@ -99,6 +103,9 @@ func (c HAConfig) validateS11() error {
 	}
 	if c.BackupDeniedCredentials && c.BackupDeniedReadyLimit <= 0 {
 		return errors.New("-backup-denied-credentials needs a positive -backup-denied-ready-limit for its cluster")
+	}
+	if err := c.validateS11Interrupted(); err != nil {
+		return err
 	}
 	_, _, _, err := splitService(c.ObjectStoreService)
 	return err
@@ -190,6 +197,31 @@ func (s minioStore) List(ctx context.Context, bucket, prefix string) ([]string, 
 		keys = append(keys, obj.Key)
 	}
 	return keys, nil
+}
+
+// ListSized lists the objects under prefix with their sizes.
+func (s minioStore) ListSized(ctx context.Context, bucket, prefix string) ([]storedObject, error) {
+	var objects []storedObject
+	for obj := range s.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if obj.Err != nil {
+			return nil, obj.Err
+		}
+		objects = append(objects, storedObject{Key: obj.Key, Size: obj.Size})
+	}
+	return objects, nil
+}
+
+// ListIncomplete lists the multipart uploads under prefix that were started
+// and neither completed nor aborted, as key and upload ID.
+func (s minioStore) ListIncomplete(ctx context.Context, bucket, prefix string) ([]string, error) {
+	var uploads []string
+	for upload := range s.client.ListIncompleteUploads(ctx, bucket, prefix, true) {
+		if upload.Err != nil {
+			return nil, upload.Err
+		}
+		uploads = append(uploads, upload.Key+" (upload "+upload.UploadID+")")
+	}
+	return uploads, nil
 }
 
 func (s minioStore) BucketExists(ctx context.Context, bucket string) (bool, error) {
@@ -513,6 +545,15 @@ type backupVerdict struct{ error }
 
 func (h *haRun) waitBackup(ctx context.Context, created *databasev1alpha1.CubridBackup, phases *[]s11Phase,
 	creds *s11Credentials) (*databasev1alpha1.CubridBackup, error) {
+	return h.waitBackupWith(ctx, created, phases, creds, nil)
+}
+
+// waitBackupWith is waitBackup that passes every status read, once it was
+// recorded and searched, to each, unless each is nil; an error of each ends
+// the wait with it.
+func (h *haRun) waitBackupWith(ctx context.Context, created *databasev1alpha1.CubridBackup, phases *[]s11Phase,
+	creds *s11Credentials, each func(context.Context, *databasev1alpha1.CubridBackup) error) (
+	*databasev1alpha1.CubridBackup, error) {
 	wctx, cancel := context.WithTimeout(ctx, h.cfg.BackupLimit)
 	defer cancel()
 	backup := &databasev1alpha1.CubridBackup{}
@@ -548,6 +589,11 @@ func (h *haRun) waitBackup(ctx context.Context, created *databasev1alpha1.Cubrid
 		if err := h.lookForCredentials(&creds.FoundIn, "the status read in phase "+string(s.Phase),
 			s); err != nil {
 			return false, err
+		}
+		if each != nil {
+			if err := each(wctx, backup); err != nil {
+				return false, err
+			}
 		}
 		return s.Phase == databasev1alpha1.BackupPhaseCompleted || s.Phase == databasev1alpha1.BackupPhaseFailed, nil
 	})

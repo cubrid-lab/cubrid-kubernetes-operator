@@ -127,6 +127,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s11` | The installed-Operator HA command with `-backup-bucket` | LAB01, then S11 (`complete`) on the same cluster: a full backup to object storage, its artifact downloaded and checked by the run | none |
 | `lab-installed-ha-s11-missing-destination` | The installed-Operator HA command with `-backup-bucket` and `-backup-missing-destination` | LAB01, S11 (`complete`), then S11 (`missing-destination`): a backup of the same cluster to a bucket the run found absent must end `Failed` for its upload, never `Completed` and without an artifact, with the bucket still absent at the end and the source unchanged | none |
 | `lab-installed-ha-s11-denied-credentials` | The installed-Operator HA command with `-backup-bucket` and `-backup-denied-credentials` | LAB01, S11 (`complete`), then S11 (`denied-credentials`): a backup of a new standalone cluster whose object store Secret holds keys the run first saw the store refuse must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged | none |
+| `lab-installed-ha-s11-interrupted-upload` | The installed-Operator HA command with `-backup-bucket` and `-backup-interrupted-upload`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`interrupted-upload`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is reset there once seen under way; it must end `Failed` for its upload, never `Completed` and without an artifact, with no manifest under its prefix at the end and the source unchanged | none |
 | `lab-installed-ha-s12` | The installed-Operator HA command with `-backup-bucket` and `-restore` | LAB01, S11 (`complete`), then S12 (`exact`): S11's artifact restored into a new cluster in the run namespace and checked against the history truncated at S11's known point | none |
 | `lab-installed-ha-s12-tampered` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-tampered` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`tampered`): a copy of S11's artifact with one byte changed, whose restore into another new cluster must be refused for that object's checksum | none |
 | `lab-installed-ha-s12-wrong-target` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-wrong-target` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`wrong-target`): S11's artifact restored into a cluster created over the retained PVCs of a deleted cluster of the same name, which hold its database; the restore must be refused for that target and the database left with its own marker and without S11's | none |
@@ -153,7 +154,10 @@ Operator's logs for credentials and does not restore the artifact (S12).
 `missing-destination`; the command runs it in a run of its own, not with
 S12. `lab-installed-ha-s11-denied-credentials` requires S11 `complete` and
 `denied-credentials`; the command runs it in a run of its own, not with S12
-or `missing-destination`.
+or `missing-destination`. `lab-installed-ha-s11-interrupted-upload` requires
+S11 `complete` and `interrupted-upload`; the command runs it in a run of its
+own, not with S12 or another S11 variant, and only that run's namespace
+enforces Pod Security `privileged`.
 
 `lab-installed-ha-s12` requires S12 `exact` only,
 `lab-installed-ha-s12-tampered` S12 `exact` and `tampered`,
@@ -1029,7 +1033,10 @@ it needs more.
 - **Fault confirmed by:** the backup's operation was in a running state when
   the fault was issued. For `denied-credentials`: the store refused access
   to the run's own client with the same keys before the cluster was
-  created.
+  created. For `interrupted-upload` in the lab lane: at least 512 KiB of
+  the upload passed the rate limit's counter while the backup was `Running`
+  or `Uploading`, and the reset rule's counter then showed a rejected
+  packet.
 - **The Operator must** (ADR-0007): report `Completed` only when the artifact
   and its manifest are in object storage and verified; resume or fail the
   operation after a restart without starting a second backup for the same
@@ -1045,11 +1052,25 @@ it needs more.
   (`AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch` or their
   messages); an upload failure with another answer, a failure before the
   upload, and a store that accepts the keys before anything is created do
-  not confirm the denied keys' effect and leave it blocked.
+  not confirm the denied keys' effect and leave it blocked. In the lab
+  lane, `interrupted-upload` holds the cut until the backup ends, so the
+  store is never reachable again for a resume: it must end `Failed` with
+  `BackupFailed` and `upload failed: `. A backup that ended before the cut
+  was confirmed leaves it blocked; a complete backup made before the cut is
+  recorded as complete, not as a partial artifact. The cut is confirmed
+  only at a reading at which the backup had not ended. Objects left under
+  the prefix without a manifest are recorded as a partial artifact. A fault
+  not seen removed, and a store address that changed before the cut or by
+  the end, leave it blocked.
 - **Must never happen:** `Completed` with a missing or unreadable artifact; a
   manifest that names files which do not exist; credentials in status, events
   or logs; `Completed`, or a `status.artifact`, for a backup whose
-  destination bucket does not exist or whose keys the store refuses.
+  destination bucket does not exist or whose keys the store refuses; in
+  the lab lane of `interrupted-upload`, `Completed` or a `status.artifact`
+  after the cut was confirmed, a `status.artifact` on a backup that is not
+  `Completed`, and, for a backup seen ended after the cut was confirmed, a
+  `manifest.json` under its prefix, or `Completed` or a `status.artifact`
+  when it is read again at the end.
 - **Data check:** the artifact of every `Completed` backup is restored in S12
   and compared.
 - **Limits:** `backup_limit`.

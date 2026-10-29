@@ -118,8 +118,8 @@ type HAConfig struct {
 	// run's database to this bucket. It cannot be combined with Fault.
 	BackupBucket string
 	// BackupLimit bounds the backup from its request until Completed or
-	// Failed (backup_limit), and in S11 missing-destination and
-	// denied-credentials until Failed.
+	// Failed (backup_limit), and in S11 missing-destination,
+	// denied-credentials and interrupted-upload until Failed.
 	BackupLimit time.Duration
 	// BackupMissingDestination selects S11 missing-destination after S11
 	// complete: a CubridBackup of the run's database to a bucket that does
@@ -134,6 +134,17 @@ type HAConfig struct {
 	// BackupDeniedReadyLimit bounds that standalone cluster from its
 	// creation until it is Ready. It is the run's bound, not the contract's.
 	BackupDeniedReadyLimit time.Duration
+	// BackupInterruptedUpload selects S11 interrupted-upload after S11
+	// complete: a CubridBackup to BackupBucket of a standalone cluster whose
+	// upload to the object store is limited in rate and then reset by
+	// network faults in its member's Pod. It needs BackupBucket, makes the
+	// run namespace's Pod Security enforce level privileged, and cannot be
+	// combined with Restore, BackupMissingDestination or
+	// BackupDeniedCredentials.
+	BackupInterruptedUpload bool
+	// BackupInterruptedReadyLimit bounds that standalone cluster from its
+	// creation until it is Ready. It is the run's bound, not the contract's.
+	BackupInterruptedReadyLimit time.Duration
 	// ObjectStoreService is the object store's Service as
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.
@@ -231,20 +242,23 @@ type startingState struct {
 }
 
 type haRecord struct {
-	RunID                 string          `json:"runId"`
-	Namespace             string          `json:"namespace"`
-	NamespaceUID          string          `json:"namespaceUID,omitempty"`
-	ClusterUID            string          `json:"clusterUID,omitempty"`
-	KubernetesClusterUID  string          `json:"kubernetesClusterUID"`
-	SelectedCommit        string          `json:"selectedCommit"`
-	ExpectedOperatorImage string          `json:"expectedOperatorImage"`
-	ExpectedInstanceImage string          `json:"expectedInstanceManagerImage"`
-	ExpectedWorkloadImage string          `json:"expectedWorkloadImage"`
-	StorageClass          string          `json:"storageClass"`
-	StorageProvisioner    string          `json:"storageProvisioner,omitempty"`
-	Seed                  seedRecord      `json:"seed"`
-	Operator              managerIdentity `json:"operator"`
-	OperatorAfter         managerIdentity `json:"operatorAfter"`
+	RunID                 string     `json:"runId"`
+	Namespace             string     `json:"namespace"`
+	NamespaceUID          string     `json:"namespaceUID,omitempty"`
+	ClusterUID            string     `json:"clusterUID,omitempty"`
+	KubernetesClusterUID  string     `json:"kubernetesClusterUID"`
+	SelectedCommit        string     `json:"selectedCommit"`
+	ExpectedOperatorImage string     `json:"expectedOperatorImage"`
+	ExpectedInstanceImage string     `json:"expectedInstanceManagerImage"`
+	ExpectedWorkloadImage string     `json:"expectedWorkloadImage"`
+	StorageClass          string     `json:"storageClass"`
+	StorageProvisioner    string     `json:"storageProvisioner,omitempty"`
+	Seed                  seedRecord `json:"seed"`
+	// PodSecurity are the Pod Security labels the run created its namespace
+	// with.
+	PodSecurity   map[string]string `json:"podSecurity,omitempty"`
+	Operator      managerIdentity   `json:"operator"`
+	OperatorAfter managerIdentity   `json:"operatorAfter"`
 	// Waiting is the last part of the starting state that did not hold
 	// while the run waited for it.
 	Waiting       string          `json:"waiting,omitempty"`
@@ -294,10 +308,10 @@ type haRun struct {
 	// s06 is the result of S06 restart, once it ran.
 	s06 *evidence.Scenario
 	// s11 is the result of S11 complete, once it ran, and s11Rec its record;
-	// s11Missing is that of S11 missing-destination and s11Denied that of
-	// S11 denied-credentials.
-	s11, s11Missing, s11Denied *evidence.Scenario
-	s11Rec                     *s11Record
+	// s11Missing is that of S11 missing-destination, s11Denied that of S11
+	// denied-credentials and s11Interrupted that of S11 interrupted-upload.
+	s11, s11Missing, s11Denied, s11Interrupted *evidence.Scenario
+	s11Rec                                     *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
 	// S12 operator-restart, s12IMRestart that of S12 instance-manager-restart
@@ -417,6 +431,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket for S12")
 		lane, requirements = planS11MissingDestination(cfg, lane, requirements, &summary)
 		lane, requirements = planS11DeniedCredentials(cfg, lane, requirements, &summary)
+		lane, requirements = planS11InterruptedUpload(cfg, lane, requirements, &summary)
 	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
@@ -489,11 +504,12 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	}
 	h.rec.KubernetesClusterUID, h.rec.Operator = observed.KubernetesClusterUID, observed.Operator
 	h.rec.StorageProvisioner = observed.StorageProvisioner
-	ns, _, err := r.prepareNamespace(ctx, cfg.Config, &observed)
+	ns, _, err := r.prepareNamespace(ctx, cfg.Config, &observed, cfg.BackupInterruptedUpload)
 	if err != nil {
 		return err
 	}
 	owned, h.rec.NamespaceUID = ns, observed.NamespaceUID
+	h.rec.PodSecurity = podSecurityLabels(ns.Labels)
 	h.guard = func(ctx context.Context) error { return r.requireNamespace(ctx, owned) }
 	if err := checkpoint(); err != nil {
 		return err
@@ -583,7 +599,8 @@ func (h *haRun) recordS11Variants(summary *evidence.Summary) {
 		result   *evidence.Scenario
 		variant  string
 	}{{h.cfg.BackupMissingDestination, h.s11Missing, s11MissingVariant},
-		{h.cfg.BackupDeniedCredentials, h.s11Denied, s11DeniedVariant}} {
+		{h.cfg.BackupDeniedCredentials, h.s11Denied, s11DeniedVariant},
+		{h.cfg.BackupInterruptedUpload, h.s11Interrupted, s11InterruptedVariant}} {
 		switch {
 		case v.result != nil:
 			summary.Record(*v.result)
@@ -624,6 +641,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 			h.s11Denied = &denied
 			if denied.Result != evidence.Pass {
 				return fmt.Errorf("S11/%s: %s", s11DeniedVariant, denied.Reason)
+			}
+		}
+		if h.cfg.BackupInterruptedUpload {
+			interrupted := h.runS11InterruptedUpload(ctx)
+			h.s11Interrupted = &interrupted
+			if interrupted.Result != evidence.Pass {
+				return fmt.Errorf("S11/%s: %s", s11InterruptedVariant, interrupted.Reason)
 			}
 		}
 		if !h.cfg.Restore {

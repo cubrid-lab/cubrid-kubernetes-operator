@@ -308,7 +308,7 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	runNamespace, borrowedGuard, err := r.prepareNamespace(ctx, cfg, &rec)
+	runNamespace, borrowedGuard, err := r.prepareNamespace(ctx, cfg, &rec, false)
 	if err != nil {
 		return err
 	}
@@ -523,7 +523,12 @@ func pollUntil(ctx context.Context, interval time.Duration, check func() (bool, 
 	}
 }
 
-func (r *Runner) prepareNamespace(ctx context.Context, cfg Config, rec *record) (*corev1.Namespace,
+// prepareNamespace creates the fresh run namespace, or checks the
+// preallocated one. A fresh namespace enforces Pod Security restricted;
+// privileged makes it enforce privileged, for the ephemeral container of the
+// network faults (test/faults/netfault), and keeps warn and audit at
+// restricted, so that a Pod that would break restricted still shows up.
+func (r *Runner) prepareNamespace(ctx context.Context, cfg Config, rec *record, privileged bool) (*corev1.Namespace,
 	*namespaceGuard, error) {
 	if cfg.NamespaceMode == PreallocatedNamespace {
 		borrowed := &namespaceGuard{runner: r, cfg: cfg, rec: rec, seen: map[string]string{}}
@@ -535,7 +540,11 @@ func (r *Runner) prepareNamespace(ctx context.Context, cfg Config, rec *record) 
 	} else {
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Namespace, Labels: map[string]string{
 			"app.kubernetes.io/managed-by": installedManagedBy, "app.kubernetes.io/instance": rec.RunID,
-			"pod-security.kubernetes.io/enforce": "restricted"}}}
+			podSecurityEnforce: podSecurityRestricted}}}
+		if privileged {
+			ns.Labels[podSecurityEnforce] = podSecurityPrivileged
+			ns.Labels[podSecurityWarn], ns.Labels[podSecurityAudit] = podSecurityRestricted, podSecurityRestricted
+		}
 		if err := r.Client.Create(ctx, ns); err != nil {
 			return nil, nil, fmt.Errorf("create fresh run namespace (no cleanup authority granted): %w", err)
 		}
@@ -546,6 +555,26 @@ func (r *Runner) prepareNamespace(ctx context.Context, cfg Config, rec *record) 
 		return ns, nil, nil
 	}
 
+}
+
+// Pod Security labels and levels of a namespace.
+const (
+	podSecurityEnforce    = "pod-security.kubernetes.io/enforce"
+	podSecurityWarn       = "pod-security.kubernetes.io/warn"
+	podSecurityAudit      = "pod-security.kubernetes.io/audit"
+	podSecurityRestricted = "restricted"
+	podSecurityPrivileged = "privileged"
+)
+
+// podSecurityLabels returns the Pod Security labels among labels.
+func podSecurityLabels(labels map[string]string) map[string]string {
+	found := map[string]string{}
+	for _, key := range []string{podSecurityEnforce, podSecurityWarn, podSecurityAudit} {
+		if value, ok := labels[key]; ok {
+			found[key] = value
+		}
+	}
+	return found
 }
 
 func (r *Runner) requireOwned(ctx context.Context, owned *corev1.Namespace, borrowed *namespaceGuard) error {

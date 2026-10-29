@@ -12,7 +12,8 @@ installed:
 5. Remove the namespace.
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`,
-`missing-destination` and `denied-credentials`, and S12 `exact`, `tampered`, `wrong-target`,
+`missing-destination`, `denied-credentials` and `interrupted-upload`, and S12
+`exact`, `tampered`, `wrong-target`,
 `operator-restart`, `instance-manager-restart`,
 `instance-manager-restart-preparing` and `instance-manager-restart-seeding`
 build on. It injects no fault. A pass is not an S01 result at the VM-lab
@@ -348,7 +349,8 @@ S11 here does not check:
 - the Operator's logs for credentials. They are not read, so that part of
   the never-happen list is unverified;
 - the restore of the artifact: that is S12 `exact`, with `-restore`;
-- the interrupted variants `interrupted-pod` and `interrupted-upload`;
+- the interrupted variant `interrupted-pod`, and an interrupted upload:
+  that is S11 `interrupted-upload`, with `-backup-interrupted-upload`;
 - a backup to a bucket that does not exist: that is S11
   `missing-destination`, with `-backup-missing-destination`;
 - a backup whose object store keys the store refuses: that is S11
@@ -419,8 +421,8 @@ store's and is not required.
      `upload failed: put <bucket>/` fails it: the upload ran and failed, but
      not for its destination.
    - The object store's answer after `put <bucket>/<key>: ` is recorded as
-     `storeError`, with `storeErrorKind` `no-such-bucket`, `access-denied`
-     or `other`. The verdict does not depend on it; in the one VM-lab run so
+     `storeError`, with `storeErrorKind` `no-such-bucket`, `access-denied`,
+     `reset-or-refused` or `other`. The verdict does not depend on it; in the one VM-lab run so
      far, SeaweedFS answered `The specified bucket does not exist`
      (`no-such-bucket`). The run asks whether the bucket exists with the seed
      Secret's keys, while the members write with the cluster's
@@ -568,8 +570,8 @@ reason `BackupFailed`, with the operation's reason as the message.
      `upload failed: put <backup bucket>/` fails it: the upload ran and
      failed, but not for its destination.
    - The object store's answer after `put <bucket>/<key>: ` is recorded as
-     `storeError`, with `storeErrorKind` `access-denied`, `no-such-bucket` or
-     `other`. Only `access-denied` shows that the denied keys failed the
+     `storeError`, with `storeErrorKind` `access-denied`, `no-such-bucket`,
+     `reset-or-refused` or `other`. Only `access-denied` shows that the denied keys failed the
      upload: any other answer, such as a timeout, a reset connection or a
      bucket that does not exist, or no answer quoted, blocks S11
      `denied-credentials`, since the denied keys' effect is not confirmed.
@@ -625,8 +627,250 @@ S11 `denied-credentials` here does not check:
   the member;
 - the member's staging directory after the failed upload;
 - a key that is valid but lacks permission on the bucket, keys changed in a
-  running cluster, and a store that is unreachable or fails partway through
-  the upload.
+  running cluster, and a store that is unreachable; a store that fails
+  partway through the upload is S11 `interrupted-upload`, with
+  `-backup-interrupted-upload`.
+
+## S11 interrupted-upload
+
+With `-backup-interrupted-upload` as well as `-backup-bucket`, the run goes
+on after S11 `complete` passed with S11 `interrupted-upload`: a backup whose
+upload is cut partway must end `Failed`. The lane is then
+`lab-installed-ha-s11-interrupted-upload`, and it requires LAB01,
+S11/complete and S11/interrupted-upload. `-backup-interrupted-upload`
+without `-backup-bucket`, with `-restore`, `-backup-missing-destination` or
+`-backup-denied-credentials`, or with a `-backup-interrupted-ready-limit`
+that is not positive, is refused before anything is done: a run takes one
+lane.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -backup-interrupted-upload [-backup-interrupted-ready-limit 15m] [-backup-limit 15m]
+```
+
+- **Pod Security.** The faults work from an ephemeral container with
+  `NET_ADMIN` and `NET_RAW` ([network faults](network-faults.md)), which the
+  API server admits only under `enforce=privileged`. With this flag, and only
+  with it, the run creates its namespace with
+  `pod-security.kubernetes.io/enforce=privileged` and keeps `warn` and
+  `audit` at `restricted`. The API server then still warns about, and audits,
+  a Pod that would break `restricted`, but the run collects neither the
+  warnings nor the audit log. In this lane, the run's Pods are therefore not
+  proven to comply with `restricted`. The labels are recorded in
+  `LAB01/record.json` (`podSecurity`) and, as read before anything is
+  created, in the variant's record. An HA run always creates its own
+  namespace; a preallocated namespace is refused for every HA lane. Before it
+  creates anything, the variant reads the namespace again and refuses to go
+  on unless it enforces `privileged`.
+- **Image.** The ephemeral container runs `netfault.Image`
+  (`docker.io/nicolaka/netshoot`, pinned by digest). The member's node must
+  be able to pull it.
+- `-backup-limit` bounds this variant too: from the return of the request
+  until the reading that saw `Failed`. The upload is slowed on purpose (see
+  below), so the backup takes minutes, not seconds.
+- `-backup-interrupted-ready-limit` bounds the variant's own cluster from its
+  creation until it is `Ready`. It is the run's bound, not the contract's,
+  and is refused without `-backup-interrupted-upload`.
+- `-timeout` must also cover a new standalone cluster, a `backupdb` on its
+  member, the slowed upload up to the cut, `-backup-interrupted-ready-limit`
+  and `-backup-limit`.
+
+S11 `interrupted-upload` starts only from S11 `complete` that passed. When
+S11 `complete` did not run or did not pass, it is blocked with that cause
+and nothing of it is done.
+
+**Why the upload is slowed.** S11 `complete`'s backup on the VM lab is one
+object of about 5 MB, uploaded in well under a second, so a cut cannot be
+timed into it. The run limits the member's traffic to the object store to
+256 kbit/s, which makes such an upload take close to three minutes, and
+cuts it once 512 KiB have passed the limit. The rate is the run's choice,
+not the contract's.
+
+**Why a cluster of its own.** The faults act in one Pod's network
+namespace. A standalone cluster keeps them out of the HA source cluster
+entirely. It uses the run's copy of the seed Secret, so its keys are valid.
+
+**Where the faults act.** The Instance Manager reaches the store at the
+cluster's `spec.objectStorage` endpoint, which names the Service
+`-object-store-service` (the run refuses a Service the endpoint does not
+name, as S11 `complete` does). Both faults match the TCP destination the
+member's own network namespace sends the upload to, which depends on the
+Service (`addressMode` in the record):
+- **Headless Service** (`clusterIP: None`), as on the VM lab: the endpoint's
+  name resolves to the store Pod's IP, and the member dials that IP
+  directly; no address translation is involved. The run lists the Service's
+  EndpointSlices (label `kubernetes.io/service-name`) and requires exactly
+  one ready IPv4 address that has the endpoint port of the Service's TCP
+  port. It uses that address and port (`headless-endpoint`) and records the
+  endpoint's Pod name when the EndpointSlice gives it. No ready address,
+  several ready addresses, or no endpoint with that port are refused before
+  anything is created. So is an endpoint port that differs from the
+  Service's port: nothing translates a headless Service's address, so the
+  member dials the Service's port at the Pod's IP.
+- **Service with a ClusterIP**: the upload's packets are addressed to the
+  ClusterIP and the Service's port, and the node's kube-proxy rules
+  translate them to a store Pod only after they leave the Pod. The run uses
+  the ClusterIP and the port (`cluster-ip`). A ClusterIP that is not IPv4 is
+  refused. On a cluster whose network plugin translates Service addresses
+  inside the Pod's own namespace at connect time, the faults would match
+  nothing; the rate limit's confirmation would then fail and block the
+  variant.
+- A Service without the TCP port of `-object-store-service` is refused.
+- The run resolves the address again just before the cut and at the end. An
+  address that changed, such as a store Pod that moved, blocks the variant:
+  the faults would act on an address nothing is sent to.
+
+What the product does with a cut upload, read from the code: the Instance
+Manager uploads every data object before the manifest (`UploadBackup` in
+`internal/instancemanager/upload.go`). Its client, minio-go, sends a request
+again after a network error, up to ten times with a back-off of at most a
+second. Once all attempts fail, `MinioObjectStore.Put` reports
+`put <bucket>/<key>: ...`, and `runBackup` in
+`internal/instancemanager/server.go` ends the operation `Failed` with
+`upload failed: ` and that error, without a manifest. The Operator maps it
+onto the backup in `failedBackup`: phase `Failed`, `Ready` reason
+`BackupFailed`. Both faults stay installed until the backup has ended, so
+the client's later attempts are refused at once as well.
+
+1. **Namespace and store.** The run reads the namespace's Pod Security
+   labels and resolves the object store's address, as above.
+2. **The cluster.** The run creates the standalone `CubridCluster`
+   `s11-interrupted`: one member, `highAvailability.enabled` false, the HA
+   cluster's version, image, database and storage, and `spec.objectStorage`
+   with the HA cluster's endpoint and `insecure`, no bucket and no prefix,
+   naming the run's Secret `object-storage`. It waits until the cluster is
+   `Ready`, as S11 `denied-credentials` does, for at most
+   `-backup-interrupted-ready-limit`.
+3. **The target.** The run reads the Pod `s11-interrupted-0`, which the
+   cluster's StatefulSet must control, and records its UID and IP. Every
+   fault step checks again that the Pod has that UID and IP, and that the
+   ephemeral container's namespace holds that IP.
+4. **The rate limit.** The run adds the ephemeral container and refuses a
+   Pod with a qdisc other than the default or with rules of an earlier
+   fault, and sees a TCP connect to the store succeed. It then installs a
+   `tbf` qdisc of 256 kbit/s, with a `u32` filter for TCP to the store's
+   address and port only, and reads both back. The limit is confirmed when
+   three TCP connects to the store succeed and the limited band's packet
+   counter grows by at least three. Its counters are read at the request.
+5. **Request.** The run creates the `CubridBackup` `s11-interrupted-upload`
+   for `s11-interrupted`'s database, to `-backup-bucket` under the prefix
+   `lab-runs/<run ID>/interrupted-upload`, and records the time the request
+   returned.
+6. **The cut.** At every reading while the backup is `Running` or
+   `Uploading`, the run reads the limit's counters. Once 512 KiB have passed
+   the limit since the request, it resolves the store's address again and
+   then installs, in the member's `OUTPUT`, a rule that rejects TCP to that
+   address and port with `--reject-with tcp-reset`, and reads it back. At
+   each later reading at which the backup has not ended, it reads the rule's
+   counter: the cut is confirmed when the rule has rejected a packet. The
+   record keeps the counters at the request, at the first reading that saw
+   bytes pass, and at the cut, the rate observed between the last two, the
+   phase at the cut, and every instant.
+   - The reset is local: the member's own kernel answers its socket, and the
+     store never sees the connection close. What a store and the Instance
+     Manager do when the traffic is silently dropped is not covered.
+   - The reading that first sees the backup ended never confirms the cut: a
+     packet rejected by then may have been sent after the upload finished.
+     Its counter is kept as `rejectedAtEnd`, evidence only.
+   - A cut not confirmed within two minutes of its installation, while the
+     backup has not ended, blocks S11 `interrupted-upload`.
+   - A command of a fault, or a reading of the store's address, that fails
+     is recorded in `execErrors`, and the wait goes on; a fourth error in a
+     row blocks the variant. A target Pod that changed (another UID or IP,
+     gone, or being deleted) blocks it at once.
+   - A backup whose `status.targetInstance` names another Pod than the
+     target blocks it.
+7. **Wait.** As in S11 `missing-destination`, it reads the backup every
+   `-poll` until it is `Completed` or `Failed`, for at most `-backup-limit`,
+   and records each change and the last phase it saw (`lastPhase`).
+   `endedAfterCut` is set when the backup was seen ended at a reading after
+   the one that confirmed the cut.
+   - `Completed` after the cut was confirmed, its `status.artifact`, and a
+     `status.artifact` on a backup in any phase other than `Completed`, at
+     any reading, must never happen and fail S11 `interrupted-upload`.
+   - `Completed` before the cut was installed or confirmed means the upload
+     may have finished first. That backup is complete, not partial; the
+     variant is blocked as inconclusive, and the record says so
+     (`completedBeforeCut`).
+   - `Failed` before 512 KiB were seen through the limit blocks it: the
+     upload was not seen under way.
+   - `Failed` after the cut was installed but before it was confirmed
+     blocks it.
+   - `Failed` after a confirmed cut must have `Ready` reason `BackupFailed`
+     and a message that begins with `upload failed: `; another failure fails
+     S11 `interrupted-upload`. The error after `put <bucket>/<key>: `, or
+     after `upload failed: ` when no object is named, is recorded as
+     `storeError` with its kind (`storeErrorKind`): `reset-or-refused` for a
+     connection reset or refused or a broken pipe, which is what the cut is
+     expected to cause, or another kind. The kind is recorded and named in
+     the verdict, but not required: an upload failure of another kind after
+     a confirmed cut still passes.
+   - A backup neither `Completed` nor `Failed` when `-backup-limit` passes
+     fails it, with its last phase.
+   - `failedWithin` runs from the return of the request, and
+     `failedAfterCut` from the cut's installation, to the reading that saw
+     `Failed`.
+8. **Removal.** The run removes the cut and then the limit, with
+   `-cleanup-timeout` as their own budget, also when the run ended. Each is
+   proven gone by reading it back (no rule or chain of the faults, the
+   default qdisc) and by a TCP connect to the store that succeeds. Each
+   leaves a marker in the container before it deletes anything, so that an
+   injection still running cannot install it again. A fault not seen removed
+   blocks S11 `interrupted-upload`: the member's traffic may still be cut.
+   The ephemeral container cannot be removed and stays until the Pod goes.
+9. **The prefix at the end.** With the seed Secret's keys the run lists the
+   backup bucket under the variant's prefix, with each object's size, and
+   the multipart uploads there that were neither completed nor aborted.
+   - A `manifest.json` there must never happen when the wait saw the backup
+     end after a confirmed cut (`endedAfterCut`).
+   - When the wait ended earlier (an error, the run's end, or a cut not
+     confirmed), the upload may have gone on once the faults were removed:
+     a `manifest.json` is then recorded and blocks the variant.
+   - When the backup completed before the cut, its `manifest.json` belongs
+     to a complete backup and is recorded.
+   - Other objects are a partial artifact: they are recorded
+     (`partialArtifact`), not failed, and are never taken for a complete
+     backup. The run does not remove them. A store that cannot be asked
+     blocks it.
+10. **The backup at the end.** The run reads the `CubridBackup` once more
+    (`phaseAtEnd`, `artifactAtEnd`), so that a backup driven on after the
+    wait is not missed. When the wait saw it end after a confirmed cut,
+    `Completed` or a `status.artifact` then must never happen. Otherwise
+    either is recorded and blocks the variant, unless the backup completed
+    before the cut.
+11. **Credentials, source and manager.** As S11 `denied-credentials`, with
+    the seed Secret's keys only: no key in any status of `s11-interrupted` or
+    of the backup, in either read once more at the end, or in an Event; the
+    source unchanged; the installed manager the one LAB01 checked.
+12. **Cleanup.** The run deletes the `CubridBackup` and the cluster
+    `s11-interrupted` it created, in that order, each with its UID as a
+    precondition, as S11 `denied-credentials` does. A deletion that fails is
+    recorded in the cleanup record and in the scenario's `cleanupSucceeded`,
+    and does not judge the variant; a fault not seen removed is recorded
+    there too, and blocks it (step 8). The cluster's data PVC is retained
+    and goes with the namespace.
+
+The time of the verdict is recorded as `judgedAt`. As in S11 `complete`, a
+run that ends before S11 `interrupted-upload` is judged, an API error, a
+fault that cannot be installed, confirmed or read, and a port-forward or
+client that cannot be opened block it; what was seen stays a failure.
+
+Beyond S11 `missing-destination`'s, the account needs `get` on the object
+store's Service and `list` on `endpointslices` (`discovery.k8s.io`) in the
+store's namespace, `delete` on `cubridclusters`, `update` on
+`pods/ephemeralcontainers` and `create` on `pods/exec` in the run
+namespace, and the right to create a namespace labelled
+`enforce=privileged`.
+
+S11 `interrupted-upload` here does not check:
+- the Operator's and the Instance Manager's logs;
+- the Pod Security warnings and audit records at `restricted`;
+- a silent drop or a store that stops answering, as against a reset;
+- a cut store whose traffic comes back during the backup, so a backup that
+  resumes after the store returns;
+- a backup large enough to be uploaded in parts: the S11 backup is one
+  object below minio-go's 16 MiB part size;
+- the member's staging directory after the failed upload.
 
 ## S12 exact
 
@@ -1778,6 +2022,27 @@ and S12 variant other than `complete` and `exact` only those under
   `S11/denied-credentials/source-data-check.json`, the source's data check.
   The run writes them through the evidence redactor, which removes the seed
   Secret's keys and the denied keys; it does not scan them afterwards.
+- with `-backup-interrupted-upload`, `S11/interrupted-upload/record.json`
+  (the namespace's Pod Security labels; the standalone cluster's name, UID,
+  Secret name, `readyWithin` and `readyLimit`; under `faults`, the target
+  Pod's name, UID and IP, the store's Service, the addressing mode, the
+  address and port the faults act on and the endpoint's Pod, when the address
+  was read again before the cut and at the end, the rate,
+  the limit's counters at the request, at the first growth, at the cut and
+  last, the bytes before the cut and the observed rate, the phase at the
+  cut, when the limit was installed and confirmed and the cut issued,
+  installed and confirmed, the reset rule's counters at the confirmation and
+  at the ended reading, the tolerated errors, and what became of each
+  fault's removal; the backup's name, UID, bucket and prefix, the time of
+  the request, every phase observed, `lastPhase`, `endedAfterCut`,
+  `failedWithin`, `failedAfterCut`, the failure and the error it quotes
+  (`storeError`, `storeErrorKind`), `completedBeforeCut`, any artifact
+  reported, the backup read again at the end, what was under the prefix at
+  the end with sizes and the incomplete multipart uploads, the manager
+  before and after, the source at the end, where credentials were looked
+  for, `judgedAt`, the cleanup and what is left) and
+  `S11/interrupted-upload/source-data-check.json`. The scenario's
+  measurements carry the faults' own, prefixed `rateLimit.` and `cut.`.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and
@@ -1872,10 +2137,13 @@ S12, their PVCs, `ha-wt`'s retained PVCs among them, the client and the
 copied Secrets. S12 `tampered` removes
 its copy of the artifact itself, S11 `missing-destination` deletes its
 `CubridBackup` itself, and S11 `denied-credentials` deletes its
-`CubridBackup`, its cluster `s11-denied` and that cluster's Secret itself;
-the cluster's retained data PVC goes with the namespace. It does not remove:
+`CubridBackup`, its cluster `s11-denied` and that cluster's Secret itself,
+and S11 `interrupted-upload` removes its faults and deletes its
+`CubridBackup` and its cluster `s11-interrupted` itself; each cluster's
+retained data PVC goes with the namespace. It does not remove:
 - the seed backups under `lab-runs/<run ID>` in the bucket, the restored
-  cluster's among them, and S11's artifact in the backup bucket;
+  cluster's among them, S11's artifact in the backup bucket, and what a cut
+  upload left under `lab-runs/<run ID>/interrupted-upload`;
 - a backend volume that the StorageClass retains.
 
 The record says so.

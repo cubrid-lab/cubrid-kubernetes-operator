@@ -55,7 +55,10 @@ const (
 	// The kinds of the object store's answer the failure quotes.
 	storeErrorNoSuchBucket = "no-such-bucket"
 	storeErrorAccessDenied = "access-denied"
-	storeErrorOther        = "other"
+	// storeErrorReset is a connection reset or refused, or a broken pipe:
+	// what a cut connection to the store reports.
+	storeErrorReset = "reset-or-refused"
+	storeErrorOther = "other"
 )
 
 // s11MissingBucket is what the run's own client found of the bucket that
@@ -91,8 +94,9 @@ type s11MissingRecord struct {
 	// Failure is the Ready reason and message of the backup as it ended.
 	// StoreError is the object store's answer as the failure quotes it,
 	// after "put <bucket>/<key>: ", and StoreErrorKind what it names:
-	// storeErrorNoSuchBucket, storeErrorAccessDenied or storeErrorOther. They
-	// are observations; the verdict does not depend on them.
+	// storeErrorNoSuchBucket, storeErrorAccessDenied, storeErrorReset or
+	// storeErrorOther. They are observations; the verdict does not depend on
+	// them.
 	Failure        string                                 `json:"failure,omitempty"`
 	StoreError     string                                 `json:"storeError,omitempty"`
 	StoreErrorKind string                                 `json:"storeErrorKind,omitempty"`
@@ -345,9 +349,10 @@ var accessRefusals = []string{"accessdenied", "access denied", "invalidaccesskey
 	"access key id you provided does not exist", "signaturedoesnotmatch", "signature we calculated does not match"}
 
 // storeErrorKind names what the object store's answer says: a bucket that
-// does not exist, a refused access, or something else. It is an observation:
-// the answer's words are the store's. A refused access is named first: the
-// message of an unknown access key also says "does not exist".
+// does not exist, a refused access, a reset or refused connection, or
+// something else. It is an observation: the answer's words are the store's.
+// A refused access is named first: the message of an unknown access key also
+// says "does not exist".
 func storeErrorKind(answer string) string {
 	lower := strings.ToLower(answer)
 	switch {
@@ -355,6 +360,9 @@ func storeErrorKind(answer string) string {
 		return storeErrorAccessDenied
 	case strings.Contains(lower, "nosuchbucket") || strings.Contains(lower, "does not exist"):
 		return storeErrorNoSuchBucket
+	case strings.Contains(lower, "connection reset") || strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "broken pipe"):
+		return storeErrorReset
 	}
 	return storeErrorOther
 }
