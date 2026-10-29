@@ -82,6 +82,12 @@ type s11IMRestartFixture struct {
 	refuse        bool
 	exitCode      int32
 	extraRestarts int32
+	// restartBeforeKill restarts the database container for another reason
+	// at the first Uploading reading; notReadyAfterKill leaves the restarted
+	// container not ready.
+	restartBeforeKill bool
+	notReadyAfterKill bool
+	restartedEarly    bool
 
 	imBackup      *databasev1alpha1.CubridBackup
 	imReads       int
@@ -147,7 +153,10 @@ func (f *s11IMRestartFixture) kill(ctx context.Context, pod, script string) (str
 	status.RestartCount += 1 + f.extraRestarts
 	status.LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
 		ExitCode: cmp.Or(f.exitCode, sigkillExitCode), Reason: "Error", ContainerID: old, FinishedAt: finished}}
-	status.ContainerID, status.Ready = old+"-restarted", true
+	f.mu.Lock()
+	ready := !f.notReadyAfterKill
+	f.mu.Unlock()
+	status.ContainerID, status.Ready = old+"-restarted", ready
 	status.State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: finished}}
 	if err := c.Status().Update(ctx, current); err != nil {
 		f.t.Error(err)
@@ -156,6 +165,22 @@ func (f *s11IMRestartFixture) kill(ctx context.Context, pod, script string) (str
 	f.killed = true
 	f.mu.Unlock()
 	return "", errors.New("command terminated with exit code 137"), true
+}
+
+// restartContainer restarts the member's database container for another
+// reason than the kill, as a failed liveness probe would.
+func (f *s11IMRestartFixture) restartContainer(ctx context.Context, c client.WithWatch) {
+	pod := &corev1.Pod{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: s11IMRestartMember}, pod); err != nil {
+		f.t.Error(err)
+		return
+	}
+	status := &pod.Status.ContainerStatuses[0]
+	status.RestartCount++
+	status.ContainerID += "-probe"
+	if err := c.Status().Update(ctx, pod); err != nil {
+		f.t.Error(err)
+	}
 }
 
 // nextIM is the phase of the backup at this reading. It runs with f.mu held.
@@ -200,7 +225,14 @@ func (f *s11IMRestartFixture) advanceIMBackup(ctx context.Context, c client.With
 	f.mu.Lock()
 	phase := f.nextIM()
 	killed, tamper, message := f.killed, f.tamper, cmp.Or(f.failMessage, s12IMRestartedReason)
+	early := f.restartBeforeKill && !killed && !f.restartedEarly && phase == databasev1alpha1.BackupPhaseUploading
+	if early {
+		f.restartedEarly = true
+	}
 	f.mu.Unlock()
+	if early {
+		f.restartContainer(ctx, c)
+	}
 	started := metav1.NewTime(time.Now().Add(-time.Second))
 	dest := backup.Spec.Destination.ObjectStorage
 	attempt := path.Join(dest.Prefix, testAttempt)
@@ -366,6 +398,8 @@ func requireS11IMKill(t *testing.T, k *s11IMKill) {
 		t.Fatalf("kill = %+v, want the Instance Manager killed and the container restarted", k)
 	}
 	if *k.ExitCode != sigkillExitCode || k.BackAt == nil || k.ReadyAgainAt == nil || k.ReadyAgainWithin == "" ||
+		k.ReadyTransitionAt == nil || k.ContainerAtRequest != testIMContainerID || k.RestartsAtRequest == nil ||
+		*k.RestartsAtRequest != 0 || k.RestartedBeforeKill != "" ||
 		k.RestartsAtEnd == nil || *k.RestartsAtEnd != 1 || k.OperationRef != testIMOperation ||
 		k.PhaseAtPlacement != phaseUploading || k.SentBeforeKill != 2*testUploadPerRead ||
 		!slices.Equal(k.OperationRefsSeen, []string{testIMOperation}) {
@@ -554,6 +588,49 @@ func TestRunS11InstanceManagerRestartIsBlocked(t *testing.T) {
 			}
 			f.requireCleaned(t, scenario)
 		})
+	}
+}
+
+// A database container that restarted for another reason during the
+// backup, before the kill, may already have failed the operation with the
+// restart's reason: nothing is killed, and the variant is blocked.
+func TestRunS11InstanceManagerRestartIsBlockedByARestartBeforeTheKill(t *testing.T) {
+	cfg := testS11IMRestartConfig(t)
+	f := newS11IMRestartFixture(t, cfg)
+	f.restartBeforeKill = true
+	scenario, err := s11IMRestartOf(t, f)
+	if err == nil || scenario.Result != evidence.Blocked ||
+		!strings.Contains(scenario.Reason, "the member's container restarted before the kill") {
+		t.Fatalf("S11 instance-manager-restart = %+v, want blocked by the earlier restart", scenario)
+	}
+	if len(f.kills) != 0 {
+		t.Fatalf("kills = %v, want none", f.kills)
+	}
+	rec := readS11IMRestartRecord(t, cfg.EvidenceDir)
+	if k := rec.Kill; k.KilledAt != nil || k.RestartedBeforeKill == "" || k.ContainerAtRequest != testIMContainerID {
+		t.Fatalf("kill = %+v, want the earlier restart recorded and no kill issued", k)
+	}
+	f.requireCleaned(t, scenario)
+}
+
+// The ready limit runs from the kill: a restarted container that never
+// becomes ready fails the variant once it has passed.
+func TestRunS11InstanceManagerRestartFailsWhenTheMemberIsNotReadyAgain(t *testing.T) {
+	cfg := testS11IMRestartConfig(t)
+	cfg.BackupInstanceManagerRestartReadyLimit = time.Second
+	f := newS11IMRestartFixture(t, cfg)
+	f.readyAt = 1
+	f.notReadyAfterKill = true
+	scenario, err := s11IMRestartOf(t, f)
+	if err == nil || scenario.Result != evidence.Fail ||
+		!strings.Contains(scenario.Reason, "was not Ready again within the ready limit 1s") ||
+		!strings.Contains(scenario.Reason, "of the kill") {
+		t.Fatalf("S11 instance-manager-restart = %+v, want a failure for the ready limit", scenario)
+	}
+	rec := readS11IMRestartRecord(t, cfg.EvidenceDir)
+	if k := rec.Kill; k.KilledAt == nil || k.BackAt == nil || k.ReadyAgainAt != nil ||
+		!strings.Contains(k.ReadyWaiting, "is not ready") {
+		t.Fatalf("kill = %+v, want the member back but not ready", k)
 	}
 }
 

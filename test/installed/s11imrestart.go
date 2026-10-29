@@ -68,14 +68,29 @@ type s11IMKill struct {
 	// OperationRefsSeen are the operationRefs the readings showed from the
 	// placement on, in order, each once.
 	OperationRefsSeen []string `json:"operationRefsSeen"`
-	// ReadyAgainAt is the reading that saw the restarted container ready and
-	// then the cluster Ready, and ReadyAgainWithin the time from the kill to
-	// it; ReadyWaiting is what did not hold yet at the last reading before.
-	ReadyAgainAt     *time.Time `json:"readyAgainAt,omitempty"`
-	ReadyAgainWithin string     `json:"readyAgainWithin,omitempty"`
-	ReadyWaiting     string     `json:"readyWaiting,omitempty"`
-	// placed is the index in the record's phases of the placing reading.
+	// ContainerAtRequest and RestartsAtRequest are the member's database
+	// container as read right before the backup was requested. A container
+	// that is another, or restarted, right before the kill restarted for
+	// another reason during the backup (RestartedBeforeKill), and its
+	// Instance Manager may already have failed the operation.
+	ContainerAtRequest  string `json:"containerIDAtRequest,omitempty"`
+	RestartsAtRequest   *int32 `json:"restartCountAtRequest,omitempty"`
+	RestartedBeforeKill string `json:"restartedBeforeKill,omitempty"`
+	// ReadyAgainAt is the first reading of the cluster Ready taken after the
+	// restarted container was ready, and ReadyAgainWithin the time from the
+	// kill to it; ReadyTransitionAt is the Ready condition's
+	// lastTransitionTime in that reading, which says whether Ready went False
+	// and back after the kill or never changed. ReadyWaiting is what did not
+	// hold yet at the last reading before.
+	ReadyAgainAt      *time.Time `json:"readyAgainAt,omitempty"`
+	ReadyAgainWithin  string     `json:"readyAgainWithin,omitempty"`
+	ReadyTransitionAt *time.Time `json:"readyTransitionAt,omitempty"`
+	ReadyWaiting      string     `json:"readyWaiting,omitempty"`
+	// placed is the index in the record's phases of the placing reading;
+	// issued is when the kill was about to be issued, from which the ready
+	// limit is counted.
 	placed int
+	issued time.Time
 }
 
 // confirmed reports a kill confirmed by the end or restart of the member's
@@ -305,8 +320,9 @@ func (h *haRun) runS11InstanceManagerRestart(ctx context.Context) (result eviden
 		result.Reason = fmt.Sprintf("the upload of %s's backup to %s was seen under way through the rate limit "+
 			"(%d bytes) while the backup was %s with operation %s, and the member's Instance Manager was then "+
 			"killed, confirmed by its database container's end with exit code %d; the container ran again on "+
-			"the same Pod %s after the kill and the cluster was Ready %s after it, within the ready limit, with "+
-			"the container restarted once; the backup ended Failed within backup_limit with %s and the Instance "+
+			"the same Pod %s after the kill, and a reading of the cluster after the restarted container was "+
+			"ready showed Ready %s after the kill, within the ready limit counted from it, with the container "+
+			"restarted once and not before the kill; the backup ended Failed within backup_limit with %s and the Instance "+
 			"Manager's restart reason, under the same operation in every reading from the placement on, never "+
 			"Completed and without status.artifact, also when read again at the end; no manifest.json was under "+
 			"its prefix at the end; the limit was seen removed; the source and the installed manager were "+
@@ -392,6 +408,9 @@ func (h *haRun) imRestartUpload(ctx context.Context, result *evidence.Scenario, 
 	if err := confirmThrottle(ctx, made.throttle, rec.Throttle); err != nil {
 		return err
 	}
+	if err := h.containerAtRequest(ctx, rec.Kill); err != nil {
+		return err
+	}
 	backup, err := h.createBackup(ctx, s11IMRestartBackupName, s11IMRestartClusterName, rec.Bucket, rec.Prefix)
 	if err != nil {
 		return err
@@ -443,10 +462,13 @@ func (h *haRun) imRestartReading(ctx context.Context, backup *databasev1alpha1.C
 
 // killDuringUpload kills the member's Instance Manager (instanceManagerKill)
 // once the Pod and its database container are recorded right before
-// (memberKill.recordBefore), and waits, for at most the ready limit, until
-// the container runs again on the same Pod (memberBack) and the cluster is
-// Ready again (readyAgain). An error it returns ends the wait for the
-// backup: a kill that is not confirmed, or a Pod that was replaced, is a
+// (beforeIMKill), and waits, for at most the ready limit from the kill, until
+// the container runs again on the same Pod (memberBack) and a reading of the
+// cluster after the restarted container was ready shows Ready
+// (memberBackReady). faults.Run counts its Outcome bound from the kill's
+// confirmation, so the bound from the kill is enforced in the check. An error
+// it returns ends the wait for the backup: a container that restarted before
+// the kill, a kill that is not confirmed, or a Pod that was replaced, is a
 // faultStep and blocks the variant; a member not back within the ready limit
 // fails it.
 func (h *haRun) killDuringUpload(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
@@ -456,14 +478,25 @@ func (h *haRun) killDuringUpload(ctx context.Context, cluster *databasev1alpha1.
 	outcome := faults.Run(ctx, faults.Scenario{
 		Fault: instanceManagerKill{h: h, k: &k.memberKill,
 			name: "kill the Instance Manager of the standalone member with SIGKILL"},
-		Limits: faults.Limits{Confirm: min(2*time.Minute, limit), Outcome: limit, Cleanup: time.Minute,
+		// The Outcome bound runs from the confirmation, which follows the
+		// kill: at twice the limit it is only a backstop, and the check's
+		// bound from the kill ends the wait first.
+		Limits: faults.Limits{Confirm: min(2*time.Minute, limit), Outcome: 2 * limit, Cleanup: time.Minute,
 			Poll: h.cfg.Poll},
-		Before: func(ctx context.Context) error { return h.beforeIMKill(ctx, cluster, k) },
+		Before: func(ctx context.Context) error {
+			err := h.beforeIMKill(ctx, cluster, k)
+			k.issued = time.Now()
+			return err
+		},
 		Check: func(ctx context.Context) (bool, error) {
 			done, err := h.memberBackReady(ctx, cluster, rec)
 			if ctx.Err() != nil {
 				// The step's limit, or the run's: not a broken expectation.
 				return false, nil
+			}
+			if err == nil && !done && time.Since(k.issued) > limit {
+				return false, fmt.Errorf("time limit exceeded: the expected behavior was not observed within %s "+
+					"of the kill", limit)
 			}
 			return done, err
 		},
@@ -476,6 +509,9 @@ func (h *haRun) killDuringUpload(ctx context.Context, cluster *databasev1alpha1.
 		return err
 	}
 	switch {
+	case k.RestartedBeforeKill != "":
+		return faultStep{fmt.Errorf("the member's container restarted before the kill, so it cannot be told "+
+			"whether the kill interrupted the upload; nothing was killed: %s", k.RestartedBeforeKill)}
 	case k.EndedOtherwise != "":
 		return faultStep{fmt.Errorf("the kill was not confirmed: the database container of %s ended for another "+
 			"reason than the kill: %s", k.Pod, k.EndedOtherwise)}
@@ -507,7 +543,11 @@ func (h *haRun) killDuringUpload(ctx context.Context, cluster *databasev1alpha1.
 
 // beforeIMKill reads the member's Pod right before the kill, requires the
 // cluster's StatefulSet to control it, and records it and its running
-// database container; the kill is issued only against them.
+// database container; the kill is issued only against them. A container
+// that is not the one read at the request, or restarted since, restarted
+// for another reason during the backup: the restart reason the backup would
+// end with could then come from that restart, not the kill, so nothing is
+// killed (RestartedBeforeKill).
 func (h *haRun) beforeIMKill(ctx context.Context, cluster *databasev1alpha1.CubridCluster, k *s11IMKill) error {
 	if err := h.guard(ctx); err != nil {
 		return err
@@ -521,13 +561,49 @@ func (h *haRun) beforeIMKill(ctx context.Context, cluster *databasev1alpha1.Cubr
 	if owner == nil || owner.Kind != kindStatefulSet || owner.Name != cluster.Name {
 		return fmt.Errorf("the Pod %s is not controlled by the StatefulSet of %s", pod.Name, cluster.Name)
 	}
-	return k.recordBefore(pod)
+	if err := k.recordBefore(pod); err != nil {
+		return err
+	}
+	if k.ContainerBefore != k.ContainerAtRequest || k.RestartsAtRequest == nil ||
+		*k.RestartsBefore != *k.RestartsAtRequest {
+		k.RestartedBeforeKill = fmt.Sprintf("the database container of %s was %s with restart count %s at the "+
+			"request and is %s with restart count %d right before the kill", pod.Name, k.ContainerAtRequest,
+			countText(k.RestartsAtRequest), k.ContainerBefore, *k.RestartsBefore)
+		return errors.New("the member's container restarted before the kill: " + k.RestartedBeforeKill)
+	}
+	return nil
+}
+
+// countText is a restart count, or "unknown".
+func countText(n *int32) string {
+	if n == nil {
+		return "unknown"
+	}
+	return fmt.Sprint(*n)
+}
+
+// containerAtRequest reads the member's Pod right before the backup is
+// requested and records its database container's ID and restart count.
+func (h *haRun) containerAtRequest(ctx context.Context, k *s11IMKill) error {
+	pod := &corev1.Pod{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: s11IMRestartMember},
+		pod); err != nil {
+		return fmt.Errorf("read the member %s before the request: %w", s11IMRestartMember, err)
+	}
+	status := databaseContainerStatus(pod)
+	if status == nil || status.ContainerID == "" {
+		return fmt.Errorf("the member %s reports no database container before the request", s11IMRestartMember)
+	}
+	restarts := status.RestartCount
+	k.ContainerAtRequest, k.RestartsAtRequest = status.ContainerID, &restarts
+	return nil
 }
 
 // memberBackReady reports whether the killed member's container runs again
-// (memberBack, once) and then the cluster is Ready again: the restarted
-// container reports ready and a reading of the cluster after that holds
-// standaloneReady. Every status of the cluster read is searched for a
+// (memberBack, once) and then a reading of the cluster after the restarted
+// container was ready shows Ready (standaloneReady). That Ready may never
+// have gone False after the kill; the condition's lastTransitionTime is
+// recorded as evidence of which. Every status of the cluster read is searched for a
 // credential. What does not hold yet is recorded in ReadyWaiting.
 func (h *haRun) memberBackReady(ctx context.Context, created *databasev1alpha1.CubridCluster,
 	rec *s11IMRestartRecord) (bool, error) {
@@ -573,6 +649,10 @@ func (h *haRun) memberBackReady(ctx context.Context, created *databasev1alpha1.C
 	}
 	at := time.Now().UTC()
 	k.ReadyAgainAt, k.ReadyWaiting = &at, ""
+	if c := meta.FindStatusCondition(cluster.Status.Conditions, clusterReadyCondition); c != nil {
+		transition := c.LastTransitionTime.UTC()
+		k.ReadyTransitionAt = &transition
+	}
 	return true, nil
 }
 

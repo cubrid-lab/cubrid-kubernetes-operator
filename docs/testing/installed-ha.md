@@ -1339,7 +1339,9 @@ therefore falls in the upload, not in `backupdb`.
 2. **Request.** The run creates the `CubridBackup`
    `s11-instance-manager-restart` for `s11-imrestart`'s database, to
    `-backup-bucket` under `lab-runs/<run ID>/instance-manager-restart`, and
-   records the time the request returned.
+   records the time the request returned. Right before the request it reads
+   the member's database container's ID and restart count
+   (`containerIDAtRequest`, `restartCountAtRequest`).
 3. **Place the kill.** At every reading while the backup is `Running` or
    `Uploading` with an `operationRef`, the run reads the limit's counters.
    Once 512 KiB have passed the limit since the request, that reading
@@ -1356,18 +1358,27 @@ therefore falls in the upload, not in `backupdb`.
    nothing when it finds none or more than one. The kill is confirmed when
    the Pod, with the same UID, shows the container ended or restarted, with
    exit code 137 and not `OOMKilled`.
+   - A database container that is not the one read at the request, or has
+     restarted since, right before the kill blocks the variant, and nothing
+     is killed ("the member's container restarted before the kill",
+     `restartedBeforeKill`): a restart for another reason, such as a failed
+     liveness probe, would already have failed the operation with the same
+     reason, and the kill would then interrupt nothing.
    - A kill that is refused, not confirmed within two minutes (or the ready
      limit, when shorter), or confirmed with another exit code blocks the
      variant. So does a Pod that was replaced.
-5. **The member back.** The run waits, for at most the ready limit from the
-   kill, until the Pod's database container runs again under another
-   container ID with a higher restart count, then until that container
-   reports ready and a reading of the cluster after it shows `Ready`
-   (`status.observedGeneration` current and condition `Ready` `True`).
-   `memberBackWithin` and `readyAgainWithin` run from the kill to those
-   readings. Every status of the cluster read is searched for the keys. A
-   container that does not run again, or a cluster that is not `Ready`
-   again, within the ready limit fails the variant.
+5. **The member back.** The run waits, for at most the ready limit counted
+   from the kill, until the Pod's database container runs again under
+   another container ID with a higher restart count, then until that
+   container reports ready and a reading of the cluster taken after that
+   shows `Ready` (`status.observedGeneration` current and condition `Ready`
+   `True`). That `Ready` may never have gone `False` after the kill: the
+   Operator need not have seen the restart. The condition's
+   `lastTransitionTime` in that reading is recorded (`readyTransitionAt`) as
+   evidence of which. `memberBackWithin` and `readyAgainWithin` run from the
+   kill to those readings. Every status of the cluster read is searched for
+   the keys. A container that does not run again, or no such reading of
+   `Ready`, within the ready limit from the kill fails the variant.
 6. **Wait for the end.** The run reads the backup every `-poll` until it is
    `Completed` or `Failed`, for at most `-backup-limit` from the request,
    and records every change with its `operationRef`. The limit stays
@@ -1444,7 +1455,8 @@ S11 `instance-manager-restart` here does not check:
 - the Instance Manager's operation record of the killed operation, which
   the Operator reports through the backup's status;
 - a kill between the manifest's upload and the operation's `Completed`
-  record;
+  record, which the run does not deliberately exercise (a manifest found
+  there fails the variant, as above);
 - the Operator's log from before one minute before the variant started, the
   Instance Managers' logs of the HA cluster's members, and a container
   instance before the previous one;
@@ -2656,10 +2668,12 @@ and S12 variant other than `complete` and `exact` only those under
   the rate, the limit's counters at the request, at the first growth and
   last, the observed rate, the tolerated errors and the limit's removal;
   under `kill`, the placing reading's time, phase, operation, counters and
-  bytes sent, the Pod's UID, the container's ID, restart count and start
-  before and after, the kill's time and answer, the container's end and
-  exit code, `backWithin`, `readyAgainAt`, `readyAgainWithin`, the restart
-  count at the end and `operationRefsSeen`; the backup's name, UID, bucket
+  bytes sent, the container's ID and restart count at the request and
+  `restartedBeforeKill`, the Pod's UID, the container's ID, restart count
+  and start before and after, the kill's time and answer, the container's
+  end and exit code, `backWithin`, `readyAgainAt`, `readyAgainWithin`,
+  `readyTransitionAt`, the restart count at the end and
+  `operationRefsSeen`; the backup's name, UID, bucket
   and prefix, the time of the request, every phase observed with its
   `operationRef`, `lastPhase`, `endedAfterKill`, `completedBeforeKill`,
   `failedWithin`, `failedAfterKill`, the failure and any store error, any
