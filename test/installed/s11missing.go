@@ -94,8 +94,9 @@ type s11MissingRecord struct {
 	// Failure is the Ready reason and message of the backup as it ended.
 	// StoreError is the object store's answer as the failure quotes it,
 	// after "put <bucket>/<key>: ", and StoreErrorKind what it names:
-	// storeErrorNoSuchBucket, storeErrorAccessDenied or storeErrorOther. They
-	// are observations; the verdict does not depend on them.
+	// storeErrorNoSuchBucket, storeErrorAccessDenied, storeErrorReset or
+	// storeErrorOther. They are observations; the verdict does not depend on
+	// them.
 	Failure        string                                 `json:"failure,omitempty"`
 	StoreError     string                                 `json:"storeError,omitempty"`
 	StoreErrorKind string                                 `json:"storeErrorKind,omitempty"`

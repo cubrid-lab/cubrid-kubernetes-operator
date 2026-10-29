@@ -611,7 +611,7 @@ func (h *haRun) headlessEndpoint(ctx context.Context, namespace, name string, se
 		}
 		port := 0
 		for _, p := range slice.Ports {
-			if p.Port != nil && cmp.Or(ptrValue(p.Name), "") == servicePort.Name &&
+			if p.Port != nil && ptrValue(p.Name) == servicePort.Name &&
 				(p.Protocol == nil || *p.Protocol == corev1.ProtocolTCP) {
 				port = int(*p.Port)
 			}
@@ -639,6 +639,14 @@ func (h *haRun) headlessEndpoint(ctx context.Context, namespace, name string, se
 		return storeAddress{}, fmt.Errorf("the headless object store Service %s/%s has %d ready IPv4 endpoint "+
 			"addresses with the TCP port of its port %d, not one: %v; the faults need one address to act on",
 			namespace, name, len(found), servicePort.Port, found)
+	}
+	// Nothing translates the address of a headless Service: the member
+	// dials the Service's port at the Pod's IP, so a target port that
+	// differs would leave the faults on a port nothing is sent to.
+	if found[0].port != int(servicePort.Port) {
+		return storeAddress{}, fmt.Errorf("the headless object store Service %s/%s maps its port %d to endpoint "+
+			"port %d; the member dials %d at the Pod's IP, so the faults need the two to be the same",
+			namespace, name, servicePort.Port, found[0].port, servicePort.Port)
 	}
 	return found[0], nil
 }
@@ -784,13 +792,13 @@ func (h *haRun) interruptedReading(ctx context.Context, backup *databasev1alpha1
 		if err != nil {
 			return made.tolerate(f, "read the rate limit's counters", err)
 		}
-		made.errorsInARow = 0
 		f.Last = &counters
 		sent := counters.Bytes - min(counters.Bytes, f.AtRequest.Bytes)
 		if f.FirstGrowth == nil && sent > 0 {
 			f.FirstGrowth = &counters
 		}
 		if sent < interruptedUploadSeen {
+			made.errorsInARow = 0
 			f.Waiting = fmt.Sprintf("%d bytes through the rate limit since the request, in phase %s", sent, s.Phase)
 			return nil
 		}
@@ -802,6 +810,9 @@ func (h *haRun) interruptedReading(ctx context.Context, backup *databasev1alpha1
 			}
 			return made.tolerate(f, "read the object store's address before the cut", err)
 		}
+		// The count is reset only here: a counters read that succeeds
+		// must not hide an address read that keeps failing.
+		made.errorsInARow = 0
 		checked := time.Now().UTC()
 		f.StoreCheckedBeforeCut = &checked
 		f.AtCut, f.SentBeforeCut, f.PhaseAtCut, f.Waiting = &counters, sent, string(s.Phase), ""

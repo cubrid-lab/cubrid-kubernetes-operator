@@ -421,8 +421,8 @@ store's and is not required.
      `upload failed: put <bucket>/` fails it: the upload ran and failed, but
      not for its destination.
    - The object store's answer after `put <bucket>/<key>: ` is recorded as
-     `storeError`, with `storeErrorKind` `no-such-bucket`, `access-denied`
-     or `other`. The verdict does not depend on it; in the one VM-lab run so
+     `storeError`, with `storeErrorKind` `no-such-bucket`, `access-denied`,
+     `reset-or-refused` or `other`. The verdict does not depend on it; in the one VM-lab run so
      far, SeaweedFS answered `The specified bucket does not exist`
      (`no-such-bucket`). The run asks whether the bucket exists with the seed
      Secret's keys, while the members write with the cluster's
@@ -704,7 +704,9 @@ Service (`addressMode` in the record):
   port. It uses that address and port (`headless-endpoint`) and records the
   endpoint's Pod name when the EndpointSlice gives it. No ready address,
   several ready addresses, or no endpoint with that port are refused before
-  anything is created.
+  anything is created. So is an endpoint port that differs from the
+  Service's port: nothing translates a headless Service's address, so the
+  member dials the Service's port at the Pod's IP.
 - **Service with a ClusterIP**: the upload's packets are addressed to the
   ClusterIP and the Service's port, and the node's kube-proxy rules
   translate them to a store Pod only after they leave the Pod. The run uses

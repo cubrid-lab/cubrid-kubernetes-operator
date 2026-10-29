@@ -893,6 +893,13 @@ func TestRunS11InterruptedUploadRefusesAStoreItCannotAddress(t *testing.T) {
 				slice.Ports[0].Name = &other
 				return slice
 			}()}, want: "has 0 ready IPv4 endpoint addresses"},
+		"a headless Service whose endpoint port differs from its port": {store: []client.Object{
+			testStoreServiceObject(), func() client.Object {
+				slice := testStoreSlice("seaweedfs-a", testStoreIP)
+				other := int32(8888)
+				slice.Ports[0].Port = &other
+				return slice
+			}()}, want: "maps its port 8333 to endpoint port 8888"},
 		"another port": {store: clusterIP(func(svc *corev1.Service) { svc.Spec.Ports[0].Port = 9000 }),
 			want: "has no TCP port 8333"},
 		"a UDP port of the same": {store: clusterIP(func(svc *corev1.Service) {
@@ -1034,6 +1041,36 @@ func TestRunS11InterruptedUploadToleratesAFewCommandErrors(t *testing.T) {
 	}
 	if rec := readInterruptedRecord(t, cfg.EvidenceDir); len(rec.Faults.ExecErrors) != interruptedExecTolerance {
 		t.Fatalf("errors = %v, want the %d tolerated ones recorded", rec.Faults.ExecErrors, interruptedExecTolerance)
+	}
+}
+
+// An address read that keeps failing before the cut is counted toward the
+// limit, even though every counters read in between succeeds.
+func TestRunS11InterruptedUploadCountsAStoreAddressThatKeepsFailing(t *testing.T) {
+	cfg := testS11InterruptedConfig(t)
+	f := newS11InterruptedFixture(t, cfg)
+	read := f.backupRead
+	added := false
+	f.backupRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+		if key.Name == s11InterruptedBackupName && f.reads == 2 && !added {
+			added = true
+			if err := c.Create(ctx, testStoreSlice("seaweedfs-b", "10.42.2.9")); err != nil {
+				return err
+			}
+		}
+		return read(ctx, c, key)
+	}
+	interrupted, err := interruptedOf(t, f)
+	if err == nil || interrupted.Result != evidence.Blocked || len(interrupted.NeverEvents) != 0 ||
+		!strings.Contains(interrupted.Reason, "errors in a row") ||
+		!strings.Contains(interrupted.Reason, "has 2 ready IPv4 endpoint addresses") {
+		t.Fatalf("S11 interrupted-upload = %+v, want blocked by the store address read failing", interrupted)
+	}
+	f.net.mu.Lock()
+	cut := slices.Contains(f.net.ops, "reset")
+	f.net.mu.Unlock()
+	if cut {
+		t.Fatal("the cut was installed without a readable store address")
 	}
 }
 
