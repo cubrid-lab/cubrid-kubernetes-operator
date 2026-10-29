@@ -230,9 +230,8 @@ func TestRunS11MissingDestinationPassesWhenTheBackupFails(t *testing.T) {
 		t.Fatalf("summary = %+v, want every scenario passed", summary)
 	}
 	// The summary keeps no reason for a pass; the record names both logs.
-	if notes := readMissingRecord(t, cfg.EvidenceDir).Notes; !slices.Contains(notes,
-		"the Operator's and the Instance Manager's logs were not checked") {
-		t.Fatalf("S11 missing-destination notes = %v, want both logs named as not checked", notes)
+	if notes := readMissingRecord(t, cfg.EvidenceDir).Notes; !slices.Contains(notes, logsNote()) {
+		t.Fatalf("S11 missing-destination notes = %v, want both logs named as searched", notes)
 	}
 	if strings.Join(f.writes, ",") != "namespace,secret,cluster,client,backup,backup" {
 		t.Fatalf("writes = %v", f.writes)
@@ -333,11 +332,10 @@ func requireMissingChecks(t *testing.T, rec s11MissingRecord, lab01 haRecord) {
 		len(rec.Credentials.FoundIn) != 0 {
 		t.Fatalf("credentials = %+v, want every status searched", rec.Credentials)
 	}
-	if !strings.Contains(rec.Cleanup, "deleted") || !slices.ContainsFunc(rec.Notes, func(n string) bool {
-		return strings.Contains(n, "logs were not checked")
-	}) {
-		t.Fatalf("record = %+v, want the cleanup and the unchecked logs recorded", rec)
+	if !strings.Contains(rec.Cleanup, "deleted") || !slices.Contains(rec.Notes, logsNote()) {
+		t.Fatalf("record = %+v, want the cleanup and the searched logs recorded", rec)
 	}
+	requireLogsSearched(t, rec.Credentials, testBackupTarget)
 }
 
 func TestRunS11MissingDestinationFailsWhenTheBackupCompletes(t *testing.T) {

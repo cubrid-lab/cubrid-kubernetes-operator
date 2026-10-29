@@ -222,7 +222,8 @@ func (h *haRun) runS11DeniedCredentials(ctx context.Context) evidence.Scenario {
 // BackupBucket. The backup must end Failed within BackupLimit for its upload,
 // never Completed and without status.artifact; nothing may be under its
 // prefix at the end, the source unchanged, and neither the seed Secret's keys
-// nor the variant's keys in a status read or an Event. The run never writes
+// nor the variant's keys in a status read, an Event or the logs checkS11Logs
+// searches. The run never writes
 // to or removes from the object store; it deletes the backup, the cluster and
 // the Secret it created. A run that ends, or a check that cannot be made,
 // before the variant is judged blocks it; what was seen to break stays a
@@ -244,7 +245,7 @@ func (h *haRun) runS11KeyFault(ctx context.Context, v s11KeyFault) (result evide
 			"the fault check reaches the store through -object-store-service, while the member uploads to the " +
 				"cluster's spec.objectStorage endpoint; the run assumes, as S11 complete does, that they are the " +
 				"same store, and refuses a Service that the endpoint does not name",
-			"the Operator's and the Instance Manager's logs were not checked"},
+			logsNote()},
 		Cleanup: "nothing to delete: the run created no Secret, CubridCluster or CubridBackup",
 		Residue: "nothing: the run wrote nothing to the object store" + stagingNotChecked}
 	var made s11DeniedMade
@@ -305,7 +306,9 @@ func (h *haRun) runS11KeyFault(ctx context.Context, v s11KeyFault) (result evide
 			"for its upload to " + rec.Bucket + " with an answer that refuses the keys, never Completed and " +
 			"without status.artifact; nothing was under " +
 			"its prefix at the end; the source was unchanged; neither the seed keys nor " + v.keys + " were in " +
-			"the statuses read or the Events; the Operator's and the Instance Manager's logs were not checked"
+			"the statuses read, the Events, the installed Operator's manager log or the Instance Manager's log in " +
+			v.cluster + "'s member Pod, each log read from " + logSinceMargin.String() + " before the variant " +
+			"started"
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -317,6 +320,7 @@ func (h *haRun) runS11KeyFault(ctx context.Context, v s11KeyFault) (result evide
 // checks at the end are all made; their errors are joined.
 func (h *haRun) deniedSteps(ctx context.Context, v s11KeyFault, result *evidence.Scenario, rec *s11DeniedRecord,
 	made *s11DeniedMade) error {
+	started := time.Now().UTC()
 	h.denyKeys(v)
 	if _, err := h.holdsCredential(nil); err != nil {
 		return fmt.Errorf("%w; S11 %s could not tell whether a credential is in a status or an Event", err,
@@ -352,6 +356,10 @@ func (h *haRun) deniedSteps(ctx context.Context, v s11KeyFault, result *evidence
 	}
 	if err := h.standaloneAtEnd(ctx, made.cluster, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
+	}
+	if err := h.checkS11Logs(ctx, v.cluster, lastTarget(rec.Phases), requested, started,
+		rec.Credentials); err != nil {
+		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
 	errs = append(errs, h.checkSourceS12(ctx, rec.Source, v.sourceDataCheckFile))

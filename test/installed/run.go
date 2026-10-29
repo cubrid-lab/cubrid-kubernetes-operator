@@ -86,6 +86,9 @@ type Runner struct {
 	// openStore returns the run's own client of the object store at endpoint;
 	// nil selects minio-go.
 	openStore func(endpoint, accessKey, secretKey string, secure bool) (objectStore, error)
+	// podLogs opens a container's log through the API server; S11 searches
+	// the installed manager's and the Instance Manager's logs with it.
+	podLogs podLogReader
 }
 
 type sqlStep struct {

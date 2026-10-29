@@ -149,8 +149,11 @@ its `passed` verdict is not an S01 result at the VM-lab level.
 `lab-installed-ha-s11` requires S11 `complete` only. The interrupted
 variants are not part of the lane, rather than `not_applicable`: the lab can
 kill a Pod or cut the object store, so they are not ruled out by the
-environment, only not run by this command. The lane does not read the
-Operator's logs for credentials and does not restore the artifact (S12).
+environment, only not run by this command. The lane does not restore the
+artifact (S12). Every S11 lane searches for credentials the installed
+Operator's log and the Instance Manager's log of the Pod the backup ran on,
+each only from one minute before the variant started; the Instance Managers
+of other members are not searched.
 `lab-installed-ha-s11-missing-destination` requires S11 `complete` and
 `missing-destination`; the command runs it in a run of its own, not with
 S12. `lab-installed-ha-s11-denied-credentials` requires S11 `complete` and

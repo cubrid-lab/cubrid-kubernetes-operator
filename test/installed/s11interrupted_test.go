@@ -386,8 +386,9 @@ func (f *s11InterruptedFixture) createCluster(ctx context.Context, c client.With
 	return c.Create(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s11InterruptedMember,
 		Namespace: f.cfg.Namespace, UID: testInterruptedPodUID,
 		OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", cluster.Name, "interrupted-sts")}},
-		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: databaseContainer}}},
-		Status: corev1.PodStatus{PodIP: testInterruptedPodIP, HostIP: "172.31.0.5"}})
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: databaseContainer}}},
+		Status: corev1.PodStatus{PodIP: testInterruptedPodIP, HostIP: "172.31.0.5",
+			ContainerStatuses: []corev1.ContainerStatus{{Name: databaseContainer, Ready: true}}}})
 }
 
 // addEphemeral adds the ephemeral container to the Pod and starts it.
@@ -711,6 +712,10 @@ func requireInterruptedEnd(t *testing.T, rec s11InterruptedRecord) {
 	}) {
 		t.Fatalf("notes = %v, want the local reset named", rec.Notes)
 	}
+	if !slices.Contains(rec.Notes, logsNote()) {
+		t.Fatalf("notes = %v, want both logs named as searched", rec.Notes)
+	}
+	requireLogsSearched(t, rec.Credentials, s11InterruptedMember)
 }
 
 // A partial object left under the prefix is recorded, not failed, and never

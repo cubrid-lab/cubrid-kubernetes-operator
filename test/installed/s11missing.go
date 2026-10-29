@@ -135,8 +135,8 @@ func planS11MissingDestination(cfg HAConfig, lane string, requirements []evidenc
 // run does not exist, requests a full backup of the run's database to it, and
 // the backup must end Failed within BackupLimit for its upload, never
 // Completed and without status.artifact. The bucket must still be absent at
-// the end, the source unchanged, and no credential in a status read or an
-// Event. The run never creates, writes or removes a bucket; it deletes the
+// the end, the source unchanged, and no credential in a status read, an
+// Event or the logs checkS11Logs searches. The run never creates, writes or removes a bucket; it deletes the
 // CubridBackup it created. A run that ends, or a check that cannot be made,
 // before S11 missing-destination is judged blocks it; what was seen to break
 // stays a failure.
@@ -152,7 +152,7 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 			"the run asks with the seed Secret's keys, and the members write with the cluster's " +
 				"spec.objectStorage Secret, a copy of them; the verdict does not depend on the object store's " +
 				"error code (storeError), which is recorded until a lab run shows what the store answers",
-			"the Operator's and the Instance Manager's logs were not checked"},
+			logsNote()},
 		Cleanup: "nothing to delete: the run created no CubridBackup", Residue: "nothing: the run wrote nothing " +
 			"to the object store" + stagingNotChecked}
 	var created *databasev1alpha1.CubridBackup
@@ -209,7 +209,8 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 		result.Reason = "the backup to " + rec.Bucket.Name + ", which the run found absent before the request, " +
 			"ended Failed within backup_limit for its upload, never Completed and without status.artifact; the " +
 			"bucket was still absent at the end; the source was unchanged; no credential was in the statuses read " +
-			"or the Events; the Operator's and the Instance Manager's logs were not checked"
+			"or the Events, nor in the installed Operator's manager log or the Instance Manager's log in the " +
+			"backup's target Pod, each read from " + logSinceMargin.String() + " before the variant started"
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -221,6 +222,7 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 // the checks at the end are all made; their errors are joined.
 func (h *haRun) missingSteps(ctx context.Context, result *evidence.Scenario, rec *s11MissingRecord,
 	created **databasev1alpha1.CubridBackup) error {
+	started := time.Now().UTC()
 	if _, err := h.holdsCredential(nil); err != nil {
 		return fmt.Errorf("%w; S11 missing-destination could not tell whether a credential is in a status or an "+
 			"Event", err)
@@ -246,6 +248,10 @@ func (h *haRun) missingSteps(ctx context.Context, result *evidence.Scenario, rec
 	}
 	if err := h.checkS11Credentials(ctx, *created, nil, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
+	}
+	if err := h.checkS11Logs(ctx, haClusterName, lastTarget(rec.Phases), requested, started,
+		rec.Credentials); err != nil {
+		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
 	errs = append(errs, h.checkSourceS12(ctx, rec.Source, s11MissingSourceDataCheckFile))

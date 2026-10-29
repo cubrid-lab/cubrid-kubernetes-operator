@@ -207,6 +207,13 @@ type s11Fixture struct {
 	onRead func(read int) error
 	// accessKey and secretKey are the keys the run's client must use.
 	accessKey, secretKey string
+	// logs are the container logs the fake API server holds and logErr its
+	// errors, keyed by logKey; logOf, when set, answers a read before them,
+	// unless it returns false. logReads are the logs the run read.
+	logs     map[string]string
+	logErr   map[string]error
+	logOf    func(key string) (string, bool)
+	logReads []string
 
 	reads, forwards, forwardsStopped int
 	markers                          []string
@@ -217,7 +224,7 @@ type s11Fixture struct {
 func newS11Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) *s11Fixture {
 	t.Helper()
 	f := &s11Fixture{haFixture: newHAFixture(t, cfg, extra...), store: &fakeStore{objects: map[string][]byte{}},
-		accessKey: testAccessKey, secretKey: testSecretKey,
+		accessKey: testAccessKey, secretKey: testSecretKey, logs: map[string]string{}, logErr: map[string]error{},
 		phases: []databasev1alpha1.CubridBackupPhase{databasev1alpha1.BackupPhasePending,
 			databasev1alpha1.BackupPhaseRunning, databasev1alpha1.BackupPhaseUploading,
 			databasev1alpha1.BackupPhaseCompleted}}
@@ -257,7 +264,48 @@ func newS11Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) *s11Fixtu
 		}
 		return f.store, nil
 	}
+	f.runner.podLogs = f.podLogs
 	return f
+}
+
+// logKey names a container's log in the fake API server: its namespace, Pod
+// and container, and "/previous" for the previous instance.
+func logKey(namespace, pod, container string, previous bool) string {
+	key := namespace + "/" + pod + "/" + container
+	if previous {
+		key += "/previous"
+	}
+	return key
+}
+
+// podLogs answers a read of pods/log from logs, as the API server would,
+// with at most LimitBytes; logErr answers first. A log that is not in logs
+// holds one line without a key.
+func (f *s11Fixture) podLogs(_ context.Context, namespace, pod string, opts *corev1.PodLogOptions) (io.ReadCloser,
+	error) {
+	if opts.Container == "" || opts.SinceTime == nil || opts.SinceTime.After(time.Now()) || opts.LimitBytes == nil ||
+		*opts.LimitBytes != maxLogBytes+1 {
+		f.t.Errorf("log of %s/%s read with %+v, want a container, a past sinceTime and maxLogBytes+1", namespace, pod,
+			opts)
+	}
+	key := logKey(namespace, pod, opts.Container, opts.Previous)
+	f.mu.Lock()
+	f.logReads = append(f.logReads, key)
+	err, logOf := f.logErr[key], f.logOf
+	data, ok := f.logs[key]
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if logOf != nil {
+		if answer, answered := logOf(key); answered {
+			data, ok = answer, true
+		}
+	}
+	if !ok {
+		data = "level=info msg=\"Reconciled CubridBackup\"\n"
+	}
+	return io.NopCloser(io.LimitReader(strings.NewReader(data), *opts.LimitBytes)), nil
 }
 
 // advance writes the status of the next phase, as the Operator would. The
@@ -440,9 +488,10 @@ func requireS11Record(t *testing.T, cfg HAConfig) {
 	t.Helper()
 	lab01 := readHARecord(t, cfg.EvidenceDir)
 	rec := readS11Record(t, cfg.EvidenceDir)
-	if !slices.ContainsFunc(rec.Notes, func(n string) bool { return strings.Contains(n, "logs were not checked") }) {
-		t.Fatalf("S11 notes = %v, want them to say the Operator's logs were not checked", rec.Notes)
+	if !slices.Contains(rec.Notes, logsNote()) {
+		t.Fatalf("S11 notes = %v, want them to say which logs were searched", rec.Notes)
 	}
+	requireLogsSearched(t, rec.Credentials, testBackupTarget)
 	if rec.KnownPoint == nil || rec.KnownPoint.Marker != s11Marker || rec.KnownPoint.MarkerValue != lab01.RunID ||
 		rec.KnownPoint.Acknowledged != cfg.Operations || rec.KnownPoint.LastAcknowledged != "c1-000010" {
 		t.Fatalf("known point = %+v, want the marker and the client history's position", rec.KnownPoint)

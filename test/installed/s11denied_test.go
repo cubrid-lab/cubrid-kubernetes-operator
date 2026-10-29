@@ -33,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -129,7 +130,10 @@ func newS11DeniedFixture(t *testing.T, cfg HAConfig) *s11DeniedFixture {
 		f.mu.Lock()
 		f.deniedCluster = cluster.DeepCopy()
 		f.mu.Unlock()
-		return c.Create(ctx, cluster)
+		if err := c.Create(ctx, cluster); err != nil {
+			return err
+		}
+		return c.Create(ctx, memberPod(cluster.Name, cluster.Namespace))
 	}
 	f.deniedRead = f.advanceCluster
 	created, read := f.backupCreated, f.backupRead
@@ -163,6 +167,17 @@ func newS11DeniedFixture(t *testing.T, cfg HAConfig) *s11DeniedFixture {
 	}
 	f.markersOf = func(string) []string { return nil }
 	return f
+}
+
+// memberPod is the Pod of a standalone cluster's member, owned by its
+// StatefulSet, as the Operator would create it.
+func memberPod(cluster, namespace string) *corev1.Pod {
+	name := cluster + "-0"
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(name),
+		OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", cluster, types.UID(cluster+"-sts"))}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: databaseContainer}}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: databaseContainer,
+			Ready: true}}}}
 }
 
 // deleteOwned records a deletion with the UID the run required, and
@@ -495,9 +510,10 @@ func requireDeniedChecks(t *testing.T, rec s11DeniedRecord, lab01 haRecord) {
 		len(rec.Credentials.FoundIn) != 0 {
 		t.Fatalf("credentials = %+v, want every status searched", rec.Credentials)
 	}
-	if !slices.Contains(rec.Notes, "the Operator's and the Instance Manager's logs were not checked") {
-		t.Fatalf("notes = %v, want both logs named as not checked", rec.Notes)
+	if !slices.Contains(rec.Notes, logsNote()) {
+		t.Fatalf("notes = %v, want both logs named as searched", rec.Notes)
 	}
+	requireLogsSearched(t, rec.Credentials, rec.Cluster.Name+"-0")
 }
 
 func TestRunS11DeniedCredentialsIsBlockedWhenTheFaultIsNotInPlace(t *testing.T) {
