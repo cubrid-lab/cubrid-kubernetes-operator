@@ -443,7 +443,8 @@ func requireDeniedRecord(t *testing.T, f *s11DeniedFixture) {
 		t.Fatalf("fault = %+v, want the store's refusal of the denied keys", fault)
 	}
 	if c := rec.Cluster; c == nil || c.Name != s11DeniedClusterName || c.UID != testDeniedClusterUID ||
-		c.SecretUID != testDeniedSecretUID || c.CreatedAt == nil || c.ReadyWithin == "" || c.Waiting != "" {
+		c.Secret != s11DeniedSecretName || c.SecretUID != testDeniedSecretUID || c.CreatedAt == nil ||
+		c.ReadyWithin == "" || c.Waiting != "" {
 		t.Fatalf("cluster = %+v, want it created and Ready", c)
 	}
 	requireDeniedBackup(t, f, rec)

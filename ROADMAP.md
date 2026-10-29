@@ -188,7 +188,16 @@ them, and requires its backup to the backup bucket `Failed` with
 keys within `backup_limit`, never `Completed` and without `status.artifact`,
 nothing under its prefix at the end, the source unchanged and neither the
 seed nor the denied keys in a status read or an Event; it deletes the backup,
-the cluster and the Secret it created. It is lab-only and not yet run on the VM lab.
+the cluster and the Secret it created. It is lab-only. On 2026-10-29 it
+passed once on the VM lab (manager `fb6f345`, after S11 `complete` on the
+same run): SeaweedFS refused the generated keys to the run's own client, the
+standalone cluster was `Ready` 45 s after its creation, and its backup was
+`Running` and then `Failed` 12.0 s after the request, with the store's answer
+`The access key ID you provided does not exist in our records.`
+(`access-denied`); nothing was under the prefix at the end, no key was in 22
+statuses or 114 Events, and the deletions of the backup, the cluster and the
+Secret were accepted. One run is not a baseline; the target member's staging
+directory and the Operator's and Instance Manager's logs were not checked.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's

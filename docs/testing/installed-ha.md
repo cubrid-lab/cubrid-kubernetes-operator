@@ -1766,7 +1766,8 @@ and S12 variant other than `complete` and `exact` only those under
 - with `-backup-denied-credentials`, `S11/denied-credentials/record.json`
   (the store's answer to the denied keys and its kind, whether it refused
   them and when it was asked; the standalone cluster's name and UID, its
-  Secret's name and UID, when it was created, `readyWithin` or what it
+  Secret's name (`secretName`, since the redactor blanks the value of a
+  field named `secret`) and UID, when it was created, `readyWithin` or what it
   waited for, and `readyLimit`; the backup's name, UID, bucket and prefix,
   the time of the request, every phase observed, `failedWithin`, the
   failure's reason and message, the object store's answer it quotes

@@ -72,13 +72,14 @@ type s11DeniedFault struct {
 }
 
 // s11DeniedCluster is the standalone cluster the backup is taken of, and the
-// Secret its spec.objectStorage names. ReadyWithin runs from the return of
+// Secret its spec.objectStorage names, as secretName: the redactor blanks the
+// value of a field named secret. ReadyWithin runs from the return of
 // its creation to the reading that saw it Ready; Waiting is the last of its
 // status that did not hold while the run waited.
 type s11DeniedCluster struct {
 	Name        string     `json:"name"`
 	UID         string     `json:"uid,omitempty"`
-	Secret      string     `json:"secret"`
+	Secret      string     `json:"secretName"`
 	SecretUID   string     `json:"secretUID,omitempty"`
 	CreatedAt   *time.Time `json:"createdAt,omitempty"`
 	ReadyWithin string     `json:"readyWithin,omitempty"`
