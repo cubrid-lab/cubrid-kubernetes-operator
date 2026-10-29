@@ -215,10 +215,20 @@ must end `Failed` with `BackupFailed` and `upload failed: ` within
 as a partial artifact), the source unchanged and no seed key in a status read
 or an Event; the run removes both faults and deletes the backup and the
 cluster it created. A backup that ends before the cut is confirmed, a fault
-not seen removed, and a store address that changed leave it blocked. It is lab-only and has not yet run on the VM lab: unit tests only,
-with fakes of the faults' commands and of the API server. The reset is local
-to the member; a silent drop, a store that comes back during the backup and
-a multipart upload are not covered.
+not seen removed, and a store address that changed leave it blocked. It is
+lab-only. On 2026-10-29 it passed once on the VM lab (manager `fb6f345`,
+after S11 `complete` on the same run): the store was the headless endpoint
+`seaweedfs-0` at port 8333; 560,610 bytes had passed the limit (about
+32 KB/s) when the cut went in during `Uploading`, confirmed by 4 rejected
+packets; the backup was `Failed` 11.2 s after the cut and 33.0 s after the
+request, with the store client's retry answered `connect: connection
+refused` (`reset-or-refused`); nothing was under the prefix at the end, the
+backup was still `Failed` without an artifact after the faults were seen
+removed, no key was in 28 statuses or 118 Events, and the deletions of the
+backup and the cluster were accepted. One run is not a baseline. The reset
+is local to the member; a silent drop, a store that comes back during the
+backup and a multipart upload are not covered, nor are the member's staging
+directory and the Operator's and Instance Manager's logs.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
