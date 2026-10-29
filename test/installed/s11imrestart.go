@@ -111,8 +111,8 @@ type s11IMRestartRecord struct {
 	// read them before anything was created.
 	PodSecurity map[string]string     `json:"podSecurity"`
 	Cluster     *s11StandaloneCluster `json:"cluster,omitempty"`
-	// ReadyLimit is BackupInstanceManagerRestartReadyLimit, the run's bound
-	// on the cluster before the backup and after the kill.
+	// ReadyLimit is the variant's ready limit, the run's bound on the
+	// cluster before the backup and after the kill.
 	ReadyLimit  string       `json:"readyLimit"`
 	Throttle    *s11Throttle `json:"throttle"`
 	Kill        *s11IMKill   `json:"kill"`
@@ -156,6 +156,14 @@ type s11IMRestartRecord struct {
 	// leaves.
 	Cleanup string `json:"cleanup"`
 	Residue string `json:"residue"`
+	// variant names the variant in messages; timeline is the file its
+	// kill's timeline goes to and sourceFile the one of the source's data
+	// check; readyLimit bounds the cluster before the backup and after the
+	// kill; kill returns the fault placed during the upload once the placing
+	// reading is recorded.
+	variant, timeline, sourceFile string
+	readyLimit                    time.Duration
+	kill                          func() faults.Fault
 }
 
 // validateS11InstanceManagerRestart checks the inputs of S11
@@ -173,7 +181,8 @@ func (c HAConfig) validateS11InstanceManagerRestart() error {
 		{c.BackupSignatureMismatch, flagSignatureMismatch},
 		{c.BackupInterruptedUpload, flagInterruptedUpload},
 		{c.BackupOperatorRestart, flagOperatorRestart},
-		{c.BackupOverlapping, flagOverlapping}} {
+		{c.BackupOverlapping, flagOverlapping},
+		{c.BackupOperationStoreLoss, flagOperationStoreLoss}} {
 		if other.selected {
 			return fmt.Errorf("%s and %s select different lanes; a run takes one of them", flagInstanceManagerRestart,
 				other.flag)
@@ -260,7 +269,13 @@ func (h *haRun) runS11InstanceManagerRestart(ctx context.Context) (result eviden
 				"through pods/log with previous=true",
 			logsNote(h.logLimit())},
 		Cleanup: "nothing to delete: the run created no CubridCluster or CubridBackup",
-		Residue: "nothing: the run wrote nothing to the object store" + stagingNotChecked}
+		Residue: "nothing: the run wrote nothing to the object store" + stagingNotChecked,
+		variant: "S11 instance-manager-restart", timeline: s11IMRestartTimelineFile,
+		sourceFile: s11IMRestartSourceDataCheckFile, readyLimit: h.cfg.BackupInstanceManagerRestartReadyLimit}
+	rec.kill = func() faults.Fault {
+		return instanceManagerKill{h: h, k: &rec.Kill.memberKill,
+			name: "kill the Instance Manager of the standalone member with SIGKILL"}
+	}
 	var made s11InterruptedMade
 	defer func() {
 		removed := h.removeInterruptedFaults(ctx, &made, rec.Throttle)
@@ -290,7 +305,15 @@ func (h *haRun) runS11InstanceManagerRestart(ctx context.Context) (result eviden
 		"uploadBytesBeforeKill": evidence.Unknown, "memberBackWithin": evidence.Unknown,
 		"readyAgainWithin": evidence.Unknown, "containerRestarts": evidence.Unknown,
 		"operationRefUnchanged": evidence.Unknown}
-	err := h.s11IMRestartSteps(ctx, &result, &rec, &made)
+	err := h.s11IMRestartSteps(ctx, &rec, &made, func(ctx context.Context) error {
+		return h.imRestartUpload(ctx, &rec, &made,
+			func(ctx context.Context, read *databasev1alpha1.CubridBackup) error {
+				return h.imRestartReading(ctx, read, &rec, &made, &result)
+			},
+			func(backup *databasev1alpha1.CubridBackup, waitErr error, requested time.Time) error {
+				return judgeIMRestartBackup(backup, waitErr, requested, &rec, &result)
+			})
+	}, &result)
 	if found := rec.Credentials.FoundIn; len(found) > 0 {
 		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
 	}
@@ -337,25 +360,25 @@ func (h *haRun) runS11InstanceManagerRestart(ctx context.Context) (result eviden
 	return result
 }
 
-// s11IMRestartSteps runs the steps of S11 instance-manager-restart in
-// order. Before the request, the first error ends them. After it, the
-// backup is judged, the limit is removed, and the checks at the end are all
-// made; their errors are joined.
-func (h *haRun) s11IMRestartSteps(ctx context.Context, result *evidence.Scenario, rec *s11IMRestartRecord,
-	made *s11InterruptedMade) error {
+// s11IMRestartSteps runs the steps of S11 instance-manager-restart, or of
+// another variant that kills its standalone member's Instance Manager during
+// the upload, in order; upload requests the backup, waits for it and judges
+// it. Before the request, the first error ends them. After it, the backup is
+// judged, the limit is removed, and the checks at the end are all made;
+// their errors are joined.
+func (h *haRun) s11IMRestartSteps(ctx context.Context, rec *s11IMRestartRecord, made *s11InterruptedMade,
+	upload func(context.Context) error, result *evidence.Scenario) error {
 	started := time.Now().UTC()
 	if _, err := h.holdsCredential(nil); err != nil {
-		return fmt.Errorf("%w; S11 instance-manager-restart could not tell whether a credential is in a status "+
-			"or an Event", err)
+		return fmt.Errorf("%w; %s could not tell whether a credential is in a status or an Event", err, rec.variant)
 	}
 	before := h.rec.OperatorAfter
 	rec.ManagerBefore = &before
-	if err := h.throttledStandalone(ctx, "S11 instance-manager-restart",
-		h.cfg.BackupInstanceManagerRestartReadyLimit, &rec.PodSecurity, rec.Cluster, rec.Credentials, rec.Throttle,
-		made); err != nil {
+	if err := h.throttledStandalone(ctx, rec.variant, rec.readyLimit, &rec.PodSecurity, rec.Cluster,
+		rec.Credentials, rec.Throttle, made); err != nil {
 		return err
 	}
-	err := h.imRestartUpload(ctx, result, rec, made)
+	err := upload(ctx)
 	if rec.RequestedAt == nil {
 		return err
 	}
@@ -372,58 +395,57 @@ func (h *haRun) s11IMRestartSteps(ctx context.Context, result *evidence.Scenario
 	if err := h.standaloneAtEnd(ctx, made.cluster, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
 	}
-	if err := h.checkS11Logs(ctx, s11IMRestartClusterName, true, lastTarget(rec.Phases),
+	if err := h.checkS11Logs(ctx, rec.Cluster.Name, true, lastTarget(rec.Phases),
 		requestedOnServer(made.backup, *rec.RequestedAt), started,
 		rec.Credentials, h.rec.OperatorAfter.Pods); err != nil {
 		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}
 	if k.confirmed() {
-		errs = append(errs, killedLogRead(rec.Credentials))
+		errs = append(errs, killedLogRead(rec.Credentials, rec.Throttle.Target))
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
-	errs = append(errs, h.checkSourceS12(ctx, rec.Source, s11IMRestartSourceDataCheckFile))
-	errs = append(errs, h.sameManager(ctx, "S11 instance-manager-restart", rec.ManagerBefore, &rec.ManagerAfter))
+	errs = append(errs, h.checkSourceS12(ctx, rec.Source, rec.sourceFile))
+	errs = append(errs, h.sameManager(ctx, rec.variant, rec.ManagerBefore, &rec.ManagerAfter))
 	return errors.Join(errs...)
 }
 
-// killedLogRead requires that the member's log search read the previous
+// killedLogRead requires that the log search of member read the previous
 // instance of its database container, whose Instance Manager was killed.
-func killedLogRead(creds *s11Credentials) error {
+func killedLogRead(creds *s11Credentials, member string) error {
 	for _, l := range creds.Logs {
-		if l.Log == instanceManagerLog && l.Pod == s11IMRestartMember && l.PreviousRead {
+		if l.Log == instanceManagerLog && l.Pod == member && l.PreviousRead {
 			return nil
 		}
 	}
 	return fmt.Errorf("the log of the killed Instance Manager, the previous instance of %s's database "+
-		"container, was not read", s11IMRestartMember)
+		"container, was not read", member)
 }
 
 // imRestartUpload installs and confirms the rate limit, requests the backup
-// and waits for it, killing the member's Instance Manager once the upload is
-// seen under way, and judges the backup.
-func (h *haRun) imRestartUpload(ctx context.Context, result *evidence.Scenario, rec *s11IMRestartRecord,
-	made *s11InterruptedMade) error {
+// and waits for it, acting on each reading with reading, which kills the
+// member's Instance Manager once the upload is seen under way, and judges
+// the backup with judge.
+func (h *haRun) imRestartUpload(ctx context.Context, rec *s11IMRestartRecord, made *s11InterruptedMade,
+	reading func(context.Context, *databasev1alpha1.CubridBackup) error,
+	judge func(*databasev1alpha1.CubridBackup, error, time.Time) error) error {
 	if err := made.throttle.Prepare(ctx); err != nil {
 		return fmt.Errorf("prepare the rate limit: %w", err)
 	}
 	if err := confirmThrottle(ctx, made.throttle, rec.Throttle); err != nil {
 		return err
 	}
-	if err := h.containerAtRequest(ctx, rec.Kill); err != nil {
+	if err := h.containerAtRequest(ctx, rec.Throttle.Target, rec.Kill); err != nil {
 		return err
 	}
-	backup, err := h.createBackup(ctx, s11IMRestartBackupName, s11IMRestartClusterName, rec.Bucket, rec.Prefix)
+	backup, err := h.createBackup(ctx, rec.Backup, rec.Cluster.Name, rec.Bucket, rec.Prefix)
 	if err != nil {
 		return err
 	}
 	requested := time.Now().UTC()
 	made.backup = backup
 	rec.BackupUID, rec.RequestedAt = string(backup.UID), &requested
-	backup, err = h.waitBackupWith(ctx, backup, &rec.Phases, rec.Credentials,
-		func(wctx context.Context, read *databasev1alpha1.CubridBackup) error {
-			return h.imRestartReading(wctx, read, rec, made, result)
-		})
-	return judgeIMRestartBackup(backup, err, requested, rec, result)
+	backup, err = h.waitBackupWith(ctx, backup, &rec.Phases, rec.Credentials, reading)
+	return judge(backup, err, requested)
 }
 
 // imRestartReading acts on one status read of the backup while the run
@@ -486,17 +508,16 @@ func readyLate(readyAt *time.Time, issued time.Time, limit time.Duration) error 
 func (h *haRun) killDuringUpload(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	rec *s11IMRestartRecord, result *evidence.Scenario) error {
 	k := rec.Kill
-	limit := h.cfg.BackupInstanceManagerRestartReadyLimit
+	limit := rec.readyLimit
 	outcome := faults.Run(ctx, faults.Scenario{
-		Fault: instanceManagerKill{h: h, k: &k.memberKill,
-			name: "kill the Instance Manager of the standalone member with SIGKILL"},
+		Fault: rec.kill(),
 		// The Outcome bound runs from the confirmation, which follows the
 		// kill: at twice the limit it is only a backstop, and the check's
 		// bound from the kill ends the wait first.
 		Limits: faults.Limits{Confirm: min(2*time.Minute, limit), Outcome: 2 * limit, Cleanup: time.Minute,
 			Poll: h.cfg.Poll},
 		Before: func(ctx context.Context) error {
-			err := h.beforeIMKill(ctx, cluster, k)
+			err := h.beforeIMKill(ctx, cluster, rec.Throttle.Target, k)
 			k.issued = time.Now()
 			return err
 		},
@@ -522,7 +543,7 @@ func (h *haRun) killDuringUpload(ctx context.Context, cluster *databasev1alpha1.
 		at := outcome.FaultIssuedAt
 		k.KilledAt = &at
 	}
-	if err := h.writeTimeline(s11IMRestartTimelineFile, outcome.Timeline); err != nil {
+	if err := h.writeTimeline(rec.timeline, outcome.Timeline); err != nil {
 		return err
 	}
 	switch {
@@ -558,21 +579,21 @@ func (h *haRun) killDuringUpload(ctx context.Context, cluster *databasev1alpha1.
 	return nil
 }
 
-// beforeIMKill reads the member's Pod right before the kill, requires the
+// beforeIMKill reads the Pod of member right before the kill, requires the
 // cluster's StatefulSet to control it, and records it and its running
 // database container; the kill is issued only against them. A container
 // that is not the one read at the request, or restarted since, restarted
 // for another reason during the backup: the restart reason the backup would
 // end with could then come from that restart, not the kill, so nothing is
 // killed (RestartedBeforeKill).
-func (h *haRun) beforeIMKill(ctx context.Context, cluster *databasev1alpha1.CubridCluster, k *s11IMKill) error {
+func (h *haRun) beforeIMKill(ctx context.Context, cluster *databasev1alpha1.CubridCluster, member string,
+	k *s11IMKill) error {
 	if err := h.guard(ctx); err != nil {
 		return err
 	}
 	pod := &corev1.Pod{}
-	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: s11IMRestartMember},
-		pod); err != nil {
-		return fmt.Errorf("read the member %s: %w", s11IMRestartMember, err)
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: member}, pod); err != nil {
+		return fmt.Errorf("read the member %s: %w", member, err)
 	}
 	owner := metav1.GetControllerOf(pod)
 	if owner == nil || owner.Kind != kindStatefulSet || owner.Name != cluster.Name {
@@ -599,17 +620,16 @@ func countText(n *int32) string {
 	return fmt.Sprint(*n)
 }
 
-// containerAtRequest reads the member's Pod right before the backup is
+// containerAtRequest reads the Pod of member right before the backup is
 // requested and records its database container's ID and restart count.
-func (h *haRun) containerAtRequest(ctx context.Context, k *s11IMKill) error {
+func (h *haRun) containerAtRequest(ctx context.Context, member string, k *s11IMKill) error {
 	pod := &corev1.Pod{}
-	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: s11IMRestartMember},
-		pod); err != nil {
-		return fmt.Errorf("read the member %s before the request: %w", s11IMRestartMember, err)
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: member}, pod); err != nil {
+		return fmt.Errorf("read the member %s before the request: %w", member, err)
 	}
 	status := databaseContainerStatus(pod)
 	if status == nil || status.ContainerID == "" {
-		return fmt.Errorf("the member %s reports no database container before the request", s11IMRestartMember)
+		return fmt.Errorf("the member %s reports no database container before the request", member)
 	}
 	restarts := status.RestartCount
 	k.ContainerAtRequest, k.RestartsAtRequest = status.ContainerID, &restarts
@@ -703,6 +723,63 @@ func (h *haRun) memberBackReady(ctx context.Context, created *databasev1alpha1.C
 // error of the kill's step.
 func judgeIMRestartBackup(backup *databasev1alpha1.CubridBackup, waitErr error, requested time.Time,
 	rec *s11IMRestartRecord, result *evidence.Scenario) error {
+	if done, err := judgeKilledBackup(backup, waitErr, rec, result); done {
+		return err
+	}
+	c := meta.FindStatusCondition(backup.Status.Conditions, backupReady)
+	switch {
+	case c != nil && c.Reason == s11OperationLostReason:
+		return fmt.Errorf("the backup reached the documented escalation %s after its Instance Manager was "+
+			"killed, an unknown outcome under which a backup may still run: %s", s11OperationLostReason,
+			rec.Failure)
+	case c == nil || c.Reason != s11MissingReason || c.Message != s12IMRestartedReason:
+		return backupVerdict{fmt.Errorf("the backup ended Failed after its Instance Manager was killed, but not "+
+			"for the restart (%s %q): %s", s11MissingReason, s12IMRestartedReason, failureWithStore(rec, c))}
+	}
+	recordFailedTimes(backup, requested, rec, result)
+	return nil
+}
+
+// failureWithStore is the Ready reason and message of the backup as it
+// ended, with the store's answer and its kind, also recorded, when c says
+// that the upload failed.
+func failureWithStore(rec *s11IMRestartRecord, c *metav1.Condition) string {
+	failure := rec.Failure
+	if c != nil && strings.HasPrefix(c.Message, uploadFailed) {
+		rec.StoreError = strings.TrimPrefix(c.Message, uploadFailed)
+		rec.StoreErrorKind = storeErrorKind(rec.StoreError)
+		failure += fmt.Sprintf(" (an upload failure, store error kind %s: %s)", rec.StoreErrorKind, rec.StoreError)
+	}
+	return failure
+}
+
+// recordFailedTimes records and measures the time from the request and from
+// the kill to the reading that saw the backup Failed, and from its creation
+// to its status.completedAt.
+func recordFailedTimes(backup *databasev1alpha1.CubridBackup, requested time.Time, rec *s11IMRestartRecord,
+	result *evidence.Scenario) {
+	failed := rec.Phases[len(rec.Phases)-1].At
+	rec.FailedWithin = failed.Sub(requested).Round(time.Millisecond).String()
+	rec.FailedAfterKill = failed.Sub(*rec.Kill.KilledAt).Round(time.Millisecond).String()
+	result.Measurements[failedWithinKey] = rec.FailedWithin
+	result.Measurements["failedAfterKill"] = rec.FailedAfterKill
+	if done := backup.Status.CompletedAt; done != nil {
+		rec.StatusFailedWithin = done.Sub(backup.CreationTimestamp.Time).String()
+	}
+}
+
+// judgeKilledBackup is the part of the judgement of a backup whose standalone
+// member's Instance Manager a variant kills during the upload that does not
+// depend on how the backup must fail. It records the artifact and, for a
+// backup that ended, its Ready reason. Completed after a confirmed kill, a
+// status.artifact on a reading that was not Completed, and another
+// operationRef from the placing reading on are never-events. An error of the
+// wait, a backup that completed or failed before the kill was placed, and a
+// kill that was not confirmed end the judgement too, and block the variant
+// unless the wait saw a verdict. It reports whether the judgement ended, and
+// with which error.
+func judgeKilledBackup(backup *databasev1alpha1.CubridBackup, waitErr error, rec *s11IMRestartRecord,
+	result *evidence.Scenario) (bool, error) {
 	s, k := backup.Status, rec.Kill
 	rec.Artifact = s.Artifact
 	ended := s.Phase == databasev1alpha1.BackupPhaseCompleted || s.Phase == databasev1alpha1.BackupPhaseFailed
@@ -710,21 +787,21 @@ func judgeIMRestartBackup(backup *databasev1alpha1.CubridBackup, waitErr error, 
 		rec.Failure = readyReason(backup)
 		rec.EndedAfterKill = waitErr == nil && k.confirmed()
 	}
+	cluster := rec.Cluster.Name
 	events := judgeIMRestartOperation(rec, result)
 	if s.Phase == databasev1alpha1.BackupPhaseCompleted && k.confirmed() {
-		events = append(events, "the backup of "+s11IMRestartClusterName+" ended Completed after its Instance "+
-			"Manager was killed during the upload")
+		events = append(events, "the backup of "+cluster+" ended Completed after its Instance Manager was killed "+
+			"during the upload")
 	}
 	for _, a := range rec.ArtifactsNotDone {
-		event := "status.artifact names " + a.URI + " for a backup of " + s11IMRestartClusterName + " in phase " +
-			a.Phase
+		event := "status.artifact names " + a.URI + " for a backup of " + cluster + " in phase " + a.Phase
 		if !slices.Contains(events, event) {
 			events = append(events, event)
 		}
 	}
 	if s.Phase == databasev1alpha1.BackupPhaseCompleted && k.confirmed() && s.Artifact != nil {
-		events = append(events, "status.artifact names "+s.Artifact.URI+" for a backup of "+
-			s11IMRestartClusterName+" whose Instance Manager was killed during the upload")
+		events = append(events, "status.artifact names "+s.Artifact.URI+" for a backup of "+cluster+
+			" whose Instance Manager was killed during the upload")
 	}
 	if len(events) > 0 {
 		result.NeverEvents = append(result.NeverEvents, events...)
@@ -732,52 +809,27 @@ func judgeIMRestartBackup(backup *databasev1alpha1.CubridBackup, waitErr error, 
 		for _, event := range events {
 			errs = append(errs, backupVerdict{errors.New(event)})
 		}
-		return errors.Join(errs...)
+		return true, errors.Join(errs...)
 	}
 	if waitErr != nil {
 		if errors.As(waitErr, new(backupVerdict)) || errors.As(waitErr, new(faultStep)) {
-			return waitErr
+			return true, waitErr
 		}
-		return fmt.Errorf("read the CubridBackup: %w", waitErr)
+		return true, fmt.Errorf("read the CubridBackup: %w", waitErr)
 	}
 	switch {
 	case s.Phase == databasev1alpha1.BackupPhaseCompleted:
 		rec.CompletedBeforeKill = true
-		return fmt.Errorf("the backup ended Completed before the kill could be placed, with %d bytes through the "+
-			"rate limit at the last reading: the upload finished first, S11 instance-manager-restart is "+
-			"inconclusive, and the artifact is a complete backup", rec.Throttle.lastSent())
+		return true, fmt.Errorf("the backup ended Completed before the kill could be placed, with %d bytes through "+
+			"the rate limit at the last reading: the upload finished first, %s is inconclusive, and the artifact "+
+			"is a complete backup", rec.Throttle.lastSent(), rec.variant)
 	case k.PlacedAt == nil:
-		return fmt.Errorf("the backup ended Failed before its upload was seen under way with an operation (%s): %s",
-			cmp.Or(rec.Throttle.Waiting, "no reading of the rate limit was taken"), readyReason(backup))
+		return true, fmt.Errorf("the backup ended Failed before its upload was seen under way with an operation "+
+			"(%s): %s", cmp.Or(rec.Throttle.Waiting, "no reading of the rate limit was taken"), readyReason(backup))
 	case !k.confirmed():
-		return fmt.Errorf("the backup ended Failed, but the kill was not confirmed: %s", readyReason(backup))
+		return true, fmt.Errorf("the backup ended Failed, but the kill was not confirmed: %s", readyReason(backup))
 	}
-	c := meta.FindStatusCondition(s.Conditions, backupReady)
-	switch {
-	case c != nil && c.Reason == s11OperationLostReason:
-		return fmt.Errorf("the backup reached the documented escalation %s after its Instance Manager was "+
-			"killed, an unknown outcome under which a backup may still run: %s", s11OperationLostReason,
-			rec.Failure)
-	case c == nil || c.Reason != s11MissingReason || c.Message != s12IMRestartedReason:
-		failure := rec.Failure
-		if c != nil && strings.HasPrefix(c.Message, uploadFailed) {
-			rec.StoreError = strings.TrimPrefix(c.Message, uploadFailed)
-			rec.StoreErrorKind = storeErrorKind(rec.StoreError)
-			failure += fmt.Sprintf(" (an upload failure, store error kind %s: %s)", rec.StoreErrorKind,
-				rec.StoreError)
-		}
-		return backupVerdict{fmt.Errorf("the backup ended Failed after its Instance Manager was killed, but not "+
-			"for the restart (%s %q): %s", s11MissingReason, s12IMRestartedReason, failure)}
-	}
-	failed := rec.Phases[len(rec.Phases)-1].At
-	rec.FailedWithin = failed.Sub(requested).Round(time.Millisecond).String()
-	rec.FailedAfterKill = failed.Sub(*k.KilledAt).Round(time.Millisecond).String()
-	result.Measurements[failedWithinKey] = rec.FailedWithin
-	result.Measurements["failedAfterKill"] = rec.FailedAfterKill
-	if done := s.CompletedAt; done != nil {
-		rec.StatusFailedWithin = done.Sub(backup.CreationTimestamp.Time).String()
-	}
-	return nil
+	return false, nil
 }
 
 // judgeIMRestartOperation records the operationRefs the readings showed
@@ -811,7 +863,7 @@ func (h *haRun) imRestartPrefixAtEnd(ctx context.Context, rec *s11IMRestartRecor
 	return h.prefixAtEnd(ctx, rec.Bucket, rec.Prefix, &rec.s11PrefixAtEnd, &rec.Residue, s11FaultEnd{
 		completedBefore: rec.CompletedBeforeKill, endedAfter: rec.EndedAfterKill, lastPhase: rec.LastPhase,
 		fault: "its Instance Manager was killed during the upload", confirmed: "a confirmed kill",
-		variant: "S11 instance-manager-restart"}, result)
+		variant: rec.variant}, result)
 }
 
 // imRestartBackupAtEnd reads the backup once more, after the limit was
@@ -833,17 +885,17 @@ func (h *haRun) imRestartBackupAtEnd(ctx context.Context, created *databasev1alp
 	}
 	if !rec.EndedAfterKill {
 		return fmt.Errorf("the CubridBackup read at the end is %s with status.artifact %t, and the wait did not see "+
-			"it end after a confirmed kill: recorded, and S11 instance-manager-restart cannot be judged", s.Phase,
-			s.Artifact != nil)
+			"it end after a confirmed kill: recorded, and %s cannot be judged", s.Phase, s.Artifact != nil,
+			rec.variant)
 	}
 	var events []string
 	if completed && rec.LastPhase != string(databasev1alpha1.BackupPhaseCompleted) {
-		events = append(events, "the backup of "+s11IMRestartClusterName+", seen "+rec.LastPhase+" after its "+
+		events = append(events, "the backup of "+rec.Cluster.Name+", seen "+rec.LastPhase+" after its "+
 			"Instance Manager was killed, is Completed when read again at the end")
 	}
 	if s.Artifact != nil && rec.LastPhase != string(databasev1alpha1.BackupPhaseCompleted) {
 		events = append(events, "status.artifact names "+s.Artifact.URI+" for the backup of "+
-			s11IMRestartClusterName+" read again at the end, after its Instance Manager was killed")
+			rec.Cluster.Name+" read again at the end, after its Instance Manager was killed")
 	}
 	if s.OperationRef != rec.Kill.OperationRef {
 		events = append(events, fmt.Sprintf("the backup's operationRef was %s, then %q when read again at the "+

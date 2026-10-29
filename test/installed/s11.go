@@ -84,6 +84,7 @@ const (
 	flagOperatorRestart        = "-backup-operator-restart"
 	flagInstanceManagerRestart = "-backup-instance-manager-restart"
 	flagOverlapping            = "-backup-overlapping"
+	flagOperationStoreLoss     = "-backup-operation-store-loss"
 )
 
 // validateS11 checks the inputs of S11 complete, when it is selected.
@@ -97,7 +98,8 @@ func (c HAConfig) validateS11() error {
 		{c.BackupInterruptedUpload, flagInterruptedUpload, "interrupted-upload"},
 		{c.BackupOperatorRestart, flagOperatorRestart, "operator-restart"},
 		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart, "instance-manager-restart"},
-		{c.BackupOverlapping, flagOverlapping, "overlapping"}} {
+		{c.BackupOverlapping, flagOverlapping, "overlapping"},
+		{c.BackupOperationStoreLoss, flagOperationStoreLoss, s11StoreLossVariant}} {
 		if v.selected && c.BackupBucket == "" {
 			return fmt.Errorf("%s needs -backup-bucket: S11 %s follows S11 complete", v.flag, v.variant)
 		}
@@ -137,6 +139,9 @@ func (c HAConfig) validateS11() error {
 		return err
 	}
 	if err := c.validateS11Overlapping(); err != nil {
+		return err
+	}
+	if err := c.validateS11OperationStoreLoss(); err != nil {
 		return err
 	}
 	_, _, _, err := splitService(c.ObjectStoreService)
@@ -657,11 +662,15 @@ func (h *haRun) waitBackupWith(ctx context.Context, created *databasev1alpha1.Cu
 			h.cfg.BackupLimit, readErr)
 	}
 	if err != nil && ctx.Err() == nil && wctx.Err() != nil {
-		return backup, backupVerdict{fmt.Errorf("the backup was neither Completed nor Failed within backup_limit "+
-			"%s; its last phase was %q", h.cfg.BackupLimit, backup.Status.Phase)}
+		return backup, backupVerdict{fmt.Errorf("%w %s; its last phase was %q", errBackupLimitPassed,
+			h.cfg.BackupLimit, backup.Status.Phase)}
 	}
 	return backup, err
 }
+
+// errBackupLimitPassed starts the verdict of a wait whose backup was neither
+// Completed nor Failed within backup_limit.
+var errBackupLimitPassed = errors.New("the backup was neither Completed nor Failed within backup_limit")
 
 // recordBackup records a reading of backup in phases when it differs from
 // the last one recorded, and searches its whole status, not only what a
