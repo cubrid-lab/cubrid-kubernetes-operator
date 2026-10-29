@@ -177,9 +177,17 @@ restarted while its log was read block it. `pods/log` returns only the
 container's current log file, so a log the kubelet rotated within the window
 is searched only from the rotation onward; that is not reported as a
 truncation. The Operator's log before the window and the Instance Managers
-of other members are not searched. Unit tests cover it
-with a fake log source; the log search has not yet run on the VM lab, and
-the S11 lab results in this section were recorded without it.
+of other members are not searched. Unit tests cover it with a fake log
+source. On 2026-10-29 it ran on the VM lab (manager `fb6f345`) in three
+passing runs: S11 `interrupted-upload` and S11 `denied-credentials` with an
+earlier harness of the same change (`acba678`, which read every log from
+`sinceTime`), then S11 `signature-mismatch` with the final one (`f535c40`),
+each after S11 `complete`. Every S11 step read the manager's log (1,510 to
+13,695 bytes) and its backup member's log (2,796 to 8,094 bytes), none
+truncated, no container restarted, and no key was found; in the last run the
+new member `s11-signature-0` was read whole (6,217 bytes). The S11 lab
+results recorded before those runs in this section were made without the log
+search.
 
 S11 `missing-destination` follows S11 `complete` on the same run
 (`lab-installed-ha-s11-missing-destination`, `-backup-missing-destination`,
