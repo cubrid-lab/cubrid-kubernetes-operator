@@ -1378,7 +1378,15 @@ therefore falls in the upload, not in `backupdb`.
    evidence of which. `memberBackWithin` and `readyAgainWithin` run from the
    kill to those readings. Every status of the cluster read is searched for
    the keys. A container that does not run again, or no such reading of
-   `Ready`, within the ready limit from the kill fails the variant.
+   `Ready`, within the ready limit from the kill fails the variant; so does
+   a reading of `Ready` taken after that limit. This wait runs inside the
+   wait for the backup (step 6), which ends `-backup-limit` after the
+   request: when `-backup-limit` ends first, as it does with both limits at
+   their 15-minute defaults, the variant fails as a backup that did not end
+   within `-backup-limit`, with the last phase read before the kill, and
+   the record's `readyWaiting` says what the member wait had seen. Set the
+   ready limit shorter than `-backup-limit` when a member that is slow to
+   return must be told apart from a backup that does not end.
 6. **Wait for the end.** The run reads the backup every `-poll` until it is
    `Completed` or `Failed`, for at most `-backup-limit` from the request,
    and records every change with its `operationRef`. The limit stays

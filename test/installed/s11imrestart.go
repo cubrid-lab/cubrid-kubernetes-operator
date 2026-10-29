@@ -460,6 +460,17 @@ func (h *haRun) imRestartReading(ctx context.Context, backup *databasev1alpha1.C
 	return h.killDuringUpload(ctx, made.cluster, rec, result)
 }
 
+// readyLate fails a reading that found the cluster Ready, at readyAt, more
+// than limit after the kill at issued: one found back only after the limit
+// is as late as one that was not.
+func readyLate(readyAt *time.Time, issued time.Time, limit time.Duration) error {
+	if readyAt == nil || readyAt.Sub(issued) <= limit {
+		return nil
+	}
+	return fmt.Errorf("time limit exceeded: the cluster read Ready %s after the kill, later than the ready "+
+		"limit %s", readyAt.Sub(issued).Round(time.Millisecond), limit)
+}
+
 // killDuringUpload kills the member's Instance Manager (instanceManagerKill)
 // once the Pod and its database container are recorded right before
 // (beforeIMKill), and waits, for at most the ready limit from the kill, until
@@ -493,6 +504,11 @@ func (h *haRun) killDuringUpload(ctx context.Context, cluster *databasev1alpha1.
 			if ctx.Err() != nil {
 				// The step's limit, or the run's: not a broken expectation.
 				return false, nil
+			}
+			if err == nil && done {
+				if late := readyLate(k.ReadyAgainAt, k.issued, limit); late != nil {
+					return false, late
+				}
 			}
 			if err == nil && !done && time.Since(k.issued) > limit {
 				return false, fmt.Errorf("time limit exceeded: the expected behavior was not observed within %s "+

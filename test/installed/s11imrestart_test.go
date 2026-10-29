@@ -613,6 +613,27 @@ func TestRunS11InstanceManagerRestartIsBlockedByARestartBeforeTheKill(t *testing
 	f.requireCleaned(t, scenario)
 }
 
+// A reading that found the cluster Ready only after the ready limit is as
+// late as one that did not find it Ready.
+func TestS11InstanceManagerRestartCountsALateReadyAsLate(t *testing.T) {
+	kill := time.Date(2026, 10, 29, 13, 35, 20, 0, time.UTC)
+	limit := 15 * time.Minute
+	onTime, atLimit, late := kill.Add(15*time.Second), kill.Add(limit), kill.Add(limit+2*time.Second)
+	if err := readyLate(nil, kill, limit); err != nil {
+		t.Fatalf("no Ready reading: %v, want none", err)
+	}
+	if err := readyLate(&onTime, kill, limit); err != nil {
+		t.Fatalf("Ready 15s after the kill: %v, want none", err)
+	}
+	if err := readyLate(&atLimit, kill, limit); err != nil {
+		t.Fatalf("Ready at the limit: %v, want none", err)
+	}
+	if err := readyLate(&late, kill, limit); err == nil ||
+		!strings.Contains(err.Error(), "later than the ready limit") {
+		t.Fatalf("Ready 2s after the limit: %v, want a time limit error", err)
+	}
+}
+
 // The ready limit runs from the kill: a restarted container that never
 // becomes ready fails the variant once it has passed.
 func TestRunS11InstanceManagerRestartFailsWhenTheMemberIsNotReadyAgain(t *testing.T) {
