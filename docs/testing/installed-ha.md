@@ -13,7 +13,7 @@ installed:
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`,
 `missing-destination`, `denied-credentials`, `signature-mismatch`,
-`interrupted-upload` and `operator-restart`, and S12
+`interrupted-upload`, `operator-restart` and `instance-manager-restart`, and S12
 `exact`, `tampered`, `wrong-target`,
 `operator-restart`, `instance-manager-restart`,
 `instance-manager-restart-preparing` and `instance-manager-restart-seeding`
@@ -409,6 +409,8 @@ S11 here does not check:
   that is S11 `interrupted-upload`, with `-backup-interrupted-upload`;
 - a restart of the installed manager during a backup: that is S11
   `operator-restart`, with `-backup-operator-restart`;
+- a restart of the Instance Manager during a backup's upload: that is S11
+  `instance-manager-restart`, with `-backup-instance-manager-restart`;
 - a backup to a bucket that does not exist: that is S11
   `missing-destination`, with `-backup-missing-destination`;
 - a backup whose object store keys the store refuses: that is S11
@@ -423,8 +425,9 @@ on after S11 `complete` passed with S11 `missing-destination`: a backup of
 the same cluster to a bucket that does not exist must end `Failed`. The lane
 is then `lab-installed-ha-s11-missing-destination`, and it requires LAB01,
 S11/complete and S11/missing-destination. `-backup-missing-destination`
-without `-backup-bucket`, or with `-restore` or `-backup-operator-restart`,
-is refused before anything is done: a run takes one lane.
+without `-backup-bucket`, or with `-restore`, `-backup-operator-restart` or
+`-backup-instance-manager-restart`, is refused before anything is done: a
+run takes one lane.
 
 ```sh
   ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
@@ -546,8 +549,8 @@ object store keys the store refuses must end `Failed`. The lane is then
 `lab-installed-ha-s11-denied-credentials`, and it requires LAB01,
 S11/complete and S11/denied-credentials. `-backup-denied-credentials`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
-`-backup-signature-mismatch`, `-backup-interrupted-upload` or
-`-backup-operator-restart`, or with a
+`-backup-signature-mismatch`, `-backup-interrupted-upload`,
+`-backup-operator-restart` or `-backup-instance-manager-restart`, or with a
 `-backup-denied-ready-limit` that is not positive, is refused before anything
 is done: a run takes one lane.
 
@@ -716,8 +719,8 @@ key must end `Failed`. The lane is then
 `lab-installed-ha-s11-signature-mismatch`, and it requires LAB01,
 S11/complete and S11/signature-mismatch. `-backup-signature-mismatch`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
-`-backup-denied-credentials`, `-backup-interrupted-upload` or
-`-backup-operator-restart`, or with a
+`-backup-denied-credentials`, `-backup-interrupted-upload`,
+`-backup-operator-restart` or `-backup-instance-manager-restart`, or with a
 `-backup-signature-mismatch-ready-limit` that is not positive, is refused
 before anything is done: a run takes one lane.
 
@@ -782,8 +785,8 @@ upload is cut partway must end `Failed`. The lane is then
 `lab-installed-ha-s11-interrupted-upload`, and it requires LAB01,
 S11/complete and S11/interrupted-upload. `-backup-interrupted-upload`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
-`-backup-denied-credentials`, `-backup-signature-mismatch` or
-`-backup-operator-restart`, or with a
+`-backup-denied-credentials`, `-backup-signature-mismatch`,
+`-backup-operator-restart` or `-backup-instance-manager-restart`, or with a
 `-backup-interrupted-ready-limit`
 that is not positive, is refused before anything is done: a run takes one
 lane.
@@ -1031,8 +1034,8 @@ verified artifact. The lane is then `lab-installed-ha-s11-operator-restart`,
 and it requires LAB01, S11/complete and S11/operator-restart.
 `-backup-operator-restart` without `-backup-bucket`, with `-restore`,
 `-backup-missing-destination`, `-backup-denied-credentials`,
-`-backup-signature-mismatch` or `-backup-interrupted-upload`, or without a
-positive `-resync-limit` and a `-leader-lease`, is refused before anything is
+`-backup-signature-mismatch`, `-backup-interrupted-upload` or
+`-backup-instance-manager-restart`, or without a positive `-resync-limit` and a `-leader-lease`, is refused before anything is
 done: a run takes one lane.
 
 ```sh
@@ -1234,11 +1237,239 @@ S11 `operator-restart` here does not check:
   VM-lab run it had started its upload before the restart;
 - a duplicate writer still staging without an object in the store;
 - what the deleted manager logged after its log was searched;
-- a restart of the Instance Manager, or of a member, during the backup;
+- a restart of a member during the backup; a restart of the Instance
+  Manager during the upload is S11 `instance-manager-restart`;
 - the Instance Manager's operation records, the member's staging directory,
   and incomplete multipart uploads under the prefix;
 - the Instance Managers' logs of the members the backup did not run on;
 - a restore of the second artifact.
+
+## S11 instance-manager-restart
+
+With `-backup-instance-manager-restart` as well as `-backup-bucket`, the run
+goes on after S11 `complete` passed with S11 `instance-manager-restart`: a
+backup of a standalone cluster whose Instance Manager is killed during the
+upload must end `Failed` for the restart. The lane is then
+`lab-installed-ha-s11-instance-manager-restart`, and it requires LAB01,
+S11/complete and S11/instance-manager-restart.
+`-backup-instance-manager-restart` without `-backup-bucket`, with
+`-restore`, `-backup-missing-destination`, `-backup-denied-credentials`,
+`-backup-signature-mismatch`, `-backup-interrupted-upload` or
+`-backup-operator-restart`, or with a
+`-backup-instance-manager-restart-ready-limit` that is not positive, is
+refused before anything is done: a run takes one lane. The variant is
+lab-only.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -backup-instance-manager-restart [-backup-instance-manager-restart-ready-limit 15m] [-backup-limit 15m]
+```
+
+- **Pod Security.** As in S11 `interrupted-upload`: with this flag, and only
+  with it or `-backup-interrupted-upload`, the run creates its namespace
+  with `pod-security.kubernetes.io/enforce=privileged` and keeps `warn` and
+  `audit` at `restricted`, so that the rate limit's ephemeral container is
+  admitted. Before it creates anything, the variant reads the namespace
+  again and refuses to go on unless it enforces `privileged`.
+- `-backup-limit` bounds the backup from the return of its request until
+  the reading that saw it `Completed` or `Failed`, the kill and the
+  member's restart included.
+- `-backup-instance-manager-restart-ready-limit` bounds the variant's own
+  cluster twice: from its creation until it is `Ready`, and from the kill
+  until the member's container runs again and the cluster is `Ready` again.
+  It is the run's bound, not the contract's, and is refused without
+  `-backup-instance-manager-restart`.
+- `-timeout` must also cover a new standalone cluster, a `backupdb` on its
+  member, the slowed upload up to the kill, the member's restart and
+  `-backup-limit`.
+
+S11 `instance-manager-restart` starts only from S11 `complete` that passed.
+When S11 `complete` did not run or did not pass, it is blocked with that
+cause and nothing of it is done.
+
+**Why the upload is slowed, and where the kill falls.** As in S11
+`interrupted-upload`, the run limits the member's traffic to the object
+store to 256 kbit/s, so that the lab's backup of about 5 MB takes minutes to
+upload, and places the fault once 512 KiB have passed the limit. The fault
+here is the kill of the Instance Manager, not a cut: the limit stays in
+place until the backup has ended, and nothing resets the traffic. The kill
+therefore falls in the upload, not in `backupdb`.
+
+**What the product's code predicts:**
+- The Instance Manager runs as the child of the database container's
+  entrypoint shell, which stays PID 1 and exits with the manager's status
+  once the manager is gone (`build/instance-manager/entrypoint.sh`, point
+  5). A `SIGKILL` to the manager therefore ends the container, and the
+  kubelet starts it again on the same Pod and data volume.
+- The manager keeps its operation records on that volume
+  (`IM_OPERATIONS_DIR`, `operationsDir` in
+  `internal/controller/cubridcluster_controller.go`). When it starts, it
+  marks every record that has not ended `Failed` with the reason
+  `manager restarted while operation was in progress` (`reconcileOnStart`
+  in `internal/instancemanager/opstore.go`), the reason S12
+  `instance-manager-restart` relies on.
+- The Operator polls the recorded operation by `status.operationRef`
+  (`pollBackup` in `internal/controller/cubridbackup_controller.go`). While
+  the manager cannot be reached it keeps the phase and only changes the
+  `Ready` condition. Once it reads the operation `Failed`, `failedBackup`
+  makes the backup `Failed` with `Ready` reason `BackupFailed` and the
+  operation's reason as the message.
+- A backup that is `Completed` or `Failed` is never reconciled again
+  (`Reconcile` returns at once for either phase), and with an
+  `operationRef` recorded the Operator only polls it. So nothing retries the
+  backup or starts a second operation.
+- The Instance Manager uploads every data object before `manifest.json`
+  and writes the manifest last (`UploadBackup` in
+  `internal/instancemanager/upload.go`), so an upload killed before it
+  leaves no manifest. A kill after the manifest was written and before the
+  operation was recorded `Completed` (`runBackup` in
+  `internal/instancemanager/server.go`) would leave a manifest under the
+  prefix of a backup that ends `Failed`. With the upload slowed to minutes
+  and the kill placed after 512 KiB, the run does not expect to reach that
+  window, and a manifest there fails the variant.
+
+1. **Namespace, store and cluster.** As steps 1 to 4 of S11
+   `interrupted-upload`, with the cluster `s11-imrestart` and its member
+   `s11-imrestart-0`: the run reads the namespace's Pod Security labels,
+   resolves the object store's address, creates the standalone cluster with
+   the run's Secret `object-storage`, waits until it is `Ready` within the
+   ready limit, records the member's UID and IP, adds the ephemeral
+   container, installs the 256 kbit/s limit and confirms it. No cut is
+   prepared.
+2. **Request.** The run creates the `CubridBackup`
+   `s11-instance-manager-restart` for `s11-imrestart`'s database, to
+   `-backup-bucket` under `lab-runs/<run ID>/instance-manager-restart`, and
+   records the time the request returned. Right before the request it reads
+   the member's database container's ID and restart count
+   (`containerIDAtRequest`, `restartCountAtRequest`).
+3. **Place the kill.** At every reading while the backup is `Running` or
+   `Uploading` with an `operationRef`, the run reads the limit's counters.
+   Once 512 KiB have passed the limit since the request, that reading
+   places the kill: its time, phase and operation are recorded with the
+   counters and the bytes sent (`placedAt`, `phaseAtPlacement`,
+   `operationRef`, `atKill`, `sentBeforeKill`). A command of the limit that
+   fails is tolerated as in S11 `interrupted-upload`.
+4. **The kill.** As in S12 `instance-manager-restart`: right before it, the
+   run reads the member's Pod, which the cluster's StatefulSet must control,
+   and records its UID and its running database container's ID, restart
+   count and start time. It then runs, in that container, a script that
+   sends `SIGKILL` to the one process whose parent is PID 1 and whose
+   command line is exactly `/usr/local/bin/instance-manager`, and kills
+   nothing when it finds none or more than one. The kill is confirmed when
+   the Pod, with the same UID, shows the container ended or restarted, with
+   exit code 137 and not `OOMKilled`.
+   - A database container that is not the one read at the request, or has
+     restarted since, right before the kill blocks the variant, and nothing
+     is killed ("the member's container restarted before the kill",
+     `restartedBeforeKill`): a restart for another reason, such as a failed
+     liveness probe, would already have failed the operation with the same
+     reason, and the kill would then interrupt nothing.
+   - A kill that is refused, not confirmed within two minutes (or the ready
+     limit, when shorter), or confirmed with another exit code blocks the
+     variant. So does a Pod that was replaced.
+5. **The member back.** The run waits, for at most the ready limit counted
+   from the kill, until the Pod's database container runs again under
+   another container ID with a higher restart count, then until that
+   container reports ready and a reading of the cluster taken after that
+   shows `Ready` (`status.observedGeneration` current and condition `Ready`
+   `True`). That `Ready` may never have gone `False` after the kill: the
+   Operator need not have seen the restart. The condition's
+   `lastTransitionTime` in that reading is recorded (`readyTransitionAt`) as
+   evidence of which. `memberBackWithin` and `readyAgainWithin` run from the
+   kill to those readings. Every status of the cluster read is searched for
+   the keys. A container that does not run again, or no such reading of
+   `Ready`, within the ready limit from the kill fails the variant; so does
+   a reading of `Ready` taken after that limit. This wait runs inside the
+   wait for the backup (step 6), which ends `-backup-limit` after the
+   request: when `-backup-limit` ends first, as it does with both limits at
+   their 15-minute defaults, the variant fails as a backup that did not end
+   within `-backup-limit`, with the last phase read before the kill, and
+   the record's `readyWaiting` says what the member wait had seen. Set the
+   ready limit shorter than `-backup-limit` when a member that is slow to
+   return must be told apart from a backup that does not end.
+6. **Wait for the end.** The run reads the backup every `-poll` until it is
+   `Completed` or `Failed`, for at most `-backup-limit` from the request,
+   and records every change with its `operationRef`. The limit stays
+   installed throughout.
+   - From the placing reading on, every reading must show the same
+     `operationRef`; another one is a second operation and must never
+     happen (`operationRefsSeen`, `operationRefUnchanged`).
+   - `Completed` after the kill was confirmed, its `status.artifact`, and a
+     `status.artifact` on a backup in any phase other than `Completed`, must
+     never happen.
+   - `Completed` before the kill was placed means the upload finished
+     first: the variant is blocked as inconclusive, and the record says so
+     (`completedBeforeKill`). `Failed` before the kill was placed blocks it
+     too.
+   - `Failed` after the confirmed kill must have `Ready` reason
+     `BackupFailed` and the message
+     `manager restarted while operation was in progress`. `Failed` with
+     `RecordedOperationLost`, the documented escalation of an unknown
+     outcome, blocks the variant. Any other failure fails it; when it is an
+     upload failure, the store's answer and its kind (`storeError`,
+     `storeErrorKind`) are recorded and named in the reason.
+   - A backup neither `Completed` nor `Failed` within `-backup-limit` fails
+     it. `failedWithin` runs from the return of the request, and
+     `failedAfterKill` from the kill, to the reading that saw `Failed`.
+7. **Removal.** The run removes the limit as S11 `interrupted-upload` does,
+   with `-cleanup-timeout` as its own budget, and proves it gone. A limit
+   not seen removed blocks the variant.
+8. **The prefix and the backup at the end.** As steps 9 and 10 of S11
+   `interrupted-upload`: the run lists the prefix with sizes and incomplete
+   multipart uploads, and reads the backup once more. A `manifest.json`
+   under the prefix of a backup the wait saw end after the kill must never
+   happen; objects or multipart uploads left there are recorded as a partial
+   artifact, not a backup. `Completed`, a `status.artifact` or another
+   `operationRef` in that last reading must never happen either.
+9. **One restart.** The run reads the member at the end: its database
+   container must have restarted exactly once since the kill
+   (`containerRestarts`). More restarts fail the variant; a replaced Pod
+   blocks it.
+10. **Credentials, source and manager.** As S11 `interrupted-upload`: no
+    key in any status of `s11-imrestart` or of the backup, in an Event, in
+    the installed Operator's log, read from one minute before the variant
+    started, or in the Instance Manager's log of `s11-imrestart-0`, read
+    whole. That log includes the previous instance of the database
+    container, which holds the killed Instance Manager's log, read through
+    `pods/log` with `previous=true`; when the kill was confirmed and that
+    instance was not read, the variant is blocked. The source must be
+    unchanged, and the installed manager the one LAB01 checked.
+11. **Cleanup.** The run deletes the `CubridBackup` and the cluster
+    `s11-imrestart` it created, in that order, each with its UID as a
+    precondition, and records the outcomes. The cluster's data PVC is
+    retained and goes with the namespace, and the ephemeral container stays
+    in the member's Pod until the Pod is deleted.
+
+The time of the verdict is recorded as `judgedAt`. As in S11 `complete`, a
+run that ends before S11 `instance-manager-restart` is judged, an API error,
+a limit that cannot be installed, confirmed or read, and a port-forward or
+client that cannot be opened block it; what was seen stays a failure.
+`failedWithin`, `failedAfterKill`, `uploadBytesBeforeKill`,
+`memberBackWithin`, `readyAgainWithin`, `containerRestarts` and
+`operationRefUnchanged` are `unknown` until measured; the limit's own
+measurements are prefixed `rateLimit.`.
+
+The account needs what S11 `interrupted-upload` needs; the kill uses the
+`create` on `pods/exec` the run already has.
+
+What this shows, once it passes on the VM lab: an Instance Manager killed
+in the middle of an upload makes the backup end `Failed` for the restart,
+with no second operation and no `manifest.json` under its prefix.
+
+S11 `instance-manager-restart` here does not check:
+- a kill during `backupdb` itself, before the upload starts; the lab's
+  `backupdb` takes a few seconds;
+- the member's backup staging directory after the restart (#636);
+- the Instance Manager's operation record of the killed operation, which
+  the Operator reports through the backup's status;
+- a kill between the manifest's upload and the operation's `Completed`
+  record, which the run does not deliberately exercise (a manifest found
+  there fails the variant, as above);
+- the Operator's log from before one minute before the variant started, the
+  Instance Managers' logs of the HA cluster's members, and a container
+  instance before the previous one;
+- the Pod Security warnings and audit records at `restricted`;
+- a restore of anything the backup left.
 
 ## S12 exact
 
@@ -2438,6 +2669,27 @@ and S12 variant other than `complete` and `exact` only those under
   `S11/operator-restart/timeline.jsonl` (the fault flow),
   `S11/operator-restart/manifest.json`, the manifest as stored, and
   `S11/operator-restart/source-data-check.json`.
+- with `-backup-instance-manager-restart`,
+  `S11/instance-manager-restart/record.json` (the namespace's Pod Security
+  labels; the standalone cluster's name, UID, Secret name, `readyWithin`
+  and `readyLimit`; under `throttle`, the target Pod, the store's address,
+  the rate, the limit's counters at the request, at the first growth and
+  last, the observed rate, the tolerated errors and the limit's removal;
+  under `kill`, the placing reading's time, phase, operation, counters and
+  bytes sent, the container's ID and restart count at the request and
+  `restartedBeforeKill`, the Pod's UID, the container's ID, restart count
+  and start before and after, the kill's time and answer, the container's
+  end and exit code, `backWithin`, `readyAgainAt`, `readyAgainWithin`,
+  `readyTransitionAt`, the restart count at the end and
+  `operationRefsSeen`; the backup's name, UID, bucket
+  and prefix, the time of the request, every phase observed with its
+  `operationRef`, `lastPhase`, `endedAfterKill`, `completedBeforeKill`,
+  `failedWithin`, `failedAfterKill`, the failure and any store error, any
+  artifact reported, the backup read again at the end, what was under the
+  prefix at the end, the manager before and after, the source at the end,
+  where credentials were looked for, `judgedAt`, the cleanup and what is
+  left), `S11/instance-manager-restart/timeline.jsonl` (the kill's fault
+  flow) and `S11/instance-manager-restart/source-data-check.json`.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and

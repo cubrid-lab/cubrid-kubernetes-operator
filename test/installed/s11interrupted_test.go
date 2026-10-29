@@ -17,6 +17,7 @@ limitations under the License.
 package installed
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -127,7 +128,9 @@ func testStoreSlice(name string, ips ...string) *discoveryv1.EndpointSlice {
 // ephemeral container, with a model of its network namespace: the limit
 // counts what passes it, and the reset rule refuses and counts.
 type fakeNetns struct {
-	mu                        sync.Mutex
+	mu sync.Mutex
+	// member is the Pod the faults act in, s11InterruptedMember unless set.
+	member                    string
 	throttleIP, resetIP       string
 	throttlePort, resetPort   int
 	bandBytes, bandPackets    uint64
@@ -143,7 +146,7 @@ type fakeNetns struct {
 var netnsArg = regexp.MustCompile(`^: netfault (\S+)(?: (\S+) (\d+)(?: (\d+))?)?`)
 
 func (n *fakeNetns) answer(_ context.Context, pod, script string) (string, error) {
-	if pod != s11InterruptedMember {
+	if pod != cmp.Or(n.member, s11InterruptedMember) {
 		return "", fmt.Errorf("network fault command in Pod %s", pod)
 	}
 	m := netnsArg.FindStringSubmatch(strings.SplitN(script, "\n", 2)[0])
@@ -373,7 +376,8 @@ func (f *s11InterruptedFixture) deleteOwned(ctx context.Context, c client.WithWa
 }
 
 // createCluster stores the standalone cluster and its member's Pod, owned by
-// the cluster's StatefulSet, as the Operator would.
+// the cluster's StatefulSet, with its database container running, as the
+// Operator would.
 func (f *s11InterruptedFixture) createCluster(ctx context.Context, c client.WithWatch,
 	cluster *databasev1alpha1.CubridCluster) error {
 	cluster.UID, cluster.Generation = testInterruptedClusterUID, 1
@@ -383,12 +387,14 @@ func (f *s11InterruptedFixture) createCluster(ctx context.Context, c client.With
 	if err := c.Create(ctx, cluster); err != nil {
 		return err
 	}
-	return c.Create(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s11InterruptedMember,
+	return c.Create(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: cluster.Name + "-0",
 		Namespace: f.cfg.Namespace, UID: testInterruptedPodUID,
 		OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", cluster.Name, "interrupted-sts")}},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: databaseContainer}}},
 		Status: corev1.PodStatus{PodIP: testInterruptedPodIP, HostIP: "172.31.0.5",
-			ContainerStatuses: []corev1.ContainerStatus{{Name: databaseContainer, Ready: true}}}})
+			ContainerStatuses: []corev1.ContainerStatus{{Name: databaseContainer, Ready: true,
+				ContainerID: testIMContainerID, State: corev1.ContainerState{
+					Running: &corev1.ContainerStateRunning{StartedAt: metav1.Now()}}}}}})
 }
 
 // addEphemeral adds the ephemeral container to the Pod and starts it.

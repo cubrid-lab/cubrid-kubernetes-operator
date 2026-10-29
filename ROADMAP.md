@@ -327,6 +327,51 @@ lab's. Two runs are not a baseline. The lab's manager is shared:
 deleting its Pod briefly pauses reconciliation of every other cluster and
 backup there.
 
+S11 `instance-manager-restart` also follows S11 `complete`, in a run of its
+own (`lab-installed-ha-s11-instance-manager-restart`,
+`-backup-instance-manager-restart`, #617), in a run namespace that enforces
+Pod Security `privileged` with `warn` and `audit` at `restricted`: the run
+creates a standalone cluster with the run's own Secret, limits its member's
+traffic to the object store to 256 kbit/s as S11 `interrupted-upload` does,
+requests a backup to the backup bucket, and once 512 KiB have passed the
+limit while the backup is `Running` or `Uploading` with an operation, kills
+the member's Instance Manager with `SIGKILL` as S12
+`instance-manager-restart` does, confirmed by the database container's end
+with exit code 137 on the same Pod. The limit stays until the backup ends.
+The backup must end `Failed` with `BackupFailed` and the Instance Manager's
+restart reason within `backup_limit`, never `Completed` and without
+`status.artifact`, under the same `operationRef` from the placing reading
+on, with no `manifest.json` under its prefix at the end (objects left there
+are recorded as a partial artifact); the member's container must restart
+exactly once, and a reading of the cluster after the restarted container
+was ready must show `Ready`, within the run's ready limit from the kill; a
+container that restarted before the kill, for another reason, leaves it
+blocked; the source and the installed manager must be unchanged, and no key may be
+in a status read, an Event, the manager's log or the member's log, the
+killed Instance Manager's previous container instance included. A backup
+that ends before the kill is placed, a kill that is not confirmed, and
+`Failed` with `RecordedOperationLost` leave it blocked; `Failed` for
+another reason fails it. The code predicts `Failed` for the restart: the
+manager fails every unfinished operation when it starts
+(`reconcileOnStart`), the Operator maps that onto the backup and never
+reconciles a `Failed` backup again, and the manifest is uploaded last. Unit
+tests cover it with fakes. On 2026-10-29 an earlier harness of the change,
+without the check of a restart before the kill, the from-kill ready bound
+and `readyTransitionAt`, passed once on the VM lab (manager `fb6f345`, after
+S11 `complete` on the same run): with 605,186 bytes through the limit and
+the backup `Uploading`, the Instance Manager of `s11-imrestart-0` was killed
+at 13:35:20.63 UTC (exit 137; the container's restart count was 0 before
+the kill and its instance had started at 13:33:29, before the request at
+13:34:59, so no earlier restart had ended the operation); the container was
+back 3.3 s later, the cluster read `Ready` 15.4 s after the kill, and the
+backup was `Failed` 15.4 s after the kill with `BackupFailed: manager
+restarted while operation was in progress`, under its one operation;
+nothing was under its prefix at the end, and no key was in the manager's
+log or in either instance of the member's log. One run is not a baseline,
+and the current harness has not run on the VM lab. A kill during
+`backupdb` itself and the member's staging directory (#636) are not
+covered.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after

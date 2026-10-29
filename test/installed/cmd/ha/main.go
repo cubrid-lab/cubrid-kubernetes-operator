@@ -86,32 +86,44 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"S11: bound from the backup request until Completed or Failed (backup_limit)")
 	flags.BoolVar(&cfg.BackupMissingDestination, "backup-missing-destination", false,
 		"scenario after S11 complete: S11 missing-destination, a backup to a bucket that does not exist must end "+
-			"Failed; needs -backup-bucket, not with -restore or -backup-operator-restart")
+			"Failed; needs -backup-bucket, not with -restore, -backup-operator-restart or "+
+			"-backup-instance-manager-restart")
 	flags.BoolVar(&cfg.BackupDeniedCredentials, "backup-denied-credentials", false,
 		"scenario after S11 complete: S11 denied-credentials, a backup of a standalone cluster whose object store "+
 			"Secret holds keys the store refuses must end Failed; needs -backup-bucket, not with -restore, "+
-			"-backup-missing-destination or -backup-operator-restart")
+			"-backup-missing-destination, -backup-operator-restart or -backup-instance-manager-restart")
 	flags.DurationVar(&cfg.BackupDeniedReadyLimit, "backup-denied-ready-limit", 15*time.Minute,
 		"S11 denied-credentials: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupSignatureMismatch, "backup-signature-mismatch", false,
 		"scenario after S11 complete: S11 signature-mismatch, a backup of a standalone cluster whose object store "+
 			"Secret holds the seed access key with a wrong secret key must end Failed; needs -backup-bucket, not "+
-			"with -restore, -backup-missing-destination, -backup-denied-credentials, -backup-interrupted-upload or "+
-			"-backup-operator-restart")
+			"with -restore, -backup-missing-destination, -backup-denied-credentials, -backup-interrupted-upload, "+
+			"-backup-operator-restart or -backup-instance-manager-restart")
 	flags.DurationVar(&cfg.BackupSignatureMismatchReadyLimit, "backup-signature-mismatch-ready-limit", 15*time.Minute,
 		"S11 signature-mismatch: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupInterruptedUpload, "backup-interrupted-upload", false,
 		"scenario after S11 complete: S11 interrupted-upload, a backup of a standalone cluster whose upload is "+
 			"slowed and then reset by network faults in its member's Pod must end Failed; makes the run namespace "+
 			"enforce Pod Security privileged; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
-			"-backup-denied-credentials, -backup-signature-mismatch or -backup-operator-restart")
+			"-backup-denied-credentials, -backup-signature-mismatch, -backup-operator-restart or "+
+			"-backup-instance-manager-restart")
 	flags.DurationVar(&cfg.BackupInterruptedReadyLimit, "backup-interrupted-ready-limit", 15*time.Minute,
 		"S11 interrupted-upload: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupOperatorRestart, "backup-operator-restart", false,
 		"scenario after S11 complete: S11 operator-restart, a second backup of the HA cluster during which the "+
 			"manager Pod is deleted without a grace period must end Completed with the same operation and one "+
 			"verified artifact; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
-			"-backup-denied-credentials, -backup-signature-mismatch or -backup-interrupted-upload")
+			"-backup-denied-credentials, -backup-signature-mismatch, -backup-interrupted-upload or "+
+			"-backup-instance-manager-restart")
+	flags.BoolVar(&cfg.BackupInstanceManagerRestart, "backup-instance-manager-restart", false,
+		"scenario after S11 complete: S11 instance-manager-restart, a backup of a standalone cluster whose upload "+
+			"is slowed by a network fault in its member's Pod and whose Instance Manager is killed during it must "+
+			"end Failed for the restart; makes the run namespace enforce Pod Security privileged; needs "+
+			"-backup-bucket, not with -restore, -backup-missing-destination, -backup-denied-credentials, "+
+			"-backup-signature-mismatch, -backup-interrupted-upload or -backup-operator-restart")
+	flags.DurationVar(&cfg.BackupInstanceManagerRestartReadyLimit, "backup-instance-manager-restart-ready-limit",
+		15*time.Minute, "S11 instance-manager-restart: bound from the standalone cluster's creation until it is "+
+			"Ready, and from the kill until it is Ready again")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
 		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
 	flags.BoolVar(&cfg.Restore, "restore", false,
@@ -161,6 +173,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	}
 	if set["backup-interrupted-ready-limit"] && !cfg.BackupInterruptedUpload {
 		return errors.New("-backup-interrupted-ready-limit needs -backup-interrupted-upload")
+	}
+	if set["backup-instance-manager-restart-ready-limit"] && !cfg.BackupInstanceManagerRestart {
+		return errors.New("-backup-instance-manager-restart-ready-limit needs -backup-instance-manager-restart")
 	}
 	if flags.NArg() != 0 || (cfg.Level != "kind" && cfg.Level != "vm-lab") {
 		return errors.New("choose kind or vm-lab explicitly and provide no positional command")

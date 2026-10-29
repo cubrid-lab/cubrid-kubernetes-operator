@@ -70,9 +70,13 @@ var s3Bucket = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
 // The flags of S11 variants, as the refusals of a combination name them.
 const (
-	flagRestore            = "-restore"
-	flagMissingDestination = "-backup-missing-destination"
-	flagDeniedCredentials  = "-backup-denied-credentials"
+	flagRestore                = "-restore"
+	flagMissingDestination     = "-backup-missing-destination"
+	flagDeniedCredentials      = "-backup-denied-credentials"
+	flagSignatureMismatch      = "-backup-signature-mismatch"
+	flagInterruptedUpload      = "-backup-interrupted-upload"
+	flagOperatorRestart        = "-backup-operator-restart"
+	flagInstanceManagerRestart = "-backup-instance-manager-restart"
 )
 
 // validateS11 checks the inputs of S11 complete, when it is selected.
@@ -94,6 +98,10 @@ func (c HAConfig) validateS11() error {
 	}
 	if c.BackupOperatorRestart && c.BackupBucket == "" {
 		return errors.New("-backup-operator-restart needs -backup-bucket: S11 operator-restart follows S11 complete")
+	}
+	if c.BackupInstanceManagerRestart && c.BackupBucket == "" {
+		return errors.New(flagInstanceManagerRestart + " needs -backup-bucket: S11 instance-manager-restart follows S11 " +
+			"complete")
 	}
 	if c.BackupBucket == "" {
 		return nil
@@ -124,6 +132,9 @@ func (c HAConfig) validateS11() error {
 		return err
 	}
 	if err := c.validateS11OperatorRestart(); err != nil {
+		return err
+	}
+	if err := c.validateS11InstanceManagerRestart(); err != nil {
 		return err
 	}
 	_, _, _, err := splitService(c.ObjectStoreService)

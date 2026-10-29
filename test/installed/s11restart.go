@@ -148,8 +148,9 @@ func (c HAConfig) validateS11OperatorRestart() error {
 		flag     string
 	}{{c.Restore, flagRestore}, {c.BackupMissingDestination, flagMissingDestination},
 		{c.BackupDeniedCredentials, flagDeniedCredentials},
-		{c.BackupSignatureMismatch, "-backup-signature-mismatch"},
-		{c.BackupInterruptedUpload, "-backup-interrupted-upload"}} {
+		{c.BackupSignatureMismatch, flagSignatureMismatch},
+		{c.BackupInterruptedUpload, flagInterruptedUpload},
+		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart}} {
 		if other.selected {
 			return fmt.Errorf("-backup-operator-restart and %s select different lanes; a run takes one of them",
 				other.flag)
