@@ -19,6 +19,7 @@ package installed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -103,6 +104,11 @@ type s12GracefulStopFixture struct {
 	stopLog   []gsrLine
 	// deleteErr refuses the deletion of the target's Pod.
 	deleteErr error
+	// noStaging keeps the staging directory out of every reading;
+	// samplerEndErr ends the sampler's output with that error after
+	// afterStop.
+	noStaging     bool
+	samplerEndErr error
 
 	gsCluster   *databasev1alpha1.CubridCluster
 	reads       int
@@ -145,7 +151,7 @@ func newS12GracefulStopFixture(t *testing.T, cfg HAConfig) *s12GracefulStopFixtu
 	f.stopLog = []gsrLine{
 		{150 * time.Millisecond, func(at time.Time) string {
 			return gsrLogLine(at, logCommandFailed, logEventCommand, testGSRRestoredb, "", "", "",
-				`"durationMs":2412,"exitCode":-1`)
+				`"durationMs":2412,"exitCode":-1,"err":"signal: killed"`)
 		}},
 		{250 * time.Millisecond, func(at time.Time) string {
 			return gsrLogLine(at, logOperationFailed, "operation_state_changed", "", testGSROp, "restore",
@@ -211,7 +217,14 @@ func newS12GracefulStopFixture(t *testing.T, cfg HAConfig) *s12GracefulStopFixtu
 		f.mu.Lock()
 		f.samplerRuns++
 		f.mu.Unlock()
-		return f.stream(ctx, f.sample), nil
+		r := f.stream(ctx, f.sample)
+		f.mu.Lock()
+		endErr := f.samplerEndErr
+		f.mu.Unlock()
+		if endErr == nil {
+			return r, nil
+		}
+		return io.NopCloser(io.MultiReader(r, iotestErrReader{endErr})), nil
 	}
 	f.runner.followLogs = func(ctx context.Context, namespace, pod string, opts *corev1.PodLogOptions) (
 		io.ReadCloser, error) {
@@ -294,7 +307,7 @@ func (f *s12GracefulStopFixture) sample(w io.Writer) {
 			deletedAt := f.deletedAt
 			f.mu.Unlock()
 			for _, s := range f.afterStop {
-				if !writeReading(w, deletedAt.Add(s.at), s.processes, s.holders, s.entries) {
+				if !writeReading(w, deletedAt.Add(s.at), s.processes, s.holders, f.entries(s.entries...)) {
 					return
 				}
 			}
@@ -309,12 +322,28 @@ func (f *s12GracefulStopFixture) sample(w io.Writer) {
 		if never {
 			processes, holders = nil, nil
 		}
-		if !writeReading(w, time.Now(), processes, holders, []string{testGSRDatabaseDir, testGSRStagingDir}) {
+		if !writeReading(w, time.Now(), processes, holders, f.entries(testGSRDatabaseDir, testGSRStagingDir)) {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// entries are the entries of a reading, without the staging directory
+// when noStaging is set.
+func (f *s12GracefulStopFixture) entries(entries ...string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.noStaging {
+		return entries
+	}
+	return slices.DeleteFunc(slices.Clone(entries), func(e string) bool { return e == testGSRStagingDir })
+}
+
+// iotestErrReader returns err at every read, as a stream that broke.
+type iotestErrReader struct{ err error }
+
+func (r iotestErrReader) Read([]byte) (int, error) { return 0, r.err }
 
 // log writes the target's log: two lines, and stopLog once the Pod was
 // deleted.
@@ -688,4 +717,84 @@ func TestRunHARefusesS12GracefulStopOutsideItsLane(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunS12GracefulStopIsBlockedWithoutAReadingAfterTheFailedRecord(t *testing.T) {
+	f := newS12GracefulStopFixture(t, testS12GracefulStopConfig(t))
+	f.afterStop = f.afterStop[:3]
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Blocked, "no sampler reading started after the restore operation was logged "+
+		logOperationFailed)
+}
+
+func TestRunS12GracefulStopIsBlockedWhenTheStagingIsNeverSeenGone(t *testing.T) {
+	f := newS12GracefulStopFixture(t, testS12GracefulStopConfig(t))
+	f.noStaging = true
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Blocked, "the sampler never showed the staging directory "+testGSRStagingDir+
+		" gone")
+}
+
+func TestRunS12GracefulStopJudgesASamplerErrorByWhenTheOutputEnded(t *testing.T) {
+	for name, tc := range map[string]struct {
+		lastAt time.Duration
+		result evidence.Result
+	}{
+		// The last reading is before the shutdown's server stop at 500 ms.
+		"before the shutdown": {lastAt: 400 * time.Millisecond, result: evidence.Blocked},
+		// The last reading is after it: the container was being stopped.
+		"after the shutdown": {lastAt: 600 * time.Millisecond, result: evidence.Pass},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newS12GracefulStopFixture(t, testS12GracefulStopConfig(t))
+			f.samplerEndErr = errors.New("command terminated with exit code 137")
+			f.afterStop[len(f.afterStop)-1].at = tc.lastAt
+			stop, err := gracefulStopRestoreOf(t, f)
+			if tc.result == evidence.Pass {
+				if err != nil || stop.Result != evidence.Pass {
+					t.Fatalf("S12 graceful-stop = %+v, %v; want passed", stop, err)
+				}
+				if rec := readGSRRecord(t, f.cfg); !strings.Contains(s12GracefulStopPassReason(&rec),
+					"its output ended with \"command terminated with exit code 137\"") {
+					t.Fatalf("pass reason = %q, want the sampler's end error", s12GracefulStopPassReason(&rec))
+				}
+				return
+			}
+			requireGSR(t, stop, err, tc.result, "the sampler's output ended with \"command terminated with exit code "+
+				"137\" before a reading at or after the shutdown's last logged command")
+		})
+	}
+}
+
+func TestRunS12GracefulStopIsBlockedWhenTheFailedRecordHasNoTime(t *testing.T) {
+	f := newS12GracefulStopFixture(t, testS12GracefulStopConfig(t))
+	f.stopLog[1] = gsrLine{250 * time.Millisecond, func(time.Time) string {
+		return strings.Replace(gsrLogLine(time.Now(), logOperationFailed, "operation_state_changed", "", testGSROp,
+			"restore", testGSRFailReason, ""), `"time":"`, `"time":"not-a-time`, 1)
+	}}
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Blocked, "the time of the restore operation's "+logOperationFailed+
+		" (line 4) could not be read")
+}
+
+func TestRunS12GracefulStopFailsOnARestoreFailureAfterAMissedPlacement(t *testing.T) {
+	f := newS12GracefulStopFixture(t, testS12GracefulStopConfig(t))
+	f.stopLog[0] = gsrLine{150 * time.Millisecond, func(at time.Time) string {
+		return gsrLogLine(at, logRanCommand, logEventCommand, testGSRRestoredb, "", "", "", `"exitCode":0`)
+	}}
+	f.afterDelete = []imStatus{{databasev1alpha1.BootstrapFailed, 2, "", "RestoreFailed",
+		"on " + testGSRTarget + ": restore failed: giving up after 3 attempts"}}
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Fail, "the restored cluster's bootstrap ended Failed")
+}
+
+func TestRunS12GracefulStopIsBlockedWhenRestoredbWasNotKilled(t *testing.T) {
+	f := newS12GracefulStopFixture(t, testS12GracefulStopConfig(t))
+	f.stopLog[0] = gsrLine{150 * time.Millisecond, func(at time.Time) string {
+		return gsrLogLine(at, logCommandFailed, logEventCommand, testGSRRestoredb, "", "", "",
+			`"durationMs":2412,"exitCode":1,"err":"exit status 1"`)
+	}}
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Blocked, "restoredb failed (line 3) with exit code 1 and \"exit status 1\", "+
+		"not killed: whether the stop ended it is inconclusive")
 }

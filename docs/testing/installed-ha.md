@@ -3370,8 +3370,10 @@ without filler data. S11 `complete`'s backup is about 5 MB, but the time of
 database created with a 512 MB data volume, as the HA bootstrap creates the
 source's (`HAConfig` in `internal/instancemanager/habootstrap.go`), a
 `restoredb` of a 5 MB backup was still running when it was signalled 2 s
-after its start, and the full `restoredb` runs there took 13 to 23 s. That
-the lab's disks give the same margin is a hypothesis this variant tests. A
+after its start and, its worker left running, ended about 6 to 7 s after
+its start. (The 13 to 23 s runs of POC-27 restored a 139 MB backup of a
+1.1 GB database.) That the lab's disks give enough margin is a hypothesis
+this variant tests. A
 filler in the source would change S11 `complete`'s artifact and the source
 the data checks read, so it is not used. A run in which `restoredb` ended
 before the stop reached the Instance Manager is blocked;
@@ -3413,6 +3415,10 @@ a larger artifact made by the variant itself would be the next step.
      in the log, is a missed placement too.
    - Any other reason than `the member is stopping: restore failed:
      restoredb failed: ...` fails the variant.
+   - `stoppingReason` adds the stopping prefix to any failure while the
+     member stops, so `restoredb`'s `Command failed` must also show the
+     kill: `signal: killed` in its error or exit code -1. Otherwise the stop's
+     effect is inconclusive, and the variant is blocked.
    - `Operation failed` before `restoredb`'s end, or `heartbeat stop` or
      `server stop` before `Operation failed`, must never happen.
    - A missing `restoredb` end, `Operation failed` or `heartbeat stop`
@@ -3420,7 +3426,10 @@ a larger artifact made by the variant itself would be the next step.
    - An operation in the log other than the one the cluster's status named
      before the deletion blocks it.
 
-   `stopLoggedAfterDelete` is timed as in S11 `graceful-stop`.
+   `stopLoggedAfterDelete` is timed as in S11 `graceful-stop`. A missed
+   placement blocks the variant only when nothing else failed it: a
+   bootstrap ended `Failed`, a restore over `-restore-limit`, a restored
+   data violation or a never-event stays a failure.
 6. **Judge the sampler.** The run finds the first reading that shows the
    database directory and the first after it that does not: the cleanup had
    begun then. From that reading on, no `cub*` process may hold a file at or
@@ -3433,7 +3442,19 @@ a larger artifact made by the variant itself would be the next step.
    show either directory: the cleanup must come before the record. Each of
    these must never happen. A database directory never seen, or never seen
    gone, blocks the variant. So does a sampler that never showed an open
-   file or a `cub*` process's listing before the cleanup.
+   file or a `cub*` process's listing before the cleanup. The order with the
+   record is not passed without evidence; each of these blocks the variant:
+   - an `Operation failed` line whose time cannot be read;
+   - no reading started after that time;
+   - a staging directory never seen gone;
+   - output that reached the run's limit;
+   - output that ended with an error before the container's stop. The exec
+     session ends with the container, and kubectl may report that end as an
+     error, so an error is accepted only when the last reading started at or
+     after the time of the shutdown's last logged command (`server stop`,
+     else `heartbeat stop`): every reading the variant needs was taken, and
+     the container was being stopped. The pass reason then names the
+     error.
 7. **Judge the retry.** The readings after the deletion are judged as S12
    `instance-manager-restart` judges those after its kill: no
    `BootstrapReady` `True` before `Complete`, no `RecordedOperationMissing`,

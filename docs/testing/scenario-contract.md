@@ -141,7 +141,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s12-instance-manager-restart` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-instance-manager-restart` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart`): S11's artifact restored into another new cluster while the Instance Manager of the restore's target member is killed during the restore, which restarts that member's database container on the same Pod and volume; the interrupted attempt must end with one retry and the restore complete as `exact` does, under the next attempt's operation | none |
 | `lab-installed-ha-s12-instance-manager-restart-preparing` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at preparing` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-preparing`): as `instance-manager-restart`, with the kill after a reading of the bootstrap `Preparing` with its operation; the target's record of the killed operation must show that `restoredb` had not succeeded | none |
 | `lab-installed-ha-s12-instance-manager-restart-seeding` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at seeding` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-seeding`): S11's artifact restored into another new cluster, and the Instance Manager of a member being seeded from the restored one killed during its seed restore; the seed attempt must end with one seed retry, the restore must not run again, and the cluster complete as `exact` does | none |
-| `lab-installed-ha-s12-graceful-stop` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-graceful-stop`, in a namespace that keeps Pod Security `restricted` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`graceful-stop`): S11's artifact restored into another new cluster whose restore target's Pod is deleted with its grace period as soon as a sampler in the target shows `restoredb` running; the target's log must show `restoredb`'s end, the restore operation's `Operation failed` with a reason that starts with `the member is stopping: restore failed: restoredb failed: `, and then the shutdown's `heartbeat stop` and `server stop`, in that order; no sampler reading from the first one without the database directory on may show a CUBRID process holding a file of the database or staging directory, nor `restoredb` after it, and none started after `Operation failed` either directory; exactly one retry naming the stop, and the restore complete as `exact` does under another operation | none |
+| `lab-installed-ha-s12-graceful-stop` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-graceful-stop`, in a namespace that keeps Pod Security `restricted` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`graceful-stop`): S11's artifact restored into another new cluster whose restore target's Pod is deleted with its grace period as soon as a sampler in the target shows `restoredb` running; the target's log must show `restoredb`'s end, the restore operation's `Operation failed` with a reason that starts with `the member is stopping: restore failed: restoredb failed: `, and then the shutdown's `heartbeat stop` (and `server stop` when logged), in that order, with `restoredb` killed; no sampler reading from the first one without the database directory on may show a CUBRID process holding a file of the database or staging directory, nor `restoredb` after it, and none started after `Operation failed` either directory, at least one reading having started after it; exactly one retry naming the stop, and the restore complete as `exact` does under another operation | none |
 
 `lab-installed-smoke` is a connection baseline. Its `passed` verdict applies
 to LAB00 and establishes neither S00 installation validation nor S00–S15
@@ -365,10 +365,19 @@ leave the variant blocked:
   failed `restoredb`: the stop came after `restoredb` had ended;
 - a refused deletion;
 - a log that ended without `restoredb`'s end, `Operation failed` or
-  `heartbeat stop`;
-- a database directory never seen gone, and a sampler that never showed an
-  open file or a `cub*` process's listing before that;
+  `heartbeat stop`, an `Operation failed` whose time cannot be read, and a
+  failed `restoredb` that was not killed (no `signal: killed` and no exit
+  code -1): the stopping prefix alone does not show that the stop ended it;
+- a database or staging directory never seen gone, a sampler that never
+  showed an open file or a `cub*` process's listing before that, no reading
+  started after `Operation failed`, output that reached the run's limit, and
+  output that ended with an error before a reading at or after the
+  shutdown's last logged command;
 - no retry after the deletion, or a first retry that names another reason.
+
+A missed placement does not hide a failed restore: a restore verdict (a
+bootstrap ended `Failed`, a restore over the limit, a never-event) fails the
+variant whatever the stop did.
 
 `lab-preallocated-component-smoke` is a distinct component result. Its successful
 owned-workload cleanup is not fresh LAB00 namespace cleanup or private campaign
@@ -1528,8 +1537,8 @@ it needs more.
   `runRestore` in `server.go`). The Operator ends that attempt with
   `RestoreFailedRetrying` and starts the next under a new operation
   (`restoreAttemptFailed`). So the target's log shows `restoredb`'s end,
-  `Operation failed` with that reason, then `heartbeat stop` and
-  `server stop`; exactly one retry follows the deletion, naming the stop;
+  `restoredb` killed (`signal: killed` or exit code -1), `Operation failed`
+  with that reason, then `heartbeat stop` (and `server stop` when logged); exactly one retry follows the deletion, naming the stop;
   and the restore completes as in `exact`, within `restore_limit` of the
   cluster's creation, under another operation. A second retry, another
   failure reason, or the stopped operation completing after a retry, fails

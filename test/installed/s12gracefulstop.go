@@ -77,6 +77,9 @@ const (
 	measHoldersAfterCleanup      = "holdersAfterCleanup"
 	measRetriesAfterStop         = "retriesAfterStop"
 	measOperationIDChanged       = "operationIDChanged"
+	// signalKilled is the error of a utility the cancellation killed
+	// (os/exec's ExitError for SIGKILL).
+	signalKilled = "signal: killed"
 )
 
 // restoreSamplerScript is samplerScript for the data volume: its readings
@@ -123,6 +126,11 @@ type s12StopSampler struct {
 	// operation Failed and that still showed the database or staging
 	// directory: the cleanup came after the record, which must never be.
 	PresentAfterOperationFailed []string `json:"presentAfterOperationFailed"`
+	// ReadingsAfterOperationFailed counts the readings the sampler started
+	// after the operation was logged Failed, and LastReadingAt is when it
+	// started its last reading, both by the container's clock.
+	ReadingsAfterOperationFailed int        `json:"readingsAfterOperationFailed"`
+	LastReadingAt                *time.Time `json:"lastReadingAt,omitempty"`
 }
 
 func (s *s12StopSampler) stream() *samplerStream { return &s.samplerStream }
@@ -150,6 +158,10 @@ type s12StopLog struct {
 	RestoredbResult     string     `json:"restoredbResult,omitempty"`
 	RestoredbDurationMs *int64     `json:"restoredbDurationMs,omitempty"`
 	RestoredbAt         *time.Time `json:"restoredbAt,omitempty"`
+	// RestoredbErr and RestoredbExitCode are the error and the exit code the
+	// line gave; a utility killed by a signal has exit code -1.
+	RestoredbErr      string `json:"restoredbErr,omitempty"`
+	RestoredbExitCode *int   `json:"restoredbExitCode,omitempty"`
 	// OperationID, OperationFailedLine, OperationFailedReason and
 	// OperationFailedAt are of the first Operation failed of a restore
 	// operation.
@@ -158,11 +170,13 @@ type s12StopLog struct {
 	OperationFailedReason string     `json:"operationFailedReason,omitempty"`
 	OperationFailedAt     *time.Time `json:"operationFailedAt,omitempty"`
 	// HeartbeatStopLine and ServerStopLine are of the shutdown's commands,
-	// with the message each ended with.
-	HeartbeatStopLine   int    `json:"heartbeatStopLine,omitempty"`
-	HeartbeatStopResult string `json:"heartbeatStopResult,omitempty"`
-	ServerStopLine      int    `json:"serverStopLine,omitempty"`
-	ServerStopResult    string `json:"serverStopResult,omitempty"`
+	// with the message each ended with and its time.
+	HeartbeatStopLine   int        `json:"heartbeatStopLine,omitempty"`
+	HeartbeatStopResult string     `json:"heartbeatStopResult,omitempty"`
+	HeartbeatStopAt     *time.Time `json:"heartbeatStopAt,omitempty"`
+	ServerStopLine      int        `json:"serverStopLine,omitempty"`
+	ServerStopResult    string     `json:"serverStopResult,omitempty"`
+	ServerStopAt        *time.Time `json:"serverStopAt,omitempty"`
 	// StopLine, StopLoggedAt and StopLoggedAfterDelete are as in S11
 	// graceful-stop's log (s11StopLog).
 	StopLine              int        `json:"stopLine,omitempty"`
@@ -378,8 +392,9 @@ func (h *haRun) runS12GracefulStop(ctx context.Context) (result evidence.Scenari
 
 // judgeS12GracefulStopRun sets the result of S12 graceful-stop from the
 // error of its steps and the never-events they recorded. A missed placement
-// blocks the variant unless something that must never happen was seen or
-// the restored data differed.
+// blocks the variant unless something that must never happen was seen, the
+// restored data differed, or the restore was judged (restoreVerdict): a
+// restore that failed or broke a rule stays a failure whatever the stop did.
 func (h *haRun) judgeS12GracefulStopRun(ctx context.Context, err error, rec *s12GracefulStopRecord,
 	result *evidence.Scenario) {
 	found := slices.Concat(rec.Credentials.FoundIn, rec.Searched.FoundIn)
@@ -387,7 +402,8 @@ func (h *haRun) judgeS12GracefulStopRun(ctx context.Context, err error, rec *s12
 		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
 	}
 	never := strings.Join(result.NeverEvents, "; ")
-	if missed := rec.PlacementMissed; missed != "" && never == "" && !errors.As(err, new(dataViolation)) {
+	if missed := rec.PlacementMissed; missed != "" && never == "" && !errors.As(err, new(dataViolation)) &&
+		!errors.As(err, new(restoreVerdict)) {
 		reason := "placement missed: " + missed
 		if err != nil {
 			reason += "; then: " + err.Error()
@@ -430,12 +446,18 @@ func s12GracefulStopPassReason(rec *s12GracefulStopRecord) string {
 	if rec.AttemptsAfter != nil {
 		attempts = *rec.AttemptsAfter
 	}
+	ended := "without an error"
+	if s.EndError != "" {
+		ended = fmt.Sprintf("with %q after its last reading at %s, once the shutdown was logged", s.EndError,
+			s.LastReadingAt.Format(time.RFC3339Nano))
+	}
 	return fmt.Sprintf("the sampler showed %q in %s's database container at %s, and that Pod was deleted with its "+
 		"grace period, the deletion accepted at %s; the member's log held restoredb's %s, then %s for the restore "+
-		"operation %s with %q, then the shutdown's heartbeat stop, in that order; the sampler saw the database "+
-		"directory %s gone at %s, no reading started after the operation was logged Failed showed it or the "+
-		"staging directory, and no CUBRID process held a file of either then or after, nor did restoredb run, in "+
-		"any reading, about every "+samplerInterval.String()+" (%s); the Operator ended that attempt with %s "+
+		"operation %s with %q, then the shutdown's heartbeat stop, in that order, restoredb killed (%q); the sampler "+
+		"saw the database directory %s gone at %s and the staging directory gone at %s; none of the %d reading(s) "+
+		"it started after the operation was logged Failed showed either directory; no CUBRID process held a file "+
+		"of either from the database directory's removal on, nor did restoredb run after it, in any reading, about "+
+		"every "+samplerInterval.String()+" (%s); its output ended %s; the Operator ended that attempt with %s "+
 		"naming the stop and completed the restore under operation %s, attempt %d, with one retry; the cluster "+
 		"reported Ready within restore_limit only after its bootstrap completed; its members and Services held "+
 		"exactly the rows acknowledged before the known point and S11's marker, no row written after the backup, "+
@@ -443,8 +465,9 @@ func s12GracefulStopPassReason(rec *s12GracefulStopRecord) string {
 		"statuses, the Events, the sampler's output, the deleted member's followed log, the replacement's log or "+
 		"the installed Operator's manager log", t.SeenProcess, rec.TargetMember,
 		t.SeenAt.Format(time.RFC3339Nano), t.DeleteAcceptedAt.Format(time.RFC3339Nano), l.RestoredbResult,
-		logOperationFailed, rec.StoppedOperation, l.OperationFailedReason, s.DatabaseDir,
-		s.CleanupSeenAt.Format(time.RFC3339Nano), last, s12RetryReason, rec.OperationIDAfter, attempts)
+		logOperationFailed, rec.StoppedOperation, l.OperationFailedReason, l.RestoredbErr, s.DatabaseDir,
+		s.CleanupSeenAt.Format(time.RFC3339Nano), s.StagingGoneAt.Format(time.RFC3339Nano),
+		s.ReadingsAfterOperationFailed, last, ended, s12RetryReason, rec.OperationIDAfter, attempts)
 }
 
 // s12GracefulStopSteps runs the steps of S12 graceful-stop in order. Before
@@ -712,7 +735,7 @@ func judgeRestoreStop(watch *stopWatch, memberLog []byte, rec *s12GracefulStopRe
 	if rec.PlacementMissed != "" {
 		return reasonErr
 	}
-	errs := []error{reasonErr, restoreStopLogGaps(rec)}
+	errs := []error{reasonErr, restoreStopLogGaps(rec), restoredbKilled(l)}
 	for _, o := range restoreStopLogOrder(l) {
 		event := "the member's log holds " + o
 		result.NeverEvents = append(result.NeverEvents, event)
@@ -757,16 +780,16 @@ func scanRestoreStopLog(data []byte, rec *s12GracefulStopRecord) {
 		switch {
 		case l.RestoredbLine == 0 && ours && (line.Msg == logCommandFailed || line.Msg == logRanCommand):
 			l.RestoredbLine, l.RestoredbResult, l.RestoredbDurationMs = n, line.Msg, line.DurationMs
-			l.RestoredbAt = at(line.Time)
+			l.RestoredbAt, l.RestoredbErr, l.RestoredbExitCode = at(line.Time), line.Err, line.ExitCode
 		case l.OperationFailedLine == 0 && line.Msg == logOperationFailed &&
 			line.Kind == string(instancemanager.OpRestore):
 			l.OperationID, l.OperationFailedLine, l.OperationFailedReason = line.OperationID, n, line.Reason
 			l.OperationFailedAt = at(line.Time)
 		case line.Event != logEventCommand:
 		case l.HeartbeatStopLine == 0 && line.Command == heartbeatStop:
-			l.HeartbeatStopLine, l.HeartbeatStopResult = n, line.Msg
+			l.HeartbeatStopLine, l.HeartbeatStopResult, l.HeartbeatStopAt = n, line.Msg, at(line.Time)
 		case l.ServerStopLine == 0 && strings.HasPrefix(line.Command, serverStop):
-			l.ServerStopLine, l.ServerStopResult = n, line.Msg
+			l.ServerStopLine, l.ServerStopResult, l.ServerStopAt = n, line.Msg, at(line.Time)
 		}
 	}
 }
@@ -793,6 +816,25 @@ func judgeRestoreStopReason(rec *s12GracefulStopRecord) error {
 	return restoreVerdict{fmt.Errorf("the restore operation %s ended Failed after the restore target's Pod was "+
 		"deleted while restoredb ran, but its reason does not start with %q: %q", l.OperationID,
 		restoreStopReasonPrefix, reason)}
+}
+
+// restoredbKilled requires a restoredb that the log shows fail to have been
+// killed: its error says "signal: killed" or its exit code is -1, as when
+// the stop's cancellation ended its process group (Run in internal/
+// instancemanager/cli.go). The stopping reason alone does not show it:
+// stoppingReason prefixes any failure while the member stops. Another
+// failure leaves the stop's effect inconclusive and blocks the variant.
+func restoredbKilled(l *s12StopLog) error {
+	if l.RestoredbResult != logCommandFailed || strings.Contains(l.RestoredbErr, signalKilled) ||
+		(l.RestoredbExitCode != nil && *l.RestoredbExitCode == -1) {
+		return nil
+	}
+	code := evidence.Unknown
+	if l.RestoredbExitCode != nil {
+		code = fmt.Sprint(*l.RestoredbExitCode)
+	}
+	return fmt.Errorf("restoredb failed (line %d) with exit code %s and %q, not killed: whether the stop ended "+
+		"it is inconclusive", l.RestoredbLine, code, l.RestoredbErr)
 }
 
 // restoreStopLogGaps names the lines the variant needs that the target's log
@@ -898,15 +940,21 @@ func judgeRestoreStopSamples(watch *stopWatch, rec *s12GracefulStopRecord, resul
 			Round(time.Millisecond).String()
 	}
 	afterCleanup(samples[gone:], paths, s)
+	last := samples[len(samples)-1].At
+	s.LastReadingAt = &last
 	if failed := rec.Log.OperationFailedAt; failed != nil {
 		for _, sample := range samples {
-			if sample.At.After(*failed) && (slices.Contains(sample.Entries, s.DatabaseDir) ||
-				slices.Contains(sample.Entries, s.StagingDir)) {
+			if !sample.At.After(*failed) {
+				continue
+			}
+			s.ReadingsAfterOperationFailed++
+			if slices.Contains(sample.Entries, s.DatabaseDir) || slices.Contains(sample.Entries, s.StagingDir) {
 				s.PresentAfterOperationFailed = append(s.PresentAfterOperationFailed,
 					sample.At.Format(time.RFC3339Nano))
 			}
 		}
 	}
+	unjudged := samplerUnjudged(rec)
 	result.Measurements[measHoldersAfterCleanup] = len(s.HoldersAfterCleanup)
 	cleanup := s.CleanupSeenAt.Format(time.RFC3339Nano)
 	var events []string
@@ -924,11 +972,57 @@ func judgeRestoreStopSamples(watch *stopWatch, rec *s12GracefulStopRecord, resul
 			rec.Log.OperationFailedAt.Format(time.RFC3339Nano), strings.Join(s.PresentAfterOperationFailed, ", ")))
 	}
 	result.NeverEvents = append(result.NeverEvents, events...)
-	errs := make([]error, 0, len(events))
+	errs := make([]error, 0, len(events)+1)
 	for _, event := range events {
 		errs = append(errs, restoreVerdict{errors.New(event)})
 	}
-	return errors.Join(errs...)
+	return errors.Join(append(errs, unjudged)...)
+}
+
+// samplerUnjudged says what keeps the sampler from showing the order of the
+// cleanup and the record, which then blocks the variant:
+//   - an Operation failed line whose time could not be read;
+//   - no reading started after that time: no reading could show a directory
+//     left after the record, so its absence shows nothing;
+//   - a staging directory never seen gone;
+//   - output that reached the run's limit, whose later readings were not
+//     read;
+//   - output that ended with an error before the container's stop. The exec
+//     session ends with the container, and kubectl may report that end as an
+//     error, so an error is accepted only when the last reading started at
+//     or after the time of the shutdown's last command logged (server stop,
+//     else heartbeat stop): every reading the variant needs was taken, and
+//     the container was being stopped. An error before that may have cut
+//     readings off, and blocks.
+func samplerUnjudged(rec *s12GracefulStopRecord) error {
+	s, l := rec.Sampler, rec.Log
+	var why []string
+	switch {
+	case l.OperationFailedLine != 0 && l.OperationFailedAt == nil:
+		why = append(why, fmt.Sprintf("the time of the restore operation's %s (line %d) could not be read",
+			logOperationFailed, l.OperationFailedLine))
+	case l.OperationFailedAt != nil && s.ReadingsAfterOperationFailed == 0:
+		why = append(why, fmt.Sprintf("no sampler reading started after the restore operation was logged %s at %s",
+			logOperationFailed, l.OperationFailedAt.Format(time.RFC3339Nano)))
+	}
+	if s.StagingGoneAt == nil {
+		why = append(why, "the sampler never showed the staging directory "+s.StagingDir+" gone")
+	}
+	if s.Truncated {
+		why = append(why, "the sampler's output reached the run's limit")
+	}
+	if s.EndError != "" {
+		stopped := cmp.Or(l.ServerStopAt, l.HeartbeatStopAt)
+		if stopped == nil || s.LastReadingAt == nil || s.LastReadingAt.Before(*stopped) {
+			why = append(why, fmt.Sprintf("the sampler's output ended with %q before a reading at or after the "+
+				"shutdown's last logged command", s.EndError))
+		}
+	}
+	if len(why) == 0 {
+		return nil
+	}
+	return fmt.Errorf("whether the restore's directories were gone before the operation was recorded Failed is "+
+		"not known: %s", strings.Join(why, "; "))
 }
 
 // findCleanup records in s, from the readings in order, the first that

@@ -652,11 +652,13 @@ that the stop kills `restoredb`'s process group and waits for it, that
 operation is recorded `Failed` with `the member is stopping: restore failed:
 restoredb failed: ...` before `heartbeat stop` and `server stop`; the
 Operator then retries once (`RestoreFailedRetrying`) and the next attempt
-completes. The run requires that order in the target's log, no CUBRID
-process holding a file of the restore once the sampler sees the database
-directory gone, neither directory in a reading taken after the operation was
-logged `Failed`, exactly one retry naming the stop, and then what S12
-`exact` requires; a stop that came after `restoredb` had ended blocks it. It
+completes. The run requires that order in the target's log (`server stop`
+when logged) with `restoredb` killed, no CUBRID process holding a file of
+the restore once the sampler sees the database directory gone, both
+directories seen gone and neither in a reading taken after the operation was
+logged `Failed` (at least one such reading is required), exactly one retry
+naming the stop, and then what S12 `exact` requires; a stop that came after
+`restoredb` had ended blocks it, unless the restore itself failed. It
 uses S11's artifact without filler data, because POC-27 saw a `restoredb` of
 a 5 MB backup still running after 2 s; whether the lab's disks give the stop
 enough time is what its first run will show. Unit tests cover it with fakes.

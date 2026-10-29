@@ -1477,6 +1477,7 @@ type stopLogLine struct {
 	Kind        string `json:"kind"`
 	Reason      string `json:"reason"`
 	Err         string `json:"err"`
+	ExitCode    *int   `json:"exitCode"`
 	Time        string `json:"time"`
 	DurationMs  *int64 `json:"durationMs"`
 }
