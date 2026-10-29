@@ -121,9 +121,16 @@ type haFixture struct {
 	backupCreated func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error
 	backupRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	marker        func(script string) (string, error)
-	// backupDeleted plays the API server when the run deletes a CubridBackup.
+	// backupDeleted plays the API server when the run deletes a CubridBackup,
+	// secretDeleted when it deletes a Secret.
 	backupDeleted func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup,
 		opts ...client.DeleteOption) error
+	secretDeleted func(ctx context.Context, c client.WithWatch, secret *corev1.Secret,
+		opts ...client.DeleteOption) error
+	// deniedCreated and deniedRead play the Operator for the standalone
+	// cluster of S11 denied-credentials, as restoreCreated and restoreRead do.
+	deniedCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
+	deniedRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	// eventsErr answers a list of Events.
 	eventsErr error
 	// restoreCreated plays the Operator when the run creates the restored
@@ -210,6 +217,9 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				f.writes = append(f.writes, "namespace")
 				return c.Create(ctx, value, opts...)
 			case *corev1.Secret:
+				if value.Name == s11DeniedSecretName {
+					value.UID = testDeniedSecretUID
+				}
 				if f.secret == nil {
 					f.secret = value.DeepCopy()
 				}
@@ -273,11 +283,8 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 			if pod, ok := obj.(*corev1.Pod); ok && pod.Namespace == cfg.OperatorNamespace {
 				return f.deleteManager(ctx, c, pod, opts...)
 			}
-			if cluster, ok := obj.(*databasev1alpha1.CubridCluster); ok && f.clusterDeleted != nil {
-				return f.clusterDeleted(ctx, c, cluster, opts...)
-			}
-			if backup, ok := obj.(*databasev1alpha1.CubridBackup); ok && f.backupDeleted != nil {
-				return f.backupDeleted(ctx, c, backup, opts...)
+			if err, hooked := f.deleteHooked(ctx, c, obj, opts...); hooked {
+				return err
 			}
 			ns, ok := obj.(*corev1.Namespace)
 			if !ok || ns.Name != cfg.Namespace {
@@ -295,6 +302,27 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 	f.runner = Runner{Client: testClient(t, cfg.Config, hooks, append([]client.Object{source}, extra...)...),
 		Command: f.command}
 	return f
+}
+
+// deleteHooked answers the deletion of a CubridCluster, a CubridBackup or a
+// Secret through its hook, when one is set; hooked is false otherwise.
+func (f *haFixture) deleteHooked(ctx context.Context, c client.WithWatch, obj client.Object,
+	opts ...client.DeleteOption) (err error, hooked bool) {
+	switch value := obj.(type) {
+	case *databasev1alpha1.CubridCluster:
+		if f.clusterDeleted != nil {
+			return f.clusterDeleted(ctx, c, value, opts...), true
+		}
+	case *databasev1alpha1.CubridBackup:
+		if f.backupDeleted != nil {
+			return f.backupDeleted(ctx, c, value, opts...), true
+		}
+	case *corev1.Secret:
+		if f.secretDeleted != nil {
+			return f.secretDeleted(ctx, c, value, opts...), true
+		}
+	}
+	return nil, false
 }
 
 // beforeGet plays the Operator and the kubelet before a read of obj.
@@ -331,6 +359,8 @@ func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key cl
 		return f.restartRead(ctx, c, key)
 	case key.Name == s12IMRestartClusterName && f.imRestartRead != nil:
 		return f.imRestartRead(ctx, c, key)
+	case key.Name == s11DeniedClusterName && f.deniedRead != nil:
+		return f.deniedRead(ctx, c, key)
 	}
 	return nil
 }
@@ -366,6 +396,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 		}
 		f.writes = append(f.writes, "imrestart-cluster")
 		return f.imRestartCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s11DeniedClusterName {
+		if f.deniedCreated == nil {
+			f.t.Fatalf("runner created %s without S11 denied-credentials", cluster.Name)
+		}
+		f.writes = append(f.writes, "denied-cluster")
+		return f.deniedCreated(ctx, c, cluster)
 	}
 	if cluster.Name == s12WrongTargetClusterName {
 		if f.wrongTargetCreated == nil {

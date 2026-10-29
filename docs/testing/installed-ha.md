@@ -11,8 +11,8 @@ installed:
 4. Check the data rules on every member and through both Services.
 5. Remove the namespace.
 
-LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`
-and `missing-destination`, and S12 `exact`, `tampered`, `wrong-target`,
+LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`,
+`missing-destination` and `denied-credentials`, and S12 `exact`, `tampered`, `wrong-target`,
 `operator-restart`, `instance-manager-restart`,
 `instance-manager-restart-preparing` and `instance-manager-restart-seeding`
 build on. It injects no fault. A pass is not an S01 result at the VM-lab
@@ -350,7 +350,9 @@ S11 here does not check:
 - the restore of the artifact: that is S12 `exact`, with `-restore`;
 - the interrupted variants `interrupted-pod` and `interrupted-upload`;
 - a backup to a bucket that does not exist: that is S11
-  `missing-destination`, with `-backup-missing-destination`.
+  `missing-destination`, with `-backup-missing-destination`;
+- a backup whose object store keys the store refuses: that is S11
+  `denied-credentials`, with `-backup-denied-credentials`.
 
 ## S11 missing-destination
 
@@ -463,8 +465,168 @@ run namespace.
 S11 `missing-destination` here does not check:
 - the Operator's and the Instance Manager's logs for credentials;
 - the member's staging directory after the failed upload;
-- denied credentials, another invalid destination, and a store that is
-  unreachable or fails partway through the upload.
+- denied credentials: that is S11 `denied-credentials`, with
+  `-backup-denied-credentials`;
+- another invalid destination, and a store that is unreachable or fails
+  partway through the upload.
+
+## S11 denied-credentials
+
+With `-backup-denied-credentials` as well as `-backup-bucket`, the run goes
+on after S11 `complete` passed with S11 `denied-credentials`: a backup whose
+object store keys the store refuses must end `Failed`. The lane is then
+`lab-installed-ha-s11-denied-credentials`, and it requires LAB01,
+S11/complete and S11/denied-credentials. `-backup-denied-credentials`
+without `-backup-bucket`, with `-restore` or with
+`-backup-missing-destination`, or with a `-backup-denied-ready-limit` that is
+not positive, is refused before anything is done: a run takes one lane.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -backup-denied-credentials [-backup-denied-ready-limit 15m] [-backup-limit 15m]
+```
+
+- `-backup-limit` bounds this variant too: from the return of the request
+  until the reading that saw `Failed`.
+- `-backup-denied-ready-limit` bounds the variant's own cluster from its
+  creation until it is `Ready`. It is the run's bound, not the contract's,
+  and is refused without `-backup-denied-credentials`.
+- The fault check reaches the store through `-object-store-service`, while
+  the member uploads to the cluster's `spec.objectStorage` endpoint. As in
+  S11 `complete`, the run assumes they are the same store and refuses a
+  Service that the endpoint does not name; the record notes it.
+- The run never writes to or removes from the object store. With the denied
+  keys it only lists the backup bucket under the variant's prefix before
+  anything is created, and with the seed Secret's keys it lists the same at
+  the end.
+- `-timeout` must also cover a new standalone cluster with its volume and
+  database, a `backupdb` on its member, `-backup-denied-ready-limit` and
+  `-backup-limit`.
+
+S11 `denied-credentials` starts only from S11 `complete` that passed. When
+S11 `complete` did not run or did not pass, it is blocked with that cause
+and nothing of it is done.
+
+Why it needs a cluster of its own: a `CubridBackup` names a bucket and a
+prefix, never keys. The Instance Manager reads the object store's keys only
+from its environment when it starts (`IM_S3_ACCESS_KEY` and
+`IM_S3_SECRET_KEY` in `cmd/instance-manager/main.go`), which the Operator
+sets from the cluster's `spec.objectStorage.credentialsSecretRef`. The HA
+cluster's Secret holds the seed keys, so the denied keys need a cluster whose
+Secret holds them from its creation.
+
+What the product does with such a backup, as the code reads (not yet
+observed on the lab): `backupdb` on the member does not use the object
+store. The Instance Manager then uploads every data object before the
+manifest (`UploadBackup` in `internal/instancemanager/upload.go`); the first
+`Put` with keys the store refuses fails, `MinioObjectStore.Put` reports it as
+`put <bucket>/<key>: ...`, and `runBackup` in
+`internal/instancemanager/server.go` ends the operation `Failed` with
+`upload failed: ` and that error, without a manifest. The Operator maps it
+onto the backup in `failedBackup`
+(`internal/controller/cubridbackup_controller.go`): phase `Failed`, `Ready`
+reason `BackupFailed`, with the operation's reason as the message.
+
+1. **The denied keys.** The run generates a random access key and a random
+   secret key, adds both to the evidence redactor and never records them.
+2. **The fault.** Through the port-forward to `-object-store-service` and
+   with its own client, as S11 downloads the artifact, the run asks the
+   store with the denied keys to list the backup bucket under the prefix
+   `lab-runs/<run ID>/denied-credentials`. Only an answer that refuses
+   access (`AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch` or
+   their messages) confirms the fault. A store that lists the bucket with
+   them does not check keys, and the fault is not in place; a store that
+   cannot be asked, or another answer, leaves it unconfirmed. Each blocks S11
+   `denied-credentials` before anything is created, and the record keeps the
+   answer and its kind. The run does not change the store's access rules.
+3. **The cluster.** The run creates the Secret `object-storage-denied` with
+   the denied keys under `accessKey` and `secretKey`, and the standalone
+   `CubridCluster` `s11-denied`: one member, `highAvailability.enabled`
+   false, the HA cluster's version, image, database and storage, and
+   `spec.objectStorage` with the HA cluster's endpoint and `insecure`, no
+   bucket and no prefix, naming that Secret. It reads the cluster every
+   `-poll` until its status has observed its generation and reports `Ready`
+   `True`, for at most `-backup-denied-ready-limit` from its creation, and
+   records `readyWithin`. A cluster that is not `Ready` by then, or whose
+   bootstrap failed, blocks S11 `denied-credentials`, with what it waited
+   for.
+4. **Request.** The run creates the `CubridBackup` `s11-denied-credentials`
+   for `s11-denied`'s database, to `-backup-bucket` under the variant's
+   prefix, with the default target, and records the time the request
+   returned. The cluster has one member, which is the target whatever role
+   the status reports for it.
+5. **Wait.** As in S11 `missing-destination`, it reads the backup every
+   `-poll` until it is `Completed` or `Failed`, for at most `-backup-limit`,
+   and records each change.
+   - `Completed`, and a `status.artifact` in the backup's status as it
+     ended, must never happen and fail S11 `denied-credentials`.
+   - `Failed` with another reason than `BackupFailed`, or with a message
+     that does not begin with `upload failed: `, blocks it, with the reason
+     and message: the backup ended before its upload, so the denied keys
+     were not exercised.
+   - `BackupFailed` with `upload failed: ` but not
+     `upload failed: put <backup bucket>/` fails it: the upload ran and
+     failed, but not for its destination.
+   - The object store's answer after `put <bucket>/<key>: ` is recorded as
+     `storeError`, with `storeErrorKind` `access-denied`, `no-such-bucket` or
+     `other`. Only `access-denied` shows that the denied keys failed the
+     upload: any other answer, such as a timeout, a reset connection or a
+     bucket that does not exist, or no answer quoted, blocks S11
+     `denied-credentials`, since the denied keys' effect is not confirmed.
+   - A backup read but neither `Completed` nor `Failed` when
+     `-backup-limit` passes fails it, with its last phase. When the readings
+     kept failing until then, it is blocked.
+   - `failedWithin` runs from the return of the request to the reading that
+     saw `Failed`, an upper bound.
+6. **The prefix at the end.** With the seed Secret's keys the run lists the
+   backup bucket under the variant's prefix. Any object there fails S11
+   `denied-credentials`, and the run records what it holds and whether a
+   `manifest.json` is among it. It does not remove them. A store that
+   cannot be asked blocks it.
+7. **Credentials.** Neither key of the seed Secret nor either denied key may
+   be in any status of `s11-denied` or of the backup the run read, in the
+   backup's status at the end, which holds the failure's message, in the
+   status of `s11-denied` read once more at the end, or in any Event of the
+   run namespace. One found must never happen.
+8. **The source.** As step 8 of S12 `exact`: the same member Pods and
+   containers, the same master by CUBRID and `status.currentPrimary`, and the
+   data rules over the whole history. Any difference fails S11
+   `denied-credentials`.
+9. **The manager.** As in S11 `missing-destination`: one other than LAB01
+   checked at its end blocks S11 `denied-credentials`.
+10. **Cleanup.** On every path out of S11 `denied-credentials` after
+    something was created, also when the run ended, the run deletes the
+    `CubridBackup`, the cluster `s11-denied` and the Secret
+    `object-storage-denied` it created, in that order, each with its UID as
+    a precondition, with `-cleanup-timeout` as their own budget. The record
+    says whether each deletion was accepted or the object was already gone; the run does not wait for the
+    objects to be gone. A deletion that fails is recorded there
+    and in the scenario's `cleanupSucceeded`, and the object goes with the
+    namespace. The cluster's data PVC is retained when the cluster is
+    deleted (`pvcRetentionPolicy` in
+    `internal/controller/cubridcluster_controller.go`) and goes with the
+    namespace; the record's residue says so. Cleanup does not judge S11
+    `denied-credentials`.
+
+The time of the verdict is recorded as `judgedAt`. As in S11 `complete`, a
+run that ends before S11 `denied-credentials` is judged, an API error that
+keeps the run from reading the cluster, the backup, the store, the Events or
+the source, and a port-forward or client that cannot be opened block it;
+what was seen stays a failure, with that error added to the reason.
+
+Beyond S11 `missing-destination`'s, the account needs `delete` on
+`cubridclusters` and on Secrets in the run namespace. It creates a
+`CubridCluster` and a Secret there, as LAB01 does.
+
+S11 `denied-credentials` here does not check:
+- the Operator's and the Instance Manager's logs for credentials;
+- the standalone member's environment: that its Instance Manager holds the
+  denied keys follows from the cluster's Secret, and the run does not read
+  the member;
+- the member's staging directory after the failed upload;
+- a key that is valid but lacks permission on the bucket, keys changed in a
+  running cluster, and a store that is unreachable or fails partway through
+  the upload.
 
 ## S12 exact
 
@@ -1588,7 +1750,9 @@ and S12 variant other than `complete` and `exact` only those under
   URI, digest, size and version, the result for each object and the totals,
   `backupCompletedWithin`, where credentials were looked for, and what is
   left in the bucket) and `S11/complete/manifest.json`, the manifest as the
-  run downloaded it. It holds no credential; the run checks that.
+  run downloaded it. The run searches the manifest for both keys of the seed
+  Secret, and writes both files through the evidence redactor, which removes
+  them; it does not scan the files afterwards.
 - with `-backup-missing-destination`, `S11/missing-destination/record.json`
   (the bucket's name, whether it was absent before the request and at the
   end, with the times, and what it held at the end if it existed; the
@@ -1599,6 +1763,21 @@ and S12 variant other than `complete` and `exact` only those under
   where credentials were looked for, `judgedAt`, whether the backup was
   deleted, and what is left) and
   `S11/missing-destination/source-data-check.json`, the source's data check.
+- with `-backup-denied-credentials`, `S11/denied-credentials/record.json`
+  (the store's answer to the denied keys and its kind, whether it refused
+  them and when it was asked; the standalone cluster's name and UID, its
+  Secret's name (`secretName`, since the redactor blanks the value of a
+  field named `secret`) and UID, when it was created, `readyWithin` or what it
+  waited for, and `readyLimit`; the backup's name, UID, bucket and prefix,
+  the time of the request, every phase observed, `failedWithin`, the
+  failure's reason and message, the object store's answer it quotes
+  (`storeError`, `storeErrorKind`), the artifact if one was reported, what
+  was under the prefix at the end, the manager before and after, the source
+  at the end, where credentials were looked for, `judgedAt`, whether each
+  object the run created was deleted, and what is left) and
+  `S11/denied-credentials/source-data-check.json`, the source's data check.
+  The run writes them through the evidence redactor, which removes the seed
+  Secret's keys and the denied keys; it does not scan them afterwards.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and
@@ -1691,8 +1870,10 @@ The run deletes its namespace with a UID precondition and waits until it is
 gone, as the smoke does. That removes the cluster, the restored clusters of
 S12, their PVCs, `ha-wt`'s retained PVCs among them, the client and the
 copied Secrets. S12 `tampered` removes
-its copy of the artifact itself, and S11 `missing-destination` deletes its
-`CubridBackup` itself. It does not remove:
+its copy of the artifact itself, S11 `missing-destination` deletes its
+`CubridBackup` itself, and S11 `denied-credentials` deletes its
+`CubridBackup`, its cluster `s11-denied` and that cluster's Secret itself;
+the cluster's retained data PVC goes with the namespace. It does not remove:
 - the seed backups under `lab-runs/<run ID>` in the bucket, the restored
   cluster's among them, and S11's artifact in the backup bucket;
 - a backend volume that the StorageClass retains.
