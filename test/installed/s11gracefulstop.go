@@ -120,6 +120,10 @@ const (
 	fillerRowBytes = 1000
 	fillerChunk    = 65536
 	maxFillerMB    = 8192
+	// fillerStatementLimit bounds one csql call of the filler. On the VM lab
+	// a 64 MiB copy took well under a second and the slowest statement seen
+	// took 12.2 s (POC-44).
+	fillerStatementLimit = 5 * time.Minute
 	// imDatabasesDir is where the Instance Manager keeps the members'
 	// databases on the data volume (restoreTargetRoot in
 	// internal/controller/bootstrap.go).
@@ -273,7 +277,7 @@ type s11Filler struct {
 	Rows       int    `json:"rows"`
 	Statements int    `json:"statements"`
 	// Retries counts the statements run a second time because the count
-	// did not grow; ExitErrors those that printed an error although their
+	// did not reach the expected total; ExitErrors those that printed an error although their
 	// rows were counted (POC-44). Both are evidence, not verdicts.
 	Retries       int        `json:"retries"`
 	ExitErrors    int        `json:"fillerExitErrors"`
@@ -1807,9 +1811,16 @@ type fillerStatement struct {
 // fillerSQL runs sql with csql in the standalone member and reports whether
 // its output, or the command's error, names an error. csql has been seen to
 // print -199 and -111 after a statement it had committed (POC-44), so the
-// text alone does not say whether the statement took effect.
+// text alone does not say whether the statement took effect. Each call is
+// bounded by fillerStatementLimit, so a csql that hangs ends the filler with
+// its statement named rather than the whole run.
 func (h *haRun) fillerSQL(ctx context.Context, sql string) fillerStatement {
-	out, err := h.member(ctx, s11GracefulStopMember, "bash", "-c", fillerCSQL, databaseName+"@localhost", sql)
+	sctx, cancel := context.WithTimeout(ctx, fillerStatementLimit)
+	defer cancel()
+	out, err := h.member(sctx, s11GracefulStopMember, "bash", "-c", fillerCSQL, databaseName+"@localhost", sql)
+	if errors.Is(sctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+		err = errors.Join(err, fmt.Errorf("the statement did not end within %s", fillerStatementLimit))
+	}
 	_, textErr := sqlcheck.Run(func(string) (string, error) { return out, err }, sql)
 	return fillerStatement{sql: sql, out: out, err: err, exitText: textErr != nil}
 }

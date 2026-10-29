@@ -4519,7 +4519,7 @@ whole log (searched for each value, 0 matches).
 - A restore of run `ta`'s artifact, and a second backup after run `tb` (the cluster was deleted).
 - Another object store, `IM_BACKUP_TIMEOUT` set below the stall, and the Operator's own log.
 
-## POC-44 — what csql prints while a standalone member's table is grown with `INSERT … SELECT`, on the VM lab (#277) — **observation: csql intermittently printed `ERROR CODE = -199` (server no longer responding) and `ERROR CODE = -111` (transaction aborted) after `Committed.` and `Execute OK.`, as it exited; the rows of those statements were committed, the server stayed the same process and logged nothing, and the container did not restart; the cause was not found**
+## POC-44 — what csql prints while a standalone member's table is grown with `INSERT … SELECT`, on the VM lab (#277) — **observation: csql intermittently printed `ERROR CODE = -199` (server no longer responding) and `ERROR CODE = -111` (transaction aborted) after `Committed.` and `Execute OK.`, as it exited; the counts read after those statements included their rows, the server stayed the same process, its `.err` log held nothing after `Server status is UP`, and the container did not restart; the cause was not found**
 
 **Question.** The installed-Operator test of a backup whose member is stopped
 gracefully while `backupdb` runs (scenario S11, `graceful-stop`) grows a
@@ -4565,7 +4565,7 @@ server fail?
 statement did not say whether the statement took effect: the rows were
 there. The graceful-stop test therefore judges each filler statement by a
 row count read in a csql call of its own. It runs a statement once more when
-the count did not grow, and records the statements that printed an error
+the count did not reach the expected total, and records the statements that printed an error
 although their rows were counted (`fillerExitErrors`) as evidence only.
 
 **Limits.** One lab, one image, a few minutes of statements; the pair is
