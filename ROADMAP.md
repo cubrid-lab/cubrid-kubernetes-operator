@@ -312,8 +312,18 @@ Lease at 11:29:59.446, and `Completed` was read at 11:29:59.80 with
 `completedAt` 11:29:59. The manifest's `createdAt` was 11:29:21, so the
 Instance Manager had started its upload before the restart: the replacement
 discovered and completed an operation already uploading, or done, there, not
-one restarted in the middle of `backupdb`. One run is not a baseline, and
-the current harness has not run on the VM lab. The lab's manager is shared:
+one restarted in the middle of `backupdb`. The current harness then passed
+once on the VM lab the same day (manager `fb6f345`): `Running` with its
+operation on `ha-1` (a slave) was read at 12:02:23.17 UTC, the manager Pod
+was deleted at 12:02:23.23, the replacement took the Lease at 12:02:44.686
+(24.4 s after the deletion), and `completedAt` was 12:02:44, so the
+replacement wrote `Completed`; one attempt prefix held the manifest and one
+object of 5,256,192 bytes, which verified, at both listings, and no key was
+in the old or new manager's log or `ha-1`'s. Its manifest's `createdAt` was
+12:02:21, again before the restart. Both runs therefore show a replacement
+completing an operation the old manager left unreported, and neither a
+restart during `backupdb`, which needs a backup that runs longer than the
+lab's. Two runs are not a baseline. The lab's manager is shared:
 deleting its Pod briefly pauses reconciliation of every other cluster and
 backup there.
 
