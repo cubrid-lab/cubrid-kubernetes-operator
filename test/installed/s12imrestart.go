@@ -232,6 +232,10 @@ type s12IMRestart struct {
 	// selects.
 	At      string `json:"at"`
 	variant string
+	// cause is the text the message of the retry the fault caused must
+	// hold: s12IMRestartedReason when empty. S12 graceful-stop sets it to
+	// the stopping reason (restoreStopReasonPrefix).
+	cause string
 	// PhaseFirstPastPreparing is the bootstrap phase of the first reading
 	// that was neither Preparing nor without a phase: Restoring when the
 	// kill could be placed during the restore.
@@ -1474,7 +1478,7 @@ type attemptRise struct {
 }
 
 // retryFromEvent returns the retry x is, and records it, when the Operator's
-// Event of it names the restart and the attempt x starts. The reason
+// Event of it names the restart (r.cause) and the attempt x starts. The reason
 // RestoreFailedRetrying lasts until the next reconcile, which may come at
 // once, so a reading may miss it. x must be the only rise after the kill, by
 // one from the attempt at the kill, with another operation at the end. The
@@ -1488,7 +1492,7 @@ func retryFromEvent(r *s12IMRestart, x attemptRise) *s12Retry {
 	}
 	starting := fmt.Sprintf("starting attempt %d of ", x.to+1)
 	for _, message := range r.RetryEvents {
-		if strings.Contains(message, s12IMRestartedReason) && strings.Contains(message, starting) {
+		if strings.Contains(message, cmp.Or(r.cause, s12IMRestartedReason)) && strings.Contains(message, starting) {
 			retry := s12Retry{At: x.at, From: x.from, To: x.to, Reason: s12RetryReason, Message: message,
 				FromEvent: true}
 			r.Retries = append(r.Retries, retry)

@@ -928,7 +928,7 @@ func TestReadSamplesFiresOnceAtTheFirstBackupdbWhileArmed(t *testing.T) {
 		"T 1.1\nP 77 cub_server cub_server appdb\nP 9 cub_admin cub_admin backupdb -D x\nE u/op\n.\n" +
 		"garbage\nT 1.2\n.\n"
 	for _, armed := range []bool{false, true} {
-		w := &stopWatch{seen: make(chan struct{}), armed: armed}
+		w := &stopWatch{utility: backupdbUtility, seen: make(chan struct{}), armed: armed}
 		s := &s11StopSampler{}
 		if err := readSamples(strings.NewReader(output), w, s); err != nil {
 			t.Fatal(err)

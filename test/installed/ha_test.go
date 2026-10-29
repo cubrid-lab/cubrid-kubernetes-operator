@@ -174,6 +174,10 @@ type haFixture struct {
 	imRestartCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
 	imRestartRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	memberHook       func(ctx context.Context, pod, script string) (string, error, bool)
+	// gracefulStopCreated and gracefulStopRead play the Operator for the
+	// cluster of S12 graceful-stop, as restoreCreated and restoreRead do.
+	gracefulStopCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
+	gracefulStopRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	// csqlHook answers a csql command in a member, given its SQL, first when
 	// it returns true.
 	csqlHook func(pod, sql string) (string, error, bool)
@@ -234,11 +238,10 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				f.writes = append(f.writes, "namespace")
 				return c.Create(ctx, value, opts...)
 			case *corev1.Secret:
-				switch value.Name {
-				case s11DeniedSecretName:
-					value.UID = testDeniedSecretUID
-				case s11SignatureSecretName:
-					value.UID = testSignatureSecretUID
+				if uid, ok := map[string]types.UID{s11DeniedSecretName: testDeniedSecretUID,
+					s11SignatureSecretName:    testSignatureSecretUID,
+					s12GracefulStopSecretName: testGSRSecretUID}[value.Name]; ok {
+					value.UID = uid
 				}
 				if f.secret == nil {
 					f.secret = value.DeepCopy()
@@ -396,6 +399,8 @@ func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key cl
 		return f.restartRead(ctx, c, key)
 	case key.Name == s12IMRestartClusterName && f.imRestartRead != nil:
 		return f.imRestartRead(ctx, c, key)
+	case key.Name == s12GracefulStopClusterName && f.gracefulStopRead != nil:
+		return f.gracefulStopRead(ctx, c, key)
 	case (key.Name == s11DeniedClusterName || key.Name == s11SignatureClusterName) && f.deniedRead != nil:
 		return f.deniedRead(ctx, c, key)
 	case (key.Name == s11InterruptedClusterName || key.Name == s11IMRestartClusterName ||
@@ -437,6 +442,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 		}
 		f.writes = append(f.writes, "imrestart-cluster")
 		return f.imRestartCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s12GracefulStopClusterName {
+		if f.gracefulStopCreated == nil {
+			f.t.Fatalf("runner created %s without S12 graceful-stop", cluster.Name)
+		}
+		f.writes = append(f.writes, "gracefulstop-restored-cluster")
+		return f.gracefulStopCreated(ctx, c, cluster)
 	}
 	if cluster.Name == s11DeniedClusterName {
 		if f.deniedCreated == nil {
@@ -626,7 +638,7 @@ func (f *haFixture) rowsOf(name string) []workload.Row {
 	f.reads[name]++
 	rows := slices.Clone(f.rows)
 	if strings.HasPrefix(name, s12ClusterName+"-") || strings.HasPrefix(name, s12RestartClusterName+"-") ||
-		strings.HasPrefix(name, s12IMRestartClusterName+"-") {
+		strings.HasPrefix(name, s12IMRestartClusterName+"-") || strings.HasPrefix(name, s12GracefulStopClusterName+"-") {
 		rows = slices.Clone(f.restoredRows)
 	}
 	if n, lacking := f.missing[name]; lacking && (f.missingReads == 0 || f.reads[name] <= f.missingReads) {
@@ -803,7 +815,8 @@ func (f *haFixture) clientCommand(ctx context.Context, script string) (string, e
 // restoredService is the Service of a restored cluster a client script
 // names, or empty.
 func restoredService(script string) string {
-	for _, cluster := range []string{s12IMRestartClusterName, s12RestartClusterName, s12ClusterName} {
+	for _, cluster := range []string{s12IMRestartClusterName, s12GracefulStopClusterName, s12RestartClusterName,
+		s12ClusterName} {
 		for _, mode := range []string{"ro", "rw"} {
 			if strings.Contains(script, cluster+"-"+mode) {
 				return cluster + "-" + mode

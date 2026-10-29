@@ -183,7 +183,8 @@ type s12Record struct {
 }
 
 // validateS12 checks the inputs of S12 exact, tampered, wrong-target,
-// operator-restart and instance-manager-restart, when they are selected.
+// operator-restart, instance-manager-restart and graceful-stop, when they are
+// selected.
 func (c HAConfig) validateS12() error {
 	if c.RestoreTampered && !c.Restore {
 		return errors.New("-restore-tampered needs -restore: S12 tampered follows S12 exact")
@@ -198,6 +199,9 @@ func (c HAConfig) validateS12() error {
 		return err
 	}
 	if err := c.validateS12InstanceManagerRestart(); err != nil {
+		return err
+	}
+	if err := c.validateS12GracefulStop(); err != nil {
 		return err
 	}
 	if !c.Restore {
@@ -1050,7 +1054,8 @@ func (h *haRun) checkSourceS12(ctx context.Context, source *s12Source, dataFile 
 			return fmt.Errorf("read the source's marker table: %w", err)
 		}
 		for _, written := range []struct{ marker, cluster string }{{s12Marker, s12ClusterName},
-			{s12RestartMarker, s12RestartClusterName}, {s12IMRestartMarker, s12IMRestartClusterName}} {
+			{s12RestartMarker, s12RestartClusterName}, {s12IMRestartMarker, s12IMRestartClusterName},
+			{s12GracefulStopMarker, s12GracefulStopClusterName}} {
 			if _, ok := table[written.marker]; ok {
 				return restoreVerdict{fmt.Errorf("the source changed: the marker %s written through %s-rw is on %s",
 					written.marker, written.cluster, pod)}
