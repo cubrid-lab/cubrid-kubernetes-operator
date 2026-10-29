@@ -599,7 +599,7 @@ reason `BackupFailed`, with the operation's reason as the message.
     `CubridBackup`, the cluster `s11-denied` and the Secret
     `object-storage-denied` it created, in that order, each with its UID as
     a precondition, with `-cleanup-timeout` as their own budget. The record
-    says whether each deletion was accepted; the run does not wait for the
+    says whether each deletion was accepted or the object was already gone; the run does not wait for the
     objects to be gone. A deletion that fails is recorded there
     and in the scenario's `cleanupSucceeded`, and the object goes with the
     namespace. The cluster's data PVC is retained when the cluster is

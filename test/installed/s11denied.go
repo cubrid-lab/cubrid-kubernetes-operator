@@ -606,13 +606,16 @@ func (h *haRun) deleteDenied(ctx context.Context, made s11DeniedMade, rec *s11De
 		name := fmt.Sprintf("the %s %s (UID %s)", o.kind, o.obj.GetName(), uid)
 		err := h.Client.Delete(dctx, o.obj, client.Preconditions{UID: &uid},
 			client.PropagationPolicy(metav1.DeletePropagationBackground))
-		if err != nil && !apierrors.IsNotFound(err) {
+		switch {
+		case apierrors.IsNotFound(err):
+			outcomes = append(outcomes, name+" was already gone")
+		case err != nil:
 			cleaned = false
 			outcomes = append(outcomes, name+" could not be deleted and is left until the namespace is removed: "+
 				err.Error())
-			continue
+		default:
+			outcomes = append(outcomes, "the deletion of "+strings.TrimPrefix(name, "the ")+" was accepted")
 		}
-		outcomes = append(outcomes, "the deletion of "+strings.TrimPrefix(name, "the ")+" was accepted")
 	}
 	rec.Cleanup = strings.Join(outcomes, "; ")
 	return cleaned
