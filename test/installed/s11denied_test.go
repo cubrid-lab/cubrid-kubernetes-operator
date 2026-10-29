@@ -884,8 +884,11 @@ func TestStoreErrorKindNamesWhatTheStoreAnswered(t *testing.T) {
 		"SignatureDoesNotMatch": storeErrorAccessDenied,
 		"The request signature we calculated does not match the signature you provided. Check your key and " +
 			"signing method.": storeErrorAccessDenied,
-		"connection reset by peer": storeErrorOther,
-		"":                         storeErrorOther,
+		"connection reset by peer":                             storeErrorReset,
+		"dial tcp 10.42.1.9:8333: connect: connection refused": storeErrorReset,
+		"write: broken pipe":                                   storeErrorReset,
+		"context deadline exceeded":                            storeErrorOther,
+		"":                                                     storeErrorOther,
 	} {
 		if got := storeErrorKind(answer); got != want {
 			t.Errorf("storeErrorKind(%q) = %s, want %s", answer, got, want)

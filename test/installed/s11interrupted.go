@@ -30,6 +30,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -79,6 +80,17 @@ const (
 	failedWithinKey = "failedWithin"
 )
 
+// How the store's address was found (s11InterruptedFaults.AddressMode).
+const (
+	addressClusterIP = "cluster-ip"
+	addressHeadless  = "headless-endpoint"
+)
+
+// interruptedExecTolerance is how many errors in a row of a fault's command,
+// or of a reading of the store's address, the wait for the backup tolerates;
+// the next ends it. A Pod that changed is never tolerated.
+const interruptedExecTolerance = 3
+
 // interruptedCutConfirmLimit bounds how long after its installation the cut
 // may take to show a rejected packet while the backup has not ended.
 var interruptedCutConfirmLimit = 2 * time.Minute
@@ -105,11 +117,21 @@ type s11InterruptedFaults struct {
 	TargetUID string `json:"targetUID,omitempty"`
 	TargetIP  string `json:"targetIP,omitempty"`
 	// Store is -object-store-service, and StoreIP and StorePort the
-	// Service's ClusterIP and port: the destination the member's own network
-	// namespace sends the upload to.
-	Store     string `json:"store"`
-	StoreIP   string `json:"storeIP,omitempty"`
-	StorePort int    `json:"storePort,omitempty"`
+	// destination the member's own network namespace sends the upload to.
+	// AddressMode says how it was found: addressClusterIP, the Service's
+	// ClusterIP and port, which the node translates only after the packets
+	// leave the Pod; or addressHeadless, the one ready endpoint of a headless
+	// Service and its port, which the member dials directly. StorePod names
+	// that endpoint's Pod when its EndpointSlice does.
+	Store       string `json:"store"`
+	AddressMode string `json:"addressMode,omitempty"`
+	StoreIP     string `json:"storeIP,omitempty"`
+	StorePort   int    `json:"storePort,omitempty"`
+	StorePod    string `json:"storePod,omitempty"`
+	// StoreCheckedBeforeCut and StoreCheckedAtEnd are when the address was
+	// read again before the cut and at the end, and found unchanged.
+	StoreCheckedBeforeCut *time.Time `json:"storeCheckedBeforeCut,omitempty"`
+	StoreCheckedAtEnd     *time.Time `json:"storeCheckedAtEnd,omitempty"`
 	// RateBitsPerSecond is the limit's rate; UploadSeenBytes how many bytes
 	// must have passed it before the cut.
 	RateBitsPerSecond int64  `json:"rateBitsPerSecond"`
@@ -133,8 +155,15 @@ type s11InterruptedFaults struct {
 	CutIssuedAt    *time.Time             `json:"cutIssuedAt,omitempty"`
 	CutAt          *time.Time             `json:"cutAt,omitempty"`
 	CutConfirmedAt *time.Time             `json:"cutConfirmedAt,omitempty"`
-	// Rejected is the reset rule's counter when it confirmed the cut.
-	Rejected *netfault.RejectCounters `json:"rejected,omitempty"`
+	// Rejected is the reset rule's counter when it confirmed the cut, on a
+	// reading at which the backup had not ended. RejectedAtEnd is the counter
+	// read at the reading that first saw the backup ended, when the cut was
+	// not confirmed before it: evidence, not a confirmation.
+	Rejected      *netfault.RejectCounters `json:"rejected,omitempty"`
+	RejectedAtEnd *netfault.RejectCounters `json:"rejectedAtEnd,omitempty"`
+	// ExecErrors are the errors of a fault's command, or of a reading of the
+	// store's address, that the wait tolerated, each with its UTC time.
+	ExecErrors []string `json:"execErrors"`
 	// Waiting is what the cut waited for at the last reading before it.
 	Waiting string `json:"waiting,omitempty"`
 	// RemovedAt is when both faults were seen removed; Removal what became
@@ -169,6 +198,11 @@ type s11InterruptedRecord struct {
 	Faults      *s11InterruptedFaults `json:"faults"`
 	RequestedAt *time.Time            `json:"requestedAt,omitempty"`
 	Phases      []s11Phase            `json:"phases"`
+	// LastPhase is the phase of the last reading the wait took, and
+	// EndedAfterCut is set when the wait saw the backup ended at a reading
+	// after the one that confirmed the cut.
+	LastPhase     string `json:"lastPhase,omitempty"`
+	EndedAfterCut bool   `json:"endedAfterCut"`
 	// FailedWithin runs from the return of the request to the reading that
 	// saw Failed, and FailedAfterCut from the cut's installation to it, upper
 	// bounds; StatusFailedWithin from the backup's creationTimestamp to its
@@ -185,9 +219,13 @@ type s11InterruptedRecord struct {
 	StoreErrorKind string `json:"storeErrorKind,omitempty"`
 	// CompletedBeforeCut is set when the backup ended Completed before the
 	// cut rejected a packet: a complete backup, not a partial one.
-	CompletedBeforeCut bool                                   `json:"completedBeforeCut"`
-	Artifact           *databasev1alpha1.CubridBackupArtifact `json:"artifact,omitempty"`
-	ArtifactsNotDone   []s11ArtifactReading                   `json:"artifactsNotCompleted"`
+	CompletedBeforeCut bool `json:"completedBeforeCut"`
+	// PhaseAtEnd and ArtifactAtEnd are the backup as read once more after
+	// the faults were removed and the prefix was listed.
+	PhaseAtEnd       string                                 `json:"phaseAtEnd,omitempty"`
+	ArtifactAtEnd    *databasev1alpha1.CubridBackupArtifact `json:"artifactAtEnd,omitempty"`
+	Artifact         *databasev1alpha1.CubridBackupArtifact `json:"artifact,omitempty"`
+	ArtifactsNotDone []s11ArtifactReading                   `json:"artifactsNotCompleted"`
 	// ObjectsAtEnd is what the run's client listed under the prefix at the
 	// end, with sizes; ManifestAtEnd is set when a manifest.json was among
 	// them, and PartialArtifact when objects were and no manifest.json.
@@ -224,6 +262,9 @@ type s11InterruptedMade struct {
 	// removed is set once both faults were seen removed, or none was
 	// installed; tried once their removal ran.
 	removed, tried bool
+	// errorsInARow counts the tolerated errors since the last success of a
+	// fault's command or a reading of the store's address.
+	errorsInARow int
 }
 
 // faultStep is an error of a fault's step during the wait for the backup: it
@@ -298,17 +339,17 @@ func (h *haRun) runS11InterruptedUpload(ctx context.Context) (result evidence.Sc
 		ReadyLimit:  h.cfg.BackupInterruptedReadyLimit.String(), Phases: []s11Phase{},
 		ArtifactsNotDone: []s11ArtifactReading{}, ObjectsAtEnd: []storedObject{}, IncompleteUploads: []string{},
 		Faults: &s11InterruptedFaults{Target: s11InterruptedMember, Store: h.cfg.ObjectStoreService,
-			RateBitsPerSecond: interruptedRate, UploadSeenBytes: interruptedUploadSeen,
+			RateBitsPerSecond: interruptedRate, UploadSeenBytes: interruptedUploadSeen, ExecErrors: []string{},
 			Removal: "nothing to remove: no fault was installed"},
 		Credentials: &s11Credentials{FoundIn: []string{}},
 		Notes: []string{"the faults act in the network namespace of the standalone member's Pod, from an " +
 			"ephemeral container with NET_ADMIN and NET_RAW (test/faults/netfault); the run namespace enforces " +
 			"Pod Security privileged for it, with warn and audit at restricted",
 			"the member reaches the object store at the cluster's spec.objectStorage endpoint, which names " +
-				"-object-store-service; in the member's own network namespace the upload is addressed to the " +
-				"Service's ClusterIP and port, which the node translates only afterwards, so the limit and the cut " +
-				"match that address and port; the run assumes, as S11 complete does, that the endpoint resolves " +
-				"to that Service",
+				"-object-store-service; the limit and the cut match the address the member's own network namespace " +
+				"sends to: a Service's ClusterIP and port, which the node translates only afterwards, or, for a " +
+				"headless Service, its one ready endpoint, which the member dials directly; the run assumes, as S11 " +
+				"complete does, that the endpoint resolves to that Service",
 			"the cut is a TCP reset made by the member's own kernel: the object store never saw the connection " +
 				"close, and how the store and the Instance Manager behave when the traffic is silently dropped is " +
 				"not covered",
@@ -373,12 +414,17 @@ func (h *haRun) runS11InterruptedUpload(ctx context.Context) (result evidence.Sc
 		result.Result, result.Reason = evidence.Blocked, reason
 	default:
 		result.Result = evidence.Pass
+		failure := "with an error that names a reset or refused connection (storeErrorKind " + storeErrorReset + ")"
+		if rec.StoreErrorKind != storeErrorReset {
+			failure = "with another error, recorded as storeErrorKind " + rec.StoreErrorKind
+		}
 		result.Reason = "the upload of " + s11InterruptedClusterName + "'s backup to " + rec.Bucket + " was seen " +
 			"under way through the rate limit and then reset in its member's Pod, confirmed by the reset rule's " +
-			"counter; the backup ended Failed within backup_limit for its upload, never Completed and without " +
-			"status.artifact; no manifest.json was under its prefix at the end; both faults were removed; the " +
-			"source was unchanged; no seed key was in the statuses read or the Events; the Operator's and the " +
-			"Instance Manager's logs were not checked"
+			"counter before the backup ended; the backup ended Failed within backup_limit for its upload, " +
+			failure + ", never Completed and without status.artifact, also when read again at the end; no " +
+			"manifest.json was under its prefix at the end; both faults were seen removed; the store's address " +
+			"was unchanged before the cut and at the end; the source was unchanged; no seed key was in the " +
+			"statuses read or the Events; the Operator's and the Instance Manager's logs were not checked"
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -435,9 +481,19 @@ func (h *haRun) interruptedSteps(ctx context.Context, result *evidence.Scenario,
 	}
 	errs := []error{err}
 	// The faults go before the prefix is listed: what is there at the end
-	// is what the store holds with nothing in the way.
-	h.removeInterruptedFaults(ctx, made, rec.Faults)
+	// is what the store holds with nothing in the way. A fault not seen
+	// removed blocks the variant: the member's traffic may still be cut.
+	if !h.removeInterruptedFaults(ctx, made, rec.Faults) {
+		errs = append(errs, fmt.Errorf("the faults were not seen removed: %s", rec.Faults.Removal))
+	}
+	if err := h.recheckStore(ctx, rec.Faults); err != nil {
+		errs = append(errs, fmt.Errorf("at the end: %w", err))
+	} else {
+		at := time.Now().UTC()
+		rec.Faults.StoreCheckedAtEnd = &at
+	}
 	errs = append(errs, h.interruptedAtEnd(ctx, rec, result))
+	errs = append(errs, h.interruptedBackupAtEnd(ctx, made.backup, rec, result))
 	if err := h.checkS11Credentials(ctx, made.backup, nil, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
 	}
@@ -470,11 +526,21 @@ func (h *haRun) interruptedNamespace(ctx context.Context, rec *s11InterruptedRec
 	return nil
 }
 
-// interruptedStore resolves -object-store-service to the Service's
-// ClusterIP and the port the cluster's endpoint names. It refuses a Service
-// that the endpoint does not name, a Service without an IPv4 ClusterIP
-// (such as a headless one, whose name resolves to Pod IPs) and one without
-// that TCP port.
+// storeAddress is where the member's own network namespace sends the
+// upload: see s11InterruptedFaults.AddressMode.
+type storeAddress struct {
+	mode, ip, pod string
+	port          int
+}
+
+func (a storeAddress) String() string {
+	return fmt.Sprintf("%s:%d (%s)", a.ip, a.port, a.mode)
+}
+
+// interruptedStore resolves -object-store-service to the address the
+// member's own network namespace sends the upload to (resolveStore), and
+// records it. It refuses a Service that the cluster's endpoint does not
+// name.
 func (h *haRun) interruptedStore(ctx context.Context, f *s11InterruptedFaults) error {
 	namespace, name, port, err := splitService(h.cfg.ObjectStoreService)
 	if err != nil {
@@ -483,23 +549,123 @@ func (h *haRun) interruptedStore(ctx context.Context, f *s11InterruptedFaults) e
 	if err := h.sameObjectStore(ctx, namespace, name, port); err != nil {
 		return err
 	}
-	svc := &corev1.Service{}
-	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, svc); err != nil {
-		return fmt.Errorf("read the object store's Service %s/%s: %w", namespace, name, err)
+	addr, err := h.resolveStore(ctx)
+	if err != nil {
+		return err
 	}
-	if net.ParseIP(svc.Spec.ClusterIP).To4() == nil {
-		return fmt.Errorf("the object store's Service %s/%s has ClusterIP %q, not an IPv4 address the member "+
-			"sends to", namespace, name, svc.Spec.ClusterIP)
-	}
-	number, _ := strconv.Atoi(port)
-	if !slices.ContainsFunc(svc.Spec.Ports, func(p corev1.ServicePort) bool {
-		return int(p.Port) == number && (p.Protocol == "" || p.Protocol == corev1.ProtocolTCP)
-	}) {
-		return fmt.Errorf("the object store's Service %s/%s has no TCP port %d", namespace, name, number)
-	}
-	f.StoreIP, f.StorePort = svc.Spec.ClusterIP, number
+	f.AddressMode, f.StoreIP, f.StorePort, f.StorePod = addr.mode, addr.ip, addr.port, addr.pod
 	return nil
 }
+
+// resolveStore reads -object-store-service. A Service with an IPv4
+// ClusterIP gives that ClusterIP and the Service's TCP port: the node
+// translates it only after the packets leave the Pod. A headless Service,
+// whose name resolves to its endpoints' Pod IPs, gives its one ready IPv4
+// endpoint address and the endpoint port of the Service's TCP port, read
+// from its EndpointSlices: the member dials that address directly. A
+// Service without that TCP port, another ClusterIP, and a headless Service
+// with no or several ready addresses are refused.
+func (h *haRun) resolveStore(ctx context.Context) (storeAddress, error) {
+	namespace, name, port, err := splitService(h.cfg.ObjectStoreService)
+	if err != nil {
+		return storeAddress{}, err
+	}
+	number, _ := strconv.Atoi(port)
+	svc := &corev1.Service{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, svc); err != nil {
+		return storeAddress{}, fmt.Errorf("read the object store's Service %s/%s: %w", namespace, name, err)
+	}
+	i := slices.IndexFunc(svc.Spec.Ports, func(p corev1.ServicePort) bool {
+		return int(p.Port) == number && (p.Protocol == "" || p.Protocol == corev1.ProtocolTCP)
+	})
+	if i < 0 {
+		return storeAddress{}, fmt.Errorf("the object store's Service %s/%s has no TCP port %d", namespace, name,
+			number)
+	}
+	switch ip := svc.Spec.ClusterIP; {
+	case ip == corev1.ClusterIPNone:
+		return h.headlessEndpoint(ctx, namespace, name, svc.Spec.Ports[i])
+	case net.ParseIP(ip).To4() != nil:
+		return storeAddress{mode: addressClusterIP, ip: ip, port: number}, nil
+	}
+	return storeAddress{}, fmt.Errorf("the object store's Service %s/%s has ClusterIP %q, neither an IPv4 address "+
+		"nor None", namespace, name, svc.Spec.ClusterIP)
+}
+
+// headlessEndpoint returns the one ready IPv4 address of the headless
+// Service's EndpointSlices that has the endpoint port of servicePort over
+// TCP. An endpoint whose ready condition is not set counts as ready, as the
+// EndpointSlice API says.
+func (h *haRun) headlessEndpoint(ctx context.Context, namespace, name string, servicePort corev1.ServicePort) (
+	storeAddress, error) {
+	list := &discoveryv1.EndpointSliceList{}
+	if err := h.Client.List(ctx, list, client.InNamespace(namespace),
+		client.MatchingLabels{discoveryv1.LabelServiceName: name}); err != nil {
+		return storeAddress{}, fmt.Errorf("list the EndpointSlices of the object store's Service %s/%s: %w",
+			namespace, name, err)
+	}
+	var found []storeAddress
+	for _, slice := range list.Items {
+		if slice.AddressType != discoveryv1.AddressTypeIPv4 {
+			continue
+		}
+		port := 0
+		for _, p := range slice.Ports {
+			if p.Port != nil && cmp.Or(ptrValue(p.Name), "") == servicePort.Name &&
+				(p.Protocol == nil || *p.Protocol == corev1.ProtocolTCP) {
+				port = int(*p.Port)
+			}
+		}
+		if port == 0 {
+			continue
+		}
+		for _, ep := range slice.Endpoints {
+			if ep.Conditions.Ready != nil && !*ep.Conditions.Ready {
+				continue
+			}
+			pod := ""
+			if ep.TargetRef != nil && ep.TargetRef.Kind == "Pod" {
+				pod = ep.TargetRef.Name
+			}
+			for _, ip := range ep.Addresses {
+				addr := storeAddress{mode: addressHeadless, ip: ip, port: port, pod: pod}
+				if !slices.ContainsFunc(found, func(a storeAddress) bool { return a.ip == ip && a.port == port }) {
+					found = append(found, addr)
+				}
+			}
+		}
+	}
+	if len(found) != 1 {
+		return storeAddress{}, fmt.Errorf("the headless object store Service %s/%s has %d ready IPv4 endpoint "+
+			"addresses with the TCP port of its port %d, not one: %v; the faults need one address to act on",
+			namespace, name, len(found), servicePort.Port, found)
+	}
+	return found[0], nil
+}
+
+func ptrValue(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// recheckStore resolves the store's address again and fails when it is not
+// the one the faults act on, such as a store Pod that moved.
+func (h *haRun) recheckStore(ctx context.Context, f *s11InterruptedFaults) error {
+	addr, err := h.resolveStore(ctx)
+	if err != nil {
+		return fmt.Errorf("read the object store's address again: %w", err)
+	}
+	if addr.mode != f.AddressMode || addr.ip != f.StoreIP || addr.port != f.StorePort {
+		return storeMoved{fmt.Errorf("the object store's address is now %s, not %s:%d (%s), the address the "+
+			"faults act on", addr, f.StoreIP, f.StorePort, f.AddressMode)}
+	}
+	return nil
+}
+
+// storeMoved is an error of recheckStore that saw another address.
+type storeMoved struct{ error }
 
 // createInterrupted creates the standalone cluster in the run namespace
 // (standaloneSpec) with the run's copy of the seed Secret.
@@ -563,8 +729,11 @@ func (h *haRun) interruptedUpload(ctx context.Context, result *evidence.Scenario
 	}
 	limited := time.Now().UTC()
 	f.LimitedAt = &limited
-	if ok, err := made.throttle.Confirm(ctx); err != nil || !ok {
+	switch ok, err := made.throttle.Confirm(ctx); {
+	case err != nil:
 		return fmt.Errorf("the rate limit was not confirmed: %w", err)
+	case !ok:
+		return errors.New("the rate limit was not confirmed")
 	}
 	confirmed := time.Now().UTC()
 	f.LimitConfirmedAt = &confirmed
@@ -597,6 +766,7 @@ func (h *haRun) interruptedUpload(ctx context.Context, result *evidence.Scenario
 func (h *haRun) interruptedReading(ctx context.Context, backup *databasev1alpha1.CubridBackup,
 	rec *s11InterruptedRecord, made *s11InterruptedMade) error {
 	s, f := backup.Status, rec.Faults
+	rec.LastPhase = string(s.Phase)
 	ended := s.Phase == databasev1alpha1.BackupPhaseCompleted || s.Phase == databasev1alpha1.BackupPhaseFailed
 	if s.Artifact != nil && s.Phase != databasev1alpha1.BackupPhaseCompleted {
 		rec.ArtifactsNotDone = append(rec.ArtifactsNotDone, s11ArtifactReading{At: time.Now().UTC(),
@@ -612,8 +782,9 @@ func (h *haRun) interruptedReading(ctx context.Context, backup *databasev1alpha1
 		}
 		counters, err := made.throttle.Counters(ctx)
 		if err != nil {
-			return faultStep{fmt.Errorf("read the rate limit's counters: %w", err)}
+			return made.tolerate(f, "read the rate limit's counters", err)
 		}
+		made.errorsInARow = 0
 		f.Last = &counters
 		sent := counters.Bytes - min(counters.Bytes, f.AtRequest.Bytes)
 		if f.FirstGrowth == nil && sent > 0 {
@@ -623,6 +794,16 @@ func (h *haRun) interruptedReading(ctx context.Context, backup *databasev1alpha1
 			f.Waiting = fmt.Sprintf("%d bytes through the rate limit since the request, in phase %s", sent, s.Phase)
 			return nil
 		}
+		// The store's address is read again: a store Pod that moved would
+		// leave the cut on an address nothing is sent to.
+		if err := h.recheckStore(ctx, f); err != nil {
+			if errors.As(err, new(storeMoved)) {
+				return faultStep{fmt.Errorf("before the cut: %w", err)}
+			}
+			return made.tolerate(f, "read the object store's address before the cut", err)
+		}
+		checked := time.Now().UTC()
+		f.StoreCheckedBeforeCut = &checked
 		f.AtCut, f.SentBeforeCut, f.PhaseAtCut, f.Waiting = &counters, sent, string(s.Phase), ""
 		if first := f.FirstGrowth; first != nil && counters.At.After(first.At) {
 			rate := float64(counters.Bytes-first.Bytes) / counters.At.Sub(first.At).Seconds()
@@ -641,7 +822,17 @@ func (h *haRun) interruptedReading(ctx context.Context, backup *databasev1alpha1
 	}
 	ok, err := made.reset.Confirm(ctx)
 	if err != nil {
-		return faultStep{fmt.Errorf("confirm the cut: %w", err)}
+		return made.tolerate(f, "confirm the cut", err)
+	}
+	made.errorsInARow = 0
+	if ended {
+		// A packet rejected by now may have been sent after the upload
+		// ended: the reading that first sees the backup ended confirms
+		// nothing, and its counter is kept as evidence only.
+		if rejected, read := made.reset.Rejected(); read && ok {
+			f.RejectedAtEnd = &rejected
+		}
+		return nil
 	}
 	if ok {
 		at := time.Now().UTC()
@@ -658,6 +849,21 @@ func (h *haRun) interruptedReading(ctx context.Context, backup *databasev1alpha1
 	return nil
 }
 
+// tolerate records err of a fault's step and lets the wait go on while no
+// more than interruptedExecTolerance errors came in a row; the next, and
+// any error that says the target Pod changed, ends the wait.
+func (made *s11InterruptedMade) tolerate(f *s11InterruptedFaults, step string, err error) error {
+	if errors.As(err, new(*netfault.PodChangedError)) {
+		return faultStep{fmt.Errorf("%s: %w", step, err)}
+	}
+	made.errorsInARow++
+	f.ExecErrors = append(f.ExecErrors, time.Now().UTC().Format(time.RFC3339Nano)+" "+step+": "+err.Error())
+	if made.errorsInARow > interruptedExecTolerance {
+		return faultStep{fmt.Errorf("%s: %d errors in a row, the last: %w", step, made.errorsInARow, err)}
+	}
+	return nil
+}
+
 // judgeInterrupted judges the backup as the wait left it. The Instance
 // Manager uploads each object before the manifest (UploadBackup in
 // internal/instancemanager/upload.go); a reset connection fails the object's
@@ -665,19 +871,22 @@ func (h *haRun) interruptedReading(ctx context.Context, backup *databasev1alpha1
 // runBackup (internal/instancemanager/server.go) ends the operation Failed
 // with "upload failed: " and that error, without a manifest. The Operator
 // maps it onto the backup in failedBackup: phase Failed, Ready reason
-// BackupFailed. That is what is required once the cut was confirmed.
-// Completed after the cut was confirmed, or a status.artifact on a backup
-// that is not Completed, must never happen. A backup that ended before the
-// cut was confirmed did not show what an interrupted upload does, and
-// blocks S11 interrupted-upload; so does an error of a fault's step. A
-// failure after the cut that is not for the upload, or a backup neither
-// Completed nor Failed within BackupLimit, fails it.
+// BackupFailed. That is what is required once the cut was confirmed. The
+// cut is confirmed only at a reading at which the backup had not ended, so
+// a backup seen ended with the cut confirmed ended after it. Completed after
+// the cut was confirmed, or a status.artifact on a backup that is not
+// Completed, must never happen. A backup that ended before the cut was
+// confirmed did not show what an interrupted upload does, and blocks S11
+// interrupted-upload; so does an error of a fault's step. A failure after
+// the cut that is not for the upload, or a backup neither Completed nor
+// Failed within BackupLimit, fails it.
 func (h *haRun) judgeInterrupted(backup *databasev1alpha1.CubridBackup, waitErr error, requested time.Time,
 	rec *s11InterruptedRecord, result *evidence.Scenario) error {
 	s, f := backup.Status, rec.Faults
 	rec.Artifact = s.Artifact
 	if s.Phase == databasev1alpha1.BackupPhaseCompleted || s.Phase == databasev1alpha1.BackupPhaseFailed {
 		rec.Failure = readyReason(backup)
+		rec.EndedAfterCut = waitErr == nil && f.CutConfirmedAt != nil
 	}
 	var events []string
 	if s.Phase == databasev1alpha1.BackupPhaseCompleted && f.CutConfirmedAt != nil {
@@ -714,7 +923,7 @@ func (h *haRun) judgeInterrupted(backup *databasev1alpha1.CubridBackup, waitErr 
 		rec.CompletedBeforeCut = true
 		state := "before the cut was installed"
 		if f.CutAt != nil {
-			state = "before the cut rejected a packet"
+			state = "before the cut was confirmed at an earlier reading"
 		}
 		return fmt.Errorf("the backup ended Completed %s, with %d bytes through the rate limit at the last "+
 			"reading: the upload was not interrupted, S11 interrupted-upload is inconclusive, and the artifact is "+
@@ -723,8 +932,12 @@ func (h *haRun) judgeInterrupted(backup *databasev1alpha1.CubridBackup, waitErr 
 		return fmt.Errorf("the backup ended Failed before its upload was seen under way (%s): %s",
 			cmp.Or(f.Waiting, "no reading of the rate limit was taken"), readyReason(backup))
 	case f.CutConfirmedAt == nil:
-		return fmt.Errorf("the backup ended Failed after the cut was installed, but the cut's rule rejected no "+
-			"packet: the cut was not confirmed: %s", readyReason(backup))
+		seen := "its rule rejected no packet before"
+		if f.RejectedAtEnd != nil {
+			seen = "its rule showed rejected packets only at the reading that saw the backup end, not before"
+		}
+		return fmt.Errorf("the backup ended Failed after the cut was installed, but %s: the cut was not "+
+			"confirmed: %s", seen, readyReason(backup))
 	}
 	c := meta.FindStatusCondition(s.Conditions, backupReady)
 	if c == nil || c.Reason != s11MissingReason || !strings.HasPrefix(c.Message, uploadFailed) {
@@ -845,10 +1058,65 @@ func (h *haRun) interruptedAtEnd(ctx context.Context, rec *s11InterruptedRecord,
 			"the run did not write them and does not remove them", what, rec.Bucket, rec.Prefix, len(objects),
 			len(rec.IncompleteUploads)) + stagingNotChecked
 	}
-	if rec.ManifestAtEnd && !rec.CompletedBeforeCut {
-		event := fmt.Sprintf("bucket %s holds a manifest.json under %s, the prefix of a backup whose upload was "+
-			"cut", rec.Bucket, rec.Prefix)
+	switch {
+	case !rec.ManifestAtEnd || rec.CompletedBeforeCut:
+	case rec.EndedAfterCut:
+		event := fmt.Sprintf("bucket %s holds a manifest.json under %s, the prefix of a backup that ended after "+
+			"its upload was cut", rec.Bucket, rec.Prefix)
 		result.NeverEvents = append(result.NeverEvents, event)
+		errs = append(errs, backupVerdict{errors.New(event)})
+	default:
+		// The wait did not see the backup end after a confirmed cut: the
+		// upload may have gone on once the faults were removed.
+		errs = append(errs, fmt.Errorf("bucket %s holds a manifest.json under %s, but the wait did not see the "+
+			"backup end after a confirmed cut (its last phase %q): recorded, and S11 interrupted-upload cannot be "+
+			"judged", rec.Bucket, rec.Prefix, cmp.Or(rec.LastPhase, "not read")))
+	}
+	return errors.Join(errs...)
+}
+
+// interruptedBackupAtEnd reads the backup once more, after the faults were
+// removed and the prefix was listed, so that a backup driven on after the
+// wait is not missed. Completed or a status.artifact then must never
+// happen when the wait saw it end after a confirmed cut; otherwise it is
+// recorded and blocks S11 interrupted-upload, unless the backup completed
+// before the cut, which the judgement already blocks.
+func (h *haRun) interruptedBackupAtEnd(ctx context.Context, created *databasev1alpha1.CubridBackup,
+	rec *s11InterruptedRecord, result *evidence.Scenario) error {
+	backup := &databasev1alpha1.CubridBackup{}
+	if err := h.Client.Get(ctx, client.ObjectKeyFromObject(created), backup); err != nil {
+		return fmt.Errorf("read the CubridBackup at the end: %w", err)
+	}
+	if backup.UID != created.UID {
+		return fmt.Errorf("the CubridBackup %s was replaced", created.Name)
+	}
+	s := backup.Status
+	rec.PhaseAtEnd, rec.ArtifactAtEnd = string(s.Phase), s.Artifact
+	completed := s.Phase == databasev1alpha1.BackupPhaseCompleted
+	if rec.CompletedBeforeCut || (!completed && s.Artifact == nil) {
+		return nil
+	}
+	if !rec.EndedAfterCut {
+		return fmt.Errorf("the CubridBackup read at the end is %s with status.artifact %t, and the wait did not see "+
+			"it end after a confirmed cut: recorded, and S11 interrupted-upload cannot be judged", s.Phase,
+			s.Artifact != nil)
+	}
+	if rec.LastPhase == string(databasev1alpha1.BackupPhaseCompleted) {
+		// The judgement named it already.
+		return nil
+	}
+	var events []string
+	if completed {
+		events = append(events, "the backup of "+s11InterruptedClusterName+", seen "+rec.LastPhase+" after its "+
+			"upload was cut, is Completed when read again at the end")
+	}
+	if s.Artifact != nil {
+		events = append(events, "status.artifact names "+s.Artifact.URI+" for the backup of "+
+			s11InterruptedClusterName+" read again at the end, after its upload was cut")
+	}
+	result.NeverEvents = append(result.NeverEvents, events...)
+	errs := make([]error, 0, len(events))
+	for _, event := range events {
 		errs = append(errs, backupVerdict{errors.New(event)})
 	}
 	return errors.Join(errs...)

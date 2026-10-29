@@ -34,6 +34,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -48,9 +49,14 @@ const (
 	testInterruptedClusterUID = "interrupted-cluster-uid"
 	testInterruptedPodUID     = "interrupted-pod-uid"
 	testInterruptedPodIP      = "10.42.5.20"
-	// testStoreIP is the ClusterIP of the object store's Service.
-	testStoreIP   = "10.43.0.50"
-	testStorePort = 8333
+	// testStoreIP is the object store Pod's IP, the one endpoint of its
+	// headless Service, as on the VM lab; testStorePod is that Pod.
+	// testStoreClusterIP is the ClusterIP of a Service that is not headless.
+	testStoreIP        = "10.42.1.9"
+	testStorePod       = "seaweedfs-0"
+	testStoreClusterIP = "10.43.0.50"
+	testStorePort      = 8333
+	testStorePortName  = "s3"
 	// testResetAnswer is what minio-go reports of a reset connection.
 	testResetAnswer = `Put "http://seaweedfs.object-store.svc:8333/lab-backups/x": write tcp ` +
 		testInterruptedPodIP + `:41234->` + testStoreIP + `:8333: write: connection reset by peer`
@@ -77,6 +83,10 @@ const (
 	testUploadingMessage = "uploading artifact"
 	testCompletedMessage = "backup completed"
 	testStoreService     = "seaweedfs"
+	// phaseUploading and phaseCompleted are backup phases as the record
+	// keeps them.
+	phaseUploading = string(databasev1alpha1.BackupPhaseUploading)
+	phaseCompleted = string(databasev1alpha1.BackupPhaseCompleted)
 )
 
 func testS11InterruptedConfig(t *testing.T) HAConfig {
@@ -88,10 +98,29 @@ func testS11InterruptedConfig(t *testing.T) HAConfig {
 }
 
 // testStoreServiceObject is the object store's Service the cluster's
-// endpoint names.
+// endpoint names, headless as on the VM lab.
 func testStoreServiceObject() *corev1.Service {
 	return &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: testStoreService, Namespace: testStoreNamespace},
-		Spec: corev1.ServiceSpec{ClusterIP: testStoreIP, Ports: []corev1.ServicePort{{Port: testStorePort}}}}
+		Spec: corev1.ServiceSpec{ClusterIP: corev1.ClusterIPNone,
+			Ports: []corev1.ServicePort{{Name: testStorePortName, Port: testStorePort}}}}
+}
+
+// testStoreSlice is an EndpointSlice of the object store's Service with a
+// ready endpoint at each of ips, on the store's port, and one endpoint that is not ready.
+func testStoreSlice(name string, ips ...string) *discoveryv1.EndpointSlice {
+	tcp, portName, port, ready, notReady := corev1.ProtocolTCP, testStorePortName, int32(testStorePort), true, false
+	slice := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testStoreNamespace,
+		Labels: map[string]string{discoveryv1.LabelServiceName: testStoreService}},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Ports:       []discoveryv1.EndpointPort{{Name: &portName, Port: &port, Protocol: &tcp}},
+		Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.42.3.30"},
+			Conditions: discoveryv1.EndpointConditions{Ready: &notReady}}}}
+	for i, ip := range ips {
+		slice.Endpoints = append(slice.Endpoints, discoveryv1.Endpoint{Addresses: []string{ip},
+			Conditions: discoveryv1.EndpointConditions{Ready: &ready},
+			TargetRef:  &corev1.ObjectReference{Kind: "Pod", Name: fmt.Sprintf("seaweedfs-%d", i)}})
+	}
+	return slice
 }
 
 // fakeNetns answers the commands the network faults run in the member's
@@ -105,6 +134,10 @@ type fakeNetns struct {
 	rejected, rejectedBytes   uint64
 	inertReset, ignoreUnreset bool
 	ops                       []string
+	// stats counts the reads of the limit's counters; from the failFrom-th,
+	// failCount of them fail. onUnthrottle runs when the limit is removed.
+	stats, failFrom, failCount int
+	onUnthrottle               func()
 }
 
 var netnsArg = regexp.MustCompile(`^: netfault (\S+)(?: (\S+) (\d+)(?: (\d+))?)?`)
@@ -138,6 +171,10 @@ func (n *fakeNetns) answer(_ context.Context, pod, script string) (string, error
 			"  match %02x%02x%02x%02x/ffffffff at 16\n  match 00060000/00ff0000 at 8\n"+
 			"  match 0000%04x/0000ffff at 20\n", v4[0], v4[1], v4[2], v4[3], n.throttlePort), nil
 	case "stats":
+		n.stats++
+		if n.failFrom > 0 && n.stats >= n.failFrom && n.stats < n.failFrom+n.failCount {
+			return "", errors.New("error dialing backend: EOF")
+		}
 		return fmt.Sprintf("qdisc prio 1: root refcnt 3 bands 4\n Sent 1 bytes 1 pkt (dropped 0, overlimits 0 "+
 			"requeues 0)\nqdisc tbf 40: parent 1:4 rate 256Kbit burst 16Kb lat 400ms\n Sent %d bytes %d pkt "+
 			"(dropped 0, overlimits 7 requeues 0)\n", n.bandBytes, n.bandPackets), nil
@@ -145,6 +182,9 @@ func (n *fakeNetns) answer(_ context.Context, pod, script string) (string, error
 		n.throttleIP, n.throttlePort = m[2], port
 	case "unthrottle":
 		n.throttleIP, n.throttlePort = "", 0
+		if n.onUnthrottle != nil {
+			n.onUnthrottle()
+		}
 	case "rules":
 		return n.save(), nil
 	case "reset":
@@ -243,6 +283,12 @@ type s11InterruptedFixture struct {
 	// keeps it Uploading instead.
 	afterCut     databasev1alpha1.CubridBackupPhase
 	holdAfterCut bool
+	// completeOnCut ends the backup Completed at the first reading after the
+	// cut, at which the reset rule first rejects the upload's packets;
+	// reDriven, when set, is the phase of every reading after the backup
+	// ended, which otherwise keeps the phase it ended in.
+	completeOnCut bool
+	reDriven      databasev1alpha1.CubridBackupPhase
 	// leave are the objects the member leaves under the attempt prefix when
 	// the backup ends; tamper changes the status of a reading.
 	leave  []string
@@ -257,12 +303,18 @@ type s11InterruptedFixture struct {
 	clusterReads, reads int
 	uploading           int
 	cutSeen             bool
+	final               databasev1alpha1.CubridBackupPhase
 	deleted             []string
 }
 
-func newS11InterruptedFixture(t *testing.T, cfg HAConfig) *s11InterruptedFixture {
+// newS11InterruptedFixture is the fixture over the object store objects
+// store: by default the headless Service with one ready endpoint.
+func newS11InterruptedFixture(t *testing.T, cfg HAConfig, store ...client.Object) *s11InterruptedFixture {
 	t.Helper()
-	f := &s11InterruptedFixture{s11Fixture: newS11Fixture(t, cfg, testStoreServiceObject()), net: &fakeNetns{},
+	if len(store) == 0 {
+		store = []client.Object{testStoreServiceObject(), testStoreSlice("seaweedfs-a", testStoreIP)}
+	}
+	f := &s11InterruptedFixture{s11Fixture: newS11Fixture(t, cfg, store...), net: &fakeNetns{},
 		readyAt: 2, uploadPerRead: testUploadPerRead, afterCut: databasev1alpha1.BackupPhaseFailed,
 		deleteErr: map[string]error{}}
 	f.runner.openStore = func(endpoint, accessKey, secretKey string, secure bool) (objectStore, error) {
@@ -379,6 +431,21 @@ func (f *s11InterruptedFixture) advanceCluster(ctx context.Context, c client.Wit
 // phase is the backup's phase at this reading, as the member's upload and
 // the faults make it.
 func (f *s11InterruptedFixture) phase() databasev1alpha1.CubridBackupPhase {
+	if f.final != "" && f.reDriven != "" {
+		return f.reDriven
+	}
+	if f.final != "" {
+		return f.final
+	}
+	p := f.next()
+	if p == databasev1alpha1.BackupPhaseCompleted || p == databasev1alpha1.BackupPhaseFailed {
+		f.final = p
+	}
+	return p
+}
+
+// next is the phase at this reading of a backup that has not ended.
+func (f *s11InterruptedFixture) next() databasev1alpha1.CubridBackupPhase {
 	f.reads++
 	switch f.reads {
 	case 1:
@@ -394,6 +461,9 @@ func (f *s11InterruptedFixture) phase() databasev1alpha1.CubridBackupPhase {
 	defer n.mu.Unlock()
 	if n.resetIP != "" {
 		n.send(n.resetIP, 7300)
+		if f.completeOnCut {
+			return databasev1alpha1.BackupPhaseCompleted
+		}
 		if !f.cutSeen || f.holdAfterCut {
 			f.cutSeen = true
 			return databasev1alpha1.BackupPhaseUploading
@@ -581,21 +651,35 @@ func requireInterruptedObjects(t *testing.T, f *s11InterruptedFixture, rec s11In
 	}
 }
 
+// requireInterruptedAddress checks the target and the store's address in the
+// record of a passed run.
+func requireInterruptedAddress(t *testing.T, fs *s11InterruptedFaults) {
+	t.Helper()
+	if fs == nil || fs.Target != s11InterruptedMember || fs.TargetUID != testInterruptedPodUID ||
+		fs.TargetIP != testInterruptedPodIP || fs.StoreIP != testStoreIP || fs.StorePort != testStorePort ||
+		fs.AddressMode != addressHeadless || fs.StorePod != "seaweedfs-0" || fs.StoreCheckedBeforeCut == nil ||
+		fs.StoreCheckedAtEnd == nil {
+		t.Fatalf("faults = %+v, want the store's headless endpoint, read again before the cut and at the end", fs)
+	}
+}
+
 // requireInterruptedFaults checks the faults and the failure in the record
 // of a passed run.
 func requireInterruptedFaults(t *testing.T, rec s11InterruptedRecord) {
 	t.Helper()
+	requireInterruptedAddress(t, rec.Faults)
 	fs := rec.Faults
-	if fs == nil || fs.Target != s11InterruptedMember || fs.TargetUID != testInterruptedPodUID ||
-		fs.TargetIP != testInterruptedPodIP || fs.StoreIP != testStoreIP || fs.StorePort != testStorePort ||
+	if len(fs.ExecErrors) != 0 || fs.RejectedAtEnd != nil ||
 		fs.LimitedAt == nil || fs.LimitConfirmedAt == nil || fs.AtRequest == nil || fs.AtCut == nil ||
 		fs.CutIssuedAt == nil || fs.CutAt == nil || fs.CutConfirmedAt == nil || fs.Rejected == nil ||
-		fs.Rejected.Packets == 0 || fs.SentBeforeCut != 2*testUploadPerRead || fs.PhaseAtCut != "Uploading" ||
+		fs.Rejected.Packets == 0 || fs.SentBeforeCut != 2*testUploadPerRead || fs.PhaseAtCut != phaseUploading ||
 		fs.RemovedAt == nil || fs.CutConfirmedAt.Before(*fs.CutAt) || fs.CutAt.Before(*rec.RequestedAt) {
 		t.Fatalf("faults = %+v, want the limit, the upload seen, the cut confirmed and both removed", fs)
 	}
 	if rec.FailedWithin == "" || rec.FailedAfterCut == "" || rec.StoreError != testResetAnswer ||
-		rec.StoreErrorKind != storeErrorOther || !strings.HasPrefix(rec.Failure, s11MissingReason+": upload failed: ") ||
+		rec.StoreErrorKind != storeErrorReset || !rec.EndedAfterCut || rec.LastPhase != databasePhaseFailed ||
+		rec.PhaseAtEnd != databasePhaseFailed || rec.ArtifactAtEnd != nil ||
+		!strings.HasPrefix(rec.Failure, s11MissingReason+": upload failed: ") ||
 		rec.Artifact != nil || rec.CompletedBeforeCut || len(rec.ArtifactsNotDone) != 0 {
 		t.Fatalf("record = %+v, want the upload's failure", rec)
 	}
@@ -787,43 +871,118 @@ func TestRunS11InterruptedUploadRefusesANamespaceThatIsNotPrivileged(t *testing.
 }
 
 func TestRunS11InterruptedUploadRefusesAStoreItCannotAddress(t *testing.T) {
-	for name, change := range map[string]func(svc *corev1.Service){
-		"a headless Service":     func(svc *corev1.Service) { svc.Spec.ClusterIP = corev1.ClusterIPNone },
-		"another port":           func(svc *corev1.Service) { svc.Spec.Ports[0].Port = 9000 },
-		"a UDP port of the same": func(svc *corev1.Service) { svc.Spec.Ports[0].Protocol = corev1.ProtocolUDP },
+	clusterIP := func(change func(svc *corev1.Service)) []client.Object {
+		svc := testStoreServiceObject()
+		svc.Spec.ClusterIP = testStoreClusterIP
+		change(svc)
+		return []client.Object{svc}
+	}
+	for name, tc := range map[string]struct {
+		store []client.Object
+		want  string
+	}{
+		"a headless Service with no ready endpoint": {store: []client.Object{testStoreServiceObject(),
+			testStoreSlice("seaweedfs-a")}, want: "has 0 ready IPv4 endpoint addresses"},
+		"a headless Service with two ready endpoints": {store: []client.Object{testStoreServiceObject(),
+			testStoreSlice("seaweedfs-a", testStoreIP),
+			testStoreSlice("seaweedfs-b", "10.42.2.9")}, want: "has 2 ready IPv4 endpoint addresses"},
+		"a headless Service whose endpoints lack its port": {store: []client.Object{testStoreServiceObject(),
+			func() client.Object {
+				slice := testStoreSlice("seaweedfs-a", testStoreIP)
+				other := "metrics"
+				slice.Ports[0].Name = &other
+				return slice
+			}()}, want: "has 0 ready IPv4 endpoint addresses"},
+		"another port": {store: clusterIP(func(svc *corev1.Service) { svc.Spec.Ports[0].Port = 9000 }),
+			want: "has no TCP port 8333"},
+		"a UDP port of the same": {store: clusterIP(func(svc *corev1.Service) {
+			svc.Spec.Ports[0].Protocol = corev1.ProtocolUDP
+		}), want: "has no TCP port 8333"},
+		"an IPv6 ClusterIP": {store: clusterIP(func(svc *corev1.Service) { svc.Spec.ClusterIP = "fd00::10" }),
+			want: "neither an IPv4 address nor None"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS11InterruptedConfig(t)
-			f := newS11InterruptedFixture(t, cfg)
-			created := f.backupCreated
-			f.backupCreated = func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error {
-				svc := &corev1.Service{}
-				if err := c.Get(ctx, client.ObjectKey{Namespace: testStoreNamespace, Name: testStoreService}, svc); err != nil {
-					return err
-				}
-				change(svc)
-				if err := c.Update(ctx, svc); err != nil {
-					return err
-				}
-				return created(ctx, c, backup)
-			}
+			f := newS11InterruptedFixture(t, cfg, tc.store...)
 			interrupted, err := interruptedOf(t, f)
-			if err == nil || interrupted.Result != evidence.Blocked || f.cluster != nil {
-				t.Fatalf("S11 interrupted-upload = %+v, cluster %v; want refused before anything was created",
-					interrupted, f.cluster)
+			if err == nil || interrupted.Result != evidence.Blocked || f.cluster != nil ||
+				!strings.Contains(interrupted.Reason, tc.want) {
+				t.Fatalf("S11 interrupted-upload = %+v, cluster %v; want refused before anything was created: %q",
+					interrupted, f.cluster, tc.want)
 			}
 		})
 	}
 }
 
-func TestRunS11InterruptedUploadRecordsAFaultLeftInstalled(t *testing.T) {
+// A Service that is not headless is addressed by its ClusterIP.
+func TestRunS11InterruptedUploadTargetsTheClusterIPOfAServiceThatIsNotHeadless(t *testing.T) {
+	cfg := testS11InterruptedConfig(t)
+	svc := testStoreServiceObject()
+	svc.Spec.ClusterIP = testStoreClusterIP
+	f := newS11InterruptedFixture(t, cfg, svc)
+	interrupted, err := interruptedOf(t, f)
+	if err != nil || interrupted.Result != evidence.Pass {
+		t.Fatalf("S11 interrupted-upload = %+v, %v; want a pass", interrupted, err)
+	}
+	fs := readInterruptedRecord(t, cfg.EvidenceDir).Faults
+	if fs.AddressMode != addressClusterIP || fs.StoreIP != testStoreClusterIP || fs.StorePort != testStorePort ||
+		fs.StorePod != "" {
+		t.Fatalf("faults = %+v, want the ClusterIP and the Service's port", fs)
+	}
+	f.net.mu.Lock()
+	defer f.net.mu.Unlock()
+	if !slices.Contains(f.net.ops, "throttle") || f.net.rejected == 0 {
+		t.Fatalf("fault commands %v, rejected %d; want the faults on the ClusterIP", f.net.ops, f.net.rejected)
+	}
+}
+
+// The store Pod that moved before the cut would leave the cut on an address
+// nothing is sent to.
+func TestRunS11InterruptedUploadIsBlockedWhenTheStoreMovesBeforeTheCut(t *testing.T) {
+	cfg := testS11InterruptedConfig(t)
+	f := newS11InterruptedFixture(t, cfg)
+	read := f.backupRead
+	f.backupRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+		if key.Name == s11InterruptedBackupName && f.reads == 2 {
+			slice := &discoveryv1.EndpointSlice{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: testStoreNamespace, Name: "seaweedfs-a"},
+				slice); err != nil {
+				return err
+			}
+			slice.Endpoints[1].Addresses = []string{"10.42.2.9"}
+			if err := c.Update(ctx, slice); err != nil {
+				return err
+			}
+		}
+		return read(ctx, c, key)
+	}
+	interrupted, err := interruptedOf(t, f)
+	if err == nil || interrupted.Result != evidence.Blocked || len(interrupted.NeverEvents) != 0 ||
+		!strings.Contains(interrupted.Reason, "before the cut: the object store's address is now 10.42.2.9:8333") {
+		t.Fatalf("S11 interrupted-upload = %+v, want blocked: the store moved", interrupted)
+	}
+	f.net.mu.Lock()
+	cut := slices.Contains(f.net.ops, "reset")
+	f.net.mu.Unlock()
+	if cut {
+		t.Fatal("the cut was installed on the old address")
+	}
+	if rec := readInterruptedRecord(t, cfg.EvidenceDir); rec.Faults.CutAt != nil ||
+		rec.Faults.StoreCheckedBeforeCut != nil {
+		t.Fatalf("faults = %+v, want no cut", rec.Faults)
+	}
+}
+
+// A fault not seen removed blocks the variant: the member's traffic may
+// still be cut.
+func TestRunS11InterruptedUploadIsBlockedByAFaultLeftInstalled(t *testing.T) {
 	cfg := testS11InterruptedConfig(t)
 	f := newS11InterruptedFixture(t, cfg)
 	f.net.ignoreUnreset = true
 	interrupted, err := interruptedOf(t, f)
-	if err != nil || interrupted.Result != evidence.Pass {
-		t.Fatalf("S11 interrupted-upload = %+v, %v; want a pass: removal is not part of the verdict", interrupted,
-			err)
+	if err == nil || interrupted.Result != evidence.Blocked ||
+		!strings.Contains(interrupted.Reason, "the faults were not seen removed: the cut was not seen removed") {
+		t.Fatalf("S11 interrupted-upload = %+v, %v; want blocked by the fault left", interrupted, err)
 	}
 	if interrupted.CleanupSucceeded == nil || *interrupted.CleanupSucceeded {
 		t.Fatalf("S11 interrupted-upload = %+v, want the failed removal recorded", interrupted)
@@ -836,6 +995,109 @@ func TestRunS11InterruptedUploadRecordsAFaultLeftInstalled(t *testing.T) {
 	// The cluster is deleted all the same.
 	if !slices.Equal(f.deleted, wantInterruptedDeleted) {
 		t.Fatalf("deleted = %v", f.deleted)
+	}
+}
+
+// When the wait ends before the backup ended, the upload may go on once the
+// faults are removed: a manifest.json found then is recorded, not a
+// never-event.
+func TestRunS11InterruptedUploadIsBlockedByAManifestAfterTheWaitEndedEarly(t *testing.T) {
+	cfg := testS11InterruptedConfig(t)
+	f := newS11InterruptedFixture(t, cfg)
+	// The limit's counters are read twice by its confirmation and once at
+	// the request; every reading from the second Uploading one fails.
+	f.net.failFrom, f.net.failCount = 5, 100
+	f.net.onUnthrottle = func() {
+		f.store.put(testBackupBucket, f.backup.Spec.Destination.ObjectStorage.Prefix+"/"+testAttempt+
+			"/manifest.json", []byte("{}"))
+	}
+	interrupted, err := interruptedOf(t, f)
+	if err == nil || interrupted.Result != evidence.Blocked || len(interrupted.NeverEvents) != 0 ||
+		!strings.Contains(interrupted.Reason, "4 errors in a row") ||
+		!strings.Contains(interrupted.Reason, "did not see the backup end after a confirmed cut") {
+		t.Fatalf("S11 interrupted-upload = %+v, want blocked with the manifest recorded", interrupted)
+	}
+	rec := readInterruptedRecord(t, cfg.EvidenceDir)
+	if !rec.ManifestAtEnd || rec.EndedAfterCut || rec.LastPhase != phaseUploading || len(rec.Faults.ExecErrors) != 4 {
+		t.Fatalf("record = %+v, want the manifest, the last phase and the errors recorded", rec)
+	}
+}
+
+// A few errors of a fault's command in a row are tolerated.
+func TestRunS11InterruptedUploadToleratesAFewCommandErrors(t *testing.T) {
+	cfg := testS11InterruptedConfig(t)
+	f := newS11InterruptedFixture(t, cfg)
+	f.net.failFrom, f.net.failCount = 4, interruptedExecTolerance
+	interrupted, err := interruptedOf(t, f)
+	if err != nil || interrupted.Result != evidence.Pass {
+		t.Fatalf("S11 interrupted-upload = %+v, %v; want a pass", interrupted, err)
+	}
+	if rec := readInterruptedRecord(t, cfg.EvidenceDir); len(rec.Faults.ExecErrors) != interruptedExecTolerance {
+		t.Fatalf("errors = %v, want the %d tolerated ones recorded", rec.Faults.ExecErrors, interruptedExecTolerance)
+	}
+}
+
+// A target Pod that changed is never tolerated.
+func TestRunS11InterruptedUploadStopsAtOnceWhenTheTargetPodChanges(t *testing.T) {
+	cfg := testS11InterruptedConfig(t)
+	f := newS11InterruptedFixture(t, cfg)
+	read := f.backupRead
+	f.backupRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+		if key.Name == s11InterruptedBackupName && f.reads == 2 {
+			pod := &corev1.Pod{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: cfg.Namespace, Name: s11InterruptedMember},
+				pod); err != nil {
+				return err
+			}
+			pod.Status.PodIP = "10.42.5.21"
+			if err := c.Status().Update(ctx, pod); err != nil {
+				return err
+			}
+		}
+		return read(ctx, c, key)
+	}
+	interrupted, err := interruptedOf(t, f)
+	if err == nil || interrupted.Result != evidence.Blocked || !strings.Contains(interrupted.Reason, "has IP") {
+		t.Fatalf("S11 interrupted-upload = %+v, want blocked by the changed Pod", interrupted)
+	}
+	if rec := readInterruptedRecord(t, cfg.EvidenceDir); len(rec.Faults.ExecErrors) != 0 {
+		t.Fatalf("errors = %v, want the changed Pod not tolerated", rec.Faults.ExecErrors)
+	}
+}
+
+// A packet rejected at the reading that first sees the backup Completed may
+// have been sent after the upload ended: inconclusive, not a never-event.
+func TestRunS11InterruptedUploadDoesNotConfirmTheCutAtTheEndedReading(t *testing.T) {
+	cfg := testS11InterruptedConfig(t)
+	f := newS11InterruptedFixture(t, cfg)
+	f.completeOnCut = true
+	interrupted, err := interruptedOf(t, f)
+	if err == nil || interrupted.Result != evidence.Blocked || len(interrupted.NeverEvents) != 0 ||
+		!strings.Contains(interrupted.Reason, "inconclusive") {
+		t.Fatalf("S11 interrupted-upload = %+v, want blocked as inconclusive", interrupted)
+	}
+	rec := readInterruptedRecord(t, cfg.EvidenceDir)
+	if !rec.CompletedBeforeCut || rec.Faults.CutConfirmedAt != nil || rec.Faults.RejectedAtEnd == nil ||
+		rec.EndedAfterCut {
+		t.Fatalf("record = %+v, faults = %+v; want the late rejection kept as evidence only", rec, rec.Faults)
+	}
+}
+
+// A backup driven on after it was seen Failed is found when it is read
+// again at the end.
+func TestRunS11InterruptedUploadFailsWhenTheBackupCompletesAfterTheWait(t *testing.T) {
+	cfg := testS11InterruptedConfig(t)
+	f := newS11InterruptedFixture(t, cfg)
+	f.reDriven = databasev1alpha1.BackupPhaseCompleted
+	interrupted, err := interruptedOf(t, f)
+	if err == nil || interrupted.Result != evidence.Fail ||
+		!strings.Contains(interrupted.Reason, "is Completed when read again at the end") ||
+		!strings.Contains(interrupted.Reason, "read again at the end, after its upload was cut") {
+		t.Fatalf("S11 interrupted-upload = %+v, want the backup at the end as never-events", interrupted)
+	}
+	if rec := readInterruptedRecord(t, cfg.EvidenceDir); rec.PhaseAtEnd != phaseCompleted || rec.ArtifactAtEnd == nil ||
+		rec.LastPhase != databasePhaseFailed {
+		t.Fatalf("record = %+v, want the backup at the end recorded", rec)
 	}
 }
 

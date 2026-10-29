@@ -44,6 +44,12 @@ const throttleBurst = "16kb"
 // is dropped; TCP sends it again, and the rate holds.
 const throttleLatency = "400ms"
 
+// throttleRemovedMarker is the file Remove leaves in the ephemeral
+// container before it deletes the qdisc. An injection that starts after it
+// refuses to add anything. It is the limit's own, so that the removal of
+// another fault in the same container does not stop it.
+const throttleRemovedMarker = "/tmp/netfault-throttle-removed"
+
 // protocolTCP is how `tc filter show` prints a match on the TCP protocol.
 const protocolTCP = "match 00060000/00ff0000 at 8"
 
@@ -66,9 +72,10 @@ var bandStats = regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(throttleQdisc) +
 	`[^\n]*\n\s*Sent (\d+) bytes (\d+) pkt \(dropped (\d+), overlimits (\d+)`)
 
 // Throttle limits to Rate the TCP traffic the target sends to Peer's IP and
-// port, with a tbf qdisc in the target's namespace. Peer is not entered: it
-// may be a Service's ClusterIP, which the target's own namespace sends to
-// before the node translates it. The target's other traffic is not limited.
+// port, with a tbf qdisc in the target's namespace. Peer is not entered. It
+// is the address the target's own namespace sends to: a Service's ClusterIP,
+// which the node translates only afterwards, or a Pod's IP, such as the
+// endpoint of a headless Service. The target's other traffic is not limited.
 //
 // The limit's rate is the kernel's; it is not measured here. Confirm sees
 // that TCP connects to the peer pass through the limited band, by its
@@ -165,6 +172,9 @@ func (t *Throttle) Prepare(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if _, err := shell(ctx, t.Env, t.Target, ": netfault unmark\nrm -f "+throttleRemovedMarker); err != nil {
+		return err
+	}
 	t.mu.Lock()
 	t.qdisc, t.baseline, t.haveBaseline, t.prepared = qdisc, baseline, true, true
 	t.mu.Unlock()
@@ -207,11 +217,13 @@ func (t *Throttle) Inject(ctx context.Context) error {
 	// delay's do.
 	script := fmt.Sprintf(`: netfault throttle %[1]s %[2]d %[3]d
 set -e
+[ ! -e %[6]s ] || { echo 'the fault was removed'; exit 3; }
 tc qdisc add dev eth0 root handle 1: prio bands 4
 for b in 1 2 3; do tc qdisc add dev eth0 parent 1:$b handle ${b}0: pfifo limit 10000; done
 tc qdisc add dev eth0 parent 1:4 handle 40: tbf rate %[3]dbit burst %[4]s latency %[5]s
 tc filter add dev eth0 parent 1: protocol ip prio 1 u32 match ip dst %[1]s/32 match ip protocol 6 0xff \
-  match ip dport %[2]d 0xffff flowid 1:4`, t.Peer.IP, t.Peer.Port, t.Rate, throttleBurst, throttleLatency)
+  match ip dport %[2]d 0xffff flowid 1:4`, t.Peer.IP, t.Peer.Port, t.Rate, throttleBurst, throttleLatency,
+		throttleRemovedMarker)
 	t.mu.Lock()
 	t.injected = true
 	t.mu.Unlock()
@@ -308,8 +320,11 @@ func (t *Throttle) Confirm(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// unthrottleScript deletes the fault's own root qdisc only.
+// unthrottleScript keeps any later injection from adding the limit, stops
+// one that is still running, and deletes the fault's own root qdisc only.
 const unthrottleScript = ": netfault unthrottle\n" +
+	"touch " + throttleRemovedMarker + "\n" +
+	"pkill -f 'netfault [t]hrottle' 2>/dev/null\n" +
 	"if tc qdisc show dev eth0 | grep -q '^qdisc prio 1: root'; then tc qdisc del dev eth0 root; fi"
 
 // Remove checks that the target is still the Pod it names, takes the limit

@@ -66,6 +66,8 @@ type fakeNS struct {
 	throttlePort, resetPort int
 	bandBytes, bandPackets  uint64
 	rejected, rejectedBytes uint64
+	// throttleRemoved is the limit's remove marker.
+	throttleRemoved bool
 }
 
 // fakeNet answers the commands the faults run as kubectl exec, with a model
@@ -216,12 +218,17 @@ func (n *fakeNet) uploadFault(ns *fakeNS, op, script string) (string, error) {
 	case "stats":
 		return n.stats(ns), nil
 	case "unthrottle":
+		ns.throttleRemoved = true
 		if !n.ignoreUnthrottle && strings.HasPrefix(ns.qdisc, "qdisc prio 1: root") {
 			ns.qdisc, ns.filter, ns.throttleIP, ns.throttlePort = defaultQdisc, "", "", 0
 		}
 		return "", nil
 	case "unmark":
-		ns.removed = false
+		if strings.Contains(script, throttleRemovedMarker) {
+			ns.throttleRemoved = false
+		} else {
+			ns.removed = false
+		}
 		return "", nil
 	case "reset":
 		return n.addReset(ns, script)
@@ -322,6 +329,9 @@ func (n *fakeNet) upload(podIP, addr string, bytes uint64) {
 }
 
 func (n *fakeNet) addThrottle(ns *fakeNS, script string) (string, error) {
+	if ns.throttleRemoved {
+		return faultRemoved, errors.New("command terminated with exit code 3")
+	}
 	if n.ignoreThrottle {
 		return "", nil
 	}
@@ -351,7 +361,7 @@ func (n *fakeNet) stats(ns *fakeNS) string {
 func (n *fakeNet) addReset(ns *fakeNS, script string) (string, error) {
 	switch {
 	case ns.removed:
-		return "the fault was removed", errors.New("command terminated with exit code 3")
+		return faultRemoved, errors.New("command terminated with exit code 3")
 	case n.ignoreReset:
 		return "", nil
 	}
@@ -367,7 +377,7 @@ func (n *fakeNet) inject(ns *fakeNS, script string) (string, error) {
 	case n.failInject:
 		return "iptables: Permission denied", errors.New("command terminated with exit code 4")
 	case ns.removed:
-		return "the fault was removed", errors.New("command terminated with exit code 3")
+		return faultRemoved, errors.New("command terminated with exit code 3")
 	case n.ignoreInject:
 		return "", nil
 	}
@@ -518,6 +528,8 @@ const (
 	defaultQdisc   = "qdisc noqueue 0: root refcnt 2"
 	testConnect    = "500µs"
 	outcomeReached = "outcome_reached"
+	// faultRemoved is what an injection after the removal prints.
+	faultRemoved = "the fault was removed"
 )
 
 // target is the member the tests' faults are injected in.

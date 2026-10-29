@@ -1057,16 +1057,20 @@ it needs more.
   store is never reachable again for a resume: it must end `Failed` with
   `BackupFailed` and `upload failed: `. A backup that ended before the cut
   was confirmed leaves it blocked; a complete backup made before the cut is
-  recorded as complete, not as a partial artifact. Objects left under the
-  prefix without a manifest are recorded as a partial artifact.
+  recorded as complete, not as a partial artifact. The cut is confirmed
+  only at a reading at which the backup had not ended. Objects left under
+  the prefix without a manifest are recorded as a partial artifact. A fault
+  not seen removed, and a store address that changed before the cut or by
+  the end, leave it blocked.
 - **Must never happen:** `Completed` with a missing or unreadable artifact; a
   manifest that names files which do not exist; credentials in status, events
   or logs; `Completed`, or a `status.artifact`, for a backup whose
   destination bucket does not exist or whose keys the store refuses; in
   the lab lane of `interrupted-upload`, `Completed` or a `status.artifact`
   after the cut was confirmed, a `status.artifact` on a backup that is not
-  `Completed`, and a `manifest.json` under the prefix of a backup whose
-  upload was cut.
+  `Completed`, and, for a backup seen ended after the cut was confirmed, a
+  `manifest.json` under its prefix, or `Completed` or a `status.artifact`
+  when it is read again at the end.
 - **Data check:** the artifact of every `Completed` backup is restored in S12
   and compared.
 - **Limits:** `backup_limit`.

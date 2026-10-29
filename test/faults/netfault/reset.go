@@ -49,9 +49,9 @@ type RejectCounters struct {
 // reset by peer", and a new one is refused. The reset is local. The peer
 // never sees a close and keeps its side of the connection until its own
 // timeout; how a peer behaves when the traffic is silently dropped is not
-// what this fault shows. Peer is not entered: it may be a Service's
-// ClusterIP, which the target's own namespace sends to before the node
-// translates it.
+// what this fault shows. Peer is not entered. It is the address the target's
+// own namespace sends to: a Service's ClusterIP, which the node translates
+// only afterwards, or a Pod's IP, such as the endpoint of a headless Service.
 //
 // The fault is confirmed only by the rule's own counter: Confirm is true
 // once the rule has rejected a packet, that is, once the target sent to the

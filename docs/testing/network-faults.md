@@ -53,9 +53,14 @@ The rules drop packets by Pod IP, in iptables chains of the faults' own.
   target's `eth0`, bands 1 to 3 with a `pfifo` each. Band 4 gets a `tbf`
   with the configured rate, a 16 KiB bucket and 400 ms of queue.
 - **The filter.** A `u32` filter sends only TCP packets to the peer's
-  address and port to band 4. The peer is not entered: it may be a Service's
-  ClusterIP, which is what the Pod's own namespace addresses before the
-  node translates it (kube-proxy).
+  address and port to band 4. The peer is not entered. It is the address the
+  Pod's own namespace sends to: a Service's ClusterIP, which the node
+  translates only afterwards (kube-proxy), or, behind a headless Service, the
+  store Pod's IP, which the Pod dials directly. S11 `interrupted-upload`
+  finds which from the Service and its EndpointSlices.
+- **The marker.** `Remove` leaves a marker of the limit's own in the
+  container and stops an injection still running (`pkill`) before it deletes
+  the qdisc; an injection that starts after the marker adds nothing.
 - **Counters.** `Counters` reads band 4's bytes, packets, drops and
   overlimits from `tc -s qdisc show`, so that a caller can see how much of a
   transfer has passed and at what rate.
@@ -64,7 +69,7 @@ The rules drop packets by Pod IP, in iptables chains of the faults' own.
 
 - **The rule.** In the target's `OUTPUT`, a chain of the faults' own with one
   rule: TCP to the peer's address and port is rejected with
-  `--reject-with tcp-reset`.
+  `--reject-with tcp-reset`. The peer is addressed as the rate limit's is.
 - **What it does.** A packet the target sends to the peer is dropped, and
   the target's own kernel answers its socket with a reset: a connection
   under way ends with `connection reset by peer`, and a new one is refused.
@@ -84,7 +89,8 @@ remove every rule and qdisc they installed.
 - The installed HA command labels its namespace `enforce=restricted`, except
   with `-backup-interrupted-upload`: that run's namespace is created with
   `enforce=privileged` and `warn` and `audit` at `restricted`, and the labels
-  are recorded. The variant refuses to start unless the namespace enforces
+  are recorded. That run collects neither the warnings nor the audit log, so
+  its Pods are not proven to comply with `restricted`. The variant refuses to start unless the namespace enforces
   `privileged`. Elsewhere, attaching the container fails, and the run is
   blocked.
 

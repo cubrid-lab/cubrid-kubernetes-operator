@@ -140,6 +140,29 @@ func TestThrottleRefusesAnExistingQdiscAndAnotherPodsNamespace(t *testing.T) {
 	}
 }
 
+// An injection that runs after the removal, as one still running when it was
+// removed would, adds nothing.
+func TestThrottleInjectAfterRemoveAddsNothing(t *testing.T) {
+	n := newFakeNet(testPods)
+	th := newThrottle(t, n)
+	ctx := context.Background()
+	if err := th.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := th.Inject(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := th.Remove(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := th.Inject(ctx); err == nil || !strings.Contains(err.Error(), "exit code 3") {
+		t.Fatalf("Inject after Remove returned %v", err)
+	}
+	if q := n.ns[testPods[target]].qdisc; q != defaultQdisc {
+		t.Fatalf("qdisc after a late injection: %q", q)
+	}
+}
+
 func TestThrottleValidate(t *testing.T) {
 	n := newFakeNet(testPods)
 	th := newThrottle(t, n)
