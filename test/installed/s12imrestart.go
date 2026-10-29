@@ -150,14 +150,17 @@ func imRestartLane(at string) string {
 // exactly imBinary, and kills nothing when it finds none or more than one.
 // It runs as the container's user, the manager's own. Once the manager is
 // gone the shell exits with its status, and the container ends.
-const imKillScript = `found=""; ` +
+const imKillScript = imFindScript + `kill -KILL "$1" && echo "killed instance-manager $1"`
+
+// imFindScript is the part of imKillScript that finds the Instance Manager:
+// it leaves its process ID in $1, or ends the script with imKillRefused.
+const imFindScript = `found=""; ` +
 	`for d in /proc/[0-9]*; do ` +
 	`s=$(cat "$d/stat" 2>/dev/null) || continue; read -r -a st <<< "${s##*) }"; [ "${st[1]}" = 1 ] || continue; ` +
 	`mapfile -d '' -t argv < "$d/cmdline" 2>/dev/null || continue; ` +
 	`[ "${#argv[@]}" = 1 ] && [ "${argv[0]}" = ` + imBinary + ` ] || continue; ` +
 	`found="$found ${d#/proc/}"; done; set -- $found; ` +
-	`if [ "$#" != 1 ]; then echo "` + imKillRefused + `${found:- none}"; exit 3; fi; ` +
-	`kill -KILL "$1" && echo "killed instance-manager $1"`
+	`if [ "$#" != 1 ]; then echo "` + imKillRefused + `${found:- none}"; exit 3; fi; `
 
 // s12Attempt is one value of status.bootstrap.attempts the readings showed,
 // with the operations they named under it, in order.
@@ -958,11 +961,13 @@ func databaseContainerStatus(pod *corev1.Pod) *corev1.ContainerStatus {
 // the kill is not issued unless they are those recorded before it
 // (memberKill.recordBefore); the container can still be replaced between
 // that read and the exec. The kill is permanent: the kubelet starts the
-// container again on its own. name says what is killed, for the timeline.
+// container again on its own. name says what is killed, for the timeline;
+// script is the command that kills it, imKillScript when empty.
 type instanceManagerKill struct {
-	h    *haRun
-	k    *memberKill
-	name string
+	h      *haRun
+	k      *memberKill
+	name   string
+	script string
 }
 
 // imKillName is the name of the kill at the S12 placement at.
@@ -985,13 +990,16 @@ func (f instanceManagerKill) Inject(ctx context.Context) error {
 		status.RestartCount != *f.k.RestartsBefore {
 		return fmt.Errorf("the Pod %s or its database container is not the one read right before the kill", f.k.Pod)
 	}
-	out, err := f.h.member(ctx, f.k.Pod, "bash", "-c", imKillScript)
+	out, err := f.h.member(ctx, f.k.Pod, "bash", "-c", cmp.Or(f.script, imKillScript))
 	answer := strings.TrimSpace(out)
 	if err != nil {
 		// The container may end before the command answers; Confirm decides.
 		answer = strings.TrimSpace(answer + " " + err.Error())
 	}
 	f.k.KillAnswer = answer
+	if strings.Contains(answer, storeLossRefused) {
+		return fmt.Errorf("nothing was killed in %s: %s", f.k.Pod, answer)
+	}
 	if strings.Contains(answer, imKillRefused) {
 		return fmt.Errorf("the Instance Manager of %s could not be told apart, nothing was killed: %s", f.k.Pod, answer)
 	}

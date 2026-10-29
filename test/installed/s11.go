@@ -84,6 +84,7 @@ const (
 	flagOperatorRestart        = "-backup-operator-restart"
 	flagInstanceManagerRestart = "-backup-instance-manager-restart"
 	flagOverlapping            = "-backup-overlapping"
+	flagOperationStoreLoss     = "-backup-operation-store-loss"
 )
 
 // validateS11 checks the inputs of S11 complete, when it is selected.
@@ -97,7 +98,8 @@ func (c HAConfig) validateS11() error {
 		{c.BackupInterruptedUpload, flagInterruptedUpload, "interrupted-upload"},
 		{c.BackupOperatorRestart, flagOperatorRestart, "operator-restart"},
 		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart, "instance-manager-restart"},
-		{c.BackupOverlapping, flagOverlapping, "overlapping"}} {
+		{c.BackupOverlapping, flagOverlapping, "overlapping"},
+		{c.BackupOperationStoreLoss, flagOperationStoreLoss, s11StoreLossVariant}} {
 		if v.selected && c.BackupBucket == "" {
 			return fmt.Errorf("%s needs -backup-bucket: S11 %s follows S11 complete", v.flag, v.variant)
 		}
@@ -137,6 +139,9 @@ func (c HAConfig) validateS11() error {
 		return err
 	}
 	if err := c.validateS11Overlapping(); err != nil {
+		return err
+	}
+	if err := c.validateS11OperationStoreLoss(); err != nil {
 		return err
 	}
 	_, _, _, err := splitService(c.ObjectStoreService)

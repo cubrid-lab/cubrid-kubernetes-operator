@@ -89,6 +89,10 @@ type s11IMRestartFixture struct {
 	notReadyAfterKill bool
 	restartedEarly    bool
 
+	// backupName and member are the variant's backup and its standalone
+	// member.
+	backupName, member string
+
 	imBackup      *databasev1alpha1.CubridBackup
 	imReads       int
 	killed        bool
@@ -100,12 +104,23 @@ type s11IMRestartFixture struct {
 
 func newS11IMRestartFixture(t *testing.T, cfg HAConfig) *s11IMRestartFixture {
 	t.Helper()
+	f := newS11KillFixture(t, cfg, s11IMRestartBackupName, s11IMRestartMember)
+	f.memberHook = f.kill
+	return f
+}
+
+// newS11KillFixture is the fixture of a variant that kills the Instance
+// Manager of member during the upload of backupName; it answers no member
+// command of its own.
+func newS11KillFixture(t *testing.T, cfg HAConfig, backupName, member string) *s11IMRestartFixture {
+	t.Helper()
 	f := &s11IMRestartFixture{s11InterruptedFixture: newS11InterruptedFixture(t, cfg),
-		afterKill: databasev1alpha1.BackupPhaseFailed, uploadingAfterKill: 1}
-	f.net.member = s11IMRestartMember
+		afterKill: databasev1alpha1.BackupPhaseFailed, uploadingAfterKill: 1, backupName: backupName,
+		member: member}
+	f.net.member = member
 	created, read := f.backupCreated, f.backupRead
 	f.backupCreated = func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error {
-		if backup.Name != s11IMRestartBackupName {
+		if backup.Name != f.backupName {
 			return created(ctx, c, backup)
 		}
 		f.mu.Lock()
@@ -115,12 +130,11 @@ func newS11IMRestartFixture(t *testing.T, cfg HAConfig) *s11IMRestartFixture {
 		return nil
 	}
 	f.backupRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
-		if key.Name != s11IMRestartBackupName {
+		if key.Name != f.backupName {
 			return read(ctx, c, key)
 		}
 		return f.advanceIMBackup(ctx, c, key)
 	}
-	f.memberHook = f.kill
 	return f
 }
 
@@ -141,6 +155,13 @@ func (f *s11IMRestartFixture) kill(ctx context.Context, pod, script string) (str
 	if refuse {
 		return "", errors.New(imKillRefused + " none\ncommand terminated with exit code 3"), true
 	}
+	return f.restartKilled(ctx, pod)
+}
+
+// restartKilled plays the kubelet once the member's Instance Manager was
+// killed: the database container ends with exitCode and runs again, ready
+// unless notReadyAfterKill, on the same Pod.
+func (f *s11IMRestartFixture) restartKilled(ctx context.Context, pod string) (string, error, bool) {
 	c := f.haFixture.store
 	current := &corev1.Pod{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: pod}, current); err != nil {
@@ -171,7 +192,7 @@ func (f *s11IMRestartFixture) kill(ctx context.Context, pod, script string) (str
 // reason than the kill, as a failed liveness probe would.
 func (f *s11IMRestartFixture) restartContainer(ctx context.Context, c client.WithWatch) {
 	pod := &corev1.Pod{}
-	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: s11IMRestartMember}, pod); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: f.member}, pod); err != nil {
 		f.t.Error(err)
 		return
 	}
@@ -241,7 +262,7 @@ func (f *s11IMRestartFixture) advanceIMBackup(ctx context.Context, c client.With
 	s.Conditions = []metav1.Condition{{Type: backupReady, Status: metav1.ConditionFalse,
 		Reason: testRunningReason, Message: testInProgress, LastTransitionTime: started}}
 	if phase != databasev1alpha1.BackupPhasePending {
-		s.TargetInstance, s.TargetRole = s11IMRestartMember, string(databasev1alpha1.RoleUnknown)
+		s.TargetInstance, s.TargetRole = f.member, string(databasev1alpha1.RoleUnknown)
 		s.OperationRef = testIMOperation
 	}
 	switch phase {
@@ -385,14 +406,14 @@ func TestRunS11InstanceManagerRestartPassesWhenTheKilledUploadFails(t *testing.T
 // requireS11IMRestartRecord checks the record of a passed run.
 func requireS11IMRestartRecord(t *testing.T, rec s11IMRestartRecord) {
 	t.Helper()
-	requireS11IMKill(t, rec.Kill)
+	requireS11IMKill(t, rec.Kill, s11IMRestartMember)
 	requireS11IMRestartEnd(t, rec)
 }
 
-// requireS11IMKill checks the kill in the record of a passed run.
-func requireS11IMKill(t *testing.T, k *s11IMKill) {
+// requireS11IMKill checks the kill of member in the record of a passed run.
+func requireS11IMKill(t *testing.T, k *s11IMKill, member string) {
 	t.Helper()
-	if k == nil || k.Pod != s11IMRestartMember || k.PodUID != testInterruptedPodUID ||
+	if k == nil || k.Pod != member || k.PodUID != testInterruptedPodUID ||
 		k.ContainerBefore != testIMContainerID || k.ContainerAfter != testIMContainerID+"-restarted" ||
 		k.PlacedAt == nil || k.KilledAt == nil || !k.confirmed() || k.ExitCode == nil {
 		t.Fatalf("kill = %+v, want the Instance Manager killed and the container restarted", k)

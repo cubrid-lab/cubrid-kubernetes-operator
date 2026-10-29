@@ -188,6 +188,19 @@ type HAConfig struct {
 	// BackupOverlappingReadyLimit bounds that standalone cluster from its
 	// creation until it is Ready. It is the run's bound, not the contract's.
 	BackupOverlappingReadyLimit time.Duration
+	// BackupOperationStoreLoss selects S11 operation-store-loss after S11
+	// complete: a CubridBackup to BackupBucket of a standalone cluster whose
+	// upload is limited in rate by a network fault in its member's Pod, and
+	// whose member loses the backup's operation record and its Instance
+	// Manager during the upload. It needs BackupBucket and a BackupLimit of
+	// at least storeLossMinBackupLimit, makes the run namespace's Pod Security
+	// enforce level privileged, and cannot be combined with Restore or
+	// another S11 variant.
+	BackupOperationStoreLoss bool
+	// BackupOperationStoreLossReadyLimit bounds that standalone cluster from
+	// its creation until it is Ready, and from the kill until it is Ready
+	// again. It is the run's bound, not the contract's.
+	BackupOperationStoreLossReadyLimit time.Duration
 	// ObjectStoreService is the object store's Service as
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.
@@ -228,11 +241,12 @@ type HAConfig struct {
 }
 
 // privileged reports whether the run namespace must enforce Pod Security
-// privileged: S11 interrupted-upload, instance-manager-restart and
-// overlapping add an ephemeral container with NET_ADMIN and NET_RAW to a
-// member's Pod.
+// privileged: S11 interrupted-upload, instance-manager-restart, overlapping
+// and operation-store-loss add an ephemeral container with NET_ADMIN and
+// NET_RAW to a member's Pod.
 func (c HAConfig) privileged() bool {
-	return c.BackupInterruptedUpload || c.BackupInstanceManagerRestart || c.BackupOverlapping
+	return c.BackupInterruptedUpload || c.BackupInstanceManagerRestart || c.BackupOverlapping ||
+		c.BackupOperationStoreLoss
 }
 
 func (c HAConfig) validate() error {
@@ -362,10 +376,11 @@ type haRun struct {
 	// s11Missing is that of S11 missing-destination, s11Denied that of S11
 	// denied-credentials, s11Signature that of S11 signature-mismatch and
 	// s11Interrupted that of S11 interrupted-upload, s11Restart that of S11
-	// operator-restart, s11IMRestart that of S11 instance-manager-restart and
-	// s11Overlapping that of S11 overlapping.
+	// operator-restart, s11IMRestart that of S11 instance-manager-restart,
+	// s11Overlapping that of S11 overlapping and s11StoreLoss that of S11
+	// operation-store-loss.
 	s11, s11Missing, s11Denied, s11Signature, s11Interrupted, s11Restart, s11IMRestart,
-	s11Overlapping *evidence.Scenario
+	s11Overlapping, s11StoreLoss *evidence.Scenario
 	s11Rec *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
@@ -492,6 +507,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		lane, requirements = planS11OperatorRestart(cfg, lane, requirements, &summary)
 		lane, requirements = planS11InstanceManagerRestart(cfg, lane, requirements, &summary)
 		lane, requirements = planS11Overlapping(cfg, lane, requirements, &summary)
+		lane, requirements = planS11OperationStoreLoss(cfg, lane, requirements, &summary)
 	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
@@ -664,7 +680,8 @@ func (h *haRun) recordS11Variants(summary *evidence.Summary) {
 		{h.cfg.BackupInterruptedUpload, h.s11Interrupted, s11InterruptedVariant},
 		{h.cfg.BackupOperatorRestart, h.s11Restart, s11RestartVariant},
 		{h.cfg.BackupInstanceManagerRestart, h.s11IMRestart, s11IMRestartVariant},
-		{h.cfg.BackupOverlapping, h.s11Overlapping, s11OverlappingVariant}} {
+		{h.cfg.BackupOverlapping, h.s11Overlapping, s11OverlappingVariant},
+		{h.cfg.BackupOperationStoreLoss, h.s11StoreLoss, s11StoreLossVariant}} {
 		switch {
 		case v.result != nil:
 			summary.Record(*v.result)
@@ -676,6 +693,34 @@ func (h *haRun) recordS11Variants(summary *evidence.Summary) {
 				"S11 "+v.variant+" follows S11 complete, and S11 complete did not pass")
 		}
 	}
+}
+
+// runS11Variants runs, in order, the S11 variants selected to follow S11
+// complete, records each result, and stops at the first that did not pass.
+func (h *haRun) runS11Variants(ctx context.Context) error {
+	for _, v := range []struct {
+		selected bool
+		result   **evidence.Scenario
+		variant  string
+		run      func(context.Context) evidence.Scenario
+	}{{h.cfg.BackupMissingDestination, &h.s11Missing, s11MissingVariant, h.runS11MissingDestination},
+		{h.cfg.BackupDeniedCredentials, &h.s11Denied, s11DeniedVariant, h.runS11DeniedCredentials},
+		{h.cfg.BackupSignatureMismatch, &h.s11Signature, s11SignatureVariant, h.runS11SignatureMismatch},
+		{h.cfg.BackupInterruptedUpload, &h.s11Interrupted, s11InterruptedVariant, h.runS11InterruptedUpload},
+		{h.cfg.BackupOperatorRestart, &h.s11Restart, s11RestartVariant, h.runS11OperatorRestart},
+		{h.cfg.BackupInstanceManagerRestart, &h.s11IMRestart, s11IMRestartVariant, h.runS11InstanceManagerRestart},
+		{h.cfg.BackupOverlapping, &h.s11Overlapping, s11OverlappingVariant, h.runS11Overlapping},
+		{h.cfg.BackupOperationStoreLoss, &h.s11StoreLoss, s11StoreLossVariant, h.runS11OperationStoreLoss}} {
+		if !v.selected {
+			continue
+		}
+		result := v.run(ctx)
+		*v.result = &result
+		if result.Result != evidence.Pass {
+			return fmt.Errorf("S11/%s: %s", v.variant, result.Reason)
+		}
+	}
+	return nil
 }
 
 // afterLAB01 runs the scenario selected to follow LAB01, if any.
@@ -693,54 +738,8 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 		if s11.Result != evidence.Pass {
 			return fmt.Errorf("S11/%s: %s", s11Variant, s11.Reason)
 		}
-		if h.cfg.BackupMissingDestination {
-			missing := h.runS11MissingDestination(ctx)
-			h.s11Missing = &missing
-			if missing.Result != evidence.Pass {
-				return fmt.Errorf("S11/%s: %s", s11MissingVariant, missing.Reason)
-			}
-		}
-		if h.cfg.BackupDeniedCredentials {
-			denied := h.runS11DeniedCredentials(ctx)
-			h.s11Denied = &denied
-			if denied.Result != evidence.Pass {
-				return fmt.Errorf("S11/%s: %s", s11DeniedVariant, denied.Reason)
-			}
-		}
-		if h.cfg.BackupSignatureMismatch {
-			wrong := h.runS11SignatureMismatch(ctx)
-			h.s11Signature = &wrong
-			if wrong.Result != evidence.Pass {
-				return fmt.Errorf("S11/%s: %s", s11SignatureVariant, wrong.Reason)
-			}
-		}
-		if h.cfg.BackupInterruptedUpload {
-			interrupted := h.runS11InterruptedUpload(ctx)
-			h.s11Interrupted = &interrupted
-			if interrupted.Result != evidence.Pass {
-				return fmt.Errorf("S11/%s: %s", s11InterruptedVariant, interrupted.Reason)
-			}
-		}
-		if h.cfg.BackupOperatorRestart {
-			restart := h.runS11OperatorRestart(ctx)
-			h.s11Restart = &restart
-			if restart.Result != evidence.Pass {
-				return fmt.Errorf("S11/%s: %s", s11RestartVariant, restart.Reason)
-			}
-		}
-		if h.cfg.BackupInstanceManagerRestart {
-			restart := h.runS11InstanceManagerRestart(ctx)
-			h.s11IMRestart = &restart
-			if restart.Result != evidence.Pass {
-				return fmt.Errorf("S11/%s: %s", s11IMRestartVariant, restart.Reason)
-			}
-		}
-		if h.cfg.BackupOverlapping {
-			overlapping := h.runS11Overlapping(ctx)
-			h.s11Overlapping = &overlapping
-			if overlapping.Result != evidence.Pass {
-				return fmt.Errorf("S11/%s: %s", s11OverlappingVariant, overlapping.Reason)
-			}
+		if err := h.runS11Variants(ctx); err != nil {
+			return err
 		}
 		if !h.cfg.Restore {
 			return nil

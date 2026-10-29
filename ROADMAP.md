@@ -434,6 +434,35 @@ sends the start; the lab's HA database backs up in about 2 seconds, so the
 first operation had usually ended before the second's start arrived. That
 is why the lane moved to a slowed standalone cluster.
 
+S11 `operation-store-loss` also follows S11 `complete`, in a run of its own
+(`lab-installed-ha-s11-operation-store-loss`, `-backup-operation-store-loss`,
+#457), in a run namespace that enforces Pod Security `privileged`, and
+needs a `-backup-limit` of at least 35 minutes. It reuses the steps of S11
+`instance-manager-restart` on its own standalone cluster `s11-storeloss`.
+Once 512 KiB have passed the limit while the backup is `Running` or
+`Uploading` with an operation, one command in the member stops the Instance
+Manager with `SIGSTOP`, removes the backup's operation record (`<id>.json`
+and any `<id>.*.tmp`) from `IM_OPERATIONS_DIR`, and kills the Instance
+Manager with `SIGKILL`. The kill is confirmed by exit 137 on the same Pod,
+and the record's absence by listing the store once the cluster reads
+`Ready` again. The code predicts that the restarted Instance Manager
+answers the poll with 404 `operation not found`. The Operator should then
+show `RecordedOperationMissing`, keep the phase, and end the backup
+`Failed` with `RecordedOperationLost` once the record has been missing for
+30 minutes, without a new start. The run requires that outcome within
+`backup_limit`, with at least 30 minutes from `status.operationMissingSince`
+to `status.completedAt`. It also requires the same `operationRef`
+throughout, never `Completed` or `status.artifact`, no `manifest.json`
+under the prefix, one container restart, the source and the installed
+manager unchanged, and no key in statuses, Events or logs. A record still
+there after the restart, a fault the command refused, or a restart before
+the fault leaves it blocked. `Failed` for the restart reason, or for
+another reason, fails it. The member's backup staging directory is listed
+after the restart and at the end as evidence for #636, not judged. Unit
+tests cover it with fakes. It has not yet run on the VM lab: the real
+Instance Manager's answer and the staging directory after the restart are
+still unobserved.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after

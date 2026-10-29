@@ -414,6 +414,9 @@ S11 here does not check:
   `instance-manager-restart`, with `-backup-instance-manager-restart`;
 - two backups of the same cluster requested back to back: that is S11
   `overlapping`, with `-backup-overlapping`, on a standalone cluster;
+- a member that loses a backup's operation record during the upload: that
+  is S11 `operation-store-loss`, with `-backup-operation-store-loss`, on a
+  standalone cluster;
 - a backup to a bucket that does not exist: that is S11
   `missing-destination`, with `-backup-missing-destination`;
 - a backup whose object store keys the store refuses: that is S11
@@ -428,9 +431,10 @@ on after S11 `complete` passed with S11 `missing-destination`: a backup of
 the same cluster to a bucket that does not exist must end `Failed`. The lane
 is then `lab-installed-ha-s11-missing-destination`, and it requires LAB01,
 S11/complete and S11/missing-destination. `-backup-missing-destination`
-without `-backup-bucket`, or with `-restore`, `-backup-operator-restart` or
-`-backup-instance-manager-restart`, is refused before anything is done: a
-run takes one lane.
+without `-backup-bucket`, or with `-restore` or another S11 variant's flag,
+such as `-backup-operator-restart`, `-backup-instance-manager-restart` or
+`-backup-operation-store-loss`, is refused before anything is done: a run
+takes one lane.
 
 ```sh
   ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
@@ -553,7 +557,8 @@ object store keys the store refuses must end `Failed`. The lane is then
 S11/complete and S11/denied-credentials. `-backup-denied-credentials`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
 `-backup-signature-mismatch`, `-backup-interrupted-upload`,
-`-backup-operator-restart` or `-backup-instance-manager-restart`, or with a
+`-backup-operator-restart`, `-backup-instance-manager-restart`,
+`-backup-overlapping` or `-backup-operation-store-loss`, or with a
 `-backup-denied-ready-limit` that is not positive, is refused before anything
 is done: a run takes one lane.
 
@@ -723,7 +728,8 @@ key must end `Failed`. The lane is then
 S11/complete and S11/signature-mismatch. `-backup-signature-mismatch`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
 `-backup-denied-credentials`, `-backup-interrupted-upload`,
-`-backup-operator-restart` or `-backup-instance-manager-restart`, or with a
+`-backup-operator-restart`, `-backup-instance-manager-restart`,
+`-backup-overlapping` or `-backup-operation-store-loss`, or with a
 `-backup-signature-mismatch-ready-limit` that is not positive, is refused
 before anything is done: a run takes one lane.
 
@@ -789,7 +795,8 @@ upload is cut partway must end `Failed`. The lane is then
 S11/complete and S11/interrupted-upload. `-backup-interrupted-upload`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
 `-backup-denied-credentials`, `-backup-signature-mismatch`,
-`-backup-operator-restart` or `-backup-instance-manager-restart`, or with a
+`-backup-operator-restart`, `-backup-instance-manager-restart`,
+`-backup-overlapping` or `-backup-operation-store-loss`, or with a
 `-backup-interrupted-ready-limit`
 that is not positive, is refused before anything is done: a run takes one
 lane.
@@ -802,8 +809,8 @@ lane.
 - **Pod Security.** The faults work from an ephemeral container with
   `NET_ADMIN` and `NET_RAW` ([network faults](network-faults.md)), which the
   API server admits only under `enforce=privileged`. With this flag, and only
-  with it, `-backup-instance-manager-restart` or `-backup-overlapping`, the
-  run creates its namespace with
+  with it, `-backup-instance-manager-restart`, `-backup-overlapping` or
+  `-backup-operation-store-loss`, the run creates its namespace with
   `pod-security.kubernetes.io/enforce=privileged` and keeps `warn` and
   `audit` at `restricted`. The API server then still warns about, and audits,
   a Pod that would break `restricted`, but the run collects neither the
@@ -1038,8 +1045,9 @@ verified artifact. The lane is then `lab-installed-ha-s11-operator-restart`,
 and it requires LAB01, S11/complete and S11/operator-restart.
 `-backup-operator-restart` without `-backup-bucket`, with `-restore`,
 `-backup-missing-destination`, `-backup-denied-credentials`,
-`-backup-signature-mismatch`, `-backup-interrupted-upload` or
-`-backup-instance-manager-restart`, or without a positive `-resync-limit` and a `-leader-lease`, is refused before anything is
+`-backup-signature-mismatch`, `-backup-interrupted-upload`,
+`-backup-instance-manager-restart`, `-backup-overlapping` or
+`-backup-operation-store-loss`, or without a positive `-resync-limit` and a `-leader-lease`, is refused before anything is
 done: a run takes one lane.
 
 ```sh
@@ -1258,8 +1266,9 @@ upload must end `Failed` for the restart. The lane is then
 S11/complete and S11/instance-manager-restart.
 `-backup-instance-manager-restart` without `-backup-bucket`, with
 `-restore`, `-backup-missing-destination`, `-backup-denied-credentials`,
-`-backup-signature-mismatch`, `-backup-interrupted-upload` or
-`-backup-operator-restart`, or with a
+`-backup-signature-mismatch`, `-backup-interrupted-upload`,
+`-backup-operator-restart`, `-backup-overlapping` or
+`-backup-operation-store-loss`, or with a
 `-backup-instance-manager-restart-ready-limit` that is not positive, is
 refused before anything is done: a run takes one lane. The variant is
 lab-only.
@@ -1270,8 +1279,8 @@ lab-only.
 ```
 
 - **Pod Security.** As in S11 `interrupted-upload`: with this flag, and only
-  with it, `-backup-interrupted-upload` or `-backup-overlapping`, the run
-  creates its namespace
+  with it, `-backup-interrupted-upload`, `-backup-overlapping` or
+  `-backup-operation-store-loss`, the run creates its namespace
   with `pod-security.kubernetes.io/enforce=privileged` and keeps `warn` and
   `audit` at `restricted`, so that the rate limit's ephemeral container is
   admitted. Before it creates anything, the variant reads the namespace
@@ -1487,7 +1496,8 @@ each with its own operation and one verified artifact. The lane is then
 and S11/overlapping. `-backup-overlapping` without `-backup-bucket`, with
 `-restore`, `-backup-missing-destination`, `-backup-denied-credentials`,
 `-backup-signature-mismatch`, `-backup-interrupted-upload`,
-`-backup-operator-restart` or `-backup-instance-manager-restart`, or with a
+`-backup-operator-restart`, `-backup-instance-manager-restart` or
+`-backup-operation-store-loss`, or with a
 `-backup-overlapping-ready-limit` that is not positive, is refused before
 anything is done: a run takes one lane. The variant is lab-only.
 
@@ -1705,6 +1715,182 @@ S11 `overlapping` here does not check:
   member;
 - the Pod Security warnings and audit records at `restricted`;
 - a restore of either artifact.
+
+## S11 operation-store-loss
+
+With `-backup-operation-store-loss` as well as `-backup-bucket`, the run
+goes on after S11 `complete` passed with S11 `operation-store-loss`: a
+member loses the record of a backup's operation, whose ID the Operator has
+already recorded, together with its Instance Manager, during the upload.
+The backup must show `RecordedOperationMissing` and then end `Failed` with
+`RecordedOperationLost`, without a new attempt (#457). The lane is then
+`lab-installed-ha-s11-operation-store-loss`, and it requires LAB01,
+S11/complete and S11/operation-store-loss.
+`-backup-operation-store-loss` without `-backup-bucket`, with `-restore`,
+`-backup-missing-destination`, `-backup-denied-credentials`,
+`-backup-signature-mismatch`, `-backup-interrupted-upload`,
+`-backup-operator-restart`, `-backup-instance-manager-restart` or
+`-backup-overlapping`, with a `-backup-operation-store-loss-ready-limit`
+that is not positive, or with a `-backup-limit` below 35 minutes, is
+refused before anything is done: a run takes one lane. The variant is
+lab-only.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -backup-operation-store-loss -backup-limit 35m \
+  [-backup-operation-store-loss-ready-limit 15m] -timeout 90m
+```
+
+- **Pod Security.** As in S11 `instance-manager-restart`: the run creates
+  its namespace with `pod-security.kubernetes.io/enforce=privileged` and
+  keeps `warn` and `audit` at `restricted`, and the variant refuses to go on
+  unless the namespace enforces `privileged`.
+- `-backup-limit` bounds the backup from the return of its request until
+  the reading that saw it `Completed` or `Failed`. The Operator ends a
+  backup whose record is missing only after 30 minutes
+  (`backupOperationMissingWait`), so the variant refuses a `-backup-limit`
+  below 35 minutes: 30 minutes for that bound, and five for the upload up to
+  the fault, the member's restart and the Operator's polls every 10 seconds.
+  The variant has no default of its own because `-backup-limit` is also S11
+  `complete`'s `backup_limit` in the same run: a hidden raise would loosen
+  that bound without saying so. The run records the limit it took.
+- `-backup-operation-store-loss-ready-limit` bounds the variant's own
+  cluster from its creation until it is `Ready`, and from the kill until the
+  member's container runs again and the cluster is `Ready` again. It is the
+  run's bound, not the contract's, and is refused without
+  `-backup-operation-store-loss`.
+- `-timeout` must cover LAB01, S11 `complete`, a new standalone cluster,
+  the slowed upload up to the fault, the member's restart and the 30-minute
+  bound. `-timeout 90m` leaves room for all of them at their defaults; the
+  default 30 minutes does not.
+
+S11 `operation-store-loss` starts only from S11 `complete` that passed.
+When S11 `complete` did not run or did not pass, it is blocked with that
+cause and nothing of it is done.
+
+**What the product's code predicts:**
+- The Instance Manager keeps one file per operation, `<id>.json`, in
+  `IM_OPERATIONS_DIR` (`/var/lib/cubrid/operations`, `operationsDir` in
+  `internal/controller/cubridcluster_controller.go`). A record is written
+  to a temporary file `<id>.<random>.tmp` and renamed over `<id>.json`
+  (`writeLocked` in `internal/instancemanager/opstore.go`). The store has
+  no index or other file of an operation.
+- At its start the Instance Manager reads the records it finds and fails
+  those that have not ended (`reconcileOnStart`). It writes no record that
+  it does not find. A record that is gone stays gone.
+- `GET /v1/operations/<id>` for an operation the store has no record of
+  answers `404` with `{"error":"operation not found"}` (`getOperation` in
+  `internal/instancemanager/server.go`, `ErrOperationNotFound` from `Get`).
+  The Operator's client maps only that answer to `errOperationMissing`; a
+  404 with any other message is an ordinary error (`GetOperation` in
+  `internal/controller/imclient.go`).
+- The Operator polls the recorded operation by `status.operationRef`
+  (`pollBackup` in `internal/controller/cubridbackup_controller.go`). While
+  the Instance Manager restarts, the poll cannot reach it and only the
+  `Ready` condition changes. On `errOperationMissing`, `operationMissing`
+  sets `status.operationMissingSince` once, keeps the phase `Running` or
+  `Uploading`, and sets `Ready` `False` with `RecordedOperationMissing`.
+  Only a successful read of the operation clears the time. Once more than
+  `backupOperationMissingWait`, 30 minutes, has passed since it, the
+  backup ends `Failed` with `RecordedOperationLost` (`ended`), and
+  `status.completedAt` is set.
+- A backup with an `operationRef` is only polled, and a `Failed` backup is
+  never reconciled again: no new start is sent, on that member or another.
+- The restarted Instance Manager removes the backup staging that ended or
+  unknown operations left (`reclaimBackupStaging` in
+  `internal/instancemanager/staging.go`, run by `ResumeAndServe`). An
+  operation without a record is unknown, so its directory below
+  `/var/lib/cubrid/backup-staging/<backup UID>` should be removed at the
+  start unless a process still holds a file in it. The run records what it
+  sees there and does not judge it (#636).
+
+1. **Namespace, store, cluster and request.** As steps 1 and 2 of S11
+   `instance-manager-restart`, with the cluster `s11-storeloss`, its member
+   `s11-storeloss-0` and the backup `s11-operation-store-loss` under
+   `lab-runs/<run ID>/operation-store-loss`.
+2. **Place the fault.** As step 3 of S11 `instance-manager-restart`: the
+   first reading of the backup `Running` or `Uploading` with an
+   `operationRef` after 512 KiB passed the limit since the request.
+3. **The fault.** One command in the member's database container. It finds
+   the Instance Manager exactly as the kill of S12
+   `instance-manager-restart` does, stops it with `SIGSTOP`, and waits up
+   to five seconds until it is stopped. It then removes `<id>.json` of the
+   backup's operation and any `<id>.*.tmp`, and sends `SIGKILL` to the
+   stopped Instance Manager. The ID must be a plain name. Stopping the
+   Instance Manager first means it cannot rename a record write that is
+   already under way over the removed file. When it does not stop, or the
+   record is not there before or still there after the removal, the
+   command lets it continue and kills nothing; that blocks the variant.
+   The kill is confirmed as in S11 `instance-manager-restart`: the
+   container's end with exit code 137 on the same Pod. A restart of the
+   container before the fault blocks the variant, and nothing is done.
+4. **The member back.** As step 5 of S11 `instance-manager-restart`.
+5. **The record gone.** Once the cluster is `Ready` again, the run lists the
+   operation store, names only (`storeAfterRestart`). `<id>.json` there
+   blocks the variant: the record was not lost. A store that cannot be
+   listed blocks it too. The run then lists the backup's staging directory,
+   names and sizes only (`stagingAfterRestart`).
+6. **Wait for the end.** The run reads the backup every `-poll` until it is
+   `Completed` or `Failed`, for at most `-backup-limit` from the request.
+   The limit stays installed throughout.
+   - From the placing reading on, every reading must show the same
+     `operationRef`; another one is a second operation and must never
+     happen. `Completed` after the fault, its `status.artifact`, and a
+     `status.artifact` on a backup in any phase other than `Completed`, must
+     never happen.
+   - `Completed` before the fault was placed blocks the variant as
+     inconclusive, and so does `Failed` before it.
+   - `Failed` after the fault must have `Ready` reason
+     `RecordedOperationLost`. At least one reading after the kill and before
+     it must show `RecordedOperationMissing`; every reading between the
+     placement and the end must be `Running` or `Uploading`; and
+     `status.completedAt` must be at least 30 minutes after
+     `status.operationMissingSince`. Each of those that does not hold fails
+     the variant, and so does `Failed` with `BackupFailed` and
+     `manager restarted while operation was in progress` (the restarted
+     Instance Manager still had the record) or for any other reason, which
+     is named, with the store's answer for an upload failure. A
+     `RecordedOperationLost` without both times blocks it.
+   - A backup neither `Completed` nor `Failed` within `-backup-limit` fails
+     it.
+7. **Removal, prefix, backup at the end, one restart, credentials, source,
+   manager and cleanup.** As steps 7 to 11 of S11
+   `instance-manager-restart`. A `manifest.json` under the prefix must
+   never happen; objects or multipart uploads left there are recorded as a
+   partial artifact. Before the cleanup, the run lists the backup's
+   staging directory once more (`stagingAtEnd`) and says in the residue
+   whether it was there.
+
+The time of the verdict is recorded as `judgedAt`. `missingAfterKill` runs
+from the kill to the first reading of `RecordedOperationMissing`, by the
+run's clock. `failedAfterMissingSince` runs from
+`status.operationMissingSince` to `status.completedAt`, both by the
+Operator's clock. With `failedWithin`, `failedAfterKill`,
+`uploadBytesBeforeKill`, `memberBackWithin`, `readyAgainWithin`,
+`containerRestarts`, `operationRefUnchanged`, `recordAbsentAfterRestart`,
+`stagingPresentAfterRestart` and `stagingPresentAtEnd`, they are `unknown`
+until measured; the limit's own measurements are prefixed `rateLimit.`.
+
+The account needs what S11 `instance-manager-restart` needs; the fault and
+the listings use the `create` on `pods/exec` the run already has.
+
+What a pass shows: a backup whose operation record a member lost during the
+upload is reported as missing, held in its phase, and ended `Failed` with
+`RecordedOperationLost` after the documented 30 minutes, with no second
+operation and no `manifest.json` under its prefix.
+
+S11 `operation-store-loss` here does not check:
+- a store lost without a restart of the Instance Manager, or a replaced
+  data volume: the fault removes one record and restarts the container on
+  the same volume;
+- whether the killed upload goes on after the kill: the container ends, so
+  the run sees no process; objects left under the prefix are recorded only;
+- the recovery restore's poll of a missing record (`restoreOperationMissing`
+  in `internal/controller/bootstrap.go`);
+- the Operator's Events for the backup's phases, other than searching them
+  for keys;
+- a judgement of the staging directory (#636);
+- the Pod Security warnings and audit records at `restricted`.
 
 ## S12 exact
 
@@ -2948,6 +3134,18 @@ and S12 variant other than `complete` and `exact` only those under
   `S11/overlapping/manifest-a.json` and
   `S11/overlapping/manifest-b.json`, the two manifests as stored, and
   `S11/overlapping/source-data-check.json`.
+- with `-backup-operation-store-loss`,
+  `S11/operation-store-loss/record.json` (everything
+  `S11/instance-manager-restart/record.json` holds, for the cluster
+  `s11-storeloss`; then `minBackupLimit` and `missingWait`; under
+  `storeLoss`, the operation ID, the files the fault answered that it
+  removed, when the store was listed after the restart, the names in it and
+  `recordAbsent`; `firstMissingAt`, `missingAfterKill`,
+  `operationMissingSince` and `failedAfterMissingSince`; and under
+  `stagingAfterRestart` and `stagingAtEnd`, the backup's staging directory,
+  whether it was there and its entries by type, size and path),
+  `S11/operation-store-loss/timeline.jsonl` (the fault flow) and
+  `S11/operation-store-loss/source-data-check.json`.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and
