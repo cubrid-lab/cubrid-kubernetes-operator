@@ -532,8 +532,23 @@ to show the `preStop` latency. Its first VM-lab run, at 2026-10-29
 (POC-44) found those statements' rows committed and the server unharmed,
 with the cause unknown. The filler now judges each statement by a row
 count read separately, runs a statement that added no row once more, and
-records the error text as `fillerExitErrors`. That harness has not yet run
-on the VM lab.
+records the error text as `fillerExitErrors`. That harness (`4e9eb6d`)
+passed once on the VM lab on 2026-10-29 (manager `fb6f345`, after S11
+`complete` on the same run): the filler grew to 1,073,741 rows in 3 min 12
+s (one statement printed the exit error after committing); the sampler saw
+`backupdb` at 20:26:23.859 UTC, 440 ms after the request, and the member
+Pod's deletion was accepted 14 ms later; the member's log shows the stop
+172 ms after that, `backupdb` killed (`signal: killed`) as its first
+effect, then `Operation failed` for the backup's operation, `heartbeat
+stop` and `server stop`, in that order; the staging directory was gone at
+20:26:24.203, and no sampler reading after it (524 readings in all, about
+every 100 ms) showed a process holding a file under the staging root; the
+backup was `Failed` 11.6 s after the deletion with `the member is stopping:
+backupdb failed: … signal: killed`, without the kept-staging suffix, and
+nothing was under its prefix; the replacement member was `Ready` again 1 min
+39 s after the deletion. One run is not a baseline, the 100 ms sampling can
+miss a shorter holder, and `restoredb` and `restoreslave` under a graceful
+stop are not covered.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
