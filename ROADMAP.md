@@ -327,6 +327,36 @@ lab's. Two runs are not a baseline. The lab's manager is shared:
 deleting its Pod briefly pauses reconciliation of every other cluster and
 backup there.
 
+S11 `instance-manager-restart` also follows S11 `complete`, in a run of its
+own (`lab-installed-ha-s11-instance-manager-restart`,
+`-backup-instance-manager-restart`, #617), in a run namespace that enforces
+Pod Security `privileged` with `warn` and `audit` at `restricted`: the run
+creates a standalone cluster with the run's own Secret, limits its member's
+traffic to the object store to 256 kbit/s as S11 `interrupted-upload` does,
+requests a backup to the backup bucket, and once 512 KiB have passed the
+limit while the backup is `Running` or `Uploading` with an operation, kills
+the member's Instance Manager with `SIGKILL` as S12
+`instance-manager-restart` does, confirmed by the database container's end
+with exit code 137 on the same Pod. The limit stays until the backup ends.
+The backup must end `Failed` with `BackupFailed` and the Instance Manager's
+restart reason within `backup_limit`, never `Completed` and without
+`status.artifact`, under the same `operationRef` from the placing reading
+on, with no `manifest.json` under its prefix at the end (objects left there
+are recorded as a partial artifact); the member's container must restart
+exactly once and the cluster be `Ready` again within the run's ready limit,
+the source and the installed manager must be unchanged, and no key may be
+in a status read, an Event, the manager's log or the member's log, the
+killed Instance Manager's previous container instance included. A backup
+that ends before the kill is placed, a kill that is not confirmed, and
+`Failed` with `RecordedOperationLost` leave it blocked; `Failed` for
+another reason fails it. The code predicts `Failed` for the restart: the
+manager fails every unfinished operation when it starts
+(`reconcileOnStart`), the Operator maps that onto the backup and never
+reconciles a `Failed` backup again, and the manifest is uploaded last. Unit
+tests cover it with fakes; it has not yet run on the VM lab. A kill during
+`backupdb` itself and the member's staging directory (#636) are not
+covered.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after

@@ -130,6 +130,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s11-signature-mismatch` | The installed-Operator HA command with `-backup-bucket` and `-backup-signature-mismatch` | LAB01, S11 (`complete`), then S11 (`signature-mismatch`): a backup of a new standalone cluster whose object store Secret holds the seed access key with a random secret key, which the run first saw the store refuse with `SignatureDoesNotMatch`, must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged | none |
 | `lab-installed-ha-s11-interrupted-upload` | The installed-Operator HA command with `-backup-bucket` and `-backup-interrupted-upload`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`interrupted-upload`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is reset there once seen under way; it must end `Failed` for its upload, never `Completed` and without an artifact, with no manifest under its prefix at the end and the source unchanged | none |
 | `lab-installed-ha-s11-operator-restart` | The installed-Operator HA command with `-backup-bucket` and `-backup-operator-restart` | LAB01, S11 (`complete`), then S11 (`operator-restart`): a second backup of the same cluster, during which the installed manager's Pod is deleted without a grace period once a reading shows the backup `Running` or `Uploading` with an operation; the replacement must hold the leader Lease within `operator_resync_limit`, and the backup must end `Completed` within `backup_limit`, judged written by the replacement (by the managers' node clocks), under the same operation, target and role, with an artifact that passes `complete`'s verification, one attempt prefix with one manifest under its prefix, and the source unchanged | none |
+| `lab-installed-ha-s11-instance-manager-restart` | The installed-Operator HA command with `-backup-bucket` and `-backup-instance-manager-restart`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`instance-manager-restart`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is seen under way, and whose member's Instance Manager is then killed with `SIGKILL`; it must end `Failed` with `BackupFailed` and the Instance Manager's restart reason, under the same operation, never `Completed` and without an artifact, with no manifest under its prefix at the end, the member's container restarted once and the cluster `Ready` again, and the source unchanged | none |
 | `lab-installed-ha-s12` | The installed-Operator HA command with `-backup-bucket` and `-restore` | LAB01, S11 (`complete`), then S12 (`exact`): S11's artifact restored into a new cluster in the run namespace and checked against the history truncated at S11's known point | none |
 | `lab-installed-ha-s12-tampered` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-tampered` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`tampered`): a copy of S11's artifact with one byte changed, whose restore into another new cluster must be refused for that object's checksum | none |
 | `lab-installed-ha-s12-wrong-target` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-wrong-target` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`wrong-target`): S11's artifact restored into a cluster created over the retained PVCs of a deleted cluster of the same name, which hold its database; the restore must be refused for that target and the database left with its own marker and without S11's | none |
@@ -191,6 +192,25 @@ replacement's at the end; what the deleted manager logged after its search
 cannot be read once its Pod is gone and is not searched. The installed
 manager is shared with every other cluster on the lab, and none of them is
 reconciled while its Pod is replaced.
+`lab-installed-ha-s11-instance-manager-restart` requires S11 `complete` and
+`instance-manager-restart`; the command runs it in a run of its own, not
+with S12 or another S11 variant, and only that run's namespace, like
+`interrupted-upload`'s, enforces Pod Security `privileged`. The kill is
+placed once at least 512 KiB of the upload passed the rate limit's counter
+while a reading showed the backup `Running` or `Uploading` with an
+operation; a backup that ends before that, `Completed` or `Failed`, leaves
+the variant blocked as inconclusive, and the limit stays in place until the
+backup ends. A kill that is refused, not confirmed by the end or restart of
+the member's database container with exit code 137, or confirmed on a Pod
+that was replaced leaves it blocked. `Failed` with
+`RecordedOperationLost`, the documented escalation of an unknown outcome,
+leaves it blocked; `Failed` for any other reason than the Instance
+Manager's restart fails it, with the store's answer when it is an upload
+failure. A container that does not run again, or a cluster that is not
+`Ready` again, within the ready limit after the kill fails it, and so does a
+container restarted more than once. The killed Instance Manager's log is the
+previous instance of the database container, and it is searched; one that
+could not be read leaves the variant blocked.
 
 `lab-installed-ha-s12` requires S12 `exact` only,
 `lab-installed-ha-s12-tampered` S12 `exact` and `tampered`,
@@ -1064,9 +1084,11 @@ it needs more.
   not exist; no fault is issued), `denied-credentials` (the backup is of
   a cluster whose object store Secret holds keys the store refuses) and
   `signature-mismatch` (the same, with the seed Secret's access key with a
-  wrong secret key) and `operator-restart` (the installed manager's Pod is
+  wrong secret key), `operator-restart` (the installed manager's Pod is
   deleted without a grace period while the backup is `Running` or
-  `Uploading` with its operation).
+  `Uploading` with its operation) and `instance-manager-restart` (the
+  Instance Manager of a standalone member is killed with `SIGKILL` during
+  the backup's upload, slowed by a rate limit as in `interrupted-upload`).
 - **Fault confirmed by:** the backup's operation was in a running state when
   the fault was issued. For `denied-credentials`: the store refused access
   to the run's own client with the same keys before the cluster was
@@ -1082,7 +1104,11 @@ it needs more.
   replacement's Lease `acquireTime`, by the two managers' node clocks, whose
   skew is not measured. This does not show that the Instance Manager was
   still working on the backup at the deletion: the operation may already
-  have been uploading or done there.
+  have been uploading or done there. For `instance-manager-restart`: at
+  least 512 KiB of the upload passed the rate limit's counter while the
+  backup was `Running` or `Uploading` with its operation, and the member's
+  database container then ended or restarted on the same Pod with exit
+  code 137.
 - **The Operator must** (ADR-0007): report `Completed` only when the artifact
   and its manifest are in object storage and verified; resume or fail the
   operation after a restart without starting a second backup for the same
@@ -1119,6 +1145,19 @@ it needs more.
   (`internal/controller/cubridbackup_controller.go`). A `Completed` written
   before the replacement led leaves it blocked. `Failed` with
   `RecordedOperationLost` is the documented escalation and leaves it
+  blocked; `Failed` for another reason fails it. `instance-manager-restart`
+  ends as `Failed` with `BackupFailed` and the message
+  `manager restarted while operation was in progress`: the Instance Manager
+  runs as the child of the database container's entrypoint, so the kill
+  restarts the container on the same Pod and volume
+  (`build/instance-manager/entrypoint.sh`); at its start it fails every
+  operation of its store that had not ended (`reconcileOnStart` in
+  `internal/instancemanager/opstore.go`), and the Operator maps that onto
+  the backup and never reconciles a `Failed` backup again
+  (`internal/controller/cubridbackup_controller.go`). The member's
+  container restarts once and the cluster is `Ready` again within the
+  run's ready limit. Objects left under the prefix without a manifest are
+  recorded as a partial artifact. `RecordedOperationLost` leaves it
   blocked; `Failed` for another reason fails it.
 - **Must never happen:** `Completed` with a missing or unreadable artifact; a
   manifest that names files which do not exist; credentials in status, events
@@ -1132,7 +1171,12 @@ it needs more.
   `operationRef` (a second operation), target or role from the placing
   reading on, and a second attempt prefix of the backup, or an object
   outside one, under the variant's prefix, at the first listing or at the
-  end (a second writer).
+  end (a second writer); in `instance-manager-restart`, `Completed` or a
+  `status.artifact` after the kill was confirmed, a `status.artifact` on a
+  backup that is not `Completed`, another `operationRef` from the placing
+  reading on (a second operation, which no automatic retry may start), a
+  `manifest.json` under the prefix of a backup seen ended after the kill,
+  and a member container restarted more than once.
 - **Data check:** the artifact of every `Completed` backup is restored in S12
   and compared.
 - **Limits:** `backup_limit`.

@@ -166,19 +166,10 @@ type s12Attempt struct {
 	Operations []string `json:"operations"`
 }
 
-// s12IMRestart is the Instance Manager's restart on the restore's target
-// member, or on the member being seeded, and the operations around it.
-type s12IMRestart struct {
-	// At is the placement of the kill; variant is the scenario variant it
-	// selects.
-	At      string `json:"at"`
-	variant string
-	// PhaseFirstPastPreparing is the bootstrap phase of the first reading
-	// that was neither Preparing nor without a phase: Restoring when the
-	// kill could be placed during the restore.
-	PhaseFirstPastPreparing string `json:"phaseFirstPastPreparing,omitempty"`
-	// Pod is the member killed, the restore's target or, at seeding, the
-	// member being seeded; PodUID is its UID, and ContainerBefore,
+// memberKill is the kill of a member's Instance Manager (instanceManagerKill)
+// and the restart of its database container that follows.
+type memberKill struct {
+	// Pod is the member killed; PodUID is its UID, and ContainerBefore,
 	// RestartsBefore and StartedBefore its database container, all of the
 	// reading right before the kill.
 	Pod             string     `json:"pod,omitempty"`
@@ -186,18 +177,6 @@ type s12IMRestart struct {
 	ContainerBefore string     `json:"containerIDBefore,omitempty"`
 	RestartsBefore  *int32     `json:"restartCountBefore,omitempty"`
 	StartedBefore   *time.Time `json:"containerStartedBefore,omitempty"`
-	// PhaseAtRestart, OperationIDBefore, AttemptsBefore and MessageAtRestart
-	// are of the reading of the cluster right before the kill, which says
-	// whether restoredb ran or the restored database was being started;
-	// PhaseAfterRestart is of the first reading after it.
-	PhaseAtRestart    string `json:"phaseAtRestart,omitempty"`
-	OperationIDBefore string `json:"operationIDBefore,omitempty"`
-	AttemptsBefore    *int32 `json:"attemptsBefore,omitempty"`
-	MessageAtRestart  string `json:"messageAtRestart,omitempty"`
-	PhaseAfterRestart string `json:"phaseAfterRestart,omitempty"`
-	// restartReading is the index in the record's bootstrap of the reading
-	// right before the kill, -1 until it is taken.
-	restartReading int
 	// KilledAt is when the kill was issued, KillAnswer what the command
 	// answered: the container may end before it does.
 	KilledAt   *time.Time `json:"killedAt,omitempty"`
@@ -218,7 +197,7 @@ type s12IMRestart struct {
 	lastReadErr    error
 	// ContainerAfter, RestartsAfter and StartedAfter are of the container
 	// that ran again, BackAt the reading that saw it running, and
-	// RestartsAtEnd the restart count once the cluster was Ready.
+	// RestartsAtEnd the restart count at the end.
 	ContainerAfter string     `json:"containerIDAfter,omitempty"`
 	RestartsAfter  *int32     `json:"restartCountAfter,omitempty"`
 	StartedAfter   *time.Time `json:"containerStartedAfter,omitempty"`
@@ -226,8 +205,49 @@ type s12IMRestart struct {
 	BackWithin     string     `json:"backWithin,omitempty"`
 	RestartsAtEnd  *int32     `json:"restartCountAtEnd,omitempty"`
 	// PodReplaced is set when the killed member's Pod got another UID: not
-	// the fault this variant judges.
+	// the fault the variants judge.
 	PodReplaced bool `json:"podReplaced,omitempty"`
+}
+
+// recordBefore records pod, read right before the kill, and its database
+// container, which must be running.
+func (k *memberKill) recordBefore(pod *corev1.Pod) error {
+	status := databaseContainerStatus(pod)
+	if status == nil || status.State.Running == nil || status.ContainerID == "" {
+		return fmt.Errorf("the database container of %s is not running", pod.Name)
+	}
+	restarts, started := status.RestartCount, status.State.Running.StartedAt.UTC()
+	k.Pod, k.PodUID, k.ContainerBefore, k.RestartsBefore, k.StartedBefore = pod.Name, string(pod.UID),
+		status.ContainerID, &restarts, &started
+	return nil
+}
+
+// s12IMRestart is the Instance Manager's restart on the restore's target
+// member, or on the member being seeded, and the operations around it.
+type s12IMRestart struct {
+	// At is the placement of the kill; variant is the scenario variant it
+	// selects.
+	At      string `json:"at"`
+	variant string
+	// PhaseFirstPastPreparing is the bootstrap phase of the first reading
+	// that was neither Preparing nor without a phase: Restoring when the
+	// kill could be placed during the restore.
+	PhaseFirstPastPreparing string `json:"phaseFirstPastPreparing,omitempty"`
+	// memberKill is the kill: Pod is the member killed, the restore's target
+	// or, at seeding, the member being seeded.
+	memberKill
+	// PhaseAtRestart, OperationIDBefore, AttemptsBefore and MessageAtRestart
+	// are of the reading of the cluster right before the kill, which says
+	// whether restoredb ran or the restored database was being started;
+	// PhaseAfterRestart is of the first reading after it.
+	PhaseAtRestart    string `json:"phaseAtRestart,omitempty"`
+	OperationIDBefore string `json:"operationIDBefore,omitempty"`
+	AttemptsBefore    *int32 `json:"attemptsBefore,omitempty"`
+	MessageAtRestart  string `json:"messageAtRestart,omitempty"`
+	PhaseAfterRestart string `json:"phaseAfterRestart,omitempty"`
+	// restartReading is the index in the record's bootstrap of the reading
+	// right before the kill, -1 until it is taken.
+	restartReading int
 	// Reasons are the BootstrapReady reasons of the readings after the kill,
 	// each change once, in order. Attempts are the attempts and operations
 	// every reading showed; OperationIDAfter and AttemptsAfter are of the
@@ -534,7 +554,7 @@ func (h *haRun) imRestartSteps(ctx context.Context, result *evidence.Scenario, r
 	rec.RestoredWithin = readyAt.Sub(created).Round(time.Millisecond).String()
 	result.Measurements[restoredWithinMeasurement] = rec.RestoredWithin
 	h.readRetryEvents(ctx, cluster, r)
-	if err := h.targetRestartsAtEnd(ctx, r, result); err != nil {
+	if err := h.targetRestartsAtEnd(ctx, &r.memberKill, result); err != nil {
 		return err
 	}
 	if err := h.checkRestoredSecrets(ctx, &rec.s12Record, result); err != nil {
@@ -779,7 +799,7 @@ func (h *haRun) killDuringRestore(ctx context.Context, cluster *databasev1alpha1
 	// seen is a verdict a reading of the cluster gave after the kill.
 	var seen error
 	outcome := faults.Run(ctx, faults.Scenario{
-		Fault: instanceManagerKill{h: h, r: r},
+		Fault: instanceManagerKill{h: h, k: &r.memberKill, name: imKillName(r.At)},
 		Limits: faults.Limits{Confirm: min(2*time.Minute, h.cfg.RestoreLimit),
 			Outcome: max(time.Until(createdAt.Add(h.cfg.RestoreLimit)), h.cfg.Poll), Cleanup: time.Minute,
 			Poll: h.cfg.Poll},
@@ -789,7 +809,7 @@ func (h *haRun) killDuringRestore(ctx context.Context, cluster *databasev1alpha1
 				seen = err
 				return false, err
 			}
-			done, err := h.memberBack(ctx, r)
+			done, err := h.memberBack(ctx, &r.memberKill)
 			if ctx.Err() != nil {
 				// The step's limit, or the run's: not a broken expectation.
 				return false, nil
@@ -862,13 +882,9 @@ func (h *haRun) beforeKill(ctx context.Context, created *databasev1alpha1.Cubrid
 	if !controllerOwner(pod, "StatefulSet", sts.UID) {
 		return fmt.Errorf("pod %s does not belong to the restored cluster's StatefulSet", pod.Name)
 	}
-	status := databaseContainerStatus(pod)
-	if status == nil || status.State.Running == nil || status.ContainerID == "" {
-		return fmt.Errorf("the database container of %s is not running", pod.Name)
+	if err := r.recordBefore(pod); err != nil {
+		return err
 	}
-	restarts, started := status.RestartCount, status.State.Running.StartedAt.UTC()
-	r.Pod, r.PodUID, r.ContainerBefore, r.RestartsBefore, r.StartedBefore = pod.Name, string(pod.UID),
-		status.ContainerID, &restarts, &started
 	attempts := boot.Attempts
 	r.PhaseAtRestart, r.OperationIDBefore, r.AttemptsBefore = phase, boot.OperationID, &attempts
 	if c := meta.FindStatusCondition(cluster.Status.Conditions, bootstrapReadyCondition); c != nil {
@@ -936,43 +952,48 @@ func databaseContainerStatus(pod *corev1.Pod) *corev1.ContainerStatus {
 	return nil
 }
 
-// instanceManagerKill kills the Instance Manager of the restore's target
-// member (imKillScript). A kubectl exec carries no precondition, so the Pod's
-// UID and its container's ID and restart count are read again right before,
-// and the kill is not issued unless they are those beforeKill recorded; the
-// container can still be replaced between that read and the exec. The kill
-// is permanent: the kubelet starts the container again on its own.
+// instanceManagerKill kills the Instance Manager of the member k names
+// (imKillScript). A kubectl exec carries no precondition, so the Pod's UID
+// and its container's ID and restart count are read again right before, and
+// the kill is not issued unless they are those recorded before it
+// (memberKill.recordBefore); the container can still be replaced between
+// that read and the exec. The kill is permanent: the kubelet starts the
+// container again on its own. name says what is killed, for the timeline.
 type instanceManagerKill struct {
-	h *haRun
-	r *s12IMRestart
+	h    *haRun
+	k    *memberKill
+	name string
 }
 
-func (f instanceManagerKill) Name() string {
-	if f.r.At == IMRestartAtSeeding {
+// imKillName is the name of the kill at the S12 placement at.
+func imKillName(at string) string {
+	if at == IMRestartAtSeeding {
 		return "kill the Instance Manager of the member being seeded with SIGKILL"
 	}
 	return "kill the Instance Manager of the restore's target member with SIGKILL"
 }
 
+func (f instanceManagerKill) Name() string { return f.name }
+
 func (f instanceManagerKill) Inject(ctx context.Context) error {
 	pod := &corev1.Pod{}
-	if err := f.h.Client.Get(ctx, client.ObjectKey{Namespace: f.h.cfg.Namespace, Name: f.r.Pod}, pod); err != nil {
-		return fmt.Errorf("read %s again before the kill: %w", f.r.Pod, err)
+	if err := f.h.Client.Get(ctx, client.ObjectKey{Namespace: f.h.cfg.Namespace, Name: f.k.Pod}, pod); err != nil {
+		return fmt.Errorf("read %s again before the kill: %w", f.k.Pod, err)
 	}
 	status := databaseContainerStatus(pod)
-	if string(pod.UID) != f.r.PodUID || status == nil || status.ContainerID != f.r.ContainerBefore ||
-		status.RestartCount != *f.r.RestartsBefore {
-		return fmt.Errorf("the Pod %s or its database container is not the one read right before the kill", f.r.Pod)
+	if string(pod.UID) != f.k.PodUID || status == nil || status.ContainerID != f.k.ContainerBefore ||
+		status.RestartCount != *f.k.RestartsBefore {
+		return fmt.Errorf("the Pod %s or its database container is not the one read right before the kill", f.k.Pod)
 	}
-	out, err := f.h.member(ctx, f.r.Pod, "bash", "-c", imKillScript)
+	out, err := f.h.member(ctx, f.k.Pod, "bash", "-c", imKillScript)
 	answer := strings.TrimSpace(out)
 	if err != nil {
 		// The container may end before the command answers; Confirm decides.
 		answer = strings.TrimSpace(answer + " " + err.Error())
 	}
-	f.r.KillAnswer = answer
+	f.k.KillAnswer = answer
 	if strings.Contains(answer, imKillRefused) {
-		return fmt.Errorf("the Instance Manager of %s could not be told apart, nothing was killed: %s", f.r.Pod, answer)
+		return fmt.Errorf("the Instance Manager of %s could not be told apart, nothing was killed: %s", f.k.Pod, answer)
 	}
 	return nil
 }
@@ -982,38 +1003,38 @@ func (f instanceManagerKill) Inject(ctx context.Context) error {
 // count. A Pod with another UID was replaced, which is not this fault.
 func (f instanceManagerKill) Confirm(ctx context.Context) (bool, error) {
 	pod := &corev1.Pod{}
-	if err := f.h.Client.Get(ctx, client.ObjectKey{Namespace: f.h.cfg.Namespace, Name: f.r.Pod}, pod); err != nil {
+	if err := f.h.Client.Get(ctx, client.ObjectKey{Namespace: f.h.cfg.Namespace, Name: f.k.Pod}, pod); err != nil {
 		return false, err
 	}
-	if string(pod.UID) != f.r.PodUID {
-		f.r.PodReplaced = true
-		return false, fmt.Errorf("the Pod %s was replaced", f.r.Pod)
+	if string(pod.UID) != f.k.PodUID {
+		f.k.PodReplaced = true
+		return false, fmt.Errorf("the Pod %s was replaced", f.k.Pod)
 	}
 	status := databaseContainerStatus(pod)
 	if status == nil {
 		return false, nil
 	}
-	ended := status.State.Terminated != nil && status.ContainerID == f.r.ContainerBefore
-	if !ended && status.ContainerID == f.r.ContainerBefore && status.RestartCount == *f.r.RestartsBefore {
+	ended := status.State.Terminated != nil && status.ContainerID == f.k.ContainerBefore
+	if !ended && status.ContainerID == f.k.ContainerBefore && status.RestartCount == *f.k.RestartsBefore {
 		return false, nil
 	}
 	at := time.Now().UTC()
-	f.r.EndedAt = &at
+	f.k.EndedAt = &at
 	for _, t := range []*corev1.ContainerStateTerminated{status.State.Terminated,
 		status.LastTerminationState.Terminated} {
-		if t != nil && (t.ContainerID == "" || t.ContainerID == f.r.ContainerBefore) {
+		if t != nil && (t.ContainerID == "" || t.ContainerID == f.k.ContainerBefore) {
 			code, finished := t.ExitCode, t.FinishedAt.UTC()
-			f.r.ExitCode, f.r.ExitReason, f.r.FinishedAt = &code, t.Reason, &finished
+			f.k.ExitCode, f.k.ExitReason, f.k.FinishedAt = &code, t.Reason, &finished
 			break
 		}
 	}
 	// The shell exits with the killed manager's status, 128 + SIGKILL. Any
 	// other end, or one the kubelet reports as OOMKilled, is not the kill's.
 	switch {
-	case f.r.ExitCode == nil:
-		f.r.EndedOtherwise = "its exit code was not reported"
-	case *f.r.ExitCode != sigkillExitCode || f.r.ExitReason == oomKilledReason:
-		f.r.EndedOtherwise = fmt.Sprintf("exit code %d, reason %q", *f.r.ExitCode, f.r.ExitReason)
+	case f.k.ExitCode == nil:
+		f.k.EndedOtherwise = "its exit code was not reported"
+	case *f.k.ExitCode != sigkillExitCode || f.k.ExitReason == oomKilledReason:
+		f.k.EndedOtherwise = fmt.Sprintf("exit code %d, reason %q", *f.k.ExitCode, f.k.ExitReason)
 	}
 	return true, nil
 }
@@ -1024,7 +1045,7 @@ func (f instanceManagerKill) Remove(context.Context) error { return nil }
 // again: another container than the killed one, running, with a higher
 // restart count, on the same Pod. A Pod with another UID is an error. A read
 // that fails is remembered, and the successful ones are counted.
-func (h *haRun) memberBack(ctx context.Context, r *s12IMRestart) (bool, error) {
+func (h *haRun) memberBack(ctx context.Context, r *memberKill) (bool, error) {
 	pod := &corev1.Pod{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: r.Pod}, pod); err != nil {
 		// Not judged here; a wait in which no read succeeded blocks.
@@ -1074,7 +1095,7 @@ func (h *haRun) readRetryEvents(ctx context.Context, cluster *databasev1alpha1.C
 // targetRestartsAtEnd reads the member killed once the cluster is Ready and
 // records its restart count. A replaced Pod blocks the variant; more than
 // one restart after one kill fails it: the container did not stay up.
-func (h *haRun) targetRestartsAtEnd(ctx context.Context, r *s12IMRestart, result *evidence.Scenario) error {
+func (h *haRun) targetRestartsAtEnd(ctx context.Context, r *memberKill, result *evidence.Scenario) error {
 	pod := &corev1.Pod{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: r.Pod}, pod); err != nil {
 		return fmt.Errorf("read the member killed, %s, at the end: %w", r.Pod, err)

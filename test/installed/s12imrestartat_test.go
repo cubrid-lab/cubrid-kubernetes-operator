@@ -521,7 +521,7 @@ func TestRunS12InstanceManagerRestartPreparingIsBlockedByAnotherOperationsRecord
 
 func TestIMRestartSeedingPassReasonMarksAnInferredAttempt(t *testing.T) {
 	before, after := int32(0), int32(1)
-	r := &s12IMRestart{Pod: testIMPeer, SeedAttemptsBefore: &before}
+	r := &s12IMRestart{memberKill: memberKill{Pod: testIMPeer}, SeedAttemptsBefore: &before}
 	if reason := imRestartSeedingPassReason(r); !strings.Contains(reason, "seeding attempt 1 (inferred) (seed "+
 		"restore operation unknown)") {
 		t.Fatalf("reason = %q, want the attempt marked inferred", reason)
