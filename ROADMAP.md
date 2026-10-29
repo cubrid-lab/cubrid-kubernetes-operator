@@ -404,7 +404,19 @@ must be unchanged, and no key may be in a status read, a manifest, an Event,
 the manager's log or the member's log. The run removes the limit, deletes
 both `CubridBackup`s and the cluster by UID, and leaves the artifacts. Two
 backups on different members at once are not exercised. Unit tests cover it
-with fakes; the slowed standalone harness has not run on the VM lab yet.
+with fakes. On 2026-10-29 the slowed standalone harness (`966e03f`)
+passed once on the VM lab (manager `fb6f345`, after S11 `complete` on the
+same run): both backups were requested at 15:38:23.7 UTC; at 15:38:26.7 the
+second was held with `InstanceManagerOperationInProgress` while the first
+was `Running`, and stayed `Pending` for about 2 min 45 s while the first
+uploaded through the limit; the member's records show the first operation
+ended at 15:41:11.0007 and the second created at 15:41:11.1030, 102 ms
+later, by the member's clock; the first was `Completed` 2 min 54 s and the
+second 5 min 39 s after the requests, each under its own operation, with
+one attempt prefix holding its manifest and one verified object of
+5,256,192 bytes; 10,613,240 bytes passed the limit in all. One run is not a
+baseline. The review fix made after it (the order must be judged before a
+pass, `d480fe8`) changes no path the run took.
 
 An earlier harness ran the two backups on the HA cluster, on the VM lab on
 2026-10-29 (manager `fb6f345`). Harness `6481923` passed once at 14:49 UTC
