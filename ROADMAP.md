@@ -508,10 +508,25 @@ the ready limit; the source and the installed manager unchanged; and no
 key in statuses, Events, the sampler's output or the logs. A `backupdb`
 never seen before the backup left `Running`, or a stop that reached the
 Instance Manager after `backupdb` had ended (an upload failure, or
-`backupdb`'s success in the log), leaves it blocked; it uses the lab's
-small database without filler data. The sampler cannot see a hold shorter
-than its interval, nor anything after the container ended. Unit tests cover
-it with fakes. It has not yet run on the VM lab.
+`backupdb`'s success in the log, with whatever `Completed`, artifact or
+manifest the backup then produced), leaves it blocked. The sampler cannot
+see a hold shorter than its interval, nor anything after the container
+ended. Unit tests cover it with fakes, and a Linux unit test runs the
+sampler script against a process holding a file. On 2026-10-29 the first
+harness of the change (`9ae6629`) ran once on the VM lab from 19:36 UTC
+(manager `fb6f345`), without filler data. `backupdb` took 615 ms and the
+sampler saw it 385 ms after the request. The deletion was sent 24 ms after
+that, but the stop reached the Instance Manager only after `backupdb` had
+succeeded, and the backup completed with its manifest. The staging
+directory was gone 767 ms after the deletion, with no holder after it. That
+run was a placement miss which the harness misjudged as a failure.
+
+The current harness classifies such a run as blocked. It grows a filler
+table in the cluster's database before the request (default 1024 MiB,
+`-backup-graceful-stop-filler-mb`) so that `backupdb` lasts for seconds. It
+records the time from the deletion to the first log line the stop caused,
+to show the `preStop` latency. The current harness has not yet run on the
+VM lab.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's

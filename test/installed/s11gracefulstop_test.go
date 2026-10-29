@@ -17,8 +17,10 @@ limitations under the License.
 package installed
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -60,8 +62,13 @@ func testS11GracefulStopConfig(t *testing.T) HAConfig {
 	cfg := testS11Config(t)
 	cfg.BackupGracefulStop = true
 	cfg.BackupGracefulStopReadyLimit = 5 * time.Second
+	cfg.BackupGracefulStopFillerMB = 1
 	return cfg
 }
+
+// testGSNow stands for the time of a log line, which the fake log writes
+// when it writes the line.
+const testGSNow = "@now@"
 
 // gsSample is one reading the fake sampler prints: its processes, holders
 // and entries, as the script prints them after their letter.
@@ -100,8 +107,17 @@ type s11GracefulStopFixture struct {
 	// manifestAfterDelete leaves a manifest.json under the prefix.
 	notReadyAgain       bool
 	manifestAfterDelete bool
+	// failReason is the Ready reason of the Failed backup, BackupFailed
+	// unless set; noOperationRef leaves status.operationRef empty;
+	// deleteErr refuses the deletion of the member's Pod; fillerAnswer, when
+	// set, is what the filler script prints.
+	failReason     string
+	noOperationRef bool
+	deleteErr      error
+	fillerAnswer   string
 
 	gsBackup   *databasev1alpha1.CubridBackup
+	fillers    []string
 	gsReads    int
 	afterReads int
 	gsFinal    databasev1alpha1.CubridBackupPhase
@@ -136,6 +152,7 @@ func newS11GracefulStopFixture(t *testing.T, cfg HAConfig) *s11GracefulStopFixtu
 		gsLogLine("Ran command", "command", serverStop+" "+databaseName, "", "", `"exitCode":0`)}
 	f.interruptedRead = f.readCluster
 	f.podDeleted = f.deletePod
+	f.memberHook = f.filler
 	created, read := f.backupCreated, f.backupRead
 	f.backupCreated = func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error {
 		if backup.Name != s11GracefulStopBackupName {
@@ -179,9 +196,31 @@ func newS11GracefulStopFixture(t *testing.T, cfg HAConfig) *s11GracefulStopFixtu
 	return f
 }
 
-// gsLogLine is one line of the Instance Manager's JSON log.
+// filler answers the filler script in the standalone member as csql and du
+// would, with the rows it asked for, or fillerAnswer.
+func (f *s11GracefulStopFixture) filler(_ context.Context, pod, script string) (string, error, bool) {
+	if !strings.Contains(script, fillerTable) {
+		return "", nil, false
+	}
+	f.mu.Lock()
+	f.fillers = append(f.fillers, pod)
+	answer := f.fillerAnswer
+	f.mu.Unlock()
+	if want := fillerScript(fillerRows(f.cfg.BackupGracefulStopFillerMB)); script != want ||
+		pod != s11GracefulStopMember {
+		f.t.Errorf("filler script in %s = %q, want %q", pod, script, want)
+	}
+	if answer != "" {
+		return answer, nil, true
+	}
+	return fmt.Sprintf("STATEMENTS 12\n=== <Result of SELECT Command in Line 1> ===\n\n  cast(count(*) as varchar)\n"+
+		"======\n  '%d'\n\n1 row selected.\n%s2048\n", fillerRows(f.cfg.BackupGracefulStopFillerMB), fillerDu), nil, true
+}
+
+// gsLogLine is one line of the Instance Manager's JSON log, with testGSNow
+// for its time.
 func gsLogLine(msg, event, command, operation, reason, extra string) string {
-	fields := map[string]any{"time": time.Now().UTC().Format(time.RFC3339Nano), "level": "INFO", "msg": msg,
+	fields := map[string]any{"time": testGSNow, "level": "INFO", "msg": msg,
 		"component": "instance-manager", "member": s11GracefulStopMember}
 	for k, v := range map[string]string{"event": event, "command": command, "operationID": operation,
 		"reason": reason} {
@@ -220,11 +259,14 @@ func (f *s11GracefulStopFixture) sample(w io.Writer, backupdb, server string) {
 		for _, p := range s.processes {
 			b.WriteString("P " + p + "\n")
 		}
-		for _, h := range s.holders {
-			b.WriteString("H " + h + "\n")
-		}
 		for _, e := range s.entries {
 			b.WriteString("E " + e + "\n")
+		}
+		for _, p := range s.processes {
+			b.WriteString("F " + strings.Fields(p)[0] + "\n")
+		}
+		for _, h := range s.holders {
+			b.WriteString("H " + h + "\n")
 		}
 		b.WriteString(".\n")
 		_, err := io.WriteString(w, b.String())
@@ -267,6 +309,7 @@ func (f *s11GracefulStopFixture) log(w io.Writer) {
 	}
 	<-f.stopped
 	for _, line := range f.stopLog {
+		line = strings.Replace(line, testGSNow, time.Now().UTC().Format(time.RFC3339Nano), 1)
 		if _, err := io.WriteString(w, line+"\n"); err != nil {
 			return
 		}
@@ -286,6 +329,12 @@ func (f *s11GracefulStopFixture) deletePod(ctx context.Context, c client.WithWat
 	if pod.Name != s11GracefulStopMember || uid != testInterruptedPodUID || options.GracePeriodSeconds != nil {
 		f.t.Errorf("deleted Pod %s with UID precondition %q and grace period %v, want %s with %s and its own grace "+
 			"period", pod.Name, uid, options.GracePeriodSeconds, s11GracefulStopMember, testInterruptedPodUID)
+	}
+	f.mu.Lock()
+	refused := f.deleteErr
+	f.mu.Unlock()
+	if refused != nil {
+		return refused
 	}
 	stored := &corev1.Pod{}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(pod), stored); err != nil {
@@ -371,6 +420,7 @@ func (f *s11GracefulStopFixture) advanceGS(ctx context.Context, c client.WithWat
 	f.mu.Lock()
 	phase := f.nextGS()
 	message, manifest := f.failMessage, f.manifestAfterDelete && f.deleted
+	reason, noRef := cmp.Or(f.failReason, s11MissingReason), f.noOperationRef
 	f.mu.Unlock()
 	started := metav1.NewTime(time.Now().Add(-time.Second))
 	dest := backup.Spec.Destination.ObjectStorage
@@ -381,7 +431,9 @@ func (f *s11GracefulStopFixture) advanceGS(ctx context.Context, c client.WithWat
 		Reason: testRunningReason, Message: testInProgress, LastTransitionTime: started}}
 	if phase != databasev1alpha1.BackupPhasePending {
 		s.TargetInstance, s.TargetRole = s11GracefulStopMember, string(databasev1alpha1.RoleUnknown)
-		s.OperationRef = testIMOperation
+		if !noRef {
+			s.OperationRef = testIMOperation
+		}
 	}
 	if manifest {
 		f.store.put(dest.Bucket, attempt+"/"+instancemanager.ManifestObjectName, []byte("{}"))
@@ -391,7 +443,7 @@ func (f *s11GracefulStopFixture) advanceGS(ctx context.Context, c client.WithWat
 		s.Conditions[0].Reason, s.Conditions[0].Message = testUploadRunning, testUploadingMessage
 	case databasev1alpha1.BackupPhaseFailed:
 		s.CompletedAt = &started
-		s.Conditions[0].Reason, s.Conditions[0].Message = s11MissingReason, message
+		s.Conditions[0].Reason, s.Conditions[0].Message = reason, message
 	case databasev1alpha1.BackupPhaseCompleted:
 		s.CompletedAt = &started
 		s.Artifact = &databasev1alpha1.CubridBackupArtifact{URI: "s3://" + dest.Bucket + "/" + attempt +
@@ -459,21 +511,38 @@ func TestRunS11GracefulStopPassesWhenTheStagingIsSettledBeforeCUBRIDStops(t *tes
 		t.Fatalf("deleted = %v, cleanup = %v; want %v", f.s11InterruptedFixture.deleted, scenario.CleanupSucceeded,
 			want)
 	}
-	m := scenario.Measurements
-	if m[measHoldersAfterGone] != float64(0) || m[measBackupdbDurationMs] != float64(812) ||
-		m[measOperationRefUnchanged] != true || m[failedWithinKey] == evidence.Unknown ||
-		m[measDeleteAfterSeen] == evidence.Unknown || m[measStagingGoneAfterDelete] == evidence.Unknown ||
-		m[measReadyAgainWithin] == evidence.Unknown {
-		t.Fatalf("measurements = %v", m)
-	}
+	requireGracefulStopMeasurements(t, scenario.Measurements)
 	for _, file := range []string{s11GracefulStopSamplesFile, s11GracefulStopLogFile,
 		s11GracefulStopSourceDataCheckFile} {
 		if !slices.Contains(scenario.Evidence, file) {
 			t.Fatalf("evidence = %v, want %s", scenario.Evidence, file)
 		}
 	}
-	requireGracefulStopRecord(t, readGracefulStopRecord(t, cfg.EvidenceDir), f.failMessage)
+	if !slices.Equal(f.fillers, []string{s11GracefulStopMember}) {
+		t.Fatalf("filler scripts run in %v, want once in %s", f.fillers, s11GracefulStopMember)
+	}
+	rec := readGracefulStopRecord(t, cfg.EvidenceDir)
+	requireGracefulStopRecord(t, rec, f.failMessage)
+	if fl := rec.Filler; fl == nil || fl.Rows != fillerRows(1) || fl.TargetRows != fl.Rows || fl.Statements != 12 ||
+		fl.DatabaseDirKB != 2048 || fl.DataVolume != "2052Mi" || fl.Took == "" {
+		t.Fatalf("filler = %+v", fl)
+	}
+	if l := rec.Log; l.StopLine == 0 || l.StopLoggedAt == nil || l.StopLoggedAfterDelete == "" {
+		t.Fatalf("log = %+v, want the first stop line timed", l)
+	}
 	requireNamespaceGone(t, f.haFixture)
+}
+
+// requireGracefulStopMeasurements checks the measurements of a passed run.
+func requireGracefulStopMeasurements(t *testing.T, m map[string]any) {
+	t.Helper()
+	if m[measHoldersAfterGone] != float64(0) || m[measBackupdbDurationMs] != float64(812) ||
+		m[measOperationRefUnchanged] != true || m[failedWithinKey] == evidence.Unknown ||
+		m[measDeleteAfterSeen] == evidence.Unknown || m[measStagingGoneAfterDelete] == evidence.Unknown ||
+		m[measReadyAgainWithin] == evidence.Unknown || m[measStopLoggedAfterDelete] == evidence.Unknown ||
+		m[measFillerRows] != float64(fillerRows(1)) || m[measFillerGrowth] == evidence.Unknown {
+		t.Fatalf("measurements = %v", m)
+	}
 }
 
 // requireGracefulStopRecord checks the record of a passed run whose backup
@@ -537,7 +606,36 @@ func TestRunS11GracefulStopJudgesTheOutcome(t *testing.T) {
 			f.stopLog = slices.Delete(f.stopLog, 3, 4)
 		}, want: evidence.Blocked, reason: "is incomplete: it holds no " + logOperationFailed},
 		"Completed with an artifact": {change: func(f *s11GracefulStopFixture) { f.completeAfterDelete = true },
-			want: evidence.Fail, reason: "ended Completed after its member's Pod was deleted while backupdb ran"},
+			want: evidence.Fail, reason: "ended Completed after its member's Pod was deleted and the member's log " +
+				"shows backupdb end for the stop"},
+		"Completed after backupdb's success in the log": {change: func(f *s11GracefulStopFixture) {
+			f.completeAfterDelete = true
+			f.stopLog[0] = strings.Replace(f.stopLog[0], `"Command failed"`, `"Ran command"`, 1)
+		}, want: evidence.Blocked, reason: "placement missed: the backup ended Completed"},
+		// The VM-lab run of 2026-10-29 19:36 UTC: backupdb succeeded before
+		// the stop reached the Instance Manager, and the backup completed with
+		// its manifest; the log holds no Operation failed.
+		"the lab's placement miss with a manifest": {change: func(f *s11GracefulStopFixture) {
+			f.completeAfterDelete, f.manifestAfterDelete = true, true
+			f.stopLog = []string{strings.Replace(f.stopLog[0], `"Command failed"`, `"Ran command"`, 1),
+				f.stopLog[4], f.stopLog[5]}
+		}, want: evidence.Blocked, reason: "placement missed"},
+		"a refused deletion": {change: func(f *s11GracefulStopFixture) {
+			f.deleteErr = errors.New("pods \"" + s11GracefulStopMember + "\" is forbidden")
+		}, want: evidence.Blocked, reason: "the member's Pod could not be deleted: pods"},
+		"RecordedOperationLost": {change: func(f *s11GracefulStopFixture) { f.failReason = s11OperationLostReason },
+			want: evidence.Blocked, reason: "the documented escalation " + s11OperationLostReason},
+		"heartbeat stop missing": {change: func(f *s11GracefulStopFixture) {
+			f.stopLog = slices.Delete(f.stopLog, 4, 5)
+		}, want: evidence.Blocked, reason: "it holds no the shutdown's " + heartbeatStop},
+		"server stop before the operation failed": {change: func(f *s11GracefulStopFixture) {
+			f.stopLog = []string{f.stopLog[0], f.stopLog[1], f.stopLog[2], f.stopLog[5], f.stopLog[3], f.stopLog[4]}
+		}, want: evidence.Fail, reason: "the member's log holds " + serverStop + " (line"},
+		"no operationRef read": {change: func(f *s11GracefulStopFixture) { f.noOperationRef = true },
+			want: evidence.Blocked, reason: "no operationRef was read after the deletion"},
+		"the filler failed": {change: func(f *s11GracefulStopFixture) {
+			f.fillerAnswer = fillerFailed + " statement 3: ERROR: Not enough disk space\n"
+		}, want: evidence.Blocked, reason: "grow the filler table " + fillerTable},
 		"the manifest under its prefix": {change: func(f *s11GracefulStopFixture) { f.manifestAfterDelete = true },
 			want: evidence.Fail, reason: "holds a manifest.json under"},
 		"the cluster not Ready again": {change: func(f *s11GracefulStopFixture) {
@@ -559,7 +657,88 @@ func TestRunS11GracefulStopJudgesTheOutcome(t *testing.T) {
 			if scenario.CleanupSucceeded == nil || !*scenario.CleanupSucceeded {
 				t.Fatalf("cleanup = %v, want the backup and the cluster deleted", scenario.CleanupSucceeded)
 			}
+			if tc.want == evidence.Blocked && len(scenario.NeverEvents) != 0 {
+				t.Fatalf("never-events = %v, want none for a blocked variant", scenario.NeverEvents)
+			}
 		})
+	}
+}
+
+// TestJudgeStopSamplesRequiresTheHoldersAfterTheEntryIsGone judges readings
+// directly: a holder in the reading that first lacks the operation's entry
+// fails the variant, because the script lists the entries before the open
+// files; readings that never showed an open file or a cub* process's
+// listing block it.
+func TestJudgeStopSamplesRequiresTheHoldersAfterTheEntryIsGone(t *testing.T) {
+	at := time.Now().UTC()
+	accepted := at.Add(-time.Second)
+	held := []string{"77 " + testGSFile}
+	for name, tc := range map[string]struct {
+		samples []stopSample
+		verdict bool
+		reason  string
+	}{
+		"a holder and no entry in one reading": {samples: []stopSample{
+			{Received: at, Entries: []string{testGSStaging}, Holders: held},
+			{Received: at.Add(time.Millisecond), Holders: held}},
+			verdict: true, reason: "a process held a file below"},
+		"the holder gone with the entry": {samples: []stopSample{
+			{Received: at, Entries: []string{testGSStaging}, Holders: held},
+			{Received: at.Add(time.Millisecond)}}},
+		"nothing seen of open files": {samples: []stopSample{
+			{Received: at, Entries: []string{testGSStaging}},
+			{Received: at.Add(time.Millisecond)}},
+			reason: "the sampler could not see open files"},
+		"a cub* process's files listed": {samples: []stopSample{
+			{Received: at, Entries: []string{testGSStaging}, FdListed: []string{"77"}},
+			{Received: at.Add(time.Millisecond)}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &s11GracefulStopRecord{BackupUID: testGSBackupUID, OperationRef: testIMOperation,
+				Trigger: &s11StopTrigger{DeleteAcceptedAt: &accepted},
+				Sampler: &s11StopSampler{HoldersAfterGone: []string{}}}
+			result := &evidence.Scenario{Measurements: map[string]any{}}
+			err := judgeStopSamples(&stopWatch{samples: tc.samples}, rec, result)
+			isVerdict := errors.As(err, new(backupVerdict))
+			if (tc.reason == "") != (err == nil) || isVerdict != tc.verdict ||
+				(err != nil && !strings.Contains(err.Error(), tc.reason)) {
+				t.Fatalf("judgeStopSamples() = %v, want verdict %t with %q", err, tc.verdict, tc.reason)
+			}
+		})
+	}
+}
+
+// TestJudgeStopBackupBlocksABackupReadEndedBeforeTheDeletion requires that a
+// backup whose ended phase was read before the deletion was accepted is not
+// judged as ended by the stop.
+func TestJudgeStopBackupBlocksABackupReadEndedBeforeTheDeletion(t *testing.T) {
+	accepted := time.Now().UTC()
+	rec := &s11GracefulStopRecord{Cluster: &s11StandaloneCluster{Name: s11GracefulStopClusterName},
+		Trigger: &s11StopTrigger{DeleteAcceptedAt: &accepted}, Log: &s11StopLog{BackupdbResult: logCommandFailed},
+		Phases: []s11Phase{{At: accepted.Add(-time.Millisecond), Phase: databasePhaseFailed}}}
+	backup := &databasev1alpha1.CubridBackup{Status: databasev1alpha1.CubridBackupStatus{
+		Phase: databasev1alpha1.BackupPhaseFailed, Conditions: []metav1.Condition{{Type: backupReady,
+			Reason: s11MissingReason, Message: stopReasonPrefix + testGSKilled}}}}
+	err := judgeStopBackup(backup, nil, accepted.Add(-time.Minute), rec,
+		&evidence.Scenario{Measurements: map[string]any{}})
+	if err == nil || errors.As(err, new(backupVerdict)) ||
+		!strings.Contains(err.Error(), "before its member's Pod was deleted") {
+		t.Fatalf("judgeStopBackup() = %v, want blocked: read ended before the deletion", err)
+	}
+}
+
+func TestReadyUnchangedNotesAReadyThatNeverWentFalse(t *testing.T) {
+	accepted := time.Date(2026, 10, 29, 19, 36, 10, 500_000_000, time.UTC)
+	for _, tc := range []struct {
+		transition time.Time
+		noted      bool
+	}{{accepted.Add(-time.Minute), true}, {accepted.Truncate(time.Second), false},
+		{accepted.Add(5 * time.Second), false}} {
+		transition := tc.transition
+		got := readyUnchanged(&s11StopTrigger{DeleteAcceptedAt: &accepted, ReadyTransitionAt: &transition})
+		if (got != "") != tc.noted {
+			t.Fatalf("readyUnchanged(transition %s) = %q, want noted %t", transition, got, tc.noted)
+		}
 	}
 }
 

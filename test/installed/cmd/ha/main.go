@@ -164,6 +164,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.BackupGracefulStopReadyLimit, "backup-graceful-stop-ready-limit", 15*time.Minute,
 		"S11 graceful-stop: bound from the standalone cluster's creation until it is Ready, and from the deletion "+
 			"until its replacement is ready and the cluster Ready again")
+	flags.IntVar(&cfg.BackupGracefulStopFillerMB, "backup-graceful-stop-filler-mb", 1024,
+		"S11 graceful-stop: MiB of filler rows grown in the standalone cluster's database before the backup, so "+
+			"that backupdb runs for seconds; 0 grows none; the cluster's data volume is 2Gi and four times this")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
 		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
 	flags.BoolVar(&cfg.Restore, "restore", false,
@@ -225,6 +228,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	}
 	if set["backup-graceful-stop-ready-limit"] && !cfg.BackupGracefulStop {
 		return errors.New("-backup-graceful-stop-ready-limit needs -backup-graceful-stop")
+	}
+	if set["backup-graceful-stop-filler-mb"] && !cfg.BackupGracefulStop {
+		return errors.New("-backup-graceful-stop-filler-mb needs -backup-graceful-stop")
 	}
 	if flags.NArg() != 0 || (cfg.Level != "kind" && cfg.Level != "vm-lab") {
 		return errors.New("choose kind or vm-lab explicitly and provide no positional command")

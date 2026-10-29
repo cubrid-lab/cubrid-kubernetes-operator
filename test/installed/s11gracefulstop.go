@@ -34,12 +34,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 )
 
 const (
@@ -60,9 +62,11 @@ const (
 	// operations.go) puts errStopping's text before the reason runBackup
 	// gives a failed backupdb (internal/instancemanager/server.go).
 	stopReasonPrefix = "the member is stopping: backupdb failed: "
-	// memberStopping is errStopping's text with its separator, which
+	// errStoppingText is errStopping's text (internal/instancemanager/
+	// operations.go), and memberStopping that text with the separator
 	// stoppingReason puts before any reason while the member stops.
-	memberStopping = "the member is stopping: "
+	errStoppingText = "the member is stopping"
+	memberStopping  = errStoppingText + ": "
 	// backupdbSucceeded starts the reason of a backup that failed after a
 	// backupdb that succeeded, before its upload (runBackup).
 	backupdbSucceeded = "backupdb succeeded"
@@ -103,45 +107,77 @@ const (
 	measSamples                  = "samplerSamples"
 	measReplacedWithin           = "replacementSeenWithin"
 	measReadyAgainWithin         = "readyAgainWithin"
+	measStopLoggedAfterDelete    = "stopLoggedAfterDelete"
+	measFillerRows               = "fillerRows"
+	measFillerGrowth             = "fillerGrowthTook"
+	// fillerTable is the table the run grows in the standalone member's
+	// database; fillerRowBytes the width of its one CHAR column, one row's
+	// payload; fillerChunk the most rows one statement copies, so that no
+	// one transaction holds more than about 64 MiB of log; maxFillerMB the
+	// largest filler the variant takes.
+	fillerTable    = "gs_filler"
+	fillerRowBytes = 1000
+	fillerChunk    = 65536
+	maxFillerMB    = 8192
+	// fillerFailed starts the line of the filler script that says which
+	// statement failed.
+	fillerFailed = "FILLER-FAILED"
+	// fillerDu starts its line with the database directory's size.
+	fillerDu = "DU "
+	// imDatabasesDir is where the Instance Manager keeps the members'
+	// databases on the data volume (restoreTargetRoot in
+	// internal/controller/bootstrap.go).
+	imDatabasesDir = "/var/lib/cubrid/databases"
 	// ownedBackupKind and ownedClusterKind name what the variant created in
 	// its cleanup (deleteByUID).
 	ownedBackupKind  = "CubridBackup"
 	ownedClusterKind = "cluster"
 )
 
-// gracefulStopSamplerScript prints, about every samplerInterval until it is
-// ended, one reading of the member: a line "T <seconds>.<nanoseconds>" by the
+// gracefulStopSamplerScript is samplerScript for the backup staging root.
+func gracefulStopSamplerScript() string {
+	return samplerScript(imBackupStagingRoot)
+}
+
+// samplerScript prints, about every samplerInterval until it is ended, one
+// reading of the member: a line "T <seconds>.<nanoseconds>" by the
 // container's clock, then "P <pid> <comm> <argv>" for each process whose
 // command name starts with cub (cubrid, cub_admin, cub_server, cub_master),
-// "H <pid> <path>" for each open file at or below the backup staging root,
-// from the /proc/<pid>/fd links that one ls lists, a deleted file included
-// ("<path> (deleted)"), "E <destination>/<entry>" for each entry two levels
-// below the staging root, and "." at the end of the reading. It prints no
-// file's contents. It runs as the container's user, the one cub_server runs
-// as, so it reads the links of CUBRID's processes, as stagingHolders in
+// "E <destination>/<entry>" for each entry two levels below the staging root
+// root, then, from the /proc/<pid>/fd links that one ls lists, "F <pid>" for
+// each of those cub* processes whose links it could list and "H <pid>
+// <path>" for each open file at or below root, a deleted file included
+// ("<path> (deleted)"), and "." at the end of the reading. The entries are
+// listed before the open files, so that a holder in a reading without the
+// entry was seen after the entry was gone. It prints no file's contents. It
+// runs as the container's user, the one cub_server runs as, so it reads the
+// links of CUBRID's processes, as stagingHolders in
 // internal/instancemanager/stagingwriter.go does.
-func gracefulStopSamplerScript() string {
-	return `r='` + imBackupStagingRoot + `'; while :; do ` +
-		`echo "T $(date -u +%s.%N)"; ` +
+func samplerScript(root string) string {
+	return `r='` + root + `'; while :; do ` +
+		`echo "T $(date -u +%s.%N)"; c=" "; ` +
 		`for p in /proc/[0-9]*; do n=""; read -r n < "$p/comm" 2>/dev/null || continue; ` +
 		`case "$n" in cub*) ;; *) continue ;; esac; a=(); mapfile -d '' -t a < "$p/cmdline" 2>/dev/null; ` +
-		`echo "P ${p#/proc/} $n ${a[*]}"; done; ` +
-		`ls -l /proc/[0-9]*/fd 2>/dev/null | while IFS= read -r l; do case "$l" in ` +
-		`/proc/*/fd:) q=${l#/proc/}; q=${q%/fd:} ;; *" -> $r/"*) echo "H $q ${l#* -> }" ;; esac; done; ` +
+		`c="$c${p#/proc/} "; echo "P ${p#/proc/} $n ${a[*]}"; done; ` +
 		`for e in "$r"/*/*; do [ -e "$e" ] && echo "E ${e#"$r"/}"; done; ` +
+		`ls -l /proc/[0-9]*/fd 2>/dev/null | while IFS= read -r l; do case "$l" in ` +
+		`/proc/*/fd:) q=${l#/proc/}; q=${q%/fd:}; case "$c" in *" $q "*) echo "F $q" ;; esac ;; ` +
+		`*" -> $r/"*) echo "H $q ${l#* -> }" ;; esac; done; ` +
 		`echo .; sleep 0.1; done`
 }
 
 // stopSample is one reading of the sampler: when the container's clock and
-// the run's took it, the cub* processes ("<pid> <comm> <argv>"), the open
-// files below the staging root ("<pid> <path>") and the entries two levels
-// below it ("<destination>/<entry>").
+// the run's took it, the cub* processes ("<pid> <comm> <argv>"), the entries
+// two levels below the staging root ("<destination>/<entry>"), the cub*
+// processes whose open files ls could list (FdListed) and the open files
+// below the staging root ("<pid> <path>").
 type stopSample struct {
 	At        time.Time `json:"at"`
 	Received  time.Time `json:"receivedAt"`
 	Processes []string  `json:"processes"`
-	Holders   []string  `json:"holders"`
 	Entries   []string  `json:"entries"`
+	FdListed  []string  `json:"fdListed"`
+	Holders   []string  `json:"holders"`
 }
 
 // backupdbProcess returns the first process of the reading whose argv runs
@@ -217,6 +253,34 @@ type s11StopLog struct {
 	HeartbeatStopResult string `json:"heartbeatStopResult,omitempty"`
 	ServerStopLine      int    `json:"serverStopLine,omitempty"`
 	ServerStopResult    string `json:"serverStopResult,omitempty"`
+	// StopLine is the first line the stop caused (isStopLine), StopLoggedAt
+	// its time by the member's clock and StopLoggedAfterDelete the time from
+	// the deletion's acceptance, by the run's clock, to it: an upper bound on
+	// the preStop hook's latency, since the Instance Manager logs nothing
+	// when a stop begins. The two clocks' skew is not measured.
+	StopLine              int        `json:"stopLine,omitempty"`
+	StopLoggedAt          *time.Time `json:"stopLoggedAt,omitempty"`
+	StopLoggedAfterDelete string     `json:"stopLoggedAfterDelete,omitempty"`
+}
+
+// s11Filler is the table the run grew in the standalone member's database
+// before the request, so that backupdb runs long enough for the stop to
+// land inside it: its name, the size asked for, the rows of fillerRowBytes
+// it holds (counted at the end), the statements run, when the growth started
+// and how long it took, and the database directory's size in KiB after it
+// (du -sk), or why that could not be read.
+type s11Filler struct {
+	Table         string     `json:"table"`
+	TargetMB      int        `json:"targetMB"`
+	RowBytes      int        `json:"rowBytes"`
+	TargetRows    int        `json:"targetRows"`
+	Rows          int        `json:"rows"`
+	Statements    int        `json:"statements"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	Took          string     `json:"took,omitempty"`
+	DatabaseDirKB int64      `json:"databaseDirKB,omitempty"`
+	DuError       string     `json:"duError,omitempty"`
+	DataVolume    string     `json:"dataVolume"`
 }
 
 // s11StopTrigger is the deletion of the member's Pod and its replacement.
@@ -249,6 +313,10 @@ type s11StopTrigger struct {
 	ReadyAgainWithin  string     `json:"readyAgainWithin,omitempty"`
 	ReadyTransitionAt *time.Time `json:"readyTransitionAt,omitempty"`
 	ReadyWaiting      string     `json:"readyWaiting,omitempty"`
+	// ReadyUnchanged is set when ReadyTransitionAt is before the second of
+	// the deletion's acceptance: Ready never went False through the
+	// replacement, as the Operator observed it. It is recorded, not judged.
+	ReadyUnchanged string `json:"readyUnchanged,omitempty"`
 }
 
 // s11GracefulStopRecord is the evidence of S11 graceful-stop besides the
@@ -262,6 +330,7 @@ type s11GracefulStopRecord struct {
 	PodSecurity        map[string]string     `json:"podSecurity"`
 	Cluster            *s11StandaloneCluster `json:"cluster,omitempty"`
 	ReadyLimit         string                `json:"readyLimit"`
+	Filler             *s11Filler            `json:"filler,omitempty"`
 	Trigger            *s11StopTrigger       `json:"trigger"`
 	Sampler            *s11StopSampler       `json:"sampler"`
 	Log                *s11StopLog           `json:"log"`
@@ -272,8 +341,8 @@ type s11GracefulStopRecord struct {
 	// OperationRefsSeen every one they showed, in order, each once.
 	OperationRef      string   `json:"operationRef,omitempty"`
 	OperationRefsSeen []string `json:"operationRefsSeen"`
-	// EndedAfterDelete is set when the wait saw the backup end after the
-	// deletion was accepted.
+	// EndedAfterDelete is set when the wait's first reading of the phase the
+	// backup ended in was taken after the deletion was accepted.
 	EndedAfterDelete bool `json:"endedAfterDelete"`
 	// FailedWithin runs from the request's return, and FailedAfterDelete from
 	// the deletion's acceptance, to the reading that saw Failed.
@@ -319,6 +388,10 @@ func (c HAConfig) validateS11GracefulStop() error {
 	}
 	if c.BackupGracefulStopReadyLimit <= 0 {
 		return errors.New(flagGracefulStop + " needs a positive -backup-graceful-stop-ready-limit for its cluster")
+	}
+	if c.BackupGracefulStopFillerMB < 0 || c.BackupGracefulStopFillerMB > maxFillerMB {
+		return fmt.Errorf("%s needs a -backup-graceful-stop-filler-mb of 0 to %d, not %d", flagGracefulStop,
+			maxFillerMB, c.BackupGracefulStopFillerMB)
 	}
 	return nil
 }
@@ -412,8 +485,18 @@ func (h *haRun) runS11GracefulStop(ctx context.Context) (result evidence.Scenari
 				"instance-manager shutdown before the container gets SIGTERM",
 			"the run never writes to or removes from the object store; with the seed Secret's keys it lists the " +
 				"backup bucket under the prefix at the end",
+			"before the request the run grows a table " + fillerTable + " in the standalone member's database, " +
+				"through csql in its database container, so that backupdb runs long enough for the stop to land " +
+				"inside it; no data check reads that cluster, and the HA source is not touched",
+			"the time from the deletion to the first log line the stop caused is an upper bound on the preStop " +
+				"hook's latency, across the run's clock and the member's",
 			logsNote(h.logLimit())},
 		Cleanup: nothingCreated, Residue: "nothing: the run wrote nothing to the object store"}
+	if mb := h.cfg.BackupGracefulStopFillerMB; mb > 0 {
+		volume := gracefulStopDataVolume(mb)
+		rec.Filler = &s11Filler{Table: fillerTable, TargetMB: mb, RowBytes: fillerRowBytes,
+			TargetRows: fillerRows(mb), DataVolume: volume.String()}
+	}
 	var made s11InterruptedMade
 	watch := &stopWatch{seen: make(chan struct{})}
 	var memberLog []byte
@@ -449,7 +532,8 @@ func (h *haRun) runS11GracefulStop(ctx context.Context) (result evidence.Scenari
 		measStagingGoneAfterDelete: evidence.Unknown, measHoldersAfterGone: evidence.Unknown,
 		measBackupdbDurationMs: evidence.Unknown, measSamples: evidence.Unknown,
 		measReplacedWithin: evidence.Unknown, measReadyAgainWithin: evidence.Unknown,
-		measOperationRefUnchanged: evidence.Unknown}
+		measOperationRefUnchanged: evidence.Unknown, measStopLoggedAfterDelete: evidence.Unknown,
+		measFillerRows: evidence.Unknown, measFillerGrowth: evidence.Unknown}
 	err := h.gracefulStopSteps(ctx, rec, &made, watch, &memberLog, &result)
 	h.judgeGracefulStopRun(ctx, err, rec, &result)
 	judged := time.Now().UTC()
@@ -485,7 +569,7 @@ func (h *haRun) judgeGracefulStopRun(ctx context.Context, err error, rec *s11Gra
 		result.Result, result.Reason = evidence.Blocked, reason
 	default:
 		t, s, l := rec.Trigger, rec.Sampler, rec.Log
-		last := "no process held a staging file in any reading"
+		last := "no process held a staging file in any reading, about every " + samplerInterval.String()
 		if s.LastHolder != "" {
 			last = fmt.Sprintf("the last open staging file was %s, at %s", s.LastHolder,
 				s.LastHolderAt.Format(time.RFC3339Nano))
@@ -496,7 +580,8 @@ func (h *haRun) judgeGracefulStopRun(ctx context.Context, err error, rec *s11Gra
 			"backup_limit with %s %q, without a kept staging, under its one operation %s, never Completed and "+
 			"without status.artifact, also when read again at the end; the sampler saw the operation's staging "+
 			"directory gone at %s and no process holding a file below the backup's staging destination then or "+
-			"after (%s); the member's log held backupdb's %s, %d staging writer event(s), the operation's %s and "+
+			"after, in any reading, about every "+samplerInterval.String()+" (%s); the member's log held "+
+			"backupdb's %s, %d staging writer event(s), the operation's %s and "+
 			"then the shutdown's heartbeat stop, in that order; no manifest.json was under the prefix at the end; "+
 			"the replacement Pod was seen and the cluster read Ready %s after the deletion, within the ready limit; "+
 			"the source and the installed manager were unchanged; no seed key was in the statuses read, the "+
@@ -532,11 +617,14 @@ func (h *haRun) gracefulStopSteps(ctx context.Context, rec *s11GracefulStopRecor
 		return fmt.Errorf("read the run namespace: %w", err)
 	}
 	rec.PodSecurity = podSecurityLabels(ns.Labels)
-	if err := h.createInterrupted(ctx, rec.Cluster, made); err != nil {
+	if err := h.createGracefulStop(ctx, rec.Cluster, made); err != nil {
 		return err
 	}
 	if err := h.waitStandaloneReady(ctx, made.cluster, rec.Cluster, rec.Credentials,
 		h.cfg.BackupGracefulStopReadyLimit); err != nil {
+		return err
+	}
+	if err := h.growFiller(ctx, rec.Filler, result); err != nil {
 		return err
 	}
 	if err := h.memberBeforeRequest(ctx, made.cluster, rec.Trigger); err != nil {
@@ -570,19 +658,30 @@ func (h *haRun) gracefulStopSteps(ctx context.Context, rec *s11GracefulStopRecor
 	}
 	awaitStreams(samplerDone, logDone, stopStreams)
 	result.Measurements[measSamples] = rec.Sampler.Samples
-	// The log is read before the backup is judged: a Completed backup is
-	// judged by whether the log shows backupdb succeed.
+	// The log is read before the backup is judged: a Completed backup, and a
+	// manifest under the prefix, are judged by whether the log shows backupdb
+	// end for the stop or succeed before it.
 	var logErr, samplesErr error
-	if rec.Trigger.DeleteAcceptedAt != nil && rec.OperationRef != "" {
+	switch deleted := rec.Trigger.DeleteAcceptedAt != nil; {
+	case deleted && rec.OperationRef == "":
+		readStopLog(*memberLog, rec, result)
+		logErr = errors.New("no operationRef was read after the deletion, so the sampler and the member's log " +
+			"cannot be judged against the backup's operation")
+	case deleted:
 		logErr, samplesErr = judgeStopLog(*memberLog, rec, result), judgeStopSamples(watch, rec, result)
 	}
 	errs := make([]error, 0, 9)
 	errs = append(errs, judgeStopBackup(backup, waitErr, *rec.RequestedAt, rec, result), samplesErr, logErr,
 		replaced)
+	// After backupdb succeeded, a manifest is the backup's own: the placement
+	// was missed. Only a backupdb that ended for the stop makes one a
+	// never-event; without its end in the log, a manifest cannot be judged.
 	errs = append(errs, h.prefixAtEnd(ctx, rec.Bucket, rec.Prefix, &rec.s11PrefixAtEnd, &rec.Residue, s11FaultEnd{
-		endedAfter: rec.EndedAfterDelete, lastPhase: rec.LastPhase,
-		fault: "its member's Pod was deleted while backupdb ran", confirmed: "an accepted deletion",
-		variant: "S11 graceful-stop"}, result))
+		completedBefore: rec.Log.BackupdbResult == logRanCommand,
+		endedAfter:      rec.EndedAfterDelete && rec.Log.BackupdbResult == logCommandFailed, lastPhase: rec.LastPhase,
+		fault:     "its member's Pod was deleted and backupdb ended for the stop",
+		confirmed: "an accepted deletion and backupdb's end for the stop in the member's log",
+		variant:   "S11 graceful-stop"}, result))
 	errs = append(errs, h.gracefulStopBackupAtEnd(ctx, made.backup, rec, result))
 	errs = append(errs, h.gracefulStopCredentials(ctx, made, rec, watch, *memberLog, started))
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
@@ -705,11 +804,14 @@ func readSamples(r io.Reader, watch *stopWatch, s *s11StopSampler) error {
 				cur = nil
 				continue
 			}
-			cur = &stopSample{At: at, Processes: []string{}, Holders: []string{}, Entries: []string{}}
+			cur = &stopSample{At: at, Processes: []string{}, Entries: []string{}, FdListed: []string{},
+				Holders: []string{}}
 		case cur == nil:
 			unparsed++
 		case kind == "P":
 			cur.Processes = append(cur.Processes, rest)
+		case kind == "F":
+			cur.FdListed = append(cur.FdListed, rest)
 		case kind == "H":
 			cur.Holders = append(cur.Holders, rest)
 		case kind == "E":
@@ -842,9 +944,11 @@ func (h *haRun) gracefulStopBackup(ctx context.Context, rec *s11GracefulStopReco
 		result.Measurements[measBackupdbSeenAfterRequest] = t.SeenAt.Sub(requested).Round(time.Millisecond).String()
 		result.Measurements[measDeleteAfterSeen] = t.DeleteAcceptedAt.Sub(*t.SeenAt).Round(time.Millisecond).String()
 	}
-	if s := backup.Status.Phase; waitErr == nil && t.DeleteAcceptedAt != nil &&
+	// The first reading of the phase the backup ended in is the last phase
+	// recorded: a phase is recorded when it changes.
+	if s := backup.Status.Phase; waitErr == nil && t.DeleteAcceptedAt != nil && len(rec.Phases) > 0 &&
 		(s == databasev1alpha1.BackupPhaseCompleted || s == databasev1alpha1.BackupPhaseFailed) {
-		rec.EndedAfterDelete = true
+		rec.EndedAfterDelete = rec.Phases[len(rec.Phases)-1].At.After(*t.DeleteAcceptedAt)
 	}
 	return backup, waitErr
 }
@@ -924,10 +1028,14 @@ func (h *haRun) gracefulStopReading(ctx context.Context, backup *databasev1alpha
 		rec.Trigger.Missed = fmt.Sprintf("the backup was %s before the sampler showed backupdb in %d reading(s)",
 			s.Phase, len(watch.samples))
 	}
-	missed, accepted := rec.Trigger.Missed, rec.Trigger.DeleteAcceptedAt != nil
+	missed, accepted, refused := rec.Trigger.Missed, rec.Trigger.DeleteAcceptedAt != nil, rec.Trigger.DeleteError
 	watch.mu.Unlock()
 	if missed != "" {
 		return faultStep{errors.New("placement missed: " + missed)}
+	}
+	if refused != "" {
+		return faultStep{errors.New("the sampler showed backupdb, but the member's Pod could not be deleted: " +
+			refused)}
 	}
 	if accepted && rec.Trigger.ReadyAgainAt == nil {
 		if _, err := h.replacementReady(ctx, made.cluster, rec); err != nil {
@@ -1053,6 +1161,22 @@ func measureReplacement(rec *s11GracefulStopRecord, result *evidence.Scenario) {
 		t.ReadyAgainWithin = t.ReadyAgainAt.Sub(*t.DeleteAcceptedAt).Round(time.Millisecond).String()
 		result.Measurements[measReadyAgainWithin] = t.ReadyAgainWithin
 	}
+	t.ReadyUnchanged = readyUnchanged(t)
+}
+
+// readyUnchanged says, when the Ready condition's lastTransitionTime in the
+// reading that found the cluster Ready again is before the second of the
+// deletion's acceptance, that Ready never went False through the
+// replacement; it is empty otherwise. lastTransitionTime has whole seconds:
+// a transition in the deletion's second counts as after it.
+func readyUnchanged(t *s11StopTrigger) string {
+	if t.ReadyTransitionAt == nil || t.DeleteAcceptedAt == nil ||
+		!t.ReadyTransitionAt.Before(t.DeleteAcceptedAt.Truncate(time.Second)) {
+		return ""
+	}
+	return fmt.Sprintf("the cluster's Ready lastTransitionTime %s is before the deletion was accepted at %s: Ready "+
+		"never went False while the member was replaced, as the Operator observed it",
+		t.ReadyTransitionAt.Format(time.RFC3339), t.DeleteAcceptedAt.Format(time.RFC3339Nano))
 }
 
 // judgeStopBackup judges the backup as the wait left it.
@@ -1075,16 +1199,21 @@ func measureReplacement(rec *s11GracefulStopRecord, result *evidence.Scenario) {
 // replacement's, and copies the reason into the backup's Ready message
 // (failedBackup in internal/controller/cubridbackup_controller.go).
 //
-// So once the deletion was accepted: Failed must be BackupFailed with a
-// reason that starts with stopReasonPrefix and does not say that the staging
-// is kept. A reason of an upload, or of a backupdb that succeeded, shows a
-// stop that reached the manager after backupdb had ended, and blocks the
-// variant, as does Completed when the member's log shows backupdb's own
-// success; Completed otherwise, a status.artifact on a reading that is not
-// Completed, and another operationRef are never-events. RecordedOperationLost
-// is the documented escalation and blocks it; any other failure fails it. A
-// backup that left Running before the sampler saw backupdb, or a deletion
-// that was refused, blocks it.
+// So once the deletion was accepted and the backup was first read ended
+// after it (EndedAfterDelete): Failed must be BackupFailed with a reason that
+// starts with stopReasonPrefix and does not say that the staging is kept. A
+// reason of an upload, or of a backupdb that succeeded, shows a stop that
+// reached the manager after backupdb had ended, and blocks the variant, as
+// does Completed when the member's log shows backupdb's own success: the
+// placement was missed, and the Completed backup is its own. Completed when
+// the log shows backupdb end for the stop (Command failed), a
+// status.artifact on a reading that is not Completed, and another
+// operationRef are never-events; Completed when the log shows no end of
+// backupdb cannot be judged and blocks it. RecordedOperationLost is the
+// documented escalation and blocks it; any other failure fails it. A backup
+// that left Running before the sampler saw backupdb, a deletion that was
+// refused, or a backup read ended before the deletion was accepted, blocks
+// it.
 func judgeStopBackup(backup *databasev1alpha1.CubridBackup, waitErr error, requested time.Time,
 	rec *s11GracefulStopRecord, result *evidence.Scenario) error {
 	s, t := backup.Status, rec.Trigger
@@ -1095,26 +1224,7 @@ func judgeStopBackup(backup *databasev1alpha1.CubridBackup, waitErr error, reque
 	}
 	deleted := t.DeleteAcceptedAt != nil
 	result.Measurements[measOperationRefUnchanged] = len(rec.OperationRefsSeen) <= 1
-	var events []string
-	if len(rec.OperationRefsSeen) > 1 {
-		events = append(events, fmt.Sprintf("the backup's operationRef was %s, then %s: a second operation",
-			rec.OperationRefsSeen[0], strings.Join(rec.OperationRefsSeen[1:], ", ")))
-	}
-	for _, a := range rec.ArtifactsNotDone {
-		event := "status.artifact names " + a.URI + " for a backup of " + rec.Cluster.Name + " in phase " + a.Phase
-		if !slices.Contains(events, event) {
-			events = append(events, event)
-		}
-	}
-	if completed && deleted && rec.Log.BackupdbResult != logRanCommand {
-		events = append(events, "the backup of "+rec.Cluster.Name+" ended Completed after its member's Pod was "+
-			"deleted while backupdb ran, and the member's log does not show backupdb succeed first")
-		if s.Artifact != nil {
-			events = append(events, "status.artifact names "+s.Artifact.URI+" for a backup of "+rec.Cluster.Name+
-				" whose member was stopped while backupdb ran")
-		}
-	}
-	if len(events) > 0 {
+	if events := stopBackupEvents(s, rec); len(events) > 0 {
 		result.NeverEvents = append(result.NeverEvents, events...)
 		errs := make([]error, 0, len(events))
 		for _, event := range events {
@@ -1135,9 +1245,15 @@ func judgeStopBackup(backup *databasev1alpha1.CubridBackup, waitErr error, reque
 	case !deleted:
 		return fmt.Errorf("placement missed: the backup ended %s (%s) before the sampler showed backupdb",
 			s.Phase, rec.Failure)
-	case completed:
+	case !rec.EndedAfterDelete:
+		return fmt.Errorf("the backup was read %s before its member's Pod was deleted, so the stop cannot have "+
+			"ended it: %s", s.Phase, rec.Failure)
+	case completed && rec.Log.BackupdbResult == logRanCommand:
 		return fmt.Errorf("placement missed: the backup ended Completed, and the member's log shows backupdb "+
 			"succeed before the stop reached the Instance Manager: %s", rec.Failure)
+	case completed:
+		return fmt.Errorf("the backup ended Completed after its member's Pod was deleted, but the member's log "+
+			"shows no end of backupdb, so whether the stop came before it is not known: %s", rec.Failure)
 	}
 	c := meta.FindStatusCondition(s.Conditions, backupReady)
 	message := ""
@@ -1169,6 +1285,34 @@ func judgeStopBackup(backup *databasev1alpha1.CubridBackup, waitErr error, reque
 	result.Measurements[failedWithinKey] = rec.FailedWithin
 	result.Measurements[measFailedAfterDelete] = rec.FailedAfterDelete
 	return nil
+}
+
+// stopBackupEvents returns the never-events of the backup as the wait left
+// it, s: another operationRef, a status.artifact on a reading that was not
+// Completed, and Completed, with its artifact, after the deletion when the
+// member's log shows backupdb end for the stop.
+func stopBackupEvents(s databasev1alpha1.CubridBackupStatus, rec *s11GracefulStopRecord) []string {
+	var events []string
+	if len(rec.OperationRefsSeen) > 1 {
+		events = append(events, fmt.Sprintf("the backup's operationRef was %s, then %s: a second operation",
+			rec.OperationRefsSeen[0], strings.Join(rec.OperationRefsSeen[1:], ", ")))
+	}
+	for _, a := range rec.ArtifactsNotDone {
+		event := "status.artifact names " + a.URI + " for a backup of " + rec.Cluster.Name + " in phase " + a.Phase
+		if !slices.Contains(events, event) {
+			events = append(events, event)
+		}
+	}
+	if s.Phase == databasev1alpha1.BackupPhaseCompleted && rec.EndedAfterDelete &&
+		rec.Log.BackupdbResult == logCommandFailed {
+		events = append(events, "the backup of "+rec.Cluster.Name+" ended Completed after its member's Pod was "+
+			"deleted and the member's log shows backupdb end for the stop")
+		if s.Artifact != nil {
+			events = append(events, "status.artifact names "+s.Artifact.URI+" for a backup of "+rec.Cluster.Name+
+				" whose member was stopped while backupdb ran")
+		}
+	}
+	return events
 }
 
 // judgeStopSamples finds, in the sampler's readings, the first that showed
@@ -1212,11 +1356,23 @@ func judgeStopSamples(watch *stopWatch, rec *s11GracefulStopRecord, result *evid
 	if gone >= 0 {
 		end = gone
 	}
+	visible := false
 	for _, sample := range samples[:end] {
+		visible = visible || len(sample.Holders) > 0 || len(sample.FdListed) > 0
 		if held := holds(sample); len(held) > 0 {
 			at := sample.Received
 			s.LastHolder, s.LastHolderAt = held[len(held)-1], &at
 		}
+	}
+	if !visible {
+		// No holder and no listing of a cub* process's open files: an empty
+		// answer of ls would pass the check below without showing anything.
+		before := "the end of its output"
+		if s.StagingGoneAt != nil {
+			before = "the staging directory was gone"
+		}
+		return fmt.Errorf("the sampler could not see open files: no reading before %s showed an open file below "+
+			"the staging root or the open files of a cub* process", before)
 	}
 	if gone < 0 {
 		why := "its output ended"
@@ -1258,29 +1414,45 @@ type stopLogLine struct {
 	Command     string `json:"command"`
 	OperationID string `json:"operationID"`
 	Reason      string `json:"reason"`
+	Err         string `json:"err"`
+	Time        string `json:"time"`
 	DurationMs  *int64 `json:"durationMs"`
 }
 
-// judgeStopLog finds in the followed log of the member's database container
-// backupdb's end for the backup's staging destination, the operation's
-// staging writer events and Operation failed, and the shutdown's heartbeat
-// stop and server stop (scanStopLog), and requires the staging settled
-// before CUBRID is stopped: backupdb's end, then the writer events, then
-// Operation failed, then heartbeat stop and server stop. A missing line,
-// other than server stop, blocks the variant: the log is incomplete. A line
-// out of order, or a writer wait that ended with the staging kept, fails it.
-func judgeStopLog(data []byte, rec *s11GracefulStopRecord, result *evidence.Scenario) error {
+// readStopLog scans the followed log (scanStopLog) and measures backupdb's
+// duration and the time from the deletion to the first line the stop
+// caused.
+func readStopLog(data []byte, rec *s11GracefulStopRecord, result *evidence.Scenario) ([]int, bool) {
 	l := rec.Log
 	writers, kept := scanStopLog(data, rec)
 	if l.BackupdbDurationMs != nil {
 		result.Measurements[measBackupdbDurationMs] = *l.BackupdbDurationMs
 	}
-	var errs []error
-	if l.BackupdbResult == logRanCommand {
-		errs = append(errs, fmt.Errorf("placement missed: the member's log shows backupdb succeed (line %d) "+
-			"before the stop reached it", l.BackupdbLine))
+	if t := rec.Trigger.DeleteAcceptedAt; l.StopLoggedAt != nil && t != nil {
+		l.StopLoggedAfterDelete = l.StopLoggedAt.Sub(*t).Round(time.Millisecond).String()
+		result.Measurements[measStopLoggedAfterDelete] = l.StopLoggedAfterDelete
 	}
-	errs = append(errs, stopLogGaps(rec))
+	return writers, kept
+}
+
+// judgeStopLog finds in the followed log of the member's database container
+// backupdb's end for the backup's staging destination, the operation's
+// staging writer events and Operation failed, and the shutdown's heartbeat
+// stop and server stop (readStopLog), and requires the staging settled
+// before CUBRID is stopped: backupdb's end, then the writer events, then
+// Operation failed, then heartbeat stop and server stop. A backupdb that
+// succeeded blocks the variant: the stop came after it, and nothing else of
+// the log is judged. A missing line, other than server stop, blocks it: the
+// log is incomplete. A line out of order, or a writer wait that ended with
+// the staging kept, fails it.
+func judgeStopLog(data []byte, rec *s11GracefulStopRecord, result *evidence.Scenario) error {
+	l := rec.Log
+	writers, kept := readStopLog(data, rec, result)
+	if l.BackupdbResult == logRanCommand {
+		return fmt.Errorf("placement missed: the member's log shows backupdb succeed (line %d) before the stop "+
+			"reached the Instance Manager", l.BackupdbLine)
+	}
+	errs := []error{stopLogGaps(rec)}
 	order := stopLogOrder(l, writers)
 	if kept {
 		order = append(order, "a staging writer wait that ended with the staging kept ("+logWriterTimeout+")")
@@ -1309,10 +1481,17 @@ func scanStopLog(data []byte, rec *s11GracefulStopRecord) ([]int, bool) {
 		}
 		n := i + 1
 		l.Lines++
-		own := line.OperationID == rec.OperationRef
+		own := rec.OperationRef != "" && line.OperationID == rec.OperationRef
+		ours := strings.HasPrefix(line.Command, backupdbCommand) && strings.Contains(line.Command, destination)
+		if l.StopLine == 0 && isStopLine(line, ours, own) {
+			l.StopLine = n
+			if at, err := time.Parse(time.RFC3339Nano, line.Time); err == nil {
+				at = at.UTC()
+				l.StopLoggedAt = &at
+			}
+		}
 		switch {
-		case l.BackupdbLine == 0 && strings.HasPrefix(line.Command, backupdbCommand) &&
-			strings.Contains(line.Command, destination) && (line.Msg == logCommandFailed || line.Msg == logRanCommand):
+		case l.BackupdbLine == 0 && ours && (line.Msg == logCommandFailed || line.Msg == logRanCommand):
 			l.BackupdbLine, l.BackupdbResult, l.BackupdbDurationMs = n, line.Msg, line.DurationMs
 		case own && slices.Contains([]string{logWriterWait, logWriterClosed, logWriterTimeout}, line.Event):
 			writers = append(writers, n)
@@ -1328,6 +1507,18 @@ func scanStopLog(data []byte, rec *s11GracefulStopRecord) ([]int, bool) {
 		}
 	}
 	return writers, kept
+}
+
+// isStopLine reports whether a line of the member's log was caused by the
+// stop: backupdb's failure for the backup (ours), a staging writer event of
+// the operation (own), a reason or error that says the member is stopping,
+// or a command of the shutdown. The Instance Manager logs nothing when a stop
+// begins, so the first of them is the earliest sign of it in the log.
+func isStopLine(line stopLogLine, ours, own bool) bool {
+	return (ours && line.Msg == logCommandFailed) ||
+		(own && slices.Contains([]string{logWriterWait, logWriterClosed, logWriterTimeout}, line.Event)) ||
+		strings.Contains(line.Reason, errStoppingText) || strings.Contains(line.Err, errStoppingText) ||
+		(line.Event == logEventCommand && (line.Command == heartbeatStop || strings.HasPrefix(line.Command, serverStop)))
 }
 
 // stopLogGaps names the lines judgeStopLog needs that the log does not hold.
@@ -1399,15 +1590,18 @@ func (h *haRun) gracefulStopBackupAtEnd(ctx context.Context, created *databasev1
 	}
 	rec.PhaseAtEnd, rec.ArtifactAtEnd = string(s.Phase), s.Artifact
 	completed := s.Phase == databasev1alpha1.BackupPhaseCompleted
+	endedForStop := rec.EndedAfterDelete && rec.Log.BackupdbResult == logCommandFailed
 	switch {
-	case rec.LastPhase == string(databasev1alpha1.BackupPhaseCompleted):
-		// The judgement named it already.
+	case rec.LastPhase == string(databasev1alpha1.BackupPhaseCompleted),
+		rec.Log.BackupdbResult == logRanCommand:
+		// The judgement named it already, or the placement was missed and a
+		// Completed backup is its own.
 		return nil
-	case !rec.EndedAfterDelete && !completed && s.Artifact == nil:
+	case !endedForStop && !completed && s.Artifact == nil:
 		return nil
-	case !rec.EndedAfterDelete:
+	case !endedForStop:
 		return fmt.Errorf("the CubridBackup read at the end is %s with status.artifact %t, and the wait did not see "+
-			"it end after an accepted deletion: recorded, and S11 graceful-stop cannot be judged", s.Phase,
+			"it end after the stop ended backupdb: recorded, and S11 graceful-stop cannot be judged", s.Phase,
 			s.Artifact != nil)
 	}
 	var events []string
@@ -1540,4 +1734,117 @@ func (h *haRun) deleteGracefulStop(ctx context.Context, made s11InterruptedMade,
 	outcome, cleaned := h.deleteByUID(ctx, objects)
 	rec.Cleanup = outcome
 	return cleaned
+}
+
+// fillerRows is how many rows of fillerRowBytes make mb MiB of filler.
+func fillerRows(mb int) int {
+	return mb * (1 << 20) / fillerRowBytes
+}
+
+// gracefulStopDataVolume is the data volume of the variant's cluster: the
+// standalone cluster's 2Gi, and four times the filler for its pages, the log
+// and archive volumes its inserts write, and the uncompressed backupdb
+// staged on the same volume.
+func gracefulStopDataVolume(mb int) resource.Quantity {
+	q := resource.MustParse("2Gi")
+	q.Add(*resource.NewQuantity(int64(4*mb)<<20, resource.BinarySI))
+	return q
+}
+
+// createGracefulStop creates the standalone cluster rec names in the run
+// namespace (standaloneSpec) with the run's copy of the seed Secret, and a
+// data volume large enough for the filler (gracefulStopDataVolume).
+func (h *haRun) createGracefulStop(ctx context.Context, rec *s11StandaloneCluster, made *s11InterruptedMade) error {
+	if err := h.guard(ctx); err != nil {
+		return err
+	}
+	spec := h.standaloneSpec(seedSecretName)
+	if mb := h.cfg.BackupGracefulStopFillerMB; mb > 0 {
+		spec.Storage.Data.Size = gracefulStopDataVolume(mb)
+	}
+	cluster := &databasev1alpha1.CubridCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: rec.Name, Namespace: h.cfg.Namespace}, Spec: spec}
+	if err := h.Client.Create(ctx, cluster); err != nil {
+		return fmt.Errorf("create the cluster %s: %w", rec.Name, err)
+	}
+	created := time.Now().UTC()
+	made.cluster, rec.UID, rec.CreatedAt = cluster, string(cluster.UID), &created
+	if cluster.UID == "" {
+		return fmt.Errorf("created cluster %s has no observed UID", rec.Name)
+	}
+	return nil
+}
+
+// fillerScript grows fillerTable to rows rows in the member's database
+// through csql, as dba, the way the run reads members (csqlRead): it creates
+// the table with one CHAR(fillerRowBytes) column, inserts one row, and then
+// copies at most fillerChunk rows of the table into itself per statement,
+// each committed on its own, until rows rows are there. A statement whose
+// output names an error ends it with a line fillerFailed. It then counts the
+// rows, as a string value, and prints "DU <KiB>" for the databases'
+// directory on the data volume.
+func fillerScript(rows int) string {
+	return `export PATH="${CUBRID}/bin:${PATH}"; db='` + databaseName + `@localhost'; t=` + fillerTable +
+		`; target=` + strconv.Itoa(rows) + `; chunk=` + strconv.Itoa(fillerChunk) + `; s=0; ` +
+		`q() { s=$((s+1)); o=$(csql -u dba "$db" -c "$1" 2>&1); ` +
+		`case "$o" in *ERROR*|*"Failed to connect"*) echo "` + fillerFailed + ` statement $s: $o"; exit 5 ;; esac; }; ` +
+		`q "CREATE TABLE $t (pad CHAR(` + strconv.Itoa(fillerRowBytes) + `)); ` +
+		`INSERT INTO $t (pad) VALUES (REPEAT('x', ` + strconv.Itoa(fillerRowBytes) + `)); COMMIT;"; n=1; ` +
+		`while [ "$n" -lt "$target" ]; do k=$n; [ "$k" -gt "$chunk" ] && k=$chunk; ` +
+		`[ $((target-n)) -lt "$k" ] && k=$((target-n)); ` +
+		`q "INSERT INTO $t (pad) SELECT pad FROM $t LIMIT $k; COMMIT;"; n=$((n+k)); done; ` +
+		`echo "STATEMENTS $s"; csql -u dba "$db" -c "SELECT CAST(COUNT(*) AS VARCHAR(20)) FROM $t;" 2>&1; ` +
+		`echo "` + fillerDu + `$(du -sk '` + imDatabasesDir + `' 2>&1 | cut -f1)"`
+}
+
+// growFiller grows the filler table in the standalone member's database
+// before the request (fillerScript), and records its rows, the statements
+// run and how long it took. Nothing is grown when filler is nil. A failed
+// statement, or fewer rows than asked for, blocks the variant: backupdb might
+// end before the stop. The table is in the variant's own cluster, which no
+// data check reads.
+func (h *haRun) growFiller(ctx context.Context, filler *s11Filler, result *evidence.Scenario) error {
+	if filler == nil {
+		return nil
+	}
+	started := time.Now().UTC()
+	filler.StartedAt = &started
+	out, err := h.member(ctx, s11GracefulStopMember, "bash", "-c", fillerScript(filler.TargetRows))
+	took := time.Since(started).Round(time.Millisecond)
+	filler.Took = took.String()
+	result.Measurements[measFillerGrowth] = filler.Took
+	if _, after, failed := strings.Cut(out, fillerFailed); failed || err != nil {
+		detail := strings.TrimSpace(out)
+		if failed {
+			detail = fillerFailed + firstLine(after)
+		}
+		return fmt.Errorf("grow the filler table %s in %s: %s", fillerTable, s11GracefulStopMember,
+			h.redactError(errors.Join(err, errors.New(detail))))
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		if n, ok := strings.CutPrefix(line, "STATEMENTS "); ok {
+			filler.Statements, _ = strconv.Atoi(strings.TrimSpace(n))
+		}
+		if kb, ok := strings.CutPrefix(line, fillerDu); ok {
+			v, convErr := strconv.ParseInt(strings.TrimSpace(kb), 10, 64)
+			if convErr != nil {
+				filler.DuError = strings.TrimSpace(kb)
+			} else {
+				filler.DatabaseDirKB = v
+			}
+		}
+	}
+	values, err := sqlcheck.Values(out)
+	if err == nil && len(values) == 1 {
+		filler.Rows, err = strconv.Atoi(values[0])
+	}
+	if err != nil || len(values) != 1 {
+		return fmt.Errorf("count the rows of the filler table %s: %v", fillerTable, err)
+	}
+	result.Measurements[measFillerRows] = filler.Rows
+	if filler.Rows < filler.TargetRows {
+		return fmt.Errorf("the filler table %s holds %d rows, fewer than the %d asked for", fillerTable,
+			filler.Rows, filler.TargetRows)
+	}
+	return nil
 }

@@ -212,6 +212,11 @@ type HAConfig struct {
 	// replacement Pod is ready and the cluster Ready again. It is the run's
 	// bound, not the contract's.
 	BackupGracefulStopReadyLimit time.Duration
+	// BackupGracefulStopFillerMB is the size in MiB of the table S11
+	// graceful-stop grows in its cluster's database before the request, so
+	// that backupdb runs long enough for the stop to land inside it; 0 grows
+	// none. The cluster's data volume grows with it.
+	BackupGracefulStopFillerMB int
 	// ObjectStoreService is the object store's Service as
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.

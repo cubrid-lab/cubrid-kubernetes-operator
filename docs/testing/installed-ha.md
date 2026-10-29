@@ -1931,13 +1931,15 @@ S11/complete and S11/graceful-stop. `-backup-graceful-stop` without
 `-backup-denied-credentials`, `-backup-signature-mismatch`,
 `-backup-interrupted-upload`, `-backup-operator-restart`,
 `-backup-instance-manager-restart`, `-backup-overlapping` or
-`-backup-operation-store-loss`, or with a
-`-backup-graceful-stop-ready-limit` that is not positive, is refused before
+`-backup-operation-store-loss`, with a
+`-backup-graceful-stop-ready-limit` that is not positive, or with a
+`-backup-graceful-stop-filler-mb` outside 0 to 8192, is refused before
 anything is done: a run takes one lane. The variant is lab-only.
 
 ```sh
   ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
-  -backup-graceful-stop [-backup-graceful-stop-ready-limit 15m] [-backup-limit 15m]
+  -backup-graceful-stop [-backup-graceful-stop-filler-mb 1024] \
+  [-backup-graceful-stop-ready-limit 15m] [-backup-limit 15m] -timeout 60m
 ```
 
 - **Pod Security.** The variant adds no container and needs no privilege,
@@ -1950,9 +1952,16 @@ anything is done: a run takes one lane. The variant is lab-only.
   until the StatefulSet's replacement Pod runs a ready database container
   and the cluster is `Ready` again. It is the run's bound, not the
   contract's, and is refused without `-backup-graceful-stop`.
-- `-timeout` must also cover a new standalone cluster, the backup, the
-  member's stop (up to the Pod's 120-second grace period) and its
-  replacement.
+- `-backup-graceful-stop-filler-mb` is the size in MiB of the filler table
+  the run grows in the cluster's database before the request (step 2);
+  default 1024, 0 grows none, refused without `-backup-graceful-stop`. The
+  cluster's data volume is then 2Gi and four times the filler (6Gi at the
+  default): the filler's pages, the log and archive volumes its inserts
+  write, and the uncompressed `backupdb` staged on the same volume. The
+  lab's StorageClass must be able to provide it.
+- `-timeout` must also cover a new standalone cluster, the filler's growth,
+  the backup, the member's stop (up to the Pod's 120-second grace period)
+  and its replacement.
 
 S11 `graceful-stop` starts only from S11 `complete` that passed. When S11
 `complete` did not run or did not pass, it is blocked with that cause and
@@ -2003,18 +2012,42 @@ nothing of it is done.
    It reads its member `s11-gracefulstop-0`, requires the cluster's
    StatefulSet to control it and its database container to be ready, and
    records the Pod's UID and the container's ID.
-2. **Sampler and log.** Before the request the run starts two streams from
+2. **Filler.** Unless `-backup-graceful-stop-filler-mb` is 0, one command in
+   the member's database container grows a table `gs_filler` with one
+   `CHAR(1000)` column through `csql -u dba appdb@localhost`, the way the
+   run reads members. It creates the table and inserts one row, then copies
+   at most 65,536 rows of the table into itself per statement
+   (`INSERT INTO gs_filler (pad) SELECT pad FROM gs_filler LIMIT <k>`), each
+   committed on its own, until the target row count
+   (MiB × 1,048,576 / 1,000) is reached. It then counts the rows and runs
+   `du -sk` on `/var/lib/cubrid/databases`. The record keeps the rows, the
+   statements, the directory's size and the time the growth took
+   (`fillerRows`, `fillerGrowthTook`). A failed statement, or fewer rows
+   than asked for, blocks the variant. The table is in the variant's own
+   cluster. No data check reads that cluster: S11 `complete`'s and the
+   source's checks read only the HA cluster. On the VM lab on 2026-10-29
+   `backupdb` of this cluster without filler took 615 ms. That was too short:
+   the stop reached the Instance Manager after it had ended. POC-27 measured
+   2 to 51 s for a 1.1 GB database. The default 1024 MiB aims at several
+   seconds, at least ten times that, on the lab's disks.
+3. **Sampler and log.** Before the request the run starts two streams from
    the member's database container. The sampler is one `pods/exec`
-   session, a shell loop that prints, about every 100 ms, the time by the
-   container's clock, each process whose command name starts with `cub`
-   (process ID, command name and argument list), each open file at or
-   below `/var/lib/cubrid/backup-staging` (process ID and path, from the
-   `/proc/<pid>/fd` links, a deleted file included), and the entries two
-   levels below that root (`<backup UID>/<operation ID>`). It prints no
-   file's contents. The second stream follows the container's log through
+   session, a shell loop that prints, about every 100 ms, one reading:
+   - the time by the container's clock;
+   - each process whose command name starts with `cub` (process ID,
+     command name and argument list);
+   - the entries two levels below `/var/lib/cubrid/backup-staging`
+     (`<backup UID>/<operation ID>`);
+   - then, from one `ls -l /proc/*/fd`, the `cub*` processes whose open
+     files it could list, and each open file at or below the root (process
+     ID and path, a deleted file included).
+
+   The entries are listed before the open files, so a holder in a reading
+   without the entry was seen after the entry was gone. It prints no file's
+   contents. The second stream follows the container's log through
    `pods/log`, whole. The deleted Pod's log is gone once the Pod is
    replaced, so this is the only read of it.
-3. **Request and trigger.** The run requests a full backup to the backup
+4. **Request and trigger.** The run requests a full backup to the backup
    bucket under `lab-runs/<run ID>/graceful-stop`. At the first reading of
    the sampler that shows a process whose argument list holds `backupdb`
    (`cubrid backupdb` or `cub_admin backupdb`), it deletes the member's Pod
@@ -2022,49 +2055,80 @@ nothing of it is done.
    time of that reading, and when the deletion was sent and accepted, are
    recorded. A backup read in another phase than `Pending` or `Running`
    before the sampler showed `backupdb` blocks the variant: the placement
-   was missed. A deletion the API server refused blocks it too.
-4. **Wait for the end.** The run reads the backup every `-poll` until it is
+   was missed. A deletion the API server refused ends the wait and blocks
+   it too.
+5. **Wait for the end.** The run reads the backup every `-poll` until it is
    `Completed` or `Failed`, for at most `-backup-limit` from the request.
-   After the deletion, each reading also looks for the replacement.
-5. **The member back.** The StatefulSet's replacement Pod (same name,
+   After the deletion, each reading also looks for the replacement. The
+   backup counts as ended after the deletion (`endedAfterDelete`) only when
+   the first reading of its final phase was taken after the deletion was
+   accepted; a backup read ended before that blocks the variant.
+6. **The member back.** The StatefulSet's replacement Pod (same name,
    another UID, controlled by the cluster's StatefulSet) must run a ready
    database container, and a reading of the cluster after that must show
    `Ready`, within the ready limit from the deletion. A replacement not
-   seen, or a cluster not `Ready` again, in time fails the variant.
-6. **Judge the backup.** The backup must end `Failed` with `BackupFailed`
+   seen, or a cluster not `Ready` again, in time fails the variant. When
+   the `Ready` condition's `lastTransitionTime` in that reading is before
+   the second of the deletion, `Ready` never went `False` as the Operator
+   observed it; the record says so in `readyUnchanged`, and it is not
+   judged.
+7. **Judge the log.** In the followed log the run finds `backupdb`'s end
+   for the backup's staging destination, the operation's staging writer
+   events, its `Operation failed`, and the shutdown's
+   `cubrid heartbeat stop` and `cubrid server stop`. If `backupdb` ended
+   with `Ran command`, it succeeded before the stop reached the Instance
+   Manager. The placement was missed and the variant is blocked; nothing
+   else of the log is judged. Otherwise the order must be `backupdb`'s end,
+   the writer events, `Operation failed`, and then the two stop commands. A
+   line out of order, or a writer wait that ended with
+   `backup_staging_writer_timeout`, fails the variant. A missing `backupdb`
+   end, `Operation failed` or `heartbeat stop` blocks it: the log is
+   incomplete. `server stop` is ordered when it is there. The first line
+   the stop caused (`backupdb`'s failure, a writer event, a reason or error
+   that says the member is stopping, or a shutdown command) is timed:
+   `stopLoggedAfterDelete` runs from the deletion's acceptance to it. The
+   Instance Manager logs nothing when a stop begins, so this is an upper
+   bound on the `preStop` hook's latency, across the run's clock and the
+   member's.
+8. **Judge the backup.** The backup must end `Failed` with `BackupFailed`
    and a message that starts with
    `the member is stopping: backupdb failed: ` and does not say that the
    staging is kept, under one `operationRef`. A kept staging, the Instance
    Manager's restart reason, and any other failure fail the variant.
-   `Completed` after the deletion fails it, with its `status.artifact`,
-   unless the member's log shows `backupdb`'s own success first: then the
-   stop reached the Instance Manager after `backupdb` had ended, and the
-   variant is blocked. A reason that starts, after the stopping prefix,
-   with `upload failed: ` or `backupdb succeeded` means the same and blocks
-   it. `RecordedOperationLost`, the documented escalation, blocks it.
-   Another `operationRef`, and a `status.artifact` on a backup that is not
-   `Completed`, must never happen.
-7. **Judge the sampler.** In the sampler's readings the run finds the first
+   - `Completed` after the deletion when the log shows `backupdb` end for
+     the stop (`Command failed`) must never happen, and neither may its
+     `status.artifact`.
+   - `Completed` when the log shows `backupdb` succeed first is the
+     backup's own: the placement was missed, and the variant is blocked.
+   - `Completed` when the log shows no end of `backupdb` cannot be judged
+     and blocks it.
+   - A reason that starts, after the stopping prefix, with
+     `upload failed: ` or `backupdb succeeded` means the stop came after
+     `backupdb` and blocks it.
+   - `RecordedOperationLost`, the documented escalation, blocks it.
+   - Another `operationRef`, and a `status.artifact` on a backup that is
+     not `Completed`, must never happen.
+   - No `operationRef` read after the deletion leaves the sampler and the
+     log without an operation to judge against, and blocks it.
+9. **Judge the sampler.** In the sampler's readings the run finds the first
    that shows the operation's staging directory
    (`<backup UID>/<operation ID>`) and the first after it that does not. No
    reading from that one on may show a process holding a file below
    `/var/lib/cubrid/backup-staging/<backup UID>`: that must never happen.
    The last holder before it, and when, are recorded. A directory never
    seen, or never seen gone before the sampler's output ended, blocks the
-   variant.
-8. **Judge the log.** In the followed log the run finds `backupdb`'s end
-   for the backup's staging destination, the operation's staging writer
-   events, its `Operation failed`, and the shutdown's
-   `cubrid heartbeat stop` and `cubrid server stop`. The order must be
-   `backupdb`'s end, the writer events, `Operation failed`, and then the
-   two stop commands. A line out of order, or a writer wait that ended with
-   `backup_staging_writer_timeout`, fails the variant. A missing
-   `backupdb` end, `Operation failed` or `heartbeat stop` blocks it: the
-   log is incomplete. `server stop` is ordered when it is there.
-9. **Prefix, backup at the end, credentials, source, manager and cleanup.**
+   variant. So does a sampler that, before that reading, never showed an
+   open file below the root or the listing of a `cub*` process's open
+   files: an empty answer from `ls` would otherwise show no holder without
+   having looked.
+10. **Prefix, backup at the end, credentials, source, manager and cleanup.**
    As steps 7 to 11 of S11 `instance-manager-restart`, without a limit to
-   remove: a `manifest.json` under the prefix must never happen, and other
-   objects are recorded as a partial artifact. Neither seed key may be in a
+   remove. A `manifest.json` under the prefix must never happen when the
+   backup ended after the deletion and the log shows `backupdb` end for the
+   stop. After `backupdb`'s success it is the backup's own and is only
+   recorded. Without `backupdb`'s end in the log it cannot be judged and
+   blocks the variant. Other objects are recorded as a partial artifact.
+   Neither seed key may be in a
    status read, an Event, the sampler's output, the deleted member's
    followed log, the replacement's log, read whole, or the installed
    manager's log. A followed log or sampler output that reached the run's
@@ -2079,9 +2143,11 @@ first reading without the staging directory; `failedAfterDelete` from the
 acceptance to the reading of `Failed`; `replacementSeenWithin` and
 `readyAgainWithin` from the acceptance to the first reading of the
 replacement and of the cluster `Ready` again. `backupdbDurationMs` is the
-Instance Manager's own `durationMs` of `backupdb`.
-`holdersAfterStagingGone`, `samplerSamples`, `failedWithin` and
-`operationRefUnchanged` complete them. Each is `unknown` until measured.
+Instance Manager's own `durationMs` of `backupdb`, and
+`stopLoggedAfterDelete` is described in step 7. `fillerRows`,
+`fillerGrowthTook`, `holdersAfterStagingGone`, `samplerSamples`,
+`failedWithin` and `operationRefUnchanged` complete them. Each is `unknown`
+until measured.
 
 The account needs, beyond S11 `complete`'s, `delete` on Pods in the run
 namespace and `get` on `pods/log` with `follow`; the sampler uses the
@@ -2092,14 +2158,16 @@ What a pass shows: on the pinned image, a graceful stop of a member while
 waits until no process holds a staging file before it removes the staging,
 and settles the operation before it stops CUBRID.
 
-**Larger database.** The variant uses the standalone cluster's database as
-it is, without filler data. The lab's small databases back up in about two
-seconds; the sampler reads every 100 ms, so `backupdb` should be seen. The
-risk is the deletion's path to the Instance Manager: the kubelet must start
-the `preStop` hook while `backupdb` still runs. A run that is blocked
-because the stop reached the Instance Manager after `backupdb` had ended
-(an `upload failed` reason, or `backupdb`'s success in the log) says that
-a larger database is needed.
+**Placement.** The deletion must reach the Instance Manager through the
+kubelet's `preStop` hook while `backupdb` still runs. A run that is blocked
+because the stop arrived after `backupdb` had ended (an `upload failed`
+reason, or `backupdb`'s success in the log) says that the filler is too
+small for the lab's disks; `backupdbDurationMs` and
+`stopLoggedAfterDelete` show by how much.
+
+The sampler script itself is exercised by a Linux unit test that runs it
+against a temporary staging root and a process named `cub_server` holding
+a file there, before and after the directory is removed.
 
 S11 `graceful-stop` here does not check:
 - a writer that holds a staging file for less than the sampler's 100 ms
@@ -3369,21 +3437,26 @@ and S12 variant other than `complete` and `exact` only those under
 - with `-backup-graceful-stop`, `S11/graceful-stop/record.json` (the
   backup, its UID, bucket, prefix and object store Service, the run
   namespace's Pod Security labels, the cluster `s11-gracefulstop` and the
-  ready limit; under `trigger`, the member's Pod UID and container ID, the
+  ready limit; under `filler`, the table, the size and rows asked for, the
+  rows counted, the statements, when the growth started and how long it
+  took, the database directory's size and the data volume asked for; under
+  `trigger`, the member's Pod UID and container ID, the
   sampler's reading that showed `backupdb` and its process, when the
   deletion was sent and accepted or why it was refused, why the placement
   was missed, and the replacement's UID with when it was seen and when the
-  cluster read `Ready` again; under `sampler`, the interval, the readings
+  cluster read `Ready` again, its `lastTransitionTime` and `readyUnchanged`;
+  under `sampler`, the interval, the readings
   and bytes read, whether it was cut, when and why its output ended, the
   first and last reading with `backupdb`, the operation's staging
   directory with when it was seen and seen gone, the last holder before
   and every holder after; under `log`, the line numbers and results of
   `backupdb`'s end, the writer events, `Operation failed` with its reason,
-  `heartbeat stop` and `server stop`; the phases, operationRefs, failure,
+  `heartbeat stop` and `server stop`, and the first line the stop caused,
+  its time and `stopLoggedAfterDelete`; the phases, operationRefs, failure,
   times, the backup and prefix at the end, the manager before and after,
   the source, where credentials were looked for, `judgedAt`, the cleanup
   and what is left), `S11/graceful-stop/sampler.jsonl` (each reading of
-  the sampler), `S11/graceful-stop/member-log.jsonl` (the deleted member's
+  the sampler, with the `cub*` processes whose open files it listed), `S11/graceful-stop/member-log.jsonl` (the deleted member's
   followed log, redacted) and `S11/graceful-stop/source-data-check.json`.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's

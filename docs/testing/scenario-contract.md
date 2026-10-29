@@ -133,7 +133,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s11-instance-manager-restart` | The installed-Operator HA command with `-backup-bucket` and `-backup-instance-manager-restart`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`instance-manager-restart`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is seen under way, and whose member's Instance Manager is then killed with `SIGKILL`; it must end `Failed` with `BackupFailed` and the Instance Manager's restart reason, under the same operation, never `Completed` and without an artifact, with no manifest under its prefix at the end, the member's container restarted once, and not before the kill, and a reading of the cluster after the restarted container was ready showing `Ready`, and the source unchanged | none |
 | `lab-installed-ha-s11-overlapping` | The installed-Operator HA command with `-backup-bucket` and `-backup-overlapping`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`overlapping`): two backups of a new standalone cluster whose upload is slowed by a rate limit in its member's Pod, requested back to back, each under a prefix of its own; a reading must show the second held with `InstanceManagerOperationInProgress`; both must end `Completed` within `backup_limit`, each with its own operation, never shared, and a target and role that never change, an artifact that passes `complete`'s verification for that cluster, a manifest that names its own operation, and one attempt prefix with one manifest and no other object under its prefix; the member's record of the second's operation must not have been created before the record of the first's was written as ended, by the member's clock; the limit must be seen removed and the source unchanged | none |
 | `lab-installed-ha-s11-operation-store-loss` | The installed-Operator HA command with `-backup-bucket`, `-backup-operation-store-loss` and a `-backup-limit` of at least 35 minutes, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`operation-store-loss`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is seen under way, and whose member then loses the backup's operation record and its Instance Manager in one command; the record must be absent from the member's operation store after the restart, and the backup must show `RecordedOperationMissing`, stay `Running` or `Uploading`, and end `Failed` with `RecordedOperationLost` at least 30 minutes after `status.operationMissingSince` and within `backup_limit`, under the same operation, never `Completed` and without an artifact, with no manifest under its prefix at the end, the member's container restarted once, and not before the fault, the cluster `Ready` again within the ready limit, and the source unchanged | none |
-| `lab-installed-ha-s11-graceful-stop` | The installed-Operator HA command with `-backup-bucket` and `-backup-graceful-stop`, in a namespace that keeps Pod Security `restricted` | LAB01, S11 (`complete`), then S11 (`graceful-stop`): a backup of a new standalone cluster whose member's Pod is deleted with its grace period as soon as a sampler in the member shows `backupdb` running; the backup must end `Failed` with `BackupFailed` and a reason that starts with `the member is stopping: backupdb failed: ` and does not say the staging is kept, under one operation, never `Completed` and without an artifact; no sampler reading from the first one without the operation's staging directory on may show a process holding a staging file; the member's log must show `backupdb`'s end, the staging writer events, the operation's `Operation failed` and then the shutdown's `heartbeat stop` and `server stop`, in that order; no manifest under its prefix; the replacement Pod ready and the cluster `Ready` again within the ready limit; and the source unchanged | none |
+| `lab-installed-ha-s11-graceful-stop` | The installed-Operator HA command with `-backup-bucket` and `-backup-graceful-stop`, in a namespace that keeps Pod Security `restricted` | LAB01, S11 (`complete`), then S11 (`graceful-stop`): a backup of a new standalone cluster, grown by a filler table so that `backupdb` runs for seconds, whose member's Pod is deleted with its grace period as soon as a sampler in the member shows `backupdb` running; the backup must end `Failed` with `BackupFailed` and a reason that starts with `the member is stopping: backupdb failed: ` and does not say the staging is kept, under one operation, never `Completed` and without an artifact; no sampler reading from the first one without the operation's staging directory on may show a process holding a staging file; the member's log must show `backupdb`'s end, the staging writer events, the operation's `Operation failed` and then the shutdown's `heartbeat stop` and `server stop`, in that order; no manifest under its prefix; the replacement Pod ready and the cluster `Ready` again within the ready limit; and the source unchanged | none |
 | `lab-installed-ha-s12` | The installed-Operator HA command with `-backup-bucket` and `-restore` | LAB01, S11 (`complete`), then S12 (`exact`): S11's artifact restored into a new cluster in the run namespace and checked against the history truncated at S11's known point | none |
 | `lab-installed-ha-s12-tampered` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-tampered` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`tampered`): a copy of S11's artifact with one byte changed, whose restore into another new cluster must be refused for that object's checksum | none |
 | `lab-installed-ha-s12-wrong-target` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-wrong-target` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`wrong-target`): S11's artifact restored into a cluster created over the retained PVCs of a deleted cluster of the same name, which hold its database; the restore must be refused for that target and the database left with its own marker and without S11's | none |
@@ -295,19 +295,36 @@ and at the end; it is recorded, not judged.
 `lab-installed-ha-s11-graceful-stop` requires S11 `complete` and
 `graceful-stop`; the command runs it in a run of its own, not with S12 or
 another S11 variant. Its namespace keeps Pod Security `restricted`: it
-adds no container. Before the request it starts a sampler in the member's
-database container, one exec session that prints the `cub*` processes, the
-open files below the backup staging root and its entries about every
-100 ms, and follows the container's log. At the first sampler reading that
-shows `backupdb`, it deletes the member's Pod with its grace period and its
-UID as a precondition. A backup read in another phase than `Pending` or
-`Running` before that blocks the variant (placement missed), and so does a
-backup that failed for its upload, or completed, after the member's log
-showed `backupdb` succeed: the stop came after `backupdb` had ended. A
-staging directory never seen gone in the sampler's readings, and a log that
-ended without `backupdb`'s end, `Operation failed` or `heartbeat stop`,
-leave it blocked. A writer that holds a file for less than 100 ms may fall
-between two readings, and nothing after the container's end is sampled.
+adds no container. Before the request it grows a filler table in the
+member's database through csql (`-backup-graceful-stop-filler-mb`, default
+1024 MiB, with a data volume of 2Gi and four times that), so that `backupdb`
+runs long enough for the stop to land inside it. Without filler, `backupdb`
+took 615 ms on the VM lab, and the stop came after it. No data check reads
+that cluster. It then starts a sampler in the member's database container:
+one exec session that prints, about every 100 ms, the `cub*` processes, the
+backup staging root's entries, and then the open files below it with the
+`cub*` processes whose open files it listed. It also follows the
+container's log. At the first sampler reading that shows `backupdb`, it
+deletes the member's Pod with its grace period and its UID as a
+precondition. The following leave the variant blocked:
+- a backup read in another phase than `Pending` or `Running` before that
+  (placement missed);
+- a refused deletion;
+- a backup read ended before the deletion was accepted;
+- a backup that failed for its upload, or completed with its manifest,
+  after the member's log showed `backupdb` succeed: the stop came after
+  `backupdb` had ended;
+- a staging directory never seen gone in the sampler's readings, and a
+  sampler that never showed an open file or a `cub*` process's listing
+  before that;
+- a log that ended without `backupdb`'s end, `Operation failed` or
+  `heartbeat stop`;
+- no `operationRef` read.
+
+A writer that holds a file for less than 100 ms may fall between two
+readings, and nothing after the container's end is sampled. The time from
+the deletion to the first log line the stop caused is recorded as an upper
+bound on the `preStop` hook's latency.
 
 `lab-installed-ha-s12` requires S12 `exact` only,
 `lab-installed-ha-s12-tampered` S12 `exact` and `tampered`,
@@ -1331,10 +1348,11 @@ it needs more.
   `manifest.json` under the prefix of a backup seen ended after the kill,
   and a member container restarted more than once; in
   `operation-store-loss`, the same as in `instance-manager-restart`; in
-  `graceful-stop`, `Completed` or a `status.artifact` after the deletion
-  unless the member's log shows `backupdb` succeed first, another
-  `operationRef`, a `manifest.json` under the prefix of a backup seen ended
-  after the deletion, a process holding a file below the backup's staging
+  `graceful-stop`, `Completed` or a `status.artifact` of a backup first
+  read ended after the deletion when the member's log shows `backupdb` end
+  for the stop (`Command failed`), another `operationRef`, a
+  `manifest.json` under the prefix of such a backup, a process holding a
+  file below the backup's staging
   destination in a sampler reading at or after the first one without the
   operation's staging directory, and, in the member's log, a staging writer
   event outside `backupdb`'s end and `Operation failed`, `Operation failed`
