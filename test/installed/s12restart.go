@@ -81,11 +81,34 @@ type s12Retry struct {
 	FromEvent bool `json:"fromEvent,omitempty"`
 }
 
+// managerRestart is the deletion of the manager's Pod and its replacement's
+// return, as managerBack observes it; S12 and S11 operator-restart share it.
+type managerRestart struct {
+	ManagerBefore imageIdentity  `json:"managerBefore"`
+	ManagerAfter  *imageIdentity `json:"managerAfter,omitempty"`
+	// LeaseRenewedAt is the Lease's renewTime at the read that saw the
+	// replacement back.
+	LeaseRenewedAt *time.Time `json:"leaseRenewedAt,omitempty"`
+	// RestartedAt is when the deletion was issued, GoneAt when the old Pod
+	// was confirmed gone, BackAt the reading that saw the replacement running
+	// and holding the Lease, all by the run's clock. ReplacementStartedAt and
+	// LeaseAcquiredAt are the times the cluster wrote.
+	RestartedAt          *time.Time `json:"restartedAt,omitempty"`
+	GoneAt               *time.Time `json:"goneAt,omitempty"`
+	ReplacementStartedAt *time.Time `json:"replacementStartedAt,omitempty"`
+	LeaseHolder          string     `json:"leaseHolder,omitempty"`
+	LeaseAcquiredAt      *time.Time `json:"leaseAcquiredAt,omitempty"`
+	BackAt               *time.Time `json:"backAt,omitempty"`
+	BackWithin           string     `json:"backWithin,omitempty"`
+	// ImageChanged is set when the replacement runs another image: the
+	// environment changed, which blocks the variant.
+	ImageChanged bool `json:"imageChanged,omitempty"`
+}
+
 // s12Restart is the manager's restart during the restore and the restore
 // operation around it.
 type s12Restart struct {
-	ManagerBefore imageIdentity  `json:"managerBefore"`
-	ManagerAfter  *imageIdentity `json:"managerAfter,omitempty"`
+	managerRestart
 	// PhaseFirstPastPreparing is the bootstrap phase of the first reading
 	// that was neither Preparing nor without a phase: Restoring when the
 	// restart could be placed.
@@ -101,30 +124,15 @@ type s12Restart struct {
 	// reading at or before the replacement acquired the Lease.
 	PhaseAtTakeover       string `json:"phaseAtTakeover,omitempty"`
 	OperationIDAtTakeover string `json:"operationIDAtTakeover,omitempty"`
-	// LeaseRenewedAt is the Lease's renewTime at the read that saw the
-	// replacement back, LeaseClockLag the run's time of that read minus it,
+	// LeaseClockLag is the run's time of the read that saw the replacement
+	// back minus the Lease's renewTime then (managerRestart.LeaseRenewedAt),
 	// an upper bound of how far the run's clock is ahead of the manager's.
 	// TakeoverCutoff is the Lease's acquireTime plus that bound, if positive.
-	LeaseRenewedAt *time.Time `json:"leaseRenewedAt,omitempty"`
 	LeaseClockLag  string     `json:"leaseClockLag,omitempty"`
 	TakeoverCutoff *time.Time `json:"takeoverCutoff,omitempty"`
 	// restartReading is the index in the record's bootstrap of the reading
 	// at the restart.
 	restartReading int
-	// RestartedAt is when the deletion was issued, GoneAt when the old Pod
-	// was confirmed gone, BackAt the reading that saw the replacement running
-	// and holding the Lease, all by the run's clock. ReplacementStartedAt and
-	// LeaseAcquiredAt are the times the cluster wrote.
-	RestartedAt          *time.Time `json:"restartedAt,omitempty"`
-	GoneAt               *time.Time `json:"goneAt,omitempty"`
-	ReplacementStartedAt *time.Time `json:"replacementStartedAt,omitempty"`
-	LeaseHolder          string     `json:"leaseHolder,omitempty"`
-	LeaseAcquiredAt      *time.Time `json:"leaseAcquiredAt,omitempty"`
-	BackAt               *time.Time `json:"backAt,omitempty"`
-	BackWithin           string     `json:"backWithin,omitempty"`
-	// ImageChanged is set when the replacement runs another image: the
-	// environment changed, which blocks the variant.
-	ImageChanged bool `json:"imageChanged,omitempty"`
 	// OperationIDAfter and AttemptsAfter are of the last reading that named
 	// an operation; Retries are the attempts the status showed ending.
 	OperationIDAfter string     `json:"operationIDAfter,omitempty"`
@@ -198,10 +206,10 @@ func (h *haRun) runS12OperatorRestart(ctx context.Context) (result evidence.Scen
 		})
 	}()
 	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String(),
-		"operator_resync_limit": h.cfg.ResyncLimit.String()}
+		resyncLimitName: h.cfg.ResyncLimit.String()}
 	result.Measurements = map[string]any{restoredWithinMeasurement: evidence.Unknown,
-		"operatorBackWithin":   evidence.Unknown,
-		"operationIDUnchanged": evidence.Unknown, "attemptsAdded": evidence.Unknown, "phaseAtTakeover": evidence.Unknown,
+		operatorBackMeasurement: evidence.Unknown,
+		"operationIDUnchanged":  evidence.Unknown, "attemptsAdded": evidence.Unknown, "phaseAtTakeover": evidence.Unknown,
 		"leaseClockLag": evidence.Unknown, "takeoverCutoff": evidence.Unknown,
 		dataRulesHeldMeasurement: evidence.Unknown, postBackupRowsMeasurement: evidence.Unknown}
 	err := h.restartSteps(ctx, &result, &rec)
@@ -468,7 +476,7 @@ func (h *haRun) restartDuringRestore(ctx context.Context, cluster *databasev1alp
 				seen = err
 				return false, err
 			}
-			done, err := h.managerBack(ctx, r)
+			done, err := h.managerBack(ctx, &r.managerRestart)
 			if ctx.Err() != nil {
 				// The step's limit, or the run's: not a broken expectation.
 				return false, nil
@@ -495,7 +503,7 @@ func (h *haRun) restartDuringRestore(ctx context.Context, cluster *databasev1alp
 	}
 	back := outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)
 	r.BackWithin = back.Round(time.Millisecond).String()
-	result.Measurements["operatorBackWithin"] = r.BackWithin
+	result.Measurements[operatorBackMeasurement] = r.BackWithin
 	if err := takeover(rec, result); err != nil {
 		// The phase at the takeover is recorded either way.
 		result.Measurements["phaseAtTakeover"] = cmp.Or(r.PhaseAtTakeover, evidence.Unknown)
@@ -628,7 +636,7 @@ func (h *haRun) readDuringRestart(ctx context.Context, created *databasev1alpha1
 // the Deployment that is not the deleted one, with the same runtime image,
 // its manager container running, and holding the leader Lease. Another image
 // is an error that blocks the variant.
-func (h *haRun) managerBack(ctx context.Context, r *s12Restart) (bool, error) {
+func (h *haRun) managerBack(ctx context.Context, r *managerRestart) (bool, error) {
 	manager, err := h.observeManager(ctx, h.cfg.Config)
 	if err != nil || len(manager.Pods) != 1 || manager.Pods[0].UID == r.ManagerBefore.UID {
 		return false, nil

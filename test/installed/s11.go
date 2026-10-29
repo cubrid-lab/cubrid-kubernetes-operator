@@ -68,6 +68,13 @@ const (
 // dots are refused separately.
 var s3Bucket = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
+// The flags of S11 variants, as the refusals of a combination name them.
+const (
+	flagRestore            = "-restore"
+	flagMissingDestination = "-backup-missing-destination"
+	flagDeniedCredentials  = "-backup-denied-credentials"
+)
+
 // validateS11 checks the inputs of S11 complete, when it is selected.
 func (c HAConfig) validateS11() error {
 	if c.BackupMissingDestination && c.BackupBucket == "" {
@@ -84,6 +91,9 @@ func (c HAConfig) validateS11() error {
 	if c.BackupInterruptedUpload && c.BackupBucket == "" {
 		return errors.New("-backup-interrupted-upload needs -backup-bucket: S11 interrupted-upload follows S11 " +
 			"complete")
+	}
+	if c.BackupOperatorRestart && c.BackupBucket == "" {
+		return errors.New("-backup-operator-restart needs -backup-bucket: S11 operator-restart follows S11 complete")
 	}
 	if c.BackupBucket == "" {
 		return nil
@@ -111,6 +121,9 @@ func (c HAConfig) validateS11() error {
 		return err
 	}
 	if err := c.validateS11Interrupted(); err != nil {
+		return err
+	}
+	if err := c.validateS11OperatorRestart(); err != nil {
 		return err
 	}
 	_, _, _, err := splitService(c.ObjectStoreService)
@@ -264,6 +277,7 @@ type s11KnownPoint struct {
 type s11Phase struct {
 	At             time.Time          `json:"at"`
 	Phase          string             `json:"phase"`
+	OperationRef   string             `json:"operationRef,omitempty"`
 	TargetInstance string             `json:"targetInstance,omitempty"`
 	TargetRole     string             `json:"targetRole,omitempty"`
 	FallbackUsed   bool               `json:"fallbackUsed"`
@@ -453,7 +467,7 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 	}
 	credErr := h.checkS11Credentials(ctx, backup, manifest, rec.Credentials)
 	logErr := h.checkS11Logs(ctx, haClusterName, false, lastTarget(rec.Phases),
-		requestedOnServer(backup, requested), started, rec.Credentials)
+		requestedOnServer(backup, requested), started, rec.Credentials, h.rec.OperatorAfter.Pods)
 	if found := rec.Credentials.FoundIn; len(found) > 0 {
 		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
 	}
@@ -594,21 +608,10 @@ func (h *haRun) waitBackupWith(ctx context.Context, created *databasev1alpha1.Cu
 		if backup.UID != created.UID {
 			return false, backupVerdict{errors.New("the CubridBackup was replaced")}
 		}
-		s := backup.Status
-		seen := s11Phase{At: time.Now().UTC(), Phase: string(s.Phase), TargetInstance: s.TargetInstance,
-			TargetRole: s.TargetRole, FallbackUsed: s.FallbackUsed, Conditions: s.Conditions}
-		if seen.Conditions == nil {
-			seen.Conditions = []metav1.Condition{}
-		}
-		if n := len(*phases); n == 0 || !samePhase((*phases)[n-1], seen) {
-			*phases = append(*phases, seen)
-		}
-		// Every status read, whole, not only what a phase records.
-		creds.StatusesChecked++
-		if err := h.lookForCredentials(&creds.FoundIn, "the status read in phase "+string(s.Phase),
-			s); err != nil {
+		if err := h.recordBackup(backup, phases, creds); err != nil {
 			return false, err
 		}
+		s := backup.Status
 		if each != nil {
 			if err := each(wctx, backup); err != nil {
 				return false, err
@@ -626,6 +629,25 @@ func (h *haRun) waitBackupWith(ctx context.Context, created *databasev1alpha1.Cu
 			"%s; its last phase was %q", h.cfg.BackupLimit, backup.Status.Phase)}
 	}
 	return backup, err
+}
+
+// recordBackup records a reading of backup in phases when it differs from
+// the last one recorded, and searches its whole status, not only what a
+// phase records, for a credential in creds.
+func (h *haRun) recordBackup(backup *databasev1alpha1.CubridBackup, phases *[]s11Phase,
+	creds *s11Credentials) error {
+	s := backup.Status
+	seen := s11Phase{At: time.Now().UTC(), Phase: string(s.Phase), OperationRef: s.OperationRef,
+		TargetInstance: s.TargetInstance, TargetRole: s.TargetRole, FallbackUsed: s.FallbackUsed,
+		Conditions: s.Conditions}
+	if seen.Conditions == nil {
+		seen.Conditions = []metav1.Condition{}
+	}
+	if n := len(*phases); n == 0 || !samePhase((*phases)[n-1], seen) {
+		*phases = append(*phases, seen)
+	}
+	creds.StatusesChecked++
+	return h.lookForCredentials(&creds.FoundIn, "the status read in phase "+string(s.Phase), s)
 }
 
 func samePhase(a, b s11Phase) bool {

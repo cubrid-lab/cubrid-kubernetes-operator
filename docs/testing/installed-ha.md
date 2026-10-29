@@ -12,8 +12,8 @@ installed:
 5. Remove the namespace.
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`,
-`missing-destination`, `denied-credentials`, `signature-mismatch` and
-`interrupted-upload`, and S12
+`missing-destination`, `denied-credentials`, `signature-mismatch`,
+`interrupted-upload` and `operator-restart`, and S12
 `exact`, `tampered`, `wrong-target`,
 `operator-restart`, `instance-manager-restart`,
 `instance-manager-restart-preparing` and `instance-manager-restart-seeding`
@@ -407,6 +407,8 @@ S11 here does not check:
 - the restore of the artifact: that is S12 `exact`, with `-restore`;
 - the interrupted variant `interrupted-pod`, and an interrupted upload:
   that is S11 `interrupted-upload`, with `-backup-interrupted-upload`;
+- a restart of the installed manager during a backup: that is S11
+  `operator-restart`, with `-backup-operator-restart`;
 - a backup to a bucket that does not exist: that is S11
   `missing-destination`, with `-backup-missing-destination`;
 - a backup whose object store keys the store refuses: that is S11
@@ -421,8 +423,8 @@ on after S11 `complete` passed with S11 `missing-destination`: a backup of
 the same cluster to a bucket that does not exist must end `Failed`. The lane
 is then `lab-installed-ha-s11-missing-destination`, and it requires LAB01,
 S11/complete and S11/missing-destination. `-backup-missing-destination`
-without `-backup-bucket`, or with `-restore`, is refused before anything is
-done: a run takes one lane.
+without `-backup-bucket`, or with `-restore` or `-backup-operator-restart`,
+is refused before anything is done: a run takes one lane.
 
 ```sh
   ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
@@ -544,7 +546,8 @@ object store keys the store refuses must end `Failed`. The lane is then
 `lab-installed-ha-s11-denied-credentials`, and it requires LAB01,
 S11/complete and S11/denied-credentials. `-backup-denied-credentials`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
-`-backup-signature-mismatch` or `-backup-interrupted-upload`, or with a
+`-backup-signature-mismatch`, `-backup-interrupted-upload` or
+`-backup-operator-restart`, or with a
 `-backup-denied-ready-limit` that is not positive, is refused before anything
 is done: a run takes one lane.
 
@@ -713,7 +716,8 @@ key must end `Failed`. The lane is then
 `lab-installed-ha-s11-signature-mismatch`, and it requires LAB01,
 S11/complete and S11/signature-mismatch. `-backup-signature-mismatch`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
-`-backup-denied-credentials` or `-backup-interrupted-upload`, or with a
+`-backup-denied-credentials`, `-backup-interrupted-upload` or
+`-backup-operator-restart`, or with a
 `-backup-signature-mismatch-ready-limit` that is not positive, is refused
 before anything is done: a run takes one lane.
 
@@ -778,7 +782,8 @@ upload is cut partway must end `Failed`. The lane is then
 `lab-installed-ha-s11-interrupted-upload`, and it requires LAB01,
 S11/complete and S11/interrupted-upload. `-backup-interrupted-upload`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
-`-backup-denied-credentials` or `-backup-signature-mismatch`, or with a
+`-backup-denied-credentials`, `-backup-signature-mismatch` or
+`-backup-operator-restart`, or with a
 `-backup-interrupted-ready-limit`
 that is not positive, is refused before anything is done: a run takes one
 lane.
@@ -1015,6 +1020,225 @@ S11 `interrupted-upload` here does not check:
 - a backup large enough to be uploaded in parts: the S11 backup is one
   object below minio-go's 16 MiB part size;
 - the member's staging directory after the failed upload.
+
+## S11 operator-restart
+
+With `-backup-operator-restart` as well as `-backup-bucket`, the run goes on
+after S11 `complete` passed with S11 `operator-restart`: a second backup of
+the HA cluster, during which the installed manager's Pod is deleted without
+a grace period, must end `Completed` with the same operation and one
+verified artifact. The lane is then `lab-installed-ha-s11-operator-restart`,
+and it requires LAB01, S11/complete and S11/operator-restart.
+`-backup-operator-restart` without `-backup-bucket`, with `-restore`,
+`-backup-missing-destination`, `-backup-denied-credentials`,
+`-backup-signature-mismatch` or `-backup-interrupted-upload`, or without a
+positive `-resync-limit` and a `-leader-lease`, is refused before anything is
+done: a run takes one lane.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -backup-operator-restart [-backup-limit 15m] [-resync-limit 2m] \
+  [-leader-lease 91d4fe35.cubrid.io]
+```
+
+- `-backup-limit` bounds the second backup from the return of its request
+  until the reading that saw it `Completed` or `Failed`, the restart
+  included.
+- `-resync-limit` (`operator_resync_limit`) bounds the manager's return:
+  from the deletion to the reading that saw the replacement back, as in S12
+  `operator-restart`.
+- `-timeout` must also cover a second backup of the HA cluster, its
+  download and the manager's restart.
+
+S11 `operator-restart` starts only from S11 `complete` that passed. When S11
+`complete` did not run or did not pass, it is blocked with that cause and
+nothing of it is done.
+
+**The installed manager is shared.** The lab's Operator manages every
+cluster and backup on the lab, not only the run's. While its Pod is replaced,
+none of them is reconciled; the run touches only the Pod, and the Deployment
+starts the replacement. As in S06 `restart` and S12 `operator-restart`,
+schedule the run when that pause does not disturb other work.
+
+**What the product's code predicts** (`internal/controller/cubridbackup_controller.go`):
+- The Operator records `status.operationRef` in the same status write that
+  makes the backup `Running`, after the Instance Manager accepted the start
+  (`startBackup`). The restart is placed after a reading that shows both, so
+  the operation is stored before the manager goes away.
+- A replacement reconciles a backup that is neither `Completed` nor `Failed`.
+  With an `operationRef` recorded, it only polls that operation on the
+  recorded target (`pollBackup`): it neither selects a target nor sends a
+  start again. `startBackup` and `adoptBackup`, the only code that writes
+  `operationRef`, are not reached while one is recorded.
+- The Instance Manager runs the backup in the member's Pod, which the
+  restart does not touch, and keeps the operation's record there.
+- So the code predicts `Completed` with the operation, target and role that
+  the placing reading showed. Two other endings exist. `Failed` with the
+  reason `BackupFailed` is the Instance Manager's own failure of the
+  operation, which a manager restart does not cause; it fails the variant.
+  `Failed` with `RecordedOperationLost` is the documented escalation of an
+  unknown outcome: the target held no record of the operation for
+  `backupOperationMissingWait` (30 minutes), and a backup may still run. It
+  blocks the variant, which needs `Completed`; it is longer than the default
+  `-backup-limit`, so a run does not normally reach it.
+
+1. **Request.** The run creates the `CubridBackup` `s11-operator-restart`, a
+   full backup of the run's database on the HA cluster, to `-backup-bucket`
+   under `lab-runs/<run ID>/operator-restart`, and records the time the
+   request returned. The target is left to its default, `PreferStandby`.
+2. **Place the restart.** The run reads the backup every `-poll`, records
+   each change (with `operationRef`) and searches each status for the keys,
+   as S11 `complete` does, until a reading shows phase `Running` or
+   `Uploading` with an `operationRef`: both are in progress, with the
+   operation recorded. That reading places the restart: its time, phase,
+   operation, target and role are recorded (`placedAt`, `phaseAtPlacement`,
+   `operationRef`, `targetInstance`, `targetRole`).
+   - A reading that shows `Completed` or `Failed` first means the restart
+     cannot be placed while the backup runs:
+     S11 `operator-restart` is blocked as inconclusive ("the restart could
+     not be placed while the backup ran"), with that phase and its reason
+     recorded (`notPlaced`), and the manager is not touched.
+3. **The restart.** Through the same fault flow as S06 `restart` and S12
+   `operator-restart`, the run first requires the manager Pod LAB01
+   checked, searches that Pod's log for the keys while it can still be read
+   (step 7), and reads the backup once more. That reading's phase is
+   recorded (`phaseAtRestart`), with `inProgressAtRestart` set when it is
+   `Running` or `Uploading` (also a measurement). Neither shows that the
+   Instance Manager
+   was still working on the backup when the deletion took effect. A backup
+   that ended `Completed` or `Failed` by then blocks the variant without a
+   restart, and another manager Pod blocks it too. The run then deletes the
+   manager's Pod with no grace period and its UID as a precondition; the
+   deletion is confirmed when that Pod is gone, and its time recorded
+   (`restartedAt`, `goneAt`).
+4. **The manager back.** As step 4 of S12 `operator-restart`: the
+   Deployment's replacement, one Pod that is not the deleted one, must run
+   the same runtime image with its `manager` container running and hold the
+   leader Lease. A replacement on another image blocks the variant. No
+   replacement within five times `-resync-limit` (at least two seconds)
+   fails it, and one back later than `-resync-limit`
+   (`operatorBackWithin`) fails it, also when a later step blocks. The
+   backup is read again only after the replacement is back.
+5. **Wait for the end.** The run reads the backup as in step 2 until it is
+   `Completed` or `Failed`, within `-backup-limit` of the request.
+   - From the placing reading on, every reading must show the same
+     `operationRef`, `targetInstance` and `targetRole`. Another
+     `operationRef`, or a cleared one, is a second operation, and another
+     target or role a moved backup; each must never happen. The
+     `operationRef`s seen are recorded (`operationRefsSeen`), and
+     `operationRefUnchanged` is measured from them.
+   - `Failed` is recorded with its reason (`failure`). With
+     `RecordedOperationLost` it blocks the variant; with any other reason it
+     fails it. Neither `Completed` nor `Failed` within `-backup-limit` fails
+     it.
+   - **Who completed it.** A deletion without a grace period leaves the old
+     manager process running until the kubelet kills it, and it keeps the
+     leader Lease meanwhile, since the manager does not release it on
+     cancel (`cmd/main.go`). It may therefore write `Completed` itself, and
+     then the replacement's resumption of the operation was not observed.
+     The controller sets `status.completedAt` when it writes `Completed`
+     (`completed`), and the API server keeps it to the second. It must be at
+     or after the second of the replacement's Lease `acquireTime`; otherwise
+     the variant is blocked ("the old manager completed the backup before the
+     replacement led"), with both times recorded (`statusCompletedAt`,
+     `leaseAcquiredAt`). Both are written by the managers, by their nodes'
+     clocks, not the run's; a skew between those nodes is not measured. A
+     `completedAt` in the same second as an `acquireTime` with a fraction,
+     such as 12:00:59 against 12:00:59.446, passes. Why one second of slack
+     is safe: the manager does not release the Lease when it stops
+     (`LeaderElectionReleaseOnCancel` is off in `cmd/main.go`), so the
+     replacement acquires it only after it went 15 s unrenewed, and an old
+     manager that is still running either keeps renewing it, which holds
+     the replacement off, or exits at its 10 s renew deadline first. So the
+     old manager's last possible write is several seconds before the
+     acquisition, and the check could take it for the replacement's only if
+     the two nodes' clocks differed by more than about 5 s.
+   - **Where the restart fell.** The Instance Manager sets the manifest's
+     `createdAt` right before it uploads (`runBackup` in
+     `internal/instancemanager/server.go`). The run records it
+     (`manifestCreatedAt`, also a measurement) and
+     `uploadStartedBeforeRestart` (also a measurement), set when it is
+     before the second of the deletion. When it is set, the replacement
+     discovered and completed an operation that was already uploading, or
+     done, in the Instance Manager: the restart did not fall in the middle of
+     `backupdb`. This is evidence, not a verdict. `createdAt` is the
+     member's clock, to the second, and the deletion's time the run's; a
+     `createdAt` in the deletion's second is not counted as before it, and a
+     skew between the clocks is not measured.
+6. **The artifact.** For `Completed`, the run verifies the artifact as
+   S11 `complete` does, with its own client: the manifest's digest against
+   the status, its identity against the backup, the cluster and the engine
+   version, and the size and SHA-256 of every object it names. Its copy of
+   the manifest goes to `S11/operator-restart/manifest.json`. A mismatch
+   fails the variant; an object the manifest names that the store does not
+   hold must never happen.
+   - **One writer.** The run then lists the whole variant prefix and groups
+     what it holds by attempt prefix of the backup
+     (`<prefix>/<cluster UID>/<database>/<backup UID>/attempt-<id>`). The
+     operation uploads once, under one attempt prefix. A second attempt
+     prefix that holds objects, or an object outside an attempt prefix of the
+     backup, is a second writer and must never happen. The one attempt prefix
+     must be the artifact's and hold its one `manifest.json`. What was found
+     is recorded under `attempts`, and `attemptPrefixes` is measured. The run
+     lists the prefix again at the end, after the source check (step 8), and
+     a second attempt prefix holding objects, or an object outside one, that
+     appears then fails the variant too (`attemptsAtEnd`). That second
+     listing looks only for another prefix or an object outside one; it does
+     not count the manifests in the artifact's own prefix again. Only stored
+     objects are listed: a duplicate still staging on a member without an
+     object, or an unfinished multipart upload, is not seen.
+7. **Credentials.** As in S11 `complete`, in every status read, the manifest
+   and the Events of the run namespace, and in the logs: the deleted
+   manager's log as read right before its deletion (step 3), the
+   replacement's log and the Instance Manager's log in the backup's target
+   Pod, each from one minute before the variant started. The deleted Pod's
+   log cannot be read through `pods/log` once the Pod is gone, so what the
+   old manager logged between that search and its end is not searched. This
+   is a stated limit of the variant, not a block. When no deletion was
+   issued, the manager LAB01 checked is searched at the end instead, as the
+   other variants search it.
+8. **The source and the manager.** The source must be unchanged, as in S11
+   `missing-destination` (its data check goes to
+   `S11/operator-restart/source-data-check.json`). At the end the installed
+   manager must be the Deployment LAB01 checked with one Pod: the replacement
+   the run saw take the Lease, by its whole identity (UID, node, image,
+   runtime image and container ID), or the Pod LAB01 checked when no
+   deletion was issued. Anything else blocks the variant. A manager Pod that
+   differs from LAB01's is expected here, so the other variants' identity
+   check, which requires LAB01's Pod, does not apply.
+9. **Cleanup.** The run deletes the `CubridBackup` it created, with its UID
+   as a precondition, as S11 `missing-destination` does, and records the
+   outcome in `cleanup` and the scenario's `cleanupSucceeded`. It does not
+   remove the artifact.
+
+As in S11 `complete`, a run that ends before S11 `operator-restart` is
+judged, an API error, and a port-forward or client that cannot be opened
+block it; what was seen stays a failure, with that error added to the
+reason. `backupCompletedWithin`, `operatorBackWithin`,
+`operationRefUnchanged`, `inProgressAtRestart`,
+`uploadStartedBeforeRestart`, `objectsVerified`, `artifactBytes`,
+`objectsNotInManifest` and `attemptPrefixes` are `unknown` until measured;
+`manifestCreatedAt` is added once the manifest was read. A pass's reason
+names the phase, operation and target at the placement, the phase right
+before the deletion and how long after it the replacement was back.
+
+Beyond S11 `missing-destination`'s, the account needs what S06 `restart`
+needs: `delete` on Pods and `get` on Leases in the Operator's namespace.
+
+S11 `operator-restart` here does not check:
+- the restart at another point of the backup: before its target is recorded,
+  or between the start on the Instance Manager and the status write that
+  records `operationRef`. The restart follows a reading of `Running` or
+  `Uploading` with an operation; the Instance Manager's operation may have
+  moved on, or ended, before the deletion took effect, and on the first
+  VM-lab run it had started its upload before the restart;
+- a duplicate writer still staging without an object in the store;
+- what the deleted manager logged after its log was searched;
+- a restart of the Instance Manager, or of a member, during the backup;
+- the Instance Manager's operation records, the member's staging directory,
+  and incomplete multipart uploads under the prefix;
+- the Instance Managers' logs of the members the backup did not run on;
+- a restore of the second artifact.
 
 ## S12 exact
 
@@ -2199,6 +2423,21 @@ and S12 variant other than `complete` and `exact` only those under
   for, `judgedAt`, the cleanup and what is left) and
   `S11/interrupted-upload/source-data-check.json`. The scenario's
   measurements carry the faults' own, prefixed `rateLimit.` and `cut.`.
+- with `-backup-operator-restart`, `S11/operator-restart/record.json` (the
+  fields of S11 `complete`'s record for the second backup, every phase
+  observed with its `operationRef`; under `restart`, the manager Pod before
+  and its replacement, the placing reading's time, phase, operation, target
+  and role, `phaseAtRestart`, `inProgressAtRestart`, `notPlaced`, the
+  deletion's and the replacement's times, the Lease's holder and times,
+  `backWithin`, `imageChanged`, `statusCompletedAt`, `manifestCreatedAt`,
+  `uploadStartedBeforeRestart` and `operationRefsSeen`; under `attempts`
+  and `attemptsAtEnd`, the attempt prefixes found at the first listing and
+  at the end, with their object counts and manifests, and any object outside
+  them; the failure, the manager before and at the end, the source
+  at the end, `judgedAt`, the cleanup and what is left),
+  `S11/operator-restart/timeline.jsonl` (the fault flow),
+  `S11/operator-restart/manifest.json`, the manifest as stored, and
+  `S11/operator-restart/source-data-check.json`.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and
@@ -2252,7 +2491,13 @@ and S12 variant other than `complete` and `exact` only those under
   `attempts` after, and the retries),
   `S12/operator-restart/timeline.jsonl` (the fault flow),
   `S12/operator-restart/data-check.json` and
-  `S12/operator-restart/source-data-check.json`.
+  `S12/operator-restart/source-data-check.json`. Since S11
+  `operator-restart` was added, the manager's fields of the record's
+  `restart` (the manager before and after, the Lease's times and holder,
+  the deletion's and replacement's times, `backWithin` and `imageChanged`)
+  are written first, before the restore's fields. The keys and values are
+  the same as before, only their order changed, so compare the record as
+  JSON, not byte for byte.
 - with `-restore-instance-manager-restart`,
   `S12/instance-manager-restart/record.json` (as S12 `exact`'s record for
   `ha-imrestart`, without the writes after the backup, and the restart: the
@@ -2296,11 +2541,13 @@ its copy of the artifact itself, S11 `missing-destination` deletes its
 `CubridBackup`, its cluster `s11-denied` and that cluster's Secret itself,
 S11 `signature-mismatch` does the same with `s11-signature` and its Secret,
 and S11 `interrupted-upload` removes its faults and deletes its
-`CubridBackup` and its cluster `s11-interrupted` itself; each cluster's
+`CubridBackup` and its cluster `s11-interrupted` itself, and S11
+`operator-restart` deletes its `CubridBackup` itself; each cluster's
 retained data PVC goes with the namespace. It does not remove:
 - the seed backups under `lab-runs/<run ID>` in the bucket, the restored
-  cluster's among them, S11's artifact in the backup bucket, and what a cut
-  upload left under `lab-runs/<run ID>/interrupted-upload`;
+  cluster's among them, S11's artifact in the backup bucket, what a cut
+  upload left under `lab-runs/<run ID>/interrupted-upload`, and S11
+  `operator-restart`'s artifact under `lab-runs/<run ID>/operator-restart`;
 - a backend volume that the StorageClass retains.
 
 The record says so.

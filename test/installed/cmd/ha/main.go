@@ -76,36 +76,42 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.StablePeriod, "stable-period", 30*time.Second,
 		"S06: how long the clients must stay acknowledged after the fault (stable_period)")
 	flags.DurationVar(&cfg.ResyncLimit, "resync-limit", 2*time.Minute,
-		"S06: bound for the replacement manager's first fresh status, S12 operator-restart: for its return "+
-			"(operator_resync_limit)")
+		"S06: bound for the replacement manager's first fresh status, S11 and S12 operator-restart: for its "+
+			"return (operator_resync_limit)")
 	flags.StringVar(&cfg.LeaderLease, "leader-lease", "91d4fe35.cubrid.io",
-		"S06 and S12 operator-restart: the manager's leader election Lease in its namespace")
+		"S06 and S11 and S12 operator-restart: the manager's leader election Lease in its namespace")
 	flags.StringVar(&cfg.BackupBucket, "backup-bucket", "",
 		"scenario after LAB01: S11 complete, a full backup to this bucket; not with -fault")
 	flags.DurationVar(&cfg.BackupLimit, "backup-limit", 15*time.Minute,
 		"S11: bound from the backup request until Completed or Failed (backup_limit)")
 	flags.BoolVar(&cfg.BackupMissingDestination, "backup-missing-destination", false,
 		"scenario after S11 complete: S11 missing-destination, a backup to a bucket that does not exist must end "+
-			"Failed; needs -backup-bucket, not with -restore")
+			"Failed; needs -backup-bucket, not with -restore or -backup-operator-restart")
 	flags.BoolVar(&cfg.BackupDeniedCredentials, "backup-denied-credentials", false,
 		"scenario after S11 complete: S11 denied-credentials, a backup of a standalone cluster whose object store "+
-			"Secret holds keys the store refuses must end Failed; needs -backup-bucket, not with -restore or "+
-			"-backup-missing-destination")
+			"Secret holds keys the store refuses must end Failed; needs -backup-bucket, not with -restore, "+
+			"-backup-missing-destination or -backup-operator-restart")
 	flags.DurationVar(&cfg.BackupDeniedReadyLimit, "backup-denied-ready-limit", 15*time.Minute,
 		"S11 denied-credentials: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupSignatureMismatch, "backup-signature-mismatch", false,
 		"scenario after S11 complete: S11 signature-mismatch, a backup of a standalone cluster whose object store "+
 			"Secret holds the seed access key with a wrong secret key must end Failed; needs -backup-bucket, not "+
-			"with -restore, -backup-missing-destination, -backup-denied-credentials or -backup-interrupted-upload")
+			"with -restore, -backup-missing-destination, -backup-denied-credentials, -backup-interrupted-upload or "+
+			"-backup-operator-restart")
 	flags.DurationVar(&cfg.BackupSignatureMismatchReadyLimit, "backup-signature-mismatch-ready-limit", 15*time.Minute,
 		"S11 signature-mismatch: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupInterruptedUpload, "backup-interrupted-upload", false,
 		"scenario after S11 complete: S11 interrupted-upload, a backup of a standalone cluster whose upload is "+
 			"slowed and then reset by network faults in its member's Pod must end Failed; makes the run namespace "+
 			"enforce Pod Security privileged; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
-			"-backup-denied-credentials or -backup-signature-mismatch")
+			"-backup-denied-credentials, -backup-signature-mismatch or -backup-operator-restart")
 	flags.DurationVar(&cfg.BackupInterruptedReadyLimit, "backup-interrupted-ready-limit", 15*time.Minute,
 		"S11 interrupted-upload: bound from the standalone cluster's creation until it is Ready")
+	flags.BoolVar(&cfg.BackupOperatorRestart, "backup-operator-restart", false,
+		"scenario after S11 complete: S11 operator-restart, a second backup of the HA cluster during which the "+
+			"manager Pod is deleted without a grace period must end Completed with the same operation and one "+
+			"verified artifact; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
+			"-backup-denied-credentials, -backup-signature-mismatch or -backup-interrupted-upload")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
 		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
 	flags.BoolVar(&cfg.Restore, "restore", false,

@@ -157,7 +157,7 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 			"to the object store" + stagingNotChecked}
 	var created *databasev1alpha1.CubridBackup
 	defer func() {
-		cleaned := h.deleteMissingBackup(ctx, created, &rec)
+		cleaned := h.deleteMissingBackup(ctx, created, &rec.Cleanup)
 		result.CleanupSucceeded = &cleaned
 		// A pass without its evidence is a failure; a blocked or failed S11
 		// missing-destination keeps its result, with the evidence that could
@@ -251,7 +251,7 @@ func (h *haRun) missingSteps(ctx context.Context, result *evidence.Scenario, rec
 	}
 	if err := h.checkS11Logs(ctx, haClusterName, false, lastTarget(rec.Phases),
 		requestedOnServer(*created, requested), started,
-		rec.Credentials); err != nil {
+		rec.Credentials, h.rec.OperatorAfter.Pods); err != nil {
 		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
@@ -428,9 +428,10 @@ func (h *haRun) sameManager(ctx context.Context, variant string, before *manager
 
 // deleteMissingBackup deletes the CubridBackup the run created, by its UID,
 // with a budget of its own so that a run that ended still deletes it, and
-// records the outcome. It does not judge S11 missing-destination.
+// records the outcome in cleanup. It does not judge the variant; S11
+// missing-destination and operator-restart use it.
 func (h *haRun) deleteMissingBackup(ctx context.Context, created *databasev1alpha1.CubridBackup,
-	rec *s11MissingRecord) bool {
+	cleanup *string) bool {
 	if created == nil {
 		return true
 	}
@@ -440,9 +441,9 @@ func (h *haRun) deleteMissingBackup(ctx context.Context, created *databasev1alph
 	name := fmt.Sprintf("the CubridBackup %s (UID %s)", created.Name, uid)
 	if err := h.Client.Delete(dctx, created, client.Preconditions{UID: &uid}); err != nil &&
 		!apierrors.IsNotFound(err) {
-		rec.Cleanup = name + " could not be deleted and is left until the namespace is removed: " + err.Error()
+		*cleanup = name + " could not be deleted and is left until the namespace is removed: " + err.Error()
 		return false
 	}
-	rec.Cleanup = name + " was deleted"
+	*cleanup = name + " was deleted"
 	return true
 }
