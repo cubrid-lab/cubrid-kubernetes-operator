@@ -643,7 +643,7 @@ seed source and during the seed backup are not covered.
 
 S12 `graceful-stop`, a lab-only variant (`lab-installed-ha-s12-graceful-stop`,
 `-restore-graceful-stop`, #277), is the restore's side of S11
-`graceful-stop`; it has not yet run on the VM lab. It restores S11's artifact
+`graceful-stop`. It restores S11's artifact
 into another new cluster, samples the restore's target as S11
 `graceful-stop` samples its member, and deletes the target's Pod with its
 grace period at the first reading that shows `restoredb`. The code predicts
@@ -660,8 +660,24 @@ logged `Failed` (at least one such reading is required), exactly one retry
 naming the stop, and then what S12 `exact` requires; a stop that came after
 `restoredb` had ended blocks it, unless the restore itself failed. It
 uses S11's artifact without filler data, because POC-27 saw a `restoredb` of
-a 5 MB backup still running after 2 s; whether the lab's disks give the stop
-enough time is what its first run will show. Unit tests cover it with fakes.
+a 5 MB backup still running after 2 s. Unit tests cover it with fakes. On
+2026-10-29 an earlier harness of the change (`202e1c2`, without the
+requirements for a reading after the failure, the staging seen gone, the
+sampler's end and `restoredb` killed) passed once on the VM lab (manager
+`fb6f345`, after S12 `exact` on the same run), and its record meets those
+requirements: the sampler saw `restoredb` at 21:59:14.507 UTC and the
+deletion followed 22 ms later; the target's log shows `restoredb` ended
+`Command failed` with `signal: killed` after 285 ms (line 12), then
+`Operation failed` with `the member is stopping: restore failed: restoredb
+failed: signal: killed` (line 13, 21:59:14.972), `heartbeat stop` (14) and
+`server stop` (15); the database directory was seen gone at 21:59:14.802
+and the staging at 21:59:14.926, no CUBRID process held a file of either
+after that, and the two readings taken after the failure was logged showed
+neither, the sampler's output ending without an error after the shutdown's
+commands; the Operator retried once under a new operation, and the
+restored cluster was `Ready` 3 min 49 s after its creation and passed S12
+`exact`'s checks. So on the lab's disks `restoredb` of the 5 MB artifact
+gave the stop enough time without filler. One run is not a baseline.
 `restoreslave` under a graceful stop, a stop during the download or the
 start of the restored database, and an operation ended by its timeout are
 not covered.
