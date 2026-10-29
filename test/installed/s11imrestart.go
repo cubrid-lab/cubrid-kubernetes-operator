@@ -182,7 +182,8 @@ func (c HAConfig) validateS11InstanceManagerRestart() error {
 		{c.BackupInterruptedUpload, flagInterruptedUpload},
 		{c.BackupOperatorRestart, flagOperatorRestart},
 		{c.BackupOverlapping, flagOverlapping},
-		{c.BackupOperationStoreLoss, flagOperationStoreLoss}} {
+		{c.BackupOperationStoreLoss, flagOperationStoreLoss},
+		{c.BackupGracefulStop, flagGracefulStop}} {
 		if other.selected {
 			return fmt.Errorf("%s and %s select different lanes; a run takes one of them", flagInstanceManagerRestart,
 				other.flag)

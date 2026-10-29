@@ -156,7 +156,8 @@ func (c HAConfig) validateS11OperationStoreLoss() error {
 		{c.BackupInterruptedUpload, flagInterruptedUpload},
 		{c.BackupOperatorRestart, flagOperatorRestart},
 		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart},
-		{c.BackupOverlapping, flagOverlapping}} {
+		{c.BackupOverlapping, flagOverlapping},
+		{c.BackupGracefulStop, flagGracefulStop}} {
 		if other.selected {
 			return fmt.Errorf("%s and %s select different lanes; a run takes one of them", flagOperationStoreLoss,
 				other.flag)

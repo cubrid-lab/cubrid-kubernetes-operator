@@ -82,7 +82,8 @@ func (c HAConfig) validateS11Signature() error {
 		{c.BackupOperatorRestart, flagOperatorRestart},
 		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart},
 		{c.BackupOverlapping, flagOverlapping},
-		{c.BackupOperationStoreLoss, flagOperationStoreLoss}} {
+		{c.BackupOperationStoreLoss, flagOperationStoreLoss},
+		{c.BackupGracefulStop, flagGracefulStop}} {
 		if other.selected {
 			return fmt.Errorf("-backup-signature-mismatch and %s select different lanes; a run takes one of them",
 				other.flag)

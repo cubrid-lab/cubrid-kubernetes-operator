@@ -178,6 +178,9 @@ type haFixture struct {
 	// Deployment; the error is the read's.
 	podRead        func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	deploymentRead func(key client.ObjectKey) error
+	// podDeleted plays the API server and the StatefulSet when the run
+	// deletes a Pod of the run namespace.
+	podDeleted func(ctx context.Context, c client.WithWatch, pod *corev1.Pod, opts ...client.DeleteOption) error
 	// markerAnswer, when it returns true, answers a read of the marker table
 	// in place of markersOf.
 	markerAnswer func(pod string) (string, error, bool)
@@ -327,11 +330,19 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 	return f
 }
 
-// deleteHooked answers the deletion of a CubridCluster, a CubridBackup or a
-// Secret through its hook, when one is set; hooked is false otherwise.
+// deleteHooked answers the deletion of a CubridCluster, a CubridBackup, a
+// Secret or a Pod of the run namespace through its hook, when one is set;
+// hooked is false otherwise.
 func (f *haFixture) deleteHooked(ctx context.Context, c client.WithWatch, obj client.Object,
 	opts ...client.DeleteOption) (err error, hooked bool) {
 	switch value := obj.(type) {
+	case *corev1.Pod:
+		if f.podDeleted != nil && value.Namespace == f.cfg.Namespace {
+			f.mu.Lock()
+			f.writes = append(f.writes, "delete-member-pod")
+			f.mu.Unlock()
+			return f.podDeleted(ctx, c, value, opts...), true
+		}
 	case *databasev1alpha1.CubridCluster:
 		if f.clusterDeleted != nil {
 			return f.clusterDeleted(ctx, c, value, opts...), true
@@ -385,7 +396,8 @@ func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key cl
 	case (key.Name == s11DeniedClusterName || key.Name == s11SignatureClusterName) && f.deniedRead != nil:
 		return f.deniedRead(ctx, c, key)
 	case (key.Name == s11InterruptedClusterName || key.Name == s11IMRestartClusterName ||
-		key.Name == s11OverlappingClusterName || key.Name == s11StoreLossClusterName) && f.interruptedRead != nil:
+		key.Name == s11OverlappingClusterName || key.Name == s11StoreLossClusterName ||
+		key.Name == s11GracefulStopClusterName) && f.interruptedRead != nil:
 		return f.interruptedRead(ctx, c, key)
 	}
 	return nil
@@ -463,6 +475,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 			f.t.Fatalf("runner created %s without S11 operation-store-loss", cluster.Name)
 		}
 		f.writes = append(f.writes, "storeloss-cluster")
+		return f.interruptedCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s11GracefulStopClusterName {
+		if f.interruptedCreated == nil {
+			f.t.Fatalf("runner created %s without S11 graceful-stop", cluster.Name)
+		}
+		f.writes = append(f.writes, "gracefulstop-cluster")
 		return f.interruptedCreated(ctx, c, cluster)
 	}
 	if cluster.Name == s12WrongTargetClusterName {

@@ -481,6 +481,38 @@ directory was gone after the restart and at the end, as
 `reclaimBackupStaging` predicts. The first run's figures were within a
 second of these. Two runs are not a baseline.
 
+S11 `graceful-stop` also follows S11 `complete`, in a run of its own
+(`lab-installed-ha-s11-graceful-stop`, `-backup-graceful-stop`, #277, with
+#468 and #469), in a run namespace that keeps Pod Security `restricted`:
+the run creates a standalone cluster `s11-gracefulstop` with the run's own
+Secret, starts a sampler in its member's database container (one exec
+session that prints the `cub*` processes, the files open below the backup
+staging root and the entries below it about every 100 ms) and follows the
+container's log, requests a backup, and at the first sampler reading that
+shows `backupdb` deletes the member's Pod with its grace period, so that
+its `preStop` hook stops the Instance Manager while `backupdb` runs. The
+code predicts `Failed` with `BackupFailed` and `the member is stopping:
+backupdb failed: ...`, without a kept staging: the stop cancels the
+backup, the cancellation kills `backupdb`'s process group, the failed
+backup waits until no process holds a staging file before it removes the
+staging and records the operation, and only then does the stop run
+`heartbeat stop` and `server stop`. The run requires that outcome within
+`backup_limit` under one operation, never `Completed` or
+`status.artifact`; no sampler reading at or after the first one without the
+operation's staging directory may show a process holding a file below the
+backup's staging destination; the member's log must hold `backupdb`'s
+`Command failed`, the operation's staging writer events, its `Operation
+failed` and then the shutdown's commands, in that order; no `manifest.json`
+under the prefix; the replacement Pod ready and the cluster `Ready` within
+the ready limit; the source and the installed manager unchanged; and no
+key in statuses, Events, the sampler's output or the logs. A `backupdb`
+never seen before the backup left `Running`, or a stop that reached the
+Instance Manager after `backupdb` had ended (an upload failure, or
+`backupdb`'s success in the log), leaves it blocked; it uses the lab's
+small database without filler data. The sampler cannot see a hold shorter
+than its interval, nor anything after the container ended. Unit tests cover
+it with fakes. It has not yet run on the VM lab.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after

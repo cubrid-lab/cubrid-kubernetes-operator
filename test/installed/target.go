@@ -150,7 +150,54 @@ func (t *Target) Runner() (*Runner, error) {
 	podLogs := func(ctx context.Context, namespace, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
 		return clientset.CoreV1().Pods(namespace).GetLogs(pod, opts).Stream(ctx)
 	}
-	return &Runner{Client: c, Command: t.command, Redactor: t.redactor, forward: t.forward, podLogs: podLogs}, nil
+	// A followed log lasts until its container ends: it is bounded by the
+	// caller's context, not by the timeout of one request.
+	followConfig := rest.CopyConfig(t.config)
+	followConfig.Timeout = 0
+	followClientset, err := kubernetes.NewForConfig(followConfig)
+	if err != nil {
+		return nil, errors.New("could not initialize the selected Kubernetes log client")
+	}
+	followLogs := func(ctx context.Context, namespace, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+		return followClientset.CoreV1().Pods(namespace).GetLogs(pod, opts).Stream(ctx)
+	}
+	return &Runner{Client: c, Command: t.command, Redactor: t.redactor, forward: t.forward, podLogs: podLogs,
+		followLogs: followLogs, execStream: t.execStream}, nil
+}
+
+// streamedProcess is the standard output of a process that execStream
+// started; Close ends the process and waits for it.
+type streamedProcess struct {
+	io.Reader
+	cancel context.CancelFunc
+	cmd    *exec.Cmd
+}
+
+func (p *streamedProcess) Close() error {
+	p.cancel()
+	// The process was ended on purpose, or had ended by itself: its status
+	// says nothing the reader needs.
+	_ = p.cmd.Wait()
+	return nil
+}
+
+// execStream starts kubectl with args through this target's snapshot and
+// returns its standard output as it is written. The process also ends with
+// ctx. Its error output is discarded: a command that streams is judged by
+// what it printed.
+func (t *Target) execStream(ctx context.Context, args ...string) (io.ReadCloser, error) {
+	pctx, cancel := context.WithCancel(ctx)
+	cmd := t.Kubectl(pctx, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, err
+	}
+	return &streamedProcess{Reader: stdout, cancel: cancel, cmd: cmd}, nil
 }
 
 // logReadTimeout bounds one read of a container's log.

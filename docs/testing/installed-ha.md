@@ -417,6 +417,8 @@ S11 here does not check:
 - a member that loses a backup's operation record during the upload: that
   is S11 `operation-store-loss`, with `-backup-operation-store-loss`, on a
   standalone cluster;
+- a member stopped gracefully while `backupdb` runs: that is S11
+  `graceful-stop`, with `-backup-graceful-stop`, on a standalone cluster;
 - a backup to a bucket that does not exist: that is S11
   `missing-destination`, with `-backup-missing-destination`;
 - a backup whose object store keys the store refuses: that is S11
@@ -432,8 +434,8 @@ the same cluster to a bucket that does not exist must end `Failed`. The lane
 is then `lab-installed-ha-s11-missing-destination`, and it requires LAB01,
 S11/complete and S11/missing-destination. `-backup-missing-destination`
 without `-backup-bucket`, or with `-restore` or another S11 variant's flag,
-such as `-backup-operator-restart`, `-backup-instance-manager-restart` or
-`-backup-operation-store-loss`, is refused before anything is done: a run
+such as `-backup-operator-restart`, `-backup-instance-manager-restart`,
+`-backup-operation-store-loss` or `-backup-graceful-stop`, is refused before anything is done: a run
 takes one lane.
 
 ```sh
@@ -558,7 +560,8 @@ S11/complete and S11/denied-credentials. `-backup-denied-credentials`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
 `-backup-signature-mismatch`, `-backup-interrupted-upload`,
 `-backup-operator-restart`, `-backup-instance-manager-restart`,
-`-backup-overlapping` or `-backup-operation-store-loss`, or with a
+`-backup-overlapping`, `-backup-operation-store-loss` or
+`-backup-graceful-stop`, or with a
 `-backup-denied-ready-limit` that is not positive, is refused before anything
 is done: a run takes one lane.
 
@@ -729,7 +732,8 @@ S11/complete and S11/signature-mismatch. `-backup-signature-mismatch`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
 `-backup-denied-credentials`, `-backup-interrupted-upload`,
 `-backup-operator-restart`, `-backup-instance-manager-restart`,
-`-backup-overlapping` or `-backup-operation-store-loss`, or with a
+`-backup-overlapping`, `-backup-operation-store-loss` or
+`-backup-graceful-stop`, or with a
 `-backup-signature-mismatch-ready-limit` that is not positive, is refused
 before anything is done: a run takes one lane.
 
@@ -796,7 +800,8 @@ S11/complete and S11/interrupted-upload. `-backup-interrupted-upload`
 without `-backup-bucket`, with `-restore`, `-backup-missing-destination`,
 `-backup-denied-credentials`, `-backup-signature-mismatch`,
 `-backup-operator-restart`, `-backup-instance-manager-restart`,
-`-backup-overlapping` or `-backup-operation-store-loss`, or with a
+`-backup-overlapping`, `-backup-operation-store-loss` or
+`-backup-graceful-stop`, or with a
 `-backup-interrupted-ready-limit`
 that is not positive, is refused before anything is done: a run takes one
 lane.
@@ -1046,8 +1051,8 @@ and it requires LAB01, S11/complete and S11/operator-restart.
 `-backup-operator-restart` without `-backup-bucket`, with `-restore`,
 `-backup-missing-destination`, `-backup-denied-credentials`,
 `-backup-signature-mismatch`, `-backup-interrupted-upload`,
-`-backup-instance-manager-restart`, `-backup-overlapping` or
-`-backup-operation-store-loss`, or without a positive `-resync-limit` and a `-leader-lease`, is refused before anything is
+`-backup-instance-manager-restart`, `-backup-overlapping`,
+`-backup-operation-store-loss` or `-backup-graceful-stop`, or without a positive `-resync-limit` and a `-leader-lease`, is refused before anything is
 done: a run takes one lane.
 
 ```sh
@@ -1267,8 +1272,8 @@ S11/complete and S11/instance-manager-restart.
 `-backup-instance-manager-restart` without `-backup-bucket`, with
 `-restore`, `-backup-missing-destination`, `-backup-denied-credentials`,
 `-backup-signature-mismatch`, `-backup-interrupted-upload`,
-`-backup-operator-restart`, `-backup-overlapping` or
-`-backup-operation-store-loss`, or with a
+`-backup-operator-restart`, `-backup-overlapping`,
+`-backup-operation-store-loss` or `-backup-graceful-stop`, or with a
 `-backup-instance-manager-restart-ready-limit` that is not positive, is
 refused before anything is done: a run takes one lane. The variant is
 lab-only.
@@ -1472,7 +1477,10 @@ with no second operation and no `manifest.json` under its prefix.
 
 S11 `instance-manager-restart` here does not check:
 - a kill during `backupdb` itself, before the upload starts; the lab's
-  `backupdb` takes a few seconds;
+  `backupdb` takes a few seconds. A graceful stop of the member while
+  `backupdb` runs is S11 `graceful-stop`, with `-backup-graceful-stop`;
+  a `SIGKILL` of the Instance Manager during `backupdb` is still not
+  checked;
 - the member's backup staging directory after the restart (#636);
 - the Instance Manager's operation record of the killed operation, which
   the Operator reports through the backup's status;
@@ -1496,8 +1504,8 @@ each with its own operation and one verified artifact. The lane is then
 and S11/overlapping. `-backup-overlapping` without `-backup-bucket`, with
 `-restore`, `-backup-missing-destination`, `-backup-denied-credentials`,
 `-backup-signature-mismatch`, `-backup-interrupted-upload`,
-`-backup-operator-restart`, `-backup-instance-manager-restart` or
-`-backup-operation-store-loss`, or with a
+`-backup-operator-restart`, `-backup-instance-manager-restart`,
+`-backup-operation-store-loss` or `-backup-graceful-stop`, or with a
 `-backup-overlapping-ready-limit` that is not positive, is refused before
 anything is done: a run takes one lane. The variant is lab-only.
 
@@ -1729,8 +1737,9 @@ S11/complete and S11/operation-store-loss.
 `-backup-operation-store-loss` without `-backup-bucket`, with `-restore`,
 `-backup-missing-destination`, `-backup-denied-credentials`,
 `-backup-signature-mismatch`, `-backup-interrupted-upload`,
-`-backup-operator-restart`, `-backup-instance-manager-restart` or
-`-backup-overlapping`, with a `-backup-operation-store-loss-ready-limit`
+`-backup-operator-restart`, `-backup-instance-manager-restart`,
+`-backup-overlapping` or `-backup-graceful-stop`, with a
+`-backup-operation-store-loss-ready-limit`
 that is not positive, or with a `-backup-limit` below 35 minutes, is
 refused before anything is done: a run takes one lane. The variant is
 lab-only.
@@ -1907,6 +1916,201 @@ S11 `operation-store-loss` here does not check:
   for keys;
 - a judgement of the staging directory (#636);
 - the Pod Security warnings and audit records at `restricted`.
+
+## S11 graceful-stop
+
+With `-backup-graceful-stop` as well as `-backup-bucket`, the run goes on
+after S11 `complete` passed with S11 `graceful-stop`: the member's Pod is
+deleted, with its grace period, while `backupdb` runs. The variant shows on
+the real image that no process still writes the backup's staging files once
+the Instance Manager removes them, and that the staging is settled before
+CUBRID is stopped (#277, #468, #469, POC-27 in `docs/poc/RESULTS.md`). The
+lane is then `lab-installed-ha-s11-graceful-stop`, and it requires LAB01,
+S11/complete and S11/graceful-stop. `-backup-graceful-stop` without
+`-backup-bucket`, with `-restore`, `-backup-missing-destination`,
+`-backup-denied-credentials`, `-backup-signature-mismatch`,
+`-backup-interrupted-upload`, `-backup-operator-restart`,
+`-backup-instance-manager-restart`, `-backup-overlapping` or
+`-backup-operation-store-loss`, or with a
+`-backup-graceful-stop-ready-limit` that is not positive, is refused before
+anything is done: a run takes one lane. The variant is lab-only.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -backup-graceful-stop [-backup-graceful-stop-ready-limit 15m] [-backup-limit 15m]
+```
+
+- **Pod Security.** The variant adds no container and needs no privilege,
+  so the run namespace keeps the level LAB01 created it with
+  (`enforce=restricted`). The variant records the namespace's labels.
+- `-backup-limit` bounds the backup from the return of its request until
+  the reading that saw it `Completed` or `Failed`, the stop included.
+- `-backup-graceful-stop-ready-limit` bounds the variant's own cluster
+  from its creation until it is `Ready`, and from the deletion's acceptance
+  until the StatefulSet's replacement Pod runs a ready database container
+  and the cluster is `Ready` again. It is the run's bound, not the
+  contract's, and is refused without `-backup-graceful-stop`.
+- `-timeout` must also cover a new standalone cluster, the backup, the
+  member's stop (up to the Pod's 120-second grace period) and its
+  replacement.
+
+S11 `graceful-stop` starts only from S11 `complete` that passed. When S11
+`complete` did not run or did not pass, it is blocked with that cause and
+nothing of it is done.
+
+**What the product's code predicts:**
+- The member Pod has `terminationGracePeriodSeconds` 120 and a `preStop`
+  hook that runs `instance-manager shutdown`
+  (`podSpec` and `preStopShutdown` in
+  `internal/controller/cubridcluster_controller.go`). The command asks the
+  Instance Manager, which calls `Stop` with its `Shutdown` budget of 100
+  seconds (`shutdown` and the defaults in
+  `internal/instancemanager/server.go`).
+- `Stop` marks the member stopping, cancels every operation's context
+  (`endOps`), waits for the operations for at most the budget less a
+  30-second reserve, and only then runs `cubrid heartbeat stop` and
+  `cubrid server stop <database>` (`Stop`, `awaitOperations` and `Shutdown`
+  in `internal/instancemanager/operations.go`). On a standalone member
+  `heartbeat stop` fails with "not configured for HA", which `Shutdown`
+  accepts; the log line is then `Command failed`, not `Ran command`.
+- The cancellation kills `backupdb`'s process group, and `Run` returns only
+  once the group is gone (`Run`, `groupUtilities` and `endGroup` in
+  `internal/instancemanager/cli.go`). `Backup` returns
+  `backupdb failed: <error>: <output>`.
+- `runBackup`'s failure path (`internal/instancemanager/server.go`) puts
+  `the member is stopping: ` before `backupdb failed: ...`
+  (`stoppingReason`), waits up to 30 seconds while `cub_server` still runs
+  until no process holds a file below the operation's staging directory
+  (`awaitStagingWriters` in `internal/instancemanager/stagingwriter.go`),
+  removes the directory, and records the operation `Failed`. A holder still
+  there after the bound keeps the directory and adds
+  `; the backup staging <dir> is kept and is not uploaded or reused: ...`
+  to the reason.
+- The Instance Manager logs, as JSON on the container's standard output:
+  `Command failed` for `cubrid backupdb ...` with `durationMs`
+  (`LoggingCLI` in `internal/instancemanager/logging.go`);
+  `backup_staging_writer_wait`, then `_closed` or `_timeout`, with the
+  holders, only when a process held a file at the first look; `Operation
+  failed` with the operation and its reason (`logState` in
+  `internal/instancemanager/opstore.go`); then the shutdown's commands.
+- The operation's record is on the data volume, so the Operator reads it
+  from the stopping Instance Manager or from the replacement Pod's, and
+  copies its reason into the backup's `Ready` message with `BackupFailed`
+  (`failedBackup` in `internal/controller/cubridbackup_controller.go`).
+
+1. **Cluster.** The run creates the standalone cluster `s11-gracefulstop`
+   with the run's copy of the seed Secret and waits until it is `Ready`.
+   It reads its member `s11-gracefulstop-0`, requires the cluster's
+   StatefulSet to control it and its database container to be ready, and
+   records the Pod's UID and the container's ID.
+2. **Sampler and log.** Before the request the run starts two streams from
+   the member's database container. The sampler is one `pods/exec`
+   session, a shell loop that prints, about every 100 ms, the time by the
+   container's clock, each process whose command name starts with `cub`
+   (process ID, command name and argument list), each open file at or
+   below `/var/lib/cubrid/backup-staging` (process ID and path, from the
+   `/proc/<pid>/fd` links, a deleted file included), and the entries two
+   levels below that root (`<backup UID>/<operation ID>`). It prints no
+   file's contents. The second stream follows the container's log through
+   `pods/log`, whole. The deleted Pod's log is gone once the Pod is
+   replaced, so this is the only read of it.
+3. **Request and trigger.** The run requests a full backup to the backup
+   bucket under `lab-runs/<run ID>/graceful-stop`. At the first reading of
+   the sampler that shows a process whose argument list holds `backupdb`
+   (`cubrid backupdb` or `cub_admin backupdb`), it deletes the member's Pod
+   with its own grace period and the recorded UID as a precondition. The
+   time of that reading, and when the deletion was sent and accepted, are
+   recorded. A backup read in another phase than `Pending` or `Running`
+   before the sampler showed `backupdb` blocks the variant: the placement
+   was missed. A deletion the API server refused blocks it too.
+4. **Wait for the end.** The run reads the backup every `-poll` until it is
+   `Completed` or `Failed`, for at most `-backup-limit` from the request.
+   After the deletion, each reading also looks for the replacement.
+5. **The member back.** The StatefulSet's replacement Pod (same name,
+   another UID, controlled by the cluster's StatefulSet) must run a ready
+   database container, and a reading of the cluster after that must show
+   `Ready`, within the ready limit from the deletion. A replacement not
+   seen, or a cluster not `Ready` again, in time fails the variant.
+6. **Judge the backup.** The backup must end `Failed` with `BackupFailed`
+   and a message that starts with
+   `the member is stopping: backupdb failed: ` and does not say that the
+   staging is kept, under one `operationRef`. A kept staging, the Instance
+   Manager's restart reason, and any other failure fail the variant.
+   `Completed` after the deletion fails it, with its `status.artifact`,
+   unless the member's log shows `backupdb`'s own success first: then the
+   stop reached the Instance Manager after `backupdb` had ended, and the
+   variant is blocked. A reason that starts, after the stopping prefix,
+   with `upload failed: ` or `backupdb succeeded` means the same and blocks
+   it. `RecordedOperationLost`, the documented escalation, blocks it.
+   Another `operationRef`, and a `status.artifact` on a backup that is not
+   `Completed`, must never happen.
+7. **Judge the sampler.** In the sampler's readings the run finds the first
+   that shows the operation's staging directory
+   (`<backup UID>/<operation ID>`) and the first after it that does not. No
+   reading from that one on may show a process holding a file below
+   `/var/lib/cubrid/backup-staging/<backup UID>`: that must never happen.
+   The last holder before it, and when, are recorded. A directory never
+   seen, or never seen gone before the sampler's output ended, blocks the
+   variant.
+8. **Judge the log.** In the followed log the run finds `backupdb`'s end
+   for the backup's staging destination, the operation's staging writer
+   events, its `Operation failed`, and the shutdown's
+   `cubrid heartbeat stop` and `cubrid server stop`. The order must be
+   `backupdb`'s end, the writer events, `Operation failed`, and then the
+   two stop commands. A line out of order, or a writer wait that ended with
+   `backup_staging_writer_timeout`, fails the variant. A missing
+   `backupdb` end, `Operation failed` or `heartbeat stop` blocks it: the
+   log is incomplete. `server stop` is ordered when it is there.
+9. **Prefix, backup at the end, credentials, source, manager and cleanup.**
+   As steps 7 to 11 of S11 `instance-manager-restart`, without a limit to
+   remove: a `manifest.json` under the prefix must never happen, and other
+   objects are recorded as a partial artifact. Neither seed key may be in a
+   status read, an Event, the sampler's output, the deleted member's
+   followed log, the replacement's log, read whole, or the installed
+   manager's log. A followed log or sampler output that reached the run's
+   log limit leaves the search incomplete and blocks the variant. The run
+   deletes the backup and the cluster by UID.
+
+The time of the verdict is recorded as `judgedAt`.
+`backupdbSeenAfterRequest` runs from the request to the sampler's reading
+of `backupdb`; `deleteAfterBackupdbSeen` from that reading to the
+deletion's acceptance; `stagingGoneAfterDelete` from the acceptance to the
+first reading without the staging directory; `failedAfterDelete` from the
+acceptance to the reading of `Failed`; `replacementSeenWithin` and
+`readyAgainWithin` from the acceptance to the first reading of the
+replacement and of the cluster `Ready` again. `backupdbDurationMs` is the
+Instance Manager's own `durationMs` of `backupdb`.
+`holdersAfterStagingGone`, `samplerSamples`, `failedWithin` and
+`operationRefUnchanged` complete them. Each is `unknown` until measured.
+
+The account needs, beyond S11 `complete`'s, `delete` on Pods in the run
+namespace and `get` on `pods/log` with `follow`; the sampler uses the
+`create` on `pods/exec` the run already has.
+
+What a pass shows: on the pinned image, a graceful stop of a member while
+`backupdb` runs ends the backup `Failed` for the stop; the Instance Manager
+waits until no process holds a staging file before it removes the staging,
+and settles the operation before it stops CUBRID.
+
+**Larger database.** The variant uses the standalone cluster's database as
+it is, without filler data. The lab's small databases back up in about two
+seconds; the sampler reads every 100 ms, so `backupdb` should be seen. The
+risk is the deletion's path to the Instance Manager: the kubelet must start
+the `preStop` hook while `backupdb` still runs. A run that is blocked
+because the stop reached the Instance Manager after `backupdb` had ended
+(an `upload failed` reason, or `backupdb`'s success in the log) says that
+a larger database is needed.
+
+S11 `graceful-stop` here does not check:
+- a writer that holds a staging file for less than the sampler's 100 ms
+  interval: such a hold may fall between two readings;
+- anything after the database container's end: the sampler's exec session
+  and the followed log end with the container;
+- a `SIGKILL` of the member or of its Instance Manager during `backupdb`,
+  and a stop during the upload;
+- the replacement Instance Manager's reclaim of what the stopped one left;
+- the restore of anything the backup left;
+- the Operator's log from before one minute before the variant started.
 
 ## S12 exact
 
@@ -3162,6 +3366,25 @@ and S12 variant other than `complete` and `exact` only those under
   whether it was there and its entries by type, size and path),
   `S11/operation-store-loss/timeline.jsonl` (the fault flow) and
   `S11/operation-store-loss/source-data-check.json`.
+- with `-backup-graceful-stop`, `S11/graceful-stop/record.json` (the
+  backup, its UID, bucket, prefix and object store Service, the run
+  namespace's Pod Security labels, the cluster `s11-gracefulstop` and the
+  ready limit; under `trigger`, the member's Pod UID and container ID, the
+  sampler's reading that showed `backupdb` and its process, when the
+  deletion was sent and accepted or why it was refused, why the placement
+  was missed, and the replacement's UID with when it was seen and when the
+  cluster read `Ready` again; under `sampler`, the interval, the readings
+  and bytes read, whether it was cut, when and why its output ended, the
+  first and last reading with `backupdb`, the operation's staging
+  directory with when it was seen and seen gone, the last holder before
+  and every holder after; under `log`, the line numbers and results of
+  `backupdb`'s end, the writer events, `Operation failed` with its reason,
+  `heartbeat stop` and `server stop`; the phases, operationRefs, failure,
+  times, the backup and prefix at the end, the manager before and after,
+  the source, where credentials were looked for, `judgedAt`, the cleanup
+  and what is left), `S11/graceful-stop/sampler.jsonl` (each reading of
+  the sampler), `S11/graceful-stop/member-log.jsonl` (the deleted member's
+  followed log, redacted) and `S11/graceful-stop/source-data-check.json`.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and
