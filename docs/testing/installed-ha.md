@@ -304,7 +304,58 @@ is refused before anything is done.
    as it is, URL- and JSON-escaped, and in the four base64 alphabets). One
    found must never happen, also when the backup then fails or cannot be
    read. A key shorter than four bytes cannot be searched for: S11 is then
-   blocked, never passed. The Operator's logs are not read; the record says so.
+   blocked, never passed.
+6. **Logs.** The run searches two container logs for both keys, in the same
+   encodings, through the Kubernetes API (`pods/log`):
+   - the installed Operator's log: container `manager` of each manager Pod
+     LAB01 recorded in `-operator-namespace` for `-operator-deployment`,
+     only while the Pod still has the UID LAB01 recorded;
+   - the Instance Manager's log: container `cubrid` of the Pod the backup
+     ran on, `status.targetInstance`. The Instance Manager is a process of
+     that container, started by its entrypoint
+     (`build/instance-manager/entrypoint.sh`), so its output is the
+     container's log. The Pod must be controlled by the cluster's
+     StatefulSet and must have been created before the second in which the
+     backup was requested (`creationTimestamp` has one-second precision, so
+     a Pod created in that second counts as created after it).
+
+   A Pod that existed before the variant started (the manager, and in S11
+   `complete` and `missing-destination` the HA member) is read from one
+   minute before the variant started (`readFrom: sinceTime`). The minute
+   allows for a node clock behind the run's; a larger skew is not measured.
+   A Pod of a cluster the variant created (`s11-denied-0`,
+   `s11-signature-0`, `s11-interrupted-0`) is read whole, without
+   `sinceTime` (`readFrom: whole-log`), because all of its log is in scope.
+   Each read is bounded to 16 MiB per container instance (`limitBytes`).
+   When the container's restart count is above zero, its previous instance
+   is read too, in the same way. After the reads the run reads the Pod again,
+   and a change in the container's restart count or container ID means an
+   instance may have gone unread.
+
+   A key found in either log must never happen. The record names the log,
+   never the key, and holds no log content. Error text from the API passes
+   through the evidence redactor before it is recorded. The run cannot claim
+   a clean log when it could not read it whole, so each of the following
+   leaves S11 blocked, not passed, and the record says what was not searched
+   and why:
+   - a log that cannot be read, or whose read fails partway;
+   - a read of which the API returned more than 16 MiB;
+   - a Pod with another UID, one the StatefulSet does not control, or one
+     created after the request;
+   - a container that restarted more than once, unless its previous
+     instance started before `sinceTime`, because only the previous instance
+     can be read (for a whole log, any second restart blocks);
+   - a container that restarted while its log was read;
+   - a backup that named no `status.targetInstance`.
+
+   `pods/log` returns only the container's current log file. The kubelet
+   rotates that file (`containerLogMaxSize`, 10 MiB by default), and the
+   rotated files are not returned. A log that grew past the rotation size
+   within the window is therefore searched only from the last rotation
+   onward; that is not seen as a truncation and does not block S11. The 16
+   MiB bound blocks only what the API returned. What the Operator logged
+   before the window, and the Instance Managers of the other members, are
+   not searched. The record's notes say so.
 
 The artifact is left in the bucket for S12; the record says so. Deleting the
 namespace removes the `CubridBackup`, not the artifact.
@@ -313,8 +364,9 @@ A run that ends, for example at its `-timeout`, before S11 is judged leaves
 S11 blocked, not failed. So does an API error while the run reads the
 backup, such as a refused `get`, or readings that keep failing, for example
 with `503`, until `-backup-limit` passes, so that the phase at the limit is
-not known; a port-forward or a client that cannot be opened; and a list of
-the Events that is refused: the run could not check. S11 fails when the
+not known; a port-forward or a client that cannot be opened; a list of
+the Events that is refused; and a log that could not be searched whole
+(step 6): the run could not check. S11 fails when the
 backup ends `Failed`, is replaced, or is read but neither `Completed` nor
 `Failed` when `-backup-limit` passes. A backup seen `Failed`, replaced or
 over the limit stays failed even when the run ends right after.
@@ -344,11 +396,14 @@ The account needs, beyond LAB01's:
   `create` or both depending on its version, so grant both on
   `pods/portforward`. These verbs follow from kubectl's requests; they were
   not checked against the lab's API server;
-- `get` on the seed Secret, as before.
+- `get` on the seed Secret, as before;
+- `get` on Pods and on `pods/log` in the run namespace and in the
+  Operator's namespace (`-operator-namespace`), to search the logs (step 6).
+  Every S11 variant needs it.
 
 S11 here does not check:
-- the Operator's logs for credentials. They are not read, so that part of
-  the never-happen list is unverified;
+- the Operator's log from before one minute before S11 started, and the
+  Instance Managers' logs of the members the backup did not run on;
 - the restore of the artifact: that is S12 `exact`, with `-restore`;
 - the interrupted variant `interrupted-pod`, and an interrupted upload:
   that is S11 `interrupted-upload`, with `-backup-interrupted-upload`;
@@ -442,8 +497,12 @@ store's and is not required.
    it. It does not remove it.
 5. **Credentials.** As in S11 `complete`: neither key of the seed Secret may
    be in any status the run read, in the backup's status at the end, which
-   holds the failure's message, or in any Event of the run namespace. One
-   found must never happen.
+   holds the failure's message, or in any Event of the run namespace. Nor
+   may it be in the installed Operator's log or in the Instance Manager's
+   log of the Pod the backup ran on, a member of the HA cluster, each read
+   from one minute before S11 `missing-destination` started, as step 6 of
+   S11 `complete` describes. One found must never happen; a log that could
+   not be searched whole blocks the variant.
 6. **The source.** As step 8 of S12 `exact`: the same member Pods and
    containers, the same master by CUBRID and `status.currentPrimary`, and the
    data rules over the whole history. Any difference fails S11
@@ -468,7 +527,8 @@ Beyond S11 `complete`'s, the account needs `delete` on `cubridbackups` in the
 run namespace.
 
 S11 `missing-destination` here does not check:
-- the Operator's and the Instance Manager's logs for credentials;
+- the Operator's log from before one minute before the variant started, and
+  the Instance Managers' logs of the members the backup did not run on;
 - the member's staging directory after the failed upload;
 - denied credentials: that is S11 `denied-credentials`, with
   `-backup-denied-credentials`, and S11 `signature-mismatch`, with
@@ -594,7 +654,12 @@ reason `BackupFailed`, with the operation's reason as the message.
    be in any status of `s11-denied` or of the backup the run read, in the
    backup's status at the end, which holds the failure's message, in the
    status of `s11-denied` read once more at the end, or in any Event of the
-   run namespace. One found must never happen.
+   run namespace. Nor may it be in the installed Operator's log, read from
+   one minute before S11 `denied-credentials` started, or in the Instance
+   Manager's log of `s11-denied-0`, the Pod the backup ran on, read whole
+   because the variant created it, as step 6 of S11 `complete` describes. The logs are read before the cluster is
+   deleted. One found must never happen; a log that could not be searched
+   whole blocks the variant.
 8. **The source.** As step 8 of S12 `exact`: the same member Pods and
    containers, the same master by CUBRID and `status.currentPrimary`, and the
    data rules over the whole history. Any difference fails S11
@@ -626,7 +691,8 @@ Beyond S11 `missing-destination`'s, the account needs `delete` on
 `CubridCluster` and a Secret there, as LAB01 does.
 
 S11 `denied-credentials` here does not check:
-- the Operator's and the Instance Manager's logs for credentials;
+- the Operator's log from before one minute before the variant started, and
+  the Instance Managers' logs of the HA cluster's members;
 - the standalone member's environment: that its Instance Manager holds the
   denied keys follows from the cluster's Secret, and the run does not read
   the member;
@@ -914,8 +980,11 @@ the client's later attempts are refused at once as well.
     before the cut.
 11. **Credentials, source and manager.** As S11 `denied-credentials`, with
     the seed Secret's keys only: no key in any status of `s11-interrupted` or
-    of the backup, in either read once more at the end, or in an Event; the
-    source unchanged; the installed manager the one LAB01 checked.
+    of the backup, in either read once more at the end, in an Event, in the
+    installed Operator's log, read from one minute before the variant
+    started, or in the Instance Manager's log of `s11-interrupted-0`, read
+    whole; the source unchanged; the installed manager the one LAB01
+    checked.
 12. **Cleanup.** The run deletes the `CubridBackup` and the cluster
     `s11-interrupted` it created, in that order, each with its UID as a
     precondition, as S11 `denied-credentials` does. A deletion that fails is
@@ -937,7 +1006,8 @@ namespace, and the right to create a namespace labelled
 `enforce=privileged`.
 
 S11 `interrupted-upload` here does not check:
-- the Operator's and the Instance Manager's logs;
+- the Operator's log from before one minute before the variant started, and
+  the Instance Managers' logs of the HA cluster's members;
 - the Pod Security warnings and audit records at `restricted`;
 - a silent drop or a store that stops answering, as against a reset;
 - a cut store whose traffic comes back during the backup, so a backup that
@@ -2068,7 +2138,14 @@ and S12 variant other than `complete` and `exact` only those under
   URI, digest, size and version, the result for each object and the totals,
   `backupCompletedWithin`, where credentials were looked for, and what is
   left in the bucket) and `S11/complete/manifest.json`, the manifest as the
-  run downloaded it. The run searches the manifest for both keys of the seed
+  run downloaded it. Where credentials were looked for includes, under
+  `credentials.logs`, each log searched: which log, its namespace, Pod, UID
+  and container, how it was read (`readFrom`: `sinceTime` with the time, or
+  `whole-log`), the restart count and container ID, the bytes read and whether
+  the read was truncated, whether the previous instance was read with its
+  bytes and truncation, whether a key was found, and what could not be
+  searched (`unchecked`). Every S11 variant's record has the same field; no
+  record holds log content. The run searches the manifest for both keys of the seed
   Secret, and writes both files through the evidence redactor, which removes
   them; it does not scan the files afterwards.
 - with `-backup-missing-destination`, `S11/missing-destination/record.json`

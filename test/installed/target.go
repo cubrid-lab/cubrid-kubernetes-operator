@@ -32,7 +32,9 @@ import (
 	"syscall"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -137,8 +139,22 @@ func (t *Target) Runner() (*Runner, error) {
 	if err != nil {
 		return nil, errors.New("could not initialize the selected Kubernetes client")
 	}
-	return &Runner{Client: c, Command: t.command, Redactor: t.redactor, forward: t.forward}, nil
+	// Reading a log of up to defaultMaxLogBytes may take longer than the 10 s the
+	// other API calls are given.
+	logConfig := rest.CopyConfig(t.config)
+	logConfig.Timeout = logReadTimeout
+	clientset, err := kubernetes.NewForConfig(logConfig)
+	if err != nil {
+		return nil, errors.New("could not initialize the selected Kubernetes log client")
+	}
+	podLogs := func(ctx context.Context, namespace, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+		return clientset.CoreV1().Pods(namespace).GetLogs(pod, opts).Stream(ctx)
+	}
+	return &Runner{Client: c, Command: t.command, Redactor: t.redactor, forward: t.forward, podLogs: podLogs}, nil
 }
+
+// logReadTimeout bounds one read of a container's log.
+const logReadTimeout = 2 * time.Minute
 
 // forwardReady bounds how long a port-forward may take to listen.
 const forwardReady = 30 * time.Second

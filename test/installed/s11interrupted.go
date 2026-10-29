@@ -73,12 +73,8 @@ const (
 		s11InterruptedMember + " until the Pod is deleted"
 )
 
-// logsNotChecked is the note that neither log was read, and failedWithinKey
-// the measurement of the time to Failed.
-const (
-	logsNotChecked  = "the Operator's and the Instance Manager's logs were not checked"
-	failedWithinKey = "failedWithin"
-)
+// failedWithinKey is the measurement of the time to Failed.
+const failedWithinKey = "failedWithin"
 
 // How the store's address was found (s11InterruptedFaults.AddressMode).
 const (
@@ -323,7 +319,7 @@ func planS11InterruptedUpload(cfg HAConfig, lane string, requirements []evidence
 // ends. The backup must end Failed for its upload within BackupLimit, never
 // Completed and without status.artifact; no manifest.json may be under its
 // prefix at the end, the source must be unchanged, and neither seed key in
-// a status read or an Event. The run removes both faults, records what is
+// a status read, an Event or the logs checkS11Logs searches. The run removes both faults, records what is
 // left under the prefix as a partial artifact, never writes to or removes
 // from the object store, and deletes the backup and the cluster it created.
 // A backup that ends before the cut took effect, a fault that cannot be
@@ -358,7 +354,7 @@ func (h *haRun) runS11InterruptedUpload(ctx context.Context) (result evidence.Sc
 				"is refused as well",
 			"the run never writes to or removes from the object store; with the seed Secret's keys it lists the " +
 				"backup bucket under the prefix at the end",
-			logsNotChecked},
+			logsNote(h.logLimit())},
 		Cleanup: "nothing to delete: the run created no CubridCluster or CubridBackup",
 		Residue: "nothing: the run wrote nothing to the object store" + stagingNotChecked}
 	var made s11InterruptedMade
@@ -425,7 +421,9 @@ func (h *haRun) runS11InterruptedUpload(ctx context.Context) (result evidence.Sc
 			failure + ", never Completed and without status.artifact, also when read again at the end; no " +
 			"manifest.json was under its prefix at the end; both faults were seen removed; the store's address " +
 			"was unchanged before the cut and at the end; the source was unchanged; no seed key was in the " +
-			"statuses read or the Events; the Operator's and the Instance Manager's logs were not checked"
+			"statuses read, the Events, the installed Operator's manager log, read from " +
+			logSinceMargin.String() + " before the variant started, or the whole Instance Manager's log in the " +
+			"member's Pod"
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -447,6 +445,7 @@ func prefixed(prefix string, m map[string]any) map[string]any {
 // errors are joined.
 func (h *haRun) interruptedSteps(ctx context.Context, result *evidence.Scenario, rec *s11InterruptedRecord,
 	made *s11InterruptedMade) error {
+	started := time.Now().UTC()
 	if _, err := h.holdsCredential(nil); err != nil {
 		return fmt.Errorf("%w; S11 interrupted-upload could not tell whether a credential is in a status or an "+
 			"Event", err)
@@ -500,6 +499,11 @@ func (h *haRun) interruptedSteps(ctx context.Context, result *evidence.Scenario,
 	}
 	if err := h.standaloneAtEnd(ctx, made.cluster, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
+	}
+	if err := h.checkS11Logs(ctx, s11InterruptedClusterName, true, lastTarget(rec.Phases),
+		requestedOnServer(made.backup, *rec.RequestedAt), started,
+		rec.Credentials); err != nil {
+		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
 	errs = append(errs, h.checkSourceS12(ctx, rec.Source, s11InterruptedSourceDataCheckFile))

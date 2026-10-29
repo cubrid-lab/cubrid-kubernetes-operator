@@ -152,8 +152,9 @@ sha256 and size of every object, and that neither credential appears in the
 backup's status, the manifest or the namespace's Events. On 2026-10-25 it
 passed four times on the VM lab (manager `d6df2ac`), the last from the merged
 harness: each backup was taken on a standby and `Completed` in about 12 s,
-with one object of 5,256,192 bytes verified. The Operator's logs are not
-checked for credentials, and the interrupted variants are not run. Since #621
+with one object of 5,256,192 bytes verified. The Operator's logs were not
+checked for credentials in those runs, and the interrupted variants are not
+run. Since #621
 the manifest and `status.artifact.cubridVersion` carry the engine version the
 backup's member observed, and the run requires it to be the version
 `cubrid_rel` reported on the master, of the `spec.version` series; until the
@@ -161,6 +162,32 @@ harness was changed to that, S11 failed on manager `fb6f345` (once, on
 2026-10-28). With the change it passed once on the VM lab on 2026-10-28
 (manager `fb6f345`): `Completed` on a standby in 12.0 s, both versions
 `11.4.6.1963`.
+
+Every S11 variant that takes a backup (`complete`, `missing-destination`,
+`denied-credentials`, `signature-mismatch` and `interrupted-upload`) now also
+searches, through `pods/log`, the installed Operator's log and the Instance
+Manager's log of the Pod the backup ran on for the seed Secret's keys and the
+variant's own keys (#616). A Pod that existed before the variant started is
+read from one minute before it, and a node clock skew over a minute is not
+measured; the member Pod of a cluster the variant created is read whole.
+Each read is bounded to 16 MiB per container instance and includes the
+previous instance of a restarted container. A key found fails the variant. A
+log that cannot be read, a read the bound truncated, and a container that
+restarted while its log was read block it. `pods/log` returns only the
+container's current log file, so a log the kubelet rotated within the window
+is searched only from the rotation onward; that is not reported as a
+truncation. The Operator's log before the window and the Instance Managers
+of other members are not searched. Unit tests cover it with a fake log
+source. On 2026-10-29 it ran on the VM lab (manager `fb6f345`) in three
+passing runs: S11 `interrupted-upload` and S11 `denied-credentials` with an
+earlier harness of the same change (`acba678`, which read every log from
+`sinceTime`), then S11 `signature-mismatch` with the final one (`f535c40`),
+each after S11 `complete`. Every S11 step read the manager's log (1,510 to
+13,695 bytes) and its backup member's log (2,796 to 8,094 bytes), none
+truncated, no container restarted, and no key was found; in the last run the
+new member `s11-signature-0` was read whole (6,217 bytes). The S11 lab
+results recorded before those runs in this section were made without the log
+search.
 
 S11 `missing-destination` follows S11 `complete` on the same run
 (`lab-installed-ha-s11-missing-destination`, `-backup-missing-destination`,

@@ -301,11 +301,14 @@ type s11Verification struct {
 type s11Credentials struct {
 	StatusChecked bool `json:"statusChecked"`
 	// StatusesChecked counts the statuses read while the run waited.
-	StatusesChecked int      `json:"statusesChecked"`
-	ManifestChecked bool     `json:"manifestChecked"`
-	EventsChecked   int      `json:"eventsChecked"`
-	BackupEvents    int      `json:"backupEvents"`
-	FoundIn         []string `json:"foundIn"`
+	StatusesChecked int  `json:"statusesChecked"`
+	ManifestChecked bool `json:"manifestChecked"`
+	EventsChecked   int  `json:"eventsChecked"`
+	BackupEvents    int  `json:"backupEvents"`
+	// Logs are the container logs searched (checkS11Logs), once the search
+	// started.
+	Logs    []s11LogCheck `json:"logs,omitempty"`
+	FoundIn []string      `json:"foundIn"`
 }
 
 // s11Record is the evidence of S11 complete.
@@ -338,10 +341,12 @@ type s11Record struct {
 // and must end Completed within BackupLimit, and the run downloads the
 // artifact with its own client and checks it against the manifest and the
 // status. No credential of the object store may be in the backup's status,
-// the manifest or the Events of the run namespace. A run that ends before
-// S11 is judged is blocked, not failed.
+// the manifest, the Events of the run namespace, the installed manager's log
+// or the Instance Manager's log of the backup's target (checkS11Logs). A run
+// that ends before S11 is judged is blocked, not failed.
 func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 	defer h.inScenario(s11ID+"/"+s11Variant, &result)()
+	started := time.Now().UTC()
 	result = evidence.Scenario{ID: s11ID, Variant: s11Variant, Result: evidence.Fail, NeverEvents: []string{}}
 	rec := s11Record{Backup: s11BackupName, Bucket: h.cfg.BackupBucket, Prefix: h.rec.Seed.Prefix + "/backups",
 		ObjectStoreService: h.cfg.ObjectStoreService, Phases: []s11Phase{}, EngineVersion: h.engineVersion,
@@ -447,6 +452,8 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 			"not be read: "+strings.Join(v.Unreadable, "; "))
 	}
 	credErr := h.checkS11Credentials(ctx, backup, manifest, rec.Credentials)
+	logErr := h.checkS11Logs(ctx, haClusterName, false, lastTarget(rec.Phases),
+		requestedOnServer(backup, requested), started, rec.Credentials)
 	if found := rec.Credentials.FoundIn; len(found) > 0 {
 		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
 	}
@@ -458,6 +465,10 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 	}
 	if credErr != nil {
 		unchecked = strings.TrimPrefix(unchecked+"; look for credentials: "+credErr.Error(), "; ")
+	}
+	if logErr != nil {
+		unchecked = strings.TrimPrefix(unchecked+"; search the logs: "+strings.ReplaceAll(logErr.Error(), "\n", "; "),
+			"; ")
 	}
 	failure := strings.Join(result.NeverEvents, "; ")
 	if len(v.Problems) > 0 {
@@ -473,8 +484,10 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 	result.Result = evidence.Pass
 	result.Reason = "the backup ended Completed within backup_limit, and every object the manifest names was " +
 		"downloaded by the run and matches it, the status and the cluster; no credential was found in the " +
-		"recorded statuses, the manifest or the Events; the Operator's logs were not checked"
-	rec.Notes = append(rec.Notes, "the Operator's logs were not checked for credentials")
+		"recorded statuses, the manifest, the Events, the installed Operator's manager log or the Instance " +
+		"Manager's log in the backup's target Pod, each log read from " + logSinceMargin.String() + " before S11 " +
+		"complete started; the Instance Managers of the other members were not searched"
+	rec.Notes = append(rec.Notes, logsNote(h.logLimit()))
 	return result
 }
 
@@ -988,7 +1001,7 @@ func (h *haRun) holdsCredential(data []byte) (bool, error) {
 // checkS11Credentials looks for the object store's keys in the backup's
 // status as read now, in the manifest and in every Event of the run
 // namespace, adding to what waitBackup found in each status it read. The
-// Operator's logs are not read.
+// logs are searched by checkS11Logs.
 func (h *haRun) checkS11Credentials(ctx context.Context, created *databasev1alpha1.CubridBackup, manifest []byte,
 	found *s11Credentials) error {
 	if manifest != nil {
