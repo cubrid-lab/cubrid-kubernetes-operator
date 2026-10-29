@@ -1041,9 +1041,11 @@ it needs more.
   (`BackupFailed`, `upload failed: put <bucket>/...`); a backup that ends
   `Failed` before its upload did not exercise the missing bucket and leaves
   the variant blocked. `denied-credentials` ends the same way, for the
-  backup bucket; a failure before the upload did not exercise the denied
-  keys and leaves it blocked, and a store that accepts them leaves it
-  blocked before anything is created.
+  backup bucket, with an answer from the store that refuses the keys
+  (`AccessDenied`, `InvalidAccessKeyId`, `SignatureDoesNotMatch` or their
+  messages); an upload failure with another answer, a failure before the
+  upload, and a store that accepts the keys before anything is created do
+  not confirm the denied keys' effect and leave it blocked.
 - **Must never happen:** `Completed` with a missing or unreadable artifact; a
   manifest that names files which do not exist; credentials in status, events
   or logs; `Completed`, or a `status.artifact`, for a backup whose

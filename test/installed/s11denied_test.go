@@ -490,7 +490,7 @@ func requireDeniedChecks(t *testing.T, rec s11DeniedRecord, lab01 haRecord) {
 		t.Fatalf("manager = %+v, %+v; want the installed manager recorded", rec.ManagerBefore, rec.ManagerAfter)
 	}
 	// Two cluster readings and four backup readings at least.
-	if rec.Credentials == nil || rec.Credentials.StatusesChecked < 6 || !rec.Credentials.StatusChecked ||
+	if rec.Credentials == nil || rec.Credentials.StatusesChecked < 7 || !rec.Credentials.StatusChecked ||
 		len(rec.Credentials.FoundIn) != 0 {
 		t.Fatalf("credentials = %+v, want every status searched", rec.Credentials)
 	}
@@ -640,6 +640,68 @@ func TestRunS11DeniedCredentialsJudgesAFailureByWhetherItReachedTheUpload(t *tes
 	}
 }
 
+func TestRunS11DeniedCredentialsIsBlockedWhenTheUploadAnswerIsNotARefusal(t *testing.T) {
+	for name, tc := range map[string]struct{ answer, want string }{
+		// The upload to the bucket failed, but for something the denied keys
+		// do not explain.
+		"a timeout":        {answer: ": context deadline exceeded", want: "context deadline exceeded"},
+		"a missing bucket": {answer: ": The specified bucket does not exist.", want: "does not exist"},
+		"no answer":        {want: "no answer quoted"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS11DeniedConfig(t)
+			f := newS11DeniedFixture(t, cfg)
+			f.tamperDenied = func(_ int, s *databasev1alpha1.CubridBackupStatus) {
+				if s.Phase == databasev1alpha1.BackupPhaseFailed {
+					s.Conditions[0].Message = "upload failed: put " + testBackupBucket + "/x/backup/appdb_bk0v000" +
+						tc.answer
+				}
+			}
+			denied, err := deniedOf(t, f)
+			if err == nil || denied.Result != evidence.Blocked || len(denied.NeverEvents) != 0 ||
+				!strings.Contains(denied.Reason, "does not show a refusal of the keys") ||
+				!strings.Contains(denied.Reason, tc.want) {
+				t.Fatalf("S11 denied-credentials = %+v, want blocked: the answer %q is not a refusal", denied,
+					tc.want)
+			}
+			if !slices.Equal(f.deleted, wantDeleted) {
+				t.Fatalf("deleted = %v, want the backup, the cluster and the Secret deleted", f.deleted)
+			}
+		})
+	}
+}
+
+func TestRunS11DeniedCredentialsFailsOnADeniedKeyInTheClusterStatusAfterReady(t *testing.T) {
+	cfg := testS11DeniedConfig(t)
+	f := newS11DeniedFixture(t, cfg)
+	read := f.deniedRead
+	f.deniedRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+		if err := read(ctx, c, key); err != nil {
+			return err
+		}
+		f.mu.Lock()
+		reads := f.clusterReads
+		f.mu.Unlock()
+		// The wait ends at the readyAt-th reading; the reading at the end
+		// follows it.
+		if reads <= f.readyAt {
+			return nil
+		}
+		cluster := &databasev1alpha1.CubridCluster{}
+		if err := c.Get(ctx, key, cluster); err != nil {
+			return err
+		}
+		cluster.Status.Conditions[0].Message += " (key " + f.keys[1] + ")"
+		return c.Update(ctx, cluster)
+	}
+	denied, err := deniedOf(t, f)
+	if err == nil || denied.Result != evidence.Fail || len(denied.NeverEvents) != 1 ||
+		!strings.Contains(denied.NeverEvents[0], "the status of "+s11DeniedClusterName+" at the end") ||
+		strings.Contains(denied.NeverEvents[0], "the status read of") {
+		t.Fatalf("S11 denied-credentials = %+v, want the key written after Ready found at the end", denied)
+	}
+}
+
 func TestRunS11DeniedCredentialsFailsOnAKeyInAnEvent(t *testing.T) {
 	for name, key := range map[string]func(f *s11DeniedFixture) string{
 		"a denied key": func(f *s11DeniedFixture) string { return f.keys[1] },
@@ -715,7 +777,7 @@ func TestRunS11DeniedCredentialsRecordsWhatItCouldNotDelete(t *testing.T) {
 	rec := readDeniedRecord(t, cfg.EvidenceDir)
 	if !strings.Contains(rec.Cleanup, testForbidden) || !strings.Contains(rec.Cleanup, "cluster "+
 		s11DeniedClusterName+" (UID "+testDeniedClusterUID+") could not be deleted") ||
-		!strings.Contains(rec.Cleanup, "Secret "+s11DeniedSecretName+" (UID "+testDeniedSecretUID+") was deleted") {
+		!strings.Contains(rec.Cleanup, "Secret "+s11DeniedSecretName+" (UID "+testDeniedSecretUID+") was accepted") {
 		t.Fatalf("cleanup = %q, want the cluster left named with the error and the rest deleted", rec.Cleanup)
 	}
 }

@@ -184,11 +184,11 @@ S11 `denied-credentials` also follows S11 `complete`, in a run of its own
 #616): the run generates keys, confirms with its own client that the store
 refuses them, creates a standalone cluster whose object store Secret holds
 them, and requires its backup to the backup bucket `Failed` with
-`BackupFailed` and `upload failed: put <bucket>/...` within `backup_limit`,
-never `Completed` and without `status.artifact`, nothing under its prefix at
-the end, the source unchanged and neither the seed nor the denied keys in a
-status read or an Event; it deletes the backup, the cluster and the Secret
-it created. It is lab-only and not yet run on the VM lab.
+`BackupFailed`, `upload failed: put <bucket>/...` and the store refusing the
+keys within `backup_limit`, never `Completed` and without `status.artifact`,
+nothing under its prefix at the end, the source unchanged and neither the
+seed nor the denied keys in a status read or an Event; it deletes the backup,
+the cluster and the Secret it created. It is lab-only and not yet run on the VM lab.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's

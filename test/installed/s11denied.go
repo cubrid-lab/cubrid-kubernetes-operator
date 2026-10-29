@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,8 +107,8 @@ type s11DeniedRecord struct {
 	StatusFailedWithin string `json:"statusFailedWithin,omitempty"`
 	// Failure is the Ready reason and message of the backup as it ended.
 	// StoreError is the object store's answer as the failure quotes it,
-	// after "put <bucket>/<key>: ", and StoreErrorKind what it names. They
-	// are observations; the verdict does not depend on them.
+	// after "put <bucket>/<key>: ", and StoreErrorKind what it names. A pass
+	// needs StoreErrorKind storeErrorAccessDenied.
 	Failure        string                                 `json:"failure,omitempty"`
 	StoreError     string                                 `json:"storeError,omitempty"`
 	StoreErrorKind string                                 `json:"storeErrorKind,omitempty"`
@@ -184,8 +185,11 @@ func (h *haRun) runS11DeniedCredentials(ctx context.Context) (result evidence.Sc
 			"the run did not read the standalone member's environment: that its Instance Manager holds the denied " +
 				"keys follows from the cluster's spec.objectStorage Secret, which the Instance Manager reads at " +
 				"start only",
-			"the verdict does not depend on the object store's error code (storeError), which is recorded until " +
-				"a lab run shows what the store answers to the member",
+			"a pass needs the object store's answer quoted in the failure (storeError) to refuse the keys " +
+				"(storeErrorKind access-denied); another answer blocks the variant",
+			"the fault check reaches the store through -object-store-service, while the member uploads to the " +
+				"cluster's spec.objectStorage endpoint; the run assumes, as S11 complete does, that they are the " +
+				"same store, and refuses a Service that the endpoint does not name",
 			"the Operator's and the Instance Manager's logs were not checked"},
 		Cleanup: "nothing to delete: the run created no Secret, CubridCluster or CubridBackup",
 		Residue: "nothing: the run wrote nothing to the object store" + stagingNotChecked}
@@ -242,7 +246,8 @@ func (h *haRun) runS11DeniedCredentials(ctx context.Context) (result evidence.Sc
 		result.Result = evidence.Pass
 		result.Reason = "the object store refused the denied keys before the request; the backup of " +
 			s11DeniedClusterName + ", whose spec.objectStorage Secret holds them, ended Failed within backup_limit " +
-			"for its upload to " + rec.Bucket + ", never Completed and without status.artifact; nothing was under " +
+			"for its upload to " + rec.Bucket + " with an answer that refuses the keys, never Completed and " +
+			"without status.artifact; nothing was under " +
 			"its prefix at the end; the source was unchanged; neither the seed keys nor the denied keys were in " +
 			"the statuses read or the Events; the Operator's and the Instance Manager's logs were not checked"
 	}
@@ -287,6 +292,9 @@ func (h *haRun) deniedSteps(ctx context.Context, result *evidence.Scenario, rec 
 			"remove them", len(rec.ObjectsAtEnd), rec.Bucket, rec.Prefix) + stagingNotChecked
 	}
 	if err := h.checkS11Credentials(ctx, made.backup, nil, rec.Credentials); err != nil {
+		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
+	}
+	if err := h.deniedClusterAtEnd(ctx, made.cluster, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
@@ -415,6 +423,19 @@ func (h *haRun) waitDeniedReady(ctx context.Context, created *databasev1alpha1.C
 	return nil
 }
 
+// deniedClusterAtEnd reads the standalone cluster once more at the end and
+// searches its status for a credential, so that a key written into it after
+// it was Ready is found too.
+func (h *haRun) deniedClusterAtEnd(ctx context.Context, created *databasev1alpha1.CubridCluster,
+	creds *s11Credentials) error {
+	cluster := &databasev1alpha1.CubridCluster{}
+	if err := h.Client.Get(ctx, client.ObjectKeyFromObject(created), cluster); err != nil {
+		return fmt.Errorf("read the cluster %s at the end: %w", created.Name, err)
+	}
+	creds.StatusesChecked++
+	return h.lookForCredentials(&creds.FoundIn, "the status of "+created.Name+" at the end", cluster.Status)
+}
+
 // standaloneReady reports what of a standalone cluster's status does not
 // hold yet, and a bootstrap that failed as an error: it does not start again
 // by itself.
@@ -452,9 +473,10 @@ func standaloneReady(cluster *databasev1alpha1.CubridCluster) (string, error) {
 // BackupFailed with the operation's reason as message. That is what is
 // required. Completed, or a status.artifact, must never happen; a failure
 // before the upload did not exercise the denied keys and blocks S11
-// denied-credentials; an upload that failed but not for its destination
-// fails it, and so does a backup neither Completed nor Failed within
-// BackupLimit.
+// denied-credentials, and so does an upload failure whose quoted answer is
+// not a refusal of the keys (storeErrorAccessDenied); an upload that failed
+// but not for its destination fails it, and so does a backup neither
+// Completed nor Failed within BackupLimit.
 func (h *haRun) judgeDenied(backup *databasev1alpha1.CubridBackup, waitErr error, requested time.Time,
 	rec *s11DeniedRecord, result *evidence.Scenario) error {
 	s := backup.Status
@@ -507,6 +529,16 @@ func (h *haRun) judgeDenied(backup *databasev1alpha1.CubridBackup, waitErr error
 	result.Measurements["failedWithin"] = rec.FailedWithin
 	if done := s.CompletedAt; done != nil {
 		rec.StatusFailedWithin = done.Sub(backup.CreationTimestamp.Time).String()
+	}
+	// Only an answer that refuses the keys shows that the denied keys failed
+	// the upload; a timeout, a reset or a missing bucket does not.
+	if rec.StoreErrorKind != storeErrorAccessDenied {
+		answer := rec.StoreError
+		if answer == "" {
+			answer = "no answer quoted in " + strconv.Quote(c.Message)
+		}
+		return fmt.Errorf("the upload to %s failed, but the store's answer does not show a refusal of the keys: "+
+			"%s; the denied keys' effect is not confirmed", rec.Bucket, answer)
 	}
 	return nil
 }
@@ -580,7 +612,7 @@ func (h *haRun) deleteDenied(ctx context.Context, made s11DeniedMade, rec *s11De
 				err.Error())
 			continue
 		}
-		outcomes = append(outcomes, name+" was deleted")
+		outcomes = append(outcomes, "the deletion of "+strings.TrimPrefix(name, "the ")+" was accepted")
 	}
 	rec.Cleanup = strings.Join(outcomes, "; ")
 	return cleaned

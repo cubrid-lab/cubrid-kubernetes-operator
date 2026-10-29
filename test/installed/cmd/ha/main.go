@@ -132,6 +132,11 @@ func run(ctx context.Context, args []string) (runErr error) {
 		}
 		return err
 	}
+	readyLimitSet := false
+	flags.Visit(func(f *flag.Flag) { readyLimitSet = readyLimitSet || f.Name == "backup-denied-ready-limit" })
+	if readyLimitSet && !cfg.BackupDeniedCredentials {
+		return errors.New("-backup-denied-ready-limit needs -backup-denied-credentials")
+	}
 	if flags.NArg() != 0 || (cfg.Level != "kind" && cfg.Level != "vm-lab") {
 		return errors.New("choose kind or vm-lab explicitly and provide no positional command")
 	}

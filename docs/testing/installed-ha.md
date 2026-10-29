@@ -489,7 +489,12 @@ not positive, is refused before anything is done: a run takes one lane.
 - `-backup-limit` bounds this variant too: from the return of the request
   until the reading that saw `Failed`.
 - `-backup-denied-ready-limit` bounds the variant's own cluster from its
-  creation until it is `Ready`. It is the run's bound, not the contract's.
+  creation until it is `Ready`. It is the run's bound, not the contract's,
+  and is refused without `-backup-denied-credentials`.
+- The fault check reaches the store through `-object-store-service`, while
+  the member uploads to the cluster's `spec.objectStorage` endpoint. As in
+  S11 `complete`, the run assumes they are the same store and refuses a
+  Service that the endpoint does not name; the record notes it.
 - The run never writes to or removes from the object store. With the denied
   keys it only lists the backup bucket under the variant's prefix before
   anything is created, and with the seed Secret's keys it lists the same at
@@ -564,7 +569,10 @@ reason `BackupFailed`, with the operation's reason as the message.
      failed, but not for its destination.
    - The object store's answer after `put <bucket>/<key>: ` is recorded as
      `storeError`, with `storeErrorKind` `access-denied`, `no-such-bucket` or
-     `other`. The verdict does not depend on it.
+     `other`. Only `access-denied` shows that the denied keys failed the
+     upload: any other answer, such as a timeout, a reset connection or a
+     bucket that does not exist, or no answer quoted, blocks S11
+     `denied-credentials`, since the denied keys' effect is not confirmed.
    - A backup read but neither `Completed` nor `Failed` when
      `-backup-limit` passes fails it, with its last phase. When the readings
      kept failing until then, it is blocked.
@@ -577,8 +585,9 @@ reason `BackupFailed`, with the operation's reason as the message.
    cannot be asked blocks it.
 7. **Credentials.** Neither key of the seed Secret nor either denied key may
    be in any status of `s11-denied` or of the backup the run read, in the
-   backup's status at the end, which holds the failure's message, or in any
-   Event of the run namespace. One found must never happen.
+   backup's status at the end, which holds the failure's message, in the
+   status of `s11-denied` read once more at the end, or in any Event of the
+   run namespace. One found must never happen.
 8. **The source.** As step 8 of S12 `exact`: the same member Pods and
    containers, the same master by CUBRID and `status.currentPrimary`, and the
    data rules over the whole history. Any difference fails S11
@@ -590,7 +599,8 @@ reason `BackupFailed`, with the operation's reason as the message.
     `CubridBackup`, the cluster `s11-denied` and the Secret
     `object-storage-denied` it created, in that order, each with its UID as
     a precondition, with `-cleanup-timeout` as their own budget. The record
-    says whether each was deleted; a deletion that fails is recorded there
+    says whether each deletion was accepted; the run does not wait for the
+    objects to be gone. A deletion that fails is recorded there
     and in the scenario's `cleanupSucceeded`, and the object goes with the
     namespace. The cluster's data PVC is retained when the cluster is
     deleted (`pvcRetentionPolicy` in
@@ -1740,7 +1750,9 @@ and S12 variant other than `complete` and `exact` only those under
   URI, digest, size and version, the result for each object and the totals,
   `backupCompletedWithin`, where credentials were looked for, and what is
   left in the bucket) and `S11/complete/manifest.json`, the manifest as the
-  run downloaded it. It holds no credential; the run checks that.
+  run downloaded it. The run searches the manifest for both keys of the seed
+  Secret, and writes both files through the evidence redactor, which removes
+  them; it does not scan the files afterwards.
 - with `-backup-missing-destination`, `S11/missing-destination/record.json`
   (the bucket's name, whether it was absent before the request and at the
   end, with the times, and what it held at the end if it existed; the
@@ -1763,7 +1775,8 @@ and S12 variant other than `complete` and `exact` only those under
   at the end, where credentials were looked for, `judgedAt`, whether each
   object the run created was deleted, and what is left) and
   `S11/denied-credentials/source-data-check.json`, the source's data check.
-  Neither holds a key; the run checks that.
+  The run writes them through the evidence redactor, which removes the seed
+  Secret's keys and the denied keys; it does not scan them afterwards.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and
