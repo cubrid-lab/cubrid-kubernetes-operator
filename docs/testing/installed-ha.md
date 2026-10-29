@@ -1088,12 +1088,13 @@ schedule the run when that pause does not disturb other work.
    request returned. The target is left to its default, `PreferStandby`.
 2. **Place the restart.** The run reads the backup every `-poll`, records
    each change (with `operationRef`) and searches each status for the keys,
-   as S11 `complete` does, until a reading shows phase `Running` with an
-   `operationRef`. That reading places the restart: its time, operation,
-   target and role are recorded (`placedAt`, `operationRef`,
-   `targetInstance`, `targetRole`).
-   - A reading that shows another phase first, `Uploading`, `Completed` or
-     `Failed`, means the restart cannot be placed while the backup runs:
+   as S11 `complete` does, until a reading shows phase `Running` or
+   `Uploading` with an `operationRef`: both are in progress, with the
+   operation recorded. That reading places the restart: its time, phase,
+   operation, target and role are recorded (`placedAt`, `phaseAtPlacement`,
+   `operationRef`, `targetInstance`, `targetRole`).
+   - A reading that shows `Completed` or `Failed` first means the restart
+     cannot be placed while the backup runs:
      S11 `operator-restart` is blocked as inconclusive ("the restart could
      not be placed while the backup ran"), with that phase and its reason
      recorded (`notPlaced`), and the manager is not touched.
@@ -1101,8 +1102,9 @@ schedule the run when that pause does not disturb other work.
    `operator-restart`, the run first requires the manager Pod LAB01
    checked, searches that Pod's log for the keys while it can still be read
    (step 7), and reads the backup once more. That reading's phase is
-   recorded (`phaseAtRestart`), with `runningAtRestart` set when it is
-   `Running` (also a measurement). Neither shows that the Instance Manager
+   recorded (`phaseAtRestart`), with `inProgressAtRestart` set when it is
+   `Running` or `Uploading` (also a measurement). Neither shows that the
+   Instance Manager
    was still working on the backup when the deletion took effect. A backup
    that ended `Completed` or `Failed` by then blocks the variant without a
    restart, and another manager Pod blocks it too. The run then deletes the
@@ -1129,6 +1131,32 @@ schedule the run when that pause does not disturb other work.
      `RecordedOperationLost` it blocks the variant; with any other reason it
      fails it. Neither `Completed` nor `Failed` within `-backup-limit` fails
      it.
+   - **Who completed it.** A deletion without a grace period leaves the old
+     manager process running until the kubelet kills it, and it keeps the
+     leader Lease meanwhile, since the manager does not release it on
+     cancel (`cmd/main.go`). It may therefore write `Completed` itself, and
+     then the replacement's resumption of the operation was not observed.
+     The controller sets `status.completedAt` when it writes `Completed`
+     (`completed`), and the API server keeps it to the second. It must be at
+     or after the second of the replacement's Lease `acquireTime`; otherwise
+     the variant is blocked ("the old manager completed the backup before the
+     replacement led"), with both times recorded (`statusCompletedAt`,
+     `leaseAcquiredAt`). Both are written by the managers, by their nodes'
+     clocks, not the run's; a skew between those nodes is not measured. The
+     first VM-lab run read `completedAt` 11:29:59 against an `acquireTime`
+     of 11:29:59.446, which passes.
+   - **Where the restart fell.** The Instance Manager sets the manifest's
+     `createdAt` right before it uploads (`runBackup` in
+     `internal/instancemanager/server.go`). The run records it
+     (`manifestCreatedAt`, also a measurement) and
+     `uploadStartedBeforeRestart` (also a measurement), set when it is
+     before the second of the deletion. When it is set, the replacement
+     discovered and completed an operation that was already uploading, or
+     done, in the Instance Manager: the restart did not fall in the middle of
+     `backupdb`. This is evidence, not a verdict. `createdAt` is the
+     member's clock, to the second, and the deletion's time the run's; a
+     `createdAt` in the deletion's second is not counted as before it, and a
+     skew between the clocks is not measured.
 6. **The artifact.** For `Completed`, the run verifies the artifact as
    S11 `complete` does, with its own client: the manifest's digest against
    the status, its identity against the backup, the cluster and the engine
@@ -1143,7 +1171,12 @@ schedule the run when that pause does not disturb other work.
      prefix that holds objects, or an object outside an attempt prefix of the
      backup, is a second writer and must never happen. The one attempt prefix
      must be the artifact's and hold its one `manifest.json`. What was found
-     is recorded under `attempts`, and `attemptPrefixes` is measured.
+     is recorded under `attempts`, and `attemptPrefixes` is measured. The run
+     lists the prefix again at the end, after the source check (step 8), and
+     a second attempt prefix holding objects, or an object outside one, that
+     appears then fails the variant too (`attemptsAtEnd`). Only stored
+     objects are listed: a duplicate still staging on a member without an
+     object, or an unfinished multipart upload, is not seen.
 7. **Credentials.** As in S11 `complete`, in every status read, the manifest
    and the Events of the run namespace, and in the logs: the deleted
    manager's log as read right before its deletion (step 3), the
@@ -1172,21 +1205,24 @@ As in S11 `complete`, a run that ends before S11 `operator-restart` is
 judged, an API error, and a port-forward or client that cannot be opened
 block it; what was seen stays a failure, with that error added to the
 reason. `backupCompletedWithin`, `operatorBackWithin`,
-`operationRefUnchanged`, `runningAtRestart`, `objectsVerified`,
-`artifactBytes`, `objectsNotInManifest` and `attemptPrefixes` are `unknown`
-until measured. A pass's reason names the operation and target at the
-placement, the phase right before the deletion and how long after it the
-replacement was back.
+`operationRefUnchanged`, `inProgressAtRestart`,
+`uploadStartedBeforeRestart`, `objectsVerified`, `artifactBytes`,
+`objectsNotInManifest` and `attemptPrefixes` are `unknown` until measured;
+`manifestCreatedAt` is added once the manifest was read. A pass's reason
+names the phase, operation and target at the placement, the phase right
+before the deletion and how long after it the replacement was back.
 
 Beyond S11 `missing-destination`'s, the account needs what S06 `restart`
 needs: `delete` on Pods and `get` on Leases in the Operator's namespace.
 
 S11 `operator-restart` here does not check:
 - the restart at another point of the backup: before its target is recorded,
-  between the start on the Instance Manager and the status write that
-  records `operationRef`, or during `Uploading`. The restart follows a
-  reading of `Running` with an operation; the Instance Manager's operation
-  may have moved on before the deletion took effect;
+  or between the start on the Instance Manager and the status write that
+  records `operationRef`. The restart follows a reading of `Running` or
+  `Uploading` with an operation; the Instance Manager's operation may have
+  moved on, or ended, before the deletion took effect, and on the first
+  VM-lab run it had started its upload before the restart;
+- a duplicate writer still staging without an object in the store;
 - what the deleted manager logged after its log was searched;
 - a restart of the Instance Manager, or of a member, during the backup;
 - the Instance Manager's operation records, the member's staging directory,
@@ -2380,12 +2416,14 @@ and S12 variant other than `complete` and `exact` only those under
 - with `-backup-operator-restart`, `S11/operator-restart/record.json` (the
   fields of S11 `complete`'s record for the second backup, every phase
   observed with its `operationRef`; under `restart`, the manager Pod before
-  and its replacement, the placing reading's time, operation, target and
-  role, `phaseAtRestart`, `runningAtRestart`, `notPlaced`, the deletion's and
-  the replacement's times, the Lease's holder and times, `backWithin`,
-  `imageChanged` and `operationRefsSeen`; under `attempts`, the attempt
-  prefixes found with their object counts and manifests and any object
-  outside them; the failure, the manager before and at the end, the source
+  and its replacement, the placing reading's time, phase, operation, target
+  and role, `phaseAtRestart`, `inProgressAtRestart`, `notPlaced`, the
+  deletion's and the replacement's times, the Lease's holder and times,
+  `backWithin`, `imageChanged`, `statusCompletedAt`, `manifestCreatedAt`,
+  `uploadStartedBeforeRestart` and `operationRefsSeen`; under `attempts`
+  and `attemptsAtEnd`, the attempt prefixes found at the first listing and
+  at the end, with their object counts and manifests, and any object outside
+  them; the failure, the manager before and at the end, the source
   at the end, `judgedAt`, the cleanup and what is left),
   `S11/operator-restart/timeline.jsonl` (the fault flow),
   `S11/operator-restart/manifest.json`, the manifest as stored, and
@@ -2443,7 +2481,13 @@ and S12 variant other than `complete` and `exact` only those under
   `attempts` after, and the retries),
   `S12/operator-restart/timeline.jsonl` (the fault flow),
   `S12/operator-restart/data-check.json` and
-  `S12/operator-restart/source-data-check.json`.
+  `S12/operator-restart/source-data-check.json`. Since S11
+  `operator-restart` was added, the manager's fields of the record's
+  `restart` (the manager before and after, the Lease's times and holder,
+  the deletion's and replacement's times, `backWithin` and `imageChanged`)
+  are written first, before the restore's fields. The keys and values are
+  the same as before, only their order changed, so compare the record as
+  JSON, not byte for byte.
 - with `-restore-instance-manager-restart`,
   `S12/instance-manager-restart/record.json` (as S12 `exact`'s record for
   `ha-imrestart`, without the writes after the backup, and the restart: the

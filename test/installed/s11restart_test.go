@@ -60,20 +60,29 @@ func testS11RestartConfig(t *testing.T) HAConfig {
 type s11RestartFixture struct {
 	*s11Fixture
 	// restartPhases are the phases the fake Operator reports, one per
-	// reading; the last is kept, and Running is kept until the manager Pod
-	// was deleted. tamperRestart changes the status of a reading; deleted
-	// tells whether the manager Pod was deleted before it. corruptObject
-	// changes an object of the artifact after its manifest was written;
-	// secondAttempt stores an object under a second attempt prefix of the
-	// backup.
-	restartPhases []databasev1alpha1.CubridBackupPhase
-	tamperRestart func(read int, deleted bool, s *databasev1alpha1.CubridBackupStatus)
-	corruptObject bool
-	secondAttempt bool
+	// reading; the last is kept, and Running or Uploading is kept until the
+	// manager Pod was deleted. tamperRestart changes the status of a reading;
+	// deleted tells whether the manager Pod was deleted before it.
+	// corruptObject changes an object of the artifact after its manifest was
+	// written; secondAttempt stores an object under a second attempt prefix of
+	// the backup, and secondAttemptLate does so while the source is checked,
+	// after the first listing. manifestCreatedAt, when set, is the manifest's
+	// createdAt. leaseAt is when the replacement acquires the Lease, given
+	// the time of the deletion; completedAt is status.completedAt, given the
+	// acquisition. Each defaults to the present.
+	restartPhases     []databasev1alpha1.CubridBackupPhase
+	tamperRestart     func(read int, deleted bool, s *databasev1alpha1.CubridBackupStatus)
+	corruptObject     bool
+	secondAttempt     bool
+	secondAttemptLate bool
+	manifestCreatedAt time.Time
+	leaseAt           func(deleted time.Time) time.Time
+	completedAt       func(acquired time.Time) time.Time
 
 	restartBackup             *databasev1alpha1.CubridBackup
 	restartArtifact           *databasev1alpha1.CubridBackupArtifact
 	restartReads, restartStep int
+	acquired                  time.Time
 	// deleted are the backups the run deleted, with the UID it required.
 	deleted []string
 }
@@ -89,8 +98,15 @@ func newS11RestartFixture(t *testing.T, cfg HAConfig) *s11RestartFixture {
 			databasev1alpha1.BackupPhaseRunning, databasev1alpha1.BackupPhaseUploading,
 			databasev1alpha1.BackupPhaseCompleted}}
 	f.replacement = func(ctx context.Context, c client.WithWatch) {
+		at := time.Now()
+		if f.leaseAt != nil {
+			at = f.leaseAt(at)
+		}
 		f.startReplacement(ctx, c)
-		f.takeLease(ctx, c)
+		f.takeLeaseAt(ctx, c, at)
+		f.mu.Lock()
+		f.acquired = at
+		f.mu.Unlock()
 	}
 	created, read := f.backupCreated, f.backupRead
 	f.backupCreated = func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error {
@@ -121,7 +137,20 @@ func newS11RestartFixture(t *testing.T, cfg HAConfig) *s11RestartFixture {
 		f.mu.Unlock()
 		return c.Delete(ctx, backup)
 	}
-	f.markersOf = func(string) []string { return nil }
+	f.markersOf = func(string) []string {
+		f.mu.Lock()
+		late, backup := f.secondAttemptLate, f.restartBackup
+		if backup != nil {
+			f.secondAttemptLate = false
+		}
+		f.mu.Unlock()
+		if late && backup != nil {
+			dest := backup.Spec.Destination.ObjectStorage
+			f.store.put(dest.Bucket, path.Join(dest.Prefix, testClusterUID, databaseName, testRestartBackupUID,
+				testSecondAttempt, testFirstBackupKey), []byte("v"))
+		}
+		return nil
+	}
 	return f
 }
 
@@ -136,11 +165,16 @@ func (f *s11RestartFixture) advanceRestart(ctx context.Context, c client.WithWat
 	f.restartReads++
 	read, deleted := f.restartReads, f.managerDeleted
 	phase := f.restartPhases[min(f.restartStep, len(f.restartPhases)-1)]
-	if phase != databasev1alpha1.BackupPhaseRunning || deleted {
+	if !inProgress(phase) || deleted {
 		f.restartStep++
 	}
 	tamper := f.tamperRestart
+	completed := time.Now()
+	if f.completedAt != nil {
+		completed = f.completedAt(f.acquired)
+	}
 	f.mu.Unlock()
+	completedAt := metav1.NewTime(completed)
 	started := metav1.NewTime(time.Now().Add(-time.Second))
 	s := &backup.Status
 	s.Phase, s.ClusterUID, s.StartedAt = phase, testClusterUID, &started
@@ -155,7 +189,7 @@ func (f *s11RestartFixture) advanceRestart(ctx context.Context, c client.WithWat
 		s.Conditions[0].Reason, s.Conditions[0].Message = testUploadRunning, testUploadingMessage
 	case databasev1alpha1.BackupPhaseCompleted:
 		s.Artifact = f.uploadRestart(backup)
-		s.CompletedAt = &started
+		s.CompletedAt = &completedAt
 		s.Conditions[0].Status, s.Conditions[0].Reason, s.Conditions[0].Message = metav1.ConditionTrue,
 			testCompleted, testCompletedMessage
 	case databasev1alpha1.BackupPhaseFailed:
@@ -181,12 +215,15 @@ func (f *s11RestartFixture) uploadRestart(
 		defer f.mu.Unlock()
 		return f.restartArtifact.DeepCopy()
 	}
-	saved := f.artifact
-	f.artifact = nil
+	saved, savedTamper := f.artifact, f.tamper
+	f.artifact, f.tamper = nil, nil
+	if created := f.manifestCreatedAt; !created.IsZero() {
+		f.tamper = func(a *fakeArtifact) { a.manifest.CreatedAt = created.UTC().Format(time.RFC3339) }
+	}
 	f.mu.Unlock()
 	artifact := f.upload(backup)
 	f.mu.Lock()
-	f.artifact, f.restartArtifact = saved, artifact.DeepCopy()
+	f.artifact, f.tamper, f.restartArtifact = saved, savedTamper, artifact.DeepCopy()
 	f.mu.Unlock()
 	dest := backup.Spec.Destination.ObjectStorage
 	dir := path.Join(dest.Prefix, testClusterUID, databaseName, string(backup.UID))
@@ -266,8 +303,9 @@ func TestRunS11OperatorRestartPassesWhenTheBackupSurvivesTheRestart(t *testing.T
 	if restart.Limits["backup_limit"] != cfg.BackupLimit.String() ||
 		restart.Limits["operator_resync_limit"] != cfg.ResyncLimit.String() ||
 		m["backupCompletedWithin"] == evidence.Unknown || m["operatorBackWithin"] == evidence.Unknown ||
-		m["operationRefUnchanged"] != true || m["runningAtRestart"] != true || m["objectsVerified"] != float64(2) ||
-		m["attemptPrefixes"] != float64(1) || m["objectsNotInManifest"] != float64(0) {
+		m["operationRefUnchanged"] != true || m["inProgressAtRestart"] != true || m["objectsVerified"] != float64(2) ||
+		m["attemptPrefixes"] != float64(1) || m["objectsNotInManifest"] != float64(0) ||
+		m["uploadStartedBeforeRestart"] != false || m["manifestCreatedAt"] == nil {
 		t.Fatalf("S11 operator-restart limits = %v, measurements = %v", restart.Limits, m)
 	}
 	for _, rel := range []string{s11RestartRecordFile, s11RestartTimelineFile, s11RestartManifestFile,
@@ -293,7 +331,8 @@ func TestRunS11OperatorRestartPassesWhenTheBackupSurvivesTheRestart(t *testing.T
 	requireS11RestartRecord(t, f)
 	reason := s11RestartPassReason(readS11RestartRecord(t, cfg.EvidenceDir).Restart)
 	for _, want := range []string{"Running with operation " + testRestartBackupOp + " on " + testBackupTarget,
-		"right before the deletion showed it Running", "exactly one attempt prefix"} {
+		"right before the deletion showed it Running", "exactly one attempt prefix",
+		"not before the second the replacement acquired the Lease"} {
 		if !strings.Contains(reason, want) {
 			t.Fatalf("S11 operator-restart reason = %q, want %q", reason, want)
 		}
@@ -305,9 +344,10 @@ func TestRunS11OperatorRestartPassesWhenTheBackupSurvivesTheRestart(t *testing.T
 func requireS11RestartRecord(t *testing.T, f *s11RestartFixture) {
 	t.Helper()
 	rec := readS11RestartRecord(t, f.cfg.EvidenceDir)
-	requireS11RestartPlaced(t, rec.Restart)
+	requireS11RestartPlaced(t, rec.Restart, databasev1alpha1.BackupPhaseRunning)
 	if rec.Artifact == nil || rec.Verification == nil || rec.Verification.ObjectsVerified != 2 ||
 		rec.Attempts == nil || len(rec.Attempts.Prefixes) != 1 || rec.Attempts.Manifests != 1 ||
+		rec.AttemptsAtEnd == nil || len(rec.AttemptsAtEnd.Prefixes) != 1 ||
 		len(rec.Attempts.Outside) != 0 || rec.ManagerAfter == nil || len(rec.ManagerAfter.Pods) != 1 ||
 		rec.ManagerAfter.Pods[0].UID != testReplacementPod || rec.Source == nil || !rec.Source.DataRulesHeld ||
 		rec.JudgedAt == nil {
@@ -327,15 +367,99 @@ func requireS11RestartRecord(t *testing.T, f *s11RestartFixture) {
 	}
 }
 
-// requireS11RestartPlaced checks the restart of a passed run.
-func requireS11RestartPlaced(t *testing.T, r *s11Restart) {
+// requireS11RestartPlaced checks the restart of a passed run, placed in
+// phase.
+func requireS11RestartPlaced(t *testing.T, r *s11Restart, phase databasev1alpha1.CubridBackupPhase) {
 	t.Helper()
 	if r == nil || r.PlacedAt == nil || r.RestartedAt == nil || r.PlacedAt.After(*r.RestartedAt) ||
-		r.OperationRef != testRestartBackupOp || r.TargetInstance != testBackupTarget || r.PhaseAtRestart != "Running" ||
-		!r.RunningAtRestart || r.ManagerAfter == nil || r.ManagerAfter.UID != testReplacementPod ||
+		r.PhaseAtPlacement != string(phase) || r.OperationRef != testRestartBackupOp ||
+		r.TargetInstance != testBackupTarget || r.PhaseAtRestart != string(phase) || !r.InProgressAtRestart ||
+		r.ManagerAfter == nil || r.ManagerAfter.UID != testReplacementPod ||
 		r.ManagerBefore.UID != testManagerPodName || r.LeaseAcquiredAt == nil || r.NotPlaced != "" ||
+		r.StatusCompletedAt == nil || r.ManifestCreatedAt == nil || r.UploadStartedBeforeRestart == nil ||
 		!slices.Equal(r.OperationRefsSeen, []string{testRestartBackupOp}) {
-		t.Fatalf("restart = %+v, want the deletion placed while the backup ran and the replacement back", r)
+		t.Fatalf("restart = %+v, want the deletion placed while the backup was %s and the replacement back", r,
+			phase)
+	}
+}
+
+// A backup first seen Uploading with its operation is still in progress:
+// the restart is placed there.
+func TestRunS11OperatorRestartPlacesTheRestartOnUploading(t *testing.T) {
+	cfg := testS11RestartConfig(t)
+	f := newS11RestartFixture(t, cfg)
+	f.restartPhases = []databasev1alpha1.CubridBackupPhase{databasev1alpha1.BackupPhasePending,
+		databasev1alpha1.BackupPhaseUploading, databasev1alpha1.BackupPhaseCompleted}
+	restart, err := restartOfS11(t, f)
+	if err != nil || restart.Result != evidence.Pass {
+		t.Fatalf("S11 operator-restart = %+v, %v; want a pass", restart, err)
+	}
+	requireS11RestartPlaced(t, readS11RestartRecord(t, cfg.EvidenceDir).Restart, databasev1alpha1.BackupPhaseUploading)
+	if f.managerDeletes != 1 {
+		t.Fatalf("manager Pod deleted %d times, want once", f.managerDeletes)
+	}
+}
+
+// status.completedAt in the second the replacement acquired the Lease, but
+// before the acquisition itself, is the replacement's: the API server keeps
+// completedAt to the second (the lab run: 11:29:59 against 11:29:59.446).
+func TestRunS11OperatorRestartPassesWithACompletionInTheSecondOfTheTakeover(t *testing.T) {
+	cfg := testS11RestartConfig(t)
+	f := newS11RestartFixture(t, cfg)
+	f.leaseAt = func(deleted time.Time) time.Time { return deleted.Truncate(time.Second).Add(900 * time.Millisecond) }
+	f.completedAt = func(acquired time.Time) time.Time { return acquired.Truncate(time.Second) }
+	restart, err := restartOfS11(t, f)
+	if err != nil || restart.Result != evidence.Pass {
+		t.Fatalf("S11 operator-restart = %+v, %v; want a pass", restart, err)
+	}
+	r := readS11RestartRecord(t, cfg.EvidenceDir).Restart
+	if r.StatusCompletedAt == nil || r.LeaseAcquiredAt == nil || !r.StatusCompletedAt.Before(*r.LeaseAcquiredAt) {
+		t.Fatalf("restart = %+v, want completedAt recorded before the acquisition, in its second", r)
+	}
+}
+
+// A completion a second before the replacement acquired the Lease was
+// written by the old manager, which a deletion without a grace period leaves
+// running: the replacement's resumption was not observed.
+func TestRunS11OperatorRestartIsBlockedWhenTheOldManagerCompletedTheBackup(t *testing.T) {
+	cfg := testS11RestartConfig(t)
+	f := newS11RestartFixture(t, cfg)
+	f.completedAt = func(acquired time.Time) time.Time { return acquired.Truncate(time.Second).Add(-time.Second) }
+	restart, err := restartOfS11(t, f)
+	requireS11RestartResult(t, restart, err, evidence.Blocked,
+		"the old manager completed the backup before the replacement led", "status.completedAt is",
+		"before the replacement acquired the Lease at")
+}
+
+// A manifest created before the restart shows an operation that was already
+// uploading, or done, in the Instance Manager: recorded, not judged.
+func TestRunS11OperatorRestartRecordsAnUploadStartedBeforeTheRestart(t *testing.T) {
+	cfg := testS11RestartConfig(t)
+	f := newS11RestartFixture(t, cfg)
+	f.manifestCreatedAt = time.Now().Add(-time.Hour)
+	restart, err := restartOfS11(t, f)
+	if err != nil || restart.Result != evidence.Pass || restart.Measurements["uploadStartedBeforeRestart"] != true {
+		t.Fatalf("S11 operator-restart = %+v, %v; want a pass with the upload started before the restart",
+			restart, err)
+	}
+	r := readS11RestartRecord(t, cfg.EvidenceDir).Restart
+	if r.UploadStartedBeforeRestart == nil || !*r.UploadStartedBeforeRestart || r.ManifestCreatedAt == nil {
+		t.Fatalf("restart = %+v, want the manifest's createdAt before the restart recorded", r)
+	}
+}
+
+// A second writer whose objects appear only after the first listing is seen
+// at the end.
+func TestRunS11OperatorRestartFailsOnASecondAttemptPrefixAtTheEnd(t *testing.T) {
+	cfg := testS11RestartConfig(t)
+	f := newS11RestartFixture(t, cfg)
+	f.secondAttemptLate = true
+	restart, err := restartOfS11(t, f)
+	requireS11RestartResult(t, restart, err, evidence.Fail, "a second writer: 2 attempt prefixes",
+		"under the variant's prefix at the end", testSecondAttempt)
+	if rec := readS11RestartRecord(t, cfg.EvidenceDir); len(rec.Attempts.Prefixes) != 1 ||
+		rec.AttemptsAtEnd == nil || len(rec.AttemptsAtEnd.Prefixes) != 2 {
+		t.Fatalf("attempts = %+v, at the end %+v; want one, then two", rec.Attempts, rec.AttemptsAtEnd)
 	}
 }
 

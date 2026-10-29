@@ -53,7 +53,8 @@ const (
 )
 
 // notPlaced is an error that says the restart could not be placed while the
-// backup was Running with an operation: the variant is inconclusive.
+// backup was Running or Uploading with an operation: the variant is
+// inconclusive.
 type notPlaced struct{ error }
 
 // s11Restart is the manager's restart during the backup and the operation
@@ -61,17 +62,32 @@ type notPlaced struct{ error }
 type s11Restart struct {
 	managerRestart
 	// PlacedAt is the reading that placed the restart, the first that showed
-	// the backup Running with an operation; OperationRef, TargetInstance and
-	// TargetRole are its status's.
-	PlacedAt       *time.Time `json:"placedAt,omitempty"`
-	OperationRef   string     `json:"operationRef,omitempty"`
-	TargetInstance string     `json:"targetInstance,omitempty"`
-	TargetRole     string     `json:"targetRole,omitempty"`
+	// the backup Running or Uploading with an operation; PhaseAtPlacement,
+	// OperationRef, TargetInstance and TargetRole are its status's.
+	PlacedAt         *time.Time `json:"placedAt,omitempty"`
+	PhaseAtPlacement string     `json:"phaseAtPlacement,omitempty"`
+	OperationRef     string     `json:"operationRef,omitempty"`
+	TargetInstance   string     `json:"targetInstance,omitempty"`
+	TargetRole       string     `json:"targetRole,omitempty"`
 	// PhaseAtRestart is the phase of the reading right before the manager Pod
-	// was deleted; RunningAtRestart is set when it was Running. Neither shows
-	// that the Instance Manager was still working on the backup then.
-	PhaseAtRestart   string `json:"phaseAtRestart,omitempty"`
-	RunningAtRestart bool   `json:"runningAtRestart"`
+	// was deleted; InProgressAtRestart is set when it was Running or
+	// Uploading. Neither shows that the Instance Manager was still working on
+	// the backup then.
+	PhaseAtRestart      string `json:"phaseAtRestart,omitempty"`
+	InProgressAtRestart bool   `json:"inProgressAtRestart"`
+	// StatusCompletedAt is the backup's status.completedAt, which the manager
+	// that wrote Completed set, to the second. It must not be before the
+	// second of the replacement's Lease acquireTime (LeaseAcquiredAt):
+	// otherwise the old manager, which keeps running and holding the Lease
+	// for a while after a deletion without a grace period, completed it.
+	StatusCompletedAt *time.Time `json:"statusCompletedAt,omitempty"`
+	// ManifestCreatedAt is the manifest's createdAt, which the Instance
+	// Manager sets right before its upload, by the member's clock;
+	// UploadStartedBeforeRestart is set when it is before the second of
+	// RestartedAt, by the run's clock. It is evidence of where the restart fell in the operation,
+	// not a verdict.
+	ManifestCreatedAt          *time.Time `json:"manifestCreatedAt,omitempty"`
+	UploadStartedBeforeRestart *bool      `json:"uploadStartedBeforeRestart,omitempty"`
 	// NotPlaced says why the restart could not be placed during the backup.
 	NotPlaced string `json:"notPlaced,omitempty"`
 	// OperationRefsSeen are the operationRefs the readings showed from the
@@ -105,6 +121,9 @@ type s11RestartRecord struct {
 	s11Record
 	Restart  *s11Restart  `json:"restart,omitempty"`
 	Attempts *s11Attempts `json:"attempts,omitempty"`
+	// AttemptsAtEnd is the same listing, made again at the end of the
+	// variant, after the source check.
+	AttemptsAtEnd *s11Attempts `json:"attemptsAtEnd,omitempty"`
 	// Failure is the Ready reason and message of a backup that ended Failed.
 	Failure string `json:"failure,omitempty"`
 	// ManagerBefore is the installed manager as LAB01 read it at its end,
@@ -162,19 +181,21 @@ func planS11OperatorRestart(cfg HAConfig, lane string, requirements []evidence.R
 
 // runS11OperatorRestart runs S11 operator-restart after S11 complete passed:
 // a second full backup of the HA cluster is requested to BackupBucket under
-// the variant's prefix, and once a reading shows it Running with an
-// operation, the manager's Pod is deleted without a grace period, as S06 and
-// S12 operator-restart delete it. The replacement must run the same image
-// and hold the leader Lease within ResyncLimit. The backup must end
-// Completed within BackupLimit of its request, its operation, target and role
-// must never change from the placing reading on, its artifact must pass S11
-// complete's verification, exactly one attempt prefix of it may hold objects
-// under the variant's prefix, the source must be unchanged and no credential
-// may be in a status read, the manifest, an Event or the logs searched. A
-// restart that cannot be placed while the backup runs, the documented
-// escalation of an unknown outcome, a run that ends, or a check that cannot
-// be made, before S11 operator-restart is judged blocks it; what was seen to
-// break stays a failure. The run deletes the CubridBackup it created, and
+// the variant's prefix, and once a reading shows it Running or Uploading
+// with an operation, the manager's Pod is deleted without a grace period, as
+// S06 and S12 operator-restart delete it. The replacement must run the same
+// image and hold the leader Lease within ResyncLimit. The backup must end
+// Completed within BackupLimit of its request, written by the replacement
+// (completedAfterTakeover), its operation, target and role must never change
+// from the placing reading on, its artifact must pass S11 complete's
+// verification, exactly one attempt prefix of it may hold objects under the
+// variant's prefix, also when listed again at the end, the source must be
+// unchanged and no credential may be in a status read, the manifest, an
+// Event or the logs searched. A restart that cannot be placed while the
+// backup runs, a completion the old manager wrote, the documented escalation
+// of an unknown outcome, a run that ends, or a check that cannot be made,
+// before S11 operator-restart is judged blocks it; what was seen to break
+// stays a failure. The run deletes the CubridBackup it created, and
 // leaves the artifact in the bucket.
 func (h *haRun) runS11OperatorRestart(ctx context.Context) (result evidence.Scenario) {
 	defer h.inScenario(s11ID+"/"+s11RestartVariant, &result)()
@@ -182,9 +203,18 @@ func (h *haRun) runS11OperatorRestart(ctx context.Context) (result evidence.Scen
 	rec := s11RestartRecord{s11Record: s11Record{Backup: s11RestartBackupName, Bucket: h.cfg.BackupBucket,
 		Prefix: h.rec.Seed.Prefix + "/operator-restart", ObjectStoreService: h.cfg.ObjectStoreService,
 		Phases: []s11Phase{}, EngineVersion: h.engineVersion, Credentials: &s11Credentials{FoundIn: []string{}},
-		Notes: []string{"the restart is placed after a reading that saw the backup Running with an operation; " +
-			"the reading right before the deletion is recorded, and neither shows that the Instance Manager was " +
-			"still working on the backup when the deletion took effect",
+		Notes: []string{"the restart is placed after a reading that saw the backup Running or Uploading with an " +
+			"operation; the reading right before the deletion is recorded, and neither shows that the Instance " +
+			"Manager was still working on the backup when the deletion took effect",
+			"the manifest's createdAt is set by the Instance Manager right before its upload, by the member's " +
+				"clock, and the restart's time is the run's clock; when createdAt is before the restart " +
+				"(uploadStartedBeforeRestart), the replacement discovered and completed an operation that was " +
+				"already uploading or done in the Instance Manager, not one restarted in the middle of backupdb; " +
+				"this is evidence of where the restart fell, not a verdict",
+			"status.completedAt is set to the second by the manager that wrote Completed, and the Lease's " +
+				"acquireTime by the replacement, each by its own node's clock; a completedAt before the second of " +
+				"the acquireTime blocks the variant, since the deleted manager may still run and hold the Lease " +
+				"until the kubelet kills it",
 			"the installed manager is shared: while its Pod is replaced, no cluster or backup it manages is " +
 				"reconciled",
 			"the deleted manager's log was searched right before its deletion; what it logged after that search " +
@@ -216,7 +246,8 @@ func (h *haRun) runS11OperatorRestart(ctx context.Context) (result evidence.Scen
 		resyncLimitName: h.cfg.ResyncLimit.String()}
 	result.Measurements = map[string]any{"backupCompletedWithin": evidence.Unknown,
 		operatorBackMeasurement: evidence.Unknown, "operationRefUnchanged": evidence.Unknown,
-		"runningAtRestart": evidence.Unknown, "objectsVerified": evidence.Unknown, "artifactBytes": evidence.Unknown,
+		"inProgressAtRestart": evidence.Unknown, "uploadStartedBeforeRestart": evidence.Unknown,
+		"objectsVerified": evidence.Unknown, "artifactBytes": evidence.Unknown,
 		"objectsNotInManifest": evidence.Unknown, "attemptPrefixes": evidence.Unknown}
 	err := h.s11RestartSteps(ctx, &result, &rec, &created)
 	// A credential found in any status read, the manifest, an Event or a log
@@ -258,15 +289,16 @@ func (h *haRun) runS11OperatorRestart(ctx context.Context) (result evidence.Scen
 // s11RestartPassReason is the reason of a pass, from what the run recorded.
 func s11RestartPassReason(r *s11Restart) string {
 	return fmt.Sprintf("the manager Pod was deleted without a grace period after a reading showed the backup "+
-		"Running with operation %s on %s, and the reading right before the deletion showed it %s; the replacement "+
+		"%s with operation %s on %s, and the reading right before the deletion showed it %s; the replacement "+
 		"ran the same image and held the leader Lease, back %s after the deletion, within operator_resync_limit; "+
-		"the backup ended Completed within backup_limit, with the same operation, target and role in every reading "+
+		"the backup ended Completed within backup_limit, with status.completedAt not before the second the "+
+		"replacement acquired the Lease, and with the same operation, target and role in every reading "+
 		"from the placement on; every object the manifest names was downloaded by the run and matches it, the "+
 		"status and the cluster, and exactly one attempt prefix of the backup, holding the one manifest.json, held "+
 		"objects under the variant's prefix; the source was unchanged; no credential was found in the recorded "+
 		"statuses, the manifest, the Events, the deleted manager's log as read right before its deletion, the "+
-		"replacement's log or the Instance Manager's log in the backup's target Pod", r.OperationRef,
-		r.TargetInstance, r.PhaseAtRestart, r.BackWithin)
+		"replacement's log or the Instance Manager's log in the backup's target Pod", r.PhaseAtPlacement,
+		r.OperationRef, r.TargetInstance, r.PhaseAtRestart, r.BackWithin)
 }
 
 // s11RestartSteps runs the steps of S11 operator-restart in order. Before
@@ -329,14 +361,26 @@ func (h *haRun) s11RestartSteps(ctx context.Context, result *evidence.Scenario, 
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
 	errs = append(errs, h.checkSourceS12(ctx, rec.Source, s11RestartSourceDataCheckFile))
+	// A second writer that was still uploading at the first listing shows up
+	// now.
+	if rec.Attempts != nil && rec.Attempts.Listed {
+		at, err := h.listS11Attempts(ctx, *created, rec)
+		rec.AttemptsAtEnd = at
+		if err != nil {
+			errs = append(errs, fmt.Errorf("list the variant's prefix again at the end: %w", err))
+		} else {
+			result.NeverEvents = append(result.NeverEvents, secondWriter(at, "at the end")...)
+		}
+	}
 	errs = append(errs, h.managerAfterRestart(ctx, before, r, &rec.ManagerAfter))
 	return errors.Join(errs...)
 }
 
 // placeRestart places the restart at read, a reading of the backup not yet
-// placed: a reading in phase Running with an operation deletes the manager's
-// Pod (restartDuringBackup); one that is Pending or without a phase, or
-// Running without an operation yet, waits for the next. Any other phase
+// placed: a reading in phase Running or Uploading with an operation, both
+// in progress with the operation recorded, deletes the manager's Pod
+// (restartDuringBackup); one that is Pending or without a phase, or in
+// progress without an operation yet, waits for the next. Completed or Failed
 // first means the restart cannot be placed while the backup runs, which
 // blocks the variant.
 func (h *haRun) placeRestart(ctx context.Context, created, read *databasev1alpha1.CubridBackup,
@@ -345,15 +389,15 @@ func (h *haRun) placeRestart(ctx context.Context, created, read *databasev1alpha
 	switch {
 	case s.Phase == "" || s.Phase == databasev1alpha1.BackupPhasePending:
 		return nil
-	case s.Phase == databasev1alpha1.BackupPhaseRunning && s.OperationRef == "":
+	case inProgress(s.Phase) && s.OperationRef == "":
 		return nil
-	case s.Phase != databasev1alpha1.BackupPhaseRunning:
+	case !inProgress(s.Phase):
 		r.NotPlaced = fmt.Sprintf("the restart could not be placed while the backup ran: no reading showed it "+
-			"Running with an operation before one showed it %s (%s)", s.Phase, readyReason(read))
+			"Running or Uploading with an operation before one showed it %s (%s)", s.Phase, readyReason(read))
 		return notPlaced{errors.New(r.NotPlaced)}
 	}
 	at := time.Now().UTC()
-	r.PlacedAt, r.placed = &at, len(rec.Phases)-1
+	r.PlacedAt, r.placed, r.PhaseAtPlacement = &at, len(rec.Phases)-1, string(s.Phase)
 	r.OperationRef, r.TargetInstance, r.TargetRole = s.OperationRef, s.TargetInstance, s.TargetRole
 	back, err := h.restartDuringBackup(ctx, created, rec, result, since, oldLog)
 	if back > h.cfg.ResyncLimit {
@@ -451,8 +495,14 @@ func (h *haRun) beforeBackupRestart(ctx context.Context, created *databasev1alph
 			"the manager Pod was deleted", s.Phase, readyReason(backup))
 		return notPlaced{errors.New(r.NotPlaced)}
 	}
-	r.RunningAtRestart = s.Phase == databasev1alpha1.BackupPhaseRunning
+	r.InProgressAtRestart = inProgress(s.Phase)
 	return nil
+}
+
+// inProgress reports a backup phase that is not terminal and follows the
+// start on the Instance Manager: Running or Uploading.
+func inProgress(phase databasev1alpha1.CubridBackupPhase) bool {
+	return phase == databasev1alpha1.BackupPhaseRunning || phase == databasev1alpha1.BackupPhaseUploading
 }
 
 // judgeRestartedBackup judges the backup as the wait left it, and returns
@@ -534,7 +584,66 @@ func (h *haRun) judgeRestartedBackup(ctx context.Context, backup *databasev1alph
 	if err := h.checkS11Attempts(ctx, backup, rec, result); err != nil {
 		errs = append(errs, fmt.Errorf("list the variant's prefix: %w", err))
 	}
+	uploadStarted(manifest, rec.Restart, result)
+	errs = append(errs, completedAfterTakeover(backup, rec.Restart))
 	return manifest, errors.Join(errs...)
+}
+
+// completedAfterTakeover records status.completedAt and requires it at or
+// after the second of the replacement's Lease acquireTime. completed in
+// internal/controller/cubridbackup_controller.go sets completedAt when it
+// writes Completed, and the API server keeps it to the second. A deletion
+// without a grace period leaves the old manager running, and holding the
+// Lease, until the kubelet kills it (the manager does not release the Lease
+// on cancel, cmd/main.go), so it may still write Completed itself; then the
+// replacement's resumption of the operation was not observed, which blocks
+// the variant. Both times are servers' clocks of the managers' nodes, not
+// the run's.
+func completedAfterTakeover(backup *databasev1alpha1.CubridBackup, r *s11Restart) error {
+	done := backup.Status.CompletedAt
+	if done != nil {
+		at := done.UTC()
+		r.StatusCompletedAt = &at
+	}
+	switch {
+	case done == nil:
+		return errors.New("the backup is Completed without status.completedAt, so which manager completed it " +
+			"cannot be told")
+	case r.LeaseAcquiredAt == nil:
+		return errors.New("the replacement's Lease acquireTime was not read, so which manager completed the " +
+			"backup cannot be told")
+	case done.Time.Before(r.LeaseAcquiredAt.Truncate(time.Second)):
+		return fmt.Errorf("the old manager completed the backup before the replacement led: status.completedAt "+
+			"is %s, before the replacement acquired the Lease at %s", done.UTC().Format(time.RFC3339),
+			r.LeaseAcquiredAt.Format(time.RFC3339Nano))
+	}
+	return nil
+}
+
+// uploadStarted records the manifest's createdAt, which the Instance Manager
+// sets right before it uploads (runBackup in
+// internal/instancemanager/server.go), and whether it is before the restart.
+// createdAt is the member's clock to the second and the restart's time the
+// run's: it is evidence of where the restart fell, not a verdict.
+func uploadStarted(manifest []byte, r *s11Restart, result *evidence.Scenario) {
+	if manifest == nil || r.RestartedAt == nil {
+		return
+	}
+	parsed, err := instancemanager.ParseManifest(manifest)
+	if err != nil {
+		return
+	}
+	created, err := time.Parse(time.RFC3339, parsed.CreatedAt)
+	if err != nil {
+		return
+	}
+	created = created.UTC()
+	// createdAt is to the second: one in the restart's second is not counted
+	// as before it.
+	before := created.Before(r.RestartedAt.Truncate(time.Second))
+	r.ManifestCreatedAt, r.UploadStartedBeforeRestart = &created, &before
+	result.Measurements["uploadStartedBeforeRestart"] = before
+	result.Measurements["manifestCreatedAt"] = created.Format(time.RFC3339)
 }
 
 // judgeRestartOperation records the operationRefs the readings showed from
@@ -563,7 +672,7 @@ func judgeRestartOperation(rec *s11RestartRecord, result *evidence.Scenario) {
 	}
 	result.Measurements["operationRefUnchanged"] = len(r.OperationRefsSeen) == 1
 	if r.RestartedAt != nil {
-		result.Measurements["runningAtRestart"] = r.RunningAtRestart
+		result.Measurements["inProgressAtRestart"] = r.InProgressAtRestart
 	}
 	result.NeverEvents = append(result.NeverEvents, events...)
 }
@@ -577,16 +686,61 @@ func judgeRestartOperation(rec *s11RestartRecord, result *evidence.Scenario) {
 // artifact's and hold its manifest.json.
 func (h *haRun) checkS11Attempts(ctx context.Context, backup *databasev1alpha1.CubridBackup,
 	rec *s11RestartRecord, result *evidence.Scenario) error {
-	a := &s11Attempts{Prefixes: []s11AttemptPrefix{}, Outside: []string{}}
+	a, err := h.listS11Attempts(ctx, backup, rec)
 	rec.Attempts = a
-	store, stop, err := h.openS11Store(ctx)
 	if err != nil {
 		return err
+	}
+	result.Measurements["attemptPrefixes"] = len(a.Prefixes)
+	result.NeverEvents = append(result.NeverEvents, secondWriter(a, "")...)
+	manifestKey := rec.Verification.ManifestKey
+	if len(a.Prefixes) == 1 && manifestKey != "" &&
+		(a.Prefixes[0].Prefix != path.Dir(manifestKey) || a.Manifests != 1) {
+		return backupVerdict{fmt.Errorf("the one attempt prefix that holds objects, %s, is not the artifact's, "+
+			"%s, with its one manifest.json (%d found)", a.Prefixes[0].Prefix, path.Dir(manifestKey), a.Manifests)}
+	}
+	return nil
+}
+
+// secondWriter returns the never-events of a listing: a second attempt
+// prefix that holds objects, and objects outside an attempt prefix. when
+// says when the listing was made, if not at the first listing.
+func secondWriter(a *s11Attempts, when string) []string {
+	var events []string
+	suffix := ""
+	if when != "" {
+		suffix = " " + when
+	}
+	if len(a.Prefixes) > 1 {
+		names := make([]string, 0, len(a.Prefixes))
+		for _, p := range a.Prefixes {
+			names = append(names, fmt.Sprintf("%s (%d objects, manifest %t)", p.Prefix, p.Objects, p.Manifest))
+		}
+		events = append(events, fmt.Sprintf("a second writer: %d attempt prefixes of the backup hold objects "+
+			"under the variant's prefix%s: %s", len(a.Prefixes), suffix, strings.Join(names, ", ")))
+	}
+	if len(a.Outside) > 0 {
+		events = append(events, "objects under the variant's prefix are outside an attempt prefix of the backup"+
+			suffix+": "+strings.Join(a.Outside, ", "))
+	}
+	return events
+}
+
+// listS11Attempts lists the variant's prefix with the run's own client and
+// groups what it holds by attempt prefix of backup. Only objects are seen: a
+// duplicate that is still staging without an object, or an unfinished
+// multipart upload, is not.
+func (h *haRun) listS11Attempts(ctx context.Context, backup *databasev1alpha1.CubridBackup,
+	rec *s11RestartRecord) (*s11Attempts, error) {
+	a := &s11Attempts{Prefixes: []s11AttemptPrefix{}, Outside: []string{}}
+	store, stop, err := h.openS11Store(ctx)
+	if err != nil {
+		return a, err
 	}
 	defer stop()
 	keys, err := store.List(ctx, rec.Bucket, rec.Prefix+"/")
 	if err != nil {
-		return fmt.Errorf("list %s: %w", rec.Prefix, err)
+		return a, fmt.Errorf("list %s: %w", rec.Prefix, err)
 	}
 	a.Listed = true
 	dir := path.Join(rec.Prefix, h.rec.ClusterUID, databaseName, string(backup.UID))
@@ -611,26 +765,7 @@ func (h *haRun) checkS11Attempts(ctx context.Context, backup *databasev1alpha1.C
 			a.Manifests++
 		}
 	}
-	result.Measurements["attemptPrefixes"] = len(a.Prefixes)
-	if len(a.Prefixes) > 1 {
-		names := make([]string, 0, len(a.Prefixes))
-		for _, p := range a.Prefixes {
-			names = append(names, fmt.Sprintf("%s (%d objects, manifest %t)", p.Prefix, p.Objects, p.Manifest))
-		}
-		result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("a second writer: %d attempt prefixes of the "+
-			"backup hold objects under the variant's prefix: %s", len(a.Prefixes), strings.Join(names, ", ")))
-	}
-	if len(a.Outside) > 0 {
-		result.NeverEvents = append(result.NeverEvents, "objects under the variant's prefix are outside an attempt "+
-			"prefix of the backup: "+strings.Join(a.Outside, ", "))
-	}
-	manifestKey := rec.Verification.ManifestKey
-	if len(a.Prefixes) == 1 && manifestKey != "" &&
-		(a.Prefixes[0].Prefix != path.Dir(manifestKey) || a.Manifests != 1) {
-		return backupVerdict{fmt.Errorf("the one attempt prefix that holds objects, %s, is not the artifact's, "+
-			"%s, with its one manifest.json (%d found)", a.Prefixes[0].Prefix, path.Dir(manifestKey), a.Manifests)}
-	}
-	return nil
+	return a, nil
 }
 
 // managerAfterRestart reads the installed manager at the end of the variant

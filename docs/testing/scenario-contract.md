@@ -129,7 +129,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s11-denied-credentials` | The installed-Operator HA command with `-backup-bucket` and `-backup-denied-credentials` | LAB01, S11 (`complete`), then S11 (`denied-credentials`): a backup of a new standalone cluster whose object store Secret holds keys the run first saw the store refuse must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged | none |
 | `lab-installed-ha-s11-signature-mismatch` | The installed-Operator HA command with `-backup-bucket` and `-backup-signature-mismatch` | LAB01, S11 (`complete`), then S11 (`signature-mismatch`): a backup of a new standalone cluster whose object store Secret holds the seed access key with a random secret key, which the run first saw the store refuse with `SignatureDoesNotMatch`, must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged | none |
 | `lab-installed-ha-s11-interrupted-upload` | The installed-Operator HA command with `-backup-bucket` and `-backup-interrupted-upload`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`interrupted-upload`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is reset there once seen under way; it must end `Failed` for its upload, never `Completed` and without an artifact, with no manifest under its prefix at the end and the source unchanged | none |
-| `lab-installed-ha-s11-operator-restart` | The installed-Operator HA command with `-backup-bucket` and `-backup-operator-restart` | LAB01, S11 (`complete`), then S11 (`operator-restart`): a second backup of the same cluster, during which the installed manager's Pod is deleted without a grace period once a reading shows the backup `Running` with an operation; the replacement must hold the leader Lease within `operator_resync_limit`, and the backup must end `Completed` within `backup_limit` under the same operation, target and role, with an artifact that passes `complete`'s verification, one attempt prefix with one manifest under its prefix, and the source unchanged | none |
+| `lab-installed-ha-s11-operator-restart` | The installed-Operator HA command with `-backup-bucket` and `-backup-operator-restart` | LAB01, S11 (`complete`), then S11 (`operator-restart`): a second backup of the same cluster, during which the installed manager's Pod is deleted without a grace period once a reading shows the backup `Running` or `Uploading` with an operation; the replacement must hold the leader Lease within `operator_resync_limit`, and the backup must end `Completed` within `backup_limit`, written by the replacement, under the same operation, target and role, with an artifact that passes `complete`'s verification, one attempt prefix with one manifest under its prefix, and the source unchanged | none |
 | `lab-installed-ha-s12` | The installed-Operator HA command with `-backup-bucket` and `-restore` | LAB01, S11 (`complete`), then S12 (`exact`): S11's artifact restored into a new cluster in the run namespace and checked against the history truncated at S11's known point | none |
 | `lab-installed-ha-s12-tampered` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-tampered` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`tampered`): a copy of S11's artifact with one byte changed, whose restore into another new cluster must be refused for that object's checksum | none |
 | `lab-installed-ha-s12-wrong-target` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-wrong-target` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`wrong-target`): S11's artifact restored into a cluster created over the retained PVCs of a deleted cluster of the same name, which hold its database; the restore must be refused for that target and the database left with its own marker and without S11's | none |
@@ -170,10 +170,19 @@ own, not with S12 or another S11 variant, and only that run's namespace
 enforces Pod Security `privileged`.
 `lab-installed-ha-s11-operator-restart` requires S11 `complete` and
 `operator-restart`; the command runs it in a run of its own, not with S12 or
-another S11 variant. A backup that is seen in another phase before a reading
-shows it `Running` with an operation, or that has ended by the reading right
-before the deletion, leaves the variant blocked: the restart could not be
-placed while the backup ran. A replacement not back within five times
+another S11 variant. A backup that is seen `Completed` or `Failed` before a
+reading shows it `Running` or `Uploading` with an operation, or that has
+ended by the reading right before the deletion, leaves the variant blocked:
+the restart could not be placed while the backup ran. A `status.completedAt`
+before the second of the replacement's Lease `acquireTime` leaves it blocked
+too: the old manager, which runs and holds the Lease until the kubelet kills
+it, completed the backup, and the replacement's resumption was not observed.
+The manifest's `createdAt` against the deletion's time is recorded as
+evidence of whether the upload had started before the restart; it is not a
+verdict. The prefix is listed again at the end, and a second attempt prefix
+then fails the variant as well; a duplicate still staging without a stored
+object, or an unfinished multipart upload, is not seen. A replacement not
+back within five times
 `operator_resync_limit`, or back later than `operator_resync_limit`, fails
 it. `Failed` with `RecordedOperationLost`, the documented escalation of an
 unknown outcome, leaves it blocked; `Failed` for any other reason fails it.
@@ -1056,8 +1065,8 @@ it needs more.
   a cluster whose object store Secret holds keys the store refuses) and
   `signature-mismatch` (the same, with the seed Secret's access key with a
   wrong secret key) and `operator-restart` (the installed manager's Pod is
-  deleted without a grace period while the backup is `Running` with its
-  operation).
+  deleted without a grace period while the backup is `Running` or
+  `Uploading` with its operation).
 - **Fault confirmed by:** the backup's operation was in a running state when
   the fault was issued. For `denied-credentials`: the store refused access
   to the run's own client with the same keys before the cluster was
@@ -1065,8 +1074,14 @@ it needs more.
   `SignatureDoesNotMatch`. For `interrupted-upload` in the lab lane: at least 512 KiB of
   the upload passed the rate limit's counter while the backup was `Running`
   or `Uploading`, and the reset rule's counter then showed a rejected
-  packet. For `operator-restart`: the deleted manager Pod is gone, and a
-  replacement Pod running the same image holds the leader Lease.
+  packet. For `operator-restart`: the reading right before the deletion
+  showed the backup `Running` or `Uploading` with its operation, the deleted
+  manager Pod is gone, a replacement Pod running the same image holds the
+  leader Lease, and `Completed` was written by the replacement, not the old
+  manager (`status.completedAt` not before the second of the replacement's
+  Lease `acquireTime`). This does not show that the Instance Manager was
+  still working on the backup at the deletion: the operation may already
+  have been uploading or done there.
 - **The Operator must** (ADR-0007): report `Completed` only when the artifact
   and its manifest are in object storage and verified; resume or fail the
   operation after a restart without starting a second backup for the same
@@ -1100,7 +1115,8 @@ it needs more.
   artifact that passes `complete`'s verification: the Operator records
   `status.operationRef` with `Running`, and a replacement only polls that
   operation and never starts another
-  (`internal/controller/cubridbackup_controller.go`). `Failed` with
+  (`internal/controller/cubridbackup_controller.go`). A `Completed` written
+  before the replacement led leaves it blocked. `Failed` with
   `RecordedOperationLost` is the documented escalation and leaves it
   blocked; `Failed` for another reason fails it.
 - **Must never happen:** `Completed` with a missing or unreadable artifact; a
@@ -1114,7 +1130,8 @@ it needs more.
   when it is read again at the end; in `operator-restart`, another
   `operationRef` (a second operation), target or role from the placing
   reading on, and a second attempt prefix of the backup, or an object
-  outside one, under the variant's prefix (a second writer).
+  outside one, under the variant's prefix, at the first listing or at the
+  end (a second writer).
 - **Data check:** the artifact of every `Completed` backup is restored in S12
   and compared.
 - **Limits:** `backup_limit`.

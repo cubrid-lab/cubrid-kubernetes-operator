@@ -282,23 +282,38 @@ directory and the Operator's and Instance Manager's logs.
 S11 `operator-restart` also follows S11 `complete`, in a run of its own
 (`lab-installed-ha-s11-operator-restart`, `-backup-operator-restart`,
 #617): the run requests a second backup of the HA cluster to the backup
-bucket under its own prefix and, once a reading shows it `Running` with an
-`operationRef`, deletes the installed manager's Pod without a grace period,
-as S12 `operator-restart` does. The replacement must run the same image and
-hold the leader Lease within `operator_resync_limit`; the backup must end
-`Completed` within `backup_limit` with the same `operationRef`, target and
-role in every reading from the placing one on, an artifact that passes S11
-`complete`'s verification, and exactly one attempt prefix with one manifest
-under the variant's prefix; the source must be unchanged, and no key may be
-in a status read, the manifest, an Event, the deleted manager's log as read
-right before its deletion, the replacement's log or the target member's log.
-A backup that is not seen `Running` with an operation before it ends leaves
-it blocked, and so does `Failed` with `RecordedOperationLost`, the documented
-escalation; `Failed` for another reason fails it. The run deletes its
-`CubridBackup` and leaves the artifact. The backup controller predicts
-`Completed` under the same operation: it records `operationRef` with
-`Running`, and a replacement only polls that operation. Unit tests cover it
-with fakes. It has not yet run on the VM lab. The lab's manager is shared:
+bucket under its own prefix and, once a reading shows it `Running` or
+`Uploading` with an `operationRef`, deletes the installed manager's Pod
+without a grace period, as S12 `operator-restart` does. The replacement must
+run the same image and hold the leader Lease within `operator_resync_limit`;
+the backup must end `Completed` within `backup_limit`, with
+`status.completedAt` not before the second of the replacement's Lease
+`acquireTime` (otherwise the old manager, still running and holding the
+Lease, completed it, which blocks the variant), the same `operationRef`,
+target and role in every reading from the placing one on, an artifact that
+passes S11 `complete`'s verification, and exactly one attempt prefix with
+one manifest under the variant's prefix, also when listed again at the end;
+the source must be unchanged, and no key may be in a status read, the
+manifest, an Event, the deleted manager's log as read right before its
+deletion, the replacement's log or the target member's log. The manifest's
+`createdAt` is recorded against the deletion (`uploadStartedBeforeRestart`)
+as evidence, not a verdict. A backup that is not seen in progress with an
+operation before it ends leaves it blocked, and so does `Failed` with
+`RecordedOperationLost`, the documented escalation; `Failed` for another
+reason fails it. The run deletes its `CubridBackup` and leaves the artifact.
+The backup controller predicts `Completed` under the same operation: it
+records `operationRef` with `Running`, and a replacement only polls that
+operation. Unit tests cover it with fakes. On 2026-10-29 an earlier harness
+of the change, which placed the restart on `Running` only and had neither
+the `completedAt` check nor the second listing, passed once on the VM lab:
+`Running` with its operation on `ha-1` (a slave) was read at 11:29:23.34
+UTC, the manager Pod was deleted at 11:29:23.44, the replacement took the
+Lease at 11:29:59.446, and `Completed` was read at 11:29:59.80 with
+`completedAt` 11:29:59. The manifest's `createdAt` was 11:29:21, so the
+Instance Manager had started its upload before the restart: the replacement
+discovered and completed an operation already uploading, or done, there, not
+one restarted in the middle of `backupdb`. One run is not a baseline, and
+the current harness has not run on the VM lab. The lab's manager is shared:
 deleting its Pod briefly pauses reconciliation of every other cluster and
 backup there.
 
