@@ -1142,9 +1142,17 @@ schedule the run when that pause does not disturb other work.
      the variant is blocked ("the old manager completed the backup before the
      replacement led"), with both times recorded (`statusCompletedAt`,
      `leaseAcquiredAt`). Both are written by the managers, by their nodes'
-     clocks, not the run's; a skew between those nodes is not measured. The
-     first VM-lab run read `completedAt` 11:29:59 against an `acquireTime`
-     of 11:29:59.446, which passes.
+     clocks, not the run's; a skew between those nodes is not measured. A
+     `completedAt` in the same second as an `acquireTime` with a fraction,
+     such as 12:00:59 against 12:00:59.446, passes. Why one second of slack
+     is safe: the manager does not release the Lease when it stops
+     (`LeaderElectionReleaseOnCancel` is off in `cmd/main.go`), so the
+     replacement acquires it only after it went 15 s unrenewed, and an old
+     manager that is still running either keeps renewing it, which holds
+     the replacement off, or exits at its 10 s renew deadline first. So the
+     old manager's last possible write is several seconds before the
+     acquisition, and the check could take it for the replacement's only if
+     the two nodes' clocks differed by more than about 5 s.
    - **Where the restart fell.** The Instance Manager sets the manifest's
      `createdAt` right before it uploads (`runBackup` in
      `internal/instancemanager/server.go`). The run records it
@@ -1174,7 +1182,9 @@ schedule the run when that pause does not disturb other work.
      is recorded under `attempts`, and `attemptPrefixes` is measured. The run
      lists the prefix again at the end, after the source check (step 8), and
      a second attempt prefix holding objects, or an object outside one, that
-     appears then fails the variant too (`attemptsAtEnd`). Only stored
+     appears then fails the variant too (`attemptsAtEnd`). That second
+     listing looks only for another prefix or an object outside one; it does
+     not count the manifests in the artifact's own prefix again. Only stored
      objects are listed: a duplicate still staging on a member without an
      object, or an unfinished multipart upload, is not seen.
 7. **Credentials.** As in S11 `complete`, in every status read, the manifest

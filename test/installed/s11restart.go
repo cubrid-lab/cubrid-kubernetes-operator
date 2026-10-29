@@ -185,7 +185,7 @@ func planS11OperatorRestart(cfg HAConfig, lane string, requirements []evidence.R
 // with an operation, the manager's Pod is deleted without a grace period, as
 // S06 and S12 operator-restart delete it. The replacement must run the same
 // image and hold the leader Lease within ResyncLimit. The backup must end
-// Completed within BackupLimit of its request, written by the replacement
+// Completed within BackupLimit of its request, judged written by the replacement
 // (completedAfterTakeover), its operation, target and role must never change
 // from the placing reading on, its artifact must pass S11 complete's
 // verification, exactly one attempt prefix of it may hold objects under the

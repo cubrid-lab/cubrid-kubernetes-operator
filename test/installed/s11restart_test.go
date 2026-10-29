@@ -402,7 +402,7 @@ func TestRunS11OperatorRestartPlacesTheRestartOnUploading(t *testing.T) {
 
 // status.completedAt in the second the replacement acquired the Lease, but
 // before the acquisition itself, is the replacement's: the API server keeps
-// completedAt to the second (the lab run: 11:29:59 against 11:29:59.446).
+// completedAt to the second (e.g. 12:00:59 against 12:00:59.446).
 func TestRunS11OperatorRestartPassesWithACompletionInTheSecondOfTheTakeover(t *testing.T) {
 	cfg := testS11RestartConfig(t)
 	f := newS11RestartFixture(t, cfg)
