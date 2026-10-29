@@ -150,7 +150,8 @@ func (c HAConfig) validateS11OperatorRestart() error {
 		{c.BackupDeniedCredentials, flagDeniedCredentials},
 		{c.BackupSignatureMismatch, flagSignatureMismatch},
 		{c.BackupInterruptedUpload, flagInterruptedUpload},
-		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart}} {
+		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart},
+		{c.BackupOverlapping, flagOverlapping}} {
 		if other.selected {
 			return fmt.Errorf("-backup-operator-restart and %s select different lanes; a run takes one of them",
 				other.flag)
@@ -245,11 +246,11 @@ func (h *haRun) runS11OperatorRestart(ctx context.Context) (result evidence.Scen
 	}()
 	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String(),
 		resyncLimitName: h.cfg.ResyncLimit.String()}
-	result.Measurements = map[string]any{"backupCompletedWithin": evidence.Unknown,
+	result.Measurements = map[string]any{measBackupCompletedWithin: evidence.Unknown,
 		operatorBackMeasurement: evidence.Unknown, "operationRefUnchanged": evidence.Unknown,
 		"inProgressAtRestart": evidence.Unknown, "uploadStartedBeforeRestart": evidence.Unknown,
-		"objectsVerified": evidence.Unknown, "artifactBytes": evidence.Unknown,
-		"objectsNotInManifest": evidence.Unknown, "attemptPrefixes": evidence.Unknown}
+		measObjectsVerified: evidence.Unknown, measArtifactBytes: evidence.Unknown,
+		measObjectsNotInManifest: evidence.Unknown, "attemptPrefixes": evidence.Unknown}
 	err := h.s11RestartSteps(ctx, &result, &rec, &created)
 	// A credential found in any status read, the manifest, an Event or a log
 	// is a failure, whichever step ended S11 operator-restart.
@@ -365,7 +366,7 @@ func (h *haRun) s11RestartSteps(ctx context.Context, result *evidence.Scenario, 
 	// A second writer that was still uploading at the first listing shows up
 	// now.
 	if rec.Attempts != nil && rec.Attempts.Listed {
-		at, err := h.listS11Attempts(ctx, *created, rec)
+		at, err := h.listS11Attempts(ctx, *created, &rec.s11Record)
 		rec.AttemptsAtEnd = at
 		if err != nil {
 			errs = append(errs, fmt.Errorf("list the variant's prefix again at the end: %w", err))
@@ -547,7 +548,7 @@ func (h *haRun) judgeRestartedBackup(ctx context.Context, backup *databasev1alph
 	}
 	within := rec.Phases[len(rec.Phases)-1].At.Sub(requested)
 	rec.CompletedWithin = within.Round(time.Millisecond).String()
-	result.Measurements["backupCompletedWithin"] = rec.CompletedWithin
+	result.Measurements[measBackupCompletedWithin] = rec.CompletedWithin
 	if done := s.CompletedAt; done != nil {
 		rec.StatusCompletedWithin = done.Sub(backup.CreationTimestamp.Time).String()
 	}
@@ -565,11 +566,11 @@ func (h *haRun) judgeRestartedBackup(ctx context.Context, backup *databasev1alph
 	}
 	v := rec.Verification
 	if v.ObjectsChecked {
-		result.Measurements["objectsVerified"] = v.ObjectsVerified
-		result.Measurements["artifactBytes"] = v.BytesDownloaded
+		result.Measurements[measObjectsVerified] = v.ObjectsVerified
+		result.Measurements[measArtifactBytes] = v.BytesDownloaded
 	}
 	if v.Listed {
-		result.Measurements["objectsNotInManifest"] = len(v.NotInManifest)
+		result.Measurements[measObjectsNotInManifest] = len(v.NotInManifest)
 	}
 	if len(v.Unreadable) > 0 {
 		result.NeverEvents = append(result.NeverEvents, "the backup is Completed, and objects of its artifact could "+
@@ -687,7 +688,7 @@ func judgeRestartOperation(rec *s11RestartRecord, result *evidence.Scenario) {
 // artifact's and hold its manifest.json.
 func (h *haRun) checkS11Attempts(ctx context.Context, backup *databasev1alpha1.CubridBackup,
 	rec *s11RestartRecord, result *evidence.Scenario) error {
-	a, err := h.listS11Attempts(ctx, backup, rec)
+	a, err := h.listS11Attempts(ctx, backup, &rec.s11Record)
 	rec.Attempts = a
 	if err != nil {
 		return err
@@ -732,7 +733,7 @@ func secondWriter(a *s11Attempts, when string) []string {
 // duplicate that is still staging without an object, or an unfinished
 // multipart upload, is not.
 func (h *haRun) listS11Attempts(ctx context.Context, backup *databasev1alpha1.CubridBackup,
-	rec *s11RestartRecord) (*s11Attempts, error) {
+	rec *s11Record) (*s11Attempts, error) {
 	a := &s11Attempts{Prefixes: []s11AttemptPrefix{}, Outside: []string{}}
 	store, stop, err := h.openS11Store(ctx)
 	if err != nil {

@@ -619,16 +619,16 @@ func TestRunHARefusesBackupOperatorRestartWithoutItsLane(t *testing.T) {
 		testWithRestore: {change: func(cfg *HAConfig) {
 			cfg.Restore, cfg.RestoreLimit = true, time.Minute
 		}, want: testRestoreFlag},
-		"with the missing-destination variant": {change: func(cfg *HAConfig) {
+		testWithMissing: {change: func(cfg *HAConfig) {
 			cfg.BackupMissingDestination = true
 		}, want: "-backup-operator-restart and " + flagMissingDestination + " select"},
-		"with the denied-credentials variant": {change: func(cfg *HAConfig) {
+		testWithDenied: {change: func(cfg *HAConfig) {
 			cfg.BackupDeniedCredentials, cfg.BackupDeniedReadyLimit = true, time.Minute
 		}, want: "-backup-operator-restart and " + flagDeniedCredentials + " select"},
 		"with the signature-mismatch variant": {change: func(cfg *HAConfig) {
 			cfg.BackupSignatureMismatch, cfg.BackupSignatureMismatchReadyLimit = true, time.Minute
 		}, want: "-backup-signature-mismatch and -backup-operator-restart select"},
-		"with the interrupted-upload variant": {change: func(cfg *HAConfig) {
+		testWithInterrupted: {change: func(cfg *HAConfig) {
 			cfg.BackupInterruptedUpload, cfg.BackupInterruptedReadyLimit = true, time.Minute
 		}, want: "-backup-interrupted-upload and -backup-operator-restart select"},
 		"without a resync limit": {change: func(cfg *HAConfig) { cfg.ResyncLimit = 0 },

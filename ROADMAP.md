@@ -372,6 +372,33 @@ and the current harness has not run on the VM lab. A kill during
 `backupdb` itself and the member's staging directory (#636) are not
 covered.
 
+S11 `overlapping` also follows S11 `complete`, in a run of its own
+(`lab-installed-ha-s11-overlapping`, `-backup-overlapping`, #617): the run
+requests two more backups of the HA cluster to the backup bucket back to
+back, each under a prefix of its own, and reads both in turn until both
+ended. Both must end `Completed` within `backup_limit`, each with its own
+`operationRef`, never shared and never replaced, a target and role that
+never change, an artifact that passes S11 `complete`'s verification, a
+manifest whose `operationID` is its own backup's, and exactly one attempt
+prefix with one manifest under its prefix, also when listed again at the
+end. The code predicts this: each backup has its own idempotency key and
+staging directory, so on one target the Instance Manager refuses the second
+start with `409 OperationInProgress` while the first's operation runs, and
+the Operator holds the second on its recorded target
+(`InstanceManagerOperationInProgress`) and sends the start again until the
+target accepts it; two selections that rank the standbys differently run
+the backups at once on two targets. On one target, the second's
+`status.startedAt` must not be before the first's manifest `createdAt`
+(the Operator node's clock and the member's, to the second). A run in which
+the readings show neither a hold nor both backups running at once on two
+targets is blocked: the overlap was not exercised. `Failed` for a conflict,
+`RecordedTargetNotStarted` or a staging failure is a never-event, and
+`Failed` for another reason fails it. The source and the installed manager
+must be unchanged, and no key may be in a status read, a manifest, an Event,
+the manager's log or either target member's log. The run deletes both
+`CubridBackup`s by UID and leaves the artifacts. Unit tests cover it with
+fakes; it has not run on the VM lab yet.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after

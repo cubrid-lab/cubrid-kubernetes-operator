@@ -98,32 +98,38 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"scenario after S11 complete: S11 signature-mismatch, a backup of a standalone cluster whose object store "+
 			"Secret holds the seed access key with a wrong secret key must end Failed; needs -backup-bucket, not "+
 			"with -restore, -backup-missing-destination, -backup-denied-credentials, -backup-interrupted-upload, "+
-			"-backup-operator-restart or -backup-instance-manager-restart")
+			"-backup-operator-restart, -backup-instance-manager-restart or -backup-overlapping")
 	flags.DurationVar(&cfg.BackupSignatureMismatchReadyLimit, "backup-signature-mismatch-ready-limit", 15*time.Minute,
 		"S11 signature-mismatch: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupInterruptedUpload, "backup-interrupted-upload", false,
 		"scenario after S11 complete: S11 interrupted-upload, a backup of a standalone cluster whose upload is "+
 			"slowed and then reset by network faults in its member's Pod must end Failed; makes the run namespace "+
 			"enforce Pod Security privileged; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
-			"-backup-denied-credentials, -backup-signature-mismatch, -backup-operator-restart or "+
-			"-backup-instance-manager-restart")
+			"-backup-denied-credentials, -backup-signature-mismatch, -backup-operator-restart, "+
+			"-backup-instance-manager-restart or -backup-overlapping")
 	flags.DurationVar(&cfg.BackupInterruptedReadyLimit, "backup-interrupted-ready-limit", 15*time.Minute,
 		"S11 interrupted-upload: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupOperatorRestart, "backup-operator-restart", false,
 		"scenario after S11 complete: S11 operator-restart, a second backup of the HA cluster during which the "+
 			"manager Pod is deleted without a grace period must end Completed with the same operation and one "+
 			"verified artifact; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
-			"-backup-denied-credentials, -backup-signature-mismatch, -backup-interrupted-upload or "+
-			"-backup-instance-manager-restart")
+			"-backup-denied-credentials, -backup-signature-mismatch, -backup-interrupted-upload, "+
+			"-backup-instance-manager-restart or -backup-overlapping")
 	flags.BoolVar(&cfg.BackupInstanceManagerRestart, "backup-instance-manager-restart", false,
 		"scenario after S11 complete: S11 instance-manager-restart, a backup of a standalone cluster whose upload "+
 			"is slowed by a network fault in its member's Pod and whose Instance Manager is killed during it must "+
 			"end Failed for the restart; makes the run namespace enforce Pod Security privileged; needs "+
 			"-backup-bucket, not with -restore, -backup-missing-destination, -backup-denied-credentials, "+
-			"-backup-signature-mismatch, -backup-interrupted-upload or -backup-operator-restart")
+			"-backup-signature-mismatch, -backup-interrupted-upload, -backup-operator-restart or -backup-overlapping")
 	flags.DurationVar(&cfg.BackupInstanceManagerRestartReadyLimit, "backup-instance-manager-restart-ready-limit",
 		15*time.Minute, "S11 instance-manager-restart: bound from the standalone cluster's creation until it is "+
 			"Ready, and from the kill until it is Ready again")
+	flags.BoolVar(&cfg.BackupOverlapping, "backup-overlapping", false,
+		"scenario after S11 complete: S11 overlapping, two more backups of the HA cluster requested back to back "+
+			"must both end Completed, each with its own operation and one verified artifact under its own prefix; "+
+			"needs -backup-bucket, not with -restore, -backup-missing-destination, -backup-denied-credentials, "+
+			"-backup-signature-mismatch, -backup-interrupted-upload, -backup-operator-restart or "+
+			"-backup-instance-manager-restart")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
 		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
 	flags.BoolVar(&cfg.Restore, "restore", false,

@@ -78,6 +78,10 @@ const (
 	testNoBucket       = "without -backup-bucket"
 	testWithRestore    = "with -restore"
 	testRestoreFlag    = "-restore"
+	// The cases of the refusal tables that combine two S11 variants.
+	testWithMissing     = "with the missing-destination variant"
+	testWithDenied      = "with the denied-credentials variant"
+	testWithInterrupted = "with the interrupted-upload variant"
 	// testUploadingMessage and testCompletedMessage are the Ready messages of
 	// an upload under way and of a completed backup; testStoreService is the
 	// object store's Service.

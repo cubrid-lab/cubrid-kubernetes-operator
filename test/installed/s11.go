@@ -62,6 +62,12 @@ const (
 	backupReady = "Ready"
 	// backupLimitName is the contract's limit on a backup (backup_limit).
 	backupLimitName = "backup_limit"
+	// The measurements of an artifact that S11 complete and the variants
+	// that verify one share.
+	measBackupCompletedWithin = "backupCompletedWithin"
+	measObjectsVerified       = "objectsVerified"
+	measArtifactBytes         = "artifactBytes"
+	measObjectsNotInManifest  = "objectsNotInManifest"
 )
 
 // s3Bucket is the bucket rule of a CubridBackup's destination; two adjacent
@@ -77,31 +83,24 @@ const (
 	flagInterruptedUpload      = "-backup-interrupted-upload"
 	flagOperatorRestart        = "-backup-operator-restart"
 	flagInstanceManagerRestart = "-backup-instance-manager-restart"
+	flagOverlapping            = "-backup-overlapping"
 )
 
 // validateS11 checks the inputs of S11 complete, when it is selected.
 func (c HAConfig) validateS11() error {
-	if c.BackupMissingDestination && c.BackupBucket == "" {
-		return errors.New("-backup-missing-destination needs -backup-bucket: S11 missing-destination follows S11 " +
-			"complete")
-	}
-	if c.BackupDeniedCredentials && c.BackupBucket == "" {
-		return errors.New("-backup-denied-credentials needs -backup-bucket: S11 denied-credentials follows S11 " +
-			"complete")
-	}
-	if c.BackupSignatureMismatch && c.BackupBucket == "" {
-		return errors.New("-backup-signature-mismatch needs -backup-bucket: S11 signature-mismatch follows S11 complete")
-	}
-	if c.BackupInterruptedUpload && c.BackupBucket == "" {
-		return errors.New("-backup-interrupted-upload needs -backup-bucket: S11 interrupted-upload follows S11 " +
-			"complete")
-	}
-	if c.BackupOperatorRestart && c.BackupBucket == "" {
-		return errors.New("-backup-operator-restart needs -backup-bucket: S11 operator-restart follows S11 complete")
-	}
-	if c.BackupInstanceManagerRestart && c.BackupBucket == "" {
-		return errors.New(flagInstanceManagerRestart + " needs -backup-bucket: S11 instance-manager-restart follows S11 " +
-			"complete")
+	for _, v := range []struct {
+		selected      bool
+		flag, variant string
+	}{{c.BackupMissingDestination, flagMissingDestination, "missing-destination"},
+		{c.BackupDeniedCredentials, flagDeniedCredentials, "denied-credentials"},
+		{c.BackupSignatureMismatch, flagSignatureMismatch, "signature-mismatch"},
+		{c.BackupInterruptedUpload, flagInterruptedUpload, "interrupted-upload"},
+		{c.BackupOperatorRestart, flagOperatorRestart, "operator-restart"},
+		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart, "instance-manager-restart"},
+		{c.BackupOverlapping, flagOverlapping, "overlapping"}} {
+		if v.selected && c.BackupBucket == "" {
+			return fmt.Errorf("%s needs -backup-bucket: S11 %s follows S11 complete", v.flag, v.variant)
+		}
 	}
 	if c.BackupBucket == "" {
 		return nil
@@ -135,6 +134,9 @@ func (c HAConfig) validateS11() error {
 		return err
 	}
 	if err := c.validateS11InstanceManagerRestart(); err != nil {
+		return err
+	}
+	if err := c.validateS11Overlapping(); err != nil {
 		return err
 	}
 	_, _, _, err := splitService(c.ObjectStoreService)
@@ -406,9 +408,9 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 		return result
 	}
 	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String()}
-	result.Measurements = map[string]any{"backupCompletedWithin": evidence.Unknown,
-		"objectsVerified": evidence.Unknown, "artifactBytes": evidence.Unknown,
-		"objectsNotInManifest": evidence.Unknown}
+	result.Measurements = map[string]any{measBackupCompletedWithin: evidence.Unknown,
+		measObjectsVerified: evidence.Unknown, measArtifactBytes: evidence.Unknown,
+		measObjectsNotInManifest: evidence.Unknown}
 	rec.Credentials = &s11Credentials{FoundIn: []string{}}
 	if _, err := h.holdsCredential(nil); err != nil {
 		return end(evidence.Blocked, "%v; S11 could not tell whether a credential is in a status, the manifest or "+
@@ -449,7 +451,7 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 	}
 	within := rec.Phases[len(rec.Phases)-1].At.Sub(requested)
 	rec.CompletedWithin = within.Round(time.Millisecond).String()
-	result.Measurements["backupCompletedWithin"] = rec.CompletedWithin
+	result.Measurements[measBackupCompletedWithin] = rec.CompletedWithin
 	if done := backup.Status.CompletedAt; done != nil {
 		rec.StatusCompletedWithin = done.Sub(backup.CreationTimestamp.Time).String()
 	}
@@ -466,11 +468,11 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 	}
 	v := rec.Verification
 	if v.ObjectsChecked {
-		result.Measurements["objectsVerified"] = v.ObjectsVerified
-		result.Measurements["artifactBytes"] = v.BytesDownloaded
+		result.Measurements[measObjectsVerified] = v.ObjectsVerified
+		result.Measurements[measArtifactBytes] = v.BytesDownloaded
 	}
 	if v.Listed {
-		result.Measurements["objectsNotInManifest"] = len(v.NotInManifest)
+		result.Measurements[measObjectsNotInManifest] = len(v.NotInManifest)
 	}
 	if len(v.Unreadable) > 0 {
 		result.NeverEvents = append(result.NeverEvents, "the backup is Completed, and objects of its artifact could "+

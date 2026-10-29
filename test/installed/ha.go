@@ -178,6 +178,11 @@ type HAConfig struct {
 	// from its creation until it is Ready, and from the kill until it is
 	// Ready again. It is the run's bound, not the contract's.
 	BackupInstanceManagerRestartReadyLimit time.Duration
+	// BackupOverlapping selects S11 overlapping after S11 complete: two more
+	// CubridBackups of the HA cluster to BackupBucket, requested back to
+	// back, each under a prefix of its own. It needs BackupBucket and cannot
+	// be combined with Restore or another S11 variant.
+	BackupOverlapping bool
 	// ObjectStoreService is the object store's Service as
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.
@@ -351,9 +356,11 @@ type haRun struct {
 	// s11Missing is that of S11 missing-destination, s11Denied that of S11
 	// denied-credentials, s11Signature that of S11 signature-mismatch and
 	// s11Interrupted that of S11 interrupted-upload, s11Restart that of S11
-	// operator-restart and s11IMRestart that of S11 instance-manager-restart.
-	s11, s11Missing, s11Denied, s11Signature, s11Interrupted, s11Restart, s11IMRestart *evidence.Scenario
-	s11Rec                                                                             *s11Record
+	// operator-restart, s11IMRestart that of S11 instance-manager-restart and
+	// s11Overlapping that of S11 overlapping.
+	s11, s11Missing, s11Denied, s11Signature, s11Interrupted, s11Restart, s11IMRestart,
+	s11Overlapping *evidence.Scenario
+	s11Rec *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
 	// S12 operator-restart, s12IMRestart that of S12 instance-manager-restart
@@ -478,6 +485,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		lane, requirements = planS11InterruptedUpload(cfg, lane, requirements, &summary)
 		lane, requirements = planS11OperatorRestart(cfg, lane, requirements, &summary)
 		lane, requirements = planS11InstanceManagerRestart(cfg, lane, requirements, &summary)
+		lane, requirements = planS11Overlapping(cfg, lane, requirements, &summary)
 	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
@@ -649,7 +657,8 @@ func (h *haRun) recordS11Variants(summary *evidence.Summary) {
 		{h.cfg.BackupSignatureMismatch, h.s11Signature, s11SignatureVariant},
 		{h.cfg.BackupInterruptedUpload, h.s11Interrupted, s11InterruptedVariant},
 		{h.cfg.BackupOperatorRestart, h.s11Restart, s11RestartVariant},
-		{h.cfg.BackupInstanceManagerRestart, h.s11IMRestart, s11IMRestartVariant}} {
+		{h.cfg.BackupInstanceManagerRestart, h.s11IMRestart, s11IMRestartVariant},
+		{h.cfg.BackupOverlapping, h.s11Overlapping, s11OverlappingVariant}} {
 		switch {
 		case v.result != nil:
 			summary.Record(*v.result)
@@ -718,6 +727,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 			h.s11IMRestart = &restart
 			if restart.Result != evidence.Pass {
 				return fmt.Errorf("S11/%s: %s", s11IMRestartVariant, restart.Reason)
+			}
+		}
+		if h.cfg.BackupOverlapping {
+			overlapping := h.runS11Overlapping(ctx)
+			h.s11Overlapping = &overlapping
+			if overlapping.Result != evidence.Pass {
+				return fmt.Errorf("S11/%s: %s", s11OverlappingVariant, overlapping.Reason)
 			}
 		}
 		if !h.cfg.Restore {
