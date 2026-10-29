@@ -481,6 +481,75 @@ directory was gone after the restart and at the end, as
 `reclaimBackupStaging` predicts. The first run's figures were within a
 second of these. Two runs are not a baseline.
 
+S11 `graceful-stop` also follows S11 `complete`, in a run of its own
+(`lab-installed-ha-s11-graceful-stop`, `-backup-graceful-stop`, #277, with
+#468 and #469), in a run namespace that keeps Pod Security `restricted`:
+the run creates a standalone cluster `s11-gracefulstop` with the run's own
+Secret, starts a sampler in its member's database container (one exec
+session that prints the `cub*` processes, the files open below the backup
+staging root and the entries below it about every 100 ms) and follows the
+container's log, requests a backup, and at the first sampler reading that
+shows `backupdb` deletes the member's Pod with its grace period, so that
+its `preStop` hook stops the Instance Manager while `backupdb` runs. The
+code predicts `Failed` with `BackupFailed` and `the member is stopping:
+backupdb failed: ...`, without a kept staging: the stop cancels the
+backup, the cancellation kills `backupdb`'s process group, the failed
+backup waits until no process holds a staging file before it removes the
+staging and records the operation, and only then does the stop run
+`heartbeat stop` and `server stop`. The run requires that outcome within
+`backup_limit` under one operation, never `Completed` or
+`status.artifact`; no sampler reading at or after the first one without the
+operation's staging directory may show a process holding a file below the
+backup's staging destination; the member's log must hold `backupdb`'s
+`Command failed`, the operation's staging writer events, its `Operation
+failed` and then the shutdown's commands, in that order; no `manifest.json`
+under the prefix; the replacement Pod ready and the cluster `Ready` within
+the ready limit; the source and the installed manager unchanged; and no
+key in statuses, Events, the sampler's output or the logs. A `backupdb`
+never seen before the backup left `Running`, or a stop that reached the
+Instance Manager after `backupdb` had ended (an upload failure, or
+`backupdb`'s success in the log, with whatever `Completed`, artifact or
+manifest the backup then produced), leaves it blocked. The sampler cannot
+see a hold shorter than its interval, nor anything after the container
+ended. Unit tests cover it with fakes, and a Linux unit test runs the
+sampler script against a process holding a file. On 2026-10-29 the first
+harness of the change (`9ae6629`) ran once on the VM lab from 19:36 UTC
+(manager `fb6f345`), without filler data. `backupdb` took 615 ms and the
+sampler saw it 385 ms after the request. The deletion was sent 24 ms after
+that, but the stop reached the Instance Manager only after `backupdb` had
+succeeded, and the backup completed with its manifest. The staging
+directory was gone 767 ms after the deletion, with no holder after it. That
+run was a placement miss which the harness misjudged as a failure.
+
+The current harness classifies such a run as blocked. It grows a filler
+table in the cluster's database before the request (default 1024 MiB,
+`-backup-graceful-stop-filler-mb`) so that `backupdb` lasts for seconds. It
+records the time from the deletion to the first log line the stop caused,
+to show the `preStop` latency. Its first VM-lab run, at 2026-10-29
+20:00 UTC (`c2e31c3`), was blocked while it grew the filler, after about
+30 s, at about 196,608 rows. csql had printed `ERROR CODE = -199` and
+`-111` after a statement it had committed. A manual check on the lab
+(POC-44) found those statements' rows committed and the server unharmed,
+with the cause unknown. The filler now judges each statement by a row
+count read separately, runs a statement that added no row once more, and
+records the error text as `fillerExitErrors`. That harness (`4e9eb6d`)
+passed once on the VM lab on 2026-10-29 (manager `fb6f345`, after S11
+`complete` on the same run): the filler grew to 1,073,741 rows in 3 min 12
+s (one statement printed the exit error after committing); the sampler saw
+`backupdb` at 20:26:23.859 UTC, 440 ms after the request, and the member
+Pod's deletion was accepted 14 ms later; the member's log shows the stop
+172 ms after that, `backupdb` killed (`signal: killed`) as its first
+effect, then `Operation failed` for the backup's operation, `heartbeat
+stop` and `server stop`, in that order; the staging directory was gone at
+20:26:24.203, and no sampler reading after it (524 readings in all, about
+every 100 ms) showed a process holding a file under the staging root; the
+backup was `Failed` 11.6 s after the deletion with `the member is stopping:
+backupdb failed: … signal: killed`, without the kept-staging suffix, and
+nothing was under its prefix; the replacement member was `Ready` again 1 min
+39 s after the deletion. One run is not a baseline, the 100 ms sampling can
+miss a shorter holder, and `restoredb` and `restoreslave` under a graceful
+stop are not covered.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after

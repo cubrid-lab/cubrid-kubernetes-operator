@@ -88,22 +88,22 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"scenario after S11 complete: S11 missing-destination, a backup to a bucket that does not exist must end "+
 			"Failed; needs -backup-bucket, not with -restore or another S11 variant: -backup-denied-credentials, "+
 			"-backup-signature-mismatch, -backup-interrupted-upload, -backup-operator-restart, "+
-			"-backup-instance-manager-restart, -backup-overlapping or "+
-			"-backup-operation-store-loss")
+			"-backup-instance-manager-restart, -backup-overlapping, -backup-operation-store-loss or "+
+			"-backup-graceful-stop")
 	flags.BoolVar(&cfg.BackupDeniedCredentials, "backup-denied-credentials", false,
 		"scenario after S11 complete: S11 denied-credentials, a backup of a standalone cluster whose object store "+
 			"Secret holds keys the store refuses must end Failed; needs -backup-bucket, not with -restore or another "+
 			"S11 variant: -backup-missing-destination, -backup-signature-mismatch, -backup-interrupted-upload, "+
-			"-backup-operator-restart, -backup-instance-manager-restart, -backup-overlapping or "+
-			"-backup-operation-store-loss")
+			"-backup-operator-restart, -backup-instance-manager-restart, -backup-overlapping, "+
+			"-backup-operation-store-loss or -backup-graceful-stop")
 	flags.DurationVar(&cfg.BackupDeniedReadyLimit, "backup-denied-ready-limit", 15*time.Minute,
 		"S11 denied-credentials: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupSignatureMismatch, "backup-signature-mismatch", false,
 		"scenario after S11 complete: S11 signature-mismatch, a backup of a standalone cluster whose object store "+
 			"Secret holds the seed access key with a wrong secret key must end Failed; needs -backup-bucket, not "+
 			"with -restore, -backup-missing-destination, -backup-denied-credentials, -backup-interrupted-upload, "+
-			"-backup-operator-restart, -backup-instance-manager-restart, -backup-overlapping or "+
-			"-backup-operation-store-loss")
+			"-backup-operator-restart, -backup-instance-manager-restart, -backup-overlapping, "+
+			"-backup-operation-store-loss or -backup-graceful-stop")
 	flags.DurationVar(&cfg.BackupSignatureMismatchReadyLimit, "backup-signature-mismatch-ready-limit", 15*time.Minute,
 		"S11 signature-mismatch: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupInterruptedUpload, "backup-interrupted-upload", false,
@@ -111,8 +111,8 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"slowed and then reset by network faults in its member's Pod must end Failed; makes the run namespace "+
 			"enforce Pod Security privileged; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
 			"-backup-denied-credentials, -backup-signature-mismatch, -backup-operator-restart, "+
-			"-backup-instance-manager-restart, -backup-overlapping or "+
-			"-backup-operation-store-loss")
+			"-backup-instance-manager-restart, -backup-overlapping, -backup-operation-store-loss or "+
+			"-backup-graceful-stop")
 	flags.DurationVar(&cfg.BackupInterruptedReadyLimit, "backup-interrupted-ready-limit", 15*time.Minute,
 		"S11 interrupted-upload: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupOperatorRestart, "backup-operator-restart", false,
@@ -120,15 +120,15 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"manager Pod is deleted without a grace period must end Completed with the same operation and one "+
 			"verified artifact; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
 			"-backup-denied-credentials, -backup-signature-mismatch, -backup-interrupted-upload, "+
-			"-backup-instance-manager-restart, -backup-overlapping or "+
-			"-backup-operation-store-loss")
+			"-backup-instance-manager-restart, -backup-overlapping, -backup-operation-store-loss or "+
+			"-backup-graceful-stop")
 	flags.BoolVar(&cfg.BackupInstanceManagerRestart, "backup-instance-manager-restart", false,
 		"scenario after S11 complete: S11 instance-manager-restart, a backup of a standalone cluster whose upload "+
 			"is slowed by a network fault in its member's Pod and whose Instance Manager is killed during it must "+
 			"end Failed for the restart; makes the run namespace enforce Pod Security privileged; needs "+
 			"-backup-bucket, not with -restore, -backup-missing-destination, -backup-denied-credentials, "+
 			"-backup-signature-mismatch, -backup-interrupted-upload, -backup-operator-restart, "+
-			"-backup-overlapping or -backup-operation-store-loss")
+			"-backup-overlapping, -backup-operation-store-loss or -backup-graceful-stop")
 	flags.DurationVar(&cfg.BackupInstanceManagerRestartReadyLimit, "backup-instance-manager-restart-ready-limit",
 		15*time.Minute, "S11 instance-manager-restart: bound from the standalone cluster's creation until it is "+
 			"Ready, and from the kill until it is Ready again")
@@ -139,7 +139,7 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"own prefix; makes the run namespace enforce Pod Security privileged; needs -backup-bucket, not with "+
 			"-restore, -backup-missing-destination, -backup-denied-credentials, "+
 			"-backup-signature-mismatch, -backup-interrupted-upload, -backup-operator-restart, "+
-			"-backup-instance-manager-restart or -backup-operation-store-loss")
+			"-backup-instance-manager-restart, -backup-operation-store-loss or -backup-graceful-stop")
 	flags.DurationVar(&cfg.BackupOverlappingReadyLimit, "backup-overlapping-ready-limit", 15*time.Minute,
 		"S11 overlapping: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupOperationStoreLoss, "backup-operation-store-loss", false,
@@ -149,10 +149,24 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"with RecordedOperationLost after 30 minutes; makes the run namespace enforce Pod Security privileged; "+
 			"needs -backup-bucket and -backup-limit of at least 35m, not with -restore, -backup-missing-destination, "+
 			"-backup-denied-credentials, -backup-signature-mismatch, -backup-interrupted-upload, "+
-			"-backup-operator-restart, -backup-instance-manager-restart or -backup-overlapping")
+			"-backup-operator-restart, -backup-instance-manager-restart, -backup-overlapping or -backup-graceful-stop")
 	flags.DurationVar(&cfg.BackupOperationStoreLossReadyLimit, "backup-operation-store-loss-ready-limit",
 		15*time.Minute, "S11 operation-store-loss: bound from the standalone cluster's creation until it is Ready, "+
 			"and from the kill until it is Ready again")
+	flags.BoolVar(&cfg.BackupGracefulStop, "backup-graceful-stop", false,
+		"scenario after S11 complete: S11 graceful-stop, a backup of a standalone cluster whose member's Pod is "+
+			"deleted with its grace period as soon as backupdb is seen running must end Failed for the stop, with "+
+			"no process holding a staging file once the staging is gone and the staging settled before CUBRID "+
+			"stops; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
+			"-backup-denied-credentials, -backup-signature-mismatch, -backup-interrupted-upload, "+
+			"-backup-operator-restart, -backup-instance-manager-restart, -backup-overlapping or "+
+			"-backup-operation-store-loss")
+	flags.DurationVar(&cfg.BackupGracefulStopReadyLimit, "backup-graceful-stop-ready-limit", 15*time.Minute,
+		"S11 graceful-stop: bound from the standalone cluster's creation until it is Ready, and from the deletion "+
+			"until its replacement is ready and the cluster Ready again")
+	flags.IntVar(&cfg.BackupGracefulStopFillerMB, "backup-graceful-stop-filler-mb", 1024,
+		"S11 graceful-stop: MiB of filler rows grown in the standalone cluster's database before the backup, so "+
+			"that backupdb runs for seconds; 0 grows none; the cluster's data volume is 2Gi and four times this")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
 		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
 	flags.BoolVar(&cfg.Restore, "restore", false,
@@ -211,6 +225,12 @@ func run(ctx context.Context, args []string) (runErr error) {
 	}
 	if set["backup-operation-store-loss-ready-limit"] && !cfg.BackupOperationStoreLoss {
 		return errors.New("-backup-operation-store-loss-ready-limit needs -backup-operation-store-loss")
+	}
+	if set["backup-graceful-stop-ready-limit"] && !cfg.BackupGracefulStop {
+		return errors.New("-backup-graceful-stop-ready-limit needs -backup-graceful-stop")
+	}
+	if set["backup-graceful-stop-filler-mb"] && !cfg.BackupGracefulStop {
+		return errors.New("-backup-graceful-stop-filler-mb needs -backup-graceful-stop")
 	}
 	if flags.NArg() != 0 || (cfg.Level != "kind" && cfg.Level != "vm-lab") {
 		return errors.New("choose kind or vm-lab explicitly and provide no positional command")

@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"strings"
@@ -89,6 +90,15 @@ type Runner struct {
 	// podLogs opens a container's log through the API server; S11 searches
 	// the installed manager's and the Instance Manager's logs with it.
 	podLogs podLogReader
+	// followLogs opens a container's log through the API server and follows
+	// it until the container ends or ctx does, without the bound on one read
+	// that podLogs has; S11 graceful-stop records the log of a member Pod it
+	// deletes with it.
+	followLogs podLogReader
+	// execStream runs kubectl with args and returns its standard output as
+	// it is written; Close ends the process. S11 graceful-stop samples a
+	// member's processes through it.
+	execStream func(ctx context.Context, args ...string) (io.ReadCloser, error)
 	// maxLogBytes bounds what S11 reads of one container instance's log;
 	// zero selects defaultMaxLogBytes.
 	maxLogBytes int64

@@ -201,6 +201,22 @@ type HAConfig struct {
 	// its creation until it is Ready, and from the kill until it is Ready
 	// again. It is the run's bound, not the contract's.
 	BackupOperationStoreLossReadyLimit time.Duration
+	// BackupGracefulStop selects S11 graceful-stop after S11 complete: a
+	// CubridBackup to BackupBucket of a standalone cluster whose member's Pod
+	// is deleted with its grace period while backupdb runs. It needs
+	// BackupBucket and cannot be combined with Restore or another S11
+	// variant.
+	BackupGracefulStop bool
+	// BackupGracefulStopReadyLimit bounds that standalone cluster from its
+	// creation until it is Ready, and from the deletion until the member's
+	// replacement Pod is ready and the cluster Ready again. It is the run's
+	// bound, not the contract's.
+	BackupGracefulStopReadyLimit time.Duration
+	// BackupGracefulStopFillerMB is the size in MiB of the table S11
+	// graceful-stop grows in its cluster's database before the request, so
+	// that backupdb runs long enough for the stop to land inside it; 0 grows
+	// none. The cluster's data volume grows with it.
+	BackupGracefulStopFillerMB int
 	// ObjectStoreService is the object store's Service as
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.
@@ -377,10 +393,10 @@ type haRun struct {
 	// denied-credentials, s11Signature that of S11 signature-mismatch and
 	// s11Interrupted that of S11 interrupted-upload, s11Restart that of S11
 	// operator-restart, s11IMRestart that of S11 instance-manager-restart,
-	// s11Overlapping that of S11 overlapping and s11StoreLoss that of S11
-	// operation-store-loss.
+	// s11Overlapping that of S11 overlapping, s11StoreLoss that of S11
+	// operation-store-loss and s11GracefulStop that of S11 graceful-stop.
 	s11, s11Missing, s11Denied, s11Signature, s11Interrupted, s11Restart, s11IMRestart,
-	s11Overlapping, s11StoreLoss *evidence.Scenario
+	s11Overlapping, s11StoreLoss, s11GracefulStop *evidence.Scenario
 	s11Rec *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
@@ -508,6 +524,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		lane, requirements = planS11InstanceManagerRestart(cfg, lane, requirements, &summary)
 		lane, requirements = planS11Overlapping(cfg, lane, requirements, &summary)
 		lane, requirements = planS11OperationStoreLoss(cfg, lane, requirements, &summary)
+		lane, requirements = planS11GracefulStop(cfg, lane, requirements, &summary)
 	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
@@ -686,7 +703,8 @@ func (h *haRun) s11Variants() []s11FollowUp {
 		{h.cfg.BackupOperatorRestart, &h.s11Restart, s11RestartVariant, h.runS11OperatorRestart},
 		{h.cfg.BackupInstanceManagerRestart, &h.s11IMRestart, s11IMRestartVariant, h.runS11InstanceManagerRestart},
 		{h.cfg.BackupOverlapping, &h.s11Overlapping, s11OverlappingVariant, h.runS11Overlapping},
-		{h.cfg.BackupOperationStoreLoss, &h.s11StoreLoss, s11StoreLossVariant, h.runS11OperationStoreLoss}}
+		{h.cfg.BackupOperationStoreLoss, &h.s11StoreLoss, s11StoreLossVariant, h.runS11OperationStoreLoss},
+		{h.cfg.BackupGracefulStop, &h.s11GracefulStop, s11GracefulStopVariant, h.runS11GracefulStop}}
 }
 
 // recordS11Variants records the S11 variants selected to follow S11

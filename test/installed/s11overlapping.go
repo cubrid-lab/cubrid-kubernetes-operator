@@ -208,7 +208,8 @@ func (c HAConfig) validateS11Overlapping() error {
 		{c.BackupInterruptedUpload, flagInterruptedUpload},
 		{c.BackupOperatorRestart, flagOperatorRestart},
 		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart},
-		{c.BackupOperationStoreLoss, flagOperationStoreLoss}} {
+		{c.BackupOperationStoreLoss, flagOperationStoreLoss},
+		{c.BackupGracefulStop, flagGracefulStop}} {
 		if other.selected {
 			return fmt.Errorf("%s and %s select different lanes; a run takes one of them", flagOverlapping,
 				other.flag)

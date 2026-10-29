@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-43, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-44, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -24,7 +24,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > plain Pods and no CUBRID; POC-40 and POC-41 ran on the VM lab, with the
 > installed Operator and its derivative image; POC-42 ran in Docker on a
 > native linux/amd64 host, and its last part on the VM lab with the installed
-> Operator; POC-43 ran on the VM lab with the installed Operator. Each
+> Operator; POC-43 and POC-44 ran on the VM lab with the installed Operator. Each
 > states its own environment. Each POC is the behavior of one image in a
 > few runs, not a general CUBRID guarantee. The raw observations below
 > are kept as recorded; where a later POC contradicts one, a note says so.
@@ -4518,3 +4518,58 @@ whole log (searched for each value, 0 matches).
 - A cut that resets the connection instead of dropping it. That is what the installed-Operator test of a backup whose upload is cut (scenario S11, `interrupted-upload`, PR #632) does.
 - A restore of run `ta`'s artifact, and a second backup after run `tb` (the cluster was deleted).
 - Another object store, `IM_BACKUP_TIMEOUT` set below the stall, and the Operator's own log.
+
+## POC-44 — what csql prints while a standalone member's table is grown with `INSERT … SELECT`, on the VM lab (#277) — **observation: csql intermittently printed `ERROR CODE = -199` (server no longer responding) and `ERROR CODE = -111` (transaction aborted) after `Committed.` and `Execute OK.`, as it exited; the counts read after those statements included their rows, the server stayed the same process, its `.err` log held nothing after `Server status is UP`, and the container did not restart; the cause was not found**
+
+**Question.** The installed-Operator test of a backup whose member is stopped
+gracefully while `backupdb` runs (scenario S11, `graceful-stop`) grows a
+filler table in a standalone member's database before the backup, so that
+`backupdb` runs for seconds. Its first VM-lab run of the filler, at
+2026-10-29 20:00 UTC (`cubrid-lab-s11gs-2`, harness `c2e31c3`), was blocked
+after about 30 s, at about 196,608 rows: the output of statement 20 held
+`65536 rows affected`, `Committed.` and `Execute OK.`, then
+`ERROR CODE = -199`, `Server no longer responding....`, `Invalid argument`,
+`ERROR CODE = -111` and `Your transaction has been aborted by the system due
+to server failure or mode change.` That harness judged a statement by the
+error text in its output. Did those statements take effect, and did the
+server fail?
+
+**Environment (2026-10-29 20:07Z to 20:12Z).**
+- The VM lab, the installed Operator from main `fb6f345` and its default
+  Instance Manager image, CUBRID 11.4.6.
+- A one-member standalone cluster created by hand, with the run's copy of
+  the object store Secret.
+- The statements of that harness, by hand, in the member's database
+  container: `csql -u dba appdb@localhost -c "<statement>"`. They were
+  `CREATE TABLE gs_filler (pad CHAR(1000))`, one
+  `INSERT … VALUES (REPEAT('x', 1000))`, and then
+  `INSERT INTO gs_filler (pad) SELECT pad FROM gs_filler LIMIT <k>; COMMIT;`
+  repeated, with `SELECT COUNT(*)` read between them.
+
+**Observations.**
+- The -199 and -111 pair appeared intermittently, and only after
+  `Committed.` and `Execute OK.`, as csql exited. Twice it came at the first
+  `INSERT` of a series: once at statement 13 and once at statement 4.
+- The rows of those statements were committed: the count grew from 6,144 to
+  49,152 across the statements that printed the pair, and later by exactly
+  8,192 per statement.
+- The server stayed the same process: `cubrid server status` showed pid 32
+  from the start. The container never restarted (restart count 0, Ready),
+  and the server's `.err` log held nothing after `Server status is UP`.
+- With `-c "INSERT …;"` alone (csql commits at exit), and with
+  `-c "INSERT …; COMMIT;"`, the pair did not come back in a later attempt.
+- One `INSERT` of 8,192 rows took 12.2 s, against about 0.1 s for the
+  others. This was perhaps while a volume grew; that was not checked.
+
+**Finding.** In these runs the error text csql printed after a committed
+statement did not say whether the statement took effect: the rows were
+there. The graceful-stop test therefore judges each filler statement by a
+row count read in a csql call of its own. It runs a statement once more when
+the count did not reach the expected total, and records the statements that printed an error
+although their rows were counted (`fillerExitErrors`) as evidence only.
+
+**Limits.** One lab, one image, a few minutes of statements; the pair is
+intermittent and was not reproduced on demand. The cause is unknown. It may
+be csql's shutdown racing the server's close of the connection, but that was
+not shown. Neither the server's nor csql's own trace was read beyond the
+`.err` log, and no other client was tried.
