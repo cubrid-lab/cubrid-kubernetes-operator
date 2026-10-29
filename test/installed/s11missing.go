@@ -169,7 +169,7 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 			return !strings.HasPrefix(f, "S11/"+s11MissingVariant+"/")
 		})
 	}()
-	result.Limits = map[string]string{"backup_limit": h.cfg.BackupLimit.String()}
+	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String()}
 	result.Measurements = map[string]any{"failedWithin": evidence.Unknown}
 	err := h.missingSteps(ctx, &result, &rec, &created)
 	// A credential found in any status read or Event is a failure, whichever
@@ -226,7 +226,7 @@ func (h *haRun) missingSteps(ctx context.Context, result *evidence.Scenario, rec
 	if err := h.missingBefore(ctx, rec.Bucket); err != nil {
 		return err
 	}
-	backup, err := h.createBackup(ctx, s11MissingBackupName, rec.Bucket.Name, rec.Prefix)
+	backup, err := h.createBackup(ctx, s11MissingBackupName, haClusterName, rec.Bucket.Name, rec.Prefix)
 	if err != nil {
 		return err
 	}
@@ -245,7 +245,7 @@ func (h *haRun) missingSteps(ctx context.Context, result *evidence.Scenario, rec
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
 	errs = append(errs, h.checkSourceS12(ctx, rec.Source, s11MissingSourceDataCheckFile))
-	errs = append(errs, h.missingManager(ctx, rec))
+	errs = append(errs, h.sameManager(ctx, "S11 missing-destination", rec.ManagerBefore, &rec.ManagerAfter))
 	return errors.Join(errs...)
 }
 
@@ -338,16 +338,23 @@ func (h *haRun) judgeMissing(backup *databasev1alpha1.CubridBackup, waitErr erro
 	return nil
 }
 
+// accessRefusals are the S3 error codes and messages, lower case, of a
+// refused access: a denied request, an unknown access key and a signature
+// made with another secret key.
+var accessRefusals = []string{"accessdenied", "access denied", "invalidaccesskeyid",
+	"access key id you provided does not exist", "signaturedoesnotmatch", "signature we calculated does not match"}
+
 // storeErrorKind names what the object store's answer says: a bucket that
 // does not exist, a refused access, or something else. It is an observation:
-// the answer's words are the store's, and no lab run has shown them yet.
+// the answer's words are the store's. A refused access is named first: the
+// message of an unknown access key also says "does not exist".
 func storeErrorKind(answer string) string {
 	lower := strings.ToLower(answer)
 	switch {
+	case slices.ContainsFunc(accessRefusals, func(s string) bool { return strings.Contains(lower, s) }):
+		return storeErrorAccessDenied
 	case strings.Contains(lower, "nosuchbucket") || strings.Contains(lower, "does not exist"):
 		return storeErrorNoSuchBucket
-	case strings.Contains(lower, "accessdenied") || strings.Contains(lower, "access denied"):
-		return storeErrorAccessDenied
 	}
 	return storeErrorOther
 }
@@ -388,18 +395,18 @@ func (h *haRun) missingAtEnd(ctx context.Context, b *s11MissingBucket) error {
 	return backupVerdict{errors.New(held)}
 }
 
-// missingManager reads the installed manager at the end. A manager other
-// than the one LAB01 checked blocks S11 missing-destination: the backup was
-// not taken by the Operator the run started with.
-func (h *haRun) missingManager(ctx context.Context, rec *s11MissingRecord) error {
-	after, err := h.observeManager(ctx, h.cfg.Config)
-	rec.ManagerAfter = &after
+// sameManager reads the installed manager at the end of the variant named
+// into after. A manager other than before, the one LAB01 checked, blocks the
+// variant: the backup was not taken by the Operator the run started with.
+func (h *haRun) sameManager(ctx context.Context, variant string, before *managerIdentity,
+	after **managerIdentity) error {
+	read, err := h.observeManager(ctx, h.cfg.Config)
+	*after = &read
 	if err != nil {
 		return err
 	}
-	if before := rec.ManagerBefore; after.DeploymentUID != before.DeploymentUID ||
-		!slices.Equal(after.Pods, before.Pods) {
-		return errors.New("the installed manager identity changed during S11 missing-destination")
+	if read.DeploymentUID != before.DeploymentUID || !slices.Equal(read.Pods, before.Pods) {
+		return errors.New("the installed manager identity changed during " + variant)
 	}
 	return nil
 }

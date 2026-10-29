@@ -118,12 +118,22 @@ type HAConfig struct {
 	// run's database to this bucket. It cannot be combined with Fault.
 	BackupBucket string
 	// BackupLimit bounds the backup from its request until Completed or
-	// Failed (backup_limit), and in S11 missing-destination until Failed.
+	// Failed (backup_limit), and in S11 missing-destination and
+	// denied-credentials until Failed.
 	BackupLimit time.Duration
 	// BackupMissingDestination selects S11 missing-destination after S11
 	// complete: a CubridBackup of the run's database to a bucket that does
 	// not exist. It needs BackupBucket and cannot be combined with Restore.
 	BackupMissingDestination bool
+	// BackupDeniedCredentials selects S11 denied-credentials after S11
+	// complete: a CubridBackup to BackupBucket of a standalone cluster whose
+	// spec.objectStorage Secret holds keys the object store refuses. It
+	// needs BackupBucket and cannot be combined with Restore or
+	// BackupMissingDestination.
+	BackupDeniedCredentials bool
+	// BackupDeniedReadyLimit bounds that standalone cluster from its
+	// creation until it is Ready. It is the run's bound, not the contract's.
+	BackupDeniedReadyLimit time.Duration
 	// ObjectStoreService is the object store's Service as
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.
@@ -284,9 +294,10 @@ type haRun struct {
 	// s06 is the result of S06 restart, once it ran.
 	s06 *evidence.Scenario
 	// s11 is the result of S11 complete, once it ran, and s11Rec its record;
-	// s11Missing is that of S11 missing-destination.
-	s11, s11Missing *evidence.Scenario
-	s11Rec          *s11Record
+	// s11Missing is that of S11 missing-destination and s11Denied that of
+	// S11 denied-credentials.
+	s11, s11Missing, s11Denied *evidence.Scenario
+	s11Rec                     *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
 	// S12 operator-restart, s12IMRestart that of S12 instance-manager-restart
@@ -303,6 +314,11 @@ type haRun struct {
 	// accessKey and secretKey are the seed Secret's values. They go to the
 	// redactor and to the run's own object store client, nowhere else.
 	accessKey, secretKey string
+	// deniedKeys are the access key and the secret key S11
+	// denied-credentials generated, once it did. They go to the redactor, to
+	// the run's own object store client and to the Secret of that variant's
+	// cluster, nowhere else; holdsCredential looks for them too.
+	deniedKeys []string
 }
 
 // RunHA creates a three-member HA cluster in a fresh namespace through the
@@ -400,6 +416,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 			"backup to object storage, downloaded and checked by the run; no other S00-S15 qualification"
 		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket for S12")
 		lane, requirements = planS11MissingDestination(cfg, lane, requirements, &summary)
+		lane, requirements = planS11DeniedCredentials(cfg, lane, requirements, &summary)
 	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
@@ -503,16 +520,7 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 		summary.Settle(evidence.Requirement{ID: s11ID, Variant: s11Variant}, evidence.Blocked,
 			"S11 starts from LAB01's checked state, and LAB01 did not pass")
 	}
-	switch {
-	case h.s11Missing != nil:
-		summary.Record(*h.s11Missing)
-	case h.cfg.BackupMissingDestination && h.s11 == nil:
-		summary.Settle(evidence.Requirement{ID: s11ID, Variant: s11MissingVariant}, evidence.Blocked,
-			"S11 missing-destination follows S11 complete, and S11 complete did not run")
-	case h.cfg.BackupMissingDestination:
-		summary.Settle(evidence.Requirement{ID: s11ID, Variant: s11MissingVariant}, evidence.Blocked,
-			"S11 missing-destination follows S11 complete, and S11 complete did not pass")
-	}
+	h.recordS11Variants(summary)
 	switch {
 	case h.s12 != nil:
 		summary.Record(*h.s12)
@@ -567,6 +575,28 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 	}
 }
 
+// recordS11Variants records the S11 variants selected to follow S11
+// complete, and settles as blocked those that did not run.
+func (h *haRun) recordS11Variants(summary *evidence.Summary) {
+	for _, v := range []struct {
+		selected bool
+		result   *evidence.Scenario
+		variant  string
+	}{{h.cfg.BackupMissingDestination, h.s11Missing, s11MissingVariant},
+		{h.cfg.BackupDeniedCredentials, h.s11Denied, s11DeniedVariant}} {
+		switch {
+		case v.result != nil:
+			summary.Record(*v.result)
+		case v.selected && h.s11 == nil:
+			summary.Settle(evidence.Requirement{ID: s11ID, Variant: v.variant}, evidence.Blocked,
+				"S11 "+v.variant+" follows S11 complete, and S11 complete did not run")
+		case v.selected:
+			summary.Settle(evidence.Requirement{ID: s11ID, Variant: v.variant}, evidence.Blocked,
+				"S11 "+v.variant+" follows S11 complete, and S11 complete did not pass")
+		}
+	}
+}
+
 // afterLAB01 runs the scenario selected to follow LAB01, if any.
 func (h *haRun) afterLAB01(ctx context.Context) error {
 	switch {
@@ -587,6 +617,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 			h.s11Missing = &missing
 			if missing.Result != evidence.Pass {
 				return fmt.Errorf("S11/%s: %s", s11MissingVariant, missing.Reason)
+			}
+		}
+		if h.cfg.BackupDeniedCredentials {
+			denied := h.runS11DeniedCredentials(ctx)
+			h.s11Denied = &denied
+			if denied.Result != evidence.Pass {
+				return fmt.Errorf("S11/%s: %s", s11DeniedVariant, denied.Reason)
 			}
 		}
 		if !h.cfg.Restore {

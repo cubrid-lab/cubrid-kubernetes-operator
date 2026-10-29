@@ -60,6 +60,8 @@ const (
 	s11Marker = "s11"
 	// backupReady is the condition that holds a backup's reason.
 	backupReady = "Ready"
+	// backupLimitName is the contract's limit on a backup (backup_limit).
+	backupLimitName = "backup_limit"
 )
 
 // s3Bucket is the bucket rule of a CubridBackup's destination; two adjacent
@@ -70,6 +72,10 @@ var s3Bucket = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 func (c HAConfig) validateS11() error {
 	if c.BackupMissingDestination && c.BackupBucket == "" {
 		return errors.New("-backup-missing-destination needs -backup-bucket: S11 missing-destination follows S11 " +
+			"complete")
+	}
+	if c.BackupDeniedCredentials && c.BackupBucket == "" {
+		return errors.New("-backup-denied-credentials needs -backup-bucket: S11 denied-credentials follows S11 " +
 			"complete")
 	}
 	if c.BackupBucket == "" {
@@ -83,6 +89,16 @@ func (c HAConfig) validateS11() error {
 	}
 	if c.BackupMissingDestination && c.Restore {
 		return errors.New("-backup-missing-destination and -restore select different lanes; a run takes one of them")
+	}
+	if c.BackupDeniedCredentials && c.Restore {
+		return errors.New("-backup-denied-credentials and -restore select different lanes; a run takes one of them")
+	}
+	if c.BackupDeniedCredentials && c.BackupMissingDestination {
+		return errors.New("-backup-denied-credentials and -backup-missing-destination select different lanes; a " +
+			"run takes one of them")
+	}
+	if c.BackupDeniedCredentials && c.BackupDeniedReadyLimit <= 0 {
+		return errors.New("-backup-denied-credentials needs a positive -backup-denied-ready-limit for its cluster")
 	}
 	_, _, _, err := splitService(c.ObjectStoreService)
 	return err
@@ -112,7 +128,9 @@ var maxManifestSize int64 = 16 << 20
 // objectStore reads an S3-compatible store and writes to it. S11 verifies
 // the artifact with a client of its own, not through the Operator or the
 // Instance Manager; S12 tampered writes and removes its copy of it with the
-// same client, and S11 missing-destination asks it whether a bucket exists.
+// same client, S11 missing-destination asks it whether a bucket exists, and
+// S11 denied-credentials lists a prefix with the seed keys and with keys the
+// store must refuse.
 type objectStore interface {
 	Get(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 	List(ctx context.Context, bucket, prefix string) ([]string, error)
@@ -319,7 +337,7 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 		}
 		return result
 	}
-	result.Limits = map[string]string{"backup_limit": h.cfg.BackupLimit.String()}
+	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String()}
 	result.Measurements = map[string]any{"backupCompletedWithin": evidence.Unknown,
 		"objectsVerified": evidence.Unknown, "artifactBytes": evidence.Unknown,
 		"objectsNotInManifest": evidence.Unknown}
@@ -333,7 +351,7 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 	if err != nil {
 		return end(evidence.Blocked, "record the known point: %v", err)
 	}
-	backup, err := h.createBackup(ctx, s11BackupName, h.cfg.BackupBucket, rec.Prefix)
+	backup, err := h.createBackup(ctx, s11BackupName, haClusterName, h.cfg.BackupBucket, rec.Prefix)
 	if err != nil {
 		return end(evidence.Blocked, "%v", err)
 	}
@@ -461,18 +479,18 @@ func (h *haRun) knownPoint(ctx context.Context) (*s11KnownPoint, error) {
 }
 
 // createBackup requests the CubridBackup name, a full backup of the run's
-// database to bucket under prefix. The target is left to its default,
-// PreferStandby. The Operator reaches the store with the cluster's
-// spec.objectStorage: its endpoint and the copied Secret, through the
-// members' environment.
-func (h *haRun) createBackup(ctx context.Context, name, bucket, prefix string) (*databasev1alpha1.CubridBackup,
-	error) {
+// database on cluster to bucket under prefix. The target is left to its
+// default, PreferStandby. The Operator reaches the store with the cluster's
+// spec.objectStorage: its endpoint and its Secret, through the members'
+// environment.
+func (h *haRun) createBackup(ctx context.Context, name, cluster, bucket, prefix string) (
+	*databasev1alpha1.CubridBackup, error) {
 	if err := h.guard(ctx); err != nil {
 		return nil, err
 	}
 	backup := &databasev1alpha1.CubridBackup{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: h.cfg.Namespace},
-		Spec: databasev1alpha1.CubridBackupSpec{ClusterRef: databasev1alpha1.LocalObjectRef{Name: haClusterName},
+		Spec: databasev1alpha1.CubridBackupSpec{ClusterRef: databasev1alpha1.LocalObjectRef{Name: cluster},
 			Database: databaseName, Destination: databasev1alpha1.CubridBackupDestination{
 				Type:          databasev1alpha1.DestinationObjectStorage,
 				ObjectStorage: &databasev1alpha1.ObjectStorageDestination{Bucket: bucket, Prefix: prefix}}}}
@@ -667,9 +685,15 @@ func (h *haRun) verifyS11Objects(ctx context.Context, store objectStore, m insta
 	return nil
 }
 
-// openS11Store opens the port-forward and the run's client; stop ends the
-// port-forward.
+// openS11Store opens the port-forward and the run's client with the seed
+// Secret's keys; stop ends the port-forward.
 func (h *haRun) openS11Store(ctx context.Context) (objectStore, func(), error) {
+	return h.openStoreWith(ctx, h.accessKey, h.secretKey)
+}
+
+// openStoreWith opens the port-forward and the run's client with accessKey
+// and secretKey; stop ends the port-forward.
+func (h *haRun) openStoreWith(ctx context.Context, accessKey, secretKey string) (objectStore, func(), error) {
 	if h.forward == nil {
 		return nil, nil, errors.New("no port-forward to the object store is available")
 	}
@@ -688,7 +712,7 @@ func (h *haRun) openS11Store(ctx context.Context) (objectStore, func(), error) {
 	if open == nil {
 		open = newMinioStore
 	}
-	store, err := open(endpoint, h.accessKey, h.secretKey, !h.cfg.SeedInsecure)
+	store, err := open(endpoint, accessKey, secretKey, !h.cfg.SeedInsecure)
 	if err != nil {
 		stop()
 		return nil, nil, fmt.Errorf("open the object store client: %w", err)
@@ -886,15 +910,23 @@ func (h *haRun) lookForCredentials(found *[]string, where string, v any) error {
 	return nil
 }
 
-// holdsCredential reports whether data holds a key of the object store. A
-// key too short for evidence.SecretForms cannot be searched for: the run
-// does not claim it found none.
+// holdsCredential reports whether data holds a key of the object store: a
+// key of the seed Secret or, once S11 denied-credentials generated them, a
+// denied key. A key too short for evidence.SecretForms cannot be searched
+// for: the run does not claim it found none.
 func (h *haRun) holdsCredential(data []byte) (bool, error) {
 	access, secret := evidence.SecretForms(h.accessKey), evidence.SecretForms(h.secretKey)
 	if len(access) == 0 || len(secret) == 0 {
 		return false, errors.New("a key of the seed Secret is too short to be searched for")
 	}
 	forms := append(access, secret...)
+	for _, key := range h.deniedKeys {
+		denied := evidence.SecretForms(key)
+		if len(denied) == 0 {
+			return false, errors.New("a denied key is too short to be searched for")
+		}
+		forms = append(forms, denied...)
+	}
 	return slices.ContainsFunc(forms, func(form string) bool { return strings.Contains(string(data), form) }), nil
 }
 

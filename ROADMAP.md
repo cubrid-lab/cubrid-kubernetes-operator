@@ -176,9 +176,19 @@ after the request, with the store's answer `The specified bucket does not
 exist` (SeaweedFS); the bucket was still absent with no object, no credential
 was in 5 statuses or 81 Events, and the run deleted its `CubridBackup`. One
 run is not a baseline; the target member's staging directory afterwards and
-the Operator's and Instance Manager's logs were not checked. Denied
-credentials, other invalid destinations and an interrupted upload are not
-covered.
+the Operator's and Instance Manager's logs were not checked. Other invalid
+destinations and an interrupted upload are not covered.
+
+S11 `denied-credentials` also follows S11 `complete`, in a run of its own
+(`lab-installed-ha-s11-denied-credentials`, `-backup-denied-credentials`,
+#616): the run generates keys, confirms with its own client that the store
+refuses them, creates a standalone cluster whose object store Secret holds
+them, and requires its backup to the backup bucket `Failed` with
+`BackupFailed` and `upload failed: put <bucket>/...` within `backup_limit`,
+never `Completed` and without `status.artifact`, nothing under its prefix at
+the end, the source unchanged and neither the seed nor the denied keys in a
+status read or an Event; it deletes the backup, the cluster and the Secret
+it created. It is lab-only and not yet run on the VM lab.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
