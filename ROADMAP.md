@@ -462,9 +462,24 @@ fault, or a `backup_limit` that runs out while the backup still reads
 blocked. `Failed` for the restart reason, or for
 another reason, fails it. The member's backup staging directory is listed
 after the restart and at the end as evidence for #636, not judged. Unit
-tests cover it with fakes. It has not yet run on the VM lab: the real
-Instance Manager's answer and the staging directory after the restart are
-still unobserved.
+tests cover it with fakes. On 2026-10-29 it passed twice on the VM lab
+(manager `fb6f345`, after S11 `complete` on the same run), once with an
+earlier harness of the change (`470f55b`, which checked only the main thread
+of the stopped Instance Manager) and once with the reviewed one (`1dab28d`).
+In the second run, with 560,612 bytes through the limit and the backup
+`Uploading`, the command removed `op-bfd729df….json` from the member's
+store and killed the Instance Manager at 17:52:24.93 UTC; the container was
+back 3.4 s later and the cluster read `Ready` 15.5 s after the kill; the
+store held no record of the operation after the restart; the restarted
+Instance Manager answered `404: operation not found`, the Operator set
+`operationMissingSince` 17:52:37 and the backup read `Uploading` with
+`RecordedOperationMissing` from 17:52:40.92; it ended `Failed` with
+`RecordedOperationLost` at 18:22:39.70, 30 min 2 s after
+`operationMissingSince`, under its one operation, with no new attempt,
+nothing under its prefix and no artifact. The killed operation's staging
+directory was gone after the restart and at the end, as
+`reclaimBackupStaging` predicts. The first run's figures were within a
+second of these. Two runs are not a baseline.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
