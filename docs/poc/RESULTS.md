@@ -25,8 +25,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > installed Operator and its derivative image; POC-42 ran in Docker on a
 > native linux/amd64 host, and its last part on the VM lab with the installed
 > Operator; POC-43 ran on the VM lab with the installed Operator. Each
-> states its own environment. Each POC is the behavior of one image in a few runs, not a
-> general CUBRID guarantee. The raw observations below are kept as recorded;
+> states its own environment. Each POC is the behavior of one image in a
+> few runs, not a general CUBRID guarantee. The raw observations below are kept as recorded;
 > where a later POC contradicts one, a note says so. The current reading of
 > the whole is at the top of [Net assessment](#net-assessment).
 
@@ -4462,7 +4462,7 @@ and the only deadline of its own is `IM_BACKUP_TIMEOUT` (default 2 h).
 **Departures.**
 - One run each, one object per backup, one store (SeaweedFS), one throttle rate.
 - A drop, not a reset: a store that resets the connection, or a multipart upload, may behave otherwise.
-- The cut was applied by hand, not by the `test/faults/netfault` helpers, and confirmed by the TCP counters (`bytes_acked` stopped growing, `backoff` rose), not by its probes.
+- The cut was applied by hand, not by the `test/faults/netfault` helpers, and confirmed by the TCP counters (`bytes_acked` stopped growing, `backoff` rose), not by their probes.
 - The first backup, before the namespace carried the label `app.kubernetes.io/managed-by=cubrid-installed-smoke`, was refused by the store's NetworkPolicy: `dial tcp 10.42.1.9:8333: connect: connection refused`, `Failed/BackupFailed` 11 s after the request, nothing under its prefix. It was not a planned case and is reported only as seen.
 - A baseline backup `base2` with the label and without a fault went `Completed` 11 s after the request.
 - Run `tb`'s PUT used the connection left open by run `ta`: its counters continued from `ta`'s final values. The socket's ports were not recorded, so this is inferred from the counters.
@@ -4481,7 +4481,7 @@ and the only deadline of its own is `IM_BACKUP_TIMEOUT` (default 2 h).
 | 06:04:50 | Instance Manager: `Completed` |
 | 06:05:00 | `CubridBackup` `Completed/BackupCompleted`, `status.artifact.sizeBytes` 6,304,768 |
 
-- About 11 MB were acknowledged after the cut was removed, 1.7 times the object. So the object was sent again from its start. The count fits the rest of the first PUT's body plus one full resend (about 10.96 MB), and is too small for two full resends; the requests themselves were not logged. The Instance Manager logged no retry: between `Uploading` and `Completed` it logged only the Operator's polls.
+- About 11 MB were acknowledged after the cut was removed, 1.7 times the object. So the object was sent again from its start. The count fits the rest of the first PUT's body plus one full resend (about 10.96 MB), and is too small for two full resends after the cut was removed; the requests themselves were not logged. The Instance Manager logged no retry: between `Uploading` and `Completed` it logged only the Operator's polls.
 - The artifact: `manifest.json` (484 bytes) and `backup/appdb_bk0v000` (6,304,768 bytes) under a fresh `attempt-<id>`. The object, read back with `fs.cat`, had SHA-256 `0a53f365…07f290`, the value in the manifest, and the manifest's size. The archive starts with `CUBRID/Backup_v2`. No restore of it was made.
 
 **Run `tb`: cut and never healed** (the throttle stayed, the cut was not removed before the end).
@@ -4510,7 +4510,7 @@ whole log (searched for each value, 0 matches).
 - **Nothing partial was left, and nothing partial was reported complete.** With a single-PUT object, an interrupted PUT left nothing in SeaweedFS (its own message: `returning 0 partial chunks for cleanup`), and no manifest was written. A `Completed` backup's object matched its manifest.
 - **A short cut is absorbed.** The object was sent again after the store gave up on the first PUT, and the backup completed. That is shown by the byte counts; the Instance Manager logged no retry, so it is taken to be minio-go's own.
 - **A lasting silent cut fails, late.** The backup stayed `Uploading` for 21.5 min with no progress before it failed. The bound came from the kernel's and minio-go's defaults, not from the Operator or the Instance Manager. By the code, `IM_BACKUP_TIMEOUT` (default 2 h) bounds a stall that those defaults do not end; that was not tested.
-- **A harness lane that cuts silently needs a `backup_limit` above that delay**: about 21.5 min after the cut from these defaults, plus the upload time before the cut (about 25 min in all here). Otherwise it ends before the backup does.
+- **A harness lane that cuts silently needs a `backup_limit` above that delay**: about 21.5 min after the cut from these defaults, plus the upload time before the cut (22.7 min in all here, so a limit of about 25 min). Otherwise it ends before the backup does.
 
 **Not tested.**
 - A multipart upload (an object above 16 MiB) and an upload of more than one object, where some objects may land before the cut, under a fresh `attempt-<id>` and without a manifest.
