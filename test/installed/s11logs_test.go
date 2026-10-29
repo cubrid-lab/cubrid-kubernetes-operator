@@ -23,9 +23,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
@@ -42,40 +44,70 @@ func memberLogKey(cfg HAConfig, pod string) string {
 }
 
 // requireLogsSearched checks that the installed manager's log and the
-// Instance Manager's log in target were searched whole and found clean.
+// Instance Manager's log in target were searched within the limit and found
+// clean: the manager's from sinceTime, the member's from sinceTime in the HA
+// cluster and whole in a cluster the variant created.
 func requireLogsSearched(t *testing.T, creds *s11Credentials, target string) {
 	t.Helper()
 	if creds == nil || len(creds.Logs) != 2 {
 		t.Fatalf("credentials = %+v, want two logs searched", creds)
 	}
 	op, im := creds.Logs[0], creds.Logs[1]
+	wantMember := logWhole
+	if target == testBackupTarget {
+		wantMember = logFromSinceTime
+	}
 	if op.Log != operatorLog || op.Pod != testManagerPodName || op.UID != testManagerPodName ||
-		op.Container != managerContainer || im.Log != instanceManagerLog || im.Pod != target || im.UID == "" ||
-		im.Container != databaseContainer {
+		op.Container != managerContainer || op.ReadFrom != logFromSinceTime || im.Log != instanceManagerLog ||
+		im.Pod != target || im.UID == "" || im.Container != databaseContainer || im.ReadFrom != wantMember {
 		t.Fatalf("logs = %+v, want the manager's and the Instance Manager's in %s", creds.Logs, target)
 	}
 	for _, c := range creds.Logs {
-		if c.SinceTime.IsZero() || c.BytesRead == 0 || c.Truncated || c.PreviousRead || c.Found || c.Unchecked != "" {
-			t.Fatalf("log = %+v, want it read whole and clean", c)
+		if c.SinceTime.IsZero() != (c.ReadFrom == logWhole) || c.BytesRead == 0 || c.Truncated || c.PreviousRead ||
+			c.Found || c.Unchecked != "" {
+			t.Fatalf("log = %+v, want it read within the limit and clean", c)
 		}
 	}
 }
 
-// restartedManager reads the installed manager's Pod with one restart of
-// its container.
-type restartedManager struct{ client.Client }
+// tamperedPods answers a Get of the Pod named pod changed by tamper, once
+// armed reports true; other reads are the client's.
+type tamperedPods struct {
+	client.Client
+	pod    string
+	armed  func() bool
+	tamper func(*corev1.Pod)
+}
 
-func (c restartedManager) Get(ctx context.Context, key client.ObjectKey, obj client.Object,
+func (c tamperedPods) Get(ctx context.Context, key client.ObjectKey, obj client.Object,
 	opts ...client.GetOption) error {
 	if err := c.Client.Get(ctx, key, obj, opts...); err != nil {
 		return err
 	}
-	if pod, ok := obj.(*corev1.Pod); ok && pod.Name == testManagerPodName {
-		for i := range pod.Status.ContainerStatuses {
-			pod.Status.ContainerStatuses[i].RestartCount = 1
-		}
+	if pod, ok := obj.(*corev1.Pod); ok && pod.Name == c.pod && c.armed() {
+		c.tamper(pod)
 	}
 	return nil
+}
+
+// tamperPod makes the run read the Pod named pod changed by tamper: from its
+// first Get, or, with afterRead, only once a log was read. LAB01 and the
+// Pod's first read in the log search see it as it is.
+func (f *s11Fixture) tamperPod(pod string, afterRead bool, tamper func(*corev1.Pod)) {
+	f.runner.Client = tamperedPods{Client: f.runner.Client, pod: pod, tamper: tamper, armed: func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return !afterRead || len(f.logReads) > 0
+	}}
+}
+
+// restart sets the restart count of every container of pod.
+func restart(count int32) func(*corev1.Pod) {
+	return func(pod *corev1.Pod) {
+		for i := range pod.Status.ContainerStatuses {
+			pod.Status.ContainerStatuses[i].RestartCount = count
+		}
+	}
 }
 
 // runS11Logs runs S11 complete with the fixture's logs and returns it and
@@ -143,7 +175,7 @@ func TestS11CompleteFailsOnAKeyInThePreviousInstanceOfARestartedContainer(t *tes
 	cfg := testS11Config(t)
 	f := newS11Fixture(t, cfg)
 	// The manager restarted once: its previous instance logged the key.
-	f.runner.Client = restartedManager{Client: f.runner.Client}
+	f.tamperPod(testManagerPodName, false, restart(1))
 	f.logs[managerLogKey(cfg, true)] = "panic: dump " + testSecretKey + "\n"
 	s11, rec := runS11Logs(t, f)
 	if s11.Result != evidence.Fail || len(s11.NeverEvents) != 1 || !strings.Contains(s11.NeverEvents[0], operatorLog) {
@@ -168,12 +200,49 @@ func TestS11CompleteIsBlockedByALogNotFullySearched(t *testing.T) {
 				corev1.Resource("pods/log"), testBackupTarget, errors.New("RBAC"))
 		}, want: testForbidden, check: func(c s11LogCheck) bool { return c.Log == instanceManagerLog }},
 		"truncated Operator's log": {prepare: func(f *s11Fixture) {
-			limit := maxLogBytes
-			maxLogBytes = 64
-			f.t.Cleanup(func() { maxLogBytes = limit })
+			f.runner.maxLogBytes = 64
 			f.logs[managerLogKey(f.cfg, false)] = strings.Repeat("reconciled\n", 10)
 		}, want: "more than 64 bytes", check: func(c s11LogCheck) bool {
 			return c.Log == operatorLog && c.Truncated && c.BytesRead == 65
+		}},
+		"error partway through the Instance Manager's log": {prepare: func(f *s11Fixture) {
+			f.streamErr[memberLogKey(f.cfg, testBackupTarget)] = errors.New("unexpected EOF")
+		}, want: "unexpected EOF", check: func(c s11LogCheck) bool {
+			return c.Log == instanceManagerLog && c.BytesRead > 0
+		}},
+		"manager Pod with another UID": {prepare: func(f *s11Fixture) {
+			f.tamperPod(testManagerPodName, false, func(p *corev1.Pod) { p.UID = "another-manager" })
+		}, want: "not " + testManagerPodName + ", the one recorded", check: func(c s11LogCheck) bool {
+			return c.Log == operatorLog && c.BytesRead == 0
+		}},
+		"target Pod the StatefulSet does not control": {prepare: func(f *s11Fixture) {
+			f.tamperPod(testBackupTarget, true, func(p *corev1.Pod) { p.OwnerReferences = nil })
+		}, want: "not controlled by the StatefulSet", check: func(c s11LogCheck) bool {
+			return c.Log == instanceManagerLog && c.BytesRead == 0
+		}},
+		"target Pod created after the request": {prepare: func(f *s11Fixture) {
+			f.tamperPod(testBackupTarget, true, func(p *corev1.Pod) {
+				p.CreationTimestamp = metav1.NewTime(time.Now().Add(time.Hour))
+			})
+		}, want: "not before the backup was requested", check: func(c s11LogCheck) bool {
+			return c.Log == instanceManagerLog && c.BytesRead == 0
+		}},
+		"manager restarted twice, the previous instance recently": {prepare: func(f *s11Fixture) {
+			f.tamperPod(testManagerPodName, false, func(p *corev1.Pod) {
+				restart(2)(p)
+				p.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{
+					StartedAt: metav1.Now()}
+			})
+		}, want: "restarted 2 times", check: func(c s11LogCheck) bool {
+			return c.Log == operatorLog && c.PreviousRead
+		}},
+		"manager restarted while its log was read": {prepare: func(f *s11Fixture) {
+			f.tamperPod(testManagerPodName, true, func(p *corev1.Pod) {
+				restart(1)(p)
+				p.Status.ContainerStatuses[0].ContainerID = "containerd://manager-restarted"
+			})
+		}, want: "restarted while its log was read", check: func(c s11LogCheck) bool {
+			return c.Log == operatorLog && c.RestartCount == 0 && !c.PreviousRead
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -243,5 +312,33 @@ func TestS11InterruptedUploadFailsOnAKeyInTheInstanceManagersLog(t *testing.T) {
 	}
 	if c := readInterruptedRecord(t, cfg.EvidenceDir).Credentials.Logs[1]; !c.Found || c.Pod != s11InterruptedMember {
 		t.Fatalf("log = %+v, want the key found in the member's log", c)
+	}
+}
+
+func TestS11DeniedCredentialsReadsTheNewMembersWholeLog(t *testing.T) {
+	cfg := testS11DeniedConfig(t)
+	f := newS11DeniedFixture(t, cfg)
+	denied, err := deniedOf(t, f)
+	if err != nil || denied.Result != evidence.Pass {
+		t.Fatalf("S11 denied-credentials = %+v, RunHA() error = %v; want a pass", denied, err)
+	}
+	// The member's Pod belongs to the cluster the variant created: all of its
+	// log is in scope. The manager existed before and is read from sinceTime.
+	member := f.logOpts[memberLogKey(cfg, s11DeniedClusterName+"-0")]
+	manager := f.logOpts[managerLogKey(cfg, false)]
+	if member.Container != databaseContainer || member.SinceTime != nil || manager.SinceTime == nil {
+		t.Fatalf("member read with %+v, manager with %+v; want the member whole", member, manager)
+	}
+	requireLogsSearched(t, readDeniedRecord(t, cfg.EvidenceDir).Credentials, s11DeniedClusterName+"-0")
+}
+
+func TestS11LogsAreNotSearchedWithoutATarget(t *testing.T) {
+	h := &haRun{Runner: &Runner{}, cfg: testS11Config(t)}
+	creds := &s11Credentials{FoundIn: []string{}}
+	err := h.checkS11Logs(t.Context(), haClusterName, false, "", time.Now(), time.Now(), creds)
+	// Not a verdict: each variant is blocked by it.
+	if err == nil || errors.As(err, new(backupVerdict)) || !strings.Contains(err.Error(), "no status.targetInstance") ||
+		len(creds.FoundIn) != 0 {
+		t.Fatalf("checkS11Logs() = %v, want the Instance Manager's log named as not searched", err)
 	}
 }

@@ -245,7 +245,7 @@ func (h *haRun) runS11KeyFault(ctx context.Context, v s11KeyFault) (result evide
 			"the fault check reaches the store through -object-store-service, while the member uploads to the " +
 				"cluster's spec.objectStorage endpoint; the run assumes, as S11 complete does, that they are the " +
 				"same store, and refuses a Service that the endpoint does not name",
-			logsNote()},
+			logsNote(h.logLimit())},
 		Cleanup: "nothing to delete: the run created no Secret, CubridCluster or CubridBackup",
 		Residue: "nothing: the run wrote nothing to the object store" + stagingNotChecked}
 	var made s11DeniedMade
@@ -306,9 +306,9 @@ func (h *haRun) runS11KeyFault(ctx context.Context, v s11KeyFault) (result evide
 			"for its upload to " + rec.Bucket + " with an answer that refuses the keys, never Completed and " +
 			"without status.artifact; nothing was under " +
 			"its prefix at the end; the source was unchanged; neither the seed keys nor " + v.keys + " were in " +
-			"the statuses read, the Events, the installed Operator's manager log or the Instance Manager's log in " +
-			v.cluster + "'s member Pod, each log read from " + logSinceMargin.String() + " before the variant " +
-			"started"
+			"the statuses read, the Events, the installed Operator's manager log, read from " +
+			logSinceMargin.String() + " before the variant started, or the whole Instance Manager's log in " +
+			v.cluster + "'s member Pod"
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -357,7 +357,7 @@ func (h *haRun) deniedSteps(ctx context.Context, v s11KeyFault, result *evidence
 	if err := h.standaloneAtEnd(ctx, made.cluster, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
 	}
-	if err := h.checkS11Logs(ctx, v.cluster, lastTarget(rec.Phases), requested, started,
+	if err := h.checkS11Logs(ctx, v.cluster, true, lastTarget(rec.Phases), requested, started,
 		rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}

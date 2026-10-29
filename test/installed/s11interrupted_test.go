@@ -712,7 +712,7 @@ func requireInterruptedEnd(t *testing.T, rec s11InterruptedRecord) {
 	}) {
 		t.Fatalf("notes = %v, want the local reset named", rec.Notes)
 	}
-	if !slices.Contains(rec.Notes, logsNote()) {
+	if !slices.Contains(rec.Notes, logsNote(defaultMaxLogBytes)) {
 		t.Fatalf("notes = %v, want both logs named as searched", rec.Notes)
 	}
 	requireLogsSearched(t, rec.Credentials, s11InterruptedMember)

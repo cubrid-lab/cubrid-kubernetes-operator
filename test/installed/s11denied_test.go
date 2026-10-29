@@ -510,7 +510,7 @@ func requireDeniedChecks(t *testing.T, rec s11DeniedRecord, lab01 haRecord) {
 		len(rec.Credentials.FoundIn) != 0 {
 		t.Fatalf("credentials = %+v, want every status searched", rec.Credentials)
 	}
-	if !slices.Contains(rec.Notes, logsNote()) {
+	if !slices.Contains(rec.Notes, logsNote(defaultMaxLogBytes)) {
 		t.Fatalf("notes = %v, want both logs named as searched", rec.Notes)
 	}
 	requireLogsSearched(t, rec.Credentials, rec.Cluster.Name+"-0")

@@ -452,7 +452,7 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 			"not be read: "+strings.Join(v.Unreadable, "; "))
 	}
 	credErr := h.checkS11Credentials(ctx, backup, manifest, rec.Credentials)
-	logErr := h.checkS11Logs(ctx, haClusterName, lastTarget(rec.Phases), requested, started, rec.Credentials)
+	logErr := h.checkS11Logs(ctx, haClusterName, false, lastTarget(rec.Phases), requested, started, rec.Credentials)
 	if found := rec.Credentials.FoundIn; len(found) > 0 {
 		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
 	}
@@ -486,7 +486,7 @@ func (h *haRun) runS11(ctx context.Context) (result evidence.Scenario) {
 		"recorded statuses, the manifest, the Events, the installed Operator's manager log or the Instance " +
 		"Manager's log in the backup's target Pod, each log read from " + logSinceMargin.String() + " before S11 " +
 		"complete started; the Instance Managers of the other members were not searched"
-	rec.Notes = append(rec.Notes, logsNote())
+	rec.Notes = append(rec.Notes, logsNote(h.logLimit()))
 	return result
 }
 

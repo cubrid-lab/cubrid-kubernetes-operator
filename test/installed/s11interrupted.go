@@ -354,7 +354,7 @@ func (h *haRun) runS11InterruptedUpload(ctx context.Context) (result evidence.Sc
 				"is refused as well",
 			"the run never writes to or removes from the object store; with the seed Secret's keys it lists the " +
 				"backup bucket under the prefix at the end",
-			logsNote()},
+			logsNote(h.logLimit())},
 		Cleanup: "nothing to delete: the run created no CubridCluster or CubridBackup",
 		Residue: "nothing: the run wrote nothing to the object store" + stagingNotChecked}
 	var made s11InterruptedMade
@@ -421,8 +421,9 @@ func (h *haRun) runS11InterruptedUpload(ctx context.Context) (result evidence.Sc
 			failure + ", never Completed and without status.artifact, also when read again at the end; no " +
 			"manifest.json was under its prefix at the end; both faults were seen removed; the store's address " +
 			"was unchanged before the cut and at the end; the source was unchanged; no seed key was in the " +
-			"statuses read, the Events, the installed Operator's manager log or the Instance Manager's log in " +
-			"the member's Pod, each log read from " + logSinceMargin.String() + " before the variant started"
+			"statuses read, the Events, the installed Operator's manager log, read from " +
+			logSinceMargin.String() + " before the variant started, or the whole Instance Manager's log in the " +
+			"member's Pod"
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -499,7 +500,7 @@ func (h *haRun) interruptedSteps(ctx context.Context, result *evidence.Scenario,
 	if err := h.standaloneAtEnd(ctx, made.cluster, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
 	}
-	if err := h.checkS11Logs(ctx, s11InterruptedClusterName, lastTarget(rec.Phases), *rec.RequestedAt, started,
+	if err := h.checkS11Logs(ctx, s11InterruptedClusterName, true, lastTarget(rec.Phases), *rec.RequestedAt, started,
 		rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}

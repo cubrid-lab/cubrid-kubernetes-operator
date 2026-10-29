@@ -152,7 +152,7 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 			"the run asks with the seed Secret's keys, and the members write with the cluster's " +
 				"spec.objectStorage Secret, a copy of them; the verdict does not depend on the object store's " +
 				"error code (storeError), which is recorded until a lab run shows what the store answers",
-			logsNote()},
+			logsNote(h.logLimit())},
 		Cleanup: "nothing to delete: the run created no CubridBackup", Residue: "nothing: the run wrote nothing " +
 			"to the object store" + stagingNotChecked}
 	var created *databasev1alpha1.CubridBackup
@@ -249,7 +249,7 @@ func (h *haRun) missingSteps(ctx context.Context, result *evidence.Scenario, rec
 	if err := h.checkS11Credentials(ctx, *created, nil, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
 	}
-	if err := h.checkS11Logs(ctx, haClusterName, lastTarget(rec.Phases), requested, started,
+	if err := h.checkS11Logs(ctx, haClusterName, false, lastTarget(rec.Phases), requested, started,
 		rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}

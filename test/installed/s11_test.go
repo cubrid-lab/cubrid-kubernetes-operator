@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -208,12 +209,16 @@ type s11Fixture struct {
 	// accessKey and secretKey are the keys the run's client must use.
 	accessKey, secretKey string
 	// logs are the container logs the fake API server holds and logErr its
-	// errors, keyed by logKey; logOf, when set, answers a read before them,
-	// unless it returns false. logReads are the logs the run read.
-	logs     map[string]string
-	logErr   map[string]error
-	logOf    func(key string) (string, bool)
-	logReads []string
+	// errors, keyed by logKey; streamErr ends a read with an error after the
+	// log's content. logOf, when set, answers a read before them, unless it
+	// returns false. logReads are the logs the run read, and logOpts the
+	// options of each.
+	logs      map[string]string
+	logErr    map[string]error
+	streamErr map[string]error
+	logOf     func(key string) (string, bool)
+	logReads  []string
+	logOpts   map[string]corev1.PodLogOptions
 
 	reads, forwards, forwardsStopped int
 	markers                          []string
@@ -225,6 +230,7 @@ func newS11Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) *s11Fixtu
 	t.Helper()
 	f := &s11Fixture{haFixture: newHAFixture(t, cfg, extra...), store: &fakeStore{objects: map[string][]byte{}},
 		accessKey: testAccessKey, secretKey: testSecretKey, logs: map[string]string{}, logErr: map[string]error{},
+		streamErr: map[string]error{}, logOpts: map[string]corev1.PodLogOptions{},
 		phases: []databasev1alpha1.CubridBackupPhase{databasev1alpha1.BackupPhasePending,
 			databasev1alpha1.BackupPhaseRunning, databasev1alpha1.BackupPhaseUploading,
 			databasev1alpha1.BackupPhaseCompleted}}
@@ -283,15 +289,16 @@ func logKey(namespace, pod, container string, previous bool) string {
 // holds one line without a key.
 func (f *s11Fixture) podLogs(_ context.Context, namespace, pod string, opts *corev1.PodLogOptions) (io.ReadCloser,
 	error) {
-	if opts.Container == "" || opts.SinceTime == nil || opts.SinceTime.After(time.Now()) || opts.LimitBytes == nil ||
-		*opts.LimitBytes != maxLogBytes+1 {
-		f.t.Errorf("log of %s/%s read with %+v, want a container, a past sinceTime and maxLogBytes+1", namespace, pod,
-			opts)
+	if opts.Container == "" || (opts.SinceTime != nil && opts.SinceTime.After(time.Now())) ||
+		opts.LimitBytes == nil || *opts.LimitBytes != f.runner.logLimit()+1 {
+		f.t.Errorf("log of %s/%s read with %+v, want a container, no or a past sinceTime and the limit and one",
+			namespace, pod, opts)
 	}
 	key := logKey(namespace, pod, opts.Container, opts.Previous)
 	f.mu.Lock()
 	f.logReads = append(f.logReads, key)
-	err, logOf := f.logErr[key], f.logOf
+	f.logOpts[key] = *opts
+	err, streamErr, logOf := f.logErr[key], f.streamErr[key], f.logOf
 	data, ok := f.logs[key]
 	f.mu.Unlock()
 	if err != nil {
@@ -305,7 +312,11 @@ func (f *s11Fixture) podLogs(_ context.Context, namespace, pod string, opts *cor
 	if !ok {
 		data = "level=info msg=\"Reconciled CubridBackup\"\n"
 	}
-	return io.NopCloser(io.LimitReader(strings.NewReader(data), *opts.LimitBytes)), nil
+	r := io.LimitReader(strings.NewReader(data), *opts.LimitBytes)
+	if streamErr != nil {
+		r = io.MultiReader(r, iotest.ErrReader(streamErr))
+	}
+	return io.NopCloser(r), nil
 }
 
 // advance writes the status of the next phase, as the Operator would. The
@@ -488,7 +499,7 @@ func requireS11Record(t *testing.T, cfg HAConfig) {
 	t.Helper()
 	lab01 := readHARecord(t, cfg.EvidenceDir)
 	rec := readS11Record(t, cfg.EvidenceDir)
-	if !slices.Contains(rec.Notes, logsNote()) {
+	if !slices.Contains(rec.Notes, logsNote(defaultMaxLogBytes)) {
 		t.Fatalf("S11 notes = %v, want them to say which logs were searched", rec.Notes)
 	}
 	requireLogsSearched(t, rec.Credentials, testBackupTarget)

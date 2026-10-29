@@ -315,26 +315,47 @@ is refused before anything is done.
      that container, started by its entrypoint
      (`build/instance-manager/entrypoint.sh`), so its output is the
      container's log. The Pod must be controlled by the cluster's
-     StatefulSet and must not have been created after the backup was
-     requested.
+     StatefulSet and must have been created before the second in which the
+     backup was requested (`creationTimestamp` has one-second precision, so
+     a Pod created in that second counts as created after it).
 
-   Each log is read from one minute before S11 started (`sinceTime`; the
-   minute allows for a node clock behind the run's), at most 16 MiB per
-   container instance (`limitBytes`). When the container's restart count is
-   above zero, its previous instance is read too, in the same way. A key
-   found in either log must never happen. The record names the log, never
-   the key, and holds no log content. The run cannot claim a clean log when
-   it could not read it whole, so each of the following leaves S11 blocked,
-   not passed, and the record says what was not searched and why:
-   - a log that cannot be read;
-   - a log that holds more than 16 MiB;
-   - a Pod with another UID, or one created after the request;
+   A Pod that existed before the variant started (the manager, and in S11
+   `complete` and `missing-destination` the HA member) is read from one
+   minute before the variant started (`readFrom: sinceTime`). The minute
+   allows for a node clock behind the run's; a larger skew is not measured.
+   A Pod of a cluster the variant created (`s11-denied-0`,
+   `s11-signature-0`, `s11-interrupted-0`) is read whole, without
+   `sinceTime` (`readFrom: whole-log`), because all of its log is in scope.
+   Each read is bounded to 16 MiB per container instance (`limitBytes`).
+   When the container's restart count is above zero, its previous instance
+   is read too, in the same way. After the reads the run reads the Pod again,
+   and a change in the container's restart count or container ID means an
+   instance may have gone unread.
+
+   A key found in either log must never happen. The record names the log,
+   never the key, and holds no log content. Error text from the API passes
+   through the evidence redactor before it is recorded. The run cannot claim
+   a clean log when it could not read it whole, so each of the following
+   leaves S11 blocked, not passed, and the record says what was not searched
+   and why:
+   - a log that cannot be read, or whose read fails partway;
+   - a read of which the API returned more than 16 MiB;
+   - a Pod with another UID, one the StatefulSet does not control, or one
+     created after the request;
    - a container that restarted more than once, unless its previous
      instance started before `sinceTime`, because only the previous instance
-     can be read.
+     can be read (for a whole log, any second restart blocks);
+   - a container that restarted while its log was read;
+   - a backup that named no `status.targetInstance`.
 
-   What the Operator logged before that minute, and the Instance Managers of
-   the other members, are not searched.
+   `pods/log` returns only the container's current log file. The kubelet
+   rotates that file (`containerLogMaxSize`, 10 MiB by default), and the
+   rotated files are not returned. A log that grew past the rotation size
+   within the window is therefore searched only from the last rotation
+   onward; that is not seen as a truncation and does not block S11. The 16
+   MiB bound blocks only what the API returned. What the Operator logged
+   before the window, and the Instance Managers of the other members, are
+   not searched. The record's notes say so.
 
 The artifact is left in the bucket for S12; the record says so. Deleting the
 namespace removes the `CubridBackup`, not the artifact.
@@ -633,10 +654,10 @@ reason `BackupFailed`, with the operation's reason as the message.
    be in any status of `s11-denied` or of the backup the run read, in the
    backup's status at the end, which holds the failure's message, in the
    status of `s11-denied` read once more at the end, or in any Event of the
-   run namespace. Nor may it be in the installed Operator's log or in the
-   Instance Manager's log of `s11-denied-0`, the Pod the backup ran on, each
-   read from one minute before S11 `denied-credentials` started, as step 6
-   of S11 `complete` describes. The logs are read before the cluster is
+   run namespace. Nor may it be in the installed Operator's log, read from
+   one minute before S11 `denied-credentials` started, or in the Instance
+   Manager's log of `s11-denied-0`, the Pod the backup ran on, read whole
+   because the variant created it, as step 6 of S11 `complete` describes. The logs are read before the cluster is
    deleted. One found must never happen; a log that could not be searched
    whole blocks the variant.
 8. **The source.** As step 8 of S12 `exact`: the same member Pods and
@@ -960,9 +981,9 @@ the client's later attempts are refused at once as well.
 11. **Credentials, source and manager.** As S11 `denied-credentials`, with
     the seed Secret's keys only: no key in any status of `s11-interrupted` or
     of the backup, in either read once more at the end, in an Event, in the
-    installed Operator's log or in the Instance Manager's log of
-    `s11-interrupted-0`, each log read from one minute before the variant
-    started; the source unchanged; the installed manager the one LAB01
+    installed Operator's log, read from one minute before the variant
+    started, or in the Instance Manager's log of `s11-interrupted-0`, read
+    whole; the source unchanged; the installed manager the one LAB01
     checked.
 12. **Cleanup.** The run deletes the `CubridBackup` and the cluster
     `s11-interrupted` it created, in that order, each with its UID as a
@@ -2119,7 +2140,8 @@ and S12 variant other than `complete` and `exact` only those under
   left in the bucket) and `S11/complete/manifest.json`, the manifest as the
   run downloaded it. Where credentials were looked for includes, under
   `credentials.logs`, each log searched: which log, its namespace, Pod, UID
-  and container, `sinceTime`, the restart count, the bytes read and whether
+  and container, how it was read (`readFrom`: `sinceTime` with the time, or
+  `whole-log`), the restart count and container ID, the bytes read and whether
   the read was truncated, whether the previous instance was read with its
   bytes and truncation, whether a key was found, and what could not be
   searched (`unchecked`). Every S11 variant's record has the same field; no

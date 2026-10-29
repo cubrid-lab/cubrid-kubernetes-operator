@@ -139,7 +139,7 @@ func (t *Target) Runner() (*Runner, error) {
 	if err != nil {
 		return nil, errors.New("could not initialize the selected Kubernetes client")
 	}
-	// Reading a log of up to maxLogBytes may take longer than the 10 s the
+	// Reading a log of up to defaultMaxLogBytes may take longer than the 10 s the
 	// other API calls are given.
 	logConfig := rest.CopyConfig(t.config)
 	logConfig.Timeout = logReadTimeout

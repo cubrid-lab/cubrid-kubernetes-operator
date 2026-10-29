@@ -89,6 +89,9 @@ type Runner struct {
 	// podLogs opens a container's log through the API server; S11 searches
 	// the installed manager's and the Instance Manager's logs with it.
 	podLogs podLogReader
+	// maxLogBytes bounds what S11 reads of one container instance's log;
+	// zero selects defaultMaxLogBytes.
+	maxLogBytes int64
 }
 
 type sqlStep struct {
