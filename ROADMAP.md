@@ -372,6 +372,68 @@ and the current harness has not run on the VM lab. A kill during
 `backupdb` itself and the member's staging directory (#636) are not
 covered.
 
+S11 `overlapping` also follows S11 `complete`, in a run of its own
+(`lab-installed-ha-s11-overlapping`, `-backup-overlapping`, #617), in a run
+namespace that enforces Pod Security `privileged` with `warn` and `audit` at
+`restricted`: the run creates a standalone cluster with the run's own
+Secret, limits its member's traffic to the object store to 256 kbit/s as
+S11 `interrupted-upload` does, confirmed before the requests and kept until
+both backups ended, and requests two backups to the backup bucket back to
+back, each under a prefix of its own. Both target the one member, and the
+first upload takes minutes, so the second start meets the first's
+operation: a reading of it held with `InstanceManagerOperationInProgress`
+is required, and without one the variant is blocked. Both must end
+`Completed` within `backup_limit` (the default 15 minutes covers two
+uploads of about 5 MB, about 2.7 minutes each), each with its own
+`operationRef`, never shared and never replaced, an artifact that passes S11
+`complete`'s verification for that cluster, a manifest whose `operationID`
+is its own backup's, and exactly one attempt prefix with one manifest and no
+other object under its prefix, also when listed again at the end. The code
+predicts this: each backup has its own idempotency key and staging
+directory, the Instance Manager refuses the second start with `409
+OperationInProgress` while the first's operation runs, and the Operator
+holds the second on its recorded target and sends the start again until the
+member accepts it. The run reads the member's records of both operations:
+the second's `createdAt` must be at or after the first's `updatedAt`,
+written when it ended after its upload and staging cleanup, both by the
+member's clock; a record that cannot be read leaves the variant blocked.
+The limit must be seen removed. `Failed` for a conflict,
+`RecordedTargetNotStarted` or a staging failure is a never-event, and
+`Failed` for another reason fails it. The source and the installed manager
+must be unchanged, and no key may be in a status read, a manifest, an Event,
+the manager's log or the member's log. The run removes the limit, deletes
+both `CubridBackup`s and the cluster by UID, and leaves the artifacts. Two
+backups on different members at once are not exercised. Unit tests cover it
+with fakes. On 2026-10-29 the slowed standalone harness (`966e03f`)
+passed once on the VM lab (manager `fb6f345`, after S11 `complete` on the
+same run): both backups were requested at 15:38:23.7 UTC; at 15:38:26.7 the
+second was held with `InstanceManagerOperationInProgress` while the first
+was `Running`, and stayed `Pending` for about 2 min 45 s while the first
+uploaded through the limit; the member's records show the first operation
+ended at 15:41:11.0007 and the second created at 15:41:11.1030, 102 ms
+later, by the member's clock; the first was `Completed` 2 min 54 s and the
+second 5 min 39 s after the requests, each under its own operation, with
+one attempt prefix holding its manifest and one verified object of
+5,256,192 bytes; 10,613,240 bytes passed the limit in all. One run is not a
+baseline. The review fix made after it (the order must be judged before a
+pass, `d480fe8`) changes no path the run took.
+
+An earlier harness ran the two backups on the HA cluster, on the VM lab on
+2026-10-29 (manager `fb6f345`). Harness `6481923` passed once at 14:49 UTC
+under its earlier rule, which compared the second's `status.startedAt` with
+the first's manifest `createdAt`: both on `ha-1`, the second held with
+`InstanceManagerOperationInProgress`, completed in 12 s and 15 s. Harness
+`b498f91`, with the member's-clock rule, was blocked twice for lack of
+contention: at 15:03 UTC both were requested at 15:06:53.7, the member's
+records show the first operation ended at 15:06:55.53 and the second
+created at 15:06:55.59, and no reading showed a hold; at 15:13 UTC `a`
+completed within 3.0 s and `b` within 12.0 s, again without a hold. The
+Instance Manager accepts a start with 202 and runs it in the background,
+and the Operator needs a reconcile or two to record the target before it
+sends the start; the lab's HA database backs up in about 2 seconds, so the
+first operation had usually ended before the second's start arrived. That
+is why the lane moved to a slowed standalone cluster.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after

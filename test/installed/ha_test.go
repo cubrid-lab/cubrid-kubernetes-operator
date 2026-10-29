@@ -384,7 +384,8 @@ func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key cl
 		return f.imRestartRead(ctx, c, key)
 	case (key.Name == s11DeniedClusterName || key.Name == s11SignatureClusterName) && f.deniedRead != nil:
 		return f.deniedRead(ctx, c, key)
-	case (key.Name == s11InterruptedClusterName || key.Name == s11IMRestartClusterName) && f.interruptedRead != nil:
+	case (key.Name == s11InterruptedClusterName || key.Name == s11IMRestartClusterName ||
+		key.Name == s11OverlappingClusterName) && f.interruptedRead != nil:
 		return f.interruptedRead(ctx, c, key)
 	}
 	return nil
@@ -448,6 +449,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 			f.t.Fatalf("runner created %s without S11 instance-manager-restart", cluster.Name)
 		}
 		f.writes = append(f.writes, "imrestart-standalone-cluster")
+		return f.interruptedCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s11OverlappingClusterName {
+		if f.interruptedCreated == nil {
+			f.t.Fatalf("runner created %s without S11 overlapping", cluster.Name)
+		}
+		f.writes = append(f.writes, "overlapping-cluster")
 		return f.interruptedCreated(ctx, c, cluster)
 	}
 	if cluster.Name == s12WrongTargetClusterName {

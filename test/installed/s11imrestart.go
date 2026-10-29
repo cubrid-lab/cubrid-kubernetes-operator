@@ -172,7 +172,8 @@ func (c HAConfig) validateS11InstanceManagerRestart() error {
 		{c.BackupDeniedCredentials, flagDeniedCredentials},
 		{c.BackupSignatureMismatch, flagSignatureMismatch},
 		{c.BackupInterruptedUpload, flagInterruptedUpload},
-		{c.BackupOperatorRestart, flagOperatorRestart}} {
+		{c.BackupOperatorRestart, flagOperatorRestart},
+		{c.BackupOverlapping, flagOverlapping}} {
 		if other.selected {
 			return fmt.Errorf("%s and %s select different lanes; a run takes one of them", flagInstanceManagerRestart,
 				other.flag)

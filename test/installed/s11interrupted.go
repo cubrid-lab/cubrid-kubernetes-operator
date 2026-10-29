@@ -301,7 +301,8 @@ func (c HAConfig) validateS11Interrupted() error {
 		{c.BackupDeniedCredentials, flagDeniedCredentials},
 		{c.BackupSignatureMismatch, flagSignatureMismatch},
 		{c.BackupOperatorRestart, flagOperatorRestart},
-		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart}} {
+		{c.BackupInstanceManagerRestart, flagInstanceManagerRestart},
+		{c.BackupOverlapping, flagOverlapping}} {
 		if other.selected {
 			return fmt.Errorf("-backup-interrupted-upload and %s select different lanes; a run takes one of them",
 				other.flag)

@@ -13,7 +13,8 @@ installed:
 
 LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`,
 `missing-destination`, `denied-credentials`, `signature-mismatch`,
-`interrupted-upload`, `operator-restart` and `instance-manager-restart`, and S12
+`interrupted-upload`, `operator-restart`, `instance-manager-restart` and
+`overlapping`, and S12
 `exact`, `tampered`, `wrong-target`,
 `operator-restart`, `instance-manager-restart`,
 `instance-manager-restart-preparing` and `instance-manager-restart-seeding`
@@ -411,6 +412,8 @@ S11 here does not check:
   `operator-restart`, with `-backup-operator-restart`;
 - a restart of the Instance Manager during a backup's upload: that is S11
   `instance-manager-restart`, with `-backup-instance-manager-restart`;
+- two backups of the same cluster requested back to back: that is S11
+  `overlapping`, with `-backup-overlapping`, on a standalone cluster;
 - a backup to a bucket that does not exist: that is S11
   `missing-destination`, with `-backup-missing-destination`;
 - a backup whose object store keys the store refuses: that is S11
@@ -799,7 +802,8 @@ lane.
 - **Pod Security.** The faults work from an ephemeral container with
   `NET_ADMIN` and `NET_RAW` ([network faults](network-faults.md)), which the
   API server admits only under `enforce=privileged`. With this flag, and only
-  with it, the run creates its namespace with
+  with it, `-backup-instance-manager-restart` or `-backup-overlapping`, the
+  run creates its namespace with
   `pod-security.kubernetes.io/enforce=privileged` and keeps `warn` and
   `audit` at `restricted`. The API server then still warns about, and audits,
   a Pod that would break `restricted`, but the run collects neither the
@@ -1266,7 +1270,8 @@ lab-only.
 ```
 
 - **Pod Security.** As in S11 `interrupted-upload`: with this flag, and only
-  with it or `-backup-interrupted-upload`, the run creates its namespace
+  with it, `-backup-interrupted-upload` or `-backup-overlapping`, the run
+  creates its namespace
   with `pod-security.kubernetes.io/enforce=privileged` and keeps `warn` and
   `audit` at `restricted`, so that the rate limit's ephemeral container is
   admitted. Before it creates anything, the variant reads the namespace
@@ -1452,7 +1457,7 @@ measurements are prefixed `rateLimit.`.
 The account needs what S11 `interrupted-upload` needs; the kill uses the
 `create` on `pods/exec` the run already has.
 
-What this shows, once it passes on the VM lab: an Instance Manager killed
+What a pass shows: an Instance Manager killed
 in the middle of an upload makes the backup end `Failed` for the restart,
 with no second operation and no `manifest.json` under its prefix.
 
@@ -1470,6 +1475,236 @@ S11 `instance-manager-restart` here does not check:
   instance before the previous one;
 - the Pod Security warnings and audit records at `restricted`;
 - a restore of anything the backup left.
+
+## S11 overlapping
+
+With `-backup-overlapping` as well as `-backup-bucket`, the run goes on
+after S11 `complete` passed with S11 `overlapping`: two backups of a new
+standalone cluster, requested back to back while its member's upload is
+slowed, must both end `Completed`, the second held until the first ended,
+each with its own operation and one verified artifact. The lane is then
+`lab-installed-ha-s11-overlapping`, and it requires LAB01, S11/complete
+and S11/overlapping. `-backup-overlapping` without `-backup-bucket`, with
+`-restore`, `-backup-missing-destination`, `-backup-denied-credentials`,
+`-backup-signature-mismatch`, `-backup-interrupted-upload`,
+`-backup-operator-restart` or `-backup-instance-manager-restart`, or with a
+`-backup-overlapping-ready-limit` that is not positive, is refused before
+anything is done: a run takes one lane. The variant is lab-only.
+
+```sh
+  ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -backup-overlapping [-backup-overlapping-ready-limit 15m] [-backup-limit 15m]
+```
+
+- **Pod Security.** As in S11 `interrupted-upload` and
+  `instance-manager-restart`: with this flag the run creates its namespace
+  with `pod-security.kubernetes.io/enforce=privileged` and keeps `warn` and
+  `audit` at `restricted`, so that the rate limit's ephemeral container is
+  admitted. Before it creates anything, the variant reads the namespace
+  again and refuses to go on unless it enforces `privileged`.
+- `-backup-limit` bounds the two backups together, from the return of the
+  second request until the round of readings that saw both `Completed` or
+  `Failed`. The backups run one after the other through the limit: at
+  256 kbit/s (32 KB/s), the lab's backup of about 5 MB takes about
+  2.7 minutes to upload, so the two take about 5.5 minutes with their
+  `backupdb` runs and the second's retries, about 10 seconds apart. The
+  default 15 minutes covers that; a larger database needs a larger limit.
+- `-backup-overlapping-ready-limit` bounds the variant's own cluster from
+  its creation until it is `Ready`. It is the run's bound, not the
+  contract's, and is refused without `-backup-overlapping`.
+- `-timeout` must also cover a new standalone cluster, the two backups and
+  their downloads.
+
+S11 `overlapping` starts only from S11 `complete` that passed. When S11
+`complete` did not run or did not pass, it is blocked with that cause and
+nothing of it is done.
+
+**Why a slowed standalone cluster.** An earlier harness ran the two backups
+on the HA cluster, and on the VM lab the overlap was a matter of chance:
+the Operator records each backup's target in one reconcile and sends its
+start in a later one, the Instance Manager answers the start with 202 and
+runs the backup in the background, and the lab's backup of the HA database
+takes about 2 seconds. The first backup's operation had usually ended
+before the second's start arrived, so the second was never held. Here the
+cluster has one member, so both backups target it, and its upload passes a
+rate limit, so the first operation runs for minutes: the second start meets
+it. Two backups on different members at once are not exercised.
+
+**What the product's code predicts:**
+- Each backup has its own idempotency key,
+  `cubridbackup:<namespace>:<name>:<uid>`, and its own staging directory,
+  `backup-staging/<uid>` (`idempotencyKey` and `buildBackupRequest` in
+  `internal/controller/cubridbackup_controller.go`).
+- The cluster has one member, so both backups select it, in the role
+  `unknown` (`RoleUnknownSingleInstanceFallback`, `selectBackupTarget` in
+  `internal/controller/backuptarget.go`).
+- The Instance Manager finds no operation under the second backup's key,
+  and the first's operation, which has not ended, holds the database, so
+  it refuses the second start with 409 and the code `OperationInProgress`
+  (`FindOrCreate` in `internal/instancemanager/opstore.go`, `backup` in
+  `server.go`). Its staging directory is its own, so
+  `StagingDestinationInUse` is not expected. The Operator maps the refusal
+  to `errStartConflict` (`statusError` in `internal/controller/imclient.go`)
+  and `holdRecordedTarget`, which asks the member only for an operation
+  under the backup's own key. It finds none, so the backup stays `Pending`
+  with the `Ready` reason `InstanceManagerOperationInProgress`, keeps its
+  recorded target, and sends the start again at its next reconcile, about
+  every 10 seconds, until the member accepts it once the first operation
+  ended. It ends only after `backupTargetWait` (30 minutes) with
+  `RecordedTargetNotStarted`, longer than the default `-backup-limit`. A
+  409 for the other backup's operation is not taken for one of the
+  backup's own key: that would be `InstanceManagerRequestConflict`, which
+  only an operation under the same key with another request body gives.
+- So the code predicts both `Completed`, one after the other, each with
+  its own operation and artifact, and the second held at least once.
+
+1. **The cluster and the limit.** As in S11 `instance-manager-restart`, the
+   run refuses a run namespace that does not enforce `privileged` and an
+   object store it cannot address, creates the standalone cluster
+   `s11-overlapping` with the run's own Secret, waits until it is `Ready`
+   within `-backup-overlapping-ready-limit`, and limits its member's TCP
+   traffic to the object store to 256 kbit/s, confirmed by connects through
+   the limit before the requests. The limit stays until both backups ended.
+2. **Requests.** The run creates the `CubridBackup`s `s11-overlapping-a`
+   and `s11-overlapping-b`, full backups of the cluster's database, to
+   `-backup-bucket` under `lab-runs/<run ID>/overlapping-a` and
+   `lab-runs/<run ID>/overlapping-b`, one right after the other, and
+   records when each request returned and the gap between them
+   (`requestGap`).
+3. **Wait.** In each round, every `-poll`, the run reads both backups in
+   turn, records each change of each with its `operationRef`, target and
+   conditions, and searches each status for the keys, until both are
+   `Completed` or `Failed`, within `-backup-limit`. It records:
+   - each backup's `operationRef`s and targets with their roles
+     (`operationRefsSeen`, `targetsSeen`);
+   - each reading of a backup without an operation whose `Ready` reason is
+     a conflict (`InstanceManagerOperationInProgress`,
+     `InstanceManagerStagingInUse`, `InstanceManagerRequestConflict` or
+     `InstanceManagerConflict`), with its message, the time of the reading
+     and the other backup's phase, operation and target in the same round
+     (`holds`), once for each change of reason, target or the other
+     backup's phase: each retry's message names its own request;
+   - the order in which a reading first showed each with an operation
+     (`started`), and the first and last round that showed both `Running`
+     or `Uploading` with their operations (`bothInProgressFrom`,
+     `bothInProgressTo`), as evidence only.
+
+   A target other than the member the limit acts in stops the wait and
+   blocks the variant; a backup whose recorded target changed fails it (step
+   5). Once both ended, the limit's counters are read once more, and what
+   passed the limit since the requests is measured
+   (`uploadBytesThroughLimit`).
+4. **Each backup.** Each must be `Completed`. `Failed` fails the variant
+   with its reason (`failure`); with a conflict reason,
+   `RecordedTargetNotStarted`, or a message about the staging directory, it
+   is a never-event. For `Completed`, the run verifies the artifact as S11
+   `complete` does, with its own client, against the standalone cluster: its
+   UID, its one member, and the role `unknown`. It copies the manifest to
+   `S11/overlapping/manifest-a.json` or `manifest-b.json`. The manifest's
+   `operationID` must be the backup's own `status.operationRef`; the other
+   backup's operation there must never happen. A manifest names its objects
+   relative to its own attempt prefix, so it cannot name an object of the
+   other backup. No upload is interrupted in this variant, so an object in
+   the backup's own attempt prefix that the manifest does not name
+   (`objectsNotInManifest` above 0) came from another writer and must never
+   happen. Each backup's prefix is then listed as in S11
+   `operator-restart`: exactly one attempt prefix of the backup holds
+   objects, the artifact's, with its one `manifest.json`; a second attempt
+   prefix, or an object outside an attempt prefix of the backup, the other
+   backup's among them, must never happen. The listing is made again at the
+   end, after the limit was removed and the source checked.
+5. **The two together.**
+   - The two must never share an `operationRef`, and neither may show a
+     second one or a second target: each must never happen.
+   - A hold with `InstanceManagerRequestConflict` must never happen: it
+     would be the other backup's operation taken for one of the backup's
+     own key. A hold with `InstanceManagerStagingInUse` fails the variant:
+     each backup's own staging directory rules it out.
+   - **The hold.** A reading of one backup held with
+     `InstanceManagerOperationInProgress` is required (`heldWithConflict`).
+     Without one, the first ended before the second was accepted, the
+     overlap was not exercised, and the variant is blocked as inconclusive
+     (`notContended`). Through the limit this should not happen.
+   - **Order.** The backup held with `InstanceManagerOperationInProgress`
+     ran second; when neither or both were held, the one with the earlier
+     `status.startedAt` ran first (`first`, `second`). When that cannot be
+     told, the variant is blocked.
+   - **One operation at a time, by the member's clock.** The run reads, in
+     the member (`cat` in the database container), the Instance Manager's
+     record of each backup's operation,
+     `/var/lib/cubrid/operations/<operation ID>.json`, and records its
+     state, `createdAt` and `updatedAt` (`operationRecord`). The Instance
+     Manager writes a backup's end only after its upload ended and its
+     staging directory was removed, and creates no other operation of the
+     database before that end is written (`runBackup` in
+     `internal/instancemanager/server.go`, `FindOrCreate` in `opstore.go`).
+     So the second's `createdAt` must be at or after the first's
+     `updatedAt` (`secondCreatedAt`, `firstEndedAt`); one before it is two
+     backups on one member at once and must never happen. Both times are
+     the member's clock, below the second. A record that cannot be read,
+     that is of another operation, or a first record that has not ended
+     leaves the variant blocked, neither passed nor failed.
+   - **Evidence only.** The Operator sees that an operation ended only at
+     its next poll of it, and a held backup sends its start again only at
+     its next reconcile, both about 10 seconds apart (`backupPollAfter`),
+     so the readings can show the second `Running` while the first still
+     shows `Running` or `Uploading`; that is recorded
+     (`bothInProgressInReadings`), not judged. The second's
+     `status.startedAt`, by the Operator node's clock, and the first's
+     manifest `createdAt`, which the Instance Manager sets when the upload
+     begins, are recorded too (`secondStartedAt`,
+     `firstManifestCreatedAt`) but not judged.
+6. **The limit at the end.** As in S11 `instance-manager-restart`: the
+   limit must be seen removed, and the store's address must be unchanged.
+   A limit not seen removed blocks the variant.
+7. **Credentials.** As in S11 `complete`, for each backup: in every status
+   read, its manifest and the Events of the run namespace, and in the
+   installed manager's log and the member's log, read whole, since the run
+   created the cluster; and in every status of the cluster read.
+8. **The source and the manager.** The HA source must be unchanged, as in
+   S11 `missing-destination` (its data check goes to
+   `S11/overlapping/source-data-check.json`), and the installed manager
+   must be the one LAB01 checked; another blocks the variant.
+9. **Cleanup.** On every path out of the variant, the run removes the
+   limit, then deletes both `CubridBackup`s and then the cluster, each with
+   its UID as a precondition, and records the outcomes in the backups' and
+   the record's `cleanup` and in the scenario's `cleanupSucceeded`. The
+   cluster's data PVC is retained and goes with the namespace, and the
+   ephemeral container stays in the member's Pod until it is deleted. It
+   does not remove the artifacts.
+
+As in S11 `complete`, a run that ends before S11 `overlapping` is judged,
+an API error, and a port-forward or client that cannot be opened block it;
+what was seen stays a failure, with that error added to the reason.
+`heldWithConflict`, `bothInProgressInReadings`, `operationRefsDistinct` and
+`uploadBytesThroughLimit`, and for each backup, prefixed `a.` or `b.`,
+`backupCompletedWithin`, `objectsVerified`, `artifactBytes`,
+`objectsNotInManifest` and `attemptPrefixes`, are `unknown` until measured;
+the limit's own measurements are added prefixed `rateLimit.`.
+
+The account needs what S11 `instance-manager-restart` needs for its cluster
+and its limit, and `create` on `pods/exec` in the run namespace, which LAB01
+already uses, to read the operation records.
+
+What a pass shows: two backups of the same
+cluster requested at once each end with their own operation and their own
+verified artifact, and the second start is held while the first's operation
+runs. By the member's own records, the second operation was created only
+after the first had ended, upload and staging cleanup included. It does not
+show what the Instance Manager would do on a clock that steps backwards
+between the two records.
+
+S11 `overlapping` here does not check:
+- two backups on different members of an HA cluster at once;
+- the Instance Manager's refusals, which the run sees only through the
+  backups' statuses; the member's staging directories; incomplete
+  multipart uploads under the prefixes;
+- the same `CubridBackup` requested twice: the API server refuses a second
+  object of the same name;
+- more than two backups, and a backup of another database on the same
+  member;
+- the Pod Security warnings and audit records at `restricted`;
+- a restore of either artifact.
 
 ## S12 exact
 
@@ -2690,6 +2925,29 @@ and S12 variant other than `complete` and `exact` only those under
   where credentials were looked for, `judgedAt`, the cleanup and what is
   left), `S11/instance-manager-restart/timeline.jsonl` (the kill's fault
   flow) and `S11/instance-manager-restart/source-data-check.json`.
+- with `-backup-overlapping`, `S11/overlapping/record.json` (the namespace's
+  Pod Security labels; the standalone cluster's name, UID, Secret name,
+  `readyWithin` and `readyLimit`; under `throttle`, the target Pod, the
+  store's address, the rate, the limit's counters at the request and after
+  the backups, the tolerated errors and the limit's removal; where the
+  cluster's statuses were searched for credentials; for each of the two
+  backups: its name, UID, bucket and prefix, the time of the request,
+  every phase observed with its `operationRef`, target and conditions,
+  `operationRefsSeen`, `targetsSeen`, the holds with their reason, message,
+  time and the other backup's phase, operation and target,
+  `statusStartedAt`, `backupCompletedWithin`, the artifact, the
+  verification, the manifest's `createdAt` and `operationID`, the
+  member's record of its operation, the listings
+  of its prefix and at the end, any failure, where credentials were looked
+  for and its cleanup; then the gap between the two requests, the overlap
+  (`started`, `heldWithConflict`, `bothInProgressFrom` and
+  `bothInProgressTo`, `first`, `second`, `firstEndedAt`,
+  `secondCreatedAt`, `secondStartedAt`, `firstManifestCreatedAt`,
+  `notContended`), the manager before and after, the source at the end and
+  `judgedAt`, the cleanup of the limit and the cluster, and what is left),
+  `S11/overlapping/manifest-a.json` and
+  `S11/overlapping/manifest-b.json`, the two manifests as stored, and
+  `S11/overlapping/source-data-check.json`.
 - with `-restore`, `S12/exact/record.json` (S11's known point, the writes
   after the backup and where the history stood after them, the artifact's
   URI and manifest digest, the restored cluster's name, UID, seed prefix and
@@ -2793,13 +3051,17 @@ its copy of the artifact itself, S11 `missing-destination` deletes its
 `CubridBackup`, its cluster `s11-denied` and that cluster's Secret itself,
 S11 `signature-mismatch` does the same with `s11-signature` and its Secret,
 and S11 `interrupted-upload` removes its faults and deletes its
-`CubridBackup` and its cluster `s11-interrupted` itself, and S11
-`operator-restart` deletes its `CubridBackup` itself; each cluster's
+`CubridBackup` and its cluster `s11-interrupted` itself, S11
+`operator-restart` deletes its `CubridBackup` itself, and S11 `overlapping`
+removes its limit and deletes its two `CubridBackup`s and its cluster
+`s11-overlapping` itself; each cluster's
 retained data PVC goes with the namespace. It does not remove:
 - the seed backups under `lab-runs/<run ID>` in the bucket, the restored
   cluster's among them, S11's artifact in the backup bucket, what a cut
-  upload left under `lab-runs/<run ID>/interrupted-upload`, and S11
-  `operator-restart`'s artifact under `lab-runs/<run ID>/operator-restart`;
+  upload left under `lab-runs/<run ID>/interrupted-upload`, S11
+  `operator-restart`'s artifact under `lab-runs/<run ID>/operator-restart`,
+  and S11 `overlapping`'s two artifacts under
+  `lab-runs/<run ID>/overlapping-a` and `lab-runs/<run ID>/overlapping-b`;
 - a backend volume that the StorageClass retains.
 
 The record says so.

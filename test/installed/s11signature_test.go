@@ -502,13 +502,13 @@ func TestRunHARefusesBackupSignatureMismatchWithoutItsLane(t *testing.T) {
 		testWithRestore: {change: func(cfg *HAConfig) {
 			cfg.Restore, cfg.RestoreLimit = true, time.Minute
 		}, want: testRestoreFlag},
-		"with the missing-destination variant": {change: func(cfg *HAConfig) {
+		testWithMissing: {change: func(cfg *HAConfig) {
 			cfg.BackupMissingDestination = true
 		}, want: "and -backup-missing-destination select"},
-		"with the denied-credentials variant": {change: func(cfg *HAConfig) {
+		testWithDenied: {change: func(cfg *HAConfig) {
 			cfg.BackupDeniedCredentials, cfg.BackupDeniedReadyLimit = true, time.Minute
 		}, want: "and -backup-denied-credentials select"},
-		"with the interrupted-upload variant": {change: func(cfg *HAConfig) {
+		testWithInterrupted: {change: func(cfg *HAConfig) {
 			cfg.BackupInterruptedUpload, cfg.BackupInterruptedReadyLimit = true, time.Minute
 		}, want: "and -backup-interrupted-upload select"},
 		"without its ready limit": {change: func(cfg *HAConfig) { cfg.BackupSignatureMismatchReadyLimit = 0 },
