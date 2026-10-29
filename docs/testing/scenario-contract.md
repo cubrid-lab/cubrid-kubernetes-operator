@@ -141,6 +141,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s12-instance-manager-restart` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-instance-manager-restart` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart`): S11's artifact restored into another new cluster while the Instance Manager of the restore's target member is killed during the restore, which restarts that member's database container on the same Pod and volume; the interrupted attempt must end with one retry and the restore complete as `exact` does, under the next attempt's operation | none |
 | `lab-installed-ha-s12-instance-manager-restart-preparing` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at preparing` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-preparing`): as `instance-manager-restart`, with the kill after a reading of the bootstrap `Preparing` with its operation; the target's record of the killed operation must show that `restoredb` had not succeeded | none |
 | `lab-installed-ha-s12-instance-manager-restart-seeding` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at seeding` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-seeding`): S11's artifact restored into another new cluster, and the Instance Manager of a member being seeded from the restored one killed during its seed restore; the seed attempt must end with one seed retry, the restore must not run again, and the cluster complete as `exact` does | none |
+| `lab-installed-ha-s12-graceful-stop` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-graceful-stop`, in a namespace that keeps Pod Security `restricted` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`graceful-stop`): S11's artifact restored into another new cluster whose restore target's Pod is deleted with its grace period as soon as a sampler in the target shows `restoredb` running; the target's log must show `restoredb`'s end, the restore operation's `Operation failed` with a reason that starts with `the member is stopping: restore failed: restoredb failed: `, and then the shutdown's `heartbeat stop` (and `server stop` when logged), in that order, with `restoredb` killed; no sampler reading from the first one without the database directory on may show a CUBRID process holding a file of the database or staging directory, nor `restoredb` after it, and none started after `Operation failed` either directory, at least one reading having started after it; exactly one retry naming the stop, and the restore complete as `exact` does under another operation | none |
 
 `lab-installed-smoke` is a connection baseline. Its `passed` verdict applies
 to LAB00 and establishes neither S00 installation validation nor S00–S15
@@ -337,12 +338,46 @@ bound on the `preStop` hook's latency.
 `instance-manager-restart`, and
 `lab-installed-ha-s12-instance-manager-restart-preparing` and
 `lab-installed-ha-s12-instance-manager-restart-seeding` S12 `exact` and the
-variant their name ends with. A variant a lane does
+variant their name ends with, and `lab-installed-ha-s12-graceful-stop` S12
+`exact` and `graceful-stop`. A variant a lane does
 not name is not part of it, rather than `not_applicable`: the lab does not
 rule it out, the command does not run it in that lane. The command runs
-`tampered`, `wrong-target`, `operator-restart` and each placement of
-`instance-manager-restart` in separate runs, one lane each: a pass at one
-placement is no evidence for another.
+`tampered`, `wrong-target`, `operator-restart`, each placement of
+`instance-manager-restart` and `graceful-stop` in separate runs, one lane
+each: a pass at one placement is no evidence for another.
+
+`lab-installed-ha-s12-graceful-stop` keeps Pod Security `restricted`: it adds
+no container. It restores S11's artifact as it is, without filler data: in
+POC-27 a `restoredb` of a 5 MB backup of a database with a 512 MB data
+volume was still running 2 s after its start. Once the target's database
+container runs, it starts the sampler of `lab-installed-ha-s11-graceful-stop`
+there with the data volume as its root, follows the container's log, and at
+the first reading that shows `restoredb` deletes the target's Pod with its
+grace period and its UID as a precondition. The restore's cleanup logs
+nothing; the sampler sees it begun at the first reading without the
+database directory. Holders that are not CUBRID processes, such as the
+Instance Manager's own removal, are recorded and not judged. The following
+leave the variant blocked:
+- a bootstrap read past the first `restoredb` (`SeedingReplicas`,
+  `Complete` or a failed attempt), or a sampler that ended, before the
+  sampler showed `restoredb` (placement missed);
+- `restoredb`'s success in the target's log, or a stopping reason without a
+  failed `restoredb`: the stop came after `restoredb` had ended;
+- a refused deletion;
+- a log that ended without `restoredb`'s end, `Operation failed` or
+  `heartbeat stop`, an `Operation failed` whose time cannot be read, and a
+  failed `restoredb` that was not killed (no `signal: killed` and no exit
+  code -1): the stopping prefix alone does not show that the stop ended it;
+- a database or staging directory never seen gone, a sampler that never
+  showed an open file or a `cub*` process's listing before that, no reading
+  started after `Operation failed`, output that reached the run's limit, and
+  output that ended with an error before a reading at or after the
+  shutdown's last logged command;
+- no retry after the deletion, or a first retry that names another reason.
+
+A missed placement does not hide a failed restore: a restore verdict (a
+bootstrap ended `Failed`, a restore over the limit, a never-event) fails the
+variant whatever the stop did.
 
 `lab-preallocated-component-smoke` is a distinct component result. Its successful
 owned-workload cleanup is not fresh LAB00 namespace cleanup or private campaign
@@ -1399,10 +1434,11 @@ it needs more.
   `SIGKILL` after such a reading; it runs as the child of the database
   container's PID 1, so the container restarts on the same Pod and volume),
   `instance-manager-restart-preparing` (the same kill after a reading of the
-  bootstrap `Preparing` with its operation) and
+  bootstrap `Preparing` with its operation),
   `instance-manager-restart-seeding` (the same kill on a member being seeded
   from the restored one, after a reading of `SeedingReplicas` with a seed
-  restore recorded for that member).
+  restore recorded for that member) and `graceful-stop` (the restore
+  target's Pod is deleted with its grace period while `restoredb` runs).
 - **Expected, `exact`:** the new cluster holds exactly the rows that were
   acknowledged before the marker, the marker itself, and no row written after
   the backup finished.
@@ -1490,6 +1526,23 @@ it needs more.
   container. The member being seeded is the one killed, not the seed source:
   its database was never served, and the Operator's seed retry is built for
   its interruption; the source's container is the restored master's.
+- **Expected, `graceful-stop`:** the Pod's `preStop` hook stops the Instance
+  Manager. `Stop` cancels the restore and waits for it before it stops
+  CUBRID (`Stop` in `internal/instancemanager/operations.go`); the
+  cancellation kills `restoredb`'s process group and returns once it is gone
+  (`internal/instancemanager/cli.go`); `Restore` then removes the database
+  directory it registered and its staging directory, and the operation is
+  recorded `Failed` with `the member is stopping: restore failed: restoredb
+  failed: ...` (`Restore` in `internal/instancemanager/restore.go`,
+  `runRestore` in `server.go`). The Operator ends that attempt with
+  `RestoreFailedRetrying` and starts the next under a new operation
+  (`restoreAttemptFailed`). So the target's log shows `restoredb`'s end,
+  `restoredb` killed (`signal: killed` or exit code -1), `Operation failed`
+  with that reason, then `heartbeat stop` (and `server stop` when logged); exactly one retry follows the deletion, naming the stop;
+  and the restore completes as in `exact`, within `restore_limit` of the
+  cluster's creation, under another operation. A second retry, another
+  failure reason, or the stopped operation completing after a retry, fails
+  the variant.
 - **Must never happen:** an existing database overwritten; a cluster reported
   `Ready` with data that differs from the backup; the new cluster depending
   on a Secret of the source cluster. In `operator-restart` also: the restore
@@ -1506,11 +1559,18 @@ it needs more.
   those of `instance-manager-restart` for the killed member, a retry of the
   restore after the kill (it had completed), the database's attempts falling
   or reaching the Operator's limit of 3, and a member's seed restore becoming
-  another under the same database attempts.
+  another under the same database attempts. In `graceful-stop` also: those
+  of `instance-manager-restart` for the bootstrap; a CUBRID process holding
+  a file of the restore's database or staging directory in a sampler reading
+  from the first one without the database directory on, or `restoredb` in a
+  later one; either directory in a reading started after the operation was
+  logged `Failed`; and `Operation failed` before `restoredb`'s end, or the
+  shutdown's commands before `Operation failed`, in the target's log.
 - **Data check:** the data rules against the history truncated at the marker.
 - **Limits:** `restore_limit`; in `operator-restart` also
   `operator_resync_limit`. In every `instance-manager-restart` variant,
-  `restore_limit` also bounds the container's return.
+  `restore_limit` also bounds the container's return; in `graceful-stop` it
+  covers the stop, the replacement Pod and the retried restore.
 
 ### S13: deletion and retention
 

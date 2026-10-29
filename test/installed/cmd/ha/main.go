@@ -195,6 +195,12 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"Downloading) or "+installed.IMRestartAtSeeding+" (a reading of SeedingReplicas with a seed restore "+
 			"recorded; the member being seeded is killed); a value other than "+installed.IMRestartAtRestoring+
 			" needs -restore-instance-manager-restart")
+	flags.BoolVar(&cfg.RestoreGracefulStop, "restore-graceful-stop", false,
+		"scenario after S12 exact: S12 graceful-stop, S11's artifact restored into another new cluster whose "+
+			"restore target's Pod is deleted with its grace period as soon as restoredb is seen running; the "+
+			"attempt must end for the stop with no CUBRID process holding a file of the restore once its cleanup "+
+			"began, and one retry must then complete as S12 exact; needs -restore, not with -restore-tampered, "+
+			"-restore-wrong-target, -restore-operator-restart or -restore-instance-manager-restart")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")

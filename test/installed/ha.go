@@ -254,6 +254,11 @@ type HAConfig struct {
 	// IMRestartAtSeeding. Each placement is a variant and a lane of its own.
 	// Another value than the default needs RestoreInstanceManagerRestart.
 	RestoreInstanceManagerRestartAt string
+	// RestoreGracefulStop selects S12 graceful-stop after S12 exact: S11's
+	// artifact restored into another new cluster whose restore target's Pod
+	// is deleted with its grace period while restoredb runs. It needs
+	// Restore, and cannot be combined with another S12 variant.
+	RestoreGracefulStop bool
 }
 
 // privileged reports whether the run namespace must enforce Pod Security
@@ -401,10 +406,10 @@ type haRun struct {
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
 	// S12 operator-restart, s12IMRestart that of S12 instance-manager-restart
-	// at the selected placement.
+	// at the selected placement and s12GracefulStop that of S12 graceful-stop.
 	// s12Expected is the history at S11's known point that S12 exact took.
-	s12, s12Tampered, s12WrongTarget, s12Restart, s12IMRestart *evidence.Scenario
-	s12Expected                                                string
+	s12, s12Tampered, s12WrongTarget, s12Restart, s12IMRestart, s12GracefulStop *evidence.Scenario
+	s12Expected                                                                 string
 	// scenario names the scenario whose reads run now, for lostSessions, and
 	// reads counts the csql reads each scenario made.
 	scenario string
@@ -510,6 +515,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				"cluster in the run namespace, and into another while " + imRestartPlacementNote[at] +
 				"; no other S00-S15 qualification"
 		}
+		lane, requirements = planS12GracefulStop(cfg, lane, requirements, &summary)
 	case cfg.BackupBucket != "":
 		lane = s11Lane
 		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant})
@@ -682,6 +688,16 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 		summary.Settle(evidence.Requirement{ID: s12ID, Variant: variant}, evidence.Blocked,
 			"S12 "+variant+" follows S12 exact, and S12 exact did not pass")
 	}
+	switch {
+	case h.s12GracefulStop != nil:
+		summary.Record(*h.s12GracefulStop)
+	case h.cfg.RestoreGracefulStop && h.s12 == nil:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12GracefulStopVariant}, evidence.Blocked,
+			"S12 graceful-stop follows S12 exact, and S12 exact did not run")
+	case h.cfg.RestoreGracefulStop:
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12GracefulStopVariant}, evidence.Blocked,
+			"S12 graceful-stop follows S12 exact, and S12 exact did not pass")
+	}
 }
 
 // s11FollowUp is an S11 variant that follows S11 complete: whether the run
@@ -778,6 +794,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 			h.s12IMRestart = &restart
 			if restart.Result != evidence.Pass {
 				return fmt.Errorf("S12/%s: %s", restart.Variant, restart.Reason)
+			}
+		}
+		if h.cfg.RestoreGracefulStop {
+			stop := h.runS12GracefulStop(ctx)
+			h.s12GracefulStop = &stop
+			if stop.Result != evidence.Pass {
+				return fmt.Errorf("S12/%s: %s", s12GracefulStopVariant, stop.Reason)
 			}
 		}
 		if h.cfg.RestoreWrongTarget {

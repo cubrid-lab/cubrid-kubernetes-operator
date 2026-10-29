@@ -89,6 +89,8 @@ const (
 	// backupdb (Backup in internal/instancemanager/operations.go);
 	// heartbeatStop and serverStop those of the shutdown (Shutdown).
 	backupdbCommand = "cubrid backupdb "
+	// backupdbUtility is the utility S11 graceful-stop's sampler watches.
+	backupdbUtility = "backupdb"
 	heartbeatStop   = "cubrid heartbeat stop"
 	serverStop      = "cubrid server stop"
 	// samplerInterval is the pause between two readings of the sampler.
@@ -180,19 +182,19 @@ type stopSample struct {
 	Holders   []string  `json:"holders"`
 }
 
-// backupdbProcess returns the first process of the reading whose argv runs
-// backupdb, or "".
-func (s stopSample) backupdbProcess() string {
+// utilityProcess returns the first process of the reading whose argv runs
+// the CUBRID utility named, or "".
+func (s stopSample) utilityProcess(utility string) string {
 	for _, p := range s.Processes {
-		if slices.Contains(strings.Fields(p), "backupdb") {
+		if slices.Contains(strings.Fields(p), utility) {
 			return p
 		}
 	}
 	return ""
 }
 
-// s11StopSampler is what the run took from the sampler and found in it.
-type s11StopSampler struct {
+// samplerStream is what the run took from a sampler's output.
+type samplerStream struct {
 	Interval string `json:"interval"`
 	Samples  int    `json:"samples"`
 	// BytesRead and Truncated are of the sampler's output, which the run
@@ -204,6 +206,30 @@ type s11StopSampler struct {
 	// the end of the output.
 	EndedAt  *time.Time `json:"endedAt,omitempty"`
 	EndError string     `json:"endError,omitempty"`
+}
+
+func (s *samplerStream) setEnd(at time.Time, read int64, truncated bool, endErr string) {
+	s.EndedAt, s.BytesRead, s.Truncated, s.EndError = &at, read, truncated, endErr
+}
+
+// samplerRecord is a variant's record of its sampler: the output's stream,
+// and the readings that showed the watched utility, which it names in its
+// own terms.
+type samplerRecord interface {
+	stream() *samplerStream
+	sawUtility(at time.Time)
+}
+
+// streamEnd records how a stream the run read ended: when, the bytes read,
+// whether it reached the run's limit, and why it ended when that was not
+// the end of the stream.
+type streamEnd interface {
+	setEnd(at time.Time, read int64, truncated bool, endErr string)
+}
+
+// s11StopSampler is what the run took from the sampler and found in it.
+type s11StopSampler struct {
+	samplerStream
 	// FirstBackupdbAt and LastBackupdbAt are the first and the last reading,
 	// by the run's clock, that showed a backupdb process.
 	FirstBackupdbAt *time.Time `json:"firstBackupdbAt,omitempty"`
@@ -221,6 +247,15 @@ type s11StopSampler struct {
 	LastHolder       string     `json:"lastHolder,omitempty"`
 	LastHolderAt     *time.Time `json:"lastHolderAt,omitempty"`
 	HoldersAfterGone []string   `json:"holdersAfterGone"`
+}
+
+func (s *s11StopSampler) stream() *samplerStream { return &s.samplerStream }
+
+func (s *s11StopSampler) sawUtility(at time.Time) {
+	if s.FirstBackupdbAt == nil {
+		s.FirstBackupdbAt = &at
+	}
+	s.LastBackupdbAt = &at
 }
 
 // s11StopLog is what the run found in the followed log of the member's
@@ -263,6 +298,10 @@ type s11StopLog struct {
 	StopLoggedAfterDelete string     `json:"stopLoggedAfterDelete,omitempty"`
 }
 
+func (l *s11StopLog) setEnd(at time.Time, read int64, truncated bool, endErr string) {
+	l.EndedAt, l.BytesRead, l.Truncated, l.EndError = &at, read, truncated, endErr
+}
+
 // s11Filler is the table the run grew in the standalone member's database
 // before the request, so that backupdb runs long enough for the stop to
 // land inside it: its name, the size asked for, the rows of fillerRowBytes
@@ -295,8 +334,9 @@ type s11StopTrigger struct {
 	// precondition.
 	PodUID      string `json:"podUID,omitempty"`
 	ContainerID string `json:"containerID,omitempty"`
-	// SeenAt is the sampler's reading, by the run's clock, that showed
-	// backupdb while the trigger was armed, and SeenProcess the process.
+	// SeenAt is the sampler's reading, by the run's clock, that showed the
+	// watched utility (backupdb, restoredb) while the trigger was armed, and
+	// SeenProcess the process.
 	SeenAt      *time.Time `json:"seenAt,omitempty"`
 	SeenProcess string     `json:"seenProcess,omitempty"`
 	// DeleteIssuedAt and DeleteAcceptedAt are when the deletion was sent and
@@ -307,8 +347,9 @@ type s11StopTrigger struct {
 	// Missed says why the trigger was not placed.
 	Missed string `json:"missed,omitempty"`
 	// ReplacementUID is the Pod the StatefulSet created in its place,
-	// ReplacementAt the reading that first saw it, ReadyAgainAt the first
-	// reading of the cluster Ready after its database container was ready,
+	// ReplacementAt the reading that first saw it, ReadyAgainAt, for S11's
+	// standalone cluster, the first reading of the cluster Ready after its
+	// database container was ready,
 	// ReadyAgainWithin the time from the deletion to it, ReadyTransitionAt
 	// the Ready condition's lastTransitionTime then, and ReadyWaiting what
 	// did not hold yet at the last reading before.
@@ -418,11 +459,13 @@ func planS11GracefulStop(cfg HAConfig, lane string, requirements []evidence.Requ
 }
 
 // stopWatch is the state the sampler, the trigger and the wait for the
-// backup share. The sampler's reader appends readings and fires the trigger
-// at the first one that shows backupdb while it is armed; a reading of the
-// backup that has left Pending or Running before then disarms it.
+// operation share. The sampler's reader appends readings and fires the
+// trigger at the first one that shows the utility (backupdbUtility,
+// restoredbUtility) while it is armed; a reading of the operation that has
+// moved past the utility before then disarms it.
 type stopWatch struct {
 	mu      sync.Mutex
+	utility string
 	samples []stopSample
 	armed   bool
 	fired   bool
@@ -473,8 +516,9 @@ func (h *haRun) runS11GracefulStop(ctx context.Context) (result evidence.Scenari
 		PodSecurity: map[string]string{},
 		Cluster:     &s11StandaloneCluster{Name: s11GracefulStopClusterName, Secret: seedSecretName},
 		ReadyLimit:  h.cfg.BackupGracefulStopReadyLimit.String(), Trigger: &s11StopTrigger{},
-		Sampler: &s11StopSampler{Interval: samplerInterval.String(), HoldersAfterGone: []string{}},
-		Log:     &s11StopLog{WriterEvents: []string{}}, Phases: []s11Phase{}, OperationRefsSeen: []string{},
+		Sampler: &s11StopSampler{samplerStream: samplerStream{Interval: samplerInterval.String()},
+			HoldersAfterGone: []string{}},
+		Log: &s11StopLog{WriterEvents: []string{}}, Phases: []s11Phase{}, OperationRefsSeen: []string{},
 		ArtifactsNotDone: []s11ArtifactReading{}, s11PrefixAtEnd: newS11PrefixAtEnd(),
 		Credentials: &s11Credentials{FoundIn: []string{}},
 		Notes: []string{"the run namespace keeps the Pod Security level LAB01 created it with: the variant adds no " +
@@ -503,32 +547,14 @@ func (h *haRun) runS11GracefulStop(ctx context.Context) (result evidence.Scenari
 			TargetRows: fillerRows(mb), DataVolume: volume.String()}
 	}
 	var made s11InterruptedMade
-	watch := &stopWatch{seen: make(chan struct{})}
+	watch := &stopWatch{utility: backupdbUtility, seen: make(chan struct{})}
 	var memberLog []byte
 	defer func() {
 		cleaned := h.deleteGracefulStop(ctx, made, rec)
 		result.CleanupSucceeded = &cleaned
-		var errs []error
-		if err := h.writeSamples(watch); err != nil {
-			errs = append(errs, err)
-		}
-		if memberLog != nil {
-			errs = append(errs, h.write(s11GracefulStopLogFile, memberLog))
-		}
-		errs = append(errs, h.writeJSON(s11GracefulStopRecordFile, rec))
-		// A pass without its evidence is a failure; a blocked or failed S11
-		// graceful-stop keeps its result, with the evidence that could not be
-		// written.
-		if err := errors.Join(errs...); err != nil {
-			if result.Result == evidence.Pass {
-				result.Result, result.Reason = evidence.Fail, ""
-			}
-			result.Reason = strings.TrimPrefix(result.Reason+"; write S11 graceful-stop evidence: "+err.Error(),
-				"; ")
-		}
-		result.Evidence = slices.DeleteFunc(slices.Clone(h.files), func(f string) bool {
-			return !strings.HasPrefix(f, "S11/"+s11GracefulStopVariant+"/")
-		})
+		h.writeStopEvidence(stopEvidence{name: "S11 graceful-stop", dir: "S11/" + s11GracefulStopVariant + "/",
+			samples: s11GracefulStopSamplesFile, log: s11GracefulStopLogFile, record: s11GracefulStopRecordFile},
+			watch, memberLog, rec, &result)
 	}()
 	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String(),
 		readyLimitName: h.cfg.BackupGracefulStopReadyLimit.String()}
@@ -544,6 +570,39 @@ func (h *haRun) runS11GracefulStop(ctx context.Context) (result evidence.Scenari
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
 	return result
+}
+
+// stopEvidence names the evidence of a graceful-stop variant: the variant
+// for a reason, the directory every file of it is below, and the files of
+// its sampler's readings, its followed log and its record.
+type stopEvidence struct {
+	name, dir, samples, log, record string
+}
+
+// writeStopEvidence writes a graceful-stop variant's sampler readings, its
+// followed log when it was read, and its record, and lists the files below
+// its directory as its evidence. A pass without its evidence is a failure; a
+// blocked or failed variant keeps its result, with the evidence that could
+// not be written.
+func (h *haRun) writeStopEvidence(files stopEvidence, watch *stopWatch, memberLog []byte, rec any,
+	result *evidence.Scenario) {
+	var errs []error
+	if err := h.writeSamples(watch, files.samples); err != nil {
+		errs = append(errs, err)
+	}
+	if memberLog != nil {
+		errs = append(errs, h.write(files.log, memberLog))
+	}
+	errs = append(errs, h.writeJSON(files.record, rec))
+	if err := errors.Join(errs...); err != nil {
+		if result.Result == evidence.Pass {
+			result.Result, result.Reason = evidence.Fail, ""
+		}
+		result.Reason = strings.TrimPrefix(result.Reason+"; write "+files.name+" evidence: "+err.Error(), "; ")
+	}
+	result.Evidence = slices.DeleteFunc(slices.Clone(h.files), func(f string) bool {
+		return !strings.HasPrefix(f, files.dir)
+	})
 }
 
 // judgeGracefulStopRun sets the result of S11 graceful-stop from the error of
@@ -637,11 +696,11 @@ func (h *haRun) gracefulStopSteps(ctx context.Context, rec *s11GracefulStopRecor
 	}
 	sctx, stopStreams := context.WithCancel(ctx)
 	defer stopStreams()
-	samplerDone, err := h.startSampler(sctx, watch, rec.Sampler)
+	samplerDone, err := h.startSampler(sctx, s11GracefulStopMember, gracefulStopSamplerScript(), watch, rec.Sampler)
 	if err != nil {
 		return err
 	}
-	logDone, err := h.startMemberLog(sctx, rec.Log, memberLog)
+	logDone, err := h.startMemberLog(sctx, s11GracefulStopMember, rec.Log, memberLog)
 	if err != nil {
 		stopStreams()
 		<-samplerDone
@@ -736,18 +795,20 @@ func (h *haRun) memberBeforeRequest(ctx context.Context, cluster *databasev1alph
 	return nil
 }
 
-// startSampler starts gracefulStopSamplerScript in the member's database
-// container and reads its output until it ends, at most the run's log limit;
-// the returned channel is closed then. Each reading is appended to watch,
-// and the first that shows backupdb while watch is armed fires it.
-func (h *haRun) startSampler(ctx context.Context, watch *stopWatch, s *s11StopSampler) (<-chan struct{}, error) {
+// startSampler starts script, a samplerScript, in the database container of
+// the member pod and reads its output until it ends, at most the run's log
+// limit; the returned channel is closed then. Each reading is appended to
+// watch, and the first that shows watch's utility while watch is armed
+// fires it.
+func (h *haRun) startSampler(ctx context.Context, pod, script string, watch *stopWatch, s samplerRecord) (
+	<-chan struct{}, error) {
 	if err := h.guard(ctx); err != nil {
 		return nil, err
 	}
-	stream, err := h.execStream(ctx, "-n", h.cfg.Namespace, "exec", s11GracefulStopMember, "-c", databaseContainer,
-		"--", "bash", "-c", gracefulStopSamplerScript())
+	stream, err := h.execStream(ctx, "-n", h.cfg.Namespace, "exec", pod, "-c", databaseContainer,
+		"--", "bash", "-c", script)
 	if err != nil {
-		return nil, fmt.Errorf("start the sampler in %s: %w", s11GracefulStopMember, err)
+		return nil, fmt.Errorf("start the sampler in %s: %w", pod, err)
 	}
 	done := make(chan struct{})
 	go func() {
@@ -758,11 +819,11 @@ func (h *haRun) startSampler(ctx context.Context, watch *stopWatch, s *s11StopSa
 		err := readSamples(io.TeeReader(counted, &lockedWriter{mu: &watch.mu, w: &watch.output}), watch, s)
 		watch.mu.Lock()
 		defer watch.mu.Unlock()
-		at := time.Now().UTC()
-		s.EndedAt, s.BytesRead, s.Truncated = &at, counted.n, counted.n > limit
+		endErr := ""
 		if err != nil && ctx.Err() == nil {
-			s.EndError = h.redactError(err)
+			endErr = h.redactError(err)
 		}
+		s.stream().setEnd(time.Now().UTC(), counted.n, counted.n > limit, endErr)
 	}()
 	return done, nil
 }
@@ -793,7 +854,7 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 
 // readSamples parses the sampler's output into readings and adds each to
 // watch as it ends (addSample).
-func readSamples(r io.Reader, watch *stopWatch, s *s11StopSampler) error {
+func readSamples(r io.Reader, watch *stopWatch, s samplerRecord) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	var cur *stopSample
@@ -830,7 +891,7 @@ func readSamples(r io.Reader, watch *stopWatch, s *s11StopSampler) error {
 		}
 	}
 	watch.mu.Lock()
-	s.Unparsed += unparsed
+	s.stream().Unparsed += unparsed
 	watch.mu.Unlock()
 	return sc.Err()
 }
@@ -853,18 +914,14 @@ func parseSampleTime(v string) (time.Time, error) {
 }
 
 // addSample records one reading, and fires the trigger at the first that
-// shows a backupdb process while it is armed.
-func (w *stopWatch) addSample(sample stopSample, s *s11StopSampler) {
+// shows a process of the watched utility while it is armed.
+func (w *stopWatch) addSample(sample stopSample, s samplerRecord) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.samples = append(w.samples, sample)
-	s.Samples = len(w.samples)
-	if p := sample.backupdbProcess(); p != "" {
-		at := sample.Received
-		if s.FirstBackupdbAt == nil {
-			s.FirstBackupdbAt = &at
-		}
-		s.LastBackupdbAt = &at
+	s.stream().Samples = len(w.samples)
+	if p := sample.utilityProcess(w.utility); p != "" {
+		s.sawUtility(sample.Received)
 		if w.armed && !w.fired {
 			w.fired = true
 			close(w.seen)
@@ -872,31 +929,31 @@ func (w *stopWatch) addSample(sample stopSample, s *s11StopSampler) {
 	}
 }
 
-// startMemberLog follows the log of the member's database container, whole,
-// at most the run's log limit and one byte more, into out; the returned
-// channel is closed once the log ended.
-func (h *haRun) startMemberLog(ctx context.Context, l *s11StopLog, out *[]byte) (<-chan struct{}, error) {
+// startMemberLog follows the log of the member pod's database container,
+// whole, at most the run's log limit and one byte more, into out; the
+// returned channel is closed once the log ended, and l records how.
+func (h *haRun) startMemberLog(ctx context.Context, pod string, l streamEnd, out *[]byte) (<-chan struct{}, error) {
 	if err := h.guard(ctx); err != nil {
 		return nil, err
 	}
 	limit := h.logLimit()
 	asked := limit + 1
-	stream, err := h.followLogs(ctx, h.cfg.Namespace, s11GracefulStopMember, &corev1.PodLogOptions{
+	stream, err := h.followLogs(ctx, h.cfg.Namespace, pod, &corev1.PodLogOptions{
 		Container: databaseContainer, Follow: true, LimitBytes: &asked})
 	if err != nil {
-		return nil, fmt.Errorf("follow the log of %s: %s", s11GracefulStopMember, h.redactError(err))
+		return nil, fmt.Errorf("follow the log of %s: %s", pod, h.redactError(err))
 	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		defer func() { _ = stream.Close() }()
 		data, err := io.ReadAll(io.LimitReader(stream, asked))
-		at := time.Now().UTC()
 		*out = data
-		l.EndedAt, l.BytesRead, l.Truncated = &at, int64(len(data)), int64(len(data)) > limit
+		endErr := ""
 		if err != nil && ctx.Err() == nil {
-			l.EndError = h.redactError(err)
+			endErr = h.redactError(err)
 		}
+		l.setEnd(time.Now().UTC(), int64(len(data)), int64(len(data)) > limit, endErr)
 	}()
 	return done, nil
 }
@@ -927,7 +984,7 @@ func (h *haRun) gracefulStopBackup(ctx context.Context, rec *s11GracefulStopReco
 		defer close(triggered)
 		select {
 		case <-watch.seen:
-			h.triggerStop(tctx, watch, rec)
+			h.triggerStop(tctx, watch, s11GracefulStopMember, rec.Trigger)
 		case <-tctx.Done():
 		}
 	}()
@@ -958,15 +1015,14 @@ func (h *haRun) gracefulStopBackup(ctx context.Context, rec *s11GracefulStopReco
 	return backup, waitErr
 }
 
-// triggerStop deletes the member's Pod with its grace period and its UID as
-// a precondition, and records when the sampler first saw backupdb and when
-// the deletion was sent and accepted. It writes the trigger with watch.mu
-// held: the wait for the backup reads it meanwhile.
-func (h *haRun) triggerStop(ctx context.Context, watch *stopWatch, rec *s11GracefulStopRecord) {
-	t := rec.Trigger
+// triggerStop deletes the member's Pod, pod, with its grace period and the
+// UID t names as a precondition, and records when the sampler first saw the
+// watched utility and when the deletion was sent and accepted. It writes the
+// trigger with watch.mu held: the wait for the operation reads it meanwhile.
+func (h *haRun) triggerStop(ctx context.Context, watch *stopWatch, pod string, t *s11StopTrigger) {
 	watch.mu.Lock()
 	for _, sample := range watch.samples {
-		if p := sample.backupdbProcess(); p != "" {
+		if p := sample.utilityProcess(watch.utility); p != "" {
 			at := sample.Received
 			t.SeenAt, t.SeenProcess = &at, p
 			break
@@ -984,12 +1040,12 @@ func (h *haRun) triggerStop(ctx context.Context, watch *stopWatch, rec *s11Grace
 		return
 	}
 	uid := types.UID(podUID)
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s11GracefulStopMember, Namespace: h.cfg.Namespace}}
+	member := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: pod, Namespace: h.cfg.Namespace}}
 	issued := time.Now().UTC()
 	watch.mu.Lock()
 	t.DeleteIssuedAt = &issued
 	watch.mu.Unlock()
-	if err := h.Client.Delete(ctx, pod, client.Preconditions{UID: &uid}); err != nil {
+	if err := h.Client.Delete(ctx, member, client.Preconditions{UID: &uid}); err != nil {
 		failed(err)
 		return
 	}
@@ -1418,8 +1474,10 @@ type stopLogLine struct {
 	Event       string `json:"event"`
 	Command     string `json:"command"`
 	OperationID string `json:"operationID"`
+	Kind        string `json:"kind"`
 	Reason      string `json:"reason"`
 	Err         string `json:"err"`
+	ExitCode    *int   `json:"exitCode"`
 	Time        string `json:"time"`
 	DurationMs  *int64 `json:"durationMs"`
 }
@@ -1654,25 +1712,10 @@ func (h *haRun) gracefulStopCredentials(ctx context.Context, made *s11Interrupte
 	watch.mu.Lock()
 	sampled := slices.Clone(watch.output.Bytes())
 	watch.mu.Unlock()
-	for _, stream := range []struct {
-		where     string
-		data      []byte
-		truncated bool
-	}{{"the sampler's output in " + s11GracefulStopMember, sampled, rec.Sampler.Truncated},
-		{"the followed log of the deleted member " + s11GracefulStopMember, memberLog, rec.Log.Truncated}} {
-		holds, err := h.holdsCredential(stream.data)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if holds {
-			creds.FoundIn = append(creds.FoundIn, stream.where)
-		}
-		if stream.truncated {
-			errs = append(errs, fmt.Errorf("%s reached the run's limit of %d bytes and was not fully searched",
-				stream.where, h.logLimit()))
-		}
-	}
+	errs = append(errs, h.searchStreams(creds,
+		searchedStream{"the sampler's output in " + s11GracefulStopMember, sampled, rec.Sampler.Truncated},
+		searchedStream{"the followed log of the deleted member " + s11GracefulStopMember, memberLog,
+			rec.Log.Truncated})...)
 	if creds.Logs == nil {
 		creds.Logs = []s11LogCheck{}
 	}
@@ -1700,8 +1743,39 @@ func (h *haRun) gracefulStopCredentials(ctx context.Context, made *s11Interrupte
 	return errors.Join(errs...)
 }
 
-// writeSamples stores the sampler's readings as JSON lines.
-func (h *haRun) writeSamples(watch *stopWatch) error {
+// searchedStream is what the run read of a stream, a sampler's output or a
+// followed log, to search it for the object store's keys: where it is, the
+// bytes read and whether they reached the run's limit.
+type searchedStream struct {
+	where     string
+	data      []byte
+	truncated bool
+}
+
+// searchStreams looks for the object store's keys in each stream, adds
+// where one was found to creds.FoundIn, and returns why a stream was not
+// fully searched.
+func (h *haRun) searchStreams(creds *s11Credentials, streams ...searchedStream) []error {
+	var errs []error
+	for _, stream := range streams {
+		holds, err := h.holdsCredential(stream.data)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if holds {
+			creds.FoundIn = append(creds.FoundIn, stream.where)
+		}
+		if stream.truncated {
+			errs = append(errs, fmt.Errorf("%s reached the run's limit of %d bytes and was not fully searched",
+				stream.where, h.logLimit()))
+		}
+	}
+	return errs
+}
+
+// writeSamples stores the sampler's readings as JSON lines in file.
+func (h *haRun) writeSamples(watch *stopWatch, file string) error {
 	watch.mu.Lock()
 	samples := slices.Clone(watch.samples)
 	watch.mu.Unlock()
@@ -1716,7 +1790,7 @@ func (h *haRun) writeSamples(watch *stopWatch) error {
 		}
 		b.Write(append(data, '\n'))
 	}
-	return h.write(s11GracefulStopSamplesFile, b.Bytes())
+	return h.write(file, b.Bytes())
 }
 
 // deleteGracefulStop deletes the CubridBackup and the cluster the run
