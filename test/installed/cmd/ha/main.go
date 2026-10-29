@@ -149,8 +149,7 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"with RecordedOperationLost after 30 minutes; makes the run namespace enforce Pod Security privileged; "+
 			"needs -backup-bucket and -backup-limit of at least 35m, not with -restore, -backup-missing-destination, "+
 			"-backup-denied-credentials, -backup-signature-mismatch, -backup-interrupted-upload, "+
-			"-backup-operator-restart, -backup-instance-manager-restart, -backup-overlapping or "+
-			"-backup-operation-store-loss")
+			"-backup-operator-restart, -backup-instance-manager-restart or -backup-overlapping")
 	flags.DurationVar(&cfg.BackupOperationStoreLossReadyLimit, "backup-operation-store-loss-ready-limit",
 		15*time.Minute, "S11 operation-store-loss: bound from the standalone cluster's creation until it is Ready, "+
 			"and from the kill until it is Ready again")

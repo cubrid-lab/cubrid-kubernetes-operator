@@ -1737,8 +1737,8 @@ lab-only.
 
 ```sh
   ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
-  -backup-operation-store-loss -backup-limit 35m \
-  [-backup-operation-store-loss-ready-limit 15m] -timeout 90m
+  -backup-operation-store-loss -backup-limit 40m \
+  [-backup-operation-store-loss-ready-limit 15m] -timeout 100m
 ```
 
 - **Pod Security.** As in S11 `instance-manager-restart`: the run creates
@@ -1751,6 +1751,15 @@ lab-only.
   (`backupOperationMissingWait`), so the variant refuses a `-backup-limit`
   below 35 minutes: 30 minutes for that bound, and five for the upload up to
   the fault, the member's restart and the Operator's polls every 10 seconds.
+  That floor is the least limit that can show the end at all; use
+  `-backup-limit 40m`, which also leaves room for a slow restart. The
+  Operator's bound starts at its first missing answer, after the restart,
+  while `-backup-limit` starts at the request. So when `-backup-limit`
+  runs out while the backup reads `RecordedOperationMissing` and less than
+  30 minutes have passed from `status.operationMissingSince` to the last
+  reading, the variant is blocked as inconclusive, not failed. That reading
+  is timed by the run's clock and `operationMissingSince` by the
+  Operator's.
   The variant has no default of its own because `-backup-limit` is also S11
   `complete`'s `backup_limit` in the same run: a hidden raise would loosen
   that bound without saying so. The run records the limit it took.
@@ -1761,8 +1770,8 @@ lab-only.
   `-backup-operation-store-loss`.
 - `-timeout` must cover LAB01, S11 `complete`, a new standalone cluster,
   the slowed upload up to the fault, the member's restart and the 30-minute
-  bound. `-timeout 90m` leaves room for all of them at their defaults; the
-  default 30 minutes does not.
+  bound. `-timeout 100m` leaves room for all of them with `-backup-limit
+  40m`; the default 30 minutes does not.
 
 S11 `operation-store-loss` starts only from S11 `complete` that passed.
 When S11 `complete` did not run or did not pass, it is blocked with that
@@ -1814,11 +1823,16 @@ cause and nothing of it is done.
 3. **The fault.** One command in the member's database container. It finds
    the Instance Manager exactly as the kill of S12
    `instance-manager-restart` does, stops it with `SIGSTOP`, and waits up
-   to five seconds until it is stopped. It then removes `<id>.json` of the
-   backup's operation and any `<id>.*.tmp`, and sends `SIGKILL` to the
-   stopped Instance Manager. The ID must be a plain name. Stopping the
-   Instance Manager first means it cannot rename a record write that is
-   already under way over the removed file. When it does not stop, or the
+   to five seconds until every one of its threads
+   (`/proc/<pid>/task/*/stat`) is in state `T`. It then removes `<id>.json`
+   of the backup's operation and any `<id>.*.tmp`, and sends `SIGKILL` to
+   the stopped Instance Manager. The ID must have the form the Instance
+   Manager gives one, `op-` and 32 lowercase hexadecimal digits
+   (`isValidOperationID`), or nothing is run. A thread inside a write or
+   rename system call stops only once the call has returned, so a record
+   write that had reached its rename has landed before the removal, and one
+   that had not is left as a temporary file, which is removed too. When it
+   does not stop, or the
    record is not there before or still there after the removal, the
    command lets it continue and kills nothing; that blocks the variant.
    The kill is confirmed as in S11 `instance-manager-restart`: the
@@ -1852,7 +1866,9 @@ cause and nothing of it is done.
      is named, with the store's answer for an upload failure. A
      `RecordedOperationLost` without both times blocks it.
    - A backup neither `Completed` nor `Failed` within `-backup-limit` fails
-     it.
+     it, unless its last reading shows `RecordedOperationMissing` less than
+     30 minutes after `status.operationMissingSince`: the Operator's bound
+     has not been reached, and the variant is blocked as inconclusive.
 7. **Removal, prefix, backup at the end, one restart, credentials, source,
    manager and cleanup.** As steps 7 to 11 of S11
    `instance-manager-restart`. A `manifest.json` under the prefix must

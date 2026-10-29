@@ -19,6 +19,8 @@ package installed
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -74,6 +76,8 @@ type s11StoreLossFixture struct {
 	lostAfter               time.Duration
 	stagingLeft             bool
 	also                    func(s *databasev1alpha1.CubridBackupStatus)
+	// listErr answers the listing of the store after the restart.
+	listErr error
 
 	since    metav1.Time
 	listings int
@@ -108,6 +112,9 @@ func (f *s11StoreLossFixture) answer(ctx context.Context, pod, script string) (s
 		f.mu.Lock()
 		f.listings++
 		f.mu.Unlock()
+		if f.listErr != nil {
+			return "", f.listErr, true
+		}
 		names := testIMOperation2 + ".json\n"
 		if f.recordStays {
 			names += testIMOperation + ".json\n"
@@ -324,6 +331,16 @@ func TestRunS11OperationStoreLossFails(t *testing.T) {
 		"a manifest.json under the prefix": {set: func(f *s11StoreLossFixture) {
 			f.leave = []string{testFirstBackupKey, instancemanager.ManifestObjectName}
 		}, never: true, want: []string{testManifestHeld}},
+		"Pending after the kill": {set: func(f *s11StoreLossFixture) {
+			f.also = func(s *databasev1alpha1.CubridBackupStatus) {
+				f.mu.Lock()
+				after := f.afterReads
+				f.mu.Unlock()
+				if after == 2 && s.Phase == databasev1alpha1.BackupPhaseUploading {
+					s.Phase = databasev1alpha1.BackupPhasePending
+				}
+			}
+		}, want: []string{"the backup was Pending at", "keeps Running or Uploading until it ends"}},
 		"another operation": {set: func(f *s11StoreLossFixture) {
 			f.also = func(s *databasev1alpha1.CubridBackupStatus) {
 				if s.Phase == databasev1alpha1.BackupPhaseFailed {
@@ -357,6 +374,10 @@ func TestRunS11OperationStoreLossIsBlocked(t *testing.T) {
 	}{
 		"the record is still there after the restart": {set: func(f *s11StoreLossFixture) { f.recordStays = true },
 			want: "holds " + testIMOperation + ".json after the restart"},
+		"the store could not be listed after the restart": {set: func(f *s11StoreLossFixture) {
+			f.listErr = errors.New("command terminated with exit code 2")
+		}, want: "could not be listed after the restart, so the removal of the record of operation " +
+			testIMOperation + " is not confirmed"},
 		"the fault was refused": {set: func(f *s11StoreLossFixture) {
 			f.memberHook = func(ctx context.Context, pod, script string) (string, error, bool) {
 				if strings.Contains(script, "kill -STOP") {
@@ -425,6 +446,126 @@ func TestRunHARefusesBackupOperationStoreLossWithoutItsLane(t *testing.T) {
 			}
 			if len(f.writes) != 0 || len(f.ran) != 0 {
 				t.Fatalf("writes = %v, commands = %v; want nothing done", f.writes, f.ran)
+			}
+		})
+	}
+}
+
+func TestRunS11OperationStoreLossIsBlockedWhenS11CompleteDidNotPass(t *testing.T) {
+	cfg := testS11StoreLossConfig(t)
+	f := newS11StoreLossFixture(t, cfg)
+	f.phases = []databasev1alpha1.CubridBackupPhase{databasev1alpha1.BackupPhaseFailed}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	summary := readSummary(t, cfg.EvidenceDir)
+	if summary.Lane != s11StoreLossLane || len(summary.Scenarios) != 3 {
+		t.Fatalf("summary = %+v, want LAB01, S11/complete and S11/%s", summary, s11StoreLossVariant)
+	}
+	if scenario := summary.Scenarios[2]; scenario.Variant != s11StoreLossVariant ||
+		scenario.Result != evidence.Blocked || !strings.Contains(scenario.Reason, "S11 complete did not pass") {
+		t.Fatalf("S11 operation-store-loss = %+v, want blocked by S11 complete", scenario)
+	}
+	if f.cluster != nil || len(f.net.ops) != 0 || len(f.kills) != 0 || f.listings != 0 {
+		t.Fatal("S11 operation-store-loss ran although S11 complete did not pass")
+	}
+}
+
+// testStoreLossJudged builds the record and backup judgeStoreLossBackup
+// takes: the fault placed and the kill at the first of phases, and the
+// backup as the last reading shows it, missing since since and completed at
+// done.
+func testStoreLossJudged(phases []s11Phase, since, done *metav1.Time) (*s11StoreLossRecord,
+	*databasev1alpha1.CubridBackup) {
+	placed, absent := phases[0].At, true
+	end := phases[len(phases)-1]
+	rec := &s11StoreLossRecord{s11IMRestartRecord: s11IMRestartRecord{
+		Cluster: &s11StandaloneCluster{Name: s11StoreLossClusterName}, Throttle: &s11Throttle{},
+		Kill: &s11IMKill{memberKill: memberKill{KilledAt: &placed, EndedAt: &placed}, PlacedAt: &placed,
+			OperationRef: testIMOperation, OperationRefsSeen: []string{}, placed: 0},
+		Phases: phases, variant: "S11 operation-store-loss"},
+		StoreLoss: &s11StoreLoss{RecordAbsent: &absent}}
+	backup := &databasev1alpha1.CubridBackup{Status: databasev1alpha1.CubridBackupStatus{
+		Phase: databasev1alpha1.CubridBackupPhase(end.Phase), OperationRef: testIMOperation,
+		Conditions: end.Conditions, OperationMissingSince: since, CompletedAt: done}}
+	return rec, backup
+}
+
+// testReading is a reading of the backup at at, in phase, with Ready reason
+// reason.
+func testReading(at time.Time, phase databasev1alpha1.CubridBackupPhase, reason string) s11Phase {
+	return s11Phase{At: at, Phase: string(phase), OperationRef: testIMOperation,
+		Conditions: []metav1.Condition{{Type: backupReady, Status: metav1.ConditionFalse, Reason: reason}}}
+}
+
+// The judgement on its own: a missing reading after the kill is required
+// apart from its measurement, the phase stays Running or Uploading, both
+// bound times must be set, the bound itself counts as reached, and a
+// backup_limit that ran out before the Operator's bound is inconclusive.
+func TestJudgeStoreLossBackup(t *testing.T) {
+	const pass, fail, block = "pass", "fail", "block"
+	kill := time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC)
+	since := metav1.NewTime(kill.Add(time.Minute))
+	atBound := metav1.NewTime(since.Add(storeLossMissingWait))
+	early := metav1.NewTime(since.Add(storeLossMissingWait - time.Second))
+	up, failed := databasev1alpha1.BackupPhaseUploading, databasev1alpha1.BackupPhaseFailed
+	placing := testReading(kill, up, testUploadRunning)
+	unreachable := testReading(kill.Add(10*time.Second), up, "InstanceManagerUnavailable")
+	missing := testReading(since.Time, up, s12OperationMissingReason)
+	lost := testReading(atBound.Add(5*time.Second), failed, s11OperationLostReason)
+	limit := backupVerdict{fmt.Errorf("%w 40m0s; its last phase was %q", errBackupLimitPassed, up)}
+	noMissing := "no reading after the kill showed " + s12OperationMissingReason
+	for name, tc := range map[string]struct {
+		phases      []s11Phase
+		since, done *metav1.Time
+		waitErr     error
+		want        string
+		reason      string
+	}{
+		"lost exactly at the bound": {phases: []s11Phase{placing, unreachable, missing, lost}, since: &since,
+			done: &atBound, want: pass},
+		"no missing reading": {phases: []s11Phase{placing, unreachable, lost}, since: &since, done: &atBound,
+			want: fail, reason: noMissing},
+		"a missing reading only at the placement": {
+			phases: []s11Phase{testReading(kill, up, s12OperationMissingReason), unreachable, lost},
+			since:  &since, done: &atBound, want: fail, reason: noMissing},
+		"Pending after the kill": {phases: []s11Phase{placing,
+			testReading(kill.Add(10*time.Second), databasev1alpha1.BackupPhasePending, testRunningReason), missing,
+			lost}, since: &since, done: &atBound, want: fail, reason: "keeps Running or Uploading until it ends"},
+		"lost before the bound": {phases: []s11Phase{placing, missing, lost}, since: &since, done: &early,
+			want: fail, reason: "before the bound of 30m0s"},
+		"lost without operationMissingSince": {phases: []s11Phase{placing, missing, lost}, done: &atBound,
+			want: block, reason: "cannot be checked"},
+		"lost without completedAt": {phases: []s11Phase{placing, missing, lost}, since: &since, want: block,
+			reason: "cannot be checked"},
+		"backup_limit before the Operator's bound": {
+			phases: []s11Phase{placing, missing, testReading(since.Add(10*time.Minute), up,
+				s12OperationMissingReason)}, since: &since, waitErr: limit, want: block,
+			reason: "inconclusive: backup_limit ran out while the backup read " + s12OperationMissingReason},
+		"backup_limit after the Operator's bound": {
+			phases: []s11Phase{placing, missing, testReading(since.Add(storeLossMissingWait+time.Minute), up,
+				s12OperationMissingReason)}, since: &since, waitErr: limit, want: fail,
+			reason: errBackupLimitPassed.Error()},
+		"backup_limit before any missing reading": {phases: []s11Phase{placing, unreachable}, waitErr: limit,
+			want: fail, reason: errBackupLimitPassed.Error()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec, backup := testStoreLossJudged(tc.phases, tc.since, tc.done)
+			result := &evidence.Scenario{Measurements: map[string]any{}}
+			err := judgeStoreLossBackup(backup, tc.waitErr, kill.Add(-time.Minute), rec, result)
+			got := pass
+			switch {
+			case errors.As(err, new(backupVerdict)):
+				got = fail
+			case err != nil:
+				got = block
+			}
+			if got != tc.want || (err != nil && !strings.Contains(err.Error(), tc.reason)) {
+				t.Fatalf("judgeStoreLossBackup() = %v (%s), want %s: %s", err, got, tc.want, tc.reason)
+			}
+			if tc.want == pass && (rec.FirstMissingAt == nil || !rec.FirstMissingAt.Equal(since.Time) ||
+				rec.MissingAfterKill != "1m0s" || rec.FailedAfterMissingSince != "30m0s") {
+				t.Fatalf("record = %+v, want the first missing reading and the bound measured", rec)
 			}
 		})
 	}

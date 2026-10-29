@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -198,18 +199,24 @@ func planS11OperationStoreLoss(cfg HAConfig, lane string, requirements []evidenc
 // command. It finds the manager as imKillScript does (imFindScript) and
 // stops it with SIGSTOP first, so that it writes nothing while the record
 // goes: a record write already under way is a temporary file renamed over
-// <id>.json (writeLocked in internal/instancemanager/opstore.go). It removes
-// <id>.json and any of its temporary files, <id>.*.tmp; the store holds no
-// index or other file of an operation. It then kills the stopped manager
-// with SIGKILL, as imKillScript does. When the manager does not stop, the
-// record is not there before, or is still there after, it lets the manager
-// go on and answers storeLossRefused, and nothing is killed. id is a plain
-// name, checked by the caller.
+// <id>.json (writeLocked in internal/instancemanager/opstore.go). The
+// manager is taken as stopped only once every one of its threads
+// (/proc/<pid>/task/*/stat) is in state T: a thread inside a write or
+// rename system call is not stopped until that call returns, so a rename
+// under way has landed before anything is removed. It removes <id>.json and
+// any of its temporary files, <id>.*.tmp; the store holds no index or other
+// file of an operation. It then kills the stopped manager with SIGKILL, as
+// imKillScript does. When the manager does not stop within five seconds,
+// the record is not there before, or is still there after, it lets the
+// manager go on and answers storeLossRefused, and nothing is killed. id is
+// an operation ID, checked by the caller (operationIDPattern).
 func storeLossScript(id string) string {
 	return imFindScript + `p="$1"; r='` + imOperationsDir + "/" + id + `'; ` +
 		`kill -STOP "$p" || { echo "` + storeLossRefused + ` SIGSTOP to $p failed"; exit 4; }; ` +
-		`t=""; for ((i = 0; i < 50; i++)); do s=$(cat "/proc/$p/stat" 2>/dev/null) || break; ` +
-		`read -r -a st <<< "${s##*) }"; if [ "${st[0]}" = T ]; then t=1; break; fi; sleep 0.1; done; ` +
+		`t=""; for ((i = 0; i < 50; i++)); do [ -d "/proc/$p/task" ] || break; a=1; ` +
+		`for f in /proc/"$p"/task/*/stat; do s=$(cat "$f" 2>/dev/null) || continue; ` +
+		`read -r -a st <<< "${s##*) }"; [ "${st[0]}" = T ] || { a=""; break; }; done; ` +
+		`if [ -n "$a" ]; then t=1; break; fi; sleep 0.1; done; ` +
 		`if [ -z "$t" ]; then kill -CONT "$p"; echo "` + storeLossRefused + ` instance-manager $p did not stop"; ` +
 		`exit 4; fi; ` +
 		`if [ ! -f "$r.json" ]; then kill -CONT "$p"; echo "` + storeLossRefused + ` no record ${r##*/}.json"; ` +
@@ -232,12 +239,23 @@ type operationStoreLoss struct {
 	id string
 }
 
+// operationIDPattern is the form of an operation ID the Instance Manager
+// generates and accepts (newOperationID, isValidOperationID in
+// internal/instancemanager/opstore.go).
+var operationIDPattern = regexp.MustCompile(`^op-[0-9a-f]{32}$`)
+
 func (f operationStoreLoss) Inject(ctx context.Context) error {
-	if !plainName.MatchString(f.id) {
-		return fmt.Errorf("the operation ID %q is not a plain name; nothing was removed or killed", f.id)
+	if !operationIDPattern.MatchString(f.id) {
+		return fmt.Errorf("%q is not an operation ID of the Instance Manager; nothing was removed or killed", f.id)
 	}
 	f.script = storeLossScript(f.id)
-	return f.instanceManagerKill.Inject(ctx)
+	if err := f.instanceManagerKill.Inject(ctx); err != nil {
+		return err
+	}
+	if strings.Contains(f.k.KillAnswer, storeLossRefused) {
+		return fmt.Errorf("nothing was killed in %s: %s", f.k.Pod, f.k.KillAnswer)
+	}
+	return nil
 }
 
 // runS11OperationStoreLoss runs S11 operation-store-loss after S11 complete
@@ -392,7 +410,7 @@ func (h *haRun) judgeStoreLossRun(ctx context.Context, err error, rec *s11StoreL
 		result.Result = evidence.Pass
 		result.Reason = fmt.Sprintf("the upload of %s's backup to %s was seen under way through the rate limit "+
 			"(%d bytes) while the backup was %s with operation %s; one command in the member then removed the "+
-			"operation's record (%s) from the Instance Manager's operation store and killed the Instance "+
+			"operation's record%s from the Instance Manager's operation store and killed the Instance "+
 			"Manager, confirmed by its database container's end with exit code %d; the container ran again on "+
 			"the same Pod %s after the kill, a reading of the cluster after the restarted container was ready "+
 			"showed Ready %s after the kill, within the ready limit counted from it, and the store listed after "+
@@ -404,10 +422,19 @@ func (h *haRun) judgeStoreLossRun(ctx context.Context, err error, rec *s11StoreL
 			"source and the installed manager were unchanged; no seed key was in the statuses read, the Events, "+
 			"the installed Operator's manager log or the member's log, whole, the killed Instance Manager's "+
 			"previous instance included", s11StoreLossClusterName, rec.Bucket, k.SentBeforeKill,
-			k.PhaseAtPlacement, k.OperationRef, strings.Join(rec.StoreLoss.Removed, ", "), sigkillExitCode,
+			k.PhaseAtPlacement, k.OperationRef, removedText(rec.StoreLoss.Removed), sigkillExitCode,
 			k.BackWithin, k.ReadyAgainWithin, s12OperationMissingReason, rec.MissingAfterKill,
 			s11OperationLostReason, rec.FailedAfterMissingSince)
 	}
+}
+
+// removedText names, for the pass reason, the files the fault answered that
+// it removed; nothing when its answer was cut short before naming one.
+func removedText(removed []string) string {
+	if len(removed) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(removed, ", ") + ")"
 }
 
 // storeLossReading acts on one status read of the backup as S11
@@ -542,21 +569,30 @@ func stagingResidue(st *s11Staging) string {
 // the placement and the end Running or Uploading, and at least
 // storeLossMissingWait after status.operationMissingSince. Failed for the
 // manager's restart says the restarted manager still had the record, and
-// any other failure is named; both fail the variant.
+// any other failure is named; both fail the variant. A backup_limit that ran
+// out before the Operator's bound could be reached (boundNotReached) blocks
+// it instead.
 func judgeStoreLossBackup(backup *databasev1alpha1.CubridBackup, waitErr error, requested time.Time,
 	rec *s11StoreLossRecord, result *evidence.Scenario) error {
 	r := &rec.s11IMRestartRecord
+	s, k := backup.Status, r.Kill
+	if since := s.OperationMissingSince; since != nil {
+		at := since.UTC()
+		rec.OperationMissingSince = &at
+	}
 	if done, err := judgeKilledBackup(backup, waitErr, r, result); done {
+		// Only the wait's own error: a never-event is joined into another.
+		var v backupVerdict
+		if err == waitErr && errors.As(err, &v) && errors.Is(v.error, errBackupLimitPassed) {
+			if short := boundNotReached(rec, s); short != nil {
+				return short
+			}
+		}
 		return err
 	}
 	if l := rec.StoreLoss; l.RecordAbsent == nil || !*l.RecordAbsent {
 		return faultStep{fmt.Errorf("the backup ended Failed after the kill, but the record's absence after the "+
 			"restart was not confirmed: %s", r.Failure)}
-	}
-	s, k := backup.Status, r.Kill
-	if since := s.OperationMissingSince; since != nil {
-		at := since.UTC()
-		rec.OperationMissingSince = &at
 	}
 	c := meta.FindStatusCondition(s.Conditions, backupReady)
 	switch {
@@ -568,27 +604,30 @@ func judgeStoreLossBackup(backup *databasev1alpha1.CubridBackup, waitErr error, 
 		return backupVerdict{fmt.Errorf("the backup ended Failed after its operation record was removed and its "+
 			"Instance Manager killed, but not with %s: %s", s11OperationLostReason, failureWithStore(r, c))}
 	}
-	var missing *s11Phase
-	for i := k.placed + 1; i < len(r.Phases); i++ {
-		p := r.Phases[i]
-		if i < len(r.Phases)-1 && !inProgress(databasev1alpha1.CubridBackupPhase(p.Phase)) {
+	after := r.Phases[min(max(k.placed+1, 0), len(r.Phases)):]
+	for i, p := range after {
+		if i < len(after)-1 && !inProgress(databasev1alpha1.CubridBackupPhase(p.Phase)) {
 			return backupVerdict{fmt.Errorf("the backup was %s at %s, after the kill and before it ended: a backup "+
 				"whose record is missing keeps Running or Uploading until it ends", p.Phase,
 				p.At.Format(time.RFC3339Nano))}
 		}
-		if pc := meta.FindStatusCondition(p.Conditions, backupReady); missing == nil && pc != nil &&
-			pc.Reason == s12OperationMissingReason {
-			missing = &r.Phases[i]
+	}
+	missing := slices.IndexFunc(after, func(p s11Phase) bool {
+		pc := meta.FindStatusCondition(p.Conditions, backupReady)
+		return pc != nil && pc.Reason == s12OperationMissingReason
+	})
+	if missing >= 0 {
+		first := after[missing].At
+		rec.FirstMissingAt = &first
+		if k.KilledAt != nil {
+			rec.MissingAfterKill = first.Sub(*k.KilledAt).Round(time.Millisecond).String()
+			result.Measurements[measMissingAfterKill] = rec.MissingAfterKill
 		}
 	}
-	if missing == nil {
+	if missing < 0 {
 		return backupVerdict{fmt.Errorf("the backup ended Failed with %s, but no reading after the kill showed %s "+
 			"first", s11OperationLostReason, s12OperationMissingReason)}
 	}
-	first := missing.At
-	rec.FirstMissingAt = &first
-	rec.MissingAfterKill = first.Sub(*k.KilledAt).Round(time.Millisecond).String()
-	result.Measurements[measMissingAfterKill] = rec.MissingAfterKill
 	since, done := s.OperationMissingSince, s.CompletedAt
 	if since == nil || done == nil {
 		return fmt.Errorf("the backup ended Failed with %s without status.operationMissingSince and "+
@@ -604,4 +643,27 @@ func judgeStoreLossBackup(backup *databasev1alpha1.CubridBackup, waitErr error, 
 	}
 	recordFailedTimes(backup, requested, r, result)
 	return nil
+}
+
+// boundNotReached returns the block of a backup whose backup_limit ran out
+// while it read RecordedOperationMissing and less than storeLossMissingWait
+// had passed from status.operationMissingSince to the last reading: the
+// Operator's bound starts at its first missing answer, after the restart,
+// and backup_limit at the request, so a slow restart leaves the outcome
+// unobserved, not wrong. The last reading's time is the run's clock and
+// operationMissingSince the Operator's. Otherwise it returns nil.
+func boundNotReached(rec *s11StoreLossRecord, s databasev1alpha1.CubridBackupStatus) error {
+	phases := rec.Phases
+	c := meta.FindStatusCondition(s.Conditions, backupReady)
+	if len(phases) == 0 || s.OperationMissingSince == nil || !inProgress(s.Phase) || c == nil ||
+		c.Reason != s12OperationMissingReason {
+		return nil
+	}
+	waited := phases[len(phases)-1].At.Sub(s.OperationMissingSince.Time)
+	if waited >= storeLossMissingWait {
+		return nil
+	}
+	return fmt.Errorf("inconclusive: backup_limit ran out while the backup read %s, %s after "+
+		"status.operationMissingSince, before the Operator's bound of %s; a longer -backup-limit is needed to see "+
+		"the end", s12OperationMissingReason, waited.Round(time.Second), storeLossMissingWait)
 }

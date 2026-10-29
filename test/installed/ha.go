@@ -667,24 +667,35 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 	}
 }
 
+// s11FollowUp is an S11 variant that follows S11 complete: whether the run
+// selects it, where its result is kept, its name and how it runs.
+type s11FollowUp struct {
+	selected bool
+	result   **evidence.Scenario
+	variant  string
+	run      func(context.Context) evidence.Scenario
+}
+
+// s11Variants are the S11 variants in the order a run takes them; a new
+// variant is added here only.
+func (h *haRun) s11Variants() []s11FollowUp {
+	return []s11FollowUp{{h.cfg.BackupMissingDestination, &h.s11Missing, s11MissingVariant, h.runS11MissingDestination},
+		{h.cfg.BackupDeniedCredentials, &h.s11Denied, s11DeniedVariant, h.runS11DeniedCredentials},
+		{h.cfg.BackupSignatureMismatch, &h.s11Signature, s11SignatureVariant, h.runS11SignatureMismatch},
+		{h.cfg.BackupInterruptedUpload, &h.s11Interrupted, s11InterruptedVariant, h.runS11InterruptedUpload},
+		{h.cfg.BackupOperatorRestart, &h.s11Restart, s11RestartVariant, h.runS11OperatorRestart},
+		{h.cfg.BackupInstanceManagerRestart, &h.s11IMRestart, s11IMRestartVariant, h.runS11InstanceManagerRestart},
+		{h.cfg.BackupOverlapping, &h.s11Overlapping, s11OverlappingVariant, h.runS11Overlapping},
+		{h.cfg.BackupOperationStoreLoss, &h.s11StoreLoss, s11StoreLossVariant, h.runS11OperationStoreLoss}}
+}
+
 // recordS11Variants records the S11 variants selected to follow S11
 // complete, and settles as blocked those that did not run.
 func (h *haRun) recordS11Variants(summary *evidence.Summary) {
-	for _, v := range []struct {
-		selected bool
-		result   *evidence.Scenario
-		variant  string
-	}{{h.cfg.BackupMissingDestination, h.s11Missing, s11MissingVariant},
-		{h.cfg.BackupDeniedCredentials, h.s11Denied, s11DeniedVariant},
-		{h.cfg.BackupSignatureMismatch, h.s11Signature, s11SignatureVariant},
-		{h.cfg.BackupInterruptedUpload, h.s11Interrupted, s11InterruptedVariant},
-		{h.cfg.BackupOperatorRestart, h.s11Restart, s11RestartVariant},
-		{h.cfg.BackupInstanceManagerRestart, h.s11IMRestart, s11IMRestartVariant},
-		{h.cfg.BackupOverlapping, h.s11Overlapping, s11OverlappingVariant},
-		{h.cfg.BackupOperationStoreLoss, h.s11StoreLoss, s11StoreLossVariant}} {
+	for _, v := range h.s11Variants() {
 		switch {
-		case v.result != nil:
-			summary.Record(*v.result)
+		case *v.result != nil:
+			summary.Record(**v.result)
 		case v.selected && h.s11 == nil:
 			summary.Settle(evidence.Requirement{ID: s11ID, Variant: v.variant}, evidence.Blocked,
 				"S11 "+v.variant+" follows S11 complete, and S11 complete did not run")
@@ -698,19 +709,7 @@ func (h *haRun) recordS11Variants(summary *evidence.Summary) {
 // runS11Variants runs, in order, the S11 variants selected to follow S11
 // complete, records each result, and stops at the first that did not pass.
 func (h *haRun) runS11Variants(ctx context.Context) error {
-	for _, v := range []struct {
-		selected bool
-		result   **evidence.Scenario
-		variant  string
-		run      func(context.Context) evidence.Scenario
-	}{{h.cfg.BackupMissingDestination, &h.s11Missing, s11MissingVariant, h.runS11MissingDestination},
-		{h.cfg.BackupDeniedCredentials, &h.s11Denied, s11DeniedVariant, h.runS11DeniedCredentials},
-		{h.cfg.BackupSignatureMismatch, &h.s11Signature, s11SignatureVariant, h.runS11SignatureMismatch},
-		{h.cfg.BackupInterruptedUpload, &h.s11Interrupted, s11InterruptedVariant, h.runS11InterruptedUpload},
-		{h.cfg.BackupOperatorRestart, &h.s11Restart, s11RestartVariant, h.runS11OperatorRestart},
-		{h.cfg.BackupInstanceManagerRestart, &h.s11IMRestart, s11IMRestartVariant, h.runS11InstanceManagerRestart},
-		{h.cfg.BackupOverlapping, &h.s11Overlapping, s11OverlappingVariant, h.runS11Overlapping},
-		{h.cfg.BackupOperationStoreLoss, &h.s11StoreLoss, s11StoreLossVariant, h.runS11OperationStoreLoss}} {
+	for _, v := range h.s11Variants() {
 		if !v.selected {
 			continue
 		}

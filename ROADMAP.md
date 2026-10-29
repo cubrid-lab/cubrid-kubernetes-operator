@@ -437,11 +437,12 @@ is why the lane moved to a slowed standalone cluster.
 S11 `operation-store-loss` also follows S11 `complete`, in a run of its own
 (`lab-installed-ha-s11-operation-store-loss`, `-backup-operation-store-loss`,
 #457), in a run namespace that enforces Pod Security `privileged`, and
-needs a `-backup-limit` of at least 35 minutes. It reuses the steps of S11
-`instance-manager-restart` on its own standalone cluster `s11-storeloss`.
-Once 512 KiB have passed the limit while the backup is `Running` or
-`Uploading` with an operation, one command in the member stops the Instance
-Manager with `SIGSTOP`, removes the backup's operation record (`<id>.json`
+needs a `-backup-limit` of at least 35 minutes (40 recommended). It reuses
+the steps of S11 `instance-manager-restart` on its own standalone cluster
+`s11-storeloss`. Once 512 KiB have passed the limit while the backup is
+`Running` or `Uploading` with an operation, one command in the member stops
+the Instance Manager with `SIGSTOP`, waits until all its threads are
+stopped, removes the backup's operation record (`<id>.json`
 and any `<id>.*.tmp`) from `IM_OPERATIONS_DIR`, and kills the Instance
 Manager with `SIGKILL`. The kill is confirmed by exit 137 on the same Pod,
 and the record's absence by listing the store once the cluster reads
@@ -455,8 +456,10 @@ to `status.completedAt`. It also requires the same `operationRef`
 throughout, never `Completed` or `status.artifact`, no `manifest.json`
 under the prefix, one container restart, the source and the installed
 manager unchanged, and no key in statuses, Events or logs. A record still
-there after the restart, a fault the command refused, or a restart before
-the fault leaves it blocked. `Failed` for the restart reason, or for
+there after the restart, a fault the command refused, a restart before the
+fault, or a `backup_limit` that runs out while the backup still reads
+`RecordedOperationMissing` before the Operator's 30 minutes leaves it
+blocked. `Failed` for the restart reason, or for
 another reason, fails it. The member's backup staging directory is listed
 after the restart and at the end as evidence for #636, not judged. Unit
 tests cover it with fakes. It has not yet run on the VM lab: the real

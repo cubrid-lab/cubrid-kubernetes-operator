@@ -997,9 +997,6 @@ func (f instanceManagerKill) Inject(ctx context.Context) error {
 		answer = strings.TrimSpace(answer + " " + err.Error())
 	}
 	f.k.KillAnswer = answer
-	if strings.Contains(answer, storeLossRefused) {
-		return fmt.Errorf("nothing was killed in %s: %s", f.k.Pod, answer)
-	}
 	if strings.Contains(answer, imKillRefused) {
 		return fmt.Errorf("the Instance Manager of %s could not be told apart, nothing was killed: %s", f.k.Pod, answer)
 	}

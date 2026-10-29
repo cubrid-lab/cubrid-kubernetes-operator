@@ -662,11 +662,15 @@ func (h *haRun) waitBackupWith(ctx context.Context, created *databasev1alpha1.Cu
 			h.cfg.BackupLimit, readErr)
 	}
 	if err != nil && ctx.Err() == nil && wctx.Err() != nil {
-		return backup, backupVerdict{fmt.Errorf("the backup was neither Completed nor Failed within backup_limit "+
-			"%s; its last phase was %q", h.cfg.BackupLimit, backup.Status.Phase)}
+		return backup, backupVerdict{fmt.Errorf("%w %s; its last phase was %q", errBackupLimitPassed,
+			h.cfg.BackupLimit, backup.Status.Phase)}
 	}
 	return backup, err
 }
+
+// errBackupLimitPassed starts the verdict of a wait whose backup was neither
+// Completed nor Failed within backup_limit.
+var errBackupLimitPassed = errors.New("the backup was neither Completed nor Failed within backup_limit")
 
 // recordBackup records a reading of backup in phases when it differs from
 // the last one recorded, and searches its whole status, not only what a

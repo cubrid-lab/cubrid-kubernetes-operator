@@ -265,12 +265,19 @@ S12 or another S11 variant, and only that run's namespace, like
 needs a `backup_limit` of at least 35 minutes, because the Operator ends a
 backup whose record is missing only after 30 minutes; the command refuses a
 shorter one rather than raise the limit S11 `complete` shares in the same
-run. The fault is placed as in `instance-manager-restart`. It is one command
-in the member's database container. The command stops the Instance Manager
-with `SIGSTOP`, removes the backup's operation record (`<id>.json`) and its
-temporary files (`<id>.*.tmp`) from the operation store, and kills the
-Instance Manager with `SIGKILL`. Stopping the Instance Manager first means
-a record write already under way cannot bring the record back. The kill
+run; 40 minutes is the recommended limit. A `backup_limit` that runs out
+while the backup reads `RecordedOperationMissing`, less than 30 minutes
+after `status.operationMissingSince`, leaves the variant blocked as
+inconclusive: the Operator's bound starts after the restart, not at the
+request. The fault is placed as in `instance-manager-restart`. It is one
+command in the member's database container. The command stops the
+Instance Manager with `SIGSTOP` and waits until every one of its threads
+is stopped. It then removes the backup's operation record (`<id>.json`)
+and its temporary files (`<id>.*.tmp`) from the operation store, and kills
+the Instance Manager with `SIGKILL`. A thread stops only after a system
+call it is in has returned, so a record write cannot bring the record back
+after the removal. The operation ID must have the Instance Manager's form,
+`op-` and 32 hexadecimal digits, or nothing is run. The kill
 is confirmed as in `instance-manager-restart`. The record's loss is
 confirmed by listing the store, names only, once the cluster reads `Ready`
 again; a record still there, a store that cannot be listed, a fault the

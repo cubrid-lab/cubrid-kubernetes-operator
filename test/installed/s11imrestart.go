@@ -111,8 +111,8 @@ type s11IMRestartRecord struct {
 	// read them before anything was created.
 	PodSecurity map[string]string     `json:"podSecurity"`
 	Cluster     *s11StandaloneCluster `json:"cluster,omitempty"`
-	// ReadyLimit is BackupInstanceManagerRestartReadyLimit, the run's bound
-	// on the cluster before the backup and after the kill.
+	// ReadyLimit is the variant's ready limit, the run's bound on the
+	// cluster before the backup and after the kill.
 	ReadyLimit  string       `json:"readyLimit"`
 	Throttle    *s11Throttle `json:"throttle"`
 	Kill        *s11IMKill   `json:"kill"`
