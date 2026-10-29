@@ -174,6 +174,9 @@ type haFixture struct {
 	imRestartCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
 	imRestartRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	memberHook       func(ctx context.Context, pod, script string) (string, error, bool)
+	// csqlHook answers a csql command in a member, given its SQL, first when
+	// it returns true.
+	csqlHook func(pod, sql string) (string, error, bool)
 	// podRead and deploymentRead run before each read of a Pod and of a
 	// Deployment; the error is the read's.
 	podRead        func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
@@ -672,6 +675,11 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 	f.mu.Unlock()
 	if memberHook != nil {
 		if out, err, done := memberHook(ctx, pod, script); done {
+			return out, err
+		}
+	}
+	if f.csqlHook != nil && strings.Contains(script, "csql") {
+		if out, err, done := f.csqlHook(pod, args[len(args)-1]); done {
 			return out, err
 		}
 	}

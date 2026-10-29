@@ -2019,11 +2019,23 @@ nothing of it is done.
    at most 65,536 rows of the table into itself per statement
    (`INSERT INTO gs_filler (pad) SELECT pad FROM gs_filler LIMIT <k>`), each
    committed on its own, until the target row count
-   (MiB × 1,048,576 / 1,000) is reached. It then counts the rows and runs
-   `du -sk` on `/var/lib/cubrid/databases`. The record keeps the rows, the
-   statements, the directory's size and the time the growth took
-   (`fillerRows`, `fillerGrowthTook`). A failed statement, or fewer rows
-   than asked for, blocks the variant. The table is in the variant's own
+   (MiB × 1,048,576 / 1,000) is reached. Each statement is its own csql
+   call and is followed by `SELECT COUNT(*)` in another one.
+   - A statement is judged by that count, not by csql's output. On the VM
+     lab csql printed `ERROR CODE = -199` and `-111` after statements it had
+     committed (POC-44 in `docs/poc/RESULTS.md`).
+   - A statement whose count did not reach the expected value is run once
+     more. If the count still has not grown, the variant is blocked with
+     both outputs.
+   - Statements that printed an error although their rows were counted are
+     recorded as `fillerExitErrors`, evidence only.
+
+   At the end the run counts the rows again and runs `du -sk` on
+   `/var/lib/cubrid/databases`. The record keeps the rows, the statements,
+   the retries, the exit errors, the directory's size and the time the
+   growth took (`fillerRows`, `fillerGrowthTook`, `fillerExitErrors`).
+   Fewer rows than asked for at the end blocks the variant. The table is in
+   the variant's own
    cluster. No data check reads that cluster: S11 `complete`'s and the
    source's checks read only the HA cluster. On the VM lab on 2026-10-29
    `backupdb` of this cluster without filler took 615 ms. That was too short:
@@ -2145,7 +2157,7 @@ acceptance to the reading of `Failed`; `replacementSeenWithin` and
 replacement and of the cluster `Ready` again. `backupdbDurationMs` is the
 Instance Manager's own `durationMs` of `backupdb`, and
 `stopLoggedAfterDelete` is described in step 7. `fillerRows`,
-`fillerGrowthTook`, `holdersAfterStagingGone`, `samplerSamples`,
+`fillerGrowthTook`, `fillerExitErrors`, `holdersAfterStagingGone`, `samplerSamples`,
 `failedWithin` and `operationRefUnchanged` complete them. Each is `unknown`
 until measured.
 
@@ -3438,7 +3450,8 @@ and S12 variant other than `complete` and `exact` only those under
   backup, its UID, bucket, prefix and object store Service, the run
   namespace's Pod Security labels, the cluster `s11-gracefulstop` and the
   ready limit; under `filler`, the table, the size and rows asked for, the
-  rows counted, the statements, when the growth started and how long it
+  rows counted, the statements, the retries, the statements that printed an
+  error although their rows were counted, when the growth started and how long it
   took, the database directory's size and the data volume asked for; under
   `trigger`, the member's Pod UID and container ID, the
   sampler's reading that showed `backupdb` and its process, when the

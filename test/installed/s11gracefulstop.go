@@ -110,6 +110,7 @@ const (
 	measStopLoggedAfterDelete    = "stopLoggedAfterDelete"
 	measFillerRows               = "fillerRows"
 	measFillerGrowth             = "fillerGrowthTook"
+	measFillerExitErrors         = "fillerExitErrors"
 	// fillerTable is the table the run grows in the standalone member's
 	// database; fillerRowBytes the width of its one CHAR column, one row's
 	// payload; fillerChunk the most rows one statement copies, so that no
@@ -119,11 +120,6 @@ const (
 	fillerRowBytes = 1000
 	fillerChunk    = 65536
 	maxFillerMB    = 8192
-	// fillerFailed starts the line of the filler script that says which
-	// statement failed.
-	fillerFailed = "FILLER-FAILED"
-	// fillerDu starts its line with the database directory's size.
-	fillerDu = "DU "
 	// imDatabasesDir is where the Instance Manager keeps the members'
 	// databases on the data volume (restoreTargetRoot in
 	// internal/controller/bootstrap.go).
@@ -270,12 +266,17 @@ type s11StopLog struct {
 // and how long it took, and the database directory's size in KiB after it
 // (du -sk), or why that could not be read.
 type s11Filler struct {
-	Table         string     `json:"table"`
-	TargetMB      int        `json:"targetMB"`
-	RowBytes      int        `json:"rowBytes"`
-	TargetRows    int        `json:"targetRows"`
-	Rows          int        `json:"rows"`
-	Statements    int        `json:"statements"`
+	Table      string `json:"table"`
+	TargetMB   int    `json:"targetMB"`
+	RowBytes   int    `json:"rowBytes"`
+	TargetRows int    `json:"targetRows"`
+	Rows       int    `json:"rows"`
+	Statements int    `json:"statements"`
+	// Retries counts the statements run a second time because the count
+	// did not grow; ExitErrors those that printed an error although their
+	// rows were counted (POC-44). Both are evidence, not verdicts.
+	Retries       int        `json:"retries"`
+	ExitErrors    int        `json:"fillerExitErrors"`
 	StartedAt     *time.Time `json:"startedAt,omitempty"`
 	Took          string     `json:"took,omitempty"`
 	DatabaseDirKB int64      `json:"databaseDirKB,omitempty"`
@@ -1775,76 +1776,160 @@ func (h *haRun) createGracefulStop(ctx context.Context, rec *s11StandaloneCluste
 	return nil
 }
 
-// fillerScript grows fillerTable to rows rows in the member's database
-// through csql, as dba, the way the run reads members (csqlRead): it creates
-// the table with one CHAR(fillerRowBytes) column, inserts one row, and then
-// copies at most fillerChunk rows of the table into itself per statement,
-// each committed on its own, until rows rows are there. A statement whose
-// output names an error ends it with a line fillerFailed. It then counts the
-// rows, as a string value, and prints "DU <KiB>" for the databases'
-// directory on the data volume.
-func fillerScript(rows int) string {
-	return `export PATH="${CUBRID}/bin:${PATH}"; db='` + databaseName + `@localhost'; t=` + fillerTable +
-		`; target=` + strconv.Itoa(rows) + `; chunk=` + strconv.Itoa(fillerChunk) + `; s=0; ` +
-		`q() { s=$((s+1)); o=$(csql -u dba "$db" -c "$1" 2>&1); ` +
-		`case "$o" in *ERROR*|*"Failed to connect"*) echo "` + fillerFailed + ` statement $s: $o"; exit 5 ;; esac; }; ` +
-		`q "CREATE TABLE $t (pad CHAR(` + strconv.Itoa(fillerRowBytes) + `)); ` +
-		`INSERT INTO $t (pad) VALUES (REPEAT('x', ` + strconv.Itoa(fillerRowBytes) + `)); COMMIT;"; n=1; ` +
-		`while [ "$n" -lt "$target" ]; do k=$n; [ "$k" -gt "$chunk" ] && k=$chunk; ` +
-		`[ $((target-n)) -lt "$k" ] && k=$((target-n)); ` +
-		`q "INSERT INTO $t (pad) SELECT pad FROM $t LIMIT $k; COMMIT;"; n=$((n+k)); done; ` +
-		`echo "STATEMENTS $s"; csql -u dba "$db" -c "SELECT CAST(COUNT(*) AS VARCHAR(20)) FROM $t;" 2>&1; ` +
-		`echo "` + fillerDu + `$(du -sk '` + imDatabasesDir + `' 2>&1 | cut -f1)"`
+// fillerCSQL runs csql as dba on the member's database, the way the run
+// reads members (csqlRead), without csqlRead's second read: a statement that
+// writes is never sent again by it.
+const fillerCSQL = `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`
+
+// fillerCreate, fillerSeed and fillerCount are the filler's statements that
+// create its table, insert its first row and count its rows;
+// fillerCopy(k) copies k rows of the table into itself.
+var (
+	fillerCreate = "CREATE TABLE " + fillerTable + " (pad CHAR(" + strconv.Itoa(fillerRowBytes) + ")); COMMIT;"
+	fillerSeed   = "INSERT INTO " + fillerTable + " (pad) VALUES (REPEAT('x', " + strconv.Itoa(fillerRowBytes) +
+		")); COMMIT;"
+	fillerCount = "SELECT CAST(COUNT(*) AS VARCHAR(20)) FROM " + fillerTable + ";"
+)
+
+func fillerCopy(k int) string {
+	return "INSERT INTO " + fillerTable + " (pad) SELECT pad FROM " + fillerTable + " LIMIT " + strconv.Itoa(k) +
+		"; COMMIT;"
+}
+
+// fillerStatement is one statement of the filler and what csql answered.
+type fillerStatement struct {
+	sql      string
+	out      string
+	err      error
+	exitText bool
+}
+
+// fillerSQL runs sql with csql in the standalone member and reports whether
+// its output, or the command's error, names an error. csql has been seen to
+// print -199 and -111 after a statement it had committed (POC-44), so the
+// text alone does not say whether the statement took effect.
+func (h *haRun) fillerSQL(ctx context.Context, sql string) fillerStatement {
+	out, err := h.member(ctx, s11GracefulStopMember, "bash", "-c", fillerCSQL, databaseName+"@localhost", sql)
+	_, textErr := sqlcheck.Run(func(string) (string, error) { return out, err }, sql)
+	return fillerStatement{sql: sql, out: out, err: err, exitText: textErr != nil}
+}
+
+// fillerRowsNow counts the filler table's rows in a csql call of its own.
+// The count is read from the result table whatever else csql printed; a
+// count that cannot be read is tried once more.
+func (h *haRun) fillerRowsNow(ctx context.Context) (int, error) {
+	var last error
+	for range 2 {
+		st := h.fillerSQL(ctx, fillerCount)
+		values, err := sqlcheck.Values(st.out)
+		if err == nil && len(values) == 1 {
+			if n, convErr := strconv.Atoi(values[0]); convErr == nil {
+				return n, nil
+			}
+		}
+		last = fmt.Errorf("the count of %s could not be read: %s", fillerTable,
+			h.redactError(errors.Join(st.err, errors.New(strings.TrimSpace(st.out)))))
+	}
+	return 0, last
+}
+
+// fillerStep runs one statement that must bring the table to at least want
+// rows, and reads the count after it. A statement counts as failed only when
+// the count did not reach want: then it is run once more, and a count that
+// still has not grown past before blocks the variant with the statement's
+// output. An error printed by a statement whose rows were counted is
+// recorded in filler.ExitErrors, not judged. It returns the count.
+func (h *haRun) fillerStep(ctx context.Context, filler *s11Filler, sql string, before, want int) (int, error) {
+	var outputs []string
+	for try := range 2 {
+		st := h.fillerSQL(ctx, sql)
+		filler.Statements++
+		if try > 0 {
+			filler.Retries++
+		}
+		outputs = append(outputs, strings.TrimSpace(st.out))
+		n, err := h.fillerRowsNow(ctx)
+		if err != nil {
+			return before, err
+		}
+		if n >= want || (try > 0 && n > before) {
+			if st.exitText || st.err != nil {
+				filler.ExitErrors++
+			}
+			return n, nil
+		}
+		if ctx.Err() != nil {
+			return n, ctx.Err()
+		}
+	}
+	return before, fmt.Errorf("the filler table %s did not grow past %d rows after %q, run twice: %s", fillerTable,
+		before, sql, h.redactError(errors.New(strings.Join(outputs, " | "))))
 }
 
 // growFiller grows the filler table in the standalone member's database
-// before the request (fillerScript), and records its rows, the statements
-// run and how long it took. Nothing is grown when filler is nil. A failed
-// statement, or fewer rows than asked for, blocks the variant: backupdb might
-// end before the stop. The table is in the variant's own cluster, which no
-// data check reads.
+// before the request, and records its rows, the statements run, the retries,
+// the statements that printed an error after their rows were counted, the
+// database directory's size and how long it took. Nothing is grown when
+// filler is nil. It creates the table with one CHAR(fillerRowBytes) column,
+// inserts one row, and then copies at most fillerChunk rows of the table
+// into itself per statement, each committed on its own and each followed by
+// a count in a csql call of its own (fillerStep), until TargetRows rows are
+// there. A statement that does not grow the table, run twice, or a final
+// count below TargetRows, blocks the variant: backupdb might end before the
+// stop. The table is in the variant's own cluster, which no data check
+// reads.
 func (h *haRun) growFiller(ctx context.Context, filler *s11Filler, result *evidence.Scenario) error {
 	if filler == nil {
 		return nil
 	}
 	started := time.Now().UTC()
 	filler.StartedAt = &started
-	out, err := h.member(ctx, s11GracefulStopMember, "bash", "-c", fillerScript(filler.TargetRows))
-	took := time.Since(started).Round(time.Millisecond)
-	filler.Took = took.String()
-	result.Measurements[measFillerGrowth] = filler.Took
-	if _, after, failed := strings.Cut(out, fillerFailed); failed || err != nil {
-		detail := strings.TrimSpace(out)
-		if failed {
-			detail = fillerFailed + firstLine(after)
-		}
-		return fmt.Errorf("grow the filler table %s in %s: %s", fillerTable, s11GracefulStopMember,
-			h.redactError(errors.Join(err, errors.New(detail))))
+	defer func() {
+		filler.Took = time.Since(started).Round(time.Millisecond).String()
+		result.Measurements[measFillerGrowth] = filler.Took
+		result.Measurements[measFillerExitErrors] = filler.ExitErrors
+	}()
+	create := h.fillerSQL(ctx, fillerCreate)
+	filler.Statements++
+	n, err := h.fillerRowsNow(ctx)
+	if err != nil {
+		return fmt.Errorf("create the filler table %s in %s: %s; %w", fillerTable, s11GracefulStopMember,
+			h.redactError(errors.Join(create.err, errors.New(strings.TrimSpace(create.out)))), err)
 	}
-	for line := range strings.SplitSeq(out, "\n") {
-		if n, ok := strings.CutPrefix(line, "STATEMENTS "); ok {
-			filler.Statements, _ = strconv.Atoi(strings.TrimSpace(n))
-		}
-		if kb, ok := strings.CutPrefix(line, fillerDu); ok {
-			v, convErr := strconv.ParseInt(strings.TrimSpace(kb), 10, 64)
-			if convErr != nil {
-				filler.DuError = strings.TrimSpace(kb)
-			} else {
-				filler.DatabaseDirKB = v
-			}
+	if create.exitText || create.err != nil {
+		filler.ExitErrors++
+	}
+	if n == 0 {
+		if n, err = h.fillerStep(ctx, filler, fillerSeed, 0, 1); err != nil {
+			return fmt.Errorf("grow the filler table %s in %s: %w", fillerTable, s11GracefulStopMember, err)
 		}
 	}
-	values, err := sqlcheck.Values(out)
-	if err == nil && len(values) == 1 {
-		filler.Rows, err = strconv.Atoi(values[0])
+	for n < filler.TargetRows {
+		k := min(n, fillerChunk, filler.TargetRows-n)
+		if n, err = h.fillerStep(ctx, filler, fillerCopy(k), n, n+k); err != nil {
+			return fmt.Errorf("grow the filler table %s in %s: %w", fillerTable, s11GracefulStopMember, err)
+		}
 	}
-	if err != nil || len(values) != 1 {
-		return fmt.Errorf("count the rows of the filler table %s: %v", fillerTable, err)
+	if filler.Rows, err = h.fillerRowsNow(ctx); err != nil {
+		return err
 	}
 	result.Measurements[measFillerRows] = filler.Rows
+	filler.DatabaseDirKB, filler.DuError = h.databaseDirKB(ctx)
 	if filler.Rows < filler.TargetRows {
 		return fmt.Errorf("the filler table %s holds %d rows, fewer than the %d asked for", fillerTable,
 			filler.Rows, filler.TargetRows)
 	}
 	return nil
+}
+
+// databaseDirKB is the size in KiB of the databases' directory on the
+// member's data volume (du -sk), or why it could not be read.
+func (h *haRun) databaseDirKB(ctx context.Context) (int64, string) {
+	out, err := h.member(ctx, s11GracefulStopMember, "du", "-sk", imDatabasesDir)
+	field, _, _ := strings.Cut(strings.TrimSpace(out), "\t")
+	kb, convErr := strconv.ParseInt(strings.TrimSpace(field), 10, 64)
+	if err != nil || convErr != nil {
+		return 0, h.redactError(errors.Join(err, convErr))
+	}
+	return kb, ""
 }

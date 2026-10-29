@@ -109,15 +109,21 @@ type s11GracefulStopFixture struct {
 	manifestAfterDelete bool
 	// failReason is the Ready reason of the Failed backup, BackupFailed
 	// unless set; noOperationRef leaves status.operationRef empty;
-	// deleteErr refuses the deletion of the member's Pod; fillerAnswer, when
-	// set, is what the filler script prints.
+	// deleteErr refuses the deletion of the member's Pod.
 	failReason     string
 	noOperationRef bool
 	deleteErr      error
-	fillerAnswer   string
+	// exitErrorAt makes the filler's statements with these numbers print
+	// csql's -199 and -111 after committing, as POC-44 saw; stuckAt makes the
+	// statement with that number, and its retry, add no row.
+	exitErrorAt map[int]bool
+	stuckAt     int
 
-	gsBackup   *databasev1alpha1.CubridBackup
-	fillers    []string
+	gsBackup *databasev1alpha1.CubridBackup
+	// fillerRows is the filler table's row count, nil before it is created;
+	// fillerSQL the filler's statements as run, counts left out.
+	fillerRows *int
+	fillerSQL  []string
 	gsReads    int
 	afterReads int
 	gsFinal    databasev1alpha1.CubridBackupPhase
@@ -152,7 +158,8 @@ func newS11GracefulStopFixture(t *testing.T, cfg HAConfig) *s11GracefulStopFixtu
 		gsLogLine("Ran command", "command", serverStop+" "+databaseName, "", "", `"exitCode":0`)}
 	f.interruptedRead = f.readCluster
 	f.podDeleted = f.deletePod
-	f.memberHook = f.filler
+	f.memberHook = f.du
+	f.csqlHook = f.filler
 	created, read := f.backupCreated, f.backupRead
 	f.backupCreated = func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error {
 		if backup.Name != s11GracefulStopBackupName {
@@ -196,25 +203,61 @@ func newS11GracefulStopFixture(t *testing.T, cfg HAConfig) *s11GracefulStopFixtu
 	return f
 }
 
-// filler answers the filler script in the standalone member as csql and du
-// would, with the rows it asked for, or fillerAnswer.
-func (f *s11GracefulStopFixture) filler(_ context.Context, pod, script string) (string, error, bool) {
-	if !strings.Contains(script, fillerTable) {
+// testGSExitError is what csql printed, on the VM lab, after a statement it
+// had committed (POC-44).
+const testGSExitError = "\nERROR CODE = -199\nServer no longer responding....\nInvalid argument\n" +
+	"ERROR CODE = -111\nYour transaction has been aborted by the system due to server failure or mode change.\n"
+
+// du answers du -sk of the databases' directory in the standalone member.
+func (f *s11GracefulStopFixture) du(_ context.Context, pod, script string) (string, error, bool) {
+	if pod != s11GracefulStopMember || script != imDatabasesDir {
 		return "", nil, false
 	}
+	return "2048\t" + imDatabasesDir + "\n", nil, true
+}
+
+// filler plays csql on the filler table in the standalone member: it
+// creates the table, inserts the first row, copies the rows LIMIT names, and
+// counts them. A statement in exitErrorAt commits and then prints
+// testGSExitError; the statement stuckAt and its retry add nothing.
+func (f *s11GracefulStopFixture) filler(pod, sql string) (string, error, bool) {
+	if !strings.Contains(sql, fillerTable) {
+		return "", nil, false
+	}
+	if pod != s11GracefulStopMember {
+		f.t.Errorf("filler SQL in %s, want %s", pod, s11GracefulStopMember)
+	}
 	f.mu.Lock()
-	f.fillers = append(f.fillers, pod)
-	answer := f.fillerAnswer
-	f.mu.Unlock()
-	if want := fillerScript(fillerRows(f.cfg.BackupGracefulStopFillerMB)); script != want ||
-		pod != s11GracefulStopMember {
-		f.t.Errorf("filler script in %s = %q, want %q", pod, script, want)
+	defer f.mu.Unlock()
+	if sql == fillerCount {
+		if f.fillerRows == nil {
+			return "ERROR: Unknown class \"dba." + fillerTable + "\".\n", nil, true
+		}
+		return fmt.Sprintf("=== <Result of SELECT Command in Line 1> ===\n\n  cast(count(*) as varchar)\n======\n"+
+			"  '%d'\n\n1 row selected.\n", *f.fillerRows), nil, true
 	}
-	if answer != "" {
-		return answer, nil, true
+	f.fillerSQL = append(f.fillerSQL, sql)
+	statement := len(f.fillerSQL)
+	switch {
+	case sql == fillerCreate:
+		zero := 0
+		f.fillerRows = &zero
+	case f.stuckAt > 0 && (statement == f.stuckAt || statement == f.stuckAt+1):
+	case sql == fillerSeed:
+		*f.fillerRows = 1
+	default:
+		var k int
+		if _, err := fmt.Sscanf(sql, "INSERT INTO "+fillerTable+" (pad) SELECT pad FROM "+fillerTable+
+			" LIMIT %d; COMMIT;", &k); err != nil {
+			f.t.Errorf("filler SQL %q: %v", sql, err)
+		}
+		*f.fillerRows += k
 	}
-	return fmt.Sprintf("STATEMENTS 12\n=== <Result of SELECT Command in Line 1> ===\n\n  cast(count(*) as varchar)\n"+
-		"======\n  '%d'\n\n1 row selected.\n%s2048\n", fillerRows(f.cfg.BackupGracefulStopFillerMB), fillerDu), nil, true
+	out := "Execute OK. (1 rows affected)\nCommitted.\n"
+	if f.exitErrorAt[statement] {
+		out += testGSExitError
+	}
+	return out, nil, true
 }
 
 // gsLogLine is one line of the Instance Manager's JSON log, with testGSNow
@@ -518,13 +561,20 @@ func TestRunS11GracefulStopPassesWhenTheStagingIsSettledBeforeCUBRIDStops(t *tes
 			t.Fatalf("evidence = %v, want %s", scenario.Evidence, file)
 		}
 	}
-	if !slices.Equal(f.fillers, []string{s11GracefulStopMember}) {
-		t.Fatalf("filler scripts run in %v, want once in %s", f.fillers, s11GracefulStopMember)
+	// 1,048 rows: the table, the first row, ten doublings to 1,024 and 24 more.
+	wantSQL := []string{fillerCreate, fillerSeed}
+	for k := 1; k <= 512; k *= 2 {
+		wantSQL = append(wantSQL, fillerCopy(k))
+	}
+	wantSQL = append(wantSQL, fillerCopy(24))
+	if !slices.Equal(f.fillerSQL, wantSQL) {
+		t.Fatalf("filler statements = %q, want %q", f.fillerSQL, wantSQL)
 	}
 	rec := readGracefulStopRecord(t, cfg.EvidenceDir)
 	requireGracefulStopRecord(t, rec, f.failMessage)
-	if fl := rec.Filler; fl == nil || fl.Rows != fillerRows(1) || fl.TargetRows != fl.Rows || fl.Statements != 12 ||
-		fl.DatabaseDirKB != 2048 || fl.DataVolume != "2052Mi" || fl.Took == "" {
+	if fl := rec.Filler; fl == nil || fl.Rows != fillerRows(1) || fl.TargetRows != fl.Rows || fl.Statements != 13 ||
+		fl.Retries != 0 || fl.ExitErrors != 0 || fl.DatabaseDirKB != 2048 || fl.DataVolume != "2052Mi" ||
+		fl.Took == "" {
 		t.Fatalf("filler = %+v", fl)
 	}
 	if l := rec.Log; l.StopLine == 0 || l.StopLoggedAt == nil || l.StopLoggedAfterDelete == "" {
@@ -633,9 +683,9 @@ func TestRunS11GracefulStopJudgesTheOutcome(t *testing.T) {
 		}, want: evidence.Fail, reason: "the member's log holds " + serverStop + " (line"},
 		"no operationRef read": {change: func(f *s11GracefulStopFixture) { f.noOperationRef = true },
 			want: evidence.Blocked, reason: "no operationRef was read after the deletion"},
-		"the filler failed": {change: func(f *s11GracefulStopFixture) {
-			f.fillerAnswer = fillerFailed + " statement 3: ERROR: Not enough disk space\n"
-		}, want: evidence.Blocked, reason: "grow the filler table " + fillerTable},
+		"a filler statement that adds no row, also when run again": {change: func(f *s11GracefulStopFixture) {
+			f.stuckAt = 4
+		}, want: evidence.Blocked, reason: "did not grow past 2 rows after"},
 		"the manifest under its prefix": {change: func(f *s11GracefulStopFixture) { f.manifestAfterDelete = true },
 			want: evidence.Fail, reason: "holds a manifest.json under"},
 		"the cluster not Ready again": {change: func(f *s11GracefulStopFixture) {
@@ -661,6 +711,54 @@ func TestRunS11GracefulStopJudgesTheOutcome(t *testing.T) {
 				t.Fatalf("never-events = %v, want none for a blocked variant", scenario.NeverEvents)
 			}
 		})
+	}
+}
+
+// TestRunS11GracefulStopCountsTheFillerNotCSQLsExitErrors plays csql printing
+// -199 and -111 after statements it committed, as POC-44 saw on the VM lab:
+// the rows are counted, so the growth goes on, and the statements are
+// recorded as exit errors. A statement whose first run adds no row is run
+// once more.
+func TestRunS11GracefulStopCountsTheFillerNotCSQLsExitErrors(t *testing.T) {
+	cfg := testS11GracefulStopConfig(t)
+	f := newS11GracefulStopFixture(t, cfg)
+	f.exitErrorAt = map[int]bool{2: true, 6: true}
+	scenario, err := gracefulStopOf(t, f)
+	if err != nil || scenario.Result != evidence.Pass {
+		t.Fatalf("S11 graceful-stop = %+v, RunHA() error = %v; want a pass", scenario, err)
+	}
+	fl := readGracefulStopRecord(t, cfg.EvidenceDir).Filler
+	if fl == nil || fl.Rows != fillerRows(1) || fl.ExitErrors != 2 || fl.Retries != 0 || fl.Statements != 13 ||
+		scenario.Measurements[measFillerExitErrors] != float64(2) {
+		t.Fatalf("filler = %+v, measurements = %v; want every row and two exit errors", fl,
+			scenario.Measurements)
+	}
+}
+
+func TestGrowFillerRunsAStatementThatAddedNoRowOnceMore(t *testing.T) {
+	cfg := testS11GracefulStopConfig(t)
+	f := newS11GracefulStopFixture(t, cfg)
+	// The third statement, the first copy, adds nothing at its first run
+	// only: the fixture's stuckAt would hold its retry too.
+	f.csqlHook = func(pod, sql string) (string, error, bool) {
+		f.mu.Lock()
+		first := len(f.fillerSQL) == 2 && sql == fillerCopy(1)
+		if first {
+			f.fillerSQL = append(f.fillerSQL, sql)
+		}
+		f.mu.Unlock()
+		if first {
+			return "Execute OK.\n" + testGSExitError, nil, true
+		}
+		return f.filler(pod, sql)
+	}
+	scenario, err := gracefulStopOf(t, f)
+	if err != nil || scenario.Result != evidence.Pass {
+		t.Fatalf("S11 graceful-stop = %+v, RunHA() error = %v; want a pass", scenario, err)
+	}
+	fl := readGracefulStopRecord(t, cfg.EvidenceDir).Filler
+	if fl == nil || fl.Rows != fillerRows(1) || fl.Retries != 1 || fl.Statements != 14 || fl.ExitErrors != 0 {
+		t.Fatalf("filler = %+v, want every row after one retry", fl)
 	}
 }
 

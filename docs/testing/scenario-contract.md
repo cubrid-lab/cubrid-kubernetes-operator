@@ -299,8 +299,11 @@ adds no container. Before the request it grows a filler table in the
 member's database through csql (`-backup-graceful-stop-filler-mb`, default
 1024 MiB, with a data volume of 2Gi and four times that), so that `backupdb`
 runs long enough for the stop to land inside it. Without filler, `backupdb`
-took 615 ms on the VM lab, and the stop came after it. No data check reads
-that cluster. It then starts a sampler in the member's database container:
+took 615 ms on the VM lab, and the stop came after it. Each filler
+statement is judged by a row count read in a csql call of its own, not by
+csql's output, which printed -199 and -111 after committed statements on the
+VM lab (POC-44). A statement that adds no row is run once more, and one that
+still adds none blocks the variant. No data check reads that cluster. It then starts a sampler in the member's database container:
 one exec session that prints, about every 100 ms, the `cub*` processes, the
 backup staging root's entries, and then the open files below it with the
 `cub*` processes whose open files it listed. It also follows the

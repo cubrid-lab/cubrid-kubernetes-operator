@@ -525,8 +525,15 @@ The current harness classifies such a run as blocked. It grows a filler
 table in the cluster's database before the request (default 1024 MiB,
 `-backup-graceful-stop-filler-mb`) so that `backupdb` lasts for seconds. It
 records the time from the deletion to the first log line the stop caused,
-to show the `preStop` latency. The current harness has not yet run on the
-VM lab.
+to show the `preStop` latency. Its first VM-lab run, at 2026-10-29
+20:00 UTC (`c2e31c3`), was blocked while it grew the filler, after about
+30 s, at about 196,608 rows. csql had printed `ERROR CODE = -199` and
+`-111` after a statement it had committed. A manual check on the lab
+(POC-44) found those statements' rows committed and the server unharmed,
+with the cause unknown. The filler now judges each statement by a row
+count read separately, runs a statement that added no row once more, and
+records the error text as `fillerExitErrors`. That harness has not yet run
+on the VM lab.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
