@@ -48,6 +48,11 @@ const (
 	s06RecordFile        = "S06/restart/record.json"
 	s06TimelineFile      = "S06/restart/timeline.jsonl"
 	s06DataCheckFile     = "S06/restart/data-check.json"
+	// resyncLimitName is the contract's limit on the replacement manager
+	// (operator_resync_limit), and operatorBackMeasurement the measurement of
+	// its return.
+	resyncLimitName         = "operator_resync_limit"
+	operatorBackMeasurement = "operatorBackWithin"
 	// s06ClientStart bounds the wait for each client's first acknowledgements.
 	s06ClientStart = 2 * time.Minute
 	// s06Acknowledged is how many acknowledgements each client needs before
@@ -210,9 +215,9 @@ func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 		return result
 	}
 	back := outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)
-	result.Limits = map[string]string{"operator_resync_limit": h.cfg.ResyncLimit.String(),
+	result.Limits = map[string]string{resyncLimitName: h.cfg.ResyncLimit.String(),
 		"stable_period": h.cfg.StablePeriod.String()}
-	result.Measurements = map[string]any{"operatorBackWithin": back.Round(time.Millisecond).String(),
+	result.Measurements = map[string]any{operatorBackMeasurement: back.Round(time.Millisecond).String(),
 		"shortestStableFor": evidence.Unknown, "operationsNotAcknowledged": evidence.Unknown,
 		"membersRestarted": evidence.Unknown, "databaseFailoverObserved": evidence.Unknown}
 

@@ -276,9 +276,10 @@ func (c HAConfig) validateS11Interrupted() error {
 	for _, other := range []struct {
 		selected bool
 		flag     string
-	}{{c.Restore, "-restore"}, {c.BackupMissingDestination, "-backup-missing-destination"},
-		{c.BackupDeniedCredentials, "-backup-denied-credentials"},
-		{c.BackupSignatureMismatch, "-backup-signature-mismatch"}} {
+	}{{c.Restore, flagRestore}, {c.BackupMissingDestination, flagMissingDestination},
+		{c.BackupDeniedCredentials, flagDeniedCredentials},
+		{c.BackupSignatureMismatch, "-backup-signature-mismatch"},
+		{c.BackupOperatorRestart, "-backup-operator-restart"}} {
 		if other.selected {
 			return fmt.Errorf("-backup-interrupted-upload and %s select different lanes; a run takes one of them",
 				other.flag)
@@ -502,7 +503,7 @@ func (h *haRun) interruptedSteps(ctx context.Context, result *evidence.Scenario,
 	}
 	if err := h.checkS11Logs(ctx, s11InterruptedClusterName, true, lastTarget(rec.Phases),
 		requestedOnServer(made.backup, *rec.RequestedAt), started,
-		rec.Credentials); err != nil {
+		rec.Credentials, h.rec.OperatorAfter.Pods); err != nil {
 		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}

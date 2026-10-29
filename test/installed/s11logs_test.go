@@ -336,7 +336,8 @@ func TestS11DeniedCredentialsReadsTheNewMembersWholeLog(t *testing.T) {
 func TestS11LogsAreNotSearchedWithoutATarget(t *testing.T) {
 	h := &haRun{Runner: &Runner{}, cfg: testS11Config(t)}
 	creds := &s11Credentials{FoundIn: []string{}}
-	err := h.checkS11Logs(t.Context(), haClusterName, false, "", time.Now(), time.Now(), creds)
+	err := h.checkS11Logs(t.Context(), haClusterName, false, "", time.Now(), time.Now(), creds,
+		h.rec.OperatorAfter.Pods)
 	// Not a verdict: each variant is blocked by it.
 	if err == nil || errors.As(err, new(backupVerdict)) || !strings.Contains(err.Error(), "no status.targetInstance") ||
 		len(creds.FoundIn) != 0 {

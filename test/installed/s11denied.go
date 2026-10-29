@@ -359,7 +359,7 @@ func (h *haRun) deniedSteps(ctx context.Context, v s11KeyFault, result *evidence
 	}
 	if err := h.checkS11Logs(ctx, v.cluster, true, lastTarget(rec.Phases),
 		requestedOnServer(made.backup, requested), started,
-		rec.Credentials); err != nil {
+		rec.Credentials, h.rec.OperatorAfter.Pods); err != nil {
 		errs = append(errs, fmt.Errorf("search the logs: %w", err))
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}

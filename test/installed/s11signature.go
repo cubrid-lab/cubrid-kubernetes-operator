@@ -76,9 +76,10 @@ func (c HAConfig) validateS11Signature() error {
 	for _, other := range []struct {
 		selected bool
 		flag     string
-	}{{c.Restore, "-restore"}, {c.BackupMissingDestination, "-backup-missing-destination"},
-		{c.BackupDeniedCredentials, "-backup-denied-credentials"},
-		{c.BackupInterruptedUpload, "-backup-interrupted-upload"}} {
+	}{{c.Restore, flagRestore}, {c.BackupMissingDestination, flagMissingDestination},
+		{c.BackupDeniedCredentials, flagDeniedCredentials},
+		{c.BackupInterruptedUpload, "-backup-interrupted-upload"},
+		{c.BackupOperatorRestart, "-backup-operator-restart"}} {
 		if other.selected {
 			return fmt.Errorf("-backup-signature-mismatch and %s select different lanes; a run takes one of them",
 				other.flag)

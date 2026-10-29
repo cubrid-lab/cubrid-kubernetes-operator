@@ -108,11 +108,11 @@ type HAConfig struct {
 	Fault string
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
-	// first fresh status (operator_resync_limit), and in S12 operator-restart
-	// its return.
+	// first fresh status (operator_resync_limit), and in S11 and S12
+	// operator-restart its return.
 	StablePeriod, ResyncLimit time.Duration
 	// LeaderLease is the manager's leader election Lease in its namespace,
-	// for S06 restart and S12 operator-restart.
+	// for S06 restart and S11 and S12 operator-restart.
 	LeaderLease string
 	// BackupBucket selects S11 complete after LAB01: a CubridBackup of the
 	// run's database to this bucket. It cannot be combined with Fault.
@@ -120,6 +120,8 @@ type HAConfig struct {
 	// BackupLimit bounds the backup from its request until Completed or
 	// Failed (backup_limit), and in S11 missing-destination,
 	// denied-credentials, signature-mismatch and interrupted-upload until Failed.
+	// In S11 operator-restart it bounds the second backup until Completed or
+	// Failed, the manager's restart included.
 	BackupLimit time.Duration
 	// BackupMissingDestination selects S11 missing-destination after S11
 	// complete: a CubridBackup of the run's database to a bucket that does
@@ -155,6 +157,13 @@ type HAConfig struct {
 	// BackupInterruptedReadyLimit bounds that standalone cluster from its
 	// creation until it is Ready. It is the run's bound, not the contract's.
 	BackupInterruptedReadyLimit time.Duration
+	// BackupOperatorRestart selects S11 operator-restart after S11 complete:
+	// a second CubridBackup of the HA cluster to BackupBucket, during which
+	// the installed manager's Pod is deleted without a grace period. It needs
+	// BackupBucket, ResyncLimit and LeaderLease, and cannot be combined with
+	// Restore, BackupMissingDestination, BackupDeniedCredentials,
+	// BackupSignatureMismatch or BackupInterruptedUpload.
+	BackupOperatorRestart bool
 	// ObjectStoreService is the object store's Service as
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.
@@ -320,9 +329,10 @@ type haRun struct {
 	// s11 is the result of S11 complete, once it ran, and s11Rec its record;
 	// s11Missing is that of S11 missing-destination, s11Denied that of S11
 	// denied-credentials, s11Signature that of S11 signature-mismatch and
-	// s11Interrupted that of S11 interrupted-upload.
-	s11, s11Missing, s11Denied, s11Signature, s11Interrupted *evidence.Scenario
-	s11Rec                                                   *s11Record
+	// s11Interrupted that of S11 interrupted-upload and s11Restart that of
+	// S11 operator-restart.
+	s11, s11Missing, s11Denied, s11Signature, s11Interrupted, s11Restart *evidence.Scenario
+	s11Rec                                                               *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
 	// S12 operator-restart, s12IMRestart that of S12 instance-manager-restart
@@ -445,6 +455,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		lane, requirements = planS11DeniedCredentials(cfg, lane, requirements, &summary)
 		lane, requirements = planS11SignatureMismatch(cfg, lane, requirements, &summary)
 		lane, requirements = planS11InterruptedUpload(cfg, lane, requirements, &summary)
+		lane, requirements = planS11OperatorRestart(cfg, lane, requirements, &summary)
 	}
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
@@ -614,7 +625,8 @@ func (h *haRun) recordS11Variants(summary *evidence.Summary) {
 	}{{h.cfg.BackupMissingDestination, h.s11Missing, s11MissingVariant},
 		{h.cfg.BackupDeniedCredentials, h.s11Denied, s11DeniedVariant},
 		{h.cfg.BackupSignatureMismatch, h.s11Signature, s11SignatureVariant},
-		{h.cfg.BackupInterruptedUpload, h.s11Interrupted, s11InterruptedVariant}} {
+		{h.cfg.BackupInterruptedUpload, h.s11Interrupted, s11InterruptedVariant},
+		{h.cfg.BackupOperatorRestart, h.s11Restart, s11RestartVariant}} {
 		switch {
 		case v.result != nil:
 			summary.Record(*v.result)
@@ -669,6 +681,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 			h.s11Interrupted = &interrupted
 			if interrupted.Result != evidence.Pass {
 				return fmt.Errorf("S11/%s: %s", s11InterruptedVariant, interrupted.Reason)
+			}
+		}
+		if h.cfg.BackupOperatorRestart {
+			restart := h.runS11OperatorRestart(ctx)
+			h.s11Restart = &restart
+			if restart.Result != evidence.Pass {
+				return fmt.Errorf("S11/%s: %s", s11RestartVariant, restart.Reason)
 			}
 		}
 		if !h.cfg.Restore {

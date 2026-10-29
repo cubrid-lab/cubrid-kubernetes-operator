@@ -132,7 +132,8 @@ func lastTarget(phases []s11Phase) string {
 }
 
 // checkS11Logs searches for the object store's keys the installed manager's
-// log in each manager Pod LAB01 recorded, by its UID, and the Instance
+// log in each manager Pod of managers, by its UID: those LAB01 recorded,
+// unless the variant replaced the manager, and the Instance
 // Manager's log in target, the Pod the backup ran on, which the StatefulSet
 // of cluster must control and which must not have been created after the
 // backup was requested. The Instance Manager is a process of the member's
@@ -162,16 +163,16 @@ func createdBefore(created, requested time.Time) bool {
 }
 
 func (h *haRun) checkS11Logs(ctx context.Context, cluster string, created bool, target string, requested,
-	started time.Time, creds *s11Credentials) error {
+	started time.Time, creds *s11Credentials, managers []imageIdentity) error {
 	if creds.Logs == nil {
 		creds.Logs = []s11LogCheck{}
 	}
 	since := started.Add(-logSinceMargin).Truncate(time.Second)
 	var errs []error
-	if len(h.rec.OperatorAfter.Pods) == 0 {
+	if len(managers) == 0 {
 		errs = append(errs, errors.New("no installed manager Pod was recorded, so the Operator's log was not searched"))
 	}
-	for _, m := range h.rec.OperatorAfter.Pods {
+	for _, m := range managers {
 		errs = append(errs, h.searchLog(ctx, creds, s11LogCheck{Log: operatorLog, Namespace: h.cfg.OperatorNamespace,
 			Pod: m.Pod, UID: m.UID, Container: managerContainer, ReadFrom: logFromSinceTime, SinceTime: since}, nil))
 	}

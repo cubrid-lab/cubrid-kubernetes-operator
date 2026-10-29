@@ -279,6 +279,29 @@ is local to the member; a silent drop, a store that comes back during the
 backup and a multipart upload are not covered, nor are the member's staging
 directory and the Operator's and Instance Manager's logs.
 
+S11 `operator-restart` also follows S11 `complete`, in a run of its own
+(`lab-installed-ha-s11-operator-restart`, `-backup-operator-restart`,
+#617): the run requests a second backup of the HA cluster to the backup
+bucket under its own prefix and, once a reading shows it `Running` with an
+`operationRef`, deletes the installed manager's Pod without a grace period,
+as S12 `operator-restart` does. The replacement must run the same image and
+hold the leader Lease within `operator_resync_limit`; the backup must end
+`Completed` within `backup_limit` with the same `operationRef`, target and
+role in every reading from the placing one on, an artifact that passes S11
+`complete`'s verification, and exactly one attempt prefix with one manifest
+under the variant's prefix; the source must be unchanged, and no key may be
+in a status read, the manifest, an Event, the deleted manager's log as read
+right before its deletion, the replacement's log or the target member's log.
+A backup that is not seen `Running` with an operation before it ends leaves
+it blocked, and so does `Failed` with `RecordedOperationLost`, the documented
+escalation; `Failed` for another reason fails it. The run deletes its
+`CubridBackup` and leaves the artifact. The backup controller predicts
+`Completed` under the same operation: it records `operationRef` with
+`Running`, and a replacement only polls that operation. Unit tests cover it
+with fakes. It has not yet run on the VM lab. The lab's manager is shared:
+deleting its Pod briefly pauses reconciliation of every other cluster and
+backup there.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after
