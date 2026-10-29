@@ -93,6 +93,13 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"-backup-missing-destination")
 	flags.DurationVar(&cfg.BackupDeniedReadyLimit, "backup-denied-ready-limit", 15*time.Minute,
 		"S11 denied-credentials: bound from the standalone cluster's creation until it is Ready")
+	flags.BoolVar(&cfg.BackupInterruptedUpload, "backup-interrupted-upload", false,
+		"scenario after S11 complete: S11 interrupted-upload, a backup of a standalone cluster whose upload is "+
+			"slowed and then reset by network faults in its member's Pod must end Failed; makes the run namespace "+
+			"enforce Pod Security privileged; needs -backup-bucket, not with -restore, -backup-missing-destination "+
+			"or -backup-denied-credentials")
+	flags.DurationVar(&cfg.BackupInterruptedReadyLimit, "backup-interrupted-ready-limit", 15*time.Minute,
+		"S11 interrupted-upload: bound from the standalone cluster's creation until it is Ready")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
 		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
 	flags.BoolVar(&cfg.Restore, "restore", false,
@@ -132,10 +139,13 @@ func run(ctx context.Context, args []string) (runErr error) {
 		}
 		return err
 	}
-	readyLimitSet := false
-	flags.Visit(func(f *flag.Flag) { readyLimitSet = readyLimitSet || f.Name == "backup-denied-ready-limit" })
-	if readyLimitSet && !cfg.BackupDeniedCredentials {
+	set := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if set["backup-denied-ready-limit"] && !cfg.BackupDeniedCredentials {
 		return errors.New("-backup-denied-ready-limit needs -backup-denied-credentials")
+	}
+	if set["backup-interrupted-ready-limit"] && !cfg.BackupInterruptedUpload {
+		return errors.New("-backup-interrupted-ready-limit needs -backup-interrupted-upload")
 	}
 	if flags.NArg() != 0 || (cfg.Level != "kind" && cfg.Level != "vm-lab") {
 		return errors.New("choose kind or vm-lab explicitly and provide no positional command")

@@ -16,7 +16,9 @@ limitations under the License.
 
 // Package netfault holds the network faults of S07 and S08 as faults.Fault
 // values: a partition (traffic dropped in one or both directions between a
-// member and its peers) and a delay of the traffic from a member to a peer.
+// member and its peers) and a delay of the traffic from a member to a peer;
+// and those of S11 interrupted-upload: a rate limit and a TCP reset of a
+// member's traffic to one address and port.
 //
 // The faults work inside the network namespace of the member's Pod, from an
 // ephemeral container with NET_ADMIN (POC-39 in docs/poc/RESULTS.md). A rule
@@ -290,18 +292,20 @@ type rules struct {
 	// seen counts the packets from an address that passed chainIn.
 	seen map[string]uint64
 	// dropIn counts the packets from an address chainIn dropped; dropOut
-	// the packets to an address chainOut dropped.
-	dropIn, dropOut map[string]uint64
+	// the packets to an address chainOut dropped or rejected, and
+	// dropOutBytes their bytes.
+	dropIn, dropOut, dropOutBytes map[string]uint64
 }
 
 var (
-	saveRule  = regexp.MustCompile(`^\[(\d+):\d+\] (-A (\S+) .*)$`)
+	saveRule  = regexp.MustCompile(`^\[(\d+):(\d+)\] (-A (\S+) .*)$`)
 	saveChain = regexp.MustCompile(`^:(NETFAULT-\S+) `)
 )
 
 // parseRules reads `iptables-save -c -t filter`.
 func parseRules(out string) (rules, error) {
-	r := rules{seen: map[string]uint64{}, dropIn: map[string]uint64{}, dropOut: map[string]uint64{}}
+	r := rules{seen: map[string]uint64{}, dropIn: map[string]uint64{}, dropOut: map[string]uint64{},
+		dropOutBytes: map[string]uint64{}}
 	sawTable := false
 	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
@@ -313,22 +317,24 @@ func parseRules(out string) (rules, error) {
 			continue
 		}
 		m := saveRule.FindStringSubmatch(line)
-		if m == nil || !strings.Contains(m[2], "NETFAULT-") {
+		if m == nil || !strings.Contains(m[3], "NETFAULT-") {
 			continue
 		}
-		r.lines = append(r.lines, m[2])
-		packets, err := strconv.ParseUint(m[1], 10, 64)
-		if err != nil {
+		r.lines = append(r.lines, m[3])
+		packets, err1 := strconv.ParseUint(m[1], 10, 64)
+		bytes, err2 := strconv.ParseUint(m[2], 10, 64)
+		if err := errors.Join(err1, err2); err != nil {
 			return r, fmt.Errorf("counter of %q: %w", line, err)
 		}
-		fields := strings.Fields(m[2])
-		switch m[3] {
+		fields := strings.Fields(m[3])
+		switch m[4] {
 		case chainSeen:
 			r.seen[flagValue(fields, "-s")] += packets
 		case chainIn:
 			r.dropIn[flagValue(fields, "-s")] += packets
 		case chainOut:
 			r.dropOut[flagValue(fields, "-d")] += packets
+			r.dropOutBytes[flagValue(fields, "-d")] += bytes
 		}
 	}
 	if !sawTable {

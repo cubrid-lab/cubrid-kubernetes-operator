@@ -41,6 +41,7 @@ import (
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults/netfault"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -131,6 +132,15 @@ type haFixture struct {
 	// cluster of S11 denied-credentials, as restoreCreated and restoreRead do.
 	deniedCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
 	deniedRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	// interruptedCreated and interruptedRead play the Operator for the
+	// standalone cluster of S11 interrupted-upload; netfault answers a
+	// command in the network faults' ephemeral container, and
+	// ephemeralAdded plays the API server and the kubelet when the run adds
+	// that container to a Pod.
+	interruptedCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
+	interruptedRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	netfault           func(ctx context.Context, pod, script string) (string, error)
+	ephemeralAdded     func(ctx context.Context, c client.Client, pod *corev1.Pod) error
 	// eventsErr answers a list of Events.
 	eventsErr error
 	// restoreCreated plays the Operator when the run creates the restored
@@ -266,6 +276,15 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				return errors.New("forbidden write")
 			}
 		},
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+			opts ...client.SubResourceUpdateOption) error {
+			pod, ok := obj.(*corev1.Pod)
+			if sub != "ephemeralcontainers" || !ok || f.ephemeralAdded == nil {
+				t.Fatalf("runner updated subresource %s of %T", sub, obj)
+			}
+			f.writes = append(f.writes, "ephemeral-container")
+			return f.ephemeralAdded(ctx, c, pod)
+		},
 		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 			if _, ok := list.(*corev1.EventList); ok && f.eventsErr != nil {
 				return f.eventsErr
@@ -361,6 +380,8 @@ func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key cl
 		return f.imRestartRead(ctx, c, key)
 	case key.Name == s11DeniedClusterName && f.deniedRead != nil:
 		return f.deniedRead(ctx, c, key)
+	case key.Name == s11InterruptedClusterName && f.interruptedRead != nil:
+		return f.interruptedRead(ctx, c, key)
 	}
 	return nil
 }
@@ -403,6 +424,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 		}
 		f.writes = append(f.writes, "denied-cluster")
 		return f.deniedCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s11InterruptedClusterName {
+		if f.interruptedCreated == nil {
+			f.t.Fatalf("runner created %s without S11 interrupted-upload", cluster.Name)
+		}
+		f.writes = append(f.writes, "interrupted-cluster")
+		return f.interruptedCreated(ctx, c, cluster)
 	}
 	if cluster.Name == s12WrongTargetClusterName {
 		if f.wrongTargetCreated == nil {
@@ -575,6 +603,9 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 		return f.clock(), nil
 	}
 	pod, container, script := args[3], args[5], args[9]
+	if container == netfault.Container && f.netfault != nil {
+		return f.netfault(ctx, pod, script)
+	}
 	if pod == clientPodName {
 		if container != clientContainer {
 			f.t.Fatalf("client command in container %s", container)

@@ -199,6 +199,25 @@ statuses or 114 Events, and the deletions of the backup, the cluster and the
 Secret were accepted. One run is not a baseline; the target member's staging
 directory and the Operator's and Instance Manager's logs were not checked.
 
+S11 `interrupted-upload` also follows S11 `complete`, in a run of its own
+(`lab-installed-ha-s11-interrupted-upload`, `-backup-interrupted-upload`,
+#616), in a run namespace that enforces Pod Security `privileged` with
+`warn` and `audit` at `restricted`: the run creates a standalone cluster with
+the run's own Secret, limits its member's traffic to the object store's
+Service to 256 kbit/s from an ephemeral container in its Pod, requests a
+backup to the backup bucket, and once 512 KiB have passed the limit resets
+that traffic in the Pod, confirmed by the reset rule's counter. The backup
+must end `Failed` with `BackupFailed` and `upload failed: ` within
+`backup_limit`, never `Completed` and without `status.artifact`, with no
+`manifest.json` under its prefix at the end (objects left there are recorded
+as a partial artifact), the source unchanged and no seed key in a status read
+or an Event; the run removes both faults and deletes the backup and the
+cluster it created. A backup that ends before the cut is confirmed leaves it
+blocked. It is lab-only and has not yet run on the VM lab: unit tests only,
+with fakes of the faults' commands and of the API server. The reset is local
+to the member; a silent drop, a store that comes back during the backup and
+a multipart upload are not covered.
+
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's
 artifact with a seed Secret of its own, and the run requires `Ready` only after

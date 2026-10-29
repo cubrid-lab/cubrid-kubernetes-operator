@@ -2,7 +2,9 @@
 
 `test/faults/netfault` holds the network faults that S07 (network partition)
 and S08 (replication lag) of the [scenario contract](scenario-contract.md)
-use. Each is a `faults.Fault`, so `faults.Run` drives it like any other
+use, and the rate limit and the reset that S11 `interrupted-upload`
+([installed HA run](installed-ha.md#s11-interrupted-upload)) puts on a
+member's upload to the object store. Each is a `faults.Fault`, so `faults.Run` drives it like any other
 fault: the starting state is checked, the fault is injected and confirmed,
 and it is removed after every run in which it was injected. The mechanism
 and its limits come from POC-39 in [`docs/poc/RESULTS.md`](../poc/RESULTS.md).
@@ -45,6 +47,29 @@ The rules drop packets by Pod IP, in iptables chains of the faults' own.
 - **The filter.** A `u32` filter sends only packets to the peer's Pod IP to
   band 4.
 
+### Rate limit (`Throttle`)
+
+- **The qdisc.** As the delay's: a `prio` qdisc with four bands on the
+  target's `eth0`, bands 1 to 3 with a `pfifo` each. Band 4 gets a `tbf`
+  with the configured rate, a 16 KiB bucket and 400 ms of queue.
+- **The filter.** A `u32` filter sends only TCP packets to the peer's
+  address and port to band 4. The peer is not entered: it may be a Service's
+  ClusterIP, which is what the Pod's own namespace addresses before the
+  node translates it (kube-proxy).
+- **Counters.** `Counters` reads band 4's bytes, packets, drops and
+  overlimits from `tc -s qdisc show`, so that a caller can see how much of a
+  transfer has passed and at what rate.
+
+### Reset (`Reset`)
+
+- **The rule.** In the target's `OUTPUT`, a chain of the faults' own with one
+  rule: TCP to the peer's address and port is rejected with
+  `--reject-with tcp-reset`.
+- **What it does.** A packet the target sends to the peer is dropped, and
+  the target's own kernel answers its socket with a reset: a connection
+  under way ends with `connection reset by peer`, and a new one is refused.
+  The peer never sees a close. A silent drop is not what this fault shows.
+
 ### The ephemeral container stays
 
 An ephemeral container cannot be removed. It only sleeps, and the faults
@@ -56,8 +81,12 @@ remove every rule and qdisc they installed.
 - A run namespace for S07 or S08 therefore sets `enforce=privileged` and
   keeps `warn` and `audit` at `restricted`, so that a database Pod that
   would break `restricted` still shows up.
-- The installed HA command labels its namespace `enforce=restricted`.
-  Attaching the container there fails, and the run is blocked.
+- The installed HA command labels its namespace `enforce=restricted`, except
+  with `-backup-interrupted-upload`: that run's namespace is created with
+  `enforce=privileged` and `warn` and `audit` at `restricted`, and the labels
+  are recorded. The variant refuses to start unless the namespace enforces
+  `privileged`. Elsewhere, attaching the container fails, and the run is
+  blocked.
 
 ## How a fault is confirmed
 
@@ -117,6 +146,20 @@ How a path from a sender to a receiver is probed:
     less than half of the delay.
   - Each value goes to the measurements, or `unknown` when it was not taken.
     A failed measurement clears the value it would replace.
+- **Rate limit.**
+  - The qdisc and the filter are read back after the injection and at the
+    confirmation: one filter, matching the peer's address, TCP and the
+    port.
+  - It is confirmed when three TCP connects to the peer succeed and band
+    4's packet counter grows by at least three: the peer's traffic goes
+    through the limit. The rate itself is the kernel's and is not measured
+    here; a caller measures a transfer's rate from the counters.
+- **Reset.**
+  - The chain must hold exactly the rule and the jump to it, after the
+    injection and at every confirmation.
+  - It is confirmed only by the rule's own counter: once it has rejected a
+    packet. A target that sends nothing to the peer is never taken for a
+    cut one, and `Confirm` can be asked again.
 
 ## Removal
 
@@ -135,12 +178,21 @@ How a path from a sender to a receiver is probed:
   the qdisc is not the one there before. Then it measures until the connect
   time has fallen back. Nothing is removed when the injection never ran
   `tc`.
+- **Rate limit.** As the delay: the namespace is checked, the root qdisc
+  is deleted only when it is the fault's own, again a few times while the
+  qdisc is not the one there before, and then TCP connects to the peer are
+  made until one succeeds.
+- **Reset.** `Remove` leaves the marker, stops an injection still running,
+  deletes the chain and reads the rules back, again a few times while any
+  rule or chain of the faults is left, and then connects to the peer until
+  a connect succeeds. Nothing is removed when the injection never ran.
 - **Time.** Each wait for the probes ends `Env.Reserve` (default 20 s)
   before the cleanup limit, so that the last steps fit in the limit.
 - **Failures.** Every failure is returned, so `faults.Run` records
   `cleanupSucceeded: false`.
 - **Leftovers.** `Prepare` refuses a member whose namespace still has rules
-  or chains of an earlier fault.
+  or chains of an earlier fault; the delay and the rate limit refuse a
+  qdisc other than the default.
 
 ## Exercising the faults on a cluster
 
