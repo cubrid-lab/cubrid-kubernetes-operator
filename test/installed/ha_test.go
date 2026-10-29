@@ -129,7 +129,8 @@ type haFixture struct {
 	secretDeleted func(ctx context.Context, c client.WithWatch, secret *corev1.Secret,
 		opts ...client.DeleteOption) error
 	// deniedCreated and deniedRead play the Operator for the standalone
-	// cluster of S11 denied-credentials, as restoreCreated and restoreRead do.
+	// cluster of S11 denied-credentials and of S11 signature-mismatch, as
+	// restoreCreated and restoreRead do.
 	deniedCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
 	deniedRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	// interruptedCreated and interruptedRead play the Operator for the
@@ -227,8 +228,11 @@ func newHAFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *haFixture
 				f.writes = append(f.writes, "namespace")
 				return c.Create(ctx, value, opts...)
 			case *corev1.Secret:
-				if value.Name == s11DeniedSecretName {
+				switch value.Name {
+				case s11DeniedSecretName:
 					value.UID = testDeniedSecretUID
+				case s11SignatureSecretName:
+					value.UID = testSignatureSecretUID
 				}
 				if f.secret == nil {
 					f.secret = value.DeepCopy()
@@ -378,7 +382,7 @@ func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key cl
 		return f.restartRead(ctx, c, key)
 	case key.Name == s12IMRestartClusterName && f.imRestartRead != nil:
 		return f.imRestartRead(ctx, c, key)
-	case key.Name == s11DeniedClusterName && f.deniedRead != nil:
+	case (key.Name == s11DeniedClusterName || key.Name == s11SignatureClusterName) && f.deniedRead != nil:
 		return f.deniedRead(ctx, c, key)
 	case key.Name == s11InterruptedClusterName && f.interruptedRead != nil:
 		return f.interruptedRead(ctx, c, key)
@@ -423,6 +427,13 @@ func (f *haFixture) createCluster(ctx context.Context, c client.WithWatch, clust
 			f.t.Fatalf("runner created %s without S11 denied-credentials", cluster.Name)
 		}
 		f.writes = append(f.writes, "denied-cluster")
+		return f.deniedCreated(ctx, c, cluster)
+	}
+	if cluster.Name == s11SignatureClusterName {
+		if f.deniedCreated == nil {
+			f.t.Fatalf("runner created %s without S11 signature-mismatch", cluster.Name)
+		}
+		f.writes = append(f.writes, "signature-cluster")
 		return f.deniedCreated(ctx, c, cluster)
 	}
 	if cluster.Name == s11InterruptedClusterName {

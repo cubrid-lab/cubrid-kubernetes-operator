@@ -78,6 +78,9 @@ func (c HAConfig) validateS11() error {
 		return errors.New("-backup-denied-credentials needs -backup-bucket: S11 denied-credentials follows S11 " +
 			"complete")
 	}
+	if c.BackupSignatureMismatch && c.BackupBucket == "" {
+		return errors.New("-backup-signature-mismatch needs -backup-bucket: S11 signature-mismatch follows S11 complete")
+	}
 	if c.BackupInterruptedUpload && c.BackupBucket == "" {
 		return errors.New("-backup-interrupted-upload needs -backup-bucket: S11 interrupted-upload follows S11 " +
 			"complete")
@@ -103,6 +106,9 @@ func (c HAConfig) validateS11() error {
 	}
 	if c.BackupDeniedCredentials && c.BackupDeniedReadyLimit <= 0 {
 		return errors.New("-backup-denied-credentials needs a positive -backup-denied-ready-limit for its cluster")
+	}
+	if err := c.validateS11Signature(); err != nil {
+		return err
 	}
 	if err := c.validateS11Interrupted(); err != nil {
 		return err
@@ -136,8 +142,8 @@ var maxManifestSize int64 = 16 << 20
 // the artifact with a client of its own, not through the Operator or the
 // Instance Manager; S12 tampered writes and removes its copy of it with the
 // same client, S11 missing-destination asks it whether a bucket exists, and
-// S11 denied-credentials lists a prefix with the seed keys and with keys the
-// store must refuse.
+// S11 denied-credentials and signature-mismatch list a prefix with the seed keys
+// and with keys the store must refuse.
 type objectStore interface {
 	Get(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 	List(ctx context.Context, bucket, prefix string) ([]string, error)
@@ -957,9 +963,12 @@ func (h *haRun) lookForCredentials(found *[]string, where string, v any) error {
 }
 
 // holdsCredential reports whether data holds a key of the object store: a
-// key of the seed Secret or, once S11 denied-credentials generated them, a
-// denied key. A key too short for evidence.SecretForms cannot be searched
-// for: the run does not claim it found none.
+// key of the seed Secret or, once S11 denied-credentials or signature-mismatch made
+// them, a key of that variant. The access key of S11 signature-mismatch is the
+// seed Secret's, so its forms are searched for twice; a place is recorded
+// once all the same (lookForCredentials). A key too short for
+// evidence.SecretForms cannot be searched for: the run does not claim it
+// found none.
 func (h *haRun) holdsCredential(data []byte) (bool, error) {
 	access, secret := evidence.SecretForms(h.accessKey), evidence.SecretForms(h.secretKey)
 	if len(access) == 0 || len(secret) == 0 {

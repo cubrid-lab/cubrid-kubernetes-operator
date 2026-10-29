@@ -119,7 +119,7 @@ type HAConfig struct {
 	BackupBucket string
 	// BackupLimit bounds the backup from its request until Completed or
 	// Failed (backup_limit), and in S11 missing-destination,
-	// denied-credentials and interrupted-upload until Failed.
+	// denied-credentials, signature-mismatch and interrupted-upload until Failed.
 	BackupLimit time.Duration
 	// BackupMissingDestination selects S11 missing-destination after S11
 	// complete: a CubridBackup of the run's database to a bucket that does
@@ -134,13 +134,23 @@ type HAConfig struct {
 	// BackupDeniedReadyLimit bounds that standalone cluster from its
 	// creation until it is Ready. It is the run's bound, not the contract's.
 	BackupDeniedReadyLimit time.Duration
+	// BackupSignatureMismatch selects S11 signature-mismatch after S11 complete: a
+	// CubridBackup to BackupBucket of a standalone cluster whose
+	// spec.objectStorage Secret holds the seed Secret's access key with a
+	// wrong secret key. It needs BackupBucket and cannot be combined with
+	// Restore, BackupMissingDestination, BackupDeniedCredentials or
+	// BackupInterruptedUpload.
+	BackupSignatureMismatch bool
+	// BackupSignatureMismatchReadyLimit bounds that standalone cluster from its
+	// creation until it is Ready. It is the run's bound, not the contract's.
+	BackupSignatureMismatchReadyLimit time.Duration
 	// BackupInterruptedUpload selects S11 interrupted-upload after S11
 	// complete: a CubridBackup to BackupBucket of a standalone cluster whose
 	// upload to the object store is limited in rate and then reset by
 	// network faults in its member's Pod. It needs BackupBucket, makes the
 	// run namespace's Pod Security enforce level privileged, and cannot be
-	// combined with Restore, BackupMissingDestination or
-	// BackupDeniedCredentials.
+	// combined with Restore, BackupMissingDestination,
+	// BackupDeniedCredentials or BackupSignatureMismatch.
 	BackupInterruptedUpload bool
 	// BackupInterruptedReadyLimit bounds that standalone cluster from its
 	// creation until it is Ready. It is the run's bound, not the contract's.
@@ -309,9 +319,10 @@ type haRun struct {
 	s06 *evidence.Scenario
 	// s11 is the result of S11 complete, once it ran, and s11Rec its record;
 	// s11Missing is that of S11 missing-destination, s11Denied that of S11
-	// denied-credentials and s11Interrupted that of S11 interrupted-upload.
-	s11, s11Missing, s11Denied, s11Interrupted *evidence.Scenario
-	s11Rec                                     *s11Record
+	// denied-credentials, s11Signature that of S11 signature-mismatch and
+	// s11Interrupted that of S11 interrupted-upload.
+	s11, s11Missing, s11Denied, s11Signature, s11Interrupted *evidence.Scenario
+	s11Rec                                                   *s11Record
 	// s12 is the result of S12 exact, once it ran, s12Tampered that of S12
 	// tampered, s12WrongTarget that of S12 wrong-target and s12Restart that of
 	// S12 operator-restart, s12IMRestart that of S12 instance-manager-restart
@@ -329,8 +340,9 @@ type haRun struct {
 	// redactor and to the run's own object store client, nowhere else.
 	accessKey, secretKey string
 	// deniedKeys are the access key and the secret key S11
-	// denied-credentials generated, once it did. They go to the redactor, to
-	// the run's own object store client and to the Secret of that variant's
+	// denied-credentials or S11 signature-mismatch made, once it did; the access
+	// key of S11 signature-mismatch is accessKey. They go to the redactor, to the
+	// run's own object store client and to the Secret of that variant's
 	// cluster, nowhere else; holdsCredential looks for them too.
 	deniedKeys []string
 }
@@ -431,6 +443,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket for S12")
 		lane, requirements = planS11MissingDestination(cfg, lane, requirements, &summary)
 		lane, requirements = planS11DeniedCredentials(cfg, lane, requirements, &summary)
+		lane, requirements = planS11SignatureMismatch(cfg, lane, requirements, &summary)
 		lane, requirements = planS11InterruptedUpload(cfg, lane, requirements, &summary)
 	}
 	summary.Plan(requirements, "the HA run has not started")
@@ -600,6 +613,7 @@ func (h *haRun) recordS11Variants(summary *evidence.Summary) {
 		variant  string
 	}{{h.cfg.BackupMissingDestination, h.s11Missing, s11MissingVariant},
 		{h.cfg.BackupDeniedCredentials, h.s11Denied, s11DeniedVariant},
+		{h.cfg.BackupSignatureMismatch, h.s11Signature, s11SignatureVariant},
 		{h.cfg.BackupInterruptedUpload, h.s11Interrupted, s11InterruptedVariant}} {
 		switch {
 		case v.result != nil:
@@ -641,6 +655,13 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 			h.s11Denied = &denied
 			if denied.Result != evidence.Pass {
 				return fmt.Errorf("S11/%s: %s", s11DeniedVariant, denied.Reason)
+			}
+		}
+		if h.cfg.BackupSignatureMismatch {
+			wrong := h.runS11SignatureMismatch(ctx)
+			h.s11Signature = &wrong
+			if wrong.Result != evidence.Pass {
+				return fmt.Errorf("S11/%s: %s", s11SignatureVariant, wrong.Reason)
 			}
 		}
 		if h.cfg.BackupInterruptedUpload {

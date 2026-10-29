@@ -93,11 +93,17 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"-backup-missing-destination")
 	flags.DurationVar(&cfg.BackupDeniedReadyLimit, "backup-denied-ready-limit", 15*time.Minute,
 		"S11 denied-credentials: bound from the standalone cluster's creation until it is Ready")
+	flags.BoolVar(&cfg.BackupSignatureMismatch, "backup-signature-mismatch", false,
+		"scenario after S11 complete: S11 signature-mismatch, a backup of a standalone cluster whose object store "+
+			"Secret holds the seed access key with a wrong secret key must end Failed; needs -backup-bucket, not "+
+			"with -restore, -backup-missing-destination, -backup-denied-credentials or -backup-interrupted-upload")
+	flags.DurationVar(&cfg.BackupSignatureMismatchReadyLimit, "backup-signature-mismatch-ready-limit", 15*time.Minute,
+		"S11 signature-mismatch: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupInterruptedUpload, "backup-interrupted-upload", false,
 		"scenario after S11 complete: S11 interrupted-upload, a backup of a standalone cluster whose upload is "+
 			"slowed and then reset by network faults in its member's Pod must end Failed; makes the run namespace "+
-			"enforce Pod Security privileged; needs -backup-bucket, not with -restore, -backup-missing-destination "+
-			"or -backup-denied-credentials")
+			"enforce Pod Security privileged; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
+			"-backup-denied-credentials or -backup-signature-mismatch")
 	flags.DurationVar(&cfg.BackupInterruptedReadyLimit, "backup-interrupted-ready-limit", 15*time.Minute,
 		"S11 interrupted-upload: bound from the standalone cluster's creation until it is Ready")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
@@ -143,6 +149,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	if set["backup-denied-ready-limit"] && !cfg.BackupDeniedCredentials {
 		return errors.New("-backup-denied-ready-limit needs -backup-denied-credentials")
+	}
+	if set["backup-signature-mismatch-ready-limit"] && !cfg.BackupSignatureMismatch {
+		return errors.New("-backup-signature-mismatch-ready-limit needs -backup-signature-mismatch")
 	}
 	if set["backup-interrupted-ready-limit"] && !cfg.BackupInterruptedUpload {
 		return errors.New("-backup-interrupted-ready-limit needs -backup-interrupted-upload")
