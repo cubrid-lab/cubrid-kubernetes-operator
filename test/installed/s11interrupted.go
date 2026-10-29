@@ -281,7 +281,8 @@ func (c HAConfig) validateS11Interrupted() error {
 		selected bool
 		flag     string
 	}{{c.Restore, "-restore"}, {c.BackupMissingDestination, "-backup-missing-destination"},
-		{c.BackupDeniedCredentials, "-backup-denied-credentials"}} {
+		{c.BackupDeniedCredentials, "-backup-denied-credentials"},
+		{c.BackupSignatureMismatch, "-backup-signature-mismatch"}} {
 		if other.selected {
 			return fmt.Errorf("-backup-interrupted-upload and %s select different lanes; a run takes one of them",
 				other.flag)

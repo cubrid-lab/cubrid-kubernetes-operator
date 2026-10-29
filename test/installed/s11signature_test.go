@@ -409,6 +409,24 @@ func TestRunS11SignatureMismatchIsBlockedWhenTheUploadAnswerIsNotARefusal(t *tes
 	}
 }
 
+// An access refusal for another reason, such as an unknown access key, does
+// not show that the mismatched secret key failed the upload.
+func TestRunS11SignatureMismatchIsBlockedWhenTheUploadIsRefusedForAnotherReason(t *testing.T) {
+	cfg := testS11SignatureConfig(t)
+	f := newS11SignatureFixture(t, cfg)
+	f.tamperDenied = signatureStatus(func(_ int, s *databasev1alpha1.CubridBackupStatus) {
+		if s.Phase == databasev1alpha1.BackupPhaseFailed {
+			s.Conditions[0].Message = "upload failed: put " + testBackupBucket +
+				"/x/backup/appdb_bk0v000: The access key ID you provided does not exist in our records."
+		}
+	})
+	wrong, err := signatureOf(t, f)
+	if err == nil || wrong.Result != evidence.Blocked || len(wrong.NeverEvents) != 0 ||
+		!strings.Contains(wrong.Reason, "was refused, but not with \""+signatureAnswer+"\"") {
+		t.Fatalf("S11 signature-mismatch = %+v, want blocked: an unknown key is not a signature mismatch", wrong)
+	}
+}
+
 func TestRunS11SignatureMismatchFailsOnAKeyInAnEventOrAStatus(t *testing.T) {
 	accessKey := func(*s11DeniedFixture) string { return testAccessKey }
 	wrongKey := func(f *s11DeniedFixture) string { return f.keys[1] }

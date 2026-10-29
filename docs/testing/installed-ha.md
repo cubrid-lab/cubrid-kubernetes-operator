@@ -687,7 +687,10 @@ checks, verdicts, cleanup and record fields. It differs in these points:
    within `-backup-limit`, and the store's answer quoted after
    `put <bucket>/<key>: ` must be a refusal of access (`storeErrorKind`
    `access-denied`). The S3 error code is not part of that text, so the
-   upload's answer is not required to be `SignatureDoesNotMatch` itself.
+   answer must contain that code's message instead,
+   `signature we calculated does not match` (in any case). Another access
+   refusal, such as an unknown access key, leaves the variant blocked: it
+   does not show that the wrong secret key failed the upload.
 
 Its account needs what S11 `denied-credentials` needs: `delete` on
 `cubridbackups`, `cubridclusters` and Secrets in the run namespace.

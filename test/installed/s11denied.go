@@ -70,6 +70,11 @@ type s11KeyFault struct {
 	// must carry, and is then recorded; empty accepts any refusal and records
 	// none.
 	code string
+	// answer is text the store's answer quoted in the backup's failure must
+	// contain, compared in lower case; empty accepts any refusal. An access
+	// refusal for another reason would not show that these keys failed the
+	// upload.
+	answer string
 	// readyLimit bounds the cluster from its creation until it is Ready.
 	readyLimit time.Duration
 	// makeKeys returns the access key and the secret key of the Secret.
@@ -606,6 +611,10 @@ func (h *haRun) judgeDenied(v s11KeyFault, backup *databasev1alpha1.CubridBackup
 		}
 		return fmt.Errorf("the upload to %s failed, but the store's answer does not show a refusal of the keys: "+
 			"%s; %s' effect is not confirmed", rec.Bucket, answer, v.keys)
+	}
+	if v.answer != "" && !strings.Contains(strings.ToLower(rec.StoreError), v.answer) {
+		return fmt.Errorf("the upload to %s was refused, but not with %q: %s; %s' effect is not confirmed",
+			rec.Bucket, v.answer, rec.StoreError, v.keys)
 	}
 	return nil
 }

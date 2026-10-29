@@ -1062,7 +1062,8 @@ it needs more.
   not confirm the denied keys' effect and leave it blocked.
   `signature-mismatch` ends the same way and is judged by the same rules; before anything is
   created, a refusal with another code than `SignatureDoesNotMatch` leaves
-  it blocked. In the lab
+  it blocked, and so does an upload failure whose answer does not carry
+  that code's message. In the lab
   lane, `interrupted-upload` holds the cut until the backup ends, so the
   store is never reachable again for a resume: it must end `Failed` with
   `BackupFailed` and `upload failed: `. A backup that ended before the cut

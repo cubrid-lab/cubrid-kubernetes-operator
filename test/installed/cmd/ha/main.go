@@ -102,8 +102,8 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.BoolVar(&cfg.BackupInterruptedUpload, "backup-interrupted-upload", false,
 		"scenario after S11 complete: S11 interrupted-upload, a backup of a standalone cluster whose upload is "+
 			"slowed and then reset by network faults in its member's Pod must end Failed; makes the run namespace "+
-			"enforce Pod Security privileged; needs -backup-bucket, not with -restore, -backup-missing-destination "+
-			", -backup-denied-credentials or -backup-signature-mismatch")
+			"enforce Pod Security privileged; needs -backup-bucket, not with -restore, -backup-missing-destination, "+
+			"-backup-denied-credentials or -backup-signature-mismatch")
 	flags.DurationVar(&cfg.BackupInterruptedReadyLimit, "backup-interrupted-ready-limit", 15*time.Minute,
 		"S11 interrupted-upload: bound from the standalone cluster's creation until it is Ready")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
