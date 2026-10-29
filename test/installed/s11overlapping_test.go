@@ -510,6 +510,19 @@ func TestRunS11OverlappingPassesWhenTheMemberSerializesTheBackups(t *testing.T) 
 
 // The backup requested second may be started first: the held one ran
 // second, whatever the order of the requests.
+// A pass needs the order on the member judged: a backup without an
+// operation, whose record cannot be named, leaves it unjudged.
+func TestS11OverlappingRequiresTheOrderToBeJudged(t *testing.T) {
+	h := &haRun{}
+	rec := &s11OverlappingRecord{Overlap: &s11Overlap{}}
+	read := [2]*databasev1alpha1.CubridBackup{{}, {}}
+	read[0].Status.OperationRef = "op-a"
+	err := h.orderJudged(context.Background(), read, rec, &evidence.Scenario{})
+	if err == nil || !strings.Contains(err.Error(), "the order on the member was not judged") {
+		t.Fatalf("orderJudged = %v, want the order not judged", err)
+	}
+}
+
 func TestRunS11OverlappingOrdersTheBackupsByTheHold(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
 	f.steps[0], f.steps[1] = []overlapStep{heldStep, heldStep, heldStep, heldStep,

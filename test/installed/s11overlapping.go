@@ -394,7 +394,15 @@ func s11OverlappingPassReason(rec *s11OverlappingRecord) string {
 		"recorded statuses, the manifests, the Events, the installed Operator's manager log or the member's log",
 		s11OverlappingClusterName, a.Backup, b.Backup, rec.Throttle.Target, a.OperationRefsSeen[0],
 		b.OperationRefsSeen[0], o.Second, s11OperationInProgressReason, len(a.Holds)+len(b.Holds),
-		o.SecondCreatedAt.Format(time.RFC3339Nano), o.First, o.FirstEndedAt.Format(time.RFC3339Nano))
+		timeOrUnknown(o.SecondCreatedAt), o.First, timeOrUnknown(o.FirstEndedAt))
+}
+
+// timeOrUnknown formats a recorded time, or says it is unknown.
+func timeOrUnknown(t *time.Time) string {
+	if t == nil {
+		return evidence.Unknown
+	}
+	return t.Format(time.RFC3339Nano)
 }
 
 // overlappingSteps runs the steps of S11 overlapping in order. Before the
@@ -823,9 +831,7 @@ func (h *haRun) judgeOverlap(ctx context.Context, read [2]*databasev1alpha1.Cubr
 	}
 	result.Measurements["heldWithConflict"] = o.HeldWithConflict
 	result.Measurements["bothInProgressInReadings"] = o.BothInProgressFrom != nil
-	if a, b := read[0].Status, read[1].Status; a.OperationRef != "" && b.OperationRef != "" {
-		errs = append(errs, h.judgeOneTarget(ctx, rec.Throttle.Target, rec, result))
-	}
+	errs = append(errs, h.orderJudged(ctx, read, rec, result))
 	if !o.HeldWithConflict {
 		o.NotContended = "no reading showed a backup held with " + s11OperationInProgressReason + ": the first " +
 			"ended before the second was accepted, so the overlap was not exercised"
@@ -857,6 +863,23 @@ func overlapOrder(rec *s11OverlappingRecord) (first, second *s11OverlapBackup, e
 		return a, b, nil
 	}
 	return b, a, nil
+}
+
+// orderJudged judges the order of the two operations on the member
+// (judgeOneTarget) and requires that it was judged: a pass without the
+// member's records of both would show nothing about their order.
+func (h *haRun) orderJudged(ctx context.Context, read [2]*databasev1alpha1.CubridBackup,
+	rec *s11OverlappingRecord, result *evidence.Scenario) error {
+	if read[0].Status.OperationRef == "" || read[1].Status.OperationRef == "" {
+		return errors.New("the order on the member was not judged: a backup has no operationRef")
+	}
+	if err := h.judgeOneTarget(ctx, rec.Throttle.Target, rec, result); err != nil {
+		return err
+	}
+	if o := rec.Overlap; o.First == "" || o.FirstEndedAt == nil || o.SecondCreatedAt == nil {
+		return errors.New("the order on the member was not judged: the records of both operations were not read")
+	}
+	return nil
 }
 
 // judgeOneTarget requires, on target, the member's record of the

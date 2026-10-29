@@ -1457,7 +1457,7 @@ measurements are prefixed `rateLimit.`.
 The account needs what S11 `interrupted-upload` needs; the kill uses the
 `create` on `pods/exec` the run already has.
 
-What this shows, once it passes on the VM lab: an Instance Manager killed
+What a pass shows: an Instance Manager killed
 in the middle of an upload makes the backup end `Failed` for the restart,
 with no second operation and no `manifest.json` under its prefix.
 
@@ -1686,7 +1686,7 @@ The account needs what S11 `instance-manager-restart` needs for its cluster
 and its limit, and `create` on `pods/exec` in the run namespace, which LAB01
 already uses, to read the operation records.
 
-What this shows, once it passes on the VM lab: two backups of the same
+What a pass shows: two backups of the same
 cluster requested at once each end with their own operation and their own
 verified artifact, and the second start is held while the first's operation
 runs. By the member's own records, the second operation was created only

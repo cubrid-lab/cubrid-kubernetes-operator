@@ -86,12 +86,14 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"S11: bound from the backup request until Completed or Failed (backup_limit)")
 	flags.BoolVar(&cfg.BackupMissingDestination, "backup-missing-destination", false,
 		"scenario after S11 complete: S11 missing-destination, a backup to a bucket that does not exist must end "+
-			"Failed; needs -backup-bucket, not with -restore, -backup-operator-restart or "+
-			"-backup-instance-manager-restart")
+			"Failed; needs -backup-bucket, not with -restore or another S11 variant: -backup-denied-credentials, "+
+			"-backup-signature-mismatch, -backup-interrupted-upload, -backup-operator-restart, "+
+			"-backup-instance-manager-restart or -backup-overlapping")
 	flags.BoolVar(&cfg.BackupDeniedCredentials, "backup-denied-credentials", false,
 		"scenario after S11 complete: S11 denied-credentials, a backup of a standalone cluster whose object store "+
-			"Secret holds keys the store refuses must end Failed; needs -backup-bucket, not with -restore, "+
-			"-backup-missing-destination, -backup-operator-restart or -backup-instance-manager-restart")
+			"Secret holds keys the store refuses must end Failed; needs -backup-bucket, not with -restore or another "+
+			"S11 variant: -backup-missing-destination, -backup-signature-mismatch, -backup-interrupted-upload, "+
+			"-backup-operator-restart, -backup-instance-manager-restart or -backup-overlapping")
 	flags.DurationVar(&cfg.BackupDeniedReadyLimit, "backup-denied-ready-limit", 15*time.Minute,
 		"S11 denied-credentials: bound from the standalone cluster's creation until it is Ready")
 	flags.BoolVar(&cfg.BackupSignatureMismatch, "backup-signature-mismatch", false,
