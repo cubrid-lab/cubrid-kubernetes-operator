@@ -387,11 +387,15 @@ start with `409 OperationInProgress` while the first's operation runs, and
 the Operator holds the second on its recorded target
 (`InstanceManagerOperationInProgress`) and sends the start again until the
 target accepts it; two selections that rank the standbys differently run
-the backups at once on two targets. On one target, the second's
-`status.startedAt` must not be before the first's manifest `createdAt`
-(the Operator node's clock and the member's, to the second). A run in which
-the readings show neither a hold nor both backups running at once on two
-targets is blocked: the overlap was not exercised. `Failed` for a conflict,
+the backups at once on two targets. On one target, the run reads the
+target member's records of both operations: the second's `createdAt` must
+be at or after the first's `updatedAt`, written when it ended after its
+upload and staging cleanup, both by the member's clock; a record that
+cannot be read leaves the variant blocked. An object in a backup's own
+attempt prefix that its manifest does not name is a never-event. A run in
+which the readings show neither a hold on one target nor both backups
+running at once on two targets is blocked: the overlap was not
+exercised. `Failed` for a conflict,
 `RecordedTargetNotStarted` or a staging failure is a never-event, and
 `Failed` for another reason fails it. The source and the installed manager
 must be unchanged, and no key may be in a status read, a manifest, an Event,

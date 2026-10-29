@@ -18,6 +18,7 @@ package installed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -83,7 +84,9 @@ type s11OverlapBackup struct {
 	// verified, AttemptsAtEnd the same listing made again at the end.
 	Attempts      *s11Attempts `json:"attempts,omitempty"`
 	AttemptsAtEnd *s11Attempts `json:"attemptsAtEnd,omitempty"`
-	// Holds are the readings that showed the backup held after a conflict.
+	// Holds are the readings that showed the backup held after a conflict,
+	// one for each change of reason, target or the other backup's phase; the
+	// message, which names each request, is the first reading's.
 	Holds []s11Hold `json:"holds"`
 	// OperationRefsSeen and TargetsSeen are the operationRefs and the
 	// targets, with their roles, the readings showed, in order, each once.
@@ -98,6 +101,9 @@ type s11OverlapBackup struct {
 	ManifestOperationID string     `json:"manifestOperationID,omitempty"`
 	// Failure is the Ready reason and message of a backup that ended Failed.
 	Failure string `json:"failure,omitempty"`
+	// OperationRecord is the target member's record of the backup's
+	// operation, read when both backups ran on one target.
+	OperationRecord *s11OperationRecord `json:"operationRecord,omitempty"`
 	// Cleanup says whether the run deleted the backup.
 	Cleanup string `json:"cleanup"`
 	// letter starts the backup's measurements, and manifestFile names the
@@ -106,13 +112,39 @@ type s11OverlapBackup struct {
 	manifest             []byte
 }
 
+// s11OperationRecord is what the run read of the Instance Manager's record
+// of a backup's operation on its target (IM_OPERATIONS_DIR/<id>.json): its
+// state, and its createdAt and updatedAt, both by the member's clock. For an
+// operation that ended, updatedAt is when its end was written, after its
+// upload ended and its staging was removed (runBackup in
+// internal/instancemanager/server.go).
+type s11OperationRecord struct {
+	Pod         string     `json:"pod"`
+	OperationID string     `json:"operationID"`
+	State       string     `json:"state,omitempty"`
+	CreatedAt   *time.Time `json:"createdAt,omitempty"`
+	UpdatedAt   *time.Time `json:"updatedAt,omitempty"`
+	ReadError   string     `json:"readError,omitempty"`
+}
+
 // s11Overlap is what the readings showed of the two backups together.
 type s11Overlap struct {
 	// SameTarget is set once both ended: whether they had the same target.
 	SameTarget *bool `json:"sameTarget,omitempty"`
 	// Started are the backups in the order a reading first showed each one
-	// with an operation.
+	// with an operation. It is evidence; it does not order the pair.
 	Started []string `json:"started"`
+	// On one target, First and Second are the backups in the order they ran:
+	// the one held after a conflict is the second; when neither or both were,
+	// the one with the earlier status.startedAt is the first.
+	First  string `json:"first,omitempty"`
+	Second string `json:"second,omitempty"`
+	// FirstEndedAt is the updatedAt of the first's operation record, written
+	// when it ended, and SecondCreatedAt the createdAt of the second's, both
+	// by the target member's clock: the rule the variant judges on one
+	// target.
+	FirstEndedAt    *time.Time `json:"firstEndedAt,omitempty"`
+	SecondCreatedAt *time.Time `json:"secondCreatedAt,omitempty"`
 	// HeldWithConflict is set when a reading showed a backup held because
 	// another operation held its target's database.
 	HeldWithConflict bool `json:"heldWithConflict"`
@@ -121,9 +153,9 @@ type s11Overlap struct {
 	// operation.
 	BothInProgressFrom *time.Time `json:"bothInProgressFrom,omitempty"`
 	BothInProgressTo   *time.Time `json:"bothInProgressTo,omitempty"`
-	// On one target: SecondStartedAt is status.startedAt of the backup
-	// started second, and FirstManifestCreatedAt the manifest's createdAt of
-	// the one started first.
+	// On one target, as evidence only: SecondStartedAt is status.startedAt of
+	// the second, by the Operator node's clock, and FirstManifestCreatedAt the
+	// manifest's createdAt of the first, by the member's, each to the second.
 	SecondStartedAt        *time.Time `json:"secondStartedAt,omitempty"`
 	FirstManifestCreatedAt *time.Time `json:"firstManifestCreatedAt,omitempty"`
 	// NotContended says why the run did not see the two backups contend.
@@ -191,8 +223,9 @@ func planS11Overlapping(cfg HAConfig, lane string, requirements []evidence.Requi
 // and role that never change, an artifact that passes S11 complete's
 // verification, a manifest that names its own operation, and exactly one
 // attempt prefix with one manifest under its prefix, also when listed again
-// at the end. On one target, the second must not have been started before
-// the first's upload started. The source and the installed manager must be
+// at the end. On one target, the target member's record of the second's
+// operation must not have been created before the record of the first's
+// operation was written as ended. The source and the installed manager must be
 // unchanged, and no credential may be in a status read, a manifest, an Event
 // or the logs searched for each backup. A run in which the readings never
 // show the two backups contend, a run that ends, or a check that cannot be
@@ -208,13 +241,16 @@ func (h *haRun) runS11Overlapping(ctx context.Context) (result evidence.Scenario
 			"sends its start again at its next reconcile, both about 10 s apart (backupPollAfter), so on one " +
 			"target the readings can show the second backup Running while the first still shows Running or " +
 			"Uploading; that is recorded (bothInProgressFrom and bothInProgressTo), not judged; what is judged on " +
-			"one target is that the second's status.startedAt, which the Operator sets once the target accepted " +
-			"the start, is not before the first's manifest createdAt, which the Instance Manager sets right " +
-			"before its upload, while its operation still holds the database; the first is the Operator node's " +
-			"clock and the second the member's, each to the second",
+			"one target is that the target member's record of the second's operation was created at or after the " +
+			"record of the first's operation was written as ended (firstEndedAt, secondCreatedAt), both by the " +
+			"member's clock; the Instance Manager writes that end only after the upload ended and the staging was " +
+			"removed, and starts no other operation of the database before; the second's status.startedAt and the " +
+			"first's manifest createdAt are recorded as evidence only",
 		"a manifest names its objects by keys relative to its own attempt prefix, so it cannot name an object of " +
 			"the other backup; an object of the other backup under this backup's prefix shows in the listing as " +
-			"outside an attempt prefix of the backup",
+			"outside an attempt prefix of the backup; no upload is interrupted in this variant, so an object in a " +
+			"backup's own attempt prefix that its manifest does not name came from another writer and must never " +
+			"happen",
 		logsNote(h.logLimit())}}
 	for _, b := range s11OverlappingBackups {
 		rec.Backups = append(rec.Backups, &s11OverlapBackup{s11Record: s11Record{Backup: b.name,
@@ -298,10 +334,11 @@ func s11OverlappingPassReason(rec *s11OverlappingRecord) string {
 	a, b, o := rec.Backups[0], rec.Backups[1], rec.Overlap
 	var how string
 	if *o.SameTarget {
-		how = fmt.Sprintf("they had the same target, %s; a backup was held with %s (%d holds recorded), and %s "+
-			"was started at %s, not before the upload of %s, started first, began at %s",
-			lastTarget(a.Phases), s11OperationInProgressReason, len(a.Holds)+len(b.Holds), o.Started[1],
-			o.SecondStartedAt.Format(time.RFC3339), o.Started[0], o.FirstManifestCreatedAt.Format(time.RFC3339))
+		how = fmt.Sprintf("they had the same target, %s; %s was held with %s (%d holds recorded), and the "+
+			"target's record of its operation was created at %s, not before the record of %s's operation was "+
+			"written as ended at %s, by the member's clock", lastTarget(a.Phases), o.Second,
+			s11OperationInProgressReason, len(a.Holds)+len(b.Holds), o.SecondCreatedAt.Format(time.RFC3339Nano),
+			o.First, o.FirstEndedAt.Format(time.RFC3339Nano))
 	} else {
 		how = fmt.Sprintf("they ran on different targets, %s and %s, and the readings showed both Running or "+
 			"Uploading with their operations from %s to %s", lastTarget(a.Phases), lastTarget(b.Phases),
@@ -453,8 +490,8 @@ func (rec *s11OverlappingRecord) observe(read [2]*databasev1alpha1.CubridBackup,
 			OtherPhase: string(other.Phase), OtherOperationRef: other.OperationRef, OtherTarget: other.TargetInstance}
 		if n := len(b.Holds); n > 0 {
 			last := b.Holds[n-1]
-			last.At = at
-			if last == hold {
+			if last.Reason == hold.Reason && last.TargetInstance == hold.TargetInstance &&
+				last.OtherPhase == hold.OtherPhase {
 				continue
 			}
 		}
@@ -509,7 +546,7 @@ func (h *haRun) judgeOverlapping(ctx context.Context, read [2]*databasev1alpha1.
 	for i, b := range rec.Backups {
 		errs = append(errs, h.judgeOverlapBackup(ctx, read[i], requested[i], b, rec.Backups[1-i], result))
 	}
-	return errors.Join(append(errs, judgeOverlap(read, rec, result))...)
+	return errors.Join(append(errs, h.judgeOverlap(ctx, read, rec, result))...)
 }
 
 // judgeOverlapOperations adds a never-event for an operation the two
@@ -595,6 +632,11 @@ func (h *haRun) judgeOverlapBackup(ctx context.Context, backup *databasev1alpha1
 	}
 	if v.Listed {
 		result.Measurements[b.letter+"."+measObjectsNotInManifest] = len(v.NotInManifest)
+		if len(v.NotInManifest) > 0 {
+			// No upload is interrupted here, so no earlier attempt left them.
+			result.NeverEvents = append(result.NeverEvents, b.Backup+": objects in its own attempt prefix that its "+
+				"manifest does not name, from another writer: "+strings.Join(v.NotInManifest, ", "))
+		}
 	}
 	if len(v.Unreadable) > 0 {
 		result.NeverEvents = append(result.NeverEvents, b.Backup+" is Completed, and objects of its artifact could "+
@@ -669,18 +711,16 @@ func (h *haRun) checkOverlapAttempts(ctx context.Context, backup *databasev1alph
 	return nil
 }
 
-// judgeOverlap judges the two backups together. On one target the
-// Instance Manager runs one operation of the database at a time, so the
-// backup started second must not have been started before the upload of the
-// one started first began: that would be two backups on one member at once.
-// StagingDestinationInUse is not predicted, since each backup has its own
-// staging destination, and fails the variant. The two must have contended:
+// judgeOverlap judges the two backups together. StagingDestinationInUse is
+// not predicted, since each backup has its own staging destination, and
+// fails the variant. On one target the Instance Manager runs one operation
+// of the database at a time (judgeOneTarget). The two must have contended:
 // on one target, a reading showed one held with
 // InstanceManagerOperationInProgress; on two, the readings showed both in
 // progress at once. Otherwise the first ended before the second was
 // accepted, and the variant is blocked.
-func judgeOverlap(read [2]*databasev1alpha1.CubridBackup, rec *s11OverlappingRecord,
-	result *evidence.Scenario) error {
+func (h *haRun) judgeOverlap(ctx context.Context, read [2]*databasev1alpha1.CubridBackup,
+	rec *s11OverlappingRecord, result *evidence.Scenario) error {
 	o := rec.Overlap
 	var errs []error
 	for _, b := range rec.Backups {
@@ -701,37 +741,115 @@ func judgeOverlap(read [2]*databasev1alpha1.CubridBackup, rec *s11OverlappingRec
 	result.Measurements["sameTarget"] = same
 	result.Measurements["heldWithConflict"] = o.HeldWithConflict
 	result.Measurements["bothInProgressInReadings"] = o.BothInProgressFrom != nil
-	if same && len(o.Started) == 2 {
-		errs = append(errs, judgeOneTarget(rec, result))
+	if same && a.OperationRef != "" && b.OperationRef != "" {
+		errs = append(errs, h.judgeOneTarget(ctx, a.TargetInstance, rec, result))
 	}
-	contended := o.HeldWithConflict || (!same && o.BothInProgressFrom != nil)
+	contended := (same && o.HeldWithConflict) || (!same && o.BothInProgressFrom != nil)
 	if !contended {
-		o.NotContended = "the readings never showed the two backups contend: neither was held with " +
-			s11OperationInProgressReason + ", and they never ran at once on different targets; the first ended " +
+		o.NotContended = "the readings never showed the two backups contend: on one target neither was held " +
+			"with " + s11OperationInProgressReason + ", or on two targets they never ran at once; the first ended " +
 			"before the second was accepted, so the overlap was not exercised"
 		errs = append(errs, errors.New(o.NotContended))
 	}
 	return errors.Join(errs...)
 }
 
-// judgeOneTarget requires, on one target, the status.startedAt of the backup
-// started second not before the manifest createdAt of the one started first.
-func judgeOneTarget(rec *s11OverlappingRecord, result *evidence.Scenario) error {
+// heldWithConflict reports whether a reading showed b held with
+// InstanceManagerOperationInProgress.
+func heldWithConflict(b *s11OverlapBackup) bool {
+	return slices.ContainsFunc(b.Holds, func(h s11Hold) bool { return h.Reason == s11OperationInProgressReason })
+}
+
+// overlapOrder orders the two backups on one target: the one held after a
+// conflict ran second; when neither or both were, the one with the earlier
+// status.startedAt ran first. Otherwise the order cannot be told.
+func overlapOrder(rec *s11OverlappingRecord) (first, second *s11OverlapBackup, err error) {
+	a, b := rec.Backups[0], rec.Backups[1]
+	switch heldA, heldB := heldWithConflict(a), heldWithConflict(b); {
+	case heldA && !heldB:
+		return b, a, nil
+	case heldB && !heldA:
+		return a, b, nil
+	case a.StatusStartedAt == nil || b.StatusStartedAt == nil || a.StatusStartedAt.Equal(*b.StatusStartedAt):
+		return nil, nil, errors.New("which of the two backups on one target ran first could not be told: neither " +
+			"or both were held, and their status.startedAt is missing or the same")
+	case a.StatusStartedAt.Before(*b.StatusStartedAt):
+		return a, b, nil
+	}
+	return b, a, nil
+}
+
+// judgeOneTarget requires, on one target, the target member's record of the
+// second backup's operation created at or after the record of the first's
+// was written as ended. The Instance Manager refuses a new operation of the
+// database while a record of another one has not ended (FindOrCreate in
+// internal/instancemanager/opstore.go), and writes a backup's end only after
+// its upload ended and its staging was removed (runBackup in server.go); both
+// times are the member's clock, under the store's lock. A record that cannot
+// be read, or a first one that has not ended, leaves it unknown and blocks
+// the variant. The second's status.startedAt and the first's manifest
+// createdAt are recorded as evidence only.
+func (h *haRun) judgeOneTarget(ctx context.Context, target string, rec *s11OverlappingRecord,
+	result *evidence.Scenario) error {
 	o := rec.Overlap
-	index := func(name string) int {
-		return slices.IndexFunc(rec.Backups, func(b *s11OverlapBackup) bool { return b.Backup == name })
+	first, second, err := overlapOrder(rec)
+	if err != nil {
+		return err
 	}
-	first, second := rec.Backups[index(o.Started[0])], rec.Backups[index(o.Started[1])]
-	if second.StatusStartedAt == nil || first.ManifestCreatedAt == nil {
-		return fmt.Errorf("whether %s was started on its target before %s's upload began could not be told: "+
-			"its status.startedAt or the manifest's createdAt was not read", second.Backup, first.Backup)
-	}
+	o.First, o.Second = first.Backup, second.Backup
 	o.SecondStartedAt, o.FirstManifestCreatedAt = second.StatusStartedAt, first.ManifestCreatedAt
-	if second.StatusStartedAt.Before(*first.ManifestCreatedAt) {
-		result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("two backups ran on %s at once: %s was "+
-			"started at %s, before %s's upload began at %s (its manifest's createdAt), while its operation still "+
-			"held the database", lastTarget(first.Phases), second.Backup, second.StatusStartedAt.Format(time.RFC3339),
-			first.Backup, first.ManifestCreatedAt.Format(time.RFC3339)))
+	ended, err := h.readOperationRecord(ctx, target, first)
+	if err != nil {
+		return err
+	}
+	created, err := h.readOperationRecord(ctx, target, second)
+	if err != nil {
+		return err
+	}
+	if !ended.State.IsTerminal() {
+		return fmt.Errorf("the record of %s's operation %s on %s is %s, not ended, so when it ended is not known",
+			first.Backup, ended.ID, target, ended.State)
+	}
+	endedAt, createdAt := ended.UpdatedAt.UTC(), created.CreatedAt.UTC()
+	o.FirstEndedAt, o.SecondCreatedAt = &endedAt, &createdAt
+	if createdAt.Before(endedAt) {
+		result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("two backups ran on %s at once: the record of "+
+			"%s's operation %s was created at %s, before the record of %s's operation %s was written as ended at %s, "+
+			"by the member's clock", target, second.Backup, created.ID, createdAt.Format(time.RFC3339Nano),
+			first.Backup, ended.ID, endedAt.Format(time.RFC3339Nano)))
 	}
 	return nil
+}
+
+// readOperationRecord reads, in the target member, the Instance Manager's
+// record of b's operation and records what it read in b.OperationRecord. A
+// record that cannot be read, or is not of that backup operation, is
+// returned as an error.
+func (h *haRun) readOperationRecord(ctx context.Context, target string, b *s11OverlapBackup) (
+	instancemanager.Operation, error) {
+	var op instancemanager.Operation
+	id := b.OperationRefsSeen[0]
+	r := &s11OperationRecord{Pod: target, OperationID: id}
+	b.OperationRecord = r
+	fail := func(msg string) (instancemanager.Operation, error) {
+		r.ReadError = msg
+		return op, fmt.Errorf("the record of %s's operation %s on %s could not be read, so whether the two backups "+
+			"ran at once is not known: %s", b.Backup, id, target, msg)
+	}
+	if !plainName.MatchString(id) {
+		return fail("the operation ID is not a plain name")
+	}
+	out, err := h.member(ctx, target, "cat", "--", imOperationsDir+"/"+id+".json")
+	if err != nil {
+		return fail(err.Error())
+	}
+	if json.Unmarshal([]byte(out), &op) != nil {
+		return fail("the answer is not an operation record")
+	}
+	if op.ID != id || op.Kind != instancemanager.OpBackup || op.CreatedAt.IsZero() || op.UpdatedAt.IsZero() {
+		return fail(fmt.Sprintf("the record read is of %s operation %q, or has no times", op.Kind, op.ID))
+	}
+	createdAt, updatedAt := op.CreatedAt.UTC(), op.UpdatedAt.UTC()
+	r.State, r.CreatedAt, r.UpdatedAt = string(op.State), &createdAt, &updatedAt
+	return op, nil
 }

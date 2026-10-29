@@ -1556,7 +1556,8 @@ nothing of it is done.
      `InstanceManagerStagingInUse`, `InstanceManagerRequestConflict` or
      `InstanceManagerConflict`), with its message, the time of the reading
      and the other backup's phase, operation and target in the same round
-     (`holds`);
+     (`holds`), once for each change of reason, target or the other
+     backup's phase: each retry's message names its own request;
    - the order in which a reading first showed each with an operation
      (`started`), and the first and last round that showed both `Running`
      or `Uploading` with their operations (`bothInProgressFrom`,
@@ -1570,7 +1571,10 @@ nothing of it is done.
    `operationID` must be the backup's own `status.operationRef`; the other
    backup's operation there must never happen. A manifest names its objects
    relative to its own attempt prefix, so it cannot name an object of the
-   other backup. Each backup's prefix is then listed as in S11
+   other backup. No upload is interrupted in this variant, so an object in
+   the backup's own attempt prefix that the manifest does not name
+   (`objectsNotInManifest` above 0) came from another writer and must never
+   happen. Each backup's prefix is then listed as in S11
    `operator-restart`: exactly one attempt prefix of the backup holds
    objects, the artifact's, with its one `manifest.json`; a second attempt
    prefix, or an object outside an attempt prefix of the backup, the other
@@ -1588,20 +1592,37 @@ nothing of it is done.
      next reconcile, both about 10 seconds apart (`backupPollAfter`). The
      readings can therefore show the second `Running` while the first still
      shows `Running` or `Uploading`, although the Instance Manager ran them
-     one after the other. That is recorded, not judged. What is judged is
-     that the `status.startedAt` of the backup started second, which the
-     Operator sets once the target accepted the start, is not before the
-     manifest `createdAt` of the one started first, which the Instance
-     Manager sets right before its upload, while its operation still holds
-     the database. One before the other is two backups on one member at
-     once and must never happen. The first time is the Operator node's
-     clock and the second the member's, each to the second; their skew is
-     not measured. Both are recorded (`secondStartedAt`,
-     `firstManifestCreatedAt`).
+     one after the other. That is recorded, not judged.
+   - **Order.** On one target, the backup held with
+     `InstanceManagerOperationInProgress` ran second; when neither or both
+     were held, the one with the earlier `status.startedAt` ran first
+     (`first`, `second`). When that cannot be told, the variant is blocked.
+   - **One operation at a time, by the member's clock.** The run reads,
+     in the target member (`cat` in the database container), the Instance
+     Manager's record of each backup's operation,
+     `/var/lib/cubrid/operations/<operation ID>.json`, and records its
+     state, `createdAt` and `updatedAt` (`operationRecord`). The Instance
+     Manager writes a backup's end only after its upload ended and its
+     staging directory was removed, and creates no other operation of the
+     database before that end is written (`runBackup` in
+     `internal/instancemanager/server.go`, `FindOrCreate` in
+     `opstore.go`). So the second's `createdAt` must be at or after the
+     first's `updatedAt` (`secondCreatedAt`, `firstEndedAt`); one before it
+     is two backups on one member at once and must never happen. Both times
+     are the member's clock, below the second. A record that cannot be read,
+     that is of another operation, or a first record that has not ended
+     leaves the variant blocked, neither passed nor failed.
+   - **Evidence only.** The second's `status.startedAt`, by the Operator
+     node's clock, and the first's manifest `createdAt`, which the Instance
+     Manager sets when the upload begins, while the operation still holds
+     the database, are recorded (`secondStartedAt`,
+     `firstManifestCreatedAt`) but not judged: the manifest's time does not
+     show when the operation ended, and the two clocks differ.
    - **Contention.** On one target, a hold with
      `InstanceManagerOperationInProgress` shows that the second start was
-     refused while the first ran (`heldWithConflict`). On two targets, a
-     round that showed both in progress shows them running at once. When
+     refused while the first ran (`heldWithConflict`). On two targets, only
+     a round that showed both in progress shows them running at once; a
+     hold alone there is not contention. When
      neither was seen, the first ended before the second was accepted, the
      overlap was not exercised, and the variant is blocked as inconclusive
      (`notContended`).
@@ -1626,16 +1647,23 @@ what was seen stays a failure, with that error added to the reason.
 `backupCompletedWithin`, `objectsVerified`, `artifactBytes`,
 `objectsNotInManifest` and `attemptPrefixes`, are `unknown` until measured.
 
-The account needs what S11 `missing-destination` needs, nothing more.
+The account needs what S11 `missing-destination` needs, and `create` on
+`pods/exec` in the run namespace, which LAB01 already uses, to read the
+operation records.
 
 What this shows, once it passes on the VM lab: two backups of the same HA
 cluster requested at once each end with their own operation and their own
-verified artifact, and on one member the second waits for the first.
+verified artifact. On one member, it shows by the member's own records
+that the second operation was created only after the first had ended,
+upload and staging cleanup included; on two members, that they ran at
+once. It does not show what the Instance Manager would do on a clock that
+steps backwards between the two records.
 
 S11 `overlapping` here does not check:
-- the Instance Manager's operation records and its refusals, which the run
-  sees only through the backups' statuses; the members' staging
-  directories; incomplete multipart uploads under the prefixes;
+- the Instance Manager's refusals, which the run sees only through the
+  backups' statuses, and on two targets the operation records; the
+  members' staging directories; incomplete multipart uploads under the
+  prefixes;
 - the same `CubridBackup` requested twice: the API server refuses a second
   object of the same name;
 - more than two backups, and a backup of another database or cluster on
@@ -2868,11 +2896,13 @@ and S12 variant other than `complete` and `exact` only those under
   `operationRefsSeen`, `targetsSeen`, the holds with their reason, message,
   time and the other backup's phase, operation and target,
   `statusStartedAt`, `backupCompletedWithin`, the artifact, the
-  verification, the manifest's `createdAt` and `operationID`, the listings
+  verification, the manifest's `createdAt` and `operationID`, on one
+  target the member's record of its operation, the listings
   of its prefix and at the end, any failure, where credentials were looked
   for and its cleanup; then the gap between the two requests, the overlap
   (`sameTarget`, `started`, `heldWithConflict`, `bothInProgressFrom` and
-  `bothInProgressTo`, `secondStartedAt`, `firstManifestCreatedAt`,
+  `bothInProgressTo`, `first`, `second`, `firstEndedAt`,
+  `secondCreatedAt`, `secondStartedAt`, `firstManifestCreatedAt`,
   `notContended`), the manager before and after, the source at the end and
   `judgedAt`), `S11/overlapping/manifest-a.json` and
   `S11/overlapping/manifest-b.json`, the two manifests as stored, and

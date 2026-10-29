@@ -131,7 +131,7 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s11-interrupted-upload` | The installed-Operator HA command with `-backup-bucket` and `-backup-interrupted-upload`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`interrupted-upload`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is reset there once seen under way; it must end `Failed` for its upload, never `Completed` and without an artifact, with no manifest under its prefix at the end and the source unchanged | none |
 | `lab-installed-ha-s11-operator-restart` | The installed-Operator HA command with `-backup-bucket` and `-backup-operator-restart` | LAB01, S11 (`complete`), then S11 (`operator-restart`): a second backup of the same cluster, during which the installed manager's Pod is deleted without a grace period once a reading shows the backup `Running` or `Uploading` with an operation; the replacement must hold the leader Lease within `operator_resync_limit`, and the backup must end `Completed` within `backup_limit`, judged written by the replacement (by the managers' node clocks), under the same operation, target and role, with an artifact that passes `complete`'s verification, one attempt prefix with one manifest under its prefix, and the source unchanged | none |
 | `lab-installed-ha-s11-instance-manager-restart` | The installed-Operator HA command with `-backup-bucket` and `-backup-instance-manager-restart`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`instance-manager-restart`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is seen under way, and whose member's Instance Manager is then killed with `SIGKILL`; it must end `Failed` with `BackupFailed` and the Instance Manager's restart reason, under the same operation, never `Completed` and without an artifact, with no manifest under its prefix at the end, the member's container restarted once, and not before the kill, and a reading of the cluster after the restarted container was ready showing `Ready`, and the source unchanged | none |
-| `lab-installed-ha-s11-overlapping` | The installed-Operator HA command with `-backup-bucket` and `-backup-overlapping` | LAB01, S11 (`complete`), then S11 (`overlapping`): two more backups of the same cluster requested back to back, each under a prefix of its own; both must end `Completed` within `backup_limit`, each with its own operation, never shared, and a target and role that never change, an artifact that passes `complete`'s verification, a manifest that names its own operation, and one attempt prefix with one manifest under its prefix; on one target the second must not have been started before the first's upload began; the readings must show the two contend; and the source must be unchanged | none |
+| `lab-installed-ha-s11-overlapping` | The installed-Operator HA command with `-backup-bucket` and `-backup-overlapping` | LAB01, S11 (`complete`), then S11 (`overlapping`): two more backups of the same cluster requested back to back, each under a prefix of its own; both must end `Completed` within `backup_limit`, each with its own operation, never shared, and a target and role that never change, an artifact that passes `complete`'s verification, a manifest that names its own operation, and one attempt prefix with one manifest under its prefix; on one target the target member's record of the second's operation must not have been created before the record of the first's operation was written as ended, by the member's clock; the readings must show the two contend; and the source must be unchanged | none |
 | `lab-installed-ha-s12` | The installed-Operator HA command with `-backup-bucket` and `-restore` | LAB01, S11 (`complete`), then S12 (`exact`): S11's artifact restored into a new cluster in the run namespace and checked against the history truncated at S11's known point | none |
 | `lab-installed-ha-s12-tampered` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-tampered` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`tampered`): a copy of S11's artifact with one byte changed, whose restore into another new cluster must be refused for that object's checksum | none |
 | `lab-installed-ha-s12-wrong-target` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-wrong-target` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`wrong-target`): S11's artifact restored into a cluster created over the retained PVCs of a deleted cluster of the same name, which hold its database; the restore must be refused for that target and the database left with its own marker and without S11's | none |
@@ -221,21 +221,29 @@ could not be read leaves the variant blocked.
 `overlapping`; the command runs it in a run of its own, not with S12 or
 another S11 variant. The run reads the two backups in turn until both
 ended. The two must have contended: a reading showed one held with
-`InstanceManagerOperationInProgress` after its target refused its start
-with 409 while the other's operation held the database, or, on two
-targets, a round of readings showed both `Running` or `Uploading` with
-their operations. Otherwise the first ended before the second was accepted
-and the variant is blocked as inconclusive. On one target the readings may
-show both in progress for up to about one poll of the Operator (10 s),
-which learns of an operation's end, and sends a held start again, only at
-its next reconcile; that is recorded, not judged. What is judged there is
-that the second's `status.startedAt`, which the Operator sets once the
-target accepted the start, is not before the first's manifest `createdAt`,
-which the Instance Manager sets right before its upload: the Operator
-node's clock against the member's, each to the second. A shared operation,
+`InstanceManagerOperationInProgress` on the two backups' one target, or,
+on two targets, a round of readings showed both `Running` or `Uploading`
+with their operations; a hold alone on two targets is not contention.
+Otherwise the first ended before the second was accepted and the variant
+is blocked as inconclusive. On one target, the held backup ran second;
+when neither or both were held, the one with the earlier
+`status.startedAt` ran first. The readings may show both in progress for
+up to about one poll of the Operator (10 s), which learns of an
+operation's end, and sends a held start again, only at its next reconcile;
+that is recorded, not judged. What is judged there is the target member's
+own records of the two operations, read in the member: the second's
+`createdAt` must be at or after the first's `updatedAt`, written when it
+ended. The Instance Manager writes that end only after the upload ended
+and the staging directory was removed, and refuses another operation of
+the database until then, so both times are the member's clock, below the
+second. A record that cannot be read, or a first record that has not
+ended, leaves the variant blocked. The second's `status.startedAt` and the
+first's manifest `createdAt` are recorded as evidence only. A shared operation,
 a second operation or target of one backup, a manifest that names the
 other backup's operation, a second attempt prefix or an object outside an
-attempt prefix of the backup under its prefix, a refusal with
+attempt prefix of the backup under its prefix, an object in a backup's
+own attempt prefix that its manifest does not name (no upload is
+interrupted here, so it came from another writer), a refusal with
 `InstanceManagerRequestConflict` (the other backup's operation taken for
 one of the backup's own key), and `Failed` with a conflict reason,
 `RecordedTargetNotStarted` or a staging failure each fail the variant as
@@ -1143,10 +1151,10 @@ it needs more.
   least 512 KiB of the upload passed the rate limit's counter while the
   backup was `Running` or `Uploading` with its operation, and the member's
   database container then ended or restarted on the same Pod with exit
-  code 137. For `overlapping`: a reading showed one backup held with
-  `InstanceManagerOperationInProgress` while the other's operation held its
-  target's database, or, on two targets, both `Running` or `Uploading`
-  with their operations at once.
+  code 137. For `overlapping`: on one target, a reading showed one backup
+  held with `InstanceManagerOperationInProgress`; on two targets, a round
+  of readings showed both `Running` or `Uploading` with their operations
+  at once.
 - **The Operator must** (ADR-0007): report `Completed` only when the artifact
   and its manifest are in object storage and verified; resume or fail the
   operation after a restart without starting a second backup for the same
@@ -1232,8 +1240,11 @@ it needs more.
   operation the two backups share, a second operation or target of one
   backup, a manifest that names the other backup's operation, a second
   attempt prefix or an object outside an attempt prefix of the backup under
-  its prefix, at the first listing or at the end, two backups started on
-  one target before the first's upload began, a start refused with
+  its prefix, at the first listing or at the end, an object in a backup's
+  own attempt prefix that its manifest does not name, on one target the
+  member's record of the second's operation created before the record of
+  the first's was written as ended (by the member's clock), a start
+  refused with
   `InstanceManagerRequestConflict` (the other backup's operation taken for
   one of its own key), and a backup `Failed` for a conflict,
   `RecordedTargetNotStarted` or a staging failure.
