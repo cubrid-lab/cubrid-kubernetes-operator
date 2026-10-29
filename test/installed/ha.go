@@ -178,11 +178,16 @@ type HAConfig struct {
 	// from its creation until it is Ready, and from the kill until it is
 	// Ready again. It is the run's bound, not the contract's.
 	BackupInstanceManagerRestartReadyLimit time.Duration
-	// BackupOverlapping selects S11 overlapping after S11 complete: two more
-	// CubridBackups of the HA cluster to BackupBucket, requested back to
-	// back, each under a prefix of its own. It needs BackupBucket and cannot
-	// be combined with Restore or another S11 variant.
+	// BackupOverlapping selects S11 overlapping after S11 complete: two
+	// CubridBackups of a standalone cluster to BackupBucket, requested back
+	// to back, each under a prefix of its own, while the member's upload is
+	// limited in rate by a network fault in its Pod. It needs BackupBucket,
+	// makes the run namespace's Pod Security enforce level privileged, and
+	// cannot be combined with Restore or another S11 variant.
 	BackupOverlapping bool
+	// BackupOverlappingReadyLimit bounds that standalone cluster from its
+	// creation until it is Ready. It is the run's bound, not the contract's.
+	BackupOverlappingReadyLimit time.Duration
 	// ObjectStoreService is the object store's Service as
 	// <namespace>/<service>:<port>. The run downloads the artifact through a
 	// port-forward to it, with its own client.
@@ -223,10 +228,11 @@ type HAConfig struct {
 }
 
 // privileged reports whether the run namespace must enforce Pod Security
-// privileged: S11 interrupted-upload and instance-manager-restart add an
-// ephemeral container with NET_ADMIN and NET_RAW to a member's Pod.
+// privileged: S11 interrupted-upload, instance-manager-restart and
+// overlapping add an ephemeral container with NET_ADMIN and NET_RAW to a
+// member's Pod.
 func (c HAConfig) privileged() bool {
-	return c.BackupInterruptedUpload || c.BackupInstanceManagerRestart
+	return c.BackupInterruptedUpload || c.BackupInstanceManagerRestart || c.BackupOverlapping
 }
 
 func (c HAConfig) validate() error {

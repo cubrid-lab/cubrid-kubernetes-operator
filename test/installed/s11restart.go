@@ -745,7 +745,7 @@ func (h *haRun) listS11Attempts(ctx context.Context, backup *databasev1alpha1.Cu
 		return a, fmt.Errorf("list %s: %w", rec.Prefix, err)
 	}
 	a.Listed = true
-	dir := path.Join(rec.Prefix, h.rec.ClusterUID, databaseName, string(backup.UID))
+	dir := path.Join(rec.Prefix, h.sourceOf(rec).clusterUID, databaseName, string(backup.UID))
 	index := map[string]int{}
 	for _, key := range keys {
 		rest, below := strings.CutPrefix(key, dir+"/")

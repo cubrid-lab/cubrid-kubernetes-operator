@@ -42,6 +42,9 @@ import (
 const (
 	testOverlapOpA = "backup-op-a"
 	testOverlapOpB = "backup-op-b"
+	// testOverlapTarget is the standalone cluster's one member, which both
+	// backups target.
+	testOverlapTarget = s11OverlappingMember
 	// testOverlapHold is the message of a backup held after its target
 	// refused the start with OperationInProgress, as holdRecordedTarget
 	// writes it.
@@ -64,7 +67,7 @@ type overlapStep struct {
 
 var (
 	pendingStep = overlapStep{phase: databasev1alpha1.BackupPhasePending}
-	heldStep    = overlapStep{phase: databasev1alpha1.BackupPhasePending, target: testBackupTarget,
+	heldStep    = overlapStep{phase: databasev1alpha1.BackupPhasePending, target: testOverlapTarget,
 		reason: s11OperationInProgressReason, message: testOverlapHold}
 	runningStep = func(target, op string) overlapStep {
 		return overlapStep{phase: databasev1alpha1.BackupPhaseRunning, target: target, op: op}
@@ -77,13 +80,14 @@ var (
 	}
 )
 
-// s11OverlapFixture plays, after S11 complete, an Operator that takes the two
+// s11OverlapFixture plays, after S11 complete, an Operator that forms the
+// standalone cluster s11-overlapping and takes the two
 // backups of S11 overlapping as steps say, one step per reading of each; the
-// last step is kept. By default both run on one target: the first runs and
+// last step is kept. By default both run on the member: the first runs and
 // completes while the second is held with OperationInProgress, then the
 // second runs and completes.
 type s11OverlapFixture struct {
-	*s11Fixture
+	*s11InterruptedFixture
 	steps [2][]overlapStep
 	// tamperManifest changes the manifest of backup i before it is stored;
 	// startedAt is status.startedAt of backup i, given when its operation was
@@ -117,17 +121,19 @@ func testS11OverlapConfig(t *testing.T) HAConfig {
 	t.Helper()
 	cfg := testS11Config(t)
 	cfg.BackupOverlapping = true
+	cfg.BackupOverlappingReadyLimit = 5 * time.Second
 	return cfg
 }
 
 func newS11OverlapFixture(t *testing.T, cfg HAConfig) *s11OverlapFixture {
 	t.Helper()
-	f := &s11OverlapFixture{s11Fixture: newS11Fixture(t, cfg)}
+	f := &s11OverlapFixture{s11InterruptedFixture: newS11InterruptedFixture(t, cfg)}
+	f.net.member = s11OverlappingMember
 	f.steps = [2][]overlapStep{
-		{pendingStep, runningStep(testBackupTarget, testOverlapOpA), uploadStep(testBackupTarget, testOverlapOpA),
-			doneStep(testBackupTarget, testOverlapOpA)},
-		{heldStep, heldStep, heldStep, heldStep, runningStep(testBackupTarget, testOverlapOpB),
-			doneStep(testBackupTarget, testOverlapOpB)}}
+		{pendingStep, runningStep(testOverlapTarget, testOverlapOpA), uploadStep(testOverlapTarget, testOverlapOpA),
+			doneStep(testOverlapTarget, testOverlapOpA)},
+		{heldStep, heldStep, heldStep, heldStep, runningStep(testOverlapTarget, testOverlapOpB),
+			doneStep(testOverlapTarget, testOverlapOpB)}}
 	created, read := f.backupCreated, f.backupRead
 	f.backupCreated = func(ctx context.Context, c client.WithWatch, backup *databasev1alpha1.CubridBackup) error {
 		i := overlapIndex(backup.Name)
@@ -228,12 +234,20 @@ func (f *s11OverlapFixture) advanceOverlap(ctx context.Context, c client.WithWat
 	}
 	first, startedAt := f.firstOp[i], f.startedAt
 	f.mu.Unlock()
+	if inProgress(st.phase) {
+		n := f.net
+		n.mu.Lock()
+		if n.throttleIP != "" {
+			n.send(n.throttleIP, testUploadPerRead)
+		}
+		n.mu.Unlock()
+	}
 	now := metav1.Now()
 	s := &backup.Status
-	s.Phase, s.ClusterUID, s.OperationRef = st.phase, testClusterUID, st.op
+	s.Phase, s.ClusterUID, s.OperationRef = st.phase, testInterruptedClusterUID, st.op
 	s.TargetInstance, s.TargetRole = st.target, ""
 	if st.target != "" {
-		s.TargetRole = string(databasev1alpha1.RoleSlave)
+		s.TargetRole = string(databasev1alpha1.RoleUnknown)
 	}
 	s.Conditions = []metav1.Condition{{Type: backupReady, Status: metav1.ConditionFalse,
 		Reason: cmp.Or(st.reason, testRunningReason), Message: cmp.Or(message, testInProgress),
@@ -274,21 +288,24 @@ func (f *s11OverlapFixture) uploadOverlap(i int, backup *databasev1alpha1.Cubrid
 		defer f.mu.Unlock()
 		return f.artifacts[i].DeepCopy()
 	}
-	saved, savedTamper, tamper := f.artifact, f.tamper, f.tamperManifest
-	f.artifact = nil
-	f.tamper = func(a *fakeArtifact) {
+	s11 := f.s11Fixture
+	saved, savedTamper, tamper := s11.artifact, s11.tamper, f.tamperManifest
+	s11.artifact = nil
+	s11.tamper = func(a *fakeArtifact) {
 		a.manifest.OperationID, a.manifest.SourceInstance = st.op, st.target
+		a.manifest.SourceRole, a.manifest.ClusterUID = string(databasev1alpha1.RoleUnknown), testInterruptedClusterUID
+		a.move(testClusterUID, testInterruptedClusterUID)
 		if tamper != nil {
 			tamper(i, &a.manifest)
 		}
 	}
 	f.mu.Unlock()
-	artifact := f.upload(backup)
+	artifact := s11.upload(backup)
 	f.mu.Lock()
-	f.artifact, f.tamper, f.artifacts[i] = saved, savedTamper, artifact.DeepCopy()
+	s11.artifact, s11.tamper, f.artifacts[i] = saved, savedTamper, artifact.DeepCopy()
 	f.mu.Unlock()
 	dest := backup.Spec.Destination.ObjectStorage
-	dir := path.Join(dest.Prefix, testClusterUID, databaseName, string(backup.UID))
+	dir := path.Join(dest.Prefix, testInterruptedClusterUID, databaseName, string(backup.UID))
 	if f.corrupt[i] {
 		f.store.put(dest.Bucket, dir+"/"+testAttempt+"/"+testFirstBackupKey, []byte("changed"))
 	}
@@ -359,18 +376,21 @@ func requireS11OverlapResult(t *testing.T, overlap evidence.Scenario, err error,
 }
 
 // requireS11OverlapPassed checks a passed run's result and record.
-func requireS11OverlapPassed(t *testing.T, f *s11OverlapFixture, overlap evidence.Scenario, err error,
-	sameTarget bool) s11OverlappingRecord {
+func requireS11OverlapPassed(t *testing.T, f *s11OverlapFixture, overlap evidence.Scenario,
+	err error) s11OverlappingRecord {
 	t.Helper()
 	if err != nil || overlap.Result != evidence.Pass {
 		t.Fatalf("S11 overlapping = %+v, %v; want a pass", overlap, err)
 	}
-	if strings.Join(f.writes, ",") != "namespace,secret,cluster,client,backup,backup,backup" {
+	if strings.Join(f.writes, ",") != "namespace,secret,cluster,client,backup,overlapping-cluster,ephemeral-container,"+
+		"backup,backup" {
 		t.Fatalf("writes = %v", f.writes)
 	}
 	m := overlap.Measurements
-	if overlap.Limits["backup_limit"] != f.cfg.BackupLimit.String() || m["sameTarget"] != sameTarget ||
-		m["operationRefsDistinct"] != true {
+	if overlap.Limits["backup_limit"] != f.cfg.BackupLimit.String() ||
+		overlap.Limits["readyLimit"] != f.cfg.BackupOverlappingReadyLimit.String() ||
+		m["operationRefsDistinct"] != true || m["heldWithConflict"] != true ||
+		m["uploadBytesThroughLimit"] == evidence.Unknown || m["uploadBytesThroughLimit"] == float64(0) {
 		t.Fatalf("S11 overlapping limits = %v, measurements = %v", overlap.Limits, m)
 	}
 	for _, l := range []string{"a", "b"} {
@@ -388,18 +408,35 @@ func requireS11OverlapPassed(t *testing.T, f *s11OverlapFixture, overlap evidenc
 	if overlap.CleanupSucceeded == nil || !*overlap.CleanupSucceeded {
 		t.Fatalf("S11 overlapping cleanup = %v, want both backups deleted", overlap.CleanupSucceeded)
 	}
-	// The run writes nothing to the object store and leaves the artifacts.
-	if len(f.store.puts) != 0 || len(f.store.removes) != 0 {
-		t.Fatalf("the run wrote %v and removed %v in the object store; want nothing", f.store.puts, f.store.removes)
-	}
 	rec := readS11OverlapRecord(t, f.cfg.EvidenceDir)
+	requireS11OverlapStandalone(t, f, rec)
 	requireS11OverlapBackups(t, f, rec)
 	if rec.Source == nil || !rec.Source.DataRulesHeld || rec.ManagerAfter == nil || rec.JudgedAt == nil ||
-		rec.Overlap.SameTarget == nil || *rec.Overlap.SameTarget != sameTarget || rec.Overlap.NotContended != "" {
+		rec.Overlap.NotContended != "" {
 		t.Fatalf("record = %+v, overlap %+v; want the source checked and the overlap judged", rec, rec.Overlap)
 	}
 	requireNamespaceGone(t, f.haFixture)
 	return rec
+}
+
+// requireS11OverlapStandalone checks the cluster and the limit of a passed
+// run: the limit confirmed and removed, the cluster deleted by its UID after
+// the backups, and nothing written to the object store.
+func requireS11OverlapStandalone(t *testing.T, f *s11OverlapFixture, rec s11OverlappingRecord) {
+	t.Helper()
+	if f.net.throttleIP != "" || !slices.Equal(f.s11InterruptedFixture.deleted,
+		[]string{testKindCluster + "/" + s11OverlappingClusterName + "/" + testInterruptedClusterUID}) {
+		t.Fatalf("limit on %q, deleted %v; want the limit removed and the cluster deleted by its UID",
+			f.net.throttleIP, f.s11InterruptedFixture.deleted)
+	}
+	if len(f.store.puts) != 0 || len(f.store.removes) != 0 {
+		t.Fatalf("the run wrote %v and removed %v in the object store; want nothing", f.store.puts, f.store.removes)
+	}
+	if rec.Throttle == nil || rec.Throttle.LimitConfirmedAt == nil || rec.Throttle.RemovedAt == nil ||
+		rec.Throttle.Last == nil || rec.Cluster == nil || rec.Cluster.UID != testInterruptedClusterUID ||
+		rec.Credentials.StatusesChecked == 0 || rec.PodSecurity[podSecurityEnforce] != podSecurityPrivileged {
+		t.Fatalf("record = %+v, want the limit confirmed and removed on a privileged namespace's cluster", rec)
+	}
 }
 
 // requireS11OverlapBackups checks each backup's request and record in a
@@ -411,8 +448,9 @@ func requireS11OverlapBackups(t *testing.T, f *s11OverlapFixture, rec s11Overlap
 		dest := f.created[i].Spec.Destination.ObjectStorage
 		if dest == nil || dest.Bucket != testBackupBucket ||
 			dest.Prefix != "lab-runs/"+lab01.RunID+"/"+s11OverlappingBackups[i].prefix ||
-			f.created[i].Spec.ClusterRef.Name != haClusterName {
-			t.Fatalf("backup = %+v, want the HA cluster to the backup bucket under its own prefix", f.created[i])
+			f.created[i].Spec.ClusterRef.Name != s11OverlappingClusterName {
+			t.Fatalf("backup = %+v, want the standalone cluster to the backup bucket under its own prefix",
+				f.created[i])
 		}
 		if b.Artifact == nil || b.Verification == nil || b.Verification.ObjectsVerified != 2 ||
 			b.Attempts == nil || len(b.Attempts.Prefixes) != 1 || b.Attempts.Manifests != 1 ||
@@ -430,17 +468,17 @@ func requireS11OverlapBackups(t *testing.T, f *s11OverlapFixture, rec s11Overlap
 			logs = append(logs, l.Pod)
 		}
 		if !slices.Equal(logs, []string{testManagerPodName, lastTarget(b.Phases)}) {
-			t.Fatalf("logs searched for %s = %v, want the manager's and its target's", b.Backup, logs)
+			t.Fatalf("logs searched for %s = %v, want the manager's and the member's", b.Backup, logs)
 		}
 	}
 }
 
-// On one target the second backup is held with OperationInProgress while the
-// first runs, and starts once it ended.
-func TestRunS11OverlappingPassesWhenOneTargetSerializesTheBackups(t *testing.T) {
+// The second backup is held with OperationInProgress while the first
+// uploads through the limit, and starts once it ended.
+func TestRunS11OverlappingPassesWhenTheMemberSerializesTheBackups(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
 	overlap, err := overlapOfS11(t, f)
-	rec := requireS11OverlapPassed(t, f, overlap, err, true)
+	rec := requireS11OverlapPassed(t, f, overlap, err)
 	o := rec.Overlap
 	if !o.HeldWithConflict || !slices.Equal(o.Started, []string{s11OverlappingBackups[0].name,
 		s11OverlappingBackups[1].name}) || o.First != s11OverlappingBackups[0].name ||
@@ -449,21 +487,21 @@ func TestRunS11OverlappingPassesWhenOneTargetSerializesTheBackups(t *testing.T) 
 		overlap.Measurements["heldWithConflict"] != true {
 		t.Fatalf("overlap = %+v, want the second held and its record created after the first's ended", o)
 	}
-	if !slices.Equal(f.recordReads, []string{testBackupTarget + "/" + testOverlapOpA,
-		testBackupTarget + "/" + testOverlapOpB}) || rec.Backups[0].OperationRecord == nil ||
+	if !slices.Equal(f.recordReads, []string{testOverlapTarget + "/" + testOverlapOpA,
+		testOverlapTarget + "/" + testOverlapOpB}) || rec.Backups[0].OperationRecord == nil ||
 		rec.Backups[0].OperationRecord.UpdatedAt == nil || rec.Backups[1].OperationRecord == nil ||
 		rec.Backups[1].OperationRecord.CreatedAt == nil {
 		t.Fatalf("records read = %v, backups %+v; want both records read on the target", f.recordReads, rec.Backups)
 	}
 	b := rec.Backups[1]
 	if len(b.Holds) == 0 || b.Holds[0].Reason != s11OperationInProgressReason ||
-		b.Holds[0].TargetInstance != testBackupTarget || b.Holds[0].OtherPhase == "" {
+		b.Holds[0].TargetInstance != testOverlapTarget || b.Holds[0].OtherPhase == "" {
 		t.Fatalf("holds = %+v, want the hold recorded with the other backup's phase", b.Holds)
 	}
 	reason := s11OverlappingPassReason(&rec)
-	for _, want := range []string{"they had the same target, " + testBackupTarget,
+	for _, want := range []string{"through the rate limit on " + testOverlapTarget,
 		"s11-overlapping-b was held with " + s11OperationInProgressReason, testOverlapOpA + " and " + testOverlapOpB,
-		"by the member's clock"} {
+		"by the member's clock", "the limit was seen removed"} {
 		if !strings.Contains(reason, want) {
 			t.Fatalf("S11 overlapping reason = %q, want %q", reason, want)
 		}
@@ -475,36 +513,20 @@ func TestRunS11OverlappingPassesWhenOneTargetSerializesTheBackups(t *testing.T) 
 func TestRunS11OverlappingOrdersTheBackupsByTheHold(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
 	f.steps[0], f.steps[1] = []overlapStep{heldStep, heldStep, heldStep, heldStep,
-		runningStep(testBackupTarget, testOverlapOpA), doneStep(testBackupTarget, testOverlapOpA)},
-		[]overlapStep{pendingStep, runningStep(testBackupTarget, testOverlapOpB),
-			uploadStep(testBackupTarget, testOverlapOpB), doneStep(testBackupTarget, testOverlapOpB)}
+		runningStep(testOverlapTarget, testOverlapOpA), doneStep(testOverlapTarget, testOverlapOpA)},
+		[]overlapStep{pendingStep, runningStep(testOverlapTarget, testOverlapOpB),
+			uploadStep(testOverlapTarget, testOverlapOpB), doneStep(testOverlapTarget, testOverlapOpB)}
 	overlap, err := overlapOfS11(t, f)
-	rec := requireS11OverlapPassed(t, f, overlap, err, true)
+	rec := requireS11OverlapPassed(t, f, overlap, err)
 	if o := rec.Overlap; o.First != s11OverlappingBackups[1].name || o.Second != s11OverlappingBackups[0].name {
 		t.Fatalf("overlap = %+v, want the held backup, requested first, ordered second", o)
 	}
 }
 
-// Two eligible standbys may be ranked differently by the two selections:
-// the backups then run at once on different targets.
-func TestRunS11OverlappingPassesOnTwoTargets(t *testing.T) {
-	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
-	f.steps[1] = []overlapStep{pendingStep, runningStep(testMemberLast, testOverlapOpB),
-		uploadStep(testMemberLast, testOverlapOpB), doneStep(testMemberLast, testOverlapOpB)}
-	overlap, err := overlapOfS11(t, f)
-	rec := requireS11OverlapPassed(t, f, overlap, err, false)
-	if rec.Overlap.BothInProgressFrom == nil || rec.Overlap.HeldWithConflict ||
-		overlap.Measurements["bothInProgressInReadings"] != true ||
-		!strings.Contains(s11OverlappingPassReason(&rec), "different targets, "+testBackupTarget+" and "+
-			testMemberLast) {
-		t.Fatalf("S11 overlapping = %+v, overlap %+v; want both seen in progress at once", overlap, rec.Overlap)
-	}
-}
-
 func TestRunS11OverlappingFailsOnASharedOperation(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
-	f.steps[1] = []overlapStep{heldStep, heldStep, heldStep, heldStep, runningStep(testBackupTarget, testOverlapOpA),
-		doneStep(testBackupTarget, testOverlapOpA)}
+	f.steps[1] = []overlapStep{heldStep, heldStep, heldStep, heldStep, runningStep(testOverlapTarget, testOverlapOpA),
+		doneStep(testOverlapTarget, testOverlapOpA)}
 	overlap, err := overlapOfS11(t, f)
 	requireS11OverlapResult(t, overlap, err, evidence.Fail, "s11-overlapping-a and s11-overlapping-b share "+
 		"operation "+testOverlapOpA)
@@ -554,14 +576,14 @@ func TestRunS11OverlappingRecordsTheOperatorClockAsEvidenceOnly(t *testing.T) {
 		return first
 	}
 	overlap, err := overlapOfS11(t, f)
-	rec := requireS11OverlapPassed(t, f, overlap, err, true)
+	rec := requireS11OverlapPassed(t, f, overlap, err)
 	if o := rec.Overlap; o.SecondStartedAt == nil || o.FirstManifestCreatedAt == nil ||
 		!o.SecondStartedAt.Before(*o.FirstManifestCreatedAt) {
 		t.Fatalf("overlap = %+v, want the earlier startedAt recorded", o)
 	}
 }
 
-// On one target, the second's operation record created before the first's
+// The second's operation record created before the first's
 // was written as ended is two backups on one member at once, by the
 // member's own clock and below the second.
 func TestRunS11OverlappingFailsWhenTheTargetRanBothAtOnce(t *testing.T) {
@@ -572,7 +594,7 @@ func TestRunS11OverlappingFailsWhenTheTargetRanBothAtOnce(t *testing.T) {
 		}
 	}
 	overlap, err := overlapOfS11(t, f)
-	requireS11OverlapResult(t, overlap, err, evidence.Fail, "two backups ran on "+testBackupTarget+" at once",
+	requireS11OverlapResult(t, overlap, err, evidence.Fail, "two backups ran on "+testOverlapTarget+" at once",
 		"the record of s11-overlapping-b's operation "+testOverlapOpB+" was created at",
 		"before the record of s11-overlapping-a's operation "+testOverlapOpA+" was written as ended")
 }
@@ -583,7 +605,7 @@ func TestRunS11OverlappingIsBlockedWhenARecordCannotBeRead(t *testing.T) {
 	f.recordErr[0] = errors.New("cat: no such file")
 	overlap, err := overlapOfS11(t, f)
 	requireS11OverlapResult(t, overlap, err, evidence.Blocked, "the record of s11-overlapping-a's operation "+
-		testOverlapOpA+" on "+testBackupTarget+" could not be read", "cat: no such file")
+		testOverlapOpA+" on "+testOverlapTarget+" could not be read", "cat: no such file")
 	if rec := readS11OverlapRecord(t, f.cfg.EvidenceDir); rec.Backups[0].OperationRecord == nil ||
 		rec.Backups[0].OperationRecord.ReadError == "" {
 		t.Fatalf("backup = %+v, want the read error recorded", rec.Backups[0])
@@ -606,13 +628,13 @@ func TestRunS11OverlappingIsBlockedWhenTheFirstRecordHasNotEnded(t *testing.T) {
 // for each change of reason, target or the other backup's phase.
 func TestRunS11OverlappingRecordsAHoldPerChange(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
-	running := runningStep(testBackupTarget, testOverlapOpA)
-	f.steps[0] = []overlapStep{pendingStep, running, running, running, uploadStep(testBackupTarget, testOverlapOpA),
-		doneStep(testBackupTarget, testOverlapOpA)}
+	running := runningStep(testOverlapTarget, testOverlapOpA)
+	f.steps[0] = []overlapStep{pendingStep, running, running, running, uploadStep(testOverlapTarget, testOverlapOpA),
+		doneStep(testOverlapTarget, testOverlapOpA)}
 	f.steps[1] = []overlapStep{heldStep, heldStep, heldStep, heldStep, heldStep, heldStep,
-		runningStep(testBackupTarget, testOverlapOpB), doneStep(testBackupTarget, testOverlapOpB)}
+		runningStep(testOverlapTarget, testOverlapOpB), doneStep(testOverlapTarget, testOverlapOpB)}
 	overlap, err := overlapOfS11(t, f)
-	rec := requireS11OverlapPassed(t, f, overlap, err, true)
+	rec := requireS11OverlapPassed(t, f, overlap, err)
 	phases := make([]string, 0, len(rec.Backups[1].Holds))
 	for _, h := range rec.Backups[1].Holds {
 		phases = append(phases, h.OtherPhase)
@@ -628,8 +650,8 @@ func TestRunS11OverlappingFailsOnAStagingHold(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
 	staging := heldStep
 	staging.reason = s11StagingInUseReason
-	f.steps[1] = []overlapStep{staging, staging, staging, staging, runningStep(testBackupTarget, testOverlapOpB),
-		doneStep(testBackupTarget, testOverlapOpB)}
+	f.steps[1] = []overlapStep{staging, staging, staging, staging, runningStep(testOverlapTarget, testOverlapOpB),
+		doneStep(testOverlapTarget, testOverlapOpB)}
 	overlap, err := overlapOfS11(t, f)
 	requireS11OverlapResult(t, overlap, err, evidence.Fail, "s11-overlapping-b was held at",
 		"another request owns its staging destination")
@@ -640,16 +662,17 @@ func TestRunS11OverlappingFailsWhenATargetIsReplaced(t *testing.T) {
 	f.steps[1] = []overlapStep{heldStep, heldStep, heldStep, heldStep, runningStep(testMemberLast, testOverlapOpB),
 		doneStep(testMemberLast, testOverlapOpB)}
 	overlap, err := overlapOfS11(t, f)
-	requireS11OverlapResult(t, overlap, err, evidence.Fail, "s11-overlapping-b's target was "+testBackupTarget+
-		" (slave), then "+testMemberLast+" (slave): its recorded target was replaced")
+	requireS11OverlapResult(t, overlap, err, evidence.Fail, "s11-overlapping-b's target was "+testOverlapTarget+
+		" (unknown), then "+testMemberLast+" (unknown): its recorded target was replaced",
+		"not "+testOverlapTarget+", the Pod the limit acts in")
 }
 
 // Failed for the Instance Manager's own reason fails the variant, without a
 // conflict's never-event.
 func TestRunS11OverlappingFailsWhenABackupFailsForAnotherReason(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
-	f.steps[1] = []overlapStep{heldStep, heldStep, heldStep, heldStep, runningStep(testBackupTarget, testOverlapOpB),
-		{phase: databasev1alpha1.BackupPhaseFailed, target: testBackupTarget, op: testOverlapOpB,
+	f.steps[1] = []overlapStep{heldStep, heldStep, heldStep, heldStep, runningStep(testOverlapTarget, testOverlapOpB),
+		{phase: databasev1alpha1.BackupPhaseFailed, target: testOverlapTarget, op: testOverlapOpB,
 			reason: s11MissingReason, message: testBackupdbFailed}}
 	overlap, err := overlapOfS11(t, f)
 	requireS11OverlapResult(t, overlap, err, evidence.Fail, "s11-overlapping-b ended Failed: "+s11MissingReason,
@@ -659,17 +682,21 @@ func TestRunS11OverlappingFailsWhenABackupFailsForAnotherReason(t *testing.T) {
 	}
 }
 
-// On two targets, a hold alone is not contention: the readings never showed
-// both running.
-func TestRunS11OverlappingIsBlockedOnTwoTargetsWithOnlyAHold(t *testing.T) {
+// A limit not seen removed blocks the variant: the member's traffic may still
+// be slowed, and the prefixes were listed through it.
+func TestRunS11OverlappingIsBlockedByALimitLeftInstalled(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
-	held := heldStep
-	held.target = testMemberLast
-	f.steps[0] = []overlapStep{runningStep(testBackupTarget, testOverlapOpA), doneStep(testBackupTarget, testOverlapOpA)}
-	f.steps[1] = []overlapStep{held, held, runningStep(testMemberLast, testOverlapOpB),
-		doneStep(testMemberLast, testOverlapOpB)}
+	// The limit stays after its removal, as a rule the command did not clear.
+	f.net.onUnthrottle = func() { f.net.throttleIP, f.net.throttlePort = testStoreIP, testStorePort }
 	overlap, err := overlapOfS11(t, f)
-	requireS11OverlapResult(t, overlap, err, evidence.Blocked, "the readings never showed the two backups contend")
+	requireS11OverlapResult(t, overlap, err, evidence.Blocked, "the faults were not seen removed")
+	if overlap.CleanupSucceeded == nil || *overlap.CleanupSucceeded {
+		t.Fatalf("S11 overlapping = %+v, want the failed removal recorded", overlap)
+	}
+	if rec := readS11OverlapRecord(t, f.cfg.EvidenceDir); rec.Throttle.RemovedAt != nil ||
+		!strings.Contains(rec.Cleanup, "not seen removed") {
+		t.Fatalf("throttle = %+v, cleanup %q; want the limit left named", rec.Throttle, rec.Cleanup)
+	}
 }
 
 // No upload is interrupted here: an object in a backup's own attempt prefix
@@ -686,11 +713,12 @@ func TestRunS11OverlappingFailsOnAnObjectTheManifestDoesNotName(t *testing.T) {
 // exercised.
 func TestRunS11OverlappingIsBlockedWhenTheBackupsNeverOverlap(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
-	f.steps[0] = []overlapStep{runningStep(testBackupTarget, testOverlapOpA), doneStep(testBackupTarget, testOverlapOpA)}
-	f.steps[1] = []overlapStep{pendingStep, pendingStep, runningStep(testBackupTarget, testOverlapOpB),
-		doneStep(testBackupTarget, testOverlapOpB)}
+	f.steps[0] = []overlapStep{runningStep(testOverlapTarget, testOverlapOpA), doneStep(testOverlapTarget, testOverlapOpA)}
+	f.steps[1] = []overlapStep{pendingStep, pendingStep, runningStep(testOverlapTarget, testOverlapOpB),
+		doneStep(testOverlapTarget, testOverlapOpB)}
 	overlap, err := overlapOfS11(t, f)
-	requireS11OverlapResult(t, overlap, err, evidence.Blocked, "the readings never showed the two backups contend")
+	requireS11OverlapResult(t, overlap, err, evidence.Blocked, "no reading showed a backup held with "+
+		s11OperationInProgressReason, "the overlap was not exercised")
 	if rec := readS11OverlapRecord(t, f.cfg.EvidenceDir); rec.Overlap.NotContended == "" {
 		t.Fatalf("overlap = %+v, want why it was not exercised", rec.Overlap)
 	}
@@ -701,7 +729,7 @@ func TestRunS11OverlappingIsBlockedWhenTheBackupsNeverOverlap(t *testing.T) {
 func TestRunS11OverlappingFailsWhenTheHeldBackupFails(t *testing.T) {
 	f := newS11OverlapFixture(t, testS11OverlapConfig(t))
 	f.steps[1] = []overlapStep{heldStep, heldStep, heldStep, heldStep, {phase: databasev1alpha1.BackupPhaseFailed,
-		target: testBackupTarget, reason: s11TargetNotStartedReason, message: "the backup was not started on its " +
+		target: testOverlapTarget, reason: s11TargetNotStartedReason, message: "the backup was not started on its " +
 			"recorded target (last: " + s11OperationInProgressReason + ")"}}
 	overlap, err := overlapOfS11(t, f)
 	requireS11OverlapResult(t, overlap, err, evidence.Fail, "s11-overlapping-b ended Failed for a conflict or its "+
@@ -769,6 +797,8 @@ func TestRunHARefusesBackupOverlappingWithoutItsLane(t *testing.T) {
 		"with the instance-manager-restart variant": {change: func(cfg *HAConfig) {
 			cfg.BackupInstanceManagerRestart, cfg.BackupInstanceManagerRestartReadyLimit = true, time.Minute
 		}, want: flagInstanceManagerRestart + " and -backup-overlapping select"},
+		"with a ready limit that is not positive": {change: func(cfg *HAConfig) { cfg.BackupOverlappingReadyLimit = 0 },
+			want: "-backup-overlapping needs a positive -backup-overlapping-ready-limit"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS11OverlapConfig(t)

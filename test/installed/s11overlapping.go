@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -39,6 +40,10 @@ const (
 	s11OverlappingVariant             = "overlapping"
 	s11OverlappingRecordFile          = "S11/overlapping/record.json"
 	s11OverlappingSourceDataCheckFile = "S11/overlapping/source-data-check.json"
+	// s11OverlappingClusterName is the standalone cluster both backups are
+	// of, and s11OverlappingMember its one member's Pod.
+	s11OverlappingClusterName = "s11-overlapping"
+	s11OverlappingMember      = s11OverlappingClusterName + "-0"
 	// The Ready reasons of a backup whose start its recorded target refused
 	// with 409 (instanceManagerFailureReason in
 	// internal/controller/imclient.go): another operation holds the
@@ -101,8 +106,7 @@ type s11OverlapBackup struct {
 	ManifestOperationID string     `json:"manifestOperationID,omitempty"`
 	// Failure is the Ready reason and message of a backup that ended Failed.
 	Failure string `json:"failure,omitempty"`
-	// OperationRecord is the target member's record of the backup's
-	// operation, read when both backups ran on one target.
+	// OperationRecord is the member's record of the backup's operation.
 	OperationRecord *s11OperationRecord `json:"operationRecord,omitempty"`
 	// Cleanup says whether the run deleted the backup.
 	Cleanup string `json:"cleanup"`
@@ -129,20 +133,17 @@ type s11OperationRecord struct {
 
 // s11Overlap is what the readings showed of the two backups together.
 type s11Overlap struct {
-	// SameTarget is set once both ended: whether they had the same target.
-	SameTarget *bool `json:"sameTarget,omitempty"`
 	// Started are the backups in the order a reading first showed each one
 	// with an operation. It is evidence; it does not order the pair.
 	Started []string `json:"started"`
-	// On one target, First and Second are the backups in the order they ran:
+	// First and Second are the backups in the order they ran on the member:
 	// the one held after a conflict is the second; when neither or both were,
 	// the one with the earlier status.startedAt is the first.
 	First  string `json:"first,omitempty"`
 	Second string `json:"second,omitempty"`
 	// FirstEndedAt is the updatedAt of the first's operation record, written
 	// when it ended, and SecondCreatedAt the createdAt of the second's, both
-	// by the target member's clock: the rule the variant judges on one
-	// target.
+	// by the member's clock: the rule the variant judges.
 	FirstEndedAt    *time.Time `json:"firstEndedAt,omitempty"`
 	SecondCreatedAt *time.Time `json:"secondCreatedAt,omitempty"`
 	// HeldWithConflict is set when a reading showed a backup held because
@@ -150,10 +151,10 @@ type s11Overlap struct {
 	HeldWithConflict bool `json:"heldWithConflict"`
 	// BothInProgressFrom and BothInProgressTo are the first and the last
 	// round of readings that showed both Running or Uploading with an
-	// operation.
+	// operation: evidence of the Operator's polling, not judged.
 	BothInProgressFrom *time.Time `json:"bothInProgressFrom,omitempty"`
 	BothInProgressTo   *time.Time `json:"bothInProgressTo,omitempty"`
-	// On one target, as evidence only: SecondStartedAt is status.startedAt of
+	// As evidence only: SecondStartedAt is status.startedAt of
 	// the second, by the Operator node's clock, and FirstManifestCreatedAt the
 	// manifest's createdAt of the first, by the member's, each to the second.
 	SecondStartedAt        *time.Time `json:"secondStartedAt,omitempty"`
@@ -165,7 +166,17 @@ type s11Overlap struct {
 // s11OverlappingRecord is the evidence of S11 overlapping besides the
 // manifests and the source's data check.
 type s11OverlappingRecord struct {
-	Backups []*s11OverlapBackup `json:"backups"`
+	// PodSecurity are the run namespace's Pod Security labels as the run
+	// read them before anything was created.
+	PodSecurity map[string]string     `json:"podSecurity"`
+	Cluster     *s11StandaloneCluster `json:"cluster,omitempty"`
+	// ReadyLimit is BackupOverlappingReadyLimit, the run's bound on the
+	// cluster before the backups.
+	ReadyLimit string       `json:"readyLimit"`
+	Throttle   *s11Throttle `json:"throttle"`
+	// Credentials is where the cluster's statuses were searched for the keys.
+	Credentials *s11Credentials     `json:"credentials"`
+	Backups     []*s11OverlapBackup `json:"backups"`
 	// RequestGap is the time between the returns of the two requests.
 	RequestGap string      `json:"requestGap,omitempty"`
 	Overlap    *s11Overlap `json:"overlap"`
@@ -176,6 +187,10 @@ type s11OverlappingRecord struct {
 	Source        *s12Source       `json:"source,omitempty"`
 	Notes         []string         `json:"notes"`
 	JudgedAt      *time.Time       `json:"judgedAt,omitempty"`
+	// Cleanup says what became of the rate limit and the cluster; each
+	// backup's own is in its record. Residue is what the run leaves.
+	Cleanup string `json:"cleanup"`
+	Residue string `json:"residue"`
 }
 
 // validateS11Overlapping checks the inputs of S11 overlapping, when it is
@@ -198,60 +213,84 @@ func (c HAConfig) validateS11Overlapping() error {
 				other.flag)
 		}
 	}
+	if c.BackupOverlappingReadyLimit <= 0 {
+		return errors.New(flagOverlapping + " needs a positive -backup-overlapping-ready-limit for its cluster")
+	}
 	return nil
 }
 
 // planS11Overlapping returns the lane and the requirements of a run that
-// selects S11 overlapping after S11 complete, and names it in the summary's
-// first note; otherwise lane and requirements as they are.
+// selects S11 overlapping after S11 complete, and names it and the run
+// namespace's Pod Security in the summary's notes; otherwise lane and
+// requirements as they are.
 func planS11Overlapping(cfg HAConfig, lane string, requirements []evidence.Requirement,
 	summary *evidence.Summary) (string, []evidence.Requirement) {
 	if !cfg.BackupOverlapping {
 		return lane, requirements
 	}
 	summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete and S11 " +
-		"overlapping: a full backup to object storage, downloaded and checked by the run, and two more backups of " +
-		"the same cluster requested back to back, which must both end Completed with an operation and one " +
-		"verified artifact each; no other S00-S15 qualification"
+		"overlapping: a full backup to object storage, downloaded and checked by the run, and two backups of a " +
+		"standalone cluster whose upload is slowed by a rate limit in its member's Pod, requested back to back, " +
+		"which must both end Completed, the second held until the first ended, each with its own operation and " +
+		"one verified artifact; no other S00-S15 qualification"
+	summary.Notes = append(summary.Notes, "The run namespace enforces Pod Security privileged, with warn and "+
+		"audit at restricted, so that the rate limit's ephemeral container is admitted")
 	return s11OverlappingLane, append(requirements, evidence.Requirement{ID: s11ID, Variant: s11OverlappingVariant})
 }
 
-// runS11Overlapping runs S11 overlapping after S11 complete passed: two full
-// backups of the HA cluster are requested to BackupBucket back to back, each
-// under a prefix of its own, and read in turn until both ended, within
-// BackupLimit. Both must end Completed, each with its own operation, target
-// and role that never change, an artifact that passes S11 complete's
-// verification, a manifest that names its own operation, and exactly one
-// attempt prefix with one manifest under its prefix, also when listed again
-// at the end. On one target, the target member's record of the second's
-// operation must not have been created before the record of the first's
-// operation was written as ended. The source and the installed manager must be
+// runS11Overlapping runs S11 overlapping after S11 complete passed. The run
+// creates a standalone cluster with the run's own object store Secret, waits
+// until it is Ready, limits the rate of its member's TCP traffic to the object
+// store as S11 interrupted-upload does, and requests two full backups of its
+// database to BackupBucket back to back, each under a prefix of its own. The
+// limit stays until both ended, within BackupLimit. Both target the one
+// member, and the first upload takes minutes through the limit, so the second
+// start meets the first's operation and is held with
+// InstanceManagerOperationInProgress until it ended: a hold is required.
+// Both must end Completed, each with its own operation, target and role that
+// never change, an artifact that passes S11 complete's verification for that
+// cluster, a manifest that names its own operation, and exactly one attempt
+// prefix with one manifest and no other object under its prefix, also when
+// listed again at the end. The member's record of the second's operation must
+// not have been created before the record of the first's was written as
+// ended. The limit must be seen removed, the source and the installed manager
 // unchanged, and no credential may be in a status read, a manifest, an Event
-// or the logs searched for each backup. A run in which the readings never
-// show the two backups contend, a run that ends, or a check that cannot be
-// made, blocks it; what was seen to break stays a failure. The run deletes
-// the CubridBackups it created, by UID, and leaves the artifacts in the
-// bucket.
+// or the logs searched for each backup. No hold, a run that ends, or a check
+// that cannot be made blocks it; what was seen to break stays a failure. The
+// run removes the limit, deletes both CubridBackups and the cluster it
+// created, by UID, and leaves the artifacts in the bucket.
 func (h *haRun) runS11Overlapping(ctx context.Context) (result evidence.Scenario) {
 	defer h.inScenario(s11ID+"/"+s11OverlappingVariant, &result)()
 	result = evidence.Scenario{ID: s11ID, Variant: s11OverlappingVariant, Result: evidence.Fail, NeverEvents: []string{}}
-	rec := s11OverlappingRecord{Overlap: &s11Overlap{Started: []string{}}, Notes: []string{
-		"the run reads the two backups in turn in each round, so the readings of one round are one read apart",
-		"the Operator sees that an operation ended at its next poll of it, and a backup held after a conflict " +
-			"sends its start again at its next reconcile, both about 10 s apart (backupPollAfter), so on one " +
-			"target the readings can show the second backup Running while the first still shows Running or " +
-			"Uploading; that is recorded (bothInProgressFrom and bothInProgressTo), not judged; what is judged on " +
-			"one target is that the target member's record of the second's operation was created at or after the " +
-			"record of the first's operation was written as ended (firstEndedAt, secondCreatedAt), both by the " +
-			"member's clock; the Instance Manager writes that end only after the upload ended and the staging was " +
-			"removed, and starts no other operation of the database before; the second's status.startedAt and the " +
-			"first's manifest createdAt are recorded as evidence only",
-		"a manifest names its objects by keys relative to its own attempt prefix, so it cannot name an object of " +
-			"the other backup; an object of the other backup under this backup's prefix shows in the listing as " +
-			"outside an attempt prefix of the backup; no upload is interrupted in this variant, so an object in a " +
-			"backup's own attempt prefix that its manifest does not name came from another writer and must never " +
-			"happen",
-		logsNote(h.logLimit())}}
+	throttle := h.newS11Throttle(s11OverlappingMember)
+	rec := s11OverlappingRecord{PodSecurity: map[string]string{},
+		Cluster:    &s11StandaloneCluster{Name: s11OverlappingClusterName, Secret: seedSecretName},
+		ReadyLimit: h.cfg.BackupOverlappingReadyLimit.String(), Throttle: &throttle,
+		Credentials: &s11Credentials{FoundIn: []string{}}, Overlap: &s11Overlap{Started: []string{}},
+		Notes: []string{"the rate limit acts in the network namespace of the standalone member's Pod, from an " +
+			"ephemeral container with NET_ADMIN and NET_RAW (test/faults/netfault), as in S11 interrupted-upload; " +
+			"the run namespace enforces Pod Security privileged for it, with warn and audit at restricted",
+			"the limit is confirmed before the requests and stays until both backups ended, so each upload takes " +
+				"minutes and the second start meets the first's operation; the cluster has one member, so both " +
+				"backups target it, and two backups on different members at once are not exercised",
+			"the run reads the two backups in turn in each round, so the readings of one round are one read apart",
+			"the Operator sees that an operation ended at its next poll of it, and a backup held after a conflict " +
+				"sends its start again at its next reconcile, both about 10 s apart (backupPollAfter), so the " +
+				"readings can show the second backup Running while the first still shows Running or Uploading; " +
+				"that is recorded (bothInProgressFrom and bothInProgressTo), not judged; what is judged is that the " +
+				"member's record of the second's operation was created at or after the record of the first's " +
+				"operation was written as ended (firstEndedAt, secondCreatedAt), both by the member's clock; the " +
+				"Instance Manager writes that end only after the upload ended and the staging was removed, and " +
+				"starts no other operation of the database before; the second's status.startedAt and the first's " +
+				"manifest createdAt are recorded as evidence only",
+			"a manifest names its objects by keys relative to its own attempt prefix, so it cannot name an object of " +
+				"the other backup; an object of the other backup under this backup's prefix shows in the listing as " +
+				"outside an attempt prefix of the backup; no upload is interrupted in this variant, so an object in a " +
+				"backup's own attempt prefix that its manifest does not name came from another writer and must never " +
+				"happen",
+			logsNote(h.logLimit())},
+		Cleanup: "nothing to delete: the run created no CubridCluster",
+		Residue: "the artifacts under the backups' prefixes are left in the bucket; this run does not remove them"}
 	for _, b := range s11OverlappingBackups {
 		rec.Backups = append(rec.Backups, &s11OverlapBackup{s11Record: s11Record{Backup: b.name,
 			Bucket: h.cfg.BackupBucket, Prefix: h.rec.Seed.Prefix + "/" + b.prefix,
@@ -262,12 +301,19 @@ func (h *haRun) runS11Overlapping(ctx context.Context) (result evidence.Scenario
 			Cleanup: "nothing to delete: the run did not create it", letter: b.letter, manifestFile: b.manifest})
 	}
 	var created [2]*databasev1alpha1.CubridBackup
+	var made s11InterruptedMade
 	defer func() {
-		cleaned := true
+		// The limit goes first, then the backups, then the cluster.
+		cleaned := h.removeInterruptedFaults(ctx, &made, rec.Throttle)
 		for i, b := range rec.Backups {
 			cleaned = h.deleteMissingBackup(ctx, created[i], &b.Cleanup) && cleaned
 		}
+		made.backup = nil
+		cleaned = h.deleteInterrupted(ctx, made, rec.Throttle, &rec.Cleanup, &rec.Residue) && cleaned
 		result.CleanupSucceeded = &cleaned
+		if made.throttle != nil {
+			maps.Copy(result.Measurements, prefixed("rateLimit.", made.throttle.Measurements()))
+		}
 		// A pass without its evidence is a failure; a blocked or failed S11
 		// overlapping keeps its result, with the evidence that could not be
 		// written.
@@ -281,18 +327,23 @@ func (h *haRun) runS11Overlapping(ctx context.Context) (result evidence.Scenario
 			return !strings.HasPrefix(f, "S11/"+s11OverlappingVariant+"/")
 		})
 	}()
-	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String()}
-	result.Measurements = map[string]any{"sameTarget": evidence.Unknown, "heldWithConflict": evidence.Unknown,
-		"bothInProgressInReadings": evidence.Unknown, "operationRefsDistinct": evidence.Unknown}
+	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String(),
+		"readyLimit": h.cfg.BackupOverlappingReadyLimit.String()}
+	result.Measurements = map[string]any{"heldWithConflict": evidence.Unknown,
+		"bothInProgressInReadings": evidence.Unknown, "operationRefsDistinct": evidence.Unknown,
+		"uploadBytesThroughLimit": evidence.Unknown}
 	for _, b := range rec.Backups {
 		for _, m := range []string{measBackupCompletedWithin, measObjectsVerified, measArtifactBytes,
 			measObjectsNotInManifest, "attemptPrefixes"} {
 			result.Measurements[b.letter+"."+m] = evidence.Unknown
 		}
 	}
-	err := h.overlappingSteps(ctx, &result, &rec, &created)
+	err := h.overlappingSteps(ctx, &result, &rec, &created, &made)
 	// A credential found in any status read, a manifest, an Event or a log
 	// is a failure, whichever step ended S11 overlapping.
+	if found := rec.Credentials.FoundIn; len(found) > 0 {
+		result.NeverEvents = append(result.NeverEvents, s11OverlappingClusterName+": "+credentialEvent(found))
+	}
 	for _, b := range rec.Backups {
 		if found := b.Credentials.FoundIn; len(found) > 0 {
 			result.NeverEvents = append(result.NeverEvents, b.Backup+": "+credentialEvent(found))
@@ -332,33 +383,26 @@ func (h *haRun) runS11Overlapping(ctx context.Context) (result evidence.Scenario
 // recorded.
 func s11OverlappingPassReason(rec *s11OverlappingRecord) string {
 	a, b, o := rec.Backups[0], rec.Backups[1], rec.Overlap
-	var how string
-	if *o.SameTarget {
-		how = fmt.Sprintf("they had the same target, %s; %s was held with %s (%d holds recorded), and the "+
-			"target's record of its operation was created at %s, not before the record of %s's operation was "+
-			"written as ended at %s, by the member's clock", lastTarget(a.Phases), o.Second,
-			s11OperationInProgressReason, len(a.Holds)+len(b.Holds), o.SecondCreatedAt.Format(time.RFC3339Nano),
-			o.First, o.FirstEndedAt.Format(time.RFC3339Nano))
-	} else {
-		how = fmt.Sprintf("they ran on different targets, %s and %s, and the readings showed both Running or "+
-			"Uploading with their operations from %s to %s", lastTarget(a.Phases), lastTarget(b.Phases),
-			o.BothInProgressFrom.Format(time.RFC3339Nano), o.BothInProgressTo.Format(time.RFC3339Nano))
-	}
-	return fmt.Sprintf("the two backups requested back to back, %s and %s, both ended Completed within "+
-		"backup_limit, each with its own operation (%s and %s), target and role in every reading; %s; every "+
-		"object each manifest names was downloaded by the run and matches it, the status and the cluster, each "+
-		"manifest names its own operation, and exactly one attempt prefix of each backup, holding its one "+
-		"manifest.json, held objects under its prefix, also at the end; the source and the installed manager "+
-		"were unchanged; no credential was found in the recorded statuses, the manifests, the Events, the "+
-		"installed Operator's manager log or the Instance Manager's log in each backup's target Pod",
-		a.Backup, b.Backup, a.OperationRefsSeen[0], b.OperationRefsSeen[0], how)
+	return fmt.Sprintf("the two backups of %s requested back to back, %s and %s, through the rate limit on %s, "+
+		"both ended Completed within backup_limit, each with its own operation (%s and %s), target and role in "+
+		"every reading; %s was held with %s (%d holds recorded), and the member's record of its operation was "+
+		"created at %s, not before the record of %s's operation was written as ended at %s, by the member's "+
+		"clock; every object each manifest names was downloaded by the run and matches it, the status and the "+
+		"cluster, each manifest names its own operation, and exactly one attempt prefix of each backup, holding "+
+		"its one manifest.json and no other object, held objects under its prefix, also at the end; the limit "+
+		"was seen removed; the source and the installed manager were unchanged; no credential was found in the "+
+		"recorded statuses, the manifests, the Events, the installed Operator's manager log or the member's log",
+		s11OverlappingClusterName, a.Backup, b.Backup, rec.Throttle.Target, a.OperationRefsSeen[0],
+		b.OperationRefsSeen[0], o.Second, s11OperationInProgressReason, len(a.Holds)+len(b.Holds),
+		o.SecondCreatedAt.Format(time.RFC3339Nano), o.First, o.FirstEndedAt.Format(time.RFC3339Nano))
 }
 
 // overlappingSteps runs the steps of S11 overlapping in order. Before the
-// requests, the first error ends them. After them, the backups are judged
-// and the checks at the end are all made; their errors are joined.
+// requests, the first error ends them. After them, the backups are judged,
+// the limit is removed, and the checks at the end are all made; their errors
+// are joined.
 func (h *haRun) overlappingSteps(ctx context.Context, result *evidence.Scenario, rec *s11OverlappingRecord,
-	created *[2]*databasev1alpha1.CubridBackup) error {
+	created *[2]*databasev1alpha1.CubridBackup, made *s11InterruptedMade) error {
 	started := time.Now().UTC()
 	if _, err := h.holdsCredential(nil); err != nil {
 		return fmt.Errorf("%w; S11 overlapping could not tell whether a credential is in a status, a manifest or "+
@@ -366,10 +410,25 @@ func (h *haRun) overlappingSteps(ctx context.Context, result *evidence.Scenario,
 	}
 	before := h.rec.OperatorAfter
 	rec.ManagerBefore = &before
+	if err := h.throttledStandalone(ctx, "S11 overlapping", h.cfg.BackupOverlappingReadyLimit, &rec.PodSecurity,
+		rec.Cluster, rec.Credentials, rec.Throttle, made); err != nil {
+		return err
+	}
+	// A standalone member is selected in the role unknown
+	// (RoleUnknownSingleInstanceFallback in internal/controller/backuptarget.go).
+	source := &s11Source{clusterUID: rec.Cluster.UID, members: []string{rec.Throttle.Target},
+		role: string(databasev1alpha1.RoleUnknown)}
+	if err := made.throttle.Prepare(ctx); err != nil {
+		return fmt.Errorf("prepare the rate limit: %w", err)
+	}
+	if err := confirmThrottle(ctx, made.throttle, rec.Throttle); err != nil {
+		return err
+	}
 	// The two requests are sent one right after the other, nothing between.
 	var requested [2]time.Time
 	for i, b := range rec.Backups {
-		backup, err := h.createBackup(ctx, b.Backup, haClusterName, b.Bucket, b.Prefix)
+		b.source = source
+		backup, err := h.createBackup(ctx, b.Backup, s11OverlappingClusterName, b.Bucket, b.Prefix)
 		if err != nil {
 			return err
 		}
@@ -379,19 +438,25 @@ func (h *haRun) overlappingSteps(ctx context.Context, result *evidence.Scenario,
 	}
 	rec.RequestGap = requested[1].Sub(requested[0]).Round(time.Millisecond).String()
 	read, err := h.waitOverlapping(ctx, *created, rec)
+	h.limitAfterBackups(ctx, made, rec.Throttle, result)
 	errs := []error{h.judgeOverlapping(ctx, read, err, requested, rec, result)}
+	errs = append(errs, h.throttleAtEnd(ctx, made, rec.Throttle))
 	for i, b := range rec.Backups {
 		if err := h.checkS11Credentials(ctx, created[i], b.manifest, b.Credentials); err != nil {
 			errs = append(errs, fmt.Errorf("look for credentials of %s: %w", b.Backup, err))
 		}
-		if err := h.checkS11Logs(ctx, haClusterName, false, lastTarget(b.Phases),
+		if err := h.checkS11Logs(ctx, s11OverlappingClusterName, true, lastTarget(b.Phases),
 			requestedOnServer(created[i], requested[i]), started, b.Credentials, before.Pods); err != nil {
 			errs = append(errs, fmt.Errorf("search the logs for %s: %w", b.Backup, err))
 		}
 	}
+	if err := h.standaloneAtEnd(ctx, made.cluster, rec.Credentials); err != nil {
+		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
+	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
 	errs = append(errs, h.checkSourceS12(ctx, rec.Source, s11OverlappingSourceDataCheckFile))
-	// A writer that was still uploading at the first listing shows up now.
+	// A writer that was still uploading at the first listing shows up now,
+	// with the limit removed.
 	for i, b := range rec.Backups {
 		if b.Attempts == nil || !b.Attempts.Listed {
 			continue
@@ -408,6 +473,24 @@ func (h *haRun) overlappingSteps(ctx context.Context, result *evidence.Scenario,
 	}
 	errs = append(errs, h.sameManager(ctx, "S11 "+s11OverlappingVariant, &before, &rec.ManagerAfter))
 	return errors.Join(errs...)
+}
+
+// limitAfterBackups reads the rate limit's counters once both backups ended,
+// as evidence of what passed it since the requests. A read that fails is
+// recorded and judges nothing.
+func (h *haRun) limitAfterBackups(ctx context.Context, made *s11InterruptedMade, f *s11Throttle,
+	result *evidence.Scenario) {
+	if made.throttle == nil || f.AtRequest == nil {
+		return
+	}
+	counters, err := made.throttle.Counters(ctx)
+	if err != nil {
+		f.ExecErrors = append(f.ExecErrors, time.Now().UTC().Format(time.RFC3339Nano)+
+			" read the rate limit's counters after the backups: "+err.Error())
+		return
+	}
+	f.Last = &counters
+	result.Measurements["uploadBytesThroughLimit"] = f.sentSince(counters)
 }
 
 // waitOverlapping reads both backups in turn until both are Completed or
@@ -451,6 +534,13 @@ func (h *haRun) waitOverlapping(ctx context.Context, created [2]*databasev1alpha
 		}
 		readErr = nil
 		rec.observe(read, time.Now().UTC())
+		// Recorded first, so that a replaced target is judged.
+		for i, b := range rec.Backups {
+			if t := read[i].Status.TargetInstance; t != "" && t != rec.Throttle.Target {
+				return false, faultStep{fmt.Errorf("%s's target is %s, not %s, the Pod the limit acts in", b.Backup,
+					t, rec.Throttle.Target)}
+			}
+		}
 		return ended[0] && ended[1], nil
 	})
 	if err != nil && ctx.Err() == nil && wctx.Err() != nil && readErr != nil {
@@ -513,28 +603,25 @@ func (rec *s11OverlappingRecord) observe(read [2]*databasev1alpha1.CubridBackup,
 // The code's prediction. Each backup has its own idempotency key,
 // cubridbackup:<namespace>:<name>:<uid> (idempotencyKey in
 // internal/controller/cubridbackup_controller.go), and its own staging
-// destination, backup-staging/<uid> (buildBackupRequest). The controller
-// has one worker, so the two are reconciled in turn, and each selects
-// eligibleStandbys' first in a reconcile of its own (selectBackupTarget, in
-// internal/controller/backuptarget.go): the standby with the fewest pages
-// waiting to be applied, then the lowest ordinal. Usually both select the
-// same standby; two readings that rank the standbys differently give them
-// different ones, which run at the same time. On one target, the Instance
-// Manager finds no operation under the second's key and refuses it with 409
-// OperationInProgress while the first's operation has not ended
+// destination, backup-staging/<uid> (buildBackupRequest). The cluster has one
+// member, so both select it, in the role unknown (selectBackupTarget in
+// internal/controller/backuptarget.go). The first upload takes minutes
+// through the limit, so the second start reaches the member while the
+// first's operation has not ended: the Instance Manager finds no operation
+// under the second's key and refuses it with 409 OperationInProgress
 // (FindOrCreate in internal/instancemanager/opstore.go, backup in
 // server.go); its staging destination is its own, so StagingDestinationInUse
-// is not expected. The controller maps that to errStartConflict
-// (statusError in internal/controller/imclient.go) and holdRecordedTarget,
-// which looks up only the backup's own key: it finds nothing, so the backup
-// waits with InstanceManagerOperationInProgress, keeps its target, and sends
-// the start again at the next reconcile until the target accepts it. It is
-// never moved to another member, and never ends before backupTargetWait (30
-// minutes) has passed, with RecordedTargetNotStarted. So both end Completed,
-// each with its own operation, target and artifact. A refusal with
+// is not expected. The controller maps that to errStartConflict (statusError
+// in internal/controller/imclient.go) and holdRecordedTarget, which looks up
+// only the backup's own key: it finds nothing, so the backup waits with
+// InstanceManagerOperationInProgress, keeps its target, and sends the start
+// again at the next reconcile until the member accepts it. It never ends
+// before backupTargetWait (30 minutes) has passed, with
+// RecordedTargetNotStarted. So both end Completed, one after the other, each
+// with its own operation and artifact. A refusal with
 // InstanceManagerRequestConflict, a conflict of the other backup's operation
-// taken for one under the backup's own key, must never happen; Failed with
-// a conflict reason, RecordedTargetNotStarted or a staging failure is a
+// taken for one under the backup's own key, must never happen; Failed with a
+// conflict reason, RecordedTargetNotStarted or a staging failure is a
 // never-event, and Failed for any other reason fails the variant.
 func (h *haRun) judgeOverlapping(ctx context.Context, read [2]*databasev1alpha1.CubridBackup, waitErr error,
 	requested [2]time.Time, rec *s11OverlappingRecord, result *evidence.Scenario) error {
@@ -713,12 +800,11 @@ func (h *haRun) checkOverlapAttempts(ctx context.Context, backup *databasev1alph
 
 // judgeOverlap judges the two backups together. StagingDestinationInUse is
 // not predicted, since each backup has its own staging destination, and
-// fails the variant. On one target the Instance Manager runs one operation
-// of the database at a time (judgeOneTarget). The two must have contended:
-// on one target, a reading showed one held with
-// InstanceManagerOperationInProgress; on two, the readings showed both in
-// progress at once. Otherwise the first ended before the second was
-// accepted, and the variant is blocked.
+// fails the variant. The Instance Manager runs one operation of the database
+// at a time (judgeOneTarget). The second must have been held with
+// InstanceManagerOperationInProgress: otherwise the first ended before the
+// second was accepted, the overlap was not exercised, and the variant is
+// blocked. Both in progress in one round of readings is recorded, not judged.
 func (h *haRun) judgeOverlap(ctx context.Context, read [2]*databasev1alpha1.CubridBackup,
 	rec *s11OverlappingRecord, result *evidence.Scenario) error {
 	o := rec.Overlap
@@ -735,20 +821,14 @@ func (h *haRun) judgeOverlap(ctx context.Context, read [2]*databasev1alpha1.Cubr
 			}
 		}
 	}
-	a, b := read[0].Status, read[1].Status
-	same := a.TargetInstance != "" && a.TargetInstance == b.TargetInstance
-	o.SameTarget = &same
-	result.Measurements["sameTarget"] = same
 	result.Measurements["heldWithConflict"] = o.HeldWithConflict
 	result.Measurements["bothInProgressInReadings"] = o.BothInProgressFrom != nil
-	if same && a.OperationRef != "" && b.OperationRef != "" {
-		errs = append(errs, h.judgeOneTarget(ctx, a.TargetInstance, rec, result))
+	if a, b := read[0].Status, read[1].Status; a.OperationRef != "" && b.OperationRef != "" {
+		errs = append(errs, h.judgeOneTarget(ctx, rec.Throttle.Target, rec, result))
 	}
-	contended := (same && o.HeldWithConflict) || (!same && o.BothInProgressFrom != nil)
-	if !contended {
-		o.NotContended = "the readings never showed the two backups contend: on one target neither was held " +
-			"with " + s11OperationInProgressReason + ", or on two targets they never ran at once; the first ended " +
-			"before the second was accepted, so the overlap was not exercised"
+	if !o.HeldWithConflict {
+		o.NotContended = "no reading showed a backup held with " + s11OperationInProgressReason + ": the first " +
+			"ended before the second was accepted, so the overlap was not exercised"
 		errs = append(errs, errors.New(o.NotContended))
 	}
 	return errors.Join(errs...)
@@ -760,7 +840,7 @@ func heldWithConflict(b *s11OverlapBackup) bool {
 	return slices.ContainsFunc(b.Holds, func(h s11Hold) bool { return h.Reason == s11OperationInProgressReason })
 }
 
-// overlapOrder orders the two backups on one target: the one held after a
+// overlapOrder orders the two backups on the member: the one held after a
 // conflict ran second; when neither or both were, the one with the earlier
 // status.startedAt ran first. Otherwise the order cannot be told.
 func overlapOrder(rec *s11OverlappingRecord) (first, second *s11OverlapBackup, err error) {
@@ -771,7 +851,7 @@ func overlapOrder(rec *s11OverlappingRecord) (first, second *s11OverlapBackup, e
 	case heldB && !heldA:
 		return a, b, nil
 	case a.StatusStartedAt == nil || b.StatusStartedAt == nil || a.StatusStartedAt.Equal(*b.StatusStartedAt):
-		return nil, nil, errors.New("which of the two backups on one target ran first could not be told: neither " +
+		return nil, nil, errors.New("which of the two backups ran first could not be told: neither " +
 			"or both were held, and their status.startedAt is missing or the same")
 	case a.StatusStartedAt.Before(*b.StatusStartedAt):
 		return a, b, nil
@@ -779,7 +859,7 @@ func overlapOrder(rec *s11OverlappingRecord) (first, second *s11OverlapBackup, e
 	return b, a, nil
 }
 
-// judgeOneTarget requires, on one target, the target member's record of the
+// judgeOneTarget requires, on target, the member's record of the
 // second backup's operation created at or after the record of the first's
 // was written as ended. The Instance Manager refuses a new operation of the
 // database while a record of another one has not ended (FindOrCreate in

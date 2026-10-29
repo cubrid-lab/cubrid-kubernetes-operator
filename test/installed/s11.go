@@ -361,6 +361,25 @@ type s11Record struct {
 	Notes                 []string                               `json:"notes,omitempty"`
 	// Residue is what the run leaves in the object store.
 	Residue string `json:"residue"`
+	// source is the cluster the backup is of; nil is the HA cluster.
+	source *s11Source
+}
+
+// s11Source is the cluster a backup's artifact must name: its UID, its
+// members, and the role its target is selected in. An empty role is the HA
+// cluster's PreferStandby: slave, or master when the selection fell back.
+type s11Source struct {
+	clusterUID string
+	members    []string
+	role       string
+}
+
+// sourceOf is the cluster rec's backup is of.
+func (h *haRun) sourceOf(rec *s11Record) s11Source {
+	if rec.source != nil {
+		return *rec.source
+	}
+	return s11Source{clusterUID: h.rec.ClusterUID, members: h.members}
 }
 
 // runS11 runs S11 complete on the cluster LAB01 left in its checked state: a
@@ -690,7 +709,7 @@ func (h *haRun) verifyS11Artifact(ctx context.Context, backup *databasev1alpha1.
 	rec.Verification = v
 	artifact := backup.Status.Artifact
 	key, err := artifactKey(artifact.URI, h.cfg.BackupBucket,
-		path.Join(rec.Prefix, h.rec.ClusterUID, databaseName, string(backup.UID)))
+		path.Join(rec.Prefix, h.sourceOf(rec).clusterUID, databaseName, string(backup.UID)))
 	if err != nil {
 		v.Problems = append(v.Problems, err.Error())
 		return nil, nil
@@ -718,7 +737,7 @@ func (h *haRun) verifyS11Artifact(ctx context.Context, backup *databasev1alpha1.
 	}
 	v.ManifestDigest, _ = parsed.Digest()
 	v.Objects, v.ManifestSizeBytes = len(parsed.Objects), parsed.TotalSize()
-	v.Problems = append(v.Problems, h.checkManifestIdentity(parsed, backup)...)
+	v.Problems = append(v.Problems, h.checkManifestIdentity(parsed, backup, h.sourceOf(rec))...)
 	v.Problems = append(v.Problems, checkManifestIntegrity(parsed, artifact, v)...)
 	return manifest, h.verifyS11Objects(ctx, store, parsed, path.Dir(key), v)
 }
@@ -852,11 +871,11 @@ func (h *haRun) sameObjectStore(ctx context.Context, namespace, service, port st
 }
 
 // checkManifestIdentity compares what the manifest says of the backup with
-// its status, the cluster and the engine. The run checks what
+// its status, src, the cluster it is of, and the engine. The run checks what
 // instancemanager's Verify would, itself, so that the Operator's own
 // verification is not what is tested.
 func (h *haRun) checkManifestIdentity(m instancemanager.BackupManifest,
-	backup *databasev1alpha1.CubridBackup) []string {
+	backup *databasev1alpha1.CubridBackup, src s11Source) []string {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	s, artifact := backup.Status, backup.Status.Artifact
@@ -866,9 +885,9 @@ func (h *haRun) checkManifestIdentity(m instancemanager.BackupManifest,
 	if m.Database != databaseName || artifact.Database != databaseName {
 		add("the manifest names database %q and the status %q, not %s", m.Database, artifact.Database, databaseName)
 	}
-	if m.ClusterUID != h.rec.ClusterUID || string(s.ClusterUID) != h.rec.ClusterUID {
+	if m.ClusterUID != src.clusterUID || string(s.ClusterUID) != src.clusterUID {
 		add("the manifest's clusterUID is %q and the status's %q, not the cluster's %s", m.ClusterUID,
-			s.ClusterUID, h.rec.ClusterUID)
+			s.ClusterUID, src.clusterUID)
 	}
 	if m.Level != 0 || artifact.Level != databasev1alpha1.CubridBackupFull {
 		add("the manifest's level is %d and the status's %q, not a full backup", m.Level, artifact.Level)
@@ -876,13 +895,18 @@ func (h *haRun) checkManifestIdentity(m instancemanager.BackupManifest,
 	if m.SourceInstance != s.TargetInstance {
 		add("the manifest's sourceInstance %q is not status.targetInstance %q", m.SourceInstance, s.TargetInstance)
 	}
-	if !slices.Contains(h.members, m.SourceInstance) {
+	if !slices.Contains(src.members, m.SourceInstance) {
 		add("the manifest's sourceInstance %q is not a member of the cluster", m.SourceInstance)
 	}
-	// PreferStandby runs on a slave, or on the master when it fell back.
-	role := string(databasev1alpha1.RoleSlave)
-	if s.FallbackUsed {
+	// PreferStandby runs on a slave, or on the master when it fell back; a
+	// standalone member is selected in the role src names.
+	role := src.role
+	switch {
+	case role != "":
+	case s.FallbackUsed:
 		role = string(databasev1alpha1.RoleMaster)
+	default:
+		role = string(databasev1alpha1.RoleSlave)
 	}
 	if m.SourceRole != s.TargetRole || m.SourceRole != role {
 		add("the manifest's sourceRole %q, status.targetRole %q and fallbackUsed %t do not agree", m.SourceRole,

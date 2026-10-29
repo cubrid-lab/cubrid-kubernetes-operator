@@ -125,11 +125,15 @@ func run(ctx context.Context, args []string) (runErr error) {
 		15*time.Minute, "S11 instance-manager-restart: bound from the standalone cluster's creation until it is "+
 			"Ready, and from the kill until it is Ready again")
 	flags.BoolVar(&cfg.BackupOverlapping, "backup-overlapping", false,
-		"scenario after S11 complete: S11 overlapping, two more backups of the HA cluster requested back to back "+
-			"must both end Completed, each with its own operation and one verified artifact under its own prefix; "+
-			"needs -backup-bucket, not with -restore, -backup-missing-destination, -backup-denied-credentials, "+
+		"scenario after S11 complete: S11 overlapping, two backups of a standalone cluster whose upload is "+
+			"slowed by a network fault in its member's Pod, requested back to back, must both end Completed, the "+
+			"second held until the first ended, each with its own operation and one verified artifact under its "+
+			"own prefix; makes the run namespace enforce Pod Security privileged; needs -backup-bucket, not with "+
+			"-restore, -backup-missing-destination, -backup-denied-credentials, "+
 			"-backup-signature-mismatch, -backup-interrupted-upload, -backup-operator-restart or "+
 			"-backup-instance-manager-restart")
+	flags.DurationVar(&cfg.BackupOverlappingReadyLimit, "backup-overlapping-ready-limit", 15*time.Minute,
+		"S11 overlapping: bound from the standalone cluster's creation until it is Ready")
 	flags.StringVar(&cfg.ObjectStoreService, "object-store-service", "",
 		"S11: <namespace>/<service>:<port> of the object store, port-forwarded for the run's own download")
 	flags.BoolVar(&cfg.Restore, "restore", false,
@@ -182,6 +186,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	}
 	if set["backup-instance-manager-restart-ready-limit"] && !cfg.BackupInstanceManagerRestart {
 		return errors.New("-backup-instance-manager-restart-ready-limit needs -backup-instance-manager-restart")
+	}
+	if set["backup-overlapping-ready-limit"] && !cfg.BackupOverlapping {
+		return errors.New("-backup-overlapping-ready-limit needs -backup-overlapping")
 	}
 	if flags.NArg() != 0 || (cfg.Level != "kind" && cfg.Level != "vm-lab") {
 		return errors.New("choose kind or vm-lab explicitly and provide no positional command")
