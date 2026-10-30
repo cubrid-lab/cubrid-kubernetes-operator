@@ -27,13 +27,13 @@ flowchart TB
     client(["Application client"]):::ext
 
     subgraph svc["Services: Kubernetes routes to ready Pods"]
-        rw["Service demo-rw<br/>port 33000"]:::op
-        ro["Service demo-ro<br/>port 33001"]:::op
+        rw["Service<br/>demo-rw<br/>port 33000"]:::op
+        ro["Service<br/>demo-ro<br/>port 33001"]:::op
     end
 
     subgraph brokers["Broker Pods"]
-        brw["Read-write Brokers<br/>2 Pods, read-write mode"]:::cubrid
-        bro["Read-only Brokers<br/>2 Pods, read-only mode"]:::cubrid
+        brw["Read-write Brokers<br/>2 Pods"]:::cubrid
+        bro["Read-only Brokers<br/>2 Pods"]:::cubrid
     end
 
     subgraph members["Database members"]

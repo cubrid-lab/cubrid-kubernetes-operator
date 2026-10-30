@@ -27,6 +27,7 @@ status write and the next pass.
 ### Part 1: trigger and Kubernetes objects
 
 ```mermaid
+%%{init: {"sequence": {"actorMargin": 30, "width": 120}}}%%
 sequenceDiagram
     autonumber
     participant T as Trigger
@@ -130,6 +131,7 @@ a primary from stale answers.
 ## Backup controller
 
 ```mermaid
+%%{init: {"sequence": {"actorMargin": 30, "width": 120}}}%%
 sequenceDiagram
     autonumber
     participant U as User
@@ -140,8 +142,8 @@ sequenceDiagram
 
     U->>API: create a CubridBackup
     API-->>BC: watch event
-    BC->>API: read the CubridBackup<br/>and its CubridCluster
-    BC->>IM: ask every member its role
+    BC->>API: read the CubridBackup<br/>and its cluster
+    BC->>IM: ask every<br/>member its role
     BC->>BC: choose a safe member,<br/>record it in status
     BC->>IM: start the backup<br/>with an idempotency key
     IM->>OS: run backupdb,<br/>upload the artifact

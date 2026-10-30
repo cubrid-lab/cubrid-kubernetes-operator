@@ -24,9 +24,10 @@ first what Kubernetes and CUBRID do, then what the Operator observes.
 ### Part 1: the fault, CUBRID failover and the Pod's return
 
 ```mermaid
+%%{init: {"sequence": {"actorMargin": 30, "width": 120}}}%%
 sequenceDiagram
     autonumber
-    participant K8S as Kubernetes<br/>StatefulSet controller, kubelet
+    participant K8S as Kubernetes<br/>StatefulSet controller<br/>and kubelet
     participant OLD as demo-0<br/>master before the fault
     participant HA as demo-1 and demo-2<br/>CUBRID heartbeat
     participant BRW as Read-write<br/>Brokers
@@ -35,10 +36,10 @@ sequenceDiagram
     K8S->>OLD: run the preStop hook,<br/>then stop the container
     OLD->>OLD: Instance Manager starts<br/>an ordered stop of CUBRID
     HA->>HA: heartbeat loses the master,<br/>promotes a slave by<br/>member list order
-    BRW->>HA: reconnect through the host list<br/>to the new master
+    BRW->>HA: reconnect through<br/>the host list<br/>to the new master
     Note over BRW: in-flight transactions<br/>may fail, clients retry
     K8S->>OLD: recreate Pod demo-0 with<br/>the same name and volume
-    OLD->>HA: CUBRID brings the member back,<br/>normally as a slave
+    OLD->>HA: CUBRID brings<br/>the member back,<br/>normally as a slave
 ```
 
 ### Part 2: what the Operator observes

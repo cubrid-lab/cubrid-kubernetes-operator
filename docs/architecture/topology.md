@@ -73,8 +73,8 @@ flowchart TB
     client(["Application client"]):::ext
 
     subgraph svcs["Services written by the Operator"]
-        rw["Service demo-rw<br/>port 33000"]:::op
-        ro["Service demo-ro<br/>port 33001"]:::op
+        rw["Service<br/>demo-rw<br/>port 33000"]:::op
+        ro["Service<br/>demo-ro<br/>port 33001"]:::op
     end
 
     subgraph brokers["Broker Pods"]
@@ -84,16 +84,9 @@ flowchart TB
 
     subgraph members["Member Pods: heartbeat and replication run between them"]
         direction LR
-        m0["demo-0<br/>CUBRID server"]:::cubrid
-        m1["demo-1<br/>CUBRID server"]:::cubrid
-        m2["demo-2<br/>CUBRID server"]:::cubrid
-    end
-
-    subgraph vols["Volumes kept by Kubernetes"]
-        direction LR
-        v0[("data-demo-0")]:::k8s
-        v1[("data-demo-1")]:::k8s
-        v2[("data-demo-2")]:::k8s
+        m0["demo-0<br/>CUBRID server<br/>volume data-demo-0"]:::cubrid
+        m1["demo-1<br/>CUBRID server<br/>volume data-demo-1"]:::cubrid
+        m2["demo-2<br/>CUBRID server<br/>volume data-demo-2"]:::cubrid
     end
 
     client == "SQL" ==> rw
@@ -101,9 +94,6 @@ flowchart TB
     rw ==> brw
     ro ==> bro
     brokers == "port 1523" ==> members
-    m0 --- v0
-    m1 --- v1
-    m2 --- v2
 
     classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
     classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
@@ -113,7 +103,6 @@ flowchart TB
     style svcs fill:#fff7ed,stroke:#c2410c,color:#0f172a
     style brokers fill:#f0fdf4,stroke:#15803d,color:#0f172a
     style members fill:#f0fdf4,stroke:#15803d,color:#0f172a
-    style vols fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
 ```
 
 ## Key components
