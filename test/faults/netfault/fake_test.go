@@ -84,6 +84,10 @@ type fakeNet struct {
 	senders map[string]string
 	// latency is how long a command of an operation takes.
 	latency map[string]time.Duration
+	// stall, when it returns true for a command's operation, holds that
+	// command until its context ends, as a kubectl exec that does not
+	// answer before the wait's deadline.
+	stall func(op string) bool
 	// uploads sends 1460 bytes of TCP from a Pod's IP to an address each
 	// time that Pod's rules are read, as an upload under way would.
 	uploads map[string]string
@@ -146,9 +150,13 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 	pod, script := args[3], args[9]
 	op := strings.Fields(strings.SplitN(script, "\n", 2)[0])
 	n.mu.Lock()
-	latency := n.latency[op[2]]
+	latency, stall := n.latency[op[2]], n.stall
 	n.mu.Unlock()
 	time.Sleep(latency)
+	if stall != nil && stall(op[2]) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.scripts = append(n.scripts, pod+": "+strings.Join(op, " "))
@@ -190,7 +198,7 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 			ns.sticky = n.stickyCut
 		}
 		return "", nil
-	case "connect":
+	case opConnect:
 		return n.connects(ns, op[3], op[5])
 	case "qdisc":
 		return ns.qdisc + "\n", nil
@@ -520,6 +528,10 @@ func (n *fakeNet) installed(ip string) []string {
 }
 
 const testNamespace = "cubrid-lab-test"
+
+// opConnect is the operation of a fault's connect probe, the second word of
+// its script's first line.
+const opConnect = "connect"
 
 // defaultQdisc is a Pod's qdisc with no fault; testConnect the time of a
 // connect the fake does not delay; outcomeReached marks a case whose fault

@@ -19,6 +19,7 @@ package netfault
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +55,33 @@ func TestDelayWithoutEffectIsNotConfirmed(t *testing.T) {
 	}
 	if !timelineHas(o, "0s added, not 300ms") {
 		t.Errorf("the timeline does not give the measured delay: %+v", o.Timeline)
+	}
+	if m := d.Measurements(); m["measuredAddedDelay"] != "0s" {
+		t.Errorf("the measured delay is %v, want 0s", m["measuredAddedDelay"])
+	}
+}
+
+// A measurement that the confirmation window's end cuts short does not clear
+// what the attempt before it measured (#630).
+func TestDelayWithoutEffectKeepsTheMeasurementCutByTheDeadline(t *testing.T) {
+	n := newFakeNet(testPods)
+	n.noDelayEffect = true
+	d := &Delay{Env: testEnv(t, n), Target: member("ha-0"), Peer: member("ha-1"), Delay: 300 * time.Millisecond}
+	var stalled atomic.Bool
+	n.stall = func(op string) bool {
+		d.mu.Lock()
+		measured := d.haveDuring
+		d.mu.Unlock()
+		// The first connect after a measurement during the fault does not
+		// answer before the window ends.
+		return op == opConnect && measured && stalled.CompareAndSwap(false, true)
+	}
+	o := run(d, d.Prepare)
+	if o.Result != evidence.Blocked || !strings.HasPrefix(o.Reason, faults.ReasonFaultNotConfirmed) {
+		t.Fatalf("outcome %s %q, want blocked %s", o.Result, o.Reason, faults.ReasonFaultNotConfirmed)
+	}
+	if !stalled.Load() {
+		t.Fatal("no measurement was cut short")
 	}
 	if m := d.Measurements(); m["measuredAddedDelay"] != "0s" {
 		t.Errorf("the measured delay is %v, want 0s", m["measuredAddedDelay"])
@@ -135,6 +163,30 @@ func TestDelayFailures(t *testing.T) {
 				t.Errorf("cleanup succeeded=%v, timeline %+v; want %q", o.CleanupSucceeded, o.Timeline, tc.detail)
 			}
 		})
+	}
+}
+
+// A delay still seen after its removal is reported as such when the wait's
+// deadline cuts the measurement after it short (#630).
+func TestDelayStillSeenAfterRemovalIsReportedAtTheDeadline(t *testing.T) {
+	n := newFakeNet(testPods)
+	n.stickyDelay = true
+	d := newDelay(t, n)
+	var stalled atomic.Bool
+	n.stall = func(op string) bool {
+		d.mu.Lock()
+		measured := d.haveAfter
+		d.mu.Unlock()
+		// The first connect after a measurement since the removal does not
+		// answer before the wait ends.
+		return op == opConnect && measured && stalled.CompareAndSwap(false, true)
+	}
+	o := run(d, d.Prepare)
+	if !stalled.Load() {
+		t.Fatal("no measurement was cut short")
+	}
+	if !timelineHas(o, "still take") || o.CleanupSucceeded {
+		t.Errorf("cleanup succeeded=%v, timeline %+v; want \"still take\"", o.CleanupSucceeded, o.Timeline)
 	}
 }
 

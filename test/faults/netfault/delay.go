@@ -231,7 +231,9 @@ tc filter add dev eth0 parent 1: protocol ip prio 1 u32 match ip dst %[1]s/32 fl
 // Confirm measures the connect times again: the delay took effect when the
 // peer's grew by at least nine tenths of Delay and by no more than one and
 // a half times it plus 100 ms, and the control's grew by less than half of
-// Delay. A failed measurement clears the value it replaces.
+// Delay. A failed measurement clears the value it replaces, unless ctx ended
+// during it: one that the confirmation window's end cut short measured
+// nothing, and the value before it stands (#630).
 func (d *Delay) Confirm(ctx context.Context) (bool, error) {
 	if _, err := currentPod(ctx, d.Env, d.Target); err != nil {
 		return false, err
@@ -239,7 +241,9 @@ func (d *Delay) Confirm(ctx context.Context) (bool, error) {
 	during, err := d.measure(ctx, d.Peer)
 	d.mu.Lock()
 	baseline, controlBefore := d.baseline, d.controlBefore
-	d.during, d.haveDuring = during, err == nil
+	if err == nil || ctx.Err() == nil {
+		d.during, d.haveDuring = during, err == nil
+	}
 	d.mu.Unlock()
 	if err != nil {
 		return false, err
@@ -257,7 +261,9 @@ func (d *Delay) Confirm(ctx context.Context) (bool, error) {
 	}
 	control, err := d.measure(ctx, d.Control)
 	d.mu.Lock()
-	d.controlDuring, d.haveControlD = control, err == nil
+	if err == nil || ctx.Err() == nil {
+		d.controlDuring, d.haveControlD = control, err == nil
+	}
 	d.mu.Unlock()
 	if err != nil {
 		return false, err
@@ -313,10 +319,14 @@ func (d *Delay) Remove(ctx context.Context) error {
 		wait, cancel = context.WithDeadline(ctx, deadline.Add(-d.reserve()))
 	}
 	defer cancel()
+	// still is what the last measurement found. One that the wait's own
+	// deadline cut short measured nothing, and does not replace it (#630).
+	var still error
 	for {
 		start := time.Now()
 		after, err := d.measure(wait, d.Peer)
-		if err == nil {
+		switch {
+		case err == nil:
 			d.mu.Lock()
 			d.after, d.haveAfter = after, true
 			d.mu.Unlock()
@@ -325,6 +335,9 @@ func (d *Delay) Remove(ctx context.Context) error {
 			}
 			err = fmt.Errorf("connects from %s to %s still take %s, %s before the fault", d.Target.Name, d.Peer.Name,
 				after, baseline)
+			still = err
+		case wait.Err() != nil && still != nil:
+			err = still
 		}
 		if perr := d.pause(wait, time.Since(start)); perr != nil {
 			return fmt.Errorf("the delay was not seen removed: %w", errors.Join(err, perr))

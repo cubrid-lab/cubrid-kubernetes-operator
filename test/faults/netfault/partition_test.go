@@ -21,6 +21,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,6 +49,17 @@ func isolateMaster(n *fakeNet, env Env) *Partition {
 func run(p faults.Fault, prepare func(context.Context) error) faults.Outcome {
 	return faults.Run(context.Background(), faults.Scenario{Fault: p, Limits: testLimits, Before: prepare,
 		Check: func(context.Context) (bool, error) { return true, nil }})
+}
+
+// observed counts the observations of a path in a phase.
+func observed(r Record, phase, path string) int {
+	n := 0
+	for _, o := range r.Observations {
+		if o.Phase == phase && o.Path == path {
+			n++
+		}
+	}
+	return n
 }
 
 // last returns the last observation of a path in a phase.
@@ -238,6 +250,26 @@ func TestPartitionSilentOperatorIsNotConfirmed(t *testing.T) {
 	}
 	r := p.Record()
 	requireSeen(t, r, PhaseBefore, "operator -> ha-0", SeenUndecided, MethodPassive)
+	requireClean(t, n)
+}
+
+// A path that was seen undecided stays undecided in the reason when the
+// wait's deadline cuts the next observation of it: the time-out of that
+// observation is not what the path showed (#630).
+func TestPartitionSilentOperatorCutByTheDeadlineStaysUndecided(t *testing.T) {
+	n := newFakeNet(testPods)
+	p := &Partition{Env: testEnv(t, n), Target: member("ha-0"), Cuts: []Cut{{operator(), Both}}}
+	var stalled atomic.Bool
+	n.stall = func(op string) bool {
+		// The second observation of the Operator's path does not answer.
+		return op == "rules" && observed(p.Record(), PhaseBefore, "operator -> ha-0") == 1 &&
+			stalled.CompareAndSwap(false, true)
+	}
+	o := run(p, p.Prepare)
+	if o.Result != evidence.Blocked || !strings.HasPrefix(o.Reason, faults.ReasonStartingState) ||
+		!strings.Contains(o.Reason, "operator -> ha-0 undecided") {
+		t.Fatalf("outcome %s %q, want blocked: the operator's path was never seen open", o.Result, o.Reason)
+	}
 	requireClean(t, n)
 }
 
