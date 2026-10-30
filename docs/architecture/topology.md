@@ -31,7 +31,7 @@ flowchart TB
 
     subgraph cp["Kubernetes control plane"]
         api["Kubernetes API server"]:::k8s
-        builtin["Built-in controllers, kubelet<br/>watch the API server"]:::k8s
+        builtin["Built-in<br/>controllers and<br/>kubelet, watching<br/>the API server"]:::k8s
     end
 
     subgraph objs["Objects the Operator writes (cluster namespace)"]
@@ -42,8 +42,8 @@ flowchart TB
     end
 
     subgraph run["Pods that Kubernetes runs"]
-        members["Member Pods<br/>demo-0, demo-1, demo-2<br/>Instance Manager on 9090<br/>CUBRID server, heartbeat"]:::cubrid
-        brokers["Broker Pods<br/>2 read-write, 2 read-only"]:::cubrid
+        members["Member Pods<br/>demo-0, demo-1,<br/>demo-2: Instance<br/>Manager on 9090,<br/>CUBRID server,<br/>heartbeat"]:::cubrid
+        brokers["Broker Pods<br/>2 read-write,<br/>2 read-only"]:::cubrid
     end
 
     objstore[("Object storage")]:::ext
