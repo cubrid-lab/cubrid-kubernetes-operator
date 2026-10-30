@@ -599,7 +599,12 @@ make docker-build docker-push IMG=$IMG
 Use this rule for text authored or edited by Codex, Claude Code, OpenCode,
 ChatGPT, Copilot, or any other agent. It applies to issues, PRs, reviews,
 comments, checklists, status updates, commit summaries, release notes,
-documentation, presentations, and other maintainer-facing writing.
+documentation, presentations, and other maintainer-facing writing, and also
+to source-code comments, test names and test comments (for example in the
+installed HA harness under `test/installed/`). It is this repository's
+adoption of the cubrid-lab rule
+[Explanations in code, tests, reviews and agent-written text](https://github.com/cubrid-lab/.github/blob/main/docs/ISSUE_PR_COMMIT_STANDARD.md#6-explanations-in-code-tests-reviews-and-agent-written-text);
+the safety, build and test rules in this file keep precedence over it.
 
 - Write for a reader unfamiliar with the underlying test script, lab run,
   automation, or agent plan. Name the actual project, component,
@@ -616,6 +621,12 @@ documentation, presentations, and other maintainer-facing writing.
   `S09 lab check`.
   Avoid compressed task fragments, unexplained acronyms, and generated
   process/status jargon.
+- In comments and test descriptions, state the observed state, the expected
+  behavior and the reason first, then the scenario or issue reference:
+  `If the heartbeat command cannot reach a member or return its role, the
+  post-restart HA state cannot be observed, so the result is blocked rather
+  than failed (S06)`, not `observed nothing, as in S12 (#607)`. Do not rename
+  tests, fixtures, scenario IDs or artifact paths to improve prose.
 - Keep legitimate technical identifiers unchanged in code, tests, structured
   data, logs, specifications, and exact evidence references. Issue numbers,
   filenames, command names, APIs, error codes, and hashes are not prohibited.
