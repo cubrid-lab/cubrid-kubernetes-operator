@@ -66,10 +66,10 @@ sequenceDiagram
     loop on owned-object events and every 10 seconds
         CC->>OLD: ask its Instance Manager<br/>for its role
         CC->>HA: ask their Instance Managers<br/>for their roles
-        alt not every member answered freshly,<br/>or no master or more than one master
+        alt not every member<br/>answered freshly,<br/>or no master or<br/>more than one master
             CC->>CC: no primary resolved,<br/>current primary cleared<br/>#nbsp;
             CC->>CC: RoutingReady False<br/>(reported only,<br/>write path stays open)<br/>#nbsp;
-        else all three answered, exactly one master
+        else all three answered,<br/>exactly one master
             CC->>CC: PrimaryResolved True,<br/>current primary is the new master<br/>#nbsp;
         end
     end
