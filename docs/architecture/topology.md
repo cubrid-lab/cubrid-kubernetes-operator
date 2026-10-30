@@ -24,10 +24,7 @@ go).
 
 ```mermaid
 flowchart TB
-    subgraph mgr["Operator manager Pod (own namespace)"]
-        cc["Cluster controller"]:::op
-        bc["Backup controller"]:::op
-    end
+    mgr["Operator manager Pod<br/>(own namespace):<br/>cluster controller and<br/>backup controller"]:::op
 
     subgraph cp["Kubernetes control plane"]
         api["Kubernetes API server"]:::k8s
@@ -59,7 +56,6 @@ flowchart TB
     classDef cubrid fill:#dcfce7,stroke:#15803d,color:#0f172a
     classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
 
-    style mgr fill:#fff7ed,stroke:#c2410c,color:#0f172a
     style objs fill:#fff7ed,stroke:#c2410c,color:#0f172a
     style cp fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
     style run fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
