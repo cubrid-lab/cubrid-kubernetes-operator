@@ -284,7 +284,7 @@ type cancelledRestoreCLI struct {
 }
 
 func (c *cancelledRestoreCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
-	if len(args) > 0 && args[0] == "restoredb" {
+	if len(args) > 0 && args[0] == restoredbCommand {
 		close(c.entered)
 		<-ctx.Done()
 		return "", ctx.Err()

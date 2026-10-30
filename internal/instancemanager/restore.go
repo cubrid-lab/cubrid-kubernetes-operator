@@ -106,6 +106,10 @@ type RestoreRoots struct {
 	// manager read it from cubrid_rel. A restore is refused without it: the
 	// artifact's engine is compared with this one (ADR-0011).
 	EngineVersion string
+	// BeforeRestore, when set, runs once the artifact is verified and staged,
+	// right before the target is registered and restoredb runs. An error
+	// from it stops the restore there (#598).
+	BeforeRestore func() error
 }
 
 // RestoreResult reports a completed restore (ADR-0008).
@@ -174,6 +178,11 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	manifest, err := stageArtifact(ctx, store, req.Bucket, req.Prefix, exp, stagingDir)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("artifact verification failed: %w", err)
+	}
+	if roots.BeforeRestore != nil {
+		if err := roots.BeforeRestore(); err != nil {
+			return RestoreResult{}, err
+		}
 	}
 
 	// restoredb needs the database registered at its target, and -u to place

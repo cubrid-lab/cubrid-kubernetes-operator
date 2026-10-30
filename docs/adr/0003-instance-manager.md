@@ -368,9 +368,11 @@ As implemented, an operation does nothing that is not on record (#299). When
 the record of its next state cannot be written, the operation goes no further
 and ends `Failed` with that reason: no upload after `backupdb`, no start of a
 database or of heartbeat. A recorded backup staging claim does not authorize
-`backupdb` before `RunningBackup` is persisted. Restore's `Downloading` and
-`Restoring` states precede artifact reads, ownership adoption/reclaim and
-restore commands; HA bootstrap persists `Creating` before creating a database.
+`backupdb` before `RunningBackup` is persisted. Restore's `Downloading` state
+precedes artifact reads and ownership adoption/reclaim, and its `Restoring`
+state is persisted after the artifact is verified and staged and before the
+target is registered and `restoredb` runs (#598); HA bootstrap persists
+`Creating` before creating a database.
 A restore records its restored artifact before `Starting`, and records
 `Starting` before it starts the server or heartbeat. A takeover records the
 previous artifact under the new operation before changing the ownership marker
