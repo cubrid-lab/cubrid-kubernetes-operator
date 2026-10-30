@@ -32,11 +32,11 @@ flowchart TB
     end
 
     subgraph brokers["Broker Pods"]
-        brw["Read-write Brokers<br/>2 Pods"]:::cubrid
-        bro["Read-only Brokers<br/>2 Pods"]:::cubrid
+        brw["Deployment<br/>demo-broker-rw<br/>2 read-write Brokers"]:::cubrid
+        bro["Deployment<br/>demo-broker-ro<br/>2 read-only Brokers"]:::cubrid
     end
 
-    subgraph members["Database members"]
+    subgraph members["Member Pods"]
         m0["demo-0<br/>CUBRID server, master now"]:::cubrid
         m1["demo-1<br/>CUBRID server"]:::cubrid
         m2["demo-2<br/>CUBRID server"]:::cubrid
@@ -74,7 +74,7 @@ flowchart TB
     end
 
     brokers["Broker Pods"]:::cubrid
-    members["Database members<br/>demo-0, demo-1<br/>and demo-2"]:::cubrid
+    members["Member Pods<br/>demo-0, demo-1<br/>and demo-2"]:::cubrid
 
     cc -. "writes" .-> cfg
     cc -. "creates" .-> svc

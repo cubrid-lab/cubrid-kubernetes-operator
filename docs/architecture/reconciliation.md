@@ -20,9 +20,11 @@ the backup controller.
 
 ## Cluster controller
 
-The pass is drawn in two parts with the same participants and numbering:
-first the Kubernetes objects, then the observation of the members, the
-status write and the next pass.
+The pass is drawn in two parts; participants that appear in both keep the
+same names, and the numbering continues. The first part shows the Kubernetes
+objects, the second the observation of the members, the status write and the
+next pass. The background of each group of participants uses the
+[legend](README.md#legend) colors.
 
 ### Part 1: trigger and Kubernetes objects
 
@@ -30,12 +32,16 @@ status write and the next pass.
 %%{init: {"sequence": {"actorMargin": 30, "width": 120}}}%%
 sequenceDiagram
     autonumber
-    participant T as Trigger
-    participant CC as Cluster controller
-    participant API as Kubernetes<br/>API server
-    participant K8S as Built-in controllers<br/>and kubelet
+    box rgb(255,237,213) Operator
+        participant T as Trigger
+        participant CC as Cluster controller
+    end
+    box rgb(219,234,254) Kubernetes
+        participant API as Kubernetes<br/>API server
+        participant K8S as Built-in controllers<br/>and kubelet
+    end
 
-    T->>CC: change of the CubridCluster<br/>or an owned object,<br/>or a timed requeue
+    T->>CC: spec, annotation or deletion<br/>change of the CubridCluster,<br/>change of an owned object,<br/>or a timed requeue
     CC->>API: read the CubridCluster
     Note over CC,API: Kubernetes objects, in this order
     CC->>API: headless and member alias Services
@@ -44,29 +50,38 @@ sequenceDiagram
     CC->>API: NetworkPolicies
     CC->>API: StatefulSet
     API-->>K8S: watch
-    K8S->>K8S: create or replace Pods,<br/>bind volumes
+    K8S->>K8S: create Pods, recreate<br/>deleted ones, bind volumes<br/>#nbsp;
 ```
 
 ### Part 2: observe, report and run again
 
 ```mermaid
+%%{init: {"sequence": {"actorMargin": 30, "width": 120}}}%%
 sequenceDiagram
     autonumber 10
-    participant T as Trigger
-    participant CC as Cluster controller
-    participant API as Kubernetes<br/>API server
-    participant IM as Instance Manager<br/>in each member
+    box rgb(255,237,213) Operator
+        participant T as Trigger
+        participant CC as Cluster controller
+    end
+    box rgb(219,234,254) Kubernetes
+        participant API as Kubernetes<br/>API server
+    end
+    box rgb(220,252,231) CUBRID-native
+        participant IM as Instance Manager<br/>in each member
+    end
 
     alt restore into a new cluster in progress
         CC->>IM: start or poll the restore
         CC->>API: status with Ready False
+        CC-->>T: requeue after 10 s<br/>(restore poll)
+        Note over T,API: the pass ends here
     else HA cluster
-        CC->>IM: create the first database once<br/>(HA bootstrap)
+        CC->>IM: create the first database once,<br/>then seed the other members<br/>(HA bootstrap)
         CC->>IM: ask every member for its role
         IM-->>CC: role, engine version, replication
-        CC->>CC: resolve the primary from<br/>this pass's answers only
+        CC->>CC: resolve the primary from<br/>this pass's answers only<br/>#nbsp;
         CC->>API: Broker ConfigMap, Deployments,<br/>-rw and -ro Services
-        CC->>CC: engine version guard,<br/>rolling update planning
+        CC->>CC: engine version guard,<br/>rolling update planning<br/>#nbsp;
     else standalone cluster
         CC->>IM: ask the one member its role<br/>and engine version
         CC->>API: Broker ConfigMap, Deployments,<br/>-rw and -ro Services
@@ -99,14 +114,16 @@ sequenceDiagram
    Condition naming the step.
 3. **Steps 8–9:** Kubernetes, not the Operator, turns the StatefulSet into
    running Pods with their volumes.
-4. **Steps 10 onward (part 2):** the controller observes and acts according to the
-   cluster's state. For an HA cluster, the primary is resolved only from the
+4. **Steps 10 onward (part 2):** the controller observes and acts according
+   to the cluster's state. For an HA cluster, the primary is resolved only from the
    answers of this pass: exactly one master among freshly observed members, or
    no resolved primary. The Broker tier is reconciled after that, and the
    rolling update only when the engine version guard allows it.
 5. **Last steps:** the status is written once, with the Conditions, the
    member list and `currentPrimary`, and Events are emitted for changes. The
-   pass then returns a requeue delay or none.
+   pass then returns a requeue delay or none. A restore in progress is the
+   exception: that branch writes its status and returns the 10-second restore
+   poll at once, so these last steps do not run for it.
 
 ### When the controller runs again
 
@@ -134,18 +151,28 @@ a primary from stale answers.
 %%{init: {"sequence": {"actorMargin": 30, "width": 120}}}%%
 sequenceDiagram
     autonumber
-    participant U as User
-    participant BC as Backup controller
-    participant API as Kubernetes<br/>API server
-    participant IM as Instance Manager<br/>of the backup member
-    participant OS as Object<br/>storage
+    box rgb(241,245,249) Outside
+        participant U as User
+    end
+    box rgb(255,237,213) Operator
+        participant BC as Backup controller
+    end
+    box rgb(219,234,254) Kubernetes
+        participant API as Kubernetes<br/>API server
+    end
+    box rgb(220,252,231) CUBRID-native
+        participant IM as Instance Managers<br/>of the members
+    end
+    box rgb(241,245,249) Outside
+        participant OS as Object<br/>storage
+    end
 
     U->>API: create a CubridBackup
     API-->>BC: watch event
     BC->>API: read the CubridBackup<br/>and its cluster
     BC->>IM: ask every<br/>member its role
-    BC->>BC: choose a safe member,<br/>record it in status
-    BC->>IM: start the backup<br/>with an idempotency key
+    BC->>API: record the chosen<br/>member in status
+    BC->>IM: start the backup on it<br/>with an idempotency key
     IM->>OS: run backupdb,<br/>upload the artifact
     loop every 10 seconds
         BC->>IM: poll the operation

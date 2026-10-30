@@ -31,11 +31,10 @@ flowchart TB
 
     subgraph cp["Kubernetes control plane"]
         api["Kubernetes API server"]:::k8s
-        builtin["Built-in<br/>controllers and<br/>kubelet, watching<br/>the API server"]:::k8s
+        builtin["Built-in controllers<br/>and kubelet"]:::k8s
     end
 
     subgraph objs["Objects the Operator writes (cluster namespace)"]
-        direction LR
         wl["StatefulSet demo,<br/>Broker Deployments"]:::op
         cfg["Services, ConfigMaps,<br/>token Secret, NetworkPolicies"]:::op
         crs["CubridCluster and<br/>CubridBackup status"]:::op
@@ -48,12 +47,12 @@ flowchart TB
 
     objstore[("Object storage")]:::ext
 
-    mgr -. "watch and write<br/>through the API" .-> objs
+    mgr -. "watch and write" .-> api
+    builtin -. "watch" .-> api
     api -. "stores" .-> objs
     builtin -. "run Pods,<br/>attach volumes" .-> run
     mgr -. "HTTP + token<br/>port 9090" .-> members
-    members -. "backups, seeding" .-> objstore
-    objs ~~~ run
+    members == "backups, seeding" ==> objstore
 
     classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
     classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
@@ -84,9 +83,9 @@ flowchart TB
 
     subgraph members["Member Pods: heartbeat and replication run between them"]
         direction LR
-        m0["demo-0<br/>CUBRID server<br/>volume<br/>data-demo-0"]:::cubrid
-        m1["demo-1<br/>CUBRID server<br/>volume<br/>data-demo-1"]:::cubrid
-        m2["demo-2<br/>CUBRID server<br/>volume<br/>data-demo-2"]:::cubrid
+        m0["demo-0<br/>CUBRID server"]:::cubrid
+        m1["demo-1<br/>CUBRID server"]:::cubrid
+        m2["demo-2<br/>CUBRID server"]:::cubrid
         m0 ~~~ m1 ~~~ m2
     end
 

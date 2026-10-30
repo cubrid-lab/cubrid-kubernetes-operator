@@ -40,8 +40,11 @@ defined below, so a box with the same name is the same thing on every page.
 
 ## Legend
 
-Every diagram uses the same colors for who is responsible for a component and
-the same line styles for what kind of traffic an arrow carries.
+Every diagram uses the same colors for who is responsible for a component.
+In the flowcharts, each box has its owner's color, and the line style of an
+arrow says what kind of traffic it carries. In the sequence diagrams, the
+background behind each group of participants has the owner's color, and the
+arrows show the order of the steps in time rather than a kind of traffic.
 
 ```mermaid
 flowchart LR
@@ -69,7 +72,7 @@ says what each color and line means.
 | Green box | CUBRID-native: behavior that belongs to the CUBRID engine and its tools, including the Instance Manager that runs them inside each member |
 | Gray box | Outside the cluster's control: the application client and object storage |
 | Dotted arrow | Control path: Kubernetes API reads and writes, watches, and the Operator's HTTP calls to an Instance Manager |
-| Thick arrow | Data path: SQL from clients, Broker-to-server connections and CUBRID replication |
+| Thick arrow | Data path: SQL from clients, Broker-to-server connections, CUBRID replication, and backup and seeding data moved to and from object storage |
 
 The Instance Manager is drawn green although the Operator project builds it:
 it runs inside the database container and only drives local CUBRID
