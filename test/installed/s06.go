@@ -40,7 +40,11 @@ import (
 )
 
 const (
-	// FaultOperatorRestart selects S06 restart after LAB01.
+	// FaultOperatorRestart selects the operator restart validation: once the
+	// base HA run (LAB01) has left the cluster in its checked state, the
+	// manager Pod is deleted while clients keep writing, to show that the
+	// replacement resumes management without disturbing the database
+	// (scenario S06, variant restart).
 	FaultOperatorRestart = "operator-restart"
 	s06Lane              = "lab-installed-ha-s06"
 	s06ID                = "S06"
@@ -73,7 +77,10 @@ func (h *haRun) s06FlowLimits() faults.Limits {
 		Poll: h.cfg.Poll}
 }
 
-// s06Record is the evidence of S06 restart besides the timeline.
+// s06Record is what the operator restart validation (S06 restart) records
+// besides the fault timeline: the manager before and after the restart, when
+// the replacement started and took the leader Lease, and the members before
+// and after, so the verdict can be checked from the evidence alone.
 type s06Record struct {
 	Master        string          `json:"master"`
 	ManagerBefore imageIdentity   `json:"managerBefore"`
@@ -89,14 +96,17 @@ type s06Record struct {
 	// on it before the fault, in seconds.
 	ClockOffsets   map[string]float64 `json:"clockOffsetsSeconds,omitempty"`
 	ClientsStopped bool               `json:"clientsStopped"`
-	// ImageChanged is set when the replacement runs another image: the
-	// environment changed, which blocks S06.
+	// ImageChanged is set when the replacement runs another image. The run
+	// is then no longer testing the image it started with: the environment
+	// changed under it, so the result is blocked rather than judged.
 	ImageChanged    bool `json:"imageChanged,omitempty"`
 	NotAcknowledged *int `json:"operationsNotAcknowledgedAfterFault,omitempty"`
 }
 
 // maxClockOffset is the largest difference between a node's clock and the
-// run's that S06 accepts: it compares times from both.
+// run's that the operator restart validation accepts. It orders times the run
+// took against times the cluster wrote (the replacement's start, its Lease and
+// its status), so a larger skew could make a stale status look fresh.
 const maxClockOffset = time.Second
 
 // managerPodKill deletes the installed manager's Pod without a grace period.
@@ -130,12 +140,13 @@ func (f managerPodKill) Confirm(ctx context.Context) (bool, error) {
 
 func (f managerPodKill) Remove(context.Context) error { return nil }
 
-// runS06 runs S06 restart on the cluster LAB01 left in its checked state:
-// two clients write through the read-write Service while the manager's Pod
-// is deleted without a grace period. The replacement must write a status of
-// its own that names the same master within ResyncLimit; no client operation
-// after the fault may fail or stay unanswered; no member may be replaced or
-// restarted, and no role may move; and the data rules must hold. A run that
+// runS06 runs the operator restart validation (S06 restart) on the cluster
+// the base HA run (LAB01) left in its checked state: two clients write
+// through the read-write Service while the manager's Pod is deleted without
+// a grace period. The replacement must write a status of its own that names
+// the same master within ResyncLimit; no client operation after the fault may
+// fail or stay unanswered; no member may be replaced or restarted, and no
+// role may move; and the data rules must hold. A run that
 // ends before its outcome is judged is blocked, not failed.
 func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 	defer h.inScenario(s06ID+"/"+s06Variant, &result)()
@@ -310,7 +321,9 @@ func (h *haRun) observeAfterS06(ctx context.Context, result *evidence.Scenario, 
 }
 
 // beforeS06 verifies the state the fault starts from: the same manager Pod,
-// the starting conditions, and the same master as at LAB01's end.
+// the starting conditions, and the same master as at the end of the base HA
+// run (LAB01). A different starting state would make a later change
+// impossible to attribute to the restart.
 func (h *haRun) beforeS06(ctx context.Context, rec s06Record) error {
 	manager, err := h.observeManager(ctx, h.cfg.Config)
 	if err != nil {
@@ -555,8 +568,9 @@ func (h *haRun) startBackgroundClient(ctx context.Context, id string) error {
 	}
 }
 
-// stopBackgroundClients stops every client of S06 and confirms that none is
-// left running. It goes on when ctx has ended, within its own bound.
+// stopBackgroundClients stops every client of the operator restart
+// validation and confirms that none is left running. It goes on when ctx has
+// ended, within its own bound.
 func (h *haRun) stopBackgroundClients(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 	defer cancel()
