@@ -83,9 +83,11 @@ flowchart TB
     end
 
     subgraph members["Member Pods: heartbeat and replication run between them"]
+        direction LR
         m0["demo-0<br/>CUBRID server<br/>volume<br/>data-demo-0"]:::cubrid
         m1["demo-1<br/>CUBRID server<br/>volume<br/>data-demo-1"]:::cubrid
         m2["demo-2<br/>CUBRID server<br/>volume<br/>data-demo-2"]:::cubrid
+        m0 ~~~ m1 ~~~ m2
     end
 
     client == "SQL" ==> rw
