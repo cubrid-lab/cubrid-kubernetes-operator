@@ -299,7 +299,13 @@ func (h *haRun) observeAfterS06(ctx context.Context, result *evidence.Scenario, 
 	}
 	roles, unmet, err := h.roles(ctx)
 	if err != nil || unmet != "" {
-		return clients, fmt.Errorf("read the roles after the restart: %w", errors.Join(err, errors.New(unmet)))
+		err = fmt.Errorf("read the roles after the restart: %w", errors.Join(err, errors.New(unmet)))
+		// A heartbeat status that was not answered observed nothing, as in
+		// S12 (#607).
+		if strings.HasPrefix(unmet, "cubrid heartbeat status failed") || strings.Contains(unmet, unread) {
+			return clients, membersNotObserved{err}
+		}
+		return clients, err
 	}
 	result.Measurements["databaseFailoverObserved"] = roles.Master != rec.Master
 	if roles.Master != rec.Master {
@@ -465,8 +471,8 @@ func (h *haRun) writeTimeline(file string, steps []faults.Step) error {
 	return h.write(file, []byte(b.String()))
 }
 
-// membersNotObserved is an error that kept the members from being compared
-// with before: nothing was seen to change.
+// membersNotObserved is an error that kept the members, or their roles, from
+// being compared with before: nothing was seen to change.
 type membersNotObserved struct{ error }
 
 // membersUnchanged reads the members again and names those whose Pod or
@@ -477,7 +483,12 @@ type membersNotObserved struct{ error }
 func (h *haRun) membersUnchanged(ctx context.Context, before []imageIdentity) ([]imageIdentity, []string, error) {
 	cluster := &databasev1alpha1.CubridCluster{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
-		return nil, nil, membersNotObserved{err}
+		// Only a read that may succeed when retried leaves the members not
+		// observed; a cluster read as gone or refused was seen (#607).
+		if retryable(err) {
+			return nil, nil, membersNotObserved{err}
+		}
+		return nil, nil, fmt.Errorf("read the HA cluster after the restart: %w", err)
 	}
 	members, unmet, err := h.memberIdentities(ctx, cluster)
 	if err != nil {

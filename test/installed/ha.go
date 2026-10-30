@@ -1108,8 +1108,10 @@ func (h *haRun) roles(ctx context.Context) (*startingState, string, error) {
 
 // commandRan is how kubectl exec reports a command that ran in the container
 // and exited non-zero; an error without it is kubectl's own, such as an API
-// server or kubelet that could not be reached.
-var commandRan = regexp.MustCompile(`(?m)^command terminated with exit code \d+\s*$`)
+// server or kubelet that could not be reached. The message ends a line but
+// need not start one: it joins the command's last line when that line has
+// no trailing newline (#607).
+var commandRan = regexp.MustCompile(`(?m)command terminated with exit code \d+\s*$`)
 
 // rolesOf asks CUBRID on every member named for its role. One active master
 // and standby slaves are a state; anything else is what does not hold, and an

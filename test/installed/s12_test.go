@@ -1483,6 +1483,10 @@ func TestRunS12ExactJudgesAFailedHeartbeatStatusByWhetherItRan(t *testing.T) {
 		// The command ran in the member and failed: what it answered was seen.
 		"the command ran and failed": {out: "++ cubrid master is not running.\ncommand terminated with exit code 1\n",
 			result: evidence.Fail, want: "not Ready within restore_limit"},
+		// Its output had no trailing newline, so kubectl's message joins its
+		// last line: the command still ran (#607).
+		"the command ran and failed without a trailing newline": {out: "++ cubrid master is not running." +
+			"command terminated with exit code 1\n", result: evidence.Fail, want: "not Ready within restore_limit"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS12Config(t)
