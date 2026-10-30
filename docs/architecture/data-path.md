@@ -69,12 +69,12 @@ flowchart TB
 
     subgraph opside["Written by the Operator"]
         cfg["Broker config ConfigMap<br/>member host list"]:::op
-        svc["Services<br/>demo-rw, demo-ro"]:::op
+        svc["Services<br/>demo-rw<br/>and demo-ro"]:::op
         status["CubridCluster status<br/>Conditions,<br/>current primary"]:::op
     end
 
     brokers["Broker Pods"]:::cubrid
-    members["Database members<br/>demo-0 … demo-2"]:::cubrid
+    members["Database members<br/>demo-0, demo-1<br/>and demo-2"]:::cubrid
 
     cc -. "writes" .-> cfg
     cc -. "creates" .-> svc
