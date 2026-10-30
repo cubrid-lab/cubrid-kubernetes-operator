@@ -20,42 +20,58 @@ the backup controller.
 
 ## Cluster controller
 
+The pass is drawn in two parts with the same participants and numbering:
+first the Kubernetes objects, then the observation of the members, the
+status write and the next pass.
+
+### Part 1: trigger and Kubernetes objects
+
 ```mermaid
 sequenceDiagram
     autonumber
     participant T as Trigger
     participant CC as Cluster controller
-    participant API as Kubernetes API server
-    participant K8S as StatefulSet and Deployment controllers, kubelet
-    participant IM as Instance Manager in each member
+    participant API as Kubernetes<br/>API server
+    participant K8S as Built-in controllers<br/>and kubelet
 
-    T->>CC: spec, annotation or deletion change of the CubridCluster,<br/>change of an owned object, or a timed requeue
+    T->>CC: change of the CubridCluster<br/>or an owned object,<br/>or a timed requeue
     CC->>API: read the CubridCluster
     Note over CC,API: Kubernetes objects, in this order
-    CC->>API: headless Service and member alias Services
+    CC->>API: headless and member alias Services
     CC->>API: Instance Manager token Secret
-    CC->>API: HA member list ConfigMap (HA only)
+    CC->>API: HA member list ConfigMap<br/>(HA only)
     CC->>API: NetworkPolicies
     CC->>API: StatefulSet
     API-->>K8S: watch
-    K8S->>K8S: create or replace Pods, bind volumes
-    Note over CC,IM: Observe and act, then report
-    alt restore into a new cluster is in progress
-        CC->>IM: start or poll the restore operation
-        CC->>API: write status with Ready False
+    K8S->>K8S: create or replace Pods,<br/>bind volumes
+```
+
+### Part 2: observe, report and run again
+
+```mermaid
+sequenceDiagram
+    autonumber 10
+    participant T as Trigger
+    participant CC as Cluster controller
+    participant API as Kubernetes<br/>API server
+    participant IM as Instance Manager<br/>in each member
+
+    alt restore into a new cluster in progress
+        CC->>IM: start or poll the restore
+        CC->>API: status with Ready False
     else HA cluster
-        CC->>IM: create the first database once (HA bootstrap)
+        CC->>IM: create the first database once<br/>(HA bootstrap)
         CC->>IM: ask every member for its role
-        IM-->>CC: master, slave or unknown, engine version, replication
-        CC->>CC: resolve the primary from this pass's answers only
-        CC->>API: Broker ConfigMap, Broker Deployments, -rw and -ro Services
-        CC->>CC: engine version guard, rolling update planning
+        IM-->>CC: role, engine version, replication
+        CC->>CC: resolve the primary from<br/>this pass's answers only
+        CC->>API: Broker ConfigMap, Deployments,<br/>-rw and -ro Services
+        CC->>CC: engine version guard,<br/>rolling update planning
     else standalone cluster
-        CC->>IM: ask the one member for its role and engine version
-        CC->>API: Broker ConfigMap, Broker Deployments, -rw and -ro Services
+        CC->>IM: ask the one member its role<br/>and engine version
+        CC->>API: Broker ConfigMap, Deployments,<br/>-rw and -ro Services
     end
-    CC->>API: write status (Conditions, members, current primary) and emit Events
-    CC-->>T: requeue after 10 s (HA), 30 s (standalone, engine version unknown), or wait for the next event
+    CC->>API: status (Conditions, members,<br/>current primary), Events
+    CC-->>T: requeue: 10 s (HA),<br/>30 s (version unknown),<br/>or wait for an event
 ```
 
 ### Key components
@@ -82,7 +98,7 @@ sequenceDiagram
    Condition naming the step.
 3. **Steps 8–9:** Kubernetes, not the Operator, turns the StatefulSet into
    running Pods with their volumes.
-4. **Steps 10 onward:** the controller observes and acts according to the
+4. **Steps 10 onward (part 2):** the controller observes and acts according to the
    cluster's state. For an HA cluster, the primary is resolved only from the
    answers of this pass: exactly one master among freshly observed members, or
    no resolved primary. The Broker tier is reconciled after that, and the
@@ -98,17 +114,17 @@ It is not a fixed one-second poll.
 
 | Situation | Next pass | Why | Source |
 |---|---|---|---|
-| Spec, annotation or deletion change of a `CubridCluster` | immediately | the `clusterEvents` filter passes these; status-only changes do not start a pass, because the controller writes the status itself | `cubridcluster_controller.go` lines 1215–1228 |
-| Change of an owned StatefulSet, Deployment, Service, ConfigMap, Secret or NetworkPolicy | immediately | `Owns(...)` watches | `cubridcluster_controller.go` lines 1231–1243 |
-| HA cluster with role discovery configured, after a successful status write | 10 seconds | a CUBRID failover changes no Kubernetes object, so no event would report the new roles | `cubridcluster_controller.go` lines 1125–1129; `haResyncInterval`, [`haresolve.go`](../../internal/controller/haresolve.go) line 45 |
-| Restore into a new cluster in progress | 10 seconds | poll the restore operation | `restorePollAfter`, [`bootstrap.go`](../../internal/controller/bootstrap.go) line 40 |
-| Standalone cluster whose engine version is not known yet | 30 seconds | otherwise an idle cluster would stay blocked until an unrelated event | `cubridcluster_controller.go` lines 1130–1135; [`update.go`](../../internal/controller/update.go) line 44 |
-| Token Secret not yet in the cache; a short-lived write conflict; a status write conflict | 1 second | retry a transient condition without reporting it | `cubridcluster_controller.go` lines 359–362, 1183–1187, 1119–1123 |
-| Any other write failure | controller-runtime's rate-limited backoff | the error is returned; the failure is reported once as a Condition and an Event | `failed`, `cubridcluster_controller.go` lines 1175–1201 |
-| Standalone cluster, nothing pending; or a cluster name that cannot be used | no timed requeue | the next event starts the next pass; an unusable name is a terminal error and is not retried | `cubridcluster_controller.go` lines 1136 and 439–460 |
+| Spec, annotation or deletion change of a `CubridCluster` | immediately | the `clusterEvents` filter passes these; status-only changes do not start a pass, because the controller writes the status itself | `clusterEvents` in [`cubridcluster_controller.go`](../../internal/controller/cubridcluster_controller.go) |
+| Change of an owned StatefulSet, Deployment, Service, ConfigMap, Secret or NetworkPolicy | immediately | `Owns(...)` watches | `CubridClusterReconciler.SetupWithManager` in `cubridcluster_controller.go` |
+| HA cluster with role discovery configured, after a successful status write | 10 seconds | a CUBRID failover changes no Kubernetes object, so no event would report the new roles | the end of `updateStatus` in `cubridcluster_controller.go`; `haResyncInterval` in [`haresolve.go`](../../internal/controller/haresolve.go) |
+| Restore into a new cluster in progress | 10 seconds | poll the restore operation | `restorePollAfter` in [`bootstrap.go`](../../internal/controller/bootstrap.go) |
+| Standalone cluster whose engine version is not known yet | 30 seconds | otherwise an idle cluster would stay blocked until an unrelated event | `standaloneVersionPending` and `standaloneVersionRetryInterval` in [`update.go`](../../internal/controller/update.go), used by `updateStatus` |
+| Token Secret not yet in the cache; a short-lived write conflict; a status write conflict | 1 second | retry a transient condition without reporting it | `errIMTokenSecretNotCached` in `Reconcile`, `lastingConflict` in `failed`, and the conflict check after `writeStatus` in `updateStatus`, all in `cubridcluster_controller.go` |
+| Any other write failure | controller-runtime's rate-limited backoff | the error is returned; the failure is reported once as a Condition and an Event | `failed` in `cubridcluster_controller.go` |
+| Standalone cluster, nothing pending; or a cluster name that cannot be used | no timed requeue | the next event starts the next pass; an unusable name is a terminal error and is not retried | the end of `updateStatus`, and `refuseClusterName`, in `cubridcluster_controller.go` |
 
 A role answer older than 15 seconds is treated as unknown
-(`roleObservationTTL`, `haresolve.go` line 40), so a slow pass cannot resolve
+(`roleObservationTTL` in `haresolve.go`), so a slow pass cannot resolve
 a primary from stale answers.
 
 ## Backup controller
@@ -118,22 +134,22 @@ sequenceDiagram
     autonumber
     participant U as User
     participant BC as Backup controller
-    participant API as Kubernetes API server
-    participant IM as Instance Manager of the backup member
-    participant OS as Object storage
+    participant API as Kubernetes<br/>API server
+    participant IM as Instance Manager<br/>of the backup member
+    participant OS as Object<br/>storage
 
     U->>API: create a CubridBackup
     API-->>BC: watch event
-    BC->>API: read the CubridBackup and its CubridCluster
-    BC->>IM: ask every member for its role
-    BC->>BC: choose a safe member and record it in status
-    BC->>IM: start the backup with an idempotency key
-    IM->>OS: run backupdb and upload the artifact
+    BC->>API: read the CubridBackup<br/>and its CubridCluster
+    BC->>IM: ask every member its role
+    BC->>BC: choose a safe member,<br/>record it in status
+    BC->>IM: start the backup<br/>with an idempotency key
+    IM->>OS: run backupdb,<br/>upload the artifact
     loop every 10 seconds
         BC->>IM: poll the operation
-        BC->>API: status Running, then Uploading
+        BC->>API: status Running,<br/>then Uploading
     end
-    BC->>API: status Completed with the artifact, or Failed with a reason
+    BC->>API: Completed with the artifact,<br/>or Failed with a reason
 ```
 
 ### Reading order
@@ -153,22 +169,24 @@ sequenceDiagram
 
 | Statement | Level | Where |
 |---|---|---|
-| The backup controller watches only `CubridBackup` | Implemented | `SetupWithManager`, [`cubridbackup_controller.go`](../../internal/controller/cubridbackup_controller.go) lines 787–792 |
-| Target recorded before the start; one idempotency key per backup | Implemented, Design | `startBackup`, `cubridbackup_controller.go` lines 228–366, `idempotencyKey` lines 624–628; target choice in [`backuptarget.go`](../../internal/controller/backuptarget.go) line 58; [ADR-0007](../adr/0007-backup-execution.md) |
-| Poll every 10 seconds; finished backups are skipped | Implemented | `backupPollAfter`, `cubridbackup_controller.go` line 89; lines 144–147 |
+| The backup controller watches only `CubridBackup` | Implemented | `CubridBackupReconciler.SetupWithManager` in [`cubridbackup_controller.go`](../../internal/controller/cubridbackup_controller.go) |
+| Target recorded before the start; one idempotency key per backup | Implemented, Design | `startBackup` and `idempotencyKey` in `cubridbackup_controller.go`; target choice in `selectBackupTarget`, [`backuptarget.go`](../../internal/controller/backuptarget.go); [ADR-0007](../adr/0007-backup-execution.md) |
+| Poll every 10 seconds; finished backups are skipped | Implemented | `backupPollAfter` and the `BackupPhaseCompleted`/`BackupPhaseFailed` check at the start of `CubridBackupReconciler.Reconcile`, `cubridbackup_controller.go` |
 | A real `CubridBackup` on an HA cluster completes and its artifact is verified independently | Observed (VM lab) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory), row "Backup and restore": no Kind e2e test creates a `CubridBackup`; the backup and restore scenarios ran on the VM lab |
 
 ## How the controllers reach the Instance Manager
 
 - **Address:** `http://<member>.<namespace>.svc:9090/v1/...`, through the
   member's alias Service
-  ([`imclient.go`](../../internal/controller/imclient.go) lines 536–538,
-  [`roleprober.go`](../../internal/controller/roleprober.go) line 112).
+  (`HTTPBackupClient.baseURL` in
+  [`imclient.go`](../../internal/controller/imclient.go), and the role URL in
+  [`roleprober.go`](../../internal/controller/roleprober.go)).
 - **Authentication:** a bearer token read from the cluster's
-  `<cluster>-im-token` Secret (`ClusterTokens`, `imclient.go` line 357; header
-  set at line 606). Only `/livez` and `/readyz`, which the kubelet probes, are
+  `<cluster>-im-token` Secret (`ClusterTokens` in `imclient.go`; the
+  `Authorization` header is set in `acceptedTokens.send`). Only `/livez` and `/readyz`, which the kubelet probes, are
   unauthenticated
-  ([`server.go`](../../internal/instancemanager/server.go) lines 278–288).
+  (`Server.Handler` in
+  [`server.go`](../../internal/instancemanager/server.go)).
 - **Endpoints the controllers call:** `GET /v1/role` (role, engine version,
   replication), `POST /v1/ha/bootstrap`, `POST /v1/backup`,
   `POST /v1/restore/prepare`, `GET /v1/operations/{id}` and
@@ -177,25 +195,26 @@ sequenceDiagram
   and `GET /v1/ha/convergence` (diagnostics and tests), and
   `POST /v1/shutdown`, which the member's own preStop hook calls through
   `instance-manager shutdown`
-  ([`operations.go`](../../internal/instancemanager/operations.go) line 364;
-  `preStopShutdown`, `cubridcluster_controller.go` lines 1002–1013).
+  (`RequestShutdown` in
+  [`operations.go`](../../internal/instancemanager/operations.go);
+  `preStopShutdown` in `cubridcluster_controller.go`).
 
 ## Evidence
 
 | Statement | Level | Where |
 |---|---|---|
-| Order of the Kubernetes writes | Implemented | `Reconcile`, `cubridcluster_controller.go` lines 347–384 |
-| Recovery first, then the HA or standalone branch, then one status write | Implemented | `updateStatus`, `cubridcluster_controller.go` lines 1016–1141 |
-| Primary resolved only from the current pass's fresh answers | Implemented, Design | `reconcileHAStatus` and `resolvePrimary`, `haresolve.go` lines 69 and 238; [ADR-0005](../adr/0005-failover-split-brain.md) section 3 |
-| Pod readiness follows `/readyz` only; `HAReady` is a separate Condition | Implemented, Design | `cubridcluster_controller.go` lines 859–862; [docs/observability.md — Health model](../observability.md#health-model) |
+| Order of the Kubernetes writes | Implemented | `CubridClusterReconciler.Reconcile` in `cubridcluster_controller.go` |
+| Recovery first, then the HA or standalone branch, then one status write | Implemented | `updateStatus` in `cubridcluster_controller.go` |
+| Primary resolved only from the current pass's fresh answers | Implemented, Design | `reconcileHAStatus` and `resolvePrimary` in `haresolve.go`; [ADR-0005](../adr/0005-failover-split-brain.md) section 3 |
+| Pod readiness follows `/readyz` only; `HAReady` is a separate Condition | Implemented, Design | the `ReadinessProbe` in `podSpec`, `cubridcluster_controller.go`; [docs/observability.md — Health model](../observability.md#health-model) |
 | The Conditions and what each reason means | Implemented | [docs/observability.md — Conditions](../observability.md#conditions) |
-| Rolling update planning exists, but automatic Pod replacement is switched off | Implemented | `reconcileRollingUpdate`, `update.go` lines 167 and 190; ROADMAP.md row "Hardening" |
+| Rolling update planning exists, but automatic Pod replacement is switched off | Implemented | `reconcileRollingUpdate` and its `AutomaticReplacement` check in `update.go`; ROADMAP.md row "Hardening" |
 | An HA cluster bootstraps, replicates and reports one primary on the real image | Observed (Kind in CI) | ROADMAP.md row "HA and Broker" |
 
 ## Limits and assumptions
 
 - The diagram leaves out the token rotation steps, the conflict-retry
-  details and the per-step failure Conditions; the source lines above have
+  details and the per-step failure Conditions; the functions named above have
   them.
 - While a restore into a new cluster is in progress, role observation and the
   Broker tier are skipped and the cluster is reported not ready

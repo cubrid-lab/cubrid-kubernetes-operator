@@ -18,34 +18,49 @@ Brokers follow it. The Operator observes the new roles and reports them; it
 does not promote, fence or fail back. The steps marked as planned are design
 decisions that the code does not carry out yet.
 
+The sequence is drawn in two parts with the same participants and numbering:
+first what Kubernetes and CUBRID do, then what the Operator observes.
+
+### Part 1: the fault, CUBRID failover and the Pod's return
+
 ```mermaid
 sequenceDiagram
     autonumber
-    participant K8S as Kubernetes: StatefulSet controller, kubelet
-    participant OLD as demo-0, master before the fault
-    participant HA as demo-1 and demo-2: CUBRID heartbeat
-    participant BRW as Read-write Brokers
-    participant CC as Cluster controller
+    participant K8S as Kubernetes<br/>StatefulSet controller, kubelet
+    participant OLD as demo-0<br/>master before the fault
+    participant HA as demo-1 and demo-2<br/>CUBRID heartbeat
+    participant BRW as Read-write<br/>Brokers
 
     Note over OLD: The master's Pod is deleted
-    K8S->>OLD: run the preStop hook, then stop the container
-    OLD->>OLD: Instance Manager starts an ordered stop of CUBRID
-    HA->>HA: heartbeat loses the master, promotes a slave by member list order
-    BRW->>HA: reconnect through the host list to the new master
-    Note over BRW: in-flight transactions may fail, clients retry
-    K8S->>OLD: recreate Pod demo-0 with the same name and volume
-    OLD->>HA: CUBRID brings the member back, normally as a slave
+    K8S->>OLD: run the preStop hook,<br/>then stop the container
+    OLD->>OLD: Instance Manager starts<br/>an ordered stop of CUBRID
+    HA->>HA: heartbeat loses the master,<br/>promotes a slave by<br/>member list order
+    BRW->>HA: reconnect through the host list<br/>to the new master
+    Note over BRW: in-flight transactions<br/>may fail, clients retry
+    K8S->>OLD: recreate Pod demo-0 with<br/>the same name and volume
+    OLD->>HA: CUBRID brings the member back,<br/>normally as a slave
+```
+
+### Part 2: what the Operator observes
+
+```mermaid
+sequenceDiagram
+    autonumber 7
+    participant OLD as demo-0<br/>master before the fault
+    participant HA as demo-1 and demo-2<br/>CUBRID heartbeat
+    participant CC as Cluster<br/>controller
+
     loop on owned-object events and every 10 seconds
         CC->>OLD: ask its role
         CC->>HA: ask their roles
         alt a member unreachable or more than one master
-            CC->>CC: no primary resolved, current primary cleared
-            CC->>CC: RoutingReady False (reported only, write path stays open)
+            CC->>CC: no primary resolved,<br/>current primary cleared
+            CC->>CC: RoutingReady False (reported only,<br/>write path stays open)
         else all three answered, exactly one master
-            CC->>CC: PrimaryResolved True, current primary is the new master
+            CC->>CC: PrimaryResolved True,<br/>current primary is the new master
         end
     end
-    Note over CC: Planned, not implemented: close the write path while<br/>the primary is ambiguous, verify a former master before it rejoins
+    Note over CC: Planned, not implemented: close the write<br/>path while the primary is ambiguous, verify<br/>a former master before it rejoins
 ```
 
 ## Key components
@@ -78,9 +93,9 @@ sequenceDiagram
    slave. One exception was observed: when the first member of the member
    list is deleted without a grace period and is back within a second,
    CUBRID can make it master again and promote no slave (POC-19).
-5. **Loop:** on each pass the controller asks every member. While any member
-   cannot be observed, or two report themselves master, no primary is
-   resolved and `RoutingReady` is `False`. Once all three answer with exactly
+5. **Steps 7 onward (part 2), the loop:** on each pass the controller asks
+   every member. While any member cannot be observed, or two report
+   themselves master, no primary is resolved and `RoutingReady` is `False`. Once all three answer with exactly
    one master, `PrimaryResolved` becomes `True` and `currentPrimary` names it.
 6. **Final note:** two Operator safety steps from the design are not in the
    code yet; see the next section.
@@ -133,10 +148,10 @@ if they were in place.
 
 | Statement | Level | Where |
 |---|---|---|
-| Primary resolved only when every member answered freshly and exactly one is master | Implemented, Design | `resolvePrimary`, [`haresolve.go`](../../internal/controller/haresolve.go) line 238; answers older than 15 seconds count as unknown (line 40); ADR-0005 section 3 |
-| HA clusters are observed again every 10 seconds, because a failover changes no Kubernetes object | Implemented | [`cubridcluster_controller.go`](../../internal/controller/cubridcluster_controller.go) lines 1125–1129; `haresolve.go` line 45 |
-| `Ready` stays `False` while more than one master is observed | Implemented | `setReady`, `cubridcluster_controller.go` lines 1144–1170 |
-| preStop hook runs `instance-manager shutdown`, which asks the local Instance Manager to stop CUBRID | Implemented, Design | `preStopShutdown`, `cubridcluster_controller.go` lines 1002–1013; [`operations.go`](../../internal/instancemanager/operations.go) line 364; [ADR-0003](../adr/0003-instance-manager.md) "Shutdown model" |
+| Primary resolved only when every member answered freshly and exactly one is master | Implemented, Design | `resolvePrimary` in [`haresolve.go`](../../internal/controller/haresolve.go); answers older than 15 seconds count as unknown (`roleObservationTTL`); ADR-0005 section 3 |
+| HA clusters are observed again every 10 seconds, because a failover changes no Kubernetes object | Implemented | the end of `updateStatus` in [`cubridcluster_controller.go`](../../internal/controller/cubridcluster_controller.go); `haResyncInterval` in `haresolve.go` |
+| `Ready` stays `False` while more than one master is observed | Implemented | `setReady` in `cubridcluster_controller.go` |
+| preStop hook runs `instance-manager shutdown`, which asks the local Instance Manager to stop CUBRID | Implemented, Design | `preStopShutdown` in `cubridcluster_controller.go`; `RequestShutdown` in [`operations.go`](../../internal/instancemanager/operations.go); [ADR-0003](../adr/0003-instance-manager.md) "Shutdown model" |
 | The master's Pod is deleted with and without a grace period; one member is master afterwards, client writes are acknowledged again, no acknowledged write is missing, and the former master returns and holds all data | Observed (Kind in CI) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory) row "HA and Broker"; [scenario contract](../testing/scenario-contract.md), "S03: primary Pod termination" |
 | When the first member's Pod is deleted without a grace period it can be back within a second, and CUBRID makes it master again instead of promoting a slave | Observed (Kind and manual POC) | POC-19 in [docs/poc/RESULTS.md](../poc/RESULTS.md); scenario contract S03 |
 | CUBRID fails over without the Operator, and a restarted Operator names the new master without restarting a member | Observed (Kind in CI; one VM-lab run of the Operator restart) | ROADMAP.md row "HA and Broker" and the Operator restart paragraph; scenario contract "S06: Operator failure"; [ADR-0005](../adr/0005-failover-split-brain.md) section 7 |

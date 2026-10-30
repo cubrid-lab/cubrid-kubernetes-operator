@@ -45,20 +45,22 @@ the same line styles for what kind of traffic an arrow carries.
 
 ```mermaid
 flowchart LR
-    k8s["Managed by Kubernetes<br/>API server, StatefulSet and<br/>Deployment controllers, kubelet"]:::k8s
-    op["Managed by the Operator<br/>the CUBRID Operator's controllers<br/>and the objects they create"]:::op
-    cub["CUBRID-native<br/>CUBRID server, heartbeat HA,<br/>Broker routing, Instance Manager"]:::cubrid
-    ext["Outside the cluster's control<br/>application client,<br/>object storage"]:::ext
+    op["Managed by the Operator<br/>controllers and the objects they write"]:::op
+    k8s["Managed by Kubernetes<br/>API server, built-in controllers, kubelet"]:::k8s
+    ext["Outside the cluster's control<br/>application client, object storage"]:::ext
+    cub["CUBRID-native<br/>server, heartbeat HA, Brokers,<br/>Instance Manager"]:::cubrid
 
-    a1[" "]:::blank -. "control path: API calls,<br/>watches, Instance Manager calls" .-> a2[" "]:::blank
-    b1[" "]:::blank == "data path: SQL and<br/>replication traffic" ==> b2[" "]:::blank
+    op -. "control path" .-> k8s
+    ext == "data path" ==> cub
 
     classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
     classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
     classDef cubrid fill:#dcfce7,stroke:#15803d,color:#0f172a
     classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
-    classDef blank fill:none,stroke:none
 ```
+
+The two arrows above are only examples of the line styles; the table below
+says what each color and line means.
 
 | Style | Meaning |
 |---|---|
@@ -97,24 +99,25 @@ namespace; the real names are built from the `CubridCluster` name.
 | Kubernetes API server | Stores every object; all controllers read and write through it | Kubernetes | — |
 | `CubridCluster` resource | The desired cluster: standalone (1 member) or HA (3 promotable members) | user writes spec, Operator writes status | [`api/v1alpha1/cubridcluster_types.go`](../../api/v1alpha1/cubridcluster_types.go), [ADR-0001](../adr/0001-ha-topology.md) |
 | `CubridBackup` resource | One requested backup of a cluster | user writes spec, Operator writes status | [`api/v1alpha1/`](../../api/v1alpha1/), [ADR-0007](../adr/0007-backup-execution.md) |
-| Operator manager Pod | One controller-runtime manager process with leader election, a metrics endpoint and health probes. It is not a database Pod and holds no data | Operator | [`cmd/main.go`](../../cmd/main.go) lines 223–247, [`config/manager/manager.yaml`](../../config/manager/manager.yaml) |
+| Operator manager Pod | One controller-runtime manager process with leader election, a metrics endpoint and health probes. It is not a database Pod and holds no data | Operator | the `ctrl.NewManager` options in [`cmd/main.go`](../../cmd/main.go), [`config/manager/manager.yaml`](../../config/manager/manager.yaml) |
 | Cluster controller | `CubridClusterReconciler`: everything about a `CubridCluster` | Operator | [`internal/controller/cubridcluster_controller.go`](../../internal/controller/cubridcluster_controller.go) |
 | Backup controller | `CubridBackupReconciler`: drives one `CubridBackup` to `Completed` or `Failed` | Operator | [`internal/controller/cubridbackup_controller.go`](../../internal/controller/cubridbackup_controller.go) |
-| Database StatefulSet `demo` | Pods `demo-0` … `demo-2`, each with its own data volume claim `data-demo-N` | object: Operator; Pods and volumes: Kubernetes | `reconcileStatefulSet`, `cubridcluster_controller.go` lines 700–752 |
-| Database member Pod | One database container, `cubrid`, in which the Instance Manager runs as the main process and supervises the CUBRID server and, for HA, heartbeat | Kubernetes runs it; CUBRID runs inside | `podSpec`, `cubridcluster_controller.go` lines 846–857, [ADR-0003](../adr/0003-instance-manager.md) |
-| Instance Manager | HTTP API on port 9090 inside each member that runs local CUBRID commands (role, HA bootstrap, backup, restore, shutdown) | CUBRID side (built by this project) | [`internal/instancemanager/server.go`](../../internal/instancemanager/server.go) lines 275–288 |
-| Headless Service `demo-instances` and member alias Services `demo-0` … | Stable DNS names for each member, which CUBRID HA and the Operator use | Operator | `cubridcluster_controller.go` line 473, [`memberservice.go`](../../internal/controller/memberservice.go) line 62, [ADR-0004](../adr/0004-ha-hostname-dns.md) |
-| Broker Deployments `demo-broker-rw`, `demo-broker-ro` | Two read-write and two read-only CUBRID Broker Pods, separate from the database Pods | object: Operator; routing: CUBRID | [`broker.go`](../../internal/controller/broker.go) lines 49–101, [ADR-0002](../adr/0002-broker-routing.md) |
-| Services `demo-rw`, `demo-ro` | Application endpoints (ports 33000 and 33001) that select Broker Pods, never database Pods | Operator | `broker.go` lines 70–71, 274 |
-| NetworkPolicies `demo-database`, `demo-broker` | Ingress rules for the database and Broker Pods | Operator writes them; the network plugin enforces them | [`networkpolicy.go`](../../internal/controller/networkpolicy.go) line 63, [README — Network access](../../README.md#network-access) |
+| Database StatefulSet `demo` | Pods `demo-0` … `demo-2`, each with its own data volume claim `data-demo-N` | object: Operator; Pods and volumes: Kubernetes | `reconcileStatefulSet` in [`cubridcluster_controller.go`](../../internal/controller/cubridcluster_controller.go) |
+| Database member Pod | One database container, `cubrid`, in which the Instance Manager runs as the main process and supervises the CUBRID server and, for HA, heartbeat | Kubernetes runs it; CUBRID runs inside | `podSpec` in `cubridcluster_controller.go`, [ADR-0003](../adr/0003-instance-manager.md) |
+| Instance Manager | HTTP API on port 9090 inside each member that runs local CUBRID commands (role, HA bootstrap, backup, restore, shutdown) | CUBRID side (built by this project) | `Server.Handler` in [`internal/instancemanager/server.go`](../../internal/instancemanager/server.go) |
+| Headless Service `demo-instances` and member alias Services `demo-0` … | Stable DNS names for each member, which CUBRID HA and the Operator use | Operator | `reconcileHeadlessService` in `cubridcluster_controller.go`, `reconcileMemberServices` in [`memberservice.go`](../../internal/controller/memberservice.go), [ADR-0004](../adr/0004-ha-hostname-dns.md) |
+| Broker Deployments `demo-broker-rw`, `demo-broker-ro` | Two read-write and two read-only CUBRID Broker Pods, separate from the database Pods | object: Operator; routing: CUBRID | `brokerReplicas` and `reconcileBrokerTier` in [`broker.go`](../../internal/controller/broker.go), [ADR-0002](../adr/0002-broker-routing.md) |
+| Services `demo-rw`, `demo-ro` | Application endpoints (ports 33000 and 33001) that select Broker Pods, never database Pods | Operator | `rwServiceName`, `roServiceName` and `reconcileBrokerService` in `broker.go` |
+| NetworkPolicies `demo-database`, `demo-broker` | Ingress rules for the database and Broker Pods | Operator writes them; the network plugin enforces them | `reconcileNetworkPolicies` in [`networkpolicy.go`](../../internal/controller/networkpolicy.go), [README — Network access](../../README.md#network-access) |
 | Object storage | Where backups go and where HA members are seeded from | outside | [ADR-0007](../adr/0007-backup-execution.md) |
 
 ## Short answers
 
 **Where does the Operator run?** In its own manager Pod, as one process that
 hosts two controllers, with leader election so only one replica acts at a
-time (`cmd/main.go` lines 223–230 and 253–289; `--leader-elect` is set in
-`config/manager/manager.yaml` line 64). It never runs inside a database Pod.
+time (the `ctrl.NewManager` options and the two `SetupWithManager` calls in
+`cmd/main.go`; the `--leader-elect` flag is set in
+`config/manager/manager.yaml`). It never runs inside a database Pod.
 See [System topology](topology.md).
 
 **What triggers reconciliation?** A change to a `CubridCluster`'s spec,
@@ -153,12 +156,12 @@ controllers registered with one manager:
 
 | DESIGN.md §7 role | Where it is in the code |
 |---|---|
-| Cluster Reconciler | `CubridClusterReconciler.Reconcile`, `cubridcluster_controller.go` lines 324–385 |
-| HA Reconciler | the same controller: `reconcileHAConfig` ([`haconfig.go`](../../internal/controller/haconfig.go) line 97), `reconcileHABootstrap` ([`habootstrap.go`](../../internal/controller/habootstrap.go) line 195), `reconcileHAStatus` and `resolvePrimary` ([`haresolve.go`](../../internal/controller/haresolve.go) lines 69 and 238) |
+| Cluster Reconciler | `CubridClusterReconciler.Reconcile` in [`cubridcluster_controller.go`](../../internal/controller/cubridcluster_controller.go) |
+| HA Reconciler | the same controller: `reconcileHAConfig` ([`haconfig.go`](../../internal/controller/haconfig.go)), `reconcileHABootstrap` ([`habootstrap.go`](../../internal/controller/habootstrap.go)), `reconcileHAStatus` and `resolvePrimary` ([`haresolve.go`](../../internal/controller/haresolve.go)) |
 | Service Reconciler | the same controller: `reconcileHeadlessService`, `reconcileMemberServices`, and the Broker tier in `broker.go` |
-| Storage Reconciler | the same controller: the StatefulSet's data volume claim template (`dataPVCTemplate`, `cubridcluster_controller.go` line 753); Kubernetes creates and keeps the volumes |
-| Backup Reconciler | `CubridBackupReconciler`, a second controller (`cubridbackup_controller.go`); restore into a new cluster runs in the cluster controller (`reconcileRecovery`, [`bootstrap.go`](../../internal/controller/bootstrap.go) line 73) |
-| Update Reconciler | the same controller: `reconcileUpdateGuard` and `reconcileRollingUpdate` ([`update.go`](../../internal/controller/update.go) lines 95 and 167) |
+| Storage Reconciler | the same controller: the StatefulSet's data volume claim template (`dataPVCTemplate` in `cubridcluster_controller.go`); Kubernetes creates and keeps the volumes |
+| Backup Reconciler | `CubridBackupReconciler`, a second controller (`cubridbackup_controller.go`); restore into a new cluster runs in the cluster controller (`reconcileRecovery` in [`bootstrap.go`](../../internal/controller/bootstrap.go)) |
+| Update Reconciler | the same controller: `reconcileUpdateGuard` and `reconcileRollingUpdate` (both in [`update.go`](../../internal/controller/update.go)) |
 
 This matches DESIGN.md's requirement that these concerns form one lifecycle
 reconciled together rather than independent subsystems.
