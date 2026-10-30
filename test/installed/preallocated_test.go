@@ -362,6 +362,10 @@ func TestPreallocatedEpochAndWorkloadReplacementStopsSQLAndCleanup(t *testing.T)
 			testAmbiguousOwner, testPodKind, testPVCKind, testVolumeKind} {
 			t.Run(phase+"/"+kind, func(t *testing.T) {
 				f := preallocatedFixture(t)
+				// The replacement, not the run's deadline, must end the run:
+				// the fixture's one second can run out on a loaded host
+				// before the step under test (#552).
+				f.cfg.Timeout = time.Minute
 				executedSQL := 0
 				f.commandHook = func(_ context.Context, args []string) (string, error) {
 					last := args[len(args)-1]
@@ -376,8 +380,12 @@ func TestPreallocatedEpochAndWorkloadReplacementStopsSQLAndCleanup(t *testing.T)
 					}
 					return out, err
 				}
-				if err := f.runner.Run(t.Context(), f.cfg); err == nil {
+				err := f.runner.Run(t.Context(), f.cfg)
+				if err == nil {
 					t.Fatal("replacement passed")
+				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("the run ended at its deadline, not at the replacement: %v", err)
 				}
 				if f.deletes != 0 {
 					t.Fatal("ambiguity granted CR cleanup authority")
