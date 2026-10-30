@@ -939,10 +939,6 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			fail(notRecorded(OpDownloading, err))
 			return
 		}
-		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring }); err != nil {
-			fail(notRecorded(OpRestoring, err))
-			return
-		}
 		// Nothing is taken over, removed or restored on an engine the
 		// restore may not run on (ADR-0011).
 		if err := checkRestoreEngine(roots.EngineVersion, req.ExpectedCubridVersion); err != nil {
@@ -968,9 +964,22 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 				fail("restore failed: " + err.Error())
 				return
 			}
+			// The backup is verified and downloaded while the operation is
+			// Downloading; it is Restoring once restoredb is about to run,
+			// which is when the Operator reports the phase Restoring (#598).
+			restoringFailed := false
+			roots.BeforeRestore = func() error {
+				_, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring })
+				restoringFailed = err != nil
+				return err
+			}
 			res, err := Restore(ctx, s.cli, s.objects, roots, req)
 			if err != nil {
-				fail("restore failed: " + err.Error())
+				if restoringFailed {
+					fail(notRecorded(OpRestoring, err))
+				} else {
+					fail("restore failed: " + err.Error())
+				}
 				return
 			}
 			restored = &OperationArtifact{

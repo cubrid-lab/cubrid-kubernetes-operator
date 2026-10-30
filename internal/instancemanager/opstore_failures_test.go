@@ -592,10 +592,17 @@ func TestServer_Backup_StopsBeforeUnrecordedRunningBackup(t *testing.T) {
 	}
 }
 
+// Downloading is recorded before anything is read; Restoring, after the
+// backup is verified and downloaded and before restoredb (#598). Neither
+// write failing leaves the database, its registration or the staging
+// directory behind.
 func TestServer_Restore_StopsBeforeUnrecordedTransitions(t *testing.T) {
 	skipRootPersistence(t)
-	for _, tc := range []struct{ previous, attempted OperationState }{
-		{OpPending, OpDownloading}, {OpDownloading, OpRestoring},
+	for _, tc := range []struct {
+		previous, attempted OperationState
+		reads               bool
+	}{
+		{OpPending, OpDownloading, false}, {OpDownloading, OpRestoring, true},
 	} {
 		t.Run(string(tc.attempted), func(t *testing.T) {
 			f := newResumeFixture(t)
@@ -617,8 +624,9 @@ func TestServer_Restore_StopsBeforeUnrecordedTransitions(t *testing.T) {
 			checkTransitionFailure(t, f.server, op, tc.previous, tc.attempted, &logged, repair, func(h http.Handler) *httptest.ResponseRecorder {
 				return persistenceRequest(h, http.MethodPost, "/v1/restore/prepare", "restore-key", string(body))
 			})
-			if calls := cli.recorded(); len(calls) != 0 || objects.gets != 0 {
-				t.Errorf("unrecorded %s ran commands %v or read %d objects", tc.attempted, calls, objects.gets)
+			if calls := cli.recorded(); len(calls) != 0 || (objects.gets != 0) != tc.reads {
+				t.Errorf("unrecorded %s ran commands %v or read %d objects (reads expected: %v)",
+					tc.attempted, calls, objects.gets, tc.reads)
 			}
 			for _, path := range []string{filepath.Join(f.databases, dbName), filepath.Join(f.databases, databasesTxt), f.req.StagingDir} {
 				if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -770,7 +778,7 @@ func TestServer_Restore_StopsBeforeUnrecordedAdoption(t *testing.T) {
 	f.start(cli)
 	var logged bytes.Buffer
 	var repair func()
-	f.server.store.SetLogger(slog.New(&afterStateRecord{Handler: slog.NewJSONHandler(&logged, nil), state: OpRestoring,
+	f.server.store.SetLogger(slog.New(&afterStateRecord{Handler: slog.NewJSONHandler(&logged, nil), state: OpDownloading,
 		once: func() { repair = unwritableDuringOperation(t, f.storeDir) }}))
 	op := f.post("restore-adoption")
 	f.server.ops.Wait()
@@ -782,7 +790,7 @@ func TestServer_Restore_StopsBeforeUnrecordedAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkTransitionFailure(t, f.server, op, OpRestoring, OpRestoring, &logged, repair,
+	checkTransitionFailure(t, f.server, op, OpDownloading, OpDownloading, &logged, repair,
 		func(h http.Handler) *httptest.ResponseRecorder {
 			return persistenceRequest(h, http.MethodPost, "/v1/restore/prepare", "restore-adoption", string(body))
 		}, failureMetadata{owner: previous.ID, reason: "restore failed:", forbidden: OpStarting})
