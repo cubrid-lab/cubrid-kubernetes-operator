@@ -17,30 +17,29 @@ arrows) only writes the objects and configuration that the data path uses. No
 SQL passes through the Operator, and the Operator does not switch the
 read-write endpoint between database Pods when the master changes.
 
+The SQL path and the management path are drawn as two diagrams with the
+same names.
+
+### SQL path
+
 ```mermaid
-flowchart LR
+flowchart TB
     client(["Application client"]):::ext
 
     subgraph svc["Services: Kubernetes routes to ready Pods"]
-        rw["Service demo-rw<br/>port 33000"]:::op
-        ro["Service demo-ro<br/>port 33001"]:::op
+        rw["Service<br/>demo-rw<br/>port 33000"]:::op
+        ro["Service<br/>demo-ro<br/>port 33001"]:::op
     end
 
     subgraph brokers["Broker Pods"]
-        brw["Read-write Brokers<br/>2 Pods, read-write access mode"]:::cubrid
-        bro["Read-only Brokers<br/>2 Pods, read-only access mode"]:::cubrid
+        brw["Deployment<br/>demo-broker-rw<br/>2 read-write Brokers"]:::cubrid
+        bro["Deployment<br/>demo-broker-ro<br/>2 read-only Brokers"]:::cubrid
     end
 
-    subgraph members["Database members"]
+    subgraph members["Member Pods"]
         m0["demo-0<br/>CUBRID server, master now"]:::cubrid
         m1["demo-1<br/>CUBRID server"]:::cubrid
         m2["demo-2<br/>CUBRID server"]:::cubrid
-    end
-
-    subgraph opside["Management path"]
-        cc["Cluster controller"]:::op
-        cfg["Broker config ConfigMap<br/>member host list"]:::op
-        status["CubridCluster status<br/>Conditions and current primary"]:::op
     end
 
     client == "SQL" ==> rw
@@ -52,16 +51,43 @@ flowchart LR
     m0 == "replication" ==> m1
     m0 == "replication" ==> m2
 
+    classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+    classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
+    classDef cubrid fill:#dcfce7,stroke:#15803d,color:#0f172a
+    classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
+
+    style svc fill:#fff7ed,stroke:#c2410c,color:#0f172a
+    style brokers fill:#f0fdf4,stroke:#15803d,color:#0f172a
+    style members fill:#f0fdf4,stroke:#15803d,color:#0f172a
+```
+
+### Management path
+
+```mermaid
+flowchart TB
+    cc["Cluster controller"]:::op
+
+    subgraph opside["Written by the Operator"]
+        cfg["Broker config ConfigMap<br/>member host list"]:::op
+        svc["Services<br/>demo-rw<br/>and demo-ro"]:::op
+        status["CubridCluster status<br/>Conditions,<br/>current primary"]:::op
+    end
+
+    brokers["Broker Pods"]:::cubrid
+    members["Member Pods<br/>demo-0, demo-1<br/>and demo-2"]:::cubrid
+
     cc -. "writes" .-> cfg
-    cfg -. "read once at Broker start" .-> brokers
     cc -. "creates" .-> svc
-    cc -. "asks each member its role" .-> members
     cc -. "writes" .-> status
+    cfg -. "read once at<br/>Broker start" .-> brokers
+    cc -. "asks each<br/>member its role" .-> members
 
     classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
     classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
     classDef cubrid fill:#dcfce7,stroke:#15803d,color:#0f172a
     classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
+
+    style opside fill:#fff7ed,stroke:#c2410c,color:#0f172a
 ```
 
 The diagram draws `demo-0` as the master at this moment. Which member is
@@ -117,8 +143,8 @@ Services do not change.
 
 | Statement | Level | Where |
 |---|---|---|
-| `-rw` and `-ro` select Broker Pods, never database Pods; two Brokers per access mode | Implemented, Design | [`broker.go`](../../internal/controller/broker.go) lines 49–50, 74–101, 274; [ADR-0002](../adr/0002-broker-routing.md) "Decision" and "As implemented" |
-| Brokers run `ACCESS_MODE=RW` or `RO`, and `databases.txt` lists every member's DNS name | Implemented | [`broker_config.go`](../../internal/controller/broker_config.go) lines 52–61, 116–122, 161, 169–180 |
+| `-rw` and `-ro` select Broker Pods, never database Pods; two Brokers per access mode | Implemented, Design | `brokerReplicas`, `reconcileBrokerTier` and `reconcileBrokerService` in [`broker.go`](../../internal/controller/broker.go); [ADR-0002](../adr/0002-broker-routing.md) "Decision" and "As implemented" |
+| Brokers run `ACCESS_MODE=RW` or `RO`, and `databases.txt` lists every member's DNS name | Implemented | `memberDNSNames`, `generateBrokerConf`, `writeBrokerSection` and `generateBrokerDatabasesTxt` in [`broker_config.go`](../../internal/controller/broker_config.go) |
 | The Operator does not switch `-rw` between database Pods after a failover | Design, Implemented | ADR-0002 "Decision"; no `role=master` selector in `broker.go` |
 | A client commits through `-rw`, reads through `-ro`, and is refused a write through `-ro` with `-581` | Observed (Kind in CI) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory), rows "Foundation" (standalone) and "HA and Broker"; [scenario contract](../testing/scenario-contract.md), "S01: three-member HA with read-write and read-only access" |
 | Writes and schema changes replicate to every member | Observed (Kind in CI) | ROADMAP.md row "HA and Broker"; scenario contract "S02: normal replication" |

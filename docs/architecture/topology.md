@@ -16,66 +16,89 @@ three-member HA cluster named `demo`. A standalone cluster is the same with
 one member and no HA member list (see [Standalone and HA](#standalone-and-ha)).
 The Operator runs in its own Pod and is never one of the database Pods.
 
+The picture is drawn as two diagrams that use the same names: the control
+path (who writes and runs what) and the data path (where SQL and replication
+go).
+
+### Control path
+
 ```mermaid
 flowchart TB
-    client(["Application client"]):::ext
+    mgr["Operator manager Pod<br/>(own namespace):<br/>cluster controller and<br/>backup controller"]:::op
 
     subgraph cp["Kubernetes control plane"]
         api["Kubernetes API server"]:::k8s
-        builtin["StatefulSet and Deployment<br/>controllers, kubelet"]:::k8s
+        builtin["Built-in controllers<br/>and kubelet"]:::k8s
     end
 
-    subgraph mgr["Operator manager Pod (own namespace, leader-elected)"]
-        cc["Cluster controller"]:::op
-        bc["Backup controller"]:::op
+    subgraph objs["Objects the Operator writes (cluster namespace)"]
+        wl["StatefulSet demo,<br/>Broker Deployments"]:::op
+        cfg["Services, ConfigMaps,<br/>token Secret, NetworkPolicies"]:::op
+        crs["CubridCluster and<br/>CubridBackup status"]:::op
     end
 
-    subgraph appns["Cluster namespace"]
-        subgraph objs["Objects the Operator writes"]
-            crs["CubridCluster demo status,<br/>CubridBackup status"]:::op
-            cfg["ConfigMaps: HA member list, Broker config<br/>Secret: Instance Manager token<br/>NetworkPolicies"]:::op
-            dns["Headless Service demo-instances,<br/>member alias Services"]:::op
-        end
-        rw["Service demo-rw :33000"]:::op
-        ro["Service demo-ro :33001"]:::op
-        brw["Deployment demo-broker-rw<br/>2 read-write Broker Pods"]:::cubrid
-        bro["Deployment demo-broker-ro<br/>2 read-only Broker Pods"]:::cubrid
-        subgraph sts["StatefulSet demo: CUBRID heartbeat and replication run between the members"]
-            direction LR
-            m0["Pod demo-0<br/>Instance Manager supervising<br/>CUBRID server and heartbeat"]:::cubrid
-            m1["Pod demo-1<br/>Instance Manager supervising<br/>CUBRID server and heartbeat"]:::cubrid
-            m2["Pod demo-2<br/>Instance Manager supervising<br/>CUBRID server and heartbeat"]:::cubrid
-            v0[("Volume data-demo-0")]:::k8s
-            v1[("Volume data-demo-1")]:::k8s
-            v2[("Volume data-demo-2")]:::k8s
-        end
+    subgraph run["Pods that Kubernetes runs"]
+        members["Member Pods<br/>demo-0, demo-1<br/>and demo-2:<br/>Instance Manager<br/>on port 9090,<br/>CUBRID server<br/>and heartbeat"]:::cubrid
+        brokers["Broker Pods<br/>2 read-write,<br/>2 read-only"]:::cubrid
     end
 
     objstore[("Object storage")]:::ext
 
-    cc -. "watch and write" .-> api
-    bc -. "watch and write status" .-> api
-    api -. "stores" .-> objs
+    mgr -. "watch and write" .-> api
     builtin -. "watch" .-> api
-    builtin -. "run Pods" .-> sts
-    cc -. "HTTP + token, port 9090" .-> sts
-    bc -. "HTTP + token, port 9090" .-> sts
-
-    client == "SQL" ==> rw
-    client == "SQL" ==> ro
-    rw ==> brw
-    ro ==> bro
-    brw == "port 1523" ==> sts
-    bro == "port 1523" ==> sts
-    m0 --- v0
-    m1 --- v1
-    m2 --- v2
-    sts -. "backups, seeding" .-> objstore
+    api -. "stores" .-> objs
+    builtin -. "run Pods,<br/>attach volumes" .-> run
+    mgr -. "HTTP + token<br/>port 9090" .-> members
+    members == "backups, seeding" ==> objstore
 
     classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
     classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
     classDef cubrid fill:#dcfce7,stroke:#15803d,color:#0f172a
     classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
+
+    style objs fill:#fff7ed,stroke:#c2410c,color:#0f172a
+    style cp fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
+    style run fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
+```
+
+### Data path
+
+```mermaid
+flowchart TB
+    client(["Application client"]):::ext
+
+    subgraph svcs["Services written by the Operator"]
+        rw["Service<br/>demo-rw<br/>port 33000"]:::op
+        ro["Service<br/>demo-ro<br/>port 33001"]:::op
+    end
+
+    subgraph brokers["Broker Pods"]
+        brw["Deployment<br/>demo-broker-rw<br/>2 read-write Brokers"]:::cubrid
+        bro["Deployment<br/>demo-broker-ro<br/>2 read-only Brokers"]:::cubrid
+    end
+
+    subgraph members["Member Pods: heartbeat and replication run between them"]
+        direction LR
+        m0["demo-0<br/>CUBRID server"]:::cubrid
+        m1["demo-1<br/>CUBRID server"]:::cubrid
+        m2["demo-2<br/>CUBRID server"]:::cubrid
+        m0 ~~~ m1 ~~~ m2
+    end
+
+    client == "SQL" ==> rw
+    client == "SQL" ==> ro
+    rw ==> brw
+    ro ==> bro
+    brokers == "port 1523" ==> members
+
+    classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+    classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
+    classDef cubrid fill:#dcfce7,stroke:#15803d,color:#0f172a
+    classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
+
+    style svcs fill:#fff7ed,stroke:#c2410c,color:#0f172a
+    style brokers fill:#f0fdf4,stroke:#15803d,color:#0f172a
+    style members fill:#f0fdf4,stroke:#15803d,color:#0f172a
 ```
 
 ## Key components
@@ -104,9 +127,9 @@ All names are those of the [shared component table](README.md#shared-components)
 
 ## Reading order
 
-1. Start at the **Operator manager Pod**. Its two controllers only talk to
-   the **Kubernetes API server** and, over HTTP, to the **Instance Manager**
-   in each member.
+1. In the **control path** diagram, start at the **Operator manager Pod**.
+   Its two controllers only talk to the **Kubernetes API server** and, over
+   HTTP, to the **Instance Manager** in each member.
 2. Follow the dotted arrows from the API server: the Operator writes the
    StatefulSet, Deployments, Services, ConfigMaps, Secret and NetworkPolicies;
    the **built-in controllers and kubelet** turn them into running Pods.
@@ -114,10 +137,11 @@ All names are those of the [shared component table](README.md#shared-components)
    share one container, and each member has its own volume. The controllers'
    HTTP calls on port 9090 go to the Instance Manager, never to the CUBRID
    server.
-4. Follow the thick arrows from the **application client**: SQL goes to a
-   Service, a Broker and a CUBRID server. The Operator is not on that path.
+4. In the **data path** diagram, follow the thick arrows from the
+   **application client**: SQL goes to a Service, a Broker and a CUBRID
+   server. The Operator is not on that path.
 5. Between the members, **CUBRID heartbeat and replication** run directly,
-   without the Operator, as the StatefulSet's label says. The
+   without the Operator, as the member group's label says. The
    [data path](data-path.md) page draws them.
 
 ## Standalone and HA
@@ -138,13 +162,13 @@ Validation rules for the member count are in
 
 | Statement | Level | Where |
 |---|---|---|
-| One manager process runs both controllers with leader election, metrics and health probes | Implemented | [`cmd/main.go`](../../cmd/main.go) lines 223–247 (manager options), 253–289 (two controllers), 291–298 (health checks); `--leader-elect` in [`config/manager/manager.yaml`](../../config/manager/manager.yaml) line 64 |
-| The cluster controller owns StatefulSets, Deployments, Services, ConfigMaps, Secrets and NetworkPolicies | Implemented | `SetupWithManager`, [`cubridcluster_controller.go`](../../internal/controller/cubridcluster_controller.go) lines 1231–1243 |
-| One database container per member; Instance Manager supervises CUBRID in it | Implemented, Design | `podSpec`, `cubridcluster_controller.go` lines 846–857; [ADR-0003](../adr/0003-instance-manager.md) "Decision"; [DESIGN.md §9](../../DESIGN.md#9-instance-manager) |
-| StatefulSet uses the `demo-instances` Service, parallel Pod start and `OnDelete` updates | Implemented | `cubridcluster_controller.go` lines 714, 719, 723 |
-| Member alias Services give each member its short HA name | Implemented, Design | [`memberservice.go`](../../internal/controller/memberservice.go) line 62; [ADR-0004](../adr/0004-ha-hostname-dns.md) |
-| Two read-write and two read-only Broker Pods in separate Deployments behind `-rw`/`-ro` | Implemented, Design | [`broker.go`](../../internal/controller/broker.go) lines 49–50, 70–101; [ADR-0002](../adr/0002-broker-routing.md) |
-| Ports: Broker 33000/33001, server 1523, Instance Manager 9090, heartbeat 59901/UDP | Implemented | [`broker_config.go`](../../internal/controller/broker_config.go) lines 30–31; `cubridcluster_controller.go` lines 57–61; [`memberservice.go`](../../internal/controller/memberservice.go) line 47 |
+| One manager process runs both controllers with leader election, metrics and health probes | Implemented | [`cmd/main.go`](../../cmd/main.go): the `ctrl.NewManager` options, the two `SetupWithManager` calls, and `AddHealthzCheck` and `AddReadyzCheck`; the `--leader-elect` flag in [`config/manager/manager.yaml`](../../config/manager/manager.yaml) |
+| The cluster controller owns StatefulSets, Deployments, Services, ConfigMaps, Secrets and NetworkPolicies | Implemented | `CubridClusterReconciler.SetupWithManager` in [`cubridcluster_controller.go`](../../internal/controller/cubridcluster_controller.go) |
+| One database container per member; Instance Manager supervises CUBRID in it | Implemented, Design | `podSpec` in `cubridcluster_controller.go`; [ADR-0003](../adr/0003-instance-manager.md) "Decision"; [DESIGN.md §9](../../DESIGN.md#9-instance-manager) |
+| StatefulSet uses the `demo-instances` Service, parallel Pod start and `OnDelete` updates | Implemented | `ServiceName`, `PodManagementPolicy` and `UpdateStrategy` set in `reconcileStatefulSet`, `cubridcluster_controller.go` |
+| Member alias Services give each member its short HA name | Implemented, Design | `reconcileMemberServices` in [`memberservice.go`](../../internal/controller/memberservice.go); [ADR-0004](../adr/0004-ha-hostname-dns.md) |
+| Two read-write and two read-only Broker Pods in separate Deployments behind `-rw`/`-ro` | Implemented, Design | `brokerReplicas` and `reconcileBrokerTier` in [`broker.go`](../../internal/controller/broker.go); [ADR-0002](../adr/0002-broker-routing.md) |
+| Ports: Broker 33000/33001, server 1523, Instance Manager 9090, heartbeat 59901/UDP | Implemented | `brokerRWPort` and `brokerROPort` in [`broker_config.go`](../../internal/controller/broker_config.go); `cubridServerPort` and `instanceManagerPort` in `cubridcluster_controller.go`; `haHeartbeatPort` in [`memberservice.go`](../../internal/controller/memberservice.go) |
 | A standalone cluster and a three-member HA cluster become Ready on the real image | Observed (Kind in CI) | [ROADMAP.md](../../ROADMAP.md#implementation-and-validation-inventory), rows "Foundation" and "HA and Broker" |
 | Three-member HA with an installed Operator on the VM lab | Observed (VM lab, recorded runs) | ROADMAP.md, the installed HA run paragraph; [docs/testing/installed-ha.md](../testing/installed-ha.md) |
 
@@ -161,4 +185,4 @@ Validation rules for the member count are in
 - Placement of the database members, PodDisruptionBudgets and multi-zone
   layouts are not shown because the Operator does not manage them yet
   (ROADMAP.md, "Hardening"). The Broker Deployments only carry a preferred
-  anti-affinity on the node name (`broker.go` line 222).
+  anti-affinity on the node name (`brokerPodSpec` in `broker.go`).
