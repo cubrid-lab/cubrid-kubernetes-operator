@@ -30,24 +30,23 @@ coordinates **CUBRID native HA** with the Kubernetes lifecycle.
 
 ## Relationship to the existing CUBRID Operator
 
-CUBRID already provides an official Kubernetes Operator.
+CUBRID already provides an official Kubernetes Operator,
+[CUBRID/cubrid-operator](https://github.com/CUBRID/cubrid-operator). It
+deploys CUBRID HA, reports the current master, removes Pods whose Broker is
+not listening from Service Endpoints, schedules backups and supports scaling.
 
-This project does not intend to replace it.
+This project does not replace it and offers no migration path. It explores
+different design and validation questions: a primary resolved only from the
+agreeing answers of every member, an authenticated Instance Manager API
+instead of `pods/exec`, a separate read-write and read-only Broker tier,
+verified backups restored into a new cluster, and failure scenarios checked
+with real SQL.
 
-The purpose of this experimental project is to explore a more
-database-aware reconciliation model focused on:
-
-- explicit database role discovery
-- Kubernetes-aware HA lifecycle orchestration
-- failure and rejoin state machines
-- stable read/write routing
-- backup and recovery validation
-- database-aware health
-- failure-oriented E2E testing
-- Kubernetes Conditions and observability
-
-Where possible, lessons and reusable ideas should be contributed back to
-the broader CUBRID ecosystem.
+[docs/official-operator-comparison.md](./docs/official-operator-comparison.md)
+compares the two at pinned revisions, with the evidence level of each claim,
+the open questions and the opportunities to contribute findings upstream.
+Measured side-by-side scenarios are tracked in
+[#93](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/93).
 
 ## Goals
 
@@ -262,6 +261,7 @@ Core API, HA safety and recovery changes require design agreement.
 - [docs/adr/](./docs/adr/) — architecture decision records
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — how to contribute and the ADR process
 - [docs/compatibility.md](./docs/compatibility.md) — support matrix and cluster providers
+- [docs/official-operator-comparison.md](./docs/official-operator-comparison.md) — differences from the official CUBRID Operator, with sources
 - [docs/governance.md](./docs/governance.md) — Apache-2.0 terms, maintainer responsibilities and API-group decision
 
 ## License
