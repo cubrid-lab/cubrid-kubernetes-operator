@@ -16,6 +16,9 @@
 > existing official CUBRID Operator.
 > See [Relationship to the existing CUBRID Operator](#relationship-to-the-existing-cubrid-operator).
 
+New to the project? [docs/architecture/](./docs/architecture/README.md) explains
+the architecture with diagrams before you read the design or the code.
+
 ## Why this project?
 
 Running a database on Kubernetes requires more than creating Pods and
@@ -257,6 +260,9 @@ Core API, HA safety and recovery changes require design agreement.
 
 ## Documentation
 
+- [docs/architecture/](./docs/architecture/README.md) — the architecture in
+  diagrams: where the Operator runs, what it reconciles, how clients reach
+  the database and who handles a failure; start here
 - [DESIGN.md](./DESIGN.md) — architecture and design principles
 - [ROADMAP.md](./ROADMAP.md) — delivery scope, stages and validation status
 - [docs/adr/](./docs/adr/) — architecture decision records
