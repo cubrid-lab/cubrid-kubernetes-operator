@@ -141,6 +141,79 @@ the starting state, so none was replaced or restarted. CUBRID must report
 the same master and slaves, and `status.currentPrimary` the same master.
 The manager must still be the same Pods.
 
+## S04 power-off
+
+With `-fault vm-power-off` the run goes on after LAB01 passed, on the same
+cluster, with S04 of the scenario contract: the VM of the node that runs the
+master loses power. The lane is then `lab-installed-ha-s04`, and it requires
+both LAB01 and S04/power-off. It runs on the `vm-lab` level only.
+
+The run does not know the provider. It powers a VM off and on, and reads its
+power state, through three commands the lab gives it:
+
+| Flag | What the command does |
+|---|---|
+| `-vm-stop-command` | powers off the VM of node `$NODE` without a shutdown |
+| `-vm-start-command` | powers that VM on again |
+| `-vm-status-command` | prints `stopped` while that VM is powered off |
+
+Each runs with `sh -c` on the run's host, with `NODE` set to the node's name.
+What the commands print is kept only through the run's redactor.
+
+1. The run finds the master's node. S04 is blocked, and no VM is touched,
+   when that node runs the API server (label
+   `node-role.kubernetes.io/control-plane`), or the workload client or the
+   manager: the run and the Operator must outlive the VM.
+2. As in S06, the run reads each node's clock and is blocked on an offset
+   over a second, then starts two clients writing through `<cluster>-rw`.
+3. Right before the fault, the starting conditions must be `True`, the master
+   the same as at LAB01's end, the node `Ready` and its VM not reported
+   `stopped`. Otherwise S04 is blocked.
+4. The run powers the VM off. The fault is confirmed when the status command
+   prints `stopped` and the node is not `Ready`.
+5. While the VM is off, the run reads, on every poll:
+   - the roles of the two other members: one must be master and the other a
+     slave. That is CUBRID's promotion; the Operator has no action that
+     promotes a member.
+   - `PrimaryResolved`: a reading of `True` 30 seconds or more after the VM
+     was confirmed off is a never-event (ADR-0005 keeps an observation fresh
+     for 15 seconds).
+   - the powered-off member's Pod: a deletion timestamp or another UID is a
+     never-event. `-vm-down-for` (default 1 minute) is capped at 4 minutes,
+     under the 300-second tolerations after which Kubernetes itself would
+     delete the Pod.
+
+   The VM stays off until a slave was promoted and at least `-vm-down-for`
+   has passed since it was confirmed off, within `-failover-limit` plus
+   `-vm-down-for`. A master that moves again while the VM is off fails S04.
+6. The run powers the VM on, unless the status command no longer prints
+   `stopped`. A VM that could not be powered on blocks S04: what follows
+   cannot be judged, and the VM is the lab's to recover.
+7. Within `-vm-return-limit` (`vm_return_limit`, default 10 minutes) of the
+   start, the node must be `Ready` and the cluster must converge: the member
+   on the VM is the same Pod, CUBRID reports one master and two slaves,
+   `status.currentPrimary` names that master, and the starting conditions
+   are `True`. Which member ends as master is recorded (`finalMaster`), not
+   judged.
+8. The clients go on for `-stable-period`, then stop. Answers that failed
+   while the master's VM was off are expected. Every client must be
+   acknowledged again without interruption, for at least the stable period,
+   and the last of them must have recovered within `-failover-limit`
+   (`failover_limit`, default 30 seconds) of the VM being confirmed off.
+9. The data rules must hold on every member and both Services, over
+   everything every client recorded.
+
+Measurements: `promotedWithin` (from the VM confirmed off until the
+promotion was seen), `failoverWithin` (until the last client recovered),
+`vmReturnWithin` (from the start until the node was `Ready`),
+`primaryResolvedNotTrueFor` (from the first reading of it not `True` until
+the cluster converged), `finalMaster`, `shortestStableFor` and
+`operationsNotAcknowledged`. `S04/power-off/record.json` keeps the times,
+`S04/power-off/timeline.jsonl` the fault flow.
+
+The limits have no recorded value yet; the defaults are the run's bounds.
+A run with them is a baseline run.
+
 ## S06 restart
 
 With `-fault operator-restart` the run goes on after LAB01 passed, on the
@@ -3519,6 +3592,14 @@ and S12 variant other than `complete` and `exact` only those under
   Secret's source, operation counts and cleanup;
 - `LAB01/history.jsonl`: the client's history;
 - `LAB01/data-check.json`: the last data-rule report.
+- with `-fault vm-power-off`, `S04/power-off/record.json` (the master, its Pod
+  and node, the clock offsets, when the VM was confirmed off, the promoted
+  member and when it was seen, any reading of `PrimaryResolved` `True` or Pod
+  deletion while the VM was off, when the VM was powered on, its node `Ready`
+  and the cluster converged, the final master and the members after),
+  `S04/power-off/timeline.jsonl` (the fault flow) and
+  `S04/power-off/data-check.json`. The clients' operations are in
+  `LAB01/history.jsonl` with the rest.
 - with `-fault operator-restart`, `S06/restart/record.json` (the master, the
   manager before and after, when the old Pod was gone, when the replacement
   started and the status time it wrote, the members before and after),
