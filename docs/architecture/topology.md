@@ -42,7 +42,7 @@ flowchart TB
     end
 
     subgraph run["Pods that Kubernetes runs"]
-        members["Member Pods<br/>demo-0, demo-1,<br/>demo-2: Instance<br/>Manager on 9090,<br/>CUBRID server,<br/>heartbeat"]:::cubrid
+        members["Member Pods<br/>demo-0, demo-1<br/>and demo-2:<br/>Instance Manager<br/>on port 9090,<br/>CUBRID server<br/>and heartbeat"]:::cubrid
         brokers["Broker Pods<br/>2 read-write,<br/>2 read-only"]:::cubrid
     end
 
