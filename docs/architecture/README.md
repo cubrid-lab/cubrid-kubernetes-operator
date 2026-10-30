@@ -10,8 +10,8 @@
 These pages are the diagram-first entry point to the Operator's runtime
 architecture. They are written for a reader who knows Kubernetes basics
 (Pods, StatefulSets, Services, controllers) but has not read the Go source or
-the ADRs. Each page has one diagram, a paragraph on what it shows, the order
-in which to read it, its limits, and links to the code, the decision records
+the ADRs. Each page has its diagrams, a paragraph on what they show, the order
+in which to read them, their limits, and links to the code, the decision records
 and the validation evidence behind it.
 
 ## Reading path
