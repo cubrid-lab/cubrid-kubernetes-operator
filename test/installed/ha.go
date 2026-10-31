@@ -307,9 +307,11 @@ func (c HAConfig) validate() error {
 	if err := c.validateS04(); err != nil {
 		return err
 	}
-	if c.Fault != "" && (c.StablePeriod <= 0 || c.ResyncLimit <= 0 ||
-		len(validation.IsDNS1123Subdomain(c.LeaderLease)) != 0) {
-		return errors.New("a fault needs a positive stable period and resync limit, and the leader Lease")
+	if c.Fault != "" && c.StablePeriod <= 0 {
+		return errors.New("a fault needs a positive stable period")
+	}
+	if c.Fault == FaultOperatorRestart && (c.ResyncLimit <= 0 || len(validation.IsDNS1123Subdomain(c.LeaderLease)) != 0) {
+		return errors.New("S06 restart needs a positive resync limit and the leader Lease")
 	}
 	if err := c.validateS11(); err != nil {
 		return err

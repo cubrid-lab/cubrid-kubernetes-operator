@@ -81,13 +81,14 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.StringVar(&cfg.VMStartCommand, "vm-start-command", "",
 		"S04: shell command that powers on the VM of node $NODE")
 	flags.StringVar(&cfg.VMStatusCommand, "vm-status-command", "",
-		"S04: shell command that prints \"stopped\" when the VM of node $NODE is powered off")
+		"S04: shell command that prints \"stopped\" when the VM of node $NODE is powered off and \"running\" when it "+
+			"runs")
 	flags.DurationVar(&cfg.FailoverLimit, "failover-limit", 30*time.Second,
 		"S04: bound from the VM confirmed off until every client's writes are acknowledged again (failover_limit)")
 	flags.DurationVar(&cfg.VMReturnLimit, "vm-return-limit", 10*time.Minute,
 		"S04: bound from the VM's start until its node is Ready and the cluster converged (vm_return_limit)")
 	flags.DurationVar(&cfg.VMDownFor, "vm-down-for", time.Minute,
-		"S04: how long the VM stays off at least, from when it was confirmed off; at most 4m")
+		"S04: how long the VM stays off at least, from when it was confirmed off; at least 1m")
 	flags.DurationVar(&cfg.ResyncLimit, "resync-limit", 2*time.Minute,
 		"S06: bound for the replacement manager's first fresh status, S11 and S12 operator-restart: for its "+
 			"return (operator_resync_limit)")

@@ -41,8 +41,17 @@ const (
 	testMasterNode = "node-2"
 )
 
+// shortGrace shortens primaryResolvedGrace for one test.
+func shortGrace(t *testing.T, grace time.Duration) {
+	t.Helper()
+	was := primaryResolvedGrace
+	primaryResolvedGrace = grace
+	t.Cleanup(func() { primaryResolvedGrace = was })
+}
+
 func testS04Config(t *testing.T) HAConfig {
 	t.Helper()
+	shortGrace(t, 20*time.Millisecond)
 	cfg := testHAConfig(t)
 	cfg.Level = "vm-lab"
 	cfg.Timeout = 30 * time.Second
@@ -68,13 +77,18 @@ type s04Lab struct {
 	commands []string
 	// promote is whether CUBRID promotes a slave; keepResolved keeps
 	// PrimaryResolved True while the VM is off; deletePod deletes the
-	// powered-off member's Pod; failStart fails the start command.
-	promote, keepResolved, deletePod, failStart bool
+	// powered-off member's Pod; failStart fails the start command;
+	// returnEarly makes the node Ready again before the run starts the VM.
+	promote, keepResolved, deletePod, failStart, returnEarly bool
+	// stopping is how many status reads after the outcome report the VM
+	// "stopping" before "stopped".
+	stopping       int
+	readsAfterStop int
 }
 
-func newS04Fixture(t *testing.T, cfg HAConfig) (*haFixture, *s04Lab) {
+func newS04Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) (*haFixture, *s04Lab) {
 	t.Helper()
-	nodes := []client.Object{}
+	nodes := append([]client.Object{}, extra...)
 	for i := 1; i <= 3; i++ {
 		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("node-%d", i), Labels: map[string]string{}},
 			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady,
@@ -103,6 +117,20 @@ func newS04Fixture(t *testing.T, cfg HAConfig) (*haFixture, *s04Lab) {
 		}
 		return "", nil, false
 	}
+	f.podRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+		f.mu.Lock()
+		early := lab.returnEarly && lab.stopped[testMasterNode] && key.Name == testHAPrimary
+		f.mu.Unlock()
+		if !early {
+			return nil
+		}
+		n := &corev1.Node{}
+		if err := c.Get(ctx, client.ObjectKey{Name: testMasterNode}, n); err != nil {
+			return err
+		}
+		n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}
+		return c.Status().Update(ctx, n)
+	}
 	return f, lab
 }
 
@@ -115,6 +143,14 @@ func (l *s04Lab) run(ctx context.Context, script string, env []string) (string, 
 	case testVMStatus:
 		l.f.mu.Lock()
 		defer l.f.mu.Unlock()
+		if l.stopped[node] {
+			l.readsAfterStop++
+		}
+		// The first read after the stop is Confirm's; the next is the cleanup's.
+		if l.stopped[node] && l.readsAfterStop >= 2 && l.stopping > 0 {
+			l.stopping--
+			return "stopping\n", nil
+		}
 		if l.stopped[node] {
 			return "stopped\n", nil
 		}
@@ -227,10 +263,8 @@ func TestRunS04PassesWhenCUBRIDPromotesAndTheClusterConverges(t *testing.T) {
 }
 
 func TestRunS04FailsWhenTheOperatorKeepsPrimaryResolved(t *testing.T) {
-	grace := primaryResolvedGrace
-	primaryResolvedGrace = 100 * time.Millisecond
-	t.Cleanup(func() { primaryResolvedGrace = grace })
 	cfg := testS04Config(t)
+	shortGrace(t, 100*time.Millisecond)
 	cfg.VMDownFor = 300 * time.Millisecond
 	f, lab := newS04Fixture(t, cfg)
 	lab.keepResolved = true
@@ -278,7 +312,6 @@ func TestRunS04FailsWhenTheClientsRecoverAfterTheFailoverLimit(t *testing.T) {
 	// The fake clients answer from a second after they are read, well after
 	// the VM was off.
 	cfg.FailoverLimit = 300 * time.Millisecond
-	cfg.VMDownFor = 10 * time.Millisecond
 	f, _ := newS04Fixture(t, cfg)
 	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
 		t.Fatal("RunHA() passed")
@@ -313,7 +346,7 @@ func TestRunS04RefusesAMasterOnTheControlPlaneNode(t *testing.T) {
 		t.Fatal("RunHA() passed")
 	}
 	s04 := s04Scenario(t, cfg.EvidenceDir)
-	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "runs the API server") {
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "carries "+controlPlaneLabel) {
 		t.Fatalf("S04 = %+v, want blocked: the master's node runs the API server", s04)
 	}
 	for _, c := range lab.commands {
@@ -352,12 +385,79 @@ func TestRunS04RefusesMembersThatShareTheMastersNode(t *testing.T) {
 	}
 }
 
+// assertNoPower fails the test when a VM was stopped or started.
+func assertNoPower(t *testing.T, lab *s04Lab) {
+	t.Helper()
+	for _, c := range lab.commands {
+		if strings.HasPrefix(c, testVMStop) || strings.HasPrefix(c, testVMStart) {
+			t.Fatalf("a VM was powered: %v", lab.commands)
+		}
+	}
+}
+
+func TestRunS04RefusesABrokerOnTheMastersNode(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ha-broker-rw-1",
+		Namespace: cfg.Namespace, Labels: map[string]string{"app.kubernetes.io/component": brokerComponent}},
+		Spec: corev1.PodSpec{NodeName: testMasterNode}})
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "Broker Pod ha-broker-rw-1") {
+		t.Fatalf("S04 = %+v, want blocked: a Broker shares the master's node", s04)
+	}
+	assertNoPower(t, lab)
+}
+
+func TestRunS04RefusesAnOutagePastThePodsToleration(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.VMDownFor = 4 * time.Minute
+	f, lab := newS04Fixture(t, cfg)
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "after which Kubernetes deletes the Pod") {
+		t.Fatalf("S04 = %+v, want blocked: the outage would outlast the Pod's toleration", s04)
+	}
+	assertNoPower(t, lab)
+}
+
+func TestRunS04IsBlockedWhenTheVMComesBackOnItsOwn(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.returnEarly = true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "came back on its own") {
+		t.Fatalf("S04 = %+v, want blocked: the VM came back on its own", s04)
+	}
+}
+
+func TestRunS04PowersOnAVMThatIsStillStopping(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.stopping = 2
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Pass {
+		t.Fatalf("S04 = %+v, want a pass after the cleanup waited out the stopping state", s04)
+	}
+	if lab.stopping != 0 {
+		t.Fatalf("the cleanup read the VM's state %d times fewer than the stopping reads", lab.stopping)
+	}
+}
+
 func TestHAConfigRefusesS04OutsideTheVMLabAndWithoutItsControls(t *testing.T) {
 	for name, change := range map[string]func(*HAConfig){
 		"outside the lab": func(c *HAConfig) { c.Level = "unit" },
 		"no stop command": func(c *HAConfig) { c.VMStopCommand = " " },
 		"no limit":        func(c *HAConfig) { c.FailoverLimit = 0 },
-		"too long down":   func(c *HAConfig) { c.VMDownFor = maxVMDownFor + time.Second },
+		"too short down":  func(c *HAConfig) { c.VMDownFor = primaryResolvedGrace },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS04Config(t)
