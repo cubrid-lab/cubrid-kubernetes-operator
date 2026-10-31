@@ -95,6 +95,18 @@ var _ = Describe("Database member placement (#90)", func() {
 		Expect(term.PodAffinityTerm.TopologyKey).To(Equal("kubernetes.io/hostname"))
 		Expect(labels.SelectorFromSet(term.PodAffinityTerm.LabelSelector.MatchLabels).
 			Matches(labels.Set(sts.Spec.Template.Labels))).To(BeTrue())
+		Expect(term.PodAffinityTerm.LabelSelector.MatchLabels).To(HaveKeyWithValue("app.kubernetes.io/instance",
+			"place-preferred"), "the term must not select the members of another cluster")
+	})
+
+	It("defaults an empty placement to Required", func() {
+		c := haCluster("place-empty")
+		c.Spec.Placement = &databasev1alpha1.CubridPlacement{}
+		anti := podAntiAffinity(reconcileSts(c))
+		Expect(anti.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(1))
+		created := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: c.Name, Namespace: c.Namespace}, created)).To(Succeed())
+		Expect(created.Spec.Placement.MemberSpread).To(Equal(databasev1alpha1.MemberSpreadRequired))
 	})
 
 	It("sets no affinity for a standalone cluster", func() {
