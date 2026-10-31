@@ -157,7 +157,7 @@ func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 	defer func() {
 		if clientsStarted && !rec.ClientsStopped {
 			// Clients left writing would change the rows after the verdict.
-			err := h.stopBackgroundClients(ctx)
+			err := h.stopBackgroundClients(ctx, s06Clients)
 			rec.ClientsStopped = err == nil
 			if err != nil && result.Result == evidence.Pass {
 				result.Result, result.Reason = evidence.Fail, "stop the clients: "+err.Error()
@@ -276,11 +276,11 @@ func (h *haRun) runS06(ctx context.Context) (result evidence.Scenario) {
 // unanswered, members replaced or restarted, and a master that moved.
 func (h *haRun) observeAfterS06(ctx context.Context, result *evidence.Scenario, rec *s06Record,
 	faultAt time.Time) (clientAnswers, error) {
-	if err := h.stopBackgroundClients(ctx); err != nil {
+	if err := h.stopBackgroundClients(ctx, s06Clients); err != nil {
 		return clientAnswers{}, fmt.Errorf("stop the clients: %w", err)
 	}
 	rec.ClientsStopped = true
-	clients, err := h.collectBackgroundClients(ctx, faultAt)
+	clients, err := h.collectBackgroundClients(ctx, s06Clients, faultAt)
 	if err != nil {
 		return clients, fmt.Errorf("collect the clients: %w", err)
 	}
@@ -568,14 +568,13 @@ func (h *haRun) startBackgroundClient(ctx context.Context, id string) error {
 	}
 }
 
-// stopBackgroundClients stops every client of the operator restart
-// validation and confirms that none is left running. It goes on when ctx has
-// ended, within its own bound.
-func (h *haRun) stopBackgroundClients(ctx context.Context) error {
+// stopBackgroundClients stops the clients ids and confirms that none is left
+// running. It goes on when ctx has ended, within its own bound.
+func (h *haRun) stopBackgroundClients(ctx context.Context, ids []string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 	defer cancel()
 	var errs []error
-	for _, id := range s06Clients {
+	for _, id := range ids {
 		pid := "/tmp/" + id + ".pid"
 		// The client's parent is the container's PID 1, sleep, which reaps
 		// no child: a stopped client stays a zombie, which kill -0 still
@@ -594,7 +593,7 @@ func (h *haRun) stopBackgroundClients(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// s06Clients' answers after the fault.
+// The background clients' answers after a fault.
 type clientAnswers struct {
 	operations      evidence.Operations
 	notAcknowledged int
@@ -603,6 +602,9 @@ type clientAnswers struct {
 	notRecovered   []string
 	shortestStable time.Duration
 	stableMeasured bool
+	// slowestRecovery is the longest time from faultAt until a client
+	// recovered, among the clients that did.
+	slowestRecovery time.Duration
 }
 
 // collectBackgroundClients reads what the stopped clients recorded, adds it
@@ -611,9 +613,10 @@ type clientAnswers struct {
 // time any of them was acknowledged without interruption after faultAt. An
 // operation a client was stopped in has no answer; it is not counted as
 // unanswered.
-func (h *haRun) collectBackgroundClients(ctx context.Context, faultAt time.Time) (clientAnswers, error) {
+func (h *haRun) collectBackgroundClients(ctx context.Context, ids []string, faultAt time.Time) (clientAnswers,
+	error) {
 	var a clientAnswers
-	for _, id := range s06Clients {
+	for _, id := range ids {
 		text, err := h.clientRun(ctx, fmt.Sprintf("sleep 1; cat /tmp/%s.jsonl", id))
 		if err != nil {
 			return a, err
@@ -639,10 +642,14 @@ func (h *haRun) collectBackgroundClients(ctx context.Context, faultAt time.Time)
 				a.notAcknowledged++
 			}
 		}
-		if _, stable, recovered := workload.Recovery(events, faultAt); !recovered {
+		recoveredAt, stable, recovered := workload.Recovery(events, faultAt)
+		if !recovered {
 			a.notRecovered = append(a.notRecovered, id)
-		} else if !a.stableMeasured || stable < a.shortestStable {
-			a.shortestStable, a.stableMeasured = stable, true
+		} else {
+			if !a.stableMeasured || stable < a.shortestStable {
+				a.shortestStable, a.stableMeasured = stable, true
+			}
+			a.slowestRecovery = max(a.slowestRecovery, recoveredAt.Sub(faultAt))
 		}
 		a.operations.Attempted += history.Counts[workload.Attempted]
 		a.operations.Acknowledged += history.Counts[workload.Acknowledged]

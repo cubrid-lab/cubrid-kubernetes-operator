@@ -80,6 +80,9 @@ type Runner struct {
 	Client   client.Client
 	Command  func(context.Context, ...string) (string, error)
 	Redactor *evidence.Redactor
+	// host runs a shell script on the run's host with extra environment;
+	// nil selects hostCommand. S04 runs the lab's VM controls with it.
+	host func(ctx context.Context, script string, env []string) (string, error)
 	// forward opens a port-forward to port of a Service and returns the local
 	// address and a func that ends it (Target.forward). S11 reaches the
 	// object store through it.

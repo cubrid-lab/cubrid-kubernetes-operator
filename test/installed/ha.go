@@ -102,10 +102,23 @@ type HAConfig struct {
 	// StableFor is how long the starting state must keep holding, with the
 	// same master, slaves and Pods, before the workload starts.
 	StableFor time.Duration
-	// Fault selects a scenario after LAB01: empty for none, or
+	// Fault selects a scenario after LAB01: empty for none,
 	// FaultOperatorRestart for S06 restart, which deletes the installed
-	// manager's Pod.
+	// manager's Pod, or FaultVMPowerOff for S04 power-off, which powers off
+	// the VM of the master's node.
 	Fault string
+	// VMStopCommand, VMStartCommand and VMStatusCommand are the lab's own
+	// controls of a node's VM, for S04: each runs with sh -c on the run's
+	// host with NODE set to the node's name, and the status command prints
+	// "stopped" for a VM that is powered off. Nothing about the provider is
+	// in this repository.
+	VMStopCommand, VMStartCommand, VMStatusCommand string
+	// FailoverLimit bounds the time from the VM confirmed off until every
+	// client's writes are acknowledged again without interruption
+	// (failover_limit); VMReturnLimit the node's return and the cluster's
+	// convergence after the VM was powered on (vm_return_limit).
+	// VMDownFor is how long the VM stays off at least, under maxVMDownFor.
+	FailoverLimit, VMReturnLimit, VMDownFor time.Duration
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
 	// first fresh status (operator_resync_limit), and in S11 and S12
@@ -288,12 +301,17 @@ func (c HAConfig) validate() error {
 		len(validation.IsDNS1123Subdomain(c.SeedSecret)) != 0 || c.SeedSecretNamespace == c.Namespace {
 		return errors.New("the seed Secret must be named, outside the run namespace")
 	}
-	if c.Fault != "" && c.Fault != FaultOperatorRestart {
-		return fmt.Errorf("fault must be empty or %s", FaultOperatorRestart)
+	if c.Fault != "" && c.Fault != FaultOperatorRestart && c.Fault != FaultVMPowerOff {
+		return fmt.Errorf("fault must be empty, %s or %s", FaultOperatorRestart, FaultVMPowerOff)
 	}
-	if c.Fault != "" && (c.StablePeriod <= 0 || c.ResyncLimit <= 0 ||
-		len(validation.IsDNS1123Subdomain(c.LeaderLease)) != 0) {
-		return errors.New("a fault needs a positive stable period and resync limit, and the leader Lease")
+	if err := c.validateS04(); err != nil {
+		return err
+	}
+	if c.Fault != "" && c.StablePeriod <= 0 {
+		return errors.New("a fault needs a positive stable period")
+	}
+	if c.Fault == FaultOperatorRestart && (c.ResyncLimit <= 0 || len(validation.IsDNS1123Subdomain(c.LeaderLease)) != 0) {
+		return errors.New("S06 restart needs a positive resync limit and the leader Lease")
 	}
 	if err := c.validateS11(); err != nil {
 		return err
@@ -391,6 +409,8 @@ type haRun struct {
 	files    []string
 	// labPassed is set once LAB01's checks have passed.
 	labPassed bool
+	// s04 is the result of S04 power-off, once it ran.
+	s04 *evidence.Scenario
 	// s06 is the result of S06 restart, once it ran.
 	s06 *evidence.Scenario
 	// s11 is the result of S11 complete, once it ran, and s11Rec its record;
@@ -468,11 +488,10 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 			"Namespace cleanup does not certify deletion of retained backend volumes or of the seed backups"}}
 	lane, requirements := haLane, []evidence.Requirement{{ID: haScenarioID}}
 	switch {
-	case cfg.Fault == FaultOperatorRestart:
-		lane = s06Lane
-		requirements = append(requirements, evidence.Requirement{ID: s06ID, Variant: s06Variant})
-		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S06 restart: the " +
-			"manager Pod is deleted without a grace period; no other S00-S15 qualification"
+	case cfg.Fault != "":
+		var requirement evidence.Requirement
+		lane, requirement, summary.Notes[0] = faultLane(cfg.Fault)
+		requirements = append(requirements, requirement)
 	case cfg.Restore:
 		lane = s12Lane
 		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant},
@@ -620,15 +639,44 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	return h.afterLAB01(ctx)
 }
 
+// faultLane returns the lane, the requirement and the summary's first note
+// of a fault scenario after LAB01.
+func faultLane(fault string) (string, evidence.Requirement, string) {
+	if fault == FaultVMPowerOff {
+		return s04Lane, evidence.Requirement{ID: s04ID, Variant: s04Variant}, "Three-member HA cluster against an " +
+			"installed Operator, then S04 power-off: the VM of the master's node is powered off without a " +
+			"shutdown and powered on again; no other S00-S15 qualification"
+	}
+	return s06Lane, evidence.Requirement{ID: s06ID, Variant: s06Variant}, "Three-member HA cluster against an " +
+		"installed Operator, then S06 restart: the manager Pod is deleted without a grace period; no other " +
+		"S00-S15 qualification"
+}
+
+// recordFault records the fault scenario selected to follow LAB01, or
+// settles it as blocked when it did not run.
+func (h *haRun) recordFault(summary *evidence.Summary) {
+	for _, f := range []struct {
+		result      *evidence.Scenario
+		fault       string
+		requirement evidence.Requirement
+	}{
+		{h.s04, FaultVMPowerOff, evidence.Requirement{ID: s04ID, Variant: s04Variant}},
+		{h.s06, FaultOperatorRestart, evidence.Requirement{ID: s06ID, Variant: s06Variant}},
+	} {
+		switch {
+		case f.result != nil:
+			summary.Record(*f.result)
+		case h.cfg.Fault == f.fault:
+			summary.Settle(f.requirement, evidence.Blocked,
+				f.requirement.ID+" starts from LAB01's checked state, and LAB01 did not pass")
+		}
+	}
+}
+
 // recordAfterLAB01 records the scenarios selected to follow LAB01, and
 // settles as blocked those that did not run.
 func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
-	if h.s06 != nil {
-		summary.Record(*h.s06)
-	} else if h.cfg.Fault == FaultOperatorRestart {
-		summary.Settle(evidence.Requirement{ID: s06ID, Variant: s06Variant}, evidence.Blocked,
-			"S06 starts from LAB01's checked state, and LAB01 did not pass")
-	}
+	h.recordFault(summary)
 	if h.s11 != nil {
 		summary.Record(*h.s11)
 	} else if h.cfg.BackupBucket != "" {
@@ -759,6 +807,12 @@ func (h *haRun) runS11Variants(ctx context.Context) error {
 // afterLAB01 runs the scenario selected to follow LAB01, if any.
 func (h *haRun) afterLAB01(ctx context.Context) error {
 	switch {
+	case h.cfg.Fault == FaultVMPowerOff:
+		s04 := h.runS04(ctx)
+		h.s04 = &s04
+		if s04.Result != evidence.Pass {
+			return fmt.Errorf("S04/%s: %s", s04Variant, s04.Reason)
+		}
 	case h.cfg.Fault == FaultOperatorRestart:
 		s06 := h.runS06(ctx)
 		h.s06 = &s06
