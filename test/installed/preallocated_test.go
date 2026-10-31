@@ -355,6 +355,20 @@ func replaceObserved(t *testing.T, f *fixture, kind string) {
 	}
 }
 
+// replacementGuard is what the run's guard says when it finds each
+// replacement of TestPreallocatedEpochAndWorkloadReplacementStopsSQLAndCleanup.
+var replacementGuard = map[string]string{
+	testNamespaceAction: "preallocated namespace epoch changed or is terminating",
+	testOwnerName:       "external immutable owner epoch changed",
+	ownerNonceKey:       "external immutable owner epoch changed",
+	testClusterAction:   "preallocated namespace contains a foreign or replacement cluster",
+	testStatefulSetKind: "StatefulSet/smoke was replaced",
+	testAmbiguousOwner:  "foreign StatefulSet in preallocated namespace",
+	testPodKind:         "Pod/smoke-0 was replaced",
+	testPVCKind:         "PersistentVolumeClaim/data-smoke-0 was replaced",
+	testVolumeKind:      "recorded PVC backing volume changed",
+}
+
 func TestPreallocatedEpochAndWorkloadReplacementStopsSQLAndCleanup(t *testing.T) {
 	for _, phase := range []string{testBeforeWrite, testBeforeRead, testBeforeCleanup} {
 		for _, kind := range []string{testNamespaceAction, testOwnerName, ownerNonceKey,
@@ -384,8 +398,11 @@ func TestPreallocatedEpochAndWorkloadReplacementStopsSQLAndCleanup(t *testing.T)
 				if err == nil {
 					t.Fatal("replacement passed")
 				}
-				if errors.Is(err, context.DeadlineExceeded) {
-					t.Fatalf("the run ended at its deadline, not at the replacement: %v", err)
+				// The replacement's guard, and not the run's deadline or any
+				// other error, must have ended the run.
+				if !strings.Contains(err.Error(), replacementGuard[kind]) {
+					t.Fatalf("the run ended with %q, not at the guard of the replacement (%q)", err,
+						replacementGuard[kind])
 				}
 				if f.deletes != 0 {
 					t.Fatal("ambiguity granted CR cleanup authority")
