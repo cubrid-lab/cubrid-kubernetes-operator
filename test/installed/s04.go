@@ -407,8 +407,9 @@ func lastStep(steps []faults.Step) string {
 }
 
 // s04Placement finds the master's node and refuses a placement that S04
-// cannot run on: the master on a node that runs the API server, or on the
-// node of the workload client or of the manager, which would fail with it.
+// cannot run on: the master on a node that runs the API server, or that
+// another member, the workload client or the manager shares, which would
+// fail with it.
 func (h *haRun) s04Placement(ctx context.Context, rec *s04Record) error {
 	for _, member := range rec.MembersBefore {
 		if member.Pod == rec.Master {
@@ -425,6 +426,14 @@ func (h *haRun) s04Placement(ctx context.Context, rec *s04Record) error {
 	if _, ok := node.Labels[controlPlaneLabel]; ok {
 		return fmt.Errorf("master %s runs on node %s, which runs the API server: its VM is not powered off",
 			rec.Master, rec.Node)
+	}
+	// Another member on the same node would lose power with the master, and
+	// the scenario would not be the one the contract describes (#596).
+	for _, member := range rec.MembersBefore {
+		if member.Pod != rec.Master && member.Node == rec.Node {
+			return fmt.Errorf("member %s runs on the master's node %s too: powering it off would take more than "+
+				"the master", member.Pod, rec.Node)
+		}
 	}
 	if h.rec.Client == nil || h.rec.Client.Node == rec.Node {
 		return fmt.Errorf("the workload client runs on the master's node %s, or its node is not known", rec.Node)

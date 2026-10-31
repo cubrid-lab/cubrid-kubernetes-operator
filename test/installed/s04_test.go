@@ -323,6 +323,34 @@ func TestRunS04RefusesAMasterOnTheControlPlaneNode(t *testing.T) {
 	}
 }
 
+func TestRunS04RefusesMembersThatShareTheMastersNode(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	f.podRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+		if key.Name != testMemberHA0 {
+			return nil
+		}
+		pod := &corev1.Pod{}
+		if err := c.Get(ctx, key, pod); err != nil || pod.Spec.NodeName == testMasterNode {
+			return err
+		}
+		pod.Spec.NodeName = testMasterNode
+		return c.Update(ctx, pod)
+	}
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "member "+testMemberHA0+" runs on the master's node") {
+		t.Fatalf("S04 = %+v, want blocked: another member shares the master's node", s04)
+	}
+	for _, c := range lab.commands {
+		if strings.HasPrefix(c, testVMStop) || strings.HasPrefix(c, testVMStart) {
+			t.Fatalf("a VM was powered: %v", lab.commands)
+		}
+	}
+}
+
 func TestHAConfigRefusesS04OutsideTheVMLabAndWithoutItsControls(t *testing.T) {
 	for name, change := range map[string]func(*HAConfig){
 		"outside the lab": func(c *HAConfig) { c.Level = "unit" },
