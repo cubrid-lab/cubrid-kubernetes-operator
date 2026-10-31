@@ -665,7 +665,8 @@ func (h *haRun) watchUnobserved(ctx context.Context, rec *s04Record, result *evi
 	}
 	pod := &corev1.Pod{}
 	err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: rec.MasterPod.Pod}, pod)
-	if apierrors.IsNotFound(err) || (err == nil && (pod.DeletionTimestamp != nil || string(pod.UID) != rec.MasterPod.UID)) {
+	replaced := err == nil && (pod.DeletionTimestamp != nil || string(pod.UID) != rec.MasterPod.UID)
+	if apierrors.IsNotFound(err) || replaced {
 		rec.PodDeletedAt = &now
 		result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("the Pod %s was deleted or replaced while its "+
 			"VM was off", rec.MasterPod.Pod))
