@@ -838,7 +838,10 @@ func restoredbKilled(l *s12StopLog) error {
 }
 
 // restoreStopLogGaps names the lines the variant needs that the target's log
-// does not hold. server stop is not among them, as in S11 graceful-stop.
+// does not hold; any of them missing means the log is incomplete and the
+// variant is blocked. server stop is not required: it is checked for order
+// when present, but its absence does not block the variant, the same rule the
+// backup graceful-stop check applies (stopLogGaps, S11 graceful-stop).
 func restoreStopLogGaps(rec *s12GracefulStopRecord) error {
 	l := rec.Log
 	var missing []string

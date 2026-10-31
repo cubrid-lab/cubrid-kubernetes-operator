@@ -3215,20 +3215,20 @@ What the product does:
   after `restorePollAfter` (10 seconds), or sooner when an event of an owned
   object starts a reconcile; a change of the status alone does not
   (`clusterEvents` in `internal/controller/cubridcluster_controller.go`).
-- The Instance Manager records its operation `Downloading` and then
-  `Restoring` before it reads the backup; the manifest's verification and the
-  download (`stageArtifact`) and `restoredb` all run while the operation is
-  `Restoring`, and the restored artifact is recorded (`restored`) only once
-  `restoredb` succeeded (`runRestore` in `internal/instancemanager/server.go`,
-  `Operation.Restored` in `operation.go`). So `Preparing` in the status does
-  not show that the download still runs: at the kill the verification, the
-  download or `restoredb` may run. What the variant establishes is that
-  `restoredb` had not succeeded, from the operation's record (`restored`
-  absent), not that it had not started: `restoredb` may have been running
-  when the kill ended it. (The comment of
-  `setRestoreProgress` says the phase stays `Preparing` while the backup is
-  verified and downloaded; with these states it stays `Preparing` only until
-  the Operator reads the operation again.)
+- The Instance Manager records its operation `Downloading` before it reads
+  the backup; the manifest's verification and the download (`stageArtifact`)
+  run while the operation is `Downloading`. It records `Restoring` once the
+  backup is staged, right before it registers the target and runs
+  `restoredb` (#598), and records the restored artifact (`restored`) only
+  once `restoredb` succeeded (`runRestore` in
+  `internal/instancemanager/server.go`, `Restore` in `restore.go`,
+  `Operation.Restored` in `operation.go`). So the phase stays `Preparing`
+  while the backup is verified and downloaded, as `setRestoreProgress` says.
+  A reading of `Preparing` still shows only what the Operator last read: the
+  manager may have recorded `Restoring` and started `restoredb` after it.
+  What the variant establishes is that `restoredb` had not succeeded, from
+  the operation's record (`restored` absent), not that it had not started:
+  `restoredb` may have been running when the kill ended it.
 - After the restart everything is as at `restoring`: the record is failed
   with the manager's restart, and the Operator ends the attempt with
   `RestoreFailedRetrying`, raises `status.bootstrap.attempts` and starts the

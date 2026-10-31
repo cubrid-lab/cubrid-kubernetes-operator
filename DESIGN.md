@@ -424,6 +424,15 @@ A CUBRID HA member must have a stable identity independent of Pod restart.
 
 ## 7. High-Level Architecture
 
+The diagram-first explanation of the runtime architecture is in
+[docs/architecture/](docs/architecture/README.md): system topology,
+reconciliation, the client and data path, and failure and recovery
+responsibilities, each linked to the code and the validation evidence. The
+overview below shows the design's responsibilities. The six "reconcilers" in
+it are roles, not separate controllers: the code runs them as steps of two
+controllers, the cluster controller and the backup controller, as mapped in
+[Two controllers and the six named roles](docs/architecture/README.md#two-controllers-and-the-six-named-roles-in-designmd).
+
 ```text
                         Kubernetes API
                               │

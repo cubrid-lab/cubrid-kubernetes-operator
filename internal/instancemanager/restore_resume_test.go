@@ -19,11 +19,13 @@ package instancemanager
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -31,6 +33,9 @@ import (
 // restoredVolume is the file the test restoredb leaves in the database
 // directory, standing in for the restored volumes.
 const restoredVolume = dbName + "_vinf"
+
+// restoredbCommand is the cubrid utility a restore runs.
+const restoredbCommand = "restoredb"
 
 // volumeCLI is a stepCLI whose restoredb leaves a volume in the database
 // directory and then runs afterRestore.
@@ -42,7 +47,7 @@ type volumeCLI struct {
 
 func (c *volumeCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
 	out, err := c.stepCLI.Run(ctx, name, args...)
-	if err == nil && len(args) > 0 && args[0] == "restoredb" {
+	if err == nil && len(args) > 0 && args[0] == restoredbCommand {
 		if werr := os.WriteFile(filepath.Join(c.databases, dbName, restoredVolume), []byte("restored"), 0o600); werr != nil {
 			return "", werr
 		}
@@ -680,4 +685,68 @@ func TestRestore_LeavesTheEntrypointsUnfinishedCreatedbAlone(t *testing.T) {
 		t.Errorf("adoptRestored = %v, %v; want nothing taken over", restored, err)
 	}
 	wantUntouched()
+}
+
+// stateAtRead records, at each object read, the state of the restore that
+// asked for it.
+type stateAtRead struct {
+	ObjectStore
+	server *Server
+	key    string
+	mu     sync.Mutex
+	states []OperationState
+}
+
+func (s *stateAtRead) Get(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	if ops, err := s.server.store.FindByKey(s.key); err == nil && len(ops) == 1 {
+		s.mu.Lock()
+		s.states = append(s.states, ops[0].State)
+		s.mu.Unlock()
+	}
+	return s.ObjectStore.Get(ctx, bucket, key)
+}
+
+// stateAtRestoredb is a volumeCLI that records the restore's state when
+// restoredb runs.
+type stateAtRestoredb struct {
+	volumeCLI
+	server *Server
+	key    string
+	state  OperationState
+}
+
+func (c *stateAtRestoredb) Run(ctx context.Context, name string, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == restoredbCommand {
+		if ops, err := c.server.store.FindByKey(c.key); err == nil && len(ops) == 1 {
+			c.state = ops[0].State
+		}
+	}
+	return c.volumeCLI.Run(ctx, name, args...)
+}
+
+// The backup is verified and downloaded while the operation is Downloading,
+// and it is Restoring only once restoredb is about to run: the Operator
+// reports the phase Restoring from that state (#598).
+func TestServer_Restore_IsRestoringOnlyFromRestoredb(t *testing.T) {
+	f := newResumeFixture(t)
+	reads := &stateAtRead{ObjectStore: f.objects, key: "restore-states"}
+	f.objects = reads
+	cli := &stateAtRestoredb{volumeCLI: volumeCLI{databases: f.databases}, key: "restore-states"}
+	f.start(cli)
+	reads.server, cli.server = f.server, f.server
+
+	if op := f.run("restore-states"); op.State != OpCompleted {
+		t.Fatalf("restore = %s (%s), want Completed", op.State, op.FailureReason)
+	}
+	if len(reads.states) == 0 {
+		t.Fatal("the restore read no object")
+	}
+	for i, state := range reads.states {
+		if state != OpDownloading {
+			t.Errorf("object read %d ran while the operation was %s, want Downloading", i, state)
+		}
+	}
+	if cli.state != OpRestoring {
+		t.Errorf("restoredb ran while the operation was %q, want Restoring", cli.state)
+	}
 }
