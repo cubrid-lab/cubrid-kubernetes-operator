@@ -293,6 +293,9 @@ spec:
     bucket: %s
     credentialsSecretRef:
       name: object-storage
+  # Kind has a single node: let the members share it (#90).
+  placement:
+    memberSpread: Preferred
   storage:
     data:
       size: 2Gi

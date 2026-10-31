@@ -242,6 +242,41 @@ spec:
   that the cluster does not own is never taken over or removed; the cluster
   reports a reconcile failure instead.
 
+## Member placement
+
+The members of an HA cluster run on different nodes by default, so that
+one node's failure takes at most one of them. The DB Pods carry a required
+Pod anti-affinity on `kubernetes.io/hostname` that selects the cluster's
+own members only; members of different clusters may share a node. A
+standalone cluster has no placement rule.
+
+```yaml
+spec:
+  placement:
+    memberSpread: Preferred   # Required (default) or Preferred
+```
+
+- **Required** needs at least as many schedulable nodes as members. A member
+  with no node of its own stays `Pending`; with three nodes and three
+  members, so does the member of a drained or lost node until that node
+  returns.
+- **Preferred** only asks the scheduler to spread the members, and lets them
+  share a node when it cannot. It is for test clusters with fewer nodes than
+  members, such as the single-node Kind cluster of the e2e tests. Members on
+  one node all go down with it.
+- The rule is in the StatefulSet's Pod template. Pods are replaced only on
+  delete, so a change, and the rule itself on a cluster created by an
+  earlier version, applies to a member when its Pod is next recreated, and
+  until then the member is reported as running an outdated revision.
+  Running Pods are not moved.
+- **Storage bound to a node** (such as `local-path`): a member's volume stays
+  on the node it was created on, and its recreated Pod can only run there. A
+  cluster created by an earlier version whose members share a node keeps
+  them there, and under `Required` the recreated members stay `Pending`. Set
+  `memberSpread: Preferred` on such a cluster before upgrading the Operator,
+  and recreate it, with its data restored, to spread it.
+- PodDisruptionBudgets and Broker placement are separate work (#90).
+
 ## Scope and validation
 
 See [ROADMAP.md](./ROADMAP.md) for the v0.1 required, conditional and future
