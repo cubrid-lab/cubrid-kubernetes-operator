@@ -262,7 +262,7 @@ func TestPartitionSilentOperatorCutByTheDeadlineStaysUndecided(t *testing.T) {
 	var stalled atomic.Bool
 	n.stall = func(op string) bool {
 		// The second observation of the Operator's path does not answer.
-		return op == "rules" && observed(p.Record(), PhaseBefore, "operator -> ha-0") == 1 &&
+		return op == opRules && observed(p.Record(), PhaseBefore, "operator -> ha-0") == 1 &&
 			stalled.CompareAndSwap(false, true)
 	}
 	o := run(p, p.Prepare)

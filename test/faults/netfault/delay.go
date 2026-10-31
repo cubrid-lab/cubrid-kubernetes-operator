@@ -319,9 +319,10 @@ func (d *Delay) Remove(ctx context.Context) error {
 		wait, cancel = context.WithDeadline(ctx, deadline.Add(-d.reserve()))
 	}
 	defer cancel()
-	// still is what the last measurement found. One that the wait's own
-	// deadline cut short measured nothing, and does not replace it (#630).
-	var still error
+	// found is what the last measurement that the wait's own deadline did not
+	// cut short found. One that the deadline cut short measured nothing, and
+	// does not replace it (#630).
+	var found error
 	for {
 		start := time.Now()
 		after, err := d.measure(wait, d.Peer)
@@ -335,9 +336,11 @@ func (d *Delay) Remove(ctx context.Context) error {
 			}
 			err = fmt.Errorf("connects from %s to %s still take %s, %s before the fault", d.Target.Name, d.Peer.Name,
 				after, baseline)
-			still = err
-		case wait.Err() != nil && still != nil:
-			err = still
+			found = err
+		case wait.Err() != nil && found != nil:
+			err = found
+		default:
+			found = err
 		}
 		if perr := d.pause(wait, time.Since(start)); perr != nil {
 			return fmt.Errorf("the delay was not seen removed: %w", errors.Join(err, perr))

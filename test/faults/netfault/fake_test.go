@@ -88,6 +88,9 @@ type fakeNet struct {
 	// command until its context ends, as a kubectl exec that does not
 	// answer before the wait's deadline.
 	stall func(op string) bool
+	// fail, when it returns an error for a command's operation, fails that
+	// command with it.
+	fail func(op string) error
 	// uploads sends 1460 bytes of TCP from a Pod's IP to an address each
 	// time that Pod's rules are read, as an upload under way would.
 	uploads map[string]string
@@ -150,12 +153,17 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 	pod, script := args[3], args[9]
 	op := strings.Fields(strings.SplitN(script, "\n", 2)[0])
 	n.mu.Lock()
-	latency, stall := n.latency[op[2]], n.stall
+	latency, stall, fail := n.latency[op[2]], n.stall, n.fail
 	n.mu.Unlock()
 	time.Sleep(latency)
 	if stall != nil && stall(op[2]) {
 		<-ctx.Done()
 		return "", ctx.Err()
+	}
+	if fail != nil {
+		if err := fail(op[2]); err != nil {
+			return "", err
+		}
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -171,7 +179,7 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 	switch op[2] {
 	case "addr":
 		return fmt.Sprintf("2: eth0    inet %s/24 brd 10.42.1.255 scope global eth0\\       valid_lft forever\n", ns.ip), nil
-	case "rules":
+	case opRules:
 		return n.rules(ns), nil
 	case "observe":
 		ns.removed = false
@@ -529,9 +537,12 @@ func (n *fakeNet) installed(ip string) []string {
 
 const testNamespace = "cubrid-lab-test"
 
-// opConnect is the operation of a fault's connect probe, the second word of
-// its script's first line.
-const opConnect = "connect"
+// opConnect and opRules are the operations of a fault's connect probe and
+// of its reading of the rules, the second word of a script's first line.
+const (
+	opConnect = "connect"
+	opRules   = "rules"
+)
 
 // defaultQdisc is a Pod's qdisc with no fault; testConnect the time of a
 // connect the fake does not delay; outcomeReached marks a case whose fault

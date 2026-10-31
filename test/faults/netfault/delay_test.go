@@ -18,6 +18,7 @@ package netfault
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -187,6 +188,36 @@ func TestDelayStillSeenAfterRemovalIsReportedAtTheDeadline(t *testing.T) {
 	}
 	if !timelineHas(o, "still take") || o.CleanupSucceeded {
 		t.Errorf("cleanup succeeded=%v, timeline %+v; want \"still take\"", o.CleanupSucceeded, o.Timeline)
+	}
+}
+
+// A failure of a later measurement, not cut short, replaces what an earlier
+// one found: the deadline then keeps the failure, not the older finding.
+func TestDelayRemovalReportsTheLastFindingNotCutShort(t *testing.T) {
+	n := newFakeNet(testPods)
+	n.stickyDelay = true
+	d := newDelay(t, n)
+	var after atomic.Int32
+	measuredAfter := func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.haveAfter
+	}
+	n.fail = func(op string) error {
+		if op == opConnect && measuredAfter() && after.Add(1) == 1 {
+			return errors.New("REAL-FAILURE")
+		}
+		return nil
+	}
+	n.stall = func(op string) bool {
+		return op == opConnect && measuredAfter() && after.Load() >= 1 && after.CompareAndSwap(1, 2)
+	}
+	o := run(d, d.Prepare)
+	if after.Load() < 2 {
+		t.Fatal("the failing and the cut measurements did not both run")
+	}
+	if !timelineHas(o, "REAL-FAILURE") || timelineHas(o, "still take") {
+		t.Errorf("cleanup timeline %+v; want the later real failure, not the older finding", o.Timeline)
 	}
 }
 
