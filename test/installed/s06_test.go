@@ -430,18 +430,19 @@ func TestRunS06RestartKeepsANeverEventWhenTheMembersCannotBeObserved(t *testing.
 	}
 }
 
-// After the restart, an HA cluster read as gone or refused is a state that
-// was seen and fails S06; only a read that may succeed when retried leaves
-// the members not observed (#607).
+// After the restart, an HA cluster read as gone is a state that was seen and
+// fails S06; any other error reading it leaves the members not observed
+// (#607).
 func TestRunS06RestartJudgesAnUnreadHAClusterByItsError(t *testing.T) {
 	gr := schema.GroupResource{Group: databasev1alpha1.GroupVersion.Group, Resource: "cubridclusters"}
 	for name, tc := range map[string]struct {
 		err    error
 		result evidence.Result
 	}{
-		"gone":        {apierrors.NewNotFound(gr, haClusterName), evidence.Fail},
-		"forbidden":   {apierrors.NewForbidden(gr, haClusterName, errors.New("denied")), evidence.Fail},
-		"unavailable": {apierrors.NewServiceUnavailable("etcd is unavailable"), evidence.Blocked},
+		"gone":               {apierrors.NewNotFound(gr, haClusterName), evidence.Fail},
+		"forbidden":          {apierrors.NewForbidden(gr, haClusterName, errors.New("denied")), evidence.Blocked},
+		"unavailable":        {apierrors.NewServiceUnavailable("etcd is unavailable"), evidence.Blocked},
+		"connection refused": {errors.New("dial tcp 10.43.0.1:443: connect: connection refused"), evidence.Blocked},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS06Config(t)
@@ -473,14 +474,21 @@ func TestRunS06RestartJudgesAnUnreadHAClusterByItsError(t *testing.T) {
 
 // A role read after the restart that did not reach a member observed
 // nothing: S06 is blocked, unless something that must never happen was
-// already seen (#607).
+// already seen (#607). One that ran and failed is CUBRID's answer and fails
+// S06.
 func TestRunS06RestartJudgesAnUnreadRoleRead(t *testing.T) {
+	unreached := "error: unable to upgrade connection: container not found (\"cubrid\")\n"
 	for name, tc := range map[string]struct {
+		out             string
 		failedOperation bool
 		result          evidence.Result
+		want            string
 	}{
-		"nothing else seen":         {false, evidence.Blocked},
-		"a client operation failed": {true, evidence.Fail},
+		"nothing else seen":         {unreached, false, evidence.Blocked, "unable to upgrade connection"},
+		"a client operation failed": {unreached, true, evidence.Fail, "unable to upgrade connection"},
+		// The command ran and failed: CUBRID answered.
+		"the command ran and failed": {"++ cubrid master is not running.\ncommand terminated with exit code 1\n",
+			false, evidence.Fail, "cubrid heartbeat status failed on " + testHAPrimary},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS06Config(t)
@@ -505,15 +513,14 @@ func TestRunS06RestartJudgesAnUnreadRoleRead(t *testing.T) {
 				if !stopped.Load() || pod != testHAPrimary || !strings.Contains(script, "heartbeat status") {
 					return "", nil, false
 				}
-				out := "error: unable to upgrade connection: container not found (\"cubrid\")\n"
-				return out, errors.New("kubectl failed: exit status 1: " + out), true
+				return tc.out, errors.New("kubectl failed: exit status 1: " + tc.out), true
 			}
 			if err := f.runner.RunHA(t.Context(), cfg); err == nil {
 				t.Fatal("RunHA() passed")
 			}
 			_, _, s06 := s06Scenario(t, cfg.EvidenceDir)
-			if s06.Result != tc.result || !strings.Contains(s06.Reason, "unable to upgrade connection") {
-				t.Fatalf("S06 = %+v, want %s naming the unread role", s06, tc.result)
+			if s06.Result != tc.result || !strings.Contains(s06.Reason, tc.want) {
+				t.Fatalf("S06 = %+v, want %s naming %q", s06, tc.result, tc.want)
 			}
 		})
 	}

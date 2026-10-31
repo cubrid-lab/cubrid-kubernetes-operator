@@ -300,9 +300,9 @@ func (h *haRun) observeAfterS06(ctx context.Context, result *evidence.Scenario, 
 	roles, unmet, err := h.roles(ctx)
 	if err != nil || unmet != "" {
 		err = fmt.Errorf("read the roles after the restart: %w", errors.Join(err, errors.New(unmet)))
-		// A heartbeat status that was not answered observed nothing, as in
-		// S12 (#607).
-		if strings.HasPrefix(unmet, "cubrid heartbeat status failed") || strings.Contains(unmet, unread) {
+		// A heartbeat status that did not reach a member observed nothing
+		// (#607); one that ran and failed is CUBRID's answer, and fails S06.
+		if strings.Contains(unmet, unread) {
 			return clients, membersNotObserved{err}
 		}
 		return clients, err
@@ -483,12 +483,12 @@ type membersNotObserved struct{ error }
 func (h *haRun) membersUnchanged(ctx context.Context, before []imageIdentity) ([]imageIdentity, []string, error) {
 	cluster := &databasev1alpha1.CubridCluster{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
-		// Only a read that may succeed when retried leaves the members not
-		// observed; a cluster read as gone or refused was seen (#607).
-		if retryable(err) {
-			return nil, nil, membersNotObserved{err}
+		// A cluster read as gone was seen (#607); any other error, of the
+		// API server or of the harness's own access, observed nothing.
+		if apierrors.IsNotFound(err) {
+			return nil, nil, fmt.Errorf("read the HA cluster after the restart: %w", err)
 		}
-		return nil, nil, fmt.Errorf("read the HA cluster after the restart: %w", err)
+		return nil, nil, membersNotObserved{err}
 	}
 	members, unmet, err := h.memberIdentities(ctx, cluster)
 	if err != nil {
