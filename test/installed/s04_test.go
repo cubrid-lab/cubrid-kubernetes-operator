@@ -341,7 +341,8 @@ func TestRunS04RefusesMembersThatShareTheMastersNode(t *testing.T) {
 		t.Fatal("RunHA() passed")
 	}
 	s04 := s04Scenario(t, cfg.EvidenceDir)
-	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "member "+testMemberHA0+" runs on the master's node") {
+	if s04.Result != evidence.Blocked ||
+		!strings.Contains(s04.Reason, "member "+testMemberHA0+" runs on the master's node") {
 		t.Fatalf("S04 = %+v, want blocked: another member shares the master's node", s04)
 	}
 	for _, c := range lab.commands {
