@@ -45,6 +45,14 @@ const (
 	testLeaderLease    = "91d4fe35.cubrid.io"
 )
 
+// The tests in this file cover the operator restart validation (scenario
+// S06, variant restart): the manager Pod is deleted while clients write, and
+// the run must see the replacement write a fresh status naming the same
+// master, with no failed client operation, member restart or role change.
+// A missing observation blocks the result unless a violation was already
+// seen, in which case it stays failed. The S06 in the test names is the
+// scenario identifier, kept for traceability to the scenario contract.
+
 func testS06Config(t *testing.T) HAConfig {
 	t.Helper()
 	cfg := testHAConfig(t)
@@ -526,6 +534,9 @@ func TestRunS06RestartJudgesAnUnreadRoleRead(t *testing.T) {
 	}
 }
 
+// The restart is only meaningful on a cluster the base HA run (LAB01)
+// checked. When that run fails, the manager must not be deleted and the
+// restart validation is blocked, not failed.
 func TestRunS06IsBlockedWhenLAB01Failed(t *testing.T) {
 	cfg := testS06Config(t)
 	f := newS06Fixture(t, cfg)

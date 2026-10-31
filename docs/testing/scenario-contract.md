@@ -1490,10 +1490,12 @@ it needs more.
   state its start answered, `Pending`, which shows as `Preparing` until it
   reads the operation again (`reconcileRecovery`, `setRestoreProgress` in
   `internal/controller/bootstrap.go`). The Instance Manager records its
-  operation `Restoring` before it verifies and downloads the backup, and
-  records the restored artifact only once `restoredb` succeeded (`runRestore`
-  in `internal/instancemanager/server.go`, `Operation.Restored`), so the
-  phase does not tell the download from `restoredb`: the target's record of
+  operation `Restoring` only right before `restoredb`, after it verified and
+  downloaded the backup (#598), and records the restored artifact only once
+  `restoredb` succeeded (`runRestore` in `internal/instancemanager/server.go`,
+  `Operation.Restored`). The phase shows only what the Operator last read, so
+  it does not tell the download from a `restoredb` that started after that
+  read: the target's record of
   the killed operation, read once the cluster is Ready, must be `Failed` by
   the restart without a restored artifact, so `restoredb` had not
   succeeded. It is `blocked` when the kill cannot be placed while the

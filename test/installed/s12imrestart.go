@@ -455,9 +455,10 @@ var imRestartNotes = map[string][]string{
 		"the Operator's logs, and its Events of the cluster other than RestoreFailedRetrying, were not checked"},
 	IMRestartAtPreparing: {"the kill is placed after a reading that saw the bootstrap Preparing with an operation: " +
 		"the Operator had read the operation no further than Pending or Downloading; the " +
-		"Instance Manager records its operation Restoring before it downloads and verifies the backup " +
-		"(runRestore in internal/instancemanager/server.go), so whether the download or restoredb ran at the kill " +
-		"was not observed, only that restoredb had not succeeded",
+		"Instance Manager records its operation Restoring only right before restoredb, after the backup is " +
+		"verified and downloaded (runRestore in internal/instancemanager/server.go), but it may have done so " +
+		"after the Operator's last read, so whether the download or restoredb ran at the kill was not observed, " +
+		"only that restoredb had not succeeded",
 		"the record of the killed operation on the target's volume, and whether the recovery's staging directory " +
 			"was left there, were read once the cluster was Ready; the next attempt's own record, the Instance " +
 			"Manager's logs and the rest of the volume were not read",
