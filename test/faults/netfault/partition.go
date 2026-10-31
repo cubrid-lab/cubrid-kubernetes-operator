@@ -729,6 +729,11 @@ func (p *Partition) snapshot(ctx context.Context) error {
 // waitOpen probes the paths until every one is seen open, or ctx ends.
 func (p *Partition) waitOpen(ctx context.Context, phase string, paths []Path) error {
 	open := map[string]bool{}
+	// last is what the last observation of each path that the wait's own
+	// deadline did not cut short found, as it is reported. One that the
+	// deadline cut short does not replace it: that the time ran out is not
+	// what the path showed (#630).
+	last := map[string]string{}
 	for {
 		start := time.Now()
 		var notYet []string
@@ -739,13 +744,17 @@ func (p *Partition) waitOpen(ctx context.Context, phase string, paths []Path) er
 			}
 			seen, err := p.observe(ctx, phase, path, SeenOpen)
 			switch {
+			case err != nil && ctx.Err() != nil && last[path.String()] != "":
+				notYet = append(notYet, path.String()+last[path.String()])
 			case err != nil:
 				lastErr = err
-				notYet = append(notYet, path.String()+": "+err.Error())
+				last[path.String()] = ": " + err.Error()
+				notYet = append(notYet, path.String()+last[path.String()])
 			case seen == SeenOpen:
 				open[path.String()] = true
 			default:
-				notYet = append(notYet, path.String()+" "+seen)
+				last[path.String()] = " " + seen
+				notYet = append(notYet, path.String()+last[path.String()])
 			}
 		}
 		if len(notYet) == 0 {
