@@ -183,7 +183,9 @@ type haFixture struct {
 	csqlHook func(pod, sql string) (string, error, bool)
 	// podRead and deploymentRead run before each read of a Pod and of a
 	// Deployment; the error is the read's.
-	podRead        func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	podRead func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
+	// haClusterRead, when set, plays a read of the HA cluster.
+	haClusterRead  func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	deploymentRead func(key client.ObjectKey) error
 	// podDeleted plays the API server and the StatefulSet when the run
 	// deletes a Pod of the run namespace.
@@ -389,6 +391,8 @@ func (f *haFixture) beforeGet(ctx context.Context, c client.WithWatch, key clien
 // readRestored plays the Operator before a reading of a restored cluster.
 func (f *haFixture) readRestored(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
 	switch {
+	case key.Name == haClusterName && f.haClusterRead != nil:
+		return f.haClusterRead(ctx, c, key)
 	case key.Name == s12ClusterName && f.restoreRead != nil:
 		return f.restoreRead(ctx, c, key)
 	case key.Name == s12TamperedClusterName && f.tamperedRead != nil:

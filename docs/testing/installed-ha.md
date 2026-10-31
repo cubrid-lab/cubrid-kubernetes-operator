@@ -195,7 +195,10 @@ same cluster, with S06 `restart` of the scenario contract. The lane is then
    `membersRestarted` is then a lower bound. A member that is not Ready or
    could not be read, with no other member changed, blocks S06 with
    `membersRestarted` unknown, and a never-event seen before keeps S06
-   failed, with the error added to the reason.
+   failed, with the error added to the reason. The same holds for an HA
+   cluster that could not be read, other than one read as gone (NotFound),
+   which fails S06, and for a `cubrid heartbeat status` that did not reach a
+   member; one that ran and failed is CUBRID's answer and fails S06 (#607).
 8. The data rules must hold on every member and both Services, over
    everything every client recorded.
 
