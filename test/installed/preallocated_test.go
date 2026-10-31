@@ -355,6 +355,20 @@ func replaceObserved(t *testing.T, f *fixture, kind string) {
 	}
 }
 
+// replacementGuard is what the run's guard says when it finds each
+// replacement of TestPreallocatedEpochAndWorkloadReplacementStopsSQLAndCleanup.
+var replacementGuard = map[string]string{
+	testNamespaceAction: "preallocated namespace epoch changed or is terminating",
+	testOwnerName:       "external immutable owner epoch changed",
+	ownerNonceKey:       "external immutable owner epoch changed",
+	testClusterAction:   "preallocated namespace contains a foreign or replacement cluster",
+	testStatefulSetKind: "StatefulSet/smoke was replaced",
+	testAmbiguousOwner:  "foreign StatefulSet in preallocated namespace",
+	testPodKind:         "Pod/smoke-0 was replaced",
+	testPVCKind:         "PersistentVolumeClaim/data-smoke-0 was replaced",
+	testVolumeKind:      "recorded PVC backing volume changed",
+}
+
 func TestPreallocatedEpochAndWorkloadReplacementStopsSQLAndCleanup(t *testing.T) {
 	for _, phase := range []string{testBeforeWrite, testBeforeRead, testBeforeCleanup} {
 		for _, kind := range []string{testNamespaceAction, testOwnerName, ownerNonceKey,
@@ -362,6 +376,10 @@ func TestPreallocatedEpochAndWorkloadReplacementStopsSQLAndCleanup(t *testing.T)
 			testAmbiguousOwner, testPodKind, testPVCKind, testVolumeKind} {
 			t.Run(phase+"/"+kind, func(t *testing.T) {
 				f := preallocatedFixture(t)
+				// The replacement, not the run's deadline, must end the run:
+				// the fixture's one second can run out on a loaded host
+				// before the step under test (#552).
+				f.cfg.Timeout = time.Minute
 				executedSQL := 0
 				f.commandHook = func(_ context.Context, args []string) (string, error) {
 					last := args[len(args)-1]
@@ -376,8 +394,15 @@ func TestPreallocatedEpochAndWorkloadReplacementStopsSQLAndCleanup(t *testing.T)
 					}
 					return out, err
 				}
-				if err := f.runner.Run(t.Context(), f.cfg); err == nil {
+				err := f.runner.Run(t.Context(), f.cfg)
+				if err == nil {
 					t.Fatal("replacement passed")
+				}
+				// The replacement's guard, and not the run's deadline or any
+				// other error, must have ended the run.
+				if !strings.Contains(err.Error(), replacementGuard[kind]) {
+					t.Fatalf("the run ended with %q, not at the guard of the replacement (%q)", err,
+						replacementGuard[kind])
 				}
 				if f.deletes != 0 {
 					t.Fatal("ambiguity granted CR cleanup authority")
