@@ -269,6 +269,12 @@ spec:
   earlier version, applies to a member when its Pod is next recreated, and
   until then the member is reported as running an outdated revision.
   Running Pods are not moved.
+- **Storage bound to a node** (such as `local-path`): a member's volume stays
+  on the node it was created on, and its recreated Pod can only run there. A
+  cluster created by an earlier version whose members share a node keeps
+  them there, and under `Required` the recreated members stay `Pending`. Set
+  `memberSpread: Preferred` on such a cluster before upgrading the Operator,
+  and recreate it, with its data restored, to spread it.
 - PodDisruptionBudgets and Broker placement are separate work (#90).
 
 ## Scope and validation
