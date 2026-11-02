@@ -1479,7 +1479,7 @@ func TestRunS12ExactJudgesAFailedHeartbeatStatusByWhetherItRan(t *testing.T) {
 	}{
 		// kubectl could not reach the container: nothing was asked.
 		"the exec did not reach the member": {out: "error: unable to upgrade connection: container not found " +
-			"(\"cubrid\")\n", result: evidence.Blocked, want: "unable to upgrade connection"},
+			"(\"cubrid\")\n", result: evidence.Blocked, want: testUpgradeRefused},
 		// The command ran in the member and failed: what it answered was seen.
 		"the command ran and failed": {out: "++ cubrid master is not running.\ncommand terminated with exit code 1\n",
 			result: evidence.Fail, want: "not Ready within restore_limit"},

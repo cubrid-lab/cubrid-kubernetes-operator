@@ -41,6 +41,9 @@ import (
 )
 
 const (
+	// testUpgradeRefused is what kubectl says when its exec cannot reach the
+	// container.
+	testUpgradeRefused = "unable to upgrade connection"
 	testReplacementPod = "manager-pod-2"
 	testLeaderLease    = "91d4fe35.cubrid.io"
 )
@@ -447,10 +450,10 @@ func TestRunS06RestartJudgesAnUnreadHAClusterByItsError(t *testing.T) {
 		err    error
 		result evidence.Result
 	}{
-		"gone":               {apierrors.NewNotFound(gr, haClusterName), evidence.Fail},
-		"forbidden":          {apierrors.NewForbidden(gr, haClusterName, errors.New("denied")), evidence.Blocked},
-		"unavailable":        {apierrors.NewServiceUnavailable("etcd is unavailable"), evidence.Blocked},
-		"connection refused": {errors.New("dial tcp 10.43.0.1:443: connect: connection refused"), evidence.Blocked},
+		"gone":        {apierrors.NewNotFound(gr, haClusterName), evidence.Fail},
+		"forbidden":   {apierrors.NewForbidden(gr, haClusterName, errors.New("denied")), evidence.Blocked},
+		"unavailable": {apierrors.NewServiceUnavailable("etcd is unavailable"), evidence.Blocked},
+		testIMRefused: {errors.New("dial tcp 10.43.0.1:443: connect: " + testIMRefused), evidence.Blocked},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testS06Config(t)
@@ -485,15 +488,15 @@ func TestRunS06RestartJudgesAnUnreadHAClusterByItsError(t *testing.T) {
 // already seen (#607). One that ran and failed is CUBRID's answer and fails
 // S06.
 func TestRunS06RestartJudgesAnUnreadRoleRead(t *testing.T) {
-	unreached := "error: unable to upgrade connection: container not found (\"cubrid\")\n"
+	unreached := "error: " + testUpgradeRefused + ": container not found (\"cubrid\")\n"
 	for name, tc := range map[string]struct {
 		out             string
 		failedOperation bool
 		result          evidence.Result
 		want            string
 	}{
-		"nothing else seen":         {unreached, false, evidence.Blocked, "unable to upgrade connection"},
-		"a client operation failed": {unreached, true, evidence.Fail, "unable to upgrade connection"},
+		"nothing else seen":         {unreached, false, evidence.Blocked, testUpgradeRefused},
+		"a client operation failed": {unreached, true, evidence.Fail, testUpgradeRefused},
 		// The command ran and failed: CUBRID answered.
 		"the command ran and failed": {"++ cubrid master is not running.\ncommand terminated with exit code 1\n",
 			false, evidence.Fail, "cubrid heartbeat status failed on " + testHAPrimary},
