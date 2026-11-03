@@ -84,7 +84,7 @@ func (r *Runner) checkNodeFreeSpace(ctx context.Context, cfg Config, rec *record
 		}
 		if readSpace {
 			if summary.Node.Fs == nil || summary.Node.Fs.AvailableBytes == nil {
-				return fmt.Errorf("the free space of node %s was not reported", node.Name)
+				return fmt.Errorf("the free space of node %s was not reported; no resources were created", node.Name)
 			}
 			free := *summary.Node.Fs.AvailableBytes
 			rec.NodeFreeBytes[node.Name] = free

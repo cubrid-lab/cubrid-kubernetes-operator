@@ -315,3 +315,48 @@ func TestRunWithNeitherMinimumReadsNoNodeStats(t *testing.T) {
 		t.Fatalf("read %v, want no node read", *read)
 	}
 }
+
+// A preallocated namespace's run reads nothing cluster-wide beyond its fixed
+// names, so no node is read even with both minimums set.
+func TestPreallocatedRunReadsNoNodeStats(t *testing.T) {
+	nodes, hook, read := nodesWithStats(t, map[string]int64{testFullNode: testGi},
+		map[string]int64{testFullNode: testGi / 2}, "")
+	f := preallocatedFixture(t, nodes...)
+	f.cfg.MinNodeFreeSpace, f.cfg.MinNodeFreeMemory = 4*testGi, 2*testGi
+	answerNodeStats(f, hook)
+	if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if len(*read) != 0 {
+		t.Fatalf("read %v, want no node read", *read)
+	}
+}
+
+// The HA lane keeps what the pre-flight read in LAB01's record, also when a
+// node short of memory refused the run.
+func TestRunHARecordsTheNodeFiguresWhenANodeShortOfMemoryRefusesIt(t *testing.T) {
+	cfg := testHAConfig(t)
+	cfg.MinNodeFreeSpace, cfg.MinNodeFreeMemory = 4*testGi, 2*testGi
+	nodes, hook, _ := nodesWithStats(t, map[string]int64{testRoomyNode: 16 * testGi, testFullNode: 16 * testGi},
+		map[string]int64{testRoomyNode: 6 * testGi, testFullNode: testGi / 2}, "")
+	f := newHAFixture(t, cfg, nodes...)
+	f.runner.Command = func(ctx context.Context, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == testVerbGet {
+			return hook(ctx, args)
+		}
+		return f.command(ctx, args...)
+	}
+	err := f.runner.RunHA(t.Context(), cfg)
+	if err == nil || !strings.Contains(err.Error(), testFullNode+" has 536870912 bytes of memory available") {
+		t.Fatalf("RunHA() = %v, want a refusal naming node-3", err)
+	}
+	if len(f.writes) != 0 {
+		t.Fatalf("a refused run created %v", f.writes)
+	}
+	rec := readHARecord(t, cfg.EvidenceDir)
+	if rec.NodeAvailableMemoryBytes[testFullNode] != testGi/2 || rec.NodeAvailableMemoryBytes[testRoomyNode] != 6*testGi ||
+		rec.NodeFreeBytes[testFullNode] != 16*testGi {
+		t.Fatalf("record = memory %v, space %v, want both nodes recorded", rec.NodeAvailableMemoryBytes,
+			rec.NodeFreeBytes)
+	}
+}
