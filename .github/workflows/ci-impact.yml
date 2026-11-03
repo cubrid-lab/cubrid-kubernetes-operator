@@ -92,7 +92,9 @@ jobs:
               "security.yml": {"govulncheck"},
               "codeql.yml": {"codeql_go", "codeql_actions"},
               "pr-title.yml": set(),
-              "ci-impact.yml": set(),
+              # The classifier gates every heavy check, so a change to it runs
+              # all of them: a broken classifier must not land unexercised.
+              "ci-impact.yml": set(CHECKS),
           }
 
           def select(paths):
@@ -129,7 +131,11 @@ jobs:
           examples = [
               (["README.md", "docs/testing/installed-ha.md", "AGENTS.md"], set()),
               ([".github/PULL_REQUEST_TEMPLATE.md", ".github/workflows/pr-title.yml"], ACTIONS),
-              ([".github/workflows/ci-impact.yml"], ACTIONS),
+              ([".github/workflows/ci-impact.yml"], set(CHECKS)),
+              (["build/instance-manager/entrypoint.sh"], set(CHECKS)),
+              (["config/samples/ha.yaml"], set(CHECKS)),
+              (["Makefile"], set(CHECKS)),
+              ([".github/ISSUE_TEMPLATE/bug.yml", "docs/architecture/flow.svg"], set()),
               ([".github/workflows/lint.yml"], ACTIONS | {"go_lint"}),
               ([".github/workflows/test.yml"], ACTIONS | {"go_tests"}),
               ([".github/workflows/test-e2e.yml"], ACTIONS | {"go_e2e"}),

@@ -541,7 +541,10 @@ it is the only evidence.
   A test that passes when its required behavior is violated is a defect in
   the test. Do not weaken an assertion to stop a flaky failure.
 - Evidence a change needs before merge, beyond the unit and envtest, lint,
-  verify and E2E checks CI runs on every pull request:
+  verify and E2E checks CI runs on every pull request that changes code,
+  configuration, tests or workflows (a pull request that changes only
+  documentation or issue forms skips them; see
+  `.github/workflows/ci-impact.yml`):
 
   | Change | Additional evidence |
   |--------|--------|
