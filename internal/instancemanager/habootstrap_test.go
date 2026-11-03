@@ -163,7 +163,7 @@ func TestHABootstrap_CreatesTheDatabaseThenStartsHeartbeat(t *testing.T) {
 // flag (#666).
 func TestHABootstrap_LeavesTheLogVolumeSizeToTheImageWhenNoneIsSet(t *testing.T) {
 	f := newHAFixture(t)
-	f.srv.WithHAConfig(HAConfig{ConfPath: f.srv.ha.ConfPath, VolumeSize: "64M"})
+	f.srv.WithHAConfig(HAConfig{ConfPath: f.srv.ha.ConfPath, VolumeSize: f.srv.ha.VolumeSize})
 	if final := f.run("boot-1"); final.State != OpCompleted {
 		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
 	}
