@@ -408,6 +408,9 @@ func (r *Runner) observeEnvironment(ctx context.Context, cfg Config, rec *record
 		return fmt.Errorf("observe selected StorageClass: %w", err)
 	}
 	rec.StorageProvisioner = sc.Provisioner
+	if err := r.refuseLeftoverVolumes(ctx, cfg); err != nil {
+		return err
+	}
 	return r.checkNodeFreeSpace(ctx, cfg, rec)
 }
 

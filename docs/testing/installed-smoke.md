@@ -63,10 +63,14 @@ bin/installed-smoke \
 The default run timeout is 10 minutes, followed by an independent cleanup
 budget of 2 minutes. Both can be set with `--timeout` and `--cleanup-timeout`.
 
-Before it creates anything, the command reads the free space that kubelet
-reports for each node a member could be scheduled to: every node that is not
-cordoned and has no `NoSchedule` or `NoExecute` taint. It reads it through
-`/api/v1/nodes/<node>/proxy/stats/summary` (`node.fs.availableBytes`). A node
+Before it creates anything, the command reads the free space of kubelet's
+root filesystem for each node a member could be scheduled to: every `Ready`
+node that is not cordoned and has no `NoSchedule` or `NoExecute` taint. It
+reads it through `/api/v1/nodes/<node>/proxy/stats/summary`
+(`node.fs.availableBytes`, with a 30-second request timeout). On the VM lab,
+that filesystem also holds the `local-path` volumes and the container
+images. On a cluster where they are separate filesystems, the value says
+nothing about the volumes' space. A node
 with less than `--min-node-free-space` refuses the run, and nothing is
 created. The default is `4Gi`: one member's volume plus kubelet's eviction
 threshold. kubelet evicts Pods on a node that runs short of disk, the
@@ -74,6 +78,11 @@ volume-delete helpers of the lab's `local-path` storage among them. The
 values read are recorded as `nodeFreeBytes`. `0` reads nothing. The check
 needs `list` on nodes and `get` on `nodes/proxy`. A preallocated namespace's
 run does not read it.
+
+A fresh-namespace run also refuses, before it creates anything, a namespace
+name that already has PersistentVolumes bound to its claims, such as an
+earlier run's that were not reclaimed. Its cleanup would otherwise wait for
+them.
 The outer launcher/job must leave time for cleanup and evidence retention.
 SIGINT, SIGTERM and SIGHUP cancel the run; cleanup still receives its own live
 context. The private credential snapshot is removed when the command returns.
@@ -107,7 +116,8 @@ no cleanup authority. Deletion includes that saved UID as an API precondition;
 a replacement namespace is left in place. The command waits for namespace
 disappearance and never removes finalizers or falls back to deletion by name.
 It then waits, within the same cleanup budget, until no PersistentVolume is
-left that was bound to a claim in the namespace. Each volume still there is
+left that was bound to a claim in the namespace, except volumes whose reclaim
+policy is `Retain`, which stay by design. Each volume still there is
 named in `cleanup` with its phase, claim and node, and the cleanup is not
 complete. This needs `list` on PersistentVolumes. The command deletes no
 volume itself.

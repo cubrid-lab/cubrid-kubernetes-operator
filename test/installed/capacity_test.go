@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,29 +36,49 @@ const (
 	testFullNode  = "node-3"
 )
 
-// runVolume is a local volume bound to a claim in namespace, pinned to node,
-// as the local-path provisioner leaves one after its claim is deleted.
-func runVolume(name, namespace, node string, phase corev1.PersistentVolumePhase) *corev1.PersistentVolume {
+// runVolume is a local volume bound to a claim in namespace, pinned to the
+// full node, as the local-path provisioner leaves one after its claim is
+// deleted.
+func runVolume(name, namespace string, phase corev1.PersistentVolumePhase) *corev1.PersistentVolume {
 	return &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: corev1.PersistentVolumeSpec{
 			ClaimRef: &corev1.ObjectReference{Namespace: namespace, Name: "data-" + clusterName + "-0"},
 			NodeAffinity: &corev1.VolumeNodeAffinity{Required: &corev1.NodeSelector{
 				NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
-					Key: corev1.LabelHostname, Operator: corev1.NodeSelectorOpIn, Values: []string{node}}}}}}}},
+					Key: corev1.LabelHostname, Operator: corev1.NodeSelectorOpIn, Values: []string{testFullNode}}}}}}}},
 		Status: corev1.PersistentVolumeStatus{Phase: phase}}
+}
+
+// leaveVolumesOnNamespaceDeletion has the run's namespace deletion leave
+// volumes behind, as a provisioner whose delete helper cannot run does.
+func leaveVolumesOnNamespaceDeletion(f *fixture, volumes ...*corev1.PersistentVolume) {
+	f.deleteHook = func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+		if _, ok := obj.(*corev1.Namespace); ok {
+			for _, volume := range volumes {
+				if err := c.Create(ctx, volume.DeepCopy()); err != nil {
+					return err
+				}
+			}
+		}
+		return c.Delete(ctx, obj, opts...)
+	}
 }
 
 func TestRunCleanupIsNotCompleteWhileARunVolumeIsLeft(t *testing.T) {
 	cfg := testConfig(t)
-	// A volume of another namespace is not the run's and is never waited for.
-	f := newConfiguredFixture(t, cfg, runVolume("pv-run", cfg.Namespace, testFullNode, corev1.VolumeReleased),
-		runVolume("pv-other", "cubrid-test", testFullNode, corev1.VolumeBound))
+	// A volume of another namespace is not the run's, and a retained one stays
+	// by design: neither is waited for.
+	f := newConfiguredFixture(t, cfg, runVolume("pv-other", "cubrid-test", corev1.VolumeBound))
+	retained := runVolume("pv-retained", cfg.Namespace, corev1.VolumeReleased)
+	retained.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+	leaveVolumesOnNamespaceDeletion(f, runVolume("pv-run", cfg.Namespace, corev1.VolumeReleased),
+		retained)
 	if err := f.runner.Run(t.Context(), f.cfg); err == nil {
 		t.Fatal("Run() passed with the run's volume left behind")
 	}
 	rec := readRecord(t, cfg.EvidenceDir)
 	if !strings.Contains(rec.Cleanup, "pv-run (Released, claim data-smoke-0, node node-3)") ||
-		strings.Contains(rec.Cleanup, "pv-other") {
+		strings.Contains(rec.Cleanup, "pv-other") || strings.Contains(rec.Cleanup, "pv-retained") {
 		t.Fatalf("cleanup = %q, want only the run's Released volume named with its node", rec.Cleanup)
 	}
 	if summary := readSummary(t, cfg.EvidenceDir); summary.Passed || summary.Scenarios[0].CleanupSucceeded == nil ||
@@ -68,16 +89,21 @@ func TestRunCleanupIsNotCompleteWhileARunVolumeIsLeft(t *testing.T) {
 
 func TestRunCleanupCompletesOnceTheRunVolumesAreDeleted(t *testing.T) {
 	cfg := testConfig(t)
-	f := newConfiguredFixture(t, cfg, runVolume("pv-run", cfg.Namespace, testFullNode, corev1.VolumeReleased))
-	// The provisioner removes the volume after the namespace is gone.
+	f := newConfiguredFixture(t, cfg)
+	// The namespace's deletion leaves a Released volume, which the provisioner
+	// removes a moment later.
 	f.deleteHook = func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-		if err := c.Delete(ctx, obj, opts...); err != nil {
-			return err
-		}
 		if _, ok := obj.(*corev1.Namespace); ok {
-			return c.Delete(ctx, &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-run"}})
+			volume := runVolume("pv-run", cfg.Namespace, corev1.VolumeReleased)
+			if err := c.Create(ctx, volume); err != nil {
+				return err
+			}
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				_ = c.Delete(context.Background(), volume)
+			}()
 		}
-		return nil
+		return c.Delete(ctx, obj, opts...)
 	}
 	if err := f.runner.Run(t.Context(), f.cfg); err != nil {
 		t.Fatalf("Run() = %v", err)
@@ -94,7 +120,8 @@ func nodesWithFreeSpace(t *testing.T, free map[string]int64, unschedulable strin
 	t.Helper()
 	nodes := make([]client.Object, 0, len(free))
 	for name := range free {
-		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}}
 		if name == unschedulable {
 			node.Spec.Taints = []corev1.Taint{{Key: "node-role.kubernetes.io/control-plane",
 				Effect: corev1.TaintEffectNoSchedule}}
@@ -103,7 +130,7 @@ func nodesWithFreeSpace(t *testing.T, free map[string]int64, unschedulable strin
 	}
 	read := &[]string{}
 	hook := func(_ context.Context, args []string) (string, error) {
-		if len(args) == 3 && args[0] == testVerbGet && args[1] == "--raw" {
+		if len(args) == 4 && args[0] == testVerbGet && args[1] == "--raw" && args[3] == "--request-timeout=30s" {
 			node := strings.TrimSuffix(strings.TrimPrefix(args[2], "/api/v1/nodes/"), "/proxy/stats/summary")
 			*read = append(*read, node)
 			return fmt.Sprintf(`{"node":{"nodeName":%q,"fs":{"availableBytes":%d,"capacityBytes":%d}}}`, node,
@@ -173,5 +200,36 @@ func TestFreeSpaceFlagReadsASizeAndRefusesANegativeOne(t *testing.T) {
 	}
 	if err := flags.Parse([]string{"-min-node-free-space", "-1Gi"}); err == nil {
 		t.Fatal("a negative size was accepted")
+	}
+}
+
+func TestRunRefusesANamespaceThatAlreadyHasVolumes(t *testing.T) {
+	cfg := testConfig(t)
+	f := newConfiguredFixture(t, cfg, runVolume("pv-earlier", cfg.Namespace, corev1.VolumeReleased))
+	err := f.runner.Run(t.Context(), f.cfg)
+	if err == nil || !strings.Contains(err.Error(), "pv-earlier (Released") {
+		t.Fatalf("Run() = %v, want a refusal naming the earlier run's volume", err)
+	}
+	if len(f.writes) != 0 || f.deletes != 0 {
+		t.Fatalf("a refused run created or deleted something: writes %v, deletes %d", f.writes, f.deletes)
+	}
+}
+
+func TestRunLeavesANodeThatIsNotReadyOutOfTheFreeSpaceCheck(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.MinNodeFreeSpace = 4 * testGi
+	nodes, hook, read := nodesWithFreeSpace(t, map[string]int64{testRoomyNode: 16 * testGi, testFullNode: testGi}, "")
+	for _, obj := range nodes {
+		if node := obj.(*corev1.Node); node.Name == testFullNode {
+			node.Status.Conditions[0].Status = corev1.ConditionUnknown
+		}
+	}
+	f := newConfiguredFixture(t, cfg, nodes...)
+	answerNodeStats(f, hook)
+	if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+		t.Fatalf("Run() = %v: a node that is not Ready gets no member", err)
+	}
+	if len(*read) != 1 || (*read)[0] != testRoomyNode {
+		t.Fatalf("read %v, want %s only", *read, testRoomyNode)
 	}
 }

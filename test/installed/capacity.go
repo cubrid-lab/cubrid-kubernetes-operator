@@ -32,8 +32,9 @@ import (
 )
 
 // checkNodeFreeSpace reads, before the run creates anything, the free space
-// of the filesystem kubelet keeps volumes and images on, on every node a
-// member could be scheduled to. kubelet evicts Pods when that space runs low,
+// of kubelet's root filesystem (nodefs) on every Ready node a member could be
+// scheduled to. On the VM lab, local-path volumes and container images share
+// that filesystem; elsewhere they may not. kubelet evicts Pods when it runs low,
 // and a run's members can all land on one node, so a run that starts on a
 // full node can evict the shared clusters and its own volumes' delete helpers
 // with them. A node under cfg.MinNodeFreeSpace refuses the run; a minimum of
@@ -55,7 +56,10 @@ func (r *Runner) checkNodeFreeSpace(ctx context.Context, cfg Config, rec *record
 		if !schedulable(node) {
 			continue
 		}
-		out, err := r.Command(ctx, "get", "--raw", "/api/v1/nodes/"+node.Name+"/proxy/stats/summary")
+		// A node going down answers no proxy read; the bound keeps it from
+		// holding the run until its deadline.
+		out, err := r.Command(ctx, "get", "--raw", "/api/v1/nodes/"+node.Name+"/proxy/stats/summary",
+			"--request-timeout=30s")
 		if err != nil {
 			return fmt.Errorf("read the free space of node %s: %w", node.Name, err)
 		}
@@ -110,14 +114,58 @@ func (f flagValue) Set(value string) error {
 }
 
 // schedulable reports whether a member Pod, which tolerates no taint of its
-// own, could be scheduled to node.
+// own, could be scheduled to node now: Ready, not cordoned and not tainted.
 func schedulable(node *corev1.Node) bool {
-	if node.Spec.Unschedulable {
+	ready := slices.ContainsFunc(node.Status.Conditions, func(c corev1.NodeCondition) bool {
+		return c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue
+	})
+	if !ready || node.Spec.Unschedulable {
 		return false
 	}
 	return !slices.ContainsFunc(node.Spec.Taints, func(t corev1.Taint) bool {
 		return t.Effect == corev1.TaintEffectNoSchedule || t.Effect == corev1.TaintEffectNoExecute
 	})
+}
+
+// refuseLeftoverVolumes refuses a fresh-namespace run whose namespace name
+// already has PersistentVolumes bound to claims in it, such as a previous
+// run's that were not reclaimed: the cleanup would wait for them and fail
+// this run for what it did not leave.
+func (r *Runner) refuseLeftoverVolumes(ctx context.Context, cfg Config) error {
+	if cfg.NamespaceMode == PreallocatedNamespace {
+		return nil
+	}
+	left, err := r.runVolumes(ctx, cfg.Namespace)
+	if err != nil {
+		return err
+	}
+	if len(left) > 0 {
+		return fmt.Errorf("namespace %s already has volumes bound to its claims, left by an earlier run; choose a "+
+			"new namespace, no resources were created: %s", cfg.Namespace, strings.Join(left, ", "))
+	}
+	return nil
+}
+
+// runVolumes names the PersistentVolumes bound to a claim in namespace that
+// the provisioner deletes once their claim is gone, with their phase, claim
+// and node. A volume the StorageClass retains is left out: it stays by
+// design.
+func (r *Runner) runVolumes(ctx context.Context, namespace string) ([]string, error) {
+	volumes := &corev1.PersistentVolumeList{}
+	if err := r.Client.List(ctx, volumes); err != nil {
+		return nil, fmt.Errorf("list the PersistentVolumes: %w", err)
+	}
+	var left []string
+	for i := range volumes.Items {
+		volume := &volumes.Items[i]
+		if volume.Spec.ClaimRef == nil || volume.Spec.ClaimRef.Namespace != namespace ||
+			volume.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+			continue
+		}
+		left = append(left, fmt.Sprintf("%s (%s, claim %s, node %s)", volume.Name, volume.Status.Phase,
+			volume.Spec.ClaimRef.Name, volumeNode(volume)))
+	}
+	return left, nil
 }
 
 // awaitVolumesReclaimed waits, after the run's namespace is gone, until no
@@ -130,20 +178,9 @@ func schedulable(node *corev1.Node) bool {
 func (r *Runner) awaitVolumesReclaimed(ctx context.Context, namespace string, poll time.Duration) error {
 	var left []string
 	err := pollUntil(ctx, poll, func() (bool, error) {
-		volumes := &corev1.PersistentVolumeList{}
-		if err := r.Client.List(ctx, volumes); err != nil {
-			return false, fmt.Errorf("list the PersistentVolumes: %w", err)
-		}
-		left = left[:0]
-		for i := range volumes.Items {
-			volume := &volumes.Items[i]
-			if volume.Spec.ClaimRef == nil || volume.Spec.ClaimRef.Namespace != namespace {
-				continue
-			}
-			left = append(left, fmt.Sprintf("%s (%s, claim %s, node %s)", volume.Name, volume.Status.Phase,
-				volume.Spec.ClaimRef.Name, volumeNode(volume)))
-		}
-		return len(left) == 0, nil
+		var err error
+		left, err = r.runVolumes(ctx, namespace)
+		return err == nil && len(left) == 0, err
 	})
 	if err != nil && len(left) > 0 {
 		return errors.Join(fmt.Errorf("the run namespace's volumes were not reclaimed: %s",
