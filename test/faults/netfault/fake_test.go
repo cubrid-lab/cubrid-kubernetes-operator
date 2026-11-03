@@ -84,6 +84,13 @@ type fakeNet struct {
 	senders map[string]string
 	// latency is how long a command of an operation takes.
 	latency map[string]time.Duration
+	// stall, when it returns true for a command's operation, holds that
+	// command until its context ends, as a kubectl exec that does not
+	// answer before the wait's deadline.
+	stall func(op string) bool
+	// fail, when it returns an error for a command's operation, fails that
+	// command with it.
+	fail func(op string) error
 	// uploads sends 1460 bytes of TCP from a Pod's IP to an address each
 	// time that Pod's rules are read, as an upload under way would.
 	uploads map[string]string
@@ -146,9 +153,18 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 	pod, script := args[3], args[9]
 	op := strings.Fields(strings.SplitN(script, "\n", 2)[0])
 	n.mu.Lock()
-	latency := n.latency[op[2]]
+	latency, stall, fail := n.latency[op[2]], n.stall, n.fail
 	n.mu.Unlock()
 	time.Sleep(latency)
+	if stall != nil && stall(op[2]) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	if fail != nil {
+		if err := fail(op[2]); err != nil {
+			return "", err
+		}
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.scripts = append(n.scripts, pod+": "+strings.Join(op, " "))
@@ -163,7 +179,7 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 	switch op[2] {
 	case "addr":
 		return fmt.Sprintf("2: eth0    inet %s/24 brd 10.42.1.255 scope global eth0\\       valid_lft forever\n", ns.ip), nil
-	case "rules":
+	case opRules:
 		return n.rules(ns), nil
 	case "observe":
 		ns.removed = false
@@ -190,7 +206,7 @@ func (n *fakeNet) kubectl(ctx context.Context, args ...string) (string, error) {
 			ns.sticky = n.stickyCut
 		}
 		return "", nil
-	case "connect":
+	case opConnect:
 		return n.connects(ns, op[3], op[5])
 	case "qdisc":
 		return ns.qdisc + "\n", nil
@@ -520,6 +536,13 @@ func (n *fakeNet) installed(ip string) []string {
 }
 
 const testNamespace = "cubrid-lab-test"
+
+// opConnect and opRules are the operations of a fault's connect probe and
+// of its reading of the rules, the second word of a script's first line.
+const (
+	opConnect = "connect"
+	opRules   = "rules"
+)
 
 // defaultQdisc is a Pod's qdisc with no fault; testConnect the time of a
 // connect the fake does not delay; outcomeReached marks a case whose fault
