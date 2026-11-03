@@ -32,24 +32,34 @@ import (
 )
 
 // checkNodeFreeSpace reads, before the run creates anything, the free space
-// of kubelet's root filesystem (nodefs) on every Ready node a member could be
-// scheduled to. On the VM lab, local-path volumes and container images share
-// that filesystem; elsewhere they may not. kubelet evicts Pods when it runs low,
-// and a run's members can all land on one node, so a run that starts on a
-// full node can evict the shared clusters and its own volumes' delete helpers
-// with them. A node under cfg.MinNodeFreeSpace refuses the run; a minimum of
-// zero reads nothing, and so does a preallocated namespace's run, whose
-// cluster-wide reads are limited to fixed names. The space read is recorded
-// in bytes per node.
+// of kubelet's root filesystem (nodefs) and the available memory on every
+// Ready node a member could be scheduled to. On the VM lab, local-path
+// volumes and container images share that filesystem; elsewhere they may not.
+// kubelet evicts Pods when it runs low, and a run's members can all land on
+// one node, so a run that starts on a full node can evict the shared clusters
+// and its own volumes' delete helpers with them. Memory is read for the same
+// reason: database Pods request none, so the scheduler does not avoid a node
+// whose memory the shared clusters already use, and there the kernel kills
+// cub_server (#672). A node under cfg.MinNodeFreeSpace or
+// cfg.MinNodeFreeMemory, or one that does not report a figure a minimum asks
+// for, refuses the run. A minimum of zero reads nothing, and so does a
+// preallocated namespace's run, whose cluster-wide reads are limited to fixed
+// names. What was read is recorded in bytes per node.
 func (r *Runner) checkNodeFreeSpace(ctx context.Context, cfg Config, rec *record) error {
-	if cfg.MinNodeFreeSpace <= 0 || cfg.NamespaceMode == PreallocatedNamespace {
+	readSpace, readMemory := cfg.MinNodeFreeSpace > 0, cfg.MinNodeFreeMemory > 0
+	if !readSpace && !readMemory || cfg.NamespaceMode == PreallocatedNamespace {
 		return nil
 	}
 	nodes := &corev1.NodeList{}
 	if err := r.Client.List(ctx, nodes); err != nil {
 		return fmt.Errorf("list the nodes to read their free space: %w", err)
 	}
-	rec.NodeFreeBytes = map[string]int64{}
+	if readSpace {
+		rec.NodeFreeBytes = map[string]int64{}
+	}
+	if readMemory {
+		rec.NodeAvailableMemoryBytes = map[string]int64{}
+	}
 	var short []string
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
@@ -65,24 +75,39 @@ func (r *Runner) checkNodeFreeSpace(ctx context.Context, cfg Config, rec *record
 		}
 		var summary struct {
 			Node struct {
-				Fs *struct {
-					AvailableBytes *int64 `json:"availableBytes"`
-				} `json:"fs"`
+				Fs     *struct{ AvailableBytes *int64 } `json:"fs"`
+				Memory *struct{ AvailableBytes *int64 } `json:"memory"`
 			} `json:"node"`
 		}
-		if err := json.Unmarshal([]byte(out), &summary); err != nil || summary.Node.Fs == nil ||
-			summary.Node.Fs.AvailableBytes == nil {
-			return fmt.Errorf("the free space of node %s was not reported", node.Name)
+		if err := json.Unmarshal([]byte(out), &summary); err != nil {
+			return fmt.Errorf("the stats summary of node %s could not be read: %w", node.Name, err)
 		}
-		free := *summary.Node.Fs.AvailableBytes
-		rec.NodeFreeBytes[node.Name] = free
-		if free < cfg.MinNodeFreeSpace {
-			short = append(short, fmt.Sprintf("%s has %d bytes free", node.Name, free))
+		if readSpace {
+			if summary.Node.Fs == nil || summary.Node.Fs.AvailableBytes == nil {
+				return fmt.Errorf("the free space of node %s was not reported", node.Name)
+			}
+			free := *summary.Node.Fs.AvailableBytes
+			rec.NodeFreeBytes[node.Name] = free
+			if free < cfg.MinNodeFreeSpace {
+				short = append(short, fmt.Sprintf("%s has %d bytes free", node.Name, free))
+			}
+		}
+		if readMemory {
+			if summary.Node.Memory == nil || summary.Node.Memory.AvailableBytes == nil {
+				return fmt.Errorf("the available memory of node %s was not reported; no resources were created",
+					node.Name)
+			}
+			available := *summary.Node.Memory.AvailableBytes
+			rec.NodeAvailableMemoryBytes[node.Name] = available
+			if available < cfg.MinNodeFreeMemory {
+				short = append(short, fmt.Sprintf("%s has %d bytes of memory available", node.Name, available))
+			}
 		}
 	}
 	if len(short) > 0 {
-		return fmt.Errorf("a node has less free space than the %d bytes a run needs (-min-node-free-space); no "+
-			"resources were created: %s", cfg.MinNodeFreeSpace, strings.Join(short, ", "))
+		return fmt.Errorf("a node has less free space or memory than a run needs (-min-node-free-space %d, "+
+			"-min-node-free-memory %d bytes); no resources were created: %s", cfg.MinNodeFreeSpace,
+			cfg.MinNodeFreeMemory, strings.Join(short, ", "))
 	}
 	return nil
 }

@@ -225,6 +225,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.Var(installed.FreeSpaceFlag(&cfg.MinNodeFreeSpace, "8Gi"), "min-node-free-space",
 		"free space every schedulable node must have before the run creates anything: one three-member cluster "+
 			"on one node above kubelet's eviction threshold; 0 reads none")
+	flags.Var(installed.FreeSpaceFlag(&cfg.MinNodeFreeMemory, "2Gi"), "min-node-free-memory",
+		"memory kubelet must report available on every schedulable node before the run creates anything: one "+
+			"three-member cluster, at about 600Mi a member, on one node; 0 reads none")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

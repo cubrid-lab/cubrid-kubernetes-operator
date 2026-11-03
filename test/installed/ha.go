@@ -361,7 +361,10 @@ type haRecord struct {
 	// NodeFreeBytes is the free space each schedulable node reported before
 	// the run created anything, when a minimum was set (checkNodeFreeSpace).
 	NodeFreeBytes map[string]int64 `json:"nodeFreeBytes,omitempty"`
-	Seed          seedRecord       `json:"seed"`
+	// NodeAvailableMemoryBytes is the memory each schedulable node reported
+	// available before the run created anything, when a minimum was set.
+	NodeAvailableMemoryBytes map[string]int64 `json:"nodeAvailableMemoryBytes,omitempty"`
+	Seed                     seedRecord       `json:"seed"`
 	// PodSecurity are the Pod Security labels the run created its namespace
 	// with.
 	PodSecurity   map[string]string `json:"podSecurity,omitempty"`
@@ -622,9 +625,10 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	defer cancel()
 	observed := record{RunID: runID}
 	err := r.observeEnvironment(ctx, cfg.Config, &observed, &summary.Environment)
-	// The free space read is kept also when a node short of it refused the
-	// run.
+	// The free space and memory read are kept also when a node short of
+	// either refused the run.
 	h.rec.NodeFreeBytes = observed.NodeFreeBytes
+	h.rec.NodeAvailableMemoryBytes = observed.NodeAvailableMemoryBytes
 	if err != nil {
 		return err
 	}

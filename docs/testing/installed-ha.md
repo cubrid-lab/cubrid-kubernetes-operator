@@ -68,6 +68,12 @@ In addition to the smoke's inputs:
   one three-member cluster on one node above kubelet's eviction threshold.
   Lanes that create more clusters, such as S12's, can need more. The values
   read are recorded as `nodeFreeBytes` in `LAB01/record.json`.
+- `-min-node-free-memory` (default `2Gi`) is the memory every schedulable
+  node must report available before anything is created, as in the smoke.
+  Here it is one three-member cluster, at about 600Mi a member, on one node.
+  A node with no figure refuses the run too. Lanes that create more clusters,
+  such as S12's, can need more. The values read are recorded as
+  `nodeAvailableMemoryBytes` in `LAB01/record.json`.
 
 The account needs, beyond the smoke's:
 - `get` on the seed Secret;

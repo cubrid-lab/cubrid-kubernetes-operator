@@ -79,6 +79,17 @@ values read are recorded as `nodeFreeBytes`. `0` reads nothing. The check
 needs `list` on nodes and `get` on `nodes/proxy`. A preallocated namespace's
 run does not read it.
 
+The same summary gives the memory kubelet reports available on each of those
+nodes (`node.memory.availableBytes`). A node with less than
+`--min-node-free-memory` refuses the run, and nothing is created. So does a
+node that reports no figure, because an unknown measurement is not taken as
+enough. The default is `1Gi`, room for one member at about 600Mi. Database Pods
+request no memory, so the scheduler does not avoid a node that the shared
+clusters already fill. There the kernel kills `cub_server` and the node goes
+NotReady (#672). The values read are recorded as `nodeAvailableMemoryBytes`.
+`0` reads nothing. This is a snapshot taken when the run starts: it does not
+stop the memory use growing during the run.
+
 A fresh-namespace run also refuses, before it creates anything, a namespace
 name that already has PersistentVolumes bound to its claims, such as an
 earlier run's that were not reclaimed. Its cleanup would otherwise wait for
