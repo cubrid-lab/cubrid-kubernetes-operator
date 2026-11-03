@@ -208,9 +208,13 @@ What the commands print is kept only through the run's redactor.
    undone. A VM not seen running again blocks S04: what follows cannot be
    judged, and the VM is the lab's to recover.
 7. Until the node is `Ready` and the member on the VM answers its heartbeat
-   status again, the member still cannot be observed, and the reads of
-   step 5 on `PrimaryResolved` and the Pod go on: a node that is `Ready`
-   does not mean CUBRID on it runs. Within
+   status as master or slave again, the member still cannot be observed, and
+   the reads of step 5 on `PrimaryResolved` and the Pod go on: a node that
+   is `Ready` does not mean CUBRID on it runs. The Operator reaches the
+   member over the Pod network and the run through `kubectl exec`, so the
+   Operator may see it first: the reads also end when the HA cluster's
+   `status.instances` shows the member with a known role and a
+   `lastObservedTime` after the VM was confirmed off. Within
    `-vm-return-limit` (`vm_return_limit`, default 10 minutes) of the start,
    the node must be `Ready` and the cluster must converge: the member on the
    VM is the same Pod, CUBRID reports one master and two slaves,
@@ -232,8 +236,8 @@ What the commands print is kept only through the run's redactor.
 Measurements, from the stop command's issue unless named otherwise:
 `confirmedOffAfter`, `promotedWithin` (until the promotion was seen),
 `failoverWithin` (until the last client recovered), `vmReturnWithin` and
-`convergedWithin` (from the first start command's return until the node was `Ready`, and until
-the cluster converged), `primaryResolvedNotTrueFor` (from the first reading
+`convergedWithin` (from the return of the cleanup's first start command until
+the node was `Ready`, and until the cluster converged), `primaryResolvedNotTrueFor` (from the first reading
 of it not `True` after its last `True` until the cluster converged),
 `finalMaster`, `shortestStableFor` and `operationsNotAcknowledged`.
 `S04/power-off/record.json` keeps the times, `S04/power-off/timeline.jsonl`

@@ -130,10 +130,12 @@ type s04Record struct {
 	// PodDeletedAt is set when the powered-off member's Pod was seen with a
 	// deletion timestamp, or replaced, while its VM was off.
 	PodDeletedAt *time.Time `json:"podDeletedWhileOffAt,omitempty"`
-	// PoweredOnAt is when the first VM start command returned, or when the
-	// cleanup ended if it started nothing; NodeReadyAt when the node was
-	// Ready again; MemberAnsweredAt when the member on the VM answered its
-	// heartbeat status again, until which PrimaryResolved stays watched;
+	// PoweredOnAt is when the cleanup's first VM start command returned,
+	// whatever its result, or when the cleanup ended if it started nothing;
+	// NodeReadyAt when the node was Ready again; MemberAnsweredAt when the
+	// member on the VM was seen answering again, to the run's heartbeat
+	// status or in the Operator's own record, until which PrimaryResolved
+	// stays watched;
 	// ConvergedAt when one master and two slaves, the starting conditions and
 	// the member's Pod were seen again.
 	PoweredOnAt      *time.Time `json:"poweredOnAt,omitempty"`
@@ -203,7 +205,8 @@ func (h *haRun) vmCommand(ctx context.Context, script, node string) (string, err
 
 // vmPowerOff powers off the VM of the node that runs the master, through the
 // lab's own command: the provider's controls are not in this repository.
-// started is set when the cleanup's first start command returned.
+// started is set when the cleanup's first start command returned, whether
+// or not it succeeded.
 type vmPowerOff struct {
 	h       *haRun
 	node    string
@@ -263,12 +266,13 @@ func (f vmPowerOff) Remove(ctx context.Context) error {
 			}
 			last = "the VM is reported running and was not started by the cleanup"
 		case state == vmStopped:
-			if _, err := f.h.vmCommand(ctx, f.h.cfg.VMStartCommand, f.node); err != nil {
+			_, err := f.h.vmCommand(ctx, f.h.cfg.VMStartCommand, f.node)
+			if f.started.IsZero() {
+				*f.started = time.Now().UTC()
+			}
+			if err != nil {
 				last = "the VM start command failed: " + err.Error()
 			} else {
-				if f.started.IsZero() {
-					*f.started = time.Now().UTC()
-				}
 				last = "the VM was started and is not reported running yet"
 			}
 		default:
@@ -672,12 +676,22 @@ func (h *haRun) whileVMOff(ctx context.Context, rec *s04Record, result *evidence
 // Operator's PrimaryResolved and that member's Pod, and records in result
 // what breaks the contract: PrimaryResolved True primaryResolvedGrace or
 // more after the VM was confirmed off, and the Pod deleted, gone or
-// replaced.
+// replaced. Once the VM was powered on, the Operator reaches the member
+// over the Pod network and the run through kubectl exec, so either can see
+// it first: a member the Operator's own record shows answering since the VM
+// was confirmed off is observed again, and the watch ends.
 func (h *haRun) watchUnobserved(ctx context.Context, rec *s04Record, result *evidence.Scenario, now time.Time) {
 	afterGrace := now.Sub(*rec.PoweredOffAt) >= primaryResolvedGrace
+	while := "on the powered-off VM, could not be observed"
+	if rec.PoweredOnAt != nil {
+		while = "on the VM powered on again, had not answered again"
+	}
 	cluster := &databasev1alpha1.CubridCluster{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
 		rec.ClusterReadFailures++
+	} else if rec.PoweredOnAt != nil && answeredSince(cluster, rec.Master, *rec.PoweredOffAt) {
+		rec.MemberAnsweredAt = &now
+		return
 	} else {
 		resolved := meta.IsStatusConditionTrue(cluster.Status.Conditions, primaryResolvedCondition)
 		if afterGrace {
@@ -689,8 +703,7 @@ func (h *haRun) watchUnobserved(ctx context.Context, rec *s04Record, result *evi
 			// no longer be fresh.
 			rec.PrimaryResolvedTrueAt = &now
 			result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("the Operator reported %s True at %s "+
-				"while %s, on the powered-off VM, could not be observed", primaryResolvedCondition,
-				now.Format(time.RFC3339), rec.Master))
+				"while %s, %s", primaryResolvedCondition, now.Format(time.RFC3339), rec.Master, while))
 		case resolved:
 			rec.PrimaryResolvedNotTrueFrom = nil
 		case rec.PrimaryResolvedNotTrueFrom == nil:
@@ -706,8 +719,22 @@ func (h *haRun) watchUnobserved(ctx context.Context, rec *s04Record, result *evi
 	if apierrors.IsNotFound(err) || replaced {
 		rec.PodDeletedAt = &now
 		result.NeverEvents = append(result.NeverEvents, fmt.Sprintf("the Pod %s was deleted or replaced while its "+
-			"VM was off", rec.MasterPod.Pod))
+			"VM was off or before it answered again", rec.MasterPod.Pod))
 	}
+}
+
+// answeredSince reports whether the Operator's record shows member answering
+// with a known role after since. A member that does not answer keeps the time
+// of its last answer, so a time after since is an answer the Operator had
+// after it.
+func answeredSince(cluster *databasev1alpha1.CubridCluster, member string, since time.Time) bool {
+	for _, instance := range cluster.Status.Instances {
+		if instance.Name == member {
+			known := instance.Role == databasev1alpha1.RoleMaster || instance.Role == databasev1alpha1.RoleSlave
+			return known && instance.LastObservedTime != nil && instance.LastObservedTime.After(since)
+		}
+	}
+	return false
 }
 
 // survivorRoles asks CUBRID on each member named for its role, and returns
@@ -794,11 +821,12 @@ func (h *haRun) afterVMReturn(ctx context.Context, rec *s04Record, result *evide
 	}
 }
 
-// memberAnswers reports whether pod answered its heartbeat status, whatever
-// its role.
+// memberAnswers reports whether pod answered its heartbeat status as an
+// active master or a standby slave.
 func (h *haRun) memberAnswers(ctx context.Context, pod string) bool {
-	_, err := h.member(ctx, pod, "bash", "-c", heartbeatStatus)
-	return err == nil
+	out, err := h.member(ctx, pod, "bash", "-c", heartbeatStatus)
+	role := heartbeatRole(pod, out)
+	return err == nil && (role == roleMaster || role == roleSlave)
 }
 
 // converged reports whether the cluster is back in a checked state after the

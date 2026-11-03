@@ -93,6 +93,9 @@ type s04Lab struct {
 	// the Operator reports PrimaryResolved True; poweredOn is set then.
 	silentAfterOn int
 	poweredOn     bool
+	// recordOnReturn has the Operator record the member on the VM as an
+	// answering slave as soon as the VM is powered on.
+	recordOnReturn bool
 	// lateStop fails the stop command and powers the VM off only after that
 	// many more status reads, as a stop the provider accepted before the
 	// command was cancelled. lateStopIssued is set once that command ran.
@@ -239,6 +242,11 @@ func (l *s04Lab) power(ctx context.Context, node string, on bool) {
 		Status: resolved, Reason: "Test", ObservedGeneration: cluster.Generation})
 	if on {
 		cluster.Status.CurrentPrimary = testMemberHA0
+	}
+	if on && l.recordOnReturn {
+		cluster.Status.Instances = []databasev1alpha1.InstanceStatus{{Name: testHAPrimary,
+			// The API keeps whole seconds; the real outage lasts a minute.
+			Role: databasev1alpha1.RoleSlave, LastObservedTime: &metav1.Time{Time: time.Now().Add(2 * time.Second)}}}
 	}
 	if err := c.Update(ctx, cluster); err != nil {
 		f.t.Error(err)
@@ -514,6 +522,20 @@ func TestRunS04FailsWhenPrimaryResolvedIsTrueBeforeTheReturningMemberAnswers(t *
 	if s04.Result != evidence.Fail || len(s04.NeverEvents) != 1 ||
 		!strings.Contains(s04.NeverEvents[0], primaryResolvedCondition+" True") {
 		t.Fatalf("S04 = %+v, want a failure with PrimaryResolved True before the member answered", s04)
+	}
+}
+
+func TestRunS04PassesWhenTheOperatorSeesTheReturningMemberBeforeTheRun(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	// The Operator's record shows the member answering again while the
+	// run's own reads of it still fail: PrimaryResolved True is then right.
+	lab.silentAfterOn, lab.recordOnReturn = 3, true
+	if err := f.runner.RunHA(t.Context(), cfg); err != nil {
+		t.Fatalf("RunHA() = %v", err)
+	}
+	if s04 := s04Scenario(t, cfg.EvidenceDir); s04.Result != evidence.Pass {
+		t.Fatalf("S04 = %+v, want a pass: the Operator observed the member before PrimaryResolved was True", s04)
 	}
 }
 
