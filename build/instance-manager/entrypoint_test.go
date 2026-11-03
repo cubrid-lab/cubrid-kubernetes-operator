@@ -300,7 +300,11 @@ func TestEntrypoint_NewServerCreatesTheLogVolumeAtTheGivenSize(t *testing.T) {
 			if code, out := f.run(); code != 0 {
 				t.Fatalf("exit %d:\n%s", code, out)
 			}
-			createdb := f.recorded()[0]
+			calls := f.recorded()
+			if len(calls) == 0 {
+				t.Fatal("no call was recorded, want createdb first")
+			}
+			createdb := calls[0]
 			if tc.want != "" && !strings.Contains(createdb, tc.want) {
 				t.Errorf("createdb = %q, want %q", createdb, tc.want)
 			}

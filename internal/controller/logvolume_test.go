@@ -27,15 +27,17 @@ import (
 // 512M files, a 2Gi member already used about 1.7 GB of its volume before any
 // archive was kept (#666; docs/poc/RESULTS.md, POC-45).
 func TestLogVolumeSizeIsA32ndOfTheDataVolumeWithinTheEngineLimits(t *testing.T) {
+	const largest = "512M"
 	for _, tc := range []struct{ size, want string }{
 		{"100Mi", "20M"},
 		{"640Mi", "20M"},
 		{"1Gi", "32M"},
 		{"1500Mi", "46M"},
 		{"2Gi", "64M"},
-		{"16Gi", "512M"},
-		{"100Gi", "512M"},
+		{"16Gi", largest},
+		{"100Gi", largest},
 		{"3G", "89M"},
+		{"100E", largest},
 	} {
 		if got := logVolumeSize(resource.MustParse(tc.size)); got != tc.want {
 			t.Errorf("logVolumeSize(%s) = %s, want %s", tc.size, got, tc.want)

@@ -1227,15 +1227,19 @@ separated later.
 
 Every log file of a member is the database's log volume size: the active
 log, the temporary archive, `lgar.removed`, its archives, and the same files
-for each peer whose log it copies. CUBRID removes archives only when it
-creates a new one, so a member holds several at a time, and during a burst
-more than `log_max_archives` or `ha_copy_log_max_archives` allow
-(docs/poc/RESULTS.md, POC-45). With the image's 512M, a 2Gi HA member
+for each peer whose log it copies. In POC-45 (docs/poc/RESULTS.md), CUBRID
+removed archives only when it created a new one, so a member held several
+at a time, and during a burst more than `log_max_archives` or
+`ha_copy_log_max_archives` allow. With the image's 512M, a 2Gi HA member
 already used about 1.7 GB of its volume (#666).
 
 The Operator therefore creates the database with a log volume of a 32nd of
 `storage.data.size`, in whole MiB, between 20M (the smallest the engine
-accepts) and the image's 512M: 64M for 2Gi, 512M from 16Gi up. It passes the
+accepts) and the image's 512M: 64M for 2Gi, 512M from 16Gi up. A 32nd leaves
+room for 32 such files: at 2Gi, the 512M database volume takes the space of
+8, about 7 are the fixed log files of a member and its two copy directories,
+and about 17 remain for archives, against the 6 of the master's own archives
+and 8 copies a member held during a burst in POC-45. It passes the
 size to `createdb` through `CUBRID_LOG_VOLUME_SIZE`. The members seeded from
 a backup with `restoredb` or `restoreslave` keep the backup's size (POC-46),
 so the size chosen at the first `createdb` holds for the whole cluster. The
@@ -1243,9 +1247,10 @@ size is fixed when the database is created: an existing database keeps its
 log volume, and a cluster recovered from a backup keeps the backup's.
 
 A smaller log volume also means that an archive is created, and older ones
-removed, after fewer bytes of log. A member that is stopped while its peers
-remove archives it has not copied may not rejoin (POC-45); with smaller
-files, that happens after fewer writes.
+removed, after fewer bytes of log. In POC-45, a member stopped uncleanly
+while its peers removed archives did not rejoin; the likely cause, not
+confirmed, is that an archive it needed had been removed. A smaller log
+volume is expected, not measured, to bring that point after fewer writes.
 
 ### Monitoring Targets
 

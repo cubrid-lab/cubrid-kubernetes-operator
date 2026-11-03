@@ -35,13 +35,18 @@ const (
 //
 // Every log file of a member is this large: its active log, its temporary
 // archive, lgar.removed and its archives, and the same files for each peer
-// whose log it copies. CUBRID removes archives only when it creates a new
-// one, so a member holds several at a time. With the image's 512M, a 2Gi HA
+// whose log it copies. In POC-45, CUBRID removed archives only when it
+// created a new one, so a member held several at a time. With the image's 512M, a 2Gi HA
 // member already used about 1.7 GB before any archive was kept (#666;
 // docs/poc/RESULTS.md, POC-45). The members seeded from a backup keep the
 // backup's size, so the size chosen at the first createdb holds for the
 // whole cluster.
 func logVolumeSize(size resource.Quantity) string {
+	// Value() saturates beyond int64, so a size that large is taken as the
+	// largest log volume first.
+	if size.Cmp(*resource.NewQuantity(maxLogVolumeMiB*32<<20, resource.BinarySI)) >= 0 {
+		return strconv.Itoa(maxLogVolumeMiB) + "M"
+	}
 	mib := size.Value() / 32 / (1 << 20)
 	mib = max(minLogVolumeMiB, min(maxLogVolumeMiB, mib))
 	return strconv.FormatInt(mib, 10) + "M"
