@@ -44,9 +44,11 @@ jobs:
           )
           SCOPE = re.compile(r"[a-z0-9][a-z0-9_-]*")
           # Scenario/lab/review IDs are evidence labels, not readable titles.
+          # Scenario and lab IDs are matched in any case (a scope is
+          # lowercase); review codes only in upper case, so that ordinary
+          # words such as "r1 replicas" or "im-2" are not taken for them.
           INTERNAL_IDS = re.compile(
-              r"(?<![A-Za-z0-9])(?:S\d{2}|LAB\d{2,}|(?:RT|DEP|NW|CTL|IM)-\d+|R\d+)(?![A-Za-z0-9])",
-              re.IGNORECASE,
+              r"(?<![A-Za-z0-9])(?:(?i:S\d{2}|LAB\d{2,})|(?:RT|DEP|NW|CTL|IM)-\d+|R\d+)(?![A-Za-z0-9])"
           )
           # Self-checks run in this checkout-free job to prevent regressions.
           rejected = (
@@ -61,6 +63,9 @@ jobs:
               "fix(installed): classify HA status failures and kubectl exit messages correctly",
               "docs(adr): clarify write-quarantine failover guarantees",
               "fix(api): handle HTTP 404 from a downstream service",
+              "feat(backup): upload backups to S3 over IPv4 or IPv6",
+              "fix(api): validate v1alpha1 fields against CVE-2024-45337",
+              "chore(deps): bump go to 1.25 and use r1 replicas with im-2 images",
           )
           for sample in rejected:
               if not INTERNAL_IDS.search(sample):

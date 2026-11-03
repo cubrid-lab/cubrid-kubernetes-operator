@@ -294,8 +294,8 @@ Issue structure, scope terms, release targets and tracking-issue rules are in
   by a few words. Put IDs in the body for traceability; review the
   completed title before publishing. For example, write
   `test: add HA failover test for unexpected VM power loss` instead of
-  a title centered on `S04`. The existing `PR title` CI job enforces
-  the PR-specific rule. Do not merge while a review comment is unresolved
+  a title centered on `S04`. The existing `PR title` CI job rejects the
+  known identifier patterns; review covers the rest. Do not merge while a review comment is unresolved
   or unanswered, or while a validation the change requires has not passed.
   Never write any form of close, fix or resolve next to an issue number,
   even negated ("does not close #N"), unless the PR closes it.
