@@ -74,6 +74,12 @@ const (
 	brokerComponent = "broker"
 )
 
+// vmSettle is how long the cleanup must read a VM running before it trusts
+// that reading when it has not started the VM itself: a stop command that was
+// cancelled after the provider accepted it can still power the VM off a
+// little later. Tests shorten it.
+var vmSettle = 30 * time.Second
+
 // primaryResolvedGrace is how long after the VM was confirmed off the
 // Operator may still report PrimaryResolved True: ADR-0005 keeps an
 // observation fresh for 15 seconds, and the Operator reads the members again
@@ -124,15 +130,19 @@ type s04Record struct {
 	// PodDeletedAt is set when the powered-off member's Pod was seen with a
 	// deletion timestamp, or replaced, while its VM was off.
 	PodDeletedAt *time.Time `json:"podDeletedWhileOffAt,omitempty"`
-	// PoweredOnAt is when the VM start command returned; NodeReadyAt when
-	// the node was Ready again; ConvergedAt when one master and two slaves,
-	// the starting conditions and the member's Pod were seen again.
-	PoweredOnAt     *time.Time `json:"poweredOnAt,omitempty"`
-	NodeReadyAt     *time.Time `json:"nodeReadyAt,omitempty"`
-	ConvergedAt     *time.Time `json:"convergedAt,omitempty"`
-	FinalMaster     string     `json:"finalMaster,omitempty"`
-	ClientsStopped  bool       `json:"clientsStopped"`
-	NotAcknowledged *int       `json:"operationsNotAcknowledgedAfterFault,omitempty"`
+	// PoweredOnAt is when the first VM start command returned, or when the
+	// cleanup ended if it started nothing; NodeReadyAt when the node was
+	// Ready again; MemberAnsweredAt when the member on the VM answered its
+	// heartbeat status again, until which PrimaryResolved stays watched;
+	// ConvergedAt when one master and two slaves, the starting conditions and
+	// the member's Pod were seen again.
+	PoweredOnAt      *time.Time `json:"poweredOnAt,omitempty"`
+	NodeReadyAt      *time.Time `json:"nodeReadyAt,omitempty"`
+	MemberAnsweredAt *time.Time `json:"memberAnsweredAt,omitempty"`
+	ConvergedAt      *time.Time `json:"convergedAt,omitempty"`
+	FinalMaster      string     `json:"finalMaster,omitempty"`
+	ClientsStopped   bool       `json:"clientsStopped"`
+	NotAcknowledged  *int       `json:"operationsNotAcknowledgedAfterFault,omitempty"`
 }
 
 // validateS04 refuses S04 outside the VM lab, without the lab's VM controls
@@ -193,9 +203,11 @@ func (h *haRun) vmCommand(ctx context.Context, script, node string) (string, err
 
 // vmPowerOff powers off the VM of the node that runs the master, through the
 // lab's own command: the provider's controls are not in this repository.
+// started is set when the cleanup's first start command returned.
 type vmPowerOff struct {
-	h    *haRun
-	node string
+	h       *haRun
+	node    string
+	started *time.Time
 }
 
 func (f vmPowerOff) Name() string { return "power off the VM of node " + f.node }
@@ -226,20 +238,37 @@ func (f vmPowerOff) Confirm(ctx context.Context) (bool, error) {
 // until the lab reports it running, starting it whenever it reports it
 // stopped. Any other state, such as one still stopping, and a failed command
 // are read again, within ctx. So a stop that never took effect leaves
-// nothing to start, and a cleanup ends only on a VM reported running.
+// nothing to start, and a cleanup ends only on a VM reported running: after
+// its own start, at once; otherwise once it was read running for vmSettle,
+// so a stop still on its way is seen and undone.
 func (f vmPowerOff) Remove(ctx context.Context) error {
 	var last string
+	var runningSince time.Time
 	for {
 		state, err := f.h.vmCommand(ctx, f.h.cfg.VMStatusCommand, f.node)
-		switch state = strings.TrimSpace(state); {
+		if state = strings.TrimSpace(state); err != nil || state != vmRunning {
+			runningSince = time.Time{}
+		}
+		switch {
 		case err != nil:
 			last = "the VM status command failed: " + err.Error()
-		case state == vmRunning:
+		case state == vmRunning && !f.started.IsZero():
 			return nil
+		case state == vmRunning:
+			if runningSince.IsZero() {
+				runningSince = time.Now()
+			}
+			if time.Since(runningSince) >= vmSettle {
+				return nil
+			}
+			last = "the VM is reported running and was not started by the cleanup"
 		case state == vmStopped:
 			if _, err := f.h.vmCommand(ctx, f.h.cfg.VMStartCommand, f.node); err != nil {
 				last = "the VM start command failed: " + err.Error()
 			} else {
+				if f.started.IsZero() {
+					*f.started = time.Now().UTC()
+				}
 				last = "the VM was started and is not reported running yet"
 			}
 		default:
@@ -284,7 +313,7 @@ func (h *haRun) s04FlowLimits() faults.Limits {
 // is powered on again, its node must be Ready and the cluster must converge
 // to one master and two slaves with the starting conditions, within
 // VMReturnLimit. Every client's writes must be acknowledged again without
-// interruption within FailoverLimit of the VM being confirmed off, and for
+// interruption within FailoverLimit of the VM stop being issued, and for
 // StablePeriod, and the data rules must hold. A run that ends before its
 // outcome is judged is blocked, not failed.
 func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
@@ -329,8 +358,9 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 			return end(evidence.Blocked, "start the clients: %v", err)
 		}
 	}
+	started := new(time.Time)
 	outcome := faults.Run(ctx, faults.Scenario{
-		Fault:  vmPowerOff{h: h, node: rec.Node},
+		Fault:  vmPowerOff{h: h, node: rec.Node, started: started},
 		Limits: h.s04FlowLimits(),
 		Before: func(ctx context.Context) error { return h.beforeS04(ctx, rec) },
 		Check: func(ctx context.Context) (bool, error) {
@@ -346,7 +376,10 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		rec.StopIssuedAt = &issued
 	}
 	if outcome.CleanupSucceeded {
-		at := time.Now().UTC()
+		at := *started
+		if at.IsZero() {
+			at = time.Now().UTC()
+		}
 		rec.PoweredOnAt = &at
 	}
 	if err := h.writeTimeline(s04TimelineFile, outcome.Timeline); err != nil {
@@ -374,12 +407,12 @@ func (h *haRun) runS04(ctx context.Context) (result evidence.Scenario) {
 		return end(evidence.Blocked, "the VM was not powered on again: %s", lastStep(outcome.Timeline))
 	}
 	if outcome.Result != evidence.Pass {
+		if len(result.NeverEvents) > 0 {
+			return end(evidence.Fail, "%s; %s", strings.Join(result.NeverEvents, "; "), outcome.Reason)
+		}
 		if rec.VMReturnedEarly {
 			// The lab, not the product, ended the outage.
 			return end(evidence.Blocked, "%s", outcome.Reason)
-		}
-		if len(result.NeverEvents) > 0 {
-			return end(evidence.Fail, "%s; %s", strings.Join(result.NeverEvents, "; "), outcome.Reason)
 		}
 		result.Result, result.Reason = outcome.Result, outcome.Reason
 		return result
@@ -511,7 +544,8 @@ func lastStep(steps []faults.Step) string {
 // cannot run on: the master on a node that runs the API server, or that
 // another member, the workload client or the manager shares, which would
 // fail with it, or an outage that would outlast the Pod's toleration of the
-// node's taints.
+// node's taints. The VM can stay off for the whole outcome limit,
+// FailoverLimit and VMDownFor, before the cleanup starts it.
 func (h *haRun) s04Placement(ctx context.Context, rec *s04Record) error {
 	for _, member := range rec.MembersBefore {
 		if member.Pod == rec.Master {
@@ -534,9 +568,9 @@ func (h *haRun) s04Placement(ctx context.Context, rec *s04Record) error {
 		return err
 	}
 	rec.TaintToleration = toleration.String()
-	if h.cfg.VMDownFor+vmBootBudget >= toleration {
-		return fmt.Errorf("the VM would be off for %s and boot within %s, past the %s after which Kubernetes "+
-			"deletes the Pod %s of a NotReady node", h.cfg.VMDownFor, vmBootBudget, toleration, rec.MasterPod.Pod)
+	if off := h.cfg.FailoverLimit + h.cfg.VMDownFor; off+vmBootBudget >= toleration {
+		return fmt.Errorf("the VM could be off for %s and boot within %s, past the %s after which Kubernetes "+
+			"deletes the Pod %s of a NotReady node", off, vmBootBudget, toleration, rec.MasterPod.Pod)
 	}
 	// Another member on the same node would lose power with the master, and
 	// the scenario would not be the one the contract describes (#596).
@@ -548,6 +582,9 @@ func (h *haRun) s04Placement(ctx context.Context, rec *s04Record) error {
 	}
 	if h.rec.Client == nil || h.rec.Client.Node == rec.Node {
 		return fmt.Errorf("the workload client runs on the master's node %s, or its node is not known", rec.Node)
+	}
+	if len(h.rec.OperatorAfter.Pods) == 0 {
+		return errors.New("no manager Pod is known: its node cannot be checked against the master's")
 	}
 	for _, manager := range h.rec.OperatorAfter.Pods {
 		if manager.Node == rec.Node {
@@ -697,10 +734,12 @@ func (h *haRun) survivorRoles(ctx context.Context, members []string) (masters, s
 // afterVMReturn waits, within VMReturnLimit from the VM's start, for its node
 // to be Ready, and then for the cluster to converge: the member Pod on it the
 // same Pod, one master and two slaves, status.currentPrimary naming the
-// master, and the starting conditions True. What was not seen by then is
+// master, and the starting conditions True. Until the member on the VM
+// answers its heartbeat status again, a node that is Ready does not make it
+// observed, and PrimaryResolved stays watched. What was not seen by then is
 // returned; a role or Pod that could not be read is a membersNotObserved.
 func (h *haRun) afterVMReturn(ctx context.Context, rec *s04Record, result *evidence.Scenario) error {
-	deadline := time.Now().Add(h.cfg.VMReturnLimit)
+	deadline := rec.PoweredOnAt.Add(h.cfg.VMReturnLimit)
 	var last string
 	for {
 		now := time.Now().UTC()
@@ -709,9 +748,16 @@ func (h *haRun) afterVMReturn(ctx context.Context, rec *s04Record, result *evide
 				rec.NodeReadyAt = &now
 				result.Measurements["vmReturnWithin"] = now.Sub(*rec.PoweredOnAt).Round(time.Millisecond).String()
 			} else {
-				// The member still cannot be observed while its VM boots.
-				h.watchUnobserved(ctx, rec, result, now)
 				last = fmt.Sprintf("node %s is not Ready", rec.Node)
+			}
+		}
+		if rec.MemberAnsweredAt == nil {
+			if rec.NodeReadyAt != nil && h.memberAnswers(ctx, rec.MasterPod.Pod) {
+				rec.MemberAnsweredAt = &now
+			} else {
+				// The member still cannot be observed while its VM boots
+				// and its CUBRID starts.
+				h.watchUnobserved(ctx, rec, result, now)
 			}
 		}
 		if rec.NodeReadyAt != nil {
@@ -746,6 +792,13 @@ func (h *haRun) afterVMReturn(ctx context.Context, rec *s04Record, result *evide
 		case <-time.After(h.cfg.Poll):
 		}
 	}
+}
+
+// memberAnswers reports whether pod answered its heartbeat status, whatever
+// its role.
+func (h *haRun) memberAnswers(ctx context.Context, pod string) bool {
+	_, err := h.member(ctx, pod, "bash", "-c", heartbeatStatus)
+	return err == nil
 }
 
 // converged reports whether the cluster is back in a checked state after the

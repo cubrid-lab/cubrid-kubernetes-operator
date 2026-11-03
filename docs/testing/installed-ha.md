@@ -166,8 +166,11 @@ What the commands print is kept only through the run's redactor.
      `node-role.kubernetes.io/control-plane`, `/master`, `/controlplane` or
      `/etcd`, or one of its addresses serves the `kubernetes` Service;
    - another member, the workload client or the manager runs there too: the
-     scenario would take more than the master;
-   - `-vm-down-for` plus two minutes for the VM to boot is not shorter than
+     scenario would take more than the master. No manager Pod known from
+     LAB01 blocks S04 too;
+   - `-failover-limit` plus `-vm-down-for`, the longest the VM can stay off
+     before the run starts it, plus two minutes for the VM to boot, is not
+     shorter than
      the member Pod's toleration of the `not-ready` and `unreachable` taints
      (300 seconds when the Pod sets none), after which Kubernetes itself, not
      the Operator, would delete the Pod.
@@ -188,7 +191,8 @@ What the commands print is kept only through the run's redactor.
    - the powered-off member's Pod: a deletion timestamp, another UID, or no
      Pod at all is a never-event.
    - the node: `Ready` again before the run powered the VM on blocks S04, as
-     the lab, not the run, ended the outage.
+     the lab, not the run, ended the outage, unless a never-event was already
+     seen; then S04 fails.
 
    The VM stays off until a slave was promoted, `PrimaryResolved` was read
    after its 30 seconds, and at least `-vm-down-for` (default 1 minute; at
@@ -198,10 +202,15 @@ What the commands print is kept only through the run's redactor.
 6. The run powers the VM on: it reads the VM's state until the status command
    prints `running`, starting the VM whenever it prints `stopped`, and reads
    again after a failed command or a state in between, within
-   `-vm-return-limit`. A VM not seen running again blocks S04: what follows
-   cannot be judged, and the VM is the lab's to recover.
-7. Until the node is `Ready`, the member still cannot be observed, and the
-   reads of step 5 on `PrimaryResolved` and the Pod go on. Within
+   `-vm-return-limit`. When the run did not start the VM itself, for example
+   after a stop command that failed or was cancelled, `running` counts only
+   once it was read for 30 seconds, so a stop still on its way is seen and
+   undone. A VM not seen running again blocks S04: what follows cannot be
+   judged, and the VM is the lab's to recover.
+7. Until the node is `Ready` and the member on the VM answers its heartbeat
+   status again, the member still cannot be observed, and the reads of
+   step 5 on `PrimaryResolved` and the Pod go on: a node that is `Ready`
+   does not mean CUBRID on it runs. Within
    `-vm-return-limit` (`vm_return_limit`, default 10 minutes) of the start,
    the node must be `Ready` and the cluster must converge: the member on the
    VM is the same Pod, CUBRID reports one master and two slaves,
@@ -223,7 +232,7 @@ What the commands print is kept only through the run's redactor.
 Measurements, from the stop command's issue unless named otherwise:
 `confirmedOffAfter`, `promotedWithin` (until the promotion was seen),
 `failoverWithin` (until the last client recovered), `vmReturnWithin` and
-`convergedWithin` (from the VM's start until the node was `Ready`, and until
+`convergedWithin` (from the first start command's return until the node was `Ready`, and until
 the cluster converged), `primaryResolvedNotTrueFor` (from the first reading
 of it not `True` after its last `True` until the cluster converged),
 `finalMaster`, `shortestStableFor` and `operationsNotAcknowledged`.

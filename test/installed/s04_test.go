@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,9 @@ func shortGrace(t *testing.T, grace time.Duration) {
 func testS04Config(t *testing.T) HAConfig {
 	t.Helper()
 	shortGrace(t, 20*time.Millisecond)
+	wasSettle := vmSettle
+	vmSettle = 50 * time.Millisecond
+	t.Cleanup(func() { vmSettle = wasSettle })
 	cfg := testHAConfig(t)
 	cfg.Level = "vm-lab"
 	cfg.Timeout = 30 * time.Second
@@ -84,6 +88,16 @@ type s04Lab struct {
 	// "stopping" before "stopped".
 	stopping       int
 	readsAfterStop int
+	// silentAfterOn is how many reads of the member on the VM still fail
+	// once the VM was powered on again, while the node is already Ready and
+	// the Operator reports PrimaryResolved True; poweredOn is set then.
+	silentAfterOn int
+	poweredOn     bool
+	// lateStop fails the stop command and powers the VM off only after that
+	// many more status reads, as a stop the provider accepted before the
+	// command was cancelled. lateStopIssued is set once that command ran.
+	lateStop       int
+	lateStopIssued bool
 }
 
 func newS04Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) (*haFixture, *s04Lab) {
@@ -111,7 +125,10 @@ func newS04Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) (*haFixtu
 	f.memberHook = func(_ context.Context, pod, _ string) (string, error, bool) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if pod == testHAPrimary && lab.stopped[testMasterNode] {
+		if pod == testHAPrimary && (lab.stopped[testMasterNode] || lab.poweredOn && lab.silentAfterOn > 0) {
+			if !lab.stopped[testMasterNode] {
+				lab.silentAfterOn--
+			}
 			out := "error: unable to upgrade connection: dial tcp: i/o timeout\n"
 			return out, errors.New("kubectl failed: exit status 1: " + out), true
 		}
@@ -142,6 +159,13 @@ func (l *s04Lab) run(ctx context.Context, script string, env []string) (string, 
 	switch script {
 	case testVMStatus:
 		l.f.mu.Lock()
+		if l.lateStopIssued && l.lateStop > 0 {
+			if l.lateStop--; l.lateStop == 0 {
+				l.f.mu.Unlock()
+				l.power(ctx, node, false)
+				l.f.mu.Lock()
+			}
+		}
 		defer l.f.mu.Unlock()
 		if l.stopped[node] {
 			l.readsAfterStop++
@@ -156,6 +180,13 @@ func (l *s04Lab) run(ctx context.Context, script string, env []string) (string, 
 		}
 		return "running\n", nil
 	case testVMStop:
+		l.f.mu.Lock()
+		late := l.lateStop > 0
+		l.lateStopIssued = late
+		l.f.mu.Unlock()
+		if late {
+			return "", errors.New("signal: killed")
+		}
 		l.power(ctx, node, false)
 		return "", nil
 	case testVMStart:
@@ -173,6 +204,7 @@ func (l *s04Lab) power(ctx context.Context, node string, on bool) {
 	f, c := l.f, l.f.store
 	f.mu.Lock()
 	l.stopped[node] = !on
+	l.poweredOn = l.poweredOn || on
 	switch {
 	case !on && l.promote:
 		f.roles[testMemberHA0] = roleMaster
@@ -467,4 +499,70 @@ func TestHAConfigRefusesS04OutsideTheVMLabAndWithoutItsControls(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunS04FailsWhenPrimaryResolvedIsTrueBeforeTheReturningMemberAnswers(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	// The node is Ready and the Operator reports PrimaryResolved True again
+	// at once, while the member on the VM does not answer yet.
+	lab.silentAfterOn = 3
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || len(s04.NeverEvents) != 1 ||
+		!strings.Contains(s04.NeverEvents[0], primaryResolvedCondition+" True") {
+		t.Fatalf("S04 = %+v, want a failure with PrimaryResolved True before the member answered", s04)
+	}
+}
+
+func TestRunS04PowersOnAVMWhoseCancelledStopTookEffectLater(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	// The stop command fails, and the VM goes off on the cleanup's second
+	// status read: a cleanup that trusted its first "running" would leave it
+	// off.
+	lab.lateStop = 2
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || s04.CleanupSucceeded == nil || !*s04.CleanupSucceeded {
+		t.Fatalf("S04 = %+v, want blocked on the failed stop, with the VM powered on again", s04)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// A late stop still pending is one the cleanup stopped watching for.
+	if lab.lateStop > 0 || lab.stopped[testMasterNode] ||
+		!slices.Contains(lab.commands, testVMStart+" "+testMasterNode) {
+		t.Fatalf("VM commands %v: the VM that went off late was not powered on again", lab.commands)
+	}
+}
+
+func TestRunS04FailsOnANeverEventWhenTheVMComesBackOnItsOwn(t *testing.T) {
+	cfg := testS04Config(t)
+	f, lab := newS04Fixture(t, cfg)
+	lab.returnEarly, lab.deletePod = true, true
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Fail || len(s04.NeverEvents) == 0 {
+		t.Fatalf("S04 = %+v, want a failure: a never-event was seen before the VM came back", s04)
+	}
+}
+
+func TestRunS04RefusesAnOutageWhoseFailoverLimitOutlastsTheToleration(t *testing.T) {
+	cfg := testS04Config(t)
+	cfg.FailoverLimit = 3 * time.Minute
+	f, lab := newS04Fixture(t, cfg)
+	if err := f.runner.RunHA(t.Context(), cfg); err == nil {
+		t.Fatal("RunHA() passed")
+	}
+	s04 := s04Scenario(t, cfg.EvidenceDir)
+	if s04.Result != evidence.Blocked || !strings.Contains(s04.Reason, "after which Kubernetes deletes the Pod") {
+		t.Fatalf("S04 = %+v, want blocked: failover_limit and the down time outlast the Pod's toleration", s04)
+	}
+	assertNoPower(t, lab)
 }

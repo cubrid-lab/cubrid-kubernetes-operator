@@ -113,11 +113,12 @@ type HAConfig struct {
 	// "stopped" for a VM that is powered off. Nothing about the provider is
 	// in this repository.
 	VMStopCommand, VMStartCommand, VMStatusCommand string
-	// FailoverLimit bounds the time from the VM confirmed off until every
-	// client's writes are acknowledged again without interruption
+	// FailoverLimit bounds the time from the VM stop being issued until
+	// every client's writes are acknowledged again without interruption
 	// (failover_limit); VMReturnLimit the node's return and the cluster's
 	// convergence after the VM was powered on (vm_return_limit).
-	// VMDownFor is how long the VM stays off at least, under maxVMDownFor.
+	// VMDownFor is how long the VM stays off at least; with FailoverLimit
+	// and the boot it must stay under the member Pod's taint toleration.
 	FailoverLimit, VMReturnLimit, VMDownFor time.Duration
 	// StablePeriod is how long the clients must stay acknowledged after the
 	// fault (stable_period); ResyncLimit bounds the replacement manager's
