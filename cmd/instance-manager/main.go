@@ -155,9 +155,10 @@ func run(logger *slog.Logger) error {
 	// What an HA member needs to create the cluster's first database; the
 	// endpoint refuses a standalone member.
 	server = server.WithHAConfig(instancemanager.HAConfig{
-		ConfPath:   envOr("CUBRID_HA_CONF", "/etc/cubrid-ha/cubrid_ha.conf"),
-		VolumeSize: os.Getenv("CUBRID_VOLUME_SIZE"),
-		Locale:     os.Getenv("CUBRID_LOCALE"),
+		ConfPath:      envOr("CUBRID_HA_CONF", "/etc/cubrid-ha/cubrid_ha.conf"),
+		VolumeSize:    os.Getenv("CUBRID_VOLUME_SIZE"),
+		LogVolumeSize: os.Getenv("CUBRID_LOG_VOLUME_SIZE"),
+		Locale:        os.Getenv("CUBRID_LOCALE"),
 	})
 
 	timeouts, err := timeoutsFromEnv()

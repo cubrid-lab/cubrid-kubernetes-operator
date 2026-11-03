@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-45, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-46, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -25,8 +25,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > installed Operator and its derivative image; POC-42 ran in Docker on a
 > native linux/amd64 host, and its last part on the VM lab with the installed
 > Operator; POC-43 and POC-44 ran on the VM lab with the installed Operator;
-> POC-45 ran in Docker on a native linux/amd64 host, with the Operator's
-> Instance Manager image. Each states its own environment. Each POC is the
+> POC-45 and POC-46 ran in Docker on a native linux/amd64 host, with the
+> Operator's Instance Manager image. Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -4778,3 +4778,41 @@ and the role of `lgar.removed` are unknown. The run with limits tried one pair
 log volume, and a sustained write rate the appliers keep up with were not
 tried. The appliers' rate here is of three servers sharing one host.
 `restoreslave`, the documented way to rebuild a slave, was not tried.
+
+## POC-46 — whether a database restored from a backup keeps the backup's log volume size or takes `cubrid.conf`'s (#666) — **observation: both `restoredb -u` and `restoreslave -u -s master` created a 24M log volume from a backup of a 24M database, with `log_volume_size=48M` in `cubrid.conf`**
+
+**Question.** The Operator creates an HA cluster's first database with
+`createdb` and seeds the other members from its backup. If it sets the log
+volume size at `createdb`, do the seeded members get the same size, or the
+one in their `cubrid.conf`?
+
+**Environment (2026-11-03 12:05Z).** One container of the lab's Instance
+Manager image
+(`sha256:559c0d23c4fe1760f0ab33e25d91e59aa5e4ed0ead97f63e9f77bcaf08637af8`,
+engine `11.4.6.1963`) in Docker 29.2.1 on a native linux/amd64 host, started
+with `sleep infinity`. `data_buffer_size` and `log_buffer_size` were lowered
+to 64M and 4M.
+
+**Steps and observations.**
+1. `cubrid createdb --db-volume-size=32M --log-volume-size=24M -F $CUBRID_DATABASES/appdb appdb en_US`,
+   with the image's `log_volume_size=512M` in `cubrid.conf`: `appdb_lgat`
+   was 24,576 KB (the database volume `appdb` was 65,536 KB).
+2. `cubrid backupdb -S -z -D /tmp/bk appdb`, then `cubrid deletedb appdb`,
+   the directory removed and recreated, and the `databases.txt` line put
+   back.
+3. `log_volume_size=48M` in `cubrid.conf`, then
+   `cubrid restoredb -u -B /tmp/bk appdb`: `appdb_lgat` was 24,576 KB.
+4. The database removed again, `ha_mode=on` added to `cubrid.conf`,
+   `cubrid_ha.conf` set to `ha_node_list=cubrid@r-9:r-0`, `ha_db_list=appdb`,
+   then `cubrid restoreslave -u -s master -m r-9 -B /tmp/bk appdb`:
+   `appdb_lgat` was 24,576 KB. With `ha_node_list=cubrid@r-0` and `-m r-0`,
+   `restoreslave` refused: "The database name or the host name was not
+   configured for HA."
+
+**Finding.** In this run both restores kept the backup's log volume size
+and ignored `cubrid.conf`'s, so the size set at the first `createdb` reaches
+the members seeded from its backup.
+
+**Limits.** One container and one backup; the restored database was not
+started, and no slave followed a real master. The archive files a restored
+member creates later were not looked at.

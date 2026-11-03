@@ -169,9 +169,12 @@ init_db() {
     rm -f "${marker}"
     return 2
   fi
+  # The operator sizes each log file from the data volume
+  # (CUBRID_LOG_VOLUME_SIZE); unset leaves it to the image's cubrid.conf.
   log "createdb '${CUBRID_DB}' (registers databases.txt with absolute paths)"
   ( cd "${db_dir}" \
     && cubrid createdb --db-volume-size="${CUBRID_VOLUME_SIZE:-512M}" \
+         ${CUBRID_LOG_VOLUME_SIZE:+"--log-volume-size=${CUBRID_LOG_VOLUME_SIZE}"} \
          --server-name="$(hostname)" "${CUBRID_DB}" "${CUBRID_LOCALE:-en_US}" ) || return 1
   rm -f "${marker}"
 }

@@ -533,6 +533,7 @@ entrypoint reads. Changing any of these needs both sides changed together.
 | `CUBRID_HA_CONF` | `/etc/cubrid-ha/cubrid_ha.conf`, the read-only mount of the `<cluster>-ha-config` ConfigMap in an HA cluster. The entrypoint copies it into `$CUBRID/conf` and sets `ha_mode=on` at every start. An HA member starts heartbeat only when its database is on the volume; without one it runs only the manager and waits for the HA bootstrap. An HA member whose file is absent starts nothing either |
 | `IM_BOOTSTRAP_TIMEOUT` | optional; the deadline of the HA bootstrap operation (`createdb` and the HA start), default 15m. The operator does not set it |
 | `CUBRID_BOOTSTRAP` | `new`, or `recovery` when `spec.bootstrap.recovery` is set: the entrypoint must not create an empty database in recovery (ADR-0008) |
+| `CUBRID_LOG_VOLUME_SIZE` | a 32nd of `spec.storage.data.size` in whole MiB, between `20M` and `512M`: the `--log-volume-size` of the database the entrypoint (one member) or the HA bootstrap (the first HA member) creates. Unset leaves the image's `log_volume_size` (512M). It counts only when a database is created (DESIGN.md, "Log Volume Size"; #666) |
 | `IM_TOKEN` | from Secret `<cluster>-im-token`, key `token` |
 | `IM_OPERATIONS_DIR` | `/var/lib/cubrid/operations`, on the PVC: the durable operation records. Without it the manager serves no asynchronous backup or restore |
 | `IM_LOG_LEVEL` | optional: `debug`, `info`, `warn` or `error`; `info` when unset |
