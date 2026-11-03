@@ -45,13 +45,15 @@ jobs:
           SCOPE = re.compile(r"[a-z0-9][a-z0-9_-]*")
           # Scenario/lab/review IDs are evidence labels, not readable titles.
           INTERNAL_IDS = re.compile(
-              r"(?<![A-Za-z0-9])(?:S\d{2}|LAB\d{2,}|(?:RT|DEP|NW|CTL|IM)-\d+|R\d+)(?![A-Za-z0-9])"
+              r"(?<![A-Za-z0-9])(?:S\d{2}|LAB\d{2,}|(?:RT|DEP|NW|CTL|IM)-\d+|R\d+)(?![A-Za-z0-9])",
+              re.IGNORECASE,
           )
           # Self-checks run in this checkout-free job to prevent regressions.
           rejected = (
               "test(installed): add S04 power-off to the installed-Operator HA lane",
               "test(installed): split S06 verdicts by what was seen",
               "test: validate LAB01 setup",
+              "test(s04): verify failover",
               "fix: address CTL-4 and R3",
           )
           accepted = (
