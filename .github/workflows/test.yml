@@ -18,7 +18,15 @@ concurrency:
 permissions: {}
 
 jobs:
+  impact:
+    uses: ./.github/workflows/ci-impact.yml
+    permissions:
+      pull-requests: read
+
   test:
+    needs: impact
+    # Failure to classify changes must never skip a required check.
+    if: ${{ !cancelled() && (needs.impact.result != 'success' || needs.impact.outputs.go_tests != 'false') }}
     permissions:
       contents: read
     name: Run on Ubuntu

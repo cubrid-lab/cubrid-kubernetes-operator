@@ -13,12 +13,29 @@ on:
   schedule:
     - cron: "0 0 * * 1"
 
+concurrency:
+  # A new PR push cancels only an obsolete PR scan, never main or schedules.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   security-events: write
+  pull-requests: read
 
 jobs:
+  impact:
+    uses: ./.github/workflows/ci-impact.yml
+    permissions:
+      pull-requests: read
+
   go:
+    needs: impact
+    # Failure to classify changes must never skip a required check.
+    if: ${{ !cancelled() && (needs.impact.result != 'success' || needs.impact.outputs.codeql_go != 'false') }}
+    permissions:
+      contents: read
+      security-events: write
     name: Analyze (go)
     uses: cubrid-lab/.github/.github/workflows/codeql.yml@90b89fd672e63dfbc953172b8c473d58e334cdfb
     with:
@@ -26,6 +43,12 @@ jobs:
       category: /language:go
 
   actions:
+    needs: impact
+    # Failure to classify changes must never skip a required check.
+    if: ${{ !cancelled() && (needs.impact.result != 'success' || needs.impact.outputs.codeql_actions != 'false') }}
+    permissions:
+      contents: read
+      security-events: write
     name: Analyze (actions)
     uses: cubrid-lab/.github/.github/workflows/codeql.yml@90b89fd672e63dfbc953172b8c473d58e334cdfb
     with:

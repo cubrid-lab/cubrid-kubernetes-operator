@@ -1,0 +1,177 @@
+name: CI change impact
+
+# Lightweight, checkout-free classification of pull request file changes.
+# Keep required workflow/job checks present even on documentation-only PRs:
+# callers skip their heavy jobs, not the workflow trigger.
+# On main pushes, scheduled runs and manual dispatches all checks still run.
+on:
+  workflow_call:
+    outputs:
+      go_lint:
+        value: ${{ jobs.detect.outputs.go_lint }}
+      go_tests:
+        value: ${{ jobs.detect.outputs.go_tests }}
+      go_e2e:
+        value: ${{ jobs.detect.outputs.go_e2e }}
+      govulncheck:
+        value: ${{ jobs.detect.outputs.govulncheck }}
+      codeql_go:
+        value: ${{ jobs.detect.outputs.codeql_go }}
+      codeql_actions:
+        value: ${{ jobs.detect.outputs.codeql_actions }}
+
+permissions:
+  pull-requests: read
+
+jobs:
+  detect:
+    name: Classify changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      go_lint: ${{ steps.impact.outputs.go_lint }}
+      go_tests: ${{ steps.impact.outputs.go_tests }}
+      go_e2e: ${{ steps.impact.outputs.go_e2e }}
+      govulncheck: ${{ steps.impact.outputs.govulncheck }}
+      codeql_go: ${{ steps.impact.outputs.codeql_go }}
+      codeql_actions: ${{ steps.impact.outputs.codeql_actions }}
+    steps:
+      - name: Read changed files (or fail open)
+        id: impact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          all_checks() {
+            for check in go_lint go_tests go_e2e govulncheck codeql_go codeql_actions; do
+              echo "$check=true" >> "$GITHUB_OUTPUT"
+            done
+          }
+
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Non-PR event: preserve full validation."
+            all_checks
+            exit 0
+          fi
+
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Unknown PR number; running all validation."
+            all_checks
+            exit 0
+          fi
+
+          # Never use pull_request_target or run PR-controlled code. File
+          # metadata is read through the GitHub API with a read-only token.
+          # --slurp retains paginated JSON including rename history.
+          changes="$RUNNER_TEMP/ci-impact-files.json"
+          if ! gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" > "$changes"; then
+            echo "::warning::Cannot list PR changes; running all validation."
+            all_checks
+            exit 0
+          fi
+
+          CHANGES_FILE="$changes" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import PurePosixPath
+
+          CHECKS = (
+              "go_lint", "go_tests", "go_e2e", "govulncheck",
+              "codeql_go", "codeql_actions",
+          )
+          ACTIONS = {"codeql_actions"}
+          WORKFLOW_CHECKS = {
+              "lint.yml": {"go_lint"},
+              "test.yml": {"go_tests"},
+              "test-e2e.yml": {"go_e2e"},
+              "security.yml": {"govulncheck"},
+              "codeql.yml": {"codeql_go", "codeql_actions"},
+              "pr-title.yml": set(),
+              # The classifier gates every heavy check, so a change to it runs
+              # all of them: a broken classifier must not land unexercised.
+              "ci-impact.yml": set(CHECKS),
+          }
+
+          def select(paths):
+              selected = set()
+              for path in paths:
+                  # Documentation, including the PR template and agent guide,
+                  # does not need compilation or integration testing.
+                  if path.endswith((".md", ".mdx", ".rst")):
+                      continue
+                  # Pure illustration changes under documentation.
+                  if path.startswith("docs/") and path.endswith((
+                      ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+                      ".drawio",
+                  )):
+                      continue
+                  # GitHub issue forms are not Actions workflow programs.
+                  if path.startswith(".github/ISSUE_TEMPLATE/") and path.endswith((".yml", ".yaml")):
+                      continue
+                  if path.startswith(".github/workflows/"):
+                      workflow = PurePosixPath(path).name
+                      if workflow not in WORKFLOW_CHECKS:
+                          # An unrecognized workflow might execute product
+                          # code. Unknown changes always run every check.
+                          return set(CHECKS)
+                      selected.update(ACTIONS)
+                      selected.update(WORKFLOW_CHECKS[workflow])
+                      continue
+                  # Source, tests, dependency files, Makefile, scripts,
+                  # configuration and every unknown path are safety-relevant.
+                  return set(CHECKS)
+              return selected
+
+          # Classification regression cases run without executing PR code.
+          examples = [
+              (["README.md", "docs/testing/installed-ha.md", "AGENTS.md"], set()),
+              ([".github/PULL_REQUEST_TEMPLATE.md", ".github/workflows/pr-title.yml"], ACTIONS),
+              ([".github/workflows/ci-impact.yml"], set(CHECKS)),
+              (["build/instance-manager/entrypoint.sh"], set(CHECKS)),
+              (["config/samples/ha.yaml"], set(CHECKS)),
+              (["Makefile"], set(CHECKS)),
+              ([".github/ISSUE_TEMPLATE/bug.yml", "docs/architecture/flow.svg"], set()),
+              ([".github/workflows/lint.yml"], ACTIONS | {"go_lint"}),
+              ([".github/workflows/test.yml"], ACTIONS | {"go_tests"}),
+              ([".github/workflows/test-e2e.yml"], ACTIONS | {"go_e2e"}),
+              ([".github/workflows/security.yml"], ACTIONS | {"govulncheck"}),
+              ([".github/workflows/codeql.yml"], ACTIONS | {"codeql_go"}),
+              ([".github/workflows/unknown.yml"], set(CHECKS)),
+              (["go.mod"], set(CHECKS)),
+              (["test/e2e/ha_test.go"], set(CHECKS)),
+              (["docs/index.md", "cmd/main.go"], set(CHECKS)),
+          ]
+          for paths, expected in examples:
+              actual = select(paths)
+              assert actual == expected, (paths, sorted(actual), sorted(expected))
+
+          try:
+              with open(os.environ["CHANGES_FILE"], encoding="utf-8") as handle:
+                  pages = json.load(handle)
+              entries = [item for page in pages for item in page]
+              expected_count = int(os.environ["PR_CHANGED_FILES"])
+              if not entries or len(entries) != expected_count:
+                  raise ValueError(f"PR files incomplete: got {len(entries)}, expected {expected_count}")
+              # Renames must check both old and new filenames: moving Go
+              # source into docs must never be misclassified as docs-only.
+              paths = []
+              for entry in entries:
+                  paths.append(entry["filename"])
+                  if entry.get("status") == "renamed":
+                      paths.append(entry["previous_filename"])
+              selected = select(paths)
+          except (OSError, ValueError, KeyError, TypeError, AssertionError) as exc:
+              print(f"::warning::File classification incomplete ({exc}); running all validation.")
+              selected = set(CHECKS)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for check in CHECKS:
+                  output.write(f"{check}={'true' if check in selected else 'false'}\n")
+
+          print("Required validation:", ", ".join(sorted(selected)) or "PR title only")
+          PY

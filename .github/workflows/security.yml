@@ -13,11 +13,27 @@ on:
   schedule:
     - cron: "0 2 * * 1"
 
+concurrency:
+  # A new PR push cancels only an obsolete PR scan, never main or schedules.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  impact:
+    uses: ./.github/workflows/ci-impact.yml
+    permissions:
+      pull-requests: read
+
   govulncheck:
+    needs: impact
+    # Failure to classify changes must never skip a required check.
+    if: ${{ !cancelled() && (needs.impact.result != 'success' || needs.impact.outputs.govulncheck != 'false') }}
+    permissions:
+      contents: read
     name: govulncheck
     runs-on: ubuntu-latest
     # A hung module download would otherwise hold the runner for the default 6 hours.
