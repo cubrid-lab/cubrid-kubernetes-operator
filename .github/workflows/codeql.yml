@@ -26,7 +26,8 @@ jobs:
 
   go:
     needs: impact
-    if: needs.impact.outputs.codeql_go == 'true'
+    # Failure to classify changes must never skip a required check.
+    if: ${{ !cancelled() && (needs.impact.result != 'success' || needs.impact.outputs.codeql_go != 'false') }}
     permissions:
       contents: read
       security-events: write
@@ -38,7 +39,8 @@ jobs:
 
   actions:
     needs: impact
-    if: needs.impact.outputs.codeql_actions == 'true'
+    # Failure to classify changes must never skip a required check.
+    if: ${{ !cancelled() && (needs.impact.result != 'success' || needs.impact.outputs.codeql_actions != 'false') }}
     permissions:
       contents: read
       security-events: write
