@@ -18,7 +18,14 @@ concurrency:
 permissions: {}
 
 jobs:
+  impact:
+    uses: ./.github/workflows/ci-impact.yml
+    permissions:
+      pull-requests: read
+
   test-e2e:
+    needs: impact
+    if: needs.impact.outputs.go_e2e == 'true'
     permissions:
       contents: read
     name: Run on Ubuntu
