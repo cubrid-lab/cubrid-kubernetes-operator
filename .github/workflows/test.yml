@@ -18,7 +18,14 @@ concurrency:
 permissions: {}
 
 jobs:
+  impact:
+    uses: ./.github/workflows/ci-impact.yml
+    permissions:
+      pull-requests: read
+
   test:
+    needs: impact
+    if: needs.impact.outputs.go_tests == 'true'
     permissions:
       contents: read
     name: Run on Ubuntu
