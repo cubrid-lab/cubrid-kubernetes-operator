@@ -27,8 +27,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > Operator; POC-43 and POC-44 ran on the VM lab with the installed Operator;
 > POC-45 ran in Docker on a native linux/amd64 host, with the Operator's
 > Instance Manager image. Each states its own environment. Each POC is the
-> behavior of one image in a few runs, not a general CUBRID guarantee. The raw observations below
-> are kept as recorded; where a later POC contradicts one, a note says so.
+> behavior of one image in a few runs, not a general CUBRID guarantee. The
+> raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
 > [Net assessment](#net-assessment).
 
@@ -4696,8 +4696,8 @@ own log and its copies of the other slave's log held at most two archives.
   utilities" for each older archive as it created a new one, but removed
   only 001 (10:21:30) and 002–005 (10:24:25); 006–011 stayed. The slaves'
   copies were removed one at a time (000 to 003, the last at 10:24:53) and
-  then not at all while 004–011 arrived. The slaves' appliers were far behind: `h-1` applied about
-  16,000 rows a minute at 10:28 and about 6,400 a minute by 10:49, and both
+  then not at all while 004–011 arrived. The slaves' appliers were far
+  behind: `h-1` applied about 16,000 rows a minute at 10:28 and about 6,400 a minute by 10:49, and both
   slaves had applied every row at 10:55:02, 28 minutes after the burst
   ended.
 - *After the appliers caught up.* Nothing was removed until a new archive
@@ -4747,7 +4747,8 @@ own log and its copies of the other slave's log held at most two archives.
 the creation of a new archive, in batches; the member's own archives were not
 held to `log_max_archives=0`, nor the copies of the master's log to
 `ha_copy_log_max_archives=1`, between archives. With 512 MB log files, a
-member that writes little creates an archive only days apart, so slow
+member that writes little creates an archive only days apart, as on the lab
+in #666, so slow
 removal is consistent with the lab's volumes in #666. On the lab, though, it
 was a slave's copies of a peer slave's log that held three archives, which
 this run did not reproduce: here copies of a slave's log held at most one.
@@ -4756,11 +4757,14 @@ uncleanly, did not rejoin and took its whole HA stack down with it; one
 recovery attempt with an empty copy directory failed. With explicit limits,
 the counts came back to the limits only at the first new archive after the
 appliers had caught up; during a burst, and after the catch-up until that
-archive, they were above the limits. What a member kept was every archive
-back to the oldest one still needed when its last archive was created, kept
-until its next archive; this run suggests a volume budget has to cover that
-set, besides `lgat`, `lgar_t` and `lgar.removed`, for the member's own log
-and for each copy directory, each file about `log_volume_size`.
+archive, they were above the limits. Removal happened only when an archive
+was created, and during the burst each removal took fewer archives than the
+master had logged as no longer needed. What a member held was what its last
+removal left plus every archive created since: up to six of the master's own
+archives and eight copies here. This run suggests a volume budget has to
+cover that set, besides `lgat`, `lgar_t` and `lgar.removed`, for the
+member's own log and for each copy directory, each file about
+`log_volume_size`.
 
 **Limits.** One run of each part on one host, with a 24M log volume instead
 of 512M; the timings are of this host only. Writes came in bursts, not at a
