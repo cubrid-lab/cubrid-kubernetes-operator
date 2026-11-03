@@ -25,7 +25,8 @@ jobs:
 
   test-e2e:
     needs: impact
-    if: needs.impact.outputs.go_e2e == 'true'
+    # Failure to classify changes must never skip a required check.
+    if: ${{ !cancelled() && (needs.impact.result != 'success' || needs.impact.outputs.go_e2e != 'false') }}
     permissions:
       contents: read
     name: Run on Ubuntu
