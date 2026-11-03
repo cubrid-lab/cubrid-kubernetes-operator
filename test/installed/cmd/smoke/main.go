@@ -63,6 +63,8 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.Timeout, "timeout", 10*time.Minute, "whole smoke deadline")
 	flags.DurationVar(&cfg.CleanupTimeout, "cleanup-timeout", 2*time.Minute, "independent cleanup deadline")
 	flags.DurationVar(&cfg.Poll, "poll", time.Second, "readiness/cleanup polling interval")
+	flags.Var(installed.FreeSpaceFlag(&cfg.MinNodeFreeSpace, "4Gi"), "min-node-free-space",
+		"free space every schedulable node must have before the run creates anything; 0 reads none")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

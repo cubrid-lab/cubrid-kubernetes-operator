@@ -347,18 +347,21 @@ type startingState struct {
 }
 
 type haRecord struct {
-	RunID                 string     `json:"runId"`
-	Namespace             string     `json:"namespace"`
-	NamespaceUID          string     `json:"namespaceUID,omitempty"`
-	ClusterUID            string     `json:"clusterUID,omitempty"`
-	KubernetesClusterUID  string     `json:"kubernetesClusterUID"`
-	SelectedCommit        string     `json:"selectedCommit"`
-	ExpectedOperatorImage string     `json:"expectedOperatorImage"`
-	ExpectedInstanceImage string     `json:"expectedInstanceManagerImage"`
-	ExpectedWorkloadImage string     `json:"expectedWorkloadImage"`
-	StorageClass          string     `json:"storageClass"`
-	StorageProvisioner    string     `json:"storageProvisioner,omitempty"`
-	Seed                  seedRecord `json:"seed"`
+	RunID                 string `json:"runId"`
+	Namespace             string `json:"namespace"`
+	NamespaceUID          string `json:"namespaceUID,omitempty"`
+	ClusterUID            string `json:"clusterUID,omitempty"`
+	KubernetesClusterUID  string `json:"kubernetesClusterUID"`
+	SelectedCommit        string `json:"selectedCommit"`
+	ExpectedOperatorImage string `json:"expectedOperatorImage"`
+	ExpectedInstanceImage string `json:"expectedInstanceManagerImage"`
+	ExpectedWorkloadImage string `json:"expectedWorkloadImage"`
+	StorageClass          string `json:"storageClass"`
+	StorageProvisioner    string `json:"storageProvisioner,omitempty"`
+	// NodeFreeBytes is the free space each schedulable node reported before
+	// the run created anything, when a minimum was set (checkNodeFreeSpace).
+	NodeFreeBytes map[string]int64 `json:"nodeFreeBytes,omitempty"`
+	Seed          seedRecord       `json:"seed"`
 	// PodSecurity are the Pod Security labels the run created its namespace
 	// with.
 	PodSecurity   map[string]string `json:"podSecurity,omitempty"`
@@ -618,7 +621,11 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	observed := record{RunID: runID}
-	if err := r.observeEnvironment(ctx, cfg.Config, &observed, &summary.Environment); err != nil {
+	err := r.observeEnvironment(ctx, cfg.Config, &observed, &summary.Environment)
+	// The free space read is kept also when a node short of it refused the
+	// run.
+	h.rec.NodeFreeBytes = observed.NodeFreeBytes
+	if err != nil {
 		return err
 	}
 	h.rec.KubernetesClusterUID, h.rec.Operator = observed.KubernetesClusterUID, observed.Operator
