@@ -588,3 +588,27 @@ func TestRunS04RefusesAnOutageWhoseFailoverLimitOutlastsTheToleration(t *testing
 	}
 	assertNoPower(t, lab)
 }
+
+func TestAnsweredSinceNeedsAKnownRoleObservedAfterThePowerOn(t *testing.T) {
+	poweredOn := time.Date(2026, 11, 3, 1, 0, 0, 0, time.UTC)
+	before, after := metav1.NewTime(poweredOn.Add(-time.Minute)), metav1.NewTime(poweredOn.Add(time.Second))
+	for name, tc := range map[string]struct {
+		instance databasev1alpha1.InstanceStatus
+		want     bool
+	}{
+		"a slave observed after":  {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleSlave, LastObservedTime: &after}, true},
+		"a master observed after": {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleMaster, LastObservedTime: &after}, true},
+		"a slave observed before": {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleSlave, LastObservedTime: &before}, false},
+		"an unknown role after":   {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleUnknown, LastObservedTime: &after}, false},
+		"never observed":          {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleSlave}, false},
+		"another member observed": {databasev1alpha1.InstanceStatus{Name: testMemberHA0, Role: databasev1alpha1.RoleSlave, LastObservedTime: &after}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cluster := &databasev1alpha1.CubridCluster{}
+			cluster.Status.Instances = []databasev1alpha1.InstanceStatus{tc.instance}
+			if got := answeredSince(cluster, testHAPrimary, poweredOn); got != tc.want {
+				t.Fatalf("answeredSince() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

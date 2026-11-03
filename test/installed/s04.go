@@ -679,7 +679,7 @@ func (h *haRun) whileVMOff(ctx context.Context, rec *s04Record, result *evidence
 // replaced. Once the VM was powered on, the Operator reaches the member
 // over the Pod network and the run through kubectl exec, so either can see
 // it first: a member the Operator's own record shows answering since the VM
-// was confirmed off is observed again, and the watch ends.
+// was powered on is observed again, and the watch ends.
 func (h *haRun) watchUnobserved(ctx context.Context, rec *s04Record, result *evidence.Scenario, now time.Time) {
 	afterGrace := now.Sub(*rec.PoweredOffAt) >= primaryResolvedGrace
 	while := "on the powered-off VM, could not be observed"
@@ -689,7 +689,7 @@ func (h *haRun) watchUnobserved(ctx context.Context, rec *s04Record, result *evi
 	cluster := &databasev1alpha1.CubridCluster{}
 	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: haClusterName}, cluster); err != nil {
 		rec.ClusterReadFailures++
-	} else if rec.PoweredOnAt != nil && answeredSince(cluster, rec.Master, *rec.PoweredOffAt) {
+	} else if rec.PoweredOnAt != nil && answeredSince(cluster, rec.Master, *rec.PoweredOnAt) {
 		rec.MemberAnsweredAt = &now
 		return
 	} else {

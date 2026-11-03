@@ -214,7 +214,7 @@ What the commands print is kept only through the run's redactor.
    member over the Pod network and the run through `kubectl exec`, so the
    Operator may see it first: the reads also end when the HA cluster's
    `status.instances` shows the member with a known role and a
-   `lastObservedTime` after the VM was confirmed off. Within
+   `lastObservedTime` after the VM was powered on. Within
    `-vm-return-limit` (`vm_return_limit`, default 10 minutes) of the start,
    the node must be `Ready` and the cluster must converge: the member on the
    VM is the same Pod, CUBRID reports one master and two slaves,
