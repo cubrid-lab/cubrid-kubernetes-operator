@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-44, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-45, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -24,8 +24,9 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > plain Pods and no CUBRID; POC-40 and POC-41 ran on the VM lab, with the
 > installed Operator and its derivative image; POC-42 ran in Docker on a
 > native linux/amd64 host, and its last part on the VM lab with the installed
-> Operator; POC-43 and POC-44 ran on the VM lab with the installed Operator. Each
-> states its own environment. Each POC is the behavior of one image in a
+> Operator; POC-43 and POC-44 ran on the VM lab with the installed Operator;
+> POC-45 ran in Docker on a native linux/amd64 host, with the Operator's
+> Instance Manager image. Each states its own environment. Each POC is the behavior of one image in a
 > few runs, not a general CUBRID guarantee. The raw observations below
 > are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -4573,3 +4574,182 @@ intermittent and was not reproduced on demand. The cause is unknown. It may
 be csql's shutdown racing the server's close of the connection, but that was
 not shown. Neither the server's nor csql's own trace was read beyond the
 `.err` log, and no other client was tried.
+
+## POC-45 — when an HA member's own and copied archive logs are created and removed on the Operator's image, and whether a member stopped across removals rejoins (#667, #666) — **observation: with the image's defaults (`log_max_archives=0`, `ha_copy_log_max_archives=1`, `force_remove_log_archives=y`), archives were removed only when a new archive was created: the master's own archives in batches, and a slave's copies of the master's log in batches, so six copies stayed for 1.5 h with no new archive; copies of a slave's log stayed at one; a slave stopped while its peers removed archives did not rejoin: its copy of the other slave's log failed with -1024 and heartbeat deactivated every HA process on it; with `log_max_archives=2` and `ha_copy_log_max_archives=2`, a burst left six of the master's archives and eight copies while the appliers were 28 min behind, and both fell to two only at the first new archive after the appliers caught up**
+
+**Question.** Long-lived HA member volumes on the VM lab grow past their 2Gi
+request in 512 MB log files (#666). The Operator renders no log setting, so
+the image's settings apply. On the image the lab runs: when does a member
+create and remove its own archive logs and its copies of its peers' logs,
+what is `<db>_lgar.removed`, do explicit limits keep the counts bounded, and
+can a member that was stopped while its peers removed archives still catch
+up? The last is the risk POC-14 left open.
+
+**Environment (2026-11-03 07:50Z to 10:56Z).**
+- Docker 29.2.1 on a native linux/amd64 host. The Instance Manager image the
+  lab runs,
+  `ghcr.io/cubrid-lab/cubrid-kubernetes-operator/instance-manager@sha256:559c0d23c4fe1760f0ab33e25d91e59aa5e4ed0ead97f63e9f77bcaf08637af8`,
+  engine `11.4.6.1963`, started with `sleep infinity` as the entrypoint, so
+  the Instance Manager did not run.
+- Three containers `h-0`, `h-1` and `h-2` on one Docker network, formed as
+  POC-15 forms a group: on each, `cubrid.conf` gets `ha_mode=on`,
+  `cubrid_ha.conf` gets `ha_node_list=cubrid@h-0:h-1:h-2`, `ha_db_list=appdb`
+  and `ha_port_id=59901`, then
+  `cubrid createdb --db-volume-size=32M --log-volume-size=24M --server-name=h-0:h-1:h-2 appdb en_US`,
+  then `cubrid heartbeat start`, `h-0` first. `h-0` became master.
+- A 24M log volume instead of the image's 512M, so that archives appear in
+  minutes; the engine refused 16M ("between 20.0M and 4.0G"). Each archive
+  then holds 1,534 log pages, and every log file is 24,560 KB.
+  `data_buffer_size` and `log_buffer_size` were lowered to 64M and 4M to fit
+  three servers on the host.
+- The load: on `h-0`, each batch is one csql call,
+  `INSERT INTO t (pad) SELECT 'x' FROM db_class a, db_class b LIMIT 2000; COMMIT;`
+  into `t (id INT AUTO_INCREMENT PRIMARY KEY, pad CHAR(1000))`.
+- The listings: `ls` of `$CUBRID_DATABASES/appdb` (the member's own log) and
+  `$CUBRID_DATABASES/appdb_<peer>` (its copies of each peer's log) on every
+  member, and the `ARCHIVE`, `REMOVE` and `COMMENT` lines of each
+  directory's `appdb_lginf`. Times are UTC.
+
+**The image's settings (item 4).** The image's `cubrid.conf` sets
+`log_volume_size=512M` and `log_max_archives=0`, besides
+`data_buffer_size=512M`, `log_buffer_size=256M`, `db_volume_size=512M`,
+`max_clients=100` and `cubrid_port_id=1523`. `cubrid paramdump -S appdb` on a
+slave read `log_max_archives=0`, `ha_copy_log_max_archives=1`,
+`force_remove_log_archives=y`, `checkpoint_interval=360.000 sec` and
+`checkpoint_every_size=1.5G`. Nothing in `internal/` or
+`build/instance-manager/` renders a log setting.
+
+**Observations with the image's defaults (item 1).**
+
+| UTC | Load before the listing | Master `h-0`, own archives | `h-1`'s copy of `h-0`'s log | `h-0`'s copy of `h-1`'s log |
+|---|---|---|---|---|
+| 07:54 | 25 batches | 000–002 | 000–002 | none |
+| 07:56 | 25 more | 000–004 | 000–004 | none |
+| 07:57 | 25 more | 000–005 | 000–005 | none |
+| 08:05 | none for 7 min | 000–005 | 000–005 | 001 |
+| 08:07 | 12 batches | 006, and `lgar.removed` | 002–006 | 002 |
+| 08:09 | 24 batches | 006–008 | 003–008 | 002 |
+| 08:17 | 400 s idle, then 12 batches | 009, and `lgar.removed` | 004–009 | 003 |
+| 10:00 | 40 and 12 batches, with `h-2` stopped (below) | 010–012 | 011–012 | 012 |
+
+`h-2`'s copy of `h-0`'s log matched `h-1`'s until `h-2` was stopped, except
+at 08:07, when it held 003–006.
+
+- *The master's own archives.* With `log_max_archives=0` they were not
+  removed as they were created: six stayed through three loads. Each removal
+  came at the creation of a new archive, as one `REMOVE` of a range:
+  000–005 at 08:06:35 (archive 006 at 08:06:32), 006–008 at 08:17:26
+  (archive 009) and 009 at 09:51:25 (archive 010). Archives 010–012 stayed
+  after 11 and 12 were created. The removal reason logged was "Number of
+  active log archives has been exceeded the max desired number". The first
+  removal came after a checkpoint in the 7-minute idle period, but the
+  checkpoint alone removed nothing (the 08:05 listing). Whether each range
+  ends at the last checkpoint was not checked.
+- *A slave's own log.* The slaves also archive their own log as they apply.
+  `h-1` logged, for example, "Log archive appdb/appdb_lgar008, which
+  contains log pages before 15340, is not needed any longer by any HA
+  utilities." and then removed 006–008.
+- *Copies of the master's log on a slave.* They were not held to
+  `ha_copy_log_max_archives=1`. Removals came only when a new archive was
+  copied: 000–001 at 08:06:34, 002 at 08:08:13, 003 at 08:17:25, then 004–009
+  together at 09:51:23 and 010 at 09:52:07. From 08:17 to 09:51, with no new
+  archive, six copies (004–009) stayed on both slaves. How far the appliers
+  had applied them was not recorded during that period.
+- *Copies of a slave's log.* `appdb_h-1` on `h-0` and `h-2` and `appdb_h-2`
+  on the others held one archive at every listing.
+- *`<db>_lgar.removed`.* A file of the same size as an archive (24,560 KB)
+  that appeared with the first removal on each member and stayed on the
+  slaves. On `h-1` its time (09:52) was that of a removal there (09:51:59).
+  What CUBRID uses it for was not determined.
+
+**Observations with explicit limits (item 2).** A new group was formed the
+same way at 10:09, with `log_max_archives=2` and
+`ha_copy_log_max_archives=2` added to `cubrid.conf`; `paramdump` on a slave
+read both as 2 and `force_remove_log_archives=y`. (`paramdump` reads
+`log_volume_size=512.0M` from the file; the volumes were created with 24M.)
+
+| UTC | Load before the listing | Master `h-0`, own archives | `h-1`'s copy of `h-0`'s log | Rows applied on `h-1`, of the master's |
+|---|---|---|---|---|
+| 10:13 | 40 batches | 000–001 | 000–001 | not read |
+| 10:20 | 400 s idle, then 12 batches | 001–002, and `lgar.removed` | 001–002 | 104,000 of 104,000, read on `h-2` |
+| 10:27 | 120 batches | 006–011 | 004–011 | 132,000 of 344,000 (10:27:40) |
+| 10:55 | none; both slaves had applied every row at 10:55:02 | 006–011 | 004–011 | 344,000 of 344,000 |
+| 10:55 | 12 batches | 011–012, and `lgar.removed` | 011–012 | not read |
+
+`h-2`'s copy of `h-0`'s log matched `h-1`'s at every listing. Each slave's
+own log and its copies of the other slave's log held at most two archives.
+
+- *During the burst.* The master logged "is not needed any longer by any HA
+  utilities" for each older archive as it created a new one, but removed
+  only 001 (10:21:30) and 002–005 (10:24:25); 006–011 stayed. The slaves' copies were removed
+  one at a time (000 to 003, the last at 10:24:53) and then not at all while
+  004–011 arrived. The slaves' appliers were far behind: `h-1` applied about
+  16,000 rows a minute at 10:28 and about 6,400 a minute by 10:49, and both
+  slaves had applied every row at 10:55:02, 28 minutes after the burst
+  ended. `applyinfo` reported a fail count of 0.
+- *After the appliers caught up.* Nothing was removed until a new archive
+  was created: the 10:55:02 listing still held six of the master's own
+  archives and eight copies. At the next archive (012, at 10:55:22 on the
+  master and 10:55:23 on `h-1`), the master removed 006–010 at 10:55:25 and
+  `h-1` removed its copies 004–010 at 10:55:30, leaving two of each.
+
+**A slave stopped while its peers removed archives (item 3).**
+- At 08:18:16, `cubrid heartbeat stop` on `h-2` stopped its server, copiers
+  and appliers, but did not return, leaving `cub_master` with HA state
+  `unknown`. The hung command was ended by hand at 09:51, and `h-2` stayed
+  down until 10:00. From 09:51 the master took 40 batches, a 400 s idle
+  period and 12 more batches.
+- While `h-2` was down, `h-0` removed archive 009 (09:51:25), and `h-1`
+  removed its own archives 006–008 (09:00:17), 009 (09:51:59) and 010–011
+  (09:59:21). Each removal on `h-1` was preceded by "is not needed any longer
+  by any HA utilities", with `h-2`'s copier not connected.
+- At 10:00:09, `cubrid heartbeat start` on `h-2` did not bring it back: 90 s
+  later its HA state was still `unknown`. A second start, after its
+  `cub_master` was ended (another `heartbeat stop` hung again), brought the
+  server up as standby at 10:03:25. Then `h-2`'s copier of `h-1`'s log
+  failed at 10:03:34 with -1024, "log writer: failed to get log page(s)
+  starting from page id 7391", and "Encountered an unrecoverable error and
+  will shut itself down". By the page ranges `h-1` logged (1,534 pages per
+  archive, for example 009 holding 13806–15339), page 7391 is in its archive
+  004. `h-1`'s own log held only archive 003 at 08:17:56 and only 012 at
+  10:00, so 004 was created and removed while `h-2` was down; the exact
+  times were not kept. `cub_master` then deregistered it and
+  deactivated heartbeat, shutting down `h-2`'s server, copiers and appliers
+  (10:03:36 to 10:03:38). The copier of `h-0`'s log had started and
+  reported no error before it was shut down, so whether the master's removal
+  of 009 alone would also have blocked `h-2` was not seen.
+- One recovery attempt: `h-2`'s copy of `h-1`'s log was moved aside and
+  replaced by an empty directory, then heartbeat was started again. The
+  copier of `h-1`'s log started (10:09:06, "change the state of HA server
+  (appdb@h-1) from 'na' to 'standby'"), the applier of that log started at
+  its saved position 7392 and was reported failed 2 s later, and heartbeat
+  deactivated again. The applier's log named no cause.
+
+**Finding.** With the image's defaults, archive removal is driven by the
+creation of a new archive. On a member that writes little, that can be days
+apart with 512 MB log files. That fits the lab's volumes in #666, where a
+slave's copies of a peer's log held three 512 MB archives, written days
+apart, over 11 days. The member's own archives are removed in batches at
+archive creation, not held to `log_max_archives=0`. Copies of the master's log are not held to
+`ha_copy_log_max_archives=1` between archives. Removal on one member does not
+wait for a peer that is down: a member stopped across its peers' removals
+did not rejoin and took its whole HA stack down with it. Recovering such a
+member needs more than an empty copy directory; the attempt here failed.
+With explicit limits, the counts came back to the limits only at the first
+new archive after the appliers had caught up; during a burst they were not
+bounded by the settings. A volume budget therefore has to cover, besides the
+active log, `lgar_t` and `lgar.removed`, the configured archives on each
+member plus every archive a peer's applier has not applied yet, for each copy
+directory. The size of each of those files is `log_volume_size`.
+
+**Limits.** One run of each part on one host, with a 24M log volume instead
+of 512M; the timings are of this host only. `heartbeat stop` hung twice on
+`h-2`, so item 3's member was stopped by a hung command and then by ending
+`cub_master`, not by a clean stop; a clean stop was not tried. The applier's
+failure in the recovery attempt has no known cause. Whether the master's own
+removals alone block a stopped slave, how long a stop the defaults tolerate,
+and the role of `lgar.removed` are unknown. Item 2 tried one pair of limits
+(2 and 2) with one burst; other values, `log_max_archives=0` with a smaller
+log volume, and a sustained write rate the appliers keep up with were not
+tried. The appliers' rate here is of three servers sharing one host.
+`restoreslave`, the documented way to rebuild a slave, was not tried.
