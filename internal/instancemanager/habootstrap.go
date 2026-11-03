@@ -43,6 +43,9 @@ type HAConfig struct {
 	ConfPath string
 	// VolumeSize is the --db-volume-size of a database this member creates.
 	VolumeSize string
+	// LogVolumeSize is the --log-volume-size of a database this member
+	// creates. Empty leaves it to the image's cubrid.conf.
+	LogVolumeSize string
 	// Locale is the locale of a database this member creates.
 	Locale string
 }
@@ -237,11 +240,12 @@ func createHADatabase(ctx context.Context, cli CLI, target string, ha HAConfig, 
 	// file and writing it back; the manager's own writes of the file wait
 	// until it has ended, so that neither loses the other's line (#298).
 	databasesTxtMu.Lock()
-	out, err := cli.Run(ctx, "cubrid", "createdb",
-		"--db-volume-size="+ha.VolumeSize,
-		"--server-name="+hosts,
-		"-F", dir,
-		database, ha.Locale)
+	args := []string{"createdb", "--db-volume-size=" + ha.VolumeSize}
+	if ha.LogVolumeSize != "" {
+		args = append(args, "--log-volume-size="+ha.LogVolumeSize)
+	}
+	args = append(args, "--server-name="+hosts, "-F", dir, database, ha.Locale)
+	out, err := cli.Run(ctx, "cubrid", args...)
 	if err != nil {
 		// Nothing but this attempt wrote into the directory it just created.
 		if registered, regErr := registeredInDatabasesTxt(target, database); regErr == nil && !registered {

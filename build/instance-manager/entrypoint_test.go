@@ -282,6 +282,35 @@ func TestEntrypoint_NewServerCreatesThenStarts(t *testing.T) {
 	}
 }
 
+// The operator sizes the log volume from the data volume; the entrypoint
+// passes the size to createdb, and without one leaves it to the image's
+// cubrid.conf (#666).
+func TestEntrypoint_NewServerCreatesTheLogVolumeAtTheGivenSize(t *testing.T) {
+	for _, tc := range []struct {
+		name, size, want string
+	}{
+		{name: "given", size: "32M", want: " --log-volume-size=32M "},
+		{name: "unset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			if tc.size != "" {
+				f.env["CUBRID_LOG_VOLUME_SIZE"] = tc.size
+			}
+			if code, out := f.run(); code != 0 {
+				t.Fatalf("exit %d:\n%s", code, out)
+			}
+			createdb := f.recorded()[0]
+			if tc.want != "" && !strings.Contains(createdb, tc.want) {
+				t.Errorf("createdb = %q, want %q", createdb, tc.want)
+			}
+			if tc.want == "" && strings.Contains(createdb, "--log-volume-size") {
+				t.Errorf("createdb = %q, want no --log-volume-size", createdb)
+			}
+		})
+	}
+}
+
 func TestEntrypoint_ExistingDatabaseIsNotRecreated(t *testing.T) {
 	f := newFixture(t, managerStub)
 	f.registerDatabase()

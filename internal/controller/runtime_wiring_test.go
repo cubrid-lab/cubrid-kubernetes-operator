@@ -200,6 +200,11 @@ var _ = Describe("Instance Manager runtime wiring (#98)", func() {
 		mode, ok := envValue(c, "CUBRID_BOOTSTRAP")
 		Expect(ok).To(BeTrue())
 		Expect(mode.Value).To(Equal("new"))
+
+		// A 1Gi volume gets 32M log files instead of the image's 512M (#666).
+		logSize, ok := envValue(c, "CUBRID_LOG_VOLUME_SIZE")
+		Expect(ok).To(BeTrue(), "the database would be created with the image's 512M log files")
+		Expect(logSize.Value).To(Equal("32M"))
 	})
 
 	// Without the operation store the manager answers /v1/backup

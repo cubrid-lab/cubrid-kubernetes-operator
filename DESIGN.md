@@ -1223,6 +1223,30 @@ The initial API does not have to expose every volume separately, but
 controller logic and volume naming must be designed so volumes can be
 separated later.
 
+### Log Volume Size
+
+Every log file of a member is the database's log volume size: the active
+log, the temporary archive, `lgar.removed`, its archives, and the same files
+for each peer whose log it copies. CUBRID removes archives only when it
+creates a new one, so a member holds several at a time, and during a burst
+more than `log_max_archives` or `ha_copy_log_max_archives` allow
+(docs/poc/RESULTS.md, POC-45). With the image's 512M, a 2Gi HA member
+already used about 1.7 GB of its volume (#666).
+
+The Operator therefore creates the database with a log volume of a 32nd of
+`storage.data.size`, in whole MiB, between 20M (the smallest the engine
+accepts) and the image's 512M: 64M for 2Gi, 512M from 16Gi up. It passes the
+size to `createdb` through `CUBRID_LOG_VOLUME_SIZE`. The members seeded from
+a backup with `restoredb` or `restoreslave` keep the backup's size (POC-46),
+so the size chosen at the first `createdb` holds for the whole cluster. The
+size is fixed when the database is created: an existing database keeps its
+log volume, and a cluster recovered from a backup keeps the backup's.
+
+A smaller log volume also means that an archive is created, and older ones
+removed, after fewer bytes of log. A member that is stopped while its peers
+remove archives it has not copied may not rejoin (POC-45); with smaller
+files, that happens after fewer writes.
+
 ### Monitoring Targets
 
 ```text

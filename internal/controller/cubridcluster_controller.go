@@ -912,6 +912,9 @@ func instanceManagerEnv(cluster *databasev1alpha1.CubridCluster) []corev1.EnvVar
 		{Name: "CUBRID_DATABASES", Value: restoreTargetRoot},
 		{Name: "CUBRID_COMPONENTS", Value: components},
 		{Name: "CUBRID_BOOTSTRAP", Value: bootstrap},
+		// The size of each log file of a database the member creates; it is
+		// fixed when the database is created (#666).
+		{Name: "CUBRID_LOG_VOLUME_SIZE", Value: logVolumeSize(cluster.Spec.Storage.Data.Size)},
 		{Name: "IM_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: imTokenSecretName(cluster.Name)},
 			Key:                  imTokenKey,

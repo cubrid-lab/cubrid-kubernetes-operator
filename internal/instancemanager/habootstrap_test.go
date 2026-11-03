@@ -109,7 +109,7 @@ func newHAFixture(t *testing.T) *haFixture {
 	srv := NewServer(cli, "tok").
 		WithOperationStore(store).
 		WithRestoreRoots(RestoreRoots{Target: databases, Staging: filepath.Join(base, "staging")}).
-		WithHAConfig(HAConfig{ConfPath: conf, VolumeSize: "64M"})
+		WithHAConfig(HAConfig{ConfPath: conf, VolumeSize: "64M", LogVolumeSize: "32M"})
 	srv.heartbeatProcesses, srv.heartbeatSettle = processTable(), 0
 	return &haFixture{t: t, cli: cli, store: store, databases: databases, srv: srv, handler: srv.Handler()}
 }
@@ -149,12 +149,30 @@ func TestHABootstrap_CreatesTheDatabaseThenStartsHeartbeat(t *testing.T) {
 		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
 	}
 	want := []string{
-		"cubrid createdb --db-volume-size=64M --server-name=demo-0:demo-1:demo-2 -F " +
+		"cubrid createdb --db-volume-size=64M --log-volume-size=32M --server-name=demo-0:demo-1:demo-2 -F " +
 			filepath.Join(f.databases, dbName) + " " + dbName + " en_US",
 		callHeartbeatStart,
 	}
 	if got := f.cli.recorded(); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("commands = %q\nwant       %q", got, want)
+	}
+}
+
+// A manager given no log volume size, as by an operator that sets none,
+// leaves the size to the image's cubrid.conf rather than passing an empty
+// flag (#666).
+func TestHABootstrap_LeavesTheLogVolumeSizeToTheImageWhenNoneIsSet(t *testing.T) {
+	f := newHAFixture(t)
+	f.srv.WithHAConfig(HAConfig{ConfPath: f.srv.ha.ConfPath, VolumeSize: "64M"})
+	if final := f.run("boot-1"); final.State != OpCompleted {
+		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
+	}
+	got := f.cli.recorded()
+	if len(got) == 0 || !strings.HasPrefix(got[0], "cubrid createdb ") {
+		t.Fatalf("commands = %q, want createdb first", got)
+	}
+	if strings.Contains(got[0], "--log-volume-size") {
+		t.Errorf("createdb = %q, want no --log-volume-size", got[0])
 	}
 }
 
