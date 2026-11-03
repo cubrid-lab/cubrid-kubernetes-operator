@@ -592,16 +592,20 @@ func TestRunS04RefusesAnOutageWhoseFailoverLimitOutlastsTheToleration(t *testing
 func TestAnsweredSinceNeedsAKnownRoleObservedAfterThePowerOn(t *testing.T) {
 	poweredOn := time.Date(2026, 11, 3, 1, 0, 0, 0, time.UTC)
 	before, after := metav1.NewTime(poweredOn.Add(-time.Minute)), metav1.NewTime(poweredOn.Add(time.Second))
+	instance := func(name string, role databasev1alpha1.CubridRole, at *metav1.Time) databasev1alpha1.InstanceStatus {
+		return databasev1alpha1.InstanceStatus{Name: name, Role: role, LastObservedTime: at}
+	}
+	slave, master, unknown := databasev1alpha1.RoleSlave, databasev1alpha1.RoleMaster, databasev1alpha1.RoleUnknown
 	for name, tc := range map[string]struct {
 		instance databasev1alpha1.InstanceStatus
 		want     bool
 	}{
-		"a slave observed after":  {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleSlave, LastObservedTime: &after}, true},
-		"a master observed after": {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleMaster, LastObservedTime: &after}, true},
-		"a slave observed before": {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleSlave, LastObservedTime: &before}, false},
-		"an unknown role after":   {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleUnknown, LastObservedTime: &after}, false},
-		"never observed":          {databasev1alpha1.InstanceStatus{Name: testHAPrimary, Role: databasev1alpha1.RoleSlave}, false},
-		"another member observed": {databasev1alpha1.InstanceStatus{Name: testMemberHA0, Role: databasev1alpha1.RoleSlave, LastObservedTime: &after}, false},
+		"a slave observed after":  {instance(testHAPrimary, slave, &after), true},
+		"a master observed after": {instance(testHAPrimary, master, &after), true},
+		"a slave observed before": {instance(testHAPrimary, slave, &before), false},
+		"an unknown role after":   {instance(testHAPrimary, unknown, &after), false},
+		"never observed":          {instance(testHAPrimary, slave, nil), false},
+		"another member observed": {instance(testMemberHA0, slave, &after), false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cluster := &databasev1alpha1.CubridCluster{}
