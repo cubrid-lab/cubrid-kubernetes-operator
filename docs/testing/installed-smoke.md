@@ -82,7 +82,8 @@ run does not read it.
 A fresh-namespace run also refuses, before it creates anything, a namespace
 name that already has PersistentVolumes bound to its claims, such as an
 earlier run's that were not reclaimed. Its cleanup would otherwise wait for
-them.
+them. This check also needs `list` on PersistentVolumes, from the start of the
+run. A preallocated namespace's run makes neither check.
 The outer launcher/job must leave time for cleanup and evidence retention.
 SIGINT, SIGTERM and SIGHUP cancel the run; cleanup still receives its own live
 context. The private credential snapshot is removed when the command returns.
