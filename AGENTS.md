@@ -288,11 +288,17 @@ Issue structure, scope terms, release targets and tracking-issue rules are in
   Kind is not evidence of VM failure behavior, and one POC is not a general
   CUBRID guarantee. An unconfirmed cause stays a hypothesis. After a fix,
   check the regression under the same failure condition that exposed it.
-- **PR titles** never use internal review identifiers (`R3`, `CTL-4`). Do not
-  merge while a review comment is unresolved or unanswered, or while a
-  validation the change requires has not passed. Never write any form of
-  close, fix or resolve next to an issue number, even negated ("does not
-  close #N"), unless the PR closes it.
+- **Issue and PR titles must describe the behavior or outcome in plain
+  language.** Never use internal scenario, lab or review IDs (`S04`,
+  `S06`, `LAB01`, `R3`, `CTL-4`) in the title, even when followed
+  by a few words. Put IDs in the body for traceability; review the
+  completed title before publishing. For example, write
+  `test: add HA failover test for unexpected VM power loss` instead of
+  a title centered on `S04`. The existing `PR title` CI job rejects the
+  known identifier patterns; review covers the rest. Do not merge while a review comment is unresolved
+  or unanswered, or while a validation the change requires has not passed.
+  Never write any form of close, fix or resolve next to an issue number,
+  even negated ("does not close #N"), unless the PR closes it.
 - **Regressions.** For a confirmed defect, record why the existing tests
   missed it and check related paths for the same pattern. A cause not yet
   known is recorded as unknown, never invented. Update existing tracking work

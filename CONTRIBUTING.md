@@ -305,6 +305,13 @@ type(scope)!: description
 - **description**: English and specific (name the function, type or behavior
   that changed). Start with a lowercase letter unless the first word is an API
   name, acronym or proper noun. No trailing period.
+- **Explain the change in plain language.** Do not use internal scenario,
+  lab, or review IDs such as `S04`, `S06`, `LAB01`, `R3` or
+  `CTL-4` in the title, even alongside a description. Describe the
+  behavior or outcome (for example, `test: add HA failover test for
+  unexpected VM power loss`). Keep IDs in **Validation Evidence** or the
+  issue/PR body for traceability. The existing `PR title` CI check
+  rejects standalone internal identifiers in titles.
 - No bracket, status or priority prefixes (`[Bug]`, `[WIP]`, `Track:`,
   `epic:`, `P1`). Open a draft pull request for unfinished work; priority and
   size are labels.
@@ -332,7 +339,7 @@ Examples:
 fix(broker): match the RO Service selector to the Broker Pod labels
 feat(runtime): wire the Instance Manager image and runtime configuration
 test(e2e): add a real SQL workload and reusable fault runner
-docs(adr): amend the ADR-0005 write quarantine contract
+docs(adr): clarify write-quarantine failover guarantees
 chore(deps): bump sigs.k8s.io/controller-runtime from 0.25.0 to 0.25.1
 feat(api)!: rename the CubridCluster topology field
 ```
@@ -353,6 +360,9 @@ These rules apply the
 to this repository; where this file is stricter, this file applies.
 
 - Lead with one plain-language problem or outcome, prefixed by a short type: `bug:`, `feat:`, `test:`, `docs:`, `ci:` or `chore:`. Other accurate types are allowed. An internal issue/test code, priority, phase, status or detailed component name must not replace the outcome. A component scope in parentheses is optional, not mandatory. For issues use `bug:` for observed defects; PRs and squash commits retain conventional `fix:`.
+- Keep internal scenario, lab and review codes (for example, `S04` and
+  `LAB01`) out of issue titles as well. Put the identifier in the body,
+  and use the title to name the problem or intended result.
 - Keep the issue body **current**, rather than appending dated review notes above obsolete checklists. Use Problem, confirmed Evidence if relevant, Scope/Out of scope, checkable Done when, and Dependencies/Related work as needed. Use the shortest sections that establish independently verifiable work.
 - If implementation/verification exceeds two days, split independently reviewable S/M deliverables into linked issues and make the L/XL parent an outcome/coordination tracker. Do not divide an atomic safety or data-integrity change merely to produce more issues. Preserve owner, release constraints and links.
 - Put the detailed outcome of a lab run in its specific scenario issue or durable result document; a coordination parent carries only a concise verdict and link. Keep prior comments and authored evidence, and distinguish the most recent verified state from historical plans.

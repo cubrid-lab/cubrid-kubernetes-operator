@@ -3,7 +3,10 @@ Title: `type: description` or `type(scope): description`; add `!` before the col
 for a breaking change. Types: feat, fix, docs, test, perf, refactor, ci, build,
 chore, style, revert. English, lowercase start unless the first word is an API
 name, acronym, or proper noun. No trailing period, no issue numbers (put
-"Closes #123" in Related Issues). The title becomes the squash commit title.
+"Closes #123" in Related Issues). The title becomes the squash commit title. Describe the actual change in
+words; do not use internal scenario/lab/review IDs (S04, S06, LAB01, R3,
+CTL-4) in titles. Example: `test: add HA failover test for unexpected VM
+power loss`. Keep scenario IDs in Validation Evidence below.
 See CONTRIBUTING.md#pull-request-and-commit-titles.
 -->
 ## Summary
