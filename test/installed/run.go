@@ -77,6 +77,10 @@ type Config struct {
 	// must have before the run creates anything; zero reads none
 	// (checkNodeFreeSpace).
 	MinNodeFreeSpace int64
+	// MinNodeFreeMemory is the memory, in bytes, kubelet must report
+	// available on every schedulable node before the run creates anything;
+	// zero reads none (checkNodeFreeSpace).
+	MinNodeFreeMemory int64
 }
 
 // Runner uses an API client and command runner bound to the same target.
@@ -142,6 +146,9 @@ type record struct {
 	// NodeFreeBytes is the free space each schedulable node reported before
 	// the run created anything, when a minimum was set.
 	NodeFreeBytes map[string]int64 `json:"nodeFreeBytes,omitempty"`
+	// NodeAvailableMemoryBytes is the memory each schedulable node reported
+	// available before the run created anything, when a minimum was set.
+	NodeAvailableMemoryBytes map[string]int64 `json:"nodeAvailableMemoryBytes,omitempty"`
 	// ManagerChangedAtCleanup is set when preallocated cleanup saw a manager
 	// incarnation other than the recorded one. The run then fails.
 	ManagerChangedAtCleanup bool `json:"managerChangedAtCleanup,omitempty"`
@@ -199,14 +206,23 @@ func (c Config) validate() error {
 			return errors.New("expected images must be pinned by digest or tagged main-<selected commit>")
 		}
 	}
-	if c.Timeout <= 0 || c.CleanupTimeout <= 0 || c.Poll <= 0 {
-		return errors.New("run, cleanup and poll durations must be positive")
-	}
-	if c.MinNodeFreeSpace < 0 {
-		return errors.New("the minimum free space of a node must not be negative")
+	if err := c.validateBudgets(); err != nil {
+		return err
 	}
 	if c.Level != "kind" && c.Level != "vm-lab" && c.Level != "unit" {
 		return errors.New("an explicit evidence environment level is required")
+	}
+	return nil
+}
+
+// validateBudgets checks the run's durations and the minimum free space and
+// memory a node must have.
+func (c Config) validateBudgets() error {
+	if c.Timeout <= 0 || c.CleanupTimeout <= 0 || c.Poll <= 0 {
+		return errors.New("run, cleanup and poll durations must be positive")
+	}
+	if c.MinNodeFreeSpace < 0 || c.MinNodeFreeMemory < 0 {
+		return errors.New("the minimum free space and available memory of a node must not be negative")
 	}
 	return nil
 }

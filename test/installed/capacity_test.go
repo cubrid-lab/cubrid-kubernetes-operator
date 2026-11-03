@@ -114,8 +114,16 @@ func TestRunCleanupCompletesOnceTheRunVolumesAreDeleted(t *testing.T) {
 }
 
 // nodesWithFreeSpace returns nodes and a command hook that reports each
-// node's free space as kubelet's stats summary does.
+// node's free space as kubelet's stats summary does, with no memory figure.
 func nodesWithFreeSpace(t *testing.T, free map[string]int64, unschedulable string) ([]client.Object,
+	func(context.Context, []string) (string, error), *[]string) {
+	t.Helper()
+	return nodesWithStats(t, free, nil, unschedulable)
+}
+
+// nodesWithStats is nodesWithFreeSpace with the available memory of each
+// node in memory; a node missing from memory reports none.
+func nodesWithStats(t *testing.T, free, memory map[string]int64, unschedulable string) ([]client.Object,
 	func(context.Context, []string) (string, error), *[]string) {
 	t.Helper()
 	nodes := make([]client.Object, 0, len(free))
@@ -133,8 +141,12 @@ func nodesWithFreeSpace(t *testing.T, free map[string]int64, unschedulable strin
 		if len(args) == 4 && args[0] == testVerbGet && args[1] == "--raw" && args[3] == "--request-timeout=30s" {
 			node := strings.TrimSuffix(strings.TrimPrefix(args[2], "/api/v1/nodes/"), "/proxy/stats/summary")
 			*read = append(*read, node)
-			return fmt.Sprintf(`{"node":{"nodeName":%q,"fs":{"availableBytes":%d,"capacityBytes":%d}}}`, node,
-				free[node], 40*testGi), nil
+			mem := ""
+			if available, ok := memory[node]; ok {
+				mem = fmt.Sprintf(`,"memory":{"availableBytes":%d,"workingSetBytes":%d}`, available, testGi)
+			}
+			return fmt.Sprintf(`{"node":{"nodeName":%q,"fs":{"availableBytes":%d,"capacityBytes":%d}%s}}`, node,
+				free[node], 40*testGi, mem), nil
 		}
 		return "", fmt.Errorf("unexpected command %q", args)
 	}
@@ -231,5 +243,120 @@ func TestRunLeavesANodeThatIsNotReadyOutOfTheFreeSpaceCheck(t *testing.T) {
 	}
 	if len(*read) != 1 || (*read)[0] != testRoomyNode {
 		t.Fatalf("read %v, want %s only", *read, testRoomyNode)
+	}
+}
+
+func TestRunRefusesANodeShortOfMemoryBeforeCreatingAnything(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.MinNodeFreeMemory = 2 * testGi
+	nodes, hook, _ := nodesWithStats(t, map[string]int64{testRoomyNode: 16 * testGi, testFullNode: 16 * testGi},
+		map[string]int64{testRoomyNode: 6 * testGi, testFullNode: testGi / 2}, "")
+	f := newConfiguredFixture(t, cfg, nodes...)
+	answerNodeStats(f, hook)
+	err := f.runner.Run(t.Context(), f.cfg)
+	if err == nil || !strings.Contains(err.Error(), testFullNode+" has 536870912 bytes of memory available") {
+		t.Fatalf("Run() = %v, want a refusal naming node-3", err)
+	}
+	if len(f.writes) != 0 || f.deletes != 0 {
+		t.Fatalf("a refused run created or deleted something: writes %v, deletes %d", f.writes, f.deletes)
+	}
+	rec := readRecord(t, cfg.EvidenceDir)
+	if rec.NodeAvailableMemoryBytes[testRoomyNode] != 6*testGi || rec.NodeAvailableMemoryBytes[testFullNode] != testGi/2 {
+		t.Fatalf("nodeAvailableMemoryBytes = %v, want both nodes recorded", rec.NodeAvailableMemoryBytes)
+	}
+}
+
+// A node whose available memory kubelet does not report could be the one
+// short of it, so the run is refused rather than started on an unknown.
+func TestRunRefusesANodeThatReportsNoAvailableMemory(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.MinNodeFreeMemory = 2 * testGi
+	nodes, hook, _ := nodesWithStats(t, map[string]int64{testRoomyNode: 16 * testGi, testFullNode: 16 * testGi},
+		map[string]int64{testRoomyNode: 6 * testGi}, "")
+	f := newConfiguredFixture(t, cfg, nodes...)
+	answerNodeStats(f, hook)
+	err := f.runner.Run(t.Context(), f.cfg)
+	if err == nil || !strings.Contains(err.Error(), "the available memory of node "+testFullNode+" was not reported") {
+		t.Fatalf("Run() = %v, want a refusal for node-3's unreported memory", err)
+	}
+	if len(f.writes) != 0 || f.deletes != 0 {
+		t.Fatalf("a refused run created or deleted something: writes %v, deletes %d", f.writes, f.deletes)
+	}
+	if _, ok := readRecord(t, cfg.EvidenceDir).NodeAvailableMemoryBytes[testFullNode]; ok {
+		t.Fatal("an unreported memory figure was recorded")
+	}
+}
+
+func TestRunWithNoMinimumMemoryLeavesItUnread(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.MinNodeFreeSpace = 4 * testGi
+	// Memory is not reported, and no minimum asks for it.
+	nodes, hook, _ := nodesWithFreeSpace(t, map[string]int64{testRoomyNode: 16 * testGi}, "")
+	f := newConfiguredFixture(t, cfg, nodes...)
+	answerNodeStats(f, hook)
+	if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if rec := readRecord(t, cfg.EvidenceDir); rec.NodeAvailableMemoryBytes != nil {
+		t.Fatalf("nodeAvailableMemoryBytes = %v, want none read", rec.NodeAvailableMemoryBytes)
+	}
+}
+
+func TestRunWithNeitherMinimumReadsNoNodeStats(t *testing.T) {
+	cfg := testConfig(t)
+	nodes, hook, read := nodesWithStats(t, map[string]int64{testFullNode: testGi},
+		map[string]int64{testFullNode: testGi / 2}, "")
+	f := newConfiguredFixture(t, cfg, nodes...)
+	answerNodeStats(f, hook)
+	if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if len(*read) != 0 {
+		t.Fatalf("read %v, want no node read", *read)
+	}
+}
+
+// A preallocated namespace's run reads nothing cluster-wide beyond its fixed
+// names, so no node is read even with both minimums set.
+func TestPreallocatedRunReadsNoNodeStats(t *testing.T) {
+	nodes, hook, read := nodesWithStats(t, map[string]int64{testFullNode: testGi},
+		map[string]int64{testFullNode: testGi / 2}, "")
+	f := preallocatedFixture(t, nodes...)
+	f.cfg.MinNodeFreeSpace, f.cfg.MinNodeFreeMemory = 4*testGi, 2*testGi
+	answerNodeStats(f, hook)
+	if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if len(*read) != 0 {
+		t.Fatalf("read %v, want no node read", *read)
+	}
+}
+
+// The HA lane keeps what the pre-flight read in LAB01's record, also when a
+// node short of memory refused the run.
+func TestRunHARecordsTheNodeFiguresWhenANodeShortOfMemoryRefusesIt(t *testing.T) {
+	cfg := testHAConfig(t)
+	cfg.MinNodeFreeSpace, cfg.MinNodeFreeMemory = 4*testGi, 2*testGi
+	nodes, hook, _ := nodesWithStats(t, map[string]int64{testRoomyNode: 16 * testGi, testFullNode: 16 * testGi},
+		map[string]int64{testRoomyNode: 6 * testGi, testFullNode: testGi / 2}, "")
+	f := newHAFixture(t, cfg, nodes...)
+	f.runner.Command = func(ctx context.Context, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == testVerbGet {
+			return hook(ctx, args)
+		}
+		return f.command(ctx, args...)
+	}
+	err := f.runner.RunHA(t.Context(), cfg)
+	if err == nil || !strings.Contains(err.Error(), testFullNode+" has 536870912 bytes of memory available") {
+		t.Fatalf("RunHA() = %v, want a refusal naming node-3", err)
+	}
+	if len(f.writes) != 0 {
+		t.Fatalf("a refused run created %v", f.writes)
+	}
+	rec := readHARecord(t, cfg.EvidenceDir)
+	if rec.NodeAvailableMemoryBytes[testFullNode] != testGi/2 || rec.NodeAvailableMemoryBytes[testRoomyNode] != 6*testGi ||
+		rec.NodeFreeBytes[testFullNode] != 16*testGi {
+		t.Fatalf("record = memory %v, space %v, want both nodes recorded", rec.NodeAvailableMemoryBytes,
+			rec.NodeFreeBytes)
 	}
 }
