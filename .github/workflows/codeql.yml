@@ -13,6 +13,11 @@ on:
   schedule:
     - cron: "0 0 * * 1"
 
+concurrency:
+  # A new PR push cancels only an obsolete PR scan, never main or schedules.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   security-events: write
