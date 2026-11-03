@@ -43,6 +43,30 @@ jobs:
               re.DOTALL,
           )
           SCOPE = re.compile(r"[a-z0-9][a-z0-9_-]*")
+          # Scenario/lab/review IDs are evidence labels, not readable titles.
+          INTERNAL_IDS = re.compile(
+              r"(?<![A-Za-z0-9])(?:S\d{2}|LAB\d{2,}|(?:RT|DEP|NW|CTL|IM)-\d+|R\d+)(?![A-Za-z0-9])"
+          )
+          # Self-checks run in this checkout-free job to prevent regressions.
+          rejected = (
+              "test(installed): add S04 power-off to the installed-Operator HA lane",
+              "test(installed): split S06 verdicts by what was seen",
+              "test: validate LAB01 setup",
+              "fix: address CTL-4 and R3",
+          )
+          accepted = (
+              "test: add HA failover test for unexpected VM power loss",
+              "fix(installed): classify HA status failures and kubectl exit messages correctly",
+              "docs(adr): clarify write-quarantine failover guarantees",
+              "fix(api): handle HTTP 404 from a downstream service",
+          )
+          for sample in rejected:
+              if not INTERNAL_IDS.search(sample):
+                  raise RuntimeError(f"PR title regression: failed to reject {sample!r}")
+          for sample in accepted:
+              if INTERNAL_IDS.search(sample):
+                  raise RuntimeError(f"PR title regression: rejected readable title {sample!r}")
+
           HELP = (
               "Format: type: description | type(scope): description | "
               "type!: description | type(scope)!: description",
@@ -51,6 +75,7 @@ jobs:
               " 'feat(ha): seed slaves from the initial master',"
               " 'refactor(api)!: rename the topology field'",
               "Put issue references in the PR body (Closes #123 / Refs #123), not the title.",
+              "Spell out the actual change; put scenario/lab/review IDs (S04, LAB01, R3) in the body.",
               "Rule: CONTRIBUTING.md, section 'Pull request and commit titles'.",
           )
 
@@ -87,6 +112,14 @@ jobs:
                       f"Description starts with '{first}'; start lowercase unless it is "
                       "a proper noun or API name."
                   )
+          internal_ids = sorted(set(INTERNAL_IDS.findall(title)))
+          if internal_ids:
+              errors.append(
+                  "Internal scenario/lab/review ID(s) in the title: "
+                  + ", ".join(internal_ids)
+                  + ". Describe the behavior in words, and put IDs in the PR body."
+              )
+
           if re.search(r"#\d+", title):
               errors.append("Do not put issue or PR numbers in the title.")
           if re.search(r"\bwip\b", title, re.IGNORECASE):
