@@ -73,6 +73,10 @@ type Config struct {
 	OperatorImage, InstanceManagerImage, Commit        string
 	StorageClass, EvidenceDir, Level, ClusterUID       string
 	Timeout, CleanupTimeout, Poll                      time.Duration
+	// MinNodeFreeSpace is the free space, in bytes, every schedulable node
+	// must have before the run creates anything; zero reads none
+	// (checkNodeFreeSpace).
+	MinNodeFreeSpace int64
 }
 
 // Runner uses an API client and command runner bound to the same target.
@@ -135,6 +139,9 @@ type record struct {
 	RetainedPVCs          []pvcIdentity   `json:"retainedPVCs"`
 	FixtureReusable       *bool           `json:"fixtureReusable,omitempty"`
 	ResetRequired         *bool           `json:"resetRequired,omitempty"`
+	// NodeFreeBytes is the free space each schedulable node reported before
+	// the run created anything, when a minimum was set.
+	NodeFreeBytes map[string]int64 `json:"nodeFreeBytes,omitempty"`
 	// ManagerChangedAtCleanup is set when preallocated cleanup saw a manager
 	// incarnation other than the recorded one. The run then fails.
 	ManagerChangedAtCleanup bool `json:"managerChangedAtCleanup,omitempty"`
@@ -195,6 +202,9 @@ func (c Config) validate() error {
 	if c.Timeout <= 0 || c.CleanupTimeout <= 0 || c.Poll <= 0 {
 		return errors.New("run, cleanup and poll durations must be positive")
 	}
+	if c.MinNodeFreeSpace < 0 {
+		return errors.New("the minimum free space of a node must not be negative")
+	}
 	if c.Level != "kind" && c.Level != "vm-lab" && c.Level != "unit" {
 		return errors.New("an explicit evidence environment level is required")
 	}
@@ -254,7 +264,8 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 			CubridImageDigest: evidence.Unknown, EngineVersion: evidence.Unknown, ClientDriver: "csql"},
 		Notes: []string{"Connection smoke against an installed Operator; no installation, VM fault or S00-S15 qualification",
 			"Commit is selected by the campaign; actual runtime image identities are recorded separately",
-			"Namespace cleanup does not certify deletion of retained backend volumes"}}
+			"A fresh namespace's cleanup waits until the volumes bound to its claims are deleted; a preallocated " +
+				"namespace's retained volumes are not deleted"}}
 	lane := laneName
 	variant := ""
 	if cfg.NamespaceMode == PreallocatedNamespace {
@@ -397,7 +408,10 @@ func (r *Runner) observeEnvironment(ctx context.Context, cfg Config, rec *record
 		return fmt.Errorf("observe selected StorageClass: %w", err)
 	}
 	rec.StorageProvisioner = sc.Provisioner
-	return nil
+	if err := r.refuseLeftoverVolumes(ctx, cfg); err != nil {
+		return err
+	}
+	return r.checkNodeFreeSpace(ctx, cfg, rec)
 }
 
 func (r *Runner) checkSQL(
@@ -493,7 +507,7 @@ func (r *Runner) cleanup(ctx context.Context, ns *corev1.Namespace, poll time.Du
 	key := client.ObjectKeyFromObject(ns)
 	if err := r.Client.Get(ctx, key, current); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			return r.awaitVolumesReclaimed(ctx, ns.Name, poll)
 		}
 		return err
 	}
@@ -504,11 +518,11 @@ func (r *Runner) cleanup(ctx context.Context, ns *corev1.Namespace, poll time.Du
 	options := &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}
 	if err := r.Client.Delete(ctx, ns, options); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			return r.awaitVolumesReclaimed(ctx, ns.Name, poll)
 		}
 		return err
 	}
-	return pollUntil(ctx, poll, func() (bool, error) {
+	if err := pollUntil(ctx, poll, func() (bool, error) {
 		err := r.Client.Get(ctx, key, current)
 		if apierrors.IsNotFound(err) {
 			return true, nil
@@ -520,7 +534,10 @@ func (r *Runner) cleanup(ctx context.Context, ns *corev1.Namespace, poll time.Du
 			return false, errors.New("run namespace was replaced during cleanup; the replacement was left in place")
 		}
 		return false, nil
-	})
+	}); err != nil {
+		return err
+	}
+	return r.awaitVolumesReclaimed(ctx, ns.Name, poll)
 }
 
 func pollUntil(ctx context.Context, interval time.Duration, check func() (bool, error)) error {

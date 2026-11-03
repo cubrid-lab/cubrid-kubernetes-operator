@@ -222,6 +222,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")
 	flags.DurationVar(&cfg.CleanupTimeout, "cleanup-timeout", 5*time.Minute, "independent cleanup deadline")
 	flags.DurationVar(&cfg.Poll, "poll", 3*time.Second, "polling interval")
+	flags.Var(installed.FreeSpaceFlag(&cfg.MinNodeFreeSpace, "8Gi"), "min-node-free-space",
+		"free space every schedulable node must have before the run creates anything: one three-member cluster "+
+			"on one node above kubelet's eviction threshold; 0 reads none")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

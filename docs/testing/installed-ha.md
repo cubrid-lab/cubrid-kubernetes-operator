@@ -61,7 +61,13 @@ In addition to the smoke's inputs:
 - `-stable-for` (default 15 seconds) is how long the starting state must
   keep holding before the client starts.
 - `-timeout` (default 30 minutes) bounds the whole run. `-cleanup-timeout`
-  (default 5 minutes) is its own budget for removing the namespace.
+  (default 5 minutes) is its own budget for removing the namespace and for
+  waiting until the volumes of its claims are deleted, as the smoke does.
+- `-min-node-free-space` (default `8Gi`) is the free space every schedulable
+  node must report before anything is created, as in the smoke. Here it is
+  one three-member cluster on one node above kubelet's eviction threshold.
+  Lanes that create more clusters, such as S12's, can need more. The values
+  read are recorded as `nodeFreeBytes` in `LAB01/record.json`.
 
 The account needs, beyond the smoke's:
 - `get` on the seed Secret;
@@ -3914,7 +3920,8 @@ runs from the client's last answer until the data rules held everywhere.
 ## Cleanup
 
 The run deletes its namespace with a UID precondition and waits until it is
-gone, as the smoke does. That removes the cluster, the restored clusters of
+gone, and then until the PersistentVolumes of its claims are deleted, as the
+smoke does. That removes the cluster, the restored clusters of
 S12, their PVCs, `ha-wt`'s retained PVCs among them, the client and the
 copied Secrets. S12 `tampered` removes
 its copy of the artifact itself, S11 `missing-destination` deletes its
