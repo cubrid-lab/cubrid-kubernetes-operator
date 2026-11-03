@@ -1238,8 +1238,8 @@ The Operator therefore creates the database with a log volume of a 32nd of
 accepts) and the image's 512M: 64M for 2Gi, 512M from 16Gi up. A 32nd leaves
 room for 32 such files: at 2Gi, the 512M database volume takes the space of
 8, about 7 are the fixed log files of a member and its two copy directories,
-and about 17 remain for archives, against the 6 of the master's own archives
-and 8 copies a member held during a burst in POC-45. It passes the
+and about 17 remain for archives; during a burst in POC-45 the master held
+6 of its own archives and a slave 8 copies of the master's log. It passes the
 size to `createdb` through `CUBRID_LOG_VOLUME_SIZE`. The members seeded from
 a backup with `restoredb` or `restoreslave` keep the backup's size (POC-46),
 so the size chosen at the first `createdb` holds for the whole cluster. The

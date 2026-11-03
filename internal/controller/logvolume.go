@@ -42,8 +42,8 @@ const (
 // backup's size, so the size chosen at the first createdb holds for the
 // whole cluster.
 func logVolumeSize(size resource.Quantity) string {
-	// Value() saturates beyond int64, so a size that large is taken as the
-	// largest log volume first.
+	// Value() is not reliable beyond int64 (100E gives 0), so a size of 16Gi
+	// or more is taken as the largest log volume first.
 	if size.Cmp(*resource.NewQuantity(maxLogVolumeMiB*32<<20, resource.BinarySI)) >= 0 {
 		return strconv.Itoa(maxLogVolumeMiB) + "M"
 	}
