@@ -73,7 +73,10 @@ directory needs its normal credential-file lifecycle policy.
 The command reads the selected cluster identity, StorageClass and installed
 manager. It verifies the manager Pod through Deployment → ReplicaSet → Pod
 ownership, stable availability, the named container's declared image and actual
-runtime identity. A label-matching unrelated Pod is insufficient.
+runtime identity. A label-matching unrelated Pod is insufficient. A Pod that is
+being deleted, or that has ended in phase `Succeeded` or `Failed`, such as a
+Pod of an old ReplicaSet that kubelet evicted, runs no manager and is not
+counted. A pending or not-ready Pod is counted and blocks the run.
 
 It creates a namespace with a unique run label and the restricted Pod Security
 policy, then one `CubridCluster` in it. Before creation and database commands,

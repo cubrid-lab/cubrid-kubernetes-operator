@@ -705,3 +705,48 @@ func TestRuntimeImageIDIsRecordedWithoutManifestDigestAssumptions(t *testing.T) 
 		t.Fatalf("runtime configuration ID was confused with a repository manifest digest: %+v, %v", identity, err)
 	}
 }
+
+// finishedManagerPod is a manager Pod of an old ReplicaSet that has ended in
+// phase, as kubelet leaves one after it evicts or stops it: not ready, with no
+// deletion timestamp.
+func finishedManagerPod(cfg Config, phase corev1.PodPhase) []client.Object {
+	name := "old-manager-pod-" + strings.ToLower(string(phase))
+	return []client.Object{
+		&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "old-manager-rs", Namespace: cfg.OperatorNamespace,
+			UID:             "old-replicaset",
+			OwnerReferences: []metav1.OwnerReference{owner("Deployment", cfg.OperatorDeployment, "deployment")}}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cfg.OperatorNamespace, UID: types.UID(name),
+			Labels:          map[string]string{testAppLabel: testManagerName},
+			OwnerReferences: []metav1.OwnerReference{owner("ReplicaSet", "old-manager-rs", "old-replicaset")}},
+			Spec: corev1.PodSpec{NodeName: "node-2",
+				Containers: []corev1.Container{{Name: testManagerName, Image: "old-image"}}},
+			Status: corev1.PodStatus{Phase: phase}},
+	}
+}
+
+func TestRunLeavesOutAFinishedManagerPodOfAnOldReplicaSet(t *testing.T) {
+	for _, phase := range []corev1.PodPhase{corev1.PodSucceeded, corev1.PodFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			cfg := testConfig(t)
+			f := newConfiguredFixture(t, cfg, finishedManagerPod(cfg, phase)...)
+			if err := f.runner.Run(t.Context(), f.cfg); err != nil {
+				t.Fatalf("Run() = %v: a finished Pod runs no manager and must not block the run", err)
+			}
+			if !readSummary(t, f.cfg.EvidenceDir).Passed {
+				t.Fatal("the run did not pass")
+			}
+		})
+	}
+}
+
+func TestRunStillRefusesAPendingManagerPod(t *testing.T) {
+	cfg := testConfig(t)
+	pending := finishedManagerPod(cfg, corev1.PodPending)
+	f := newConfiguredFixture(t, cfg, pending...)
+	if err := f.runner.Run(t.Context(), f.cfg); err == nil {
+		t.Fatal("a pending manager Pod passed")
+	}
+	if len(f.writes) != 0 || readSummary(t, f.cfg.EvidenceDir).Passed {
+		t.Fatalf("an unverified installation caused writes: %v", f.writes)
+	}
+}

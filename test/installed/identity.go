@@ -94,6 +94,14 @@ func podReady(pod *corev1.Pod) bool {
 	return false
 }
 
+// runsNoManager reports whether pod is being deleted or has ended, such as a
+// Pod of an old ReplicaSet that kubelet evicted. A pending or not-ready Pod
+// may still run the manager, so it is counted and blocks the check.
+func runsNoManager(pod *corev1.Pod) bool {
+	return !pod.DeletionTimestamp.IsZero() || pod.Status.Phase == corev1.PodSucceeded ||
+		pod.Status.Phase == corev1.PodFailed
+}
+
 func (r *Runner) observeManager(ctx context.Context, cfg Config) (managerIdentity, error) {
 	var identity managerIdentity
 	deployment := &appsv1.Deployment{}
@@ -134,7 +142,7 @@ func (r *Runner) observeManager(ctx context.Context, cfg Config) (managerIdentit
 	}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		if !pod.DeletionTimestamp.IsZero() {
+		if runsNoManager(pod) {
 			continue
 		}
 		for _, owner := range pod.OwnerReferences {
