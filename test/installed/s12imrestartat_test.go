@@ -863,6 +863,9 @@ const (
 	// testIMNotAtSeedBackup is how a kill that could not be placed at
 	// seed-backup is reported.
 	testIMNotAtSeedBackup = "could not be placed while the seed backup ran"
+	// testIMNoSeedLimit is how a rate limit that could not be placed before
+	// the seed backup is reported.
+	testIMNoSeedLimit = "the rate limit could not be placed before the seed backup"
 	// testIMNoRecord is what a member answers for a record it does not
 	// hold, and testIMNotFailedByRestart how a killed operation's record
 	// that ended otherwise is reported.
@@ -1094,7 +1097,7 @@ func TestRunS12InstanceManagerRestartSeedBackupWithTheRateLimit(t *testing.T) {
 			f.beforeKill = f.beforeKill[2:]
 			f.beforeSeed = f.beforeSeed[2:]
 			f.holdStep = 1
-		}, want: []string{"the rate limit could not be placed before the seed backup",
+		}, want: []string{testIMNoSeedLimit,
 			"the bootstrap was seen SeedingReplicas before the target's Pod could take the limit"}},
 		// The backup completes before 512 KiB passed the limit.
 		"the backup completes under the limit first": {change: func(_ *s12IMRestartFixture,
@@ -1120,21 +1123,21 @@ func TestRunS12InstanceManagerRestartSeedBackupWithTheRateLimit(t *testing.T) {
 		}, removed: true, want: []string{"read the rate limit's counters", "4 errors in a row"}},
 		// The seeding recorded a seed backup by the time the limit was
 		// confirmed: it may have run before the limit.
-		"a seed backup recorded when the limit is confirmed": {change: func(f *s12IMRestartFixture,
+		// The seed backup had ended by the time the limit was confirmed: its
+		// upload ran before the limit.
+		"a seed backup ended when the limit is confirmed": {change: func(f *s12IMRestartFixture,
 			r *s12IMRestartSeedBackupRecords) {
-			f.tamper = func(_ int, killed bool, s *databasev1alpha1.CubridClusterStatus) {
-				r.net.mu.Lock()
-				limited := r.net.throttleIP != ""
-				r.net.mu.Unlock()
-				if !killed && limited {
-					s.Bootstrap.Phase = databasev1alpha1.BootstrapSeedingReplicas
-					s.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName, Phase: testDatabaseCreated,
-						PrimaryCreated: true, Seeding: &databasev1alpha1.DatabaseSeeding{Member: testIMPeer,
-							Source: testIMRestartTarget, BackupOperationID: testIMSeedBackupOp}}}
-				}
-			}
-		}, removed: true, want: []string{"the rate limit could not be placed before the seed backup",
-			"seed backup " + testIMSeedBackupOp + " was already recorded"}},
+			tamperSeedingOnceLimited(f, r, &databasev1alpha1.DatabaseSeeding{Member: testIMPeer,
+				Source: testIMRestartTarget, BackupOperationID: testIMSeedBackupOp})
+			r.polled = []instancemanager.OperationState{instancemanager.OpCompleted}
+		}, removed: true, want: []string{testIMNoSeedLimit,
+			"seed backup " + testIMSeedBackupOp + " was read Completed when the limit was confirmed"}},
+		"a seed restore recorded when the limit is confirmed": {change: func(f *s12IMRestartFixture,
+			r *s12IMRestartSeedBackupRecords) {
+			tamperSeedingOnceLimited(f, r, &databasev1alpha1.DatabaseSeeding{Member: testIMPeer,
+				Source: testIMRestartTarget, BackupOperationID: testIMSeedBackupOp, RestoreOperationID: testIMSeedOp})
+		}, removed: true, want: []string{testIMNoSeedLimit,
+			"seed restore " + testIMSeedOp + " was already recorded when the limit was confirmed"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, records := newS12IMRestartSeedBackupFixture(t)
@@ -1422,4 +1425,79 @@ func setTargetPod(ctx context.Context, c client.Client, namespace string, change
 	}
 	change(pod)
 	return c.Status().Update(ctx, pod)
+}
+
+// tamperSeedingOnceLimited makes every reading before the kill, once the
+// limit is installed, show the bootstrap SeedingReplicas with seeding.
+func tamperSeedingOnceLimited(f *s12IMRestartFixture, r *s12IMRestartSeedBackupRecords,
+	seeding *databasev1alpha1.DatabaseSeeding) {
+	f.tamper = func(_ int, killed bool, s *databasev1alpha1.CubridClusterStatus) {
+		r.net.mu.Lock()
+		limited := r.net.throttleIP != ""
+		r.net.mu.Unlock()
+		if !killed && limited {
+			s.Bootstrap.Phase = databasev1alpha1.BootstrapSeedingReplicas
+			s.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName, Phase: testDatabaseCreated,
+				PrimaryCreated: true, Seeding: seeding.DeepCopy()}}
+		}
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupTakesALimitConfirmedWhileTheBackupRuns(t *testing.T) {
+	f, records := newS12IMRestartSeedBackupFixture(t)
+	// The seed backup was recorded by the time the limit was confirmed, and
+	// its record still reads RunningBackup: what it uploads from then on
+	// passes the limit, and the kill still needs 512 KiB through it while
+	// Uploading.
+	tamperSeedingOnceLimited(f, records, &databasev1alpha1.DatabaseSeeding{Member: testIMPeer,
+		Source: testIMRestartTarget, BackupOperationID: testIMSeedBackupOp})
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass {
+		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v; want a pass", restart, err)
+	}
+	r := readIMRestartRecord(t, f.cfg).IMRestart
+	if r.SentBeforeKill < interruptedUploadSeen || r.PlacingReading == nil ||
+		r.PlacingReading.State != string(instancemanager.OpUploading) {
+		t.Fatalf("sent = %d, placing = %+v; want the kill while Uploading after 512 KiB", r.SentBeforeKill,
+			r.PlacingReading)
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupLimitsTheTargetBeforeItsContainerRuns(t *testing.T) {
+	f, records := newS12IMRestartSeedBackupFixture(t)
+	// The target's Pod has its IP, from its sandbox, while its database
+	// container still waits; the container runs from the third reading.
+	created := f.imRestartCreated
+	f.imRestartCreated = func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error {
+		if err := created(ctx, c, cluster); err != nil {
+			return err
+		}
+		return setTargetPod(ctx, c, f.cfg.Namespace, func(pod *corev1.Pod) {
+			pod.Status.ContainerStatuses[0].State = corev1.ContainerState{
+				Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"}}
+		})
+	}
+	f.beforeKill = slices.Insert(f.beforeKill, 0, databasev1alpha1.BootstrapPreparing,
+		databasev1alpha1.BootstrapPreparing)
+	f.beforeSeed = slices.Insert(f.beforeSeed, 0, nil, nil)
+	f.holdStep += 2
+	limitedFirst := false
+	f.tamper = func(read int, _ bool, _ *databasev1alpha1.CubridClusterStatus) {
+		if read != 3 {
+			return
+		}
+		records.net.mu.Lock()
+		limitedFirst = records.net.throttleIP != ""
+		records.net.mu.Unlock()
+		if err := setTargetPod(t.Context(), f.haFixture.store, f.cfg.Namespace, func(pod *corev1.Pod) {
+			pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass || !limitedFirst {
+		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v, limit before the container ran = %t; want a "+
+			"pass with the limit installed first", restart, err, limitedFirst)
+	}
 }

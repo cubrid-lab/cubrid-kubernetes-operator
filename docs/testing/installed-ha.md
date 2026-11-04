@@ -3516,19 +3516,30 @@ refuses to go on, before anything is created, unless it enforces
 `privileged`; it also refuses an object store whose address it cannot
 resolve. When the limit goes in, and why:
 - The Operator starts the first seed backup in the same reconcile that
-  records `SeedingReplicas`, so a limit installed after that phase is read
-  could miss the backup. The Operator also names the target in its first
-  reconcile of the recovery, usually before the target's Pod is scheduled,
-  so the run waits, while the bootstrap reads `Preparing` or `Restoring`,
-  until the target's Pod exists, is controlled by the cluster's
-  StatefulSet, has an IP and runs its database container. It then installs
-  the limit on that Pod only and confirms it by connects to the store
-  through it. A bootstrap seen in another phase first blocks the variant
-  ("the rate limit could not be placed before the seed backup") without a
-  fault. Once the limit is confirmed, the cluster is read again: a bootstrap
-  past `Restoring`, or a seed backup already recorded, blocks the variant
-  too, since that backup may have run before the limit. A limit that cannot
-  be installed or confirmed blocks the variant, and its removal still runs.
+  records `SeedingReplicas`, and on a small database the restore, the start
+  and the seed backup together take only seconds once the target's database
+  container runs, less than installing the limit takes. The Operator names
+  the target in its first reconcile of the recovery, usually before the
+  target's Pod is scheduled. So the run waits, while the bootstrap reads
+  `Preparing` or `Restoring`, until the target's Pod exists, is not being
+  deleted, is controlled by the cluster's StatefulSet and has an IP. The IP
+  comes with the Pod's sandbox, whose network namespace the limit acts in,
+  before the database container runs: the limit then goes in on that Pod
+  before its Instance Manager can start the restore. It is confirmed by
+  connects to the store through it. A bootstrap seen in another phase first
+  blocks the variant ("the rate limit could not be placed before the seed
+  backup") without a fault. Whether a cluster's kubelet starts the
+  ephemeral container while the database container still waits was not
+  observed; the limit then goes in once it does.
+- Once the limit is confirmed, the cluster is read again. What decides is
+  that the seed backup's upload passes the limit, which the kill requires in
+  any case (512 KiB through it while `Uploading`), and the limit acts from
+  its installation. A seed backup already recorded is accepted while the
+  source's record of it has not ended; a seed restore already recorded, a
+  seed backup whose record ended or cannot be read, or a bootstrap past
+  `SeedingReplicas`, blocks the variant, since that upload may have run
+  before the limit. A limit that cannot be installed or confirmed blocks the
+  variant, and its removal still runs.
 - The limit acts on what the target sends to the store. The restore's
   download comes the other way: only its requests and acknowledgements pass
   the limit, a small part of what is downloaded, so the restore is not held

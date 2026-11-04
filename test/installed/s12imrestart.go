@@ -893,10 +893,13 @@ func (h *haRun) limitSeedSource(ctx context.Context, cluster *databasev1alpha1.C
 }
 
 // seedSourceReady reports whether the restore target's Pod can take the
-// limit: it exists, the cluster's StatefulSet controls it, it has an IP and
-// its database container runs. The Operator names the target in its first
+// limit: it exists, is not being deleted, the cluster's StatefulSet controls
+// it and it has an IP. The IP comes with the Pod's sandbox, and with it the
+// network namespace the limit acts in, before the database container runs:
+// the limit goes in before the Instance Manager can start the restore, and
+// so long before its seed backup. The Operator names the target in its first
 // reconcile of a recovery, usually before the Pod is scheduled, so a Pod
-// that is missing or not ready yet is waited for; a Pod of another owner is
+// that is missing or has no IP yet is waited for; a Pod of another owner is
 // an error. Once ready, its UID and IP are recorded in f.
 func (h *haRun) seedSourceReady(ctx context.Context, cluster *databasev1alpha1.CubridCluster, target string,
 	f *s11Throttle) (bool, error) {
@@ -912,21 +915,26 @@ func (h *haRun) seedSourceReady(ctx context.Context, cluster *databasev1alpha1.C
 		owner.Name != cluster.Name {
 		return false, fmt.Errorf("the Pod %s is not controlled by the StatefulSet of %s", target, cluster.Name)
 	}
-	status := databaseContainerStatus(pod)
-	if pod.Status.PodIP == "" || status == nil || status.State.Running == nil {
-		f.Waiting = "the target's Pod " + target + " has no IP or its database container is not running yet"
+	if pod.Status.PodIP == "" || pod.DeletionTimestamp != nil {
+		f.Waiting = "the target's Pod " + target + " has no IP yet or is being deleted"
 		return false, nil
 	}
 	f.Target, f.TargetUID, f.TargetIP, f.Waiting = target, string(pod.UID), pod.Status.PodIP, ""
 	return true, nil
 }
 
-// limitBeforeSeeding reads the restored cluster once the limit is confirmed:
-// a bootstrap past Restoring, or a seed backup already recorded, may have
-// had its seed backup's upload run before the limit, which blocks the
+// limitBeforeSeeding reads the restored cluster once the limit is
+// confirmed. What decides is that the seed backup's upload passes the limit,
+// which the kill requires anyway (seedUploadUnderWay counts 512 KiB through
+// it while the backup is Uploading); the limit acts from its installation.
+// So a seed backup already recorded is accepted while the source's record of
+// it has not ended. A seed restore already recorded, a seed backup whose
+// record ended or cannot be read, or a bootstrap past SeedingReplicas shows
+// a seed backup whose upload may have run before the limit, which blocks the
 // variant.
 func (h *haRun) limitBeforeSeeding(ctx context.Context, created *databasev1alpha1.CubridCluster,
 	rec *s12IMRestartRecord, result *evidence.Scenario) error {
+	r := rec.IMRestart
 	cluster, err := h.readRestarted(ctx, created)
 	if err != nil {
 		return fmt.Errorf("read the restored cluster after the rate limit was confirmed: %w", err)
@@ -935,16 +943,33 @@ func (h *haRun) limitBeforeSeeding(ctx context.Context, created *databasev1alpha
 	if err != nil {
 		return err
 	}
-	if seeding := firstDatabaseSeeding(cluster); seeding != nil && seeding.BackupOperationID != "" {
-		return fmt.Errorf(imNoSeedLimit+"seed backup %s was already recorded when the limit was confirmed",
-			seeding.BackupOperationID)
-	}
 	switch phase {
-	case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
-		return nil
+	case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring),
+		string(databasev1alpha1.BootstrapSeedingReplicas):
+	default:
+		return fmt.Errorf(imNoSeedLimit+"the bootstrap was %s when the limit was confirmed", cmp.Or(phase,
+			noBootstrapPhase))
 	}
-	return fmt.Errorf(imNoSeedLimit+"the bootstrap was %s when the limit was confirmed", cmp.Or(phase,
-		noBootstrapPhase))
+	seeding := firstDatabaseSeeding(cluster)
+	switch {
+	case seeding == nil || seeding.BackupOperationID == "" && seeding.RestoreOperationID == "":
+		return nil
+	case seeding.RestoreOperationID != "":
+		return fmt.Errorf(imNoSeedLimit+"seed restore %s was already recorded when the limit was confirmed",
+			seeding.RestoreOperationID)
+	}
+	id := seeding.BackupOperationID
+	op, err := h.readIMOperation(ctx, r.Throttle.Target, id)
+	if err != nil {
+		return fmt.Errorf(imNoSeedLimit+"seed backup %s was recorded when the limit was confirmed, and its record "+
+			"could not be read: %w", id, err)
+	}
+	r.OperationReadings = append(r.OperationReadings, s12OperationReading{At: time.Now().UTC(), Operation: id,
+		State: string(op.State)})
+	if op.State.IsTerminal() {
+		return fmt.Errorf(imNoSeedLimit+"seed backup %s was read %s when the limit was confirmed", id, op.State)
+	}
+	return nil
 }
 
 // removeSeedLimit removes, at seed-backup, the rate limit once
