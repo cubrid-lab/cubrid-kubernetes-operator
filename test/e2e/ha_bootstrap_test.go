@@ -564,6 +564,7 @@ spec:
 		s06Step(scenarios, s06Absent)
 		s03Step(scenarios, s03Abrupt)
 		s03Step(scenarios, s03Graceful)
+		openTransactionStep(scenarios)
 		replicationStallStep(scenarios)
 		// The token variants of S14 replace every member's Pod, the master
 		// last, which moves the master; no step after them depends on which

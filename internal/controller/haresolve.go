@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,13 +105,31 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	setCondition(cluster, conditionPrimaryResolved, res.Status, res.Reason, primaryResolvedMessage(res))
 	replStatus, replReason, replMessage := replicationCondition(cluster.Status.Instances, obs, now)
 	setCondition(cluster, conditionReplicationHealthy, replStatus, replReason, replMessage)
-	if res.Status == metav1.ConditionTrue {
-		setCondition(cluster, conditionHAReady, metav1.ConditionTrue, "HealthyReplication",
-			"single primary resolved: "+res.CurrentPrimary)
-	} else {
-		setCondition(cluster, conditionHAReady, metav1.ConditionFalse, res.Reason, primaryResolvedMessage(res))
-	}
+	haStatus, haReason, haMessage := haReadyCondition(res, cluster.Status.Instances, replStatus, replReason, replMessage)
+	setCondition(cluster, conditionHAReady, haStatus, haReason, haMessage)
 	return res
+}
+
+// haReadyCondition is HAReady, from the primary resolution res and the
+// ReplicationHealthy condition judged over instances (#249). A resolved
+// primary is not enough: a slave that does not apply the master's log makes
+// HAReady False with the replication's reason, and a slave whose applier could
+// not be read makes it Unknown. With no slave observed there is no
+// replication to judge, and the resolved primary decides alone. Nothing that
+// routes clients reads HAReady; RoutingReady follows the primary resolution
+// only.
+func haReadyCondition(res PrimaryResolution, instances []databasev1alpha1.InstanceStatus,
+	replStatus metav1.ConditionStatus, replReason, replMessage string) (metav1.ConditionStatus, string, string) {
+	if res.Status != metav1.ConditionTrue {
+		return metav1.ConditionFalse, res.Reason, primaryResolvedMessage(res)
+	}
+	slaves := slices.ContainsFunc(instances, func(in databasev1alpha1.InstanceStatus) bool {
+		return in.Role == databasev1alpha1.RoleSlave
+	})
+	if slaves && replStatus != metav1.ConditionTrue {
+		return replStatus, replReason, "single primary resolved: " + res.CurrentPrimary + "; replication: " + replMessage
+	}
+	return metav1.ConditionTrue, "HealthyReplication", "single primary resolved: " + res.CurrentPrimary
 }
 
 // logUnobservedMembers writes one line for each member whose role the status

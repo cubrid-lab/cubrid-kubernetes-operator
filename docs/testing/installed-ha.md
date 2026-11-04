@@ -92,7 +92,10 @@ run ends with the bootstrap's `SeedBackupFailed` reason.
 **Starting state.** Before the client starts, all of these must hold on the
 same reading:
 - the cluster's status has observed its generation, and `Ready`, `HAReady`,
-  `PrimaryResolved` and `RoutingReady` are `True`;
+  `PrimaryResolved` and `RoutingReady` are `True`. Since #249 `HAReady` is
+  `True` only while `ReplicationHealthy` is too, so this wait also lasts while
+  a slave's applier is stalled or could not be read; the harness itself is
+  unchanged;
 - each member Pod is Ready, belongs to the cluster's StatefulSet and runs the
   expected Instance Manager image;
 - both Broker Deployments, owned by the cluster, are fully available;

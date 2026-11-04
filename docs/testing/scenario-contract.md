@@ -422,7 +422,8 @@ Within the HA group the scenarios run in order on one cluster, and a failed
 step does not stop the group. Each step after S01 starts only from the
 common starting state of S01, restored and verified within 10 minutes: every
 member's Pod `Ready` and not being deleted, one active master and standby
-slaves, `Ready`, `HAReady`, `PrimaryResolved` and `RoutingReady` `True` with
+slaves, `Ready`, `HAReady` (which since #249 also needs `ReplicationHealthy`
+`True`), `PrimaryResolved` and `RoutingReady` `True` with
 the master as `status.currentPrimary`, the Operator and every Broker
 available with no Broker Pod being deleted, the workload client Pod running
 and not being deleted, a marker written through the read-write Service
