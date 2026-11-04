@@ -114,6 +114,8 @@ type Rule struct {
 // finding is what one rule found.
 type finding struct {
 	disagreements, notes []string
+	// evaluated holds the start of every status read the rule could judge.
+	evaluated []time.Time
 	// notJudged says why the rule could not be judged at all: the evidence
 	// it needs is missing.
 	notJudged string
@@ -130,6 +132,9 @@ type Agreement struct {
 	// evidence it requires is missing (docs/testing/scenario-contract.md,
 	// "Results").
 	NotJudged []string
+	// Evaluated is how many status reads each Never or Tolerance rule could
+	// judge.
+	Evaluated map[string]int
 }
 
 // Reading the HA status. staleAfter is the reader rule of
@@ -165,6 +170,16 @@ const brokerTolerance = 5*time.Second + 30*time.Second + samplingSlack
 // longer gap the Deployment may have had no available Pod without any reading
 // showing it.
 const readingGap = 6 * time.Second
+
+// The least evidence a Never or Tolerance rule needs for a verdict. It must
+// have judged at least minEvaluatedReads status reads, and at least half of
+// all the reads, so that one read without the evidence in a run of many
+// leaves a note while a rule that could judge few of them is not judged.
+// When the timeline marks the fault (fault_issued) and the outcome
+// (outcome_reached), at least one judged read must fall between the two and
+// one after the outcome, in the stable period: a rule that judged only reads
+// before the fault, or none while the fault acted, did not test it.
+const minEvaluatedReads = 3
 
 // maxLines is how many findings of one rule are written out; the rest are
 // counted.
@@ -216,6 +231,15 @@ func CheckAgreement(obs Observations, rules []Rule) Agreement {
 				f.notJudged = ""
 			}
 		}
+		if r.Kind != Report {
+			if a.Evaluated == nil {
+				a.Evaluated = map[string]int{}
+			}
+			a.Evaluated[r.ID] = len(f.evaluated)
+			if f.notJudged == "" {
+				f.notJudged = insufficient(f.evaluated, len(obs.Samples), obs.Steps)
+			}
+		}
 		a.Disagreements = append(a.Disagreements, prefixed(string(r.Kind)+": "+r.ID, f.disagreements)...)
 		a.Notes = append(a.Notes, prefixed(r.ID, f.notes)...)
 		if f.notJudged != "" {
@@ -223,6 +247,35 @@ func CheckAgreement(obs Observations, rules []Rule) Agreement {
 		}
 	}
 	return a
+}
+
+// insufficient says why the judged reads are too few for a verdict, or "".
+func insufficient(evaluated []time.Time, reads int, steps []Step) string {
+	if len(evaluated) < minEvaluatedReads || 2*len(evaluated) < reads {
+		return fmt.Sprintf("only %d of %d status reads could be judged; at least %d and at least half are needed",
+			len(evaluated), reads, minEvaluatedReads)
+	}
+	var faultAt, outcomeAt time.Time
+	for _, st := range steps {
+		switch st.Kind {
+		case "fault_issued":
+			faultAt = st.T
+		case "outcome_reached":
+			outcomeAt = st.T
+		}
+	}
+	in := func(from, to time.Time) bool {
+		return slices.ContainsFunc(evaluated, func(t time.Time) bool {
+			return !t.Before(from) && (to.IsZero() || t.Before(to))
+		})
+	}
+	switch {
+	case !faultAt.IsZero() && !in(faultAt, outcomeAt):
+		return "no status read between the fault and the outcome could be judged"
+	case !outcomeAt.IsZero() && !in(outcomeAt, time.Time{}):
+		return "no status read in the stable period after the outcome could be judged"
+	}
+	return ""
 }
 
 // prefixed puts the rule's ID before each line, and keeps maxLines of them.
@@ -251,7 +304,7 @@ func HAReportRules() []Rule {
 			ID: ruleRoutingWithoutPrimary, Kind: Report,
 			Says: "RoutingReady=True while PrimaryResolved is not True; possible for one read after a conflicting " +
 				"write of a Broker object, which leaves the Broker Conditions as they were",
-			check: perRead(func(s ConditionSample) (string, string) {
+			check: perRead(nil, func(s ConditionSample) (string, string) {
 				c, ok := s.Conditions[condPrimaryResolved]
 				if !isTrue(s, condRoutingReady) || !ok || c.Status == condTrue {
 					return "", ""
@@ -273,7 +326,7 @@ func NeverRules() []Rule {
 			ID: ruleRoutingNeedsWriteEndpoint, Kind: Never,
 			Says: "RoutingReady=True comes with WriteEndpointReady=True in the same read: routing is ready only " +
 				"when a read-write Broker Pod is available, and both are set from the same count",
-			check: perRead(func(s ConditionSample) (string, string) {
+			check: perRead([]string{condRoutingReady, condWriteEndpointReady}, func(s ConditionSample) (string, string) {
 				if !isTrue(s, condRoutingReady) {
 					return "", ""
 				}
@@ -284,7 +337,7 @@ func NeverRules() []Rule {
 			ID: ruleHAReadyNeedsPrimary, Kind: Never,
 			Says: "HAReady=True comes with PrimaryResolved=True in the same read; HAReady=False with " +
 				"PrimaryResolved=True is allowed",
-			check: perRead(func(s ConditionSample) (string, string) {
+			check: perRead([]string{condHAReady, condPrimaryResolved}, func(s ConditionSample) (string, string) {
 				if !isTrue(s, condHAReady) {
 					return "", ""
 				}
@@ -294,21 +347,22 @@ func NeverRules() []Rule {
 		{
 			ID: ruleBrokersNeedEndpoints, Kind: Never,
 			Says: "BrokerReady=True comes with WriteEndpointReady=True and ReadEndpointReady=True in the same read",
-			check: perRead(func(s ConditionSample) (string, string) {
-				if !isTrue(s, condBrokerReady) {
-					return "", ""
-				}
-				if bad, skip := needTrue(s, condWriteEndpointReady); bad != "" || skip != "" {
-					return bad, skip
-				}
-				return needTrue(s, condReadEndpointReady)
-			}),
+			check: perRead([]string{condBrokerReady, condWriteEndpointReady, condReadEndpointReady},
+				func(s ConditionSample) (string, string) {
+					if !isTrue(s, condBrokerReady) {
+						return "", ""
+					}
+					if bad, skip := needTrue(s, condWriteEndpointReady); bad != "" || skip != "" {
+						return bad, skip
+					}
+					return needTrue(s, condReadEndpointReady)
+				}),
 		},
 		{
 			ID: rulePrimaryNeedsEveryAnswer, Kind: Never,
 			Says: "PrimaryResolved=True comes with every member's lastObservedTime equal to the cluster's: a " +
 				"primary is resolved only from an observation in which every member answered",
-			check: perRead(func(s ConditionSample) (string, string) {
+			check: perRead([]string{condPrimaryResolved}, func(s ConditionSample) (string, string) {
 				if !isTrue(s, condPrimaryResolved) {
 					return "", ""
 				}
@@ -331,7 +385,7 @@ func NeverRules() []Rule {
 		{
 			ID: ruleReplicationNamesSlaves, Kind: Never,
 			Says: "every member ReplicationHealthy=False names is a slave in status.instances of the same read",
-			check: perRead(func(s ConditionSample) (string, string) {
+			check: perRead([]string{condReplicationHealthy}, func(s ConditionSample) (string, string) {
 				c, ok := s.Conditions[condReplicationHealthy]
 				if !ok || c.Status != condFalse {
 					return "", ""
@@ -436,13 +490,18 @@ func checkPrimaryIsConfirmedMaster(obs Observations, master string) finding {
 	fresh, notes := freshSamples(obs.Samples)
 	var bad []string
 	unconfirmed := 0
+	var evaluated []time.Time
 	for _, s := range fresh {
+		confirmedNear := slices.ContainsFunc(confirmed, func(t time.Time) bool {
+			return !t.Before(s.ReadStart.Add(-AgreementTolerance)) && !t.After(s.ReadEnd)
+		})
+		if _, ok := s.Conditions[condPrimaryResolved]; ok && confirmedNear {
+			evaluated = append(evaluated, s.ReadStart)
+		}
 		if !isTrue(s, condPrimaryResolved) || s.CurrentPrimary == master {
 			continue
 		}
-		if !slices.ContainsFunc(confirmed, func(t time.Time) bool {
-			return !t.Before(s.ReadStart.Add(-AgreementTolerance)) && !t.After(s.ReadEnd)
-		}) {
+		if !confirmedNear {
 			unconfirmed++
 			continue
 		}
@@ -453,7 +512,7 @@ func checkPrimaryIsConfirmedMaster(obs Observations, master string) finding {
 		notes = append(notes, fmt.Sprintf("not judged in %d reads that name another primary: no heartbeat sweep "+
 			"within the tolerance before them confirmed the starting master", unconfirmed))
 	}
-	return finding{disagreements: bad, notes: notes}
+	return finding{disagreements: bad, notes: notes, evaluated: evaluated}
 }
 
 // checkWriteEndpointFollowsDeployment compares every read that says no
@@ -463,11 +522,14 @@ func checkPrimaryIsConfirmedMaster(obs Observations, master string) finding {
 // readingGap from the next, showed an available Pod. A Condition that changed
 // more recently may rest on a moment without an available Pod that no reading
 // caught, and is not judged.
+//
+// The reads that report no Broker since the same lastTransitionTime are one
+// period. A period in which that lasted longer than brokerTolerance needs a
+// verdict: at least one of its reads must have a complete window of
+// Deployment readings, or the rule is not judged. Other reads of the period
+// whose window has a gap are only noted. A read counts as judged when it
+// carries WriteEndpointReady and a reading of the Deployment.
 func checkWriteEndpointFollowsDeployment(obs Observations) finding {
-	type reading struct {
-		t         time.Time
-		available int
-	}
 	var readings []reading
 	var empty []time.Time
 	for _, s := range obs.Samples {
@@ -488,49 +550,49 @@ func checkWriteEndpointFollowsDeployment(obs Observations) finding {
 			"%d readings, first at %s", len(empty), stamp(empty[0])))
 	}
 	var bad []string
-	uncovered, gaps, noTransition := 0, 0, 0
+	var evaluated []time.Time
+	// undecided holds, by the time a period began, whether none of its reads
+	// that need a verdict could be decided yet.
+	undecided := map[time.Time]bool{}
+	uncovered, gaps := 0, 0
 	for _, s := range obs.Samples {
 		c, ok := s.Conditions[condWriteEndpointReady]
+		if ok && s.RWAvailable != nil {
+			evaluated = append(evaluated, s.ReadStart)
+		}
 		if !ok || c.Status != condFalse || c.Reason != "NoBrokerAvailable" {
 			continue
 		}
-		if c.LastTransitionTime.IsZero() {
-			noTransition++
-			continue
-		}
-		if s.ReadStart.Sub(c.LastTransitionTime) <= brokerTolerance {
+		if !c.LastTransitionTime.IsZero() && s.ReadStart.Sub(c.LastTransitionTime) <= brokerTolerance {
 			continue // within the tolerance of the change
 		}
-		from := s.ReadStart.Add(-brokerTolerance)
-		// The readings over the tolerance, from the last one at or before
-		// its start to the one of this read.
-		first := -1
-		for i, r := range readings {
-			if !r.t.After(from) {
-				first = i
-			}
+		period := c.LastTransitionTime
+		if _, seen := undecided[period]; !seen {
+			undecided[period] = true
 		}
-		if first < 0 {
+		if period.IsZero() {
+			continue // without a transition time the period cannot be judged
+		}
+		w := windowBefore(readings, s.ReadStart.Add(-brokerTolerance), s.ReadEnd)
+		switch {
+		case !w.covered:
 			uncovered++
 			continue
-		}
-		all, gap, seen := true, false, 0
-		for i := first; i < len(readings) && !readings[i].t.After(s.ReadEnd); i++ {
-			if i > first && readings[i].t.Sub(readings[i-1].t) > readingGap {
-				gap = true
-			}
-			seen++
-			all = all && readings[i].available > 0
-		}
-		last := readings[first+seen-1].t
-		switch {
-		case !all:
-		case gap || s.ReadEnd.Sub(last) > readingGap:
+		case w.gap:
 			gaps++
-		default:
+			continue
+		}
+		undecided[period] = false
+		if w.allAvailable {
 			bad = append(bad, fmt.Sprintf("read at %s: WriteEndpointReady=False (NoBrokerAvailable) since %s, "+
 				"while all %d readings of the Deployment since %s showed an available Pod",
-				stamp(s.ReadStart), stamp(c.LastTransitionTime), seen, stamp(readings[first].t)))
+				stamp(s.ReadStart), stamp(c.LastTransitionTime), w.seen, stamp(w.from)))
+		}
+	}
+	var open []string
+	for _, period := range slices.SortedFunc(maps.Keys(undecided), time.Time.Compare) {
+		if undecided[period] {
+			open = append(open, stampOrUnset(period))
 		}
 	}
 	for _, n := range []struct {
@@ -539,14 +601,63 @@ func checkWriteEndpointFollowsDeployment(obs Observations) finding {
 	}{
 		{uncovered, "the Deployment was not read for the whole tolerance before them"},
 		{gaps, fmt.Sprintf("the readings of the Deployment before them leave a gap of more than %s", readingGap)},
-		{noTransition, "the Condition has no lastTransitionTime"},
 	} {
 		if n.count > 0 {
 			notes = append(notes, fmt.Sprintf("not judged in %d reads that say no Broker is available: %s",
 				n.count, n.why))
 		}
 	}
-	return finding{disagreements: bad, notes: notes}
+	f := finding{disagreements: bad, notes: notes, evaluated: evaluated}
+	if len(open) > 0 {
+		f.notJudged = fmt.Sprintf("no read of the periods that reported no Broker for longer than the tolerance, "+
+			"since %s, has a complete window of Deployment readings", strings.Join(open, ", "))
+	}
+	return f
+}
+
+// reading is one reading of the read-write Broker Deployment's available Pods.
+type reading struct {
+	t         time.Time
+	available int
+}
+
+// window is what the readings over a tolerance window show.
+type window struct {
+	// covered is false when no reading was taken at or before its start.
+	covered bool
+	// gap is true when two readings, or the last one and the window's end,
+	// are more than readingGap apart.
+	gap          bool
+	allAvailable bool
+	seen         int
+	// from is the time of the first reading used.
+	from time.Time
+}
+
+// windowBefore looks at the sorted readings from the last one at or before
+// from to the last one at or before end.
+func windowBefore(readings []reading, from, end time.Time) window {
+	first := -1
+	for i, r := range readings {
+		if !r.t.After(from) {
+			first = i
+		}
+	}
+	if first < 0 {
+		return window{}
+	}
+	w := window{covered: true, allAvailable: true, from: readings[first].t}
+	last := readings[first].t
+	for i := first; i < len(readings) && !readings[i].t.After(end); i++ {
+		if i > first && readings[i].t.Sub(readings[i-1].t) > readingGap {
+			w.gap = true
+		}
+		w.seen++
+		w.allAvailable = w.allAvailable && readings[i].available > 0
+		last = readings[i].t
+	}
+	w.gap = w.gap || end.Sub(last) > readingGap
+	return w
 }
 
 func reportAllBrokersLost(obs Observations) finding {
@@ -605,17 +716,24 @@ func reportWrites(obs Observations, match func(SQLEvent, ConditionSample) bool, 
 // perRead applies a check to every status read. check returns a finding, or
 // why the read could not be judged; reads that could not be judged are
 // counted in one note per reason. Without any read the rule is not judged.
-func perRead(check func(ConditionSample) (bad, skip string)) func(Observations) finding {
+//
+// A read counts as judged when it carries every Condition in needs and check
+// gave no reason to skip it.
+func perRead(needs []string, check func(ConditionSample) (bad, skip string)) func(Observations) finding {
 	return func(obs Observations) finding {
 		if len(obs.Samples) == 0 {
 			return finding{notJudged: "no status read was recorded"}
 		}
 		var bad []string
+		var evaluated []time.Time
 		skipped := map[string]int{}
 		for _, s := range obs.Samples {
 			b, skip := check(s)
 			if b != "" {
 				bad = append(bad, b)
+			}
+			if skip == "" && hasAll(s, needs) {
+				evaluated = append(evaluated, s.ReadStart)
 			}
 			if skip != "" {
 				skipped[skip]++
@@ -625,8 +743,17 @@ func perRead(check func(ConditionSample) (bad, skip string)) func(Observations) 
 		for _, why := range slices.Sorted(maps.Keys(skipped)) {
 			notes = append(notes, fmt.Sprintf("not judged in %d reads: %s", skipped[why], why))
 		}
-		return finding{disagreements: bad, notes: notes}
+		return finding{disagreements: bad, notes: notes, evaluated: evaluated}
 	}
+}
+
+func hasAll(s ConditionSample, conditions []string) bool {
+	for _, c := range conditions {
+		if _, ok := s.Conditions[c]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // freshSamples returns the reads, in the order of their start, whose status

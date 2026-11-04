@@ -364,22 +364,7 @@ func (r *haRun) s05(variant string) {
 		Evidence:   files,
 	}, within(brokerRecoveryLimit, recovery),
 		faults.Bound{Limit: stablePeriod, Measured: minStable, AtLeast: true, Unmeasured: !measuredStable})
-	if len(agreement.Disagreements) > 0 {
-		result.NeverEvents = append(result.NeverEvents, agreement.Disagreements...)
-		if result.Reason == "" {
-			result.Reason = reasonConditionDisagreement
-		} else {
-			result.Reason = reasonConditionDisagreement + "; " + result.Reason
-		}
-		result.Result = evidence.Fail
-	}
-	// A rule S05 requires that could not be judged leaves no verdict on the
-	// Conditions: the evidence it needs is missing, so a run that passed
-	// everything else is blocked, not passed.
-	if len(agreement.NotJudged) > 0 && result.Result == evidence.Pass {
-		result.Result = evidence.Blocked
-		result.Reason = reasonConditionsNotJudged + ": " + strings.Join(agreement.NotJudged, "; ")
-	}
+	result = withAgreement(result, agreement)
 	Expect(agreement.Disagreements).To(BeEmpty(),
 		"S05/%s: the Conditions disagreed with CUBRID's heartbeat or the Broker Deployment; see agreement.txt", variant)
 	Expect(agreement.NotJudged).To(BeEmpty(),

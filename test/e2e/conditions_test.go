@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
@@ -190,7 +191,11 @@ func checkConditions(dir string, rounds []conditionRound, events []workload.Even
 		"client operations with an outcome: %d\n", len(rounds), unread, len(obs.Sweeps), len(obs.SQL))
 	fmt.Fprintf(&text, "Tolerance of the rules that compare sources: %s\n\nRules:\n", faults.AgreementTolerance)
 	for _, rule := range rules {
-		fmt.Fprintf(&text, "- %s (%s): %s\n", rule.ID, rule.Kind, rule.Says)
+		judged := ""
+		if n, ok := agreement.Evaluated[rule.ID]; ok {
+			judged = fmt.Sprintf(", %d status reads judged", n)
+		}
+		fmt.Fprintf(&text, "- %s (%s%s): %s\n", rule.ID, rule.Kind, judged, rule.Says)
 	}
 	for _, part := range []struct {
 		title string
@@ -220,6 +225,7 @@ func checkConditions(dir string, rounds []conditionRound, events []workload.Even
 		"unreadStatus":  unread,
 		"disagreements": len(agreement.Disagreements),
 		"notJudged":     len(agreement.NotJudged),
+		"evaluated":     agreement.Evaluated,
 		"notes":         len(agreement.Notes),
 	}
 }
@@ -277,4 +283,71 @@ func TestHeartbeatRoleIn(t *testing.T) {
 			t.Errorf("heartbeatRoleIn(%q) = %q, want %q", out, got, want)
 		}
 	}
+}
+
+// TestS05CannotPassWithARuleNeverEvaluated checks that a run whose status
+// reads never carried a Condition a required rule reads is blocked, not
+// passed, and that a disagreement fails a run that passed everything else.
+func TestS05CannotPassWithARuleNeverEvaluated(t *testing.T) {
+	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	start := time.Now().UTC()
+	var rounds []conditionRound
+	for i := range 20 {
+		at := start.Add(time.Duration(i) * 2 * time.Second)
+		available := 2
+		rounds = append(rounds, conditionRound{
+			Status: &faults.ConditionSample{ReadStart: at, ReadEnd: at, LastObserved: at, CurrentPrimary: "m-0",
+				RWAvailable: &available,
+				// No read carries WriteEndpointReady or BrokerReady.
+				Conditions: map[string]faults.ConditionState{
+					"RoutingReady": {Status: "True"}, "PrimaryResolved": {Status: "True"}, "HAReady": {Status: "True"},
+					"ReplicationHealthy": {Status: "True"}, "ReadEndpointReady": {Status: "True"},
+				},
+				Instances: []faults.MemberStatus{{Name: "m-0", Role: "master", LastObserved: at}}},
+			Roles: &faults.RoleSweep{Start: at, End: at, Roles: map[string]string{"m-0": "master"}},
+		})
+	}
+	agreement, _, measured := checkConditions("S05/test", rounds, nil, nil,
+		slices.Concat(faults.NeverRules(), faults.HAReportRules(), faults.S05Rules("m-0", true)))
+	passed := evidence.Scenario{ID: "S05", Variant: "test", Result: evidence.Pass}
+	got := withAgreement(passed, agreement)
+	if got.Result != evidence.Blocked || !strings.HasPrefix(got.Reason, reasonConditionsNotJudged) {
+		t.Errorf("result %s (%s), want blocked with %s; not judged: %v", got.Result, got.Reason,
+			reasonConditionsNotJudged, agreement.NotJudged)
+	}
+	if evaluated, ok := measured["evaluated"].(map[string]int); !ok || len(evaluated) == 0 {
+		t.Errorf("measurement %v has no evaluated count per rule", measured)
+	}
+
+	failed := withAgreement(passed, faults.Agreement{Disagreements: []string{"never: a: b"}})
+	if failed.Result != evidence.Fail || failed.Reason != reasonConditionDisagreement || len(failed.NeverEvents) != 1 {
+		t.Errorf("a disagreement gave %+v", failed)
+	}
+	if kept := withAgreement(evidence.Scenario{Result: evidence.Fail, Reason: "data check"},
+		faults.Agreement{NotJudged: []string{"a: no evidence"}}); kept.Result != evidence.Fail {
+		t.Errorf("a failed run became %s", kept.Result)
+	}
+}
+
+// withAgreement gives a scenario's result what the comparison of its
+// Conditions found. A disagreement fails it and is listed in neverEvents. A
+// rule the scenario requires that could not be judged leaves no verdict on
+// the Conditions, since the evidence it needs is missing: a result that
+// passed everything else becomes blocked, never pass. A result that is
+// already not a pass keeps its own verdict.
+func withAgreement(result evidence.Scenario, agreement faults.Agreement) evidence.Scenario {
+	if len(agreement.Disagreements) > 0 {
+		result.NeverEvents = append(result.NeverEvents, agreement.Disagreements...)
+		if result.Reason == "" {
+			result.Reason = reasonConditionDisagreement
+		} else {
+			result.Reason = reasonConditionDisagreement + "; " + result.Reason
+		}
+		result.Result = evidence.Fail
+	}
+	if len(agreement.NotJudged) > 0 && result.Result == evidence.Pass {
+		result.Result = evidence.Blocked
+		result.Reason = reasonConditionsNotJudged + ": " + strings.Join(agreement.NotJudged, "; ")
+	}
+	return result
 }

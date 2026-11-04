@@ -720,12 +720,30 @@ timeline. Each rule is of one of three kinds:
   Conditions of the Brokers and `Ready` say that Pods and Deployments are
   available, not that a client can run SQL.
 
-A Condition that is `Unknown` makes no claim. A single read that a rule
-cannot judge, for example one without the Condition it compares, is counted in
-a note. A Never or Tolerance rule that cannot be judged at all, because the
-evidence it needs is missing, for example when no heartbeat answer names the
-starting master as an active master, is never counted as passed: the
-scenario, when all else passed, is `blocked` with reason
+A Condition that is `Unknown` makes no claim. Each Never and Tolerance rule
+counts the status reads it could judge, and `agreement.txt` and
+`measurements.conditionAgreement.evaluated` give that count per rule. A
+read counts for a Never rule when it carries every Condition the rule
+reads; for the primary rule when it is not stale, carries `PrimaryResolved`
+and a heartbeat sweep in the 80 seconds before it confirmed the starting
+master; for the write-endpoint rule when it carries `WriteEndpointReady` and
+a reading of the Deployment. A rule has enough evidence for a verdict only
+when:
+
+- it judged at least 3 reads, and at least half of all the status reads;
+- at least one judged read falls between the fault and the outcome, and one
+  in the stable period after the outcome, as the timeline marks them;
+- for the write-endpoint rule, every period in which `WriteEndpointReady`
+  said `NoBrokerAvailable` for longer than 40 seconds has at least one read
+  whose 40 seconds before it are covered by Deployment readings none more
+  than 6 seconds apart.
+
+A single read that a rule cannot judge in a run that otherwise meets these
+limits, such as one read without a Condition or one window with a gap in
+the Deployment readings, is only a note. A rule below them, or one whose
+evidence is missing altogether, for example when no heartbeat answer names
+the starting master as an active master, is not judged and is never counted
+as passed: the scenario, when all else passed, is `blocked` with reason
 `condition_agreement_not_judged`, since required evidence is missing
 ([Results](#results)). `agreement.txt` lists every rule with its kind, the
 disagreements, the rules that could not be judged, and the notes. A
@@ -818,7 +836,8 @@ was `True`, are reported only.
   [Conditions during the fault](#conditions-during-the-fault)),
   `measurements.conditionAgreement` counts the status reads, the reads that
   could not be made, the disagreements, the rules that could not be judged
-  and the notes. Each disagreement is also listed in `neverEvents`, starting
+  and the notes, and gives, in `evaluated`, how many reads each rule
+  judged. Each disagreement is also listed in `neverEvents`, starting
   with `never:` or `tolerance:`, and the scenario's reason is
   `condition_disagreement`.
 - `faultConfirmed` is left out for a scenario that injects no fault.

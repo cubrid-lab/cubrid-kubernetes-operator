@@ -115,8 +115,10 @@ type agreementCase struct {
 	// note is a word expected in a note; "" expects nothing of the notes.
 	note string
 	// notJudged is the rule ID expected among the rules that could not be
-	// judged at all; "" expects none.
+	// judged at all.
 	notJudged string
+	// judged expects every rule to have enough evidence for a verdict.
+	judged bool
 }
 
 func checkCases(t *testing.T, rules []Rule, cases map[string]agreementCase) {
@@ -133,7 +135,7 @@ func checkCases(t *testing.T, rules []Rule, cases map[string]agreementCase) {
 			t.Errorf("%s: no note mentions %q among %v", name, c.note, got.Notes)
 		}
 		switch {
-		case c.notJudged == "" && len(got.NotJudged) > 0:
+		case c.judged && len(got.NotJudged) > 0:
 			t.Errorf("%s: unexpected rules not judged %v", name, got.NotJudged)
 		case c.notJudged != "" && !mentions(got.NotJudged, c.notJudged):
 			t.Errorf("%s: rule %s is not among the rules not judged %v", name, c.notJudged, got.NotJudged)
@@ -172,7 +174,7 @@ func TestNeverRules(t *testing.T) {
 	unparsed := with(healthy(10), "ReplicationHealthy", "False", "SomethingElse")
 
 	checkCases(t, NeverRules(), map[string]agreementCase{
-		"every Condition True agrees": {obs: series(30)},
+		"every Condition True agrees": {obs: series(30), judged: true},
 		"routing ready although the write endpoint is not": {
 			obs:      one(with(healthy(10), "WriteEndpointReady", "False", "NoBrokerAvailable")),
 			disagree: ruleRoutingNeedsWriteEndpoint},
@@ -229,6 +231,46 @@ func TestNeverRules(t *testing.T) {
 	}
 }
 
+func TestNeverRulesNeedEnoughEvaluableReads(t *testing.T) {
+	without := func(c string) func(ConditionSample) ConditionSample {
+		return func(s ConditionSample) ConditionSample {
+			conditions := maps.Clone(s.Conditions)
+			delete(conditions, c)
+			s.Conditions = conditions
+			return s
+		}
+	}
+	// The fault is issued at second 2, and the outcome is reached at second
+	// 20: the stable period runs from there to the last read.
+	timed := func(obs Observations) Observations {
+		obs.Steps = []Step{{T: at(2), Kind: "fault_issued"}, {T: at(20), Kind: "outcome_reached"}}
+		return obs
+	}
+	isolated := replace(series(30), 0, func(s ConditionSample) ConditionSample {
+		if s.ReadStart.Equal(at(10)) {
+			return without("WriteEndpointReady")(s)
+		}
+		return s
+	})
+
+	checkCases(t, NeverRules(), map[string]agreementCase{
+		"every read without a Condition a rule reads leaves the rule not judged": {
+			obs: replace(series(30), 0, without("WriteEndpointReady")), notJudged: ruleRoutingNeedsWriteEndpoint},
+		"one read without it among many is a note, and the rule is judged": {
+			obs: isolated, note: ruleRoutingNeedsWriteEndpoint, judged: true},
+		"reads with it only before the stable period leave the rule not judged": {
+			obs: timed(replace(series(30), 20, without("HAReady"))), notJudged: ruleHAReadyNeedsPrimary},
+		"reads with it during the fault and the stable period are judged": {
+			obs: timed(series(30)), judged: true},
+		"too few reads leave the rule not judged": {
+			obs: series(2), notJudged: ruleHAReadyNeedsPrimary},
+	})
+	got := CheckAgreement(series(30), NeverRules())
+	if got.Evaluated[ruleHAReadyNeedsPrimary] != 16 {
+		t.Errorf("evaluated reads of %s = %d, want 16", ruleHAReadyNeedsPrimary, got.Evaluated[ruleHAReadyNeedsPrimary])
+	}
+}
+
 func TestDisagreementsNameTheirKind(t *testing.T) {
 	never := CheckAgreement(one(with(healthy(10), "PrimaryResolved", "False", "PrimaryObservationIncomplete")),
 		NeverRules())
@@ -269,7 +311,7 @@ func TestS05PrimaryAgreesWithHeartbeat(t *testing.T) {
 	}
 
 	checkCases(t, S05Rules(m0, true), map[string]agreementCase{
-		"the status names the master heartbeat confirms": {obs: series(30)},
+		"the status names the master heartbeat confirms": {obs: series(30), judged: true},
 		"the status names another primary while heartbeat confirms the master": {
 			obs: replace(series(30), 10, otherPrimary), disagree: rulePrimaryIsConfirmedMaster},
 		"heartbeat names another master once, so the rule's precondition does not hold": {
@@ -313,21 +355,31 @@ func TestS05WriteEndpointAgreesWithDeployment(t *testing.T) {
 	dipped := replace(replace(replace(series(70), 4, pods(1)), 40, pods(0)), 42, pods(1))
 	dipped = replace(dipped, 6, noBroker(6))
 	// Ten seconds without a reading of the Deployment, from second 32 to 44:
-	// a drop to no available Pod in between would not have been seen.
+	// a drop to no available Pod in between would not have been seen. Every
+	// read that reported no Broker for longer than the tolerance has that gap
+	// in its tolerance window.
 	coarse := replace(replace(replace(series(70), 4, pods(1)), 6, noBroker(6)), 32, unread)
 	coarse = replace(coarse, 44, pods(1))
-	// The status said so since before the reads began.
+	// The same gap in a longer run: the reads from second 86 on have a
+	// complete window after it.
+	isolated := replace(replace(replace(series(100), 4, pods(1)), 6, noBroker(6)), 32, unread)
+	isolated = replace(isolated, 44, pods(1))
+	// The status said so since before the reads began: the Deployment was
+	// read every two seconds, but no read has a complete tolerance window.
 	early := replace(replace(series(30), 0, pods(1)), 0, noBroker(-30))
 
 	checkCases(t, S05Rules(m0, true), map[string]agreementCase{
 		"no Broker reported for longer than the tolerance after the fault while one Pod was available": {
-			obs: aftermath, disagree: ruleWriteEndpointFollowsDeployment},
-		"no Broker reported for less than the tolerance agrees":       {obs: recent},
-		"a reading with no available Pod within the tolerance agrees": {obs: dipped, note: "none"},
-		"a gap between the readings of the Deployment is not judged": {
-			obs: coarse, note: "gap"},
-		"no Broker reported since before the readings cover the tolerance is not judged": {
-			obs: early, note: ruleWriteEndpointFollowsDeployment},
+			obs: aftermath, disagree: ruleWriteEndpointFollowsDeployment, judged: true},
+		"no Broker reported for less than the tolerance agrees": {obs: recent, judged: true},
+		"a reading with no available Pod within the tolerance agrees": {
+			obs: dipped, note: "none", judged: true},
+		"a sampling gap over the only window that could decide leaves the rule not judged": {
+			obs: coarse, note: "gap", notJudged: ruleWriteEndpointFollowsDeployment},
+		"an isolated sampling gap in a run with complete windows after it is judged": {
+			obs: isolated, note: "gap", disagree: ruleWriteEndpointFollowsDeployment, judged: true},
+		"Deployment readings without a complete tolerance window leave the rule not judged": {
+			obs: early, notJudged: ruleWriteEndpointFollowsDeployment},
 		"without a reading of the Deployment the rule is not judged": {
 			obs: replace(aftermath, 0, unread), notJudged: ruleWriteEndpointFollowsDeployment},
 	})
