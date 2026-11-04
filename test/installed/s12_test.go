@@ -1506,3 +1506,94 @@ func TestRunS12ExactJudgesAFailedHeartbeatStatusByWhetherItRan(t *testing.T) {
 		})
 	}
 }
+
+func TestRunS12ExactRecordsWhereTheArtifactWasTaken(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	s12, err := s12Of(t, f, t.Context())
+	if err != nil || s12.Result != evidence.Pass {
+		t.Fatalf("S12 = %+v, %v; want a pass", s12, err)
+	}
+	m := s12.Measurements
+	if m["artifactSourceRole"] != string(databasev1alpha1.RoleSlave) || m["artifactFromSourceCluster"] != true ||
+		m["restoredClusterIsAnother"] != true {
+		t.Fatalf("measurements = %v, want a standby's backup of the source, restored into another cluster", m)
+	}
+	rec := readS12Record(t, cfg.EvidenceDir)
+	if a := rec.ArtifactSource; a == nil || a.ClusterUID != testClusterUID || a.SourceInstance != testBackupTarget ||
+		a.SourceRole != string(databasev1alpha1.RoleSlave) || rec.SourceClusterUID != testClusterUID ||
+		rec.ClusterUID == testClusterUID {
+		t.Fatalf("artifact source = %+v, source cluster %q, restored %q", rec.ArtifactSource, rec.SourceClusterUID,
+			rec.ClusterUID)
+	}
+}
+
+func TestRunS12ExactPassesOnAMasterProducedArtifactAndSaysTheStandbyIsNotShown(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	// The Operator fell back to the master: no standby was eligible, which
+	// PreferStandby allows (selectBackupTarget in
+	// internal/controller/backuptarget.go).
+	f.tamper = func(a *fakeArtifact) { a.manifest.SourceRole = string(databasev1alpha1.RoleMaster) }
+	f.tamperStatus = func(s *databasev1alpha1.CubridBackupStatus) {
+		s.FallbackUsed, s.TargetRole = true, string(databasev1alpha1.RoleMaster)
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err != nil || s12.Result != evidence.Pass || s12.Measurements["artifactSourceRole"] != roleMaster {
+		t.Fatalf("S12 = %+v, %v; want a pass that records the master", s12, err)
+	}
+	if rec := readS12Record(t, cfg.EvidenceDir); !slices.ContainsFunc(rec.Notes, func(n string) bool {
+		return strings.Contains(n, "a standby-produced backup is not shown by this run")
+	}) {
+		t.Fatalf("notes = %v, want the standby item left unshown", rec.Notes)
+	}
+}
+
+func TestArtifactSourceEventsNameAnArtifactOfAnotherCluster(t *testing.T) {
+	src := &s11ManifestSource{ClusterUID: testClusterUID, SourceInstance: testBackupTarget, SourceRole: roleSlave}
+	for name, tc := range map[string]struct {
+		source              *s11ManifestSource
+		sourceUID, restored string
+		want                string
+	}{
+		"the source's artifact restored into another cluster": {source: src, sourceUID: testClusterUID,
+			restored: testRestoreUID},
+		"an artifact of another cluster": {source: &s11ManifestSource{ClusterUID: "other-uid", SourceRole: roleSlave},
+			sourceUID: testClusterUID, restored: testRestoreUID,
+			want: "the artifact's manifest names cluster other-uid, not the source cluster " + testClusterUID},
+		"restored into the source's own UID": {source: src, sourceUID: testClusterUID, restored: testClusterUID,
+			want: "the restored cluster has the UID " + testClusterUID + " of the cluster the artifact was taken of"},
+		"a role neither slave nor master": {source: &s11ManifestSource{ClusterUID: testClusterUID,
+			SourceRole: "standby"}, sourceUID: testClusterUID, restored: testRestoreUID,
+			want: "the artifact's manifest names the source role \"standby\", neither slave nor master"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &s12Record{ArtifactSource: tc.source, SourceClusterUID: tc.sourceUID, ClusterUID: tc.restored}
+			events := artifactSourceEvents(rec)
+			if tc.want == "" && len(events) != 0 || tc.want != "" && !slices.Contains(events, tc.want) {
+				t.Fatalf("events = %v, want %q", events, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunS12ExactFailsOnBootstrapReadyBeforeTheBootstrapCompleted(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	// BootstrapReady True while the restore runs, with Ready still False.
+	f.tamperRestore = func(_ int, s *databasev1alpha1.CubridClusterStatus) {
+		if s.Bootstrap.Phase == databasev1alpha1.BootstrapRestoring {
+			for i := range s.Conditions {
+				if s.Conditions[i].Type == bootstrapReadyCondition {
+					s.Conditions[i].Status = metav1.ConditionTrue
+				}
+			}
+		}
+	}
+	s12, err := s12Of(t, f, t.Context())
+	if err == nil || s12.Result != evidence.Fail || !slices.ContainsFunc(s12.NeverEvents, func(e string) bool {
+		return strings.Contains(e, "reported BootstrapReady True") && strings.Contains(e, "Restoring")
+	}) {
+		t.Fatalf("S12 = %+v, want BootstrapReady True before Complete as a never-event", s12)
+	}
+}

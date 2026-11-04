@@ -1752,9 +1752,8 @@ func scanIMRestartBootstrap(rec *s12IMRestartRecord) (events, unexplained []stri
 // BootstrapReady True before Complete, the reason RecordedOperationMissing,
 // and attempts at or beyond s12MaxAttempts.
 func readingNeverEvents(p s12Phase, boot *metav1.Condition, once func(kind, event string)) {
-	if boot != nil && boot.Status == metav1.ConditionTrue && p.Phase != string(databasev1alpha1.BootstrapComplete) {
-		once("early", fmt.Sprintf("the restored cluster reported BootstrapReady True (%s) while its "+
-			"bootstrap phase was %q", boot.Reason, cmp.Or(p.Phase, noBootstrapPhase)))
+	if early := bootstrapReadyEarly(p, boot); early != "" {
+		once("early", early)
 	}
 	if boot != nil && boot.Reason == s12OperationMissingReason {
 		once("missing", fmt.Sprintf("the target answered that it holds no record of the restore "+

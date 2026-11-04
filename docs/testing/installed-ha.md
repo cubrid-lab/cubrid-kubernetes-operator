@@ -2336,6 +2336,23 @@ requires LAB01, S11/complete and S12/exact. `-restore` without
 S12 starts only from S11 `complete` that passed. When LAB01 or S11 did not
 pass, S12 is blocked and nothing of it is done.
 
+**Where the artifact was taken.** S11 records what the artifact's manifest
+says of its source (`manifestSource` in S11's record: `clusterUID`,
+`sourceInstance`, `sourceRole`), and S12 copies it into its record
+(`artifactSource`, with `sourceClusterUID`, the UID of the cluster S11
+backed up). An S11 record without it blocks S12. These must never happen,
+whichever step ends S12: a manifest that names another cluster than the
+source, a restored cluster with the UID of the cluster the artifact was
+taken of, and a source role that is neither `slave` nor `master`. The source
+role is recorded as `artifactSourceRole`, and `artifactFromSourceCluster`
+and `restoredClusterIsAnother` say whether the two UIDs held; each is
+`unknown` until read. A `master` does not fail S12: with the default
+`PreferStandby`, the Operator takes the backup on an eligible standby and
+falls back to the master only when no standby is eligible and the primary is
+resolved (`selectBackupTarget` in `internal/controller/backuptarget.go`,
+#291), and S11 checks the role against the backup's status. The record's
+`notes` then say that a standby-produced backup is not shown by that run.
+
 1. **Writes after the backup.** The run takes the client history as it
    stands before these writes. No client runs between LAB01's workload and
    them, and S11's marker goes to the marker table, so this is the history
@@ -2393,6 +2410,12 @@ pass, S12 is blocked and nothing of it is done.
      fails S12 with the `BootstrapReady` reason.
    - `Ready` `True` while `status.bootstrap.phase` is not `Complete` must
      never happen and fails S12 at once.
+   - `BootstrapReady` `True` in any recorded reading whose bootstrap phase is
+     not `Complete` must never happen either: the Operator sets it only once
+     every member is seeded (`reconcileSeeding` in
+     `internal/controller/habootstrap.go`). It is judged from the recorded
+     readings once S12's steps end, whichever step ended them; a reading
+     the run did not take is not judged.
    - A cluster read but not Ready when `-restore-limit` passes fails S12,
      with the last phase and what did not hold. A master whose `cubrid
      heartbeat status` reports `registered_and_to_be_active` is not yet
@@ -2515,11 +2538,11 @@ S12 `exact` here does not check:
   restore runs; a restarted Operator runs only with
   `-restore-operator-restart`, and a killed Instance Manager on the target
   member only with `-restore-instance-manager-restart`, below;
-- an artifact taken on the master: S11 takes the backup on a slave
-  (`PreferStandby`), and a restore into a new cluster accepts an artifact
-  taken on either role (`restoreExpectation` in
-  `internal/instancemanager/restore.go`); only that the slave's artifact
-  restores is shown here;
+- an artifact taken on each role in one run: S11 takes the backup on a slave
+  (`PreferStandby`), or on the master when no standby is eligible, and a
+  restore into a new cluster accepts an artifact taken on either role
+  (`restoreExpectation` in `internal/instancemanager/restore.go`); only the
+  role `artifactSourceRole` records is shown restored by a run;
 - the times the restore records itself, such as the Instance Manager's
   operation times; only `restoredWithin` is measured;
 - the Operator's logs for credentials, and Events of the restored cluster.

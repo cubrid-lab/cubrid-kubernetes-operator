@@ -155,19 +155,24 @@ type s12Credentials struct {
 
 // s12Record is the evidence of S12 exact besides the data checks.
 type s12Record struct {
-	KnownPoint     *s11KnownPoint  `json:"knownPoint,omitempty"`
-	PostBackup     *s12PostBackup  `json:"postBackupWrites,omitempty"`
-	ArtifactURI    string          `json:"artifactUri,omitempty"`
-	ManifestDigest string          `json:"manifestDigest,omitempty"`
-	Cluster        string          `json:"cluster"`
-	ClusterUID     string          `json:"clusterUID,omitempty"`
-	SeedPrefix     string          `json:"seedPrefix"`
-	SecretRef      string          `json:"credentialsSecretRef"`
-	CreatedAt      *time.Time      `json:"createdAt,omitempty"`
-	Bootstrap      []s12Phase      `json:"bootstrap"`
-	RestoredWithin string          `json:"restoredWithin,omitempty"`
-	Members        []imageIdentity `json:"members"`
-	Roles          *startingState  `json:"roles,omitempty"`
+	KnownPoint     *s11KnownPoint `json:"knownPoint,omitempty"`
+	PostBackup     *s12PostBackup `json:"postBackupWrites,omitempty"`
+	ArtifactURI    string         `json:"artifactUri,omitempty"`
+	ManifestDigest string         `json:"manifestDigest,omitempty"`
+	// ArtifactSource is what the artifact's manifest says of where the
+	// backup was taken, as S11 read it, and SourceClusterUID the UID of the
+	// cluster S11 backed up.
+	ArtifactSource   *s11ManifestSource `json:"artifactSource,omitempty"`
+	SourceClusterUID string             `json:"sourceClusterUID,omitempty"`
+	Cluster          string             `json:"cluster"`
+	ClusterUID       string             `json:"clusterUID,omitempty"`
+	SeedPrefix       string             `json:"seedPrefix"`
+	SecretRef        string             `json:"credentialsSecretRef"`
+	CreatedAt        *time.Time         `json:"createdAt,omitempty"`
+	Bootstrap        []s12Phase         `json:"bootstrap"`
+	RestoredWithin   string             `json:"restoredWithin,omitempty"`
+	Members          []imageIdentity    `json:"members"`
+	Roles            *startingState     `json:"roles,omitempty"`
 	// HANodes is the node list cubrid heartbeat status reports on one member
 	// of each cluster, by cluster.
 	HANodes map[string][]string `json:"haNodes,omitempty"`
@@ -257,8 +262,22 @@ func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 	}()
 	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String()}
 	result.Measurements = map[string]any{restoredWithinMeasurement: evidence.Unknown,
-		dataRulesHeldMeasurement: evidence.Unknown, postBackupRowsMeasurement: evidence.Unknown}
+		dataRulesHeldMeasurement: evidence.Unknown, postBackupRowsMeasurement: evidence.Unknown,
+		"artifactSourceRole": evidence.Unknown, "artifactFromSourceCluster": evidence.Unknown,
+		"restoredClusterIsAnother": evidence.Unknown}
 	err := h.s12Steps(ctx, &result, &rec)
+	if a := rec.ArtifactSource; a != nil {
+		result.Measurements["artifactFromSourceCluster"] = a.ClusterUID == rec.SourceClusterUID
+		if rec.ClusterUID != "" {
+			result.Measurements["restoredClusterIsAnother"] = rec.ClusterUID != a.ClusterUID
+		}
+	}
+	// What the manifest and the readings show is judged whichever step ended
+	// S12.
+	result.NeverEvents = append(result.NeverEvents, artifactSourceEvents(&rec)...)
+	if early := firstBootstrapReadyEarly(rec.Bootstrap); early != "" {
+		result.NeverEvents = append(result.NeverEvents, early)
+	}
 	// A credential found in any status read is a failure, whichever step
 	// ended S12.
 	if found := rec.Credentials.FoundIn; len(found) > 0 {
@@ -309,6 +328,16 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 		return errors.New("S11 recorded no known point or artifact to restore")
 	}
 	rec.KnownPoint, rec.ArtifactURI, rec.ManifestDigest = s11.KnownPoint, s11.Artifact.URI, s11.Artifact.ManifestDigest
+	if s11.ManifestSource == nil {
+		return errors.New("S11 recorded no manifest source: where the artifact was taken is not known")
+	}
+	source := *s11.ManifestSource
+	rec.ArtifactSource, rec.SourceClusterUID = &source, h.rec.ClusterUID
+	result.Measurements["artifactSourceRole"] = source.SourceRole
+	if source.SourceRole == string(databasev1alpha1.RoleMaster) {
+		rec.Notes = append(rec.Notes, "the artifact was taken on the master "+source.SourceInstance+", the "+
+			"Operator's fallback when no standby is eligible: a standby-produced backup is not shown by this run")
+	}
 	expected, err := h.postBackupWrites(ctx, rec)
 	if err != nil {
 		return err
@@ -1144,4 +1173,61 @@ func (h *haRun) checkHANodes(ctx context.Context, restored *startingState, rec *
 		}
 	}
 	return nil
+}
+
+// artifactSourceEvents returns what the artifact's manifest, as S11 read it,
+// must never say of a restore from it (rec.ArtifactSource): that the backup
+// is of another cluster than the source S11 backed up, that the restored
+// cluster has the UID of the cluster the artifact was taken of, or that it
+// was taken on a member in a role other than slave or master. The Operator
+// takes a backup of an HA cluster with the default PreferStandby on an
+// eligible standby, and on the master only when none is eligible and the
+// primary is resolved (selectBackupTarget in internal/controller/
+// backuptarget.go, #291); S11 checks the role against the backup's status. A
+// master's backup is legitimate, so it is recorded, not judged.
+func artifactSourceEvents(rec *s12Record) []string {
+	a := rec.ArtifactSource
+	if a == nil {
+		return nil
+	}
+	var events []string
+	if a.ClusterUID != rec.SourceClusterUID {
+		events = append(events, fmt.Sprintf("the artifact's manifest names cluster %s, not the source cluster %s",
+			a.ClusterUID, rec.SourceClusterUID))
+	}
+	if rec.ClusterUID != "" && rec.ClusterUID == a.ClusterUID {
+		events = append(events, fmt.Sprintf("the restored cluster has the UID %s of the cluster the artifact was "+
+			"taken of", rec.ClusterUID))
+	}
+	switch a.SourceRole {
+	case string(databasev1alpha1.RoleSlave), string(databasev1alpha1.RoleMaster):
+	default:
+		events = append(events, fmt.Sprintf("the artifact's manifest names the source role %q, neither slave nor "+
+			"master", a.SourceRole))
+	}
+	return events
+}
+
+// bootstrapReadyEarly describes p, a reading of a restored cluster, when its
+// BootstrapReady condition boot is True while the bootstrap is not
+// Complete, and is empty otherwise. The Operator sets BootstrapReady True
+// only once every member is seeded (reconcileSeeding in
+// internal/controller/habootstrap.go), so that must never happen.
+func bootstrapReadyEarly(p s12Phase, boot *metav1.Condition) string {
+	if boot == nil || boot.Status != metav1.ConditionTrue || p.Phase == string(databasev1alpha1.BootstrapComplete) {
+		return ""
+	}
+	return fmt.Sprintf("the restored cluster reported BootstrapReady True (%s) while its bootstrap phase was %q",
+		boot.Reason, cmp.Or(p.Phase, noBootstrapPhase))
+}
+
+// firstBootstrapReadyEarly is bootstrapReadyEarly of the first of phases
+// that has one, or empty.
+func firstBootstrapReadyEarly(phases []s12Phase) string {
+	for _, p := range phases {
+		if early := bootstrapReadyEarly(p, meta.FindStatusCondition(p.Conditions, bootstrapReadyCondition)); early != "" {
+			return early
+		}
+	}
+	return ""
 }
