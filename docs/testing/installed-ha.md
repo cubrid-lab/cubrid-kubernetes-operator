@@ -18,7 +18,8 @@ LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`,
 `exact`, `tampered`, `wrong-target`,
 `operator-restart`, `instance-manager-restart`,
 `instance-manager-restart-preparing`, `instance-manager-restart-seeding`,
-`instance-manager-restart-starting` and `graceful-stop` build on. It injects no fault. A pass is not an S01 result at the VM-lab
+`instance-manager-restart-starting`, `instance-manager-restart-seed-backup` and
+`graceful-stop` build on. It injects no fault. A pass is not an S01 result at the VM-lab
 level, and it does not qualify any of S00 to S15.
 
 It shares its inputs, target snapshot, manager identity checks and namespace
@@ -2976,9 +2977,9 @@ S12/instance-manager-restart. `-restore-instance-manager-restart` without
 `-restore`, or with `-restore-tampered`, `-restore-wrong-target` or
 `-restore-operator-restart`, is refused before anything is done.
 `-restore-instance-manager-restart-at` places the kill: `restoring`, the
-default, is this section; `preparing`, `seeding` and `starting` are variants
-and lanes of their own
-([below](#s12-instance-manager-restart-at-preparing-seeding-and-starting)).
+default, is this section; `preparing`, `seeding`, `starting` and
+`seed-backup` are variants and lanes of their own
+([below](#s12-instance-manager-restart-at-preparing-seeding-starting-and-seed-backup)).
 Any other value, or a value other than `restoring` without
 `-restore-instance-manager-restart`, is refused before anything is done.
 
@@ -3195,8 +3196,9 @@ Three clusters, nine DB Pods and their Brokers, share the lab's workers while
 
 S12 `instance-manager-restart` here does not check:
 - the kill at another point of the flow: while the bootstrap is `Preparing`,
-  during a seed restore and while the restored database is started
-  (`Starting`) run only with `-restore-instance-manager-restart-at`, below;
+  during a seed restore, while the restored database is started
+  (`Starting`) and on the seed source during the seed backup run only with
+  `-restore-instance-manager-restart-at`, below;
   between `Completed` and the status that records it is not placed by any of
   them. The kill follows a reading of
   `Restoring`; the message at the kill says whether `restoredb` ran or the
@@ -3213,10 +3215,10 @@ S12 `instance-manager-restart` here does not check:
 - the Operator's logs, and the Events of `ha-imrestart` other than
   `RestoreFailedRetrying`.
 
-## S12 instance-manager-restart at preparing, seeding and starting
+## S12 instance-manager-restart at preparing, seeding, starting and seed-backup
 
-With `-restore-instance-manager-restart-at preparing`, `seeding` or `starting`
-as well as `-restore-instance-manager-restart`, the variant is
+With `-restore-instance-manager-restart-at preparing`, `seeding`, `starting`
+or `seed-backup` as well as `-restore-instance-manager-restart`, the variant is
 `instance-manager-restart-<placement>`, for example
 `instance-manager-restart-preparing`, in the lane
 `lab-installed-ha-s12-instance-manager-restart-<placement>`, which requires
@@ -3229,7 +3231,7 @@ except what follows; the evidence goes to `S12/<variant>/`.
 
 ```sh
   ... -restore -restore-instance-manager-restart \
-  -restore-instance-manager-restart-at preparing|seeding|starting [-restore-limit 20m]
+  -restore-instance-manager-restart-at preparing|seeding|starting|seed-backup [-restore-limit 20m]
 ```
 
 ### preparing
@@ -3468,18 +3470,92 @@ A second restore of the same artifact records the same artifact, and a
 `restoredb` run between two readings of the cluster is not seen, so a pass
 does not rule out a second restore; the Instance Manager's logs would.
 
+### seed-backup
+
+Which member is killed, and when. Once the restore is recorded as complete
+on its target, the Operator seeds the first peer from that member, the
+holder: it starts a seed backup there and records its operation in
+`status.databases[].seeding.backupOperationID`, polls it until it ends, and
+only then starts the seed restore on the peer and records
+`restoreOperationID` (`seedMember`, `seedBackup` in
+`internal/controller/habootstrap.go`). The run kills the Instance Manager of
+the seed backup's **source** (`seeding.source`), the member the restore
+restored, while that backup runs. That ends the source's database container
+and with it the restored database's server, the only copy of the restored
+data until a peer is seeded. The restore had completed and cleared its
+ownership marker, so when the container runs again the entrypoint starts
+`cubrid heartbeat start` on the restored data
+(`build/instance-manager/entrypoint.sh`).
+
+What the product does after the kill:
+- The restarted Instance Manager fails the unfinished seed backup with
+  `manager restarted while operation was in progress` (`reconcileOnStart` in
+  `internal/instancemanager/opstore.go`). The Operator reads it `Failed`,
+  clears the seeding and ends the seed attempt with
+  `SeedBackupFailedRetrying`, the message `on <source>: <reason>; starting
+  attempt <n> of 3`, an Event with the same reason, and the database's
+  `bootstrapAttempts` raised (`bootstrapStepFailed`). While the source's
+  manager is down the poll fails and the condition says so.
+- The next seed attempt has no earlier restore of this step to take over, so
+  it takes a new seed backup under the next attempt's key, a new operation,
+  then restores the peer and seeds the second peer (`retrySkipsSeedBackup`,
+  `bootstrapKey`). The restore is not polled or started again
+  (`reconcileRecovery`): `status.bootstrap.operationID` and `attempts` stay.
+
+What differs from the steps above:
+- **Wait for a seed backup** (step 2): at `-poll` until the bootstrap is
+  `SeedingReplicas` (`Preparing` and `Restoring` are waited through; any
+  other phase blocks the variant), then the cluster no more often than every
+  250 ms and, once the seeding records a seed backup with no seed restore,
+  the source's own record of that backup
+  (`/var/lib/cubrid/operations/<backupOperationID>.json`, one `kubectl exec`).
+  The first reading of the record in a state that has not ended (`Pending`,
+  `RunningBackup` or `Uploading`) places the kill (`placingReading`). A
+  bootstrap seen in another phase, a seed restore recorded, or the record
+  read `Completed` or `Failed`, first, blocks the variant ("the kill could not
+  be placed while the seed backup ran") without a kill; a seed backup that
+  failed on its own is S12 `exact`'s to judge. A record that cannot be read
+  is read again; `-restore-limit` passing then blocks the variant, and
+  passing without any seed backup recorded fails it.
+- **Right before the kill** (step 3): the reading must be `SeedingReplicas`
+  with the same seed backup and no seed restore; the member killed is the
+  source, which must be a member of `ha-imrestart` and not the member being
+  seeded. The peer (`seedPeer`), the seed backup and the database's attempts
+  are recorded as the state at the kill. Steps 4 to 7 apply to the source.
+- **The bootstrap** (step 8), as at `seeding`, except that the expected seed
+  retry is `SeedBackupFailedRetrying` on the source, and the operation
+  compared is the peer's seed backup under the next attempt
+  (`seedBackupOperationIDAfter`), which must differ from the killed one. A
+  retry of the restore after the kill, or a reading after the kill whose
+  message says "restoredb is running", must never happen: the restored data
+  is not restored again; either fails the variant.
+- **The killed backup's record**, last: read on the source, it must be
+  `Failed` with the manager's restart; a record that cannot be read, or one
+  that ended otherwise (for example `Completed`: the backup ended before the
+  kill took effect), blocks the variant.
+- `seedRetriesAfterKill`, `seedAttemptsAdded`, `seedBackupOperationChanged`
+  and `killedBackupFailedByRestart` are measured, and `unknown` until read.
+
+That the restored data was not removed or restored again rests on the
+bootstrap readings and on the data checks of step 7, which read every
+member; the source's volume is not read. What the killed backup left in
+object storage under the seed prefix is not read either: the next backup
+writes to the same place, its manifest last.
+
 These placements here do not check:
 - at `preparing`, whether the verification, the download or `restoredb` ran
   at the kill, the next attempt's own record, and whether
   `reclaimIncomplete` removed anything;
-- at `seeding`, a kill of the source's Instance Manager, a kill during the
-  seed backup or during the second peer's seed restore, whether the retry
+- at `seeding`, a kill during the second peer's seed restore, whether the retry
   reused the seed backup or took a new one, and whether the member's
   Instance Manager took over the failed restore's data or removed it;
 - at `starting`, the Instance Manager's logs of the take-over, and a kill
   after the restored database's start ended but before `Completed` was
   recorded, which the readings of the record cannot tell apart from
   `Starting`;
+- at `seed-backup`, a kill during a later peer's seed backup, whose source
+  is the member observed as the master, the source's volume, and the seed
+  backup objects the killed attempt left;
 - a kill between `Completed` and the status that records it;
 - the Instance Manager's and the Operator's logs, and other Events of
   `ha-imrestart`.
@@ -4039,8 +4115,8 @@ and S12 variant other than `complete` and `exact` only those under
   `S12/instance-manager-restart/timeline.jsonl` (the fault flow),
   `S12/instance-manager-restart/data-check.json` and
   `S12/instance-manager-restart/source-data-check.json`.
-- with `-restore-instance-manager-restart-at preparing`, `seeding` or
-  `starting`, the same four files under `S12/instance-manager-restart-<placement>/`;
+- with `-restore-instance-manager-restart-at preparing`, `seeding`,
+  `starting` or `seed-backup`, the same four files under `S12/instance-manager-restart-<placement>/`;
   the record also names the placement (`at`) and holds, at `preparing` and
   `starting`, the killed operation's record as read (state, failure reason,
   restored artifact, whether the staging directory was there, or why it
@@ -4049,7 +4125,11 @@ and S12 variant other than `complete` and `exact` only those under
   operation's record as read (`completingOperation`), and at `seeding` the
   member killed, its seed restore operation and the database's attempts
   before and after, the seed retries, each marked when it was taken from an
-  Event, and the messages of the `SeedRestoreFailedRetrying` Events.
+  Event, and the messages of the `SeedRestoreFailedRetrying` Events; at
+  `seed-backup` the same for the source killed, the peer (`seedPeer`), the
+  seed backup before and after, the reading that placed the kill
+  (`placingReading`), the `SeedBackupFailedRetrying` Events and the killed
+  backup's record as read (`killedSeedBackup`).
 - with `-restore-graceful-stop`, `S12/graceful-stop/record.json` (as S12
   `exact`'s record for `ha-gracefulstop`, without the writes after the
   backup, and the stop: the target, its Pod's UID and container's ID, the

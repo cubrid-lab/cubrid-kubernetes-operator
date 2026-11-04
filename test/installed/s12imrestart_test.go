@@ -79,12 +79,13 @@ type imStatus struct {
 }
 
 // imSeed is the first database's seeding the fake Operator reports at one
-// reading: its attempts, the member being seeded and its seed restore, the
-// members seeded, and, before the kill, the BootstrapReady reason and message
-// in place of the restore's.
+// reading: its attempts, the member being seeded, its seed restore and seed
+// backup, the members seeded, and, before the kill, the BootstrapReady reason
+// and message in place of the restore's.
 type imSeed struct {
 	attempts        int32
 	member, op      string
+	backup          string
 	seeded          []string
 	reason, message string
 }
@@ -347,7 +348,7 @@ func (f *s12IMRestartFixture) advanceIMRestart(ctx context.Context, c client.Wit
 			SeededMembers: seed.seeded}
 		if seed.member != "" {
 			db.Seeding = &databasev1alpha1.DatabaseSeeding{Member: seed.member, Source: testIMRestartTarget,
-				RestoreOperationID: seed.op}
+				RestoreOperationID: seed.op, BackupOperationID: seed.backup}
 		}
 		s.Databases = []databasev1alpha1.DatabaseStatus{db}
 	}

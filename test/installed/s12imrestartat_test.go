@@ -477,9 +477,10 @@ func TestRunHARefusesAnInvalidS12InstanceManagerRestartPlacement(t *testing.T) {
 
 func TestIMRestartPlacementsHaveALaneAndAVariantEach(t *testing.T) {
 	for at, want := range map[string]string{IMRestartAtRestoring: "instance-manager-restart",
-		IMRestartAtPreparing: "instance-manager-restart-preparing",
-		IMRestartAtSeeding:   "instance-manager-restart-seeding",
-		IMRestartAtStarting:  "instance-manager-restart-starting"} {
+		IMRestartAtPreparing:  "instance-manager-restart-preparing",
+		IMRestartAtSeeding:    "instance-manager-restart-seeding",
+		IMRestartAtStarting:   "instance-manager-restart-starting",
+		IMRestartAtSeedBackup: "instance-manager-restart-seed-backup"} {
 		if got := imRestartVariant(at); got != want {
 			t.Fatalf("imRestartVariant(%s) = %s, want %s", at, got, want)
 		}
@@ -840,5 +841,245 @@ func TestRunS12InstanceManagerRestartStartingWhenRestoreLimitPassesBeforeStartin
 				t.Fatalf("kills = %d, want none", f.imKills)
 			}
 		})
+	}
+}
+
+const (
+	// testIMSeedBackupOp is the first peer's seed backup on the restored
+	// member under the database's attempt 0, testIMSeedBackupOp2 under
+	// attempt 1, and testIMSeedBackupOp3 the second peer's.
+	testIMSeedBackupOp  = "op-seed-backup-0"
+	testIMSeedBackupOp2 = "op-seed-backup-1"
+	testIMSeedBackupOp3 = "op-seed-backup-2"
+	// testIMSeedBackupRetryMessage is the Operator's message of the seed
+	// attempt whose backup the kill ended.
+	testIMSeedBackupRetryMessage = "on " + testIMRestartTarget + ": " + s12IMRestartedReason +
+		"; starting attempt 2 of 3"
+	testIMBackingUp = "backing up on " + testIMRestartTarget
+	// testIMNotAtSeedBackup is how a kill that could not be placed at
+	// seed-backup is reported.
+	testIMNotAtSeedBackup = "could not be placed while the seed backup ran"
+	// testIMNoRecord is what a member answers for a record it does not
+	// hold, and testIMNotFailedByRestart how a killed operation's record
+	// that ended otherwise is reported.
+	testIMNoRecord           = "No such file or directory"
+	testIMNotFailedByRestart = "not Failed by its restart"
+)
+
+// s12IMRestartSeedBackupRecords are the source's records of the seed backup
+// the fixture at seed-backup answers: polled are its states read before the
+// kill, one per read, the last kept; killed is its record read after the
+// cluster is Ready, and killedErr, when set, answers that read.
+type s12IMRestartSeedBackupRecords struct {
+	polled    []instancemanager.OperationState
+	polls     int
+	killed    instancemanager.Operation
+	killedErr error
+}
+
+// newS12IMRestartSeedBackupFixture plays a recovery whose restore completed
+// on the target and whose first seed backup, on the target, is interrupted
+// by the kill of the target's Instance Manager: the source's record of the
+// backup reads RunningBackup, the kill lands, the seed attempt fails with
+// SeedBackupFailedRetrying naming the manager's restart, and the next seed
+// attempt takes a new backup, seeds the first peer and then the second.
+// The restore itself keeps its operation and is not run again. After the
+// run, the killed backup's record is Failed by the restart.
+func newS12IMRestartSeedBackupFixture(t *testing.T) (*s12IMRestartFixture, *s12IMRestartSeedBackupRecords) {
+	t.Helper()
+	f := newS12IMRestartFixture(t, testS12IMRestartConfigAt(t, IMRestartAtSeedBackup))
+	seeding := databasev1alpha1.BootstrapSeedingReplicas
+	f.beforeKill = []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapPreparing,
+		databasev1alpha1.BootstrapRestoring, seeding, seeding}
+	f.holdStep = 3
+	f.beforeSeed = []*imSeed{nil, nil,
+		{member: testIMPeer, reason: testIMSeedBackup, message: testIMBackingUp},
+		{member: testIMPeer, backup: testIMSeedBackupOp, reason: testIMSeedBackup, message: testIMBackingUp}}
+	f.afterKill = []imStatus{
+		{seeding, 0, testIMRestartOp, testIMUnavailable, testIMRefused},
+		{seeding, 0, testIMRestartOp, s12SeedBackupRetryReason, testIMSeedBackupRetryMessage},
+		{seeding, 0, testIMRestartOp, testIMSeedBackup, testIMBackingUp},
+		{seeding, 0, testIMRestartOp, testSeedInProgress, "restoring on " + testIMPeer},
+		{seeding, 0, testIMRestartOp, testSeedInProgress, "restoring on " + testIMPeer2},
+		{databasev1alpha1.BootstrapComplete, 0, testIMRestartOp, testPeersSeeded, testIMCopied},
+	}
+	f.afterSeed = []*imSeed{
+		{member: testIMPeer, backup: testIMSeedBackupOp},
+		{attempts: 1},
+		{attempts: 1, member: testIMPeer, backup: testIMSeedBackupOp2},
+		{attempts: 1, member: testIMPeer, backup: testIMSeedBackupOp2, op: testIMSeedOp2},
+		{attempts: 1, member: testIMPeer2, backup: testIMSeedBackupOp3, op: testIMSeedOp3, seeded: []string{testIMPeer}},
+		{attempts: 1, seeded: []string{testIMPeer, testIMPeer2}},
+	}
+	records := &s12IMRestartSeedBackupRecords{
+		polled: []instancemanager.OperationState{instancemanager.OpRunningBackup},
+		killed: instancemanager.Operation{ID: testIMSeedBackupOp, Kind: instancemanager.OpBackup,
+			State: instancemanager.OpFailed, FailureReason: s12IMRestartedReason},
+	}
+	f.opRecord = func(pod, script string) (string, error) {
+		if pod != testIMRestartTarget || !strings.Contains(script, imOperationsDir+"/"+testIMSeedBackupOp+".json") {
+			t.Errorf("record read on %s with %q, want the seed backup's on the restore's target", pod, script)
+			return "", errors.New("no such record")
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.killed {
+			if records.killedErr != nil {
+				return "", records.killedErr
+			}
+			return testOpJSON(t, records.killed), nil
+		}
+		state := records.polled[min(records.polls, len(records.polled)-1)]
+		records.polls++
+		return testOpJSON(t, instancemanager.Operation{ID: testIMSeedBackupOp, Kind: instancemanager.OpBackup,
+			State: state}), nil
+	}
+	return f, records
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupPassesWhenTheSeedRetryTakesANewBackup(t *testing.T) {
+	f, records := newS12IMRestartSeedBackupFixture(t)
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass {
+		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v; want a pass", restart, err)
+	}
+	if f.imKills != 1 || !slices.Equal(f.killedPods, []string{testIMRestartTarget}) || records.polls != 1 ||
+		f.recordReads != 2 {
+		t.Fatalf("kills = %d on %v, record reads = %d (%d before the kill); want one kill on %s after one read",
+			f.imKills, f.killedPods, f.recordReads, records.polls, testIMRestartTarget)
+	}
+	if !slices.Contains(restart.Evidence, "S12/instance-manager-restart-seed-backup/record.json") {
+		t.Fatalf("evidence = %v, want the variant's record", restart.Evidence)
+	}
+	m := restart.Measurements
+	if m["seedRetriesAfterKill"] != float64(1) || m["seedAttemptsAdded"] != float64(1) ||
+		m["seedBackupOperationChanged"] != true || m["killedBackupFailedByRestart"] != true ||
+		m["retriesAfterKill"] != float64(0) || m["attemptsAdded"] != float64(0) || m["operationIDChanged"] != false ||
+		m["containerRestarts"] != float64(1) {
+		t.Fatalf("measurements = %v", m)
+	}
+	r := readIMRestartRecord(t, f.cfg).IMRestart
+	requireSeedBackupRecord(t, r)
+	for _, want := range []string{"Instance Manager on " + testIMRestartTarget + " was killed",
+		"seed backup operation " + testIMSeedBackupOp, "for " + testIMPeer, s12SeedBackupRetryReason,
+		"seed backup operation " + testIMSeedBackupOp2, "the restore kept operation " + testIMRestartOp} {
+		if reason := imRestartPassReasonAt(r); !strings.Contains(reason, want) {
+			t.Fatalf("reason = %q, want %q", reason, want)
+		}
+	}
+}
+
+// requireSeedBackupRecord fails unless the record of a pass at seed-backup
+// names the source killed, the peer, both seed backups, the one seed retry,
+// the reading that placed the kill and the killed backup's record.
+func requireSeedBackupRecord(t *testing.T, r *s12IMRestart) {
+	t.Helper()
+	if r.At != IMRestartAtSeedBackup || r.Pod != testIMRestartTarget || r.SeedPeer != testIMPeer ||
+		r.SeedBackupOperationIDBefore != testIMSeedBackupOp || r.SeedBackupOperationIDAfter != testIMSeedBackupOp2 ||
+		r.SeedAttemptsBefore == nil || *r.SeedAttemptsBefore != 0 || r.SeedAttemptsAfter == nil ||
+		*r.SeedAttemptsAfter != 1 || len(r.SeedRetries) != 1 || r.SeedRetries[0].Reason != s12SeedBackupRetryReason ||
+		r.PlacingReading == nil || r.PlacingReading.State != string(instancemanager.OpRunningBackup) ||
+		r.PlacingReading.Operation != testIMSeedBackupOp || r.KilledSeedBackup == nil ||
+		r.KilledSeedBackup.State != string(instancemanager.OpFailed) {
+		t.Fatalf("restart = %+v, placing = %+v, killed backup = %+v", r, r.PlacingReading, r.KilledSeedBackup)
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupIsBlockedWhenTheKillCannotBePlaced(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartFixture, *s12IMRestartSeedBackupRecords)
+		want   []string
+	}{
+		"the backup's record is first read Completed": {change: func(_ *s12IMRestartFixture,
+			r *s12IMRestartSeedBackupRecords) {
+			r.polled = []instancemanager.OperationState{instancemanager.OpCompleted}
+		}, want: []string{testIMNotAtSeedBackup, "read Completed before any reading of it running"}},
+		"a seed restore is recorded first": {change: func(f *s12IMRestartFixture, _ *s12IMRestartSeedBackupRecords) {
+			f.beforeSeed[3].op = testIMSeedOp
+		}, want: []string{testIMNotAtSeedBackup, "a seed restore " + testIMSeedOp + " of " + testIMPeer +
+			" was recorded before"}},
+		"the bootstrap completes first": {change: func(f *s12IMRestartFixture, _ *s12IMRestartSeedBackupRecords) {
+			f.beforeKill = append(f.beforeKill[:3], databasev1alpha1.BootstrapComplete)
+			f.beforeSeed[3] = &imSeed{seeded: []string{testIMPeer, testIMPeer2}}
+		}, want: []string{testIMNotAtSeedBackup, "the bootstrap was seen Complete"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartSeedBackupFixture(t)
+			tc.change(f, records)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
+			if f.imKills != 0 {
+				t.Fatalf("kills = %d, want none", f.imKills)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupIsBlockedByTheKilledBackupsRecord(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartSeedBackupRecords)
+		want   []string
+	}{
+		"the killed backup's record cannot be read": {change: func(r *s12IMRestartSeedBackupRecords) {
+			r.killedErr = errors.New(testIMNoRecord + "\ncommand terminated with exit code 1")
+		}, want: []string{"the record of the seed backup " + testIMSeedBackupOp + " on " + testIMRestartTarget +
+			" could not be read", testIMNoRecord}},
+		"the backup completed": {change: func(r *s12IMRestartSeedBackupRecords) {
+			r.killed.State, r.killed.FailureReason = instancemanager.OpCompleted, ""
+		}, want: []string{"is Completed", testIMNotFailedByRestart}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartSeedBackupFixture(t)
+			tc.change(records)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
+			if restart.Measurements["killedBackupFailedByRestart"] == true {
+				t.Fatalf("measurements = %v, want killedBackupFailedByRestart not true", restart.Measurements)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupFails(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartFixture)
+		want   []string
+	}{
+		"the restore retried after the kill": {change: func(f *s12IMRestartFixture) {
+			f.afterKill[1] = imStatus{databasev1alpha1.BootstrapSeedingReplicas, 1, "", s12RetryReason,
+				"on " + testIMRestartTarget + ": " + s12IMRestartedReason + "; starting attempt 2 of 3"}
+			for i := 2; i < len(f.afterKill); i++ {
+				f.afterKill[i].attempts = 1
+			}
+		}, want: []string{"the restore was retried after the kill, after it had completed and seeding had begun"}},
+		"restoredb running after the kill": {change: func(f *s12IMRestartFixture) {
+			f.afterKill[2] = imStatus{databasev1alpha1.BootstrapRestoring, 0, testIMRestartOp, testRestoreInProgress,
+				testIMRestoredbRunning}
+		}, want: []string{"the restore ran again after the kill", testIMRestoredbRunning}},
+		"a second seed retry": {change: func(f *s12IMRestartFixture) {
+			again := "on " + testIMRestartTarget + ": backup failed: upload: " + testReset + "; starting attempt 3 of 3"
+			f.afterKill = slices.Insert(f.afterKill, 3, imStatus{databasev1alpha1.BootstrapSeedingReplicas, 0,
+				testIMRestartOp, s12SeedBackupRetryReason, again})
+			f.afterSeed = slices.Insert(f.afterSeed, 3, &imSeed{attempts: 2})
+			for i := 4; i < len(f.afterSeed); i++ {
+				f.afterSeed[i].attempts = 2
+			}
+		}, want: []string{"the seeding failed again after the seed attempt the kill ended", testReset}},
+		"the next attempt names the killed backup": {change: func(f *s12IMRestartFixture) {
+			f.afterSeed[2].backup, f.afterSeed[3].backup = testIMSeedBackupOp, testIMSeedBackupOp
+		}, want: []string{"the seed backup operation " + testIMSeedBackupOp + " the kill ended is the one recorded"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, _ := newS12IMRestartSeedBackupFixture(t)
+			tc.change(f)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Fail, tc.want...)
+		})
+	}
+}
+
+func TestValidateS12InstanceManagerRestartAcceptsSeedBackup(t *testing.T) {
+	if err := testS12IMRestartConfigAt(t, IMRestartAtSeedBackup).validateS12InstanceManagerRestart(); err != nil {
+		t.Fatalf("validateS12InstanceManagerRestart() = %v, want seed-backup accepted", err)
 	}
 }

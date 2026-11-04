@@ -113,6 +113,12 @@ const (
 	// bootstrap's operation in the state Starting: restoredb has succeeded and
 	// the restored database is being started.
 	IMRestartAtStarting = "starting"
+	// IMRestartAtSeedBackup kills the Instance Manager of the seed backup's
+	// source, the member the restore restored, while its seed backup for the
+	// first peer runs: after a reading of SeedingReplicas with a seed backup
+	// and no seed restore recorded, and a reading of the source's own record
+	// of that backup that has not ended.
+	IMRestartAtSeedBackup = "seed-backup"
 )
 
 // Measurements of the retries after a fault during a recovery bootstrap,
@@ -133,6 +139,8 @@ var imRestartPlacementNote = map[string]string{
 		"its seed restore",
 	IMRestartAtStarting: "the Instance Manager of the restore's target member is killed while the restored " +
 		"database is being started",
+	IMRestartAtSeedBackup: "the Instance Manager of the restored member is killed while it takes the seed " +
+		"backup for a peer",
 }
 
 // imRestartAt is the selected placement of the kill.
@@ -301,6 +309,16 @@ type s12IMRestart struct {
 	SeedAttemptsAfter            *int32     `json:"seedAttemptsAfter,omitempty"`
 	SeedRetries                  []s12Retry `json:"seedRetries,omitempty"`
 	SeedRetryEvents              []string   `json:"seedRetryEvents,omitempty"`
+	// At seed-backup: SeedPeer is the member the seed backup was for, and
+	// SeedBackupOperationIDBefore the seed backup of the reading right before
+	// the kill; SeedBackupOperationIDAfter is of the last reading after the
+	// kill that recorded a seed backup for that member under a later attempt.
+	// KilledSeedBackup is the source's record of the killed seed backup, read
+	// once the cluster was Ready.
+	SeedPeer                    string              `json:"seedPeer,omitempty"`
+	SeedBackupOperationIDBefore string              `json:"seedBackupOperationIDBefore,omitempty"`
+	SeedBackupOperationIDAfter  string              `json:"seedBackupOperationIDAfter,omitempty"`
+	KilledSeedBackup            *s12KilledOperation `json:"killedSeedBackup,omitempty"`
 	// seedRetriesAfterKill counts the seed retries after the kill.
 	seedRetriesAfterKill int
 	// KilledOperation is, at preparing, the target's record of the operation
@@ -352,10 +370,11 @@ type s12IMRestartRecord struct {
 // instance-manager-restart, when it is selected.
 func (c HAConfig) validateS12InstanceManagerRestart() error {
 	switch c.RestoreInstanceManagerRestartAt {
-	case "", IMRestartAtRestoring, IMRestartAtPreparing, IMRestartAtSeeding, IMRestartAtStarting:
+	case "", IMRestartAtRestoring, IMRestartAtPreparing, IMRestartAtSeeding, IMRestartAtStarting,
+		IMRestartAtSeedBackup:
 	default:
-		return fmt.Errorf("-restore-instance-manager-restart-at must be %s, %s, %s or %s", IMRestartAtRestoring,
-			IMRestartAtPreparing, IMRestartAtSeeding, IMRestartAtStarting)
+		return fmt.Errorf("-restore-instance-manager-restart-at must be %s, %s, %s, %s or %s", IMRestartAtRestoring,
+			IMRestartAtPreparing, IMRestartAtSeeding, IMRestartAtStarting, IMRestartAtSeedBackup)
 	}
 	if !c.RestoreInstanceManagerRestart {
 		if c.imRestartAt() != IMRestartAtRestoring {
@@ -437,6 +456,11 @@ func (h *haRun) runS12InstanceManagerRestart(ctx context.Context) (result eviden
 		result.Measurements[measSeedRetriesAfterKill], result.Measurements[measSeedAttemptsAdded] = evidence.Unknown,
 			evidence.Unknown
 		result.Measurements[measSeedRestoreOperationChanged] = evidence.Unknown
+	case IMRestartAtSeedBackup:
+		result.Measurements[measSeedRetriesAfterKill], result.Measurements[measSeedAttemptsAdded] = evidence.Unknown,
+			evidence.Unknown
+		result.Measurements["seedBackupOperationChanged"] = evidence.Unknown
+		result.Measurements["killedBackupFailedByRestart"] = evidence.Unknown
 	}
 	err := h.imRestartSteps(ctx, &result, &rec)
 	// What the bootstrap showed is judged whichever step ended the variant.
@@ -512,6 +536,19 @@ var imRestartNotes = map[string][]string{
 			"read: the Instance Manager's logs and operation records were not checked",
 		"the Operator's logs, and its Events of the cluster other than RestoreFailedRetrying and " +
 			"SeedRestoreFailedRetrying, were not checked"},
+	IMRestartAtSeedBackup: {"the kill is placed at the first reading, taken no more often than every " +
+		imStartingPoll.String() + " once the bootstrap was SeedingReplicas, of the source's own record of the " +
+		"recorded seed backup in a state that has not ended, with no seed restore recorded for its peer; the " +
+		"backup may have ended before the kill took effect, which the record of the killed backup Failed by the " +
+		"restart rules out",
+		"the kill ends the source's database container and with it the restored database's server, the only " +
+			"copy of the restored data until a peer is seeded; the entrypoint starts heartbeat again when the " +
+			"container runs again (build/instance-manager/entrypoint.sh); that the restored data was not " +
+			"restored again is read from the bootstrap (no restore retry and no reading of restoredb running " +
+			"after the kill) and from the data checks, not from the volume",
+		"the seed backup left in object storage by the killed attempt, the Instance Manager's logs and the " +
+			"Operator's logs, and its Events of the cluster other than RestoreFailedRetrying and " +
+			"SeedBackupFailedRetrying, were not checked"},
 	IMRestartAtStarting: {"the kill is placed at the first reading, taken no more often than every " +
 		imStartingPoll.String() + " while the bootstrap was Restoring, of the target's own record of the " +
 		"bootstrap's operation in the state Starting: restoredb had succeeded and the restored database was " +
@@ -536,6 +573,8 @@ func imRestartPassReasonAt(r *s12IMRestart) string {
 		return imRestartSeedingPassReason(r)
 	case IMRestartAtStarting:
 		return imRestartStartingPassReason(r)
+	case IMRestartAtSeedBackup:
+		return imRestartSeedBackupPassReason(r)
 	}
 	return imRestartPassReason(r)
 }
@@ -553,16 +592,16 @@ func notInterrupted(rec *s12IMRestartRecord) string {
 	if r.KilledAt == nil {
 		return ""
 	}
-	if r.At == IMRestartAtSeeding {
+	if seedPlacement(r.At) {
 		if r.seedRetriesAfterKill > 0 || r.restartReading < 0 || r.restartReading+1 >= len(rec.Bootstrap) {
 			return ""
 		}
 		p := rec.Bootstrap[r.restartReading+1]
-		if p.Phase != string(databasev1alpha1.BootstrapComplete) && !slices.Contains(p.SeededMembers, r.Pod) {
+		if p.Phase != string(databasev1alpha1.BootstrapComplete) && !slices.Contains(p.SeededMembers, seededPeer(r)) {
 			return ""
 		}
-		return fmt.Sprintf("the kill did not interrupt a seed restore: the first changed reading after it was %s "+
-			"with %s seeded, and no seed retry followed", cmp.Or(p.Phase, noBootstrapPhase),
+		return fmt.Sprintf("the kill did not interrupt %s: the first changed reading after it was %s with %s "+
+			"seeded, and no seed retry followed", seedStepName(r.At), cmp.Or(p.Phase, noBootstrapPhase),
 			cmp.Or(strings.Join(p.SeededMembers, ", "), "no member"))
 	}
 	past := r.PhaseAfterRestart == string(databasev1alpha1.BootstrapSeedingReplicas) ||
@@ -579,6 +618,38 @@ func notInterrupted(rec *s12IMRestartRecord) string {
 	}
 	return fmt.Sprintf("the kill did not interrupt %s: the first reading after it was %s, and no retry "+
 		"followed", what, r.PhaseAfterRestart)
+}
+
+// seedPlacement says whether the placement at kills during seeding, after
+// the restore completed.
+func seedPlacement(at string) bool { return at == IMRestartAtSeeding || at == IMRestartAtSeedBackup }
+
+// seededPeer is the member whose seed step the kill interrupts: the member
+// killed at seeding, the peer of the seed backup at seed-backup.
+func seededPeer(r *s12IMRestart) string {
+	if r.At == IMRestartAtSeedBackup {
+		return r.SeedPeer
+	}
+	return r.Pod
+}
+
+// seedStepName names the seed step the placement at interrupts.
+func seedStepName(at string) string {
+	if at == IMRestartAtSeedBackup {
+		return "a seed backup"
+	}
+	return "a seed restore"
+}
+
+// seedRetryReasonAt is the BootstrapReady reason of the seed retry the kill
+// at the placement at causes (bootstrapStepFailed in internal/controller/
+// habootstrap.go): SeedBackupFailedRetrying for a seed backup that failed,
+// SeedRestoreFailedRetrying for a seed restore.
+func seedRetryReasonAt(at string) string {
+	if at == IMRestartAtSeedBackup {
+		return s12SeedBackupRetryReason
+	}
+	return s12SeedRetryReason
 }
 
 // imRestartSteps runs the steps of S12 instance-manager-restart in order and
@@ -647,6 +718,9 @@ func (h *haRun) imRestartSteps(ctx context.Context, result *evidence.Scenario, r
 		final.Status); err != nil {
 		return err
 	}
+	if r.At == IMRestartAtSeedBackup {
+		return h.checkKilledSeedBackup(ctx, r, result)
+	}
 	if r.At != IMRestartAtPreparing && r.At != IMRestartAtStarting {
 		return nil
 	}
@@ -687,11 +761,117 @@ func (h *haRun) waitIMPlacement(ctx context.Context, cluster *databasev1alpha1.C
 					"before a reading of SeedingReplicas with a seed restore", phase)
 			})
 	}
+	if r.At == IMRestartAtSeedBackup {
+		if err := h.waitPlaced(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result,
+			"restore did not complete", func(_ *databasev1alpha1.CubridCluster, phase string) (bool, error) {
+				switch phase {
+				case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
+					return false, nil
+				case string(databasev1alpha1.BootstrapSeedingReplicas):
+					return true, nil
+				}
+				return false, fmt.Errorf(imNotAtSeedBackup+"the bootstrap was seen %s before SeedingReplicas", phase)
+			}); err != nil {
+			return err
+		}
+		return h.waitSeedBackup(ctx, cluster, created, rec, result)
+	}
 	if err := h.waitRestoring(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result); err != nil ||
 		r.At != IMRestartAtStarting {
 		return err
 	}
 	return h.waitStarting(ctx, cluster, created, rec, result)
+}
+
+// imNotAtSeedBackup starts the reason of a kill that could not be placed at
+// seed-backup.
+const imNotAtSeedBackup = "the kill could not be placed while the seed backup ran: "
+
+// waitSeedBackup reads, at seed-backup, the restored cluster every
+// imStartingPoll while its bootstrap is SeedingReplicas and, once the first
+// database's seeding records a seed backup and no seed restore, the
+// source's own record of that backup, until the record is read in a state
+// that has not ended, which places the kill, or RestoreLimit has passed
+// since createdAt. The Operator records the seed backup's operation once it
+// started it on the source, polls it until it ends, and records the seed
+// restore on the peer only after the backup completed (seedMember,
+// seedBackup in internal/controller/habootstrap.go). A bootstrap seen in
+// another phase, a seed restore recorded, or a record read Completed or
+// Failed, before any reading of the backup running, means the kill could
+// not be placed there, which blocks the variant; a seed backup that failed
+// is S12 exact's to judge. A record that cannot be read is read again.
+func (h *haRun) waitSeedBackup(ctx context.Context, created *databasev1alpha1.CubridCluster, createdAt time.Time,
+	rec *s12IMRestartRecord, result *evidence.Scenario) error {
+	r := rec.IMRestart
+	wctx, cancel := context.WithDeadline(ctx, createdAt.Add(h.cfg.RestoreLimit))
+	defer cancel()
+	// readErr is the last error of a read of the cluster or the record, nil
+	// once one succeeded.
+	var readErr error
+	err := pollUntil(wctx, imStartingPoll, func() (bool, error) {
+		cluster, err := h.readRestarted(wctx, created)
+		switch {
+		case (err != nil || cluster == nil) && wctx.Err() != nil:
+			return false, nil
+		case err != nil && retryable(err):
+			readErr = err
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		phase, err := h.restoredStatus(cluster, &rec.s12Record, result)
+		switch {
+		case err != nil:
+			return false, err
+		case phase == string(databasev1alpha1.BootstrapFailed):
+			return false, restoreVerdict{fmt.Errorf("the restored cluster's bootstrap ended Failed: %s",
+				bootstrapReason(cluster))}
+		case phase != string(databasev1alpha1.BootstrapSeedingReplicas):
+			return false, fmt.Errorf(imNotAtSeedBackup+"the bootstrap was seen %s before any reading of a seed "+
+				"backup running", cmp.Or(phase, noBootstrapPhase))
+		}
+		seeding := firstDatabaseSeeding(cluster)
+		switch {
+		case seeding == nil || seeding.Member == "":
+			return false, nil
+		case seeding.RestoreOperationID != "":
+			return false, fmt.Errorf(imNotAtSeedBackup+"a seed restore %s of %s was recorded before any reading of "+
+				"its seed backup running", seeding.RestoreOperationID, seeding.Member)
+		case seeding.BackupOperationID == "":
+			return false, nil
+		case !slices.Contains(clusterMembers(created.Name), seeding.Source):
+			return false, fmt.Errorf("the seed backup's source %q is not a member of %s", seeding.Source, created.Name)
+		}
+		id := seeding.BackupOperationID
+		op, err := h.readIMOperation(wctx, seeding.Source, id)
+		switch {
+		case err != nil && wctx.Err() != nil:
+			return false, nil
+		case err != nil:
+			readErr = fmt.Errorf("read the record of the seed backup %s on %s: %w", id, seeding.Source, err)
+			return false, nil
+		}
+		readErr = nil
+		reading := s12OperationReading{At: time.Now().UTC(), Operation: id, State: string(op.State)}
+		if !op.State.IsTerminal() {
+			r.PlacingReading = &reading
+			return true, nil
+		}
+		r.OperationReadings = append(r.OperationReadings, reading)
+		return false, fmt.Errorf(imNotAtSeedBackup+"the source's record of the seed backup %s was read %s before "+
+			"any reading of it running", id, op.State)
+	})
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() == nil && wctx.Err() != nil && readErr != nil:
+		return fmt.Errorf(imNotAtSeedBackup+"no reading before restore_limit %s passed showed it: %w",
+			h.cfg.RestoreLimit, readErr)
+	case ctx.Err() == nil && wctx.Err() != nil:
+		return restoreVerdict{fmt.Errorf("the restored cluster's seeding recorded no seed backup within "+
+			"restore_limit %s", h.cfg.RestoreLimit)}
+	}
+	return err
 }
 
 // imStartingPoll is how often, at starting, the target's record of the
@@ -945,6 +1125,60 @@ func imRestartStartingPassReason(r *s12IMRestart) string {
 		"Manager's and the Operator's logs were not checked", r.Pod, r.PhaseAtRestart, r.OperationIDBefore,
 		r.MessageAtRestart, r.OperationIDBefore, r.Pod, placed, r.BackWithin, restored, s12RetryReason,
 		r.OperationIDAfter, attempts)
+}
+
+// imRestartSeedBackupPassReason is the reason of a pass at seed-backup.
+func imRestartSeedBackupPassReason(r *s12IMRestart) string {
+	attempt, backupAfter, placed, state := evidence.Unknown, evidence.Unknown, evidence.Unknown, evidence.Unknown
+	if r.SeedAttemptsAfter != nil {
+		attempt = fmt.Sprint(*r.SeedAttemptsAfter)
+	}
+	if r.SeedBackupOperationIDAfter != "" {
+		backupAfter = r.SeedBackupOperationIDAfter
+	}
+	if p := r.PlacingReading; p != nil {
+		placed, state = p.At.Format(time.RFC3339Nano), p.State
+	}
+	return fmt.Sprintf("the Instance Manager on %s was killed while it took the seed backup for %s of the cluster "+
+		"restored from S11's artifact, right after its record of seed backup operation %s was read %s at %s; its "+
+		"container, and with it the restored database's server, ran again on the same Pod %s after the kill; the "+
+		"Instance Manager's record of that backup shows it Failed by the restart; the Operator ended that seed "+
+		"attempt with %s naming the Instance Manager's restart and seeded %s under seeding attempt %s with seed "+
+		"backup operation %s, with one seed retry, while the restore kept operation %s with no retry after the "+
+		"kill and no reading of restoredb running; the cluster reported Ready within restore_limit only after its "+
+		"bootstrap completed, with BootstrapReady never True before; its members and Services held exactly the rows "+
+		"acknowledged before the known point and S11's marker, no row written after the backup, and took a normal "+
+		"write; the source was unchanged; no credential was in its status and no Secret of the source in its Pods; "+
+		"the Instance Manager's and the Operator's logs were not checked", r.Pod, r.SeedPeer,
+		r.SeedBackupOperationIDBefore, state, placed, r.BackWithin, s12SeedBackupRetryReason, r.SeedPeer, attempt,
+		backupAfter, r.OperationIDBefore)
+}
+
+// checkKilledSeedBackup reads, at seed-backup and once the cluster is Ready,
+// the source's record of the seed backup at the kill. The record is on the
+// source's volume and kept across the restart; the restarted Instance
+// Manager fails every operation that had not ended with the restart's reason
+// (reconcileOnStart in internal/instancemanager/opstore.go). A record that
+// cannot be read, or did not end Failed by the restart, leaves what ended the
+// backup unknown, which blocks the variant.
+func (h *haRun) checkKilledSeedBackup(ctx context.Context, r *s12IMRestart, result *evidence.Scenario) error {
+	k := &s12KilledOperation{}
+	r.KilledSeedBackup = k
+	id := r.SeedBackupOperationIDBefore
+	op, err := h.readIMOperation(ctx, r.Pod, id)
+	if err != nil {
+		k.ReadError = err.Error()
+		return fmt.Errorf("the record of the seed backup %s on %s could not be read, so what ended it is not "+
+			"known: %w", id, r.Pod, err)
+	}
+	k.State, k.FailureReason = string(op.State), op.FailureReason
+	failed := op.State == instancemanager.OpFailed && op.FailureReason == s12IMRestartedReason
+	result.Measurements["killedBackupFailedByRestart"] = failed
+	if !failed {
+		return fmt.Errorf("the Instance Manager's record of the seed backup %s on %s is %s (%q), not Failed by its "+
+			"restart: what ended the backup is not known", id, r.Pod, op.State, op.FailureReason)
+	}
+	return nil
 }
 
 // killedOperationScript prints the Instance Manager's record of operation
@@ -1206,6 +1440,16 @@ func (h *haRun) beforeKill(ctx context.Context, created *databasev1alpha1.Cubrid
 		seedAttempts := dbStatus.BootstrapAttempts
 		r.SeedRestoreOperationIDBefore, r.SeedAttemptsBefore = dbStatus.Seeding.RestoreOperationID, &seedAttempts
 	}
+	if r.At == IMRestartAtSeedBackup {
+		dbStatus := firstDatabaseStatus(cluster)
+		if p := r.PlacingReading; p == nil || p.Operation != dbStatus.Seeding.BackupOperationID {
+			return fmt.Errorf(imNotAtSeedBackup+"right before it the seeding named the seed backup %q, not the one "+
+				"whose record was read running", dbStatus.Seeding.BackupOperationID)
+		}
+		seedAttempts := dbStatus.BootstrapAttempts
+		r.SeedPeer, r.SeedBackupOperationIDBefore, r.SeedAttemptsBefore = dbStatus.Seeding.Member,
+			dbStatus.Seeding.BackupOperationID, &seedAttempts
+	}
 	r.restartReading = len(rec.Bootstrap) - 1
 	return nil
 }
@@ -1215,8 +1459,10 @@ func (h *haRun) beforeKill(ctx context.Context, created *databasev1alpha1.Cubrid
 // target, in Restoring or Preparing with an operation, or the member being
 // seeded, in SeedingReplicas with a seed restore recorded for it. That member
 // is never the restore's target, which is not seeded over (reconcileSeeding
-// in internal/controller/habootstrap.go). Any other reading, or a member that
-// is not one of the cluster's, is an error that blocks the variant.
+// in internal/controller/habootstrap.go); or, at seed-backup, the source of
+// the seed backup, in SeedingReplicas with a seed backup and no seed restore
+// recorded. Any other reading, or a member that is not one of the cluster's,
+// is an error that blocks the variant.
 func killedMember(cluster *databasev1alpha1.CubridCluster, at, phase string) (string, error) {
 	boot := cluster.Status.Bootstrap
 	member := boot.TargetMember
@@ -1237,6 +1483,17 @@ func killedMember(cluster *databasev1alpha1.CubridCluster, at, phase string) (st
 			return "", fmt.Errorf("the member being seeded, %s, is the restore's target", seeding.Member)
 		}
 		member = seeding.Member
+	case IMRestartAtSeedBackup:
+		seeding := firstDatabaseSeeding(cluster)
+		if phase != string(databasev1alpha1.BootstrapSeedingReplicas) || seeding == nil || seeding.Member == "" ||
+			seeding.BackupOperationID == "" || seeding.RestoreOperationID != "" {
+			return "", fmt.Errorf(imNotAtSeedBackup+"right before it the bootstrap phase was %q without a seed "+
+				"backup recorded alone", cmp.Or(phase, noBootstrapPhase))
+		}
+		if seeding.Source == seeding.Member {
+			return "", fmt.Errorf("the seed backup's source, %s, is the member being seeded", seeding.Source)
+		}
+		member = seeding.Source
 	default:
 		if phase != string(databasev1alpha1.BootstrapRestoring) || boot.OperationID == "" {
 			return "", fmt.Errorf("the restart could not be placed during the restore: right before it the "+
@@ -1280,8 +1537,11 @@ type instanceManagerKill struct {
 
 // imKillName is the name of the kill at the S12 placement at.
 func imKillName(at string) string {
-	if at == IMRestartAtSeeding {
+	switch at {
+	case IMRestartAtSeeding:
 		return "kill the Instance Manager of the member being seeded with SIGKILL"
+	case IMRestartAtSeedBackup:
+		return "kill the Instance Manager of the seed backup's source with SIGKILL"
 	}
 	return "kill the Instance Manager of the restore's target member with SIGKILL"
 }
@@ -1399,7 +1659,7 @@ func (h *haRun) readRetryEvents(ctx context.Context, cluster *databasev1alpha1.C
 		switch {
 		case event.Reason == s12RetryReason:
 			r.RetryEvents = append(r.RetryEvents, event.Message)
-		case event.Reason == s12SeedRetryReason && r.At == IMRestartAtSeeding:
+		case seedPlacement(r.At) && event.Reason == seedRetryReasonAt(r.At):
 			r.SeedRetryEvents = append(r.SeedRetryEvents, event.Message)
 		}
 	}
@@ -1477,7 +1737,7 @@ func judgeIMRestartBootstrap(rec *s12IMRestartRecord, result *evidence.Scenario)
 			"reason %s: the cause is unknown", strings.Join(unexplained, ", "), s12RetryReason))
 	}
 	switch {
-	case r.At == IMRestartAtSeeding:
+	case seedPlacement(r.At):
 		errs = append(errs, judgeSeedingKill(rec, result, afterKill))
 	// The expectation of the kill is judged on a restore that completed.
 	case r.KilledAt != nil && r.OperationIDBefore != "" && rec.RestoredWithin != "":
@@ -1534,9 +1794,16 @@ func judgeSeedingKill(rec *s12IMRestartRecord, result *evidence.Scenario, afterK
 	if r.SeedRestoreOperationIDBefore != "" && r.SeedRestoreOperationIDAfter != "" {
 		result.Measurements[measSeedRestoreOperationChanged] = r.SeedRestoreOperationIDBefore != r.SeedRestoreOperationIDAfter
 	}
+	if r.SeedBackupOperationIDBefore != "" && r.SeedBackupOperationIDAfter != "" {
+		result.Measurements["seedBackupOperationChanged"] = r.SeedBackupOperationIDBefore != r.SeedBackupOperationIDAfter
+	}
 	if r.KilledAt != nil && len(afterKill) > 0 {
 		events = append(events, fmt.Sprintf("the restore was retried after the kill, after it had completed and "+
 			"seeding had begun: %s", afterKill[0].Message))
+	}
+	if again := restoredbAfterKill(rec); r.At == IMRestartAtSeedBackup && again != "" {
+		events = append(events, "the restore ran again after the kill, after it had completed and seeding had "+
+			"begun: "+again)
 	}
 	// What must never happen fails the variant through the never-events.
 	result.NeverEvents = append(result.NeverEvents, events...)
@@ -1546,10 +1813,29 @@ func judgeSeedingKill(rec *s12IMRestartRecord, result *evidence.Scenario, afterK
 			"reason %s or %s: the cause is unknown", strings.Join(unexplained, ", "), s12SeedRetryReason,
 			s12SeedBackupRetryReason))
 	}
-	if r.KilledAt != nil && r.SeedRestoreOperationIDBefore != "" && rec.RestoredWithin != "" {
+	if r.KilledAt != nil && (r.SeedRestoreOperationIDBefore != "" || r.SeedBackupOperationIDBefore != "") &&
+		rec.RestoredWithin != "" {
 		errs = append(errs, judgeSeedKillRetries(r, seedAfterKill))
 	}
 	return errors.Join(errs...)
+}
+
+// restoredbAfterKill describes the first reading after the kill whose
+// BootstrapReady message says restoredb is running (imRestoredbRunning), or
+// is empty. Once the restore completed on its target the Operator never
+// starts it again, so after a kill during seeding no reading may show it.
+func restoredbAfterKill(rec *s12IMRestartRecord) string {
+	r := rec.IMRestart
+	if r.KilledAt == nil || r.restartReading < 0 {
+		return ""
+	}
+	for _, p := range rec.Bootstrap[r.restartReading+1:] {
+		if boot := meta.FindStatusCondition(p.Conditions, bootstrapReadyCondition); boot != nil &&
+			strings.HasPrefix(boot.Message, imRestoredbRunning) {
+			return fmt.Sprintf("a reading at %s showed %q", p.At.Format(time.RFC3339), boot.Message)
+		}
+	}
+	return ""
 }
 
 // scanSeedRetries records, from the readings in order, the seed retries and
@@ -1595,6 +1881,9 @@ func scanSeedRetries(rec *s12IMRestartRecord) (events, unexplained []string, aft
 			events = append(events, fmt.Sprintf("the restored cluster's seeding attempts reached %d, beyond the "+
 				"Operator's %d attempts", p.DatabaseAttempts, s12MaxAttempts))
 		}
+		if after(i) {
+			seedBackupAfterKill(r, p)
+		}
 		if p.SeedMember == "" || p.SeedRestoreOperationID == "" {
 			continue
 		}
@@ -1605,7 +1894,7 @@ func scanSeedRetries(rec *s12IMRestartRecord) (events, unexplained []string, aft
 				p.DatabaseAttempts))
 		}
 		ops[p.SeedMember], opAttempts[p.SeedMember] = p.SeedRestoreOperationID, p.DatabaseAttempts
-		if p.SeedMember == r.Pod && after(i) && r.SeedAttemptsBefore != nil &&
+		if r.At == IMRestartAtSeeding && p.SeedMember == r.Pod && after(i) && r.SeedAttemptsBefore != nil &&
 			p.DatabaseAttempts > *r.SeedAttemptsBefore {
 			seedAttempts := p.DatabaseAttempts
 			r.SeedRestoreOperationIDAfter, r.SeedAttemptsAfter = p.SeedRestoreOperationID, &seedAttempts
@@ -1623,6 +1912,19 @@ func scanSeedRetries(rec *s12IMRestartRecord) (events, unexplained []string, aft
 	return events, unexplained, afterKill
 }
 
+// seedBackupAfterKill records, at seed-backup, the peer's seed backup and the
+// database's attempts of p, a reading after the kill, when p shows a seed
+// backup recorded for the peer under a later attempt than the one at the
+// kill.
+func seedBackupAfterKill(r *s12IMRestart, p s12Phase) {
+	if r.At != IMRestartAtSeedBackup || p.SeedMember != r.SeedPeer || p.SeedBackupOperationID == "" ||
+		r.SeedAttemptsBefore == nil || p.DatabaseAttempts <= *r.SeedAttemptsBefore {
+		return
+	}
+	seedAttempts := p.DatabaseAttempts
+	r.SeedBackupOperationIDAfter, r.SeedAttemptsAfter = p.SeedBackupOperationID, &seedAttempts
+}
+
 // seedRetryFromEvent returns the seed retry x is, and records it, when an
 // Event of the Operator's names the restart on the killed member and the
 // attempt x starts, as retryFromEvent does for the restore: x must be by one
@@ -1635,7 +1937,7 @@ func seedRetryFromEvent(r *s12IMRestart, x attemptRise) *s12Retry {
 	for _, message := range r.SeedRetryEvents {
 		if strings.HasPrefix(message, "on "+r.Pod+": ") && strings.Contains(message, cmp.Or(r.cause, s12IMRestartedReason)) &&
 			strings.Contains(message, starting) {
-			retry := s12Retry{At: x.at, From: x.from, To: x.to, Reason: s12SeedRetryReason, Message: message,
+			retry := s12Retry{At: x.at, From: x.from, To: x.to, Reason: seedRetryReasonAt(r.At), Message: message,
 				FromEvent: true}
 			r.SeedRetries = append(r.SeedRetries, retry)
 			slices.SortStableFunc(r.SeedRetries, func(a, b s12Retry) int { return a.At.Compare(b.At) })
@@ -1646,18 +1948,23 @@ func seedRetryFromEvent(r *s12IMRestart, x attemptRise) *s12Retry {
 }
 
 // judgeSeedKillRetries judges the seed retries after the kill of a cluster
-// that completed: exactly one, a failed seed restore on the killed member
-// naming the Instance Manager's restart, and, when a reading showed the
-// member's seed restore under the next attempt, another operation than the
-// one at the kill. The Instance Manager fails the operation at its start
+// that completed: exactly one, the failed seed step on the killed member
+// naming the Instance Manager's restart (a seed restore at seeding, a seed
+// backup on the source at seed-backup), and, when a reading showed that
+// step's operation under the next attempt, another operation than the one at
+// the kill. The Instance Manager fails the operation at its start
 // (reconcileOnStart), the Operator reads it Failed and retries the seed step
-// (seedMember), and the next attempt's key creates a new operation
-// (bootstrapKey, FindOrCreate).
+// (seedMember, seedBackup), and the next attempt's key creates a new
+// operation (bootstrapKey, FindOrCreate).
 func judgeSeedKillRetries(r *s12IMRestart, afterKill []s12Retry) error {
+	step, before, after := "seed restore", r.SeedRestoreOperationIDBefore, r.SeedRestoreOperationIDAfter
+	if r.At == IMRestartAtSeedBackup {
+		step, before, after = "seed backup", r.SeedBackupOperationIDBefore, r.SeedBackupOperationIDAfter
+	}
 	switch {
 	case len(afterKill) == 0:
-		return fmt.Errorf("the kill did not interrupt the seed restore: %s was seeded with no failed seed attempt, "+
-			"so operation %s had ended before its Instance Manager was killed", r.Pod, r.SeedRestoreOperationIDBefore)
+		return fmt.Errorf("the kill did not interrupt the %s: %s was seeded with no failed seed attempt, so "+
+			"operation %s had ended before the Instance Manager of %s was killed", step, seededPeer(r), before, r.Pod)
 	case len(afterKill) > 1:
 		var failed []string
 		for _, retry := range afterKill[1:] {
@@ -1665,18 +1972,18 @@ func judgeSeedKillRetries(r *s12IMRestart, afterKill []s12Retry) error {
 		}
 		return restoreVerdict{fmt.Errorf("the seeding failed again after the seed attempt the kill ended: %s",
 			strings.Join(failed, "; "))}
-	case afterKill[0].Reason != s12SeedRetryReason || !strings.HasPrefix(afterKill[0].Message, "on "+r.Pod+": ") ||
+	case afterKill[0].Reason != seedRetryReasonAt(r.At) || !strings.HasPrefix(afterKill[0].Message, "on "+r.Pod+": ") ||
 		!strings.Contains(afterKill[0].Message, cmp.Or(r.cause, s12IMRestartedReason)):
 		cause := "the Instance Manager's restart"
 		if r.cause != "" {
 			cause = "the member's stop"
 		}
-		return fmt.Errorf("the seed attempt the kill interrupted ended with %s %q, not with a seed restore on %s "+
-			"failed by %s (%q): whether the fault ended it was not observed",
-			afterKill[0].Reason, afterKill[0].Message, r.Pod, cause, cmp.Or(r.cause, s12IMRestartedReason))
-	case r.SeedRestoreOperationIDAfter == r.SeedRestoreOperationIDBefore:
-		return restoreVerdict{fmt.Errorf("the seed restore operation %s the kill ended is the one recorded for %s "+
-			"after the next seed attempt started", r.SeedRestoreOperationIDBefore, r.Pod)}
+		return fmt.Errorf("the seed attempt the kill interrupted ended with %s %q, not with a %s on %s failed by "+
+			"%s (%q): whether the fault ended it was not observed", afterKill[0].Reason, afterKill[0].Message, step,
+			r.Pod, cause, cmp.Or(r.cause, s12IMRestartedReason))
+	case after == before:
+		return restoreVerdict{fmt.Errorf("the %s operation %s the kill ended is the one recorded for %s after the "+
+			"next seed attempt started", step, before, seededPeer(r))}
 	}
 	return nil
 }
