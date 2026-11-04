@@ -66,6 +66,8 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 			var roles roleLog
 			roles.sample(ctx, r)
 		},
+		"conditionRound":    func(ctx context.Context) { _ = r.conditionRound(ctx, true) },
+		"heartbeatRole":     func(ctx context.Context) { _ = r.heartbeatRole(ctx, pod0) },
 		"operatorAvailable": func(ctx context.Context) { _ = operatorAvailable(ctx) },
 		"readS00Row": func(ctx context.Context) {
 			_ = readS00Row(csqlInPod(ctx, "ns", pod0, "db"), "m")
@@ -84,5 +86,28 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 				t.Fatalf("%s did not return within 5s after its context ended", name)
 			}
 		})
+	}
+}
+
+// TestConditionSamplerStopsWhileKubectlHangs checks that stopping the
+// background reads of the status ends the kubectl they are waiting on, so
+// that a scenario does not wait for the sampler longer than a moment.
+func TestConditionSamplerStopsWhileKubectlHangs(t *testing.T) {
+	r := newHARun("ns", "client-ns", "cluster", "db", []string{pod0, "pod-1", "pod-2"})
+	hangingKubectl(t)
+	sampler := r.sampleConditions(true)
+	time.Sleep(200 * time.Millisecond)
+	done := make(chan []conditionRound)
+	go func() { done <- sampler.stop() }()
+	select {
+	case rounds := <-done:
+		if len(rounds) != 0 {
+			t.Errorf("a round cut short by stop was kept: %+v", rounds)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop did not return within 5s while kubectl hung")
+	}
+	if rounds := sampler.stop(); len(rounds) != 0 {
+		t.Errorf("a second stop returned %+v", rounds)
 	}
 }
