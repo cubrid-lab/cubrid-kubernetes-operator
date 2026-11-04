@@ -435,8 +435,10 @@ func openTransactionStep(r *haRun) {
 		// idle csql session shows a transaction time of 0 there; one whose
 		// statements have run shows the time since its first change.
 		activeFor := func() (float64, string, error) {
-			out, err := r.kubectl(context.Background(), "exec", master, "--", "bash", "-c",
-				`export PATH="${CUBRID}/bin:${PATH}"; cubrid tranlist "$0"`, r.database)
+			// An HA member's databases.txt names several hosts, so tranlist
+			// needs the database's host as well (<db>@localhost).
+			out, err := r.kubectl(context.Background(), "exec", master, "-c", "cubrid", "--", "bash", "-c",
+				`export PATH="${CUBRID}/bin:${PATH}"; cubrid tranlist "$0@localhost"`, r.database)
 			if err != nil {
 				return 0, out, err
 			}
