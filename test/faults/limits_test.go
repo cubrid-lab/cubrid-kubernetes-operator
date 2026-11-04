@@ -356,7 +356,7 @@ func TestJudgeS00Limits(t *testing.T) {
 			in:   passed(), install: install(0, 40*time.Second, false), ready: ready(0, 2*time.Minute, false),
 			want: evidence.Blocked, wantReason: ReasonTimeLimitUnset,
 			wantVerdict: "blocked: " + ReasonTimeLimitUnset,
-			wantLimits: limitsOf("confirm=5m0s install_limit=unset ready_limit=unset"),
+			wantLimits:  limitsOf("confirm=5m0s install_limit=unset ready_limit=unset"),
 		},
 		{
 			name:    "both set and within",
