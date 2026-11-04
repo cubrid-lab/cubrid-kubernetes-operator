@@ -26,6 +26,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -88,7 +89,14 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	res := resolvePrimary(members, obs, now)
 	cluster.Status.CurrentPrimary = res.CurrentPrimary
 	previous := cluster.Status.Instances
-	cluster.Status.Instances = instanceStatuses(members, obs, now, previous)
+	// The applier readings kept from the last pass are compared with this
+	// one, and this pass's are kept only once the status they fed is written
+	// (writeStatus), so that both describe the same reading.
+	positions := r.applierPositions().readings(cluster.UID, now)
+	cluster.Status.Instances = instanceStatuses(members, obs, now, previous, positions)
+	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
+		report.(*reconcileReport).positions = readingPositions(members, obs, positions, now)
+	}
 	logUnobservedMembers(ctx, cluster, previous, obs, now)
 	observedAt := metav1.NewTime(now)
 	cluster.Status.LastObservedTime = &observedAt
@@ -288,7 +296,7 @@ func resolvePrimary(members []string, obs map[string]RoleObservation, now time.T
 // then, and a member that gave no answer keeps the time of its last one and
 // its last report of an unfinished database.
 func instanceStatuses(members []string, obs map[string]RoleObservation, now time.Time,
-	previous []databasev1alpha1.InstanceStatus) []databasev1alpha1.InstanceStatus {
+	previous []databasev1alpha1.InstanceStatus, positions map[string]applierReading) []databasev1alpha1.InstanceStatus {
 	before := make(map[string]*databasev1alpha1.InstanceReplication, len(previous))
 	answered := make(map[string]*metav1.Time, len(previous))
 	reported := make(map[string]*databasev1alpha1.InstanceUnfinishedDatabase, len(previous))
@@ -331,7 +339,7 @@ func instanceStatuses(members []string, obs map[string]RoleObservation, now time
 		// restarting, or one observed in another role, has none.
 		var replication *databasev1alpha1.InstanceReplication
 		if role == databasev1alpha1.RoleSlave {
-			replication = nextReplication(before[m], withSourceLogEnd(obs[m].Replication, obs, now), now)
+			replication = nextReplication(before[m], withSourceLogEnd(obs[m].Replication, obs, now), positionOf(positions, m), now)
 		}
 		out = append(out, databasev1alpha1.InstanceStatus{
 			Name:                  m,

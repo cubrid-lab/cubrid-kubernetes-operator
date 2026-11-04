@@ -128,7 +128,7 @@ func TestResolvePrimary(t *testing.T) {
 func TestInstanceStatuses(t *testing.T) {
 	members := []string{c0, c1, c2}
 	obs := map[string]RoleObservation{c0: master(), c1: slave(), c2: unreach()}
-	got := instanceStatuses(members, obs, testNow, nil)
+	got := instanceStatuses(members, obs, testNow, nil, nil)
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3", len(got))
 	}
@@ -149,7 +149,7 @@ func TestInstanceStatuses(t *testing.T) {
 func TestInstanceStatusesTreatStaleAndConflictingAsUnknown(t *testing.T) {
 	members := []string{c0, c1}
 	obs := map[string]RoleObservation{c0: aged(master(), time.Hour), c1: conflicting(slave())}
-	for _, got := range instanceStatuses(members, obs, testNow, nil) {
+	for _, got := range instanceStatuses(members, obs, testNow, nil, nil) {
 		if got.Role != databasev1alpha1.RoleUnknown || got.Ready {
 			t.Errorf("%s = %+v, want unknown and not ready", got.Name, got)
 		}
@@ -207,7 +207,7 @@ func TestInstanceStatuses_LastObservedTimeIsThePass(t *testing.T) {
 	answered := master()
 	answered.ObservedAt = testNow.Add(-1500 * time.Millisecond)
 	obs := map[string]RoleObservation{c0: answered, c1: unreach()}
-	got := instanceStatuses(members, obs, testNow, previous)
+	got := instanceStatuses(members, obs, testNow, previous, nil)
 	if at := got[0].LastObservedTime; at == nil || !at.Time.Equal(testNow) {
 		t.Errorf("member that answered: lastObservedTime = %v, want the pass's time %v", at, testNow)
 	}
@@ -218,7 +218,7 @@ func TestInstanceStatuses_LastObservedTimeIsThePass(t *testing.T) {
 	// An answer that contradicts itself or names another member is no
 	// answer of this member: its time is kept.
 	obs[c1] = conflicting(slave())
-	if at := instanceStatuses(members, obs, testNow, previous)[1].LastObservedTime; at == nil || !at.Time.Equal(earlier.Time) {
+	if at := instanceStatuses(members, obs, testNow, previous, nil)[1].LastObservedTime; at == nil || !at.Time.Equal(earlier.Time) {
 		t.Errorf("member with a conflicting answer: lastObservedTime = %v, want %v", at, earlier)
 	}
 }

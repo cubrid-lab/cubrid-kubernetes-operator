@@ -160,7 +160,7 @@ func TestReadyMasterClaims(t *testing.T) {
 			if meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady) == tc.multiple {
 				t.Fatalf("Ready must be false exactly when multiple masters are observed: %+v", cluster.Status.Conditions)
 			}
-			for _, in := range instanceStatuses(members, obs, testNow, nil) {
+			for _, in := range instanceStatuses(members, obs, testNow, nil, nil) {
 				if obs[in.Name].Conflicting && in.Role != databasev1alpha1.RoleUnknown {
 					t.Errorf("conflicting member %s acquired authority: %+v", in.Name, in)
 				}

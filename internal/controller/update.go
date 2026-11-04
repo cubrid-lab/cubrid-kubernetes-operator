@@ -294,7 +294,7 @@ func (r *CubridClusterReconciler) reconcileStandaloneStatus(ctx context.Context,
 			refused = append(refused, m)
 		}
 	}
-	instances := instanceStatuses(members, obs, r.now(), cluster.Status.Instances)
+	instances := instanceStatuses(members, obs, r.now(), cluster.Status.Instances, nil)
 	for i := range instances {
 		instances[i].Role = databasev1alpha1.RoleUnknown
 		instances[i].Ready = false

@@ -76,13 +76,14 @@ func selectBackupTarget(
 	members []string,
 	obs map[string]RoleObservation,
 	history map[string]*databasev1alpha1.InstanceReplication,
+	positions map[string]applierReading,
 	res PrimaryResolution,
 	pref databasev1alpha1.TargetPreference,
 	single bool,
 	primaryLogEndWaitOver bool,
 	now time.Time,
 ) TargetSelection {
-	standbys, logEndUnread := eligibleStandbys(members, obs, history, res, now)
+	standbys, logEndUnread := eligibleStandbys(members, obs, history, positions, res, now)
 	primaryResolved := res.Status == metav1.ConditionTrue && res.CurrentPrimary != ""
 
 	switch pref {
@@ -135,7 +136,9 @@ func selectBackupTarget(
 // no change, and neither the stall series this reading continues nor the
 // series of its copy of the primary's log not growing, read against the
 // primary's log end in obs as the cluster's status is (nextReplication, from
-// the history that status records), has reached replicationStallWindow.
+// the history that status records and the applier readings the cluster
+// controller keeps in positions, which are only read here), has reached
+// replicationStallWindow.
 //
 // A copy that receives nothing leaves no page waiting to be applied
 // (docs/poc/RESULTS.md, POC-41), so the applier's counters alone would keep
@@ -156,11 +159,18 @@ func selectBackupTarget(
 // eligible in a reconcile that did not read the primary's log end.
 // logEndUnread reports that some standby was excluded for that reason alone.
 //
-// A long transaction on the master can keep pages waiting with nothing
-// applied and so exclude a standby that is not behind (#249); that only
-// moves the backup to another standby or to the master fallback.
+// The stall is judged by the applier's position when the Instance Manager
+// reports it, so a long transaction on the master, which keeps pages waiting
+// while the counters stay, does not exclude a standby whose position moves
+// (#249). Without a kept reading to compare with, as after an Operator
+// restart, the stall the status records is kept and none is started, so a
+// standby whose recorded stall reached the window stays excluded. A standby
+// whose Instance Manager reports no position is judged by its counters, and a
+// long transaction can still exclude it; that only moves the backup to
+// another standby or to the master fallback.
 func eligibleStandbys(members []string, obs map[string]RoleObservation,
-	history map[string]*databasev1alpha1.InstanceReplication, res PrimaryResolution, now time.Time) (standbys []string, logEndUnread bool) {
+	history map[string]*databasev1alpha1.InstanceReplication, positions map[string]applierReading, res PrimaryResolution,
+	now time.Time) (standbys []string, logEndUnread bool) {
 	if res.Status != metav1.ConditionTrue || res.CurrentPrimary == "" {
 		return nil, false
 	}
@@ -175,7 +185,7 @@ func eligibleStandbys(members []string, obs map[string]RoleObservation,
 			continue
 		}
 		withEnd := withSourceLogEnd(r, obs, now)
-		next := nextReplication(history[m], withEnd, now)
+		next := nextReplication(history[m], withEnd, positionOf(positions, m), now)
 		if next.StalledSince != nil && now.Sub(next.StalledSince.Time) >= replicationStallWindow {
 			continue
 		}

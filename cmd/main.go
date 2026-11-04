@@ -253,6 +253,9 @@ func main() {
 	// Each cluster's Instance Managers are called with that cluster's own token.
 	tokens := controller.ClusterTokens(mgr.GetClient())
 	clusterProber := controller.NewHTTPRoleProber(tokens)
+	// The cluster controller keeps each slave's last applier reading here;
+	// the backup controller reads it to judge standbys the same way (#249).
+	positions := controller.NewApplierPositions()
 	if err := (&controller.CubridClusterReconciler{
 		Client:    mgr.GetClient(),
 		APIReader: mgr.GetAPIReader(),
@@ -266,6 +269,7 @@ func main() {
 		Backup:       controller.NewHTTPBackupClient(tokens),
 		DefaultImage: instanceManagerImage,
 		OperatorNS:   operatorNamespace,
+		Positions:    positions,
 		// Checked above: at least MIN_NUM_APPL_SERVER.
 		BrokerMaxApplServers: brokerMaxApplServers,
 		// Checked above: neither is negative.
@@ -276,10 +280,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.CubridBackupReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Prober: controller.NewHTTPRoleProber(tokens),
-		Backup: controller.NewHTTPBackupClient(tokens),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Prober:    controller.NewHTTPRoleProber(tokens),
+		Backup:    controller.NewHTTPBackupClient(tokens),
+		Positions: positions,
 		//nolint:staticcheck // as for the cluster controller above.
 		Recorder: mgr.GetEventRecorderFor("cubridbackup-controller"),
 	}).SetupWithManager(mgr); err != nil {

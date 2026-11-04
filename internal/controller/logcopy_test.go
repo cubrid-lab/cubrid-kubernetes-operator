@@ -85,7 +85,7 @@ func TestNextReplication_LogCopy(t *testing.T) {
 		"another master's log":        {other, read(logAt(148, 3632), logAt(156, 8472)), logAt(148, 3632), 8, -1},
 	}
 	for name, tc := range tests {
-		got := nextReplication(tc.prev, tc.obs, testNow)
+		got := nextReplication(tc.prev, tc.obs, nil, testNow)
 		if got == nil {
 			t.Errorf("%s: got nil", name)
 			continue
@@ -108,7 +108,7 @@ func TestNextReplication_LogCopy(t *testing.T) {
 	}
 	// A missed reading keeps the series as it was, as for the apply stall.
 	prev := copying(logAt(148, 3632), 5, 40*time.Second)
-	if got := nextReplication(prev, nil, testNow); got == nil || got.NotReceivingSince == nil ||
+	if got := nextReplication(prev, nil, nil, testNow); got == nil || got.NotReceivingSince == nil ||
 		!got.NotReceivingSince.Time.Equal(prev.NotReceivingSince.Time) || got.CopiedEOF == nil || *got.CopiedEOF != *prev.CopiedEOF {
 		t.Errorf("missed reading = %+v, want the reading before unchanged", got)
 	}
@@ -121,7 +121,7 @@ func TestNextReplication_ApplyAndCopyStallTogether(t *testing.T) {
 	prev.CopiedEOF, prev.CopyDelayedPages = logAt(148, 3632), 3
 	obs := &ReplicationObservation{Source: replMaster, AppliedChanges: 10, DelayedPages: 9,
 		CopiedEOF: logAt(148, 3632), SourceLogEnd: logAt(151, 0)}
-	if got := nextReplication(prev, obs, testNow); got.StalledSince == nil || got.NotReceivingSince == nil {
+	if got := nextReplication(prev, obs, nil, testNow); got.StalledSince == nil || got.NotReceivingSince == nil {
 		t.Errorf("both stalls = %+v, want both reported", got)
 	}
 }
@@ -182,7 +182,7 @@ func TestInstanceStatuses_LogCopy(t *testing.T) {
 	for i := 0; i <= 7; i++ {
 		now := testNow.Add(time.Duration(i) * haResyncInterval)
 		obs := obsAt(now, logAt(150+int64(i), 0), false)
-		status = instanceStatuses(members, obs, now, status)
+		status = instanceStatuses(members, obs, now, status, nil)
 		if obs[replSlaveA].Replication.SourceLogEnd != nil {
 			t.Fatalf("step %d: the slave's observation was changed", i)
 		}
@@ -202,7 +202,7 @@ func TestInstanceStatuses_LogCopy(t *testing.T) {
 	// decided and the series is kept.
 	now := testNow.Add(8 * haResyncInterval)
 	before := status[1].Replication
-	kept := instanceStatuses(members, obsAt(now, logAt(160, 0), true), now, status)[1].Replication
+	kept := instanceStatuses(members, obsAt(now, logAt(160, 0), true), now, status, nil)[1].Replication
 	if kept == nil || kept.NotReceivingSince == nil || !kept.NotReceivingSince.Time.Equal(firstStalled) ||
 		kept.CopyDelayedPages != before.CopyDelayedPages {
 		t.Errorf("with an untrusted master = %+v, want the series kept", kept)

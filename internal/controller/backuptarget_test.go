@@ -144,7 +144,7 @@ func TestSelectBackupTarget(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := selectBackupTarget(tc.members, tc.obs, nil, tc.res, tc.pref, tc.single, false, testNow)
+			got := selectBackupTarget(tc.members, tc.obs, nil, nil, tc.res, tc.pref, tc.single, false, testNow)
 			if got.Selected != tc.wantSelected {
 				t.Fatalf("Selected = %v, want %v (reason %q)", got.Selected, tc.wantSelected, got.Reason)
 			}
@@ -199,7 +199,7 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := map[string]RoleObservation{c0: obsMaster(), c1: tc.c1, c2: obsDown()}
 
-			got := selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, false, testNow)
+			got := selectBackupTarget(members, obs, nil, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, false, testNow)
 			if got.Selected {
 				t.Errorf("StandbyOnly selected %s on an observation that is not authoritative", got.Instance)
 			}
@@ -209,7 +209,7 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 
 			// PreferStandby must not take that slave either; with a resolved
 			// primary it falls back to the master, as documented.
-			got = selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.PreferStandby, false, false, testNow)
+			got = selectBackupTarget(members, obs, nil, nil, resolvedPrimary(), databasev1alpha1.PreferStandby, false, false, testNow)
 			if got.Instance == c1 {
 				t.Errorf("PreferStandby selected %s on an observation that is not authoritative", c1)
 			}
@@ -218,7 +218,7 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 
 	t.Run("a fresh, consistent slave is selected", func(t *testing.T) {
 		obs := map[string]RoleObservation{c0: obsMaster(), c1: obsSlave(), c2: obsDown()}
-		got := selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, false, testNow)
+		got := selectBackupTarget(members, obs, nil, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, false, testNow)
 		if !got.Selected || got.Instance != c1 {
 			t.Errorf("got %+v, want %s selected", got, c1)
 		}
@@ -337,14 +337,14 @@ func TestSelectBackupTarget_StandbyNeedsFreshReplicationEvidence(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := map[string]RoleObservation{c0: obsMaster(), c1: tc.c1, c2: tc.c2}
-			got := selectBackupTarget(members, obs, tc.history, tc.res, databasev1alpha1.StandbyOnly, false, false, testNow)
+			got := selectBackupTarget(members, obs, tc.history, nil, tc.res, databasev1alpha1.StandbyOnly, false, false, testNow)
 			switch {
 			case tc.wantStandby == "" && (got.Selected || got.Reason != reasonNoHealthyStandby):
 				t.Errorf("StandbyOnly = %+v, want no standby (NoHealthyStandby)", got)
 			case tc.wantStandby != "" && (!got.Selected || got.Instance != tc.wantStandby):
 				t.Errorf("StandbyOnly = %+v, want %s", got, tc.wantStandby)
 			}
-			got = selectBackupTarget(members, obs, tc.history, tc.res, databasev1alpha1.PreferStandby, false, false, testNow)
+			got = selectBackupTarget(members, obs, tc.history, nil, tc.res, databasev1alpha1.PreferStandby, false, false, testNow)
 			if tc.wantStandby == "" && tc.res.Status == metav1.ConditionTrue &&
 				(got.Instance != c0 || got.Reason != reasonMasterFallbackSelected) {
 				t.Errorf("PreferStandby = %+v, want the master as a fallback", got)
@@ -454,7 +454,7 @@ func TestSelectBackupTarget_StandbyCopyMustGrow(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := map[string]RoleObservation{c0: tc.c0, c1: tc.c1, c2: slaveApplying(c0, 50)}
-			got := selectBackupTarget(members, obs, tc.history, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, false, testNow)
+			got := selectBackupTarget(members, obs, tc.history, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, false, testNow)
 			if !got.Selected || got.Instance != tc.wantStandby {
 				t.Errorf("StandbyOnly = %+v, want %s", got, tc.wantStandby)
 			}
@@ -517,11 +517,11 @@ func TestSelectBackupTarget_WaitsForThePrimaryLogEnd(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := map[string]RoleObservation{c0: tc.c0, c1: tc.c1, c2: tc.c2}
-			got := selectBackupTarget(members, obs, tc.history, resolvedPrimary(), databasev1alpha1.PreferStandby, false, tc.waitOver, testNow)
+			got := selectBackupTarget(members, obs, tc.history, nil, resolvedPrimary(), databasev1alpha1.PreferStandby, false, tc.waitOver, testNow)
 			if got != tc.wantPrefer {
 				t.Errorf("PreferStandby = %+v, want %+v", got, tc.wantPrefer)
 			}
-			got = selectBackupTarget(members, obs, tc.history, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, tc.waitOver, testNow)
+			got = selectBackupTarget(members, obs, tc.history, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, tc.waitOver, testNow)
 			if tc.wantPrefer.Role != databasev1alpha1.RoleSlave && (got.Selected || got.Reason != reasonNoHealthyStandby) {
 				t.Errorf("StandbyOnly = %+v, want no standby (NoHealthyStandby)", got)
 			}

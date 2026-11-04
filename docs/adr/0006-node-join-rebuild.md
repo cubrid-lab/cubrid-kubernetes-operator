@@ -181,7 +181,18 @@ per-member catch-up gate: a member's readiness is its Pod readiness, which
 follows the Instance Manager's `/readyz` (a confirmed heartbeat role), and
 the `-ro` Service selects Broker Pods, not members. A slave whose applier
 applies nothing is reported by the `ReplicationHealthy` Condition, which
-nothing acts on (docs/observability.md).
+nothing acts on (docs/observability.md); `HAReady` does not follow it.
+The stall is judged by the applier's position in the copied log (`Final
+LSA`, which the Instance Manager reads with `cubrid applyinfo -a -v`), not
+by its counters, which move only when a transaction commits (#249,
+docs/poc/RESULTS.md, POC-48): for the same source and applier process, a
+stall starts when the position did not move while the copy grew and pages
+waited at both readings, continues while the position stays and pages wait,
+and ends when the position moves or no page waits. The previous reading is
+kept in the Operator's memory and `stalledSince` in the status, so after an
+Operator restart the first reading keeps a reported stall and starts none.
+A reading without the position is judged by the counters. Backup target
+selection reads the same readings (#291).
 
 ### PVC-intact vs rebuild decision signal
 

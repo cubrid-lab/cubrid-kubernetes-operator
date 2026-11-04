@@ -147,6 +147,30 @@ a member is unreachable, leaves `Ready` to the members' readiness, so that it
 does not change on every failover; `PrimaryResolved`, `HAReady` and
 `RoutingReady` report that state.
 
+A slave is stalled (`stalledSince` set in `status.instances[].replication`)
+when log pages wait to be applied and its applier did not advance between
+two readings of the same applier process. When the Instance Manager reports
+the applier's position in the copied log (`Final LSA` of `cubrid applyinfo
+-a -v`, #593), the position decides
+([#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249)):
+a stall starts when the position did not move while the copy of the log grew
+and pages waited at both readings, continues while the position stays and
+pages wait, and ends when it moves or no page waits. The position moves
+through the records of a transaction that is still open on the master,
+while the counters (`appliedChanges`) move only at its commit, so a long
+transaction does not make a healthy slave look stalled (docs/poc/RESULTS.md,
+POC-48). An idle slave a few bytes behind the end of its copy, with no page
+waiting, is not stalled. The positions themselves change every few seconds
+on any healthy cluster, so the Operator keeps the last reading in memory and
+not in the status, which therefore is not written more often; the reading
+is kept only once the status it fed was written. After an Operator restart
+or a change of leader there is no reading to compare with: the first reading
+keeps a `stalledSince` already reported and starts none, so a stall that had
+not been reported yet is reported one reading later. An Instance Manager
+that does not report the position is judged by its counters as before, and
+a long transaction can still make its slave look stalled. `HAReady` does not
+follow `ReplicationHealthy` yet.
+
 `ReplicationHealthy` judges only the slaves whose applier was read in the
 current observation. When a read times out
 ([#278](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/278)),
@@ -229,7 +253,7 @@ An HA cluster with role discovery publishes when its HA status was observed:
 |---|---|
 | `status.lastObservedTime` | When the Operator last asked every member for its role: the observation that `currentPrimary`, `instances[]` and `PrimaryResolved`, `HAReady` and `ReplicationHealthy` were derived from |
 | `status.instances[].lastObservedTime` | The time of the observation in which that member last gave a reachable answer to the role query, whatever role it reported, that did not contradict itself or name another member; the same value as `status.lastObservedTime` for a member that answered in that observation |
-| `status.instances[].replication.observedAt` | When the slave's applier counters were last read |
+| `status.instances[].replication.observedAt` | When the slave's applier counters were last read; the applier's position read with them is kept in the Operator's memory, not in the status |
 
 - **The times only move forward, and are not written on every pass.** The
   Operator observes the roles every 10 seconds (`haResyncInterval`). A

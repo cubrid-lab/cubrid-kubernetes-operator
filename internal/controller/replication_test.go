@@ -98,7 +98,7 @@ func TestNextReplication(t *testing.T) {
 		"the counter went back": {repl(10, 4, -1), obs(0, 4), false, -1},
 	}
 	for name, tc := range tests {
-		got := nextReplication(tc.prev, tc.obs, testNow)
+		got := nextReplication(tc.prev, tc.obs, nil, testNow)
 		if got != nil && tc.obs != nil && (got.ObservedAt == nil || !got.ObservedAt.Time.Equal(testNow)) {
 			t.Errorf("%s: observedAt = %v, want the time of the reading", name, got.ObservedAt)
 		}
@@ -134,7 +134,7 @@ func TestNextReplication(t *testing.T) {
 // replicationHistoryTTL.
 func TestNextReplication_MissedReading(t *testing.T) {
 	prev := repl(10, 9, 40*time.Second)
-	got := nextReplication(prev, nil, testNow)
+	got := nextReplication(prev, nil, nil, testNow)
 	if got == nil || *got.ObservedAt != *prev.ObservedAt || got.StalledSince == nil ||
 		!got.StalledSince.Time.Equal(prev.StalledSince.Time) || got.AppliedChanges != 10 || got.DelayedPages != 9 {
 		t.Errorf("missed reading = %+v, want the reading before unchanged", got)
@@ -211,7 +211,7 @@ func TestInstanceStatuses_Replication(t *testing.T) {
 		replSlaveA: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow, Replication: stuck},
 		replSlaveB: {Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: testNow, Replication: stuck},
 	}
-	first := instanceStatuses(members, obs, testNow, nil)
+	first := instanceStatuses(members, obs, testNow, nil, nil)
 	if first[0].Replication != nil || first[2].Replication != nil {
 		t.Errorf("replication of a master or an unknown member: %+v, %+v", first[0].Replication, first[2].Replication)
 	}
@@ -223,7 +223,7 @@ func TestInstanceStatuses_Replication(t *testing.T) {
 		o.ObservedAt = later
 		obs[name] = o
 	}
-	second := instanceStatuses(members, obs, later, first)
+	second := instanceStatuses(members, obs, later, first, nil)
 	if r := second[1].Replication; r == nil || r.StalledSince == nil || !r.StalledSince.Time.Equal(later) {
 		t.Errorf("second observation with nothing applied = %+v, want it stalled since then", r)
 	}
@@ -276,7 +276,7 @@ func TestInstanceStatuses_ReplicationAcrossMissedReadings(t *testing.T) {
 	for i, slave := range steps {
 		now := testNow.Add(time.Duration(i) * haResyncInterval)
 		obs := at(now, slave)
-		status = instanceStatuses(members, obs, now, status)
+		status = instanceStatuses(members, obs, now, status, nil)
 		if r := status[1].Replication; i > 0 && (r == nil || r.StalledSince == nil || !r.StalledSince.Time.Equal(stalledSince)) {
 			t.Fatalf("step %d: replication = %+v, want stalled since the second reading", i, r)
 		}
@@ -301,9 +301,9 @@ func TestInstanceStatuses_ReplicationHistoryExpires(t *testing.T) {
 			replSlaveA: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: when, Replication: r},
 		}
 	}
-	status := instanceStatuses(members, obsAt(testNow, stuck), testNow, nil)
+	status := instanceStatuses(members, obsAt(testNow, stuck), testNow, nil, nil)
 	later := testNow.Add(historyExpired)
-	gap := instanceStatuses(members, obsAt(later, nil), later, status)
+	gap := instanceStatuses(members, obsAt(later, nil), later, status, nil)
 	if r := gap[1].Replication; r != nil {
 		t.Errorf("replication after the history expired = %+v, want none", r)
 	}
@@ -311,7 +311,7 @@ func TestInstanceStatuses_ReplicationHistoryExpires(t *testing.T) {
 		t.Errorf("condition after the history expired = %s, want Unknown", cond)
 	}
 	again := later.Add(haResyncInterval)
-	if r := instanceStatuses(members, obsAt(again, stuck), again, gap)[1].Replication; r == nil || r.StalledSince != nil {
+	if r := instanceStatuses(members, obsAt(again, stuck), again, gap, nil)[1].Replication; r == nil || r.StalledSince != nil {
 		t.Errorf("first reading of a new series = %+v, want it not stalled", r)
 	}
 }
@@ -334,7 +334,7 @@ func TestInstanceStatuses_HeldReadingKeepsTheStallSeries(t *testing.T) {
 	var stored databasev1alpha1.CubridClusterStatus
 	pass := func(now time.Time, r *ReplicationObservation) {
 		next := stored.DeepCopy()
-		next.Instances = instanceStatuses(members, obsAt(now, r), now, stored.Instances)
+		next.Instances = instanceStatuses(members, obsAt(now, r), now, stored.Instances, nil)
 		at := metav1.NewTime(now)
 		next.LastObservedTime = &at
 		holdObservationTimes(&stored, next, now)
@@ -383,7 +383,7 @@ func TestInstanceStatuses_ReplicationKeptOnlyForAReadSlave(t *testing.T) {
 		"a member that is now a master":      {master, false},
 	} {
 		obs := map[string]RoleObservation{replMaster: master, replSlaveA: tc.member}
-		if r := instanceStatuses(members, obs, testNow, prev)[1].Replication; (r != nil) != tc.kept {
+		if r := instanceStatuses(members, obs, testNow, prev, nil)[1].Replication; (r != nil) != tc.kept {
 			t.Errorf("%s: replication = %+v, want kept %t", name, r, tc.kept)
 		}
 	}
@@ -421,7 +421,7 @@ func TestNextReplication_RestartedApplierStartsANewSeries(t *testing.T) {
 		"an applier whose identity could not be read":       {prevOf(before, 40*time.Second), reading("", 10, 9), 40 * time.Second},
 		"the same applier, first two readings with a stall": {prevOf(before, notStalled), reading(before, 10, 9), 0},
 	} {
-		got := nextReplication(tc.prev, tc.obs, testNow)
+		got := nextReplication(tc.prev, tc.obs, nil, testNow)
 		if got.Applier != tc.obs.Applier {
 			t.Errorf("%s: applier = %q, want the one of the reading, %q", name, got.Applier, tc.obs.Applier)
 		}
@@ -433,7 +433,7 @@ func TestNextReplication_RestartedApplierStartsANewSeries(t *testing.T) {
 		}
 	}
 	// A reading that is missed keeps the identity with the rest.
-	if got := nextReplication(prevOf(before, 40*time.Second), nil, testNow); got.Applier != before {
+	if got := nextReplication(prevOf(before, 40*time.Second), nil, nil, testNow); got.Applier != before {
 		t.Errorf("a missed reading: applier = %q, want it kept as %q", got.Applier, before)
 	}
 }
@@ -449,7 +449,7 @@ func TestNextReplication_CrashLoopingApplierStaysStalled(t *testing.T) {
 		now := testNow.Add(time.Duration(i) * haResyncInterval)
 		obs := &ReplicationObservation{Source: replMaster, AppliedChanges: 10, DelayedPages: 9,
 			Applier: "pid:" + strconv.Itoa(100+i) + ":" + strconv.Itoa(1000+i)}
-		next := nextReplication(prev, obs, now)
+		next := nextReplication(prev, obs, nil, now)
 		if next.StalledSince == nil {
 			t.Fatalf("reading %d beside applier %s: stalledSince = nil, want the stall still reported", i, obs.Applier)
 		}

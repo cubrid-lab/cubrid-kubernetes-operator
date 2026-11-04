@@ -150,6 +150,11 @@ type CubridClusterReconciler struct {
 	// NetworkPolicy of the DB Pods admits to the Instance Manager port. Empty
 	// admits none.
 	OperatorNS string
+	// Positions keeps the last reading of each slave's applier for the stall
+	// rule (nextReplication), shared with the CubridBackupReconciler. Nil
+	// keeps the readings in a store of this reconciler's own.
+	Positions    *ApplierPositions
+	ownPositions ApplierPositions
 
 	// reports holds, per cluster, the report of the reconcile that is running
 	// for it (reconcileReport).
@@ -211,6 +216,10 @@ type reconcileReport struct {
 	// readyReplicas is the number of ready Pods of the StatefulSet this
 	// reconcile read, nil when it read none.
 	readyReplicas *int32
+	// positions are the applier readings of this reconcile's observation,
+	// kept in ApplierPositions once a write of the status they fed succeeds;
+	// nil when the roles were not observed.
+	positions map[string]applierReading
 }
 
 type pendingEvent struct{ eventType, reason, message string }
@@ -275,6 +284,10 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 	if err == nil {
 		// The metrics say what the stored status says.
 		publishClusterMetrics(cluster, readyReplicas)
+		// So do the applier readings the next one is compared with.
+		if ok && report.(*reconcileReport).positions != nil {
+			r.applierPositions().commit(cluster.UID, client.ObjectKeyFromObject(cluster), report.(*reconcileReport).positions)
+		}
 	}
 	if apierrors.IsNotFound(err) {
 		// The cluster was deleted during the reconcile: there is nothing to
@@ -282,6 +295,7 @@ func (r *CubridClusterReconciler) writeStatus(ctx context.Context, cluster *data
 		// as a CRD without the status subresource, stays an error.
 		gone := r.Get(ctx, client.ObjectKeyFromObject(cluster), &databasev1alpha1.CubridCluster{})
 		if apierrors.IsNotFound(gone) {
+			r.applierPositions().forget(client.ObjectKeyFromObject(cluster))
 			logf.FromContext(ctx).V(1).Info("Skipped status write of a deleted CubridCluster")
 			return nil
 		}
@@ -330,6 +344,7 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		r.conflicts.Delete(conflictKey{req.NamespacedName, brokerWrites})
 		if apierrors.IsNotFound(err) {
 			metrics.DeleteCluster(req.Namespace, req.Name)
+			r.applierPositions().forget(req.NamespacedName)
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -1243,4 +1258,12 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&networkingv1.NetworkPolicy{}).
 		Named("cubridcluster").
 		Complete(r)
+}
+
+// applierPositions is the store of applier readings this reconciler writes.
+func (r *CubridClusterReconciler) applierPositions() *ApplierPositions {
+	if r.Positions != nil {
+		return r.Positions
+	}
+	return &r.ownPositions
 }
