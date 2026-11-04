@@ -92,7 +92,8 @@ type ReplicationObservation struct {
 // does not move and pages wait; it ends when the position moves or no page
 // waits. "Behind" is pages waiting, never a gap between the position and the
 // copy's end: an idle healthy slave sits a few bytes behind (#593). A reading
-// of another source starts no stall.
+// of another source starts no stall. Readings less than
+// positionCompareInterval apart are not compared: the stall stored is kept.
 //
 // When this reading carries the positions and no reading is kept, as after an
 // Operator restart or a change of leader, nothing is compared: the stored
@@ -156,19 +157,7 @@ func nextReplication(prev *databasev1alpha1.InstanceReplication, obs *Replicatio
 			next.StalledSince = continued(reported, prev != nil && sameApplier(prev.Applier, obs.Applier), now)
 		}
 	case positioned && pos.FinalLSA != nil && pos.CopiedEOF != nil:
-		if pos.Source != obs.Source || *pos.FinalLSA != *obs.FinalLSA || obs.DelayedPages == 0 {
-			return next
-		}
-		if !sameApplier(pos.Applier, obs.Applier) {
-			next.StalledSince = continued(reported, false, now)
-			return next
-		}
-		if reported == nil && pos.DelayedPages > 0 && logBefore(*pos.CopiedEOF, *obs.CopiedEOF) {
-			since := metav1.NewTime(now)
-			next.StalledSince = &since
-			return next
-		}
-		next.StalledSince = reported.DeepCopy()
+		next.StalledSince = positionStall(reported, pos, obs, now)
 	case prev != nil && prev.Source == obs.Source &&
 		prev.DelayedPages > 0 && obs.DelayedPages > 0 && prev.AppliedChanges == obs.AppliedChanges:
 		// The counters: pages wait and nothing was applied since the
@@ -182,6 +171,26 @@ func nextReplication(prev *databasev1alpha1.InstanceReplication, obs *Replicatio
 		next.StalledSince = continued(reported, same, now)
 	}
 	return next
+}
+
+// positionStall is the stalledSince of the reading obs, judged by the
+// applier's position against pos, the reading kept before, which both carry
+// it; reported is the stall stored before, nil for none (nextReplication).
+func positionStall(reported *metav1.Time, pos *applierReading, obs *ReplicationObservation, now time.Time) *metav1.Time {
+	switch {
+	case tooClose(pos.ReadAt, now):
+		// Too soon after the reading kept to compare positions: the stall
+		// stored is neither started nor ended.
+		return reported.DeepCopy()
+	case pos.Source != obs.Source || *pos.FinalLSA != *obs.FinalLSA || obs.DelayedPages == 0:
+		return nil
+	case !sameApplier(pos.Applier, obs.Applier):
+		return continued(reported, false, now)
+	case reported == nil && pos.DelayedPages > 0 && logBefore(*pos.CopiedEOF, *obs.CopiedEOF):
+		since := metav1.NewTime(now)
+		return &since
+	}
+	return reported.DeepCopy()
 }
 
 // sameApplier reports whether two applier identities may name the same

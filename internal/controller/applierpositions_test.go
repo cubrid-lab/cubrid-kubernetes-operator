@@ -159,6 +159,57 @@ func TestNextReplication_ByApplierPosition(t *testing.T) {
 	}
 }
 
+// A slave that gave no answer to one probe keeps its earlier reading, so the
+// next reading is compared with it; the TTL still bounds it.
+func TestReadingPositions_KeptAcrossAMissedProbe(t *testing.T) {
+	members := []string{replMaster, replSlaveA}
+	master := RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: testNow}
+	first := *positionBefore("a", lsa(100, 0), lsa(101, 0), 3)
+	before := map[string]applierReading{replSlaveA: first}
+	kept := readingPositions(members, map[string]RoleObservation{replMaster: master, replSlaveA: {Reachable: false}},
+		before, testNow)
+	if r, ok := kept[replSlaveA]; !ok || r.ReadAt != first.ReadAt {
+		t.Fatalf("readings after a missed probe = %+v, want the earlier one kept", kept)
+	}
+	later := testNow.Add(haResyncInterval)
+	got := nextReplication(repl(10, 3, -1), positionObs("a", lsa(100, 0), lsa(105, 0), 7), positionOf(kept, replSlaveA), later)
+	if got.StalledSince == nil || !got.StalledSince.Time.Equal(later) {
+		t.Errorf("stalledSince = %v, want a stall compared with the earlier reading", got.StalledSince)
+	}
+}
+
+// Two readings much closer than the HA resync interval, as from reconciles
+// that events trigger a second apart, are not compared by position: a busy
+// slave's position may not have moved yet. The earlier reading stays the base,
+// and the stored stall is neither started nor cleared.
+func TestNextReplication_CloseReadingsAreNotCompared(t *testing.T) {
+	near := func(final, eof *databasev1alpha1.LogAddress, delayed int64) *applierReading {
+		r := positionBefore("a", final, eof, delayed)
+		r.ReadAt = testNow.Add(-time.Second)
+		return r
+	}
+	if got := nextReplication(repl(10, 3, -1), positionObs("a", lsa(100, 0), lsa(105, 0), 7),
+		near(lsa(100, 0), lsa(101, 0), 3), testNow); got.StalledSince != nil {
+		t.Errorf("a stall started from readings 1 s apart: %v", got.StalledSince)
+	}
+	stalled := repl(10, 7, 50*time.Second)
+	if got := nextReplication(stalled, positionObs("a", lsa(101, 0), lsa(105, 0), 6),
+		near(lsa(100, 0), lsa(105, 0), 7), testNow); got.StalledSince == nil ||
+		!got.StalledSince.Time.Equal(stalled.StalledSince.Time) {
+		t.Errorf("a stall changed by readings 1 s apart: %v", got.StalledSince)
+	}
+	members := []string{replMaster, replSlaveA}
+	obs := map[string]RoleObservation{
+		replMaster: {Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: testNow},
+		replSlaveA: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow,
+			Replication: positionObs("a", lsa(101, 0), lsa(105, 0), 6)},
+	}
+	base := *near(lsa(100, 0), lsa(105, 0), 7)
+	if kept := readingPositions(members, obs, map[string]applierReading{replSlaveA: base}, testNow); kept[replSlaveA].ReadAt != base.ReadAt {
+		t.Errorf("reading kept = %+v, want the earlier one as the base", kept[replSlaveA])
+	}
+}
+
 // The Instance Manager's applier position reaches the observation.
 func TestObservationFromStatus_ApplierPosition(t *testing.T) {
 	applier := &instancemanager.ApplyConvergence{Available: true, Source: replMaster, DelayedPageCount: 2,
@@ -183,7 +234,7 @@ func TestApplierPositions(t *testing.T) {
 		replMaster: {Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: testNow},
 		replSlaveA: slave(positionObs("a", lsa(100, 0), lsa(101, 0), 1)),
 		replSlaveB: slave(nil),
-		replSlaveC: {Reachable: false},
+		replSlaveC: {Reachable: true, Role: databasev1alpha1.RoleReplica, ObservedAt: testNow},
 	}
 	before := map[string]applierReading{
 		replSlaveB: *positionBefore("b", lsa(50, 0), lsa(50, 0), 0),

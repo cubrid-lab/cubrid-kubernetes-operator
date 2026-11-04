@@ -155,7 +155,13 @@ the applier's position in the copied log (`Final LSA` of `cubrid applyinfo
 ([#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249)):
 a stall starts when the position did not move while the copy of the log grew
 and pages waited at both readings, continues while the position stays and
-pages wait, and ends when it moves or no page waits. The position moves
+pages wait, and ends when it moves or no page waits. When another applier
+process takes over while a stall is reported and pages wait, the stall
+starts again at that reading and continues while the new applier's position
+stays, without the copy having to grow again; with no stall reported,
+another applier starts none. Readings less than 5 seconds apart, as from
+reconciles that events trigger, are not compared, and a slave that misses
+one probe keeps its last reading as the base. The position moves
 through the records of a transaction that is still open on the master,
 while the counters (`appliedChanges`) move only at its commit, so a long
 transaction does not make a healthy slave look stalled (docs/poc/RESULTS.md,

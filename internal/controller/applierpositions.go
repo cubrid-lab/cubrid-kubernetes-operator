@@ -130,22 +130,43 @@ func (r applierReading) deepCopy() applierReading {
 }
 
 // readingPositions returns the readings of this observation's slaves to keep
-// for the next one: the reading of each authoritative slave whose applier was
-// read, read at now, and for an authoritative slave whose applier was not
-// read, the reading kept before, as the status keeps its last reading. A
-// member that is not an authoritative slave keeps none.
+// for the next one. An authoritative slave whose applier was read keeps this
+// reading, read at now, unless the reading kept is less than
+// positionCompareInterval old: that one stays the base the next reading is
+// compared with (nextReplication). A member authoritatively observed in
+// another role keeps none. Any other member, a slave whose applier was not
+// read or a member that gave no usable answer, keeps the reading kept before,
+// until it is older than replicationHistoryTTL.
 func readingPositions(members []string, obs map[string]RoleObservation, before map[string]applierReading,
 	now time.Time) map[string]applierReading {
 	out := make(map[string]applierReading)
-	for _, m := range authoritativeSlaves(members, obs, now) {
-		if r := obs[m].Replication; r != nil {
+	for _, m := range members {
+		o, observed := obs[m]
+		kept, hasKept := before[m]
+		switch {
+		case observed && authoritative(o, now) && o.Role != databasev1alpha1.RoleSlave:
+		case observed && authoritative(o, now) && o.Replication != nil && (!hasKept || !tooClose(kept.ReadAt, now)):
+			r := o.Replication
 			out[m] = applierReading{Source: r.Source, Applier: r.Applier, FinalLSA: r.FinalLSA.DeepCopy(),
 				CopiedEOF: r.CopiedEOF.DeepCopy(), DelayedPages: r.DelayedPages, ReadAt: now}
-		} else if kept, ok := before[m]; ok {
+		case hasKept:
 			out[m] = kept
 		}
 	}
 	return out
+}
+
+// positionCompareInterval is the least time between two readings whose
+// applier positions are compared. Reconciles that events trigger can read a
+// slave a second apart, too soon for a busy applier's position to have moved,
+// which would start a stall and clear it at the next reading.
+const positionCompareInterval = haResyncInterval / 2
+
+// tooClose reports whether a reading taken at now is too close to one read at
+// before to compare their positions.
+func tooClose(before, now time.Time) bool {
+	age := now.Sub(before)
+	return age >= 0 && age < positionCompareInterval
 }
 
 // positionOf returns the reading kept for member, nil when there is none.

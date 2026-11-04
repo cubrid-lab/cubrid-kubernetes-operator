@@ -188,7 +188,10 @@ by its counters, which move only when a transaction commits (#249,
 docs/poc/RESULTS.md, POC-48): for the same source and applier process, a
 stall starts when the position did not move while the copy grew and pages
 waited at both readings, continues while the position stays and pages wait,
-and ends when the position moves or no page waits. The previous reading is
+and ends when the position moves or no page waits; another applier process
+restarts a reported stall at now, which then continues while its position
+stays and pages wait, without the copy having to grow again. Readings less
+than half the resync interval apart are not compared. The previous reading is
 kept in the Operator's memory and `stalledSince` in the status, so after an
 Operator restart the first reading keeps a reported stall and starts none.
 A reading without the position is judged by the counters. Backup target
