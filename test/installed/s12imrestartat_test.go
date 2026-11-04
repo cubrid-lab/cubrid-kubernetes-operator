@@ -539,6 +539,9 @@ const (
 	// is Starting, testIMRestoredManifest the manifest the restore restored.
 	testIMStarting         = "the restored database is being started on " + testIMRestartTarget
 	testIMRestoredManifest = "s3://bucket/run/manifest.json"
+	// testIMNotStarting is how a kill that could not be placed at starting
+	// is reported.
+	testIMNotStarting = "could not be placed while the restored database was being started"
 )
 
 // testIMRestored is the restored artifact the target's Instance Manager
@@ -562,12 +565,15 @@ func testOpJSON(t *testing.T, op instancemanager.Operation) string {
 // the fixture at starting answers: polled are the states of the killed
 // operation read before the kill, one per read, the last kept; killed is its
 // record read after the cluster is Ready, completing that of the next
-// operation.
+// operation. pollErr, when set, answers every read before the kill, and
+// completingErr the read of the next operation's record.
 type s12IMRestartStartingRecords struct {
-	polled     []instancemanager.OperationState
-	polls      int
-	killed     instancemanager.Operation
-	completing instancemanager.Operation
+	polled        []instancemanager.OperationState
+	polls         int
+	pollErr       error
+	killed        instancemanager.Operation
+	completing    instancemanager.Operation
+	completingErr error
 }
 
 // newS12IMRestartStartingFixture plays a restore whose Instance Manager is
@@ -605,6 +611,9 @@ func newS12IMRestartStartingFixture(t *testing.T) (*s12IMRestartFixture, *s12IMR
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		switch {
+		case strings.Contains(script, imOperationsDir+"/"+records.completing.ID+".json") &&
+			records.completingErr != nil:
+			return "", records.completingErr
 		case strings.Contains(script, imOperationsDir+"/"+records.completing.ID+".json"):
 			return testOpJSON(t, records.completing), nil
 		case !strings.Contains(script, imOperationsDir+"/"+testIMRestartOp+".json"):
@@ -612,6 +621,9 @@ func newS12IMRestartStartingFixture(t *testing.T) (*s12IMRestartFixture, *s12IMR
 			return "", errors.New("no such record")
 		case f.killed:
 			return testOpRecord(t, records.killed, "absent"), nil
+		case records.pollErr != nil:
+			records.polls++
+			return "", records.pollErr
 		}
 		state := records.polled[min(records.polls, len(records.polled)-1)]
 		records.polls++
@@ -666,27 +678,51 @@ func TestRunS12InstanceManagerRestartStartingPassesWhenTheNextOperationTakesOver
 func TestRunS12InstanceManagerRestartStartingIsBlockedWhenTheKillCannotBePlaced(t *testing.T) {
 	for name, tc := range map[string]struct {
 		change func(*s12IMRestartFixture, *s12IMRestartStartingRecords)
+		polls  int
 		want   []string
 	}{
 		"the record is first seen Completed": {change: func(_ *s12IMRestartFixture, r *s12IMRestartStartingRecords) {
 			r.polled = []instancemanager.OperationState{instancemanager.OpRestoring, instancemanager.OpCompleted}
-		}, want: []string{"could not be placed while the restored database was being started",
+		}, polls: 2, want: []string{testIMNotStarting,
 			"read Completed before any reading of it Starting"}},
 		"the bootstrap moves past Restoring first": {change: func(f *s12IMRestartFixture,
 			r *s12IMRestartStartingRecords) {
 			f.beforeKill = append(f.beforeKill, databasev1alpha1.BootstrapSeedingReplicas)
 			f.noHold = true
 			r.polled = []instancemanager.OperationState{instancemanager.OpRestoring}
-		}, want: []string{"could not be placed while the restored database was being started",
+		}, want: []string{testIMNotStarting,
 			"the bootstrap was seen SeedingReplicas"}},
+		// The record is read only while the bootstrap is Restoring with the
+		// operation, so a bootstrap past it is seen without any exec.
+		"the record read Failed for another reason": {change: func(_ *s12IMRestartFixture,
+			r *s12IMRestartStartingRecords) {
+			r.polled = []instancemanager.OperationState{instancemanager.OpFailed}
+		}, polls: 1, want: []string{testIMNotStarting,
+			"read Failed before any reading of it Starting"}},
+		"the bootstrap names another operation right before the kill": {change: func(f *s12IMRestartFixture,
+			r *s12IMRestartStartingRecords) {
+			f.tamper = func(_ int, killed bool, s *databasev1alpha1.CubridClusterStatus) {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				// The attempt failed and the next one started between the
+				// reading of Starting and the reading right before the kill.
+				if !killed && r.polls >= len(r.polled) {
+					s.Bootstrap.Attempts, s.Bootstrap.OperationID = 1, testIMRestartOp3
+					s.Conditions[0].Reason, s.Conditions[0].Message = s12RetryReason, testIMRetryMessage
+				}
+			}
+		}, polls: 3, want: []string{testIMNotStarting,
+			"right before it the bootstrap named operation \"" + testIMRestartOp3 + "\", not the one whose " +
+				"record was read Starting"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, records := newS12IMRestartStartingFixture(t)
 			tc.change(f, records)
 			restart, err := imRestartOf(t, f)
 			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
-			if f.imKills != 0 {
-				t.Fatalf("kills = %d, want none", f.imKills)
+			if f.imKills != 0 || records.polls != tc.polls {
+				t.Fatalf("kills = %d, record reads before the kill = %d; want none and %d", f.imKills,
+					records.polls, tc.polls)
 			}
 		})
 	}
@@ -744,5 +780,65 @@ func TestRunS12InstanceManagerRestartStartingFailsWhenTheRetriedRestoreFailsAgai
 func TestValidateS12InstanceManagerRestartAcceptsStarting(t *testing.T) {
 	if err := testS12IMRestartConfigAt(t, IMRestartAtStarting).validateS12InstanceManagerRestart(); err != nil {
 		t.Fatalf("validateS12InstanceManagerRestart() = %v, want starting accepted", err)
+	}
+}
+
+func TestRunS12InstanceManagerRestartStartingIsBlockedByTheRecordsAfterReady(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartStartingRecords)
+		want   []string
+	}{
+		// The start ended and Completed was recorded before the kill took
+		// effect: the kill interrupted nothing.
+		"the killed record is Completed": {change: func(r *s12IMRestartStartingRecords) {
+			r.killed.State, r.killed.FailureReason = instancemanager.OpCompleted, ""
+		}, want: []string{"is Completed", "not Failed by its restart"}},
+		"the completing record cannot be read": {change: func(r *s12IMRestartStartingRecords) {
+			r.completingErr = errors.New("No such file or directory\ncommand terminated with exit code 1")
+		}, want: []string{"which completed the restore, on " + testIMRestartTarget + " could not be read",
+			"No such file or directory"}},
+		"the completing record is not Completed": {change: func(r *s12IMRestartStartingRecords) {
+			r.completing.State, r.completing.FailureReason = instancemanager.OpFailed, s12IMRestartedReason
+		}, want: []string{"which completed the restore, is Failed", "not Completed"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartStartingFixture(t)
+			tc.change(records)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
+			if restart.Measurements["tookOverRestoredData"] != evidence.Unknown {
+				t.Fatalf("measurements = %v, want tookOverRestoredData unknown", restart.Measurements)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartStartingWhenRestoreLimitPassesBeforeStarting(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartStartingRecords)
+		result evidence.Result
+		want   []string
+	}{
+		// The record could not be read, so whether the database was started
+		// is not known.
+		"the record cannot be read": {change: func(r *s12IMRestartStartingRecords) {
+			r.pollErr = errors.New(testIMRefused)
+		}, result: evidence.Blocked, want: []string{"no reading before restore_limit", testIMRefused}},
+		// The record was read Restoring until the limit: the restored database
+		// was not started within it, which S12 requires.
+		"the record stays Restoring": {change: func(r *s12IMRestartStartingRecords) {
+			r.polled = []instancemanager.OperationState{instancemanager.OpRestoring}
+		}, result: evidence.Fail, want: []string{"the restored database was not started within restore_limit",
+			"was last read Restoring"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartStartingFixture(t)
+			tc.change(records)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, tc.result, tc.want...)
+			if f.imKills != 0 {
+				t.Fatalf("kills = %d, want none", f.imKills)
+			}
+		})
 	}
 }

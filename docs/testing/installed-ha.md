@@ -3406,7 +3406,15 @@ What the product does:
 - The Instance Manager records the restored artifact (`restored`) once
   `restoredb` succeeded, then records the operation `Starting` and starts the
   restored database, then records it `Completed` (`runRestore`,
-  `startRestoredDatabase` in `internal/instancemanager/server.go`). The
+  `startRestoredDatabase` in `internal/instancemanager/server.go`).
+  `Starting` is recorded only right before a start command: `cubrid server
+  start` on a standalone member, and on an HA member, which the recovery's
+  target is, `cubrid heartbeat start`, and only when the manager observes
+  heartbeat as startable. When it is not, nothing is started there and the
+  record goes from `Restoring` to `Completed` without `Starting`; the
+  variant is then blocked ("read Completed before any reading of it
+  Starting"), which says that no `Starting` window was there to kill in, not
+  that the kill failed. The
   Operator shows the bootstrap `Restoring` with the operation through
   `Starting`, with the message "the restored database is being started"
   (`setRestoreProgress`). The window lasts as long as the database's start,
@@ -3422,16 +3430,22 @@ What the product does:
 
 What differs from the steps above:
 - **Wait for Starting** (step 2): after a reading of `Restoring` with an
-  `operationID`, the run reads the target's own record of that operation,
-  `/var/lib/cubrid/operations/<operationID>.json`, with one `kubectl exec`
-  about every 250 ms, and the cluster after each read. The first reading of
+  `operationID`, the run reads the cluster no more often than every 250 ms
+  and, while it still shows `Restoring` with that operation, the target's own record of the
+  operation, `/var/lib/cubrid/operations/<operationID>.json`, with one
+  `kubectl exec`. The 250 ms is a lower bound: each tick takes one read of
+  the cluster and one `kubectl exec`, so the real interval is longer. The first reading of
   the record `Starting` places the kill; it is recorded with its time
   (`placingReading`), and the earlier readings once per state
   (`operationReadings`). A record read `Completed` or `Failed`, or a cluster
   in another phase or with another operation, before any reading of
   `Starting` blocks the variant ("the kill could not be placed while the
-  restored database was being started") and nothing is killed. A record that
-  cannot be read is read again.
+  restored database was being started") and nothing is killed. That
+  includes a record read `Failed` for another reason than the restart: the
+  restore's own failure is S12 `exact`'s to judge, not this placement's. A
+  record that cannot be read is read again; `-restore-limit` passing while
+  it cannot be read blocks the variant, and passing while it is read but
+  never `Starting` fails it, as the restore was not done in time.
 - **Right before the kill** (step 3): as at `restoring`, and the reading must
   name the operation whose record was read `Starting`.
 - **The bootstrap** (step 8) is judged as at `restoring`: exactly one retry
