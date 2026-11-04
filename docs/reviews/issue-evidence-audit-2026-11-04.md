@@ -10,7 +10,7 @@
 - Current Git tree: **466 entries** including directories. **213** issues name at least one recognisable source/document path; **10** reference one or more named paths not present in the snapshot (some are historical or proposed test files, not necessarily missing implementations).
 - **98** closed issue bodies still contain unchecked task boxes. This is a documentation signal, not a proof of unfinished work; confirm closure from the accepted PR and evidence.
 - Machine-readable [306-row inventory](./issue-evidence-inventory-2026-11-04.csv) shows one row per issue, its state, category, matching/missing named source paths, whether extra real-environment evidence is indicated, and an evidence follow-up.
-- **11** issues have the limited, specifically described code/artifact checks below. All other issues remain **technical verification pending** beyond the indexed metadata. Where a row says "limited", it does **not** mean every claim in that issue was proven.
+- **12** issues have the limited, specifically described code/artifact checks below. All other issues remain **technical verification pending** beyond the indexed metadata. Where a row says "limited", it does **not** mean every claim in that issue was proven.
 
 ## Actual CI and source findings
 
@@ -19,13 +19,14 @@
 - [main E2E workflow](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/41818432894) completed successfully. The downloaded `e2e-evidence` ZIP contains `summary.json` with `passed: true`.
 - The actual S00 entry is `pass` even though `install_limit: unset`, `ready_limit: unset`, and `measurements.timeLimitVerdict: blocked: time_limit_unset`. It measured Operator installation at **12 s** and SQL readiness at **18.206805064 s**. This is a genuine policy exception: SQL checks passed, but time-limit judgment was **not scored**.
 - [PR #681](https://github.com/cubrid-lab/cubrid-kubernetes-operator/pull/681) proposes fixing the exception. A downloaded E2E artifact for [run #41822579879](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/41822579879) records S00 `pass` with `timeLimitVerdict: pass`, thresholds `1m0s` and `1m30s`, and measurements of **11 s** and **17.635305778 s**. This is evidence for that tested PR snapshot, not for unreviewed future commits or the VM lab.
-- The PR's previously checked final-head `Tests` and `Lint` failed on **three lines over 120 characters** in `test/faults/limits_test.go`. A follow-up formatting commit `ce68547` was submitted; the latest CI and independent maintainer review must still be checked before merging.
+- The PR's previously checked final-head `Tests` and `Lint` failed on **three lines over 120 characters** in `test/faults/limits_test.go`. Further formatting commits `ce68547` and `5ea8364` were submitted after the failures; final-head CI and independent maintainer review must still be checked before merging.
 
 ### Narrow, source-level findings (not production proofs)
 
 | Issue | Current-source result | What remains |
 |---|---|---|
 | [#20](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/20) | The API group `database.cubrid.io` is used in current Go/CRD sources | Documentary ownership and final naming decision |
+| [#80](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/80) | Published lab inventory describes 2-vCPU workers, node-local `local-path` rather than CSI, and no established VM power-off/return recovery | Live inventory verification, required CSI/reference acceptance and real VM stop/return evidence |
 | [#86](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/86) | Broker routing Conditions become false on unresolved primary, but this alone does not demonstrate that existing writable connections are cut off | Real SQL partition/quarantine testing |
 | [#156](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/156) | `reconcileStatefulSet` explicitly sets `ParallelPodManagement` on creation | Check accepted ADR/POC for the claimed full-restart behavior |
 | [#292](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/292) | Confirmed the S00 exception in code and real main E2E summary | PR #681 acceptance, final gate and baseline provenance |
