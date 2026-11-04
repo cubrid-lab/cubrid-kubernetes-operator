@@ -1772,7 +1772,7 @@ measured; **unset** limits have neither a value nor a baseline.
 S00 uses the same four rules as every other required scenario
 (`faults.JudgeS00Limits`). If either `install_limit` or `ready_limit`
 is `0` or `unset`, the scenario is `blocked` with `time_limit_unset`
-unless a set limit was exceeded, in which case it `fail`s. A missing
+unless a set limit was exceeded, in which case the scenario fails. A missing
 measurement against a set limit produces `measurement_missing` when
 no limit is unset. S00 records both limits and the resulting
 `timeLimitVerdict` in `summary.json` (#292).
