@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -337,7 +338,8 @@ func (r *haRun) s05(variant string) {
 	// A Broker failure moves no master, and in the variants that leave one
 	// read-write Broker Pod the write endpoint stays available.
 	agreement, agreementFiles, agreementMeasured := checkConditions("S05/"+variant, rounds, clientEvents,
-		outcome.Timeline, append(faults.NeverRules(), faults.S05Rules(master, variant != s05AllRWBrokers)...))
+		outcome.Timeline, slices.Concat(faults.NeverRules(), faults.HAReportRules(),
+			faults.S05Rules(master, variant != s05AllRWBrokers)))
 	files = append(files, agreementFiles...)
 	result = judged(evidence.Scenario{
 		ID: "S05", Variant: variant,
@@ -371,6 +373,15 @@ func (r *haRun) s05(variant string) {
 		}
 		result.Result = evidence.Fail
 	}
+	// A rule S05 requires that could not be judged leaves no verdict on the
+	// Conditions: the evidence it needs is missing, so a run that passed
+	// everything else is blocked, not passed.
+	if len(agreement.NotJudged) > 0 && result.Result == evidence.Pass {
+		result.Result = evidence.Blocked
+		result.Reason = reasonConditionsNotJudged + ": " + strings.Join(agreement.NotJudged, "; ")
+	}
 	Expect(agreement.Disagreements).To(BeEmpty(),
 		"S05/%s: the Conditions disagreed with CUBRID's heartbeat or the Broker Deployment; see agreement.txt", variant)
+	Expect(agreement.NotJudged).To(BeEmpty(),
+		"S05/%s: a rule on the Conditions could not be judged; see agreement.txt", variant)
 }

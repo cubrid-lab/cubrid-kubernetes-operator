@@ -90,6 +90,16 @@ func warnError(err error) {
 
 // Run executes the provided command within this context
 func Run(cmd *exec.Cmd) (string, error) {
+	return run(cmd, true)
+}
+
+// RunQuiet is Run without the line that announces the command, for commands
+// repeated every few seconds in the background.
+func RunQuiet(cmd *exec.Cmd) (string, error) {
+	return run(cmd, false)
+}
+
+func run(cmd *exec.Cmd, announce bool) (string, error) {
 	dir, _ := GetProjectDir()
 	cmd.Dir = dir
 
@@ -99,7 +109,9 @@ func Run(cmd *exec.Cmd) (string, error) {
 
 	cmd.Env = append(os.Environ(), "GO111MODULE=on")
 	command := redacted(strings.Join(cmd.Args, " "))
-	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
+	if announce {
+		_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("%q failed with error %q: %w", command, redacted(string(output)), err)

@@ -703,22 +703,35 @@ timeline. Each rule is of one of three kinds:
 - **Never**: a combination of Conditions that one read never holds, because
   the Operator sets both from the same step. A read that holds it is a
   disagreement.
-- **Tolerance**: a Condition compared with another source. The Condition is
-  allowed to lag behind for 80 seconds: the 60 seconds after which the status
-  is stale (docs/observability.md, "Freshness"), the 15 seconds a role answer
-  may be older than the observation (`roleObservationTTL`), and 5 seconds for
-  the sampling. A read whose `status.lastObservedTime` is more than 60 seconds
-  old, with one second more for times written in whole seconds, is stale and
-  is not compared with SQL or the roles.
+- **Tolerance**: a Condition compared with another source. A Condition that
+  rests on the role observation is allowed to lag behind for 80 seconds: the
+  60 seconds after which the status is stale (docs/observability.md,
+  "Freshness"), the 15 seconds a role answer may be older than the
+  observation (`roleObservationTTL`), and 5 seconds for the sampling. A read
+  whose `status.lastObservedTime` is more than 60 seconds old, with one second
+  more for times written in whole seconds, is stale and is not compared with
+  SQL or the roles. The Broker Conditions do not wait for that observation:
+  the Operator watches the Broker Deployments, so a change of their available
+  Pods starts a reconcile at once. They are allowed 40 seconds: up to 5
+  seconds for the role answers that reconcile asks for first, up to 30
+  seconds during which a conflicting write of a Broker object keeps them as
+  they were, and 5 seconds for the sampling.
 - **Report**: written to `agreement.txt` for a reader, never a failure. The
   Conditions of the Brokers and `Ready` say that Pods and Deployments are
   available, not that a client can run SQL.
 
-A Condition that is `Unknown` makes no claim. A rule without the evidence it
-needs, for example without a heartbeat answer, is not judged, and
-`agreement.txt` says so in a note; it is never counted as a disagreement.
-`agreement.txt` lists every rule with its kind, the disagreements and the
-notes. A disagreement fails the scenario with reason `condition_disagreement`.
+A Condition that is `Unknown` makes no claim. A single read that a rule
+cannot judge, for example one without the Condition it compares, is counted in
+a note. A Never or Tolerance rule that cannot be judged at all, because the
+evidence it needs is missing, for example when no heartbeat answer names the
+starting master as an active master, is never counted as passed: the
+scenario, when all else passed, is `blocked` with reason
+`condition_agreement_not_judged`, since required evidence is missing
+([Results](#results)). `agreement.txt` lists every rule with its kind, the
+disagreements, the rules that could not be judged, and the notes. A
+disagreement fails the scenario with reason `condition_disagreement`; each one
+starts with its kind, `never:` or `tolerance:`, so that a lag longer than the
+tolerance is told apart from a combination one read never holds.
 
 The Never rules, for every read of an HA cluster:
 
@@ -804,8 +817,9 @@ was `True`, are reported only.
 - In a scenario whose Conditions are compared with SQL and the fault (see
   [Conditions during the fault](#conditions-during-the-fault)),
   `measurements.conditionAgreement` counts the status reads, the reads that
-  could not be made, the disagreements and the notes. Each disagreement is
-  also listed in `neverEvents`, and the scenario's reason is
+  could not be made, the disagreements, the rules that could not be judged
+  and the notes. Each disagreement is also listed in `neverEvents`, starting
+  with `never:` or `tolerance:`, and the scenario's reason is
   `condition_disagreement`.
 - `faultConfirmed` is left out for a scenario that injects no fault.
 - `notes`, left out when empty, lists what a reader should know of steps
@@ -1134,10 +1148,13 @@ it needs more.
   variant, besides the Never rules: while every heartbeat answer reports the
   starting master as the only master, a status that is not stale never names
   another member as the resolved primary. In `broker-process` and
-  `one-broker-pod`, a status that is not stale never says
-  `WriteEndpointReady=False` with reason `NoBrokerAvailable` when every
-  reading of the read-write Broker Deployment in the 80 seconds before it
-  showed an available Pod; a reading with no available Pod is noted. In
+  `one-broker-pod`, the status never says `WriteEndpointReady=False` with
+  reason `NoBrokerAvailable` for more than 40 seconds while every reading of
+  the read-write Broker Deployment in the 40 seconds before the read, none
+  more than 6 seconds apart, showed an available Pod. A read whose Condition
+  changed less than 40 seconds before, or whose readings leave a longer gap,
+  may rest on a moment without an available Pod that no reading caught and is
+  not judged; a reading with no available Pod is noted. In
   `all-rw-brokers`, when `WriteEndpointReady` was not `True` and when the
   Deployment had no available Pod is reported only.
 - **Data check:** all data rules on all three members.

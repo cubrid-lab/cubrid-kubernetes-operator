@@ -125,6 +125,11 @@ func (r *haRun) status(ctx context.Context) (statusSnapshot, error) {
 	if err != nil {
 		return statusSnapshot{}, err
 	}
+	return parseStatus(out)
+}
+
+// parseStatus reads the status from the JSON of one CubridCluster.
+func parseStatus(out string) (statusSnapshot, error) {
 	var cluster struct {
 		Status struct {
 			CurrentPrimary   string     `json:"currentPrimary"`

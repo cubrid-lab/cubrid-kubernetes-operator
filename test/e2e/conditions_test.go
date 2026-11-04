@@ -38,6 +38,10 @@ import (
 // Conditions disagreed with SQL, CUBRID's heartbeat or the Broker Deployment.
 const reasonConditionDisagreement = "condition_disagreement"
 
+// reasonConditionsNotJudged is the reason of a blocked scenario in which a
+// rule it requires could not be judged, because its evidence is missing.
+const reasonConditionsNotJudged = "condition_agreement_not_judged"
+
 // conditionSampleEvery is how often the CubridCluster's status is read while
 // a fault runs.
 const conditionSampleEvery = 2 * time.Second
@@ -104,13 +108,18 @@ func (r *haRun) conditionRound(ctx context.Context, roles bool) conditionRound {
 	defer cancel()
 	var round conditionRound
 	start := time.Now().UTC()
-	if s, err := r.status(ctx); err != nil {
+	out, err := r.kubectlQuiet(ctx, "get", "cubridcluster", r.cluster, "-o", "json")
+	var s statusSnapshot
+	if err == nil {
+		s, err = parseStatus(out)
+	}
+	if err != nil {
 		round.StatusError = err.Error()
 	} else {
 		sample := s.details
 		sample.ReadStart = start
 		// availableReplicas is left out of the Deployment's status when it is 0.
-		if out, err := r.kubectl(ctx, "get", "deployment", r.cluster+"-broker-rw",
+		if out, err := r.kubectlQuiet(ctx, "get", "deployment", r.cluster+"-broker-rw",
 			"-o", "jsonpath={.status.availableReplicas}"); err == nil {
 			n, err := 0, error(nil)
 			if out = strings.TrimSpace(out); out != "" {
@@ -134,19 +143,14 @@ func (r *haRun) conditionRound(ctx context.Context, roles bool) conditionRound {
 	return round
 }
 
-// heartbeatRole is "master" for a member CUBRID reports as an active master,
-// "slave" for a standby slave, and "" for anything else or no answer.
+// heartbeatRole is the role CUBRID's heartbeat reports on pod, as
+// heartbeatRoleIn reads it, and "" when the member did not answer.
 func (r *haRun) heartbeatRole(ctx context.Context, pod string) string {
-	out, err := r.kubectl(ctx, "exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
-	switch {
-	case err != nil:
+	out, err := r.kubectlQuiet(ctx, "exec", pod, "--", "bash", "-c", heartbeatStatus)
+	if err != nil {
 		return ""
-	case strings.Contains(out, "current "+pod+", state master") && strings.Contains(out, "registered_and_active"):
-		return "master"
-	case strings.Contains(out, "current "+pod+", state slave") && strings.Contains(out, "registered_and_standby"):
-		return "slave"
 	}
-	return ""
+	return heartbeatRoleIn(pod, out)
 }
 
 // checkConditions compares the sampled Conditions with the clients'
@@ -191,7 +195,11 @@ func checkConditions(dir string, rounds []conditionRound, events []workload.Even
 	for _, part := range []struct {
 		title string
 		lines []string
-	}{{"Disagreements", agreement.Disagreements}, {"Notes, which never fail the run", agreement.Notes}} {
+	}{
+		{"Disagreements, each with its kind: a Never or a tolerance rule", agreement.Disagreements},
+		{"Rules that could not be judged, which block the scenario", agreement.NotJudged},
+		{"Notes, which never fail the run", agreement.Notes},
+	} {
 		fmt.Fprintf(&text, "\n%s:\n", part.title)
 		if len(part.lines) == 0 {
 			text.WriteString("- none\n")
@@ -211,6 +219,7 @@ func checkConditions(dir string, rounds []conditionRound, events []workload.Even
 		"statusReads":   len(rounds),
 		"unreadStatus":  unread,
 		"disagreements": len(agreement.Disagreements),
+		"notJudged":     len(agreement.NotJudged),
 		"notes":         len(agreement.Notes),
 	}
 }
@@ -249,5 +258,23 @@ func TestCheckConditionsReadsRoundsAndClientEvents(t *testing.T) {
 	}
 	if want := []string{"S05/test/conditions.jsonl", "S05/test/agreement.txt"}; !slices.Equal(files, want) {
 		t.Errorf("files = %v, want %v", files, want)
+	}
+}
+
+// TestHeartbeatRoleIn checks the reading of cubrid heartbeat status that S05's
+// sweeps and master() share: a member is a master or a slave only when the
+// line names that member and its state is active or standby.
+func TestHeartbeatRoleIn(t *testing.T) {
+	for out, want := range map[string]string{
+		" HA-Node Info (current c-0, state master)\n  Node c-0 (priority 1, state master)\n" +
+			" HA-Process Info (master 1, state master)\n  Server db (pid 1, state registered_and_active)": "master",
+		" HA-Node Info (current c-0, state slave)\n  Server db (pid 1, state registered_and_standby)": "slave",
+		" HA-Node Info (current c-0, state master)\n  Server db (pid 1, state registered)":            "",
+		" HA-Node Info (current c-1, state master)\n  Server db (pid 1, state registered_and_active)": "",
+		"cubrid heartbeat is not running": "",
+	} {
+		if got := heartbeatRoleIn("c-0", out); got != want {
+			t.Errorf("heartbeatRoleIn(%q) = %q, want %q", out, got, want)
+		}
 	}
 }

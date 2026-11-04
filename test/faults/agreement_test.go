@@ -114,6 +114,9 @@ type agreementCase struct {
 	disagree string
 	// note is a word expected in a note; "" expects nothing of the notes.
 	note string
+	// notJudged is the rule ID expected among the rules that could not be
+	// judged at all; "" expects none.
+	notJudged string
 }
 
 func checkCases(t *testing.T, rules []Rule, cases map[string]agreementCase) {
@@ -129,7 +132,23 @@ func checkCases(t *testing.T, rules []Rule, cases map[string]agreementCase) {
 		if c.note != "" && !mentions(got.Notes, c.note) {
 			t.Errorf("%s: no note mentions %q among %v", name, c.note, got.Notes)
 		}
+		switch {
+		case c.notJudged == "" && len(got.NotJudged) > 0:
+			t.Errorf("%s: unexpected rules not judged %v", name, got.NotJudged)
+		case c.notJudged != "" && !mentions(got.NotJudged, c.notJudged):
+			t.Errorf("%s: rule %s is not among the rules not judged %v", name, c.notJudged, got.NotJudged)
+		}
 	}
+}
+
+// since returns s with the Condition c set to status and reason since the
+// given second.
+func since(s ConditionSample, c, status, reason string, second float64) ConditionSample {
+	s = with(s, c, status, reason)
+	state := s.Conditions[c]
+	state.LastTransitionTime = at(second)
+	s.Conditions[c] = state
+	return s
 }
 
 func TestNeverRules(t *testing.T) {
@@ -165,13 +184,6 @@ func TestNeverRules(t *testing.T) {
 				"WriteEndpointReady", "False", "NoBrokerAvailable"), "BrokerReady", "False", "BrokersNotAvailable"))},
 		"a read without the write endpoint Condition is not judged by that rule": {
 			obs: one(noWriteEndpoint), note: ruleRoutingNeedsWriteEndpoint},
-		// The Broker Conditions are kept as they were after a conflicting
-		// write of a Broker object, while the primary is resolved afresh, so
-		// the code does not guarantee this pair; it is reported only.
-		"routing ready while the primary is not resolved is reported, not failed": {
-			obs: one(with(with(healthy(10), "PrimaryResolved", "False", "PrimaryObservationIncomplete"),
-				"HAReady", "False", "PrimaryObservationIncomplete")),
-			note: ruleRoutingWithoutPrimary},
 		"HA ready although the primary is not resolved": {
 			obs:      one(with(healthy(10), "PrimaryResolved", "False", "PrimaryObservationIncomplete")),
 			disagree: ruleHAReadyNeedsPrimary},
@@ -198,7 +210,38 @@ func TestNeverRules(t *testing.T) {
 			obs: one(replicationOn("m-7")), disagree: ruleReplicationNamesSlaves},
 		"replication unhealthy with a message that names no member is not judged": {
 			obs: one(unparsed), note: ruleReplicationNamesSlaves},
+		"without a single status read no rule can be judged": {
+			obs: Observations{}, notJudged: ruleHAReadyNeedsPrimary},
 	})
+	// The Broker Conditions are kept as they were after a conflicting write
+	// of a Broker object, while the primary is resolved afresh, so the code
+	// does not guarantee this pair; it is reported only.
+	checkCases(t, HAReportRules(), map[string]agreementCase{
+		"routing ready while the primary is not resolved is reported, not failed": {
+			obs: one(with(with(healthy(10), "PrimaryResolved", "False", "PrimaryObservationIncomplete"),
+				"HAReady", "False", "PrimaryObservationIncomplete")),
+			note: ruleRoutingWithoutPrimary},
+	})
+	for _, r := range NeverRules() {
+		if r.Kind != Never {
+			t.Errorf("rule %s of kind %s is among the Never rules", r.ID, r.Kind)
+		}
+	}
+}
+
+func TestDisagreementsNameTheirKind(t *testing.T) {
+	never := CheckAgreement(one(with(healthy(10), "PrimaryResolved", "False", "PrimaryObservationIncomplete")),
+		NeverRules())
+	if len(never.Disagreements) == 0 || !strings.HasPrefix(never.Disagreements[0], "never: ") {
+		t.Errorf("a Never finding does not say its kind: %v", never.Disagreements)
+	}
+	tolerance := CheckAgreement(replace(series(30), 10, func(s ConditionSample) ConditionSample {
+		s.CurrentPrimary = m1
+		return s
+	}), S05Rules(m0, true))
+	if !mentions(tolerance.Disagreements, "tolerance: "+rulePrimaryIsConfirmedMaster) {
+		t.Errorf("a tolerance finding does not say its kind: %v", tolerance.Disagreements)
+	}
 }
 
 func TestS05PrimaryAgreesWithHeartbeat(t *testing.T) {
@@ -219,15 +262,22 @@ func TestS05PrimaryAgreesWithHeartbeat(t *testing.T) {
 	handover.Sweeps = append(handover.Sweeps, sweep(31, m1))
 	noSweeps := replace(series(30), 10, otherPrimary)
 	noSweeps.Sweeps = nil
+	// Every sweep ran, but no answer was recognized as a master or a slave.
+	unrecognized := replace(series(30), 10, otherPrimary)
+	for i := range unrecognized.Sweeps {
+		unrecognized.Sweeps[i].Roles = map[string]string{m0: "", m1: "", m2: ""}
+	}
 
 	checkCases(t, S05Rules(m0, true), map[string]agreementCase{
 		"the status names the master heartbeat confirms": {obs: series(30)},
 		"the status names another primary while heartbeat confirms the master": {
 			obs: replace(series(30), 10, otherPrimary), disagree: rulePrimaryIsConfirmedMaster},
 		"heartbeat names another master once, so the rule's precondition does not hold": {
-			obs: replace(handover, 10, otherPrimary), note: rulePrimaryIsConfirmedMaster},
+			obs: replace(handover, 10, otherPrimary), notJudged: rulePrimaryIsConfirmedMaster},
 		"without a heartbeat sweep the rule is not judged": {
-			obs: noSweeps, note: rulePrimaryIsConfirmedMaster},
+			obs: noSweeps, notJudged: rulePrimaryIsConfirmedMaster},
+		"heartbeat answers that never name a master leave the rule not judged": {
+			obs: unrecognized, notJudged: rulePrimaryIsConfirmedMaster},
 		// The reader rule of docs/observability.md: a status observed more
 		// than 60 seconds before it was read is stale; whole-second clocks
 		// get one second more.
@@ -241,35 +291,49 @@ func TestS05PrimaryAgreesWithHeartbeat(t *testing.T) {
 }
 
 func TestS05WriteEndpointAgreesWithDeployment(t *testing.T) {
-	noBroker := func(s ConditionSample) ConditionSample {
-		return with(with(with(s, "WriteEndpointReady", "False", "NoBrokerAvailable"),
-			"RoutingReady", "False", "NoBrokerAvailable"), "BrokerReady", "False", "BrokersNotAvailable")
+	// noBroker reports no read-write Broker since the given second.
+	noBroker := func(from float64) func(ConditionSample) ConditionSample {
+		return func(s ConditionSample) ConditionSample {
+			s = since(s, "WriteEndpointReady", "False", "NoBrokerAvailable", from)
+			s = since(s, "RoutingReady", "False", "NoBrokerAvailable", from)
+			return since(s, "BrokerReady", "False", "BrokersNotAvailable", from)
+		}
 	}
 	pods := func(n int) func(ConditionSample) ConditionSample {
 		return func(s ConditionSample) ConditionSample { s.RWAvailable = new(n); return s }
 	}
-	long := series(200)
-	// The Deployment kept one available Pod from second 20 on, while the
-	// status said from second 120 on that none was.
-	oneLeft := replace(replace(long, 20, pods(1)), 120, noBroker)
-	// It had none for a moment, within the tolerance of the last reads.
-	dipped := replace(replace(replace(long, 150, pods(0)), 152, pods(1)), 160, noBroker)
-	unread := replace(replace(long, 0, func(s ConditionSample) ConditionSample { s.RWAvailable = nil; return s }),
-		120, noBroker)
+	unread := func(s ConditionSample) ConditionSample { s.RWAvailable = nil; return s }
+
+	// The fault is issued right after the first read. One Pod stays
+	// available, and the status says from second 6 on that none is.
+	aftermath := replace(replace(series(70), 4, pods(1)), 6, noBroker(6))
+	// The same, but the status changed only 30 seconds before the last read.
+	recent := replace(replace(series(70), 4, pods(1)), 40, noBroker(40))
+	// The Deployment had no available Pod at second 40.
+	dipped := replace(replace(replace(series(70), 4, pods(1)), 40, pods(0)), 42, pods(1))
+	dipped = replace(dipped, 6, noBroker(6))
+	// Ten seconds without a reading of the Deployment, from second 32 to 44:
+	// a drop to no available Pod in between would not have been seen.
+	coarse := replace(replace(replace(series(70), 4, pods(1)), 6, noBroker(6)), 32, unread)
+	coarse = replace(coarse, 44, pods(1))
+	// The status said so since before the reads began.
+	early := replace(replace(series(30), 0, pods(1)), 0, noBroker(-30))
 
 	checkCases(t, S05Rules(m0, true), map[string]agreementCase{
-		"no Broker reported for longer than the tolerance while one Pod was available": {
-			obs: oneLeft, disagree: ruleWriteEndpointFollowsDeployment},
-		"no Broker reported soon after the Deployment had none agrees": {
-			obs: dipped, note: "none"},
-		"no Broker reported before the reads cover the tolerance is not judged": {
-			obs: replace(series(30), 10, noBroker), note: ruleWriteEndpointFollowsDeployment},
+		"no Broker reported for longer than the tolerance after the fault while one Pod was available": {
+			obs: aftermath, disagree: ruleWriteEndpointFollowsDeployment},
+		"no Broker reported for less than the tolerance agrees":       {obs: recent},
+		"a reading with no available Pod within the tolerance agrees": {obs: dipped, note: "none"},
+		"a gap between the readings of the Deployment is not judged": {
+			obs: coarse, note: "gap"},
+		"no Broker reported since before the readings cover the tolerance is not judged": {
+			obs: early, note: ruleWriteEndpointFollowsDeployment},
 		"without a reading of the Deployment the rule is not judged": {
-			obs: unread, note: ruleWriteEndpointFollowsDeployment},
+			obs: replace(aftermath, 0, unread), notJudged: ruleWriteEndpointFollowsDeployment},
 	})
 	checkCases(t, S05Rules(m0, false), map[string]agreementCase{
 		"with every read-write Broker Pod deleted, the write endpoint is reported only": {
-			obs: replace(replace(long, 20, pods(1)), 120, noBroker), note: ruleWriteEndpointAllBrokersLost},
+			obs: aftermath, note: ruleWriteEndpointAllBrokersLost},
 	})
 }
 
@@ -303,7 +367,7 @@ func TestS05SQLIsReportedOnly(t *testing.T) {
 }
 
 func TestRulesAreDescribed(t *testing.T) {
-	rules := append(NeverRules(), S05Rules(m0, true)...)
+	rules := append(append(NeverRules(), HAReportRules()...), S05Rules(m0, true)...)
 	rules = append(rules, S05Rules(m0, false)...)
 	if len(rules) == 0 {
 		t.Fatal("no rules")
@@ -314,6 +378,21 @@ func TestRulesAreDescribed(t *testing.T) {
 		}
 		if (r.Kind == Tolerance) != (r.Tolerance > 0) {
 			t.Errorf("rule %s of kind %s has tolerance %s", r.ID, r.Kind, r.Tolerance)
+		}
+	}
+}
+
+func TestBrokerTolerance(t *testing.T) {
+	// The Operator watches the Broker Deployments, so a change of their
+	// available Pods starts a reconcile at once. It waits up to 5 seconds
+	// for the role answers, keeps the Broker Conditions for up to 30 seconds
+	// of conflicting Broker writes, and the sampling adds a few seconds.
+	if brokerTolerance < 35*time.Second || brokerTolerance > 45*time.Second {
+		t.Errorf("brokerTolerance = %s, want 35s plus a few seconds of sampling", brokerTolerance)
+	}
+	for _, r := range S05Rules(m0, true) {
+		if r.ID == ruleWriteEndpointFollowsDeployment && r.Tolerance != brokerTolerance {
+			t.Errorf("rule %s has tolerance %s, want %s", r.ID, r.Tolerance, brokerTolerance)
 		}
 	}
 }
@@ -331,8 +410,11 @@ func TestReportRulesNeverDisagree(t *testing.T) {
 		if r.Kind != Report {
 			continue
 		}
-		r.check = func(Observations) ([]string, []string) { return []string{"a difference"}, nil }
-		if got := CheckAgreement(series(4), []Rule{r}); len(got.Disagreements) > 0 || !mentions(got.Notes, "a difference") {
+		r.check = func(Observations) finding {
+			return finding{disagreements: []string{"a difference"}, notJudged: "no evidence"}
+		}
+		if got := CheckAgreement(series(4), []Rule{r}); len(got.Disagreements) > 0 || len(got.NotJudged) > 0 ||
+			!mentions(got.Notes, "a difference") {
 			t.Errorf("report rule %s: %+v, want its finding among the notes", r.ID, got)
 		}
 	}
