@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,29 +111,38 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	return res
 }
 
-// reasonNoSlaveObserved is HAReady True on a resolved primary while no member
-// is observed as a slave, so no replication is judged.
-const reasonNoSlaveObserved = "NoSlaveObserved"
+// reasonReplicasNotObserved is HAReady Unknown on a resolved primary while a
+// member other than the primary is not observed as a slave.
+const reasonReplicasNotObserved = "ReplicasNotObserved"
+
+// reasonHealthyReplication is HAReady True.
+const reasonHealthyReplication = "HealthyReplication"
 
 // haReadyCondition is HAReady, from the primary resolution res and the
 // ReplicationHealthy condition judged over instances and this observation's
-// obs (#249). A resolved primary is not enough: a slave that does not apply
-// the master's log makes HAReady False with the replication's reason. With no
-// slave observed there is no replication to judge, and the resolved primary
-// decides alone (reasonNoSlaveObserved). Nothing that routes clients reads
+// obs (#249). A resolved primary is not enough. In a cluster of more than one
+// member, HAReady is True only when every member other than the primary is
+// observed as a slave and every slave applies the master's log: a slave that
+// does not makes HAReady False with the replication's reason, and a member
+// not observed as a slave, its role unknown or not asked, makes it Unknown
+// (reasonReplicasNotObserved), since nothing then shows that it holds a copy
+// of the master's log. A single-member cluster has no replication to judge
+// and is ready on its resolved primary. Nothing that routes clients reads
 // HAReady; RoutingReady follows the primary resolution only.
 //
-// A slave whose applier was not read in this observation, as when one
-// applyinfo outlasts its time limit, leaves previous, HAReady's status before,
-// as it was, while that status was decided by the replication and the slave's
-// last reading is younger than replicationStallWindow; after that, HAReady is
-// Unknown. So one missed reading does not turn HAReady Unknown and back, but
-// missing evidence never makes HAReady True: it only holds a status observed
-// a short time ago. The bound is the stall window and not a few resync
-// intervals, because the stored reading time can lag the last reading by up
-// to observationWriteInterval (holdObservationTimes), and a stall that
-// started while the slave was unread could not have been reported earlier
-// than one window anyway.
+// Missing evidence is held for a bounded time. A slave whose applier was not
+// read in this observation, as when one applyinfo outlasts its time limit,
+// or a member whose role was not observed, leaves previous, HAReady's status
+// before, as it was, while that status was decided by the replication (so
+// every other member was a slave then) and the slave's last reading or the
+// member's last answer is younger than replicationStallWindow; after that, or
+// for a member never observed, HAReady is Unknown. So one missed reading does
+// not turn HAReady Unknown and back, but missing evidence never makes HAReady
+// True: it only holds a status observed a short time ago. The bound is the
+// stall window and not a few resync intervals, because the stored times can
+// lag the last reading by up to observationWriteInterval
+// (holdObservationTimes), and a stall that started meanwhile could not have
+// been reported earlier than one window anyway.
 func haReadyCondition(res PrimaryResolution, instances []databasev1alpha1.InstanceStatus,
 	obs map[string]RoleObservation, previous *metav1.Condition, replStatus metav1.ConditionStatus,
 	replReason, replMessage string, now time.Time) (metav1.ConditionStatus, string, string) {
@@ -142,15 +150,29 @@ func haReadyCondition(res PrimaryResolution, instances []databasev1alpha1.Instan
 		return metav1.ConditionFalse, res.Reason, primaryResolvedMessage(res)
 	}
 	resolved := "single primary resolved: " + res.CurrentPrimary
-	slaves := slices.ContainsFunc(instances, func(in databasev1alpha1.InstanceStatus) bool {
-		return in.Role == databasev1alpha1.RoleSlave
-	})
+	var unobserved []string
+	recent := true
+	for _, in := range instances {
+		if in.Name == res.CurrentPrimary || in.Role == databasev1alpha1.RoleSlave {
+			continue
+		}
+		unobserved = append(unobserved, in.Name)
+		if in.LastObservedTime == nil || now.Sub(in.LastObservedTime.Time) >= replicationStallWindow {
+			recent = false
+		}
+	}
+	hold := replicationDecided(previous) && recent && unreadRecently(instances, obs, now)
 	switch {
-	case !slaves:
-		return metav1.ConditionTrue, reasonNoSlaveObserved, resolved + "; no slave observed"
-	case replStatus == metav1.ConditionTrue:
-		return metav1.ConditionTrue, "HealthyReplication", resolved
-	case replStatus == metav1.ConditionUnknown && replicationDecided(previous) && unreadRecently(instances, obs, now):
+	case replStatus == metav1.ConditionFalse:
+		return replStatus, replReason, resolved + "; replication: " + replMessage
+	case len(unobserved) > 0 && hold:
+		return previous.Status, previous.Reason, previous.Message
+	case len(unobserved) > 0:
+		return metav1.ConditionUnknown, reasonReplicasNotObserved,
+			resolved + "; not observed as a slave: " + strings.Join(unobserved, ", ")
+	case len(instances) <= 1 || replStatus == metav1.ConditionTrue:
+		return metav1.ConditionTrue, reasonHealthyReplication, resolved
+	case hold:
 		return previous.Status, previous.Reason, previous.Message
 	}
 	return replStatus, replReason, resolved + "; replication: " + replMessage
@@ -163,7 +185,7 @@ func replicationDecided(c *metav1.Condition) bool {
 		return false
 	}
 	switch c.Reason {
-	case "HealthyReplication":
+	case reasonHealthyReplication:
 		return c.Status == metav1.ConditionTrue
 	case reasonReplicationStalled, reasonApplyFailures, reasonLogCopyStalled:
 		return c.Status == metav1.ConditionFalse

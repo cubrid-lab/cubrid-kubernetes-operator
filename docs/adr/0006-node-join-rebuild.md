@@ -181,10 +181,15 @@ per-member catch-up gate: a member's readiness is its Pod readiness, which
 follows the Instance Manager's `/readyz` (a confirmed heartbeat role), and
 the `-ro` Service selects Broker Pods, not members. A slave whose applier
 applies nothing is reported by the `ReplicationHealthy` Condition, which
-which `HAReady` follows: `HAReady` is `False` with the replication's reason
-while a slave does not apply the master's log; a slave whose applier could
-not be read keeps `HAReady` as it was for up to 60 seconds after its last
-reading, then makes it `Unknown` (#249; docs/observability.md). Readiness of the
+`HAReady` follows: `HAReady` is `False` with the replication's reason while a
+slave does not apply the master's log. In a cluster of more than one member
+`HAReady` is `True` only when every member other than the primary is
+observed as a slave and applies; a member not observed as a slave makes it
+`Unknown` (`ReplicasNotObserved`), and only a single-member cluster is ready
+on its resolved primary alone. A slave whose applier could not be read, or a
+member whose role was not observed, keeps `HAReady` as it was for up to 60
+seconds after its last reading or answer, then makes it `Unknown` (#249;
+docs/observability.md). Readiness of the
 members and the endpoints do not depend on it.
 The stall is judged by the applier's position in the copied log (`Final
 LSA`, which the Instance Manager reads with `cubrid applyinfo -a -v`), not

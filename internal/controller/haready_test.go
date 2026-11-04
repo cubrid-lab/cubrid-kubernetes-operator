@@ -34,11 +34,14 @@ import (
 
 // HAReady follows ReplicationHealthy once the primary is resolved: a slave
 // that does not apply the master's log makes it False with the replication's
-// reason, and a cluster with no slave observed is ready on its resolved
-// primary alone. A slave whose applier was not read in this observation keeps
-// the status HAReady had while its last reading is younger than
-// replicationStallWindow, and makes it Unknown after that, or when HAReady had
-// no status that replication decided (#249).
+// reason. In a cluster of more than one member, a member other than the
+// primary that is not observed as a slave makes it Unknown
+// (ReplicasNotObserved); only a single-member cluster is ready on its
+// resolved primary alone. A slave whose applier was not read, or a member
+// whose role was not observed, keeps the status HAReady had while its last
+// reading or answer is younger than replicationStallWindow, and makes it
+// Unknown after that, when it was never observed, or when HAReady had no
+// status that replication decided (#249).
 func TestHAReadyCondition(t *testing.T) {
 	resolved := PrimaryResolution{CurrentPrimary: replMaster, Status: metav1.ConditionTrue, Reason: singlePrimary}
 	readAgo := func(ago time.Duration) []databasev1alpha1.InstanceStatus {
@@ -54,6 +57,31 @@ func TestHAReadyCondition(t *testing.T) {
 		{Name: replMaster, Role: databasev1alpha1.RoleMaster}, {Name: replSlaveA, Role: databasev1alpha1.RoleUnknown},
 	}
 	read := map[string]RoleObservation{replSlaveA: {Replication: &ReplicationObservation{Source: replMaster}}}
+	readBoth := map[string]RoleObservation{replSlaveA: read[replSlaveA], replSlaveB: read[replSlaveA]}
+	readAt := metav1.NewTime(testNow)
+	slaveApplying := databasev1alpha1.InstanceStatus{Name: replSlaveA, Role: databasev1alpha1.RoleSlave,
+		Replication: &databasev1alpha1.InstanceReplication{Source: replMaster, ObservedAt: &readAt}}
+	slaveBApplying := slaveApplying
+	slaveBApplying.Name = replSlaveB
+	answeredAt := metav1.NewTime(testNow.Add(-2 * haResyncInterval))
+	answered := databasev1alpha1.InstanceStatus{Name: replSlaveB, Role: databasev1alpha1.RoleUnknown,
+		LastObservedTime: &answeredAt}
+	answeredLongAt := metav1.NewTime(testNow.Add(-replicationStallWindow))
+	answeredLong := answered
+	answeredLong.LastObservedTime = &answeredLongAt
+	// unobserved is a resolved master with replSlaveA and replSlaveB as given,
+	// or never observed when nil.
+	unobserved := func(a, b *databasev1alpha1.InstanceStatus) []databasev1alpha1.InstanceStatus {
+		out := make([]databasev1alpha1.InstanceStatus, 0, 3)
+		out = append(out, databasev1alpha1.InstanceStatus{Name: replMaster, Role: databasev1alpha1.RoleMaster})
+		for i, in := range []*databasev1alpha1.InstanceStatus{a, b} {
+			if in == nil {
+				in = &databasev1alpha1.InstanceStatus{Name: []string{replSlaveA, replSlaveB}[i], Role: databasev1alpha1.RoleUnknown}
+			}
+			out = append(out, *in)
+		}
+		return out
+	}
 	unread := map[string]RoleObservation{replSlaveA: {}}
 	was := func(status metav1.ConditionStatus, reason string) *metav1.Condition {
 		return &metav1.Condition{Type: conditionHAReady, Status: status, Reason: reason, Message: "before"}
@@ -70,7 +98,7 @@ func TestHAReadyCondition(t *testing.T) {
 		reason     string
 	}{
 		{"every slave applies", resolved, slaves, read, nil, metav1.ConditionTrue, reasonAppliersProgressing,
-			metav1.ConditionTrue, "HealthyReplication"},
+			metav1.ConditionTrue, reasonHealthyReplication},
 		{"a stalled slave", resolved, slaves, read, nil, metav1.ConditionFalse, reasonReplicationStalled,
 			metav1.ConditionFalse, reasonReplicationStalled},
 		{"a slave that failed to apply a change", resolved, slaves, read, nil, metav1.ConditionFalse, reasonApplyFailures,
@@ -78,24 +106,40 @@ func TestHAReadyCondition(t *testing.T) {
 		{"a slave whose copy does not grow", resolved, slaves, read, nil, metav1.ConditionFalse, reasonLogCopyStalled,
 			metav1.ConditionFalse, reasonLogCopyStalled},
 		{"a slave missed once keeps True", resolved, readAgo(2 * haResyncInterval), unread,
-			was(metav1.ConditionTrue, "HealthyReplication"), metav1.ConditionUnknown, reasonReplicationNotObserved,
-			metav1.ConditionTrue, "HealthyReplication"},
+			was(metav1.ConditionTrue, reasonHealthyReplication), metav1.ConditionUnknown, reasonReplicationNotObserved,
+			metav1.ConditionTrue, reasonHealthyReplication},
 		{"a slave missed once keeps a stall", resolved, readAgo(2 * haResyncInterval), unread,
 			was(metav1.ConditionFalse, reasonReplicationStalled), metav1.ConditionUnknown, reasonReplicationNotObserved,
 			metav1.ConditionFalse, reasonReplicationStalled},
 		{"a slave missed for the window", resolved, readAgo(replicationStallWindow), unread,
-			was(metav1.ConditionTrue, "HealthyReplication"), metav1.ConditionUnknown, reasonReplicationNotObserved,
+			was(metav1.ConditionTrue, reasonHealthyReplication), metav1.ConditionUnknown, reasonReplicationNotObserved,
 			metav1.ConditionUnknown, reasonReplicationNotObserved},
 		{"a slave never read", resolved, noReading(), unread,
-			was(metav1.ConditionTrue, "HealthyReplication"), metav1.ConditionUnknown, reasonReplicationNotObserved,
+			was(metav1.ConditionTrue, reasonHealthyReplication), metav1.ConditionUnknown, reasonReplicationNotObserved,
 			metav1.ConditionUnknown, reasonReplicationNotObserved},
 		{"a missed slave does not keep a status of the primary resolution", resolved, readAgo(2 * haResyncInterval), unread,
 			was(metav1.ConditionFalse, multiplePrimaries), metav1.ConditionUnknown, reasonReplicationNotObserved,
 			metav1.ConditionUnknown, reasonReplicationNotObserved},
 		{"a missed slave with no status before", resolved, readAgo(2 * haResyncInterval), unread, nil,
 			metav1.ConditionUnknown, reasonReplicationNotObserved, metav1.ConditionUnknown, reasonReplicationNotObserved},
-		{"no slave observed", resolved, noSlave, read, nil, metav1.ConditionUnknown, reasonReplicationNotObserved,
-			metav1.ConditionTrue, reasonNoSlaveObserved},
+		{"one member not observed as a slave", resolved, noSlave, read, nil, metav1.ConditionUnknown,
+			reasonReplicationNotObserved, metav1.ConditionUnknown, reasonReplicasNotObserved},
+		{"a resolved master and two members never observed", resolved, unobserved(nil, nil), map[string]RoleObservation{},
+			was(metav1.ConditionTrue, reasonHealthyReplication), metav1.ConditionUnknown, reasonReplicationNotObserved,
+			metav1.ConditionUnknown, reasonReplicasNotObserved},
+		{"one slave applies and one member is not observed", resolved, unobserved(&slaveApplying, nil), read, nil,
+			metav1.ConditionTrue, reasonAppliersProgressing, metav1.ConditionUnknown, reasonReplicasNotObserved},
+		{"both slaves observed and applying", resolved, unobserved(&slaveApplying, &slaveBApplying), readBoth, nil,
+			metav1.ConditionTrue, reasonAppliersProgressing, metav1.ConditionTrue, reasonHealthyReplication},
+		{"a member that answered as a slave recently, missed once, keeps True", resolved,
+			unobserved(&slaveApplying, &answered), read, was(metav1.ConditionTrue, reasonHealthyReplication),
+			metav1.ConditionTrue, reasonAppliersProgressing, metav1.ConditionTrue, reasonHealthyReplication},
+		{"a member unobserved for the window is Unknown", resolved,
+			unobserved(&slaveApplying, &answeredLong), read, was(metav1.ConditionTrue, reasonHealthyReplication),
+			metav1.ConditionTrue, reasonAppliersProgressing, metav1.ConditionUnknown, reasonReplicasNotObserved},
+		{"a single-member cluster on its resolved primary", resolved,
+			[]databasev1alpha1.InstanceStatus{{Name: replMaster, Role: databasev1alpha1.RoleMaster}}, read, nil,
+			metav1.ConditionUnknown, reasonReplicationNotObserved, metav1.ConditionTrue, reasonHealthyReplication},
 		{"the primary is not resolved", PrimaryResolution{Status: metav1.ConditionFalse, Reason: multiplePrimaries},
 			slaves, read, nil, metav1.ConditionTrue, reasonAppliersProgressing, metav1.ConditionFalse, multiplePrimaries},
 	}
