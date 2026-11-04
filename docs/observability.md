@@ -80,7 +80,7 @@ the fixed names below; free text belongs in `message`.
 | `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed (`ClusterReady`) | `InvalidClusterName`: the cluster's name is not a DNS-1035 label of at most 53 characters, so the Operator writes no object for it and does not retry (recreate it under a name of at most 52 characters; ADR-0004); `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved`, or the reason of a step that could not write an object of the cluster, such as `StatefulSetReconcileFailed` (see below) |
 | `Progressing` | The Operator is still working towards the spec: members are starting (`InstancesStarting`), a recovery bootstrap runs (`BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`), or a step failed and is retried (that step's reason) | `Reconciled` once the cluster is reconciled, also while more than one master is observed; `BootstrapRecoveryFailed`; `InvalidClusterName` |
 | `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member); `Unknown` with `RolesNotObserved` |
-| `HAReady` | `PrimaryResolved` is `True`, and `ReplicationHealthy` is `True` or no slave was observed | the reason of `PrimaryResolved`; the reason of `ReplicationHealthy` (`ReplicationStalled`, `ApplyFailures`, `LogCopyStalled`); `HADisabled`; `Unknown` with `ReplicationNotObserved`, `RoleDiscoveryDisabled` or `RolesNotObserved` |
+| `HAReady` | `PrimaryResolved` is `True`, and `ReplicationHealthy` is `True` or no slave was observed | the reason of `PrimaryResolved`; the reason of `ReplicationHealthy` (`ReplicationStalled`, `ApplyFailures`, `LogCopyStalled`); `HADisabled`; `True` with `NoSlaveObserved` while no slave is observed; `Unknown` with `ReplicationNotObserved`, `RoleDiscoveryDisabled` or `RolesNotObserved` |
 | `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`, `LogCopyStalled` (see [the runbook](#runbook-a-slave-whose-copy-of-the-masters-log-does-not-grow)); `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
 | `BrokerReady` | A Broker of each access mode is available | `BrokersNotAvailable`, `BrokerReconcileFailed` |
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
@@ -127,11 +127,14 @@ cluster without a role prober is not changed.
 `HAReady` follows `ReplicationHealthy` once the primary is resolved
 ([#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249)):
 it is `False` with the replication's reason while a slave does not apply the
-master's log, and `Unknown` with `ReplicationNotObserved` while a slave's
-applier could not be read, so an alert on `cubrid_cluster_ha_ready` now also
-fires for a stalled slave, and under intermittent read timeouts `HAReady`
-alternates between `Unknown` and `True` as `ReplicationHealthy` does. With
-no slave observed, the resolved primary decides alone. Nothing that routes
+master's log, so an alert on `cubrid_cluster_ha_ready` now also fires for a
+stalled slave. A slave whose applier could not be read in an observation
+leaves `HAReady` as it was while the slave's last reading is younger than
+60 seconds, and makes it `Unknown` with `ReplicationNotObserved` after that:
+one read that times out does not move `HAReady` or its
+`lastTransitionTime`, and missing evidence never makes it `True`.
+`ReplicationHealthy` itself is `Unknown` for such an observation. With no
+slave observed, the resolved primary decides alone (`NoSlaveObserved`). Nothing that routes
 clients reads `HAReady`: `RoutingReady` and the read-write Service follow the
 primary resolution only, so a stalled slave does not stop writes.
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are

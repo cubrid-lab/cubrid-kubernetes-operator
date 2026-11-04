@@ -23,6 +23,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -354,10 +356,16 @@ func replicationStallStep(r *haRun) {
 // haReadyOf returns the status and reason of the cluster's HAReady condition.
 func haReadyOf(r *haRun) (string, string) {
 	out, _ := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
-		`jsonpath={.status.conditions[?(@.type=="HAReady")].status}/{.status.conditions[?(@.type=="HAReady")].reason}`)
+		`jsonpath={range .status.conditions[?(@.type=="HAReady")]}{.status}/{.reason}{end}`)
 	status, reason, _ := strings.Cut(out, "/")
 	return status, reason
 }
+
+// activeCSQL matches an active csql transaction in the output of cubrid
+// tranlist, capturing its transaction time in seconds: the columns are the
+// transaction index and state, user, host, process ID, program, query time
+// and transaction time.
+var activeCSQL = regexp.MustCompile(`(?m)\(ACTIVE\)\s+\S+\s+\S+\s+\d+\s+csql\s+[\d.]+\s+([\d.]+)`)
 
 // Shape of the transaction that openTransactionStep holds open: rounds of
 // openTxRows rows, one round every openTxPause, then the commit. 20 rounds of
@@ -399,25 +407,60 @@ func openTransactionStep(r *haRun) {
 			}
 			return values[0], nil
 		}
-		conditions := func() string {
-			out, _ := r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
-				`jsonpath={range .status.conditions[?(@.type=="ReplicationHealthy")]}{.type}={.status}/{.reason} {end}`+
-					`{range .status.conditions[?(@.type=="HAReady")]}{.type}={.status}/{.reason}{end}`)
-			return out
+		// conditions reads both conditions, asking again on a failed read; an
+		// error is returned only when three reads in a row failed.
+		conditions := func() (string, error) {
+			var out string
+			var err error
+			for range 3 {
+				out, err = r.kubectl(context.Background(), "get", "cubridcluster", r.cluster, "-o",
+					`jsonpath={range .status.conditions[?(@.type=="ReplicationHealthy")]}{.type}={.status}/{.reason} {end}`+
+						`{range .status.conditions[?(@.type=="HAReady")]}{.type}={.status}/{.reason}{end}`)
+				if err == nil {
+					return out, nil
+				}
+				time.Sleep(time.Second)
+			}
+			return "", err
+		}
+		healthyNow := func() bool {
+			c, err := conditions()
+			return err == nil && strings.Contains(c, "ReplicationHealthy=True/") && strings.Contains(c, "HAReady=True/")
 		}
 		healthy := func(c string) bool {
 			return strings.Contains(c, "ReplicationHealthy=True/") && strings.Contains(c, "HAReady=True/")
+		}
+		// activeFor returns how long, in seconds, the longest active csql
+		// transaction on the master has been open, from cubrid tranlist. An
+		// idle csql session shows a transaction time of 0 there; one whose
+		// statements have run shows the time since its first change.
+		activeFor := func() (float64, string, error) {
+			out, err := r.kubectl(context.Background(), "exec", master, "--", "bash", "-c",
+				`export PATH="${CUBRID}/bin:${PATH}"; cubrid tranlist "$0"`, r.database)
+			if err != nil {
+				return 0, out, err
+			}
+			longest := 0.0
+			for _, m := range activeCSQL.FindAllStringSubmatch(out, -1) {
+				if t, err := strconv.ParseFloat(m[1], 64); err == nil && t > longest {
+					longest = t
+				}
+			}
+			return longest, out, nil
 		}
 
 		By("creating a table with a primary key and without AUTO_INCREMENT on " + master)
 		_, err = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database),
 			"CREATE TABLE "+table+" (id INT PRIMARY KEY, pad VARCHAR(1000));")
 		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			_, _ = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database), "DROP TABLE IF EXISTS "+table+";")
+		})
 		for _, slave := range slaves {
 			Eventually(func() (string, error) { return count(slave) }, 2*time.Minute, 3*time.Second).
 				Should(Equal("0"), "the table on %s", slave)
 		}
-		Eventually(conditions, 2*time.Minute, 3*time.Second).Should(Satisfy(healthy), "the conditions before the transaction")
+		Eventually(healthyNow, 2*time.Minute, 3*time.Second).Should(BeTrue(), "the conditions before the transaction")
 
 		By(fmt.Sprintf("holding one transaction open on %s for %s while it inserts", master,
 			time.Duration(openTxRounds)*openTxPause))
@@ -442,8 +485,11 @@ func openTransactionStep(r *haRun) {
 			out, err := r.kubectl(ctx, "exec", master, "--", "bash", "-c", script)
 			done <- result{out, err}
 		}()
-		var samples []string
-		var unhealthy []string
+		var samples, unhealthy, unreadable []string
+		// The samples are kept also when the step fails.
+		DeferCleanup(func() {
+			writeScenarioFile("open-transaction/samples.txt", []byte(strings.Join(samples, "\n")+"\n"))
+		})
 		var session result
 		midChecked := false
 	wait:
@@ -453,17 +499,31 @@ func openTransactionStep(r *haRun) {
 				break wait
 			case <-time.After(5 * time.Second):
 			}
-			c := conditions()
-			sample := fmt.Sprintf("%s +%s %s", time.Now().UTC().Format(time.RFC3339),
-				time.Since(started).Round(time.Second), c)
-			samples = append(samples, sample)
-			if !healthy(c) {
-				unhealthy = append(unhealthy, sample)
+			c, err := conditions()
+			stamp := fmt.Sprintf("%s +%s", time.Now().UTC().Format(time.RFC3339), time.Since(started).Round(time.Second))
+			switch {
+			case err != nil:
+				// An API read that failed says nothing about the conditions.
+				unreadable = append(unreadable, stamp+" unreadable: "+err.Error())
+				samples = append(samples, stamp+" unreadable: "+err.Error())
+				continue
+			case !healthy(c):
+				unhealthy = append(unhealthy, stamp+" "+c)
 			}
-			// Halfway, the rows are not committed: nothing of them is on a
-			// slave, so the transaction is still open.
+			samples = append(samples, stamp+" "+c)
+			// Halfway, the transaction must be open: an active csql
+			// transaction on the master that started at least a third of
+			// the way back, and none of its rows on a slave. Were csql to
+			// hold its input until the end, nothing would run before the
+			// commit, and this would fail.
 			if !midChecked && time.Since(started) > time.Duration(openTxRounds)*openTxPause/2 {
 				midChecked = true
+				open, tranlist, err := activeFor()
+				samples = append(samples, fmt.Sprintf("longest active csql transaction on %s halfway: %.0f s\n%s",
+					master, open, tranlist))
+				Expect(err).NotTo(HaveOccurred(), "cubrid tranlist on %s: %s", master, tranlist)
+				Expect(open).To(BeNumerically(">=", (time.Duration(openTxRounds)*openTxPause/3).Seconds()),
+					"how long the csql transaction on %s has been open halfway", master)
 				n, err := count(slaves[0])
 				samples = append(samples, fmt.Sprintf("rows on %s halfway: %s %v", slaves[0], n, err))
 				Expect(err).NotTo(HaveOccurred())
@@ -471,11 +531,13 @@ func openTransactionStep(r *haRun) {
 			}
 		}
 		held := time.Since(started)
-		writeScenarioFile("open-transaction/samples.txt", []byte(strings.Join(samples, "\n")+"\n"))
+		Expect(midChecked).To(BeTrue(), "the transaction was not checked halfway")
 		Expect(session.err).NotTo(HaveOccurred(), "the csql session: %s", session.out)
 		Expect(session.out).NotTo(ContainSubstring("ERROR"), "the csql session")
 		Expect(held).To(BeNumerically(">", 90*time.Second), "how long the transaction was open")
 		Expect(unhealthy).To(BeEmpty(), "samples in which ReplicationHealthy or HAReady was not True")
+		Expect(len(unreadable)).To(BeNumerically("<", len(samples)/2), "samples whose conditions could not be read: %v",
+			unreadable)
 
 		By("checking that every slave holds the rows after the commit")
 		want := fmt.Sprint(openTxRounds * openTxRows)
@@ -483,7 +545,7 @@ func openTransactionStep(r *haRun) {
 			Eventually(func() (string, error) { return count(pod) }, 2*time.Minute, 3*time.Second).
 				Should(Equal(want), "rows of %s on %s", table, pod)
 		}
-		Expect(conditions()).To(Satisfy(healthy), "the conditions after the commit")
+		Expect(healthyNow()).To(BeTrue(), "the conditions after the commit")
 		writeScenarioFile("open-transaction/result.txt", []byte(fmt.Sprintf(
 			"master: %s\ntable: %s\nopen for: %s\nrows: %s on every member\n"+
 				"samples: %d, every one with ReplicationHealthy and HAReady True\n",

@@ -34,48 +34,86 @@ import (
 
 // HAReady follows ReplicationHealthy once the primary is resolved: a slave
 // that does not apply the master's log makes it False with the replication's
-// reason, a slave whose applier could not be read makes it Unknown, and a
-// cluster with no slave observed is ready on its resolved primary alone
-// (#249).
+// reason, and a cluster with no slave observed is ready on its resolved
+// primary alone. A slave whose applier was not read in this observation keeps
+// the status HAReady had while its last reading is younger than
+// replicationStallWindow, and makes it Unknown after that, or when HAReady had
+// no status that replication decided (#249).
 func TestHAReadyCondition(t *testing.T) {
 	resolved := PrimaryResolution{CurrentPrimary: replMaster, Status: metav1.ConditionTrue, Reason: singlePrimary}
-	slaves := []databasev1alpha1.InstanceStatus{
-		{Name: replMaster, Role: databasev1alpha1.RoleMaster}, {Name: replSlaveA, Role: databasev1alpha1.RoleSlave},
+	readAgo := func(ago time.Duration) []databasev1alpha1.InstanceStatus {
+		at := metav1.NewTime(testNow.Add(-ago))
+		return []databasev1alpha1.InstanceStatus{
+			{Name: replMaster, Role: databasev1alpha1.RoleMaster},
+			{Name: replSlaveA, Role: databasev1alpha1.RoleSlave,
+				Replication: &databasev1alpha1.InstanceReplication{Source: replMaster, ObservedAt: &at}},
+		}
 	}
+	slaves := readAgo(0)
 	noSlave := []databasev1alpha1.InstanceStatus{
 		{Name: replMaster, Role: databasev1alpha1.RoleMaster}, {Name: replSlaveA, Role: databasev1alpha1.RoleUnknown},
+	}
+	read := map[string]RoleObservation{replSlaveA: {Replication: &ReplicationObservation{Source: replMaster}}}
+	unread := map[string]RoleObservation{replSlaveA: {}}
+	was := func(status metav1.ConditionStatus, reason string) *metav1.Condition {
+		return &metav1.Condition{Type: conditionHAReady, Status: status, Reason: reason, Message: "before"}
 	}
 	tests := []struct {
 		name       string
 		res        PrimaryResolution
 		instances  []databasev1alpha1.InstanceStatus
+		obs        map[string]RoleObservation
+		previous   *metav1.Condition
 		repl       metav1.ConditionStatus
 		replReason string
 		status     metav1.ConditionStatus
 		reason     string
 	}{
-		{"every slave applies", resolved, slaves, metav1.ConditionTrue, reasonAppliersProgressing,
+		{"every slave applies", resolved, slaves, read, nil, metav1.ConditionTrue, reasonAppliersProgressing,
 			metav1.ConditionTrue, "HealthyReplication"},
-		{"a stalled slave", resolved, slaves, metav1.ConditionFalse, reasonReplicationStalled,
+		{"a stalled slave", resolved, slaves, read, nil, metav1.ConditionFalse, reasonReplicationStalled,
 			metav1.ConditionFalse, reasonReplicationStalled},
-		{"a slave that failed to apply a change", resolved, slaves, metav1.ConditionFalse, reasonApplyFailures,
+		{"a slave that failed to apply a change", resolved, slaves, read, nil, metav1.ConditionFalse, reasonApplyFailures,
 			metav1.ConditionFalse, reasonApplyFailures},
-		{"a slave whose copy does not grow", resolved, slaves, metav1.ConditionFalse, reasonLogCopyStalled,
+		{"a slave whose copy does not grow", resolved, slaves, read, nil, metav1.ConditionFalse, reasonLogCopyStalled,
 			metav1.ConditionFalse, reasonLogCopyStalled},
-		{"a slave whose applier was not read", resolved, slaves, metav1.ConditionUnknown, reasonReplicationNotObserved,
-			metav1.ConditionUnknown, reasonReplicationNotObserved},
-		{"no slave observed", resolved, noSlave, metav1.ConditionUnknown, reasonReplicationNotObserved,
+		{"a slave missed once keeps True", resolved, readAgo(2 * haResyncInterval), unread,
+			was(metav1.ConditionTrue, "HealthyReplication"), metav1.ConditionUnknown, reasonReplicationNotObserved,
 			metav1.ConditionTrue, "HealthyReplication"},
+		{"a slave missed once keeps a stall", resolved, readAgo(2 * haResyncInterval), unread,
+			was(metav1.ConditionFalse, reasonReplicationStalled), metav1.ConditionUnknown, reasonReplicationNotObserved,
+			metav1.ConditionFalse, reasonReplicationStalled},
+		{"a slave missed for the window", resolved, readAgo(replicationStallWindow), unread,
+			was(metav1.ConditionTrue, "HealthyReplication"), metav1.ConditionUnknown, reasonReplicationNotObserved,
+			metav1.ConditionUnknown, reasonReplicationNotObserved},
+		{"a slave never read", resolved, noReading(), unread,
+			was(metav1.ConditionTrue, "HealthyReplication"), metav1.ConditionUnknown, reasonReplicationNotObserved,
+			metav1.ConditionUnknown, reasonReplicationNotObserved},
+		{"a missed slave does not keep a status of the primary resolution", resolved, readAgo(2 * haResyncInterval), unread,
+			was(metav1.ConditionFalse, multiplePrimaries), metav1.ConditionUnknown, reasonReplicationNotObserved,
+			metav1.ConditionUnknown, reasonReplicationNotObserved},
+		{"a missed slave with no status before", resolved, readAgo(2 * haResyncInterval), unread, nil,
+			metav1.ConditionUnknown, reasonReplicationNotObserved, metav1.ConditionUnknown, reasonReplicationNotObserved},
+		{"no slave observed", resolved, noSlave, read, nil, metav1.ConditionUnknown, reasonReplicationNotObserved,
+			metav1.ConditionTrue, reasonNoSlaveObserved},
 		{"the primary is not resolved", PrimaryResolution{Status: metav1.ConditionFalse, Reason: multiplePrimaries},
-			slaves, metav1.ConditionTrue, reasonAppliersProgressing, metav1.ConditionFalse, multiplePrimaries},
+			slaves, read, nil, metav1.ConditionTrue, reasonAppliersProgressing, metav1.ConditionFalse, multiplePrimaries},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			status, reason, message := haReadyCondition(tc.res, tc.instances, tc.repl, tc.replReason, "on "+replSlaveA)
+			status, reason, message := haReadyCondition(tc.res, tc.instances, tc.obs, tc.previous, tc.repl, tc.replReason,
+				"on "+replSlaveA, testNow)
 			if status != tc.status || reason != tc.reason || message == "" {
 				t.Errorf("HAReady = %s/%s (%q), want %s/%s", status, reason, message, tc.status, tc.reason)
 			}
 		})
+	}
+}
+
+// noReading is a master and a slave whose applier has never been read.
+func noReading() []databasev1alpha1.InstanceStatus {
+	return []databasev1alpha1.InstanceStatus{
+		{Name: replMaster, Role: databasev1alpha1.RoleMaster}, {Name: replSlaveA, Role: databasev1alpha1.RoleSlave},
 	}
 }
 
@@ -136,5 +174,20 @@ var _ = Describe("HAReady following ReplicationHealthy (#249)", func() {
 		repl, ha = conditions()
 		Expect(repl.Status).To(Equal(metav1.ConditionTrue))
 		Expect(ha.Status).To(Equal(metav1.ConditionTrue))
+		since := ha.LastTransitionTime
+
+		By("one reading of its applier missed: HAReady keeps True")
+		delete(prober.appliers, name+"-1")
+		clock = clock.Add(haResyncInterval)
+		repl, ha = conditions()
+		Expect(repl.Status).To(Equal(metav1.ConditionUnknown))
+		Expect(ha.Status).To(Equal(metav1.ConditionTrue))
+		Expect(ha.LastTransitionTime).To(Equal(since))
+
+		By("its applier unread for the window: HAReady is Unknown")
+		clock = clock.Add(replicationStallWindow)
+		_, ha = conditions()
+		Expect(ha.Status).To(Equal(metav1.ConditionUnknown))
+		Expect(ha.Reason).To(Equal(reasonReplicationNotObserved))
 	})
 })

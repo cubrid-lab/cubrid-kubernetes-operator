@@ -182,8 +182,9 @@ follows the Instance Manager's `/readyz` (a confirmed heartbeat role), and
 the `-ro` Service selects Broker Pods, not members. A slave whose applier
 applies nothing is reported by the `ReplicationHealthy` Condition, which
 which `HAReady` follows: `HAReady` is `False` with the replication's reason
-while a slave does not apply the master's log, and `Unknown` while a slave's
-applier could not be read (#249; docs/observability.md). Readiness of the
+while a slave does not apply the master's log; a slave whose applier could
+not be read keeps `HAReady` as it was for up to 60 seconds after its last
+reading, then makes it `Unknown` (#249; docs/observability.md). Readiness of the
 members and the endpoints do not depend on it.
 The stall is judged by the applier's position in the copied log (`Final
 LSA`, which the Instance Manager reads with `cubrid applyinfo -a -v`), not
