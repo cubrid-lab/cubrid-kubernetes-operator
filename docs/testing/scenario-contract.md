@@ -521,10 +521,8 @@ kept in one table, [Time limits](#time-limits), and are set after a baseline
 measurement and before the final test campaigns. A limit is not relaxed after
 a failed run to obtain a pass: a change needs its own reviewed commit with the
 measurements that justify it. A run against a limit that is not set yet is a
-baseline run and ends as `blocked` with reason `time_limit_unset`. How the
-suite treats S00's `install_limit` and `ready_limit`, which have no value
-while S00 is required, is an open question (#292), described under
-[Time limits](#time-limits-1).
+baseline run and ends as `blocked` with reason `time_limit_unset`,
+including S00 ([Time limits](#time-limits-1)).
 
 A step of a scenario that reaches its limit is cancelled, and the run waits
 for it to return before it goes on, so that a step neither runs a command nor
@@ -738,11 +736,11 @@ reader can tell what to expect.
 - A measurement that was not taken has the string value `"unknown"`.
 - `limits` lists every limit the scenario was judged by, with `"unset"` for
   one that has no value ([Time limits](#time-limits-1)).
-- In S00, `measurements.timeLimitVerdict` is the result, with its reason,
-  that `install_limit` and `ready_limit` give under the rules of
-  [Time limits](#time-limits-1), for example `"blocked: time_limit_unset"`
-  or `"pass"`. It is recorded only when S00's checks all held, and is not
-  S00's result: see the open question there.
+- In S00, `measurements.timeLimitVerdict` records the result of judging
+  `install_limit` and `ready_limit` under the same rules as every other
+  required scenario ([Time limits](#time-limits-1)). Examples are `"pass"`
+  and `"blocked: time_limit_unset"`. The verdict also determines S00's
+  result when its other checks held; otherwise the existing failure wins.
 - `neverEvents` lists every must-never-happen outcome that was observed. A
   non-empty list means `fail`.
 - `faultConfirmed` is left out for a scenario that injects no fault.
@@ -1753,8 +1751,8 @@ measured; **unset** limits have neither a value nor a baseline.
 
 | Limit | Meaning | Value | Basis |
 |---|---|---|---|
-| `install_limit` | Operator installed and its Pod available | unset | unset; S00 records `installSeconds`: from the `creationTimestamp` of the Operator's Deployment to the `lastTransitionTime` of its `Available` condition, as the API server recorded them, in whole seconds; building and applying the manifests is not included |
-| `ready_limit` | Single-member cluster created until SQL succeeds | unset | unset; S00 records `createdToSQLSeconds`: from just before the `CubridCluster` is applied until a row was written and read through csql, an upper bound that includes the checks before that SQL |
+| `install_limit` | Operator installed and its Pod available | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset | Kind: measured |
+| `ready_limit` | Single-member cluster created until SQL succeeds | Kind on a GitHub-hosted runner: 90 seconds. VM lab: unset | Kind: measured |
 | `formation_limit` | Three-member cluster created until all conditions are `True` | Kind on a GitHub-hosted runner: 5 minutes. VM lab: unset | Kind: measured |
 | `replication_limit` | Commit on the master until every slave returns the row | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured with the earlier method; the current method has no baseline yet |
 | `failover_limit` | Start of the fault until a write through the read-write endpoint succeeds | Kind on a GitHub-hosted runner: 30 seconds. VM lab: unset | Kind: measured |
@@ -1771,20 +1769,21 @@ measured; **unset** limits have neither a value nor a baseline.
 | `delete_limit` | Cluster deleted until its resources are gone | unset | unset |
 | `drain_limit` | Drain issued until it finishes or is refused | unset | unset |
 
-**Open question (#292):** `install_limit` and `ready_limit` have no value
-and S00 is required in the `kind` lane, so rule 2 applied to S00 would keep
-every run from passing the lane. Whether to set them from a baseline,
-remove them from S00, or accept a lane that does not pass is a decision for
-the maintainers. The suite (`faults.JudgeS00Limits`) applies rules 1, 3 and
-4 to the S00 limits that are set; a limit that is not set does not change
-S00's result. S00 records both limits, `unset` where they have no value,
-and the verdict all four rules give as the measurement `timeLimitVerdict`.
+S00 uses the same four rules as every other required scenario
+(`faults.JudgeS00Limits`). If either `install_limit` or `ready_limit`
+is `0` or `unset`, the scenario is `blocked` with `time_limit_unset`
+unless a set limit was exceeded, in which case the scenario fails. A missing
+measurement against a set limit produces `measurement_missing` when
+no limit is unset. S00 records both limits and the resulting
+`timeLimitVerdict` in `summary.json` (#292).
 
 ### Baselines
 
 | Limit | Environment | Measured | How it is measured | Set |
 |---|---|---|---|---|
 | `formation_limit` | Kind on a GitHub-hosted `ubuntu-latest` runner, CUBRID 11.4.6, object storage mocked | 59 s, 71 s, 71 s, 83 s in four runs on 2026-10-05 | From the `creationTimestamp` of the `CubridCluster` to the latest `lastTransitionTime` of `Ready`, `HAReady`, `PrimaryResolved` and `RoutingReady`, all as the API server recorded them | 5 minutes, about four times the slowest run, because a runner's speed and image pulls vary |
+| `install_limit` | The same; scenario S00 | 10 s to 13 s in 33 successful runs of the `E2E Tests` workflow, on `main` and on pull requests, between 2026-10-31 and 2026-11-04 (10 s in 4, 11 s in 19, 12 s in 8, 13 s in 2) | `installSeconds`: from the `creationTimestamp` of the Operator's Deployment to the `lastTransitionTime` of its `Available` condition, as the API server recorded them, in whole seconds; building and applying the manifests is not included | 1 minute, about four times the slowest run |
+| `ready_limit` | The same; scenario S00 | 15.2 s to 22.2 s in the same 33 runs (median 16.3 s) | `createdToSQLSeconds`: from just before the `CubridCluster` is applied until a row was written and read through csql, an upper bound that includes the checks before that SQL | 90 seconds, about four times the slowest run |
 | `replication_limit` | The same | 1.74 s to 1.81 s in the same four runs, measured before #367 changed the method | Measured then from the return of the workload client, after its last commit, until every member returned the same rows and the same catalog, including the time the checks take (about one second). It is now measured from just before a marker row's commit until every slave returns the marker and the master's ledger row count, which is also an upper bound; no baseline of the new method is recorded yet | 30 seconds |
 
 | `failover_limit` | The same; scenario S03, the variants `graceful` and `abrupt` (the variant `abrupt-first-member` was added later and has no baseline here; POC-19 recorded its clients acknowledged again after 10.9 to 11.4 s) | 1.1 s to 1.8 s in eight runs (four per variant) on 2026-10-05 | From the moment the deletion of the master Pod was issued to the client's first acknowledged operation after which none failed, taken from the client's history | 30 seconds |

@@ -147,6 +147,18 @@ mandatory. Optional AI reviews are **advisory**.
    safety/HA/backup and release checks, and final maintainer merge
    decision. No CI result or AI summary grants automatic approval.
 
+Before an agent opens or revises a PR, compare its final code diff with the
+human-readable title, summary, linked issue's acceptance criteria, changed
+scenario contracts, and actual verification results. Do not describe pending,
+cancelled, or unrun checks as passing. For baseline-derived thresholds, link
+the raw runs/artifacts or reproducible aggregation and disclose selection or
+retention limits; an unsupported number must not be represented as verified.
+For required scenario limits, test zero/unset, unmeasured, boundary and
+exceeded values against the same gate semantics as other scenarios. Do not
+introduce an exception merely to keep CI green. If a required reviewer is
+unavailable, leave approval pending rather than self-waiving the independent
+maintainer review or substituting an AI review.
+
 ## PR overlap, priority, and readiness
 
 - Before starting a PR, compare the assigned issue's decision, acceptance,

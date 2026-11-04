@@ -31,7 +31,7 @@ import (
 // (limits.go); the values and the baselines they come from are recorded in
 // docs/testing/scenario-contract.md, section "Time limits". "0" or "unset"
 // runs a scenario as a baseline: it is then reported as blocked with reason
-// time_limit_unset, never as a pass.
+// time_limit_unset, never as a pass, including S00 (faults.JudgeS00Limits).
 var (
 	installLimit        = limit(faults.InstallLimit)
 	readyLimit          = limit(faults.ReadyLimit)
