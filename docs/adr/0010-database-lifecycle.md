@@ -226,8 +226,14 @@ are checked in the same reconcile that starts the restore. Once the restore's
 operation is recorded, the copy keeps its source and its backup whatever the
 roles become, and the source is not asked again.
 
+On the VM lab (2026-11-04, Operator `16dbbf8`, two scripted runs on #281),
+a master whose CUBRID was killed while the last member's seed backup ran on
+it was followed: the operator waited with `SeedSourceNotResolved` until the
+former master answered again as a slave, then took a backup on the new master
+in round 1 and restored the last member from it.
+
 What this does not cover: a master that changes while `restoreslave` runs,
-which is not detected and has not been tried on the engine; and a copy that
+which is not detected and has not been tried on the engine (#678); and a copy that
 failed after it had restored the data, when the master has changed since: the
 next attempt copies from the new master, the Instance Manager refuses to
 restore over data that another request restored (ADR-0008), and the bootstrap
