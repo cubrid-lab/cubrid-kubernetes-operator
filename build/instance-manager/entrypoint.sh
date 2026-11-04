@@ -60,6 +60,21 @@ terminate() {
 }
 trap terminate TERM INT
 
+# "instance-manager shutdown" writes this stop record before it asks the
+# manager to stop (internal/instancemanager, StopFile). The preStop hook runs
+# it in a process of its own, which stops CUBRID itself while no manager
+# listens, and this script gets no signal until the hook has returned. A
+# record seen before a start is a termination, as if the trap had run: what
+# is not started yet is not started, and what was started is stopped (#323).
+IM_STOP_FILE="${IM_STOP_FILE:-/tmp/instance-manager-stop-requested}"
+stop_recorded() {
+  if [ "${terminating}" = "0" ] && { [ -e "${IM_STOP_FILE}" ] || [ -L "${IM_STOP_FILE}" ]; }; then
+    log "a stop was requested (${IM_STOP_FILE}): nothing more is started"
+    terminating=1
+  fi
+  [ "${terminating}" = "1" ]
+}
+
 # Take the member lock, then wait until no other process runs CUBRID on the
 # volume. The old container of a force-deleted Pod can outlive the start of
 # its replacement, and a second server on the same database diverges the log
@@ -221,12 +236,14 @@ start_cubrid() {
         log "termination requested during createdb: the server is not started"
         return 0
       fi
+      stop_recorded && return 0
       started=1
       cubrid server start "${CUBRID_DB}" ;;
     MASTER|SLAVE|HA)
       # An HA member never creates its database here: the first one is created
       # once, on one member, through the Instance Manager, and the others are
       # seeded from it (ADR-0010). This only restarts an initialized member.
+      stop_recorded && return 0
       started=1
       cubrid heartbeat start ;;
   esac
@@ -290,6 +307,7 @@ else
   start_cubrid
 fi
 
+stop_recorded || true
 if [ "${terminating}" = "1" ]; then
   # A termination handled after the last check but before the start found
   # nothing to stop: stop what was started since.

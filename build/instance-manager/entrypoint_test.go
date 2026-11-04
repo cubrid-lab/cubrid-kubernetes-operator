@@ -163,6 +163,8 @@ func newFixture(t *testing.T, manager string) *fixture {
 		"CUBRID_BOOTSTRAP":  bootstrapNew,
 		"IM_BIN":            im,
 		"CALLS":             f.calls,
+		// Each test reads its own stop record, never the host's.
+		envStopFile: filepath.Join(root, "stop-requested"),
 	}
 	return f
 }

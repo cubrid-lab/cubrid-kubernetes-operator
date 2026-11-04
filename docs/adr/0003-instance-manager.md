@@ -307,7 +307,14 @@ listens, and again before every `cubrid server start` and
 `cubrid heartbeat start`. When it is there, the manager behaves as a member
 that is stopping: it reclaims nothing, starts no completed restore's
 database, admits no operation (`503`), and treats the absence of CUBRID as
-intended; it does not run the shutdown itself, which the command ran. A
+intended; it does not run the shutdown itself, which the command ran.
+The entrypoint reads the same record before it starts CUBRID and before it
+launches the manager. The preStop hook runs the command in a process of its
+own, and the entrypoint gets no signal until the hook has returned, so a
+recorded stop counts there as its own termination: nothing more is started,
+and what it had already started is stopped again. Its `IM_STOP_FILE` exists
+only for the script's tests and defaults to the fixed path; the Operator sets
+nothing there. A
 record that cannot be examined counts as one, and is logged as
 `stop_file_unreadable` rather than as a recorded stop (`stop_recorded`). The order closes both races: a
 record written before the manager's look is found, and one written after it
