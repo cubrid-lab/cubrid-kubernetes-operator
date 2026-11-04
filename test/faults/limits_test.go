@@ -83,8 +83,8 @@ func TestLimitDefaults(t *testing.T) {
 		// want is the default; zero means that the contract records none.
 		want time.Duration
 	}{
-		{InstallLimit, "install_limit", "E2E_INSTALL_LIMIT", 0},
-		{ReadyLimit, "ready_limit", "E2E_READY_LIMIT", 0},
+		{InstallLimit, "install_limit", "E2E_INSTALL_LIMIT", time.Minute},
+		{ReadyLimit, "ready_limit", "E2E_READY_LIMIT", 90 * time.Second},
 		{FormationLimit, "formation_limit", "E2E_FORMATION_LIMIT", 5 * time.Minute},
 		{ReplicationLimit, "replication_limit", "E2E_REPLICATION_LIMIT", 30 * time.Second},
 		{FailoverLimit, "failover_limit", "E2E_FAILOVER_LIMIT", 30 * time.Second},
@@ -139,8 +139,8 @@ func TestJudge(t *testing.T) {
 	}{
 		{
 			name: "S00: install_limit and ready_limit unset is a baseline",
-			bounds: []Bound{{Limit: def(InstallLimit), Measured: 40 * time.Second},
-				{Limit: def(ReadyLimit), Measured: 2 * time.Minute}},
+			bounds: []Bound{{Limit: lim(InstallLimit, 0), Measured: 40 * time.Second},
+				{Limit: lim(ReadyLimit, 0), Measured: 2 * time.Minute}},
 			want: evidence.Blocked, wantReason: ReasonTimeLimitUnset,
 			wantLimits: limitsOf("install_limit=unset ready_limit=unset"),
 		},
@@ -165,7 +165,7 @@ func TestJudge(t *testing.T) {
 		{
 			name: "S00: install_limit unmeasured while ready_limit is unset",
 			bounds: []Bound{{Limit: lim(InstallLimit, time.Minute), Unmeasured: true},
-				{Limit: def(ReadyLimit), Measured: time.Minute}},
+				{Limit: lim(ReadyLimit, 0), Measured: time.Minute}},
 			want: evidence.Blocked, wantReason: ReasonTimeLimitUnset,
 		},
 		{
@@ -176,7 +176,7 @@ func TestJudge(t *testing.T) {
 		},
 		{
 			name: "S00: ready_limit exceeded while install_limit is unset",
-			bounds: []Bound{{Limit: def(InstallLimit), Measured: 40 * time.Second},
+			bounds: []Bound{{Limit: lim(InstallLimit, 0), Measured: 40 * time.Second},
 				{Limit: lim(ReadyLimit, time.Minute), Measured: 2 * time.Minute}},
 			want: evidence.Fail, wantReason: readyExceeded,
 		},

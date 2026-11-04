@@ -64,9 +64,9 @@ type LimitSpec struct {
 // and here together.
 var (
 	// InstallLimit: the Operator installed until its Pod is available.
-	InstallLimit = LimitSpec{"install_limit", "E2E_INSTALL_LIMIT", 0}
+	InstallLimit = LimitSpec{"install_limit", "E2E_INSTALL_LIMIT", time.Minute}
 	// ReadyLimit: a single-member cluster created until SQL succeeds.
-	ReadyLimit = LimitSpec{"ready_limit", "E2E_READY_LIMIT", 0}
+	ReadyLimit = LimitSpec{"ready_limit", "E2E_READY_LIMIT", 90 * time.Second}
 	// FormationLimit: a three-member cluster created until all conditions
 	// are True.
 	FormationLimit = LimitSpec{"formation_limit", "E2E_FORMATION_LIMIT", 5 * time.Minute}
@@ -194,12 +194,12 @@ func Judge(bounds ...Bound) Verdict {
 // them.
 //
 // The limits that are set decide the result as Judge decides it. A limit
-// that is not set does not: S00 is required in the kind lane, and blocking it
-// would keep every run from passing the lane (see the open question on
-// install_limit and ready_limit in docs/testing/scenario-contract.md, "Time
-// limits"). What Judge makes of both limits is recorded as the measurement
-// timeLimitVerdict, so the summary does not read as a run scored against
-// them.
+// that is not set, which happens only when its variable sets it to 0 or
+// unset, does not: S00 is required in the kind lane, and blocking it would
+// keep such a run from passing the lane (docs/testing/scenario-contract.md,
+// "Time limits"). What Judge makes of both limits is recorded as the
+// measurement timeLimitVerdict, so the summary does not read as a run scored
+// against a limit it was not judged by.
 func JudgeS00Limits(result evidence.Scenario, install, ready Bound) evidence.Scenario {
 	v := Judge(install, ready)
 	if result.Limits == nil {
