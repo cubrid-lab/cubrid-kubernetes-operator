@@ -751,8 +751,9 @@ auto-failbacks (ADR-0001, ADR-0005).
 preStop + PID-1 `SIGTERM` run the same stop through
 `instance-manager shutdown`. The command first records the stop in the
 container-local file `/tmp/instance-manager-stop-requested`, after which
-the manager starts nothing, also when the stop came before it listened
-(ADR-0003, Shutdown model). The stop then admits no new operation, cancels
+the manager starts nothing, also when the stop came before it listened,
+and neither does the entrypoint, also when the preStop hook ran before it
+started CUBRID (ADR-0003, Shutdown model). The stop then admits no new operation, cancels
 and waits for the running ones, and runs `cubrid heartbeat stop` and
 `cubrid server stop <db>`. The ADR-0003 steps "readyz false", "persist a
 shutdown marker" on the PVC and "verify processes exited" are not part of
