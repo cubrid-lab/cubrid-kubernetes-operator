@@ -145,6 +145,13 @@ func TestJudge(t *testing.T) {
 			wantLimits: limitsOf("install_limit=unset ready_limit=unset"),
 		},
 		{
+			name: "S00: the defaults, with the slowest baseline run, pass",
+			bounds: []Bound{{Limit: def(InstallLimit), Measured: 13 * time.Second},
+				{Limit: def(ReadyLimit), Measured: 22250 * time.Millisecond}},
+			want:       evidence.Pass,
+			wantLimits: limitsOf("install_limit=1m0s ready_limit=1m30s"),
+		},
+		{
 			name:       "S00: both set, both within",
 			bounds:     []Bound{within(lim(InstallLimit, time.Minute)), within(lim(ReadyLimit, 5*time.Minute))},
 			want:       evidence.Pass,

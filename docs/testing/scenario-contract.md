@@ -1725,7 +1725,7 @@ variable that holds a duration such as `45s` or `2m`:
 `E2E_REPLICATION_LIMIT`, `E2E_FAILOVER_LIMIT`, `E2E_REJOIN_LIMIT`,
 `E2E_STABLE_PERIOD`, `E2E_BROKER_RECOVERY_LIMIT` and
 `E2E_OPERATOR_RESYNC_LIMIT`. The value `0` or `unset` runs the scenario as a
-baseline, which is reported as `blocked`. A value that is not a duration,
+baseline, which is reported as `blocked` (for S00, see below the table). A value that is not a duration,
 or is negative, stops the suite before it starts. The limit a scenario was
 judged by is in its entry of `summary.json`, with `unset` for one that has
 no value, so a run with other limits cannot be mistaken for one with the
