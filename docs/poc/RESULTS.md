@@ -4877,7 +4877,7 @@ when the restore's cleanup or retry begins.
 - The container ran with `--init`, which reaps orphans, in plain Docker:
   not in a Pod, on Kind or on a VM.
 
-## POC-48 — what `cubrid applyinfo -L … -a -v` prints on a slave while a transaction stays open on the master, on a stuck applier and on an idle slave (ADR-0006, #249) — **observation: `Final LSA` advanced at every 5 s sample of a healthy slave through 150 s open transactions, also when no counter and no commit moved (part P2); it stayed fixed for 108 s on a stopped applier while the copied EOF grew and up to 80 pages waited; on an idle slave over 6 minutes no page ever waited and `Final LSA` changed at every sample; after each commit the inserts were applied together and `Final LSA` reached the copied EOF within one sample**
+## POC-48 — what `cubrid applyinfo -L … -a -v` prints on a slave while a transaction stays open on the master, on a stuck applier and on an idle slave (ADR-0006, #249) — **observation: `Final LSA` advanced at every sample (about every 5.5 s) of a healthy slave through 150 s open transactions, also when no counter and no commit moved (part P2); it stayed fixed for 108 s on a stopped applier while the copied EOF grew and up to 80 pages waited; on an idle slave over 6 minutes no page ever waited and `Final LSA` changed at every sample; after each commit the inserts were applied together and `Final LSA` reached the copied EOF within one sample**
 
 **Question (#249).** POC-37 found that the applier's position advances
 through an open transaction, reading it with SQL from `db_ha_apply_info`.
@@ -4914,8 +4914,9 @@ each. The containers and the network were removed afterwards.
 The open transaction was one `csql --no-auto-commit` session on the master
 that was fed one `INSERT … SELECT` of 200 rows with a 1000-character column
 every 5 s for 30 rounds (150 s), then `COMMIT`. A check before the run
-showed csql runs piped statements as they arrive: the master's log end grew
-8 pages before the session was sent its `ROLLBACK`. The parts:
+showed csql runs piped statements as they arrive: the master's log end went
+from 147|5376 to 155|7368 in the 4 s before the session was sent its
+`ROLLBACK` (read with commands during the run and not saved). The parts:
 
 | Part | Table | What else |
 |---|---|---|
@@ -4955,7 +4956,7 @@ slave (a sample about every 20 s; the full series moved in the same way):
 
 **The other open-transaction parts.**
 - **P** (the master's own applier running): the same. The insert, update, delete and schema counts stayed fixed for the whole transaction. The commit count still rose, from 401 to 429, from the master's own applier recording its progress (POC-37, part D). `Final LSA` changed at every sample. 1 to 4 pages waited in 4 samples, never two in a row. At the commit the inserts rose by 6,000.
-- **A and A2** (`AUTO_INCREMENT`): the **update count rose by 200 with every insert of the open transaction** (6200 to 12003 in A2) and the inserts only at the commit. Most likely each insert's `AUTO_INCREMENT` serial update reaches the slave on its own; that was not examined further. A test insert of 200 rows rolled back before part A had also left the update count at 200. In A2 the commit count stayed at 170 for the whole transaction. `Final LSA` changed at every sample. Up to 9 pages waited, at most six samples (26 s) in a row.
+- **A and A2** (`AUTO_INCREMENT`): the **update count rose during the open transaction**, in A2 from 6200 to 12003 over its 30 inserts (about 220 per sample) and to 12200 at the commit, 6,000 in all, one per row inserted; the inserts rose only at the commit. Most likely each insert's `AUTO_INCREMENT` serial update reaches the slave on its own; that was not examined further. The update count was already 200 at the first sample of part A, after a test insert of 200 rows that was rolled back; its value before that test was not recorded. In A2 the commit count stayed at 170 for the whole transaction. `Final LSA` changed at every sample. Up to 9 pages waited, at most six samples (26 s) in a row.
 - **In all four,** the slave held every row of the master after the commit: 6,000 and 12,000 rows of `t`, 6,000 and 12,000 rows of `v`.
 
 **Part B: the slave's applier stopped.**
@@ -4966,7 +4967,7 @@ slave (a sample about every 20 s; the full series moved in the same way):
 | 18:12:23 (stopped at 18:12:22) | 777\|12216 | 786\|12456 | 12000 | 247 | 9 |
 | 18:12:45 | 777\|12216 | 806\|616 | 12000 | 247 | 29 |
 | 18:13:17 | 777\|12216 | 836\|13992 | 12000 | 247 | 59 |
-| 18:13:44 (writes done) | 777\|12216 | 857\|9952 | 12000 | 247 | 80 |
+| 18:13:44 (after the last insert) | 777\|12216 | 857\|9952 | 12000 | 247 | 80 |
 | 18:14:11 | 777\|12216 | 857\|11296 | 12000 | 247 | 80 |
 | 18:14:17 (resumed at 18:14:16) | 786\|12456 | 857\|11616 | 12200 | 248 | 71 |
 | 18:14:39 | 826\|10840 | 858\|6960 | 13000 | 252 | 32 |
@@ -4989,26 +4990,28 @@ client:
 - The commit count rose from 179 to 243, from the master's own applier.
 - The counters the current rule compares (insert, update, delete, schema) did not move.
 
-**The two stall rules, applied to the samples.** The current rule
-(`internal/controller/replication.go`) takes a slave as waiting when pages
-wait at two readings and the insert, update, delete and schema counts have
-not changed between them. The proposed rule takes the same, with `Final
-LSA` in place of the counts. The longest stretch of consecutive samples in
-which each held:
+**The two stall rules, applied to the samples.** The counts-only column
+takes a slave as waiting when pages wait at two readings and the insert,
+update, delete and schema counts have not changed between them, as the
+current rule in `internal/controller/replication.go` does. That rule also
+compares the applier's process and starts its series again when another
+process has taken over, which this table does not reproduce. The proposed
+rule takes the same as the counts-only column, with `Final LSA` in place of
+the counts. The longest stretch of consecutive samples in which each held:
 
-| Part | Current rule (counts) | Proposed rule (`Final LSA`) |
+| Part | Counts only | Proposed rule (`Final LSA`) |
 |---|---|---|
 | A, A2, P, P2 (open transaction) | 0 s | 0 s |
 | I (idle, 6 min) | 0 s | 0 s |
 | B (applier stopped) | 108 s | 108 s |
-| K (applier killed, restarted) | 33 s | 0 s |
+| K (applier killed, restarted) | 22 s after the kill (33 s counting part B's last 10 s, with 1 page waiting) | 0 s |
 | the two parts on the table without a primary key | 11 s and 6 s | 0 s |
 
 **Findings.**
 - **The value that advances during an open transaction is `Final LSA`.** It is in the output the Instance Manager already reads (`-a -v`). In part P2 it changed at every sample of a 150 s open transaction while every counter of that output, and the commit count, stayed the same. This confirms POC-37's `final_lsa` through `applyinfo`, with no SQL on the slave. (POC-37 noted that `applyinfo` with `-a` does not print the position; with `-v`, which the Instance Manager adds, it does.)
 - **The counters are not a progress signal.** Without `AUTO_INCREMENT` (P, P2) they stayed fixed for the whole open transaction. With it (A, A2) the update count rose only because of the serial. Whether the current rule would be wrong therefore depends on the table, not on the slave's health.
 - **On a stopped applier `Final LSA` stops** while the copied EOF grows and pages pile up (part B). The proposed rule held for the whole 108 s stop.
-- **An applier that is killed and restarted by heartbeat was not seen as stuck by `Final LSA`.** The counters stood still for 33 s while it caught up.
+- **An applier that is killed and restarted by heartbeat was not seen as stuck by `Final LSA`.** The counts stood still with pages waiting from the first sample after the kill (18:15:39) to 18:16:01, 22 s, while the new applier caught up. The current rule would most likely not count that as one stall, because another applier process took over; its process comparison was not reproduced here.
 - **The idle slave never met the stall condition.** In 6 minutes no page waited, so neither rule could hold; `Final LSA` also changed at every sample, because the idle log grows (POC-42).
 - **On a healthy slave under load pages wait for short stretches** (up to 9 pages, up to six samples in a row), but `Final LSA` moved in each of them. A rule on the number of waiting pages alone would not tell those apart from part B's first samples.
 - **After each commit the slave caught up at once:** the inserts rose by the transaction's rows in the next sample, and `Final LSA` reached the copied EOF within one sample.
@@ -5016,7 +5019,7 @@ which each held:
 **Limits.**
 - One run of each part, on one two-member pair in Docker on one host: not Kind, not Pods, not the VM lab.
 - `kill -STOP` of an applier is a stand-in for a stuck one, not a state CUBRID reached by itself. POC-17's state was not reproduced here; POC-37, part C, showed `final_lsa` fixed in it.
-- The rules were applied to consecutive samples about 5.5 s apart. The Operator compares readings at its own interval, which was not reproduced; with sparser readings, two samples with waiting pages could be compared across samples without them.
+- The rules were applied to consecutive samples about 5.5 s apart. The Operator's handling of the applier's identity (process ID and start time) was not reproduced. The Operator compares readings at its own interval, which was not reproduced; with sparser readings, two samples with waiting pages could be compared across samples without them.
 - One write rate, one row size, one transaction length (150 s) and `ha_copy_sync_mode=sync`. A longer transaction, a heavier load and `async` were not tried.
 - Stopping the master's own applier (A2, P2) is a signal stand-in for a master with no other commit.
 - The engine's use of `Final LSA` was observed, not read in its source. In particular, why it moves at the 16 KB page boundary (`<page>|0` or `<page>|32`) with pages waiting, as in some samples of A, A2 and K, was not looked at.
