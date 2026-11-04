@@ -115,13 +115,18 @@ func (f *fakeRestoreClient) GetOperation(_ context.Context, _, _, _ string) (ins
 type memberProber struct{ master string }
 
 // ProbeRole answers master for p.master and slave for every other member,
-// whose applier was read applying the master's log with nothing waiting.
+// whose applier was read applying the master's log with nothing waiting. The
+// slave's copy ends where the master's own log ends: a backup chooses a
+// standby only with evidence that its copy receives the master's log (#291),
+// and equal ends leave nothing waiting to be copied in the cluster's status.
 func (p *memberProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
 	if podName == p.master {
-		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now()}
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now(),
+			LogEnd: &databasev1alpha1.LogAddress{Page: 10}}
 	}
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now(),
-		Replication: &ReplicationObservation{Source: p.master, AppliedChanges: 1}}
+		Replication: &ReplicationObservation{Source: p.master, AppliedChanges: 1,
+			CopiedEOF: &databasev1alpha1.LogAddress{Page: 10}}}
 }
 
 // applierProber reports one master and slaves with the given appliers, at the

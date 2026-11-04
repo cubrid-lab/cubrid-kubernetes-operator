@@ -169,6 +169,10 @@ func (in *CubridBackupStatus) DeepCopyInto(out *CubridBackupStatus) {
 		in, out := &in.ObjectStorageNotAppliedSince, &out.ObjectStorageNotAppliedSince
 		*out = (*in).DeepCopy()
 	}
+	if in.PrimaryLogEndNotReadSince != nil {
+		in, out := &in.PrimaryLogEndNotReadSince, &out.PrimaryLogEndNotReadSince
+		*out = (*in).DeepCopy()
+	}
 	if in.OperationMissingSince != nil {
 		in, out := &in.OperationMissingSince, &out.OperationMissingSince
 		*out = (*in).DeepCopy()

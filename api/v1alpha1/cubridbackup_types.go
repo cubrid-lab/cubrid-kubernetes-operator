@@ -239,6 +239,13 @@ type CubridBackupStatus struct {
 	// +optional
 	ObjectStorageNotAppliedSince *metav1.Time `json:"objectStorageNotAppliedSince,omitempty"`
 
+	// primaryLogEndNotReadSince is when a standby-preferred selection first
+	// waited because a standby lacked only the master's own log end, while
+	// no target was recorded. That wait is bounded from this time, and it
+	// starts again after a selection that ended otherwise (ADR-0007).
+	// +optional
+	PrimaryLogEndNotReadSince *metav1.Time `json:"primaryLogEndNotReadSince,omitempty"`
+
 	// operationMissingSince is when the target first answered that it holds
 	// no record of operationRef, since the operation was last read. The
 	// backup ends Failed when the record stays missing for a bound from this
