@@ -521,9 +521,8 @@ kept in one table, [Time limits](#time-limits), and are set after a baseline
 measurement and before the final test campaigns. A limit is not relaxed after
 a failed run to obtain a pass: a change needs its own reviewed commit with the
 measurements that justify it. A run against a limit that is not set yet is a
-baseline run and ends as `blocked` with reason `time_limit_unset`, except
-S00, whose `install_limit` and `ready_limit` decide its result only when
-they are set ([Time limits](#time-limits-1)).
+baseline run and ends as `blocked` with reason `time_limit_unset`,
+including S00 ([Time limits](#time-limits-1)).
 
 A step of a scenario that reaches its limit is cancelled, and the run waits
 for it to return before it goes on, so that a step neither runs a command nor
@@ -737,11 +736,11 @@ reader can tell what to expect.
 - A measurement that was not taken has the string value `"unknown"`.
 - `limits` lists every limit the scenario was judged by, with `"unset"` for
   one that has no value ([Time limits](#time-limits-1)).
-- In S00, `measurements.timeLimitVerdict` is the result, with its reason,
-  that `install_limit` and `ready_limit` give under the rules of
-  [Time limits](#time-limits-1), for example `"pass"`, or
-  `"blocked: time_limit_unset"` when a variable unsets one. It is recorded
-  only when S00's checks all held.
+- In S00, `measurements.timeLimitVerdict` records the result of judging
+  `install_limit` and `ready_limit` under the same rules as every other
+  required scenario ([Time limits](#time-limits-1)). Examples are `"pass"`
+  and `"blocked: time_limit_unset"`. The verdict also determines S00's
+  result when its other checks held; otherwise the existing failure wins.
 - `neverEvents` lists every must-never-happen outcome that was observed. A
   non-empty list means `fail`.
 - `faultConfirmed` is left out for a scenario that injects no fault.
@@ -1725,7 +1724,7 @@ variable that holds a duration such as `45s` or `2m`:
 `E2E_REPLICATION_LIMIT`, `E2E_FAILOVER_LIMIT`, `E2E_REJOIN_LIMIT`,
 `E2E_STABLE_PERIOD`, `E2E_BROKER_RECOVERY_LIMIT` and
 `E2E_OPERATOR_RESYNC_LIMIT`. The value `0` or `unset` runs the scenario as a
-baseline, which is reported as `blocked` (for S00, see below the table). A value that is not a duration,
+baseline, which is reported as `blocked`. A value that is not a duration,
 or is negative, stops the suite before it starts. The limit a scenario was
 judged by is in its entry of `summary.json`, with `unset` for one that has
 no value, so a run with other limits cannot be mistaken for one with the
@@ -1770,12 +1769,13 @@ measured; **unset** limits have neither a value nor a baseline.
 | `delete_limit` | Cluster deleted until its resources are gone | unset | unset |
 | `drain_limit` | Drain issued until it finishes or is refused | unset | unset |
 
-S00 is judged by `install_limit` and `ready_limit` with rules 1, 3 and 4
-(`faults.JudgeS00Limits`). A limit that a variable sets to `0` or `unset`
-does not change S00's result, because S00 is required in the `kind` lane,
-and rule 2 would keep every such run from passing it. S00 records both
-limits and the verdict all four rules give, as the measurement
-`timeLimitVerdict` (#292).
+S00 uses the same four rules as every other required scenario
+(`faults.JudgeS00Limits`). If either `install_limit` or `ready_limit`
+is `0` or `unset`, the scenario is `blocked` with `time_limit_unset`
+unless a set limit was exceeded, in which case it `fail`s. A missing
+measurement against a set limit produces `measurement_missing` when
+no limit is unset. S00 records both limits and the resulting
+`timeLimitVerdict` in `summary.json` (#292).
 
 ### Baselines
 
