@@ -30,6 +30,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -727,8 +728,8 @@ func (h *haRun) imRestartSteps(ctx context.Context, result *evidence.Scenario, r
 	}
 	err = h.killDuringRestore(ctx, cluster, created, rec, result)
 	if r.At == IMRestartAtSeedBackup {
-		// The retry's seed backup and what is judged after it run without
-		// the limit.
+		// The limit is removed right after the source's container runs
+		// again; the retry may begin under it briefly.
 		err = errors.Join(err, h.removeSeedLimit(ctx, r))
 	}
 	if err != nil {
@@ -856,26 +857,24 @@ const imNoSeedLimit = "the rate limit could not be placed before the seed backup
 // the seed restore on the peer not at all.
 func (h *haRun) limitSeedSource(ctx context.Context, cluster *databasev1alpha1.CubridCluster, created time.Time,
 	rec *s12IMRestartRecord, result *evidence.Scenario) error {
-	r := rec.IMRestart
-	target := ""
+	r, f := rec.IMRestart, rec.IMRestart.Throttle
 	if err := h.waitPlaced(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result,
 		"restore did not start", func(c *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 			switch phase {
 			case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
-				target = c.Status.Bootstrap.TargetMember
-				return target != "", nil
+			default:
+				return false, fmt.Errorf(imNoSeedLimit+"the bootstrap was seen %s before the target's Pod could "+
+					"take the limit", phase)
 			}
-			return false, fmt.Errorf(imNoSeedLimit+"the bootstrap was first seen %s, not Preparing or Restoring",
-				phase)
+			target := c.Status.Bootstrap.TargetMember
+			if target == "" {
+				return false, nil
+			}
+			if !slices.Contains(clusterMembers(cluster.Name), target) {
+				return false, fmt.Errorf("the restore's target member %q is not a member of %s", target, cluster.Name)
+			}
+			return h.seedSourceReady(ctx, cluster, target, f)
 		}); err != nil {
-		return err
-	}
-	if !slices.Contains(clusterMembers(cluster.Name), target) {
-		return fmt.Errorf("the restore's target member %q is not a member of %s", target, cluster.Name)
-	}
-	f := r.Throttle
-	f.Target = target
-	if err := h.interruptedTarget(ctx, cluster, f); err != nil {
 		return err
 	}
 	env := netfault.Env{Client: h.Client, Kubectl: h.Command, Poll: h.cfg.Poll,
@@ -887,7 +886,65 @@ func (h *haRun) limitSeedSource(ctx context.Context, cluster *databasev1alpha1.C
 	if err := r.limit.throttle.Prepare(ctx); err != nil {
 		return fmt.Errorf("prepare the rate limit: %w", err)
 	}
-	return confirmThrottle(ctx, r.limit.throttle, f)
+	if err := confirmThrottle(ctx, r.limit.throttle, f); err != nil {
+		return err
+	}
+	return h.limitBeforeSeeding(ctx, cluster, rec, result)
+}
+
+// seedSourceReady reports whether the restore target's Pod can take the
+// limit: it exists, the cluster's StatefulSet controls it, it has an IP and
+// its database container runs. The Operator names the target in its first
+// reconcile of a recovery, usually before the Pod is scheduled, so a Pod
+// that is missing or not ready yet is waited for; a Pod of another owner is
+// an error. Once ready, its UID and IP are recorded in f.
+func (h *haRun) seedSourceReady(ctx context.Context, cluster *databasev1alpha1.CubridCluster, target string,
+	f *s11Throttle) (bool, error) {
+	pod := &corev1.Pod{}
+	if err := h.Client.Get(ctx, client.ObjectKey{Namespace: h.cfg.Namespace, Name: target}, pod); err != nil {
+		if apierrors.IsNotFound(err) || retryable(err) {
+			f.Waiting = "the target's Pod " + target + " could not be read yet: " + err.Error()
+			return false, nil
+		}
+		return false, fmt.Errorf("read the target's Pod %s: %w", target, err)
+	}
+	if owner := metav1.GetControllerOf(pod); owner == nil || owner.Kind != kindStatefulSet ||
+		owner.Name != cluster.Name {
+		return false, fmt.Errorf("the Pod %s is not controlled by the StatefulSet of %s", target, cluster.Name)
+	}
+	status := databaseContainerStatus(pod)
+	if pod.Status.PodIP == "" || status == nil || status.State.Running == nil {
+		f.Waiting = "the target's Pod " + target + " has no IP or its database container is not running yet"
+		return false, nil
+	}
+	f.Target, f.TargetUID, f.TargetIP, f.Waiting = target, string(pod.UID), pod.Status.PodIP, ""
+	return true, nil
+}
+
+// limitBeforeSeeding reads the restored cluster once the limit is confirmed:
+// a bootstrap past Restoring, or a seed backup already recorded, may have
+// had its seed backup's upload run before the limit, which blocks the
+// variant.
+func (h *haRun) limitBeforeSeeding(ctx context.Context, created *databasev1alpha1.CubridCluster,
+	rec *s12IMRestartRecord, result *evidence.Scenario) error {
+	cluster, err := h.readRestarted(ctx, created)
+	if err != nil {
+		return fmt.Errorf("read the restored cluster after the rate limit was confirmed: %w", err)
+	}
+	phase, err := h.restoredStatus(cluster, &rec.s12Record, result)
+	if err != nil {
+		return err
+	}
+	if seeding := firstDatabaseSeeding(cluster); seeding != nil && seeding.BackupOperationID != "" {
+		return fmt.Errorf(imNoSeedLimit+"seed backup %s was already recorded when the limit was confirmed",
+			seeding.BackupOperationID)
+	}
+	switch phase {
+	case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
+		return nil
+	}
+	return fmt.Errorf(imNoSeedLimit+"the bootstrap was %s when the limit was confirmed", cmp.Or(phase,
+		noBootstrapPhase))
 }
 
 // removeSeedLimit removes, at seed-backup, the rate limit once

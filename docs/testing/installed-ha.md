@@ -3517,19 +3517,26 @@ refuses to go on, before anything is created, unless it enforces
 resolve. When the limit goes in, and why:
 - The Operator starts the first seed backup in the same reconcile that
   records `SeedingReplicas`, so a limit installed after that phase is read
-  could miss the backup. The limit goes in at the first reading of
-  `Preparing` or `Restoring` that names the target, on the target's Pod
-  only, and is confirmed by connects to the store through it; a bootstrap
-  first seen in another phase blocks the variant ("the rate limit could not
-  be placed before the seed backup") without a fault.
+  could miss the backup. The Operator also names the target in its first
+  reconcile of the recovery, usually before the target's Pod is scheduled,
+  so the run waits, while the bootstrap reads `Preparing` or `Restoring`,
+  until the target's Pod exists, is controlled by the cluster's
+  StatefulSet, has an IP and runs its database container. It then installs
+  the limit on that Pod only and confirms it by connects to the store
+  through it. A bootstrap seen in another phase first blocks the variant
+  ("the rate limit could not be placed before the seed backup") without a
+  fault. Once the limit is confirmed, the cluster is read again: a bootstrap
+  past `Restoring`, or a seed backup already recorded, blocks the variant
+  too, since that backup may have run before the limit. A limit that cannot
+  be installed or confirmed blocks the variant, and its removal still runs.
 - The limit acts on what the target sends to the store. The restore's
   download comes the other way: only its requests and acknowledgements pass
   the limit, a small part of what is downloaded, so the restore is not held
   to 256 kbit/s; the seed restore runs on the peer and does not pass it. Only
   the seed backup's upload, which the target sends, is held to the limit.
-- The limit is removed right after the source's container runs again, so
-  that the retry's seed backup and everything judged after it run without
-  it, and it must be seen removed: a limit that is not seen removed blocks
+- The limit is removed right after the source's container runs again; the
+  retry may begin under it briefly, and everything judged after it runs
+  without it. It must be seen removed: a limit that is not seen removed blocks
   the variant. A step that ends before the kill removes it too. The
   ephemeral container stays in the target's Pod; the cluster goes with the
   namespace.

@@ -140,9 +140,10 @@ type fakeNetns struct {
 	bandBytes, bandPackets    uint64
 	rejected, rejectedBytes   uint64
 	inertReset, ignoreUnreset bool
-	// ignoreUnthrottle leaves the limit in place when it is removed.
-	ignoreUnthrottle bool
-	ops              []string
+	// ignoreUnthrottle leaves the limit in place when it is removed;
+	// failThrottle refuses to install it.
+	ignoreUnthrottle, failThrottle bool
+	ops                            []string
 	// stats counts the reads of the limit's counters; from the failFrom-th,
 	// failCount of them fail. onUnthrottle runs when the limit is removed.
 	stats, failFrom, failCount int
@@ -188,6 +189,9 @@ func (n *fakeNetns) answer(_ context.Context, pod, script string) (string, error
 			"requeues 0)\nqdisc tbf 40: parent 1:4 rate 256Kbit burst 16Kb lat 400ms\n Sent %d bytes %d pkt "+
 			"(dropped 0, overlimits 7 requeues 0)\n", n.bandBytes, n.bandPackets), nil
 	case "throttle":
+		if n.failThrottle {
+			return "RTNETLINK answers: Operation not permitted", errors.New("command terminated with exit code 2")
+		}
 		n.throttleIP, n.throttlePort = m[2], port
 	case "unthrottle":
 		if n.ignoreUnthrottle {
