@@ -23,6 +23,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
@@ -126,5 +129,84 @@ var _ = Describe("CubridBackup target selection with the cluster's replication h
 		Expect(fake.instances).To(Equal([]string{name + "-0"}))
 		Expect(got.Status.TargetInstance).To(Equal(name + "-0"))
 		Expect(got.Status.FallbackUsed).To(BeTrue())
+	})
+})
+
+// logEndUnreadProber reports a master whose own log end was not read and
+// caught-up slaves whose copy's end was read. Every member answers, so the
+// primary is resolved.
+type logEndUnreadProber struct{ master string }
+
+func (p *logEndUnreadProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
+	if podName == p.master {
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now()}
+	}
+	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now(),
+		Replication: &ReplicationObservation{Source: p.master, AppliedChanges: 1,
+			CopiedEOF: &databasev1alpha1.LogAddress{Page: 10}}}
+}
+
+// When the master's own log end was not read, a caught-up standby has no
+// evidence that its copy receives the master's log, so it is not chosen. A
+// PreferStandby backup then asks again a few seconds later instead of
+// taking the master at once, and falls back to the master only after
+// primaryLogEndWait from the backup's creation, so an Instance Manager that
+// never reports the log end does not hold the backup forever (#291).
+var _ = Describe("CubridBackup target selection while the master's log end is not read", func() {
+	const namespace = "default"
+	ctx := context.Background()
+
+	start := func(name string, clock func() time.Time) (*databasev1alpha1.CubridBackup, *lostResponseBackupClient, ctrl.Result) {
+		cluster := haCluster(name)
+		cluster.Spec.Databases = []databasev1alpha1.CubridDatabase{{Name: demoDB}}
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+		createAppliedMemberPods(ctx, cluster)
+		backup := &databasev1alpha1.CubridBackup{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Spec: databasev1alpha1.CubridBackupSpec{
+				ClusterRef: databasev1alpha1.LocalObjectRef{Name: name},
+				Database:   demoDB,
+				Level:      databasev1alpha1.CubridBackupFull,
+				Target:     databasev1alpha1.CubridBackupTarget{Preference: databasev1alpha1.PreferStandby},
+				Destination: databasev1alpha1.CubridBackupDestination{
+					Type:          databasev1alpha1.DestinationObjectStorage,
+					ObjectStorage: &databasev1alpha1.ObjectStorageDestination{Bucket: waitBucket},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+		fake := &lostResponseBackupClient{}
+		r := &CubridBackupReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(), Backup: fake,
+			Prober: &logEndUnreadProber{master: name + "-0"}, Clock: clock,
+		}
+		result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(backup)})
+		Expect(err).NotTo(HaveOccurred())
+		return backup, fake, result
+	}
+
+	It("starts nothing and asks again within seconds while the bound has not passed", func() {
+		backup, fake, result := start("bk-logend-wait", nil)
+
+		got := stored(ctx, backup)
+		Expect(fake.instances).To(BeEmpty(), "a backup was started without evidence about any standby's copy")
+		Expect(got.Status.TargetInstance).To(BeEmpty())
+		Expect(readyOf(got).Reason).To(Equal(reasonPrimaryLogEndNotRead))
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(result.RequeueAfter).To(BeNumerically("<=", backupPollAfter))
+	})
+
+	It("falls back to the master once the bound has passed since the backup's creation", func() {
+		later := time.Now().Add(primaryLogEndWait + time.Minute)
+		backup, fake, _ := start("bk-logend-over", func() time.Time { return later })
+
+		got := stored(ctx, backup)
+		Expect(fake.instances).To(Equal([]string{"bk-logend-over-0"}))
+		Expect(got.Status.TargetInstance).To(Equal("bk-logend-over-0"))
+		Expect(got.Status.FallbackUsed).To(BeTrue())
+		Expect(got.Status.TargetRole).To(Equal(string(databasev1alpha1.RoleMaster)))
+		Expect(readyOf(got).Reason).To(Equal(reasonMasterFallbackPrimaryLogEndNotRead))
 	})
 })

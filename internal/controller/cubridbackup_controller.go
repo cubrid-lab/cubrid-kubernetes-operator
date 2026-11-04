@@ -233,7 +233,9 @@ func replicationHistory(cluster *databasev1alpha1.CubridCluster) map[string]*dat
 // reason spec.target.preference is read only for that first selection: a later
 // change does not move a backup whose target is already recorded. Nothing is
 // dispatched to a target whose Pod does not run with the cluster's
-// object-storage settings. Both waits are bounded by backupTargetWait.
+// object-storage settings. Both waits are bounded by backupTargetWait. A
+// PreferStandby selection that waits only for the master's own log end is
+// bounded by primaryLogEndWait from the backup's creation.
 func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -265,14 +267,20 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 				"recorded target "+sel.Instance+" is no longer eligible for its recorded role "+backup.Status.TargetRole)
 		}
 	} else {
-		sel = selectBackupTarget(members, obs, replicationHistory(cluster), res, backup.Spec.Target.Preference, single, observedAt)
+		logEndWaitOver := r.now().Sub(backup.CreationTimestamp.Time) >= primaryLogEndWait
+		sel = selectBackupTarget(members, obs, replicationHistory(cluster), res, backup.Spec.Target.Preference, single,
+			logEndWaitOver, observedAt)
 		if !sel.Selected {
 			// Not terminal: HA may resolve later. Surface why and requeue.
 			// A wait for object storage that this interrupts starts again
 			// when a Pod without the settings is selected next.
 			backup.Status.ObjectStorageNotAppliedSince = nil
-			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason,
-				"no safe backup target yet; waiting for a healthy target")
+			msg := "no safe backup target yet; waiting for a healthy target"
+			if sel.Reason == reasonPrimaryLogEndNotRead {
+				msg = fmt.Sprintf("the master's own log end was not read, so no standby's copy of its log can be judged; "+
+					"asking again, and falling back to the master %s after the backup's creation", primaryLogEndWait)
+			}
+			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, msg)
 			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
 		}
 	}

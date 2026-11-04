@@ -114,12 +114,26 @@ log: the end of its copy must have been read in the same observation, as it
 is read with the applier's counters, and when the master's own log end was
 not read, the copy's end must lie past the one in a stored reading of the
 same source taken no longer than the 60 s stall window ago. A slave without
-that evidence is not eligible. Eligible slaves are ordered by the log pages
-waiting to be applied (`delayedPages`), then by ordinal. Missing evidence never counts as caught
-up: a slave whose applier or copy's end could not be read is not eligible, and no slave is
-eligible while the primary is not resolved, so `StandbyOnly` waits
-(`NoHealthyStandby`) and `PreferStandby` falls back to the master only under
-the rule above. That also holds when the applier cannot be read at all,
+that evidence is not eligible. The status keeps a copy's end only while pages
+of the master's log wait to be copied, so a caught-up slave has no stored
+reading to have grown from: in an observation that did not read the master's
+log end, it is not eligible. The master's log end is missing when
+`applyinfo -r` on the master fails or does not answer within its budget,
+when the master's server is not active, and always with an Instance Manager
+that does not report it (older than #624). So that one missed reading does
+not put a whole backup on the master, `PreferStandby` waits
+(`PrimaryLogEndNotRead`, asked again every 10 s) while a slave is excluded
+only because the master's log end was not read, and falls back to the master
+(`MasterFallbackPrimaryLogEndNotRead`, `fallbackUsed: true`) once 30 s have
+passed since the backup's creation; with an Instance Manager that never
+reports the log end, a `PreferStandby` backup therefore runs on the master
+after that delay. A slave excluded for another reason as well does not hold
+the selection. Eligible slaves are ordered by the log pages waiting to be
+applied (`delayedPages`), then by ordinal. Missing evidence never counts as
+caught up: a slave whose applier or copy's end could not be read is not
+eligible, and no slave is eligible while the primary is not resolved, so
+`StandbyOnly` waits (`NoHealthyStandby`) and `PreferStandby` falls back to
+the master only under the rule above. That also holds when the applier cannot be read at all,
 because the Instance Manager is older and reports no replication or because
 `applyinfo` timed out under load: that slave is not eligible, so
 `PreferStandby` then falls back to the master. A `failCount` greater than 0

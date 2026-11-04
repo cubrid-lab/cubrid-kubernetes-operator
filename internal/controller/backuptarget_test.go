@@ -97,15 +97,6 @@ func TestSelectBackupTarget(t *testing.T) {
 			wantSelected: true, wantInstance: c0, wantRole: databasev1alpha1.RoleMaster, wantFallback: true, wantReason: "MasterFallbackSelected",
 		},
 		{
-			// Without the master's log end and with no stored reading, nothing
-			// shows that a standby's copy receives the master's log (#291).
-			name:    "PreferStandby falls back to master when the master's log end was not read",
-			members: m3,
-			obs:     map[string]RoleObservation{c0: masterLogEndUnread(), c1: obsSlave(), c2: obsSlave()},
-			res:     resolvedPrimary(), pref: databasev1alpha1.PreferStandby,
-			wantSelected: true, wantInstance: c0, wantRole: databasev1alpha1.RoleMaster, wantFallback: true, wantReason: reasonMasterFallbackSelected,
-		},
-		{
 			name:    "PreferStandby refuses master fallback when primary ambiguous",
 			members: m3,
 			obs:     map[string]RoleObservation{c0: obsMaster(), c1: obsMaster(), c2: obsDown()},
@@ -153,7 +144,7 @@ func TestSelectBackupTarget(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := selectBackupTarget(tc.members, tc.obs, nil, tc.res, tc.pref, tc.single, testNow)
+			got := selectBackupTarget(tc.members, tc.obs, nil, tc.res, tc.pref, tc.single, false, testNow)
 			if got.Selected != tc.wantSelected {
 				t.Fatalf("Selected = %v, want %v (reason %q)", got.Selected, tc.wantSelected, got.Reason)
 			}
@@ -208,7 +199,7 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := map[string]RoleObservation{c0: obsMaster(), c1: tc.c1, c2: obsDown()}
 
-			got := selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
+			got := selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, false, testNow)
 			if got.Selected {
 				t.Errorf("StandbyOnly selected %s on an observation that is not authoritative", got.Instance)
 			}
@@ -218,7 +209,7 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 
 			// PreferStandby must not take that slave either; with a resolved
 			// primary it falls back to the master, as documented.
-			got = selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.PreferStandby, false, testNow)
+			got = selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.PreferStandby, false, false, testNow)
 			if got.Instance == c1 {
 				t.Errorf("PreferStandby selected %s on an observation that is not authoritative", c1)
 			}
@@ -227,7 +218,7 @@ func TestSelectBackupTarget_StandbyMustBeAuthoritative(t *testing.T) {
 
 	t.Run("a fresh, consistent slave is selected", func(t *testing.T) {
 		obs := map[string]RoleObservation{c0: obsMaster(), c1: obsSlave(), c2: obsDown()}
-		got := selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
+		got := selectBackupTarget(members, obs, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, false, testNow)
 		if !got.Selected || got.Instance != c1 {
 			t.Errorf("got %+v, want %s selected", got, c1)
 		}
@@ -346,14 +337,14 @@ func TestSelectBackupTarget_StandbyNeedsFreshReplicationEvidence(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := map[string]RoleObservation{c0: obsMaster(), c1: tc.c1, c2: tc.c2}
-			got := selectBackupTarget(members, obs, tc.history, tc.res, databasev1alpha1.StandbyOnly, false, testNow)
+			got := selectBackupTarget(members, obs, tc.history, tc.res, databasev1alpha1.StandbyOnly, false, false, testNow)
 			switch {
 			case tc.wantStandby == "" && (got.Selected || got.Reason != reasonNoHealthyStandby):
 				t.Errorf("StandbyOnly = %+v, want no standby (NoHealthyStandby)", got)
 			case tc.wantStandby != "" && (!got.Selected || got.Instance != tc.wantStandby):
 				t.Errorf("StandbyOnly = %+v, want %s", got, tc.wantStandby)
 			}
-			got = selectBackupTarget(members, obs, tc.history, tc.res, databasev1alpha1.PreferStandby, false, testNow)
+			got = selectBackupTarget(members, obs, tc.history, tc.res, databasev1alpha1.PreferStandby, false, false, testNow)
 			if tc.wantStandby == "" && tc.res.Status == metav1.ConditionTrue &&
 				(got.Instance != c0 || got.Reason != reasonMasterFallbackSelected) {
 				t.Errorf("PreferStandby = %+v, want the master as a fallback", got)
@@ -441,15 +432,98 @@ func TestSelectBackupTarget_StandbyCopyMustGrow(t *testing.T) {
 			masterLogEndUnread(), copyAt(101), readAgo(replicationStallWindow+time.Second, 100), c2},
 		{"not a standby whose copy's end went back, the master's log end unread",
 			masterLogEndUnread(), copyAt(101), readAgo(10*time.Second, 102), c2},
+		{"not a standby whose stored reading is in the future, the master's log end unread",
+			masterLogEndUnread(), copyAt(101), readAgo(-10*time.Second, 100), c2},
+		{"not a standby whose stored reading is of another source, the master's log end unread",
+			masterLogEndUnread(), copyAt(101), func() map[string]*databasev1alpha1.InstanceReplication {
+				h := readAgo(10*time.Second, 100)
+				h[c1].Source = c2
+				return h
+			}(), c2},
+		{"a standby whose copy grew within its page since a recent reading, the master's log end unread",
+			masterLogEndUnread(), func() RoleObservation {
+				o := copyAt(100)
+				o.Replication.CopiedEOF.Offset = 8
+				return o
+			}(), readAgo(10*time.Second, 100), c1},
+		{"a standby whose stored reading is exactly the stall window old, the master's log end unread",
+			masterLogEndUnread(), copyAt(101), readAgo(replicationStallWindow, 100), c1},
 		{"not a standby whose copy's end was not read",
 			masterAt(105), unreadCopy, notReceivingFor(replicationStallWindow), c2},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := map[string]RoleObservation{c0: tc.c0, c1: tc.c1, c2: slaveApplying(c0, 50)}
-			got := selectBackupTarget(members, obs, tc.history, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, testNow)
+			got := selectBackupTarget(members, obs, tc.history, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, false, testNow)
 			if !got.Selected || got.Instance != tc.wantStandby {
 				t.Errorf("StandbyOnly = %+v, want %s", got, tc.wantStandby)
+			}
+		})
+	}
+}
+
+// A caught-up standby has no stored copy end to grow from, since the status
+// keeps it only while pages wait to be copied. When the master's own log end
+// was not read in a reconcile, such a standby is not eligible, and the master
+// fallback would take a whole PreferStandby backup for one missed reading.
+// While the bound of primaryLogEndWait has not passed, PreferStandby
+// therefore waits (PrimaryLogEndNotRead) when a standby was excluded only
+// because the master's log end was not read; after it, it falls back to the
+// master under a reason that says why. StandbyOnly waits as for any standby
+// that is not eligible (#291).
+func TestSelectBackupTarget_WaitsForThePrimaryLogEnd(t *testing.T) {
+	members := []string{c0, c1, c2}
+	stalled := func() map[string]*databasev1alpha1.InstanceReplication {
+		since, read := metav1.NewTime(testNow.Add(-2*replicationStallWindow)), metav1.NewTime(testNow.Add(-10*time.Second))
+		return map[string]*databasev1alpha1.InstanceReplication{
+			c1: {Source: c0, AppliedChanges: 10, DelayedPages: 5, StalledSince: &since, ObservedAt: &read},
+		}
+	}
+	unreadCopy := slaveApplying(c0, 0)
+	unreadCopy.Replication.CopiedEOF = nil
+	tests := []struct {
+		name       string
+		c0, c1, c2 RoleObservation
+		history    map[string]*databasev1alpha1.InstanceReplication
+		waitOver   bool
+		wantPrefer TargetSelection
+	}{
+		{"waits while the bound has not passed",
+			masterLogEndUnread(), obsSlave(), obsDown(), nil, false,
+			TargetSelection{Reason: reasonPrimaryLogEndNotRead}},
+		{"falls back to the master once the bound has passed",
+			masterLogEndUnread(), obsSlave(), obsDown(), nil, true,
+			TargetSelection{Instance: c0, Role: databasev1alpha1.RoleMaster, FallbackUsed: true, Selected: true,
+				Reason: reasonMasterFallbackPrimaryLogEndNotRead}},
+		{"does not wait for a standby that is stalled as well",
+			masterLogEndUnread(), slaveApplying(c0, 5), obsDown(), stalled(), false,
+			TargetSelection{Instance: c0, Role: databasev1alpha1.RoleMaster, FallbackUsed: true, Selected: true,
+				Reason: reasonMasterFallbackSelected}},
+		{"does not wait for a standby whose copy's end was not read",
+			masterLogEndUnread(), unreadCopy, obsDown(), nil, false,
+			TargetSelection{Instance: c0, Role: databasev1alpha1.RoleMaster, FallbackUsed: true, Selected: true,
+				Reason: reasonMasterFallbackSelected}},
+		{"does not wait when no standby answers",
+			masterLogEndUnread(), obsDown(), obsDown(), nil, false,
+			TargetSelection{Instance: c0, Role: databasev1alpha1.RoleMaster, FallbackUsed: true, Selected: true,
+				Reason: reasonMasterFallbackSelected}},
+		{"takes the standby whose evidence is complete instead of waiting",
+			masterLogEndUnread(), obsSlave(), slaveApplying(c0, 3), map[string]*databasev1alpha1.InstanceReplication{
+				c2: {Source: c0, AppliedChanges: 10, CopiedEOF: &databasev1alpha1.LogAddress{Page: caughtUpLogEnd.Page - 1},
+					CopyDelayedPages: 1, ObservedAt: func() *metav1.Time { t := metav1.NewTime(testNow.Add(-10 * time.Second)); return &t }()},
+			}, false,
+			TargetSelection{Instance: c2, Role: databasev1alpha1.RoleSlave, Selected: true, Reason: reasonStandbySelected}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := map[string]RoleObservation{c0: tc.c0, c1: tc.c1, c2: tc.c2}
+			got := selectBackupTarget(members, obs, tc.history, resolvedPrimary(), databasev1alpha1.PreferStandby, false, tc.waitOver, testNow)
+			if got != tc.wantPrefer {
+				t.Errorf("PreferStandby = %+v, want %+v", got, tc.wantPrefer)
+			}
+			got = selectBackupTarget(members, obs, tc.history, resolvedPrimary(), databasev1alpha1.StandbyOnly, false, tc.waitOver, testNow)
+			if tc.wantPrefer.Role != databasev1alpha1.RoleSlave && (got.Selected || got.Reason != reasonNoHealthyStandby) {
+				t.Errorf("StandbyOnly = %+v, want no standby (NoHealthyStandby)", got)
 			}
 		})
 	}
