@@ -2515,8 +2515,18 @@ resolved (`selectBackupTarget` in `internal/controller/backuptarget.go`,
    taken, so the source is taken from the location, which the Operator
    names from its own observation; that the member was the master then is
    the Operator's, not the run's, observation. `seedFromOwnMaster` says
-   whether every manifest held. A listing or read that fails, a manifest
-   that cannot be parsed, and no seed manifest at all block S12.
+   whether every manifest held. Every member other than the restore's
+   target must have a seed manifest that names it: `seed` names the first
+   member `status.databases[].seededMembers` recorded, and
+   `seed-<peer>-from-<source>[-r<n>]` names `<peer>`. More than one manifest
+   for a peer, such as a later round after a change of master, is accepted
+   when each passes the checks above. A manifest that names another member,
+   the restore's target or a name that is not one of the cluster's, must
+   never happen: the Operator seeds only the other members. A member with no
+   seed manifest blocks S12: its seeding is then not shown, which is also so
+   when no reading recorded the seeded members, as `seed` then names no
+   one. A listing or read that fails, a manifest that cannot be parsed, and
+   no seed manifest at all block S12 too.
 10. **Credentials.** Neither key of the seed Secret may be in any status of
    the restored cluster the run read, at every reading and once at the end,
    in any encoding the redaction removes. One found must never happen.

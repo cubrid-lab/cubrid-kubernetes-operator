@@ -105,10 +105,12 @@ const (
 )
 
 // s12SeedManifest is what a seed backup's manifest says of where it was
-// taken: its key, the cluster's UID, the member and its role, and the member
-// its location names as its source (ExpectedSource).
+// taken: its key, the peer it seeds as its location names it, the cluster's
+// UID, the member and its role, and the member its location names as its
+// source (ExpectedSource).
 type s12SeedManifest struct {
 	Key            string `json:"key"`
+	Peer           string `json:"peer"`
 	ClusterUID     string `json:"clusterUID"`
 	SourceInstance string `json:"sourceInstance"`
 	SourceRole     string `json:"sourceRole"`
@@ -1295,10 +1297,14 @@ func (h *haRun) checkSeeds(ctx context.Context, cluster *databasev1alpha1.Cubrid
 	if err != nil {
 		return fmt.Errorf("list the restored cluster's seed backups under %s/%s: %w", bucket, prefix, err)
 	}
-	target := ""
+	target, firstPeer := "", ""
 	for _, p := range rec.Bootstrap {
 		target = cmp.Or(target, p.TargetMember)
+		if firstPeer == "" && len(p.SeededMembers) > 0 {
+			firstPeer = p.SeededMembers[0]
+		}
 	}
+	peers := slices.DeleteFunc(clusterMembers(cluster.Name), func(m string) bool { return m == target })
 	rec.SeedManifests = []s12SeedManifest{}
 	var events []string
 	for _, key := range keys {
@@ -1311,9 +1317,13 @@ func (h *haRun) checkSeeds(ctx context.Context, cluster *databasev1alpha1.Cubrid
 		if err != nil {
 			return fmt.Errorf("read the seed backup's manifest %s: %w", key, err)
 		}
-		seed := s12SeedManifest{Key: key, ClusterUID: m.ClusterUID, SourceInstance: m.SourceInstance,
-			SourceRole: m.SourceRole, ExpectedSource: seedSourceOf(dir, target)}
+		seed := s12SeedManifest{Key: key, Peer: seedPeerOf(dir, firstPeer), ClusterUID: m.ClusterUID,
+			SourceInstance: m.SourceInstance, SourceRole: m.SourceRole, ExpectedSource: seedSourceOf(dir, target)}
 		rec.SeedManifests = append(rec.SeedManifests, seed)
+		if seed.Peer != "" && !slices.Contains(peers, seed.Peer) {
+			events = append(events, fmt.Sprintf("the seed backup %s names %s, which is not a member the restored "+
+				"cluster seeds: it seeds %s", key, seed.Peer, strings.Join(peers, " and ")))
+		}
 		if seed.ClusterUID != uid {
 			events = append(events, fmt.Sprintf("the seed backup's manifest %s names cluster %s, not the restored "+
 				"cluster %s", key, seed.ClusterUID, uid))
@@ -1331,9 +1341,33 @@ func (h *haRun) checkSeeds(ctx context.Context, cluster *databasev1alpha1.Cubrid
 		return fmt.Errorf("no seed backup's manifest is under %s/%s: that the peers were seeded from the restored "+
 			"cluster's master is not shown", bucket, prefix)
 	}
-	result.Measurements[measSeedFromOwnMaster] = len(events) == 0
 	result.NeverEvents = append(result.NeverEvents, events...)
+	var missing []string
+	for _, peer := range peers {
+		if !slices.ContainsFunc(rec.SeedManifests, func(m s12SeedManifest) bool { return m.Peer == peer }) {
+			missing = append(missing, peer)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("no seed backup's manifest names %s under %s/%s: that %s seeded from the restored "+
+			"cluster's master is not shown", strings.Join(missing, " or "), bucket, prefix,
+			map[bool]string{true: "it was", false: "they were"}[len(missing) == 1])
+	}
+	result.Measurements[measSeedFromOwnMaster] = len(events) == 0
 	return nil
+}
+
+// seedPeerOf is the peer a seed backup's directory below the cluster's UID
+// names: <peer> of "seed-<peer>-from-<source>[-r<round>]", and for "seed",
+// which the Operator uses for the first peer only (seedMember in
+// internal/controller/habootstrap.go), firstPeer, the first member the
+// cluster's status recorded as seeded, or empty when no reading recorded one.
+func seedPeerOf(dir, firstPeer string) string {
+	peer, _, found := strings.Cut(strings.TrimPrefix(dir, "seed-"), "-from-")
+	if !found {
+		return firstPeer
+	}
+	return peer
 }
 
 // seedSourceOf is the member a seed backup's directory below the cluster's

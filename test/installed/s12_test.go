@@ -167,8 +167,10 @@ func (f *s12Fixture) advanceRestore(ctx context.Context, c client.WithWatch, key
 	case databasev1alpha1.BootstrapComplete:
 		boot.Reason, boot.Message = "RecoveryComplete", "restore completed"
 		s.CurrentPrimary = testRestoreMaster
+		// The first peer was seeded from the restore's target, the second
+		// from the master (seedMember in internal/controller/habootstrap.go).
 		s.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName, Phase: "Created", PrimaryCreated: true,
-			HAConfigured: true}}
+			HAConfigured: true, SeededMembers: []string{testSeedFirstPeer, testSeedLaterPeer}}}
 	case databasev1alpha1.BootstrapFailed:
 		boot.Reason, boot.Message = s12RefusedReason, "on ha-restore-0: restoredb failed: exit status 1"
 	}
@@ -1608,7 +1610,11 @@ func TestRunS12ExactFailsOnBootstrapReadyBeforeTheBootstrapCompleted(t *testing.
 // testSeedLaterDir is the directory of the second peer's seed backup, taken
 // on the restored cluster's master (seedLocationDir in
 // internal/controller/habootstrap.go).
-const testSeedLaterDir = "seed-ha-restore-2-from-" + testRestoreMaster
+const (
+	testSeedFirstPeer = "ha-restore-1"
+	testSeedLaterPeer = "ha-restore-2"
+	testSeedLaterDir  = "seed-" + testSeedLaterPeer + "-from-" + testRestoreMaster
+)
 
 // storeSeeds leaves in the store what the Operator's seeding leaves: a seed
 // backup's manifest for each peer, taken on the restored cluster's master,
@@ -1727,5 +1733,54 @@ func TestS12StepsIsBlockedWithoutS11sManifestSource(t *testing.T) {
 	if err := h.s12Steps(t.Context(), &result, &s12Record{}); err == nil ||
 		!strings.Contains(err.Error(), "S11 recorded no manifest source") {
 		t.Fatalf("s12Steps() error = %v, want it blocked without S11's manifest source", err)
+	}
+}
+
+func TestRunS12ExactJudgesWhetherEveryPeerHasASeed(t *testing.T) {
+	later := func(dir string) func(map[string]*instancemanager.BackupManifest) {
+		return func(m map[string]*instancemanager.BackupManifest) {
+			copied := *m[testSeedLaterDir]
+			m[dir] = &copied
+		}
+	}
+	for name, tc := range map[string]struct {
+		tamper   func(map[string]*instancemanager.BackupManifest)
+		result   evidence.Result
+		want     string
+		manifest int
+	}{
+		"both peers have a seed": {result: evidence.Pass, manifest: 2},
+		// A round after a change of master leaves a second seed of the same
+		// peer, which passes its own checks.
+		"a later round of the second peer": {tamper: later(testSeedLaterDir + "-r1"), result: evidence.Pass,
+			manifest: 3},
+		// The reviewer's case: the first peer's seed is there, the second
+		// peer's is not, so its seeding is not shown.
+		"the second peer's seed missing": {tamper: func(m map[string]*instancemanager.BackupManifest) {
+			delete(m, testSeedLaterDir)
+		}, result: evidence.Blocked, want: "no seed backup's manifest names " + testSeedLaterPeer},
+		"the first peer's seed missing": {tamper: func(m map[string]*instancemanager.BackupManifest) {
+			delete(m, "seed")
+		}, result: evidence.Blocked, want: "no seed backup's manifest names " + testSeedFirstPeer},
+		// The Operator seeds only the members other than the restore's target.
+		"a seed for the restore's target": {tamper: later("seed-" + testRestoreMaster + "-from-" + testSeedFirstPeer),
+			result: evidence.Fail, want: "names " + testRestoreMaster + ", which is not a member the restored " +
+				"cluster seeds"},
+		"a seed for another cluster's member": {tamper: later("seed-ha-other-0-from-" + testRestoreMaster),
+			result: evidence.Fail, want: "names ha-other-0, which is not a member the restored cluster seeds"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12Config(t)
+			f := newS12Fixture(t, cfg)
+			f.tamperSeeds = tc.tamper
+			s12, err := s12Of(t, f, t.Context())
+			if s12.Result != tc.result || (tc.result != evidence.Pass && err == nil) ||
+				!strings.Contains(s12.Reason+strings.Join(s12.NeverEvents, "; "), tc.want) {
+				t.Fatalf("S12 = %+v, %v; want %s with %q", s12, err, tc.result, tc.want)
+			}
+			if rec := readS12Record(t, cfg.EvidenceDir); tc.manifest > 0 && len(rec.SeedManifests) != tc.manifest {
+				t.Fatalf("seed manifests = %+v, want %d", rec.SeedManifests, tc.manifest)
+			}
+		})
 	}
 }
