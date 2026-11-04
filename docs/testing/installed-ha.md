@@ -2339,6 +2339,23 @@ requires LAB01, S11/complete and S12/exact. `-restore` without
 S12 starts only from S11 `complete` that passed. When LAB01 or S11 did not
 pass, S12 is blocked and nothing of it is done.
 
+**Where the artifact was taken.** S11 records what the artifact's manifest
+says of its source (`manifestSource` in S11's record: `clusterUID`,
+`sourceInstance`, `sourceRole`), and S12 copies it into its record
+(`artifactSource`, with `sourceClusterUID`, the UID of the cluster S11
+backed up). An S11 record without it blocks S12 before anything is written. These must never happen,
+whichever step ends S12: a manifest that names another cluster than the
+source, a restored cluster with the UID of the cluster the artifact was
+taken of, and a source role that is neither `slave` nor `master`. The source
+role is recorded as `artifactSourceRole`, and `artifactFromSourceCluster`
+and `restoredClusterIsAnother` say whether the two UIDs held; each is
+`unknown` until read. A `master` does not fail S12: with the default
+`PreferStandby`, the Operator takes the backup on an eligible standby and
+falls back to the master only when no standby is eligible and the primary is
+resolved (`selectBackupTarget` in `internal/controller/backuptarget.go`,
+#291), and S11 checks the role against the backup's status. The record's
+`notes` then say that a standby-produced backup is not shown by that run.
+
 1. **Writes after the backup.** The run takes the client history as it
    stands before these writes. No client runs between LAB01's workload and
    them, and S11's marker goes to the marker table, so this is the history
@@ -2396,6 +2413,14 @@ pass, S12 is blocked and nothing of it is done.
      fails S12 with the `BootstrapReady` reason.
    - `Ready` `True` while `status.bootstrap.phase` is not `Complete` must
      never happen and fails S12 at once.
+   - `BootstrapReady` `True` in any recorded reading whose bootstrap phase is
+     not `Complete` must never happen either: the Operator sets it only once
+     every member is seeded (`reconcileSeeding` in
+     `internal/controller/habootstrap.go`), in the reconcile that records the
+     recovery `Complete` (`reconcileRecoverySeeding` in
+     `internal/controller/bootstrap.go`). It is judged from the recorded
+     readings once S12's steps end, whichever step ended them; a reading
+     the run did not take is not judged.
    - A cluster read but not Ready when `-restore-limit` passes fails S12,
      with the last phase and what did not hold. A master whose `cubrid
      heartbeat status` reports `registered_and_to_be_active` is not yet
@@ -2475,7 +2500,37 @@ pass, S12 is blocked and nothing of it is done.
    there it would be a write meant for the restored cluster. And the data rules
    must hold on the source's members and Services over the whole history, the
    writes after the backup included. Any difference fails S12.
-9. **Credentials.** Neither key of the seed Secret may be in any status of
+9. **Seeded from its own master.** The run lists, with the seed Secret's
+   keys through the port-forward to `-object-store-service`, the restored
+   cluster's seed prefix below its UID,
+   `lab-runs/<run ID>/restore-seed/<restored cluster UID>/`, and reads each
+   seed backup's manifest, `seed*/appdb/manifest.json`. The Operator stores
+   the first peer's seed under `seed`, taken on the member the database was
+   restored on, and a later peer's under `seed-<peer>-from-<source>[-r<n>]`,
+   taken on the member it observed as the master (`seedLocation`,
+   `seedLocationDir`, `selectSeedSource` in
+   `internal/controller/habootstrap.go`). Each manifest is recorded
+   (`seedManifests`: key, `clusterUID`, `sourceInstance`, `sourceRole` and
+   `expectedSource`), and these must never happen: a `clusterUID` other than
+   the restored cluster's, a `sourceRole` other than `master`, and a
+   `sourceInstance` other than the source its location names (the restore's
+   target for `seed`). The run does not observe the roles when a seed is
+   taken, so the source is taken from the location, which the Operator
+   names from its own observation; that the member was the master then is
+   the Operator's, not the run's, observation. `seedFromOwnMaster` says
+   whether every manifest held. Every member other than the restore's
+   target must have a seed manifest that names it: `seed` names the first
+   member `status.databases[].seededMembers` recorded, and
+   `seed-<peer>-from-<source>[-r<n>]` names `<peer>`. More than one manifest
+   for a peer, such as a later round after a change of master, is accepted
+   when each passes the checks above. A manifest that names another member,
+   the restore's target or a name that is not one of the cluster's, must
+   never happen: the Operator seeds only the other members. A member with no
+   seed manifest blocks S12: its seeding is then not shown, which is also so
+   when no reading recorded the seeded members, as `seed` then names no
+   one. A listing or read that fails, a manifest that cannot be parsed, and
+   no seed manifest at all block S12 too.
+10. **Credentials.** Neither key of the seed Secret may be in any status of
    the restored cluster the run read, at every reading and once at the end,
    in any encoding the redaction removes. One found must never happen.
 
@@ -2518,11 +2573,11 @@ S12 `exact` here does not check:
   restore runs; a restarted Operator runs only with
   `-restore-operator-restart`, and a killed Instance Manager on the target
   member only with `-restore-instance-manager-restart`, below;
-- an artifact taken on the master: S11 takes the backup on a slave
-  (`PreferStandby`), and a restore into a new cluster accepts an artifact
-  taken on either role (`restoreExpectation` in
-  `internal/instancemanager/restore.go`); only that the slave's artifact
-  restores is shown here;
+- an artifact taken on each role in one run: S11 takes the backup on a slave
+  (`PreferStandby`), or on the master when no standby is eligible, and a
+  restore into a new cluster accepts an artifact taken on either role
+  (`restoreExpectation` in `internal/instancemanager/restore.go`); only the
+  role `artifactSourceRole` records is shown restored by a run;
 - the times the restore records itself, such as the Instance Manager's
   operation times; only `restoredWithin` is measured;
 - the Operator's logs for credentials, and Events of the restored cluster.

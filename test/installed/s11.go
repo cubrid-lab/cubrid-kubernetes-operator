@@ -367,12 +367,23 @@ type s11Record struct {
 	Artifact              *databasev1alpha1.CubridBackupArtifact `json:"artifact,omitempty"`
 	EngineVersion         string                                 `json:"engineVersion"`
 	Verification          *s11Verification                       `json:"verification,omitempty"`
-	Credentials           *s11Credentials                        `json:"credentials,omitempty"`
-	Notes                 []string                               `json:"notes,omitempty"`
+	// ManifestSource is what the artifact's manifest says of where the
+	// backup was taken, as the run parsed it.
+	ManifestSource *s11ManifestSource `json:"manifestSource,omitempty"`
+	Credentials    *s11Credentials    `json:"credentials,omitempty"`
+	Notes          []string           `json:"notes,omitempty"`
 	// Residue is what the run leaves in the object store.
 	Residue string `json:"residue"`
 	// source is the cluster the backup is of; nil is the HA cluster.
 	source *s11Source
+}
+
+// s11ManifestSource is what a manifest says of the backup's source: the
+// cluster's UID, the member the backup ran on and that member's role.
+type s11ManifestSource struct {
+	ClusterUID     string `json:"clusterUID"`
+	SourceInstance string `json:"sourceInstance"`
+	SourceRole     string `json:"sourceRole"`
 }
 
 // s11Source is the cluster a backup's artifact must name: its UID, its
@@ -750,6 +761,8 @@ func (h *haRun) verifyS11Artifact(ctx context.Context, backup *databasev1alpha1.
 		return manifest, nil
 	}
 	v.ManifestDigest, _ = parsed.Digest()
+	rec.ManifestSource = &s11ManifestSource{ClusterUID: parsed.ClusterUID, SourceInstance: parsed.SourceInstance,
+		SourceRole: parsed.SourceRole}
 	v.Objects, v.ManifestSizeBytes = len(parsed.Objects), parsed.TotalSize()
 	v.Problems = append(v.Problems, h.checkManifestIdentity(parsed, backup, h.sourceOf(rec))...)
 	v.Problems = append(v.Problems, checkManifestIntegrity(parsed, artifact, v)...)
