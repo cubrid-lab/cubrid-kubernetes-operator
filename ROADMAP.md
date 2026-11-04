@@ -649,8 +649,9 @@ the data volume (#670), each with LAB01, S11 `complete` and S12 `exact`. At
 member was back within 3.3 to 4.6 s and the restored cluster Ready within
 2 min 41 s to 2 min 55 s. worker-3, whose memory the long-lived clusters
 filled, was cordoned for these runs. An earlier run with it schedulable placed
-all three members there, where the kernel killed `cub_server` and LAB01 never
-became Ready (#672).
+all three members there, since database Pods request no memory (#596); the
+kernel killed `cub_server` and LAB01 never became Ready. The harness now
+refuses a run on such a node before creating anything (#672).
 
 S12 `graceful-stop`, a lab-only variant (`lab-installed-ha-s12-graceful-stop`,
 `-restore-graceful-stop`, #277), is the restore's side of S11
