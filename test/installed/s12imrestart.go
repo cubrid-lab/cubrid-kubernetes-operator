@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults/netfault"
 )
 
 const (
@@ -129,6 +131,13 @@ const (
 	measSeedAttemptsAdded           = "seedAttemptsAdded"
 	measSeedRestoreOperationChanged = "seedRestoreOperationChanged"
 )
+
+// imRestartSummaryNotes are the summary's notes of a placement besides the
+// lane's: at seed-backup, the run namespace's Pod Security.
+var imRestartSummaryNotes = map[string][]string{
+	IMRestartAtSeedBackup: {"The run namespace enforces Pod Security privileged, with warn and audit at " +
+		"restricted, so that the rate limit's ephemeral container is admitted"},
+}
 
 // imRestartPlacementNote says, for the summary, what is killed when.
 var imRestartPlacementNote = map[string]string{
@@ -319,6 +328,21 @@ type s12IMRestart struct {
 	SeedBackupOperationIDBefore string              `json:"seedBackupOperationIDBefore,omitempty"`
 	SeedBackupOperationIDAfter  string              `json:"seedBackupOperationIDAfter,omitempty"`
 	KilledSeedBackup            *s12KilledOperation `json:"killedSeedBackup,omitempty"`
+	// At seed-backup the source's TCP traffic to the object store passes a
+	// rate limit (Throttle) from before seeding until after the kill, so that
+	// the seed backup's upload lasts long enough to be killed during it.
+	// PodSecurity are the run namespace's Pod Security labels as read before
+	// anything was created; UploadBaseline are the limit's counters at the
+	// first reading of the seed backup's record that had not ended, AtKill at
+	// the reading that placed the kill, and SentBeforeKill the bytes between
+	// them.
+	PodSecurity    map[string]string      `json:"podSecurity,omitempty"`
+	Throttle       *s11Throttle           `json:"throttle,omitempty"`
+	UploadBaseline *netfault.BandCounters `json:"uploadBaseline,omitempty"`
+	AtKill         *netfault.BandCounters `json:"atKill,omitempty"`
+	SentBeforeKill uint64                 `json:"sentBeforeKill,omitempty"`
+	// limit holds, at seed-backup, the rate limit and whether it was removed.
+	limit *s11InterruptedMade
 	// seedRetriesAfterKill counts the seed retries after the kill.
 	seedRetriesAfterKill int
 	// KilledOperation is, at preparing, the target's record of the operation
@@ -461,8 +485,11 @@ func (h *haRun) runS12InstanceManagerRestart(ctx context.Context) (result eviden
 			evidence.Unknown
 		result.Measurements["seedBackupOperationChanged"] = evidence.Unknown
 		result.Measurements["killedBackupFailedByRestart"] = evidence.Unknown
+		result.Measurements["uploadBytesBeforeKill"] = evidence.Unknown
 	}
 	err := h.imRestartSteps(ctx, &result, &rec)
+	// A step that ended before the kill leaves the rate limit to remove here.
+	err = errors.Join(err, h.removeSeedLimit(ctx, rec.IMRestart))
 	// What the bootstrap showed is judged whichever step ended the variant.
 	if judged := judgeIMRestartBootstrap(&rec, &result); err == nil || errors.As(judged, new(restoreVerdict)) {
 		err = errors.Join(judged, err)
@@ -536,11 +563,18 @@ var imRestartNotes = map[string][]string{
 			"read: the Instance Manager's logs and operation records were not checked",
 		"the Operator's logs, and its Events of the cluster other than RestoreFailedRetrying and " +
 			"SeedRestoreFailedRetrying, were not checked"},
-	IMRestartAtSeedBackup: {"the kill is placed at the first reading, taken no more often than every " +
-		imStartingPoll.String() + " once the bootstrap was SeedingReplicas, of the source's own record of the " +
-		"recorded seed backup in a state that has not ended, with no seed restore recorded for its peer; the " +
-		"backup may have ended before the kill took effect, which the record of the killed backup Failed by the " +
-		"restart rules out",
+	IMRestartAtSeedBackup: {"the restore target's TCP traffic to the object store is limited to " +
+		strconv.Itoa(interruptedRate) + " bit/s from a reading of the bootstrap Preparing or Restoring until " +
+		"after the kill, by a network fault in an ephemeral container with NET_ADMIN and NET_RAW " +
+		"(test/faults/netfault), as in S11 instance-manager-restart, so that its seed backup's upload lasts long " +
+		"enough to be killed during it; the run namespace enforces Pod Security privileged for it, with warn and " +
+		"audit at restricted; the limit acts on what the target sends only, so the restore's download passes it " +
+		"only as acknowledgements and requests, and the ephemeral container stays in the target's Pod",
+		"the kill is placed at the first reading, taken no more often than every " + imStartingPoll.String() +
+			" once the bootstrap was SeedingReplicas, of the source's own record of the recorded seed backup " +
+			"Uploading, with no seed restore recorded for its peer and " + strconv.Itoa(interruptedUploadSeen) +
+			" bytes through the limit since the first reading of that record; the backup may have ended before " +
+			"the kill took effect, which the record of the killed backup Failed by the restart rules out",
 		"the kill ends the source's database container and with it the restored database's server, the only " +
 			"copy of the restored data until a peer is seeded; the entrypoint starts heartbeat again when the " +
 			"container runs again (build/instance-manager/entrypoint.sh); that the restored data was not " +
@@ -668,6 +702,18 @@ func (h *haRun) imRestartSteps(ctx context.Context, result *evidence.Scenario, r
 		return errors.New("S12 exact recorded no history at S11's known point")
 	}
 	rec.KnownPoint, rec.ArtifactURI, rec.ManifestDigest = s11.KnownPoint, s11.Artifact.URI, s11.Artifact.ManifestDigest
+	if r.At == IMRestartAtSeedBackup {
+		// Refused before anything is created: the limit's ephemeral container
+		// needs a privileged namespace, and the limit an address to act on.
+		throttle := h.newS11Throttle("")
+		r.Throttle = &throttle
+		if err := h.privilegedNamespace(ctx, "S12 "+r.variant, &r.PodSecurity); err != nil {
+			return err
+		}
+		if err := h.interruptedStore(ctx, r.Throttle); err != nil {
+			return err
+		}
+	}
 	cluster, err := h.createRestored(ctx, s12IMRestartClusterName, s12IMRestartSecretName, rec.SeedPrefix,
 		rec.ArtifactURI)
 	if err != nil {
@@ -679,7 +725,13 @@ func (h *haRun) imRestartSteps(ctx context.Context, result *evidence.Scenario, r
 	if err := h.waitIMPlacement(ctx, cluster, created, rec, result); err != nil {
 		return err
 	}
-	if err := h.killDuringRestore(ctx, cluster, created, rec, result); err != nil {
+	err = h.killDuringRestore(ctx, cluster, created, rec, result)
+	if r.At == IMRestartAtSeedBackup {
+		// The retry's seed backup and what is judged after it run without
+		// the limit.
+		err = errors.Join(err, h.removeSeedLimit(ctx, r))
+	}
+	if err != nil {
 		return err
 	}
 	roles, readyAt, err := h.waitRestored(ctx, cluster, created, &rec.s12Record, result)
@@ -762,6 +814,9 @@ func (h *haRun) waitIMPlacement(ctx context.Context, cluster *databasev1alpha1.C
 			})
 	}
 	if r.At == IMRestartAtSeedBackup {
+		if err := h.limitSeedSource(ctx, cluster, created, rec, result); err != nil {
+			return err
+		}
 		if err := h.waitPlaced(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result,
 			"restore did not complete", func(_ *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 				switch phase {
@@ -783,9 +838,105 @@ func (h *haRun) waitIMPlacement(ctx context.Context, cluster *databasev1alpha1.C
 	return h.waitStarting(ctx, cluster, created, rec, result)
 }
 
+// imNoSeedLimit starts the reason of a rate limit that could not be placed
+// at seed-backup.
+const imNoSeedLimit = "the rate limit could not be placed before the seed backup: "
+
+// limitSeedSource places, at seed-backup, the rate limit on the restore
+// target's TCP traffic to the object store, the seed backup's source, as S11
+// instance-manager-restart does on its member (netfault.Throttle at
+// interruptedRate): once a reading shows the bootstrap Preparing or Restoring
+// with its target, it reads the target's Pod, installs the limit and confirms
+// it. The Operator starts the first seed backup in the reconcile that records
+// SeedingReplicas (reconcileRecoverySeeding, seedMember in
+// internal/controller/), so the limit must be in place before that phase is
+// read; a bootstrap first seen in another phase blocks the variant. The limit
+// acts on what the target sends to the store only: the restore's download
+// passes it only as the acknowledgements and requests the target sends, and
+// the seed restore on the peer not at all.
+func (h *haRun) limitSeedSource(ctx context.Context, cluster *databasev1alpha1.CubridCluster, created time.Time,
+	rec *s12IMRestartRecord, result *evidence.Scenario) error {
+	r := rec.IMRestart
+	target := ""
+	if err := h.waitPlaced(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result,
+		"restore did not start", func(c *databasev1alpha1.CubridCluster, phase string) (bool, error) {
+			switch phase {
+			case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
+				target = c.Status.Bootstrap.TargetMember
+				return target != "", nil
+			}
+			return false, fmt.Errorf(imNoSeedLimit+"the bootstrap was first seen %s, not Preparing or Restoring",
+				phase)
+		}); err != nil {
+		return err
+	}
+	if !slices.Contains(clusterMembers(cluster.Name), target) {
+		return fmt.Errorf("the restore's target member %q is not a member of %s", target, cluster.Name)
+	}
+	f := r.Throttle
+	f.Target = target
+	if err := h.interruptedTarget(ctx, cluster, f); err != nil {
+		return err
+	}
+	env := netfault.Env{Client: h.Client, Kubectl: h.Command, Poll: h.cfg.Poll,
+		Reserve: min(netfault.DefaultReserve, h.cfg.CleanupTimeout/4)}
+	r.limit = &s11InterruptedMade{throttle: &netfault.Throttle{Env: env,
+		Target: netfault.Endpoint{Name: f.Target, Namespace: h.cfg.Namespace, Pod: f.Target, UID: f.TargetUID,
+			IP: f.TargetIP},
+		Peer: netfault.Endpoint{Name: f.Store, IP: f.StoreIP, Port: f.StorePort}, Rate: interruptedRate}}
+	if err := r.limit.throttle.Prepare(ctx); err != nil {
+		return fmt.Errorf("prepare the rate limit: %w", err)
+	}
+	return confirmThrottle(ctx, r.limit.throttle, f)
+}
+
+// removeSeedLimit removes, at seed-backup, the rate limit once
+// (removeInterruptedFaults) and reads the store's address again. A limit not
+// seen removed blocks the variant: the source's traffic may still be
+// limited. Called again after a removal was tried, it does nothing.
+func (h *haRun) removeSeedLimit(ctx context.Context, r *s12IMRestart) error {
+	if r.limit == nil || r.limit.tried {
+		return nil
+	}
+	return h.throttleAtEnd(ctx, r.limit, r.Throttle)
+}
+
 // imNotAtSeedBackup starts the reason of a kill that could not be placed at
 // seed-backup.
 const imNotAtSeedBackup = "the kill could not be placed while the seed backup ran: "
+
+// seedUploadUnderWay reads, at seed-backup, the rate limit's counters at
+// reading, a reading of the seed backup's record that has not ended, and
+// reports whether it places the kill: the record Uploading, and
+// interruptedUploadSeen bytes through the limit since the first such reading
+// (UploadBaseline), so that the kill lands in an upload under way, not in its
+// first request. Each other reading is recorded once per state. A read of the
+// counters that fails is tolerated as S11's are (tolerate).
+func (h *haRun) seedUploadUnderWay(ctx context.Context, r *s12IMRestart, reading s12OperationReading,
+	result *evidence.Scenario) (bool, error) {
+	f := r.Throttle
+	counters, err := r.limit.throttle.Counters(ctx)
+	if err != nil {
+		return false, r.limit.tolerate(f, "read the rate limit's counters", err)
+	}
+	r.limit.errorsInARow = 0
+	f.Last = &counters
+	if r.UploadBaseline == nil {
+		r.UploadBaseline = &counters
+	}
+	sent := counters.Bytes - min(counters.Bytes, r.UploadBaseline.Bytes)
+	if reading.State != string(instancemanager.OpUploading) || sent < interruptedUploadSeen {
+		if n := len(r.OperationReadings); n == 0 || r.OperationReadings[n-1].State != reading.State {
+			r.OperationReadings = append(r.OperationReadings, reading)
+		}
+		f.Waiting = fmt.Sprintf("%d bytes through the rate limit since the first reading of the seed backup, its "+
+			"record %s", sent, reading.State)
+		return false, nil
+	}
+	r.PlacingReading, r.AtKill, r.SentBeforeKill, f.Waiting = &reading, &counters, sent, ""
+	result.Measurements["uploadBytesBeforeKill"] = sent
+	return true, nil
+}
 
 // waitSeedBackup reads, at seed-backup, the restored cluster every
 // imStartingPoll while its bootstrap is SeedingReplicas and, once the first
@@ -856,13 +1007,12 @@ func (h *haRun) waitSeedBackup(ctx context.Context, created *databasev1alpha1.Cu
 		}
 		readErr = nil
 		reading := s12OperationReading{At: time.Now().UTC(), Operation: id, State: string(op.State)}
-		if !op.State.IsTerminal() {
-			r.PlacingReading = &reading
-			return true, nil
+		if op.State.IsTerminal() {
+			r.OperationReadings = append(r.OperationReadings, reading)
+			return false, fmt.Errorf(imNotAtSeedBackup+"the source's record of the seed backup %s was read %s before "+
+				"the kill was placed", id, op.State)
 		}
-		r.OperationReadings = append(r.OperationReadings, reading)
-		return false, fmt.Errorf(imNotAtSeedBackup+"the source's record of the seed backup %s was read %s before "+
-			"any reading of it running", id, op.State)
+		return h.seedUploadUnderWay(wctx, r, reading, result)
 	})
 	switch {
 	case err == nil:
@@ -1143,7 +1293,9 @@ func imRestartSeedBackupPassReason(r *s12IMRestart) string {
 		placed, state = p.At.Format(time.RFC3339Nano), p.State
 	}
 	return fmt.Sprintf("the Instance Manager on %s was killed while it took the seed backup for %s of the cluster "+
-		"restored from S11's artifact, right after its record of seed backup operation %s was read %s at %s; its "+
+		"restored from S11's artifact, with its traffic to the object store limited, right after its record of "+
+		"seed backup operation %s was read %s at %s with %d bytes through the limit since the first reading of "+
+		"that record, and the limit was seen removed after the kill; its "+
 		"container, and with it the restored database's server, ran again on the same Pod %s after the kill; the "+
 		"Instance Manager's record of that backup shows it Failed by the restart; the Operator ended that seed "+
 		"attempt with %s naming the Instance Manager's restart and seeded %s under seeding attempt %s with seed "+
@@ -1153,7 +1305,8 @@ func imRestartSeedBackupPassReason(r *s12IMRestart) string {
 		"acknowledged before the known point and S11's marker, no row written after the backup, and took a normal "+
 		"write; the source was unchanged; no credential was in its status and no Secret of the source in its Pods; "+
 		"the Instance Manager's and the Operator's logs were not checked", r.Pod, r.SeedPeer,
-		r.SeedBackupOperationIDBefore, state, placed, r.BackWithin, s12SeedBackupRetryReason, r.SeedPeer, attempt,
+		r.SeedBackupOperationIDBefore, state, placed, r.SentBeforeKill, r.BackWithin, s12SeedBackupRetryReason,
+		r.SeedPeer, attempt,
 		backupAfter, r.OperationIDBefore)
 }
 

@@ -155,9 +155,9 @@ type s12IMRestartFixture struct {
 	targetMemberStatus string
 }
 
-func newS12IMRestartFixture(t *testing.T, cfg HAConfig) *s12IMRestartFixture {
+func newS12IMRestartFixture(t *testing.T, cfg HAConfig, extra ...client.Object) *s12IMRestartFixture {
 	t.Helper()
-	f := &s12IMRestartFixture{s12Fixture: newS12Fixture(t, cfg),
+	f := &s12IMRestartFixture{s12Fixture: newS12Fixture(t, cfg, extra...),
 		beforeKill: []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapPreparing,
 			databasev1alpha1.BootstrapRestoring}, holdStep: 1,
 		afterKill: []imStatus{
