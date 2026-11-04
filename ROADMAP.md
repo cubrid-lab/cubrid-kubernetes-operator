@@ -640,11 +640,11 @@ artifact. That shows `restoredb` had not succeeded, not that it had not
 started: the Instance Manager reports `Restoring` before it verifies or
 downloads the backup (#598). At `seeding` the peer being seeded was killed;
 exactly one seed retry with a new seed operation completed, and the restore was
-not run again. The kill during `Starting`, before a durable `Completed`, has
-a VM-lab run of its own (`starting`, #682). Kills on the seed source during
-the seed backup are not covered: the harness's `seed-backup` placement (the
-restored member's Instance Manager killed during the first seed backup) has
-not been run on the VM lab.
+not run again. Kills during `Starting`, before a durable `Completed`, on the
+seed source and during the seed backup are not covered; a `starting`
+placement exists in the harness but has not been run on the VM lab, and
+neither has the `seed-backup` placement, which kills the restored member's
+Instance Manager during the first seed backup.
 
 All three placements passed again on the VM lab between 2026-11-03 23:56 and
 2026-11-04 08:07 UTC with manager `16dbbf8`, which sizes each log file from
