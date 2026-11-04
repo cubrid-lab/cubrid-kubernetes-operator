@@ -362,7 +362,7 @@ func TestJudgeS00Limits(t *testing.T) {
 			name:    "both set and within",
 			in:      passed(),
 			install: install(time.Minute, 40*time.Second, false), ready: ready(5*time.Minute, 2*time.Minute, false),
-			want:    evidence.Pass, wantVerdict: "pass",
+			want: evidence.Pass, wantVerdict: "pass",
 			wantLimits: limitsOf("confirm=5m0s install_limit=1m0s ready_limit=5m0s"),
 		},
 		{
@@ -376,7 +376,7 @@ func TestJudgeS00Limits(t *testing.T) {
 			in:      passed(),
 			install: install(time.Minute, time.Minute, false),
 			ready:   ready(90*time.Second, 90*time.Second, false),
-			want: evidence.Pass, wantVerdict: "pass",
+			want:    evidence.Pass, wantVerdict: "pass",
 		},
 		{
 			name:    "default install limit exceeded: test fails",
