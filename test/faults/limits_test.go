@@ -352,9 +352,10 @@ func TestJudgeS00Limits(t *testing.T) {
 		wantLimits  map[string]string
 	}{
 		{
-			name: "both unset: the result is kept, with the verdict they give",
+			name: "both unset: baseline is blocked, not passed",
 			in:   passed(), install: install(0, 40*time.Second, false), ready: ready(0, 2*time.Minute, false),
-			want: evidence.Pass, wantVerdict: "blocked: " + ReasonTimeLimitUnset,
+			want: evidence.Blocked, wantReason: ReasonTimeLimitUnset,
+			wantVerdict: "blocked: " + ReasonTimeLimitUnset,
 			wantLimits: limitsOf("confirm=5m0s install_limit=unset ready_limit=unset"),
 		},
 		{
@@ -365,15 +366,39 @@ func TestJudgeS00Limits(t *testing.T) {
 			wantLimits: limitsOf("confirm=5m0s install_limit=1m0s ready_limit=5m0s"),
 		},
 		{
+			name: "one unset and the other within: baseline is blocked",
+			in:   passed(), install: install(0, 40*time.Second, false), ready: ready(90*time.Second, 22*time.Second, false),
+			want: evidence.Blocked, wantReason: ReasonTimeLimitUnset,
+			wantVerdict: "blocked: " + ReasonTimeLimitUnset,
+		},
+		{
+			name: "both measured defaults at the exact limits pass",
+			in:   passed(), install: install(time.Minute, time.Minute, false), ready: ready(90*time.Second, 90*time.Second, false),
+			want: evidence.Pass, wantVerdict: "pass",
+		},
+		{
+			name: "default install limit exceeded: test fails",
+			in:   passed(), install: install(time.Minute, 61*time.Second, false), ready: ready(90*time.Second, 22*time.Second, false),
+			want: evidence.Fail, wantReason: "install_limit exceeded: 1m1s > 1m0s",
+			wantVerdict: "fail: install_limit exceeded: 1m1s > 1m0s",
+		},
+		{
+			name: "default readiness limit exceeded: test fails",
+			in:   passed(), install: install(time.Minute, 13*time.Second, false), ready: ready(90*time.Second, 91*time.Second, false),
+			want: evidence.Fail, wantReason: "ready_limit exceeded: 1m31s > 1m30s",
+			wantVerdict: "fail: ready_limit exceeded: 1m31s > 1m30s",
+		},
+		{
 			name: "one set and exceeded, the other unset",
 			in:   passed(), install: install(0, 40*time.Second, false), ready: ready(time.Minute, 2*time.Minute, false),
 			want: evidence.Fail, wantReason: readyExceeded,
 			wantVerdict: "fail: " + readyExceeded,
 		},
 		{
-			name: "one set and unmeasured, the other unset",
+			name: "one set and unmeasured, the other unset: unset blocks",
 			in:   passed(), install: install(time.Minute, 0, true), ready: ready(0, 2*time.Minute, false),
-			want: evidence.Blocked, wantReason: ReasonMeasurementMissing,
+			want: evidence.Blocked, wantReason: ReasonTimeLimitUnset,
+			wantVerdict: "blocked: " + ReasonTimeLimitUnset,
 		},
 		{
 			name: "one set and unmeasured, the other set and within",
@@ -400,6 +425,9 @@ func TestJudgeS00Limits(t *testing.T) {
 			}
 			if tc.wantLimits != nil && !maps.Equal(got.Limits, tc.wantLimits) {
 				t.Errorf("limits: got %v, want %v", got.Limits, tc.wantLimits)
+			}
+			if got.Result == evidence.Pass && slices.Contains(slices.Collect(maps.Values(got.Limits)), unset) {
+				t.Errorf("required install smoke must not pass with unset limits: %v", got.Limits)
 			}
 		})
 	}
