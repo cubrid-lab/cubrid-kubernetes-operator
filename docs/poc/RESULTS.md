@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-46, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-47, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -26,7 +26,9 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > native linux/amd64 host, and its last part on the VM lab with the installed
 > Operator; POC-43 and POC-44 ran on the VM lab with the installed Operator;
 > POC-45 and POC-46 ran in Docker on a native linux/amd64 host, with the
-> Operator's Instance Manager image. Each states its own environment. Each POC is the
+> Operator's Instance Manager image; POC-47 ran in Docker on a native
+> linux/amd64 host, with the official image and the Instance Manager's
+> `ExecCLI`. Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -4816,3 +4818,60 @@ the members seeded from its backup.
 **Limits.** One container and one backup; the restored database was not
 started, and no slave followed a real master. The archive files a restored
 member creates later were not looked at.
+
+## POC-47 — whether a `restoredb` ended by its deadline leaves a writer, through the Instance Manager's `ExecCLI` (#277) — **observation: in five runs with deadlines of 1 to 5 s, `Run` returned `signal: killed` once the context's deadline had passed, 0.04 to 5.4 s after it, and no `cub_admin` ran and no process held a file under the database directory at its return or in the 5 s after; killing only `cubrid`, as without the group kill, left `cub_admin` writing**
+
+**Environment:** `docker.io/cubrid/cubrid:11.4`
+(`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
+CUBRID 11.4.6), Docker 29.2.1 on a native linux/amd64 host (6 CPUs, Linux
+5.15), 2026-11-04. One container started with `--init` and `sleep` as its
+command; every command ran as `cubrid` (UID 1000). The Instance Manager's
+`ExecCLI` from `main` `4ad0b65` (`internal/instancemanager/cli.go`), in a
+small statically linked program that is not kept in the repository.
+
+**Setup:** `cubrid createdb --db-volume-size=512M --log-volume-size=64M -F
+/tmp/db/appdb appdb en_US`, 400,000 rows of 900 bytes (database directory
+630 MB), `cubrid server stop`, then an offline `cubrid backupdb -S -D /tmp/bk
+appdb` (one 19 MB file). Before each run, the database directory was emptied;
+its `databases.txt` entry stayed.
+
+**Method:** the program ran `ExecCLI{}.Run` with a context whose deadline was
+set by an argument, for `cubrid restoredb -u -B /tmp/bk appdb`, the
+arguments the Instance Manager uses. When `Run` returned, and every 250 ms
+for 5 s after, it listed every process named `cub_admin` and every process
+holding a file under the database directory (`/proc/*/fd`). A run to its end
+took 17.9 s; a later one, 7.8 s. The program printed the context's own
+error (`ctx.Err()`) next to `Run`'s, which is the utility's exit status.
+
+| Deadline | `Run` returned after | Result | `cub_admin`, file holders at return and for 5 s | Files left |
+|---|---|---|---|---|
+| 1 s | 6.36 s | `signal: killed`; the context's error `context deadline exceeded` | none | `appdb`, `appdb_vinf` |
+| 2 s | 4.96 s | the same | none | `appdb`, `appdb_vinf` |
+| 3 s | 5.85 s | the same | none | `appdb`, `appdb_vinf` |
+| 4 s | 6.26 s | the same | none | `appdb`, `appdb_vinf` |
+| 5 s | 5.04 s | the same | none | `appdb`, `appdb_bkvinf`, `appdb_lgat`, `appdb_lginf`, `appdb_vinf` |
+| 10 s | 7.84 s | success: the restore ended first | none | the complete file set |
+
+**Control:** `cubrid restoredb -u -B /tmp/bk appdb` was started from a shell,
+and after 2 s only that `cubrid` process was sent `SIGKILL`, as
+`exec.CommandContext` does on a deadline without `ExecCLI`'s group kill. The
+same listing showed `cub_admin` running and holding `appdb` at the kill, and
+2 s and 5 s after it. So the listing sees the writer that POC-27 found, and the
+deadline runs above did end it.
+
+**Finding:** for `restoredb`, a deadline takes the path a cancellation takes
+in POC-27. `ExecCLI` kills the utility's process group and returns only once
+the group has ended. The time between the deadline and the return (up to
+5.4 s here) is most likely that wait; the kill and the wait were not timed
+separately. No writer was left when `Run` returned, which is
+when the restore's cleanup or retry begins.
+
+**Limits:**
+- Five runs of one utility on one container. `restoreslave`, `backupdb` and
+  `createdb` were not run under a deadline here; POC-27 ran `restoreslave`
+  and `backupdb` under a cancellation through the same `ExecCLI`.
+- The program called `ExecCLI` directly. The Instance Manager's own deadline
+  for a restore and its cleanup after `Run` were not run.
+- A holder shorter than the 250 ms sampling would not be seen.
+- The container ran with `--init`, which reaps orphans, in plain Docker:
+  not in a Pod, on Kind or on a VM.
