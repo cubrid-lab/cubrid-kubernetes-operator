@@ -27,7 +27,8 @@ import (
 var errInjected = errors.New("injected: input/output error")
 
 const (
-	faultRename = "rename"
+	faultRename        = "rename"
+	faultDirectorySync = "directory sync"
 	// volumeContent stands for a database volume's bytes.
 	volumeContent = "volume"
 )
@@ -36,15 +37,14 @@ const (
 // full or failing file system fails it.
 func failRenameOf(t *testing.T, name string) {
 	t.Helper()
+	previous := renameMetadata
 	renameMetadata = func(root *os.Root, oldname, newname string) error {
 		if newname == name {
 			return errInjected
 		}
-		return root.Rename(oldname, newname)
+		return previous(root, oldname, newname)
 	}
-	t.Cleanup(func() {
-		renameMetadata = func(root *os.Root, oldname, newname string) error { return root.Rename(oldname, newname) }
-	})
+	t.Cleanup(func() { renameMetadata = previous })
 }
 
 // failSyncAfterRenameOf makes the directory sync of dir fail once a metadata
@@ -53,9 +53,11 @@ func failRenameOf(t *testing.T, name string) {
 // Syncs before that rename, of other writes, succeed.
 func failSyncAfterRenameOf(t *testing.T, name, dir string) {
 	t.Helper()
+	previousRename, previousSync := renameMetadata, syncMetadataDir
+	// Set and read on the test's goroutine only: no write here runs on another.
 	renamed := false
 	renameMetadata = func(root *os.Root, oldname, newname string) error {
-		err := root.Rename(oldname, newname)
+		err := previousRename(root, oldname, newname)
 		if err == nil && newname == name {
 			renamed = true
 		}
@@ -65,12 +67,9 @@ func failSyncAfterRenameOf(t *testing.T, name, dir string) {
 		if renamed && d == dir {
 			return errInjected
 		}
-		return syncDir(root, d)
+		return previousSync(root, d)
 	}
-	t.Cleanup(func() {
-		renameMetadata = func(root *os.Root, oldname, newname string) error { return root.Rename(oldname, newname) }
-		syncMetadataDir = syncDir
-	})
+	t.Cleanup(func() { renameMetadata, syncMetadataDir = previousRename, previousSync })
 }
 
 func wantNoTemporaryFile(t *testing.T, path string) {
@@ -85,7 +84,7 @@ func wantNoTemporaryFile(t *testing.T, path string) {
 // back only what it made itself: its own line and the empty directory it
 // created (#298).
 func TestRegisterRestoreTarget_AFailedMetadataWriteKeepsOtherRegistrations(t *testing.T) {
-	for _, fault := range []string{faultRename, "directory sync"} {
+	for _, fault := range []string{faultRename, faultDirectorySync} {
 		t.Run(fault, func(t *testing.T) {
 			dir := t.TempDir()
 			before := registrations(dir)
@@ -113,7 +112,7 @@ func TestRegisterRestoreTarget_AFailedMetadataWriteKeepsOtherRegistrations(t *te
 // database registered: at the rename the file is as it was, and after it the
 // file holds the other registrations without the removed one.
 func TestUnregisterDatabase_AFailedMetadataWriteKeepsOtherRegistrations(t *testing.T) {
-	for _, fault := range []string{faultRename, "directory sync"} {
+	for _, fault := range []string{faultRename, faultDirectorySync} {
 		t.Run(fault, func(t *testing.T) {
 			dir := t.TempDir()
 			before := registrations(dir)
@@ -182,6 +181,59 @@ func TestMarkOwned_AFailedMetadataWriteRemovesNothing(t *testing.T) {
 				t.Errorf("marker = %q, want one of the two owners", got)
 			}
 			wantNoTemporaryFile(t, marker)
+		})
+	}
+}
+
+// A restore that takes over the data a failed attempt of the same request
+// restored records the artifact on itself and then rewrites the marker. When
+// that marker write fails, the marker names either attempt, and the data is
+// the restored database. A later reclaim must refuse it under either owner:
+// both attempts record that they restored it (#298).
+func TestAdoptRestored_AFailedMarkerWriteLeavesTheRestoredDataToNoReclaim(t *testing.T) {
+	for _, fault := range []string{faultRename, faultDirectorySync} {
+		t.Run(fault, func(t *testing.T) {
+			databases := t.TempDir()
+			store, err := NewOperationStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			restored := &OperationArtifact{ManifestURI: "s3://bucket/prefix/manifest.json", Database: dbName}
+			first, _, err := store.FindOrCreate(OpRestore, "first", "hash", dbName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Update(first.ID, func(o *Operation) { o.State, o.Restored = OpFailed, restored }); err != nil {
+				t.Fatal(err)
+			}
+			second, _, err := store.FindOrCreate(OpRestore, "second", "hash", dbName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(databases, dbName)
+			volume := filepath.Join(dir, dbName+"_vinf")
+			writeFile(t, filepath.Join(dir, ownershipMarker), first.ID+"\n")
+			writeFile(t, volume, volumeContent)
+			s := NewServer(fakeCLI{}, "tok").WithOperationStore(store).WithRestoreRoots(RestoreRoots{Target: databases})
+
+			if fault == faultRename {
+				failRenameOf(t, markerPath(dbName))
+			} else {
+				failSyncAfterRenameOf(t, markerPath(dbName), dbName)
+			}
+			if _, err := s.adoptRestored(second.ID, dbName); !errors.Is(err, errInjected) {
+				t.Fatalf("adoptRestored = %v, want the injected error", err)
+			}
+			// The restore then fails, as the server records it.
+			if _, err := store.Update(second.ID, func(o *Operation) { o.State = OpFailed }); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.reclaimIncomplete(dbName); err == nil || !strings.Contains(err.Error(), "refusing to remove it") {
+				t.Fatalf("reclaimIncomplete = %v, want a refusal to remove the restored data", err)
+			}
+			if got := readFile(t, volume); got != volumeContent {
+				t.Errorf("the restored volume = %q, want it kept", got)
+			}
 		})
 	}
 }
