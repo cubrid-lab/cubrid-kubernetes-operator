@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
@@ -86,6 +88,10 @@ type s12Fixture struct {
 	// misroute puts the marker written through the restored cluster on the
 	// source's members too.
 	misroute bool
+	// tamperSeeds changes the seed backups' manifests the fake Operator
+	// leaves under the restored cluster's seed prefix, by the directory below
+	// its UID, before they are stored.
+	tamperSeeds func(map[string]*instancemanager.BackupManifest)
 
 	restored       *databasev1alpha1.CubridCluster
 	restoreReads   int
@@ -114,6 +120,7 @@ func newS12Fixture(t *testing.T, cfg HAConfig, extra ...client.Object) *s12Fixtu
 		if err := f.createChildren(ctx, c, cluster); err != nil {
 			return err
 		}
+		f.storeSeeds(cluster)
 		if f.afterRestoreCreated != nil {
 			f.afterRestoreCreated(ctx, c)
 		}
@@ -1595,5 +1602,130 @@ func TestRunS12ExactFailsOnBootstrapReadyBeforeTheBootstrapCompleted(t *testing.
 		return strings.Contains(e, "reported BootstrapReady True") && strings.Contains(e, "Restoring")
 	}) {
 		t.Fatalf("S12 = %+v, want BootstrapReady True before Complete as a never-event", s12)
+	}
+}
+
+// testSeedLaterDir is the directory of the second peer's seed backup, taken
+// on the restored cluster's master (seedLocationDir in
+// internal/controller/habootstrap.go).
+const testSeedLaterDir = "seed-ha-restore-2-from-" + testRestoreMaster
+
+// storeSeeds leaves in the store what the Operator's seeding leaves: a seed
+// backup's manifest for each peer, taken on the restored cluster's master,
+// under <seed prefix>/<cluster UID>/<seed directory>/<database>.
+func (f *s12Fixture) storeSeeds(cluster *databasev1alpha1.CubridCluster) {
+	storage := cluster.Spec.ObjectStorage
+	seeds := map[string]*instancemanager.BackupManifest{}
+	for _, dir := range []string{"seed", testSeedLaterDir} {
+		seeds[dir] = &instancemanager.BackupManifest{ManifestVersion: instancemanager.ManifestVersion,
+			Database: databaseName, ClusterUID: string(cluster.UID), CubridVersion: testEngineVersion,
+			SourceInstance: testRestoreMaster, SourceRole: roleMaster, OperationID: "op-" + dir}
+	}
+	if f.tamperSeeds != nil {
+		f.tamperSeeds(seeds)
+	}
+	for dir, m := range seeds {
+		data, err := m.Marshal()
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		f.store.put(storage.Bucket, path.Join(storage.Prefix, string(cluster.UID), dir, databaseName,
+			instancemanager.ManifestObjectName), data)
+	}
+}
+
+func TestRunS12ExactShowsThePeersSeededFromTheRestoredMaster(t *testing.T) {
+	cfg := testS12Config(t)
+	f := newS12Fixture(t, cfg)
+	s12, err := s12Of(t, f, t.Context())
+	if err != nil || s12.Result != evidence.Pass || s12.Measurements[measSeedFromOwnMaster] != true {
+		t.Fatalf("S12 = %+v, %v; want a pass that shows the seeds from the restored master", s12, err)
+	}
+	rec := readS12Record(t, cfg.EvidenceDir)
+	if len(rec.SeedManifests) != 2 {
+		t.Fatalf("seed manifests = %+v, want both peers' seed backups", rec.SeedManifests)
+	}
+	for _, m := range rec.SeedManifests {
+		if m.ClusterUID != testRestoreUID || m.SourceRole != roleMaster || m.SourceInstance != testRestoreMaster ||
+			m.ExpectedSource != testRestoreMaster || !strings.HasSuffix(m.Key, "/"+databaseName+"/manifest.json") {
+			t.Fatalf("seed manifest = %+v", m)
+		}
+	}
+}
+
+func TestRunS12ExactFailsOnASeedNotTakenOnTheRestoredMaster(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tamper func(map[string]*instancemanager.BackupManifest)
+		want   string
+	}{
+		"a seed of another cluster": {tamper: func(m map[string]*instancemanager.BackupManifest) {
+			m["seed"].ClusterUID = testClusterUID
+		}, want: "names cluster " + testClusterUID + ", not the restored cluster " + testRestoreUID},
+		"a seed taken on a slave": {tamper: func(m map[string]*instancemanager.BackupManifest) {
+			m[testSeedLaterDir].SourceRole = roleSlave
+		}, want: "names the source role \"slave\", not master"},
+		"a seed taken on another member than its source": {tamper: func(m map[string]*instancemanager.BackupManifest) {
+			m[testSeedLaterDir].SourceInstance = "ha-restore-1"
+		}, want: "was taken on ha-restore-1, not on " + testRestoreMaster},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12Config(t)
+			f := newS12Fixture(t, cfg)
+			f.tamperSeeds = tc.tamper
+			s12, err := s12Of(t, f, t.Context())
+			if err == nil || s12.Result != evidence.Fail || !slices.ContainsFunc(s12.NeverEvents, func(e string) bool {
+				return strings.Contains(e, tc.want)
+			}) || s12.Measurements[measSeedFromOwnMaster] != false {
+				t.Fatalf("S12 = %+v, want the seed as a never-event with %q", s12, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunS12ExactIsBlockedWhenTheSeedsCannotBeRead(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12Fixture)
+		want   string
+	}{
+		"the listing fails": {change: func(f *s12Fixture) {
+			f.store.listErr = func(prefix string) error {
+				if strings.Contains(prefix, testRestoreUID) {
+					return errors.New(testReset)
+				}
+				return nil
+			}
+		}, want: "list the restored cluster's seed backups"},
+		"no seed manifest": {change: func(f *s12Fixture) {
+			f.tamperSeeds = func(m map[string]*instancemanager.BackupManifest) { clear(m) }
+		}, want: "no seed backup's manifest"},
+		"a manifest that cannot be read": {change: func(f *s12Fixture) {
+			f.store.getErr = func(_ context.Context, key string) error {
+				if strings.Contains(key, testRestoreUID) {
+					return errors.New(testReset)
+				}
+				return nil
+			}
+		}, want: "read the seed backup's manifest"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testS12Config(t)
+			f := newS12Fixture(t, cfg)
+			tc.change(f)
+			s12, err := s12Of(t, f, t.Context())
+			if err == nil || s12.Result != evidence.Blocked || !strings.Contains(s12.Reason, tc.want) {
+				t.Fatalf("S12 = %+v, want blocked with %q", s12, tc.want)
+			}
+		})
+	}
+}
+
+func TestS12StepsIsBlockedWithoutS11sManifestSource(t *testing.T) {
+	h := &haRun{cfg: testS12Config(t), redactor: evidence.NewRedactor(), accessKey: testAccessKey,
+		secretKey: testSecretKey,
+		s11Rec:    &s11Record{KnownPoint: &s11KnownPoint{}, Artifact: &databasev1alpha1.CubridBackupArtifact{}}}
+	result := evidence.Scenario{Measurements: map[string]any{}}
+	if err := h.s12Steps(t.Context(), &result, &s12Record{}); err == nil ||
+		!strings.Contains(err.Error(), "S11 recorded no manifest source") {
+		t.Fatalf("s12Steps() error = %v, want it blocked without S11's manifest source", err)
 	}
 }

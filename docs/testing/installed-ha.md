@@ -2340,7 +2340,7 @@ pass, S12 is blocked and nothing of it is done.
 says of its source (`manifestSource` in S11's record: `clusterUID`,
 `sourceInstance`, `sourceRole`), and S12 copies it into its record
 (`artifactSource`, with `sourceClusterUID`, the UID of the cluster S11
-backed up). An S11 record without it blocks S12. These must never happen,
+backed up). An S11 record without it blocks S12 before anything is written. These must never happen,
 whichever step ends S12: a manifest that names another cluster than the
 source, a restored cluster with the UID of the cluster the artifact was
 taken of, and a source role that is neither `slave` nor `master`. The source
@@ -2413,7 +2413,9 @@ resolved (`selectBackupTarget` in `internal/controller/backuptarget.go`,
    - `BootstrapReady` `True` in any recorded reading whose bootstrap phase is
      not `Complete` must never happen either: the Operator sets it only once
      every member is seeded (`reconcileSeeding` in
-     `internal/controller/habootstrap.go`). It is judged from the recorded
+     `internal/controller/habootstrap.go`), in the reconcile that records the
+     recovery `Complete` (`reconcileRecoverySeeding` in
+     `internal/controller/bootstrap.go`). It is judged from the recorded
      readings once S12's steps end, whichever step ended them; a reading
      the run did not take is not judged.
    - A cluster read but not Ready when `-restore-limit` passes fails S12,
@@ -2495,7 +2497,27 @@ resolved (`selectBackupTarget` in `internal/controller/backuptarget.go`,
    there it would be a write meant for the restored cluster. And the data rules
    must hold on the source's members and Services over the whole history, the
    writes after the backup included. Any difference fails S12.
-9. **Credentials.** Neither key of the seed Secret may be in any status of
+9. **Seeded from its own master.** The run lists, with the seed Secret's
+   keys through the port-forward to `-object-store-service`, the restored
+   cluster's seed prefix below its UID,
+   `lab-runs/<run ID>/restore-seed/<restored cluster UID>/`, and reads each
+   seed backup's manifest, `seed*/appdb/manifest.json`. The Operator stores
+   the first peer's seed under `seed`, taken on the member the database was
+   restored on, and a later peer's under `seed-<peer>-from-<source>[-r<n>]`,
+   taken on the member it observed as the master (`seedLocation`,
+   `seedLocationDir`, `selectSeedSource` in
+   `internal/controller/habootstrap.go`). Each manifest is recorded
+   (`seedManifests`: key, `clusterUID`, `sourceInstance`, `sourceRole` and
+   `expectedSource`), and these must never happen: a `clusterUID` other than
+   the restored cluster's, a `sourceRole` other than `master`, and a
+   `sourceInstance` other than the source its location names (the restore's
+   target for `seed`). The run does not observe the roles when a seed is
+   taken, so the source is taken from the location, which the Operator
+   names from its own observation; that the member was the master then is
+   the Operator's, not the run's, observation. `seedFromOwnMaster` says
+   whether every manifest held. A listing or read that fails, a manifest
+   that cannot be parsed, and no seed manifest at all block S12.
+10. **Credentials.** Neither key of the seed Secret may be in any status of
    the restored cluster the run read, at every reading and once at the end,
    in any encoding the redaction removes. One found must never happen.
 

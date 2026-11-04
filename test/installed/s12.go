@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -34,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
@@ -90,6 +93,26 @@ type s12PostBackup struct {
 	Operations       map[string]int `json:"operations"`
 	// HistoryEvents counts the events of the whole history after them.
 	HistoryEvents int `json:"historyEventsAfter"`
+}
+
+// Measurements of S12 exact: where the artifact was taken, and whether the
+// restored cluster seeded its peers from its own master.
+const (
+	measArtifactSourceRole        = "artifactSourceRole"
+	measArtifactFromSourceCluster = "artifactFromSourceCluster"
+	measRestoredClusterIsAnother  = "restoredClusterIsAnother"
+	measSeedFromOwnMaster         = "seedFromOwnMaster"
+)
+
+// s12SeedManifest is what a seed backup's manifest says of where it was
+// taken: its key, the cluster's UID, the member and its role, and the member
+// its location names as its source (ExpectedSource).
+type s12SeedManifest struct {
+	Key            string `json:"key"`
+	ClusterUID     string `json:"clusterUID"`
+	SourceInstance string `json:"sourceInstance"`
+	SourceRole     string `json:"sourceRole"`
+	ExpectedSource string `json:"expectedSource"`
 }
 
 // s12Phase is one observed state of the restored cluster's bootstrap; a new
@@ -164,15 +187,18 @@ type s12Record struct {
 	// cluster S11 backed up.
 	ArtifactSource   *s11ManifestSource `json:"artifactSource,omitempty"`
 	SourceClusterUID string             `json:"sourceClusterUID,omitempty"`
-	Cluster          string             `json:"cluster"`
-	ClusterUID       string             `json:"clusterUID,omitempty"`
-	SeedPrefix       string             `json:"seedPrefix"`
-	SecretRef        string             `json:"credentialsSecretRef"`
-	CreatedAt        *time.Time         `json:"createdAt,omitempty"`
-	Bootstrap        []s12Phase         `json:"bootstrap"`
-	RestoredWithin   string             `json:"restoredWithin,omitempty"`
-	Members          []imageIdentity    `json:"members"`
-	Roles            *startingState     `json:"roles,omitempty"`
+	// SeedManifests are the manifests of the seed backups the restored
+	// cluster's seeding left under its seed prefix, read once it was Ready.
+	SeedManifests  []s12SeedManifest `json:"seedManifests,omitempty"`
+	Cluster        string            `json:"cluster"`
+	ClusterUID     string            `json:"clusterUID,omitempty"`
+	SeedPrefix     string            `json:"seedPrefix"`
+	SecretRef      string            `json:"credentialsSecretRef"`
+	CreatedAt      *time.Time        `json:"createdAt,omitempty"`
+	Bootstrap      []s12Phase        `json:"bootstrap"`
+	RestoredWithin string            `json:"restoredWithin,omitempty"`
+	Members        []imageIdentity   `json:"members"`
+	Roles          *startingState    `json:"roles,omitempty"`
 	// HANodes is the node list cubrid heartbeat status reports on one member
 	// of each cluster, by cluster.
 	HANodes map[string][]string `json:"haNodes,omitempty"`
@@ -263,13 +289,13 @@ func (h *haRun) runS12(ctx context.Context) (result evidence.Scenario) {
 	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String()}
 	result.Measurements = map[string]any{restoredWithinMeasurement: evidence.Unknown,
 		dataRulesHeldMeasurement: evidence.Unknown, postBackupRowsMeasurement: evidence.Unknown,
-		"artifactSourceRole": evidence.Unknown, "artifactFromSourceCluster": evidence.Unknown,
-		"restoredClusterIsAnother": evidence.Unknown}
+		measArtifactSourceRole: evidence.Unknown, measArtifactFromSourceCluster: evidence.Unknown,
+		measRestoredClusterIsAnother: evidence.Unknown, measSeedFromOwnMaster: evidence.Unknown}
 	err := h.s12Steps(ctx, &result, &rec)
 	if a := rec.ArtifactSource; a != nil {
-		result.Measurements["artifactFromSourceCluster"] = a.ClusterUID == rec.SourceClusterUID
+		result.Measurements[measArtifactFromSourceCluster] = a.ClusterUID == rec.SourceClusterUID
 		if rec.ClusterUID != "" {
-			result.Measurements["restoredClusterIsAnother"] = rec.ClusterUID != a.ClusterUID
+			result.Measurements[measRestoredClusterIsAnother] = rec.ClusterUID != a.ClusterUID
 		}
 	}
 	// What the manifest and the readings show is judged whichever step ended
@@ -333,7 +359,7 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	}
 	source := *s11.ManifestSource
 	rec.ArtifactSource, rec.SourceClusterUID = &source, h.rec.ClusterUID
-	result.Measurements["artifactSourceRole"] = source.SourceRole
+	result.Measurements[measArtifactSourceRole] = source.SourceRole
 	if source.SourceRole == string(databasev1alpha1.RoleMaster) {
 		rec.Notes = append(rec.Notes, "the artifact was taken on the master "+source.SourceInstance+", the "+
 			"Operator's fallback when no standby is eligible: a standby-produced backup is not shown by this run")
@@ -370,6 +396,9 @@ func (h *haRun) s12Steps(ctx context.Context, result *evidence.Scenario, rec *s1
 	}
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
 	if err := h.checkSourceS12(ctx, rec.Source, s12SourceDataCheckFile); err != nil {
+		return err
+	}
+	if err := h.checkSeeds(ctx, cluster, rec, result); err != nil {
 		return err
 	}
 	final := &databasev1alpha1.CubridCluster{}
@@ -1212,7 +1241,9 @@ func artifactSourceEvents(rec *s12Record) []string {
 // BootstrapReady condition boot is True while the bootstrap is not
 // Complete, and is empty otherwise. The Operator sets BootstrapReady True
 // only once every member is seeded (reconcileSeeding in
-// internal/controller/habootstrap.go), so that must never happen.
+// internal/controller/habootstrap.go), and the recovery's phase Complete in
+// the same reconcile (reconcileRecoverySeeding in
+// internal/controller/bootstrap.go), so that must never happen.
 func bootstrapReadyEarly(p s12Phase, boot *metav1.Condition) string {
 	if boot == nil || boot.Status != metav1.ConditionTrue || p.Phase == string(databasev1alpha1.BootstrapComplete) {
 		return ""
@@ -1230,4 +1261,106 @@ func firstBootstrapReadyEarly(phases []s12Phase) string {
 		}
 	}
 	return ""
+}
+
+// checkSeeds reads, once the restored cluster is Ready, the manifests of the
+// seed backups its seeding left, and judges that its peers were seeded from
+// its own master, not from the artifact it was restored from or another
+// cluster's backup. The Operator takes each seed backup on the seed's source
+// and stores it under <spec.objectStorage.prefix>/<cluster UID>/<seed
+// directory>/<database> (seedLocation, seedLocationDir in
+// internal/controller/habootstrap.go): the directory is "seed" for the first
+// peer, copied from the member the database was restored on, and
+// "seed-<peer>-from-<source>[-r<round>]" for a later one, copied from the
+// member the Operator observed as the master (selectSeedSource). It records
+// the role master in the manifest (seedBackup), and the peer's restore
+// refuses a backup of another cluster (ExpectedClusterUID). The run does not
+// observe the roles when a seed is taken, so each manifest's sourceInstance
+// is compared with the source its location names, the restore's target for
+// "seed". A manifest naming another cluster, a role other than master, or
+// another member must never happen. A listing or a read that fails, a
+// manifest that cannot be parsed, and no seed manifest at all block S12:
+// the seeding is then not shown.
+func (h *haRun) checkSeeds(ctx context.Context, cluster *databasev1alpha1.CubridCluster, rec *s12Record,
+	result *evidence.Scenario) error {
+	store, stop, err := h.openS11Store(ctx)
+	if err != nil {
+		return fmt.Errorf("open the object store to read the restored cluster's seed backups: %w", err)
+	}
+	defer stop()
+	uid := string(cluster.UID)
+	bucket := cluster.Spec.ObjectStorage.Bucket
+	prefix := path.Join(strings.TrimLeft(cluster.Spec.ObjectStorage.Prefix, "/"), uid) + "/"
+	keys, err := store.List(ctx, bucket, prefix)
+	if err != nil {
+		return fmt.Errorf("list the restored cluster's seed backups under %s/%s: %w", bucket, prefix, err)
+	}
+	target := ""
+	for _, p := range rec.Bootstrap {
+		target = cmp.Or(target, p.TargetMember)
+	}
+	rec.SeedManifests = []s12SeedManifest{}
+	var events []string
+	for _, key := range keys {
+		dir, rest, _ := strings.Cut(strings.TrimPrefix(key, prefix), "/")
+		if rest != databaseName+"/"+instancemanager.ManifestObjectName || dir != "seed" &&
+			!strings.HasPrefix(dir, "seed-") {
+			continue
+		}
+		m, err := readSeedManifest(ctx, store, bucket, key)
+		if err != nil {
+			return fmt.Errorf("read the seed backup's manifest %s: %w", key, err)
+		}
+		seed := s12SeedManifest{Key: key, ClusterUID: m.ClusterUID, SourceInstance: m.SourceInstance,
+			SourceRole: m.SourceRole, ExpectedSource: seedSourceOf(dir, target)}
+		rec.SeedManifests = append(rec.SeedManifests, seed)
+		if seed.ClusterUID != uid {
+			events = append(events, fmt.Sprintf("the seed backup's manifest %s names cluster %s, not the restored "+
+				"cluster %s", key, seed.ClusterUID, uid))
+		}
+		if seed.SourceRole != string(databasev1alpha1.RoleMaster) {
+			events = append(events, fmt.Sprintf("the seed backup's manifest %s names the source role %q, not master",
+				key, seed.SourceRole))
+		}
+		if seed.SourceInstance != seed.ExpectedSource {
+			events = append(events, fmt.Sprintf("the seed backup %s was taken on %s, not on %s, the source its "+
+				"location names", key, seed.SourceInstance, seed.ExpectedSource))
+		}
+	}
+	if len(rec.SeedManifests) == 0 {
+		return fmt.Errorf("no seed backup's manifest is under %s/%s: that the peers were seeded from the restored "+
+			"cluster's master is not shown", bucket, prefix)
+	}
+	result.Measurements[measSeedFromOwnMaster] = len(events) == 0
+	result.NeverEvents = append(result.NeverEvents, events...)
+	return nil
+}
+
+// seedSourceOf is the member a seed backup's directory below the cluster's
+// UID names as its source: target, the member the database was restored
+// on, for "seed"; <source> for "seed-<peer>-from-<source>[-r<round>]".
+func seedSourceOf(dir, target string) string {
+	_, source, found := strings.Cut(dir, "-from-")
+	if !found {
+		return target
+	}
+	return seedRound.ReplaceAllString(source, "")
+}
+
+// seedRound is the round suffix of a seed backup's directory.
+var seedRound = regexp.MustCompile(`-r[0-9]+$`)
+
+// readSeedManifest reads and parses the manifest at key.
+func readSeedManifest(ctx context.Context, store objectStore, bucket, key string) (instancemanager.BackupManifest,
+	error) {
+	r, err := store.Get(ctx, bucket, key)
+	if err != nil {
+		return instancemanager.BackupManifest{}, err
+	}
+	defer func() { _ = r.Close() }()
+	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
+	if err != nil {
+		return instancemanager.BackupManifest{}, err
+	}
+	return instancemanager.ParseManifest(data)
 }

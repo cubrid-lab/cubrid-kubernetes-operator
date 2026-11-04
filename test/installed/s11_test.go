@@ -88,6 +88,8 @@ type fakeStore struct {
 	removeErr func(key string) error
 	bucketErr func(bucket string) error
 	afterPut  func(key string)
+	// listErr, when set, answers a listing under prefix.
+	listErr func(prefix string) error
 	// puts and removes are the bucket/keys the run wrote and removed.
 	puts, removes []string
 }
@@ -166,6 +168,11 @@ func (s *fakeStore) BucketExists(_ context.Context, bucket string) (bool, error)
 }
 
 func (s *fakeStore) List(_ context.Context, bucket, prefix string) ([]string, error) {
+	if s.listErr != nil {
+		if err := s.listErr(prefix); err != nil {
+			return nil, err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var keys []string
