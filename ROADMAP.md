@@ -548,7 +548,9 @@ backupdb failed: … signal: killed`, without the kept-staging suffix, and
 nothing was under its prefix; the replacement member was `Ready` again 1 min
 39 s after the deletion. One run is not a baseline, the 100 ms sampling can
 miss a shorter holder, and `restoredb` and `restoreslave` under a graceful
-stop are not covered.
+stop are not covered; for `restoreslave`, the harness has the placement
+`-restore-graceful-stop-at seeding` (#676), which has not been run on the
+VM lab.
 
 S12 `exact` follows S11 on the same run (`lab-installed-ha-s12`, `-restore`,
 #121): after 20 more writes through the source, a new cluster restores S11's

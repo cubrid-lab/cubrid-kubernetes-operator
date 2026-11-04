@@ -217,6 +217,11 @@ func run(ctx context.Context, args []string) (runErr error) {
 			"attempt must end for the stop with no CUBRID process holding a file of the restore once its cleanup "+
 			"began, and one retry must then complete as S12 exact; needs -restore, not with -restore-tampered, "+
 			"-restore-wrong-target, -restore-operator-restart or -restore-instance-manager-restart")
+	flags.StringVar(&cfg.RestoreGracefulStopAt, "restore-graceful-stop-at", installed.GracefulStopAtRestoring,
+		"S12 graceful-stop: where the Pod is deleted, each a lane of its own: "+installed.GracefulStopAtRestoring+
+			" (the restore's target, once restoredb is seen) or "+installed.GracefulStopAtSeeding+" (the first "+
+			"member being seeded, once restoreslave is seen); a value other than "+installed.GracefulStopAtRestoring+
+			" needs -restore-graceful-stop")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")
