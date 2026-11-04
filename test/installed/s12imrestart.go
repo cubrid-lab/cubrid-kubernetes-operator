@@ -841,6 +841,9 @@ func (h *haRun) waitSeedBackup(ctx context.Context, created *databasev1alpha1.Cu
 			return false, nil
 		case !slices.Contains(clusterMembers(created.Name), seeding.Source):
 			return false, fmt.Errorf("the seed backup's source %q is not a member of %s", seeding.Source, created.Name)
+		case seeding.Source != cluster.Status.Bootstrap.TargetMember:
+			return false, fmt.Errorf(imNotAtSeedBackup+"the seed backup's source is %s, not the restored member %s",
+				seeding.Source, cluster.Status.Bootstrap.TargetMember)
 		}
 		id := seeding.BackupOperationID
 		op, err := h.readIMOperation(wctx, seeding.Source, id)
@@ -1460,8 +1463,8 @@ func (h *haRun) beforeKill(ctx context.Context, created *databasev1alpha1.Cubrid
 // seeded, in SeedingReplicas with a seed restore recorded for it. That member
 // is never the restore's target, which is not seeded over (reconcileSeeding
 // in internal/controller/habootstrap.go); or, at seed-backup, the source of
-// the seed backup, in SeedingReplicas with a seed backup and no seed restore
-// recorded. Any other reading, or a member that is not one of the cluster's,
+// the seed backup, the restore's target, in SeedingReplicas with a seed
+// backup and no seed restore recorded. Any other reading, or a member that is not one of the cluster's,
 // is an error that blocks the variant.
 func killedMember(cluster *databasev1alpha1.CubridCluster, at, phase string) (string, error) {
 	boot := cluster.Status.Bootstrap
@@ -1492,6 +1495,11 @@ func killedMember(cluster *databasev1alpha1.CubridCluster, at, phase string) (st
 		}
 		if seeding.Source == seeding.Member {
 			return "", fmt.Errorf("the seed backup's source, %s, is the member being seeded", seeding.Source)
+		}
+		// The placement is the restored member's backup for the first peer.
+		if seeding.Source != boot.TargetMember {
+			return "", fmt.Errorf(imNotAtSeedBackup+"the seed backup's source is %s, not the restored member %s",
+				seeding.Source, boot.TargetMember)
 		}
 		member = seeding.Source
 	default:
@@ -1981,6 +1989,12 @@ func judgeSeedKillRetries(r *s12IMRestart, afterKill []s12Retry) error {
 		return fmt.Errorf("the seed attempt the kill interrupted ended with %s %q, not with a %s on %s failed by "+
 			"%s (%q): whether the fault ended it was not observed", afterKill[0].Reason, afterKill[0].Message, step,
 			r.Pod, cause, cmp.Or(r.cause, s12IMRestartedReason))
+	// The peer's seed backup stays recorded through its seed restore, so a
+	// reading normally shows it; the seed restore is cleared once the peer is
+	// seeded, which a reading may miss (imRestartSeedingPassReason).
+	case r.At == IMRestartAtSeedBackup && after == "":
+		return fmt.Errorf("no reading after the kill showed a seed backup for %s under the next seed attempt, so "+
+			"whether the retry took a new one instead of seed backup %s is not known", seededPeer(r), before)
 	case after == before:
 		return restoreVerdict{fmt.Errorf("the %s operation %s the kill ended is the one recorded for %s after the "+
 			"next seed attempt started", step, before, seededPeer(r))}

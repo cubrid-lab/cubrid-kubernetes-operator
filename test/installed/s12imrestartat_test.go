@@ -1002,6 +1002,17 @@ func TestRunS12InstanceManagerRestartSeedBackupIsBlockedWhenTheKillCannotBePlace
 			f.beforeKill = append(f.beforeKill[:3], databasev1alpha1.BootstrapComplete)
 			f.beforeSeed[3] = &imSeed{seeded: []string{testIMPeer, testIMPeer2}}
 		}, want: []string{testIMNotAtSeedBackup, "the bootstrap was seen Complete"}},
+		// The seeding names a source other than the restored member before
+		// its backup's record is read: nothing is read or killed there.
+		"the source is not the restored member": {change: func(f *s12IMRestartFixture,
+			_ *s12IMRestartSeedBackupRecords) {
+			f.tamper = func(_ int, killed bool, s *databasev1alpha1.CubridClusterStatus) {
+				if !killed && len(s.Databases) > 0 && s.Databases[0].Seeding != nil {
+					s.Databases[0].Seeding.Source = testIMPeer2
+				}
+			}
+		}, want: []string{testIMNotAtSeedBackup, "the seed backup's source is " + testIMPeer2 +
+			", not the restored member " + testIMRestartTarget}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, records := newS12IMRestartSeedBackupFixture(t)
@@ -1081,5 +1092,86 @@ func TestRunS12InstanceManagerRestartSeedBackupFails(t *testing.T) {
 func TestValidateS12InstanceManagerRestartAcceptsSeedBackup(t *testing.T) {
 	if err := testS12IMRestartConfigAt(t, IMRestartAtSeedBackup).validateS12InstanceManagerRestart(); err != nil {
 		t.Fatalf("validateS12InstanceManagerRestart() = %v, want seed-backup accepted", err)
+	}
+}
+
+// tamperSeedingBeforeKill changes the seeding of the reading right before the
+// kill, after the backup's record was read running: change gets the first
+// database's seeding of each such reading.
+func tamperSeedingBeforeKill(f *s12IMRestartFixture, r *s12IMRestartSeedBackupRecords,
+	change func(*databasev1alpha1.DatabaseSeeding)) {
+	f.tamper = func(_ int, killed bool, s *databasev1alpha1.CubridClusterStatus) {
+		f.mu.Lock()
+		polled := r.polls
+		f.mu.Unlock()
+		if !killed && polled > 0 && len(s.Databases) > 0 && s.Databases[0].Seeding != nil {
+			change(s.Databases[0].Seeding)
+		}
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupIsBlockedWhenTheSourceChangesRightBeforeTheKill(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*databasev1alpha1.DatabaseSeeding)
+		want   string
+	}{
+		"the source is the member being seeded": {change: func(s *databasev1alpha1.DatabaseSeeding) {
+			s.Source = s.Member
+		}, want: "the seed backup's source, " + testIMPeer + ", is the member being seeded"},
+		"the source is not the restored member": {change: func(s *databasev1alpha1.DatabaseSeeding) {
+			s.Source = testIMPeer2
+		}, want: "the seed backup's source is " + testIMPeer2 + ", not the restored member " + testIMRestartTarget},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartSeedBackupFixture(t)
+			tamperSeedingBeforeKill(f, records, tc.change)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want)
+			if f.imKills != 0 || records.polls != 1 {
+				t.Fatalf("kills = %d, record reads = %d; want none and one", f.imKills, records.polls)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupIsBlockedWhenTheRetryDoesNotShowTheRestart(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartFixture)
+		want   []string
+	}{
+		// The retry the readings show is of a seed restore, not of the
+		// killed seed backup.
+		"a seed restore retry": {change: func(f *s12IMRestartFixture) {
+			f.afterKill[1].reason = s12SeedRetryReason
+		}, want: []string{"ended with " + s12SeedRetryReason, "not with a seed backup on " + testIMRestartTarget}},
+		"a retry on another member": {change: func(f *s12IMRestartFixture) {
+			f.afterKill[1].message = "on " + testIMPeer2 + ": " + s12IMRestartedReason + "; starting attempt 2 of 3"
+		}, want: []string{"not with a seed backup on " + testIMRestartTarget}},
+		// The backup had ended before the kill took effect: the peer was
+		// restored from it under the same attempt.
+		"no seed retry": {change: func(f *s12IMRestartFixture) {
+			f.afterKill = slices.Delete(f.afterKill, 1, 3)
+			f.afterSeed = []*imSeed{
+				{member: testIMPeer, backup: testIMSeedBackupOp},
+				{member: testIMPeer, backup: testIMSeedBackupOp, op: testIMSeedOp},
+				{member: testIMPeer2, backup: testIMSeedBackupOp3, op: testIMSeedOp3, seeded: []string{testIMPeer}},
+				{seeded: []string{testIMPeer, testIMPeer2}},
+			}
+		}, want: []string{"the kill did not interrupt the seed backup", testIMSeedBackupOp + " had ended"}},
+		// No reading after the kill showed the peer's seed backup under the
+		// next attempt, so whether it is a new one is not known.
+		"the next seed backup never seen": {change: func(f *s12IMRestartFixture) {
+			for _, seed := range f.afterSeed[2:4] {
+				seed.backup = ""
+			}
+		}, want: []string{"no reading after the kill showed a seed backup for " + testIMPeer +
+			" under the next seed attempt"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, _ := newS12IMRestartSeedBackupFixture(t)
+			tc.change(f)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
+		})
 	}
 }

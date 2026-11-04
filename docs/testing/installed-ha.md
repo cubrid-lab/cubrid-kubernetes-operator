@@ -3519,13 +3519,19 @@ What differs from the steps above:
   passing without any seed backup recorded fails it.
 - **Right before the kill** (step 3): the reading must be `SeedingReplicas`
   with the same seed backup and no seed restore; the member killed is the
-  source, which must be a member of `ha-imrestart` and not the member being
-  seeded. The peer (`seedPeer`), the seed backup and the database's attempts
+  source, which must be the restored member (`status.bootstrap.targetMember`)
+  and not the member being seeded; a seeding whose source is another member
+  blocks the variant, at this reading or at any earlier one. The peer (`seedPeer`), the seed backup and the database's attempts
   are recorded as the state at the kill. Steps 4 to 7 apply to the source.
 - **The bootstrap** (step 8), as at `seeding`, except that the expected seed
   retry is `SeedBackupFailedRetrying` on the source, and the operation
   compared is the peer's seed backup under the next attempt
   (`seedBackupOperationIDAfter`), which must differ from the killed one. A
+  seed backup stays recorded until the peer is seeded, so a reading normally
+  shows it; when none does, whether the retry took a new backup is not
+  known and the variant is blocked. A first seed retry with another reason,
+  or with a message that does not start with `on <source>: ` and name the
+  manager's restart, blocks it too, as no seed retry does. A
   retry of the restore after the kill, or a reading after the kill whose
   message says "restoredb is running", must never happen: the restored data
   is not restored again; either fails the variant.
