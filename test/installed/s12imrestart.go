@@ -108,6 +108,11 @@ const (
 	// seeded after a reading of the bootstrap SeedingReplicas with a seed
 	// restore recorded for that member.
 	IMRestartAtSeeding = "seeding"
+	// IMRestartAtStarting kills the restore's target member's Instance
+	// Manager at the first reading of the target's own record of the
+	// bootstrap's operation in the state Starting: restoredb has succeeded and
+	// the restored database is being started.
+	IMRestartAtStarting = "starting"
 )
 
 // imRestartPlacementNote says, for the summary, what is killed when.
@@ -117,6 +122,8 @@ var imRestartPlacementNote = map[string]string{
 		"Preparing with an operation",
 	IMRestartAtSeeding: "the Instance Manager of a member being seeded from the restored member is killed during " +
 		"its seed restore",
+	IMRestartAtStarting: "the Instance Manager of the restore's target member is killed while the restored " +
+		"database is being started",
 }
 
 // imRestartAt is the selected placement of the kill.
@@ -290,6 +297,22 @@ type s12IMRestart struct {
 	// KilledOperation is, at preparing, the target's record of the operation
 	// at the kill, read once the cluster was Ready.
 	KilledOperation *s12KilledOperation `json:"killedOperation,omitempty"`
+	// At starting: OperationReadings are the readings of the target's record
+	// of the bootstrap's operation before the kill, each change of state once,
+	// and PlacingReading is the one that placed the kill. CompletingOperation
+	// is the target's record of the operation that completed the restore,
+	// read once the cluster was Ready.
+	OperationReadings   []s12OperationReading `json:"operationReadings,omitempty"`
+	PlacingReading      *s12OperationReading  `json:"placingReading,omitempty"`
+	CompletingOperation *s12KilledOperation   `json:"completingOperation,omitempty"`
+}
+
+// s12OperationReading is one reading of an Instance Manager's record of an
+// operation: when it was read, by the run's clock, and the state it held.
+type s12OperationReading struct {
+	At        time.Time `json:"at"`
+	Operation string    `json:"operation"`
+	State     string    `json:"state"`
 }
 
 // s12KilledOperation is what the target's Instance Manager recorded of the
@@ -320,10 +343,10 @@ type s12IMRestartRecord struct {
 // instance-manager-restart, when it is selected.
 func (c HAConfig) validateS12InstanceManagerRestart() error {
 	switch c.RestoreInstanceManagerRestartAt {
-	case "", IMRestartAtRestoring, IMRestartAtPreparing, IMRestartAtSeeding:
+	case "", IMRestartAtRestoring, IMRestartAtPreparing, IMRestartAtSeeding, IMRestartAtStarting:
 	default:
-		return fmt.Errorf("-restore-instance-manager-restart-at must be %s, %s or %s", IMRestartAtRestoring,
-			IMRestartAtPreparing, IMRestartAtSeeding)
+		return fmt.Errorf("-restore-instance-manager-restart-at must be %s, %s, %s or %s", IMRestartAtRestoring,
+			IMRestartAtPreparing, IMRestartAtSeeding, IMRestartAtStarting)
 	}
 	if !c.RestoreInstanceManagerRestart {
 		if c.imRestartAt() != IMRestartAtRestoring {
@@ -397,6 +420,10 @@ func (h *haRun) runS12InstanceManagerRestart(ctx context.Context) (result eviden
 	case IMRestartAtPreparing:
 		result.Measurements["restoredAtKill"], result.Measurements["stagingLeftAtEnd"] = evidence.Unknown,
 			evidence.Unknown
+	case IMRestartAtStarting:
+		result.Measurements["restoredAtKill"], result.Measurements["stagingLeftAtEnd"] = evidence.Unknown,
+			evidence.Unknown
+		result.Measurements["tookOverRestoredData"] = evidence.Unknown
 	case IMRestartAtSeeding:
 		result.Measurements["seedRetriesAfterKill"], result.Measurements["seedAttemptsAdded"] = evidence.Unknown,
 			evidence.Unknown
@@ -445,6 +472,11 @@ func (h *haRun) runS12InstanceManagerRestart(ctx context.Context) (result eviden
 	return result
 }
 
+// imOperatorNotChecked is the note of what of the Operator a placement
+// other than seeding does not read.
+const imOperatorNotChecked = "the Operator's logs, and its Events of the cluster other than " +
+	"RestoreFailedRetrying, were not checked"
+
 // imRestartNotes are the record's notes of each placement, besides the
 // Secret's.
 var imRestartNotes = map[string][]string{
@@ -452,7 +484,7 @@ var imRestartNotes = map[string][]string{
 		"Manager's operation may have moved on before the kill took effect",
 		"whether the next attempt removed the failed attempt's data or took it over was not read: the Instance " +
 			"Manager's logs and operation records were not checked",
-		"the Operator's logs, and its Events of the cluster other than RestoreFailedRetrying, were not checked"},
+		imOperatorNotChecked},
 	IMRestartAtPreparing: {"the kill is placed after a reading that saw the bootstrap Preparing with an operation: " +
 		"the Operator had read the operation no further than Pending or Downloading; the " +
 		"Instance Manager records its operation Restoring only right before restoredb, after the backup is " +
@@ -462,7 +494,7 @@ var imRestartNotes = map[string][]string{
 		"the record of the killed operation on the target's volume, and whether the recovery's staging directory " +
 			"was left there, were read once the cluster was Ready; the next attempt's own record, the Instance " +
 			"Manager's logs and the rest of the volume were not read",
-		"the Operator's logs, and its Events of the cluster other than RestoreFailedRetrying, were not checked"},
+		imOperatorNotChecked},
 	IMRestartAtSeeding: {"the kill is placed after a reading that saw the bootstrap SeedingReplicas with a seed " +
 		"restore recorded for the member killed; the Instance Manager's operation may have moved on before the " +
 		"kill took effect",
@@ -471,6 +503,17 @@ var imRestartNotes = map[string][]string{
 			"read: the Instance Manager's logs and operation records were not checked",
 		"the Operator's logs, and its Events of the cluster other than RestoreFailedRetrying and " +
 			"SeedRestoreFailedRetrying, were not checked"},
+	IMRestartAtStarting: {"the kill is placed at the first reading, taken about every " + imStartingPoll.String() +
+		", of the target's own record of the bootstrap's operation in the state Starting: restoredb had succeeded " +
+		"and the restored database was being started; the start may have ended before the kill took effect, " +
+		"which a record of the killed operation Failed by the restart, not Completed, rules out",
+		"the records of the killed operation and of the operation that completed the restore were read on the " +
+			"target's volume once the cluster was Ready; the same restored artifact in both, and no reading of the " +
+			"completing operation showing restoredb running, are taken as the data taken over rather than " +
+			"restored again; a second restore of the same artifact would record the same artifact, and the " +
+			"readings may miss a short restoredb run, so a second restore is not ruled out; the Instance " +
+			"Manager's logs and the rest of the volume were not read",
+		imOperatorNotChecked},
 }
 
 // imRestartPassReasonAt is the reason of a pass at the placement of r.
@@ -480,6 +523,8 @@ func imRestartPassReasonAt(r *s12IMRestart) string {
 		return imRestartPreparingPassReason(r)
 	case IMRestartAtSeeding:
 		return imRestartSeedingPassReason(r)
+	case IMRestartAtStarting:
+		return imRestartStartingPassReason(r)
 	}
 	return imRestartPassReason(r)
 }
@@ -591,18 +636,19 @@ func (h *haRun) imRestartSteps(ctx context.Context, result *evidence.Scenario, r
 		final.Status); err != nil {
 		return err
 	}
-	if r.At != IMRestartAtPreparing {
+	if r.At != IMRestartAtPreparing && r.At != IMRestartAtStarting {
 		return nil
 	}
-	// Last, so that what the data showed is judged whatever the record says.
-	return h.checkKilledOperation(ctx, cluster, r, result)
+	// Last, so that what the data showed is judged whatever the records say.
+	return h.checkKilledOperation(ctx, cluster, rec, result)
 }
 
 // waitIMPlacement waits for the reading the kill follows, as
 // waitRestoring does: at restoring that is waitRestoring; at preparing a
 // reading of Preparing with an operation, and a first phase past Preparing
 // blocks the variant; at seeding a reading of SeedingReplicas with a seed
-// restore recorded for a member, and Complete before it blocks the variant.
+// restore recorded for a member, and Complete before it blocks the variant;
+// at starting waitRestoring and then waitStarting.
 func (h *haRun) waitIMPlacement(ctx context.Context, cluster *databasev1alpha1.CubridCluster, created time.Time,
 	rec *s12IMRestartRecord, result *evidence.Scenario) error {
 	r := rec.IMRestart
@@ -630,7 +676,140 @@ func (h *haRun) waitIMPlacement(ctx context.Context, cluster *databasev1alpha1.C
 					"before a reading of SeedingReplicas with a seed restore", phase)
 			})
 	}
-	return h.waitRestoring(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result)
+	if err := h.waitRestoring(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result); err != nil ||
+		r.At != IMRestartAtStarting {
+		return err
+	}
+	return h.waitStarting(ctx, cluster, created, rec, result)
+}
+
+// imStartingPoll is how often, at starting, the target's record of the
+// operation is read: the restored database is started within seconds of
+// restoredb's end, a window the run's poll interval would mostly miss.
+const imStartingPoll = 250 * time.Millisecond
+
+// waitStarting reads, at starting, the restore target's own record of the
+// bootstrap's operation every imStartingPoll, and the restored cluster after
+// each read, until the record is read Starting, which places the kill, or
+// RestoreLimit has passed since created. The Instance Manager records
+// Starting only after restoredb succeeded and the restored artifact is on
+// record, right before it starts the restored database (runRestore in
+// internal/instancemanager/server.go); the Operator keeps the bootstrap
+// Restoring with that operation meanwhile (setRestoreProgress in
+// internal/controller/bootstrap.go). A record read Completed or Failed, or a
+// bootstrap seen in another phase or with another operation, before any
+// reading of Starting means the kill could not be placed there, which blocks
+// the variant. A record that cannot be read is read again.
+func (h *haRun) waitStarting(ctx context.Context, created *databasev1alpha1.CubridCluster, createdAt time.Time,
+	rec *s12IMRestartRecord, result *evidence.Scenario) error {
+	r := rec.IMRestart
+	last := rec.Bootstrap[len(rec.Bootstrap)-1]
+	id, member := last.OperationID, last.TargetMember
+	if !slices.Contains(clusterMembers(created.Name), member) {
+		return fmt.Errorf("the restore's target member %q is not a member of %s", member, created.Name)
+	}
+	const notPlaced = "the kill could not be placed while the restored database was being started: "
+	wctx, cancel := context.WithDeadline(ctx, createdAt.Add(h.cfg.RestoreLimit))
+	defer cancel()
+	// readErr is the last error of a read of the record or the cluster, nil
+	// once one succeeded.
+	var readErr error
+	err := pollUntil(wctx, imStartingPoll, func() (bool, error) {
+		op, err := h.readIMOperation(wctx, member, id)
+		switch {
+		case err != nil && wctx.Err() != nil:
+			return false, nil
+		case err != nil:
+			readErr = fmt.Errorf("read the record of operation %s on %s: %w", id, member, err)
+		default:
+			readErr = nil
+			reading := s12OperationReading{At: time.Now().UTC(), Operation: id, State: string(op.State)}
+			if op.State == instancemanager.OpStarting {
+				r.PlacingReading = &reading
+				return true, nil
+			}
+			if n := len(r.OperationReadings); n == 0 || r.OperationReadings[n-1].State != reading.State {
+				r.OperationReadings = append(r.OperationReadings, reading)
+			}
+			if op.State.IsTerminal() {
+				return false, fmt.Errorf(notPlaced+"the target's record of operation %s was read %s before any "+
+					"reading of it Starting", id, op.State)
+			}
+		}
+		cluster, err := h.readRestarted(wctx, created)
+		switch {
+		case (err != nil || cluster == nil) && wctx.Err() != nil:
+			return false, nil
+		case err != nil && retryable(err):
+			readErr = err
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		phase, err := h.restoredStatus(cluster, &rec.s12Record, result)
+		current := ""
+		if boot := cluster.Status.Bootstrap; boot != nil {
+			current = boot.OperationID
+		}
+		switch {
+		case err != nil:
+			return false, err
+		case phase == string(databasev1alpha1.BootstrapFailed):
+			return false, restoreVerdict{fmt.Errorf("the restored cluster's bootstrap ended Failed: %s",
+				bootstrapReason(cluster))}
+		case phase != string(databasev1alpha1.BootstrapRestoring) || current != id:
+			return false, fmt.Errorf(notPlaced+"the bootstrap was seen %s with operation %q before any reading of "+
+				"the record of operation %s Starting", cmp.Or(phase, noBootstrapPhase), current, id)
+		}
+		return false, nil
+	})
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() == nil && wctx.Err() != nil && readErr != nil:
+		return fmt.Errorf(notPlaced+"no reading before restore_limit %s passed showed it: %w", h.cfg.RestoreLimit,
+			readErr)
+	case ctx.Err() == nil && wctx.Err() != nil:
+		return restoreVerdict{fmt.Errorf("the restored database was not started within restore_limit %s: the "+
+			"target's record of operation %s was last read %s", h.cfg.RestoreLimit, id,
+			lastOperationState(r.OperationReadings))}
+	}
+	return err
+}
+
+// lastOperationState is the state of the last of readings, or unknown.
+func lastOperationState(readings []s12OperationReading) string {
+	if n := len(readings); n > 0 {
+		return readings[n-1].State
+	}
+	return evidence.Unknown
+}
+
+// operationRecordScript prints the Instance Manager's record of operation
+// id, a plain name checked by the caller, so that it names nothing outside
+// the records' directory.
+func operationRecordScript(id string) string {
+	return "cat -- '" + imOperationsDir + "/" + id + ".json'"
+}
+
+// readIMOperation reads the Instance Manager's record of operation id on
+// the member pod's volume. A record of another operation is an error.
+func (h *haRun) readIMOperation(ctx context.Context, pod, id string) (instancemanager.Operation, error) {
+	var op instancemanager.Operation
+	if !plainName.MatchString(id) {
+		return op, fmt.Errorf("the operation ID %q is not a plain name", id)
+	}
+	out, err := h.member(ctx, pod, "bash", "-c", operationRecordScript(id))
+	if err != nil {
+		return op, err
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &op); err != nil {
+		return op, fmt.Errorf("the answer is not a record: %w", err)
+	}
+	if op.ID != id {
+		return op, fmt.Errorf("the record read is of operation %q", op.ID)
+	}
+	return op, nil
 }
 
 // firstDatabaseSeeding is the seeding in the status of the spec's first
@@ -724,6 +903,36 @@ func imRestartSeedingPassReason(r *s12IMRestart) string {
 		r.MessageAtRestart, r.BackWithin, s12SeedRetryReason, r.Pod, attempt, seedAfter, r.OperationIDBefore)
 }
 
+// imRestartStartingPassReason is the reason of a pass at starting.
+func imRestartStartingPassReason(r *s12IMRestart) string {
+	attempts := int32(0)
+	if r.AttemptsAfter != nil {
+		attempts = *r.AttemptsAfter
+	}
+	placed, restored := evidence.Unknown, evidence.Unknown
+	if p := r.PlacingReading; p != nil {
+		placed = p.At.Format(time.RFC3339Nano)
+	}
+	if k := r.KilledOperation; k != nil && k.Restored != "" {
+		restored = k.Restored
+	}
+	return fmt.Sprintf("the Instance Manager on %s was killed while the cluster restored from S11's artifact was %s "+
+		"with operation %s (%q), right after the record of operation %s on %s was read Starting at %s: restoredb "+
+		"had succeeded and the restored database was being started; its container ran again on the same Pod %s "+
+		"after the kill; the Instance Manager's record of that operation shows it Failed by the restart and "+
+		"holding the restored artifact %s; the Operator ended that attempt with %s naming the Instance Manager's "+
+		"restart and completed the restore under operation %s, attempt %d, with one retry, whose record holds "+
+		"the same restored artifact and which no reading showed running restoredb, so it took over the data "+
+		"rather than restoring it again (a second restore of the same artifact between two readings would look "+
+		"the same); the cluster reported Ready within restore_limit only after its bootstrap completed, with "+
+		"BootstrapReady never True before; its members and Services held exactly the rows acknowledged before the "+
+		"known point and S11's marker, no row written after the backup, and took a normal write; the source was "+
+		"unchanged; no credential was in its status and no Secret of the source in its Pods; the Instance "+
+		"Manager's and the Operator's logs were not checked", r.Pod, r.PhaseAtRestart, r.OperationIDBefore,
+		r.MessageAtRestart, r.OperationIDBefore, r.Pod, placed, r.BackWithin, restored, s12RetryReason,
+		r.OperationIDAfter, attempts)
+}
+
 // killedOperationScript prints the Instance Manager's record of operation
 // id and then, on a line of its own, whether the staging directory of the
 // recovery of the cluster uid is there. Both are plain names, checked by the
@@ -736,8 +945,8 @@ func killedOperationScript(id, uid string) string {
 // plainName is what killedOperationScript takes as a name.
 var plainName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,63}$`)
 
-// checkKilledOperation reads, at preparing and once the cluster is Ready, the
-// target's record of the operation at the kill, and whether the recovery's
+// checkKilledOperation reads, at preparing or starting and once the cluster
+// is Ready, the target's record of the operation at the kill, and whether the recovery's
 // staging directory (restoreStagingRoot/<cluster UID>, reconcileRecovery in
 // internal/controller/bootstrap.go) is left there. The record is on the
 // member's volume and kept across the restart (FindOrCreate, writeLocked in
@@ -748,11 +957,15 @@ var plainName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,63}$`)
 // holds a restored artifact shows the kill landed after restoredb, not while
 // the restore was Preparing, and a record that cannot be read, is another
 // operation's, or did not end Failed by the restart leaves that unknown: each
-// blocks the variant. A successful restore removes the staging directory,
+// blocks the variant. At starting the record must hold the restored artifact:
+// one without it shows the kill landed before restoredb succeeded, which
+// blocks the variant, and one with it is compared with the record of the
+// operation that completed the restore (checkTakenOver). A successful restore removes the staging directory,
 // and drops the error of that removal (Restore in internal/instancemanager/
 // restore.go), so a directory left is recorded and not judged.
-func (h *haRun) checkKilledOperation(ctx context.Context, cluster *databasev1alpha1.CubridCluster, r *s12IMRestart,
-	result *evidence.Scenario) error {
+func (h *haRun) checkKilledOperation(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	rec *s12IMRestartRecord, result *evidence.Scenario) error {
+	r := rec.IMRestart
 	k := &s12KilledOperation{}
 	r.KilledOperation = k
 	id, uid := r.OperationIDBefore, string(cluster.UID)
@@ -788,10 +1001,81 @@ func (h *haRun) checkKilledOperation(ctx context.Context, cluster *databasev1alp
 	case op.State != instancemanager.OpFailed || op.FailureReason != s12IMRestartedReason:
 		return fmt.Errorf("the Instance Manager's record of operation %s on %s is %s (%q), not Failed by its "+
 			"restart: what ended the operation is not known", id, r.Pod, op.State, op.FailureReason)
+	case r.At == IMRestartAtStarting && op.Restored == nil:
+		return fmt.Errorf("the kill landed before restoredb succeeded, not while the restored database was being "+
+			"started: the Instance Manager's record of operation %s on %s holds no restored artifact", id, r.Pod)
+	case r.At == IMRestartAtStarting:
+		return h.checkTakenOver(ctx, rec, op.Restored, result)
 	case op.Restored != nil:
 		return fmt.Errorf("the kill did not land while the restore was Preparing: the Instance Manager's record of "+
 			"operation %s on %s holds the restored artifact %s, which it records only once restoredb succeeded", id,
 			r.Pod, op.Restored.ManifestURI)
+	}
+	return nil
+}
+
+// imRestoredbRunning starts the Operator's BootstrapReady message while the
+// Instance Manager answers its operation Restoring, restoredb about to run or
+// running (setRestoreProgress in internal/controller/bootstrap.go).
+const imRestoredbRunning = "restoredb is running on "
+
+// checkTakenOver reads, at starting and once the cluster is Ready, the
+// target's record of the operation that completed the restore, and compares
+// its restored artifact with killed, the one the killed operation recorded.
+// The next attempt's operation takes over data a failed attempt of the same
+// request recorded as restored: it records the same artifact and starts the
+// data, without running restoredb, so without ever being Restoring
+// (adoptRestored in internal/instancemanager/ownership.go, runRestore in
+// internal/instancemanager/server.go). So a completed record holding another
+// artifact, or none, and a reading of that operation showing restoredb
+// running, each show the data restored again instead of taken over, which
+// fails the variant. A record that cannot be read, is another operation's or
+// is not Completed blocks it. The same artifact does not rule out a second
+// restore of it between two readings.
+func (h *haRun) checkTakenOver(ctx context.Context, rec *s12IMRestartRecord, killed *instancemanager.OperationArtifact,
+	result *evidence.Scenario) error {
+	r := rec.IMRestart
+	c := &s12KilledOperation{}
+	r.CompletingOperation = c
+	// The operation the last reading named, as judgeIMRestartBootstrap takes
+	// it later.
+	id := ""
+	for _, p := range rec.Bootstrap {
+		id = cmp.Or(p.OperationID, id)
+	}
+	op, err := h.readIMOperation(ctx, r.Pod, id)
+	if err != nil {
+		c.ReadError = err.Error()
+		return fmt.Errorf("the record of operation %s, which completed the restore, on %s could not be read, so "+
+			"whether it took over the restored data is not known: %w", id, r.Pod, err)
+	}
+	c.State, c.FailureReason = string(op.State), op.FailureReason
+	if op.Restored != nil {
+		c.Restored = op.Restored.ManifestURI
+	}
+	if op.State != instancemanager.OpCompleted {
+		return fmt.Errorf("the Instance Manager's record of operation %s on %s, which completed the restore, is %s "+
+			"(%q), not Completed: whether it took over the restored data is not known", id, r.Pod, op.State,
+			op.FailureReason)
+	}
+	again := ""
+	for _, p := range rec.Bootstrap {
+		if boot := meta.FindStatusCondition(p.Conditions, bootstrapReadyCondition); p.OperationID == id &&
+			boot != nil && strings.HasPrefix(boot.Message, imRestoredbRunning) {
+			again = fmt.Sprintf("a reading at %s showed operation %s with %q", p.At.Format(time.RFC3339), id,
+				boot.Message)
+			break
+		}
+	}
+	same := op.Restored != nil && *op.Restored == *killed
+	result.Measurements["tookOverRestoredData"] = same && again == ""
+	switch {
+	case !same:
+		return restoreVerdict{fmt.Errorf("the data was restored again instead of taken over: the record of "+
+			"operation %s on %s holds the restored artifact %q, not %s, which the killed operation %s recorded", id,
+			r.Pod, c.Restored, killed.ManifestURI, r.OperationIDBefore)}
+	case again != "":
+		return restoreVerdict{fmt.Errorf("the data was restored again instead of taken over: %s", again)}
 	}
 	return nil
 }
@@ -892,6 +1176,10 @@ func (h *haRun) beforeKill(ctx context.Context, created *databasev1alpha1.Cubrid
 	}
 	if err := r.recordBefore(pod); err != nil {
 		return err
+	}
+	if p := r.PlacingReading; r.At == IMRestartAtStarting && (p == nil || p.Operation != boot.OperationID) {
+		return fmt.Errorf("the kill could not be placed while the restored database was being started: right "+
+			"before it the bootstrap named operation %q, not the one whose record was read Starting", boot.OperationID)
 	}
 	attempts := boot.Attempts
 	r.PhaseAtRestart, r.OperationIDBefore, r.AttemptsBefore = phase, boot.OperationID, &attempts

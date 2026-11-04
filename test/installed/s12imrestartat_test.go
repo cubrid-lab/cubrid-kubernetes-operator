@@ -478,7 +478,8 @@ func TestRunHARefusesAnInvalidS12InstanceManagerRestartPlacement(t *testing.T) {
 func TestIMRestartPlacementsHaveALaneAndAVariantEach(t *testing.T) {
 	for at, want := range map[string]string{IMRestartAtRestoring: "instance-manager-restart",
 		IMRestartAtPreparing: "instance-manager-restart-preparing",
-		IMRestartAtSeeding:   "instance-manager-restart-seeding"} {
+		IMRestartAtSeeding:   "instance-manager-restart-seeding",
+		IMRestartAtStarting:  "instance-manager-restart-starting"} {
 		if got := imRestartVariant(at); got != want {
 			t.Fatalf("imRestartVariant(%s) = %s, want %s", at, got, want)
 		}
@@ -530,5 +531,218 @@ func TestIMRestartSeedingPassReasonMarksAnInferredAttempt(t *testing.T) {
 	if reason := imRestartSeedingPassReason(r); strings.Contains(reason, "inferred") ||
 		!strings.Contains(reason, "seeding attempt 1 (seed restore operation "+testIMSeedOp2+")") {
 		t.Fatalf("reason = %q, want the attempt read", reason)
+	}
+}
+
+const (
+	// testIMStarting is the Operator's message while the target's operation
+	// is Starting, testIMRestoredManifest the manifest the restore restored.
+	testIMStarting         = "the restored database is being started on " + testIMRestartTarget
+	testIMRestoredManifest = "s3://bucket/run/manifest.json"
+)
+
+// testIMRestored is the restored artifact the target's Instance Manager
+// records once restoredb succeeded.
+func testIMRestored() *instancemanager.OperationArtifact {
+	return &instancemanager.OperationArtifact{ManifestURI: testIMRestoredManifest, Database: databaseName,
+		CubridVersion: testEngineVersion}
+}
+
+// testOpJSON is the answer of operationRecordScript: the record alone.
+func testOpJSON(t *testing.T, op instancemanager.Operation) string {
+	t.Helper()
+	data, err := json.Marshal(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data) + "\n"
+}
+
+// s12IMRestartStartingRecords are the target's records of the operations
+// the fixture at starting answers: polled are the states of the killed
+// operation read before the kill, one per read, the last kept; killed is its
+// record read after the cluster is Ready, completing that of the next
+// operation.
+type s12IMRestartStartingRecords struct {
+	polled     []instancemanager.OperationState
+	polls      int
+	killed     instancemanager.Operation
+	completing instancemanager.Operation
+}
+
+// newS12IMRestartStartingFixture plays a restore whose Instance Manager is
+// killed while the restored database is being started: the target's record
+// of the operation reads Restoring twice and then Starting, at which the
+// kill lands. The attempt then fails with the manager's restart, and the
+// next operation takes over the data the failed one recorded as restored,
+// starts it and completes. After the run, the killed operation's record is
+// Failed by the restart with the restored artifact, and the completing
+// one's holds the same artifact. The two readings of Restoring are recorded
+// once, as one state.
+func newS12IMRestartStartingFixture(t *testing.T) (*s12IMRestartFixture, *s12IMRestartStartingRecords) {
+	t.Helper()
+	f := newS12IMRestartFixture(t, testS12IMRestartConfigAt(t, IMRestartAtStarting))
+	f.afterKill = []imStatus{
+		{databasev1alpha1.BootstrapRestoring, 0, testIMRestartOp, testIMUnavailable, testIMRefused},
+		{databasev1alpha1.BootstrapRestoring, 1, "", s12RetryReason, testIMRetryMessage},
+		{databasev1alpha1.BootstrapPreparing, 1, testIMRestartOp2, testRestoreInProgress, testIMPreparing},
+		{databasev1alpha1.BootstrapRestoring, 1, testIMRestartOp2, testRestoreInProgress, testIMStarting},
+		{databasev1alpha1.BootstrapSeedingReplicas, 1, testIMRestartOp2, testSeedInProgress, testIMCopying},
+		{databasev1alpha1.BootstrapComplete, 1, testIMRestartOp2, testPeersSeeded, testIMCopied},
+	}
+	records := &s12IMRestartStartingRecords{
+		polled: []instancemanager.OperationState{instancemanager.OpRestoring, instancemanager.OpRestoring,
+			instancemanager.OpStarting},
+		killed: instancemanager.Operation{ID: testIMRestartOp, Kind: instancemanager.OpRestore,
+			State: instancemanager.OpFailed, FailureReason: s12IMRestartedReason, Restored: testIMRestored()},
+		completing: instancemanager.Operation{ID: testIMRestartOp2, Kind: instancemanager.OpRestore,
+			State: instancemanager.OpCompleted, Restored: testIMRestored(), Artifact: testIMRestored()},
+	}
+	f.opRecord = func(pod, script string) (string, error) {
+		if pod != testIMRestartTarget {
+			t.Errorf("record read on %s, want the restore's target %s", pod, testIMRestartTarget)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		switch {
+		case strings.Contains(script, imOperationsDir+"/"+records.completing.ID+".json"):
+			return testOpJSON(t, records.completing), nil
+		case !strings.Contains(script, imOperationsDir+"/"+testIMRestartOp+".json"):
+			t.Errorf("record read with %q, want one of the restore's operations", script)
+			return "", errors.New("no such record")
+		case f.killed:
+			return testOpRecord(t, records.killed, "absent"), nil
+		}
+		state := records.polled[min(records.polls, len(records.polled)-1)]
+		records.polls++
+		op := instancemanager.Operation{ID: testIMRestartOp, Kind: instancemanager.OpRestore, State: state}
+		if state == instancemanager.OpStarting || state == instancemanager.OpCompleted {
+			op.Restored = testIMRestored()
+		}
+		return testOpJSON(t, op), nil
+	}
+	return f, records
+}
+
+func TestRunS12InstanceManagerRestartStartingPassesWhenTheNextOperationTakesOverTheRestoredData(t *testing.T) {
+	f, records := newS12IMRestartStartingFixture(t)
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass {
+		t.Fatalf("S12 instance-manager-restart-starting = %+v, %v; want a pass", restart, err)
+	}
+	if f.imKills != 1 || !slices.Equal(f.killedPods, []string{testIMRestartTarget}) || records.polls != 3 {
+		t.Fatalf("kills = %d on %v, polls = %d; want one kill on %s after the third read", f.imKills, f.killedPods,
+			records.polls, testIMRestartTarget)
+	}
+	for _, rel := range []string{"record.json", "timeline.jsonl", "data-check.json", "source-data-check.json"} {
+		if !slices.Contains(restart.Evidence, "S12/instance-manager-restart-starting/"+rel) {
+			t.Fatalf("evidence = %v, want %s of the variant", restart.Evidence, rel)
+		}
+	}
+	m := restart.Measurements
+	if m["restoredAtKill"] != true || m["tookOverRestoredData"] != true || m["retriesAfterKill"] != float64(1) ||
+		m["operationIDChanged"] != true || m["containerRestarts"] != float64(1) {
+		t.Fatalf("measurements = %v", m)
+	}
+	r := readIMRestartRecord(t, f.cfg).IMRestart
+	if r.At != IMRestartAtStarting || r.PlacingReading == nil || r.PlacingReading.At.IsZero() ||
+		r.PlacingReading.State != string(instancemanager.OpStarting) || r.PlacingReading.Operation != testIMRestartOp ||
+		len(r.OperationReadings) != 1 || r.OperationReadings[0].State != string(instancemanager.OpRestoring) ||
+		r.KilledOperation == nil ||
+		r.KilledOperation.Restored != testIMRestoredManifest || r.CompletingOperation == nil ||
+		r.CompletingOperation.Restored != testIMRestoredManifest {
+		t.Fatalf("restart = %+v, placing = %+v, killed = %+v, completing = %+v", r, r.PlacingReading,
+			r.KilledOperation, r.CompletingOperation)
+	}
+	for _, want := range []string{"Instance Manager on " + testIMRestartTarget + " was killed",
+		"record of operation " + testIMRestartOp + " on " + testIMRestartTarget + " was read Starting",
+		"took over the data", "operation " + testIMRestartOp2 + ", attempt 1, with one retry"} {
+		if reason := imRestartPassReasonAt(r); !strings.Contains(reason, want) {
+			t.Fatalf("reason = %q, want %q", reason, want)
+		}
+	}
+}
+
+func TestRunS12InstanceManagerRestartStartingIsBlockedWhenTheKillCannotBePlaced(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartFixture, *s12IMRestartStartingRecords)
+		want   []string
+	}{
+		"the record is first seen Completed": {change: func(_ *s12IMRestartFixture, r *s12IMRestartStartingRecords) {
+			r.polled = []instancemanager.OperationState{instancemanager.OpRestoring, instancemanager.OpCompleted}
+		}, want: []string{"could not be placed while the restored database was being started",
+			"read Completed before any reading of it Starting"}},
+		"the bootstrap moves past Restoring first": {change: func(f *s12IMRestartFixture,
+			r *s12IMRestartStartingRecords) {
+			f.beforeKill = append(f.beforeKill, databasev1alpha1.BootstrapSeedingReplicas)
+			f.noHold = true
+			r.polled = []instancemanager.OperationState{instancemanager.OpRestoring}
+		}, want: []string{"could not be placed while the restored database was being started",
+			"the bootstrap was seen SeedingReplicas"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartStartingFixture(t)
+			tc.change(f, records)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
+			if f.imKills != 0 {
+				t.Fatalf("kills = %d, want none", f.imKills)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartStartingIsBlockedWhenTheKilledRecordHoldsNoRestoredData(t *testing.T) {
+	f, records := newS12IMRestartStartingFixture(t)
+	records.killed.Restored = nil
+	restart, err := imRestartOf(t, f)
+	requireIMRestart(t, restart, err, evidence.Blocked, "the kill landed before restoredb succeeded",
+		"holds no restored artifact")
+	if m := restart.Measurements; m["restoredAtKill"] != false || m["tookOverRestoredData"] != evidence.Unknown {
+		t.Fatalf("measurements = %v, want restoredAtKill false and tookOverRestoredData unknown", m)
+	}
+}
+
+func TestRunS12InstanceManagerRestartStartingFailsWhenTheDataWasRestoredAgain(t *testing.T) {
+	for name, change := range map[string]func(*s12IMRestartFixture, *s12IMRestartStartingRecords){
+		"the completing record holds another artifact": func(_ *s12IMRestartFixture, r *s12IMRestartStartingRecords) {
+			r.completing.Restored = &instancemanager.OperationArtifact{ManifestURI: "s3://bucket/run/other.json",
+				Database: databaseName, CubridVersion: testEngineVersion}
+		},
+		"a reading shows restoredb running for the next operation": func(f *s12IMRestartFixture,
+			_ *s12IMRestartStartingRecords) {
+			f.afterKill[3].message = testIMRestoredbRunning
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartStartingFixture(t)
+			change(f, records)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Fail, "restored again instead of taken over")
+			if restart.Measurements["tookOverRestoredData"] != false {
+				t.Fatalf("measurements = %v, want tookOverRestoredData false", restart.Measurements)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartStartingFailsWhenTheRetriedRestoreFailsAgain(t *testing.T) {
+	f, records := newS12IMRestartStartingFixture(t)
+	records.completing.ID = testIMRestartOp3
+	again := "on " + testIMRestartTarget + ": restore failed: start failed; starting attempt 3 of 3"
+	f.afterKill = slices.Insert(f.afterKill, 4,
+		imStatus{databasev1alpha1.BootstrapRestoring, 2, "", s12RetryReason, again},
+		imStatus{databasev1alpha1.BootstrapRestoring, 2, testIMRestartOp3, testRestoreInProgress, testIMStarting})
+	for i := 6; i < len(f.afterKill); i++ {
+		f.afterKill[i].attempts, f.afterKill[i].op = 2, testIMRestartOp3
+	}
+	restart, err := imRestartOf(t, f)
+	requireIMRestart(t, restart, err, evidence.Fail, "the restore failed again after the attempt the kill ended",
+		"start failed")
+}
+
+func TestValidateS12InstanceManagerRestartAcceptsStarting(t *testing.T) {
+	if err := testS12IMRestartConfigAt(t, IMRestartAtStarting).validateS12InstanceManagerRestart(); err != nil {
+		t.Fatalf("validateS12InstanceManagerRestart() = %v, want starting accepted", err)
 	}
 }

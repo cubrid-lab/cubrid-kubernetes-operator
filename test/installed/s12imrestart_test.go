@@ -53,6 +53,7 @@ const (
 	testIMRestartSecret = "object-storage-imrestart"
 	testIMRestartOp     = "op-attempt-0"
 	testIMRestartOp2    = "op-attempt-1"
+	testIMRestartOp3    = "op-attempt-2"
 	// testIMUnavailable is the BootstrapReady reason while the target's
 	// Instance Manager does not answer.
 	testIMUnavailable = "InstanceManagerUnavailable"
@@ -779,9 +780,9 @@ func TestRunS12InstanceManagerRestartFailsWhenTheRetriedRestoreFailsAgain(t *tes
 	again := "on " + testIMRestartTarget + ": restore failed: restoredb failed; starting attempt 3 of 3"
 	f.afterKill = slices.Insert(f.afterKill, 3,
 		imStatus{databasev1alpha1.BootstrapRestoring, 2, "", s12RetryReason, again},
-		imStatus{databasev1alpha1.BootstrapRestoring, 2, "op-attempt-2", testRestoreInProgress, "restoredb"})
+		imStatus{databasev1alpha1.BootstrapRestoring, 2, testIMRestartOp3, testRestoreInProgress, "restoredb"})
 	for i := 5; i < len(f.afterKill); i++ {
-		f.afterKill[i].attempts, f.afterKill[i].op = 2, "op-attempt-2"
+		f.afterKill[i].attempts, f.afterKill[i].op = 2, testIMRestartOp3
 	}
 	restart, err := imRestartOf(t, f)
 	requireIMRestart(t, restart, err, evidence.Fail, "the restore failed again after the attempt the kill ended",
