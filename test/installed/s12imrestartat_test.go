@@ -17,11 +17,15 @@ limitations under the License.
 package installed
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
@@ -477,9 +481,10 @@ func TestRunHARefusesAnInvalidS12InstanceManagerRestartPlacement(t *testing.T) {
 
 func TestIMRestartPlacementsHaveALaneAndAVariantEach(t *testing.T) {
 	for at, want := range map[string]string{IMRestartAtRestoring: "instance-manager-restart",
-		IMRestartAtPreparing: "instance-manager-restart-preparing",
-		IMRestartAtSeeding:   "instance-manager-restart-seeding",
-		IMRestartAtStarting:  "instance-manager-restart-starting"} {
+		IMRestartAtPreparing:  "instance-manager-restart-preparing",
+		IMRestartAtSeeding:    "instance-manager-restart-seeding",
+		IMRestartAtStarting:   "instance-manager-restart-starting",
+		IMRestartAtSeedBackup: "instance-manager-restart-seed-backup"} {
 		if got := imRestartVariant(at); got != want {
 			t.Fatalf("imRestartVariant(%s) = %s, want %s", at, got, want)
 		}
@@ -840,5 +845,659 @@ func TestRunS12InstanceManagerRestartStartingWhenRestoreLimitPassesBeforeStartin
 				t.Fatalf("kills = %d, want none", f.imKills)
 			}
 		})
+	}
+}
+
+const (
+	// testIMSeedBackupOp is the first peer's seed backup on the restored
+	// member under the database's attempt 0, testIMSeedBackupOp2 under
+	// attempt 1, and testIMSeedBackupOp3 the second peer's.
+	testIMSeedBackupOp  = "op-seed-backup-0"
+	testIMSeedBackupOp2 = "op-seed-backup-1"
+	testIMSeedBackupOp3 = "op-seed-backup-2"
+	// testIMSeedBackupRetryMessage is the Operator's message of the seed
+	// attempt whose backup the kill ended.
+	testIMSeedBackupRetryMessage = "on " + testIMRestartTarget + ": " + s12IMRestartedReason +
+		"; starting attempt 2 of 3"
+	testIMBackingUp = "backing up on " + testIMRestartTarget
+	// testIMNotAtSeedBackup is how a kill that could not be placed at
+	// seed-backup is reported.
+	testIMNotAtSeedBackup = "could not be placed while the seed backup ran"
+	// testIMNoSeedLimit is how a rate limit that could not be placed before
+	// the seed backup is reported.
+	testIMNoSeedLimit = "the rate limit could not be placed before the seed backup"
+	// testIMNoRecord is what a member answers for a record it does not
+	// hold, and testIMNotFailedByRestart how a killed operation's record
+	// that ended otherwise is reported.
+	testIMNoRecord           = "No such file or directory"
+	testIMNotFailedByRestart = "not Failed by its restart"
+)
+
+// s12IMRestartSeedBackupRecords are the source's records of the seed backup
+// the fixture at seed-backup answers: polled are its states read before the
+// kill, one per read, the last kept; killed is its record read after the
+// cluster is Ready, and killedErr, when set, answers that read. net is the
+// source's network namespace: every read of the record Uploading puts
+// uploadPerRead bytes through the rate limit, when it is installed.
+type s12IMRestartSeedBackupRecords struct {
+	polled        []instancemanager.OperationState
+	polls         int
+	killed        instancemanager.Operation
+	killedErr     error
+	net           *fakeNetns
+	uploadPerRead uint64
+	// sendAll puts the bytes through the limit at every read that has not
+	// ended, RunningBackup too. failCounters, when set, fails that many reads
+	// of the limit's counters in a row from the first read of the record.
+	sendAll      bool
+	failCounters int
+}
+
+// newS12IMRestartSeedBackupFixture plays a recovery whose restore completed
+// on the target and whose first seed backup, on the target, is interrupted
+// by the kill of the target's Instance Manager. The target's traffic to the
+// object store passes a rate limit the run installs; the source's record of
+// the backup reads RunningBackup, then Uploading with testUploadPerRead
+// bytes through the limit per read, and once 512 KiB passed the kill lands, the seed attempt fails with
+// SeedBackupFailedRetrying naming the manager's restart, and the next seed
+// attempt takes a new backup, seeds the first peer and then the second.
+// The restore itself keeps its operation and is not run again. After the
+// run, the killed backup's record is Failed by the restart.
+func newS12IMRestartSeedBackupFixture(t *testing.T) (*s12IMRestartFixture, *s12IMRestartSeedBackupRecords) {
+	t.Helper()
+	// The object store's Service, headless as on the VM lab, which the limit
+	// acts on.
+	f := newS12IMRestartFixture(t, testS12IMRestartConfigAt(t, IMRestartAtSeedBackup), testStoreServiceObject(),
+		testStoreSlice("seaweedfs-a", testStoreIP))
+	seeding := databasev1alpha1.BootstrapSeedingReplicas
+	f.beforeKill = []databasev1alpha1.BootstrapPhase{databasev1alpha1.BootstrapPreparing,
+		databasev1alpha1.BootstrapRestoring, seeding, seeding}
+	f.holdStep = 3
+	f.beforeSeed = []*imSeed{nil, nil,
+		{member: testIMPeer, reason: testIMSeedBackup, message: testIMBackingUp},
+		{member: testIMPeer, backup: testIMSeedBackupOp, reason: testIMSeedBackup, message: testIMBackingUp}}
+	f.afterKill = []imStatus{
+		{seeding, 0, testIMRestartOp, testIMUnavailable, testIMRefused},
+		{seeding, 0, testIMRestartOp, s12SeedBackupRetryReason, testIMSeedBackupRetryMessage},
+		{seeding, 0, testIMRestartOp, testIMSeedBackup, testIMBackingUp},
+		{seeding, 0, testIMRestartOp, testSeedInProgress, "restoring on " + testIMPeer},
+		{seeding, 0, testIMRestartOp, testSeedInProgress, "restoring on " + testIMPeer2},
+		{databasev1alpha1.BootstrapComplete, 0, testIMRestartOp, testPeersSeeded, testIMCopied},
+	}
+	f.afterSeed = []*imSeed{
+		{member: testIMPeer, backup: testIMSeedBackupOp},
+		{attempts: 1},
+		{attempts: 1, member: testIMPeer, backup: testIMSeedBackupOp2},
+		{attempts: 1, member: testIMPeer, backup: testIMSeedBackupOp2, op: testIMSeedOp2},
+		{attempts: 1, member: testIMPeer2, backup: testIMSeedBackupOp3, op: testIMSeedOp3, seeded: []string{testIMPeer}},
+		{attempts: 1, seeded: []string{testIMPeer, testIMPeer2}},
+	}
+	records := &s12IMRestartSeedBackupRecords{
+		polled: []instancemanager.OperationState{instancemanager.OpRunningBackup, instancemanager.OpUploading},
+		killed: instancemanager.Operation{ID: testIMSeedBackupOp, Kind: instancemanager.OpBackup,
+			State: instancemanager.OpFailed, FailureReason: s12IMRestartedReason},
+		net: &fakeNetns{member: testIMRestartTarget}, uploadPerRead: testUploadPerRead,
+	}
+	f.netfault, f.ephemeralAdded = records.net.answer, addEphemeralContainer
+	created := f.imRestartCreated
+	f.imRestartCreated = func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error {
+		if err := created(ctx, c, cluster); err != nil {
+			return err
+		}
+		// The target's IP is the one its network namespace answers.
+		pod := &corev1.Pod{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: f.cfg.Namespace, Name: testIMRestartTarget}, pod); err != nil {
+			return err
+		}
+		pod.Status.PodIP = testInterruptedPodIP
+		return c.Status().Update(ctx, pod)
+	}
+	f.opRecord = func(pod, script string) (string, error) {
+		if pod != testIMRestartTarget || !strings.Contains(script, imOperationsDir+"/"+testIMSeedBackupOp+".json") {
+			t.Errorf("record read on %s with %q, want the seed backup's on the restore's target", pod, script)
+			return "", errors.New("no such record")
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.killed {
+			if records.killedErr != nil {
+				return "", records.killedErr
+			}
+			return testOpJSON(t, records.killed), nil
+		}
+		state := records.polled[min(records.polls, len(records.polled)-1)]
+		records.polls++
+		if records.polls == 1 && records.failCounters > 0 {
+			n := records.net
+			n.mu.Lock()
+			n.failFrom, n.failCount = n.stats+1, records.failCounters
+			n.mu.Unlock()
+		}
+		if state == instancemanager.OpUploading || (records.sendAll && !state.IsTerminal()) {
+			n := records.net
+			n.mu.Lock()
+			if n.throttleIP != "" {
+				n.send(n.throttleIP, records.uploadPerRead)
+			}
+			n.mu.Unlock()
+		}
+		return testOpJSON(t, instancemanager.Operation{ID: testIMSeedBackupOp, Kind: instancemanager.OpBackup,
+			State: state}), nil
+	}
+	return f, records
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupPassesWhenTheSeedRetryTakesANewBackup(t *testing.T) {
+	f, records := newS12IMRestartSeedBackupFixture(t)
+	// The readings after the kill the fake Operator had answered when the
+	// limit was removed: the retry runs without it.
+	removedAt := -1
+	records.net.onUnthrottle = func() {
+		f.mu.Lock()
+		removedAt = f.imAfter
+		f.mu.Unlock()
+	}
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass {
+		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v; want a pass", restart, err)
+	}
+	// One reading of RunningBackup, then two of Uploading: the second puts
+	// the upload past 512 KiB through the limit.
+	if f.imKills != 1 || !slices.Equal(f.killedPods, []string{testIMRestartTarget}) || records.polls != 3 ||
+		f.recordReads != 4 {
+		t.Fatalf("kills = %d on %v, record reads = %d (%d before the kill); want one kill on %s after three reads",
+			f.imKills, f.killedPods, f.recordReads, records.polls, testIMRestartTarget)
+	}
+	if !slices.Contains(restart.Evidence, "S12/instance-manager-restart-seed-backup/record.json") {
+		t.Fatalf("evidence = %v, want the variant's record", restart.Evidence)
+	}
+	m := restart.Measurements
+	if m["seedRetriesAfterKill"] != float64(1) || m["seedAttemptsAdded"] != float64(1) ||
+		m["seedBackupOperationChanged"] != true || m["killedBackupFailedByRestart"] != true ||
+		m["retriesAfterKill"] != float64(0) || m["attemptsAdded"] != float64(0) || m["operationIDChanged"] != false ||
+		m["containerRestarts"] != float64(1) || m["uploadBytesBeforeKill"] != float64(2*testUploadPerRead) {
+		t.Fatalf("measurements = %v", m)
+	}
+	if removedAt < 0 || removedAt >= len(f.afterKill)-1 {
+		t.Fatalf("the limit was removed after %d readings after the kill, want before the reading of Complete",
+			removedAt)
+	}
+	r := readIMRestartRecord(t, f.cfg).IMRestart
+	requireSeedBackupRecord(t, r)
+	requireSeedSourceLimit(t, r, records.net)
+	for _, want := range []string{"Instance Manager on " + testIMRestartTarget + " was killed",
+		"seed backup operation " + testIMSeedBackupOp, "for " + testIMPeer, s12SeedBackupRetryReason,
+		"seed backup operation " + testIMSeedBackupOp2, "the restore kept operation " + testIMRestartOp} {
+		if reason := imRestartPassReasonAt(r); !strings.Contains(reason, want) {
+			t.Fatalf("reason = %q, want %q", reason, want)
+		}
+	}
+}
+
+// requireSeedBackupRecord fails unless the record of a pass at seed-backup
+// names the source killed, the peer, both seed backups, the one seed retry,
+// the reading that placed the kill and the killed backup's record.
+func requireSeedBackupRecord(t *testing.T, r *s12IMRestart) {
+	t.Helper()
+	if r.At != IMRestartAtSeedBackup || r.Pod != testIMRestartTarget || r.SeedPeer != testIMPeer ||
+		r.SeedBackupOperationIDBefore != testIMSeedBackupOp || r.SeedBackupOperationIDAfter != testIMSeedBackupOp2 ||
+		r.SeedAttemptsBefore == nil || *r.SeedAttemptsBefore != 0 || r.SeedAttemptsAfter == nil ||
+		*r.SeedAttemptsAfter != 1 || len(r.SeedRetries) != 1 || r.SeedRetries[0].Reason != s12SeedBackupRetryReason ||
+		r.PlacingReading == nil || r.PlacingReading.State != string(instancemanager.OpUploading) ||
+		r.PlacingReading.Operation != testIMSeedBackupOp || r.KilledSeedBackup == nil ||
+		r.KilledSeedBackup.State != string(instancemanager.OpFailed) {
+		t.Fatalf("restart = %+v, placing = %+v, killed backup = %+v", r, r.PlacingReading, r.KilledSeedBackup)
+	}
+}
+
+// requireSeedSourceLimit fails unless the rate limit on the source's traffic
+// to the object store was confirmed before the kill, its counters were read
+// at the first reading of the backup and at the kill, 512 KiB passed it
+// between them, and it was seen removed after the kill.
+func requireSeedSourceLimit(t *testing.T, r *s12IMRestart, n *fakeNetns) {
+	t.Helper()
+	f := r.Throttle
+	if f == nil || f.Target != testIMRestartTarget || f.StoreIP != testStoreIP || f.LimitConfirmedAt == nil ||
+		f.RemovedAt == nil || r.KilledAt == nil || !f.LimitConfirmedAt.Before(*r.KilledAt) ||
+		!f.RemovedAt.After(*r.KilledAt) || r.UploadBaseline == nil || r.AtKill == nil ||
+		r.SentBeforeKill < interruptedUploadSeen || r.PodSecurity[podSecurityEnforce] != podSecurityPrivileged {
+		t.Fatalf("throttle = %+v, baseline = %+v, at kill = %+v, sent = %d, Pod Security = %v", f, r.UploadBaseline,
+			r.AtKill, r.SentBeforeKill, r.PodSecurity)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.throttleIP != "" || !slices.Contains(n.ops, "throttle") || !slices.Contains(n.ops, "unthrottle") {
+		t.Fatalf("limit at the end = %q, ops = %v; want it installed and removed", n.throttleIP, n.ops)
+	}
+}
+
+func TestS12InstanceManagerRestartSeedBackupNeedsAPrivilegedNamespace(t *testing.T) {
+	if !testS12IMRestartConfigAt(t, IMRestartAtSeedBackup).privileged() {
+		t.Fatal("seed-backup does not make the run namespace privileged")
+	}
+	for _, at := range []string{IMRestartAtRestoring, IMRestartAtPreparing, IMRestartAtSeeding, IMRestartAtStarting} {
+		if testS12IMRestartConfigAt(t, at).privileged() {
+			t.Fatalf("%s makes the run namespace privileged", at)
+		}
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupWithTheRateLimit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartFixture, *s12IMRestartSeedBackupRecords)
+		kills  int
+		// removed requires the removal of the limit to have run.
+		removed bool
+		want    []string
+	}{
+		// The bootstrap is first seen seeding: the seed backup may have run
+		// before the limit could be in place.
+		"the limit cannot be placed before seeding": {change: func(f *s12IMRestartFixture,
+			_ *s12IMRestartSeedBackupRecords) {
+			f.beforeKill = f.beforeKill[2:]
+			f.beforeSeed = f.beforeSeed[2:]
+			f.holdStep = 1
+		}, want: []string{testIMNoSeedLimit,
+			"the bootstrap was seen SeedingReplicas before the target's Pod could take the limit"}},
+		// The backup completes before 512 KiB passed the limit.
+		"the backup completes under the limit first": {change: func(_ *s12IMRestartFixture,
+			r *s12IMRestartSeedBackupRecords) {
+			r.polled = []instancemanager.OperationState{instancemanager.OpRunningBackup,
+				instancemanager.OpUploading, instancemanager.OpCompleted}
+		}, want: []string{testIMNotAtSeedBackup, "read Completed before the kill was placed"}},
+		// Uploading is never read, only RunningBackup, until the record ends.
+		"no reading of Uploading": {change: func(_ *s12IMRestartFixture, r *s12IMRestartSeedBackupRecords) {
+			r.polled = []instancemanager.OperationState{instancemanager.OpRunningBackup,
+				instancemanager.OpRunningBackup, instancemanager.OpCompleted}
+		}, want: []string{testIMNotAtSeedBackup, "read Completed"}},
+		"the limit not seen removed": {change: func(_ *s12IMRestartFixture, r *s12IMRestartSeedBackupRecords) {
+			r.net.ignoreUnthrottle = true
+		}, kills: 1, want: []string{"the rate limit was not seen removed"}},
+		"the limit cannot be installed": {change: func(_ *s12IMRestartFixture, r *s12IMRestartSeedBackupRecords) {
+			r.net.failThrottle = true
+		}, removed: true, want: []string{"install the rate limit", "command terminated with exit code 2"}},
+		// Four reads of the counters in a row fail: more than the three the
+		// wait tolerates.
+		"the counters cannot be read": {change: func(_ *s12IMRestartFixture, r *s12IMRestartSeedBackupRecords) {
+			r.failCounters = 4
+		}, removed: true, want: []string{"read the rate limit's counters", "4 errors in a row"}},
+		// The seeding recorded a seed backup by the time the limit was
+		// confirmed: it may have run before the limit.
+		// The seed backup had ended by the time the limit was confirmed: its
+		// upload ran before the limit.
+		"a seed backup ended when the limit is confirmed": {change: func(f *s12IMRestartFixture,
+			r *s12IMRestartSeedBackupRecords) {
+			tamperSeedingOnceLimited(f, r, &databasev1alpha1.DatabaseSeeding{Member: testIMPeer,
+				Source: testIMRestartTarget, BackupOperationID: testIMSeedBackupOp})
+			r.polled = []instancemanager.OperationState{instancemanager.OpCompleted}
+		}, removed: true, want: []string{testIMNoSeedLimit,
+			"seed backup " + testIMSeedBackupOp + " was read Completed when the limit was confirmed"}},
+		"a seed restore recorded when the limit is confirmed": {change: func(f *s12IMRestartFixture,
+			r *s12IMRestartSeedBackupRecords) {
+			tamperSeedingOnceLimited(f, r, &databasev1alpha1.DatabaseSeeding{Member: testIMPeer,
+				Source: testIMRestartTarget, BackupOperationID: testIMSeedBackupOp, RestoreOperationID: testIMSeedOp})
+		}, removed: true, want: []string{testIMNoSeedLimit,
+			"seed restore " + testIMSeedOp + " was already recorded when the limit was confirmed"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartSeedBackupFixture(t)
+			tc.change(f, records)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
+			if f.imKills != tc.kills {
+				t.Fatalf("kills = %d, want %d", f.imKills, tc.kills)
+			}
+			n := records.net
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			if n.throttleIP != "" && !n.ignoreUnthrottle || tc.removed && !slices.Contains(n.ops, "unthrottle") {
+				t.Fatalf("the limit was left in place, or its removal did not run: ops = %v", n.ops)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupIsBlockedWhenTheKillCannotBePlaced(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartFixture, *s12IMRestartSeedBackupRecords)
+		want   []string
+	}{
+		"the backup's record is first read Completed": {change: func(_ *s12IMRestartFixture,
+			r *s12IMRestartSeedBackupRecords) {
+			r.polled = []instancemanager.OperationState{instancemanager.OpCompleted}
+		}, want: []string{testIMNotAtSeedBackup, "read Completed before the kill was placed"}},
+		"a seed restore is recorded first": {change: func(f *s12IMRestartFixture, _ *s12IMRestartSeedBackupRecords) {
+			f.beforeSeed[3].op = testIMSeedOp
+		}, want: []string{testIMNotAtSeedBackup, "a seed restore " + testIMSeedOp + " of " + testIMPeer +
+			" was recorded before"}},
+		"the bootstrap completes first": {change: func(f *s12IMRestartFixture, _ *s12IMRestartSeedBackupRecords) {
+			f.beforeKill = append(f.beforeKill[:3], databasev1alpha1.BootstrapComplete)
+			f.beforeSeed[3] = &imSeed{seeded: []string{testIMPeer, testIMPeer2}}
+		}, want: []string{testIMNotAtSeedBackup, "the bootstrap was seen Complete"}},
+		// The seeding names a source other than the restored member before
+		// its backup's record is read: nothing is read or killed there.
+		"the source is not the restored member": {change: func(f *s12IMRestartFixture,
+			_ *s12IMRestartSeedBackupRecords) {
+			f.tamper = func(_ int, killed bool, s *databasev1alpha1.CubridClusterStatus) {
+				if !killed && len(s.Databases) > 0 && s.Databases[0].Seeding != nil {
+					s.Databases[0].Seeding.Source = testIMPeer2
+				}
+			}
+		}, want: []string{testIMNotAtSeedBackup, "the seed backup's source is " + testIMPeer2 +
+			", not the restored member " + testIMRestartTarget}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartSeedBackupFixture(t)
+			tc.change(f, records)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
+			if f.imKills != 0 {
+				t.Fatalf("kills = %d, want none", f.imKills)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupIsBlockedByTheKilledBackupsRecord(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartSeedBackupRecords)
+		want   []string
+	}{
+		"the killed backup's record cannot be read": {change: func(r *s12IMRestartSeedBackupRecords) {
+			r.killedErr = errors.New(testIMNoRecord + "\ncommand terminated with exit code 1")
+		}, want: []string{"the record of the seed backup " + testIMSeedBackupOp + " on " + testIMRestartTarget +
+			" could not be read", testIMNoRecord}},
+		"the backup completed": {change: func(r *s12IMRestartSeedBackupRecords) {
+			r.killed.State, r.killed.FailureReason = instancemanager.OpCompleted, ""
+		}, want: []string{"is Completed", testIMNotFailedByRestart}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartSeedBackupFixture(t)
+			tc.change(records)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
+			if restart.Measurements["killedBackupFailedByRestart"] == true {
+				t.Fatalf("measurements = %v, want killedBackupFailedByRestart not true", restart.Measurements)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupFails(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartFixture)
+		want   []string
+	}{
+		"the restore retried after the kill": {change: func(f *s12IMRestartFixture) {
+			f.afterKill[1] = imStatus{databasev1alpha1.BootstrapSeedingReplicas, 1, "", s12RetryReason,
+				"on " + testIMRestartTarget + ": " + s12IMRestartedReason + "; starting attempt 2 of 3"}
+			for i := 2; i < len(f.afterKill); i++ {
+				f.afterKill[i].attempts = 1
+			}
+		}, want: []string{"the restore was retried after the kill, after it had completed and seeding had begun"}},
+		"restoredb running after the kill": {change: func(f *s12IMRestartFixture) {
+			f.afterKill[2] = imStatus{databasev1alpha1.BootstrapRestoring, 0, testIMRestartOp, testRestoreInProgress,
+				testIMRestoredbRunning}
+		}, want: []string{"the restore ran again after the kill", testIMRestoredbRunning}},
+		"a second seed retry": {change: func(f *s12IMRestartFixture) {
+			again := "on " + testIMRestartTarget + ": backup failed: upload: " + testReset + "; starting attempt 3 of 3"
+			f.afterKill = slices.Insert(f.afterKill, 3, imStatus{databasev1alpha1.BootstrapSeedingReplicas, 0,
+				testIMRestartOp, s12SeedBackupRetryReason, again})
+			f.afterSeed = slices.Insert(f.afterSeed, 3, &imSeed{attempts: 2})
+			for i := 4; i < len(f.afterSeed); i++ {
+				f.afterSeed[i].attempts = 2
+			}
+		}, want: []string{"the seeding failed again after the seed attempt the kill ended", testReset}},
+		"the next attempt names the killed backup": {change: func(f *s12IMRestartFixture) {
+			f.afterSeed[2].backup, f.afterSeed[3].backup = testIMSeedBackupOp, testIMSeedBackupOp
+		}, want: []string{"the seed backup operation " + testIMSeedBackupOp + " the kill ended is the one recorded"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, _ := newS12IMRestartSeedBackupFixture(t)
+			tc.change(f)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Fail, tc.want...)
+		})
+	}
+}
+
+func TestValidateS12InstanceManagerRestartAcceptsSeedBackup(t *testing.T) {
+	if err := testS12IMRestartConfigAt(t, IMRestartAtSeedBackup).validateS12InstanceManagerRestart(); err != nil {
+		t.Fatalf("validateS12InstanceManagerRestart() = %v, want seed-backup accepted", err)
+	}
+}
+
+// tamperSeedingBeforeKill changes the seeding of the reading right before the
+// kill, after the reading of the backup's record that placed it (the third,
+// one more than r.polled lists): change gets the first database's seeding of
+// each such reading.
+func tamperSeedingBeforeKill(f *s12IMRestartFixture, r *s12IMRestartSeedBackupRecords,
+	change func(*databasev1alpha1.DatabaseSeeding)) {
+	f.tamper = func(_ int, killed bool, s *databasev1alpha1.CubridClusterStatus) {
+		f.mu.Lock()
+		polled := r.polls
+		f.mu.Unlock()
+		if !killed && polled >= len(r.polled)+1 && len(s.Databases) > 0 && s.Databases[0].Seeding != nil {
+			change(s.Databases[0].Seeding)
+		}
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupIsBlockedWhenTheSourceChangesRightBeforeTheKill(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*databasev1alpha1.DatabaseSeeding)
+		want   string
+	}{
+		"the source is the member being seeded": {change: func(s *databasev1alpha1.DatabaseSeeding) {
+			s.Source = s.Member
+		}, want: "the seed backup's source, " + testIMPeer + ", is the member being seeded"},
+		"the source is not the restored member": {change: func(s *databasev1alpha1.DatabaseSeeding) {
+			s.Source = testIMPeer2
+		}, want: "the seed backup's source is " + testIMPeer2 + ", not the restored member " + testIMRestartTarget},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, records := newS12IMRestartSeedBackupFixture(t)
+			tamperSeedingBeforeKill(f, records, tc.change)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want)
+			if f.imKills != 0 || records.polls != 3 {
+				t.Fatalf("kills = %d, record reads = %d; want none and three", f.imKills, records.polls)
+			}
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupIsBlockedWhenTheRetryDoesNotShowTheRestart(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*s12IMRestartFixture)
+		want   []string
+	}{
+		// The retry the readings show is of a seed restore, not of the
+		// killed seed backup.
+		"a seed restore retry": {change: func(f *s12IMRestartFixture) {
+			f.afterKill[1].reason = s12SeedRetryReason
+		}, want: []string{"ended with " + s12SeedRetryReason, "not with a seed backup on " + testIMRestartTarget}},
+		"a retry on another member": {change: func(f *s12IMRestartFixture) {
+			f.afterKill[1].message = "on " + testIMPeer2 + ": " + s12IMRestartedReason + "; starting attempt 2 of 3"
+		}, want: []string{"not with a seed backup on " + testIMRestartTarget}},
+		// The backup had ended before the kill took effect: the peer was
+		// restored from it under the same attempt.
+		"no seed retry": {change: func(f *s12IMRestartFixture) {
+			f.afterKill = slices.Delete(f.afterKill, 1, 3)
+			f.afterSeed = []*imSeed{
+				{member: testIMPeer, backup: testIMSeedBackupOp},
+				{member: testIMPeer, backup: testIMSeedBackupOp, op: testIMSeedOp},
+				{member: testIMPeer2, backup: testIMSeedBackupOp3, op: testIMSeedOp3, seeded: []string{testIMPeer}},
+				{seeded: []string{testIMPeer, testIMPeer2}},
+			}
+		}, want: []string{"the kill did not interrupt the seed backup", testIMSeedBackupOp + " had ended"}},
+		// No reading after the kill showed the peer's seed backup under the
+		// next attempt, so whether it is a new one is not known.
+		"the next seed backup never seen": {change: func(f *s12IMRestartFixture) {
+			for _, seed := range f.afterSeed[2:4] {
+				seed.backup = ""
+			}
+		}, want: []string{"no reading after the kill showed a seed backup for " + testIMPeer +
+			" under the next seed attempt"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, _ := newS12IMRestartSeedBackupFixture(t)
+			tc.change(f)
+			restart, err := imRestartOf(t, f)
+			requireIMRestart(t, restart, err, evidence.Blocked, tc.want...)
+		})
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupPlacesTheKillOnlyWhileUploading(t *testing.T) {
+	f, records := newS12IMRestartSeedBackupFixture(t)
+	// 512 KiB pass the limit while the record still reads RunningBackup: the
+	// kill waits for the first reading of Uploading.
+	records.sendAll = true
+	records.polled = []instancemanager.OperationState{instancemanager.OpRunningBackup,
+		instancemanager.OpRunningBackup, instancemanager.OpRunningBackup, instancemanager.OpUploading}
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass {
+		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v; want a pass", restart, err)
+	}
+	r := readIMRestartRecord(t, f.cfg).IMRestart
+	if records.polls != 4 || r.PlacingReading == nil || r.PlacingReading.State != string(instancemanager.OpUploading) {
+		t.Fatalf("record reads before the kill = %d, placing = %+v; want the kill at the fourth, Uploading",
+			records.polls, r.PlacingReading)
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupToleratesAFailedCounterRead(t *testing.T) {
+	f, records := newS12IMRestartSeedBackupFixture(t)
+	records.failCounters = 1
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass {
+		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v; want a pass", restart, err)
+	}
+	if r := readIMRestartRecord(t, f.cfg).IMRestart; r.Throttle == nil || len(r.Throttle.ExecErrors) != 1 {
+		t.Fatalf("throttle = %+v, want the one failed read recorded", r.Throttle)
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupWaitsForTheTargetsPod(t *testing.T) {
+	f, records := newS12IMRestartSeedBackupFixture(t)
+	// The Operator names the target in its first reconcile, before the
+	// target's Pod has an IP and a running database container; both come at
+	// the third reading of the cluster.
+	created := f.imRestartCreated
+	f.imRestartCreated = func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error {
+		if err := created(ctx, c, cluster); err != nil {
+			return err
+		}
+		return setTargetPod(ctx, c, f.cfg.Namespace, func(pod *corev1.Pod) {
+			pod.Status.PodIP = ""
+			pod.Status.ContainerStatuses[0].State = corev1.ContainerState{
+				Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}
+		})
+	}
+	f.beforeKill = slices.Insert(f.beforeKill, 0, databasev1alpha1.BootstrapPreparing,
+		databasev1alpha1.BootstrapPreparing)
+	f.beforeSeed = slices.Insert(f.beforeSeed, 0, nil, nil)
+	f.holdStep += 2
+	f.tamper = func(read int, _ bool, _ *databasev1alpha1.CubridClusterStatus) {
+		if read != 3 {
+			return
+		}
+		if err := setTargetPod(t.Context(), f.haFixture.store, f.cfg.Namespace, func(pod *corev1.Pod) {
+			pod.Status.PodIP = testInterruptedPodIP
+			pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass || records.polls != 3 {
+		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v, record reads %d; want a pass", restart, err,
+			records.polls)
+	}
+}
+
+// setTargetPod changes the restore target's Pod as stored.
+func setTargetPod(ctx context.Context, c client.Client, namespace string, change func(*corev1.Pod)) error {
+	pod := &corev1.Pod{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: testIMRestartTarget}, pod); err != nil {
+		return err
+	}
+	change(pod)
+	return c.Status().Update(ctx, pod)
+}
+
+// tamperSeedingOnceLimited makes every reading before the kill, once the
+// limit is installed, show the bootstrap SeedingReplicas with seeding.
+func tamperSeedingOnceLimited(f *s12IMRestartFixture, r *s12IMRestartSeedBackupRecords,
+	seeding *databasev1alpha1.DatabaseSeeding) {
+	f.tamper = func(_ int, killed bool, s *databasev1alpha1.CubridClusterStatus) {
+		r.net.mu.Lock()
+		limited := r.net.throttleIP != ""
+		r.net.mu.Unlock()
+		if !killed && limited {
+			s.Bootstrap.Phase = databasev1alpha1.BootstrapSeedingReplicas
+			s.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName, Phase: testDatabaseCreated,
+				PrimaryCreated: true, Seeding: seeding.DeepCopy()}}
+		}
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupTakesALimitConfirmedWhileTheBackupRuns(t *testing.T) {
+	f, records := newS12IMRestartSeedBackupFixture(t)
+	// The seed backup was recorded by the time the limit was confirmed, and
+	// its record still reads RunningBackup: what it uploads from then on
+	// passes the limit, and the kill still needs 512 KiB through it while
+	// Uploading.
+	tamperSeedingOnceLimited(f, records, &databasev1alpha1.DatabaseSeeding{Member: testIMPeer,
+		Source: testIMRestartTarget, BackupOperationID: testIMSeedBackupOp})
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass {
+		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v; want a pass", restart, err)
+	}
+	r := readIMRestartRecord(t, f.cfg).IMRestart
+	if r.SentBeforeKill < interruptedUploadSeen || r.PlacingReading == nil ||
+		r.PlacingReading.State != string(instancemanager.OpUploading) {
+		t.Fatalf("sent = %d, placing = %+v; want the kill while Uploading after 512 KiB", r.SentBeforeKill,
+			r.PlacingReading)
+	}
+}
+
+func TestRunS12InstanceManagerRestartSeedBackupLimitsTheTargetBeforeItsContainerRuns(t *testing.T) {
+	f, records := newS12IMRestartSeedBackupFixture(t)
+	// The target's Pod has its IP, from its sandbox, while its database
+	// container still waits; the container runs from the third reading.
+	created := f.imRestartCreated
+	f.imRestartCreated = func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error {
+		if err := created(ctx, c, cluster); err != nil {
+			return err
+		}
+		return setTargetPod(ctx, c, f.cfg.Namespace, func(pod *corev1.Pod) {
+			pod.Status.ContainerStatuses[0].State = corev1.ContainerState{
+				Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"}}
+		})
+	}
+	f.beforeKill = slices.Insert(f.beforeKill, 0, databasev1alpha1.BootstrapPreparing,
+		databasev1alpha1.BootstrapPreparing)
+	f.beforeSeed = slices.Insert(f.beforeSeed, 0, nil, nil)
+	f.holdStep += 2
+	limitedFirst := false
+	f.tamper = func(read int, _ bool, _ *databasev1alpha1.CubridClusterStatus) {
+		if read != 3 {
+			return
+		}
+		records.net.mu.Lock()
+		limitedFirst = records.net.throttleIP != ""
+		records.net.mu.Unlock()
+		if err := setTargetPod(t.Context(), f.haFixture.store, f.cfg.Namespace, func(pod *corev1.Pod) {
+			pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	restart, err := imRestartOf(t, f)
+	if err != nil || restart.Result != evidence.Pass || !limitedFirst {
+		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v, limit before the container ran = %t; want a "+
+			"pass with the limit installed first", restart, err, limitedFirst)
 	}
 }

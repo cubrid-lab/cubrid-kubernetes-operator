@@ -283,11 +283,11 @@ type HAConfig struct {
 
 // privileged reports whether the run namespace must enforce Pod Security
 // privileged: S11 interrupted-upload, instance-manager-restart, overlapping
-// and operation-store-loss add an ephemeral container with NET_ADMIN and
-// NET_RAW to a member's Pod.
+// and operation-store-loss, and S12 instance-manager-restart at seed-backup,
+// add an ephemeral container with NET_ADMIN and NET_RAW to a member's Pod.
 func (c HAConfig) privileged() bool {
 	return c.BackupInterruptedUpload || c.BackupInstanceManagerRestart || c.BackupOverlapping ||
-		c.BackupOperationStoreLoss
+		c.BackupOperationStoreLoss || (c.RestoreInstanceManagerRestart && c.imRestartAt() == IMRestartAtSeedBackup)
 }
 
 func (c HAConfig) validate() error {
@@ -546,6 +546,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 				"exact and S12 " + imRestartVariant(at) + ": a full backup to object storage, restored into a new " +
 				"cluster in the run namespace, and into another while " + imRestartPlacementNote[at] +
 				"; no other S00-S15 qualification"
+			summary.Notes = append(summary.Notes, imRestartSummaryNotes[at]...)
 		}
 		lane, requirements = planS12GracefulStop(cfg, lane, requirements, &summary)
 	case cfg.BackupBucket != "":

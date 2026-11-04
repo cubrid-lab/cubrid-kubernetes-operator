@@ -18,7 +18,8 @@ LAB01 is the base that lab scenarios such as S06 `restart`, S11 `complete`,
 `exact`, `tampered`, `wrong-target`,
 `operator-restart`, `instance-manager-restart`,
 `instance-manager-restart-preparing`, `instance-manager-restart-seeding`,
-`instance-manager-restart-starting` and `graceful-stop` build on. It injects no fault. A pass is not an S01 result at the VM-lab
+`instance-manager-restart-starting`, `instance-manager-restart-seed-backup` and
+`graceful-stop` build on. It injects no fault. A pass is not an S01 result at the VM-lab
 level, and it does not qualify any of S00 to S15.
 
 It shares its inputs, target snapshot, manager identity checks and namespace
@@ -935,8 +936,9 @@ lane.
 - **Pod Security.** The faults work from an ephemeral container with
   `NET_ADMIN` and `NET_RAW` ([network faults](network-faults.md)), which the
   API server admits only under `enforce=privileged`. With this flag, and only
-  with it, `-backup-instance-manager-restart`, `-backup-overlapping` or
-  `-backup-operation-store-loss`, the run creates its namespace with
+  with it, `-backup-instance-manager-restart`, `-backup-overlapping`,
+  `-backup-operation-store-loss` or `-restore-instance-manager-restart-at
+  seed-backup`, the run creates its namespace with
   `pod-security.kubernetes.io/enforce=privileged` and keeps `warn` and
   `audit` at `restricted`. The API server then still warns about, and audits,
   a Pod that would break `restricted`, but the run collects neither the
@@ -1405,8 +1407,9 @@ lab-only.
 ```
 
 - **Pod Security.** As in S11 `interrupted-upload`: with this flag, and only
-  with it, `-backup-interrupted-upload`, `-backup-overlapping` or
-  `-backup-operation-store-loss`, the run creates its namespace
+  with it, `-backup-interrupted-upload`, `-backup-overlapping`,
+  `-backup-operation-store-loss` or `-restore-instance-manager-restart-at
+  seed-backup`, the run creates its namespace
   with `pod-security.kubernetes.io/enforce=privileged` and keeps `warn` and
   `audit` at `restricted`, so that the rate limit's ephemeral container is
   admitted. Before it creates anything, the variant reads the namespace
@@ -2976,9 +2979,9 @@ S12/instance-manager-restart. `-restore-instance-manager-restart` without
 `-restore`, or with `-restore-tampered`, `-restore-wrong-target` or
 `-restore-operator-restart`, is refused before anything is done.
 `-restore-instance-manager-restart-at` places the kill: `restoring`, the
-default, is this section; `preparing`, `seeding` and `starting` are variants
-and lanes of their own
-([below](#s12-instance-manager-restart-at-preparing-seeding-and-starting)).
+default, is this section; `preparing`, `seeding`, `starting` and
+`seed-backup` are variants and lanes of their own
+([below](#s12-instance-manager-restart-at-preparing-seeding-starting-and-seed-backup)).
 Any other value, or a value other than `restoring` without
 `-restore-instance-manager-restart`, is refused before anything is done.
 
@@ -3195,8 +3198,9 @@ Three clusters, nine DB Pods and their Brokers, share the lab's workers while
 
 S12 `instance-manager-restart` here does not check:
 - the kill at another point of the flow: while the bootstrap is `Preparing`,
-  during a seed restore and while the restored database is started
-  (`Starting`) run only with `-restore-instance-manager-restart-at`, below;
+  during a seed restore, while the restored database is started
+  (`Starting`) and on the seed source during the seed backup run only with
+  `-restore-instance-manager-restart-at`, below;
   between `Completed` and the status that records it is not placed by any of
   them. The kill follows a reading of
   `Restoring`; the message at the kill says whether `restoredb` ran or the
@@ -3213,10 +3217,10 @@ S12 `instance-manager-restart` here does not check:
 - the Operator's logs, and the Events of `ha-imrestart` other than
   `RestoreFailedRetrying`.
 
-## S12 instance-manager-restart at preparing, seeding and starting
+## S12 instance-manager-restart at preparing, seeding, starting and seed-backup
 
-With `-restore-instance-manager-restart-at preparing`, `seeding` or `starting`
-as well as `-restore-instance-manager-restart`, the variant is
+With `-restore-instance-manager-restart-at preparing`, `seeding`, `starting`
+or `seed-backup` as well as `-restore-instance-manager-restart`, the variant is
 `instance-manager-restart-<placement>`, for example
 `instance-manager-restart-preparing`, in the lane
 `lab-installed-ha-s12-instance-manager-restart-<placement>`, which requires
@@ -3229,7 +3233,7 @@ except what follows; the evidence goes to `S12/<variant>/`.
 
 ```sh
   ... -restore -restore-instance-manager-restart \
-  -restore-instance-manager-restart-at preparing|seeding|starting [-restore-limit 20m]
+  -restore-instance-manager-restart-at preparing|seeding|starting|seed-backup [-restore-limit 20m]
 ```
 
 ### preparing
@@ -3468,18 +3472,151 @@ A second restore of the same artifact records the same artifact, and a
 `restoredb` run between two readings of the cluster is not seen, so a pass
 does not rule out a second restore; the Instance Manager's logs would.
 
+### seed-backup
+
+Which member is killed, and when. Once the restore is recorded as complete
+on its target, the Operator seeds the first peer from that member, the
+holder: it starts a seed backup there and records its operation in
+`status.databases[].seeding.backupOperationID`, polls it until it ends, and
+only then starts the seed restore on the peer and records
+`restoreOperationID` (`seedMember`, `seedBackup` in
+`internal/controller/habootstrap.go`). The run kills the Instance Manager of
+the seed backup's **source** (`seeding.source`), the member the restore
+restored, while that backup runs. That ends the source's database container
+and with it the restored database's server, the only copy of the restored
+data until a peer is seeded. The restore had completed and cleared its
+ownership marker, so when the container runs again the entrypoint starts
+`cubrid heartbeat start` on the restored data
+(`build/instance-manager/entrypoint.sh`).
+
+What the product does after the kill:
+- The restarted Instance Manager fails the unfinished seed backup with
+  `manager restarted while operation was in progress` (`reconcileOnStart` in
+  `internal/instancemanager/opstore.go`). The Operator reads it `Failed`,
+  clears the seeding and ends the seed attempt with
+  `SeedBackupFailedRetrying`, the message `on <source>: <reason>; starting
+  attempt <n> of 3`, an Event with the same reason, and the database's
+  `bootstrapAttempts` raised (`bootstrapStepFailed`). While the source's
+  manager is down the poll fails and the condition says so.
+- The next seed attempt has no earlier restore of this step to take over, so
+  it takes a new seed backup under the next attempt's key, a new operation,
+  then restores the peer and seeds the second peer (`retrySkipsSeedBackup`,
+  `bootstrapKey`). The restore is not polled or started again
+  (`reconcileRecovery`): `status.bootstrap.operationID` and `attempts` stay.
+
+The rate limit. A seed backup of a small database ends within a few
+seconds, faster than the readings can place a kill in it. The run therefore
+limits the restore target's TCP traffic to the object store to 256 kbit/s,
+as S11 `instance-manager-restart` does on its member: a tbf qdisc in an
+ephemeral container with `NET_ADMIN` and `NET_RAW` (`test/faults/netfault`).
+With this placement the run creates its namespace with
+`pod-security.kubernetes.io/enforce=privileged`, keeps `warn` and `audit` at
+`restricted`, reads the labels back (`podSecurity` in the record) and
+refuses to go on, before anything is created, unless it enforces
+`privileged`; it also refuses an object store whose address it cannot
+resolve. When the limit goes in, and why:
+- The Operator starts the first seed backup in the same reconcile that
+  records `SeedingReplicas`, and on a small database the restore, the start
+  and the seed backup together take only seconds once the target's database
+  container runs, less than installing the limit takes. The Operator names
+  the target in its first reconcile of the recovery, usually before the
+  target's Pod is scheduled. So the run waits, while the bootstrap reads
+  `Preparing` or `Restoring`, until the target's Pod exists, is not being
+  deleted, is controlled by the cluster's StatefulSet and has an IP. The IP
+  comes with the Pod's sandbox, whose network namespace the limit acts in,
+  before the database container runs: the limit then goes in on that Pod
+  before its Instance Manager can start the restore. It is confirmed by
+  connects to the store through it. A bootstrap seen in another phase first
+  blocks the variant ("the rate limit could not be placed before the seed
+  backup") without a fault. Whether a cluster's kubelet starts the
+  ephemeral container while the database container still waits was not
+  observed; the limit then goes in once it does.
+- Once the limit is confirmed, the cluster is read again. What decides is
+  that the seed backup's upload passes the limit, which the kill requires in
+  any case (512 KiB through it while `Uploading`), and the limit acts from
+  its installation. A seed backup already recorded is accepted while the
+  source's record of it has not ended; a seed restore already recorded, a
+  seed backup whose record ended or cannot be read, or a bootstrap past
+  `SeedingReplicas`, blocks the variant, since that upload may have run
+  before the limit. A limit that cannot be installed or confirmed blocks the
+  variant, and its removal still runs.
+- The limit acts on what the target sends to the store. The restore's
+  download comes the other way: only its requests and acknowledgements pass
+  the limit, a small part of what is downloaded, so the restore is not held
+  to 256 kbit/s; the seed restore runs on the peer and does not pass it. Only
+  the seed backup's upload, which the target sends, is held to the limit.
+- The limit is removed right after the source's container runs again; the
+  retry may begin under it briefly, and everything judged after it runs
+  without it. It must be seen removed: a limit that is not seen removed blocks
+  the variant. A step that ends before the kill removes it too. The
+  ephemeral container stays in the target's Pod; the cluster goes with the
+  namespace.
+
+What differs from the steps above:
+- **Wait for a seed backup** (step 2): at `-poll` until the bootstrap is
+  `SeedingReplicas` (`Preparing` and `Restoring` are waited through; any
+  other phase blocks the variant), then the cluster no more often than every
+  250 ms and, once the seeding records a seed backup with no seed restore,
+  the source's own record of that backup
+  (`/var/lib/cubrid/operations/<backupOperationID>.json`, one `kubectl exec`)
+  and the limit's counters. The limit's counters at the first reading of the
+  record that has not ended are the baseline (`uploadBaseline`). The kill is
+  placed at the first reading of the record `Uploading` with 512 KiB through
+  the limit since the baseline (`placingReading`, `atKill`,
+  `sentBeforeKill`, `uploadBytesBeforeKill`): an upload under way, not its
+  first request. A bootstrap seen in another phase, a seed restore
+  recorded, or the record read `Completed` or `Failed`, first, blocks the
+  variant ("the kill could not be placed while the seed backup ran") without
+  a kill; a seed backup that failed on its own is S12 `exact`'s to judge. A
+  record or counters that cannot be read are read again (counters up to
+  three errors in a row, as in S11); `-restore-limit` passing then blocks the
+  variant, and passing without any seed backup recorded fails it.
+- **Right before the kill** (step 3): the reading must be `SeedingReplicas`
+  with the same seed backup and no seed restore; the member killed is the
+  source, which must be the restored member (`status.bootstrap.targetMember`)
+  and not the member being seeded; a seeding whose source is another member
+  blocks the variant, at this reading or at any earlier one. The peer
+  (`seedPeer`), the seed backup and the database's attempts are recorded as
+  the state at the kill. Steps 4 to 7 apply to the source.
+- **The bootstrap** (step 8), as at `seeding`, except that the expected seed
+  retry is `SeedBackupFailedRetrying` on the source, and the operation
+  compared is the peer's seed backup under the next attempt
+  (`seedBackupOperationIDAfter`), which must differ from the killed one. A
+  seed backup stays recorded until the peer is seeded, so a reading normally
+  shows it; when none does, whether the retry took a new backup is not
+  known and the variant is blocked. A first seed retry with another reason,
+  or with a message that does not start with `on <source>: ` and name the
+  manager's restart, blocks it too, as no seed retry does. A
+  retry of the restore after the kill, or a reading after the kill whose
+  message says "restoredb is running", must never happen: the restored data
+  is not restored again; either fails the variant.
+- **The killed backup's record**, last: read on the source, it must be
+  `Failed` with the manager's restart; a record that cannot be read, or one
+  that ended otherwise (for example `Completed`: the backup ended before the
+  kill took effect), blocks the variant.
+- `seedRetriesAfterKill`, `seedAttemptsAdded`, `seedBackupOperationChanged`
+  and `killedBackupFailedByRestart` are measured, and `unknown` until read.
+
+That the restored data was not removed or restored again rests on the
+bootstrap readings and on the data checks of step 7, which read every
+member; the source's volume is not read. What the killed backup left in
+object storage under the seed prefix is not read either: the next backup
+writes to the same place, its manifest last.
+
 These placements here do not check:
 - at `preparing`, whether the verification, the download or `restoredb` ran
   at the kill, the next attempt's own record, and whether
   `reclaimIncomplete` removed anything;
-- at `seeding`, a kill of the source's Instance Manager, a kill during the
-  seed backup or during the second peer's seed restore, whether the retry
+- at `seeding`, a kill during the second peer's seed restore, whether the retry
   reused the seed backup or took a new one, and whether the member's
   Instance Manager took over the failed restore's data or removed it;
 - at `starting`, the Instance Manager's logs of the take-over, and a kill
   after the restored database's start ended but before `Completed` was
   recorded, which the readings of the record cannot tell apart from
   `Starting`;
+- at `seed-backup`, a kill during a later peer's seed backup, whose source
+  is the member observed as the master, the source's volume, and the seed
+  backup objects the killed attempt left;
 - a kill between `Completed` and the status that records it;
 - the Instance Manager's and the Operator's logs, and other Events of
   `ha-imrestart`.
@@ -4039,8 +4176,8 @@ and S12 variant other than `complete` and `exact` only those under
   `S12/instance-manager-restart/timeline.jsonl` (the fault flow),
   `S12/instance-manager-restart/data-check.json` and
   `S12/instance-manager-restart/source-data-check.json`.
-- with `-restore-instance-manager-restart-at preparing`, `seeding` or
-  `starting`, the same four files under `S12/instance-manager-restart-<placement>/`;
+- with `-restore-instance-manager-restart-at preparing`, `seeding`,
+  `starting` or `seed-backup`, the same four files under `S12/instance-manager-restart-<placement>/`;
   the record also names the placement (`at`) and holds, at `preparing` and
   `starting`, the killed operation's record as read (state, failure reason,
   restored artifact, whether the staging directory was there, or why it
@@ -4049,7 +4186,15 @@ and S12 variant other than `complete` and `exact` only those under
   operation's record as read (`completingOperation`), and at `seeding` the
   member killed, its seed restore operation and the database's attempts
   before and after, the seed retries, each marked when it was taken from an
-  Event, and the messages of the `SeedRestoreFailedRetrying` Events.
+  Event, and the messages of the `SeedRestoreFailedRetrying` Events; at
+  `seed-backup` the same for the source killed, the peer (`seedPeer`), the
+  seed backup before and after, the reading that placed the kill
+  (`placingReading`), the `SeedBackupFailedRetrying` Events, the killed
+  backup's record as read (`killedSeedBackup`), the namespace's Pod Security
+  labels (`podSecurity`) and the rate limit (`throttle`: the target, the
+  store's address and how it was found, the rate, when it was installed,
+  confirmed and seen removed, its counters at the first reading of the
+  backup and at the kill, and the bytes between them).
 - with `-restore-graceful-stop`, `S12/graceful-stop/record.json` (as S12
   `exact`'s record for `ha-gracefulstop`, without the writes after the
   backup, and the stop: the target, its Pod's UID and container's ID, the
