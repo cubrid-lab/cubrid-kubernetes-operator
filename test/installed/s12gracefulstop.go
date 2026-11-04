@@ -374,7 +374,7 @@ func planS12GracefulStop(cfg HAConfig, lane string, requirements []evidence.Requ
 // newS12GracefulStopRecord is the record S12 graceful-stop starts with.
 func (h *haRun) newS12GracefulStopRecord() *s12GracefulStopRecord {
 	at := h.cfg.gracefulStopAt()
-	rec := h.newGracefulStopRecordAt()
+	rec := h.newGracefulStopRestoringRecord()
 	rec.At, rec.variant, rec.place = at, gracefulStopVariantOf(at), stopPlacements[at]
 	if at == GracefulStopAtSeeding {
 		rec.TargetMember = ""
@@ -387,8 +387,9 @@ func (h *haRun) newS12GracefulStopRecord() *s12GracefulStopRecord {
 	return rec
 }
 
-// newGracefulStopRecordAt is the record of the placement restoring.
-func (h *haRun) newGracefulStopRecordAt() *s12GracefulStopRecord {
+// newGracefulStopRestoringRecord is the record of the placement restoring,
+// which the other placements start from.
+func (h *haRun) newGracefulStopRestoringRecord() *s12GracefulStopRecord {
 	return &s12GracefulStopRecord{s12Record: s12Record{Cluster: s12GracefulStopClusterName,
 		SeedPrefix: h.rec.Seed.Prefix + "/gracefulstop-seed", SecretRef: s12GracefulStopSecretName,
 		Bootstrap: []s12Phase{}, Members: []imageIdentity{}, SecretsReferenced: []string{},
@@ -494,8 +495,8 @@ func (h *haRun) runS12GracefulStop(ctx context.Context) (result evidence.Scenari
 		measHoldersAfterCleanup: evidence.Unknown, measStopLoggedAfterDelete: evidence.Unknown,
 		measRetriesAfterStop: evidence.Unknown, measOperationIDChanged: evidence.Unknown}
 	if rec.At == GracefulStopAtSeeding {
-		for _, m := range []string{"seedRetriesAfterKill", "seedAttemptsAdded", "seedRestoreOperationChanged",
-			"retriesAfterKill"} {
+		for _, m := range []string{measSeedRetriesAfterKill, measSeedAttemptsAdded, measSeedRestoreOperationChanged,
+			measRetriesAfterKill} {
 			result.Measurements[m] = evidence.Unknown
 		}
 	}
@@ -751,7 +752,9 @@ func (rec *s12GracefulStopRecord) stagingPath() string {
 // phase names the member the stop acts on: SeedingReplicas with a member
 // being seeded that is not the restore's target. Preparing and Restoring
 // are waited through; the member is recorded as rec.TargetMember the first
-// time. Another phase leaves the decision to pastPlacement.
+// time. Another phase leaves the decision to pastPlacement. A member that is
+// the restore's target fails the variant; one that is not the cluster's
+// blocks it.
 func seedingStopTarget(cluster *databasev1alpha1.CubridCluster, phase string, rec *s12GracefulStopRecord) (
 	bool, error) {
 	if phase != string(databasev1alpha1.BootstrapSeedingReplicas) {
@@ -761,8 +764,14 @@ func seedingStopTarget(cluster *databasev1alpha1.CubridCluster, phase string, re
 	if seeding == nil || seeding.Member == "" {
 		return false, nil
 	}
+	// The Operator never seeds over the member the database was restored on
+	// (reconcileSeeding in internal/controller/habootstrap.go): a seeding that
+	// names it breaks the contract and fails the variant. A name that is not
+	// one of the cluster's members is a reading the run cannot act on, and
+	// blocks it.
 	if seeding.Member == cluster.Status.Bootstrap.TargetMember {
-		return false, fmt.Errorf("the member being seeded, %s, is the restore's target", seeding.Member)
+		return false, restoreVerdict{fmt.Errorf("the member being seeded, %s, is the restore's target",
+			seeding.Member)}
 	}
 	if !slices.Contains(clusterMembers(cluster.Name), seeding.Member) {
 		return false, fmt.Errorf("the member being seeded %q is not a member of %s", seeding.Member, cluster.Name)
@@ -1386,7 +1395,7 @@ func judgeSeedStopRetries(rec *s12GracefulStopRecord, result *evidence.Scenario)
 	irec := &s12IMRestartRecord{s12Record: rec.s12Record, IMRestart: r}
 	events, unexplained, afterStop := scanIMRestartBootstrap(irec)
 	if r.KilledAt != nil {
-		result.Measurements["retriesAfterKill"] = len(afterStop)
+		result.Measurements[measRetriesAfterKill] = len(afterStop)
 	}
 	result.NeverEvents = append(result.NeverEvents, events...)
 	errs := []error{judgeSeedingKill(irec, result, afterStop)}

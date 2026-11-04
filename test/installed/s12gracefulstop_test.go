@@ -1038,3 +1038,57 @@ func TestS12GracefulStopPlacementsHaveALaneAndAVariantEach(t *testing.T) {
 		}
 	}
 }
+
+func TestRunS12GracefulStopSeedingJudgesTheMemberBeingSeeded(t *testing.T) {
+	for name, tc := range map[string]struct {
+		member string
+		result evidence.Result
+		want   string
+	}{
+		// The Operator never seeds over the member the database was restored
+		// on (reconcileSeeding): a seeding that names it breaks the contract.
+		"the restore's target": {member: testGSRTarget, result: evidence.Fail,
+			want: "the member being seeded, " + testGSRTarget + ", is the restore's target"},
+		// A name that is not one of the cluster's members is a reading the run
+		// cannot act on.
+		"not a member of the cluster": {member: "ha-other-9", result: evidence.Blocked,
+			want: "the member being seeded \"ha-other-9\" is not a member of " + s12GracefulStopClusterName},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newS12GracefulStopSeedingFixture(t)
+			f.beforeSeed[1].member = tc.member
+			stop, err := gracefulStopRestoreOf(t, f)
+			requireGSR(t, stop, err, tc.result, tc.want)
+			if len(f.podDeletes) != 0 {
+				t.Fatalf("Pod deletions = %v, want none", f.podDeletes)
+			}
+		})
+	}
+}
+
+func TestRunS12GracefulStopSeedingIsBlockedWhenTheLogNamesAnotherSeedRestore(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.stopLog[1] = gsrLine{250 * time.Millisecond, func(at time.Time) string {
+		return gsrLogLine(at, logOperationFailed, "operation_state_changed", "", "op-seed-9", "restore",
+			testGSSFailReason, "")
+	}}
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Blocked, "the member's log names op-seed-9 as the restore operation the stop "+
+		"ended, and the cluster's status named "+testIMSeedOp+" before the deletion")
+}
+
+func TestRunS12GracefulStopSeedingFailsWhenTheShutdownPrecedesTheFailedRecord(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.stopLog[1].at, f.stopLog[2].at = 450*time.Millisecond, 250*time.Millisecond
+	f.stopLog[1], f.stopLog[2] = f.stopLog[2], f.stopLog[1]
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Fail, heartbeatStop+" (line", "before the restore operation's "+logOperationFailed)
+}
+
+func TestRunS12GracefulStopSeedingFailsWhenTheSeedRestoreIsUnchangedAfterTheRetry(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.afterSeed[2].op = testIMSeedOp
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Fail, "the seed restore operation "+testIMSeedOp+" the kill ended is the one "+
+		"recorded for "+testGSSPeer)
+}

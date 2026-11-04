@@ -3666,9 +3666,11 @@ What the product does, as read from the code:
 
 What differs from the section above:
 - **The member.** The run waits, recording every reading, for
-  `SeedingReplicas` with a member being seeded (`status.databases[].seeding.member`),
-  which must be a member of the cluster other than the restore's target;
-  that member's Pod, once its database container runs, is the one sampled,
+  `SeedingReplicas` with a member being seeded
+  (`status.databases[].seeding.member`). One that is the restore's target
+  fails the variant: the Operator never seeds over the member the database
+  was restored on (`reconcileSeeding`). One that is not a member of the
+  cluster blocks it: the run cannot act on it. That member's Pod, once its database container runs, is the one sampled,
   followed and deleted. The sampler is the same script, every 100 ms, so a
   writer holding a file for less than that may not be seen.
 - **The placement.** The Pod is deleted at the first reading that shows
