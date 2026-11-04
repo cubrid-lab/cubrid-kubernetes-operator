@@ -54,7 +54,7 @@ func markOwned(root *os.Root, database, opID string) error {
 	if err := replaceFile(root, markerPath(database), []byte(opID+"\n")); err != nil {
 		return fmt.Errorf("mark %s as owned by %s: %w", database, opID, err)
 	}
-	if err := syncDir(root, filepath.Dir(database)); err != nil {
+	if err := syncMetadataDir(root, filepath.Dir(database)); err != nil {
 		return fmt.Errorf("mark %s as owned by %s: %w", database, opID, err)
 	}
 	return nil

@@ -49,14 +49,22 @@ func replaceFile(root *os.Root, name string, data []byte) error {
 		err = closeErr
 	}
 	if err == nil {
-		err = root.Rename(tmp, name)
+		err = renameMetadata(root, tmp, name)
 	}
 	if err != nil {
 		_ = root.Remove(tmp)
 		return err
 	}
-	return syncDir(root, filepath.Dir(name))
+	return syncMetadataDir(root, filepath.Dir(name))
 }
+
+// renameMetadata and syncMetadataDir are the rename and the directory sync
+// of a metadata write (replaceFile, removeFile, markOwned); tests replace
+// them to fail at those boundaries.
+var (
+	renameMetadata  = func(root *os.Root, oldname, newname string) error { return root.Rename(oldname, newname) }
+	syncMetadataDir = syncDir
+)
 
 // databasesTxtMu serializes the manager's read-modify-writes of
 // databases.txt: a restore and an HA bootstrap of different databases may
@@ -77,7 +85,7 @@ func removeFile(root *os.Root, name string) error {
 		}
 		return err
 	}
-	return syncDir(root, filepath.Dir(name))
+	return syncMetadataDir(root, filepath.Dir(name))
 }
 
 // syncDirPath is syncDir for a directory named by its path.
