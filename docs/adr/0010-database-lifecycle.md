@@ -234,10 +234,9 @@ grace period, so that it started again; the operator waited with
 the new master in round 1 and restored the last member from it.
 
 What this does not cover: a master that changes while `restoreslave` runs,
-which is not detected and has not been tried on the engine (#678);
-and a copy that
-failed after it had restored the data, when the master has changed since: the
-next attempt copies from the new master, the Instance Manager refuses to
+which is not detected and has not been tried on the engine (#678); and a copy
+that failed after it had restored the data, when the master has changed since:
+the next attempt copies from the new master, the Instance Manager refuses to
 restore over data that another request restored (ADR-0008), and the bootstrap
 ends `Failed` and waits for a person. Nor does it cover a copy that failed
 after it had restored the data when the master changed and changed back
