@@ -4819,7 +4819,7 @@ the members seeded from its backup.
 started, and no slave followed a real master. The archive files a restored
 member creates later were not looked at.
 
-## POC-47 — whether a `restoredb` ended by its deadline leaves a writer, through the Instance Manager's `ExecCLI` (#277) — **observation: in five runs with deadlines of 1 to 5 s, `Run` returned `signal: killed` with `context deadline exceeded`, 0.04 to 5.4 s after the deadline, and no `cub_admin` ran and no process held a file under the database directory at its return or in the 5 s after; killing only `cubrid`, as without the group kill, left `cub_admin` writing**
+## POC-47 — whether a `restoredb` ended by its deadline leaves a writer, through the Instance Manager's `ExecCLI` (#277) — **observation: in five runs with deadlines of 1 to 5 s, `Run` returned `signal: killed` once the context's deadline had passed, 0.04 to 5.4 s after it, and no `cub_admin` ran and no process held a file under the database directory at its return or in the 5 s after; killing only `cubrid`, as without the group kill, left `cub_admin` writing**
 
 **Environment:** `docker.io/cubrid/cubrid:11.4`
 (`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`,
@@ -4840,11 +4840,12 @@ set by an argument, for `cubrid restoredb -u -B /tmp/bk appdb`, the
 arguments the Instance Manager uses. When `Run` returned, and every 250 ms
 for 5 s after, it listed every process named `cub_admin` and every process
 holding a file under the database directory (`/proc/*/fd`). A run to its end
-took 17.9 s; a later one, with a warm cache, 7.8 s.
+took 17.9 s; a later one, 7.8 s. The program printed the context's own
+error (`ctx.Err()`) next to `Run`'s, which is the utility's exit status.
 
 | Deadline | `Run` returned after | Result | `cub_admin`, file holders at return and for 5 s | Files left |
 |---|---|---|---|---|
-| 1 s | 6.36 s | `signal: killed`, `context deadline exceeded` | none | `appdb`, `appdb_vinf` |
+| 1 s | 6.36 s | `signal: killed`; the context's error `context deadline exceeded` | none | `appdb`, `appdb_vinf` |
 | 2 s | 4.96 s | the same | none | `appdb`, `appdb_vinf` |
 | 3 s | 5.85 s | the same | none | `appdb`, `appdb_vinf` |
 | 4 s | 6.26 s | the same | none | `appdb`, `appdb_vinf` |
@@ -4854,14 +4855,15 @@ took 17.9 s; a later one, with a warm cache, 7.8 s.
 **Control:** `cubrid restoredb -u -B /tmp/bk appdb` was started from a shell,
 and after 2 s only that `cubrid` process was sent `SIGKILL`, as
 `exec.CommandContext` does on a deadline without `ExecCLI`'s group kill. The
-same listing showed `cub_admin` running and holding `appdb` at once, after
-2 s and after 5 s. So the listing sees the writer that POC-27 found, and the
+same listing showed `cub_admin` running and holding `appdb` at the kill, and
+2 s and 5 s after it. So the listing sees the writer that POC-27 found, and the
 deadline runs above did end it.
 
 **Finding:** for `restoredb`, a deadline takes the path a cancellation takes
 in POC-27. `ExecCLI` kills the utility's process group and returns only once
 the group has ended. The time between the deadline and the return (up to
-5.4 s here) is that wait. No writer was left when `Run` returned, which is
+5.4 s here) is most likely that wait; the kill and the wait were not timed
+separately. No writer was left when `Run` returned, which is
 when the restore's cleanup or retry begins.
 
 **Limits:**
@@ -4871,3 +4873,5 @@ when the restore's cleanup or retry begins.
 - The program called `ExecCLI` directly. The Instance Manager's own deadline
   for a restore and its cleanup after `Run` were not run.
 - A holder shorter than the 250 ms sampling would not be seen.
+- The container ran with `--init`, which reaps orphans, in plain Docker:
+  not in a Pod, on Kind or on a VM.
