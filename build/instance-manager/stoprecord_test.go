@@ -52,7 +52,9 @@ func TestEntrypoint_StopRecordedBeforeTheStartStartsNothing(t *testing.T) {
 				t.Fatalf("exit = %d\n%s", code, out)
 			}
 			for _, call := range f.recorded() {
-				if strings.HasSuffix(call, " start") || strings.Contains(call, " start ") || call == callManagerStart {
+				// Nothing was started here, so nothing is stopped either.
+				if strings.HasSuffix(call, " start") || strings.Contains(call, " start ") || call == callManagerStart ||
+					call == callShutdown {
 					t.Errorf("%q ran after the stop was recorded: %q", call, f.recorded())
 				}
 			}
@@ -64,7 +66,7 @@ func TestEntrypoint_StopRecordedBeforeTheStartStartsNothing(t *testing.T) {
 }
 
 // A stop recorded while the start runs is seen when the start returns: what
-// was started is stopped again, and the manager is not started.
+// was started is stopped, and the manager is not started.
 func TestEntrypoint_StopRecordedDuringTheStartStopsWhatWasStarted(t *testing.T) {
 	f := newFixture(t, blockingManagerStub)
 	f.registerDatabase()
@@ -84,7 +86,7 @@ func TestEntrypoint_StopRecordedDuringTheStartStopsWhatWasStarted(t *testing.T) 
 	}
 	calls := f.recorded()
 	if start, stop := index(calls, "cubrid server start "+dbName), index(calls, callShutdown); stop < start {
-		t.Errorf("the started server was not stopped again: %q", calls)
+		t.Errorf("the started server was not stopped: %q", calls)
 	}
 	if managerStarted(calls) {
 		t.Errorf("the manager was started after the stop was recorded: %q", calls)

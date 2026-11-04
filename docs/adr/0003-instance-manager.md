@@ -308,13 +308,7 @@ listens, and again before every `cubrid server start` and
 that is stopping: it reclaims nothing, starts no completed restore's
 database, admits no operation (`503`), and treats the absence of CUBRID as
 intended; it does not run the shutdown itself, which the command ran.
-The entrypoint reads the same record before it starts CUBRID and before it
-launches the manager. The preStop hook runs the command in a process of its
-own, and the entrypoint gets no signal until the hook has returned, so a
-recorded stop counts there as its own termination: nothing more is started,
-and what it had already started is stopped again. Its `IM_STOP_FILE` exists
-only for the script's tests and defaults to the fixed path; the Operator sets
-nothing there. A
+A
 record that cannot be examined counts as one, and is logged as
 `stop_file_unreadable` rather than as a recorded stop (`stop_recorded`). The order closes both races: a
 record written before the manager's look is found, and one written after it
@@ -324,6 +318,15 @@ listened starts nothing at all. Nothing removes the record: a stop is final
 for the container, and a restarted container starts from the image's file
 system without it. A command that cannot write the record still stops
 CUBRID and logs the failure; the manager is then not kept from a start.
+The entrypoint reads the same record before it starts CUBRID and before it
+launches the manager. The preStop hook runs the command in a process of its
+own, and the entrypoint gets no signal until the hook has returned, so a
+recorded stop counts there as its own termination: nothing more is started,
+and what it had already started is stopped. Unlike the manager, the script
+takes a record it cannot examine (`[ -e ]` fails) as absent; the record is
+written by the same user in `/tmp`. Its `IM_STOP_FILE` exists only for the
+script's tests and defaults to the fixed path; the Operator sets nothing
+there.
 Alternatives not taken: a lock shared by the command and the manager still
 needs a record for a command that takes the lock before the manager does;
 and making only the entrypoint wait for the listener leaves the `preStop`
