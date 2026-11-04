@@ -639,7 +639,8 @@ started: the Instance Manager reports `Restoring` before it verifies or
 downloads the backup (#598). At `seeding` the peer being seeded was killed;
 exactly one seed retry with a new seed operation completed, and the restore was
 not run again. Kills during `Starting`, before a durable `Completed`, on the
-seed source and during the seed backup are not covered.
+seed source and during the seed backup are not covered; a `starting`
+placement exists in the harness but has not been run on the VM lab.
 
 All three placements passed again on the VM lab between 2026-11-03 23:56 and
 2026-11-04 08:07 UTC with manager `16dbbf8`, which sizes each log file from

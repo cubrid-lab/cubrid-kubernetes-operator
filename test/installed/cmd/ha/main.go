@@ -208,8 +208,10 @@ func run(ctx context.Context, args []string) (runErr error) {
 		"S12 instance-manager-restart: where the kill is placed, each a lane of its own: "+
 			installed.IMRestartAtRestoring+" (a reading of Restoring with an operation), "+
 			installed.IMRestartAtPreparing+" (a reading of Preparing with an operation, read no further than "+
-			"Downloading) or "+installed.IMRestartAtSeeding+" (a reading of SeedingReplicas with a seed restore "+
-			"recorded; the member being seeded is killed); a value other than "+installed.IMRestartAtRestoring+
+			"Downloading), "+installed.IMRestartAtSeeding+" (a reading of SeedingReplicas with a seed restore "+
+			"recorded; the member being seeded is killed) or "+installed.IMRestartAtStarting+" (the first "+
+			"reading of the target's record of the operation Starting: restoredb succeeded and the restored "+
+			"database is being started); a value other than "+installed.IMRestartAtRestoring+
 			" needs -restore-instance-manager-restart")
 	flags.BoolVar(&cfg.RestoreGracefulStop, "restore-graceful-stop", false,
 		"scenario after S12 exact: S12 graceful-stop, S11's artifact restored into another new cluster whose "+
