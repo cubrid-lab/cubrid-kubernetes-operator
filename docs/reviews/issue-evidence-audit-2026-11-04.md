@@ -19,7 +19,7 @@
 - [main E2E workflow](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/41818432894) completed successfully. The downloaded `e2e-evidence` ZIP contains `summary.json` with `passed: true`.
 - The actual S00 entry is `pass` even though `install_limit: unset`, `ready_limit: unset`, and `measurements.timeLimitVerdict: blocked: time_limit_unset`. It measured Operator installation at **12 s** and SQL readiness at **18.206805064 s**. This is a genuine policy exception: SQL checks passed, but time-limit judgment was **not scored**.
 - [PR #681](https://github.com/cubrid-lab/cubrid-kubernetes-operator/pull/681) proposes fixing the exception. A downloaded E2E artifact for [run #41822579879](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/41822579879) records S00 `pass` with `timeLimitVerdict: pass`, thresholds `1m0s` and `1m30s`, and measurements of **11 s** and **17.635305778 s**. This is evidence for that tested PR snapshot, not for unreviewed future commits or the VM lab.
-- The PR's previously checked final-head `Tests` and `Lint` failed on **three lines over 120 characters** in `test/faults/limits_test.go`. Further formatting commits `ce68547` and `5ea8364` were submitted after the failures; final-head CI and independent maintainer review must still be checked before merging.
+- The PR's previously checked final-head `Tests` and `Lint` failed on **three lines over 120 characters** in `test/faults/limits_test.go`. Follow-up formatting commits (latest checked update `4ba36ca`) were submitted after the failures; only successful CI on the latest PR head and the independent maintainer review can close the validation gap.
 
 ### Narrow, source-level findings (not production proofs)
 
