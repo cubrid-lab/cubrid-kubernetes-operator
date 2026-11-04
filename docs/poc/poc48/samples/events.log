@@ -1,0 +1,34 @@
+17:58:58 A open transaction start
+18:01:29 A COMMIT returned
+18:02:20 A rows master=6000 slave=6000
+18:02:30 A2 master applier 327 STOP
+18:02:40 A2 open transaction start
+18:05:11 A2 COMMIT returned
+18:05:31 A2 master applier CONT
+18:06:04 A2 rows master=12000 slave=12000
+18:06:04 I idle start
+18:12:07 I idle end
+18:12:22 B slave applier 359 STOP
+18:13:46 B writes done; rows master=13600 slave=12000
+18:14:16 B slave applier CONT
+18:15:28 B rows master=13600 slave=13600
+18:15:38 K slave applier 359 KILL
+18:17:03 K rows master=14400 slave=14400 applier now 8925
+18:17:16 N2/N table u created
+18:17:46 N open transaction start
+18:20:16 N COMMIT returned
+18:21:09 N rows master=6000 slave=0
+18:21:19 N2 master applier 327 STOP
+18:21:29 N2 open transaction start
+18:23:59 N2 COMMIT returned
+18:24:19 N2 master applier CONT
+18:24:51 N2 rows master=12000 slave=0
+18:24:56 P2/P table v created
+18:25:26 P open transaction start
+18:27:57 P COMMIT returned
+18:28:49 P rows master=6000 slave=6000
+18:28:59 P2 master applier 327 STOP
+18:29:09 P2 open transaction start
+18:31:40 P2 COMMIT returned
+18:32:00 P2 master applier CONT
+18:32:30 P2 rows master=12000 slave=12000

@@ -5016,6 +5016,14 @@ the counts. The longest stretch of consecutive samples in which each held:
 - **On a healthy slave under load pages wait for short stretches** (up to 9 pages, up to six samples in a row), but `Final LSA` moved in each of them. A rule on the number of waiting pages alone would not tell those apart from part B's first samples.
 - **After each commit the slave caught up at once:** the inserts rose by the transaction's rows in the next sample, and `Final LSA` reached the copied EOF within one sample.
 
+**Reproduce.** The harness (setup, sampling and part scripts, with the
+image digest, the container names and the sampling interval as settings), the
+TSVs of parts A, A2, P, P2, I, B and K and the run's event log are in
+[`docs/poc/poc48/`](poc48/README.md). `python3 docs/poc/poc48/analyse.py
+docs/poc/poc48/samples/*.tsv` gives the stretches of the table above; for
+part K it counts from 10 s before the kill (see the README). The harness
+merges the run's scripts and was run again only for setup and part K.
+
 **Limits.**
 - One run of each part, on one two-member pair in Docker on one host: not Kind, not Pods, not the VM lab.
 - `kill -STOP` of an applier is a stand-in for a stuck one, not a state CUBRID reached by itself. POC-17's state was not reproduced here; POC-37, part C, showed `final_lsa` fixed in it.
