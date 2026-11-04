@@ -640,11 +640,24 @@ artifact. That shows `restoredb` had not succeeded, not that it had not
 started: the Instance Manager reports `Restoring` before it verifies or
 downloads the backup (#598). At `seeding` the peer being seeded was killed;
 exactly one seed retry with a new seed operation completed, and the restore was
-not run again. Kills during `Starting`, before a durable `Completed`, on the
-seed source and during the seed backup are not covered; a `starting`
-placement exists in the harness but has not been run on the VM lab, and
-neither has the `seed-backup` placement, which kills the restored member's
-Instance Manager during the first seed backup.
+not run again.
+
+Two further placements passed once each on the VM lab on 2026-11-04 with
+manager `16dbbf8`, each with LAB01, S11 `complete` and S12 `exact`. At
+`starting` (#682) the target's Instance Manager was killed 22 ms after its
+own record of the restore read `Starting`, after `restoredb` had succeeded:
+the killed record was `Failed` by the restart and held the restored manifest,
+one retry with a new operation completed and held the same manifest, and no
+reading showed `restoredb` running again. Equal records do not rule out a
+short second `restoredb` between readings; a kill after the start but before
+`Completed` is written leaves the same record and is taken as covered by it.
+At `seed-backup` the restored member's upload to the object store was limited
+to 256 kbit/s and its Instance Manager killed while its first seed backup was
+`Uploading` (541,818 bytes through the limit): the killed backup was `Failed`
+by the restart, exactly one `SeedBackupFailedRetrying` followed with a new
+seed backup, both peers were seeded and the restore was not run again; two
+earlier runs were blocked because the backup ended before the kill could be
+placed. Kills on a later peer's seed source are not covered.
 
 All three placements passed again on the VM lab between 2026-11-03 23:56 and
 2026-11-04 08:07 UTC with manager `16dbbf8`, which sizes each log file from
