@@ -193,13 +193,9 @@ func Judge(bounds ...Bound) Verdict {
 // limits are always recorded; only a run whose checks all held is judged by
 // them.
 //
-// The limits that are set decide the result as Judge decides it. A limit
-// that is not set, which happens only when its variable sets it to 0 or
-// unset, does not: S00 is required in the kind lane, and blocking it would
-// keep such a run from passing the lane (docs/testing/scenario-contract.md,
-// "Time limits"). What Judge makes of both limits is recorded as the
-// measurement timeLimitVerdict, so the summary does not read as a run scored
-// against a limit it was not judged by.
+// S00 uses the same rules as every other required scenario: an unset
+// limit blocks the run, an exceeded limit fails it, and missing evidence
+// blocks it. The verdict is also recorded in timeLimitVerdict for diagnostics.
 func JudgeS00Limits(result evidence.Scenario, install, ready Bound) evidence.Scenario {
 	v := Judge(install, ready)
 	if result.Limits == nil {
@@ -213,16 +209,6 @@ func JudgeS00Limits(result evidence.Scenario, install, ready Bound) evidence.Sce
 		result.Measurements = map[string]any{}
 	}
 	result.Measurements["timeLimitVerdict"] = strings.TrimSuffix(string(v.Result)+": "+v.Reason, ": ")
-	var set []Bound
-	for _, b := range []Bound{install, ready} {
-		if b.Limit.Set() {
-			set = append(set, b)
-		}
-	}
-	if len(set) > 0 {
-		if scored := Judge(set...); scored.Result != evidence.Pass {
-			result.Result, result.Reason = scored.Result, scored.Reason
-		}
-	}
+	result.Result, result.Reason = v.Result, v.Reason
 	return result
 }
