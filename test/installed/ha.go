@@ -273,6 +273,12 @@ type HAConfig struct {
 	// is deleted with its grace period while restoredb runs. It needs
 	// Restore, and cannot be combined with another S12 variant.
 	RestoreGracefulStop bool
+	// RestoreGracefulStopAt places that stop: GracefulStopAtRestoring, the
+	// default, on the restore's target while restoredb runs, or
+	// GracefulStopAtSeeding, on the first member being seeded while
+	// restoreslave runs. Each placement is a variant and a lane of its own.
+	// Another value than the default needs RestoreGracefulStop.
+	RestoreGracefulStopAt string
 }
 
 // privileged reports whether the run namespace must enforce Pod Security
@@ -752,10 +758,10 @@ func (h *haRun) recordAfterLAB01(summary *evidence.Summary) {
 	case h.s12GracefulStop != nil:
 		summary.Record(*h.s12GracefulStop)
 	case h.cfg.RestoreGracefulStop && h.s12 == nil:
-		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12GracefulStopVariant}, evidence.Blocked,
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: h.cfg.gracefulStopVariant()}, evidence.Blocked,
 			"S12 graceful-stop follows S12 exact, and S12 exact did not run")
 	case h.cfg.RestoreGracefulStop:
-		summary.Settle(evidence.Requirement{ID: s12ID, Variant: s12GracefulStopVariant}, evidence.Blocked,
+		summary.Settle(evidence.Requirement{ID: s12ID, Variant: h.cfg.gracefulStopVariant()}, evidence.Blocked,
 			"S12 graceful-stop follows S12 exact, and S12 exact did not pass")
 	}
 }
@@ -866,7 +872,7 @@ func (h *haRun) afterLAB01(ctx context.Context) error {
 			stop := h.runS12GracefulStop(ctx)
 			h.s12GracefulStop = &stop
 			if stop.Result != evidence.Pass {
-				return fmt.Errorf("S12/%s: %s", s12GracefulStopVariant, stop.Reason)
+				return fmt.Errorf("S12/%s: %s", stop.Variant, stop.Reason)
 			}
 		}
 		if h.cfg.RestoreWrongTarget {

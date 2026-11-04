@@ -109,6 +109,15 @@ type s12GracefulStopFixture struct {
 	// afterStop.
 	noStaging     bool
 	samplerEndErr error
+	// member is the Pod the sampler, the followed log and the deletion act
+	// on; running are the processes of the readings before the deletion,
+	// which hold a file of the database directory and of stagingPath, whose
+	// entry is stagingDir. beforeSeed and afterSeed are the first database's
+	// seeding of the readings at the same place, nil for none.
+	member                  string
+	running                 []string
+	stagingPath, stagingDir string
+	beforeSeed, afterSeed   []*imSeed
 
 	gsCluster   *databasev1alpha1.CubridCluster
 	reads       int
@@ -126,6 +135,9 @@ type s12GracefulStopFixture struct {
 func newS12GracefulStopFixture(t *testing.T, cfg HAConfig) *s12GracefulStopFixture {
 	t.Helper()
 	f := &s12GracefulStopFixture{s12Fixture: newS12Fixture(t, cfg), stopped: make(chan struct{}),
+		member: testGSRTarget, stagingPath: testGSRStaging, stagingDir: testGSRStagingDir,
+		running: []string{testGSRWrapper + " cubrid cubrid restoredb",
+			testGSRWorker + " cub_admin cub_admin restoredb -u -B " + testGSRStaging + "/backup " + databaseName},
 		beforeDelete: []imStatus{
 			{databasev1alpha1.BootstrapPreparing, 0, testGSROp, testRestoreInProgress,
 				"the backup is being verified and downloaded on " + testGSRTarget},
@@ -209,10 +221,10 @@ func newS12GracefulStopFixture(t *testing.T, cfg HAConfig) *s12GracefulStopFixtu
 		return rows
 	}
 	f.runner.execStream = func(ctx context.Context, args ...string) (io.ReadCloser, error) {
-		want := "-n " + cfg.Namespace + " exec " + testGSRTarget + " -c " + databaseContainer + " -- bash -c " +
+		want := "-n " + cfg.Namespace + " exec " + f.member + " -c " + databaseContainer + " -- bash -c " +
 			restoreSamplerScript()
 		if strings.Join(args, " ") != want || len(args) != 10 {
-			t.Errorf("streamed command = %q, want the sampler in %s", args, testGSRTarget)
+			t.Errorf("streamed command = %q, want the sampler in %s", args, f.member)
 		}
 		f.mu.Lock()
 		f.samplerRuns++
@@ -228,7 +240,7 @@ func newS12GracefulStopFixture(t *testing.T, cfg HAConfig) *s12GracefulStopFixtu
 	}
 	f.runner.followLogs = func(ctx context.Context, namespace, pod string, opts *corev1.PodLogOptions) (
 		io.ReadCloser, error) {
-		if namespace != cfg.Namespace || pod != testGSRTarget || opts.Container != databaseContainer ||
+		if namespace != cfg.Namespace || pod != f.member || opts.Container != databaseContainer ||
 			!opts.Follow || opts.SinceTime != nil || opts.LimitBytes == nil ||
 			*opts.LimitBytes != f.runner.logLimit()+1 {
 			t.Errorf("followed log of %s/%s with %+v", namespace, pod, opts)
@@ -298,8 +310,7 @@ func writeReading(w io.Writer, at time.Time, processes, holders, entries []strin
 // sample writes readings of restoredb running until the deletion, then
 // afterStop at their times after it.
 func (f *s12GracefulStopFixture) sample(w io.Writer) {
-	running := []string{testGSRWrapper + " cubrid cubrid restoredb",
-		testGSRWorker + " cub_admin cub_admin restoredb -u -B " + testGSRStaging + "/backup " + databaseName}
+	running := f.running
 	for {
 		select {
 		case <-f.stopped:
@@ -318,11 +329,11 @@ func (f *s12GracefulStopFixture) sample(w io.Writer) {
 		never := f.neverSeen
 		f.mu.Unlock()
 		processes, holders := running, []string{testGSRWorker + " " + testGSRDatabase + "/" + databaseName,
-			testGSRWorker + " " + testGSRStaging + "/backup/" + databaseName + "_bk0v000"}
+			testGSRWorker + " " + f.stagingPath + "/backup/" + databaseName + "_bk0v000"}
 		if never {
 			processes, holders = nil, nil
 		}
-		if !writeReading(w, time.Now(), processes, holders, f.entries(testGSRDatabaseDir, testGSRStagingDir)) {
+		if !writeReading(w, time.Now(), processes, holders, f.entries(testGSRDatabaseDir, f.stagingDir)) {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -337,7 +348,7 @@ func (f *s12GracefulStopFixture) entries(entries ...string) []string {
 	if !f.noStaging {
 		return entries
 	}
-	return slices.DeleteFunc(slices.Clone(entries), func(e string) bool { return e == testGSRStagingDir })
+	return slices.DeleteFunc(slices.Clone(entries), func(e string) bool { return e == f.stagingDir })
 }
 
 // iotestErrReader returns err at every read, as a stream that broke.
@@ -376,9 +387,9 @@ func (f *s12GracefulStopFixture) deleteTarget(ctx context.Context, c client.With
 	if options.Preconditions != nil && options.Preconditions.UID != nil {
 		uid = string(*options.Preconditions.UID)
 	}
-	if pod.Name != testGSRTarget || uid != testGSRTarget || options.GracePeriodSeconds != nil {
+	if pod.Name != f.member || uid != f.member || options.GracePeriodSeconds != nil {
 		f.t.Errorf("deleted Pod %s with UID precondition %q and grace period %v, want %s with its UID and its own "+
-			"grace period", pod.Name, uid, options.GracePeriodSeconds, testGSRTarget)
+			"grace period", pod.Name, uid, options.GracePeriodSeconds, f.member)
 	}
 	f.mu.Lock()
 	refused := f.deleteErr
@@ -433,11 +444,12 @@ func (f *s12GracefulStopFixture) advanceGSR(ctx context.Context, c client.WithWa
 	}
 	f.mu.Lock()
 	var st imStatus
+	var seed *imSeed
 	if f.deleted {
-		st = f.afterDelete[min(f.afterReads, len(f.afterDelete)-1)]
+		st, seed = f.afterDelete[min(f.afterReads, len(f.afterDelete)-1)], seedAt(f.afterSeed, f.afterReads)
 		f.afterReads++
 	} else {
-		st = f.beforeDelete[min(f.reads, len(f.beforeDelete)-1)]
+		st, seed = f.beforeDelete[min(f.reads, len(f.beforeDelete)-1)], seedAt(f.beforeSeed, f.reads)
 		f.reads++
 	}
 	f.mu.Unlock()
@@ -457,6 +469,16 @@ func (f *s12GracefulStopFixture) advanceGSR(ctx context.Context, c client.WithWa
 		s.Databases = []databasev1alpha1.DatabaseStatus{{Name: databaseName, Phase: testDatabaseCreated,
 			PrimaryCreated: true, HAConfigured: true}}
 	}
+	if seed != nil {
+		db := databasev1alpha1.DatabaseStatus{Name: databaseName, Phase: testDatabaseCreated, PrimaryCreated: true,
+			HAConfigured: st.phase == databasev1alpha1.BootstrapComplete, BootstrapAttempts: seed.attempts,
+			SeededMembers: seed.seeded}
+		if seed.member != "" {
+			db.Seeding = &databasev1alpha1.DatabaseSeeding{Member: seed.member, Source: testGSRTarget,
+				RestoreOperationID: seed.op}
+		}
+		s.Databases = []databasev1alpha1.DatabaseStatus{db}
+	}
 	for _, condition := range startingConditions {
 		s.Conditions = append(s.Conditions, metav1.Condition{Type: condition, Status: status,
 			Reason: testConditionReason, LastTransitionTime: now})
@@ -474,10 +496,10 @@ func gracefulStopRestoreOf(t *testing.T, f *s12GracefulStopFixture) (evidence.Sc
 	t.Helper()
 	err := f.runner.RunHA(t.Context(), f.cfg)
 	summary := readSummary(t, f.cfg.EvidenceDir)
-	if summary.Lane != s12GracefulStopLane || len(summary.Scenarios) != 4 || summary.Scenarios[3].ID != s12ID ||
-		summary.Scenarios[3].Variant != s12GracefulStopVariant {
-		t.Fatalf("summary = %+v, want LAB01, S11/complete, S12/exact and S12/graceful-stop in lane %s", summary,
-			s12GracefulStopLane)
+	variant, lane := f.cfg.gracefulStopVariant(), gracefulStopLaneOf(f.cfg.gracefulStopAt())
+	if summary.Lane != lane || len(summary.Scenarios) != 4 || summary.Scenarios[3].ID != s12ID ||
+		summary.Scenarios[3].Variant != variant {
+		t.Fatalf("summary = %+v, want LAB01, S11/complete, S12/exact and S12/%s in lane %s", summary, variant, lane)
 	}
 	for _, s := range summary.Scenarios[:3] {
 		if s.Result != evidence.Pass {
@@ -485,7 +507,7 @@ func gracefulStopRestoreOf(t *testing.T, f *s12GracefulStopFixture) (evidence.Sc
 		}
 	}
 	requireOwnEvidence(t, summary.Scenarios[2], "S12/exact")
-	requireOwnEvidence(t, summary.Scenarios[3], "S12/"+s12GracefulStopVariant)
+	requireOwnEvidence(t, summary.Scenarios[3], "S12/"+variant)
 	requireNoSecretInEvidence(t, f.cfg.EvidenceDir)
 	return summary.Scenarios[3], err
 }
@@ -494,7 +516,7 @@ func gracefulStopRestoreOf(t *testing.T, f *s12GracefulStopFixture) (evidence.Sc
 func readGSRRecord(t *testing.T, cfg HAConfig) s12GracefulStopRecord {
 	t.Helper()
 	var rec s12GracefulStopRecord
-	data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, s12GracefulStopRecordFile))
+	data, err := os.ReadFile(filepath.Join(cfg.EvidenceDir, gracefulStopFile(cfg.gracefulStopVariant(), "record.json")))
 	if err != nil || json.Unmarshal(data, &rec) != nil || rec.Trigger == nil || rec.Sampler == nil || rec.Log == nil {
 		t.Fatalf("S12 graceful-stop record = %s, %v", data, err)
 	}
@@ -797,4 +819,276 @@ func TestRunS12GracefulStopIsBlockedWhenRestoredbWasNotKilled(t *testing.T) {
 	stop, err := gracefulStopRestoreOf(t, f)
 	requireGSR(t, stop, err, evidence.Blocked, "restoredb failed (line 3) with exit code 1 and \"exit status 1\", "+
 		"not killed: whether the stop ended it is inconclusive")
+}
+
+// The seed restore's paths, operations and messages in the fake member being
+// seeded, the first peer.
+const (
+	testGSSPeer  = "ha-gracefulstop-1"
+	testGSSPeer2 = "ha-gracefulstop-2"
+)
+
+var (
+	testGSSStaging    = imRestoreStagingRoot + "/seed-" + testGSRUID
+	testGSSStagingDir = "restore-staging/seed-" + testGSRUID
+	testGSSFailReason = seedStopReasonPrefix + testGSRKilled
+	testGSSRetry      = "on " + testGSSPeer + ": " + testGSSFailReason + "; starting attempt 2 of 3"
+	testGSSCommand    = "cubrid restoreslave -u -s master -m " + testGSRTarget + " -B " + testGSSStaging + "/backup " +
+		databaseName
+)
+
+// newS12GracefulStopSeedingFixture plays S12 graceful-stop at seeding: the
+// restore completes on the target, the first peer's seed backup and then its
+// seed restore are recorded, and the peer's Pod is deleted while its sampler
+// shows restoreslave. The peer's log then holds restoreslave killed, the
+// seed operation Failed with the stopping reason, heartbeat stop and server
+// stop; the sampler shows the seed's directories gone; the Operator ends
+// that seed attempt with SeedRestoreFailedRetrying and seeds the peer again
+// under a new seed restore, then the other peer, and completes, with the
+// restore's operation unchanged.
+func newS12GracefulStopSeedingFixture(t *testing.T) *s12GracefulStopFixture {
+	t.Helper()
+	cfg := testS12GracefulStopConfig(t)
+	cfg.RestoreGracefulStopAt = GracefulStopAtSeeding
+	f := newS12GracefulStopFixture(t, cfg)
+	seeding := databasev1alpha1.BootstrapSeedingReplicas
+	f.member, f.stagingPath, f.stagingDir = testGSSPeer, testGSSStaging, testGSSStagingDir
+	f.running = []string{testGSRWrapper + " cubrid cubrid restoreslave",
+		testGSRWorker + " cub_admin cub_admin restoreslave -u -s master -m " + testGSRTarget + " -B " + testGSSStaging +
+			"/backup " + databaseName}
+	f.roles[testGSRTarget], f.roles[testGSSPeer] = roleMaster, roleSlave
+	f.beforeDelete = []imStatus{
+		{databasev1alpha1.BootstrapRestoring, 0, testGSROp, testRestoreInProgress, "restoredb is running on " +
+			testGSRTarget},
+		{seeding, 0, testGSROp, testIMSeedBackup, "backing up on " + testGSRTarget},
+		{seeding, 0, testGSROp, testSeedInProgress, "restoring on " + testGSSPeer}}
+	// The seed restore is recorded by the reading that names the member: the
+	// Operator records it once its start is answered.
+	f.beforeSeed = []*imSeed{nil, {member: testGSSPeer, op: testIMSeedOp}, {member: testGSSPeer, op: testIMSeedOp}}
+	f.afterDelete = []imStatus{
+		{seeding, 0, testGSROp, testIMUnavailable, testIMRefused},
+		{seeding, 0, testGSROp, s12SeedRetryReason, testGSSRetry},
+		{seeding, 0, testGSROp, testSeedInProgress, "restoring on " + testGSSPeer},
+		{seeding, 0, testGSROp, testSeedInProgress, "restoring on " + testIMPeer2},
+		{databasev1alpha1.BootstrapComplete, 0, testGSROp, testPeersSeeded, testIMCopied}}
+	f.afterSeed = []*imSeed{{member: testGSSPeer, op: testIMSeedOp}, {attempts: 1},
+		{attempts: 1, member: testGSSPeer, op: testIMSeedOp2},
+		{attempts: 1, member: testGSSPeer2, op: testIMSeedOp3, seeded: []string{testGSSPeer}},
+		{attempts: 1, seeded: []string{testGSSPeer, testGSSPeer2}}}
+	f.afterStop = []gsrSample{
+		{at: 0, entries: []string{testGSRDatabaseDir, testGSSStagingDir}},
+		{at: 100 * time.Millisecond, holders: []string{"1 " + testGSSStaging + "/backup (deleted)"},
+			entries: []string{testGSSStagingDir}},
+		{at: 200 * time.Millisecond},
+		{at: 300 * time.Millisecond},
+		{at: 400 * time.Millisecond}}
+	f.stopLog = []gsrLine{
+		{150 * time.Millisecond, func(at time.Time) string {
+			return gsrLogLine(at, logCommandFailed, logEventCommand, testGSSCommand, "", "", "",
+				`"durationMs":1830,"exitCode":-1,"err":"signal: killed"`)
+		}},
+		{250 * time.Millisecond, func(at time.Time) string {
+			return gsrLogLine(at, logOperationFailed, "operation_state_changed", "", testIMSeedOp, "restore",
+				testGSSFailReason, "")
+		}},
+		{450 * time.Millisecond, func(at time.Time) string {
+			return gsrLogLine(at, logCommandFailed, logEventCommand, heartbeatStop, "", "", "", `"exitCode":1`)
+		}},
+		{500 * time.Millisecond, func(at time.Time) string {
+			return gsrLogLine(at, logCommandFailed, logEventCommand, serverStop+" "+databaseName, "", "", "",
+				`"exitCode":1`)
+		}}}
+	return f
+}
+
+func TestRunS12GracefulStopSeedingPassesWhenTheStopEndsRestoreslaveAndTheSeedRetryCompletes(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	stop, err := gracefulStopRestoreOf(t, f)
+	if err != nil || stop.Result != evidence.Pass {
+		t.Fatalf("S12 graceful-stop-seeding = %+v, %v; want passed", stop, err)
+	}
+	if !slices.Equal(f.podDeletes, []string{testGSSPeer + "/" + testGSSPeer}) || f.samplerRuns != 1 {
+		t.Fatalf("Pod deletions %v, sampler runs %d; want the peer's Pod deleted once", f.podDeletes, f.samplerRuns)
+	}
+	m := stop.Measurements
+	if m["seedRetriesAfterKill"] != float64(1) || m[measRetriesAfterStop] != float64(1) ||
+		m[measOperationIDChanged] != true || m["deleteAfterRestoreslaveSeen"] == evidence.Unknown ||
+		m["restoreslaveDurationMs"] != float64(1830) || m["retriesAfterKill"] != float64(0) {
+		t.Fatalf("measurements = %v", m)
+	}
+	rec := readGSRRecord(t, f.cfg)
+	if rec.At != GracefulStopAtSeeding || rec.TargetMember != testGSSPeer || rec.StoppedOperation != testIMSeedOp ||
+		rec.SeedRestoreAtDelete != testIMSeedOp || rec.Sampler.StagingDir != testGSSStagingDir ||
+		len(rec.SeedRetriesAfterStop) != 1 || rec.Log.RestoredbResult != logCommandFailed {
+		t.Fatalf("at %q, target %q, stopped %q, seed restore at the deletion %q, staging %q, seed retries %d, "+
+			"log %q", rec.At, rec.TargetMember, rec.StoppedOperation, rec.SeedRestoreAtDelete, rec.Sampler.StagingDir,
+			len(rec.SeedRetriesAfterStop), rec.Log.RestoredbResult)
+	}
+	for _, want := range []string{"restoreslave", testGSSPeer, testIMSeedOp2, testGSSFailReason,
+		"the restore was not run again"} {
+		if reason := s12GracefulStopPassReason(&rec); !strings.Contains(reason, want) {
+			t.Fatalf("reason = %q, want %q", reason, want)
+		}
+	}
+}
+
+func TestRunS12GracefulStopSeedingIsBlockedWhenTheSeedRestoreIsMissed(t *testing.T) {
+	for name, change := range map[string]func(*s12GracefulStopFixture){
+		// The peer was seeded before the sampler showed restoreslave.
+		"the peer seeded first": func(f *s12GracefulStopFixture) {
+			f.neverSeen = true
+			f.beforeDelete = append(f.beforeDelete, imStatus{databasev1alpha1.BootstrapSeedingReplicas, 0, testGSROp,
+				testSeedInProgress, testIMCopying})
+			f.beforeSeed = append(f.beforeSeed, &imSeed{seeded: []string{testGSSPeer}})
+		},
+		// Another member is being seeded: the peer's seed restore is over.
+		"another member being seeded": func(f *s12GracefulStopFixture) {
+			f.neverSeen = true
+			f.beforeDelete = append(f.beforeDelete, imStatus{databasev1alpha1.BootstrapSeedingReplicas, 0, testGSROp,
+				testSeedInProgress, testIMCopying})
+			f.beforeSeed = append(f.beforeSeed, &imSeed{member: testGSSPeer2, op: testIMSeedOp3})
+		},
+		"the bootstrap completed first": func(f *s12GracefulStopFixture) {
+			f.neverSeen = true
+			f.beforeDelete = append(f.beforeDelete, imStatus{databasev1alpha1.BootstrapComplete, 0, testGSROp,
+				testPeersSeeded, testIMCopied})
+			f.beforeSeed = append(f.beforeSeed, nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newS12GracefulStopSeedingFixture(t)
+			change(f)
+			stop, err := gracefulStopRestoreOf(t, f)
+			requireGSR(t, stop, err, evidence.Blocked, "placement missed", "before the sampler showed restoreslave")
+			if len(f.podDeletes) != 0 {
+				t.Fatalf("Pod deletions = %v, want none", f.podDeletes)
+			}
+		})
+	}
+}
+
+func TestRunS12GracefulStopSeedingIsBlockedWhenRestoreslaveEndedBeforeTheStop(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.stopLog[0] = gsrLine{150 * time.Millisecond, func(at time.Time) string {
+		return gsrLogLine(at, logRanCommand, logEventCommand, testGSSCommand, "", "", "", `"exitCode":0`)
+	}}
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Blocked, "placement missed: the member's log shows restoreslave succeed")
+}
+
+func TestRunS12GracefulStopSeedingFailsOnACUBRIDHolderAfterTheCleanupBegan(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.afterStop[2].processes = []string{testGSRWorker + " cub_admin cub_admin restoreslave"}
+	f.afterStop[2].holders = []string{testGSRWorker + " " + testGSSStaging + "/backup/x"}
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Fail, "a CUBRID process held a file of the restore", "restoreslave ran after")
+}
+
+func TestRunS12GracefulStopSeedingFailsWhenTheRestoreIsRetried(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.afterDelete[1] = imStatus{databasev1alpha1.BootstrapSeedingReplicas, 1, "", s12RetryReason,
+		"on " + testGSRTarget + ": " + testGSSFailReason + "; starting attempt 2 of 3"}
+	for i := 2; i < len(f.afterDelete); i++ {
+		f.afterDelete[i].attempts = 1
+	}
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Fail, "the restore was retried after the kill")
+}
+
+func TestRunS12GracefulStopSeedingFailsOnASecondSeedRetry(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	again := "on " + testGSSPeer + ": restore failed: restoreslave failed: exit status 1; starting attempt 3 of 3"
+	f.afterDelete = slices.Insert(f.afterDelete, 3, imStatus{databasev1alpha1.BootstrapSeedingReplicas, 0, testGSROp,
+		s12SeedRetryReason, again})
+	f.afterSeed = slices.Insert(f.afterSeed, 3, &imSeed{attempts: 2})
+	for i := 4; i < len(f.afterSeed); i++ {
+		f.afterSeed[i].attempts = 2
+	}
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Fail, "the seeding failed again after the seed attempt the kill ended")
+}
+
+func TestRunS12GracefulStopSeedingIsBlockedByASeedRetryForAnotherReason(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.afterDelete[1].message = "on " + testGSSPeer + ": restore failed: download: " + testReset +
+		"; starting attempt 2 of 3"
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Blocked, "not with a seed restore on "+testGSSPeer)
+}
+
+func TestS12GracefulStopPlacementsHaveALaneAndAVariantEach(t *testing.T) {
+	for at, want := range map[string]string{GracefulStopAtRestoring: "graceful-stop",
+		GracefulStopAtSeeding: "graceful-stop-seeding"} {
+		if got := gracefulStopVariantOf(at); got != want {
+			t.Fatalf("gracefulStopVariantOf(%s) = %s, want %s", at, got, want)
+		}
+		if got := gracefulStopLaneOf(at); got != "lab-installed-ha-s12-"+want {
+			t.Fatalf("gracefulStopLaneOf(%s) = %s", at, got)
+		}
+	}
+	cfg := testS12GracefulStopConfig(t)
+	cfg.RestoreGracefulStopAt = GracefulStopAtSeeding
+	if err := cfg.validateS12GracefulStop(); err != nil {
+		t.Fatalf("validateS12GracefulStop() = %v, want seeding accepted", err)
+	}
+	for _, bad := range []HAConfig{{RestoreGracefulStopAt: "uploading"},
+		{RestoreGracefulStopAt: GracefulStopAtSeeding}} {
+		if bad.validateS12GracefulStop() == nil {
+			t.Fatalf("validateS12GracefulStop(%+v) accepted it", bad)
+		}
+	}
+}
+
+func TestRunS12GracefulStopSeedingJudgesTheMemberBeingSeeded(t *testing.T) {
+	for name, tc := range map[string]struct {
+		member string
+		result evidence.Result
+		want   string
+	}{
+		// The Operator never seeds over the member the database was restored
+		// on (reconcileSeeding): a seeding that names it breaks the contract.
+		"the restore's target": {member: testGSRTarget, result: evidence.Fail,
+			want: "the member being seeded, " + testGSRTarget + ", is the restore's target"},
+		// A name that is not one of the cluster's members is a reading the run
+		// cannot act on.
+		"not a member of the cluster": {member: "ha-other-9", result: evidence.Blocked,
+			want: "the member being seeded \"ha-other-9\" is not a member of " + s12GracefulStopClusterName},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newS12GracefulStopSeedingFixture(t)
+			f.beforeSeed[1].member = tc.member
+			stop, err := gracefulStopRestoreOf(t, f)
+			requireGSR(t, stop, err, tc.result, tc.want)
+			if len(f.podDeletes) != 0 {
+				t.Fatalf("Pod deletions = %v, want none", f.podDeletes)
+			}
+		})
+	}
+}
+
+func TestRunS12GracefulStopSeedingIsBlockedWhenTheLogNamesAnotherSeedRestore(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.stopLog[1] = gsrLine{250 * time.Millisecond, func(at time.Time) string {
+		return gsrLogLine(at, logOperationFailed, "operation_state_changed", "", "op-seed-9", "restore",
+			testGSSFailReason, "")
+	}}
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Blocked, "the member's log names op-seed-9 as the restore operation the stop "+
+		"ended, and the cluster's status named "+testIMSeedOp+" before the deletion")
+}
+
+func TestRunS12GracefulStopSeedingFailsWhenTheShutdownPrecedesTheFailedRecord(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.stopLog[1].at, f.stopLog[2].at = 450*time.Millisecond, 250*time.Millisecond
+	f.stopLog[1], f.stopLog[2] = f.stopLog[2], f.stopLog[1]
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Fail, heartbeatStop+" (line", "before the restore operation's "+logOperationFailed)
+}
+
+func TestRunS12GracefulStopSeedingFailsWhenTheSeedRestoreIsUnchangedAfterTheRetry(t *testing.T) {
+	f := newS12GracefulStopSeedingFixture(t)
+	f.afterSeed[2].op = testIMSeedOp
+	stop, err := gracefulStopRestoreOf(t, f)
+	requireGSR(t, stop, err, evidence.Fail, "the seed restore operation "+testIMSeedOp+" the kill ended is the one "+
+		"recorded for "+testGSSPeer)
 }

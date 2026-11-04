@@ -3693,12 +3693,87 @@ S12 `graceful-stop` here does not check:
   removal of the database directory, which ends before the first reading
   that shows it gone;
 - anything after the database container's end;
-- `restoreslave` under a graceful stop: a stop of a member being seeded;
+- `restoreslave` under a graceful stop: a stop of a member being seeded runs
+  only with `-restore-graceful-stop-at seeding`, below;
 - a stop while the backup is downloaded or the restored database is
   started;
 - the replacement Instance Manager's reclaim, and the next attempt's own
   `restoredb` duration;
 - the Operator's log from before one minute before the variant started.
+
+### S12 graceful-stop at seeding
+
+With `-restore-graceful-stop-at seeding` as well as
+`-restore-graceful-stop`, the variant is `graceful-stop-seeding`, in the
+lane `lab-installed-ha-s12-graceful-stop-seeding`, which requires LAB01,
+S11/complete, S12/exact and S12/graceful-stop-seeding; its evidence goes to
+`S12/graceful-stop-seeding/` with the same files. `-restore-graceful-stop-at`
+with another value than `restoring` (the default, the section above) or
+`seeding`, or `seeding` without `-restore-graceful-stop`, is refused before
+anything is done. It applies the same stop to the first member the
+restored cluster seeds, while `restoreslave` seeds it (#676), and
+everything of the section above holds except what follows.
+
+What the product does, as read from the code:
+- Once the restore completed on the target, the Operator seeds the first
+  peer from the target: a seed backup there, then a seed restore on the
+  peer, recorded in `status.databases[].seeding.restoreOperationID`
+  (`seedMember` in `internal/controller/habootstrap.go`). The peer's
+  Instance Manager stages the seed backup in
+  `/var/lib/cubrid/restore-staging/seed-<cluster UID>` (the request's
+  `StagingDir`) and runs `cubrid restoreslave -u -s master -m <source> -B
+  <staging>/backup appdb` into `/var/lib/cubrid/databases/appdb` (`Restore`
+  in `internal/instancemanager/restore.go`), the same code as `restoredb`.
+  A stop cancels it, its process group is killed (`restoreslave` is a
+  group utility, `internal/instancemanager/cli.go`), and `Restore` removes
+  the registration, the database directory and the staging it created; the
+  operation is recorded `Failed` with `the member is stopping: restore
+  failed: restoreslave failed: ...` (`stoppingReason`, `runRestore`).
+- The Operator reads it `Failed`, clears the seeding and ends the seed
+  attempt with `SeedRestoreFailedRetrying`, `on <peer>: <reason>; starting
+  attempt <n> of 3`, raising `status.databases[].bootstrapAttempts`; the
+  next attempt takes a new seed backup and seed restore under its own key
+  (`bootstrapStepFailed`, `bootstrapKey`). The restore of the target is
+  recorded complete and is never started again (`reconcileRecovery`).
+
+What differs from the section above:
+- **The member.** The run waits, recording every reading, for
+  `SeedingReplicas` with a member being seeded
+  (`status.databases[].seeding.member`). One that is the restore's target
+  fails the variant: the Operator never seeds over the member the database
+  was restored on (`reconcileSeeding`). One that is not a member of the
+  cluster blocks it: the run cannot act on it. That member's Pod, once its database container runs, is the one sampled,
+  followed and deleted. The sampler is the same script, every 100 ms, so a
+  writer holding a file for less than that may not be seen.
+- **The placement.** The Pod is deleted at the first reading that shows
+  `restoreslave`. A reading of the bootstrap `Complete`, of the member
+  already seeded, or of another member being seeded, before that blocks
+  the variant ("placement missed"), as does a log that shows
+  `restoreslave` succeed (`Ran command`) before the stop.
+- **The log and the sampler.** The log's lines are `restoreslave`'s end for
+  the seed staging, the seed restore operation's `Operation failed` with
+  `the member is stopping: restore failed: restoreslave failed: `, then
+  `heartbeat stop` and `server stop`, in that order, with `restoreslave`
+  killed. The sampler judges the database directory and
+  `restore-staging/seed-<cluster UID>`, and `restoreslave` after the cleanup
+  began.
+- **The retries.** After the deletion the restore must never be retried
+  (`RestoreFailedRetrying`), and once the cluster completed there must be
+  exactly one seed retry, `SeedRestoreFailedRetrying` on the member naming
+  the stopping reason, with another seed restore operation under the next
+  seed attempt when a reading shows it; a second seed retry fails the
+  variant, and a first one for another reason or member blocks it, as at
+  S12 `instance-manager-restart-seeding`. The record holds the seed restore
+  and the seed attempts at the deletion (`seedRestoreAtDelete`,
+  `seedAttemptsAtDelete`), the seed retries after it and the
+  `SeedRestoreFailedRetrying` Events. The measurements naming the utility
+  are `deleteAfterRestoreslaveSeen` and `restoreslaveDurationMs`, besides
+  `seedRetriesAfterKill`, `seedAttemptsAdded`, `seedRestoreOperationChanged`
+  and `retriesAfterKill` (restore retries, which must be 0).
+
+S12 `graceful-stop-seeding` here does not check a stop of a later member
+being seeded, a stop during the seed backup on the source, or the next
+seed restore's own `restoreslave` duration.
 
 ## Evidence
 

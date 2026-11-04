@@ -82,6 +82,74 @@ const (
 	signalKilled = "signal: killed"
 )
 
+// Placements of S12 graceful-stop (-restore-graceful-stop-at).
+const (
+	// GracefulStopAtRestoring deletes the restore target's Pod while
+	// restoredb runs.
+	GracefulStopAtRestoring = "restoring"
+	// GracefulStopAtSeeding deletes the Pod of the first member being seeded
+	// while restoreslave seeds it from the restored master's seed backup.
+	GracefulStopAtSeeding = "seeding"
+	// restoreslaveUtility and restoreslaveCommand are the utility and the
+	// logged command of a seed restore (Restore in internal/instancemanager/
+	// restore.go, with SeedFromMaster), and seedStopReasonPrefix the failure
+	// reason of a seed restore its member's stop ended, as
+	// restoreStopReasonPrefix is of the restore.
+	restoreslaveUtility  = "restoreslave"
+	restoreslaveCommand  = "cubrid restoreslave "
+	seedStopReasonPrefix = memberStopping + "restore failed: restoreslave failed: "
+)
+
+// stopPlacement is what a placement of S12 graceful-stop stops: the utility
+// its sampler watches, the command the Instance Manager logs for it, the
+// failure reason the stop gives the operation, the staging directory below
+// restore-staging of the cluster's UID, and the names of the two
+// measurements that name the utility.
+type stopPlacement struct {
+	utility, command, reasonPrefix, stagingPrefix string
+	measDelete, measDuration                      string
+}
+
+// stopPlacements are the placements. The seed restore stages into
+// restore-staging/seed-<cluster UID> (the restore request of seedMember in
+// internal/controller/habootstrap.go).
+var stopPlacements = map[string]stopPlacement{
+	GracefulStopAtRestoring: {utility: restoredbUtility, command: restoredbCommand,
+		reasonPrefix: restoreStopReasonPrefix, measDelete: measDeleteAfterRestoredbSeen,
+		measDuration: measRestoredbDurationMs},
+	GracefulStopAtSeeding: {utility: restoreslaveUtility, command: restoreslaveCommand,
+		reasonPrefix: seedStopReasonPrefix, stagingPrefix: "seed-", measDelete: "deleteAfterRestoreslaveSeen",
+		measDuration: "restoreslaveDurationMs"},
+}
+
+// gracefulStopAt is the selected placement of S12 graceful-stop.
+func (c HAConfig) gracefulStopAt() string {
+	return cmp.Or(c.RestoreGracefulStopAt, GracefulStopAtRestoring)
+}
+
+// gracefulStopVariant is the variant of the selected placement.
+func (c HAConfig) gracefulStopVariant() string { return gracefulStopVariantOf(c.gracefulStopAt()) }
+
+// gracefulStopVariantOf is the variant of the placement at: restoring keeps
+// the name of the variant it was first.
+func gracefulStopVariantOf(at string) string {
+	if at == GracefulStopAtRestoring {
+		return s12GracefulStopVariant
+	}
+	return s12GracefulStopVariant + "-" + at
+}
+
+// gracefulStopLaneOf is the lane of the placement at.
+func gracefulStopLaneOf(at string) string {
+	if at == GracefulStopAtRestoring {
+		return s12GracefulStopLane
+	}
+	return s12GracefulStopLane + "-" + at
+}
+
+// gracefulStopFile is the evidence file name of variant.
+func gracefulStopFile(variant, name string) string { return "S12/" + variant + "/" + name }
+
 // restoreSamplerScript is samplerScript for the data volume: its readings
 // list the entries two levels below it, among them databases/<db> and
 // restore-staging/<cluster UID>, and every open file below it.
@@ -193,7 +261,12 @@ func (l *s12StopLog) setEnd(at time.Time, read int64, truncated bool, endErr str
 type s12GracefulStopRecord struct {
 	s12Record
 	SecretUID string `json:"secretUID,omitempty"`
-	// TargetMember is the restore's target, the member whose Pod is deleted.
+	// At is the placement; variant its variant and place what it stops.
+	At      string `json:"at"`
+	variant string
+	place   stopPlacement
+	// TargetMember is the member whose Pod is deleted: the restore's target,
+	// or at seeding the first member being seeded.
 	TargetMember string          `json:"targetMember"`
 	Trigger      *s11StopTrigger `json:"trigger"`
 	Sampler      *s12StopSampler `json:"sampler"`
@@ -206,6 +279,15 @@ type s12GracefulStopRecord struct {
 	OperationAtDelete string `json:"operationAtDelete,omitempty"`
 	StoppedOperation  string `json:"stoppedOperation,omitempty"`
 	deleteReading     int
+	// At seeding: SeedRestoreAtDelete and SeedAttemptsAtDelete are the seed
+	// restore of the member and the first database's attempts of the last
+	// reading recorded before the deletion; SeedRetriesAfterStop the seed
+	// retries after it, and SeedRetryEvents the messages of the Operator's
+	// SeedRestoreFailedRetrying Events of the cluster.
+	SeedRestoreAtDelete  string     `json:"seedRestoreAtDelete,omitempty"`
+	SeedAttemptsAtDelete *int32     `json:"seedAttemptsAtDelete,omitempty"`
+	SeedRetriesAfterStop []s12Retry `json:"seedRetriesAfterStop,omitempty"`
+	SeedRetryEvents      []string   `json:"seedRetryEvents,omitempty"`
 	// Reasons are the BootstrapReady reasons of the readings after the
 	// deletion, each change once; Attempts the attempts and operations every
 	// reading showed; Retries the attempts the status showed ending, and
@@ -241,7 +323,13 @@ type s12GracefulStopMade struct {
 // validateS12GracefulStop checks the inputs of S12 graceful-stop, when it is
 // selected.
 func (c HAConfig) validateS12GracefulStop() error {
+	if _, ok := stopPlacements[c.gracefulStopAt()]; !ok {
+		return fmt.Errorf("-restore-graceful-stop-at must be %s or %s", GracefulStopAtRestoring, GracefulStopAtSeeding)
+	}
 	if !c.RestoreGracefulStop {
+		if c.gracefulStopAt() != GracefulStopAtRestoring {
+			return errors.New("-restore-graceful-stop-at needs " + flagRestoreGracefulStop)
+		}
 		return nil
 	}
 	if !c.Restore {
@@ -269,17 +357,39 @@ func planS12GracefulStop(cfg HAConfig, lane string, requirements []evidence.Requ
 	if !cfg.RestoreGracefulStop {
 		return lane, requirements
 	}
+	at := cfg.gracefulStopAt()
+	what := "whose restore target's Pod is deleted with its grace period while restoredb runs"
+	if at == GracefulStopAtSeeding {
+		what = "whose first member being seeded has its Pod deleted with its grace period while restoreslave runs"
+	}
 	summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 exact and " +
-		"S12 graceful-stop: a full backup to object storage, restored into a new cluster in the run namespace, and " +
-		"into another whose restore target's Pod is deleted with its grace period while restoredb runs, which " +
-		"must end that attempt for the stop with no CUBRID process holding a file of the restore once its cleanup " +
-		"began, and complete on the next; no other S00-S15 qualification"
-	return s12GracefulStopLane, append(requirements,
-		evidence.Requirement{ID: s12ID, Variant: s12GracefulStopVariant})
+		"S12 " + gracefulStopVariantOf(at) + ": a full backup to object storage, restored into a new cluster in the " +
+		"run namespace, and into another " + what + ", which must end that attempt for the stop with no CUBRID " +
+		"process holding a file of it once its cleanup began, and complete on the next; no other S00-S15 " +
+		"qualification"
+	return gracefulStopLaneOf(at), append(requirements,
+		evidence.Requirement{ID: s12ID, Variant: gracefulStopVariantOf(at)})
 }
 
 // newS12GracefulStopRecord is the record S12 graceful-stop starts with.
 func (h *haRun) newS12GracefulStopRecord() *s12GracefulStopRecord {
+	at := h.cfg.gracefulStopAt()
+	rec := h.newGracefulStopRestoringRecord()
+	rec.At, rec.variant, rec.place = at, gracefulStopVariantOf(at), stopPlacements[at]
+	if at == GracefulStopAtSeeding {
+		rec.TargetMember = ""
+		rec.Notes = append(rec.Notes, "at seeding the Pod deleted is that of the first member the Operator "+
+			"seeds, read from status.databases[].seeding once the bootstrap is SeedingReplicas; its sampler starts "+
+			"once its database container runs, and the Pod is deleted at the first reading that shows "+
+			"restoreslave, which seeds it from the restored master's seed backup staged in restore-staging/"+
+			"seed-<cluster UID>; the seed's own cleanup and its retry are judged, and the restore must not run again")
+	}
+	return rec
+}
+
+// newGracefulStopRestoringRecord is the record of the placement restoring,
+// which the other placements start from.
+func (h *haRun) newGracefulStopRestoringRecord() *s12GracefulStopRecord {
 	return &s12GracefulStopRecord{s12Record: s12Record{Cluster: s12GracefulStopClusterName,
 		SeedPrefix: h.rec.Seed.Prefix + "/gracefulstop-seed", SecretRef: s12GracefulStopSecretName,
 		Bootstrap: []s12Phase{}, Members: []imageIdentity{}, SecretsReferenced: []string{},
@@ -362,27 +472,34 @@ func (h *haRun) newS12GracefulStopRecord() *s12GracefulStopRecord {
 // blocked, as does a log or sampler that ended before it showed what is
 // judged.
 func (h *haRun) runS12GracefulStop(ctx context.Context) (result evidence.Scenario) {
-	defer h.inScenario(s12ID+"/"+s12GracefulStopVariant, &result)()
-	result = evidence.Scenario{ID: s12ID, Variant: s12GracefulStopVariant, Result: evidence.Fail,
-		NeverEvents: []string{}}
 	rec := h.newS12GracefulStopRecord()
-	watch := &stopWatch{utility: restoredbUtility, seen: make(chan struct{})}
+	variant := rec.variant
+	defer h.inScenario(s12ID+"/"+variant, &result)()
+	result = evidence.Scenario{ID: s12ID, Variant: variant, Result: evidence.Fail, NeverEvents: []string{}}
+	watch := &stopWatch{utility: rec.place.utility, seen: make(chan struct{})}
 	var made s12GracefulStopMade
 	var memberLog []byte
 	defer func() {
 		cleaned := h.deleteS12GracefulStop(ctx, made, rec)
 		result.CleanupSucceeded = &cleaned
-		h.writeStopEvidence(stopEvidence{name: "S12 graceful-stop", dir: "S12/" + s12GracefulStopVariant + "/",
-			samples: s12GracefulStopSamplesFile, log: s12GracefulStopLogFile, record: s12GracefulStopRecordFile},
+		h.writeStopEvidence(stopEvidence{name: "S12 " + variant, dir: "S12/" + variant + "/",
+			samples: gracefulStopFile(variant, "sampler.jsonl"), log: gracefulStopFile(variant, "member-log.jsonl"),
+			record: gracefulStopFile(variant, "record.json")},
 			watch, memberLog, rec, &result)
 	}()
 	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String()}
 	result.Measurements = map[string]any{restoredWithinMeasurement: evidence.Unknown,
 		dataRulesHeldMeasurement: evidence.Unknown, postBackupRowsMeasurement: evidence.Unknown,
-		measSamples: evidence.Unknown, measDeleteAfterRestoredbSeen: evidence.Unknown,
-		measRestoredbDurationMs: evidence.Unknown, measCleanupSeenAfterDelete: evidence.Unknown,
+		measSamples: evidence.Unknown, rec.place.measDelete: evidence.Unknown,
+		rec.place.measDuration: evidence.Unknown, measCleanupSeenAfterDelete: evidence.Unknown,
 		measHoldersAfterCleanup: evidence.Unknown, measStopLoggedAfterDelete: evidence.Unknown,
 		measRetriesAfterStop: evidence.Unknown, measOperationIDChanged: evidence.Unknown}
+	if rec.At == GracefulStopAtSeeding {
+		for _, m := range []string{measSeedRetriesAfterKill, measSeedAttemptsAdded, measSeedRestoreOperationChanged,
+			measRetriesAfterKill} {
+			result.Measurements[m] = evidence.Unknown
+		}
+	}
 	err := h.s12GracefulStopSteps(ctx, rec, &made, watch, &memberLog, &result)
 	h.judgeS12GracefulStopRun(ctx, err, rec, &result)
 	judged := time.Now().UTC()
@@ -437,6 +554,7 @@ func (h *haRun) judgeS12GracefulStopRun(ctx context.Context, err error, rec *s12
 // recorded.
 func s12GracefulStopPassReason(rec *s12GracefulStopRecord) string {
 	t, s, l := rec.Trigger, rec.Sampler, rec.Log
+	place := stopPlacements[cmp.Or(rec.At, GracefulStopAtRestoring)]
 	last := "no CUBRID process held a file of the restore in any reading, about every " + samplerInterval.String()
 	if s.LastHolder != "" {
 		last = fmt.Sprintf("the last file of the restore a CUBRID process held was %s, at %s", s.LastHolder,
@@ -451,23 +569,30 @@ func s12GracefulStopPassReason(rec *s12GracefulStopRecord) string {
 		ended = fmt.Sprintf("with %q after its last reading at %s, once the shutdown was logged", s.EndError,
 			s.LastReadingAt.Format(time.RFC3339Nano))
 	}
+	retry := fmt.Sprintf("the Operator ended that attempt with %s naming the stop and completed the restore under "+
+		"operation %s, attempt %d, with one retry", s12RetryReason, rec.OperationIDAfter, attempts)
+	if rec.At == GracefulStopAtSeeding {
+		retry = fmt.Sprintf("the Operator ended that seed attempt with %s naming the stop and seeded %s again under "+
+			"seed restore operation %s, seeding attempt %d, with one seed retry, and the restore was not run again "+
+			"(operation %s kept)", s12SeedRetryReason, rec.TargetMember, rec.OperationIDAfter, attempts,
+			rec.OperationAtDelete)
+	}
 	return fmt.Sprintf("the sampler showed %q in %s's database container at %s, and that Pod was deleted with its "+
-		"grace period, the deletion accepted at %s; the member's log held restoredb's %s, then %s for the restore "+
-		"operation %s with %q, then the shutdown's heartbeat stop, in that order, restoredb killed (%q); the sampler "+
+		"grace period, the deletion accepted at %s; the member's log held %s's %s, then %s for the restore "+
+		"operation %s with %q, then the shutdown's heartbeat stop, in that order, %s killed (%q); the sampler "+
 		"saw the database directory %s gone at %s and the staging directory gone at %s; none of the %d reading(s) "+
 		"it started after the operation was logged Failed showed either directory; no CUBRID process held a file "+
-		"of either from the database directory's removal on, nor did restoredb run after it, in any reading, about "+
-		"every "+samplerInterval.String()+" (%s); its output ended %s; the Operator ended that attempt with %s "+
-		"naming the stop and completed the restore under operation %s, attempt %d, with one retry; the cluster "+
-		"reported Ready within restore_limit only after its bootstrap completed; its members and Services held "+
-		"exactly the rows acknowledged before the known point and S11's marker, no row written after the backup, "+
-		"and took a normal write; the source and the installed manager were unchanged; no credential was in its "+
-		"statuses, the Events, the sampler's output, the deleted member's followed log, the replacement's log or "+
-		"the installed Operator's manager log", t.SeenProcess, rec.TargetMember,
-		t.SeenAt.Format(time.RFC3339Nano), t.DeleteAcceptedAt.Format(time.RFC3339Nano), l.RestoredbResult,
-		logOperationFailed, rec.StoppedOperation, l.OperationFailedReason, l.RestoredbErr, s.DatabaseDir,
+		"of either from the database directory's removal on, nor did %s run after it, in any reading, about "+
+		"every "+samplerInterval.String()+" (%s); its output ended %s; %s; the cluster reported Ready within "+
+		"restore_limit only after its bootstrap completed; its members and Services held exactly the rows "+
+		"acknowledged before the known point and S11's marker, no row written after the backup, and took a normal "+
+		"write; the source and the installed manager were unchanged; no credential was in its statuses, the "+
+		"Events, the sampler's output, the deleted member's followed log, the replacement's log or the installed "+
+		"Operator's manager log", t.SeenProcess, rec.TargetMember, t.SeenAt.Format(time.RFC3339Nano),
+		t.DeleteAcceptedAt.Format(time.RFC3339Nano), place.utility, l.RestoredbResult, logOperationFailed,
+		rec.StoppedOperation, l.OperationFailedReason, place.utility, l.RestoredbErr, s.DatabaseDir,
 		s.CleanupSeenAt.Format(time.RFC3339Nano), s.StagingGoneAt.Format(time.RFC3339Nano),
-		s.ReadingsAfterOperationFailed, last, ended, s12RetryReason, rec.OperationIDAfter, attempts)
+		s.ReadingsAfterOperationFailed, place.utility, last, ended, retry)
 }
 
 // s12GracefulStopSteps runs the steps of S12 graceful-stop in order. Before
@@ -502,7 +627,7 @@ func (h *haRun) s12GracefulStopSteps(ctx context.Context, rec *s12GracefulStopRe
 	created := time.Now()
 	createdAt := created.UTC()
 	rec.ClusterUID, rec.CreatedAt = string(cluster.UID), &createdAt
-	rec.Sampler.StagingDir = strings.TrimPrefix(imRestoreStagingRoot, imDataRoot+"/") + "/" + rec.ClusterUID
+	rec.Sampler.StagingDir = strings.TrimPrefix(rec.stagingPath(), imDataRoot+"/")
 	if err := h.waitStopTarget(ctx, cluster, created, rec, result); err != nil {
 		return err
 	}
@@ -548,7 +673,7 @@ func (h *haRun) s12GracefulStopSteps(ctx context.Context, rec *s12GracefulStopRe
 	}
 	errs = append(errs, h.gracefulStopRestoreCredentials(ctx, rec, watch, *memberLog, started))
 	rec.Source = &s12Source{MembersAfter: []imageIdentity{}}
-	errs = append(errs, h.checkSourceS12(ctx, rec.Source, s12GracefulStopSourceDataCheckFile))
+	errs = append(errs, h.checkSourceS12(ctx, rec.Source, gracefulStopFile(rec.variant, "source-data-check.json")))
 	errs = append(errs, h.sameManager(ctx, "S12 graceful-stop", rec.ManagerBefore, &rec.ManagerAfter))
 	return errors.Join(errs...)
 }
@@ -585,10 +710,15 @@ func (h *haRun) waitStopTarget(ctx context.Context, created *databasev1alpha1.Cu
 		"restore target's database container did not run",
 		func(cluster *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 			boot := cluster.Status.Bootstrap
-			if boot.TargetMember != "" && boot.TargetMember != rec.TargetMember {
+			if rec.At == GracefulStopAtSeeding {
+				ready, err := seedingStopTarget(cluster, phase, rec)
+				if !ready || err != nil {
+					return false, err
+				}
+			} else if boot.TargetMember != "" && boot.TargetMember != rec.TargetMember {
 				return false, fmt.Errorf("the restore's target is %s, not %s", boot.TargetMember, rec.TargetMember)
 			}
-			if missed := pastRestoredb(phase, boot.Attempts); missed != "" {
+			if missed := rec.pastPlacement(cluster, phase); missed != "" {
 				rec.PlacementMissed = missed + " before the sampler started"
 				return false, errors.New("placement missed: " + rec.PlacementMissed)
 			}
@@ -609,6 +739,71 @@ func (h *haRun) waitStopTarget(ctx context.Context, created *databasev1alpha1.Cu
 			rec.Trigger.PodUID, rec.Trigger.ContainerID = string(pod.UID), status.ContainerID
 			return true, nil
 		})
+}
+
+// stagingPath is the staging directory the stopped restore downloads into:
+// restore-staging/<cluster UID>, or restore-staging/seed-<cluster UID> for a
+// seed restore.
+func (rec *s12GracefulStopRecord) stagingPath() string {
+	return imRestoreStagingRoot + "/" + rec.place.stagingPrefix + rec.ClusterUID
+}
+
+// seedingStopTarget reports, at seeding, whether a reading of cluster in
+// phase names the member the stop acts on: SeedingReplicas with a member
+// being seeded that is not the restore's target. Preparing and Restoring
+// are waited through; the member is recorded as rec.TargetMember the first
+// time. Another phase leaves the decision to pastPlacement. A member that is
+// the restore's target fails the variant; one that is not the cluster's
+// blocks it.
+func seedingStopTarget(cluster *databasev1alpha1.CubridCluster, phase string, rec *s12GracefulStopRecord) (
+	bool, error) {
+	if phase != string(databasev1alpha1.BootstrapSeedingReplicas) {
+		return false, nil
+	}
+	seeding := firstDatabaseSeeding(cluster)
+	if seeding == nil || seeding.Member == "" {
+		return false, nil
+	}
+	// The Operator never seeds over the member the database was restored on
+	// (reconcileSeeding in internal/controller/habootstrap.go): a seeding that
+	// names it breaks the contract and fails the variant. A name that is not
+	// one of the cluster's members is a reading the run cannot act on, and
+	// blocks it.
+	if seeding.Member == cluster.Status.Bootstrap.TargetMember {
+		return false, restoreVerdict{fmt.Errorf("the member being seeded, %s, is the restore's target",
+			seeding.Member)}
+	}
+	if !slices.Contains(clusterMembers(cluster.Name), seeding.Member) {
+		return false, fmt.Errorf("the member being seeded %q is not a member of %s", seeding.Member, cluster.Name)
+	}
+	if rec.TargetMember == "" {
+		rec.TargetMember = seeding.Member
+	}
+	return true, nil
+}
+
+// pastPlacement says, for a reading of cluster in phase, why what the
+// placement stops had ended: at restoring, pastRestoredb; at seeding, the
+// bootstrap read Complete, or the member already seeded, or another member
+// being seeded. It is empty otherwise.
+func (rec *s12GracefulStopRecord) pastPlacement(cluster *databasev1alpha1.CubridCluster, phase string) string {
+	if rec.At != GracefulStopAtSeeding {
+		return pastRestoredb(phase, cluster.Status.Bootstrap.Attempts)
+	}
+	if phase == string(databasev1alpha1.BootstrapComplete) {
+		return "the bootstrap was read " + phase
+	}
+	if rec.TargetMember == "" {
+		return ""
+	}
+	if db := firstDatabaseStatus(cluster); db != nil && slices.Contains(db.SeededMembers, rec.TargetMember) {
+		return "the bootstrap was read with " + rec.TargetMember + " seeded"
+	}
+	if seeding := firstDatabaseSeeding(cluster); seeding != nil && seeding.Member != "" &&
+		seeding.Member != rec.TargetMember {
+		return "the bootstrap was read seeding " + seeding.Member + ", not " + rec.TargetMember
+	}
+	return ""
 }
 
 // pastRestoredb says, for a reading of the bootstrap in phase at attempts,
@@ -661,7 +856,7 @@ func (h *haRun) stopDuringRestoredb(ctx context.Context, created *databasev1alph
 			case watch.fired:
 				return false, nil
 			}
-			missed := pastRestoredb(phase, cluster.Status.Bootstrap.Attempts)
+			missed := rec.pastPlacement(cluster, phase)
 			if missed == "" && rec.Sampler.EndedAt != nil {
 				missed = "the sampler's output ended"
 			}
@@ -669,7 +864,7 @@ func (h *haRun) stopDuringRestoredb(ctx context.Context, created *databasev1alph
 				return false, nil
 			}
 			watch.armed = false
-			t.Missed = fmt.Sprintf("%s before the sampler showed restoredb in %d reading(s)", missed,
+			t.Missed = fmt.Sprintf("%s before the sampler showed %s in %d reading(s)", missed, rec.place.utility,
 				len(watch.samples))
 			return false, errors.New("placement missed: " + t.Missed)
 		})
@@ -685,7 +880,7 @@ func (h *haRun) stopDuringRestoredb(ctx context.Context, created *databasev1alph
 		rec.PlacementMissed = t.Missed
 	}
 	if t.SeenAt != nil && t.DeleteAcceptedAt != nil {
-		result.Measurements[measDeleteAfterRestoredbSeen] = t.DeleteAcceptedAt.Sub(*t.SeenAt).
+		result.Measurements[rec.place.measDelete] = t.DeleteAcceptedAt.Sub(*t.SeenAt).
 			Round(time.Millisecond).String()
 	}
 	if t.DeleteAcceptedAt != nil {
@@ -693,8 +888,11 @@ func (h *haRun) stopDuringRestoredb(ctx context.Context, created *databasev1alph
 			if p.At.After(*t.DeleteAcceptedAt) {
 				break
 			}
-			attempts := p.Attempts
+			attempts, seedAttempts := p.Attempts, p.DatabaseAttempts
 			rec.deleteReading, rec.AttemptsAtDelete, rec.OperationAtDelete = i, &attempts, p.OperationID
+			if rec.At == GracefulStopAtSeeding && p.SeedMember == rec.TargetMember {
+				rec.SeedRestoreAtDelete, rec.SeedAttemptsAtDelete = p.SeedRestoreOperationID, &seedAttempts
+			}
 		}
 	}
 	return err
@@ -705,8 +903,11 @@ func (h *haRun) stopDuringRestoredb(ctx context.Context, created *databasev1alph
 func (h *haRun) readStopRetryEvents(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	rec *s12GracefulStopRecord) {
 	r := &s12IMRestart{At: IMRestartAtRestoring, RetryEvents: []string{}}
+	if rec.At == GracefulStopAtSeeding {
+		r.At, r.SeedRetryEvents = IMRestartAtSeeding, []string{}
+	}
 	h.readRetryEvents(ctx, cluster, r)
-	rec.RetryEvents, rec.EventsError = r.RetryEvents, r.EventsError
+	rec.RetryEvents, rec.SeedRetryEvents, rec.EventsError = r.RetryEvents, r.SeedRetryEvents, r.EventsError
 }
 
 // judgeRestoreStop judges what the target's log, the sampler and the
@@ -719,7 +920,7 @@ func judgeRestoreStop(watch *stopWatch, memberLog []byte, rec *s12GracefulStopRe
 	l := rec.Log
 	scanRestoreStopLog(memberLog, rec)
 	if l.RestoredbDurationMs != nil {
-		result.Measurements[measRestoredbDurationMs] = *l.RestoredbDurationMs
+		result.Measurements[rec.place.measDuration] = *l.RestoredbDurationMs
 	}
 	if t := rec.Trigger.DeleteAcceptedAt; l.StopLoggedAt != nil && t != nil {
 		l.StopLoggedAfterDelete = l.StopLoggedAt.Sub(*t).Round(time.Millisecond).String()
@@ -727,25 +928,33 @@ func judgeRestoreStop(watch *stopWatch, memberLog []byte, rec *s12GracefulStopRe
 	}
 	rec.StoppedOperation = l.OperationID
 	if l.RestoredbResult == logRanCommand {
-		rec.PlacementMissed = fmt.Sprintf("the member's log shows restoredb succeed (line %d) before the stop "+
-			"reached the Instance Manager", l.RestoredbLine)
+		rec.PlacementMissed = fmt.Sprintf("the member's log shows %s succeed (line %d) before the stop "+
+			"reached the Instance Manager", rec.place.utility, l.RestoredbLine)
 		return errors.New("placement missed: " + rec.PlacementMissed)
 	}
 	reasonErr := judgeRestoreStopReason(rec)
 	if rec.PlacementMissed != "" {
 		return reasonErr
 	}
-	errs := []error{reasonErr, restoreStopLogGaps(rec), restoredbKilled(l)}
+	errs := []error{reasonErr, restoreStopLogGaps(rec), restoredbKilled(l, rec.place.utility)}
 	for _, o := range restoreStopLogOrder(l) {
 		event := "the member's log holds " + o
 		result.NeverEvents = append(result.NeverEvents, event)
 		errs = append(errs, restoreVerdict{errors.New(event)})
 	}
-	if l.OperationID != "" && rec.OperationAtDelete != "" && l.OperationID != rec.OperationAtDelete {
-		errs = append(errs, fmt.Errorf("the member's log names %s as the restore operation the stop ended, and "+
-			"the cluster's status named %s before the deletion", l.OperationID, rec.OperationAtDelete))
+	atDelete := rec.OperationAtDelete
+	if rec.At == GracefulStopAtSeeding {
+		atDelete = rec.SeedRestoreAtDelete
 	}
-	errs = append(errs, judgeRestoreStopSamples(watch, rec, result), judgeStopRetries(rec, result))
+	if l.OperationID != "" && atDelete != "" && l.OperationID != atDelete {
+		errs = append(errs, fmt.Errorf("the member's log names %s as the restore operation the stop ended, and "+
+			"the cluster's status named %s before the deletion", l.OperationID, atDelete))
+	}
+	retries := judgeStopRetries
+	if rec.At == GracefulStopAtSeeding {
+		retries = judgeSeedStopRetries
+	}
+	errs = append(errs, judgeRestoreStopSamples(watch, rec, result), retries(rec, result))
 	return errors.Join(errs...)
 }
 
@@ -756,7 +965,7 @@ func judgeRestoreStop(watch *stopWatch, memberLog []byte, rec *s12GracefulStopRe
 // (isStopLine).
 func scanRestoreStopLog(data []byte, rec *s12GracefulStopRecord) {
 	l := rec.Log
-	backupDir := " -B " + imRestoreStagingRoot + "/" + rec.ClusterUID + "/backup "
+	backupDir := " -B " + rec.stagingPath() + "/backup "
 	at := func(v string) *time.Time {
 		t, err := time.Parse(time.RFC3339Nano, v)
 		if err != nil {
@@ -772,7 +981,7 @@ func scanRestoreStopLog(data []byte, rec *s12GracefulStopRecord) {
 		}
 		n := i + 1
 		l.Lines++
-		ours := strings.HasPrefix(line.Command, restoredbCommand) && strings.Contains(line.Command, backupDir)
+		ours := strings.HasPrefix(line.Command, rec.place.command) && strings.Contains(line.Command, backupDir)
 		own := l.OperationID != "" && line.OperationID == l.OperationID
 		if l.StopLine == 0 && isStopLine(line, ours, own) {
 			l.StopLine, l.StopLoggedAt = n, at(line.Time)
@@ -805,17 +1014,18 @@ func judgeRestoreStopReason(rec *s12GracefulStopRecord) error {
 	l := rec.Log
 	reason := l.OperationFailedReason
 	switch {
-	case l.OperationFailedLine == 0, strings.HasPrefix(reason, restoreStopReasonPrefix):
+	case l.OperationFailedLine == 0, strings.HasPrefix(reason, rec.place.reasonPrefix):
 		return nil
 	case (reason == errStoppingText || strings.HasPrefix(reason, memberStopping)) &&
 		l.RestoredbResult != logCommandFailed:
-		rec.PlacementMissed = fmt.Sprintf("the restore operation %s failed with %q, with no failed restoredb in "+
-			"the member's log: the stop reached the Instance Manager after restoredb had ended", l.OperationID, reason)
+		rec.PlacementMissed = fmt.Sprintf("the restore operation %s failed with %q, with no failed %s in the "+
+			"member's log: the stop reached the Instance Manager after %[3]s had ended", l.OperationID, reason,
+			rec.place.utility)
 		return errors.New("placement missed: " + rec.PlacementMissed)
 	}
-	return restoreVerdict{fmt.Errorf("the restore operation %s ended Failed after the restore target's Pod was "+
-		"deleted while restoredb ran, but its reason does not start with %q: %q", l.OperationID,
-		restoreStopReasonPrefix, reason)}
+	return restoreVerdict{fmt.Errorf("the restore operation %s ended Failed after %s's Pod was deleted while %s "+
+		"ran, but its reason does not start with %q: %q", l.OperationID, rec.TargetMember, rec.place.utility,
+		rec.place.reasonPrefix, reason)}
 }
 
 // restoredbKilled requires a restoredb that the log shows fail to have been
@@ -824,7 +1034,7 @@ func judgeRestoreStopReason(rec *s12GracefulStopRecord) error {
 // instancemanager/cli.go). The stopping reason alone does not show it:
 // stoppingReason prefixes any failure while the member stops. Another
 // failure leaves the stop's effect inconclusive and blocks the variant.
-func restoredbKilled(l *s12StopLog) error {
+func restoredbKilled(l *s12StopLog, utility string) error {
 	if l.RestoredbResult != logCommandFailed || strings.Contains(l.RestoredbErr, signalKilled) ||
 		(l.RestoredbExitCode != nil && *l.RestoredbExitCode == -1) {
 		return nil
@@ -833,8 +1043,8 @@ func restoredbKilled(l *s12StopLog) error {
 	if l.RestoredbExitCode != nil {
 		code = fmt.Sprint(*l.RestoredbExitCode)
 	}
-	return fmt.Errorf("restoredb failed (line %d) with exit code %s and %q, not killed: whether the stop ended "+
-		"it is inconclusive", l.RestoredbLine, code, l.RestoredbErr)
+	return fmt.Errorf("%s failed (line %d) with exit code %s and %q, not killed: whether the stop ended it is "+
+		"inconclusive", utility, l.RestoredbLine, code, l.RestoredbErr)
 }
 
 // restoreStopLogGaps names the lines the variant needs that the target's log
@@ -846,7 +1056,7 @@ func restoreStopLogGaps(rec *s12GracefulStopRecord) error {
 	l := rec.Log
 	var missing []string
 	if l.RestoredbLine == 0 {
-		missing = append(missing, "restoredb's end for "+imRestoreStagingRoot+"/"+rec.ClusterUID)
+		missing = append(missing, rec.place.utility+"'s end for "+rec.stagingPath())
 	}
 	if l.OperationFailedLine == 0 {
 		missing = append(missing, logOperationFailed+" of a restore operation")
@@ -906,7 +1116,7 @@ func judgeRestoreStopSamples(watch *stopWatch, rec *s12GracefulStopRecord, resul
 	samples := slices.Clone(watch.samples)
 	watch.mu.Unlock()
 	s := rec.Sampler
-	paths := []string{imDatabasesDir + "/" + databaseName, imRestoreStagingRoot + "/" + rec.ClusterUID}
+	paths := []string{imDatabasesDir + "/" + databaseName, rec.stagingPath()}
 	seen, gone := findCleanup(samples, s)
 	end := len(samples)
 	if gone >= 0 {
@@ -942,7 +1152,7 @@ func judgeRestoreStopSamples(watch *stopWatch, rec *s12GracefulStopRecord, resul
 		result.Measurements[measCleanupSeenAfterDelete] = s.CleanupSeenAt.Sub(*t.DeleteAcceptedAt).
 			Round(time.Millisecond).String()
 	}
-	afterCleanup(samples[gone:], paths, s)
+	afterCleanup(samples[gone:], paths, rec.place.utility, s)
 	last := samples[len(samples)-1].At
 	s.LastReadingAt = &last
 	if failed := rec.Log.OperationFailedAt; failed != nil {
@@ -966,8 +1176,8 @@ func judgeRestoreStopSamples(watch *stopWatch, rec *s12GracefulStopRecord, resul
 			"cleanup had begun: %s", cleanup, strings.Join(s.HoldersAfterCleanup, "; ")))
 	}
 	if len(s.UtilityAfterCleanup) > 0 {
-		events = append(events, fmt.Sprintf("restoredb ran after %s, when the restore's cleanup had begun: %s",
-			cleanup, strings.Join(s.UtilityAfterCleanup, "; ")))
+		events = append(events, fmt.Sprintf("%s ran after %s, when the restore's cleanup had begun: %s",
+			rec.place.utility, cleanup, strings.Join(s.UtilityAfterCleanup, "; ")))
 	}
 	if len(s.PresentAfterOperationFailed) > 0 {
 		events = append(events, fmt.Sprintf("the sampler showed the restore's database or staging directory in "+
@@ -1058,7 +1268,7 @@ func findCleanup(samples []stopSample, s *s12StopSampler) (seen, gone int) {
 // the database directory on, the holders of a file at or below paths, by
 // whether they are CUBRID processes, and the restoredb processes of the
 // readings after that first one.
-func afterCleanup(samples []stopSample, paths []string, s *s12StopSampler) {
+func afterCleanup(samples []stopSample, paths []string, utility string, s *s12StopSampler) {
 	for i, sample := range samples {
 		at := sample.Received.Format(time.RFC3339Nano)
 		held, other := restoreHolders(sample, paths)
@@ -1068,7 +1278,7 @@ func afterCleanup(samples []stopSample, paths []string, s *s12StopSampler) {
 		for _, h := range other {
 			s.OtherHoldersAfterCleanup = append(s.OtherHoldersAfterCleanup, at+" "+h)
 		}
-		if p := sample.utilityProcess(restoredbUtility); i > 0 && p != "" {
+		if p := sample.utilityProcess(utility); i > 0 && p != "" {
 			s.UtilityAfterCleanup = append(s.UtilityAfterCleanup, at+" "+p)
 		}
 	}
@@ -1164,6 +1374,54 @@ func judgeStopRetries(rec *s12GracefulStopRecord, result *evidence.Scenario) err
 	return errors.Join(errs...)
 }
 
+// judgeSeedStopRetries judges, at seeding, the cluster's readings after the
+// deletion as S12 instance-manager-restart at seeding judges them after its
+// kill (judgeSeedingKill): the restore had completed, so it must never be
+// retried, and once the cluster completed, exactly one seed retry,
+// SeedRestoreFailedRetrying on the member whose message holds
+// seedStopReasonPrefix, and another seed restore than the one the stop ended
+// under the next seed attempt. The Instance Manager records the stopped seed
+// restore Failed with that reason; the Operator ends the seed attempt with
+// SeedRestoreFailedRetrying, clears the seeding and seeds the member again
+// under the next attempt's key (seedMember, bootstrapStepFailed in
+// internal/controller/habootstrap.go).
+func judgeSeedStopRetries(rec *s12GracefulStopRecord, result *evidence.Scenario) error {
+	stopped := cmp.Or(rec.StoppedOperation, rec.SeedRestoreAtDelete)
+	r := &s12IMRestart{At: IMRestartAtSeeding, cause: seedStopReasonPrefix, restartReading: rec.deleteReading,
+		memberKill:  memberKill{Pod: rec.TargetMember, KilledAt: rec.Trigger.DeleteAcceptedAt},
+		RetryEvents: rec.RetryEvents, SeedRetryEvents: rec.SeedRetryEvents}
+	r.AttemptsBefore, r.OperationIDBefore = rec.AttemptsAtDelete, rec.OperationAtDelete
+	r.SeedRestoreOperationIDBefore, r.SeedAttemptsBefore = stopped, rec.SeedAttemptsAtDelete
+	irec := &s12IMRestartRecord{s12Record: rec.s12Record, IMRestart: r}
+	events, unexplained, afterStop := scanIMRestartBootstrap(irec)
+	if r.KilledAt != nil {
+		result.Measurements[measRetriesAfterKill] = len(afterStop)
+	}
+	result.NeverEvents = append(result.NeverEvents, events...)
+	errs := []error{judgeSeedingKill(irec, result, afterStop)}
+	for _, event := range events {
+		errs = append(errs, restoreVerdict{errors.New(event)})
+	}
+	if len(unexplained) > 0 {
+		errs = append(errs, fmt.Errorf("the restored cluster's bootstrap attempts rose %s, and no reading showed the "+
+			"reason %s: the cause is unknown", strings.Join(unexplained, ", "), s12RetryReason))
+	}
+	if rec.deleteReading < 0 {
+		errs = append(errs, errors.New("no reading of the cluster was recorded before the deletion, so the seed "+
+			"attempt it ended is not known"))
+	}
+	rec.SeedRetriesAfterStop = slices.DeleteFunc(slices.Clone(r.SeedRetries), func(retry s12Retry) bool {
+		return r.KilledAt == nil || !retry.At.After(*r.KilledAt)
+	})
+	rec.Reasons, rec.Attempts, rec.Retries = r.Reasons, r.Attempts, r.Retries
+	rec.OperationIDAfter, rec.AttemptsAfter = r.SeedRestoreOperationIDAfter, r.SeedAttemptsAfter
+	result.Measurements[measRetriesAfterStop] = r.seedRetriesAfterKill
+	if stopped != "" && r.SeedRestoreOperationIDAfter != "" {
+		result.Measurements[measOperationIDChanged] = stopped != r.SeedRestoreOperationIDAfter
+	}
+	return errors.Join(errs...)
+}
+
 // gracefulStopRestoredChecks makes, once the cluster is Ready, the checks of
 // S12 exact (s12Steps) and reads the target's replacement, in that order;
 // the first error ends them.
@@ -1179,7 +1437,7 @@ func (h *haRun) gracefulStopRestoredChecks(ctx context.Context, cluster *databas
 		return err
 	}
 	if err := h.checkRestoredData(ctx, expected, roles, &rec.s12Record, result,
-		s12GracefulStopDataCheckFile); err != nil {
+		gracefulStopFile(rec.variant, "data-check.json")); err != nil {
 		return err
 	}
 	if err := h.normalWriteS12(ctx, roles, &rec.s12Record, s12GracefulStopMarker); err != nil {

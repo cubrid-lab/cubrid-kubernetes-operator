@@ -115,6 +115,15 @@ const (
 	IMRestartAtStarting = "starting"
 )
 
+// Measurements of the retries after a fault during a recovery bootstrap,
+// which S12 instance-manager-restart and graceful-stop take.
+const (
+	measRetriesAfterKill            = "retriesAfterKill"
+	measSeedRetriesAfterKill        = "seedRetriesAfterKill"
+	measSeedAttemptsAdded           = "seedAttemptsAdded"
+	measSeedRestoreOperationChanged = "seedRestoreOperationChanged"
+)
+
 // imRestartPlacementNote says, for the summary, what is killed when.
 var imRestartPlacementNote = map[string]string{
 	IMRestartAtRestoring: "the Instance Manager of the restore's target member is killed during its restore",
@@ -414,7 +423,7 @@ func (h *haRun) runS12InstanceManagerRestart(ctx context.Context) (result eviden
 	result.Limits = map[string]string{restoreLimitName: h.cfg.RestoreLimit.String()}
 	result.Measurements = map[string]any{restoredWithinMeasurement: evidence.Unknown, "memberBackWithin": evidence.Unknown,
 		"containerRestarts": evidence.Unknown, "operationIDChanged": evidence.Unknown,
-		"attemptsAdded": evidence.Unknown, "retriesAfterKill": evidence.Unknown,
+		"attemptsAdded": evidence.Unknown, measRetriesAfterKill: evidence.Unknown,
 		dataRulesHeldMeasurement: evidence.Unknown, postBackupRowsMeasurement: evidence.Unknown}
 	switch at {
 	case IMRestartAtPreparing:
@@ -425,9 +434,9 @@ func (h *haRun) runS12InstanceManagerRestart(ctx context.Context) (result eviden
 			evidence.Unknown
 		result.Measurements["tookOverRestoredData"] = evidence.Unknown
 	case IMRestartAtSeeding:
-		result.Measurements["seedRetriesAfterKill"], result.Measurements["seedAttemptsAdded"] = evidence.Unknown,
+		result.Measurements[measSeedRetriesAfterKill], result.Measurements[measSeedAttemptsAdded] = evidence.Unknown,
 			evidence.Unknown
-		result.Measurements["seedRestoreOperationChanged"] = evidence.Unknown
+		result.Measurements[measSeedRestoreOperationChanged] = evidence.Unknown
 	}
 	err := h.imRestartSteps(ctx, &result, &rec)
 	// What the bootstrap showed is judged whichever step ended the variant.
@@ -1455,7 +1464,7 @@ func judgeIMRestartBootstrap(rec *s12IMRestartRecord, result *evidence.Scenario)
 	r := rec.IMRestart
 	events, unexplained, afterKill := scanIMRestartBootstrap(rec)
 	if r.KilledAt != nil {
-		result.Measurements["retriesAfterKill"] = len(afterKill)
+		result.Measurements[measRetriesAfterKill] = len(afterKill)
 	}
 	if r.OperationIDBefore != "" && r.OperationIDAfter != "" {
 		result.Measurements["operationIDChanged"] = r.OperationIDBefore != r.OperationIDAfter
@@ -1517,13 +1526,13 @@ func judgeSeedingKill(rec *s12IMRestartRecord, result *evidence.Scenario, afterK
 	r := rec.IMRestart
 	events, unexplained, seedAfterKill := scanSeedRetries(rec)
 	if r.KilledAt != nil {
-		result.Measurements["seedRetriesAfterKill"] = len(seedAfterKill)
+		result.Measurements[measSeedRetriesAfterKill] = len(seedAfterKill)
 	}
 	if r.SeedAttemptsBefore != nil && r.SeedAttemptsAfter != nil {
-		result.Measurements["seedAttemptsAdded"] = *r.SeedAttemptsAfter - *r.SeedAttemptsBefore
+		result.Measurements[measSeedAttemptsAdded] = *r.SeedAttemptsAfter - *r.SeedAttemptsBefore
 	}
 	if r.SeedRestoreOperationIDBefore != "" && r.SeedRestoreOperationIDAfter != "" {
-		result.Measurements["seedRestoreOperationChanged"] = r.SeedRestoreOperationIDBefore != r.SeedRestoreOperationIDAfter
+		result.Measurements[measSeedRestoreOperationChanged] = r.SeedRestoreOperationIDBefore != r.SeedRestoreOperationIDAfter
 	}
 	if r.KilledAt != nil && len(afterKill) > 0 {
 		events = append(events, fmt.Sprintf("the restore was retried after the kill, after it had completed and "+
@@ -1624,7 +1633,7 @@ func seedRetryFromEvent(r *s12IMRestart, x attemptRise) *s12Retry {
 	}
 	starting := fmt.Sprintf("starting attempt %d of ", x.to+1)
 	for _, message := range r.SeedRetryEvents {
-		if strings.HasPrefix(message, "on "+r.Pod+": ") && strings.Contains(message, s12IMRestartedReason) &&
+		if strings.HasPrefix(message, "on "+r.Pod+": ") && strings.Contains(message, cmp.Or(r.cause, s12IMRestartedReason)) &&
 			strings.Contains(message, starting) {
 			retry := s12Retry{At: x.at, From: x.from, To: x.to, Reason: s12SeedRetryReason, Message: message,
 				FromEvent: true}
@@ -1657,10 +1666,14 @@ func judgeSeedKillRetries(r *s12IMRestart, afterKill []s12Retry) error {
 		return restoreVerdict{fmt.Errorf("the seeding failed again after the seed attempt the kill ended: %s",
 			strings.Join(failed, "; "))}
 	case afterKill[0].Reason != s12SeedRetryReason || !strings.HasPrefix(afterKill[0].Message, "on "+r.Pod+": ") ||
-		!strings.Contains(afterKill[0].Message, s12IMRestartedReason):
+		!strings.Contains(afterKill[0].Message, cmp.Or(r.cause, s12IMRestartedReason)):
+		cause := "the Instance Manager's restart"
+		if r.cause != "" {
+			cause = "the member's stop"
+		}
 		return fmt.Errorf("the seed attempt the kill interrupted ended with %s %q, not with a seed restore on %s "+
-			"failed by the Instance Manager's restart (%q): whether the restart ended it was not observed",
-			afterKill[0].Reason, afterKill[0].Message, r.Pod, s12IMRestartedReason)
+			"failed by %s (%q): whether the fault ended it was not observed",
+			afterKill[0].Reason, afterKill[0].Message, r.Pod, cause, cmp.Or(r.cause, s12IMRestartedReason))
 	case r.SeedRestoreOperationIDAfter == r.SeedRestoreOperationIDBefore:
 		return restoreVerdict{fmt.Errorf("the seed restore operation %s the kill ended is the one recorded for %s "+
 			"after the next seed attempt started", r.SeedRestoreOperationIDBefore, r.Pod)}
