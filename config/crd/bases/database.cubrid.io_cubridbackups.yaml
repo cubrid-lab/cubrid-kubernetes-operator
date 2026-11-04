@@ -290,6 +290,14 @@ spec:
               phase:
                 description: phase is the high-level backup lifecycle phase.
                 type: string
+              primaryLogEndNotReadSince:
+                description: |-
+                  primaryLogEndNotReadSince is when a standby-preferred selection first
+                  waited because a standby lacked only the master's own log end, while
+                  no target was recorded. That wait is bounded from this time, and it
+                  starts again after a selection that ended otherwise (ADR-0007).
+                format: date-time
+                type: string
               startedAt:
                 description: startedAt is when the backup started.
                 format: date-time

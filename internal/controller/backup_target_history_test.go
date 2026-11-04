@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -133,12 +134,15 @@ var _ = Describe("CubridBackup target selection with the cluster's replication h
 })
 
 // logEndUnreadProber reports a master whose own log end was not read and
-// caught-up slaves whose copy's end was read. Every member answers, so the
-// primary is resolved.
-type logEndUnreadProber struct{ master string }
+// caught-up slaves whose copy's end was read. While twoMasters is set, a
+// second member answers as master too, so the primary is not resolved.
+type logEndUnreadProber struct {
+	master     string
+	twoMasters bool
+}
 
 func (p *logEndUnreadProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
-	if podName == p.master {
+	if podName == p.master || (p.twoMasters && strings.HasSuffix(podName, "-1")) {
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now()}
 	}
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now(),
@@ -149,14 +153,17 @@ func (p *logEndUnreadProber) ProbeRole(_ context.Context, podName, _ string) Rol
 // When the master's own log end was not read, a caught-up standby has no
 // evidence that its copy receives the master's log, so it is not chosen. A
 // PreferStandby backup then asks again a few seconds later instead of
-// taking the master at once, and falls back to the master only after
-// primaryLogEndWait from the backup's creation, so an Instance Manager that
-// never reports the log end does not hold the backup forever (#291).
+// taking the master at once. The wait is bounded by primaryLogEndWait from
+// the first reconcile that waited for this reason, as recorded in the
+// backup's status, not from the backup's creation: a backup that waited for
+// something else first still gets the whole bound. The recorded time
+// survives requeues and an Operator restart, and a selection that ends
+// otherwise starts the wait again (#291).
 var _ = Describe("CubridBackup target selection while the master's log end is not read", func() {
 	const namespace = "default"
 	ctx := context.Background()
 
-	start := func(name string, clock func() time.Time) (*databasev1alpha1.CubridBackup, *lostResponseBackupClient, ctrl.Result) {
+	create := func(name string) *databasev1alpha1.CubridBackup {
 		cluster := haCluster(name)
 		cluster.Spec.Databases = []databasev1alpha1.CubridDatabase{{Name: demoDB}}
 		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
@@ -177,36 +184,89 @@ var _ = Describe("CubridBackup target selection while the master's log end is no
 		}
 		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
-		fake := &lostResponseBackupClient{}
+		return backup
+	}
+
+	// reconcileAt runs a new reconciler, as after an Operator restart, at the
+	// time at and returns its result.
+	reconcileAt := func(backup *databasev1alpha1.CubridBackup, prober RoleProber, fake *lostResponseBackupClient,
+		at time.Time) ctrl.Result {
 		r := &CubridBackupReconciler{
-			Client: k8sClient, Scheme: k8sClient.Scheme(), Backup: fake,
-			Prober: &logEndUnreadProber{master: name + "-0"}, Clock: clock,
+			Client: k8sClient, Scheme: k8sClient.Scheme(), Backup: fake, Prober: prober,
+			Clock: func() time.Time { return at },
 		}
 		result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(backup)})
 		Expect(err).NotTo(HaveOccurred())
-		return backup, fake, result
+		return result
 	}
 
-	It("starts nothing and asks again within seconds while the bound has not passed", func() {
-		backup, fake, result := start("bk-logend-wait", nil)
+	It("waits on the first missed reading of a backup older than the bound whose primary just became resolved", func() {
+		const name = "bk-logend-old"
+		backup := create(name)
+		prober := &logEndUnreadProber{master: name + "-0", twoMasters: true}
+		fake := &lostResponseBackupClient{}
+		// The backup waited for a resolved primary for longer than the bound.
+		t0 := time.Now()
+		reconcileAt(backup, prober, fake, t0)
+		Expect(readyOf(stored(ctx, backup)).Reason).To(Equal("NoSafeTarget"))
+
+		prober.twoMasters = false
+		resolvedAt := t0.Add(2 * primaryLogEndWait)
+		result := reconcileAt(backup, prober, fake, resolvedAt)
 
 		got := stored(ctx, backup)
-		Expect(fake.instances).To(BeEmpty(), "a backup was started without evidence about any standby's copy")
+		Expect(fake.instances).To(BeEmpty(), "the first missed reading put the backup on a member at once")
 		Expect(got.Status.TargetInstance).To(BeEmpty())
 		Expect(readyOf(got).Reason).To(Equal(reasonPrimaryLogEndNotRead))
+		Expect(got.Status.PrimaryLogEndNotReadSince).NotTo(BeNil())
+		Expect(got.Status.PrimaryLogEndNotReadSince.Time).To(BeTemporally("~", resolvedAt, time.Second))
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		Expect(result.RequeueAfter).To(BeNumerically("<=", backupPollAfter))
 	})
 
-	It("falls back to the master once the bound has passed since the backup's creation", func() {
-		later := time.Now().Add(primaryLogEndWait + time.Minute)
-		backup, fake, _ := start("bk-logend-over", func() time.Time { return later })
+	It("keeps the wait across requeues and a restart, and falls back to the master after the bound", func() {
+		const name = "bk-logend-bound"
+		backup := create(name)
+		prober := &logEndUnreadProber{master: name + "-0"}
+		fake := &lostResponseBackupClient{}
+		t0 := time.Now()
+		reconcileAt(backup, prober, fake, t0)
+		since := stored(ctx, backup).Status.PrimaryLogEndNotReadSince
+		Expect(since).NotTo(BeNil())
 
+		reconcileAt(backup, prober, fake, t0.Add(primaryLogEndWait/2))
 		got := stored(ctx, backup)
-		Expect(fake.instances).To(Equal([]string{"bk-logend-over-0"}))
-		Expect(got.Status.TargetInstance).To(Equal("bk-logend-over-0"))
-		Expect(got.Status.FallbackUsed).To(BeTrue())
+		Expect(fake.instances).To(BeEmpty())
+		Expect(readyOf(got).Reason).To(Equal(reasonPrimaryLogEndNotRead))
+		Expect(got.Status.PrimaryLogEndNotReadSince.Time).To(BeTemporally("==", since.Time))
+
+		reconcileAt(backup, prober, fake, t0.Add(primaryLogEndWait+time.Second))
+		got = stored(ctx, backup)
+		Expect(fake.instances).To(Equal([]string{name + "-0"}))
+		Expect(got.Status.TargetInstance).To(Equal(name + "-0"))
 		Expect(got.Status.TargetRole).To(Equal(string(databasev1alpha1.RoleMaster)))
+		Expect(got.Status.FallbackUsed).To(BeTrue())
 		Expect(readyOf(got).Reason).To(Equal(reasonMasterFallbackPrimaryLogEndNotRead))
+		Expect(got.Status.PrimaryLogEndNotReadSince).To(BeNil())
+	})
+
+	It("starts the wait again after a selection that waited for another reason", func() {
+		const name = "bk-logend-again"
+		backup := create(name)
+		prober := &logEndUnreadProber{master: name + "-0"}
+		fake := &lostResponseBackupClient{}
+		t0 := time.Now()
+		reconcileAt(backup, prober, fake, t0)
+		Expect(stored(ctx, backup).Status.PrimaryLogEndNotReadSince).NotTo(BeNil())
+
+		prober.twoMasters = true
+		reconcileAt(backup, prober, fake, t0.Add(primaryLogEndWait/2))
+		Expect(stored(ctx, backup).Status.PrimaryLogEndNotReadSince).To(BeNil())
+
+		prober.twoMasters = false
+		reconcileAt(backup, prober, fake, t0.Add(primaryLogEndWait+time.Second))
+		got := stored(ctx, backup)
+		Expect(fake.instances).To(BeEmpty())
+		Expect(readyOf(got).Reason).To(Equal(reasonPrimaryLogEndNotRead))
 	})
 })

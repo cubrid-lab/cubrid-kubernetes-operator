@@ -41,11 +41,11 @@ const (
 	reasonMasterFallbackPrimaryLogEndNotRead = "MasterFallbackPrimaryLogEndNotRead"
 )
 
-// primaryLogEndWait bounds, from a backup's creation, how long a
-// PreferStandby selection waits for the master's own log end before it falls
-// back to the master. A single missed reading is asked again within this
-// bound; an Instance Manager that never reports the log end only delays the
-// backup by it.
+// primaryLogEndWait bounds how long a PreferStandby selection waits for the
+// master's own log end before it falls back to the master, from the first
+// reconcile that waited for it (status.primaryLogEndNotReadSince). A single
+// missed reading is asked again within this bound; an Instance Manager that
+// never reports the log end only delays the backup by it.
 const primaryLogEndWait = 30 * time.Second
 
 // TargetSelection is the outcome of picking a backup target (ADR-0007).
@@ -71,7 +71,7 @@ type TargetSelection struct {
 // observations, history the replication the cluster's status records per
 // member, res the ADR-0005 primary resolution, single reports a 1-member
 // (standalone) cluster, and primaryLogEndWaitOver that primaryLogEndWait has
-// passed since the backup was created.
+// passed since the selection began to wait for the master's log end.
 func selectBackupTarget(
 	members []string,
 	obs map[string]RoleObservation,

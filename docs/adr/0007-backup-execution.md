@@ -125,7 +125,14 @@ not put a whole backup on the master, `PreferStandby` waits
 (`PrimaryLogEndNotRead`, asked again every 10 s) while a slave is excluded
 only because the master's log end was not read, and falls back to the master
 (`MasterFallbackPrimaryLogEndNotRead`, `fallbackUsed: true`) once 30 s have
-passed since the backup's creation; with an Instance Manager that never
+passed since the first reconcile that waited for this reason. That time is
+recorded in `status.primaryLogEndNotReadSince`, so a requeue or an Operator
+restart neither restarts nor loses the wait, and a backup that first waited
+for something else, such as a primary that was not resolved, still gets the
+whole 30 s. A selection that ends for any other reason clears the time, and
+a later wait for the master's log end starts again with the whole bound;
+each such wait is bounded, and between two of them the backup either waits
+for that other reason or proceeds. With an Instance Manager that never
 reports the log end, a `PreferStandby` backup therefore runs on the master
 after that delay. A slave excluded for another reason as well does not hold
 the selection. Eligible slaves are ordered by the log pages waiting to be
@@ -472,7 +479,7 @@ cluster UID/instance/role, timestamps).
 
 `CubridBackup.status`: `phase` (Pending|Running|Uploading|Completed|
 Failed), `operationRef`, `targetInstance`, `targetRole`, `fallbackUsed`,
-`targetRecordedAt`, `objectStorageNotAppliedSince`, `startedAt`/`completedAt`, `artifact{uri(→manifest), manifestDigest,
+`targetRecordedAt`, `objectStorageNotAppliedSince`, `primaryLogEndNotReadSince`, `startedAt`/`completedAt`, `artifact{uri(→manifest), manifestDigest,
 sizeBytes, cubridVersion, database, level}`, `conditions`
 (`Accepted`/`Ready` with open-ended reasons: `StandbySelected`,
 `MasterFallbackSelected`, `NoHealthyStandby`, `BackupRunning`,
