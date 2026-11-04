@@ -38,6 +38,10 @@ See CONTRIBUTING.md#pull-request-and-commit-titles.
 - [ ] I have run `make manifests generate` after API/marker changes and did not hand-edit generated files
 - [ ] I have run `go mod tidy` if imports or dependencies changed
 - [ ] I have added a reproduction or regression test for a fix, and tests for new functionality (if applicable)
+- [ ] The title, summary, changed files, issue closure and test claims match the final diff and acceptance criteria
+- [ ] If scenario limits or CI gates changed, I tested set, unset/zero, missing-measurement, boundary and exceeded cases; required scenarios cannot silently pass without their mandatory limits
+- [ ] For measured baseline changes, I linked the underlying run IDs/artifacts or a reproducible data set and aggregation method, and documented known sampling limits
+- [ ] Required independent maintainer reviews are complete before merge; an AI-agent review or green CI does not replace them or authorize a waiver
 - [ ] I have verified user-visible behavior on a real cluster (Kind/minikube/lab) where it applies
 - [ ] I have updated the affected ADR / `DESIGN.md` / `ROADMAP.md` / docs
 - [ ] I have reported relevant warnings, limitations and remaining validation gaps
