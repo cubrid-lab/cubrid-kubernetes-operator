@@ -30,16 +30,19 @@ import (
 // stalledSlaveProber reports the master, one slave that reads the same
 // applier counters with pages waiting as its stored history, and a second
 // slave whose applier cannot be read. Every member answers, so the primary
-// is resolved.
+// is resolved. The stalled slave's copy ends where the master's log ends, so
+// only the apply stall can exclude it.
 type stalledSlaveProber struct{ master, slave string }
 
 func (p *stalledSlaveProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
 	switch podName {
 	case p.master:
-		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now()}
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now(),
+			LogEnd: &databasev1alpha1.LogAddress{Page: 10}}
 	case p.slave:
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now(),
-			Replication: &ReplicationObservation{Source: p.master, AppliedChanges: 10, DelayedPages: 5}}
+			Replication: &ReplicationObservation{Source: p.master, AppliedChanges: 10, DelayedPages: 5,
+				CopiedEOF: &databasev1alpha1.LogAddress{Page: 10}}}
 	}
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now()}
 }

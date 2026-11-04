@@ -25,14 +25,34 @@ import (
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
 
+// caughtUpLogEnd is where both the master's own log and a caught-up slave's
+// copy of it end in these fixtures. A standby is only chosen with evidence
+// that its copy receives the master's log: its copy's end read in the same
+// reconcile and, without a stored reading it grew from, the master's log end
+// read too (#291). The fixtures carry both ends so that a slave they call
+// caught up is caught up by that evidence as well.
+var caughtUpLogEnd = databasev1alpha1.LogAddress{Page: 200, Offset: 64}
+
 // obsSlave is a fresh slave whose applier was read in the same reconcile,
-// applying c0's log with nothing waiting.
+// applying c0's log with nothing waiting, its copy ending at the master's
+// log end.
 func obsSlave() RoleObservation {
+	end := caughtUpLogEnd
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow,
-		Replication: &ReplicationObservation{Source: c0, AppliedChanges: 10}}
+		Replication: &ReplicationObservation{Source: c0, AppliedChanges: 10, CopiedEOF: &end}}
 }
+
+// obsMaster is a fresh master whose own log ends at caughtUpLogEnd.
 func obsMaster() RoleObservation {
-	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: testNow}
+	end := caughtUpLogEnd
+	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: testNow, LogEnd: &end}
+}
+
+// masterLogEndUnread is a fresh master whose own log end was not read.
+func masterLogEndUnread() RoleObservation {
+	o := obsMaster()
+	o.LogEnd = nil
+	return o
 }
 func obsUnknown() RoleObservation {
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown}
@@ -75,6 +95,15 @@ func TestSelectBackupTarget(t *testing.T) {
 			obs:     map[string]RoleObservation{c0: obsMaster(), c1: obsDown(), c2: obsDown()},
 			res:     resolvedPrimary(), pref: databasev1alpha1.PreferStandby,
 			wantSelected: true, wantInstance: c0, wantRole: databasev1alpha1.RoleMaster, wantFallback: true, wantReason: "MasterFallbackSelected",
+		},
+		{
+			// Without the master's log end and with no stored reading, nothing
+			// shows that a standby's copy receives the master's log (#291).
+			name:    "PreferStandby falls back to master when the master's log end was not read",
+			members: m3,
+			obs:     map[string]RoleObservation{c0: masterLogEndUnread(), c1: obsSlave(), c2: obsSlave()},
+			res:     resolvedPrimary(), pref: databasev1alpha1.PreferStandby,
+			wantSelected: true, wantInstance: c0, wantRole: databasev1alpha1.RoleMaster, wantFallback: true, wantReason: reasonMasterFallbackSelected,
 		},
 		{
 			name:    "PreferStandby refuses master fallback when primary ambiguous",
@@ -260,10 +289,13 @@ func TestRecordedTargetEligible(t *testing.T) {
 }
 
 // slaveApplying is a fresh slave whose applier was read in this reconcile,
-// applying source's log with delayed pages waiting.
+// applying source's log with delayed pages waiting. Its copy ends at the
+// master's log end, so only the applier's counters decide whether it is
+// chosen.
 func slaveApplying(source string, delayed int64) RoleObservation {
 	o := obsSlave()
-	o.Replication = &ReplicationObservation{Source: source, AppliedChanges: 10, DelayedPages: delayed}
+	end := caughtUpLogEnd
+	o.Replication = &ReplicationObservation{Source: source, AppliedChanges: 10, DelayedPages: delayed, CopiedEOF: &end}
 	return o
 }
 
@@ -337,8 +369,10 @@ func TestSelectBackupTarget_StandbyNeedsFreshReplicationEvidence(t *testing.T) {
 // window while pages of it waited to be copied is not chosen, although it
 // has no page waiting to be applied (#291, POC-41). The copy is judged
 // against the master's log end in the same observations, as the cluster's
-// status is; without that end, a copy that did not grow keeps its series and
-// one that grew ends it.
+// status is. A standby is only chosen with evidence that its copy receives
+// the master's log: a standby whose copy's end was not read is not chosen,
+// and while the master's log end is not read, only a standby whose copy
+// grew since a stored reading younger than the stall window is.
 func TestSelectBackupTarget_StandbyCopyMustGrow(t *testing.T) {
 	members := []string{c0, c1, c2}
 	// copyAt is a standby whose copy of c0's log ends at page, with nothing
@@ -353,14 +387,35 @@ func TestSelectBackupTarget_StandbyCopyMustGrow(t *testing.T) {
 		o.LogEnd = &databasev1alpha1.LogAddress{Page: page}
 		return o
 	}
+	unreadCopy := slaveApplying(c0, 0)
+	unreadCopy.Replication.CopiedEOF = nil
+	// c2's copy grew since a reading 10 s ago, so c2 stays eligible whether
+	// or not the master's log end was read, and is the choice whenever c1
+	// is not.
+	withC2Growing := func(h map[string]*databasev1alpha1.InstanceReplication) map[string]*databasev1alpha1.InstanceReplication {
+		read := metav1.NewTime(testNow.Add(-10 * time.Second))
+		h[c2] = &databasev1alpha1.InstanceReplication{Source: c0, AppliedChanges: 10,
+			CopiedEOF: &databasev1alpha1.LogAddress{Page: caughtUpLogEnd.Page - 1}, CopyDelayedPages: 1, ObservedAt: &read}
+		return h
+	}
 	// The reading before, 10 s ago, had c1's copy end at page 100 while
 	// pages waited to be copied since d ago.
 	notReceivingFor := func(d time.Duration) map[string]*databasev1alpha1.InstanceReplication {
 		since, read := metav1.NewTime(testNow.Add(-d)), metav1.NewTime(testNow.Add(-10*time.Second))
-		return map[string]*databasev1alpha1.InstanceReplication{
+		return withC2Growing(map[string]*databasev1alpha1.InstanceReplication{
 			c1: {Source: c0, AppliedChanges: 10, CopiedEOF: &databasev1alpha1.LogAddress{Page: 100},
 				CopyDelayedPages: 5, NotReceivingSince: &since, ObservedAt: &read},
-		}
+		})
+	}
+	// readAgo is a stored reading of c1, age ago, with its copy ending at
+	// page while pages waited to be copied, and no series of a copy that
+	// does not grow.
+	readAgo := func(age time.Duration, page int64) map[string]*databasev1alpha1.InstanceReplication {
+		read := metav1.NewTime(testNow.Add(-age))
+		return withC2Growing(map[string]*databasev1alpha1.InstanceReplication{
+			c1: {Source: c0, AppliedChanges: 10, CopiedEOF: &databasev1alpha1.LogAddress{Page: page},
+				CopyDelayedPages: 5, ObservedAt: &read},
+		})
 	}
 	tests := []struct {
 		name        string
@@ -377,11 +432,17 @@ func TestSelectBackupTarget_StandbyCopyMustGrow(t *testing.T) {
 		{"a standby whose copy reached the master's log end",
 			masterAt(100), copyAt(100), notReceivingFor(replicationStallWindow), c1},
 		{"not a standby whose copy did not grow, the master's log end unread",
-			obsMaster(), copyAt(100), notReceivingFor(replicationStallWindow), c2},
-		{"a standby whose copy grew, the master's log end unread",
-			obsMaster(), copyAt(101), notReceivingFor(replicationStallWindow), c1},
-		{"a standby whose copy's end was not read",
-			masterAt(105), slaveApplying(c0, 0), notReceivingFor(replicationStallWindow), c1},
+			masterLogEndUnread(), copyAt(100), notReceivingFor(replicationStallWindow), c2},
+		{"a standby whose copy grew since a recent reading, the master's log end unread",
+			masterLogEndUnread(), copyAt(101), readAgo(10*time.Second, 100), c1},
+		{"not a standby with no stored reading, the master's log end unread",
+			masterLogEndUnread(), copyAt(101), withC2Growing(map[string]*databasev1alpha1.InstanceReplication{}), c2},
+		{"not a standby whose stored reading is older than the stall window, the master's log end unread",
+			masterLogEndUnread(), copyAt(101), readAgo(replicationStallWindow+time.Second, 100), c2},
+		{"not a standby whose copy's end went back, the master's log end unread",
+			masterLogEndUnread(), copyAt(101), readAgo(10*time.Second, 102), c2},
+		{"not a standby whose copy's end was not read",
+			masterAt(105), unreadCopy, notReceivingFor(replicationStallWindow), c2},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

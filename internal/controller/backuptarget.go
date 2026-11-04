@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
 
 // Reasons of a backup target selection that tests and conditions name.
@@ -107,14 +108,20 @@ func selectBackupTarget(
 // no change, and neither the stall series this reading continues nor the
 // series of its copy of the primary's log not growing, read against the
 // primary's log end in obs as the cluster's status is (nextReplication, from
-// the history that status records), has reached replicationStallWindow. A
-// copy that receives nothing leaves no page waiting to be applied
-// (docs/poc/RESULTS.md, POC-41), so the apply stall alone would keep such a
-// standby, and rank it first. A standby whose copy's end or primary's log
-// end was not read has no copy series and is not excluded by it. Missing
-// evidence of the applier never counts as caught up: a standby whose applier
-// could not be read, and every standby while the primary is not resolved, is
-// not eligible. Eligible standbys are ordered by the log pages waiting to be
+// the history that status records), has reached replicationStallWindow.
+//
+// A copy that receives nothing leaves no page waiting to be applied
+// (docs/poc/RESULTS.md, POC-41), so the applier's counters alone would keep
+// such a standby, and rank it first. A standby is therefore only eligible
+// with evidence that its copy receives the primary's log: the end of its copy
+// must have been read in this reconcile, as it is read with the applier's
+// counters, and when the primary's own log end is not in obs, the copy must
+// have grown since a reading in history of the same source that is younger
+// than replicationStallWindow. Missing evidence never counts as caught up: a
+// standby whose applier or copy's end could not be read, and every standby
+// while the primary is not resolved, is not eligible. With no eligible
+// standby, StandbyOnly waits and PreferStandby falls back to the resolved
+// master. Eligible standbys are ordered by the log pages waiting to be
 // applied, then by ordinal.
 //
 // A long transaction on the master can keep pages waiting with nothing
@@ -132,10 +139,14 @@ func eligibleStandbys(members []string, obs map[string]RoleObservation,
 	var candidates []candidate
 	for _, m := range authoritativeSlaves(members, obs, now) {
 		r := obs[m].Replication
-		if r == nil || r.FailCount > 0 || r.Source != res.CurrentPrimary {
+		if r == nil || r.FailCount > 0 || r.Source != res.CurrentPrimary || r.CopiedEOF == nil {
 			continue
 		}
-		next := nextReplication(history[m], withSourceLogEnd(r, obs, now), now)
+		withEnd := withSourceLogEnd(r, obs, now)
+		if withEnd.SourceLogEnd == nil && !copyGrewSinceRecentReading(history[m], r, now) {
+			continue
+		}
+		next := nextReplication(history[m], withEnd, now)
 		if next.StalledSince != nil && now.Sub(next.StalledSince.Time) >= replicationStallWindow {
 			continue
 		}
@@ -150,6 +161,21 @@ func eligibleStandbys(members []string, obs map[string]RoleObservation,
 		out = append(out, c.name)
 	}
 	return out
+}
+
+// copyGrewSinceRecentReading reports whether the end of a slave's copy in the
+// reading r lies past the end stored in prev, a reading of the same source
+// taken no longer than replicationStallWindow before now. Ends compare by
+// page, then offset.
+func copyGrewSinceRecentReading(prev *databasev1alpha1.InstanceReplication, r *ReplicationObservation, now time.Time) bool {
+	if prev == nil || prev.Source != r.Source || prev.CopiedEOF == nil || prev.ObservedAt == nil {
+		return false
+	}
+	if age := now.Sub(prev.ObservedAt.Time); age < 0 || age > replicationStallWindow {
+		return false
+	}
+	before := instancemanager.LSA{Page: prev.CopiedEOF.Page, Offset: prev.CopiedEOF.Offset}
+	return before.Before(instancemanager.LSA{Page: r.CopiedEOF.Page, Offset: r.CopiedEOF.Offset})
 }
 
 // authoritativeSlaves returns the members authoritatively observed as slaves

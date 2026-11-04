@@ -108,11 +108,15 @@ primary's log not growing (`notReceivingSince`, POC-41; both from the
 cluster status' replication history, the copy read against the master's log
 end in the same observation) has reached the 60 s stall window of
 `ReplicationHealthy`. A copy that receives nothing leaves no page waiting to
-be applied, so the apply stall alone would keep such a slave. A slave whose
-copy's end, or whose master's log end, has not been read has no copy series
-and stays eligible by this rule. Eligible slaves are ordered by the log pages
+be applied, so the apply stall alone would keep such a slave. A slave is
+therefore eligible only with evidence that its copy receives the master's
+log: the end of its copy must have been read in the same observation, as it
+is read with the applier's counters, and when the master's own log end was
+not read, the copy's end must lie past the one in a stored reading of the
+same source taken no longer than the 60 s stall window ago. A slave without
+that evidence is not eligible. Eligible slaves are ordered by the log pages
 waiting to be applied (`delayedPages`), then by ordinal. Missing evidence never counts as caught
-up: a slave whose applier could not be read is not eligible, and no slave is
+up: a slave whose applier or copy's end could not be read is not eligible, and no slave is
 eligible while the primary is not resolved, so `StandbyOnly` waits
 (`NoHealthyStandby`) and `PreferStandby` falls back to the master only under
 the rule above. That also holds when the applier cannot be read at all,
