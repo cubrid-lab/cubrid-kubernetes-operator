@@ -1008,16 +1008,36 @@ func s00Smoke() []SmokeSQL {
 }
 
 // s00Obs is an S00 run read every two seconds from the creation of the
-// cluster (second 0) to the end of the smoke checks (second 114), with a
-// heartbeat sweep in every round that finds no heartbeat on the member.
+// cluster (second 0) to the end of the smoke checks (second 114). It has no
+// heartbeat sweep: a standalone member runs no heartbeat to ask.
 func s00Obs() Observations {
 	var obs Observations
 	for s := 0.0; s <= 114; s += 2 {
 		obs.Samples = append(obs.Samples, standalone(s))
-		obs.Sweeps = append(obs.Sweeps, RoleSweep{Start: at(s + 0.3), End: at(s + 0.5),
-			Roles: map[string]string{s00Member: ""}, NodeStates: map[string]string{s00Member: ""}})
 	}
 	return obs
+}
+
+// TestS00RulesAreJudgedWithoutSweeps checks that S00's rules are judged from
+// the status reads and the smoke SQL alone, with no heartbeat sweep, and that
+// the verdict does not mention heartbeat sweeps.
+func TestS00RulesAreJudgedWithoutSweeps(t *testing.T) {
+	obs := s00Obs()
+	if len(obs.Sweeps) != 0 {
+		t.Fatalf("the S00 observations hold %d sweeps, want none", len(obs.Sweeps))
+	}
+	got := CheckAgreement(obs, S00Rules(s00Run(s00Smoke())))
+	if len(got.NotJudged) > 0 || len(got.Disagreements) > 0 {
+		t.Errorf("a run without sweeps: not judged %v, disagreements %v", got.NotJudged, got.Disagreements)
+	}
+	if got.Evaluated[ruleS00NoPrimary] == 0 {
+		t.Errorf("%s judged no read without sweeps", ruleS00NoPrimary)
+	}
+	for _, n := range got.Notes {
+		if strings.Contains(n, "heartbeat") {
+			t.Errorf("a note about heartbeat sweeps on a standalone cluster: %s", n)
+		}
+	}
 }
 
 func s00Run(sql []SmokeSQL) S00Run {
@@ -1106,7 +1126,6 @@ func TestS00Rules(t *testing.T) {
 			obs: routingWithoutBroker, disagree: ruleRoutingNeedsWriteEndpoint},
 		"a shared rule whose Condition a standalone cluster lacks still fails a read that has it": {
 			obs: namesNonSlave, disagree: ruleReplicationNamesSlaves},
-		"no sweep found a heartbeat master, and that is noted": {obs: s00Obs(), note: "no member answered as an HA master"},
 	})
 	checkCases(t, S00Rules(s00Run(failedCSQL)), map[string]agreementCase{
 		"csql fails while Ready stays True beyond the tolerance": {obs: readyEarly, disagree: ruleS00ReadyFollowedBySQL},

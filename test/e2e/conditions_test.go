@@ -654,7 +654,7 @@ func TestS06ConditionsAreJudgedOnEveryResult(t *testing.T) {
 // reads whatever the rest of the scenario ended with: a read of the
 // standalone cluster that names a primary, which the Operator never writes
 // for it, fails the scenario with the disagreement as its reason, and the
-// reads, the heartbeat sweeps and the verdict are kept as evidence. A run in
+// reads and the verdict are kept as evidence. A run in
 // which no SQL ran in the member's Pod has nothing to compare Ready with, so
 // it cannot pass on the Conditions.
 func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
@@ -680,7 +680,6 @@ func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
 		}
 		rounds = append(rounds, conditionRound{
 			Status: &faults.ConditionSample{ReadStart: at, ReadEnd: at, CurrentPrimary: primary, Conditions: conditions},
-			Roles:  &faults.RoleSweep{Start: at, End: at, Roles: map[string]string{member: ""}},
 		})
 	}
 	run := faults.S00Run{Member: member, PodReady: start.Add(18 * time.Second), SmokeEnd: start.Add(58 * time.Second),
@@ -697,10 +696,13 @@ func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
 			t.Errorf("a run ending with %s (%q) gave %s (%s), never events %v", ended.Result, ended.Reason,
 				got.Result, got.Reason, got.NeverEvents)
 		}
-		for _, file := range []string{"S00/conditions.jsonl", "S00/agreement.txt", "S00/roles.jsonl"} {
+		for _, file := range []string{"S00/conditions.jsonl", "S00/agreement.txt"} {
 			if !slices.Contains(got.Evidence, file) {
 				t.Errorf("a run ending with %s kept the evidence %v, without %s", ended.Result, got.Evidence, file)
 			}
+		}
+		if slices.Contains(got.Evidence, "S00/roles.jsonl") {
+			t.Errorf("a run ending with %s kept S00/roles.jsonl, which would be empty: %v", ended.Result, got.Evidence)
 		}
 		if _, ok := got.Measurements["conditionAgreement"]; !ok {
 			t.Errorf("a run ending with %s has no conditionAgreement measurement", ended.Result)

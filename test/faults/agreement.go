@@ -1530,8 +1530,7 @@ type S00Run struct {
 // is standalone: from its creation through the member's formation, Ready and
 // the smoke SQL there is no fault. A standalone member runs no heartbeat and
 // the Operator resolves no primary for it, so the Conditions are compared
-// with the SQL of the smoke checks, and heartbeat only confirms that no member
-// answers as an HA master. Its status has no status.lastObservedTime, so no
+// with the SQL of the smoke checks and no heartbeat is asked. Its status has no status.lastObservedTime, so no
 // rule here waits for it to be fresh.
 //
 // The shared Never rules are applied to every read. Four of them read
@@ -1561,9 +1560,8 @@ func S00Rules(run S00Run) []Rule {
 			ID: ruleS00NoPrimary, Kind: Never,
 			Says: "a standalone cluster claims no primary and no HA: in every read PrimaryResolved and HAReady are " +
 				"not True, status.currentPrimary is empty and no member of status.instances has the role master, " +
-				"since its member runs no heartbeat and the Operator resolves no primary for it; the heartbeat " +
-				"sweeps are noted. At least one judged read must come before the member's Pod was ready and one " +
-				"from then to the end of the smoke checks",
+				"since its member runs no heartbeat and the Operator resolves no primary for it. At least one judged " +
+				"read must come before the member's Pod was ready and one from then to the end of the smoke checks",
 			check: func(obs Observations) finding { return checkS00NoPrimary(obs, run) },
 		},
 		Rule{
@@ -1615,29 +1613,6 @@ func checkS00NoPrimary(obs Observations, run S00Run) finding {
 		return fmt.Sprintf("read at %s: a standalone cluster's status claims %s", stamp(s.ReadStart),
 			strings.Join(claims, ", ")), ""
 	})(obs)
-
-	masters := map[string]int{}
-	for _, sw := range obs.Sweeps {
-		for member := range sw.Roles {
-			if sw.Roles[member] == roleMaster || nodeMaster(sw, member) {
-				masters[member]++
-			}
-		}
-	}
-	switch {
-	case len(obs.Sweeps) == 0:
-		f.notes = append(f.notes, "no heartbeat sweep was recorded")
-	case len(masters) == 0:
-		f.notes = append(f.notes, fmt.Sprintf("in all %d heartbeat sweeps no member answered as an HA master, "+
-			"as for a standalone member that runs no heartbeat; its cubrid heartbeat status fails with \"The server was not "+
-			"configured for HA.\" (docs/poc/RESULTS.md, POC-26), which the sweeps record as no answer, so they cannot "+
-			"tell it from an exec that did not run", len(obs.Sweeps)))
-	default:
-		for _, member := range slices.Sorted(maps.Keys(masters)) {
-			f.notes = append(f.notes, fmt.Sprintf("heartbeat showed %s as master in %d of %d sweeps, on a "+
-				"standalone cluster", member, masters[member], len(obs.Sweeps)))
-		}
-	}
 
 	if f.notJudged != "" {
 		return f

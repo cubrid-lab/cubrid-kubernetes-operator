@@ -715,7 +715,7 @@ of the cluster to the end of the smoke checks. Each read records every Condition
 status, reason, message and `lastTransitionTime`, `status.currentPrimary`,
 `status.lastObservedTime` and each member's role and `lastObservedTime` in
 `status.instances`, and the number of available Pods of the read-write Broker
-Deployment. The same round asks every member for its role with
+Deployment. Except in S00, the same round asks every member for its role with
 `cubrid heartbeat status`. Each round is one line of `conditions.jsonl`.
 
 The reads are then compared, by the code in `test/faults/agreement.go`, with
@@ -1083,12 +1083,11 @@ it needs more.
   standalone: its member runs no heartbeat, the Operator resolves no primary
   for it and writes no `status.lastObservedTime`, so the Conditions are
   compared with the SQL of the smoke checks, and no rule waits for the
-  status to be fresh. Each round still asks the member with
-  `cubrid heartbeat status`, which confirms that no member answers as an HA
-  master. A standalone member answers that command with exit status 1 and
-  "The server was not configured for HA." (`docs/poc/RESULTS.md`, POC-26),
-  which the sweeps record as no answer, so they cannot tell a standalone
-  member from an exec that did not run. The rules:
+  status to be fresh. The sampler does not ask the member for its role with
+  `cubrid heartbeat status`, because a standalone member has no heartbeat: the
+  command fails with exit status 1 and "The server was not configured for HA."
+  (`docs/poc/RESULTS.md`, POC-26), which would prove nothing about the member.
+  The rules:
   - **Never:** the Never rules for an HA cluster above hold in every read.
     Four of them start from a Condition a standalone cluster never carries
     (`PrimaryResolved=True`, `HAReady=True` or `ReplicationHealthy=False`):
@@ -1149,8 +1148,8 @@ it needs more.
   The reads are judged in the scenario's cleanup, however the run ended, so a
   disagreement fails it with reason `condition_disagreement` also when an
   earlier check did not pass, and a rule without enough evidence keeps a run
-  that passed everything else `blocked`. `S00/conditions.jsonl`,
-  `S00/agreement.txt` and `S00/roles.jsonl` are always written, and
+  that passed everything else `blocked`. `S00/conditions.jsonl`
+  and `S00/agreement.txt` are always written (S00 has no `S00/roles.jsonl`), and
   `measurements.conditionAgreement` is added. `S00/timeline.jsonl` starts with
   the steps of the installation and the smoke checks (`cluster_created`,
   `pod_ready`, `ready_observed`, `brokers_available`, `smoke_checks_ended`)

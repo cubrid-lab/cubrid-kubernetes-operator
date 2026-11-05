@@ -88,9 +88,10 @@ func s00Scenario() {
 		var podDeletionOutcome *faults.Outcome
 		// createdAt is when the CubridCluster was created.
 		var createdAt time.Time
-		// sampler reads the CubridCluster's status and asks the member for its
-		// heartbeat role every 2 seconds, from the creation of the cluster to
-		// the end of the smoke checks; s00Run and steps are what the reads are
+		// sampler reads the CubridCluster's status every 2 seconds, from the
+		// creation of the cluster to the end of the smoke checks; it asks the
+		// member for no heartbeat role, since a standalone member runs none.
+		// s00Run and steps are what the reads are
 		// compared with (Conditions during the fault, scenario contract).
 		var sampler *conditionSampler
 		s00Run := faults.S00Run{Member: pod}
@@ -184,7 +185,7 @@ spec:
 
 			By("reading the CubridCluster's status every 2 seconds until the end of the smoke checks")
 			sampler = (&haRun{namespace: s00Namespace, cluster: clusterName, database: database,
-				members: []string{pod}}).sampleConditions(conditionSampling{roles: true})
+				members: []string{pod}}).sampleConditions(conditionSampling{})
 		})
 
 		AfterAll(func(ctx SpecContext) {
@@ -552,14 +553,10 @@ func writeTimeline(rel string, steps []faults.Step) string {
 
 // s00Conditions applies S00's rules on the Conditions to the sampled reads of
 // the run and gives result what they found (withAgreement). It stores the
-// heartbeat sweeps in S00/roles.jsonl, the reads in S00/conditions.jsonl and
-// the verdict in S00/agreement.txt, and adds the conditionAgreement
-// measurement. steps are the steps of the installation and the smoke checks.
+// reads in S00/conditions.jsonl and the verdict in S00/agreement.txt, and adds
+// the conditionAgreement measurement. steps are the steps of the installation and the smoke checks.
 func s00Conditions(result evidence.Scenario, rounds []conditionRound, run faults.S00Run,
 	steps []faults.Step) evidence.Scenario {
-	if f := writeRoleSweeps("S00/roles.jsonl", rounds); f != "" {
-		result.Evidence = append(result.Evidence, f)
-	}
 	agreement, files, measured := checkConditions("S00", rounds, nil, steps, faults.S00Rules(run))
 	result.Evidence = append(result.Evidence, files...)
 	if result.Measurements == nil {
