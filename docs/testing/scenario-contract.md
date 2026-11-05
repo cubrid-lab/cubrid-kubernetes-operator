@@ -776,9 +776,14 @@ read. Writes acknowledged while `RoutingReady` or `PrimaryResolved` was not
 `True` (as in open question Q2), and writes that failed while `RoutingReady`
 was `True`, are reported only.
 
-S03 judges its rule on the new master only on the reads from the outcome to
-the end of the stable period: it needs at least 3 of them judged, and half
-of the reads in that time, and no read between the fault and the outcome.
+The primary Pod termination scenario (S03) judges its rule on the new master
+only on the reads from the outcome to the end of the stable period: it needs
+at least 3 of them judged, and half of the reads in that time, and does not
+need a judged read between the fault and the outcome. It judges its rule that
+`RoutingReady=True` comes with `PrimaryResolved=True` as a Never rule only on
+the reads of the wait for the outcome, from the confirmed fault to the end of
+the wait: it needs at least 3 of them judged, and half of the reads in the
+wait, and does not need a judged read after the outcome.
 
 The replication-stall step, which is not a scenario of this contract, uses the
 same reads (`replication-stall/conditions.jsonl` and `agreement.txt`), from
@@ -1144,8 +1149,10 @@ it needs more.
 - **Conditions during the fault** (see
   [Conditions during the fault](#conditions-during-the-fault)), in every
   variant, from before the Pod is deleted to the end of the stable period,
-  besides the Never rules: `RoutingReady=True` comes with
-  `PrimaryResolved=True` in the same read (ADR-0005, section 6); a status that
+  besides the Never rules: in every read from the confirmed fault to the end
+  of the wait for the outcome, `RoutingReady=True` comes with
+  `PrimaryResolved=True` (ADR-0005, section 6), the reads S03 checked this in
+  before it compared the Conditions after the run; a status that
   is not stale resolves only a member whose own node heartbeat showed as
   master in a sweep in the 80 seconds before the read; and from the outcome to
   the end of the stable period, a read that resolves a primary names the new
@@ -1155,7 +1162,13 @@ it needs more.
   `currentPrimary` cannot be compared with it; heartbeat stands in for it.
   Writes acknowledged while `RoutingReady` or `PrimaryResolved` was not `True`
   (open question Q2) are reported only, as `acknowledgedWhilePrimaryUnresolved`
-  is. Two members reporting themselves active masters stays the CUBRID-side
+  is. Outside the wait, `RoutingReady=True` with `PrimaryResolved` not `True`
+  is reported only, as for every HA cluster above: a conflicting write of a
+  Broker object can keep the Broker Conditions as they were for one read.
+  The reads are judged and `conditions.jsonl` and `agreement.txt` are written
+  however the variant ends, so a disagreement in the wait fails it with reason
+  `condition_disagreement` also when the wait or a later check did not pass.
+  Two members reporting themselves active masters stays the CUBRID-side
   check above and is not repeated on the Conditions. Each sweep is a line of
   `S03/<variant>/roles.jsonl` with its start and end, the role heartbeat gives
   each member and the state of each member's own node.

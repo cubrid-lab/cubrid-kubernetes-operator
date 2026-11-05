@@ -431,11 +431,30 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	By("reading the cluster's Conditions and every member's heartbeat every two seconds")
 	sampler := r.sampleConditions(conditionSampling{roles: true})
 	defer sampler.stop()
+	var outcome faults.Outcome
+	var newMaster string
+	var events []workload.Event
+	// The sampled reads are judged on every way out of the scenario, so a
+	// read in the wait with RoutingReady=True and PrimaryResolved not True
+	// fails S03 also when the wait or a later check did not pass. The
+	// complete run judges them below, with the client's operations.
+	conditionsJudged := false
+	defer func() {
+		if conditionsJudged {
+			return
+		}
+		// Without the outcome the rule on the new master has nothing to
+		// judge, and a Check left running may still write newMaster.
+		master := ""
+		if outcome.Result == evidence.Pass {
+			master = newMaster
+		}
+		result, _ = s03Conditions(variant, result, sampler.stop(), events, outcome.Timeline, master)
+	}()
 
 	By("deleting the master Pod and waiting for a new master, the operator's status and the client")
-	var newMaster string
 	var electedAt, noticedAt time.Time
-	outcome := r.runFault(faults.Scenario{
+	outcome = r.runFault(faults.Scenario{
 		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful},
 		Limits: s03FlowLimits,
 		Before: func(ctx context.Context) error {
@@ -507,8 +526,6 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
 	if outcome.Result != evidence.Pass {
-		// Keep the sweeps of the wait: the scenario ends here.
-		writeRoleSweeps("S03/"+variant+"/roles.jsonl", sampler.stop())
 		result.Result, result.Reason = outcome.Result, outcome.Reason
 		// Keep what the client saw: the scenario ends here.
 		if text, err := r.client(context.Background(), fmt.Sprintf("cat /tmp/%s.jsonl", client)); err == nil {
@@ -526,10 +543,10 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		return faults.CheckOneMaster(masters, r.activeMasters(context.Background()))
 	}, stablePeriod.Value+2*time.Second, 3*time.Second).Should(Succeed())
 	rounds := sampler.stop()
-	rolesFile := writeRoleSweeps("S03/"+variant+"/roles.jsonl", rounds)
 	// How long the operator reported the primary as not resolved and the
-	// routing as not ready between the fault and the outcome, as far as the
-	// sampled reads show.
+	// routing as not ready after the fault, as far as the sampled reads show:
+	// from a read between the fault and the outcome to the next read that
+	// shows the Condition True again.
 	unresolved := notTrueWindow(rounds, "PrimaryResolved", outcome.FaultIssuedAt, outcome.OutcomeAt)
 	notRouting := notTrueWindow(rounds, "RoutingReady", outcome.FaultIssuedAt, outcome.OutcomeAt)
 	events, history := r.stopClient(client)
@@ -594,10 +611,8 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	}
 
 	files := r.evidenceFiles("S03/"+variant, report)
-	for _, f := range []string{timeline, rolesFile} {
-		if f != "" {
-			files = append(files, f)
-		}
+	if timeline != "" {
+		files = append(files, timeline)
 	}
 	since := func(t time.Time) string { return t.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String() }
 	// Writes the client was told are committed while the operator reported
@@ -611,9 +626,6 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		}
 	}
 	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt, client)
-	agreement, agreementFiles, agreementMeasured := checkConditions("S03/"+variant, rounds, events,
-		outcome.Timeline, slices.Concat(faults.NeverRules(), faults.S03Rules(newMaster)))
-	files = append(files, agreementFiles...)
 	result = judged(evidence.Scenario{
 		ID: "S03", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
@@ -634,7 +646,6 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			"primaryUnresolvedFor":               unresolved.length(),
 			"routingNotReadyFor":                 notRouting.length(),
 			"acknowledgedWhilePrimaryUnresolved": acknowledgedWhileUnresolved,
-			"conditionAgreement":                 agreementMeasured,
 		},
 		Operations: &evidence.Operations{
 			Attempted: history.Counts[workload.Attempted], Acknowledged: history.Counts[workload.Acknowledged],
@@ -643,9 +654,33 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		Evidence: files,
 	}, within(failoverLimit, recovery), stableFor(stable),
 		within(rejoinLimit, outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)))
-	result = withAgreement(result, agreement)
+	var agreement faults.Agreement
+	result, agreement = s03Conditions(variant, result, rounds, events, outcome.Timeline, newMaster)
+	conditionsJudged = true
 	Expect(agreement.Disagreements).To(BeEmpty(),
 		"S03/%s: the Conditions disagreed with CUBRID's heartbeat; see agreement.txt", variant)
 	Expect(agreement.NotJudged).To(BeEmpty(),
 		"S03/%s: a rule on the Conditions could not be judged; see agreement.txt", variant)
+}
+
+// s03Conditions applies S03's rules on the Conditions to the sampled reads of
+// a variant and gives result what they found (withAgreement). It stores the
+// heartbeat sweeps (roles.jsonl), the reads (conditions.jsonl) and the
+// verdict (agreement.txt), adds them to the evidence, and records the
+// conditionAgreement measurement. newMaster is "" when the outcome was not
+// reached.
+func s03Conditions(variant string, result evidence.Scenario, rounds []conditionRound, events []workload.Event,
+	timeline []faults.Step, newMaster string) (evidence.Scenario, faults.Agreement) {
+	dir := "S03/" + variant
+	if f := writeRoleSweeps(dir+"/roles.jsonl", rounds); f != "" {
+		result.Evidence = append(result.Evidence, f)
+	}
+	agreement, files, measured := checkConditions(dir, rounds, events, timeline,
+		slices.Concat(faults.NeverRules(), faults.S03Rules(newMaster)))
+	result.Evidence = append(result.Evidence, files...)
+	if result.Measurements == nil {
+		result.Measurements = map[string]any{}
+	}
+	result.Measurements["conditionAgreement"] = measured
+	return withAgreement(result, agreement), agreement
 }

@@ -136,8 +136,11 @@ type finding struct {
 	// verdict; zero means all of them.
 	considered int
 	// afterOutcome marks a rule that judges only the reads after the outcome,
-	// so it needs no judged read between the fault and the outcome.
+	// so it does not need a judged read between the fault and the outcome.
 	afterOutcome bool
+	// inWait marks a rule that judges only the reads of the wait for the
+	// outcome, so it does not need a judged read after the outcome.
+	inWait bool
 	// notJudged says why the rule could not be judged at all: the evidence
 	// it needs is missing.
 	notJudged string
@@ -270,7 +273,7 @@ func CheckAgreement(obs Observations, rules []Rule) Agreement {
 				if f.considered > 0 {
 					considered = f.considered
 				}
-				f.notJudged = insufficient(f.evaluated, considered, obs.Steps, f.afterOutcome)
+				f.notJudged = insufficient(f.evaluated, considered, obs.Steps, f.afterOutcome, f.inWait)
 			}
 		}
 		a.Disagreements = append(a.Disagreements, prefixed(string(r.Kind)+": "+r.ID, f.disagreements)...)
@@ -283,7 +286,7 @@ func CheckAgreement(obs Observations, rules []Rule) Agreement {
 }
 
 // insufficient says why the judged reads are too few for a verdict, or "".
-func insufficient(evaluated []time.Time, reads int, steps []Step, afterOutcome bool) string {
+func insufficient(evaluated []time.Time, reads int, steps []Step, afterOutcome, inWait bool) string {
 	if len(evaluated) < minEvaluatedReads || 2*len(evaluated) < reads {
 		return fmt.Sprintf("only %d of %d status reads could be judged; at least %d and at least half are needed",
 			len(evaluated), reads, minEvaluatedReads)
@@ -305,7 +308,7 @@ func insufficient(evaluated []time.Time, reads int, steps []Step, afterOutcome b
 	switch {
 	case !afterOutcome && !faultAt.IsZero() && !in(faultAt, outcomeAt):
 		return "no status read between the fault and the outcome could be judged"
-	case !outcomeAt.IsZero() && !in(outcomeAt, time.Time{}):
+	case !inWait && !outcomeAt.IsZero() && !in(outcomeAt, time.Time{}):
 		return "no status read in the stable period after the outcome could be judged"
 	}
 	return ""
@@ -1122,15 +1125,16 @@ func S03Rules(newMaster string) []Rule {
 			// The check S03 made of every status read it took while it
 			// waited for the outcome (ADR-0005, section 6): the write
 			// endpoint is never offered while the primary is not resolved.
+			// It is a Never rule in that wait only, from the confirmed fault
+			// to the end of the wait, as that check was. Before and after the
+			// wait the pair is reported only, as HAReportRules reports it: a
+			// conflicting write of a Broker object can keep the Broker
+			// Conditions as they were for one read.
 			ID: ruleS03RoutingNeedsPrimary, Kind: Never,
-			Says: "RoutingReady=True comes with PrimaryResolved=True in the same read",
-			check: perRead([]string{condRoutingReady, condPrimaryResolved}, func(s ConditionSample) (string, string) {
-				if !isTrue(s, condRoutingReady) || isTrue(s, condPrimaryResolved) {
-					return "", ""
-				}
-				return fmt.Sprintf("read at %s: RoutingReady=True while PrimaryResolved=%s (%s)", stamp(s.ReadStart),
-					s.Conditions[condPrimaryResolved].Status, s.Conditions[condPrimaryResolved].Reason), ""
-			}),
+			Says: "RoutingReady=True comes with PrimaryResolved=True in the same read, in every read from the " +
+				"confirmed fault to the end of the wait for the outcome; outside the wait it is reported only, " +
+				"since a conflicting write of a Broker object can keep the Broker Conditions as they were",
+			check: checkRoutingNeedsPrimaryInWait,
 		},
 		{
 			ID: ruleS03PrimaryWasMaster, Kind: Tolerance, Tolerance: AgreementTolerance,
@@ -1226,6 +1230,50 @@ func checkPrimaryAfterOutcome(obs Observations, newMaster string) finding {
 	f := finding{disagreements: bad, evaluated: evaluated, considered: considered, afterOutcome: true}
 	if considered == 0 {
 		f.notJudged = "no status read after the outcome was recorded"
+	}
+	return f
+}
+
+// checkRoutingNeedsPrimaryInWait judges the reads that started in the wait for
+// the outcome: from the step fault_confirmed to the step that ends the wait,
+// which is the next one in the timeline, whether the outcome was reached or
+// not. A read outside the wait with RoutingReady=True and PrimaryResolved not
+// True is a note.
+func checkRoutingNeedsPrimaryInWait(obs Observations) finding {
+	var from, to time.Time
+	for i, st := range obs.Steps {
+		if st.Kind == "fault_confirmed" && i+1 < len(obs.Steps) {
+			from, to = st.T, obs.Steps[i+1].T
+		}
+	}
+	if from.IsZero() {
+		return finding{notJudged: "the timeline has no confirmed fault and end of the wait for the outcome"}
+	}
+	var bad, outside []string
+	var evaluated []time.Time
+	considered := 0
+	for _, s := range obs.Samples {
+		inWait := !s.ReadStart.Before(from) && s.ReadStart.Before(to)
+		if inWait {
+			considered++
+			if hasAll(s, []string{condRoutingReady, condPrimaryResolved}) {
+				evaluated = append(evaluated, s.ReadStart)
+			}
+		}
+		if !isTrue(s, condRoutingReady) || isTrue(s, condPrimaryResolved) {
+			continue
+		}
+		line := fmt.Sprintf("read at %s: RoutingReady=True while PrimaryResolved=%s (%s)", stamp(s.ReadStart),
+			s.Conditions[condPrimaryResolved].Status, s.Conditions[condPrimaryResolved].Reason)
+		if inWait {
+			bad = append(bad, line)
+		} else {
+			outside = append(outside, line+", outside the wait for the outcome, reported only")
+		}
+	}
+	f := finding{disagreements: bad, notes: outside, evaluated: evaluated, considered: considered, inWait: true}
+	if considered == 0 {
+		f.notJudged = "no status read was recorded in the wait for the outcome"
 	}
 	return f
 }

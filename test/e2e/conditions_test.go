@@ -449,9 +449,10 @@ func stallVerdict(a faults.Agreement) error {
 }
 
 // TestNotTrueWindowFromTheSampledReads checks how S03 measures from the
-// sampled reads how long a Condition was not True between the fault and the
-// outcome: from the first read in which it was not True to the first later
-// read in which it was again.
+// sampled reads how long a Condition was not True after the fault: from the
+// first read between the fault and the outcome in which it was not True to the
+// first later read in which it was again, also when that read started after
+// the outcome.
 func TestNotTrueWindowFromTheSampledReads(t *testing.T) {
 	start := time.Now().UTC()
 	read := func(second int, status string) conditionRound {
@@ -465,8 +466,22 @@ func TestNotTrueWindowFromTheSampledReads(t *testing.T) {
 	if !w.from.Equal(start.Add(4*time.Second)) || !w.to.Equal(start.Add(10*time.Second)) {
 		t.Errorf("window = %s to %s, want 4s to 10s after the start", w.from.Sub(start), w.to.Sub(start))
 	}
-	if open := notTrueWindow(rounds, "PrimaryResolved", start.Add(11*time.Second), start.Add(20*time.Second)); open.length() != "not ended" {
-		t.Errorf("a window still open at the outcome: %s", open.length())
+	// The read at 12s opens a window that no later read closes.
+	open := notTrueWindow(rounds, "PrimaryResolved", start.Add(11*time.Second), start.Add(20*time.Second))
+	if open.length() != "not ended" {
+		t.Errorf("a window still open at the end of the reads: %s", open.length())
+	}
+	// The window opened before the outcome at 9s is closed by the read at
+	// 10s, which started after the outcome.
+	late := notTrueWindow(rounds, "PrimaryResolved", start.Add(3*time.Second), start.Add(9*time.Second))
+	if !late.from.Equal(start.Add(4*time.Second)) || !late.to.Equal(start.Add(10*time.Second)) {
+		t.Errorf("window = %s to %s, want 4s to 10s after the start: the True read after the outcome closes it",
+			late.from.Sub(start), late.to.Sub(start))
+	}
+	// A read that is not True after the outcome opens no window.
+	none := notTrueWindow(rounds, "PrimaryResolved", start.Add(5*time.Second), start.Add(7*time.Second))
+	if none.length() != "not observed" {
+		t.Errorf("a window opened after the outcome: %s", none.length())
 	}
 }
 
@@ -483,19 +498,21 @@ func TestHeartbeatNodeStateIn(t *testing.T) {
 	}
 }
 
-// notTrueWindow is, among the reads that started between from and to, the
-// window from the first read in which the Condition was not True to the first
-// later read in which it was True again.
+// notTrueWindow is the window from the first read that started between from
+// and to in which the Condition was not True, to the first later read in which
+// it was True again. That later read may start after to: the sampling sees the
+// Condition become True again only at its next read, which may come after the
+// outcome.
 func notTrueWindow(rounds []conditionRound, condition string, from, to time.Time) window {
 	var w window
 	for _, round := range rounds {
 		s := round.Status
-		if s == nil || s.ReadStart.Before(from) || s.ReadStart.After(to) {
+		if s == nil || s.ReadStart.Before(from) {
 			continue
 		}
 		holds := s.Conditions[condition].Status != "True"
 		switch {
-		case holds && w.from.IsZero():
+		case holds && w.from.IsZero() && !s.ReadStart.After(to):
 			w.from = s.ReadStart
 		case !holds && !w.from.IsZero() && w.to.IsZero():
 			w.to = s.ReadStart
@@ -518,4 +535,50 @@ func writeRoleSweeps(rel string, rounds []conditionRound) string {
 		}
 	}
 	return writeScenarioFile(rel, []byte(b.String()))
+}
+
+// TestS03ConditionsAreJudgedOnEveryResult checks that S03 judges its sampled
+// reads also when the wait for the outcome ended without it: a read in the
+// wait with RoutingReady=True and PrimaryResolved not True fails the scenario
+// with the disagreement as its reason (ADR-0005, section 6), whatever the wait
+// ended with, and the reads and the verdict are kept as evidence.
+func TestS03ConditionsAreJudgedOnEveryResult(t *testing.T) {
+	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	start := time.Now().UTC()
+	rounds := make([]conditionRound, 0, 10)
+	for i := range 10 {
+		at := start.Add(time.Duration(2*i) * time.Second)
+		resolved := "True"
+		if i == 5 {
+			resolved = "False"
+		}
+		rounds = append(rounds, conditionRound{
+			Status: &faults.ConditionSample{ReadStart: at, ReadEnd: at, LastObserved: at, CurrentPrimary: "m-0",
+				Conditions: map[string]faults.ConditionState{
+					"RoutingReady": {Status: "True"}, "PrimaryResolved": {Status: resolved},
+				}},
+			Roles: &faults.RoleSweep{Start: at, End: at, Roles: map[string]string{"m-0": "master"}},
+		})
+	}
+	timeline := func(end string) []faults.Step {
+		return []faults.Step{{T: start.Add(time.Second), Kind: "fault_issued"},
+			{T: start.Add(time.Second), Kind: "fault_confirmed"}, {T: start.Add(19 * time.Second), Kind: end}}
+	}
+	for _, ended := range []evidence.Scenario{
+		{ID: "S03", Variant: "test", Result: evidence.Blocked, Reason: faults.ReasonStepStillRunning},
+		{ID: "S03", Variant: "test", Result: evidence.Blocked, Reason: "run_cancelled: context canceled"},
+		{ID: "S03", Variant: "test", Result: evidence.Fail, Reason: "a check of S03 failed; see the test output"},
+	} {
+		got, _ := s03Conditions("test", ended, rounds, nil, timeline(ended.Reason), "")
+		if got.Result != evidence.Fail || !strings.HasPrefix(got.Reason, reasonConditionDisagreement) ||
+			len(got.NeverEvents) == 0 {
+			t.Errorf("a wait ending with %q gave %s (%s), never events %v", ended.Reason, got.Result, got.Reason,
+				got.NeverEvents)
+		}
+		for _, file := range []string{"S03/test/conditions.jsonl", "S03/test/agreement.txt", "S03/test/roles.jsonl"} {
+			if !slices.Contains(got.Evidence, file) {
+				t.Errorf("a wait ending with %q kept the evidence %v, without %s", ended.Reason, got.Evidence, file)
+			}
+		}
+	}
 }
