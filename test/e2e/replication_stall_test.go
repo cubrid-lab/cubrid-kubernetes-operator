@@ -21,9 +21,11 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +34,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -46,6 +49,15 @@ const stallForceRetryEnv = "E2E_STALL_FORCE_RETRY"
 // master's Pod is deleted, the remaining member becomes master, and heartbeat
 // is started again in the same container. The slave then looks healthy and
 // applies nothing. Deleting its Pod repairs it.
+//
+// From the start of heartbeat again until ReplicationHealthy is True after
+// the repair, the status is read every two seconds together with the count of
+// the ledger rows on the stalled slave and on the master, and compared by the
+// rules of test/faults (docs/testing/scenario-contract.md, "Conditions during
+// the fault"): conditions.jsonl and agreement.txt are kept under
+// replication-stall/, and result.txt carries the conditionAgreement
+// measurement. A disagreement, or a rule that could not be judged, fails the
+// step.
 //
 // It is not a scenario of the contract. Into the summary it reports only an
 // attempt that did not reach its precondition, as a note.
@@ -199,8 +211,19 @@ func replicationStallStep(r *haRun) {
 			Expect(err).NotTo(HaveOccurred())
 		}
 
+		var healthySlave string
+		for _, m := range r.members {
+			if m != victim && m != newMaster {
+				healthySlave = m
+			}
+		}
+		By("reading the cluster's Conditions and the rows of " + victim + " and " + newMaster + " every two seconds")
+		sampler := r.sampleConditions(conditionSampling{rows: []string{victim, newMaster}})
+		defer sampler.stop()
+
 		// No pipe after a command that starts daemons: they would keep it open.
 		By("starting heartbeat again in the same container")
+		stallStarted := time.Now().UTC()
 		_, err := inPod(victim, `cubrid heartbeat start >/tmp/hb-start.log 2>&1`)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -240,6 +263,7 @@ func replicationStallStep(r *haRun) {
 		}, 4*time.Minute, 5*time.Second).Should(Succeed(), func() string {
 			return fmt.Sprintf("the stopped member %s, new master %s\n%s", victim, newMaster, observed())
 		})
+		stallReported := time.Now().UTC()
 		for _, m := range r.members {
 			if m != victim && m != newMaster {
 				Expect(message).NotTo(ContainSubstring(m), "the healthy slave is named as stalled")
@@ -295,7 +319,21 @@ func replicationStallStep(r *haRun) {
 		after := rows(victim)
 		record += fmt.Sprintf("rows on the member after its Pod was replaced: %d\n"+
 			"ReplicationHealthy: True\nHAReady: True\n", len(after))
+
+		By("comparing the sampled Conditions with the rows")
+		// The stall is the fault, and its report the outcome: the rules need
+		// judged reads while the stall waited to be reported, and after.
+		steps := []faults.Step{
+			{T: stallStarted, Kind: "fault_issued", Detail: "heartbeat started again on " + victim},
+			{T: stallReported, Kind: "outcome_reached", Detail: "ReplicationHealthy names " + victim + " as stalled"},
+		}
+		agreement, _, measured := checkConditions("replication-stall", sampler.stop(), nil, steps,
+			slices.Concat(faults.NeverRules(), faults.HAReportRules(), faults.StallRules(victim, newMaster, healthySlave)))
+		if line, err := json.Marshal(measured); err == nil {
+			record += "conditionAgreement: " + string(line) + "\n"
+		}
 		writeScenarioFile("replication-stall/result.txt", []byte(strings.TrimSpace(record)+"\n"))
+		Expect(stallVerdict(agreement)).To(Succeed(), "see replication-stall/agreement.txt")
 	})
 
 	// A member whose CUBRID processes are stopped and stay stopped is not

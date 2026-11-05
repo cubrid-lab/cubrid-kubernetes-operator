@@ -143,10 +143,10 @@ func checkCases(t *testing.T, rules []Rule, cases map[string]agreementCase) {
 	}
 }
 
-// since returns s with the Condition c set to status and reason since the
+// falseSince returns s with the Condition c False with reason since the
 // given second.
-func since(s ConditionSample, c, status, reason string, second float64) ConditionSample {
-	s = with(s, c, status, reason)
+func falseSince(s ConditionSample, c, reason string, second float64) ConditionSample {
+	s = with(s, c, "False", reason)
 	state := s.Conditions[c]
 	state.LastTransitionTime = at(second)
 	s.Conditions[c] = state
@@ -165,13 +165,16 @@ func TestNeverRules(t *testing.T) {
 	noWriteEndpoint := healthy(10)
 	noWriteEndpoint.Conditions = map[string]ConditionState{"RoutingReady": {Status: "True"}}
 	replicationOn := func(names string) ConditionSample {
-		s := with(healthy(10), "ReplicationHealthy", "False", "ReplicationStalled")
+		// HAReady takes ReplicationHealthy's False in the same pass.
+		s := with(with(healthy(10), "ReplicationHealthy", "False", "ReplicationStalled"),
+			"HAReady", "False", "ReplicationStalled")
 		c := s.Conditions["ReplicationHealthy"]
 		c.Message = "log pages have waited for 1m0s or longer with nothing applied on: " + names
 		s.Conditions["ReplicationHealthy"] = c
 		return s
 	}
-	unparsed := with(healthy(10), "ReplicationHealthy", "False", "SomethingElse")
+	unparsed := with(with(healthy(10), "ReplicationHealthy", "False", "SomethingElse"),
+		"HAReady", "False", "SomethingElse")
 
 	checkCases(t, NeverRules(), map[string]agreementCase{
 		"every Condition True agrees": {obs: series(30), judged: true},
@@ -191,6 +194,11 @@ func TestNeverRules(t *testing.T) {
 			disagree: ruleHAReadyNeedsPrimary},
 		// A replication stall may make HAReady False while the primary stays
 		// resolved, so the two are not required to be equal.
+		// HAReady takes ReplicationHealthy's False in the same pass
+		// (haReadyCondition in internal/controller/haresolve.go).
+		"HA ready although replication is not healthy": {
+			obs:      one(with(healthy(10), "ReplicationHealthy", "False", "ReplicationStalled")),
+			disagree: ruleHAReadyFollowsReplication},
 		"HA not ready while the primary is resolved agrees": {
 			obs: one(with(healthy(10), "HAReady", "False", "ReplicationUnhealthy"))},
 		"Brokers ready although the read endpoint is not": {
@@ -336,9 +344,9 @@ func TestS05WriteEndpointAgreesWithDeployment(t *testing.T) {
 	// noBroker reports no read-write Broker since the given second.
 	noBroker := func(from float64) func(ConditionSample) ConditionSample {
 		return func(s ConditionSample) ConditionSample {
-			s = since(s, "WriteEndpointReady", "False", "NoBrokerAvailable", from)
-			s = since(s, "RoutingReady", "False", "NoBrokerAvailable", from)
-			return since(s, "BrokerReady", "False", "BrokersNotAvailable", from)
+			s = falseSince(s, "WriteEndpointReady", "NoBrokerAvailable", from)
+			s = falseSince(s, "RoutingReady", "NoBrokerAvailable", from)
+			return falseSince(s, "BrokerReady", "BrokersNotAvailable", from)
 		}
 	}
 	pods := func(n int) func(ConditionSample) ConditionSample {
@@ -469,5 +477,91 @@ func TestReportRulesNeverDisagree(t *testing.T) {
 			!mentions(got.Notes, "a difference") {
 			t.Errorf("report rule %s: %+v, want its finding among the notes", r.ID, got)
 		}
+	}
+}
+
+// stallRun is a replication stall of m-1 under the master m-0, with m-2 the
+// healthy slave: a status read and a row count of m-0 and m-1 every two
+// seconds from second 0 to 200. ReplicationHealthy names m-1 as stalled from
+// second 80 to second to (exclusive); rows(second) gives the rows on m-0 and
+// on m-1 counted at that second.
+func stallRun(to float64, rows func(second float64) (master, victim int)) Observations {
+	var obs Observations
+	for s := 0.0; s <= 200; s += 2 {
+		sample := healthy(s)
+		const from = 80
+		if s >= from && s < to {
+			sample = falseSince(falseSince(sample, "ReplicationHealthy", "ReplicationStalled", from),
+				"HAReady", "ReplicationStalled", from)
+			c := sample.Conditions["ReplicationHealthy"]
+			c.Message = "log pages have waited for 1m0s or longer with nothing applied on: " + m1
+			sample.Conditions["ReplicationHealthy"] = c
+		}
+		obs.Samples = append(obs.Samples, sample)
+		master, victim := rows(s)
+		obs.Rows = append(obs.Rows, RowCounts{Start: at(s + 0.3), End: at(s + 0.8),
+			Rows: map[string]int{m0: master, m1: victim}})
+	}
+	return obs
+}
+
+func TestStallRulesCompareTheStallWithTheRows(t *testing.T) {
+	// The victim holds 100 rows; the master gets 160 at second 10 and the
+	// victim catches up at second catchUp.
+	rows := func(catchUp float64) func(float64) (int, int) {
+		return func(s float64) (int, int) {
+			master, victim := 100, 100
+			if s >= 10 {
+				master = 160
+			}
+			if s >= catchUp {
+				victim = 160
+			}
+			return master, victim
+		}
+	}
+	// The master and the victim always hold the same rows.
+	even := func(float64) (int, int) { return 100, 100 }
+	noRows := stallRun(150, rows(160))
+	noRows.Rows = nil
+	farRows := stallRun(150, rows(160))
+	for i := range farRows.Rows {
+		farRows.Rows[i].Start = farRows.Rows[i].Start.Add(time.Hour)
+		farRows.Rows[i].End = farRows.Rows[i].End.Add(time.Hour)
+	}
+	spare := stallRun(150, rows(160))
+	spare.Samples[50] = with(spare.Samples[50], "ReplicationHealthy", "False", "ReplicationStalled")
+	c := spare.Samples[50].Conditions["ReplicationHealthy"]
+	c.Message = "log pages have waited for 1m0s or longer with nothing applied on: " + m2
+	spare.Samples[50].Conditions["ReplicationHealthy"] = c
+
+	checkCases(t, StallRules(m1, m0, m2), map[string]agreementCase{
+		"the stall is reported while the victim holds fewer rows than the master": {
+			obs: stallRun(150, rows(160)), judged: true},
+		"the stall is still reported shortly after the victim caught up": {
+			obs: stallRun(150, rows(140)), judged: true},
+		"the stall is reported although the victim held the master's rows for longer than the tolerance": {
+			obs: stallRun(200, even), disagree: ruleStallMatchesRows, judged: true},
+		"without any row count the stall rule is not judged": {
+			obs: noRows, notJudged: ruleStallMatchesRows},
+		"without a row count in the same pass as a stalled read the stall rule is not judged": {
+			obs: farRows, notJudged: ruleStallMatchesRows},
+		"the healthy slave named as stalled": {
+			obs: spare, disagree: ruleStallSpareNotNamed},
+	})
+}
+
+func TestStallReportsHowLongTheConditionLagsTheRows(t *testing.T) {
+	// The victim catches up at second 140, and ReplicationHealthy is True
+	// again from second 160 on.
+	obs := stallRun(160, func(s float64) (int, int) {
+		if s >= 140 {
+			return 160, 160
+		}
+		return 160, 100
+	})
+	got := CheckAgreement(obs, StallRules(m1, m0, m2))
+	if !mentions(got.Notes, ruleStallRecoveryLag, "20s") {
+		t.Errorf("notes %v do not report that ReplicationHealthy turned True 20s after the rows matched", got.Notes)
 	}
 }

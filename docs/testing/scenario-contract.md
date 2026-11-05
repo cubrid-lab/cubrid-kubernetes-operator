@@ -765,6 +765,9 @@ The Never rules, for every read of an HA cluster:
   every member answered.
 - Every member that `ReplicationHealthy=False` names is a slave in
   `status.instances`.
+- `HAReady` is not `True` while `ReplicationHealthy=False`: `HAReady` takes
+  `ReplicationHealthy`'s `False` in the same step, and holds an earlier value
+  only while `ReplicationHealthy` is not `False`.
 
 `RoutingReady=True` with `PrimaryResolved` not `True` is reported only:
 after a conflicting write of a Broker object, the Broker Conditions are kept
@@ -772,6 +775,29 @@ as they were while the primary is resolved again, so the two can differ in one
 read. Writes acknowledged while `RoutingReady` or `PrimaryResolved` was not
 `True` (as in open question Q2), and writes that failed while `RoutingReady`
 was `True`, are reported only.
+
+The replication-stall step, which is not a scenario of this contract, uses the
+same reads (`replication-stall/conditions.jsonl` and `agreement.txt`), from
+the moment heartbeat is started again on the stalled slave until
+`ReplicationHealthy` is `True` after its Pod was replaced. Each round also
+counts the ledger rows on the stalled slave and on the master, with csql on
+each member. Its fault is the start of the stall and its outcome the first
+report of it, for the evidence limits above. Besides the Never rules:
+
+- **Never:** the other, healthy slave is never named in
+  `ReplicationHealthy=False`.
+- **Tolerance** (80 seconds, as for every rule that rests on the role
+  observation): a status that is not stale never names the stalled slave with
+  reason `ReplicationStalled` when every row count in the 80 seconds before
+  it, none more than 10 seconds apart, showed the slave holding at least the
+  master's rows. At least one read naming it as stalled must have a row count
+  taken within 5 seconds of it, or the rule is not judged.
+- **Report:** how long after the row counts of the slave matched the master's
+  again `ReplicationHealthy` was `True`.
+
+`result.txt` carries the `conditionAgreement` measurement. The step has no
+`blocked` result, so a disagreement or a rule that could not be judged fails
+it.
 
 ### `summary.json`
 
