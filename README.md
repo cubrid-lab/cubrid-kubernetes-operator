@@ -113,9 +113,11 @@ limits cached reads, including each cluster's Instance Manager token Secret.
 Cluster references and object-storage Secret references remain in the
 resource's own namespace.
 
-With or without a watch namespace, the manager caches only Secrets and Pods
-labeled `app.kubernetes.io/managed-by=cubrid-kubernetes-operator`, which every
-Secret it writes and every Pod of its workloads carry. A `<cluster>-im-token`
+With or without a watch namespace, the manager caches only Secrets, Pods and
+PersistentVolumeClaims labeled
+`app.kubernetes.io/managed-by=cubrid-kubernetes-operator`, which every Secret
+it writes, every Pod of its workloads and every data PVC its StatefulSets
+create carry. A `<cluster>-im-token`
 Secret without that label is neither read nor adopted: the cluster reports
 `Ready=False` with reason `SecretReconcileFailed`, naming the Secret and the
 label, until that Secret is deleted or renamed. A member Pod whose label is
@@ -269,9 +271,16 @@ spec:
   it creates the StatefulSet: `Required` when neither the StatefulSet nor any
   data PVC `data-<cluster>-<ordinal>` exists, so for a new cluster, and
   `Preferred` when either exists, so for a cluster created by an earlier
-  version. The Operator never changes the recorded value; an annotation
-  removed by hand is recorded again by the same rule. A value set in
+  version. The Operator never changes the recorded value. A value set in
   `spec.placement.memberSpread` always takes precedence over it.
+- **The recorded value goes with the CubridCluster object.** Removing the
+  annotation, or replacing or recreating the CubridCluster while its
+  StatefulSet or data PVCs remain (`kubectl replace`, a forced sync of a
+  GitOps tool, a prune and create again over retained PVCs), records it
+  again by the same rule, so such a cluster only prefers separate nodes from
+  then on. Set `memberSpread: Required` in the spec to keep the rule. An
+  annotation set to `Required` by hand acts as a recorded `Required`; any
+  other value counts as `Preferred`.
 - The rule is in the StatefulSet's Pod template. Pods are replaced only on
   delete, so a change, and the rule itself on a cluster created by an
   earlier version, applies to a member when its Pod is next recreated, and
@@ -286,7 +295,8 @@ spec:
   `SpreadBlockedByVolume`, its data has to move by a backup and a restore
   into a new cluster; the Operator never moves or deletes a PVC (ADR-0006).
 - The `MemberPlacement` Condition reports where the members run, and an
-  Event is recorded when it reports a problem
+  Event is recorded when it reports a problem, once until another one or the
+  return to separate nodes is observed
   ([docs/observability.md](./docs/observability.md#conditions)):
   `MembersOnSeparateNodes` when each member runs on a node of its own;
   `MembersShareNode` when two observed members run on the same node;

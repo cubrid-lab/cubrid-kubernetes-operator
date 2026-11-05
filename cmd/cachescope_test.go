@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -78,6 +79,18 @@ func TestManagedCacheScope(t *testing.T) {
 	}))
 	mustWatch(t, admin.Create(ctx, &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "managed-0", Namespace: namespace, Labels: managed}, Spec: podSpec,
+	}))
+	claimSpec := corev1.PersistentVolumeClaimSpec{
+		AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+		Resources: corev1.VolumeResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+		},
+	}
+	mustWatch(t, admin.Create(ctx, &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: unrelated, Namespace: namespace}, Spec: claimSpec,
+	}))
+	mustWatch(t, admin.Create(ctx, &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "data-managed-0", Namespace: namespace, Labels: managed}, Spec: claimSpec,
 	}))
 	foreignData := map[string][]byte{"token": []byte("written by someone else")}
 	mustWatch(t, admin.Create(ctx, &corev1.Secret{
@@ -141,6 +154,14 @@ func TestManagedCacheScope(t *testing.T) {
 		t.Errorf("StatefulSet Pod template label %s = %q, want %q",
 			controller.ManagedByLabel, got, controller.ManagedByOperator)
 	}
+	// The StatefulSet controller labels each data PVC with the selector's
+	// labels, so the members' PVCs carry the label too.
+	if got := sts.Spec.Selector.MatchLabels[controller.ManagedByLabel]; got != controller.ManagedByOperator {
+		t.Errorf("StatefulSet selector label %s = %q, want %q",
+			controller.ManagedByLabel, got, controller.ManagedByOperator)
+	}
+	mustWatch(t, cached.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "data-managed-0"},
+		&corev1.PersistentVolumeClaim{}))
 
 	// Objects the operator does not manage stay out of the cache.
 	err = cached.Get(ctx, client.ObjectKey{Namespace: namespace, Name: unrelated}, &corev1.Secret{})
@@ -150,6 +171,10 @@ func TestManagedCacheScope(t *testing.T) {
 	err = cached.Get(ctx, client.ObjectKey{Namespace: namespace, Name: unrelated}, &corev1.Pod{})
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("cached read of an unmanaged Pod = %v, want NotFound", err)
+	}
+	err = cached.Get(ctx, client.ObjectKey{Namespace: namespace, Name: unrelated}, &corev1.PersistentVolumeClaim{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("cached read of an unmanaged PersistentVolumeClaim = %v, want NotFound", err)
 	}
 
 	// A token Secret the operator did not write is neither adopted nor

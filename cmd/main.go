@@ -311,13 +311,17 @@ func main() {
 
 // watchCacheOptions scopes namespaced informers and cached reads. Empty keeps
 // controller-runtime's cluster-wide default; API authorization is separate.
-// Secrets and Pods are cached only when they carry the operator's managed-by
-// label, so a cached read of any other Secret or Pod finds nothing.
+// Secrets, Pods and PersistentVolumeClaims are cached only when they carry
+// the operator's managed-by label, so a cached read of any other finds
+// nothing. The StatefulSet controller labels each data PVC with the
+// StatefulSet's selector, which carries the label.
 func watchCacheOptions(namespace string) (cache.Options, error) {
 	managed := labels.SelectorFromSet(labels.Set{controller.ManagedByLabel: controller.ManagedByOperator})
 	options := cache.Options{ByObject: map[client.Object]cache.ByObject{
 		&corev1.Secret{}: {Label: managed},
 		&corev1.Pod{}:    {Label: managed},
+		// The members' data PVCs, which MemberPlacement reads.
+		&corev1.PersistentVolumeClaim{}: {Label: managed},
 	}}
 	if namespace == "" {
 		return options, nil
