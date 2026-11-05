@@ -23,7 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,7 +33,6 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
-	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -52,6 +50,9 @@ const conditionSampleEvery = 2 * time.Second
 
 // conditionReadLimit bounds one round of reads.
 const conditionReadLimit = 20 * time.Second
+
+// rowCountLimit bounds one count of the ledger rows on one member.
+const rowCountLimit = 8 * time.Second
 
 // conditionRound is one line of conditions.jsonl: one read of the status, the
 // read-write Broker Deployment's available Pods, and, when asked for, the
@@ -151,9 +152,20 @@ func (r *haRun) conditionRound(ctx context.Context, sampling conditionSampling) 
 	if len(sampling.rows) > 0 {
 		counts := faults.RowCounts{Start: time.Now().UTC(), Rows: make(map[string]int, len(sampling.rows))}
 		for _, pod := range sampling.rows {
-			if n, err := r.ledgerRows(ctx, pod); err == nil {
-				counts.Rows[pod] = n
+			n, err := r.ledgerRows(ctx, pod)
+			if err != nil {
+				if counts.Errors == nil {
+					counts.Errors = map[string]string{}
+				}
+				// The whole output of csql would bury the reason.
+				why := err.Error()
+				if len(why) > 300 {
+					why = why[:300] + " ..."
+				}
+				counts.Errors[pod] = why
+				continue
 			}
+			counts.Rows[pod] = n
 		}
 		counts.End = time.Now().UTC()
 		round.Rows = &counts
@@ -171,12 +183,12 @@ func (r *haRun) conditionRound(ctx context.Context, sampling conditionSampling) 
 
 // ledgerRows counts the workload's ledger rows on a member, with csql inside
 // its Pod, without announcing the command in the test output.
+// Each count is given rowCountLimit, so that a member whose Pod is being
+// replaced does not hold up the round.
 func (r *haRun) ledgerRows(ctx context.Context, pod string) (int, error) {
-	run := func(sql string) (string, error) {
-		return utils.RunQuiet(exec.CommandContext(ctx, "kubectl", "-n", r.namespace, "exec", pod, "--",
-			"bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`, r.database+"@localhost", sql))
-	}
-	out, err := sqlcheck.Run(run, "SELECT TO_CHAR(COUNT(*)) AS v FROM ledger;")
+	ctx, cancel := context.WithTimeout(ctx, rowCountLimit)
+	defer cancel()
+	out, err := runSQL(csqlInPodQuiet(ctx, r.namespace, pod, r.database), "SELECT TO_CHAR(COUNT(*)) AS v FROM ledger;")
 	if err != nil {
 		return 0, err
 	}

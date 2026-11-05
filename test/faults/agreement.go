@@ -85,6 +85,8 @@ type RowCounts struct {
 	Start time.Time      `json:"start"`
 	End   time.Time      `json:"end"`
 	Rows  map[string]int `json:"rows"`
+	// Errors says, for each member whose count could not be read, why.
+	Errors map[string]string `json:"errors,omitempty"`
 }
 
 // Observations are everything a run recorded that the Conditions are
@@ -126,6 +128,9 @@ type finding struct {
 	disagreements, notes []string
 	// evaluated holds the start of every status read the rule could judge.
 	evaluated []time.Time
+	// considered is how many status reads the rule needs half of for a
+	// verdict; zero means all of them.
+	considered int
 	// notJudged says why the rule could not be judged at all: the evidence
 	// it needs is missing.
 	notJudged string
@@ -251,7 +256,11 @@ func CheckAgreement(obs Observations, rules []Rule) Agreement {
 			}
 			a.Evaluated[r.ID] = len(f.evaluated)
 			if f.notJudged == "" {
-				f.notJudged = insufficient(f.evaluated, len(obs.Samples), obs.Steps)
+				considered := len(obs.Samples)
+				if f.considered > 0 {
+					considered = f.considered
+				}
+				f.notJudged = insufficient(f.evaluated, considered, obs.Steps)
 			}
 		}
 		a.Disagreements = append(a.Disagreements, prefixed(string(r.Kind)+": "+r.ID, f.disagreements)...)
@@ -873,30 +882,45 @@ const rowReadingGap = 10 * time.Second
 // victim applies nothing while the master writes, and healthySlave is the
 // other slave. Each compares the reads with the counts of the ledger rows on
 // victim and master that the same sampling took.
-func StallRules(victim, master, healthySlave string) []Rule {
+// Stall describes one run of the replication-stall step.
+type Stall struct {
+	Victim, Master, HealthySlave string
+	// WritesAcknowledged is when the writes after the stall were
+	// acknowledged; zero when not known.
+	WritesAcknowledged time.Time
+	// RepairIssued is when the stalled slave's Pod was deleted; zero when
+	// it was not.
+	RepairIssued time.Time
+}
+
+func StallRules(st Stall) []Rule {
+	victim, master, healthySlave := st.Victim, st.Master, st.HealthySlave
 	return []Rule{
 		{
+			// The healthy slave is the former master's replacement Pod. While
+			// it rejoins it may report apply failures, and after the victim's
+			// repair a stalled copy of the log, so only the claim that it
+			// stalled the way the victim did, in the same read, is a
+			// disagreement: it applies the writes the victim does not.
 			ID: ruleStallSpareNotNamed, Kind: Never,
-			Says: "the healthy slave " + healthySlave + " is never named in ReplicationHealthy=False",
+			Says: "the healthy slave " + healthySlave + " (the former master's replacement Pod) is never named " +
+				"with reason ReplicationStalled in a read that names " + victim + " as stalled",
 			check: perRead([]string{condReplicationHealthy}, func(s ConditionSample) (string, string) {
-				c := s.Conditions[condReplicationHealthy]
-				if c.Status != condFalse {
+				if !stalledNaming(s, victim) || !stalledNaming(s, healthySlave) {
 					return "", ""
 				}
-				if names, _ := namedMembers(c.Message); slices.Contains(names, healthySlave) {
-					return fmt.Sprintf("read at %s: ReplicationHealthy=False (%s) names the healthy slave %s",
-						stamp(s.ReadStart), c.Reason, healthySlave), ""
-				}
-				return "", ""
+				return fmt.Sprintf("read at %s: ReplicationStalled names the healthy slave %s with %s",
+					stamp(s.ReadStart), healthySlave, victim), ""
 			}),
 		},
 		{
 			ID: ruleStallMatchesRows, Kind: Tolerance, Tolerance: AgreementTolerance,
-			Says: "a status that is not stale never names " + victim + " as stalled (ReplicationStalled) when " +
-				"every row count in the tolerance before it, none more than " + rowReadingGap.String() + " apart, " +
-				"showed it holding at least the rows of the master " + master + "; at least one stalled read " +
-				"must have a row count of the same pass",
-			check: func(obs Observations) finding { return checkStallMatchesRows(obs, victim, master) },
+			Says: "a status that is not stale, read after the writes were acknowledged, never names " + victim +
+				" as stalled (ReplicationStalled) when every row count in the tolerance before it, none more than " +
+				rowReadingGap.String() + " apart, showed it holding at least the rows of the master " + master +
+				"; at least one such stalled read must have a row count of the same pass, and the evidence " +
+				"limits count only the reads from the writes to the repair of " + victim,
+			check: func(obs Observations) finding { return checkStallMatchesRows(obs, st) },
 		},
 		{
 			ID: ruleStallRecoveryLag, Kind: Report,
@@ -933,21 +957,41 @@ func samePass(readings []reading, s ConditionSample) (reading, bool) {
 	return reading{}, false
 }
 
-func checkStallMatchesRows(obs Observations, victim, master string) finding {
+// checkStallMatchesRows compares the stalled reads with the row counts. The
+// Operator judges a stall by log pages, not rows: the failover writes log of
+// its own, so the stall can be reported before the step's writes reach the
+// master, while both hold the same rows. A stalled read before the writes were
+// acknowledged is therefore not compared. While the victim's Pod is replaced
+// its rows cannot be counted, so the evidence limits count only the reads from
+// the writes to the repair.
+func checkStallMatchesRows(obs Observations, st Stall) finding {
+	victim, master := st.Victim, st.Master
+	failures := rowCountFailures(obs.Rows)
 	readings := rowReadings(obs, victim, master)
 	if len(readings) == 0 {
-		return finding{notJudged: "no row count read both " + victim + " and " + master}
+		return finding{notJudged: "no row count read both " + victim + " and " + master, notes: failures}
 	}
 	fresh, notes := freshSamples(obs.Samples)
+	notes = append(notes, failures...)
+	inComparison := func(t time.Time) bool {
+		return !t.Before(st.WritesAcknowledged) && (st.RepairIssued.IsZero() || t.Before(st.RepairIssued))
+	}
 	var bad []string
 	var evaluated []time.Time
-	compared, behind, uncovered, gaps := 0, 0, 0, 0
+	considered, compared, behind, early, soon, uncovered, gaps := 0, 0, 0, 0, 0, 0, 0
 	for _, s := range fresh {
 		pass, inPass := samePass(readings, s)
-		if _, ok := s.Conditions[condReplicationHealthy]; ok && inPass {
-			evaluated = append(evaluated, s.ReadStart)
+		if inComparison(s.ReadStart) {
+			considered++
+			if _, ok := s.Conditions[condReplicationHealthy]; ok && inPass {
+				evaluated = append(evaluated, s.ReadStart)
+			}
 		}
 		if !stalledNaming(s, victim) {
+			continue
+		}
+		if s.ReadStart.Before(st.WritesAcknowledged) {
+			early++
 			continue
 		}
 		if inPass {
@@ -956,7 +1000,14 @@ func checkStallMatchesRows(obs Observations, victim, master string) finding {
 				behind++
 			}
 		}
-		w := windowBefore(readings, s.ReadStart.Add(-AgreementTolerance), s.ReadEnd, rowReadingGap)
+		// Rows counted before the writes say nothing of a stall the writes
+		// would show: the window is judged only once it lies after them.
+		from := s.ReadStart.Add(-AgreementTolerance)
+		if from.Before(st.WritesAcknowledged) {
+			soon++
+			continue
+		}
+		w := windowBefore(readings, from, s.ReadEnd, rowReadingGap)
 		switch {
 		case !w.covered:
 			uncovered++
@@ -968,9 +1019,13 @@ func checkStallMatchesRows(obs Observations, victim, master string) finding {
 				stamp(w.from), master))
 		}
 	}
+	if early > 0 {
+		notes = append(notes, fmt.Sprintf("%d reads naming %s as stalled before the writes were acknowledged at %s "+
+			"were not compared with the rows", early, victim, stamp(st.WritesAcknowledged)))
+	}
 	if compared == 0 {
-		return finding{notJudged: "no read naming " + victim + " as stalled had a row count of the same pass",
-			notes: notes, evaluated: evaluated}
+		return finding{notJudged: "no read naming " + victim + " as stalled after the writes had a row count of " +
+			"the same pass", notes: notes, evaluated: evaluated, considered: considered}
 	}
 	notes = append(notes, fmt.Sprintf("%d reads naming %s as stalled had a row count of the same pass; in %d of "+
 		"them it held fewer rows than %s", compared, victim, behind, master))
@@ -978,6 +1033,7 @@ func checkStallMatchesRows(obs Observations, victim, master string) finding {
 		count int
 		why   string
 	}{
+		{soon, "they came less than the tolerance after the writes were acknowledged"},
 		{uncovered, "the rows were not counted for the whole tolerance before them"},
 		{gaps, fmt.Sprintf("the row counts before them leave a gap of more than %s", rowReadingGap)},
 	} {
@@ -986,7 +1042,28 @@ func checkStallMatchesRows(obs Observations, victim, master string) finding {
 				n.count, n.why))
 		}
 	}
-	return finding{disagreements: bad, notes: notes, evaluated: evaluated}
+	return finding{disagreements: bad, notes: notes, evaluated: evaluated, considered: considered}
+}
+
+// rowCountFailures says, per member, in how many rounds its rows could not be
+// counted, and why the first time.
+func rowCountFailures(counts []RowCounts) []string {
+	failed := map[string]int{}
+	first := map[string]string{}
+	for _, c := range counts {
+		for member, why := range c.Errors {
+			if failed[member] == 0 {
+				first[member] = fmt.Sprintf("%s at %s", why, stamp(c.Start))
+			}
+			failed[member]++
+		}
+	}
+	notes := make([]string, 0, len(failed))
+	for _, member := range slices.Sorted(maps.Keys(failed)) {
+		notes = append(notes, fmt.Sprintf("the rows of %s could not be counted in %d rounds; the first: %s",
+			member, failed[member], first[member]))
+	}
+	return notes
 }
 
 // reportStallRecoveryLag finds the first row count, after the first read

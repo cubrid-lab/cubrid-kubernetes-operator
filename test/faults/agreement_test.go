@@ -505,6 +505,20 @@ func stallRun(to float64, rows func(second float64) (master, victim int)) Observ
 	return obs
 }
 
+// stall is the stall of stallRun: the writes after it were acknowledged at
+// second 10, and the stalled slave's Pod is not replaced.
+var stall = Stall{Victim: m1, Master: m0, HealthySlave: m2, WritesAcknowledged: at(10)}
+
+// naming returns s with ReplicationHealthy False for reason, naming members,
+// and HAReady False with it, as the Operator sets them in one pass.
+func naming(s ConditionSample, reason string, members ...string) ConditionSample {
+	s = with(with(s, "ReplicationHealthy", "False", reason), "HAReady", "False", reason)
+	c := s.Conditions["ReplicationHealthy"]
+	c.Message = "nothing applied on: " + strings.Join(members, ", ")
+	s.Conditions["ReplicationHealthy"] = c
+	return s
+}
+
 func TestStallRulesCompareTheStallWithTheRows(t *testing.T) {
 	// The victim holds 100 rows; the master gets 160 at second 10 and the
 	// victim catches up at second catchUp.
@@ -520,8 +534,18 @@ func TestStallRulesCompareTheStallWithTheRows(t *testing.T) {
 			return master, victim
 		}
 	}
-	// The master and the victim always hold the same rows.
+	// The master and the victim hold the same rows.
 	even := func(float64) (int, int) { return 100, 100 }
+	// The writes reach the master only at second 150; until then both hold
+	// the same rows, while the log the failover wrote already waits.
+	lateWrites := func(s float64) (int, int) {
+		if s >= 150 {
+			return 160, 100
+		}
+		return 100, 100
+	}
+	late := stall
+	late.WritesAcknowledged = at(150)
 	noRows := stallRun(150, rows(160))
 	noRows.Rows = nil
 	farRows := stallRun(150, rows(160))
@@ -529,25 +553,63 @@ func TestStallRulesCompareTheStallWithTheRows(t *testing.T) {
 		farRows.Rows[i].Start = farRows.Rows[i].Start.Add(time.Hour)
 		farRows.Rows[i].End = farRows.Rows[i].End.Add(time.Hour)
 	}
-	spare := stallRun(150, rows(160))
-	spare.Samples[50] = with(spare.Samples[50], "ReplicationHealthy", "False", "ReplicationStalled")
-	c := spare.Samples[50].Conditions["ReplicationHealthy"]
-	c.Message = "log pages have waited for 1m0s or longer with nothing applied on: " + m2
-	spare.Samples[50].Conditions["ReplicationHealthy"] = c
+	// The stalled slave's Pod is replaced at second 96: its rows cannot be
+	// counted from then on, and more than half of all the reads have no
+	// row count of it.
+	repaired := stall
+	repaired.RepairIssued = at(96)
+	replaced := stallRun(150, rows(160))
+	for i := range replaced.Rows {
+		if !replaced.Rows[i].Start.Before(at(96)) {
+			delete(replaced.Rows[i].Rows, m1)
+			replaced.Rows[i].Errors = map[string]string{m1: "the count did not return within 10s"}
+		}
+	}
 
-	checkCases(t, StallRules(m1, m0, m2), map[string]agreementCase{
+	checkCases(t, StallRules(stall), map[string]agreementCase{
 		"the stall is reported while the victim holds fewer rows than the master": {
 			obs: stallRun(150, rows(160)), judged: true},
 		"the stall is still reported shortly after the victim caught up": {
 			obs: stallRun(150, rows(140)), judged: true},
-		"the stall is reported although the victim held the master's rows for longer than the tolerance": {
+		"the stall is reported although the victim held the master's rows since the writes": {
 			obs: stallRun(200, even), disagree: ruleStallMatchesRows, judged: true},
 		"without any row count the stall rule is not judged": {
 			obs: noRows, notJudged: ruleStallMatchesRows},
 		"without a row count in the same pass as a stalled read the stall rule is not judged": {
 			obs: farRows, notJudged: ruleStallMatchesRows},
-		"the healthy slave named as stalled": {
-			obs: spare, disagree: ruleStallSpareNotNamed},
+	})
+	checkCases(t, StallRules(late), map[string]agreementCase{
+		"a stall reported before the writes were acknowledged is not compared with the rows": {
+			obs: stallRun(200, lateWrites), note: "before", judged: true},
+	})
+	checkCases(t, StallRules(repaired), map[string]agreementCase{
+		"the reads while the stalled slave's Pod is replaced do not count against the evidence": {
+			obs: replaced, note: "could not be counted", judged: true},
+	})
+}
+
+func TestStallHealthySlaveRule(t *testing.T) {
+	// One read at second 100, inside the stall of the victim m-1.
+	read := func(f func(ConditionSample) ConditionSample) Observations {
+		obs := stallRun(150, func(float64) (int, int) { return 160, 100 })
+		obs.Samples[50] = f(obs.Samples[50])
+		return obs
+	}
+	checkCases(t, StallRules(stall), map[string]agreementCase{
+		"the healthy slave named as stalled together with the victim": {
+			obs: read(func(s ConditionSample) ConditionSample {
+				return naming(s, "ReplicationStalled", m1, m2)
+			}),
+			disagree: ruleStallSpareNotNamed},
+		// The healthy slave is the former master's replacement Pod: it may
+		// report apply failures while it rejoins, and a stalled log copy after
+		// the victim's repair.
+		"the healthy slave named for apply failures while it rejoins": {
+			obs: read(func(s ConditionSample) ConditionSample { return naming(s, "ApplyFailures", m2) })},
+		"the healthy slave named for a stalled log copy": {
+			obs: read(func(s ConditionSample) ConditionSample { return naming(s, "LogCopyStalled", m2) })},
+		"the healthy slave named as stalled without the victim": {
+			obs: read(func(s ConditionSample) ConditionSample { return naming(s, "ReplicationStalled", m2) })},
 	})
 }
 
@@ -560,7 +622,7 @@ func TestStallReportsHowLongTheConditionLagsTheRows(t *testing.T) {
 		}
 		return 160, 100
 	})
-	got := CheckAgreement(obs, StallRules(m1, m0, m2))
+	got := CheckAgreement(obs, StallRules(stall))
 	if !mentions(got.Notes, ruleStallRecoveryLag, "20s") {
 		t.Errorf("notes %v do not report that ReplicationHealthy turned True 20s after the rows matched", got.Notes)
 	}

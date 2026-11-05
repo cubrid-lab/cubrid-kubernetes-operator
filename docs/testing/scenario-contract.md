@@ -784,14 +784,25 @@ counts the ledger rows on the stalled slave and on the master, with csql on
 each member. Its fault is the start of the stall and its outcome the first
 report of it, for the evidence limits above. Besides the Never rules:
 
-- **Never:** the other, healthy slave is never named in
-  `ReplicationHealthy=False`.
+- **Never:** the healthy slave, which is the former master's replacement
+  Pod, is never named with reason `ReplicationStalled` in a read that names
+  the stalled slave as stalled. While it rejoins it may be named for apply
+  failures, and after the stalled slave's repair for a stalled log copy; those
+  are not disagreements.
 - **Tolerance** (80 seconds, as for every rule that rests on the role
-  observation): a status that is not stale never names the stalled slave with
-  reason `ReplicationStalled` when every row count in the 80 seconds before
-  it, none more than 10 seconds apart, showed the slave holding at least the
-  master's rows. At least one read naming it as stalled must have a row count
-  taken within 5 seconds of it, or the rule is not judged.
+  observation): the Operator judges a stall by log pages, not rows, and the
+  failover writes log of its own, so the stall may be reported before the
+  step's writes reach the master. A read naming the stalled slave as stalled
+  is compared with the rows only once the 80 seconds before it lie after the
+  writes were acknowledged: it then never says `ReplicationStalled` when
+  every row count in those 80 seconds, none more than 10 seconds apart,
+  showed the slave holding at least the master's rows. At least one read
+  naming it as stalled after the writes must have a row count taken within
+  5 seconds of it, or the rule is not judged. The evidence limits of this
+  rule count only the reads from the writes to the deletion of the stalled
+  slave's Pod, since its rows cannot be counted while the Pod is replaced.
+  Each count is bounded to 8 seconds, and every count that failed is kept in
+  `conditions.jsonl` and noted in `agreement.txt`.
 - **Report:** how long after the row counts of the slave matched the master's
   again `ReplicationHealthy` was `True`.
 

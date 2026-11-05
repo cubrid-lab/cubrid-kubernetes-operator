@@ -211,6 +211,8 @@ func replicationStallStep(r *haRun) {
 			Expect(err).NotTo(HaveOccurred())
 		}
 
+		// The healthy slave is the former master, whose Pod this step
+		// deleted: its replacement Pod may still be starting or rejoining.
 		var healthySlave string
 		for _, m := range r.members {
 			if m != victim && m != newMaster {
@@ -232,6 +234,9 @@ func replicationStallStep(r *haRun) {
 			_, err := r.runWorkload(context.Background(), "CLIENT_ID="+clients+"a OPS=20 ROLLBACK_EVERY=0")
 			return err
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		// Before this, the stall may be reported for the log of the failover
+		// alone, while the stalled slave and the master hold the same rows.
+		writesAcknowledged := time.Now().UTC()
 		Eventually(func(g Gomega) {
 			m, slaves, err := r.master(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
@@ -305,6 +310,7 @@ func replicationStallStep(r *haRun) {
 			victim, newMaster, len(behind), len(ahead), message, haReady)
 
 		By("deleting the Pod of the stalled slave")
+		repairIssued := time.Now().UTC()
 		_, err = r.kubectl(context.Background(), "delete", "pod", victim, "--wait=false")
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(func(g Gomega) {
@@ -328,7 +334,8 @@ func replicationStallStep(r *haRun) {
 			{T: stallReported, Kind: "outcome_reached", Detail: "ReplicationHealthy names " + victim + " as stalled"},
 		}
 		agreement, _, measured := checkConditions("replication-stall", sampler.stop(), nil, steps,
-			slices.Concat(faults.NeverRules(), faults.HAReportRules(), faults.StallRules(victim, newMaster, healthySlave)))
+			slices.Concat(faults.NeverRules(), faults.HAReportRules(), faults.StallRules(faults.Stall{Victim: victim, Master: newMaster,
+				HealthySlave: healthySlave, WritesAcknowledged: writesAcknowledged, RepairIssued: repairIssued})))
 		if line, err := json.Marshal(measured); err == nil {
 			record += "conditionAgreement: " + string(line) + "\n"
 		}
