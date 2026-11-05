@@ -230,6 +230,8 @@ const (
 	ruleStallMatchesRows               = "stall-reported-while-the-slave-lacks-rows"
 	ruleStallSpareNotNamed             = "healthy-slave-never-named-unhealthy"
 	ruleStallRecoveryLag               = "replication-healthy-after-the-rows-match"
+	ruleS06PrimaryAfterReturn          = "resolved-primary-is-the-master-after-the-operator-returned"
+	ruleS06WritesWhileStale            = "writes-while-the-status-was-stale"
 )
 
 // The Conditions the rules read.
@@ -740,26 +742,22 @@ func reportAllBrokersLost(obs Observations) finding {
 }
 
 // reportWrites counts the writes that, compared with the last status read that
-// ended before them and was not stale, match.
+// ended before them, match. A write whose last read was stale is not
+// compared: that status says nothing of the time of the write.
 func reportWrites(obs Observations, match func(SQLEvent, ConditionSample) bool, what string) finding {
-	fresh, _ := freshSamples(obs.Samples)
+	samples := byReadStart(obs.Samples)
 	count := 0
 	var first time.Time
 	for _, e := range obs.SQL {
 		if !e.Write {
 			continue
 		}
-		last := -1
-		for i, s := range fresh {
-			if s.ReadEnd.After(e.T) {
-				break
-			}
-			last = i
-		}
-		if last < 0 || !match(e, fresh[last]) {
+		last := lastReadBefore(samples, e.T)
+		if last < 0 || isStale(samples[last]) || !match(e, samples[last]) {
 			continue
 		}
-		if count == 0 {
+		// The events of several clients may be joined one after the other.
+		if count == 0 || e.T.Before(first) {
 			first = e.T
 		}
 		count++
@@ -814,13 +812,39 @@ func hasAll(s ConditionSample, conditions []string) bool {
 	return true
 }
 
+// isStale reports whether the read's status is stale: its
+// status.lastObservedTime is unset or more than staleAfter old.
+func isStale(s ConditionSample) bool {
+	return s.LastObserved.IsZero() || s.ReadStart.Sub(s.LastObserved) > staleAfter
+}
+
+// byReadStart returns the reads in the order of their start.
+func byReadStart(samples []ConditionSample) []ConditionSample {
+	sorted := slices.Clone(samples)
+	slices.SortStableFunc(sorted, func(a, b ConditionSample) int { return a.ReadStart.Compare(b.ReadStart) })
+	return sorted
+}
+
+// lastReadBefore returns the index of the last of the sorted reads that ended
+// before t, or -1.
+func lastReadBefore(sorted []ConditionSample, t time.Time) int {
+	last := -1
+	for i, s := range sorted {
+		if s.ReadEnd.After(t) {
+			break
+		}
+		last = i
+	}
+	return last
+}
+
 // freshSamples returns the reads, in the order of their start, whose status
 // is not stale, and a note on the ones that were.
 func freshSamples(samples []ConditionSample) ([]ConditionSample, []string) {
 	var fresh []ConditionSample
 	stale := 0
 	for _, s := range samples {
-		if s.LastObserved.IsZero() || s.ReadStart.Sub(s.LastObserved) > staleAfter {
+		if isStale(s) {
 			stale++
 			continue
 		}
@@ -1200,13 +1224,20 @@ func checkPrimaryWasMaster(obs Observations) finding {
 	return finding{disagreements: bad, notes: notes, evaluated: evaluated}
 }
 
-func checkPrimaryAfterOutcome(obs Observations, newMaster string) finding {
-	var outcomeAt time.Time
-	for _, st := range obs.Steps {
+// outcomeTime is when the timeline marks the outcome as reached, or the zero
+// time when it does not.
+func outcomeTime(steps []Step) time.Time {
+	var t time.Time
+	for _, st := range steps {
 		if st.Kind == "outcome_reached" {
-			outcomeAt = st.T
+			t = st.T
 		}
 	}
+	return t
+}
+
+func checkPrimaryAfterOutcome(obs Observations, newMaster string) finding {
+	outcomeAt := outcomeTime(obs.Steps)
 	if outcomeAt.IsZero() {
 		return finding{notJudged: "the timeline has no outcome"}
 	}
@@ -1276,4 +1307,161 @@ func checkRoutingNeedsPrimaryInWait(obs Observations) finding {
 		f.notJudged = "no status read was recorded in the wait for the outcome"
 	}
 	return f
+}
+
+// S06Rules are the rules of an Operator failure (S06). While no Operator Pod
+// runs nobody updates the status, so what it says then is the status the
+// Operator left: it is compared only while it is not stale, and a stale read
+// is neither judged as current nor counted against the evidence limits of a
+// rule that compares the status with heartbeat. master is the master the
+// status must name once the Operator is back: the unchanged master after a
+// restart, or the member CUBRID elected while the Operator was absent; ""
+// when the outcome was not reached. returnedAt is the earliest time a status
+// the returned Operator wrote can carry as status.lastObservedTime: when the
+// old Pod was confirmed gone, or when the Deployment was scaled back.
+// strictlyAfter is set for a restart, where the killed process can outlive its
+// Pod: only a status.lastObservedTime in a later second than returnedAt's then
+// shows that the replacement wrote it.
+func S06Rules(master string, returnedAt time.Time, strictlyAfter bool) []Rule {
+	return append([]Rule{
+		{
+			ID: ruleS03PrimaryWasMaster, Kind: Tolerance, Tolerance: AgreementTolerance,
+			Says: "a status that is not stale resolves only a member whose own node heartbeat showed as master " +
+				"in a sweep within the tolerance before the read; a stale read, as the status the Operator left " +
+				"becomes while it is absent, is not compared, and the evidence limits count only the reads that " +
+				"were not stale",
+			check: checkPrimaryWasMasterWhileFresh,
+		},
+		{
+			ID: ruleS06PrimaryAfterReturn, Kind: Never,
+			Says: "from the later of the outcome and the Operator's return (" + stampOrUnset(returnedAt) + ") to the " +
+				"end of the stable period, a read that resolves a primary names " + orMissing(master, master != "") +
+				", in every read that is not stale and whose status.lastObservedTime is not before the return" +
+				strictSecond(strictlyAfter) + ", so that the returned Operator wrote it; other reads are counted in a " +
+				"note and not judged",
+			check: func(obs Observations) finding {
+				return checkPrimaryAfterReturn(obs, master, returnedAt, strictlyAfter)
+			},
+		},
+		{
+			ID: ruleS06WritesWhileStale, Kind: Report,
+			Says: "the writes acknowledged, failed or ended without a known outcome while the last status read " +
+				"before them was stale, as it is while no Operator runs; they are not compared with that status",
+			check: reportWritesWhileStale,
+		},
+	}, sqlReportRules()...)
+}
+
+// checkPrimaryWasMasterWhileFresh is checkPrimaryWasMaster with the reads
+// that were not stale as the reads it needs half of.
+func checkPrimaryWasMasterWhileFresh(obs Observations) finding {
+	f := checkPrimaryWasMaster(obs)
+	fresh, _ := freshSamples(obs.Samples)
+	f.considered = len(fresh)
+	if f.notJudged == "" && len(fresh) == 0 {
+		f.notJudged = "every status read was stale"
+	}
+	return f
+}
+
+func strictSecond(strictlyAfter bool) string {
+	if strictlyAfter {
+		return " (for a restart, in a later second than the return, since the killed process can outlive its Pod)"
+	}
+	return ""
+}
+
+func checkPrimaryAfterReturn(obs Observations, master string, returnedAt time.Time, strictlyAfter bool) finding {
+	outcomeAt := outcomeTime(obs.Steps)
+	switch {
+	case outcomeAt.IsZero():
+		return finding{notJudged: "the timeline has no outcome"}
+	case master == "":
+		return finding{notJudged: "the master the returned Operator must name is not known"}
+	}
+	from := outcomeAt
+	if returnedAt.After(from) {
+		from = returnedAt
+	}
+	// The API server stores lastObservedTime to the second. A status of the
+	// second of the return is accepted unless the killed process may have
+	// written it: it can outlive its Pod, so a restart needs a later second.
+	written := returnedAt.Truncate(time.Second)
+	if strictlyAfter {
+		written = written.Add(time.Second)
+	}
+	var bad, notes []string
+	var evaluated []time.Time
+	considered, stale, older := 0, 0, 0
+	for _, s := range obs.Samples {
+		switch {
+		case s.ReadStart.Before(from):
+			continue
+		case isStale(s):
+			stale++
+			continue
+		case s.LastObserved.Before(written):
+			older++
+			continue
+		}
+		considered++
+		if _, ok := s.Conditions[condPrimaryResolved]; !ok {
+			continue
+		}
+		evaluated = append(evaluated, s.ReadStart)
+		if isTrue(s, condPrimaryResolved) && s.CurrentPrimary != master {
+			bad = append(bad, fmt.Sprintf("read at %s, after the Operator returned: PrimaryResolved=True names %s, "+
+				"not %s", stamp(s.ReadStart), orMissing(s.CurrentPrimary, s.CurrentPrimary != ""), master))
+		}
+	}
+	if stale > 0 {
+		notes = append(notes, fmt.Sprintf("not judged in %d reads after the return: the status was stale", stale))
+	}
+	if older > 0 {
+		notes = append(notes, fmt.Sprintf("not judged in %d reads after the return: status.lastObservedTime was "+
+			"before the return, so the returned Operator had not written it", older))
+	}
+	f := finding{disagreements: bad, notes: notes, evaluated: evaluated, considered: considered, afterOutcome: true}
+	if considered == 0 {
+		f.notJudged = "no status read after the outcome and the Operator's return was written by the returned " +
+			"Operator and not stale"
+	}
+	return f
+}
+
+// reportWritesWhileStale counts, by outcome, the writes whose last status read
+// that ended before them was stale.
+func reportWritesWhileStale(obs Observations) finding {
+	samples := byReadStart(obs.Samples)
+	var stale []time.Time
+	for _, s := range samples {
+		if isStale(s) {
+			stale = append(stale, s.ReadStart)
+		}
+	}
+	if len(stale) == 0 {
+		return finding{notes: []string{"no status read was stale"}}
+	}
+	notes := []string{fmt.Sprintf("the status was stale in %d reads, from %s to %s%s", len(stale), stamp(stale[0]),
+		stamp(stale[len(stale)-1]), sinceFault(obs.Steps, stale[0]))}
+	counts := map[string]int{}
+	var first time.Time
+	for _, e := range obs.SQL {
+		if !e.Write {
+			continue
+		}
+		if last := lastReadBefore(samples, e.T); last < 0 || !isStale(samples[last]) {
+			continue
+		}
+		if first.IsZero() || e.T.Before(first) {
+			first = e.T
+		}
+		counts[e.Outcome]++
+	}
+	if first.IsZero() {
+		return finding{notes: append(notes, "no write came while the last status read before it was stale")}
+	}
+	return finding{notes: append(notes, fmt.Sprintf("while the last status read before them was stale: %d "+
+		"acknowledged, %d failed, %d without a known outcome, the first at %s%s", counts[SQLAcknowledged],
+		counts[SQLFailed], counts[SQLUnknown], stamp(first), sinceFault(obs.Steps, first)))}
 }

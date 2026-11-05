@@ -582,3 +582,65 @@ func TestS03ConditionsAreJudgedOnEveryResult(t *testing.T) {
 		}
 	}
 }
+
+// TestS06ConditionsAreJudgedOnEveryResult checks that S06 judges its sampled
+// reads also when a variant ended without the outcome or failed a later
+// check: a read with HAReady=True and PrimaryResolved not True, which the
+// Operator never writes, fails the variant with the disagreement as its
+// reason, and the reads and the verdict are kept as evidence. A run whose
+// outcome was not reached has no master to compare with after the Operator's
+// return, so it cannot pass on the Conditions.
+func TestS06ConditionsAreJudgedOnEveryResult(t *testing.T) {
+	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	start := time.Now().UTC()
+	rounds := make([]conditionRound, 0, 10)
+	for i := range 10 {
+		at := start.Add(time.Duration(2*i) * time.Second)
+		resolved := "True"
+		if i == 5 {
+			resolved = "False"
+		}
+		rounds = append(rounds, conditionRound{
+			Status: &faults.ConditionSample{ReadStart: at, ReadEnd: at, LastObserved: at, CurrentPrimary: "m-0",
+				Conditions: map[string]faults.ConditionState{
+					"HAReady": {Status: "True"}, "PrimaryResolved": {Status: resolved},
+				}},
+			Roles: &faults.RoleSweep{Start: at, End: at, Roles: map[string]string{"m-0": "master"}},
+		})
+	}
+	timeline := []faults.Step{{T: start.Add(time.Second), Kind: "fault_issued"},
+		{T: start.Add(time.Second), Kind: "fault_confirmed"}, {T: start.Add(19 * time.Second), Kind: "time_limit_exceeded"}}
+	for _, variant := range s06Variants {
+		for _, ended := range []evidence.Scenario{
+			{ID: "S06", Variant: variant, Result: evidence.Blocked, Reason: faults.ReasonStepStillRunning},
+			{ID: "S06", Variant: variant, Result: evidence.Fail, Reason: "a check of S06 failed; see the test output"},
+		} {
+			got, _ := s06Conditions(variant, ended, rounds, nil, timeline, "", time.Time{})
+			if got.Result != evidence.Fail || !strings.HasPrefix(got.Reason, reasonConditionDisagreement) ||
+				len(got.NeverEvents) == 0 {
+				t.Errorf("%s ending with %q gave %s (%s), never events %v", variant, ended.Reason, got.Result,
+					got.Reason, got.NeverEvents)
+			}
+			for _, file := range []string{"conditions.jsonl", "agreement.txt", "roles.jsonl"} {
+				if file = "S06/" + variant + "/" + file; !slices.Contains(got.Evidence, file) {
+					t.Errorf("%s ending with %q kept the evidence %v, without %s", variant, ended.Reason,
+						got.Evidence, file)
+				}
+			}
+			if _, ok := got.Measurements["conditionAgreement"]; !ok {
+				t.Errorf("%s ending with %q has no conditionAgreement measurement", variant, ended.Reason)
+			}
+		}
+	}
+	// Every read agrees, but without the outcome the rule after the
+	// Operator's return has nothing to judge: a run that passed everything
+	// else is blocked, not passed.
+	agreeing := slices.Clone(rounds)
+	agreeing[5] = rounds[4]
+	passed := evidence.Scenario{ID: "S06", Variant: s06Absent, Result: evidence.Pass}
+	if got, _ := s06Conditions(s06Absent, passed, agreeing, nil, timeline, "", time.Time{}); got.Result != evidence.Blocked ||
+		!strings.HasPrefix(got.Reason, reasonConditionsNotJudged) {
+		t.Errorf("a run without the outcome gave %s (%s), want blocked with %s", got.Result, got.Reason,
+			reasonConditionsNotJudged)
+	}
+}

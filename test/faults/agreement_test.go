@@ -428,7 +428,7 @@ func TestS05SQLIsReportedOnly(t *testing.T) {
 
 func TestRulesAreDescribed(t *testing.T) {
 	rules := append(append(NeverRules(), HAReportRules()...), S05Rules(m0, true)...)
-	rules = append(rules, S05Rules(m0, false)...)
+	rules = append(append(rules, S05Rules(m0, false)...), S06Rules(m1, at(120), false)...)
 	if len(rules) == 0 {
 		t.Fatal("no rules")
 	}
@@ -466,7 +466,7 @@ func TestTolerance(t *testing.T) {
 }
 
 func TestReportRulesNeverDisagree(t *testing.T) {
-	for _, r := range append(S05Rules(m0, true), S05Rules(m0, false)...) {
+	for _, r := range append(append(S05Rules(m0, true), S05Rules(m0, false)...), S06Rules(m1, at(120), false)...) {
 		if r.Kind != Report {
 			continue
 		}
@@ -744,5 +744,211 @@ func TestS03Rules(t *testing.T) {
 	got := CheckAgreement(names(m2, 150, 160)(s03Run(200)), S03Rules(m1))
 	if mentions(got.Disagreements, ruleS03PrimaryAfterOutcome, "12:00:1") || !mentions(got.Disagreements, "m-2") {
 		t.Errorf("the rule on the new master judged reads before the outcome: %v", got.Disagreements)
+	}
+}
+
+// The steps faults.Run notes when it issues the fault and when it reaches the
+// outcome.
+const stepFaultIssued, stepOutcomeReached = "fault_issued", "outcome_reached"
+
+// s06Run is a run of the Operator failure scenario (S06) with master m-0: a
+// status read and a heartbeat sweep every two seconds from second 0 to last.
+// The Operator stops at second 10, after its last observation at second 3, so
+// the status it left is stale from the read at second 66 on. If newMaster is
+// not m-0, the master Pod is deleted at second 14 while no Operator runs, and
+// CUBRID makes newMaster master: its node state is master from second 20 and
+// its server active from second 24. The Operator is back at returnAt and
+// writes its first observation, which names the master heartbeat shows, ten
+// seconds later. The fault is confirmed at second 12 and the outcome is
+// reached at outcomeAt.
+func s06Run(last, returnAt, outcomeAt float64, newMaster string) Observations {
+	var obs Observations
+	left := healthy(8) // the status the Operator wrote last
+	for s := 0.0; s <= last; s += 2 {
+		var sample ConditionSample
+		switch {
+		case s < 10:
+			sample = healthy(s)
+		case s < returnAt+10:
+			sample = left
+			sample.ReadStart, sample.ReadEnd = at(s), at(s+0.2)
+		default:
+			sample = healthy(s)
+			sample.CurrentPrimary = newMaster
+		}
+		obs.Samples = append(obs.Samples, sample)
+		sw := RoleSweep{Start: at(s + 0.3), End: at(s + 1.3),
+			Roles:      map[string]string{m0: roleSlave, m1: roleSlave, m2: roleSlave},
+			NodeStates: map[string]string{m0: roleSlave, m1: roleSlave, m2: roleSlave}}
+		switch {
+		case newMaster == m0 || s < 14:
+			sw.Roles[m0], sw.NodeStates[m0] = roleMaster, roleMaster
+		case s < 30:
+			sw.Roles[m0], sw.NodeStates[m0] = "", ""
+			fallthrough
+		default:
+			if s >= 20 {
+				sw.NodeStates[newMaster] = roleMaster
+			}
+			if s >= 24 {
+				sw.Roles[newMaster] = roleMaster
+			}
+		}
+		obs.Sweeps = append(obs.Sweeps, sw)
+	}
+	// The steps faults.Run notes: the fault, its confirmation, the outcome
+	// and the removal of the fault, which is the Operator's return.
+	obs.Steps = []Step{{T: at(10), Kind: stepFaultIssued}, {T: at(12), Kind: "fault_confirmed"},
+		{T: at(outcomeAt), Kind: stepOutcomeReached}, {T: at(returnAt + 1), Kind: "fault_removed"}}
+	return obs
+}
+
+// absentRun is the variant in which the master Pod is deleted while no
+// Operator runs: the outcome is reached at second 100, during the absence, and
+// the Operator is back at second 120.
+func absentRun() Observations { return s06Run(200, 120, 100, m1) }
+
+func TestS06Rules(t *testing.T) {
+	// names makes the reads from second from to second to name member as the
+	// resolved primary in a status that is not stale.
+	names := func(obs Observations, member string, from, to float64) Observations {
+		return replace(obs, from, func(s ConditionSample) ConditionSample {
+			if s.ReadStart.Before(at(to)) {
+				second := s.ReadStart.Sub(t0).Seconds()
+				s = healthy(second)
+				s.CurrentPrimary = member
+			}
+			return s
+		})
+	}
+	// The status the Operator left during the absence names the former
+	// master m-0, deleted at second 14, as the resolved primary; from second
+	// 66 on it is stale.
+	movedObservation := names(absentRun(), m0, 90, 100)
+	// The returned Operator resolves the former master again.
+	oldPrimaryAgain := names(absentRun(), m0, 150, 160)
+	// The returned Operator writes no observation the reader can trust: the
+	// status stays where the Operator left it.
+	neverFresh := replace(absentRun(), 120, func(s ConditionSample) ConditionSample {
+		left := healthy(8)
+		left.ReadStart, left.ReadEnd = s.ReadStart, s.ReadEnd
+		return left
+	})
+	// An absence long enough that most reads are stale.
+	long := s06Run(300, 220, 100, m1)
+	noOutcome := absentRun()
+	noOutcome.Steps = noOutcome.Steps[:2]
+	staleWrites := absentRun()
+	staleWrites.SQL = []SQLEvent{
+		{T: at(90.5), Write: true, Outcome: SQLAcknowledged},
+		{T: at(92.5), Write: true, Outcome: SQLFailed},
+	}
+	restart := s06Run(120, 20, 40, m0)
+
+	checkCases(t, S06Rules(m1, at(120), false), map[string]agreementCase{
+		"the stale status the Operator left names the former master, and the returned Operator the new one": {
+			obs: absentRun(), judged: true, note: "reads were stale"},
+		"a status that is not stale names the deleted master long after heartbeat stopped showing it": {
+			obs: movedObservation, disagree: ruleS03PrimaryWasMaster},
+		"the returned Operator resolves the former master again": {
+			obs: oldPrimaryAgain, disagree: ruleS06PrimaryAfterReturn},
+		"the returned Operator never writes a status that is not stale": {
+			obs: neverFresh, notJudged: ruleS06PrimaryAfterReturn},
+		"without the outcome the master after the return is not judged": {
+			obs: noOutcome, notJudged: ruleS06PrimaryAfterReturn},
+		"writes while the status was stale are reported, not compared with it": {
+			obs: staleWrites, note: ruleS06WritesWhileStale},
+	})
+	checkCases(t, S06Rules(m1, at(220), false), map[string]agreementCase{
+		"an absence in which most reads are stale is still judged from the reads that are not": {
+			obs: long, judged: true},
+	})
+	checkCases(t, S06Rules("", at(120), false), map[string]agreementCase{
+		"without the master to compare with, the rule after the return is not judged": {
+			obs: absentRun(), notJudged: ruleS06PrimaryAfterReturn},
+	})
+	checkCases(t, S06Rules(m0, at(12), true), map[string]agreementCase{
+		"a restarted Operator keeps naming the unchanged master": {obs: restart, judged: true},
+		"after the outcome a restarted Operator names another member": {
+			obs: names(restart, m1, 80, 90), disagree: ruleS06PrimaryAfterReturn},
+	})
+
+	// No read that is not stale falls between the fault (second 10) and the
+	// outcome (second 40): the status the Operator left has no observation
+	// time. The reads before the fault and after the outcome do not make up
+	// for the missing evidence in between.
+	unobserved := func(s ConditionSample) ConditionSample {
+		s.LastObserved = time.Time{}
+		return s
+	}
+	staleInWait := restart
+	staleInWait.Samples = nil
+	for _, s := range restart.Samples {
+		if !s.ReadStart.Before(at(10)) && s.ReadStart.Before(at(40)) {
+			s = unobserved(s)
+		}
+		staleInWait.Samples = append(staleInWait.Samples, s)
+	}
+	// Every read is stale.
+	staleThroughout := replace(restart, 0, unobserved)
+	checkCases(t, S06Rules(m0, at(12), true), map[string]agreementCase{
+		"no read that is not stale between the fault and the outcome is not judged": {
+			obs: staleInWait, notJudged: ruleS03PrimaryWasMaster},
+		"a run in which the status was stale throughout is not judged": {
+			obs: staleThroughout, notJudged: ruleS03PrimaryWasMaster},
+	})
+
+	// The killed Operator process can outlive its Pod, so a restart accepts
+	// only a status stamped in a later second than the one in which the Pod
+	// was confirmed gone (second 40.4): the status of second 40 may still be
+	// the old process's, and names the wrong master here. The Operator that
+	// was absent did not exist before it came back, so the same second counts.
+	sameSecond := replace(restart, 40, func(s ConditionSample) ConditionSample {
+		if s.ReadStart.Before(at(50)) {
+			second := s.ReadStart.Sub(t0).Seconds()
+			s = healthy(second)
+			s.CurrentPrimary = m1
+			s.LastObserved = at(40)
+		}
+		return s
+	})
+	restarted := CheckAgreement(sameSecond, S06Rules(m0, at(40.4), true))
+	if got := restarted; mentions(got.Disagreements, ruleS06PrimaryAfterReturn) ||
+		!mentions(got.Notes, ruleS06PrimaryAfterReturn, "before the return") {
+		t.Errorf("restart judged a status of the second in which the old Pod was gone: %+v", got)
+	}
+	returned := CheckAgreement(sameSecond, S06Rules(m0, at(40.4), false))
+	if got := returned; !mentions(got.Disagreements, ruleS06PrimaryAfterReturn) {
+		t.Errorf("a returned Operator may write in the second of its return, but no disagreement among %v",
+			got.Disagreements)
+	}
+
+	// The first time of a write report is the earliest, also when the
+	// events of two clients are joined one after the other.
+	joined := absentRun()
+	joined.SQL = []SQLEvent{
+		{T: at(92.5), Write: true, Outcome: SQLFailed},
+		{T: at(90.5), Write: true, Outcome: SQLFailed},
+	}
+	firstGot := CheckAgreement(joined, S06Rules(m1, at(120), false))
+	if !mentions(firstGot.Notes, ruleS06WritesWhileStale, "the first at "+stamp(at(90.5))) {
+		t.Errorf("notes %v do not give the earliest write while the status was stale", firstGot.Notes)
+	}
+	joinedRouting := series(100)
+	joinedRouting.SQL = joined.SQL
+	firstGot = CheckAgreement(joinedRouting, sqlReportRules())
+	if !mentions(firstGot.Notes, ruleRoutingWhileWritesFail, "the first at "+stamp(at(90.5))) {
+		t.Errorf("notes %v do not give the earliest failed write", firstGot.Notes)
+	}
+
+	// The stale status still says RoutingReady=True: a write that failed
+	// while it was stale is not reported as failing while routing was ready.
+	got := CheckAgreement(staleWrites, S06Rules(m1, at(120), false))
+	if mentions(got.Notes, ruleRoutingWhileWritesFail, "1 writes") ||
+		mentions(got.Notes, ruleWritesWithoutRouting, "1 writes") {
+		t.Errorf("writes while the status was stale were compared with it: %v", got.Notes)
+	}
+	if !mentions(got.Notes, ruleS06WritesWhileStale, "1 acknowledged", "1 failed") {
+		t.Errorf("notes %v do not count the writes while the status was stale by outcome", got.Notes)
 	}
 }
