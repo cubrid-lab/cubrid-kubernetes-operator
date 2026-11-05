@@ -774,7 +774,9 @@ after a conflicting write of a Broker object, the Broker Conditions are kept
 as they were while the primary is resolved again, so the two can differ in one
 read. Writes acknowledged while `RoutingReady` or `PrimaryResolved` was not
 `True` (as in open question Q2), and writes that failed while `RoutingReady`
-was `True`, are reported only.
+was `True`, are reported only. A write is compared with the last status read
+that ended before it, and not at all when that read was stale: a stale status
+says nothing of the moment of the write.
 
 The primary Pod termination scenario (S03) judges its rule on the new master
 only on the reads from the outcome to the end of the stable period: it needs
@@ -1294,6 +1296,48 @@ it needs more.
   with the age of the time, is recorded as `statusDuringAbsence`.
 - **Must never happen:** the Operator restoring the old master's role; a
   planned shutdown issued from stale status.
+- **Conditions during the fault** (see
+  [Conditions during the fault](#conditions-during-the-fault)), in both
+  variants, from before the fault is issued to the end of the stable period.
+  While no Operator Pod runs, nobody updates the status: what a read returns
+  then is the status the Operator left, which names the former master once
+  CUBRID has failed over and becomes stale 60 seconds after the Operator's
+  last observation. Rules that compare the status with heartbeat therefore
+  judge only reads that are not stale, and count only those reads for the
+  limit of at least half of all reads; a stale read is counted in a note,
+  never judged as current. The other limits stay: at least 3 judged reads,
+  one between the fault and the outcome and one in the stable period, so a
+  run in which the status was stale throughout is not judged. Besides the
+  Never rules, which hold for every read since each is one status the
+  Operator wrote:
+  - a status that is not stale resolves only a member whose own node
+    heartbeat showed as master in a sweep in the 80 seconds before the read,
+    as in the primary Pod termination scenario (S03). The status the
+    Operator left during the absence still names the deleted master for as
+    long as it is not stale, which this tolerance covers;
+  - from the later of the outcome and the Operator's return to the end of
+    the stable period, a read that resolves a primary names the master: the
+    unchanged master after the Operator Pod is killed (`restart`), the
+    member CUBRID elected while the Operator was absent
+    (`absent-during-failover`). Only reads that are not stale and whose
+    `status.lastObservedTime` is not before the return, so that the returned
+    Operator wrote them, are judged; the Operator's return is when the old
+    Pod was confirmed gone (`restart`) or when its Deployment was scaled
+    back (`absent-during-failover`). In the second variant the outcome is
+    reached while the Operator is still absent, so the reads between the
+    outcome and the return are not judged by this rule. Without the outcome
+    the rule has no master to compare with and is not judged.
+
+  Writes acknowledged, failed or ended without a known outcome while the last
+  status read before them was stale are reported only, by outcome, with the
+  reads in which the status was stale; they and the other report rules on SQL
+  do not compare a write with a stale status. The reads are judged and
+  `conditions.jsonl`, `agreement.txt` and `roles.jsonl` are written under
+  `S06/<variant>/` however the variant ends, so a Never disagreement fails it
+  with reason `condition_disagreement` also when a check did not pass. The
+  checks above, on the master, the members' Pods, the clients and the fresh
+  status after the return, are made as before and not replaced by the
+  Conditions.
 - **Data check:** all data rules on all three members.
 - **Limits:** `failover_limit`, `operator_resync_limit`, `stable_period`.
 - **Source note:** no outside test was read; the contract comes from

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -188,11 +189,31 @@ func (r *haRun) s06Restart() {
 		defer r.killClient(id)
 	}
 
-	By("killing the Operator Pod and waiting for its replacement to write a fresh observation")
+	By("reading the cluster's Conditions and every member's heartbeat every two seconds")
+	sampler := r.sampleConditions(conditionSampling{roles: true})
+	defer sampler.stop()
+	var outcome faults.Outcome
 	// goneAt is when the outcome was first checked: after the old Pod was
 	// confirmed gone.
 	var goneAt time.Time
-	outcome := r.runFault(faults.Scenario{
+	// The sampled reads are judged on every way out of the scenario, so a
+	// Never disagreement fails S06 also when a check did not pass. The
+	// complete run judges them below, with the clients' operations.
+	conditionsJudged := false
+	defer func() {
+		if conditionsJudged {
+			return
+		}
+		// Without the outcome a Check left running may still write goneAt.
+		var back time.Time
+		if outcome.Result == evidence.Pass {
+			back = goneAt
+		}
+		result, _ = s06Conditions(s06Restart, result, sampler.stop(), nil, outcome.Timeline, master, back)
+	}()
+
+	By("killing the Operator Pod and waiting for its replacement to write a fresh observation")
+	outcome = r.runFault(faults.Scenario{
 		Fault:  operatorPodKill{pod: pods[0]},
 		Limits: s03FlowLimits,
 		Before: func(ctx context.Context) error {
@@ -247,6 +268,8 @@ func (r *haRun) s06Restart() {
 
 	By("letting the clients run for the stable period, then stopping them")
 	time.Sleep(stablePeriod.Value + 2*time.Second)
+	rounds := sampler.stop()
+	var allEvents []workload.Event
 	operations := evidence.Operations{}
 	notAcknowledged := 0
 	// The shortest time a client was acknowledged without interruption,
@@ -255,6 +278,7 @@ func (r *haRun) s06Restart() {
 	measuredStable := false
 	for _, id := range clients {
 		events, history := r.stopClient(id)
+		allEvents = append(allEvents, events...)
 		_, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
 		Expect(recovered).To(BeTrue(), "the last answer of client %s after the fault is not an acknowledgement", id)
 		if !measuredStable || stable < minStable {
@@ -322,6 +346,13 @@ func (r *haRun) s06Restart() {
 		Evidence:   files,
 	}, within(operatorResyncLimit, back),
 		faults.Bound{Limit: stablePeriod, Measured: minStable, AtLeast: true, Unmeasured: !measuredStable})
+	var agreement faults.Agreement
+	result, agreement = s06Conditions(s06Restart, result, rounds, allEvents, outcome.Timeline, master, goneAt)
+	conditionsJudged = true
+	Expect(agreement.Disagreements).To(BeEmpty(),
+		"S06/%s: the Conditions disagreed with CUBRID's heartbeat; see agreement.txt", s06Restart)
+	Expect(agreement.NotJudged).To(BeEmpty(),
+		"S06/%s: a rule on the Conditions could not be judged; see agreement.txt", s06Restart)
 }
 
 func (r *haRun) s06Absent() {
@@ -346,13 +377,36 @@ func (r *haRun) s06Absent() {
 		_, _ = utils.Run(exec.Command("kubectl", "-n", namespace, "scale", operatorDeployment, "--replicas=1"))
 	}()
 
-	By("removing the Operator, then deleting the master Pod while it is absent")
+	By("reading the cluster's Conditions and every member's heartbeat every two seconds")
+	sampler := r.sampleConditions(conditionSampling{roles: true})
+	defer sampler.stop()
 	absence := &operatorAbsence{}
-	var newMaster, staleStatus string
+	var outcome faults.Outcome
+	var newMaster string
+	// The sampled reads are judged on every way out of the scenario, so a
+	// Never disagreement fails S06 also when a check did not pass. The
+	// complete run judges them below, with the client's operations.
+	conditionsJudged := false
+	defer func() {
+		if conditionsJudged {
+			return
+		}
+		// Without the outcome, or before the Operator was scaled back, the
+		// rule after its return has nothing to judge, and a Check or Remove
+		// left running may still write newMaster or the time of the return.
+		want, back := "", time.Time{}
+		if outcome.Result == evidence.Pass && outcome.CleanupSucceeded {
+			want, back = newMaster, absence.returnedAt
+		}
+		result, _ = s06Conditions(s06Absent, result, sampler.stop(), nil, outcome.Timeline, want, back)
+	}()
+
+	By("removing the Operator, then deleting the master Pod while it is absent")
+	var staleStatus string
 	var membersBeforeReturn map[string]string
 	var masterDeletedAt, lastObservedDuringAbsence time.Time
 	var ageBeforeAbsence time.Duration
-	outcome := r.runFault(faults.Scenario{
+	outcome = r.runFault(faults.Scenario{
 		Fault:  absence,
 		Limits: s03FlowLimits,
 		Before: func(ctx context.Context) error {
@@ -472,6 +526,7 @@ func (r *haRun) s06Absent() {
 
 	By("letting the client run for the stable period, then stopping it")
 	time.Sleep(stablePeriod.Value + 2*time.Second)
+	rounds := sampler.stop()
 	events, history := r.stopClient(client)
 	recoveredAt, stable, recovered := workload.Recovery(events, masterDeletedAt)
 	Expect(recovered).To(BeTrue(), "the client's last answer after the master was deleted is not an acknowledgement")
@@ -532,4 +587,35 @@ func (r *haRun) s06Absent() {
 		},
 		Evidence: files,
 	}, within(operatorResyncLimit, resync), within(failoverLimit, recovery), stableFor(stable))
+	var agreement faults.Agreement
+	result, agreement = s06Conditions(s06Absent, result, rounds, events, outcome.Timeline, newMaster,
+		absence.returnedAt)
+	conditionsJudged = true
+	Expect(agreement.Disagreements).To(BeEmpty(),
+		"S06/%s: the Conditions disagreed with CUBRID's heartbeat; see agreement.txt", s06Absent)
+	Expect(agreement.NotJudged).To(BeEmpty(),
+		"S06/%s: a rule on the Conditions could not be judged; see agreement.txt", s06Absent)
+}
+
+// s06Conditions applies S06's rules on the Conditions to the sampled reads of
+// a variant and gives result what they found (withAgreement). It stores the
+// heartbeat sweeps (roles.jsonl), the reads (conditions.jsonl) and the
+// verdict (agreement.txt), adds them to the evidence, and records the
+// conditionAgreement measurement. master is the master the returned Operator
+// must name, "" when the outcome was not reached; returnedAt is the earliest
+// status.lastObservedTime of a status the returned Operator wrote.
+func s06Conditions(variant string, result evidence.Scenario, rounds []conditionRound, events []workload.Event,
+	timeline []faults.Step, master string, returnedAt time.Time) (evidence.Scenario, faults.Agreement) {
+	dir := "S06/" + variant
+	if f := writeRoleSweeps(dir+"/roles.jsonl", rounds); f != "" {
+		result.Evidence = append(result.Evidence, f)
+	}
+	agreement, files, measured := checkConditions(dir, rounds, events, timeline,
+		slices.Concat(faults.NeverRules(), faults.HAReportRules(), faults.S06Rules(master, returnedAt)))
+	result.Evidence = append(result.Evidence, files...)
+	if result.Measurements == nil {
+		result.Measurements = map[string]any{}
+	}
+	result.Measurements["conditionAgreement"] = measured
+	return withAgreement(result, agreement), agreement
 }
