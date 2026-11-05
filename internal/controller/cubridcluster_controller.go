@@ -162,6 +162,10 @@ type CubridClusterReconciler struct {
 	// conflicts holds, per cluster and group of writes, since when its writes
 	// have been rejected as a conflict without one that succeeded.
 	conflicts sync.Map
+	// placementReported holds, per cluster, the last MemberPlacement reason
+	// that was True or False when its status was written (placementEntry),
+	// so that an Unknown in between records no Event again.
+	placementReported sync.Map
 }
 
 // conflictKey names one group of a cluster's writes in conflicts.
@@ -220,6 +224,9 @@ type reconcileReport struct {
 	// kept in ApplierPositions once a write of the status they fed succeeds;
 	// nil when the roles were not observed.
 	positions map[string]applierReading
+	// placement is the MemberPlacement reason this reconcile reported, kept
+	// in placementReported once the status that carries it is written.
+	placement *placementEntry
 }
 
 type pendingEvent struct{ eventType, reason, message string }
@@ -249,6 +256,9 @@ func (r *CubridClusterReconciler) endReport(ctx context.Context, cluster *databa
 	}
 	for _, e := range report.events {
 		r.event(cluster, e.eventType, e.reason, e.message)
+	}
+	if report.placement != nil {
+		r.placementReported.Store(client.ObjectKeyFromObject(cluster), *report.placement)
 	}
 	r.reportTransitions(ctx, cluster, before)
 }
@@ -342,6 +352,7 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// via owner references.
 		r.conflicts.Delete(conflictKey{req.NamespacedName, childWrites})
 		r.conflicts.Delete(conflictKey{req.NamespacedName, brokerWrites})
+		r.placementReported.Delete(req.NamespacedName)
 		if apierrors.IsNotFound(err) {
 			metrics.DeleteCluster(req.Namespace, req.Name)
 			r.applierPositions().forget(req.NamespacedName)

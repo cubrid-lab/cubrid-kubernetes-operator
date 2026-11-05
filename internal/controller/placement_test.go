@@ -18,12 +18,15 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,6 +45,16 @@ const (
 	placementCondition      = "MemberPlacement"
 	selectedNodeKey         = "volume.kubernetes.io/selected-node"
 )
+
+// podGetFails is a client whose every read of a Pod fails.
+type podGetFails struct{ client.Client }
+
+func (c podGetFails) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.Pod); ok {
+		return errors.New("the API server did not answer")
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
 
 // podAntiAffinity returns the DB Pods' anti-affinity, failing when there is none.
 func podAntiAffinity(sts appsv1.StatefulSet) *corev1.PodAntiAffinity {
@@ -77,15 +90,23 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 	ctx := context.Background()
 
 	var recorder *record.FakeRecorder
+	// One reconciler per test, as one manager runs all of a cluster's
+	// reconciles.
+	var r *CubridClusterReconciler
 
+	reconciler := func(c *databasev1alpha1.CubridCluster) *CubridClusterReconciler {
+		if r == nil {
+			r = &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder,
+				Prober:       &memberProber{master: c.Name + "-0"},
+				DefaultImage: "registry.example/cubrid-instance-manager:placement",
+			}
+		}
+		return r
+	}
 	reconcileOnce := func(c *databasev1alpha1.CubridCluster) {
 		GinkgoHelper()
-		r := &CubridClusterReconciler{
-			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder,
-			Prober:       &memberProber{master: c.Name + "-0"},
-			DefaultImage: "registry.example/cubrid-instance-manager:placement",
-		}
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(c)})
+		_, err := reconciler(c).Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(c)})
 		Expect(err).NotTo(HaveOccurred())
 	}
 	create := func(c *databasev1alpha1.CubridCluster) {
@@ -164,7 +185,29 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 		return cond
 	}
 
-	BeforeEach(func() { recorder = record.NewFakeRecorder(200) })
+	// deletePod removes member i's Pod, as a restart or a drain does.
+	deletePod := func(c *databasev1alpha1.CubridCluster, i int) {
+		GinkgoHelper()
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%d", c.Name, i), Namespace: c.Namespace}}
+		Expect(k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0))).To(Succeed())
+		Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), &corev1.Pod{}))
+		}).Should(BeTrue())
+	}
+	events := func(prefix string) []string {
+		var out []string
+		for _, e := range drain(recorder) {
+			if strings.HasPrefix(e, prefix) {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+
+	BeforeEach(func() {
+		recorder = record.NewFakeRecorder(500)
+		r = nil
+	})
 
 	Context("the rule in the Pod template", func() {
 		It("requires a node of its own for each member of a new HA cluster and records Required", func() {
@@ -286,6 +329,29 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 			Expect(meta.FindStatusCondition(stored(c).Status.Conditions, placementCondition)).To(BeNil())
 		})
 
+		It("records Preferred again when the annotation is removed by hand from a cluster with a StatefulSet", func() {
+			c := haCluster("place-removed")
+			expectRequired(reconcileSts(c))
+			got := stored(c)
+			delete(got.Annotations, spreadDefaultAnnotation)
+			Expect(k8sClient.Update(ctx, got)).To(Succeed())
+			reconcileOnce(c)
+			Expect(stored(c).Annotations).To(HaveKeyWithValue(spreadDefaultAnnotation, "Preferred"))
+			expectPreferred(statefulSet(c))
+		})
+
+		It("does not overwrite a recorded Required from a stale read of the cluster", func() {
+			c := haCluster("place-stale")
+			create(c)
+			stale := stored(c)
+			reconcileOnce(c)
+			Expect(stored(c).Annotations).To(HaveKeyWithValue(spreadDefaultAnnotation, "Required"))
+			// The stale copy has no annotation, and the StatefulSet now exists,
+			// so it would resolve to Preferred.
+			Expect(reconciler(c).recordMemberSpreadDefault(ctx, stale)).NotTo(Succeed())
+			Expect(stored(c).Annotations).To(HaveKeyWithValue(spreadDefaultAnnotation, "Required"))
+		})
+
 		It("rejects an unknown memberSpread", func() {
 			c := haCluster("place-unknown")
 			c.Spec.Placement = &databasev1alpha1.CubridPlacement{MemberSpread: "Sometimes"}
@@ -362,6 +428,53 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 			cond := placement(c)
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cond.Reason).To(Equal("MembersOnSeparateNodes"))
+		})
+
+		It("records one Warning while members keep sharing a node, also over a member without a node", func() {
+			c := haCluster("place-churn")
+			c.Spec.Placement = &databasev1alpha1.CubridPlacement{MemberSpread: databasev1alpha1.MemberSpreadPreferred}
+			create(c)
+			memberPod(c, 0, "node-a")
+			memberPod(c, 1, "node-a")
+			memberPod(c, 2, "node-b")
+			reconcileOnce(c)
+			Expect(events("Warning MembersShareNode")).To(HaveLen(1))
+			reconcileOnce(c)
+			Expect(events("Warning MembersShareNode")).To(BeEmpty(), "a second reconcile must not repeat the Warning")
+
+			// Member 1 restarts: while it has no Pod the placement is not
+			// known, and then it shares node-a again.
+			deletePod(c, 1)
+			reconcileOnce(c)
+			Expect(placement(c).Status).To(Equal(metav1.ConditionUnknown))
+			memberPod(c, 1, "node-a")
+			reconcileOnce(c)
+			Expect(placement(c).Reason).To(Equal("MembersShareNode"))
+			Expect(events("Warning MembersShareNode")).To(BeEmpty(), "an unknown placement in between is no new problem")
+
+			// Member 1 comes back on a node of its own, again over an unknown
+			// placement: the return to separate nodes is recorded once.
+			deletePod(c, 1)
+			reconcileOnce(c)
+			memberPod(c, 1, "node-c")
+			reconcileOnce(c)
+			Expect(placement(c).Reason).To(Equal("MembersOnSeparateNodes"))
+			reconcileOnce(c)
+			Expect(events("Normal MembersOnSeparateNodes")).To(HaveLen(1))
+		})
+
+		It("reports a Pod that could not be read as not observed", func() {
+			c := haCluster("place-unreadable")
+			create(c)
+			failing := podGetFails{Client: k8sClient}
+			rec := &CubridClusterReconciler{Client: failing, Scheme: k8sClient.Scheme(), Recorder: recorder}
+			got := stored(c)
+			rec.reportMemberPlacement(ctx, got)
+			cond := meta.FindStatusCondition(got.Status.Conditions, placementCondition)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionUnknown))
+			Expect(cond.Reason).To(Equal("PlacementNotObserved"))
+			Expect(cond.Message).To(ContainSubstring("the API server did not answer"))
 		})
 
 		It("does not report members as placed before each one has a node", func() {

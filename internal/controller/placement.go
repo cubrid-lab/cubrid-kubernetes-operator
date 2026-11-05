@@ -28,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -164,29 +165,49 @@ func (r *CubridClusterReconciler) memberStateExists(ctx context.Context, cluster
 	return "", nil
 }
 
+// placementEntry is the last decisive MemberPlacement reason of a cluster.
+type placementEntry struct {
+	uid    types.UID
+	reason string
+}
+
 // reportMemberPlacement sets MemberPlacement from the members' Pods and data
-// PVCs, and records an Event when it turns to a problem or back from one. A
-// standalone cluster has no such condition.
+// PVCs. An Event is recorded when a True or False observation differs from
+// the last True or False one: a Warning for a problem, a Normal one for the
+// return to separate nodes. An Unknown observation, as while a member's Pod
+// is recreated, records none and is not compared with. A standalone cluster
+// has no such condition.
 func (r *CubridClusterReconciler) reportMemberPlacement(ctx context.Context, cluster *databasev1alpha1.CubridCluster) {
 	if !spreadsMembers(cluster) {
 		meta.RemoveStatusCondition(&cluster.Status.Conditions, conditionMemberPlacement)
 		return
 	}
-	wasReason := ""
-	if was := meta.FindStatusCondition(cluster.Status.Conditions, conditionMemberPlacement); was != nil {
-		wasReason = was.Reason
+	last := ""
+	if was, ok := r.placementReported.Load(client.ObjectKeyFromObject(cluster)); ok &&
+		was.(placementEntry).uid == cluster.UID {
+		last = was.(placementEntry).reason
+	} else if was := meta.FindStatusCondition(cluster.Status.Conditions, conditionMemberPlacement); decisive(was) {
+		// After a restart of the manager, the stored condition is all that
+		// is known of what was reported.
+		last = was.Reason
 	}
 	status, reason, msg := r.observeMemberPlacement(ctx, cluster)
 	setCondition(cluster, conditionMemberPlacement, status, reason, msg)
-	if reason == wasReason {
+	if status == metav1.ConditionUnknown || reason == last {
 		return
 	}
 	switch {
 	case status == metav1.ConditionFalse:
 		r.statusEvent(cluster, corev1.EventTypeWarning, reason, msg)
-	case reason == reasonMembersOnSeparateNodes && placementProblem(wasReason):
+	case placementProblem(last):
 		r.statusEvent(cluster, corev1.EventTypeNormal, reason, msg)
 	}
+	entry := placementEntry{uid: cluster.UID, reason: reason}
+	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
+		report.(*reconcileReport).placement = &entry
+		return
+	}
+	r.placementReported.Store(client.ObjectKeyFromObject(cluster), entry)
 }
 
 func placementProblem(reason string) bool {
