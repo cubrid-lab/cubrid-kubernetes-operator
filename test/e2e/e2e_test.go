@@ -460,7 +460,7 @@ spec:
 				if CurrentSpecReport().Failed() {
 					for _, args := range [][]string{
 						{"get", "cubridcluster", spreadCluster, "-o", "yaml"},
-						{"get", "pods", "-l", "app.kubernetes.io/instance=" + spreadCluster, "-o", "wide"},
+						{"get", "pods", "-l", "app.kubernetes.io/instance=" + spreadCluster + ",app.kubernetes.io/component=database", "-o", "wide"},
 					} {
 						out, _ := utils.Run(exec.Command("kubectl", append([]string{"-n", wiringNamespace}, args...)...))
 						_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
@@ -481,7 +481,7 @@ spec:
 			By("waiting for one member on the node, two Pending as unschedulable, and the condition to say so")
 			Eventually(func(g Gomega) {
 				out, err := utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "get", "pods",
-					"-l", "app.kubernetes.io/instance="+spreadCluster, "-o",
+					"-l", "app.kubernetes.io/instance="+spreadCluster+",app.kubernetes.io/component=database", "-o",
 					`jsonpath={range .items[*]}{.metadata.name} {.spec.nodeName} {.status.conditions[?(@.type=="PodScheduled")].reason}{"\n"}{end}`))
 				g.Expect(err).NotTo(HaveOccurred())
 				var placed, unschedulable int
