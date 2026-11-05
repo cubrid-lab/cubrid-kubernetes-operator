@@ -177,3 +177,31 @@ func TestSQLChecksReadRow(t *testing.T) {
 		})
 	}
 }
+
+// csqlConnected is what csql prints before the result when it connects to a
+// server on another host than its default: a NOTIFICATION, not an error.
+const csqlConnected = "Time: 11/05/26 04:08:57.265 - NOTIFICATION *** file " +
+	"/home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, " +
+	"Tran = -1, EID = 1\nProgram 'csql' (pid 4988) connected to database server 'appdb@localhost' " +
+	"on the host 'localhost' (port 1523).\n\n"
+
+func TestSQLChecksRunIgnoresANotification(t *testing.T) {
+	out := csqlConnected + "=== <Result of SELECT Command in Line 1> ===\n\n  v\n=======\n  '42'\n"
+	got, err := Run(func(string) (string, error) { return out, nil }, "SELECT 1;")
+	if err != nil {
+		t.Fatalf("a NOTIFICATION before the result was taken as an error: %v", err)
+	}
+	if values, err := Values(got); err != nil || len(values) != 1 || values[0] != "42" {
+		t.Errorf("values after a NOTIFICATION = %v, %v", values, err)
+	}
+}
+
+func TestSQLChecksRunNamesTheErrorLineFirst(t *testing.T) {
+	out := csqlConnected + "In line 1, column 1,\n\nERROR: Server is not ready yet.\n"
+	_, err := Run(func(string) (string, error) { return out, nil }, "SELECT 1;")
+	// A short record of the error, as a sampler keeps it, must still show
+	// the line csql reported, not only the NOTIFICATION before it.
+	if err == nil || !strings.HasPrefix(err.Error(), "csql reported an error: ERROR: Server is not ready yet.") {
+		t.Errorf("error = %v, want it to start with the line csql reported", err)
+	}
+}

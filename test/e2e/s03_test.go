@@ -179,15 +179,6 @@ type window struct {
 	from, to time.Time
 }
 
-func (w *window) sample(holds bool) {
-	switch {
-	case holds && w.from.IsZero():
-		w.from = time.Now()
-	case !holds && !w.from.IsZero() && w.to.IsZero():
-		w.to = time.Now()
-	}
-}
-
 // length is the window's duration, or "not observed" when no sample fell in
 // it and "not ended" when it was still open at the last sample.
 func (w window) length() string {
@@ -269,8 +260,8 @@ func (r *haRun) collectClient(id string) (string, error) {
 	return text, nil
 }
 
-// roleLog records what CUBRID reports on every member, each time it changes.
-// It is evidence for a run that does not end as expected.
+// roleLog records what CUBRID reports on every member, each time it changes,
+// for the message of a step that does not end as expected.
 type roleLog struct {
 	lines []string
 	last  string
@@ -300,10 +291,6 @@ func (l *roleLog) sample(ctx context.Context, r *haRun) {
 	l.last = now
 	line, _ := json.Marshal(map[string]string{"t": time.Now().UTC().Format(time.RFC3339Nano), "roles": now})
 	l.lines = append(l.lines, string(line))
-}
-
-func (l *roleLog) write(rel string) string {
-	return writeScenarioFile(rel, []byte(strings.Join(l.lines, "\n")+"\n"))
 }
 
 // replicationStateLimit bounds how long replicationState may take in all;
@@ -441,14 +428,33 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	r.startClient(client)
 	defer r.killClient(client)
 
-	By("deleting the master Pod and waiting for a new master, the operator's status and the client")
+	By("reading the cluster's Conditions and every member's heartbeat every two seconds")
+	sampler := r.sampleConditions(conditionSampling{roles: true})
+	defer sampler.stop()
+	var outcome faults.Outcome
 	var newMaster string
+	var events []workload.Event
+	// The sampled reads are judged on every way out of the scenario, so a
+	// read in the wait with RoutingReady=True and PrimaryResolved not True
+	// fails S03 also when the wait or a later check did not pass. The
+	// complete run judges them below, with the client's operations.
+	conditionsJudged := false
+	defer func() {
+		if conditionsJudged {
+			return
+		}
+		// Without the outcome the rule on the new master has nothing to
+		// judge, and a Check left running may still write newMaster.
+		master := ""
+		if outcome.Result == evidence.Pass {
+			master = newMaster
+		}
+		result, _ = s03Conditions(variant, result, sampler.stop(), events, outcome.Timeline, master)
+	}()
+
+	By("deleting the master Pod and waiting for a new master, the operator's status and the client")
 	var electedAt, noticedAt time.Time
-	// How long the operator reported the primary as not resolved and the
-	// routing as not ready, as far as the samples of the wait show.
-	var unresolved, notRouting window
-	roles := &roleLog{}
-	outcome := r.runFault(faults.Scenario{
+	outcome = r.runFault(faults.Scenario{
 		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful},
 		Limits: s03FlowLimits,
 		Before: func(ctx context.Context) error {
@@ -468,20 +474,9 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			return nil
 		},
 		Check: func(ctx context.Context) (bool, error) {
-			roles.sample(ctx, r)
-			// The operator's own view, from one read of its status. It must
-			// never offer the write endpoint while the primary is not
-			// resolved (ADR-0005, section 6).
-			if s, err := r.status(ctx); err == nil {
-				resolved := s.conditions["PrimaryResolved"] == "True"
-				routing := s.conditions["RoutingReady"] == "True"
-				if routing && !resolved {
-					return false, fmt.Errorf("RoutingReady is True while PrimaryResolved is %q",
-						s.conditions["PrimaryResolved"])
-				}
-				unresolved.sample(!resolved)
-				notRouting.sample(!routing)
-			}
+			// The Operator's own view is read by the sampler, and judged after
+			// the run (conditions_test.go): it must never offer the write
+			// endpoint while the primary is not resolved (ADR-0005, section 6).
 			// Two members that are active masters at once must never happen.
 			// One sweep asks the members one after another and can see both
 			// sides of a handover, so a second sweep confirms it.
@@ -528,7 +523,6 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		},
 	})
 	timeline := writeTimeline("S03/"+variant+"/timeline.jsonl", outcome.Timeline)
-	rolesFile := roles.write("S03/" + variant + "/roles.jsonl")
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
 	if outcome.Result != evidence.Pass {
@@ -548,6 +542,13 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		}
 		return faults.CheckOneMaster(masters, r.activeMasters(context.Background()))
 	}, stablePeriod.Value+2*time.Second, 3*time.Second).Should(Succeed())
+	rounds := sampler.stop()
+	// How long the operator reported the primary as not resolved and the
+	// routing as not ready after the fault, as far as the sampled reads show:
+	// from a read between the fault and the outcome to the next read that
+	// shows the Condition True again.
+	unresolved := notTrueWindow(rounds, "PrimaryResolved", outcome.FaultIssuedAt, outcome.OutcomeAt)
+	notRouting := notTrueWindow(rounds, "RoutingReady", outcome.FaultIssuedAt, outcome.OutcomeAt)
 	events, history := r.stopClient(client)
 
 	recoveredAt, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
@@ -610,10 +611,8 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	}
 
 	files := r.evidenceFiles("S03/"+variant, report)
-	for _, f := range []string{timeline, rolesFile} {
-		if f != "" {
-			files = append(files, f)
-		}
+	if timeline != "" {
+		files = append(files, timeline)
 	}
 	since := func(t time.Time) string { return t.Sub(outcome.FaultIssuedAt).Round(time.Millisecond).String() }
 	// Writes the client was told are committed while the operator reported
@@ -655,4 +654,33 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		Evidence: files,
 	}, within(failoverLimit, recovery), stableFor(stable),
 		within(rejoinLimit, outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)))
+	var agreement faults.Agreement
+	result, agreement = s03Conditions(variant, result, rounds, events, outcome.Timeline, newMaster)
+	conditionsJudged = true
+	Expect(agreement.Disagreements).To(BeEmpty(),
+		"S03/%s: the Conditions disagreed with CUBRID's heartbeat; see agreement.txt", variant)
+	Expect(agreement.NotJudged).To(BeEmpty(),
+		"S03/%s: a rule on the Conditions could not be judged; see agreement.txt", variant)
+}
+
+// s03Conditions applies S03's rules on the Conditions to the sampled reads of
+// a variant and gives result what they found (withAgreement). It stores the
+// heartbeat sweeps (roles.jsonl), the reads (conditions.jsonl) and the
+// verdict (agreement.txt), adds them to the evidence, and records the
+// conditionAgreement measurement. newMaster is "" when the outcome was not
+// reached.
+func s03Conditions(variant string, result evidence.Scenario, rounds []conditionRound, events []workload.Event,
+	timeline []faults.Step, newMaster string) (evidence.Scenario, faults.Agreement) {
+	dir := "S03/" + variant
+	if f := writeRoleSweeps(dir+"/roles.jsonl", rounds); f != "" {
+		result.Evidence = append(result.Evidence, f)
+	}
+	agreement, files, measured := checkConditions(dir, rounds, events, timeline,
+		slices.Concat(faults.NeverRules(), faults.S03Rules(newMaster)))
+	result.Evidence = append(result.Evidence, files...)
+	if result.Measurements == nil {
+		result.Measurements = map[string]any{}
+	}
+	result.Measurements["conditionAgreement"] = measured
+	return withAgreement(result, agreement), agreement
 }

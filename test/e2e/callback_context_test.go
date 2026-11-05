@@ -69,7 +69,7 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 		"conditionRound": func(ctx context.Context) {
 			_ = r.conditionRound(ctx, conditionSampling{roles: true, rows: []string{pod0}})
 		},
-		"heartbeatRole":     func(ctx context.Context) { _ = r.heartbeatRole(ctx, pod0) },
+		"heartbeatRole":     func(ctx context.Context) { _, _ = r.heartbeatRole(ctx, pod0) },
 		"operatorAvailable": func(ctx context.Context) { _ = operatorAvailable(ctx) },
 		"readS00Row": func(ctx context.Context) {
 			_ = readS00Row(csqlInPod(ctx, "ns", pod0, "db"), "m")
