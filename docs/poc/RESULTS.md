@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-48, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-49, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -29,7 +29,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > Operator's Instance Manager image; POC-47 ran in Docker on a native
 > linux/amd64 host, with the official image and the Instance Manager's
 > `ExecCLI`; POC-48 ran in Docker on a native linux/amd64 host, with the
-> official image. Each states its own environment. Each POC is the
+> official image; POC-49 ran in Docker on a native linux/amd64 host, with the
+> Operator's Instance Manager image. Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -5031,3 +5032,159 @@ merges the run's scripts and was run again only for setup and part K.
 - One write rate, one row size, one transaction length (150 s) and `ha_copy_sync_mode=sync`. A longer transaction, a heavier load and `async` were not tried.
 - Stopping the master's own applier (A2, P2) is a signal stand-in for a master with no other commit.
 - The engine's use of `Final LSA` was observed, not read in its source. In particular, why it moves at the 16 KB page boundary (`<page>|0` or `<page>|32`) with pages waiting, as in some samples of A, A2 and K, was not looked at.
+
+## POC-49 — whether `cubrid heartbeat status` run beside csql on a standalone member makes csql print `ERROR CODE = -199` (server no longer responding) — **observation: not reproduced; in 7,800 short csql runs, 2,696 of them overlapping one of 7,182 `cubrid heartbeat status` calls (each exited 1 with "The server was not configured for HA."), no csql run printed -199 or -111 or exited non-zero (csql's own log held one -199 and -111 pair, cause unknown), with or without heartbeat calls, Broker clients, other `cubrid` commands, one CPU under load, or `docker exec` per command; the -199 seen in CI was not explained**
+
+**Question.** In the Kind e2e run 41986930319 of PR #698 (2026-11-05), the
+standalone cluster's test (scenario S00) read its marker row with
+`kubectl exec … csql -u dba appdb@localhost -c "SELECT …"` at the end of the
+Broker checks. csql printed `NOTIFICATION … CODE = -971` (connected to
+`appdb@localhost`) at 08:08:58.431Z, then at 08:08:58.445Z
+`network_cl.c, line 177 ERROR CODE = -199` (`Server no longer
+responding.... Invalid argument`) and `transaction_cl.c, line 600 ERROR CODE
+= -111` (`Your transaction has been aborted by the system due to server
+failure or mode change.`), and still printed the row (`1 row selected`),
+and the test judged the read failed. The test's condition sampler, new in
+that PR, ran `cubrid heartbeat status` in the same container through
+`kubectl exec` every 2 s; one such call ran from 08:08:58.435Z to
+08:08:58.629Z. Does a `cubrid heartbeat status` run concurrently with a csql
+connection on the same host make csql's connection to the server fail?
+
+**Environment (2026-11-05 08:13Z to 08:27Z).** Native linux/amd64 host (6
+CPUs, Linux 5.15), Docker 29.2.1.
+- Image `example.com/cubrid-instance-manager:e2e`, the Instance Manager image
+  the e2e workflow builds, built locally
+  (`sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70`),
+  `cubrid_rel`: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1) (64bit release build for
+  Linux) (Sep  7 2026 17:45:11)`, the same engine build as
+  `cubrid/cubrid:11.4`; the image's own `cubrid.conf` (no `ha_mode`).
+- One container `poc49-hb`, host name equal to its name, entrypoint replaced
+  by `sleep infinity`, every CUBRID command run as `cubrid` through
+  `docker exec`.
+- In `$CUBRID_DATABASES/appdb`: `cubrid createdb --db-volume-size=64M
+  --log-volume-size=64M --server-name=poc49-hb appdb en_US`, then
+  `cubrid server start appdb` and `CREATE TABLE t (id INT AUTO_INCREMENT
+  PRIMARY KEY, v INT)`. From part D on, `cubrid broker start` (the image's
+  `query_editor` and `broker1`, port 33000).
+
+**Method.** Each part ran a serial loop of csql runs, alternately
+`csql -u dba appdb@localhost -c "SELECT COUNT(*) FROM t"` and
+`csql -u dba appdb@localhost -c "INSERT INTO t (v) VALUES (<i>)"`, and,
+in parallel, a loop of one background command followed by a sleep. Each
+csql run's start, end, exit status and whether its output contained `-199`
+or `-111` was recorded (the `-111` match also catches longer codes such as
+`-1115`, so it can only overcount). A run was counted as an error when it
+exited non-zero or its output held either code. The overlap column counts
+csql runs whose start-to-end interval intersected at least one background
+call.
+
+| Part | Conditions | csql runs | Errors | Background calls | Overlapping csql runs |
+|---|---|---|---|---|---|
+| A | no background command | 400 | 0 | 0 | 0 |
+| B05, B05b | `cubrid heartbeat status`, 50 ms sleep | 800 | 0 | 804 | 574 |
+| B2 | `cubrid heartbeat status`, 2 s sleep (the sampler's rate) | 400 | 0 | 12 | 12 |
+| B0 | `cubrid heartbeat status` back to back | 400 | 0 | 1,905 | 400 |
+| XA | no background command; every csql run its own `docker exec` from the host | 300 | 0 | 0 | 0 |
+| XB05, XB2 | as XA, with `cubrid heartbeat status` in its own `docker exec`, 50 ms and 2 s sleep | 600 | 0 | 341 | 325 |
+| D | Brokers started, no background command | 400 | 0 | 0 | 0 |
+| E05 | Brokers started, `cubrid heartbeat status`, 50 ms | 400 | 0 | 360 | 292 |
+| F05 | Brokers started, `cubrid server status`, 50 ms | 400 | 0 | 349 | 293 |
+| G05 | Brokers started, `cubrid broker status`, 50 ms | 400 | 0 | 277 | 307 |
+| HA | container limited to 1 CPU (`docker update --cpus 1`) with four busy shell loops in it, no background command | 300 | 0 | 0 | 0 |
+| HB05 | as HA, with `cubrid heartbeat status`, 50 ms | 300 | 0 | 357 | 279 |
+| J | a Python client in a second container connecting through `broker1` with `pycubrid==1.9.0`, inserting a row, committing and disconnecting every 50 ms (763 rounds, all succeeded), no background command | 400 | 0 | 0 | 0 |
+| K05, K2 | as J, with `cubrid heartbeat status`, 50 ms and 2 s | 800 | 0 | 496 | 314 |
+| L1, L2, L3 | three csql loops at once; L1 with `cubrid heartbeat status` back to back | 1,500 | 0 | 2,907 | 500 (L1 only) |
+
+Every `cubrid heartbeat status` call (7,182) exited 1 and took a median of
+8 ms in the container (72 to 88 ms through `docker exec` or with one CPU
+under load), as POC-26 found. Every `cubrid server status` and
+`cubrid broker status` call exited 0. Under one CPU with busy loops, a csql
+run took a mean of 0.17 s against 0.05 s in part A. After all parts, no
+line `CODE = -199,` or `CODE = -111,` was in the server's, the master's or
+the client's `.err` logs under `$CUBRID/log`. csql's own error log in the
+loops' working directory (`/tmp/out/csql.err`, POC-35) did hold one such
+pair; see the second side observation.
+
+**Side observation.** After the parts, 50 of 50 successful
+`csql -u dba appdb@localhost -c "SELECT COUNT(*) FROM t"` runs in the
+container printed the `CODE = -971` NOTIFICATION (`connected to database
+server 'appdb@localhost'`) on stderr; the harness did not keep the output
+of successful runs, so how many of the 7,800 printed it is not known. The
+-971 in the CI output is therefore ordinary connection output, not a sign
+of a different connection path.
+
+**Side observation: one -199 and -111 pair in csql's own log, printed by no
+run.** `/tmp/out/csql.err`, read after the run, held 6,725 entries: 6,723
+`CODE = -971` connection notifications and one `ERROR CODE = -199`
+(`network_cl.c, line 177`, `Server no longer responding.... Invalid
+argument`) with one `ERROR CODE = -111` (`transaction_cl.c, line 600`), both
+at 08:26:09.817 and both from csql pid 89969, in the first second of the
+three concurrent loops (parts L1 to L3). The runs in progress then were run 1
+of L1 and run 1 of L2, both `SELECT COUNT(*) FROM t`; both exited 0 and their
+captured output held neither code. Run 2 of L3 (08:26:09.810Z to .942Z) was
+also in progress but is excluded: pid 89969 had already connected at
+08:26:09.794, before that run started. Which of the two was pid 89969 was not
+recorded. An L1 `cubrid heartbeat status` call ran from 08:26:09.795Z to
+08:26:09.817Z, ending in the same millisecond. Parts A to K2 logged exactly
+one -971 entry per run and nothing else; parts L1 to L3 logged 1,323 -971
+entries for 1,500 runs, and why the rest are missing was not examined. As 177
+of the 1,500 runs left no connection notice in the shared log, entries may
+have been lost, so one pair is a minimum count (hypothesis, not tested). The
+overlap counts of this entry are conservative: the runs of L2 and L3 also
+overlapped the heartbeat calls of L1, which are not counted. The
+`docker exec` parts (XA to XB2) ran csql in another directory, whose
+`csql.err` was not read. The counts, the commands that gave them and the
+quoted lines are in
+[`poc49/samples/csql-err-excerpt.md`](poc49/samples/csql-err-excerpt.md);
+the 2.2 MB log itself is not kept.
+
+**Findings.**
+- In these runs, `cubrid heartbeat status` on a standalone member did not
+  make a concurrent csql run fail, at the e2e sampler's rate (2 s) or
+  hundreds of times faster, and neither did `cubrid server status`,
+  `cubrid broker status`, Broker client connections, a `docker exec` per
+  command or a CPU under load. The hypothesis that the heartbeat call
+  causes the -199 is not supported here; it is not ruled out for the CI
+  environment.
+- csql can log the -199 and -111 pair in its own `csql.err` for a run that
+  exited 0 and printed neither code: once, here, with three csql loops and a
+  back-to-back heartbeat loop running, and with a heartbeat call ending in
+  the same millisecond. One entry does not show whether the heartbeat call,
+  the concurrent loops or neither was the cause.
+- The -199 and -111 pair had been seen before without such a sampler:
+  POC-44 saw it on the VM lab, as csql exited after committed statements,
+  with the row taking effect. The CI output fits the same form: the
+  statement's result was printed, and stderr (the errors) was printed before
+  stdout (the result), so the output's order does not show that the error
+  came before the result.
+- In run 41986930319 the failing read ("reading the row with csql again at
+  the end of the smoke checks") was itself new in PR #698. On main no csql
+  runs at that point, so main passing S00 does not show that the sampler
+  caused the error.
+- The cause of the -199 in CI is unknown.
+
+**Reproduce.** The harness and the samples are in
+[`docs/poc/poc49/`](poc49/README.md). `python3 docs/poc/poc49/analyse.py
+docs/poc/poc49/samples` gives the counts of the table above, from the
+gzipped TSVs of the recorded run.
+
+**Limits.**
+- One container, one image, local Docker on one host: not Kind, not Pods,
+  not `kubectl exec`, not the VM lab. The CI runner's load, its disk and
+  the Instance Manager, Operator and Broker Pods were not reproduced: the
+  Instance Manager process did not run here, and the Brokers ran in the
+  database container, not in Pods of their own.
+- One short statement shape, a small table, a server up for minutes only.
+- With no error in 7,800 runs, a rate above about 1 in 2,600 csql runs
+  (95 % confidence, rule of three) is unlikely in these conditions taken
+  together, and above about 1 in 900 for the 2,696 runs that overlapped a
+  heartbeat call. The rate in CI was not measured: run 41986930319 showed
+  the pair twice (S00's csql read at the end of the smoke checks on the
+  standalone member s00-0, and the replication-stall step's row count on the
+  HA member hab-2 at 07:56:52 UTC, where only the -199 line is visible in the
+  truncated note and the -111 line is not), and how many csql calls that run made was not counted.
+- csql's and the server's own traces were not read beyond the `.err` logs,
+  and CUBRID's source for `network_cl.c` line 177 was not read.
+- One POC is the behavior of one image in a few runs, not a general CUBRID
+  guarantee.
