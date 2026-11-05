@@ -102,6 +102,26 @@ func (r *haRun) kubectl(ctx context.Context, args ...string) (string, error) {
 	return utils.Run(exec.CommandContext(ctx, "kubectl", append([]string{"-n", r.namespace}, args...)...))
 }
 
+// kubectlQuiet is kubectl without announcing the command in the test output.
+func (r *haRun) kubectlQuiet(ctx context.Context, args ...string) (string, error) {
+	return utils.RunQuiet(exec.CommandContext(ctx, "kubectl", append([]string{"-n", r.namespace}, args...)...))
+}
+
+// heartbeatStatus is the command that asks CUBRID on a member for its role.
+const heartbeatStatus = `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`
+
+// heartbeatRoleIn reads what cubrid heartbeat status printed on pod: "master"
+// for an active master, "slave" for a standby slave, and "" for anything else.
+func heartbeatRoleIn(pod, out string) string {
+	switch {
+	case strings.Contains(out, "current "+pod+", state master") && strings.Contains(out, "registered_and_active"):
+		return "master"
+	case strings.Contains(out, "current "+pod+", state slave") && strings.Contains(out, "registered_and_standby"):
+		return "slave"
+	}
+	return ""
+}
+
 // client runs a command in the workload client Pod.
 func (r *haRun) client(ctx context.Context, script string) (string, error) {
 	return utils.Run(exec.CommandContext(ctx, "kubectl", "-n", r.clientNamespace, "exec", "workload-client", "--",
@@ -157,14 +177,14 @@ func (r *haRun) observedLoss(report workload.Report, faultAt time.Time, clients 
 func (r *haRun) master(ctx context.Context) (string, []string, error) {
 	var masters, slaves []string
 	for _, pod := range r.members {
-		out, err := r.kubectl(ctx, "exec", pod, "--", "bash", "-c", `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`)
+		out, err := r.kubectl(ctx, "exec", pod, "--", "bash", "-c", heartbeatStatus)
 		if err != nil {
 			return "", nil, err
 		}
-		switch {
-		case strings.Contains(out, "current "+pod+", state master") && strings.Contains(out, "registered_and_active"):
+		switch heartbeatRoleIn(pod, out) {
+		case "master":
 			masters = append(masters, pod)
-		case strings.Contains(out, "current "+pod+", state slave") && strings.Contains(out, "registered_and_standby"):
+		case "slave":
 			slaves = append(slaves, pod)
 		default:
 			return "", nil, &faults.Unmet{Member: pod, Kind: faults.UnmetRole,

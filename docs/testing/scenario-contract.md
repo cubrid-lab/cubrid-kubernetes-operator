@@ -679,9 +679,98 @@ reader can tell what to expect.
     history.jsonl       one line per client operation event
     timeline.jsonl      one line per test step, fault and observation
     cluster/            CubridCluster YAML and conditions at each checkpoint
+    conditions.jsonl    one line per read of the status during the fault
+    agreement.txt       how the Conditions compared with SQL and the fault
     logs/               Operator, Instance Manager and CUBRID logs
     data-check.json     result of each data rule, per member and endpoint
 ```
+
+### Conditions during the fault
+
+In a scenario that names this section, a background reader reads the
+CubridCluster's status every 2 seconds, from before the fault is issued to
+the end of the stable period. Each read records every Condition with its
+status, reason, message and `lastTransitionTime`, `status.currentPrimary`,
+`status.lastObservedTime` and each member's role and `lastObservedTime` in
+`status.instances`, and the number of available Pods of the read-write Broker
+Deployment. The same round asks every member for its role with
+`cubrid heartbeat status`. Each round is one line of `conditions.jsonl`.
+
+The reads are then compared, by the code in `test/faults/agreement.go`, with
+those roles, with the outcome of every client operation and with the fault's
+timeline. Each rule is of one of three kinds:
+
+- **Never**: a combination of Conditions that one read never holds, because
+  the Operator sets both from the same step. A read that holds it is a
+  disagreement.
+- **Tolerance**: a Condition compared with another source. A Condition that
+  rests on the role observation is allowed to lag behind for 80 seconds: the
+  60 seconds after which the status is stale (docs/observability.md,
+  "Freshness"), the 15 seconds a role answer may be older than the
+  observation (`roleObservationTTL`), and 5 seconds for the sampling. A read
+  whose `status.lastObservedTime` is more than 60 seconds old, with one second
+  more for times written in whole seconds, is stale and is not compared with
+  SQL or the roles. The Broker Conditions do not wait for that observation:
+  the Operator watches the Broker Deployments, so a change of their available
+  Pods starts a reconcile at once. They are allowed 40 seconds: up to 5
+  seconds for the role answers that reconcile asks for first, up to 30
+  seconds during which a conflicting write of a Broker object keeps them as
+  they were, and 5 seconds for the sampling.
+- **Report**: written to `agreement.txt` for a reader, never a failure. The
+  Conditions of the Brokers and `Ready` say that Pods and Deployments are
+  available, not that a client can run SQL.
+
+A Condition that is `Unknown` makes no claim. Each Never and Tolerance rule
+counts the status reads it could judge, and `agreement.txt` and
+`measurements.conditionAgreement.evaluated` give that count per rule. A
+read counts for a Never rule when it carries every Condition the rule
+reads; for the primary rule when it is not stale, carries `PrimaryResolved`
+and a heartbeat sweep in the 80 seconds before it confirmed the starting
+master; for the write-endpoint rule when it carries `WriteEndpointReady` and
+a reading of the Deployment. A rule has enough evidence for a verdict only
+when:
+
+- it judged at least 3 reads, and at least half of all the status reads;
+- at least one judged read falls between the fault and the outcome, and one
+  in the stable period after the outcome, as the timeline marks them;
+- for the write-endpoint rule, every period in which `WriteEndpointReady`
+  said `NoBrokerAvailable` for longer than 40 seconds has at least one read
+  whose 40 seconds before it are covered by Deployment readings none more
+  than 6 seconds apart.
+
+A single read that a rule cannot judge in a run that otherwise meets these
+limits, such as one read without a Condition or one window with a gap in
+the Deployment readings, is only a note. A rule below them, or one whose
+evidence is missing altogether, for example when no heartbeat answer names
+the starting master as an active master, is not judged and is never counted
+as passed: the scenario, when all else passed, is `blocked` with reason
+`condition_agreement_not_judged`, since required evidence is missing
+([Results](#results)). `agreement.txt` lists every rule with its kind, the
+disagreements, the rules that could not be judged, and the notes. A
+disagreement fails the scenario with reason `condition_disagreement`; each one
+starts with its kind, `never:` or `tolerance:`, so that a lag longer than the
+tolerance is told apart from a combination one read never holds.
+
+The Never rules, for every read of an HA cluster:
+
+- `RoutingReady=True` comes with `WriteEndpointReady=True`.
+- `HAReady=True` comes with `PrimaryResolved=True`. The reverse is not
+  required: an unhealthy replication may make `HAReady` `False` while the
+  primary is resolved.
+- `BrokerReady=True` comes with `WriteEndpointReady=True` and
+  `ReadEndpointReady=True`.
+- `PrimaryResolved=True` comes with every member's `lastObservedTime` equal
+  to the cluster's: a primary is resolved only from an observation in which
+  every member answered.
+- Every member that `ReplicationHealthy=False` names is a slave in
+  `status.instances`.
+
+`RoutingReady=True` with `PrimaryResolved` not `True` is reported only:
+after a conflicting write of a Broker object, the Broker Conditions are kept
+as they were while the primary is resolved again, so the two can differ in one
+read. Writes acknowledged while `RoutingReady` or `PrimaryResolved` was not
+`True` (as in open question Q2), and writes that failed while `RoutingReady`
+was `True`, are reported only.
 
 ### `summary.json`
 
@@ -743,6 +832,14 @@ reader can tell what to expect.
   result when its other checks held; otherwise the existing failure wins.
 - `neverEvents` lists every must-never-happen outcome that was observed. A
   non-empty list means `fail`.
+- In a scenario whose Conditions are compared with SQL and the fault (see
+  [Conditions during the fault](#conditions-during-the-fault)),
+  `measurements.conditionAgreement` counts the status reads, the reads that
+  could not be made, the disagreements, the rules that could not be judged
+  and the notes, and gives, in `evaluated`, how many reads each rule
+  judged. Each disagreement is also listed in `neverEvents`, starting
+  with `never:` or `tolerance:`, and the scenario's reason is
+  `condition_disagreement`.
 - `faultConfirmed` is left out for a scenario that injects no fault.
 - `notes`, left out when empty, lists what a reader should know of steps
   outside the scenarios: for example, an attempt of the replication-stall step
@@ -1063,7 +1160,22 @@ it needs more.
   client can come through the loss of its Broker Pod without a failed
   operation; the run records how many clients saw one.
 - **Must never happen:** an `acknowledged` operation missing; a database
-  failover caused by the Broker failure.
+  failover caused by the Broker failure; a disagreement of the Conditions
+  with SQL, CUBRID's heartbeat or the read-write Broker Deployment.
+- **Conditions during the fault** (see
+  [Conditions during the fault](#conditions-during-the-fault)), in every
+  variant, besides the Never rules: while every heartbeat answer reports the
+  starting master as the only master, a status that is not stale never names
+  another member as the resolved primary. In `broker-process` and
+  `one-broker-pod`, the status never says `WriteEndpointReady=False` with
+  reason `NoBrokerAvailable` for more than 40 seconds while every reading of
+  the read-write Broker Deployment in the 40 seconds before the read, none
+  more than 6 seconds apart, showed an available Pod. A read whose Condition
+  changed less than 40 seconds before, or whose readings leave a longer gap,
+  may rest on a moment without an available Pod that no reading caught and is
+  not judged; a reading with no available Pod is noted. In
+  `all-rw-brokers`, when `WriteEndpointReady` was not `True` and when the
+  Deployment had no available Pod is reported only.
 - **Data check:** all data rules on all three members.
 - **Limits:** `broker_recovery_limit`, `stable_period`.
 

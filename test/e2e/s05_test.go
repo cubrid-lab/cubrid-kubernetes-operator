@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -204,6 +205,10 @@ func (r *haRun) s05(variant string) {
 		defer r.killClient(id)
 	}
 
+	By("reading the cluster's Conditions every two seconds until the end of the stable period")
+	sampler := r.sampleConditions(true)
+	defer sampler.stop()
+
 	By("failing the Broker and waiting for two available Brokers and for every client")
 	newConnection := "not tried"
 	outcome := r.runFault(faults.Scenario{
@@ -273,6 +278,8 @@ func (r *haRun) s05(variant string) {
 
 	By("letting the clients run for the stable period, then stopping them")
 	time.Sleep(stablePeriod.Value + 2*time.Second)
+	rounds := sampler.stop()
+	var clientEvents []workload.Event
 	var recovery time.Duration
 	// The shortest time a client was acknowledged without interruption.
 	var minStable time.Duration
@@ -281,6 +288,7 @@ func (r *haRun) s05(variant string) {
 	interrupted := 0
 	for _, id := range clients {
 		events, history := r.stopClient(id)
+		clientEvents = append(clientEvents, events...)
 		recoveredAt, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
 		Expect(recovered).To(BeTrue(), "the last answer of client %s after the fault is not an acknowledgement", id)
 		Expect(stable).To(BeNumerically(">=", stablePeriod.Value),
@@ -327,6 +335,12 @@ func (r *haRun) s05(variant string) {
 		files = append(files, timeline)
 	}
 	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt, clients...)
+	// A Broker failure moves no master, and in the variants that leave one
+	// read-write Broker Pod the write endpoint stays available.
+	agreement, agreementFiles, agreementMeasured := checkConditions("S05/"+variant, rounds, clientEvents,
+		outcome.Timeline, slices.Concat(faults.NeverRules(), faults.HAReportRules(),
+			faults.S05Rules(master, variant != s05AllRWBrokers)))
+	files = append(files, agreementFiles...)
 	result = judged(evidence.Scenario{
 		ID: "S05", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
@@ -344,9 +358,15 @@ func (r *haRun) s05(variant string) {
 			"observedDataLossResolution": lossResolution,
 			"outcomeUnknown":             operations.Unknown,
 			"databaseFailoverObserved":   false,
+			"conditionAgreement":         agreementMeasured,
 		},
 		Operations: &operations,
 		Evidence:   files,
 	}, within(brokerRecoveryLimit, recovery),
 		faults.Bound{Limit: stablePeriod, Measured: minStable, AtLeast: true, Unmeasured: !measuredStable})
+	result = withAgreement(result, agreement)
+	Expect(agreement.Disagreements).To(BeEmpty(),
+		"S05/%s: the Conditions disagreed with CUBRID's heartbeat or the Broker Deployment; see agreement.txt", variant)
+	Expect(agreement.NotJudged).To(BeEmpty(),
+		"S05/%s: a rule on the Conditions could not be judged; see agreement.txt", variant)
 }

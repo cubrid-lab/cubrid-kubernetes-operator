@@ -114,6 +114,10 @@ type statusSnapshot struct {
 	conditions map[string]string
 	// lastObserved is status.lastObservedTime; zero when it is not set.
 	lastObserved time.Time
+	// details is the same read with each Condition's reason, message and
+	// transition time and with status.instances, as the Condition agreement
+	// check compares them (conditions_test.go).
+	details faults.ConditionSample
 }
 
 func (r *haRun) status(ctx context.Context) (statusSnapshot, error) {
@@ -121,25 +125,50 @@ func (r *haRun) status(ctx context.Context) (statusSnapshot, error) {
 	if err != nil {
 		return statusSnapshot{}, err
 	}
+	return parseStatus(out)
+}
+
+// parseStatus reads the status from the JSON of one CubridCluster.
+func parseStatus(out string) (statusSnapshot, error) {
 	var cluster struct {
 		Status struct {
 			CurrentPrimary   string     `json:"currentPrimary"`
 			LastObservedTime *time.Time `json:"lastObservedTime"`
 			Conditions       []struct {
-				Type   string `json:"type"`
-				Status string `json:"status"`
+				Type               string    `json:"type"`
+				Status             string    `json:"status"`
+				Reason             string    `json:"reason"`
+				Message            string    `json:"message"`
+				LastTransitionTime time.Time `json:"lastTransitionTime"`
 			} `json:"conditions"`
+			Instances []struct {
+				Name             string     `json:"name"`
+				Role             string     `json:"role"`
+				LastObservedTime *time.Time `json:"lastObservedTime"`
+			} `json:"instances"`
 		} `json:"status"`
 	}
 	if err := json.Unmarshal([]byte(out), &cluster); err != nil {
 		return statusSnapshot{}, err
 	}
 	s := statusSnapshot{primary: cluster.Status.CurrentPrimary, conditions: map[string]string{}}
+	s.details = faults.ConditionSample{Conditions: map[string]faults.ConditionState{},
+		CurrentPrimary: cluster.Status.CurrentPrimary}
 	if cluster.Status.LastObservedTime != nil {
 		s.lastObserved = *cluster.Status.LastObservedTime
+		s.details.LastObserved = s.lastObserved
 	}
 	for _, c := range cluster.Status.Conditions {
 		s.conditions[c.Type] = c.Status
+		s.details.Conditions[c.Type] = faults.ConditionState{Status: c.Status, Reason: c.Reason, Message: c.Message,
+			LastTransitionTime: c.LastTransitionTime}
+	}
+	for _, in := range cluster.Status.Instances {
+		m := faults.MemberStatus{Name: in.Name, Role: in.Role}
+		if in.LastObservedTime != nil {
+			m.LastObserved = *in.LastObservedTime
+		}
+		s.details.Instances = append(s.details.Instances, m)
 	}
 	return s, nil
 }
