@@ -38,6 +38,7 @@ import (
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -1175,8 +1176,8 @@ func TestSessionLostNeedsBothErrors(t *testing.T) {
 		"another code": {"ERROR CODE = -1990, Tran = 6\nERROR CODE = -1110, Tran = 6", false},
 		"a clean read": {"=== <Result of SELECT Command in Line 1> ===\n\n1 row selected.", false},
 	} {
-		if got := sessionLost(tc.out); got != tc.want {
-			t.Errorf("%s: sessionLost = %v, want %v", name, got, tc.want)
+		if got := sqlcheck.SessionLost(tc.out); got != tc.want {
+			t.Errorf("%s: SessionLost = %v, want %v", name, got, tc.want)
 		}
 	}
 }

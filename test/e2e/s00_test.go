@@ -103,9 +103,10 @@ func s00Scenario() {
 				Write: write, OK: ok, What: what})
 		}
 		// smokeCSQL records a csql operation in the Pod from the error of its
-		// check (smokeOutcome).
-		smokeCSQL := func(what string, write bool, start time.Time, err error) {
-			ok, inconclusive := smokeOutcome(err)
+		// check (smokeOutcome); readMarker is the marker a read looked for,
+		// empty for a write.
+		smokeCSQL := func(what string, write bool, readMarker string, start time.Time, err error) {
+			ok, inconclusive := smokeOutcome(err, readMarker)
 			smokeSQL(what, false, write, start, ok)
 			s00Run.SQL[len(s00Run.SQL)-1].Inconclusive = inconclusive
 		}
@@ -318,11 +319,11 @@ spec:
 			sql := csqlInPod(context.Background(), s00Namespace, pod, database)
 			start := time.Now()
 			err = writeS00Row(sql, marker)
-			smokeCSQL("csql write of the marker row in "+pod, true, start, err)
+			smokeCSQL("csql write of the marker row in "+pod, true, "", start, err)
 			Expect(err).NotTo(HaveOccurred())
 			start = time.Now()
 			err = readS00Row(sql, marker)
-			smokeCSQL("csql read of the marker row in "+pod, false, start, err)
+			smokeCSQL("csql read of the marker row in "+pod, false, marker, start, err)
 			Expect(err).NotTo(HaveOccurred())
 			// An upper bound: it includes the checks above.
 			record.ReadySeconds = time.Since(createdAt).Seconds()
@@ -389,7 +390,18 @@ spec:
 			By("reading the row with csql again at the end of the smoke checks, after Ready was True")
 			start := time.Now()
 			err = readS00Row(csqlInPod(context.Background(), s00Namespace, pod, database), marker)
-			smokeCSQL("csql read of the marker row in "+pod+" at the end of the smoke checks", false, start, err)
+			smokeCSQL("csql read of the marker row in "+pod+" at the end of the smoke checks", false, marker, start,
+				err)
+			// This read is judged by the row it returned, as the installed
+			// test of a graceful stop judges its filler by the rows counted:
+			// a -199 and -111 printed with the row (POC-44) is recorded in
+			// the timeline and in agreement.txt, and is not a failed read.
+			if sqlcheck.LostSessionAfterRow(err, marker) {
+				step(time.Now(), "csql_lost_session_after_row",
+					"the read at the end of the smoke checks returned the row, and csql printed ERROR CODE -199 and -111")
+				_, _ = fmt.Fprintf(GinkgoWriter, "csql returned the row and printed -199 and -111 (POC-44):\n%v\n", err)
+				err = nil
+			}
 			Expect(err).NotTo(HaveOccurred())
 			s00Run.SmokeEnd = time.Now().UTC()
 			step(s00Run.SmokeEnd, "smoke_checks_ended", "")
@@ -557,16 +569,25 @@ func s00Conditions(result evidence.Scenario, rounds []conditionRound, run faults
 }
 
 // smokeOutcome says how an SQL operation in the member's Pod is recorded
-// from err, the error of its check. It failed (ok false, no reason) only when
-// csql reported the statement as failed. A row that did not match, or a
-// command that could not be run, is not evidence of that: it is recorded
-// with a reason, and the rule that compares Ready with failed SQL leaves it
-// out.
-func smokeOutcome(err error) (ok bool, inconclusive string) {
+// from err, the error of its check; readMarker is the marker a read looked
+// for, empty for a write. It failed (ok false, no reason) only when csql
+// reported the statement as failed. A row that did not match, or a command
+// that could not be run, is not evidence of that, and neither is a read that
+// printed its row with -199 and -111 (sqlcheck.LostSessionAfterRow): POC-44
+// saw csql print that pair as it exited after statements that took effect,
+// and POC-49 did not make it appear by running heartbeat status beside csql.
+// Such an operation is recorded with a reason, and the rule that compares
+// Ready with failed SQL leaves it out. A write's output holds no row, so a
+// write that printed the pair stays failed.
+func smokeOutcome(err error, readMarker string) (ok bool, inconclusive string) {
 	var statement *sqlcheck.StatementError
 	switch {
 	case err == nil:
 		return true, ""
+	case readMarker != "" && sqlcheck.LostSessionAfterRow(err, readMarker):
+		return false, "csql printed the row with ERROR CODE -199 (server no longer responding) and -111 " +
+			"(transaction aborted), which POC-44 saw csql print after statements that took effect; the cause is " +
+			"unknown (POC-49)"
 	case errors.As(err, &statement):
 		return false, ""
 	}

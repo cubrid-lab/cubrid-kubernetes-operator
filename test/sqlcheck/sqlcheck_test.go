@@ -239,3 +239,91 @@ func TestSQLChecksStatementError(t *testing.T) {
 		}
 	}
 }
+
+// ciLostSessionRead is csql's output of the read of S00's marker row at the
+// end of the smoke checks in the Kind e2e run 41986930319 of PR #698
+// (2026-11-05), as the run's log printed it: the row and "1 row selected",
+// with -199 and -111 printed on stderr, which came before stdout.
+const ciLostSessionRead = "\n" +
+	"Time: 11/05/26 08:08:58.431 - NOTIFICATION *** file " +
+	"/home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  " +
+	"CODE = -971, Tran = -1, EID = 1\n" +
+	"Program 'csql' (pid 376) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).\n" +
+	"\n" +
+	"Time: 11/05/26 08:08:58.445 - ERROR *** file " +
+	"/home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 " +
+	"ERROR CODE = -199, Tran = 3, EID = 2\n" +
+	"Server no longer responding.... Invalid argument\n" +
+	"\n" +
+	"Time: 11/05/26 08:08:58.445 - ERROR *** file " +
+	"/home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 " +
+	"ERROR CODE = -111, Tran = 3, EID = 3\n" +
+	"Your transaction has been aborted by the system due to server failure or mode change.\n" +
+	"\n" +
+	"=== <Result of SELECT Command in Line 1> ===\n" +
+	"\n" +
+	"           id  marker              \n" +
+	"===================================\n" +
+	"            1  's00-before-pod-delete'\n" +
+	"\n" +
+	"1 row selected. (0.001000 sec) Committed. (0.000000 sec) \n"
+
+// ciMarker is the marker of the row in ciLostSessionRead.
+const ciMarker = "s00-before-pod-delete"
+
+// TestSessionLostNeedsBothErrors checks that csql's output is taken for a
+// lost session only when it holds both -199 (server no longer responding)
+// and -111 (transaction aborted), the pair POC-44 saw csql print after
+// statements that took effect.
+func TestSessionLostNeedsBothErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		out  string
+		want bool
+	}{
+		"the read of the Kind run": {ciLostSessionRead, true},
+		"-199 alone":               {"ERROR CODE = -199, Tran = 6, EID = 2\nServer no longer responding", false},
+		"-111 alone":               {"ERROR CODE = -111, Tran = 6, EID = 3\nYour transaction has been aborted", false},
+		"other codes":              {"ERROR CODE = -1990, Tran = 6\nERROR CODE = -1110, Tran = 6", false},
+		"a clean read":             {"=== <Result of SELECT Command in Line 1> ===\n\n1 row selected.", false},
+	} {
+		if got := SessionLost(tc.out); got != tc.want {
+			t.Errorf("%s: SessionLost = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// TestLostSessionAfterRow checks which errors of ReadRow are only csql's
+// report of a lost session after it printed the row: both -199 and -111,
+// exactly the row WriteRow wrote, and no command error. A -199 without the
+// row, or with only one of the two codes, stays a failed statement.
+func TestLostSessionAfterRow(t *testing.T) {
+	read := func(out string, cmdErr error) error {
+		return ReadRow(func(string) (string, error) { return out, cmdErr }, ciMarker)
+	}
+	cut, _, _ := strings.Cut(ciLostSessionRead, "=== <Result")
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"the read of the Kind run": {read(ciLostSessionRead, nil), true},
+		"the same output after a failed command": {read(ciLostSessionRead, errors.New("exit status 1")),
+			false},
+		"-199 and -111 without a result": {read(cut, nil), false},
+		"-199 alone with the row": {read(strings.Replace(ciLostSessionRead, "ERROR CODE = -111", "CODE = -971",
+			1), nil), false},
+		"another marker": {read(strings.Replace(ciLostSessionRead, ciMarker, "other", 1), nil), false},
+		"two rows": {read(strings.Replace(ciLostSessionRead, "1 row selected", "2 rows selected", 1), nil),
+			false},
+		"a clean read":  {nil, false},
+		"another error": {read("ERROR: no table", nil), false},
+		"another error besides the pair": {read(strings.Replace(ciLostSessionRead, "=== <Result",
+			"ERROR CODE = -1, Tran = 3, EID = 4\n=== <Result", 1), nil), false},
+	} {
+		if got := LostSessionAfterRow(tc.err, ciMarker); got != tc.want {
+			t.Errorf("%s: LostSessionAfterRow = %v, want %v", name, got, tc.want)
+		}
+	}
+	if err := read(ciLostSessionRead, nil); err == nil {
+		t.Error("ReadRow accepted the read of the Kind run; it keeps reporting the -199 as an error")
+	}
+}

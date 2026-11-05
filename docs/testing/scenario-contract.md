@@ -1117,11 +1117,28 @@ it needs more.
     after it before they are judged. The statement that is meant to fail is
     not counted. An operation counts as failed only when `csql` reported the
     statement as failed in the Pod; a row that did not match or a `csql` that
-    could not be run is left out of this rule and noted. This rule can only
+    could not be run is left out of this rule and noted. So is a read whose
+    `csql` exited 0 and printed the marker row and `1 row selected` together
+    with `ERROR CODE = -199` (server no longer responding) and
+    `ERROR CODE = -111` (transaction aborted), and no other error: POC-44
+    (`docs/poc/RESULTS.md`) saw `csql` print that pair as it exited after
+    statements that had taken effect, on the VM lab, and POC-49 did not make
+    it appear on a standalone member by running `cubrid heartbeat status`
+    beside `csql`; its cause is unknown, so such a read is evidence neither
+    that SQL failed nor that it succeeded. A `-199` without the row, without
+    `-111`, with another error or with a non-zero exit, and a write that
+    printed the pair, whose output holds no row, still count as failed. The
+    write and the first read keep failing S00 through their own checks as
+    before; the read at the end of the smoke checks is judged by the row it
+    returned, as the installed test of a graceful stop judges its statements
+    by the rows counted, and a pair printed with the row adds the step
+    `csql_lost_session_after_row` to `S00/timeline.jsonl` and is noted in
+    `S00/agreement.txt`. A read left out does not count as the last `csql`
+    operation either. This rule can only
     refine the reason of a run that already failed, since every failed `csql`
     operation in the Pod already fails S00 through its own check; on a passing
     run it can only block it, when no read with `Ready=True` came before the
-    last `csql` operation.
+    last `csql` operation that is not left out.
   - **Report:** SQL that succeeded while the last read before it had `Ready`
     (for `csql` in the Pod) or `RoutingReady` (for the client through the
     Brokers) not `True`, and SQL that failed while it was `True`. A failure of

@@ -1505,7 +1505,8 @@ type SmokeSQL struct {
 	OK    bool
 	// Inconclusive, when set, says why the operation's outcome is no evidence
 	// that the statement failed or succeeded in the member's Pod: the row was
-	// read but did not match, or csql could not be run there. Such an
+	// read but did not match, csql could not be run there, or csql printed
+	// the row read with -199 and -111 (POC-44). Such an
 	// operation is left out of the rules that compare the Conditions with the
 	// SQL, and the reason is noted.
 	Inconclusive string

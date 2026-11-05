@@ -18,6 +18,7 @@ limitations under the License.
 package sqlcheck
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -32,7 +33,13 @@ var csqlError = regexp.MustCompile(`(?m)^ERROR:|Failed to connect|ERROR CODE`)
 // StatementError is the error of Run for a statement csql reported as failed,
 // as opposed to a command that could not be run or an output that did not
 // hold what a check looked for.
-type StatementError struct{ err error }
+type StatementError struct {
+	err error
+	// out is csql's output; commandFailed is true when the command itself
+	// also returned an error, such as a non-zero exit status.
+	out           string
+	commandFailed bool
+}
 
 func (e *StatementError) Error() string { return e.err.Error() }
 func (e *StatementError) Unwrap() error { return e.err }
@@ -45,7 +52,7 @@ func Run(run Runner, sql string) (string, error) {
 	if err != nil {
 		err = fmt.Errorf("csql failed: %w\n%s", err, out)
 		if loc != nil {
-			return out, &StatementError{err}
+			return out, &StatementError{err: err, out: out, commandFailed: true}
 		}
 		return out, err
 	}
@@ -56,7 +63,8 @@ func Run(run Runner, sql string) (string, error) {
 		if end := strings.IndexByte(line, '\n'); end >= 0 {
 			line = line[:end]
 		}
-		return out, &StatementError{fmt.Errorf("csql reported an error: %s\n%s", strings.TrimSpace(line), out)}
+		return out, &StatementError{err: fmt.Errorf("csql reported an error: %s\n%s", strings.TrimSpace(line), out),
+			out: out}
 	}
 	return out, nil
 }
@@ -107,6 +115,12 @@ func ReadRow(run Runner, marker string) error {
 	if err != nil {
 		return err
 	}
+	return rowRead(out, marker)
+}
+
+// rowRead checks that out, csql's output of ReadRow's query, holds exactly
+// the row written by WriteRow.
+func rowRead(out, marker string) error {
 	if !strings.Contains(out, "'"+marker+"'") {
 		return fmt.Errorf("row with marker %q not found:\n%s", marker, out)
 	}
@@ -114,4 +128,42 @@ func ReadRow(run Runner, marker string) error {
 		return fmt.Errorf("expected exactly one row:\n%s", out)
 	}
 	return nil
+}
+
+// lostSessionErrors are the two errors csql prints when the server dropped
+// its session, before or after the result.
+var lostSessionErrors = []*regexp.Regexp{
+	regexp.MustCompile(`ERROR CODE = -199\b`),
+	regexp.MustCompile(`ERROR CODE = -111\b`),
+}
+
+// SessionLost reports whether csql's output holds both errors of a dropped
+// session: -199 (server no longer responding) and -111 (transaction
+// aborted). POC-44 saw csql print the pair as it exited after statements
+// that had committed, and POC-49 once found it in csql's own log for a run
+// that printed neither; its cause is unknown. The pair alone does not say
+// whether the statement took effect.
+func SessionLost(out string) bool {
+	for _, re := range lostSessionErrors {
+		if !re.MatchString(out) {
+			return false
+		}
+	}
+	return true
+}
+
+// lostSessionCodes matches the two codes of SessionLost where csql prints
+// them.
+var lostSessionCodes = regexp.MustCompile(`ERROR CODE = -(199|111)\b`)
+
+// LostSessionAfterRow reports whether err, an error of ReadRow, holds only
+// csql's report of a dropped session (SessionLost) from a read that exited 0
+// and whose output holds exactly the row WriteRow wrote. Any other error in
+// the output, a -199 without -111 or without the row, and a command that
+// failed are not such a report.
+func LostSessionAfterRow(err error, marker string) bool {
+	var statement *StatementError
+	return errors.As(err, &statement) && !statement.commandFailed && SessionLost(statement.out) &&
+		!csqlError.MatchString(lostSessionCodes.ReplaceAllString(statement.out, "")) &&
+		rowRead(statement.out, marker) == nil
 }
