@@ -292,12 +292,14 @@ const (
 // CubridPlacement configures where the cluster's DB Pods run.
 type CubridPlacement struct {
 	// memberSpread decides whether the members of an HA cluster must run on
-	// different nodes (kubernetes.io/hostname). Required, the default, keeps
-	// a member Pending rather than put it next to another; Preferred lets
-	// them share a node. A standalone cluster has one member and no
+	// different nodes (kubernetes.io/hostname). Required keeps a member
+	// Pending rather than put it next to another; Preferred lets them share
+	// a node. Unset, the operator records the value once in the cluster's
+	// annotation database.cubrid.io/member-spread-default: Required for a
+	// cluster that has neither its StatefulSet nor a data PVC yet, Preferred
+	// for one that has either. A standalone cluster has one member and no
 	// placement rule. Changing it applies to a member when its Pod is next
 	// replaced; running Pods are not moved.
-	// +kubebuilder:default=Required
 	// +optional
 	MemberSpread MemberSpread `json:"memberSpread,omitempty"`
 }
@@ -403,8 +405,9 @@ type CubridClusterSpec struct {
 	// +optional
 	NetworkPolicy *CubridNetworkPolicy `json:"networkPolicy,omitempty"`
 
-	// placement configures where the DB Pods run. Omitted, each member of an
-	// HA cluster requires a node of its own.
+	// placement configures where the DB Pods run. Omitted, each member of a
+	// new HA cluster requires a node of its own, and the members of a cluster
+	// that existed before only prefer separate nodes (see memberSpread).
 	// +optional
 	Placement *CubridPlacement `json:"placement,omitempty"`
 }

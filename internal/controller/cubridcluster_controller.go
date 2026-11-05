@@ -388,6 +388,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.failed(ctx, &cluster, "NetworkPolicyReconcileFailed", err)
 	}
 
+	// The member spread an unset spec falls back to is recorded before the
+	// StatefulSet exists, so that it tells a new cluster from an old one.
+	if err := r.recordMemberSpreadDefault(ctx, &cluster); err != nil {
+		return r.failed(ctx, &cluster, "PlacementReconcileFailed", err)
+	}
+
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
 	sts, err := r.reconcileStatefulSet(ctx, &cluster)
 	if err != nil {
@@ -904,29 +910,6 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 	}
 }
 
-// memberAffinity keeps the members of an HA cluster on different nodes, so
-// that one node's failure takes at most one member (#90). Required, the
-// default, is a scheduling rule: a member with no node of its own stays
-// Pending. Preferred is a scheduler preference only. A standalone cluster
-// gets none. The rule selects this cluster's own DB Pods only.
-func memberAffinity(cluster *databasev1alpha1.CubridCluster) *corev1.Affinity {
-	if cluster.Spec.Topology.PromotableMembers < 2 {
-		return nil
-	}
-	term := corev1.PodAffinityTerm{
-		TopologyKey:   corev1.LabelHostname,
-		LabelSelector: &metav1.LabelSelector{MatchLabels: labelsFor(cluster)},
-	}
-	if p := cluster.Spec.Placement; p != nil && p.MemberSpread == databasev1alpha1.MemberSpreadPreferred {
-		return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
-			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{Weight: 100, PodAffinityTerm: term}},
-		}}
-	}
-	return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
-		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{term},
-	}}
-}
-
 // instanceManagerEnv is the environment the Instance Manager image's
 // entrypoint reads (build/instance-manager/entrypoint.sh, ADR-0003).
 func instanceManagerEnv(cluster *databasev1alpha1.CubridCluster) []corev1.EnvVar {
@@ -1063,6 +1046,9 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	}
 
 	cluster.Status.ObservedGeneration = cluster.Generation
+	// Where the members run is reported in every phase, recovery included;
+	// it is a report only (#596).
+	r.reportMemberPlacement(ctx, cluster)
 	// Several steps below set Updating; only the value it ends with is compared
 	// with the one it had, so a value held in between is no transition.
 	updatingBefore := meta.FindStatusCondition(cluster.Status.Conditions, conditionUpdating).DeepCopy()
