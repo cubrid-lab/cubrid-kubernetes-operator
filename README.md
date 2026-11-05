@@ -244,16 +244,16 @@ spec:
 
 ## Member placement
 
-The members of an HA cluster run on different nodes by default, so that
-one node's failure takes at most one of them. The DB Pods carry a required
-Pod anti-affinity on `kubernetes.io/hostname` that selects the cluster's
-own members only; members of different clusters may share a node. A
-standalone cluster has no placement rule.
+The members of an HA cluster are kept on different nodes, so that one
+node's failure takes at most one of them. The DB Pods carry a Pod
+anti-affinity on `kubernetes.io/hostname` that selects the cluster's own
+members only; members of different clusters may share a node. A standalone
+cluster has no placement rule.
 
 ```yaml
 spec:
   placement:
-    memberSpread: Preferred   # Required (default) or Preferred
+    memberSpread: Required   # or Preferred; unset, see below
 ```
 
 - **Required** needs at least as many schedulable nodes as members. A member
@@ -264,17 +264,37 @@ spec:
   share a node when it cannot. It is for test clusters with fewer nodes than
   members, such as the single-node Kind cluster of the e2e tests. Members on
   one node all go down with it.
+- **Unset**, the Operator decides once per cluster and records the result in
+  the cluster's annotation `database.cubrid.io/member-spread-default`, before
+  it creates the StatefulSet: `Required` when neither the StatefulSet nor any
+  data PVC `data-<cluster>-<ordinal>` exists, so for a new cluster, and
+  `Preferred` when either exists, so for a cluster created by an earlier
+  version. The Operator never changes the recorded value; an annotation
+  removed by hand is recorded again by the same rule. A value set in
+  `spec.placement.memberSpread` always takes precedence over it.
 - The rule is in the StatefulSet's Pod template. Pods are replaced only on
   delete, so a change, and the rule itself on a cluster created by an
   earlier version, applies to a member when its Pod is next recreated, and
   until then the member is reported as running an outdated revision.
   Running Pods are not moved.
 - **Storage bound to a node** (such as `local-path`): a member's volume stays
-  on the node it was created on, and its recreated Pod can only run there. A
-  cluster created by an earlier version whose members share a node keeps
-  them there, and under `Required` the recreated members stay `Pending`. Set
-  `memberSpread: Preferred` on such a cluster before upgrading the Operator,
-  and recreate it, with its data restored, to spread it.
+  on the node it was created on, and its recreated Pod can only run there.
+  This is why a cluster created by an earlier version resolves to
+  `Preferred`: its members may share a node, and under `Required` a
+  recreated member would stay `Pending` behind its volume. To move such a
+  cluster to `Required`, set it explicitly. If the cluster then reports
+  `SpreadBlockedByVolume`, its data has to move by a backup and a restore
+  into a new cluster; the Operator never moves or deletes a PVC (ADR-0006).
+- The `MemberPlacement` Condition reports where the members run, and an
+  Event is recorded when it reports a problem
+  ([docs/observability.md](./docs/observability.md#conditions)):
+  `MembersOnSeparateNodes` when each member runs on a node of its own;
+  `MembersShareNode` when two observed members run on the same node;
+  `SpreadBlockedByVolume` when, under `Required`, the volumes of two
+  members are bound to the same node (the PVC annotation
+  `volume.kubernetes.io/selected-node`); `MemberUnschedulable` when a
+  member is `Pending` because the scheduler found no node for it. It is a
+  report only: the Operator takes no action on it.
 - PodDisruptionBudgets and Broker placement are separate work (#90).
 
 ## Scope and validation
