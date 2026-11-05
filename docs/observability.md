@@ -80,7 +80,7 @@ the fixed names below; free text belongs in `message`.
 | `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed (`ClusterReady`) | `InvalidClusterName`: the cluster's name is not a DNS-1035 label of at most 53 characters, so the Operator writes no object for it and does not retry (recreate it under a name of at most 52 characters; ADR-0004); `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved`, or the reason of a step that could not write an object of the cluster, such as `StatefulSetReconcileFailed` (see below) |
 | `Progressing` | The Operator is still working towards the spec: members are starting (`InstancesStarting`), a recovery bootstrap runs (`BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`), or a step failed and is retried (that step's reason) | `Reconciled` once the cluster is reconciled, also while more than one master is observed; `BootstrapRecoveryFailed`; `InvalidClusterName` |
 | `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member); `Unknown` with `RolesNotObserved` |
-| `HAReady` | `PrimaryResolved` is `True` | the reason of `PrimaryResolved`; `HADisabled`; `Unknown` with `RoleDiscoveryDisabled` or `RolesNotObserved` |
+| `HAReady` | `PrimaryResolved` is `True`, every member other than the primary is observed as a slave, and `ReplicationHealthy` is `True` (a single-member cluster: `PrimaryResolved` alone) | the reason of `PrimaryResolved`; the reason of `ReplicationHealthy` (`ReplicationStalled`, `ApplyFailures`, `LogCopyStalled`); `HADisabled`; `Unknown` with `ReplicasNotObserved`, `ReplicationNotObserved`, `RoleDiscoveryDisabled` or `RolesNotObserved` |
 | `ReplicationHealthy` | Every observed slave applies (`AppliersProgressing`) | `ReplicationStalled`, `ApplyFailures`, `LogCopyStalled` (see [the runbook](#runbook-a-slave-whose-copy-of-the-masters-log-does-not-grow)); `Unknown` with `ReplicationNotObserved` or `RolesNotObserved` |
 | `BrokerReady` | A Broker of each access mode is available | `BrokersNotAvailable`, `BrokerReconcileFailed` |
 | `WriteEndpointReady`, `ReadEndpointReady` | A Broker of that mode is available | `NoBrokerAvailable`; `Unknown` with `BrokerReconcileFailed` |
@@ -124,8 +124,29 @@ this records the `PrimaryUnresolved` transition with the reason
 `RolesNotObserved`, next to the Warning Event of the failure itself. A
 cluster without a role prober is not changed.
 
-`HAReady` does not depend on `ReplicationHealthy`
-([#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249)).
+`HAReady` follows `ReplicationHealthy` once the primary is resolved
+([#249](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/249)):
+it is `False` with the replication's reason while a slave does not apply the
+master's log, so an alert on `cubrid_cluster_ha_ready` now also fires for a
+stalled slave. In a cluster of more than one member, `HAReady` is `True`
+only when every member other than the primary is observed as a slave and
+applies; a member whose role is unknown or was not observed makes it
+`Unknown` with `ReplicasNotObserved`, because nothing then shows that the
+cluster has a working copy of the master. A primary with no observed slave
+is therefore not reported as HA-ready; only a single-member cluster is ready
+on its resolved primary alone. Missing evidence is held for a bounded time:
+a slave whose applier could not be read, or a member whose role was not
+observed, leaves `HAReady` as it was while that slave's last reading or that
+member's last answer is younger than 60 seconds, and makes it `Unknown`
+(`ReplicationNotObserved` or `ReplicasNotObserved`) after that or for a
+member never observed. One read that times out does not move `HAReady` or
+its `lastTransitionTime`, and missing evidence never makes it `True`.
+`ReplicationHealthy` itself is `Unknown` for such an observation.
+`cubrid_cluster_ha_ready` is 0 while `HAReady` is `False` or `Unknown`, so an
+alert on it fires for a stalled slave and for a member not observed as a
+slave past that bound. Nothing that routes
+clients reads `HAReady`: `RoutingReady` and the read-write Service follow the
+primary resolution only, so a stalled slave does not stop writes.
 `Ready` and the Conditions of the Brokers say that Pods and Deployments are
 available; they do not say that a client can run SQL. For an HA cluster,
 `Ready` is also `False` (`MultiplePrimariesObserved`) while more than one
@@ -174,8 +195,8 @@ or a change of leader there is no reading to compare with: the first reading
 keeps a `stalledSince` already reported and starts none, so a stall that had
 not been reported yet is reported one reading later. An Instance Manager
 that does not report the position is judged by its counters as before, and
-a long transaction can still make its slave look stalled. `HAReady` does not
-follow `ReplicationHealthy` yet.
+a long transaction can still make its slave look stalled, and with it
+`HAReady`.
 
 `ReplicationHealthy` judges only the slaves whose applier was read in the
 current observation. When a read times out

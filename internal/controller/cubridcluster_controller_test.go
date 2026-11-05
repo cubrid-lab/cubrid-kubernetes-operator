@@ -390,11 +390,11 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(c.Message).To(ContainSubstring(stallSlaveB))
 			Expect(c.Message).NotTo(ContainSubstring(stallSlaveA))
 
-			By("the primary is still resolved: the condition reports and changes nothing else")
+			By("the primary is still resolved, and HAReady follows the condition (#249)")
 			got := &databasev1alpha1.CubridCluster{}
 			Expect(k8sClient.Get(ctx, key, got)).To(Succeed())
 			Expect(got.Status.CurrentPrimary).To(Equal(stallMaster))
-			Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionHAReady)).To(BeTrue())
+			Expect(meta.FindStatusCondition(got.Status.Conditions, conditionHAReady).Reason).To(Equal(reasonReplicationStalled))
 
 			By("the applier applies again")
 			prober.appliers[stallSlaveB] = ReplicationObservation{Source: stallMaster, AppliedChanges: 140, DelayedPages: 1}

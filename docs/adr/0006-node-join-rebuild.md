@@ -181,7 +181,16 @@ per-member catch-up gate: a member's readiness is its Pod readiness, which
 follows the Instance Manager's `/readyz` (a confirmed heartbeat role), and
 the `-ro` Service selects Broker Pods, not members. A slave whose applier
 applies nothing is reported by the `ReplicationHealthy` Condition, which
-nothing acts on (docs/observability.md); `HAReady` does not follow it.
+`HAReady` follows: `HAReady` is `False` with the replication's reason while a
+slave does not apply the master's log. In a cluster of more than one member
+`HAReady` is `True` only when every member other than the primary is
+observed as a slave and applies; a member not observed as a slave makes it
+`Unknown` (`ReplicasNotObserved`), and only a single-member cluster is ready
+on its resolved primary alone. A slave whose applier could not be read, or a
+member whose role was not observed, keeps `HAReady` as it was for up to 60
+seconds after its last reading or answer, then makes it `Unknown` (#249;
+docs/observability.md). Readiness of the
+members and the endpoints do not depend on it.
 The stall is judged by the applier's position in the copied log (`Final
 LSA`, which the Instance Manager reads with `cubrid applyinfo -a -v`), not
 by its counters, which move only when a transaction commits (#249,
@@ -359,12 +368,13 @@ that is missing on one side, as from a manager that does not report it yet
 or one that could not read the process's start time, decides nothing; the
 counters alone are compared then.
 
-What it does not do. Nothing acts on the condition: `HAReady`, `Ready` and
-the endpoints do not depend on it. A transaction that stays open on the
-master for longer than the window is applied only when it commits, so its
-slaves are reported as stalled until then; whether that is acceptable is to
-be decided before the condition gates anything. A slave is not judged while
-the master writes nothing, because then nothing waits.
+What it does not do. `HAReady` follows the condition (#249), but `Ready`
+and the endpoints do not depend on it. The stall is judged by the applier's
+position, which moves through a transaction that stays open on the master
+(POC-48), so such a transaction does not make its slaves look stalled; a
+slave whose Instance Manager does not report the position is judged by the
+counters and can still be. A slave is not judged while the master writes
+nothing, because then nothing waits.
 
 ## Revisit When
 
