@@ -1126,6 +1126,17 @@ func restoreTarget(cluster string) []string {
 	return []string{cluster + "-0"}
 }
 
+// seedingMembers names the members the first seed backup and the first seed
+// restore of a restored cluster depend on: the restore target, which holds
+// the database and is the backup's source, and the first member after it,
+// which the Operator seeds first (reconcileSeeding in
+// internal/controller/habootstrap.go walks the members in ordinal order). A
+// later member is seeded only after both, so the scheduler's refusal of it
+// does not hold either up.
+func seedingMembers(cluster string) []string {
+	return []string{cluster + "-0", cluster + "-1"}
+}
+
 // limitEnded reports whether restore_limit, which wctx carries, ended a wait
 // under ctx with err: not the run, and not a verdict that a reading spanning
 // the limit returned.

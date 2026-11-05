@@ -803,7 +803,7 @@ func (h *haRun) waitIMPlacement(ctx context.Context, cluster *databasev1alpha1.C
 			})
 	case IMRestartAtSeeding:
 		return h.waitPlaced(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result,
-			clusterMembers(cluster.Name), "seeding did not start a seed restore",
+			seedingMembers(cluster.Name), "seeding did not start a seed restore",
 			func(c *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 				switch phase {
 				case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
@@ -1056,6 +1056,7 @@ func (h *haRun) waitSeedBackup(ctx context.Context, created *databasev1alpha1.Cu
 		case err != nil:
 			return false, err
 		}
+		readErr = nil
 		phase, err := h.restoredStatus(cluster, &rec.s12Record, result)
 		switch {
 		case err != nil:
@@ -1104,13 +1105,13 @@ func (h *haRun) waitSeedBackup(ctx context.Context, created *databasev1alpha1.Cu
 	case err == nil:
 		return nil
 	case limitEnded(ctx, wctx, err) && readErr != nil:
-		return h.limitUnread(clusterMembers(created.Name), fmt.Errorf(imNotAtSeedBackup+"no reading before "+
+		return h.limitUnread(seedingMembers(created.Name), fmt.Errorf(imNotAtSeedBackup+"no reading before "+
 			"restore_limit %s passed showed it: %w", h.cfg.RestoreLimit, readErr))
 	case limitEnded(ctx, wctx, err):
-		return h.limitPassed(clusterMembers(created.Name), fmt.Errorf("the restored cluster's seeding recorded no "+
+		return h.limitPassed(seedingMembers(created.Name), fmt.Errorf("the restored cluster's seeding recorded no "+
 			"seed backup within restore_limit %s", h.cfg.RestoreLimit))
 	}
-	return h.runEnded(ctx, clusterMembers(created.Name), err)
+	return h.runEnded(ctx, seedingMembers(created.Name), err)
 }
 
 // imStartingPoll is how often, at starting, the target's record of the

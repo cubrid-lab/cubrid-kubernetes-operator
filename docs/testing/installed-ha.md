@@ -151,7 +151,9 @@ Broker Pods do not use it.
 Operator. When a wait for the members of LAB00, LAB01 or any S12 variant ends,
 the run reads each member the wait depends on: the restore target `<cluster>-0`
 until a restore or its refusal ends, because the restore runs there alone and
-members start in parallel, and every member for seeding and for `Ready`. An
+members start in parallel, `<cluster>-0` and `<cluster>-1` for the first seed
+backup and seed restore, because the Operator seeds the members in ordinal order
+and a later member cannot hold either up, and every member for `Ready`. An
 unready member with `PodScheduled` `False` and reason `Unschedulable` is recorded
 as `unschedulableMembers` in the run's record, with its Pod UID, the scheduler's
 message, the condition's `lastTransitionTime` as `refusedSince`, the time of the

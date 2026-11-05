@@ -23,8 +23,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -1415,6 +1417,42 @@ func TestRunS12InstanceManagerRestartSeedBackupWaitsForTheTargetsPod(t *testing.
 		t.Fatalf("S12 instance-manager-restart-seed-backup = %+v, %v, record reads %d; want a pass", restart, err,
 			records.polls)
 	}
+}
+
+// stallSeedBackup leaves the seeding at the seed backup being asked for: the
+// Operator never records the backup's operation, so the wait for the seed
+// backup runs to restore_limit.
+func stallSeedBackup(f *s12IMRestartFixture) {
+	f.cfg.RestoreLimit = 2 * time.Second
+	f.beforeSeed[3] = f.beforeSeed[2]
+}
+
+// failClusterReadOnce makes the first read of the restored cluster once the
+// fixture holds its last step fail as a transient API error, the way a busy
+// API server does.
+func failClusterReadOnce(f *s12IMRestartFixture) {
+	previous, failed := f.imRestartRead, false
+	f.imRestartRead = func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error {
+		f.mu.Lock()
+		fail := !failed && f.imStep >= f.holdStep
+		failed = failed || fail
+		f.mu.Unlock()
+		if fail {
+			return apierrors.NewServiceUnavailable("etcd is unavailable")
+		}
+		return previous(ctx, c, key)
+	}
+}
+
+// A read of the restored cluster that failed once and was followed by readings
+// that succeeded does not explain a stall: the Operator recorded no seed
+// backup within restore_limit, which fails.
+func TestRunS12InstanceManagerRestartSeedBackupFailsOnAStallAfterOneFailedClusterRead(t *testing.T) {
+	f, _ := newS12IMRestartSeedBackupFixture(t)
+	stallSeedBackup(f)
+	failClusterReadOnce(f)
+	restart, err := imRestartOf(t, f)
+	requireIMRestart(t, restart, err, evidence.Fail, "recorded no seed backup within restore_limit")
 }
 
 // setTargetPod changes the restore target's Pod as stored.

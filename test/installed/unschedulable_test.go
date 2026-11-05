@@ -306,6 +306,26 @@ func TestRunS12InstanceManagerRestartKeepsItsVerdictWhenAnotherMemberCannotBeSch
 	requireWaitVerdict(t, restart, err, "restore_limit")
 }
 
+// The seed backup is taken on the restore's target for the first peer, so the
+// first peer is the only other member the wait depends on.
+func TestRunS12InstanceManagerRestartSeedBackupIsBlockedWhenTheFirstPeerCannotBeScheduled(t *testing.T) {
+	f, _ := newS12IMRestartSeedBackupFixture(t)
+	stallSeedBackup(f)
+	f.keepPending(clusterMembers(s12IMRestartClusterName)[1], &testUnschedulable)
+	restart, err := imRestartOf(t, f)
+	requireBlockedByScheduler(t, restart, err)
+}
+
+// The last member is seeded after the first peer's backup, so it cannot hold
+// the seed backup up.
+func TestRunS12InstanceManagerRestartSeedBackupKeepsItsVerdictWhenTheLastMemberCannotBeScheduled(t *testing.T) {
+	f, _ := newS12IMRestartSeedBackupFixture(t)
+	stallSeedBackup(f)
+	f.keepPending(clusterMembers(s12IMRestartClusterName)[2], &testUnschedulable)
+	restart, err := imRestartOf(t, f)
+	requireWaitVerdict(t, restart, err, "restore_limit")
+}
+
 func TestRunS12GracefulStopIsBlockedWhenTheTargetCannotBeScheduled(t *testing.T) {
 	cfg := testS12GracefulStopConfig(t)
 	cfg.RestoreLimit = time.Second

@@ -742,11 +742,11 @@ func (h *haRun) waitStopTarget(ctx context.Context, created *databasev1alpha1.Cu
 }
 
 // awaitedMembers names the members the wait for the placement depends on: the
-// restore target for a restore, and every member once seeding is what it waits
-// for, since the member seeded is chosen only then.
+// restore target for a restore, and the two members the first seed backup and
+// the first seed restore involve once seeding is what it waits for.
 func (rec *s12GracefulStopRecord) awaitedMembers(cluster string) []string {
 	if rec.At == GracefulStopAtSeeding {
-		return clusterMembers(cluster)
+		return seedingMembers(cluster)
 	}
 	return restoreTarget(cluster)
 }
