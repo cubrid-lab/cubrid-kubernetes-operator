@@ -68,6 +68,8 @@ func testConfig(t *testing.T) Config {
 		StorageClass: "test-storage", EvidenceDir: t.TempDir(), Level: "unit",
 		ClusterUID: "selected-lab",
 		Timeout:    time.Second, CleanupTimeout: time.Second, Poll: time.Millisecond,
+		MemberMemoryRequest: resource.MustParse(DefaultMemberMemoryRequest),
+		MemberCPURequest:    resource.MustParse(DefaultMemberCPURequest),
 	}
 }
 
@@ -231,7 +233,8 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 						Spec: corev1.PodSpec{NodeName: "node-1", Volumes: []corev1.Volume{{Name: dataClaimName,
 							VolumeSource: corev1.VolumeSource{
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}}},
-							Containers: []corev1.Container{{Name: databaseContainer, Image: f.cfg.InstanceManagerImage}}},
+							Containers: []corev1.Container{{Name: databaseContainer, Image: f.cfg.InstanceManagerImage,
+								Resources: value.Spec.Resources}}},
 						Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 							ContainerStatuses: []corev1.ContainerStatus{{Name: databaseContainer, Ready: true,
 								ContainerID: "containerd://database-container",

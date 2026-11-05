@@ -81,6 +81,10 @@ type Config struct {
 	// available on every schedulable node before the run creates anything;
 	// zero reads none (checkNodeFreeSpace).
 	MinNodeFreeMemory int64
+	// MemberMemoryRequest and MemberCPURequest are set as
+	// spec.resources.requests of every cluster the run creates; both must be
+	// positive, so that no member of a run is invisible to the scheduler.
+	MemberMemoryRequest, MemberCPURequest resource.Quantity
 }
 
 // Runner uses an API client and command runner bound to the same target.
@@ -215,14 +219,17 @@ func (c Config) validate() error {
 	return nil
 }
 
-// validateBudgets checks the run's durations and the minimum free space and
-// memory a node must have.
+// validateBudgets checks the run's durations, the minimum free space and
+// memory a node must have, and the requests of the run's members.
 func (c Config) validateBudgets() error {
 	if c.Timeout <= 0 || c.CleanupTimeout <= 0 || c.Poll <= 0 {
 		return errors.New("run, cleanup and poll durations must be positive")
 	}
 	if c.MinNodeFreeSpace < 0 || c.MinNodeFreeMemory < 0 {
 		return errors.New("the minimum free space and available memory of a node must not be negative")
+	}
+	if c.MemberMemoryRequest.Sign() <= 0 || c.MemberCPURequest.Sign() <= 0 {
+		return errors.New("the memory and CPU requests of a member must be positive")
 	}
 	return nil
 }
@@ -371,6 +378,7 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 			Version: "11.4", Image: &databasev1alpha1.CubridImage{Repository: cfg.InstanceManagerImage},
 			Databases: []databasev1alpha1.CubridDatabase{{Name: databaseName}},
 			Topology:  databasev1alpha1.CubridTopology{PromotableMembers: 1},
+			Resources: cfg.memberResources(),
 			Storage: databasev1alpha1.CubridStorage{Data: databasev1alpha1.CubridStorageSpec{
 				Size: resource.MustParse("2Gi"), StorageClassName: &cfg.StorageClass}}}}
 	if err := r.Client.Create(ctx, cluster); err != nil {

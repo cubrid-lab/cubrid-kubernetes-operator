@@ -1046,6 +1046,7 @@ func (h *haRun) clusterSpec(prefix, secret string) databasev1alpha1.CubridCluste
 		ObjectStorage: &databasev1alpha1.CubridObjectStorage{Endpoint: h.cfg.SeedEndpoint,
 			Insecure: h.cfg.SeedInsecure, Bucket: h.cfg.SeedBucket, Prefix: prefix,
 			CredentialsSecretRef: corev1.LocalObjectReference{Name: secret}},
+		Resources: h.cfg.memberResources(),
 		Placement: &databasev1alpha1.CubridPlacement{MemberSpread: h.cfg.MemberSpread},
 		Storage: databasev1alpha1.CubridStorage{Data: databasev1alpha1.CubridStorageSpec{
 			Size: resource.MustParse("2Gi"), StorageClassName: &h.cfg.StorageClass}}}

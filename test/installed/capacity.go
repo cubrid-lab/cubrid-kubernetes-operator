@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"slices"
 	"strings"
@@ -39,11 +40,11 @@ import (
 // kubelet evicts Pods when it runs low, and a run's members can all land on
 // one node, so a run that starts on a full node can evict the shared clusters
 // and its own volumes' delete helpers with them. Memory is read for the same
-// reason: database Pods request none, so the scheduler does not avoid a node
-// whose memory the shared clusters already use, and there the kernel kills
-// cub_server (#672). A node under cfg.MinNodeFreeSpace or
-// cfg.MinNodeFreeMemory, or one that does not report a figure a minimum asks
-// for, refuses the run. A minimum of zero reads nothing, and so does a
+// reason: the shared clusters' database Pods request none, so the scheduler
+// does not count the memory they use, even when the run's own members declare
+// requests, and on a full node the kernel kills cub_server (#672). A node
+// under cfg.MinNodeFreeSpace or cfg.MinNodeFreeMemory, or one that does not
+// report a figure a minimum asks for, refuses the run. A minimum of zero reads nothing, and so does a
 // preallocated namespace's run, whose cluster-wide reads are limited to fixed
 // names. What was read is recorded in bytes per node.
 func (r *Runner) checkNodeFreeSpace(ctx context.Context, cfg Config, rec *record) error {
@@ -228,6 +229,62 @@ func volumeNode(volume *corev1.PersistentVolume) string {
 		}
 	}
 	return evidence.Unknown
+}
+
+// The requests a member of a run declares unless a flag says otherwise. The
+// memory is the about 575 MiB kubectl top showed for each long-lived member on
+// the VM lab on 2026-11-03 (#671), rounded up to the 600Mi a member that the
+// memory pre-flight counts with; use during a bootstrap or a SQL workload was
+// not measured. No CPU use of a member has been measured, so the CPU is a small
+// value chosen without a measurement, low enough for the six members of a run
+// that restores into a second cluster (S12) beside the shared clusters on
+// 2 vCPU workers.
+const (
+	DefaultMemberMemoryRequest = "600Mi"
+	DefaultMemberCPURequest    = "100m"
+)
+
+// MemberRequestFlags registers the flags of a run's member requests.
+func MemberRequestFlags(flags *flag.FlagSet, cfg *Config) {
+	flags.Var(requestFlag(&cfg.MemberMemoryRequest, DefaultMemberMemoryRequest), "member-memory-request",
+		"spec.resources.requests.memory of every cluster the run creates: about 575 MiB observed per long-lived "+
+			"member on the VM lab, rounded up; must be positive")
+	flags.Var(requestFlag(&cfg.MemberCPURequest, DefaultMemberCPURequest), "member-cpu-request",
+		"spec.resources.requests.cpu of every cluster the run creates: a small value, not a measurement; must be "+
+			"positive")
+}
+
+// requestFlag is a command-line flag that sets *quantity, starting from def.
+func requestFlag(quantity *resource.Quantity, def string) requestValue {
+	*quantity = resource.MustParse(def)
+	return requestValue{quantity: quantity}
+}
+
+type requestValue struct{ quantity *resource.Quantity }
+
+func (v requestValue) String() string {
+	if v.quantity == nil {
+		return ""
+	}
+	return v.quantity.String()
+}
+
+func (v requestValue) Set(value string) error {
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil || quantity.Sign() <= 0 {
+		return fmt.Errorf("want a positive quantity such as 600Mi or 100m: %q", value)
+	}
+	*v.quantity = quantity
+	return nil
+}
+
+// memberResources is spec.resources of every cluster the run creates. It sets
+// requests only: a limit would kill a member at a peak nobody has measured.
+func (c Config) memberResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{Requests: corev1.ResourceList{
+		corev1.ResourceMemory: c.MemberMemoryRequest,
+		corev1.ResourceCPU:    c.MemberCPURequest,
+	}}
 }
 
 // MemberSpreadFlag is a command-line flag that sets *spread, starting from def.
