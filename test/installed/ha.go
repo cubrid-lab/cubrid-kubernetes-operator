@@ -390,10 +390,13 @@ type haRecord struct {
 	OperatorAfter managerIdentity   `json:"operatorAfter"`
 	// Waiting is the last part of the starting state that did not hold
 	// while the run waited for it.
-	Waiting       string          `json:"waiting,omitempty"`
-	StartingState *startingState  `json:"startingState,omitempty"`
-	Members       []imageIdentity `json:"members"`
-	MembersAfter  []imageIdentity `json:"membersAfter"`
+	Waiting string `json:"waiting,omitempty"`
+	// UnschedulableMembers are the members the scheduler could not place
+	// when a wait for them ended, with its message (blockOnUnschedulable).
+	UnschedulableMembers []unschedulableMember `json:"unschedulableMembers,omitempty"`
+	StartingState        *startingState        `json:"startingState,omitempty"`
+	Members              []imageIdentity       `json:"members"`
+	MembersAfter         []imageIdentity       `json:"membersAfter"`
 	// RolesAfter is the master and slaves CUBRID reported at the end.
 	RolesAfter *startingState `json:"rolesAfter,omitempty"`
 	Client     *imageIdentity `json:"client,omitempty"`
@@ -612,9 +615,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 			scenario.Reason = "LAB01's starting state, a subset of S01's, held for the stable period, and the data " +
 				"rules held on every member and both Services"
 		} else {
-			if owned != nil {
-				scenario.Result = evidence.Fail
-			}
+			scenario.Result = unfinishedResult(owned != nil, cleanupErr == nil, runErr)
 			scenario.Reason = runErr.Error()
 		}
 		if n := len(h.rec.LostSessions); n > 0 {
@@ -1110,11 +1111,30 @@ func (h *haRun) waitStartingState(ctx context.Context, cluster *databasev1alpha1
 	})
 	if err != nil {
 		if h.rec.Waiting != "" {
-			return fmt.Errorf("the starting state of S01 was not reached: %s: %w", h.rec.Waiting, err)
+			return h.runEnded(ctx, cluster, fmt.Errorf("the starting state of S01 was not reached: %s: %w",
+				h.rec.Waiting, err))
 		}
-		return fmt.Errorf("the starting state of S01 was not reached: %w", err)
+		return h.runEnded(ctx, cluster, fmt.Errorf("the starting state of S01 was not reached: %w", err))
 	}
 	return checkpoint()
+}
+
+// limitPassed is the error of a wait for created that reached restore_limit
+// with verdict unmet: the verdict, unless the scheduler could not place a
+// member, which blocks the scenario.
+func (h *haRun) limitPassed(created *databasev1alpha1.CubridCluster, verdict error) error {
+	return h.blockOnUnschedulable(h.cfg.Namespace, clusterMembers(created.Name), &h.rec.UnschedulableMembers,
+		restoreVerdict{verdict})
+}
+
+// runEnded is the error of a wait for created that ctx may have ended: err,
+// which already blocks the scenario, with the scheduler's refusal of a member
+// when there is one. A verdict, or an error of a run that goes on, stays err.
+func (h *haRun) runEnded(ctx context.Context, created *databasev1alpha1.CubridCluster, err error) error {
+	if ctx.Err() == nil || errors.As(err, new(restoreVerdict)) {
+		return err
+	}
+	return h.blockOnUnschedulable(h.cfg.Namespace, clusterMembers(created.Name), &h.rec.UnschedulableMembers, err)
 }
 
 // unread joins what could not be read to its retryable API error in what

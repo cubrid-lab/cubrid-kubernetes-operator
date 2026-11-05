@@ -437,10 +437,11 @@ func (h *haRun) waitRefused(ctx context.Context, created *databasev1alpha1.Cubri
 				reason = c.Reason + ": " + c.Message
 			}
 		}
-		return time.Time{}, restoreVerdict{fmt.Errorf("the restore of the tampered copy was not refused within "+
-			"restore_limit %s; its last bootstrap phase was %q, BootstrapReady %s", h.cfg.RestoreLimit, phase, reason)}
+		return time.Time{}, h.limitPassed(created, fmt.Errorf("the restore of the tampered copy was not refused "+
+			"within restore_limit %s; its last bootstrap phase was %q, BootstrapReady %s", h.cfg.RestoreLimit, phase,
+			reason))
 	}
-	return time.Time{}, err
+	return time.Time{}, h.runEnded(ctx, created, err)
 }
 
 // tamperedReading records one reading of the cluster restored from the

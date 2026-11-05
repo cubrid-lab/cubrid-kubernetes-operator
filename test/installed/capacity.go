@@ -27,7 +27,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
@@ -44,9 +46,10 @@ import (
 // does not count the memory they use, even when the run's own members declare
 // requests, and on a full node the kernel kills cub_server (#672). A node
 // under cfg.MinNodeFreeSpace or cfg.MinNodeFreeMemory, or one that does not
-// report a figure a minimum asks for, refuses the run. A minimum of zero reads nothing, and so does a
-// preallocated namespace's run, whose cluster-wide reads are limited to fixed
-// names. What was read is recorded in bytes per node.
+// report a figure a minimum asks for, refuses the run. A minimum of zero reads
+// nothing, and so does a preallocated namespace's run, whose cluster-wide
+// reads are limited to fixed names. What was read is recorded in bytes per
+// node.
 func (r *Runner) checkNodeFreeSpace(ctx context.Context, cfg Config, rec *record) error {
 	readSpace, readMemory := cfg.MinNodeFreeSpace > 0, cfg.MinNodeFreeMemory > 0
 	if !readSpace && !readMemory || cfg.NamespaceMode == PreallocatedNamespace {
@@ -231,14 +234,102 @@ func volumeNode(volume *corev1.PersistentVolume) string {
 	return evidence.Unknown
 }
 
+// unschedulableMember is a member the scheduler could not place when a wait
+// for it ended, with the scheduler's message.
+type unschedulableMember struct {
+	Pod     string `json:"pod"`
+	Message string `json:"message"`
+}
+
+// membersUnschedulable is the error of a wait that ended while the scheduler
+// could not place a member. A cluster that could not form because its members
+// do not fit says nothing about the Operator (#671), so the error blocks the
+// scenario instead of failing it. It deliberately wraps nothing: the verdict
+// the wait would otherwise have given must not be found in it.
+type membersUnschedulable struct{ error }
+
+// schedulingReadTimeout bounds the read of the members once a wait ended. It
+// uses a context of its own because the end of the run may have ended the
+// wait.
+const schedulingReadTimeout = 30 * time.Second
+
+// blockOnUnschedulable reads the members of a wait that ended with ended. A
+// member the scheduler reports it could not place is added to recorded with
+// the scheduler's message, and the error returned is membersUnschedulable,
+// which a confirmed never-event still turns into a failure. Otherwise ended
+// is returned, with what could not be read added to it.
+func (r *Runner) blockOnUnschedulable(namespace string, members []string, recorded *[]unschedulableMember,
+	ended error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), schedulingReadTimeout)
+	defer cancel()
+	var found []unschedulableMember
+	var failed []error
+	for _, name := range members {
+		pod := &corev1.Pod{}
+		err := r.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, pod)
+		switch {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			failed = append(failed, err)
+			continue
+		}
+		if message, refused := schedulerRefusal(pod); refused {
+			found = append(found, unschedulableMember{Pod: name, Message: message})
+		}
+	}
+	if len(found) == 0 {
+		if len(failed) > 0 {
+			return fmt.Errorf("%w; whether the scheduler could place every member could not be read: %v", ended,
+				errors.Join(failed...))
+		}
+		return ended
+	}
+	*recorded = append(*recorded, found...)
+	refusals := make([]string, 0, len(found))
+	for _, member := range found {
+		refusals = append(refusals, member.Pod+": "+member.Message)
+	}
+	return membersUnschedulable{fmt.Errorf("%s; the scheduler could not place the member(s), so the environment "+
+		"did not let the run judge the Operator: %s", ended, strings.Join(refusals, "; "))}
+}
+
+// unfinishedResult is the result of LAB00 or LAB01 when runErr ended it. A run
+// that created nothing is blocked. One that did has failed, unless a member
+// that does not fit left it with no verdict on the Operator; a cleanup that
+// failed is a failure either way.
+func unfinishedResult(created, cleaned bool, runErr error) evidence.Result {
+	if created && (!cleaned || !errors.As(runErr, new(membersUnschedulable))) {
+		return evidence.Fail
+	}
+	return evidence.Blocked
+}
+
+// schedulerRefusal returns the scheduler's message when pod is an unready
+// member that the scheduler reported it could not place. Any other Pending
+// member, such as one that is bound and starting, says nothing about capacity.
+func schedulerRefusal(pod *corev1.Pod) (string, bool) {
+	if podReady(pod) || !pod.DeletionTimestamp.IsZero() {
+		return "", false
+	}
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse &&
+			condition.Reason == corev1.PodReasonUnschedulable {
+			return condition.Message, true
+		}
+	}
+	return "", false
+}
+
 // The requests a member of a run declares unless a flag says otherwise. The
 // memory is the about 575 MiB kubectl top showed for each long-lived member on
-// the VM lab on 2026-11-03 (#671), rounded up to the 600Mi a member that the
-// memory pre-flight counts with; use during a bootstrap or a SQL workload was
-// not measured. No CPU use of a member has been measured, so the CPU is a small
-// value chosen without a measurement, low enough for the six members of a run
-// that restores into a second cluster (S12) beside the shared clusters on
-// 2 vCPU workers.
+// the VM lab on 2026-11-03 (#671), rounded up to 600Mi, the figure per member
+// that the memory pre-flight counts with; use during a bootstrap or a SQL
+// workload was not measured. No CPU use of a member has been measured, so the
+// CPU is a small value chosen without a measurement. It is low enough for the
+// nine members a restore lane can hold at once (three clusters: the source,
+// S12 exact's and one other S12 variant's, whose flags exclude each other) to
+// declare 900m in total beside the shared clusters on 2 vCPU workers.
 const (
 	DefaultMemberMemoryRequest = "600Mi"
 	DefaultMemberCPURequest    = "100m"
@@ -247,8 +338,8 @@ const (
 // MemberRequestFlags registers the flags of a run's member requests.
 func MemberRequestFlags(flags *flag.FlagSet, cfg *Config) {
 	flags.Var(requestFlag(&cfg.MemberMemoryRequest, DefaultMemberMemoryRequest), "member-memory-request",
-		"spec.resources.requests.memory of every cluster the run creates: about 575 MiB observed per long-lived "+
-			"member on the VM lab, rounded up; must be positive")
+		"spec.resources.requests.memory of every cluster the run creates: about 575 MiB observed per "+
+			"long-lived member on the VM lab, rounded up; must be positive")
 	flags.Var(requestFlag(&cfg.MemberCPURequest, DefaultMemberCPURequest), "member-cpu-request",
 		"spec.resources.requests.cpu of every cluster the run creates: a small value, not a measurement; must be "+
 			"positive")

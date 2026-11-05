@@ -598,11 +598,11 @@ func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.Cubr
 		if n := len(rec.Bootstrap); n > 0 {
 			phase = rec.Bootstrap[n-1].Phase
 		}
-		return nil, time.Time{}, restoreVerdict{fmt.Errorf("the restored cluster was not Ready within restore_limit "+
-			"%s; its last bootstrap phase was %q; waiting for: %s", h.cfg.RestoreLimit, phase,
-			cmp.Or(waiting, "the first reading"))}
+		return nil, time.Time{}, h.limitPassed(created, fmt.Errorf("the restored cluster was not Ready within "+
+			"restore_limit %s; its last bootstrap phase was %q; waiting for: %s", h.cfg.RestoreLimit, phase,
+			cmp.Or(waiting, "the first reading")))
 	}
-	return nil, time.Time{}, err
+	return nil, time.Time{}, h.runEnded(ctx, created, err)
 }
 
 // restoredReading records one reading of the restored cluster and returns

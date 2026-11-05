@@ -431,10 +431,10 @@ func (h *haRun) waitPlaced(ctx context.Context, created *databasev1alpha1.Cubrid
 		if n := len(rec.Bootstrap); n > 0 {
 			phase = rec.Bootstrap[n-1].Phase
 		}
-		return restoreVerdict{fmt.Errorf("the restored cluster's %s within restore_limit %s; its last bootstrap "+
-			"phase was %q", late, h.cfg.RestoreLimit, phase)}
+		return h.limitPassed(created, fmt.Errorf("the restored cluster's %s within restore_limit %s; its last "+
+			"bootstrap phase was %q", late, h.cfg.RestoreLimit, phase))
 	}
-	return err
+	return h.runEnded(ctx, created, err)
 }
 
 // readRestarted reads the restored cluster. A cluster with another UID was

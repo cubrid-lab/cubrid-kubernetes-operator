@@ -170,6 +170,20 @@ type fixture struct {
 	// store bypasses the write hooks so a test can act as the Operator; it is
 	// set once the runner creates the cluster.
 	store client.WithWatch
+	// afterCluster runs once the cluster and its children exist.
+	afterCluster func(ctx context.Context, c client.WithWatch)
+}
+
+// createChildren stores what the simulated reconciliation made, then runs
+// afterCluster.
+func (f *fixture) createChildren(ctx context.Context, c client.WithWatch, children ...client.Object) error {
+	if err := createAll(ctx, c, children...); err != nil {
+		return err
+	}
+	if f.afterCluster != nil {
+		f.afterCluster(ctx, c)
+	}
+	return nil
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -226,7 +240,7 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 						return err
 					}
 				}
-				return createAll(ctx, c, append(brokerTier(f.cfg.Namespace, value.UID),
+				return f.createChildren(ctx, c, append(brokerTier(f.cfg.Namespace, value.UID),
 					&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0", Namespace: f.cfg.Namespace,
 						UID:             "database-pod",
 						OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", clusterName, sts.UID)}},

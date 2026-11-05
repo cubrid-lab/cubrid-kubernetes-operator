@@ -93,9 +93,11 @@ stop the memory use growing during the run.
 `--member-memory-request` (default `600Mi`) and `--member-cpu-request` (default
 `100m`) are set as `spec.resources.requests` on the cluster the run creates, and
 both must be positive. The values the database Pod declares are recorded as
-`memoryRequest` and `cpuRequest` under `database`. Where these defaults come
-from, what they leave unmeasured and how they relate to the memory check above
-are in
+`memoryRequest` and `cpuRequest` under `database`, and the same fields record
+what each manager Pod declares, under `operator.pods`. A database Pod the
+scheduler cannot place when the wait ends blocks LAB00, with the scheduler's
+message in `unschedulableMembers`. Where these defaults come from, what they
+leave unmeasured and how they relate to the memory check above are in
 [Database member requests](installed-ha.md#database-member-requests).
 
 A fresh-namespace run also refuses, before it creates anything, a namespace

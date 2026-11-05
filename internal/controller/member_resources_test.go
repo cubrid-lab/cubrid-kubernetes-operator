@@ -53,7 +53,8 @@ func TestPodSpecCarriesSpecResourcesOnTheDatabaseAndInitContainers(t *testing.T)
 
 // The Operator has no default of its own: a cluster that sets no resources
 // must keep getting none, or a new Operator would change every existing
-// cluster's Pod template and restart its members.
+// cluster's Pod template and mark every member of an existing cluster out of
+// date.
 func TestPodSpecAddsNoResourcesWhenTheClusterSetsNone(t *testing.T) {
 	for _, cluster := range []*databasev1alpha1.CubridCluster{haCluster("no-requests"), standaloneCluster("no-requests")} {
 		for _, container := range databaseAndInitContainers(cluster) {

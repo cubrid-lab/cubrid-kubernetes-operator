@@ -153,6 +153,9 @@ type record struct {
 	// NodeAvailableMemoryBytes is the memory each schedulable node reported
 	// available before the run created anything, when a minimum was set.
 	NodeAvailableMemoryBytes map[string]int64 `json:"nodeAvailableMemoryBytes,omitempty"`
+	// UnschedulableMembers are the members the scheduler could not place
+	// when the wait for them ended, with its message (blockOnUnschedulable).
+	UnschedulableMembers []unschedulableMember `json:"unschedulableMembers,omitempty"`
 	// ManagerChangedAtCleanup is set when preallocated cleanup saw a manager
 	// incarnation other than the recorded one. The run then fails.
 	ManagerChangedAtCleanup bool `json:"managerChangedAtCleanup,omitempty"`
@@ -319,9 +322,10 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 		return summary.Checkpoint(cfg.EvidenceDir, redactor, lane, time.Now())
 	}
 	defer func() {
+		cleaned := true
 		if owned != nil || created != nil {
 			cleanupErr := r.cleanupRun(cfg, owned, borrowed)
-			cleaned := cleanupErr == nil
+			cleaned = cleanupErr == nil
 			scenario.CleanupSucceeded = &cleaned
 			runErr = errors.Join(runErr, recordCleanup(&rec, cleanupErr))
 		}
@@ -334,9 +338,7 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 			scenario.Result = evidence.Pass
 			scenario.Reason = "committed SQL row read through the installed Operator's new cluster"
 		} else {
-			if owned != nil || created != nil {
-				scenario.Result = evidence.Fail
-			}
+			scenario.Result = unfinishedResult(owned != nil || created != nil, cleaned, runErr)
 			scenario.Reason = runErr.Error()
 		}
 		summary.Record(scenario)
@@ -394,6 +396,9 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 	}
 	database, err := r.waitDatabase(ctx, cfg, cluster, guard)
 	if err != nil {
+		if ctx.Err() != nil {
+			return r.blockOnUnschedulable(cfg.Namespace, []string{clusterName + "-0"}, &rec.UnschedulableMembers, err)
+		}
 		return err
 	}
 	rec.Database = database

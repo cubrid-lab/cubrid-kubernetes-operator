@@ -1103,10 +1103,10 @@ func (h *haRun) waitSeedBackup(ctx context.Context, created *databasev1alpha1.Cu
 		return fmt.Errorf(imNotAtSeedBackup+"no reading before restore_limit %s passed showed it: %w",
 			h.cfg.RestoreLimit, readErr)
 	case ctx.Err() == nil && wctx.Err() != nil:
-		return restoreVerdict{fmt.Errorf("the restored cluster's seeding recorded no seed backup within "+
-			"restore_limit %s", h.cfg.RestoreLimit)}
+		return h.limitPassed(created, fmt.Errorf("the restored cluster's seeding recorded no seed backup within "+
+			"restore_limit %s", h.cfg.RestoreLimit))
 	}
-	return err
+	return h.runEnded(ctx, created, err)
 }
 
 // imStartingPoll is how often, at starting, the target's record of the
@@ -1199,11 +1199,11 @@ func (h *haRun) waitStarting(ctx context.Context, created *databasev1alpha1.Cubr
 		return fmt.Errorf(notPlaced+"no reading before restore_limit %s passed showed it: %w", h.cfg.RestoreLimit,
 			readErr)
 	case ctx.Err() == nil && wctx.Err() != nil:
-		return restoreVerdict{fmt.Errorf("the restored database was not started within restore_limit %s: the "+
-			"target's record of operation %s was last read %s", h.cfg.RestoreLimit, id,
-			lastOperationState(r.OperationReadings))}
+		return h.limitPassed(created, fmt.Errorf("the restored database was not started within restore_limit %s: "+
+			"the target's record of operation %s was last read %s", h.cfg.RestoreLimit, id,
+			lastOperationState(r.OperationReadings)))
 	}
-	return err
+	return h.runEnded(ctx, created, err)
 }
 
 // lastOperationState is the state of the last of readings, or unknown.

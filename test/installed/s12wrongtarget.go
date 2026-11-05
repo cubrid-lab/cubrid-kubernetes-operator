@@ -409,8 +409,8 @@ func (h *haRun) waitFormed(ctx context.Context, created *databasev1alpha1.Cubrid
 		return true, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("the first %s was not formed: %s: %w", created.Name, cmp.Or(waiting,
-			"no reading was taken"), err)
+		return nil, h.runEnded(ctx, created, fmt.Errorf("the first %s was not formed: %s: %w", created.Name,
+			cmp.Or(waiting, "no reading was taken"), err))
 	}
 	return roles, nil
 }
@@ -618,11 +618,11 @@ func (h *haRun) waitWrongTargetRefused(ctx context.Context, created *databasev1a
 				reason = c.Reason + ": " + c.Message
 			}
 		}
-		return time.Time{}, restoreVerdict{fmt.Errorf("the restore over the volumes that hold a database was not "+
-			"refused within restore_limit %s; its last bootstrap phase was %q, BootstrapReady %s",
-			h.cfg.RestoreLimit, phase, reason)}
+		return time.Time{}, h.limitPassed(created, fmt.Errorf("the restore over the volumes that hold a database "+
+			"was not refused within restore_limit %s; its last bootstrap phase was %q, BootstrapReady %s",
+			h.cfg.RestoreLimit, phase, reason))
 	}
-	return time.Time{}, err
+	return time.Time{}, h.runEnded(ctx, created, err)
 }
 
 // wrongTargetReading records one reading of the cluster restored over the
