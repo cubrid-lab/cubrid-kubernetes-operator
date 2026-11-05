@@ -22,6 +22,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -207,6 +208,19 @@ spec:
 					result.Result, result.Reason = o.Result, o.Reason
 				}
 				if file := writeTimeline("S00/timeline.jsonl", o.Timeline); file != "" {
+					result.Evidence = append(result.Evidence, file)
+				}
+			}
+			// A failed image load happens before the Operator is exercised, so it
+			// says nothing about the product: the scenario is blocked by the
+			// environment, with every attempt's output kept as evidence.
+			var loadErr *utils.ImageLoadError
+			if errors.As(instanceManagerImageErr, &loadErr) {
+				result.Result = evidence.Blocked
+				result.Reason = fmt.Sprintf("environment_image_load_failed: the Instance Manager image could not be "+
+					"loaded into Kind after %d attempt(s); this is a problem of the test environment, not of the "+
+					"Operator (full output in S00/image-load.txt)", len(loadErr.Attempts))
+				if file := writeScenarioFile("S00/image-load.txt", []byte(loadErr.Error()+"\n")); file != "" {
 					result.Evidence = append(result.Evidence, file)
 				}
 			}

@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
 )
@@ -113,5 +114,48 @@ func TestKindContextFollowsKindCluster(t *testing.T) {
 	t.Setenv("KIND_CLUSTER", "cubrid-kubernetes-operator-test-e2e")
 	if got, want := KindContext(), "kind-cubrid-kubernetes-operator-test-e2e"; got != want {
 		t.Fatalf("KindContext() = %q, want %q", got, want)
+	}
+}
+
+// A load that fails once and then succeeds is loaded, and nothing is reported.
+func TestLoadImageWithRetryRecoversFromTransientFailure(t *testing.T) {
+	calls, sleeps := 0, 0
+	err := loadImageWithRetry("img:e2e", func() (string, error) {
+		calls++
+		if calls == 1 {
+			return "ERROR: image with ID \"sha256:abc\" not yet present on node", errors.New("exit status 1")
+		}
+		return "loaded", nil
+	}, 3, time.Second, func(time.Duration) { sleeps++ })
+	if err != nil {
+		t.Fatalf("a transient failure followed by success must load the image, got %v", err)
+	}
+	if calls != 2 || sleeps != 1 {
+		t.Fatalf("want 2 calls and 1 backoff, got %d calls and %d backoffs", calls, sleeps)
+	}
+}
+
+// When every attempt fails, the error is an environment problem that keeps the
+// full output of every attempt, and the number of attempts is bounded.
+func TestLoadImageWithRetryKeepsEveryAttemptsOutput(t *testing.T) {
+	calls := 0
+	err := loadImageWithRetry("img:e2e", func() (string, error) {
+		calls++
+		return fmt.Sprintf("kind stderr of attempt %d: not yet present on node", calls), errors.New("exit status 1")
+	}, 3, time.Second, func(time.Duration) {})
+	var loadErr *ImageLoadError
+	if !errors.As(err, &loadErr) {
+		t.Fatalf("want an *ImageLoadError, got %v", err)
+	}
+	if calls != 3 || len(loadErr.Attempts) != 3 {
+		t.Fatalf("want 3 bounded attempts kept, got %d calls and %d kept", calls, len(loadErr.Attempts))
+	}
+	for i := 1; i <= 3; i++ {
+		if !strings.Contains(err.Error(), fmt.Sprintf("kind stderr of attempt %d: not yet present on node", i)) {
+			t.Errorf("the error lacks the output of attempt %d: %v", i, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "environment problem") {
+		t.Errorf("the error must name an environment problem: %v", err)
 	}
 }

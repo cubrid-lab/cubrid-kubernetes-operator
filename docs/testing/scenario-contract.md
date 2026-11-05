@@ -410,6 +410,18 @@ scenario none of whose steps recorded a result keeps one that says why:
 | The suite's setup failed, or the run stopped before it | `not_run`, with that reason |
 | It failed before it recorded a result | `fail` |
 
+Loading an image into Kind (the manager image, the Instance Manager image)
+is retried up to three times with a short, growing pause, because the
+failure seen in CI (`Image ... not yet present on node`, issue #689) has an
+unknown cause and may be transient. Every attempt's full output, including
+Kind's stderr, is kept. If all attempts fail, the failure is an environment
+problem, not a finding about the Operator: S00 is `blocked` with reason
+`environment_image_load_failed` and the attempts' output in
+`S00/image-load.txt`, and the HA group's scenarios are `blocked` through the
+group's setup failure, whose message names the environment problem. A
+`blocked` required scenario keeps the run from passing, so an environment
+failure never turns CI green.
+
 A scenario therefore never disappears from `summary.json`, and a step that
 never ran is never recorded as `fail`. A required scenario whose label no
 step of the suite carries can never get a result of its own, so the run
