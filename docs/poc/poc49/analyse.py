@@ -2,8 +2,12 @@
 whose start-to-end interval overlapped at least one background call.
 
 Usage: python3 analyse.py <samples dir>
+
+Reads <part>.csql.tsv and <part>.bg.tsv, or the same files gzipped
+(<part>.csql.tsv.gz, as kept in samples/).
 """
 import glob
+import gzip
 import os
 import sys
 from datetime import datetime
@@ -14,16 +18,21 @@ def t(s):
 
 
 def rows(path):
-    if not os.path.exists(path):
+    if os.path.exists(path):
+        f = open(path)
+    elif os.path.exists(path + ".gz"):
+        f = gzip.open(path + ".gz", "rt")
+    else:
         return []
-    with open(path) as f:
+    with f:
         return [line.rstrip("\n").split("\t") for line in f if line.strip()]
 
 
 d = sys.argv[1]
 print("part\tcsql\terrors\tbackground\tbg_rc\toverlapping_csql\tbg_ms_median")
-for path in sorted(glob.glob(os.path.join(d, "*.csql.tsv"))):
-    part = os.path.basename(path)[: -len(".csql.tsv")]
+parts = sorted({os.path.basename(p).split(".csql.tsv")[0] for p in glob.glob(os.path.join(d, "*.csql.tsv*"))})
+for part in parts:
+    path = os.path.join(d, part + ".csql.tsv")
     runs = rows(path)
     bg = rows(os.path.join(d, part + ".bg.tsv"))
     errors = sum(1 for r in runs if r[3] != "0" or r[4] == "1" or r[5] == "1")

@@ -5102,7 +5102,9 @@ under load), as POC-26 found. Every `cubrid server status` and
 `cubrid broker status` call exited 0. Under one CPU with busy loops, a csql
 run took a mean of 0.17 s against 0.05 s in part A. After all parts, no
 line `CODE = -199,` or `CODE = -111,` was in the server's, the master's or
-the client's `.err` logs under `$CUBRID/log`.
+the client's `.err` logs under `$CUBRID/log`. csql's own error log in the
+loops' working directory (`/tmp/out/csql.err`, POC-35) did hold one such
+pair; see the second side observation.
 
 **Side observation.** After the parts, 50 of 50 successful
 `csql -u dba appdb@localhost -c "SELECT COUNT(*) FROM t"` runs in the
@@ -5112,6 +5114,25 @@ of successful runs, so how many of the 7,800 printed it is not known. The
 -971 in the CI output is therefore ordinary connection output, not a sign
 of a different connection path.
 
+**Side observation: one -199 and -111 pair in csql's own log, printed by no
+run.** `/tmp/out/csql.err`, read after the run, held 6,725 entries: 6,723
+`CODE = -971` connection notifications and one `ERROR CODE = -199`
+(`network_cl.c, line 177`, `Server no longer responding.... Invalid
+argument`) with one `ERROR CODE = -111` (`transaction_cl.c, line 600`), both
+at 08:26:09.817 and both from csql pid 89969, in the first second of the
+three concurrent loops (parts L1 to L3). The runs in progress then were run 1
+of L1 and run 1 of L2, both `SELECT COUNT(*) FROM t`; both exited 0 and their
+captured output held neither code. Which of the two was pid 89969 was not
+recorded. An L1 `cubrid heartbeat status` call ran from 08:26:09.795Z to
+08:26:09.817Z, ending in the same millisecond. Parts A to K2 logged exactly
+one -971 entry per run and nothing else; parts L1 to L3 logged 1,323 -971
+entries for 1,500 runs, and why the rest are missing was not examined. The
+`docker exec` parts (XA to XB2) ran csql in another directory, whose
+`csql.err` was not read. The counts, the commands that gave them and the
+quoted lines are in
+[`poc49/samples/csql-err-excerpt.md`](poc49/samples/csql-err-excerpt.md);
+the 2.2 MB log itself is not kept.
+
 **Findings.**
 - In these runs, `cubrid heartbeat status` on a standalone member did not
   make a concurrent csql run fail, at the e2e sampler's rate (2 s) or
@@ -5120,6 +5141,11 @@ of a different connection path.
   command or a CPU under load. The hypothesis that the heartbeat call
   causes the -199 is not supported here; it is not ruled out for the CI
   environment.
+- csql can log the -199 and -111 pair in its own `csql.err` for a run that
+  exited 0 and printed neither code: once, here, with three csql loops and a
+  back-to-back heartbeat loop running, and with a heartbeat call ending in
+  the same millisecond. One entry does not show whether the heartbeat call,
+  the concurrent loops or neither was the cause.
 - The -199 and -111 pair had been seen before without such a sampler:
   POC-44 saw it on the VM lab, as csql exited after committed statements,
   with the row taking effect. The CI output fits the same form: the
@@ -5134,7 +5160,8 @@ of a different connection path.
 
 **Reproduce.** The harness and the samples are in
 [`docs/poc/poc49/`](poc49/README.md). `python3 docs/poc/poc49/analyse.py
-docs/poc/poc49/samples` gives the counts of the table above.
+docs/poc/poc49/samples` gives the counts of the table above, from the
+gzipped TSVs of the recorded run.
 
 **Limits.**
 - One container, one image, local Docker on one host: not Kind, not Pods,

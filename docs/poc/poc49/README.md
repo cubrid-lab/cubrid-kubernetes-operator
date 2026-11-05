@@ -18,7 +18,8 @@ password, inside throwaway containers.
 | `exec-loop.sh` | The same from the Docker host, with each csql run and each background call in its own `docker exec` |
 | `cas-client.py` | A Broker client (`pycubrid`) that connects through `broker1`, inserts a row, commits and disconnects every 50 ms for the given seconds |
 | `analyse.py` | Per part: csql runs, errors, background calls and their exit statuses, csql runs that overlapped a background call, median background call time |
-| `samples/` | The TSVs of the recorded run (2026-11-05, times in UTC). No part had a failing run, so there is no `errors.log` |
+| `samples/` | The TSVs of the recorded run (2026-11-05, times in UTC), gzipped (`<part>.csql.tsv.gz`, `<part>.bg.tsv.gz`); `analyse.py` reads them as they are, and `zcat` shows them. No part had a failing run, so there is no `errors.log` |
+| `samples/csql-err-excerpt.md` | The counts of csql's own error log (`csql.err` in the loops' working directory) and the lines quoted from it, among them one `-199` and `-111` pair that no run printed. The full 2.2 MB log is not kept |
 
 ## Reproduce
 
