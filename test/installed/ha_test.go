@@ -66,7 +66,9 @@ func testHAConfig(t *testing.T) HAConfig {
 		WorkloadImage: "example.com/workload-client@sha256:" + strings.Repeat("d", 64),
 		SeedEndpoint:  "store.example:8333", SeedBucket: "seed", SeedInsecure: true,
 		SeedSecretNamespace: "object-store", SeedSecret: testSeedSecret,
-		Operations: 10, DataCheckWithin: 200 * time.Millisecond}
+		Operations: 10, DataCheckWithin: 200 * time.Millisecond,
+		// The fixture has no nodes; the runs that need Required say so.
+		MemberSpread: databasev1alpha1.MemberSpreadPreferred}
 }
 
 // haFixture plays the Operator, CUBRID and the workload client for an HA run.
@@ -1000,6 +1002,8 @@ func TestRunHARefusesAnIncompleteConfiguration(t *testing.T) {
 		},
 		"no operations":         func(c *HAConfig) { c.Operations = 0 },
 		"no data check window":  func(c *HAConfig) { c.DataCheckWithin = 0 },
+		"no member spread":      func(c *HAConfig) { c.MemberSpread = "" },
+		"unknown member spread": func(c *HAConfig) { c.MemberSpread = "Sometimes" },
 		"preallocated":          func(c *HAConfig) { c.NamespaceMode = PreallocatedNamespace },
 		"no expected lab":       func(c *HAConfig) { c.ClusterUID = "" },
 		"namespace not for lab": func(c *HAConfig) { c.Namespace = "default" },

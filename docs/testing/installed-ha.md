@@ -75,6 +75,18 @@ In addition to the smoke's inputs:
   A node with no figure refuses the run too. Lanes that create more clusters,
   such as S12's, can need more. The values read are recorded as
   `nodeAvailableMemoryBytes` in `LAB01/record.json`.
+- `-member-spread` (default `Required`, or `Preferred`) is set as
+  `spec.placement.memberSpread` on every cluster the run creates: the source
+  cluster and the S11 and S12 ones. Under `Required` each member needs a node
+  of its own, so before anything is created the run counts the nodes that
+  are Ready, not cordoned and not tainted. With fewer than the three members
+  it is refused as blocked, not failed: "not enough schedulable nodes for
+  Required member spread". This happens, for example, when one of three
+  workers is cordoned. Make a node schedulable again, or run with
+  `-member-spread Preferred`, which lets members share a node and so says
+  nothing about separate-node placement. The value is recorded as
+  `memberSpread`, and under `Required` the nodes counted as
+  `schedulableNodes`, in `LAB01/record.json` (#596).
 
 The account needs, beyond the smoke's:
 - `get` on the seed Secret;
