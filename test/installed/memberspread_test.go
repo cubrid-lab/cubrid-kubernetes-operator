@@ -34,12 +34,13 @@ import (
 // tainted control-plane node; only the schedulable ones can run a member.
 func labNodes(schedulable ...string) []client.Object {
 	ready := corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}
-	nodes := []client.Object{
+	nodes := make([]client.Object, 0, 2+len(schedulable))
+	nodes = append(nodes,
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "cordoned"}, Spec: corev1.NodeSpec{Unschedulable: true},
 			Status: ready},
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "server"}, Spec: corev1.NodeSpec{Taints: []corev1.Taint{{
 			Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule}}}, Status: ready},
-	}
+	)
 	for _, name := range schedulable {
 		nodes = append(nodes, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: ready})
 	}

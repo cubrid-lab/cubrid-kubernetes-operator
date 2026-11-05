@@ -643,19 +643,9 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	observed := record{RunID: runID}
-	err := r.observeEnvironment(ctx, cfg.Config, &observed, &summary.Environment)
-	// The free space and memory read are kept also when a node short of
-	// either refused the run.
-	h.rec.NodeFreeBytes = observed.NodeFreeBytes
-	h.rec.NodeAvailableMemoryBytes = observed.NodeAvailableMemoryBytes
-	if err != nil {
+	if err := h.observeTarget(ctx, &observed, &summary.Environment); err != nil {
 		return err
 	}
-	if err := r.checkMemberSpreadNodes(ctx, cfg, &h.rec); err != nil {
-		return err
-	}
-	h.rec.KubernetesClusterUID, h.rec.Operator = observed.KubernetesClusterUID, observed.Operator
-	h.rec.StorageProvisioner = observed.StorageProvisioner
 	ns, _, err := r.prepareNamespace(ctx, cfg.Config, &observed, cfg.privileged())
 	if err != nil {
 		return err
@@ -671,6 +661,26 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	}
 	h.labPassed = true
 	return h.afterLAB01(ctx)
+}
+
+// observeTarget observes the target as every run does, then checks that
+// the run's member spread can place its members, and records what it read.
+// Nothing is created before it.
+func (h *haRun) observeTarget(ctx context.Context, observed *record, env *evidence.Environment) error {
+	err := h.observeEnvironment(ctx, h.cfg.Config, observed, env)
+	// The free space and memory read are kept also when a node short of
+	// either refused the run.
+	h.rec.NodeFreeBytes = observed.NodeFreeBytes
+	h.rec.NodeAvailableMemoryBytes = observed.NodeAvailableMemoryBytes
+	if err != nil {
+		return err
+	}
+	if err := h.checkMemberSpreadNodes(ctx, h.cfg, &h.rec); err != nil {
+		return err
+	}
+	h.rec.KubernetesClusterUID, h.rec.Operator = observed.KubernetesClusterUID, observed.Operator
+	h.rec.StorageProvisioner = observed.StorageProvisioner
+	return nil
 }
 
 // faultLane returns the lane, the requirement and the summary's first note
