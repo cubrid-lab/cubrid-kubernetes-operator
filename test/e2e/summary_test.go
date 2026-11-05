@@ -21,6 +21,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -91,6 +92,9 @@ var (
 	selectedSteps = map[evidence.Requirement]bool{}
 	// lastFailedStep names the step whose failure the run saw last.
 	lastFailedStep string
+	// lastFailureImageLoad is the load error when the step that failed last
+	// failed with it, and nil otherwise.
+	lastFailureImageLoad *utils.ImageLoadError
 	// reportedLabels holds the labels of every step the run reported,
 	// whether it ran or not.
 	reportedLabels = map[string]bool{}
@@ -133,6 +137,12 @@ var _ = ReportAfterEach(func(report SpecReport) {
 	defer summaryMu.Unlock()
 	suite, _ := GinkgoConfiguration()
 	selected := evidence.Selected(report, suite, suiteDescription)
+	// A group whose setup failed to load the Instance Manager image, and the
+	// steps it then did not start, are blocked by that environment problem.
+	loadErr := blockedByImageLoad(instanceManagerImageErr, report.Failure.Message)
+	if loadErr == nil && !report.Failed() {
+		loadErr = lastFailureImageLoad
+	}
 	for _, label := range report.Labels() {
 		reportedLabels[label] = true
 	}
@@ -143,7 +153,12 @@ var _ = ReportAfterEach(func(report SpecReport) {
 		if selected {
 			selectedSteps[req] = true
 		}
-		if result, reason, ok := evidence.StepOutcome(report, selected, lastFailedStep); ok {
+		result, reason, ok := evidence.StepOutcome(report, selected, lastFailedStep)
+		if ok && result == evidence.Blocked && loadErr != nil {
+			reason = imageLoadReason(loadErr, imageLoadEvidence)
+			writeScenarioFile(imageLoadEvidence, []byte(loadErr.Error()+"\n"))
+		}
+		if ok {
 			runSummary.Settle(req, result, reason)
 		}
 	}
@@ -151,6 +166,10 @@ var _ = ReportAfterEach(func(report SpecReport) {
 		lastFailedStep = report.LeafNodeText
 		if report.Failure.FailureNodeType == types.NodeTypeBeforeAll {
 			lastFailedStep += " (in the group's setup)"
+		}
+		lastFailureImageLoad = loadErr
+		if loadErr != nil {
+			lastFailedStep = imageLoadReason(loadErr, imageLoadEvidence)
 		}
 	}
 	// No step sets its own timeout: a timed-out step was stopped by the
@@ -282,4 +301,41 @@ func credentialLeaks(dir string) []string {
 		problems = append(problems, "the evidence file "+file+" holds a credential of the run")
 	}
 	return problems
+}
+
+// imageLoadEvidence is where the output of the attempts to load the Instance
+// Manager image is kept when a group of scenarios is blocked by the failure.
+const imageLoadEvidence = "suite/image-load.txt"
+
+// imageLoadReason is the reason of a scenario that the failure to load the
+// Instance Manager image into Kind blocked. Loading the image does not
+// exercise the Operator, so the failure is a problem of the test environment.
+func imageLoadReason(loadErr *utils.ImageLoadError, file string) string {
+	return fmt.Sprintf("environment_image_load_failed: the Instance Manager image could not be "+
+		"loaded into Kind after %d attempt(s); this is a problem of the test environment, not of the "+
+		"Operator (full output in %s)", len(loadErr.Attempts), file)
+}
+
+// blockedByImageLoad returns the loading error when a step failed with it:
+// the image's outcome is a failed load and the failure message of the step
+// quotes that error.
+func blockedByImageLoad(imageErr error, failureMessage string) *utils.ImageLoadError {
+	var loadErr *utils.ImageLoadError
+	if errors.As(imageErr, &loadErr) && strings.Contains(failureMessage, utils.ImageLoadProblem) {
+		return loadErr
+	}
+	return nil
+}
+
+// blockByImageLoad records on the S00 record that the scenario is blocked when
+// the Instance Manager image could not be loaded, and returns that error.
+// Otherwise it changes nothing and returns nil.
+func (e *s00Evidence) blockByImageLoad(imageErr error) *utils.ImageLoadError {
+	var loadErr *utils.ImageLoadError
+	if !errors.As(imageErr, &loadErr) {
+		return nil
+	}
+	e.Result = string(evidence.Blocked)
+	e.Reason = imageLoadReason(loadErr, "S00/image-load.txt")
+	return loadErr
 }

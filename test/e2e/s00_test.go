@@ -42,6 +42,7 @@ import (
 type s00Evidence struct {
 	Scenario            string   `json:"scenario"`
 	Result              string   `json:"result"`
+	Reason              string   `json:"reason,omitempty"`
 	Revision            string   `json:"revision"`
 	Host                string   `json:"host"`
 	ContainerTool       string   `json:"containerTool"`
@@ -163,6 +164,9 @@ spec:
 					Reason: "needs linux/amd64, ran on " + runtime.GOOS + "/" + runtime.GOARCH})
 				return
 			}
+			// The record is written below, so it must already say that the load
+			// failed: the summary and the record agree on the result.
+			loadErr := record.blockByImageLoad(instanceManagerImageErr)
 			// What a reader needs to judge the run, pass or fail.
 			if out, err := kubectl("get", "events", "--field-selector", "reason=Unhealthy",
 				"-o", `jsonpath={range .items[*]}{.involvedObject.name}{": "}{.message}{"\n"}{end}`); err == nil {
@@ -207,6 +211,16 @@ spec:
 					result.Result, result.Reason = o.Result, o.Reason
 				}
 				if file := writeTimeline("S00/timeline.jsonl", o.Timeline); file != "" {
+					result.Evidence = append(result.Evidence, file)
+				}
+			}
+			// A failed image load happens before the Operator is exercised, so it
+			// says nothing about the product: the scenario is blocked by the
+			// environment, with every attempt's output kept as evidence.
+			if loadErr != nil {
+				result.Result = evidence.Blocked
+				result.Reason = record.Reason
+				if file := writeScenarioFile("S00/image-load.txt", []byte(loadErr.Error()+"\n")); file != "" {
 					result.Evidence = append(result.Evidence, file)
 				}
 			}

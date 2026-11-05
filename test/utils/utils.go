@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
 )
@@ -231,11 +232,79 @@ func checkKindContext(current, want string) error {
 		"cluster it runs against; switch with `kubectl config use-context %s`", current, want, want)
 }
 
+// ImageLoadProblem starts the message of an *ImageLoadError, so that a test
+// report that quotes the error can be told from other failures.
+const ImageLoadProblem = "environment problem: could not load image"
+
+// ImageLoadError reports that an image could not be loaded into the Kind
+// cluster after every attempt. Loading an image does not exercise the
+// Operator, so this is a problem of the test environment (the container
+// tool, Kind or the node), never a finding about the product. Attempts holds
+// the full output of every attempt, including Kind's stderr.
+type ImageLoadError struct {
+	Image    string
+	Attempts []string
+}
+
+func (e *ImageLoadError) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, ImageLoadProblem+" %q into Kind after %d attempt(s)", e.Image, len(e.Attempts))
+	for i, a := range e.Attempts {
+		fmt.Fprintf(&b, "\n--- attempt %d ---\n%s", i+1, a)
+	}
+	return b.String()
+}
+
+const (
+	// imageLoadAttempts bounds the retries of a failed image load. The failure
+	// seen in CI ("not yet present on node", issue 689) is of unknown cause and
+	// may be transient, so a load is repeated a few times before it is reported
+	// as an environment problem.
+	imageLoadAttempts = 3
+	imageLoadBackoff  = 5 * time.Second
+)
+
+// loadImageWithRetry calls load up to attempts times, sleeping backoff times
+// the attempt number between them. load returns the command's full output and
+// its error; every failed attempt's output is also written to log as it
+// happens, so a failure that a later attempt recovers from leaves its cause.
+// A failure of every attempt returns an *ImageLoadError that keeps
+// all of the attempts' output.
+func loadImageWithRetry(image string, load func() (string, error), attempts int,
+	backoff time.Duration, sleep func(time.Duration), log io.Writer) error {
+	failure := &ImageLoadError{Image: image}
+	for i := 1; i <= attempts; i++ {
+		out, err := load()
+		if err == nil {
+			return nil
+		}
+		// Run's error embeds the output; keep the output once, with the bare
+		// exit error.
+		exit := err
+		if inner := errors.Unwrap(err); inner != nil {
+			exit = inner
+		}
+		attempt := fmt.Sprintf("%s\n%v", redacted(out), redacted(exit.Error()))
+		failure.Attempts = append(failure.Attempts, attempt)
+		_, _ = fmt.Fprintf(log, "Image load attempt %d of %d failed for %s:\n%s\n", i, attempts, image, attempt)
+		if i < attempts {
+			sleep(time.Duration(i) * backoff)
+		}
+	}
+	return failure
+}
+
 // LoadImageToKindClusterWithName loads a locally built image into the kind
 // cluster. `kind load docker-image` reads the Docker daemon only, so with any
 // other tool (CONTAINER_TOOL, e.g. podman) the image is saved to an archive
-// and loaded from there.
+// and loaded from there. A failed load is retried a bounded number of times;
+// when every attempt fails the error is an *ImageLoadError.
 func LoadImageToKindClusterWithName(name string) error {
+	return loadImageWithRetry(name, func() (string, error) { return loadImageOnce(name) },
+		imageLoadAttempts, imageLoadBackoff, time.Sleep, GinkgoWriter)
+}
+
+func loadImageOnce(name string) (string, error) {
 	cluster := kindCluster()
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
@@ -243,21 +312,19 @@ func LoadImageToKindClusterWithName(name string) error {
 	}
 	tool := ContainerTool()
 	if filepath.Base(tool) == defaultContainerTool {
-		_, err := Run(exec.Command(kindBinary, "load", "docker-image", name, "--name", cluster))
-		return err
+		return Run(exec.Command(kindBinary, "load", "docker-image", name, "--name", cluster))
 	}
 
 	dir, err := os.MkdirTemp("", "kind-image-")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	archive := filepath.Join(dir, "image.tar")
-	if _, err := Run(exec.Command(tool, "save", "-o", archive, name)); err != nil {
-		return err
+	if out, err := Run(exec.Command(tool, "save", "-o", archive, name)); err != nil {
+		return out, err
 	}
-	_, err = Run(exec.Command(kindBinary, "load", "image-archive", archive, "--name", cluster))
-	return err
+	return Run(exec.Command(kindBinary, "load", "image-archive", archive, "--name", cluster))
 }
 
 // ContainerTool returns the tool that built the images under test: the

@@ -20,9 +20,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
 )
@@ -113,5 +115,84 @@ func TestKindContextFollowsKindCluster(t *testing.T) {
 	t.Setenv("KIND_CLUSTER", "cubrid-kubernetes-operator-test-e2e")
 	if got, want := KindContext(), "kind-cubrid-kubernetes-operator-test-e2e"; got != want {
 		t.Fatalf("KindContext() = %q, want %q", got, want)
+	}
+}
+
+// A load that fails once and then succeeds is loaded, and nothing is reported.
+func TestLoadImageWithRetryRecoversFromTransientFailure(t *testing.T) {
+	calls, sleeps := 0, 0
+	err := loadImageWithRetry("img:e2e", func() (string, error) {
+		calls++
+		if calls == 1 {
+			return "ERROR: image with ID \"sha256:abc\" not yet present on node", errors.New("exit status 1")
+		}
+		return "loaded", nil
+	}, 3, time.Second, func(time.Duration) { sleeps++ }, io.Discard)
+	if err != nil {
+		t.Fatalf("a transient failure followed by success must load the image, got %v", err)
+	}
+	if calls != 2 || sleeps != 1 {
+		t.Fatalf("want 2 calls and 1 backoff, got %d calls and %d backoffs", calls, sleeps)
+	}
+}
+
+// When every attempt fails, the error is an environment problem that keeps the
+// full output of every attempt, and the number of attempts is bounded.
+func TestLoadImageWithRetryKeepsEveryAttemptsOutput(t *testing.T) {
+	calls := 0
+	err := loadImageWithRetry("img:e2e", func() (string, error) {
+		calls++
+		return fmt.Sprintf("kind stderr of attempt %d: not yet present on node", calls), errors.New("exit status 1")
+	}, 3, time.Second, func(time.Duration) {}, io.Discard)
+	var loadErr *ImageLoadError
+	if !errors.As(err, &loadErr) {
+		t.Fatalf("want an *ImageLoadError, got %v", err)
+	}
+	if calls != 3 || len(loadErr.Attempts) != 3 {
+		t.Fatalf("want 3 bounded attempts kept, got %d calls and %d kept", calls, len(loadErr.Attempts))
+	}
+	for i := 1; i <= 3; i++ {
+		if !strings.Contains(err.Error(), fmt.Sprintf("kind stderr of attempt %d: not yet present on node", i)) {
+			t.Errorf("the error lacks the output of attempt %d: %v", i, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "environment problem") {
+		t.Errorf("the error must name an environment problem: %v", err)
+	}
+}
+
+// A failed attempt that a later attempt recovers from leaves its full output
+// in the log, so the cause of a transient failure is not lost.
+func TestLoadImageWithRetryLogsEveryFailedAttemptsOutput(t *testing.T) {
+	calls := 0
+	var log bytes.Buffer
+	err := loadImageWithRetry("img:e2e", func() (string, error) {
+		calls++
+		if calls < 3 {
+			return fmt.Sprintf("kind stderr of attempt %d: not yet present on node", calls), errors.New("exit status 1")
+		}
+		return "loaded", nil
+	}, 3, time.Second, func(time.Duration) {}, &log)
+	if err != nil {
+		t.Fatalf("want the third attempt to load the image, got %v", err)
+	}
+	for i := 1; i <= 2; i++ {
+		if !strings.Contains(log.String(), fmt.Sprintf("kind stderr of attempt %d: not yet present on node", i)) {
+			t.Errorf("the log lacks the output of failed attempt %d: %s", i, log.String())
+		}
+	}
+}
+
+// The output of an attempt is kept once, not again inside the command's error.
+func TestLoadImageWithRetryKeepsOutputOnce(t *testing.T) {
+	err := loadImageWithRetry("img:e2e", func() (string, error) {
+		out := "kind stderr: not yet present on node"
+		return out, fmt.Errorf("%q failed with error %q: %w", "kind load", out, errors.New("exit status 1"))
+	}, 1, time.Second, func(time.Duration) {}, io.Discard)
+	if n := strings.Count(err.Error(), "not yet present on node"); n != 1 {
+		t.Fatalf("want the output once, found %d times: %v", n, err)
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Errorf("the exit error is missing: %v", err)
 	}
 }
