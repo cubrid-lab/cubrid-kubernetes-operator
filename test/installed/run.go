@@ -338,7 +338,8 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 			scenario.Result = evidence.Pass
 			scenario.Reason = "committed SQL row read through the installed Operator's new cluster"
 		} else {
-			scenario.Result = unfinishedResult(owned != nil || created != nil, cleaned, runErr)
+			scenario.Result = unfinishedResult(owned != nil || created != nil,
+				cleaned && !rec.ManagerChangedAtCleanup, runErr)
 			scenario.Reason = runErr.Error()
 		}
 		summary.Record(scenario)
@@ -396,7 +397,7 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 	}
 	database, err := r.waitDatabase(ctx, cfg, cluster, guard)
 	if err != nil {
-		if ctx.Err() != nil {
+		if waitCut(ctx, err) {
 			return r.blockOnUnschedulable(cfg.Namespace, []string{clusterName + "-0"}, &rec.UnschedulableMembers, err)
 		}
 		return err

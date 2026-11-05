@@ -1111,30 +1111,51 @@ func (h *haRun) waitStartingState(ctx context.Context, cluster *databasev1alpha1
 	})
 	if err != nil {
 		if h.rec.Waiting != "" {
-			return h.runEnded(ctx, cluster, fmt.Errorf("the starting state of S01 was not reached: %s: %w",
+			return h.runEnded(ctx, clusterMembers(cluster.Name), fmt.Errorf("the starting state of S01 was not reached: %s: %w",
 				h.rec.Waiting, err))
 		}
-		return h.runEnded(ctx, cluster, fmt.Errorf("the starting state of S01 was not reached: %w", err))
+		return h.runEnded(ctx, clusterMembers(cluster.Name), fmt.Errorf("the starting state of S01 was not reached: %w", err))
 	}
 	return checkpoint()
 }
 
-// limitPassed is the error of a wait for created that reached restore_limit
-// with verdict unmet: the verdict, unless the scheduler could not place a
-// member, which blocks the scenario.
-func (h *haRun) limitPassed(created *databasev1alpha1.CubridCluster, verdict error) error {
-	return h.blockOnUnschedulable(h.cfg.Namespace, clusterMembers(created.Name), &h.rec.UnschedulableMembers,
-		restoreVerdict{verdict})
+// restoreTarget names the member a restore, and the refusal of one, runs on
+// (reconcileRecovery). Members start in Parallel, so the wait for it depends
+// on no other member.
+func restoreTarget(cluster string) []string {
+	return []string{cluster + "-0"}
 }
 
-// runEnded is the error of a wait for created that ctx may have ended: err,
+// limitEnded reports whether restore_limit, which wctx carries, ended a wait
+// under ctx with err: not the run, and not a verdict that a reading spanning
+// the limit returned.
+func limitEnded(ctx, wctx context.Context, err error) bool {
+	return ctx.Err() == nil && wctx.Err() != nil && !errors.As(err, new(restoreVerdict))
+}
+
+// limitPassed is the error of a wait for members that reached restore_limit
+// with verdict unmet: the verdict, unless the scheduler refused one of them for
+// memory or CPU, which blocks the scenario.
+func (h *haRun) limitPassed(members []string, verdict error) error {
+	return h.blockOnUnschedulable(h.cfg.Namespace, members, &h.rec.UnschedulableMembers, restoreVerdict{verdict})
+}
+
+// limitUnread is the error of a wait for members that reached restore_limit
+// when the last reading could not be made: err, which already blocks the
+// scenario, with the scheduler's refusal of a member when there is one.
+func (h *haRun) limitUnread(members []string, err error) error {
+	return h.blockOnUnschedulable(h.cfg.Namespace, members, &h.rec.UnschedulableMembers, err)
+}
+
+// runEnded is the error of a wait for members that ctx may have ended: err,
 // which already blocks the scenario, with the scheduler's refusal of a member
-// when there is one. A verdict, or an error of a run that goes on, stays err.
-func (h *haRun) runEnded(ctx context.Context, created *databasev1alpha1.CubridCluster, err error) error {
-	if ctx.Err() == nil || errors.As(err, new(restoreVerdict)) {
+// when there is one. A verdict, an error of a reading that spanned the end of
+// ctx, or an error of a run that goes on, stays err.
+func (h *haRun) runEnded(ctx context.Context, members []string, err error) error {
+	if !waitCut(ctx, err) || errors.As(err, new(restoreVerdict)) {
 		return err
 	}
-	return h.blockOnUnschedulable(h.cfg.Namespace, clusterMembers(created.Name), &h.rec.UnschedulableMembers, err)
+	return h.blockOnUnschedulable(h.cfg.Namespace, members, &h.rec.UnschedulableMembers, err)
 }
 
 // unread joins what could not be read to its retryable API error in what

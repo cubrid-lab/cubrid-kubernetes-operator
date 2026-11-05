@@ -147,19 +147,39 @@ gets no requests, and the flags apply only to clusters a run creates. The same
 Broker Pods do not use it.
 
 **A member that does not fit.** Declared requests make `Insufficient memory` and
-`Insufficient cpu` possible, and such a member says nothing about the Operator.
-When a wait for the members of LAB00, LAB01 or any S12 variant ends, the run
-reads each member. An unready member with `PodScheduled` `False` and reason
-`Unschedulable` is recorded with the scheduler's message as
-`unschedulableMembers` in the run's record, the message goes into the reason,
-and the scenario ends `blocked` instead of `fail`. A never-event already
-confirmed, or for LAB00 and LAB01 a cleanup that failed, keeps the `fail`. A
-member `Pending` for another reason, such as one that is bound and starting,
-keeps the result the wait gives without it. The check reads the condition only:
-the Operator could also cause it, by rendering a Pod nothing can schedule, and
-the result is then `blocked`, not `pass`. There is no pre-flight that compares a
-node's allocatable resources with its requests, since one would need a
-cluster-wide read of every Pod, which the documented account does not grant.
+`Insufficient cpu` possible, and a run whose nodes have no room cannot judge the
+Operator. When a wait for the members of LAB00, LAB01 or any S12 variant ends,
+the run reads each member the wait depends on: the restore target `<cluster>-0`
+until a restore or its refusal ends, because the restore runs there alone and
+members start in parallel, and every member for seeding and for `Ready`. An
+unready member with `PodScheduled` `False` and reason `Unschedulable` is recorded
+as `unschedulableMembers` in the run's record, with its Pod UID, the scheduler's
+message, the condition's `lastTransitionTime` as `refusedSince`, the time of the
+reading as `readAt`, and whether it blocks the run as `blocksRun`. The message
+also goes into the reason.
+
+The scenario ends `blocked` instead of `fail` only when the message contains
+`Insufficient memory` or `Insufficient cpu` and the refusal has held for at least
+30 s (`refusalMinimumHold`), a value chosen to leave the scheduler a few more
+tries, not a measurement. One reading decides, so a younger refusal, or one with
+no transition time, keeps the result the wait gives. `refusedSince` does not move
+when only the message changes, so the 30 s count how long the member has been
+refused, not how long that message has held. Any other refusal, such as an
+anti-affinity rule, an unbound claim or a node selector, keeps the wait's result
+with the message recorded: those can come from the Pod the Operator rendered,
+and the harness does not read the `MemberPlacement` Condition. A message that
+names both, such as `1 Insufficient memory, 2 didn't match pod anti-affinity`,
+still blocks, so a wrong anti-affinity selector can hide behind a full node, and
+an Operator that rendered the wrong requests would also end `blocked`. The match
+is on the scheduler's text, which is not an API.
+
+A never-event already confirmed, a verdict a reading returned as the limit
+passed, or for LAB00 and LAB01 a cleanup that failed or saw the manager change,
+keeps the `fail`. A member `Pending` for another reason, such as one that is
+bound and starting, keeps the result the wait gives without it. There is no
+pre-flight that compares a node's allocatable resources with its requests, since
+one would need a cluster-wide read of every Pod, which the documented account
+does not grant.
 
 Requests change what the scheduler counts, not what a member uses, so they do
 not replace `-min-node-free-memory`:
@@ -183,7 +203,11 @@ not replace `-min-node-free-memory`:
   A long-lived member without requests is always in that group. A member with
   these requests is outside it only while it uses less than `600Mi`, and above
   that it ranks with the `BestEffort` Pods, so the request protects it less
-  than the class name suggests.
+  than the class name suggests. The kernel's OOM killer is a separate path that
+  does use the class, through the `oom_score_adj` the kubelet sets: 1000 for
+  `BestEffort`, and for `Burstable` a value scaled down as the memory request
+  grows. That is the path where, as `ROADMAP.md` records, the kernel killed
+  `cub_server`.
 
 **Existing clusters.** Nothing here resizes or moves an existing Pod or PVC.
 To give an existing cluster requests, set `spec.resources` on it. The Operator
@@ -2538,8 +2562,8 @@ resolved (`selectBackupTarget` in `internal/controller/backuptarget.go`,
      readings once S12's steps end, whichever step ended them; a reading
      the run did not take is not judged.
    - A cluster read but not Ready when `-restore-limit` passes fails S12,
-     with the last phase and what did not hold, unless the scheduler could not
-     place a member, which blocks it
+     with the last phase and what did not hold, unless the scheduler refused a
+     member for memory or CPU, which blocks it
      ([A member that does not fit](#database-member-requests)). A master whose `cubrid
      heartbeat status` reports `registered_and_to_be_active` is not yet
      active (POC-13, POC-14 in `docs/poc/RESULTS.md`), so the wait goes on;

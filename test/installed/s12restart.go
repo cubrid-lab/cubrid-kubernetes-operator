@@ -361,7 +361,8 @@ func restartPassReason(r *s12Restart) string {
 // goes to firstPast.
 func (h *haRun) waitRestoring(ctx context.Context, created *databasev1alpha1.CubridCluster, createdAt time.Time,
 	rec *s12Record, firstPast *string, result *evidence.Scenario) error {
-	return h.waitPlaced(ctx, created, createdAt, rec, firstPast, result, "restore did not start",
+	return h.waitPlaced(ctx, created, createdAt, rec, firstPast, result, restoreTarget(created.Name),
+		"restore did not start",
 		func(cluster *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 			switch {
 			case phase == string(databasev1alpha1.BootstrapPreparing):
@@ -381,11 +382,13 @@ func (h *haRun) waitRestoring(ctx context.Context, created *databasev1alpha1.Cub
 // it, in a bootstrap phase that is neither empty nor Failed, as the one a
 // fault follows, until RestoreLimit has passed since createdAt; an error of
 // placed ends the wait. A bootstrap Failed fails the variant, and so does the
-// limit passing first, with what the cluster did not do (late). Each reading
+// limit passing first, with what the cluster did not do (late), unless the
+// scheduler refused one of members, those the awaited step depends on, for
+// memory or CPU. Each reading
 // is recorded and checked as S12 exact's, and the first phase past Preparing
 // goes to firstPast.
 func (h *haRun) waitPlaced(ctx context.Context, created *databasev1alpha1.CubridCluster, createdAt time.Time,
-	rec *s12Record, firstPast *string, result *evidence.Scenario, late string,
+	rec *s12Record, firstPast *string, result *evidence.Scenario, members []string, late string,
 	placed func(cluster *databasev1alpha1.CubridCluster, phase string) (bool, error)) error {
 	wctx, cancel := context.WithDeadline(ctx, createdAt.Add(h.cfg.RestoreLimit))
 	defer cancel()
@@ -423,18 +426,18 @@ func (h *haRun) waitPlaced(ctx context.Context, created *databasev1alpha1.Cubrid
 	switch {
 	case err == nil:
 		return nil
-	case ctx.Err() == nil && wctx.Err() != nil && readErr != nil:
-		return fmt.Errorf("the restored cluster could not be read before restore_limit %s passed: %w",
-			h.cfg.RestoreLimit, readErr)
-	case ctx.Err() == nil && wctx.Err() != nil:
+	case limitEnded(ctx, wctx, err) && readErr != nil:
+		return h.limitUnread(members, fmt.Errorf("the restored cluster could not be read before restore_limit %s "+
+			"passed: %w", h.cfg.RestoreLimit, readErr))
+	case limitEnded(ctx, wctx, err):
 		phase := noBootstrapPhase
 		if n := len(rec.Bootstrap); n > 0 {
 			phase = rec.Bootstrap[n-1].Phase
 		}
-		return h.limitPassed(created, fmt.Errorf("the restored cluster's %s within restore_limit %s; its last "+
+		return h.limitPassed(members, fmt.Errorf("the restored cluster's %s within restore_limit %s; its last "+
 			"bootstrap phase was %q", late, h.cfg.RestoreLimit, phase))
 	}
-	return h.runEnded(ctx, created, err)
+	return h.runEnded(ctx, members, err)
 }
 
 // readRestarted reads the restored cluster. A cluster with another UID was

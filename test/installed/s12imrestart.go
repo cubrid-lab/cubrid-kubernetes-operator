@@ -793,7 +793,8 @@ func (h *haRun) waitIMPlacement(ctx context.Context, cluster *databasev1alpha1.C
 	switch r.At {
 	case IMRestartAtPreparing:
 		return h.waitPlaced(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result,
-			"restore did not start", func(c *databasev1alpha1.CubridCluster, phase string) (bool, error) {
+			restoreTarget(cluster.Name), "restore did not start",
+			func(c *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 				if phase != string(databasev1alpha1.BootstrapPreparing) {
 					return false, fmt.Errorf("the kill could not be placed while the restore was Preparing: the "+
 						"bootstrap was first seen %s, not Preparing with an operation", phase)
@@ -802,7 +803,8 @@ func (h *haRun) waitIMPlacement(ctx context.Context, cluster *databasev1alpha1.C
 			})
 	case IMRestartAtSeeding:
 		return h.waitPlaced(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result,
-			"seeding did not start a seed restore", func(c *databasev1alpha1.CubridCluster, phase string) (bool, error) {
+			clusterMembers(cluster.Name), "seeding did not start a seed restore",
+			func(c *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 				switch phase {
 				case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
 					return false, nil
@@ -819,7 +821,8 @@ func (h *haRun) waitIMPlacement(ctx context.Context, cluster *databasev1alpha1.C
 			return err
 		}
 		if err := h.waitPlaced(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result,
-			"restore did not complete", func(_ *databasev1alpha1.CubridCluster, phase string) (bool, error) {
+			restoreTarget(cluster.Name), "restore did not complete",
+			func(_ *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 				switch phase {
 				case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
 					return false, nil
@@ -859,7 +862,8 @@ func (h *haRun) limitSeedSource(ctx context.Context, cluster *databasev1alpha1.C
 	rec *s12IMRestartRecord, result *evidence.Scenario) error {
 	r, f := rec.IMRestart, rec.IMRestart.Throttle
 	if err := h.waitPlaced(ctx, cluster, created, &rec.s12Record, &r.PhaseFirstPastPreparing, result,
-		"restore did not start", func(c *databasev1alpha1.CubridCluster, phase string) (bool, error) {
+		restoreTarget(cluster.Name), "restore did not start",
+		func(c *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 			switch phase {
 			case string(databasev1alpha1.BootstrapPreparing), string(databasev1alpha1.BootstrapRestoring):
 			default:
@@ -1099,14 +1103,14 @@ func (h *haRun) waitSeedBackup(ctx context.Context, created *databasev1alpha1.Cu
 	switch {
 	case err == nil:
 		return nil
-	case ctx.Err() == nil && wctx.Err() != nil && readErr != nil:
-		return fmt.Errorf(imNotAtSeedBackup+"no reading before restore_limit %s passed showed it: %w",
-			h.cfg.RestoreLimit, readErr)
-	case ctx.Err() == nil && wctx.Err() != nil:
-		return h.limitPassed(created, fmt.Errorf("the restored cluster's seeding recorded no seed backup within "+
-			"restore_limit %s", h.cfg.RestoreLimit))
+	case limitEnded(ctx, wctx, err) && readErr != nil:
+		return h.limitUnread(clusterMembers(created.Name), fmt.Errorf(imNotAtSeedBackup+"no reading before "+
+			"restore_limit %s passed showed it: %w", h.cfg.RestoreLimit, readErr))
+	case limitEnded(ctx, wctx, err):
+		return h.limitPassed(clusterMembers(created.Name), fmt.Errorf("the restored cluster's seeding recorded no "+
+			"seed backup within restore_limit %s", h.cfg.RestoreLimit))
 	}
-	return h.runEnded(ctx, created, err)
+	return h.runEnded(ctx, clusterMembers(created.Name), err)
 }
 
 // imStartingPoll is how often, at starting, the target's record of the
@@ -1195,15 +1199,15 @@ func (h *haRun) waitStarting(ctx context.Context, created *databasev1alpha1.Cubr
 	switch {
 	case err == nil:
 		return nil
-	case ctx.Err() == nil && wctx.Err() != nil && readErr != nil:
-		return fmt.Errorf(notPlaced+"no reading before restore_limit %s passed showed it: %w", h.cfg.RestoreLimit,
-			readErr)
-	case ctx.Err() == nil && wctx.Err() != nil:
-		return h.limitPassed(created, fmt.Errorf("the restored database was not started within restore_limit %s: "+
-			"the target's record of operation %s was last read %s", h.cfg.RestoreLimit, id,
+	case limitEnded(ctx, wctx, err) && readErr != nil:
+		return h.limitUnread([]string{member}, fmt.Errorf(notPlaced+"no reading before restore_limit %s passed "+
+			"showed it: %w", h.cfg.RestoreLimit, readErr))
+	case limitEnded(ctx, wctx, err):
+		return h.limitPassed([]string{member}, fmt.Errorf("the restored database was not started within "+
+			"restore_limit %s: the target's record of operation %s was last read %s", h.cfg.RestoreLimit, id,
 			lastOperationState(r.OperationReadings)))
 	}
-	return h.runEnded(ctx, created, err)
+	return h.runEnded(ctx, []string{member}, err)
 }
 
 // lastOperationState is the state of the last of readings, or unknown.

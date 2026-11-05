@@ -589,20 +589,20 @@ func (h *haRun) waitRestored(ctx context.Context, created *databasev1alpha1.Cubr
 	case err == nil:
 		rec.Roles = roles
 		return roles, readyAt, nil
-	case ctx.Err() == nil && wctx.Err() != nil && readErr != nil:
+	case limitEnded(ctx, wctx, err) && readErr != nil:
 		// The state at the limit is not known: the run could not judge.
-		return nil, time.Time{}, fmt.Errorf("the restored cluster or its objects could not be read before "+
-			"restore_limit %s passed: %w", h.cfg.RestoreLimit, readErr)
-	case ctx.Err() == nil && wctx.Err() != nil:
+		return nil, time.Time{}, h.limitUnread(clusterMembers(created.Name), fmt.Errorf("the restored cluster or its "+
+			"objects could not be read before restore_limit %s passed: %w", h.cfg.RestoreLimit, readErr))
+	case limitEnded(ctx, wctx, err):
 		phase := noBootstrapPhase
 		if n := len(rec.Bootstrap); n > 0 {
 			phase = rec.Bootstrap[n-1].Phase
 		}
-		return nil, time.Time{}, h.limitPassed(created, fmt.Errorf("the restored cluster was not Ready within "+
-			"restore_limit %s; its last bootstrap phase was %q; waiting for: %s", h.cfg.RestoreLimit, phase,
+		return nil, time.Time{}, h.limitPassed(clusterMembers(created.Name), fmt.Errorf("the restored cluster was not "+
+			"Ready within restore_limit %s; its last bootstrap phase was %q; waiting for: %s", h.cfg.RestoreLimit, phase,
 			cmp.Or(waiting, "the first reading")))
 	}
-	return nil, time.Time{}, h.runEnded(ctx, created, err)
+	return nil, time.Time{}, h.runEnded(ctx, clusterMembers(created.Name), err)
 }
 
 // restoredReading records one reading of the restored cluster and returns

@@ -95,8 +95,9 @@ stop the memory use growing during the run.
 both must be positive. The values the database Pod declares are recorded as
 `memoryRequest` and `cpuRequest` under `database`, and the same fields record
 what each manager Pod declares, under `operator.pods`. A database Pod the
-scheduler cannot place when the wait ends blocks LAB00, with the scheduler's
-message in `unschedulableMembers`. Where these defaults come from, what they
+scheduler has refused for memory or CPU for at least 30 s when the wait ends
+blocks LAB00, and any scheduler refusal is recorded with its message in
+`unschedulableMembers`. Where these defaults come from, what they
 leave unmeasured and how they relate to the memory check above are in
 [Database member requests](installed-ha.md#database-member-requests).
 

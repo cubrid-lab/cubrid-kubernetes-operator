@@ -706,7 +706,7 @@ func (h *haRun) recordGracefulStopMade(ctx context.Context, cluster *databasev1a
 func (h *haRun) waitStopTarget(ctx context.Context, created *databasev1alpha1.CubridCluster, createdAt time.Time,
 	rec *s12GracefulStopRecord, result *evidence.Scenario) error {
 	var firstPast string
-	return h.waitPlaced(ctx, created, createdAt, &rec.s12Record, &firstPast, result,
+	return h.waitPlaced(ctx, created, createdAt, &rec.s12Record, &firstPast, result, rec.awaitedMembers(created.Name),
 		"restore target's database container did not run",
 		func(cluster *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 			boot := cluster.Status.Bootstrap
@@ -739,6 +739,16 @@ func (h *haRun) waitStopTarget(ctx context.Context, created *databasev1alpha1.Cu
 			rec.Trigger.PodUID, rec.Trigger.ContainerID = string(pod.UID), status.ContainerID
 			return true, nil
 		})
+}
+
+// awaitedMembers names the members the wait for the placement depends on: the
+// restore target for a restore, and every member once seeding is what it waits
+// for, since the member seeded is chosen only then.
+func (rec *s12GracefulStopRecord) awaitedMembers(cluster string) []string {
+	if rec.At == GracefulStopAtSeeding {
+		return clusterMembers(cluster)
+	}
+	return restoreTarget(cluster)
 }
 
 // stagingPath is the staging directory the stopped restore downloads into:
@@ -842,7 +852,7 @@ func (h *haRun) stopDuringRestoredb(ctx context.Context, created *databasev1alph
 		}
 	}()
 	var firstPast string
-	err := h.waitPlaced(ctx, created, createdAt, &rec.s12Record, &firstPast, result,
+	err := h.waitPlaced(ctx, created, createdAt, &rec.s12Record, &firstPast, result, rec.awaitedMembers(created.Name),
 		"restore was not seen running restoredb on "+rec.TargetMember,
 		func(cluster *databasev1alpha1.CubridCluster, phase string) (bool, error) {
 			watch.mu.Lock()
