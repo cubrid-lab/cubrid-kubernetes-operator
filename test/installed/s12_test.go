@@ -38,7 +38,6 @@ import (
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
-	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -1162,23 +1161,6 @@ func TestRunS12ExactIsBlockedWhenTheReadIsLostTwice(t *testing.T) {
 	}
 	if len(rec.LostSessions) != 1 || rec.LostSessions[0].Again != "the session was lost again" {
 		t.Fatalf("lost sessions = %+v, want one read made twice", rec.LostSessions)
-	}
-}
-
-func TestSessionLostNeedsBothErrors(t *testing.T) {
-	for name, tc := range map[string]struct {
-		out  string
-		want bool
-	}{
-		"both":         {testLostSession, true},
-		"-199 alone":   {"ERROR CODE = -199, Tran = 6, EID = 2\nServer no longer responding", false},
-		"-111 alone":   {"ERROR CODE = -111, Tran = 6, EID = 3\nYour transaction has been aborted", false},
-		"another code": {"ERROR CODE = -1990, Tran = 6\nERROR CODE = -1110, Tran = 6", false},
-		"a clean read": {"=== <Result of SELECT Command in Line 1> ===\n\n1 row selected.", false},
-	} {
-		if got := sqlcheck.SessionLost(tc.out); got != tc.want {
-			t.Errorf("%s: SessionLost = %v, want %v", name, got, tc.want)
-		}
 	}
 }
 

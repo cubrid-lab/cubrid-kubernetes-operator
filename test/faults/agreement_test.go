@@ -1127,6 +1127,18 @@ func TestS00Rules(t *testing.T) {
 	if got := CheckAgreement(readyEarly, S00Rules(s00Run(inconclusiveCSQL))); len(got.Disagreements) > 0 {
 		t.Errorf("an operation that is no evidence of a failed statement was judged: %v", got.Disagreements)
 	}
+	// Ready is False until after the first read, and the last read is
+	// inconclusive: the Ready rule is not judged, so S00 ends Blocked, not Pass.
+	readyAfterFirstRead := set(0, 50, func(s ConditionSample) ConditionSample {
+		return with(s, "Ready", "False", "InstancesNotReady")
+	})
+	lastInconclusive := s00Smoke()
+	lastInconclusive[3].OK = false
+	lastInconclusive[3].Inconclusive = "csql printed its row with -199 and -111"
+	checkCases(t, S00Rules(s00Run(lastInconclusive)), map[string]agreementCase{
+		"Ready is False until after the first read and the last read is inconclusive": {
+			obs: readyAfterFirstRead, notJudged: ruleS00ReadyFollowedBySQL},
+	})
 	checkCases(t, S00Rules(s00Run(lastFails)), map[string]agreementCase{
 		"csql fails at the end, with no reads for the tolerance after it": {obs: s00Obs(), note: "not judged"},
 	})

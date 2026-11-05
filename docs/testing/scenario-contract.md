@@ -1123,8 +1123,8 @@ it needs more.
     `ERROR CODE = -111` (transaction aborted), and no other error: POC-44
     (`docs/poc/RESULTS.md`) saw `csql` print that pair as it exited after
     statements that had taken effect, on the VM lab, and POC-49 did not make
-    it appear on a standalone member by running `cubrid heartbeat status`
-    beside `csql`; its cause is unknown, so such a read is evidence neither
+    csql print it on a standalone member by running `cubrid heartbeat status`
+    beside `csql` (csql's own log held one pair); its cause is unknown, so such a read is evidence neither
     that SQL failed nor that it succeeded. A `-199` without the row, without
     `-111`, with another error or with a non-zero exit, and a write that
     printed the pair, whose output holds no row, still count as failed. The

@@ -200,9 +200,10 @@ spec:
 			var rounds []conditionRound
 			if sampler != nil {
 				// A failed csql operation is compared with the reads for
-				// ReadyTolerance after it, so the reads go on that long.
+				// ReadyTolerance after it, so the reads go on that long. An
+				// inconclusive one is not judged, so waiting collects nothing.
 				for _, op := range s00Run.SQL {
-					if wait := time.Until(op.End.Add(faults.ReadyTolerance + conditionSampleEvery)); !op.OK && !op.Broker && wait > 0 {
+					if wait := time.Until(op.End.Add(faults.ReadyTolerance + conditionSampleEvery)); !op.OK && !op.Broker && op.Inconclusive == "" && wait > 0 {
 						select {
 						case <-ctx.Done():
 						case <-time.After(wait):
@@ -575,7 +576,8 @@ func s00Conditions(result evidence.Scenario, rounds []conditionRound, run faults
 // that could not be run, is not evidence of that, and neither is a read that
 // printed its row with -199 and -111 (sqlcheck.LostSessionAfterRow): POC-44
 // saw csql print that pair as it exited after statements that took effect,
-// and POC-49 did not make it appear by running heartbeat status beside csql.
+// and POC-49 did not make csql print it by running heartbeat status beside
+// csql (csql's own log held one pair).
 // Such an operation is recorded with a reason, and the rule that compares
 // Ready with failed SQL leaves it out. A write's output holds no row, so a
 // write that printed the pair stays failed.
