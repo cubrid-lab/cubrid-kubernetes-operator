@@ -710,7 +710,8 @@ reader can tell what to expect.
 
 In a scenario that names this section, a background reader reads the
 CubridCluster's status every 2 seconds, from before the fault is issued to
-the end of the stable period. Each read records every Condition with its
+the end of the stable period; in S00, which has no fault, from the creation
+of the cluster to the end of the smoke checks. Each read records every Condition with its
 status, reason, message and `lastTransitionTime`, `status.currentPrimary`,
 `status.lastObservedTime` and each member's role and `lastObservedTime` in
 `status.instances`, and the number of available Pods of the read-write Broker
@@ -1073,6 +1074,62 @@ it needs more.
   second time over existing data; a successful write through `<cluster>-ro`.
 - **Data check:** the rows written before the Pod deletion are present after
   it.
+- **Conditions during the installation** (see
+  [Conditions during the fault](#conditions-during-the-fault)): S00 has no
+  fault. The status is read every 2 seconds from the creation of the
+  `CubridCluster` to the end of the smoke checks, which end when the client
+  through the Brokers has finished, the four Broker and routing Conditions
+  are `True`, and the row has been read with `csql` once more. The cluster is
+  standalone: its member runs no heartbeat, the Operator resolves no primary
+  for it and writes no `status.lastObservedTime`, so the Conditions are
+  compared with the SQL of the smoke checks, and no rule waits for the
+  status to be fresh. Each round still asks the member with
+  `cubrid heartbeat status`, which confirms that no member answers as an HA
+  master. The rules:
+  - **Never:** the Never rules for an HA cluster above hold in every read.
+    Four of them start from a Condition a standalone cluster never carries
+    (`PrimaryResolved=True`, `HAReady=True` or `ReplicationHealthy=False`):
+    a read that breaks them still fails the run, but they are not required to
+    have judged enough reads, since the next rule judges every read for those
+    claims, and that is noted.
+  - **Never:** a standalone cluster claims no primary and no HA. In every
+    read, `PrimaryResolved` and `HAReady` are not `True`,
+    `status.currentPrimary` is empty and no member of `status.instances` has
+    the role `master`. Besides the limits above, at least one read before the
+    member's Pod was ready and one from then to the end of the smoke checks
+    must have been judged, so that the formation and the time after it are
+    both covered.
+  - **Tolerance** (30 seconds): `Ready=True` is not read while SQL fails
+    (ADR-0003). SQL run with `csql` in the member's Pod that failed is a
+    disagreement when the last read before it and every read for 30 seconds
+    after it, none more than 6 seconds apart, said `Ready=True`. `Ready`
+    follows the Pod's readiness: the kubelet probes `/readyz` every 5
+    seconds, gives each probe 5 seconds and marks the Pod not ready after 3
+    failures, up to 20 seconds; the StatefulSet's status and the reconcile add
+    a few seconds and the sampling 5. The reads this rule judges are those
+    that started before the last of those `csql` operations ended, and at
+    least one of them must say `Ready=True`: that is why the row is read with
+    `csql` once more at the end of the smoke checks, after `Ready` was seen
+    `True`. When a `csql` operation failed, the reads go on for 30 seconds
+    after it before they are judged. The statement that is meant to fail is
+    not counted.
+  - **Report:** SQL that succeeded while the last read before it had `Ready`
+    (for `csql` in the Pod) or `RoutingReady` (for the client through the
+    Brokers) not `True`, and SQL that failed while it was `True`. A failure of
+    the client through the Brokers is reported only: the Broker Conditions say
+    that Pods are available, not that a client can run SQL, as for every
+    scenario above.
+
+  The reads are judged in the scenario's cleanup, however the run ended, so a
+  disagreement fails it with reason `condition_disagreement` also when an
+  earlier check did not pass, and a rule without enough evidence keeps a run
+  that passed everything else `blocked`. `S00/conditions.jsonl`,
+  `S00/agreement.txt` and `S00/roles.jsonl` are always written, and
+  `measurements.conditionAgreement` is added. `S00/timeline.jsonl` starts with
+  the steps of the installation and the smoke checks (`cluster_created`,
+  `pod_ready`, `ready_observed`, `brokers_available`, `smoke_checks_ended`)
+  before the steps of the Pod deletion. The checks above, and the limits
+  below, are made as before.
 - **Limits:** `install_limit`, `ready_limit`.
 
 ### S01: three-member HA with read-write and read-only access

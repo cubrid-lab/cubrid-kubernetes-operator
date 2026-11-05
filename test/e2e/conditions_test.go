@@ -644,3 +644,74 @@ func TestS06ConditionsAreJudgedOnEveryResult(t *testing.T) {
 			reasonConditionsNotJudged)
 	}
 }
+
+// TestS00ConditionsAreJudgedOnEveryResult checks that S00 judges its sampled
+// reads whatever the rest of the scenario ended with: a read of the
+// standalone cluster that names a primary, which the Operator never writes
+// for it, fails the scenario with the disagreement as its reason, and the
+// reads, the heartbeat sweeps and the verdict are kept as evidence. A run in
+// which no SQL ran in the member's Pod has nothing to compare Ready with, so
+// it cannot pass on the Conditions.
+func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
+	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	const member = "s00-0"
+	start := time.Now().UTC()
+	rounds := make([]conditionRound, 0, 30)
+	for i := range 30 {
+		at := start.Add(time.Duration(2*i) * time.Second)
+		ready := "False"
+		if i >= 10 {
+			ready = "True"
+		}
+		conditions := map[string]faults.ConditionState{
+			"Ready": {Status: ready}, "HAReady": {Status: "False", Reason: "HADisabled"},
+		}
+		for _, c := range []string{"RoutingReady", "BrokerReady", "WriteEndpointReady", "ReadEndpointReady"} {
+			conditions[c] = faults.ConditionState{Status: "False"}
+		}
+		primary := ""
+		if i == 15 {
+			primary = member
+		}
+		rounds = append(rounds, conditionRound{
+			Status: &faults.ConditionSample{ReadStart: at, ReadEnd: at, CurrentPrimary: primary, Conditions: conditions},
+			Roles:  &faults.RoleSweep{Start: at, End: at, Roles: map[string]string{member: ""}},
+		})
+	}
+	run := faults.S00Run{Member: member, PodReady: start.Add(18 * time.Second), SmokeEnd: start.Add(58 * time.Second),
+		SQL: []faults.SmokeSQL{{Start: start.Add(22 * time.Second), End: start.Add(24 * time.Second), Write: true,
+			OK: true, What: "csql write"}}}
+	for _, ended := range []evidence.Scenario{
+		{ID: "S00", Result: evidence.Pass},
+		{ID: "S00", Result: evidence.Fail, Reason: "a step of the scenario failed; see the test output"},
+		{ID: "S00", Result: evidence.Blocked, Reason: faults.ReasonStepStillRunning},
+	} {
+		got := s00Conditions(ended, rounds, run, nil)
+		if got.Result != evidence.Fail || !strings.HasPrefix(got.Reason, reasonConditionDisagreement) ||
+			len(got.NeverEvents) == 0 {
+			t.Errorf("a run ending with %s (%q) gave %s (%s), never events %v", ended.Result, ended.Reason,
+				got.Result, got.Reason, got.NeverEvents)
+		}
+		for _, file := range []string{"S00/conditions.jsonl", "S00/agreement.txt", "S00/roles.jsonl"} {
+			if !slices.Contains(got.Evidence, file) {
+				t.Errorf("a run ending with %s kept the evidence %v, without %s", ended.Result, got.Evidence, file)
+			}
+		}
+		if _, ok := got.Measurements["conditionAgreement"]; !ok {
+			t.Errorf("a run ending with %s has no conditionAgreement measurement", ended.Result)
+		}
+	}
+	agreeing := slices.Clone(rounds)
+	agreeing[15] = rounds[14]
+	passed := evidence.Scenario{ID: "S00", Result: evidence.Pass}
+	if got := s00Conditions(passed, agreeing, run, nil); got.Result != evidence.Pass {
+		t.Errorf("a run whose Conditions agree gave %s (%s)", got.Result, got.Reason)
+	}
+	noSQL := run
+	noSQL.SQL = nil
+	if got := s00Conditions(passed, agreeing, noSQL, nil); got.Result != evidence.Blocked ||
+		!strings.HasPrefix(got.Reason, reasonConditionsNotJudged) {
+		t.Errorf("a run without SQL in the Pod gave %s (%s), want blocked with %s", got.Result, got.Reason,
+			reasonConditionsNotJudged)
+	}
+}

@@ -18,6 +18,7 @@ package faults
 
 import (
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -429,6 +430,7 @@ func TestS05SQLIsReportedOnly(t *testing.T) {
 func TestRulesAreDescribed(t *testing.T) {
 	rules := append(append(NeverRules(), HAReportRules()...), S05Rules(m0, true)...)
 	rules = append(append(rules, S05Rules(m0, false)...), S06Rules(m1, at(120), false)...)
+	rules = append(rules, S00Rules(s00Run(s00Smoke()))...)
 	if len(rules) == 0 {
 		t.Fatal("no rules")
 	}
@@ -466,7 +468,8 @@ func TestTolerance(t *testing.T) {
 }
 
 func TestReportRulesNeverDisagree(t *testing.T) {
-	for _, r := range append(append(S05Rules(m0, true), S05Rules(m0, false)...), S06Rules(m1, at(120), false)...) {
+	for _, r := range slices.Concat(S05Rules(m0, true), S05Rules(m0, false), S06Rules(m1, at(120), false),
+		S00Rules(s00Run(s00Smoke()))) {
 		if r.Kind != Report {
 			continue
 		}
@@ -950,5 +953,208 @@ func TestS06Rules(t *testing.T) {
 	}
 	if !mentions(got.Notes, ruleS06WritesWhileStale, "1 acknowledged", "1 failed") {
 		t.Errorf("notes %v do not count the writes while the status was stale by outcome", got.Notes)
+	}
+}
+
+// s00Member is the one member of the standalone cluster of S00.
+const s00Member = "s00-0"
+
+// standalone is a status read at the given second of the standalone cluster
+// of S00, as the Operator writes it: HAReady False with HADisabled, no
+// PrimaryResolved, no primary, no status.lastObservedTime and the member's
+// role unknown. Its Pod is ready from second 40, Ready is True from second 42,
+// and the Brokers and the write route from second 72.
+func standalone(second float64) ConditionSample {
+	state := func(status, reason string) ConditionState {
+		return ConditionState{Status: status, Reason: reason, LastTransitionTime: t0}
+	}
+	conditions := map[string]ConditionState{"HAReady": state("False", "HADisabled")}
+	if second >= 42 {
+		conditions["Ready"] = state("True", "ClusterReady")
+	} else {
+		conditions["Ready"] = state("False", "InstancesNotReady")
+	}
+	available := 0
+	if second >= 72 {
+		available = 2
+		for _, c := range []string{condBrokerReady, condWriteEndpointReady, condReadEndpointReady} {
+			conditions[c] = state("True", "BrokersAvailable")
+		}
+		conditions["RoutingReady"] = state("True", "StandaloneServerReady")
+	} else {
+		for _, c := range []string{condBrokerReady, condWriteEndpointReady, condReadEndpointReady} {
+			conditions[c] = state("False", "NoBrokerAvailable")
+		}
+		conditions["RoutingReady"] = state("False", "InstancesNotReady")
+	}
+	return ConditionSample{
+		ReadStart: at(second), ReadEnd: at(second + 0.2), Conditions: conditions,
+		Instances:   []MemberStatus{{Name: s00Member, Role: "unknown", LastObserved: at(second - 1)}},
+		RWAvailable: new(available),
+	}
+}
+
+// s00Smoke is the SQL of an S00 run that agrees with its Conditions: a row
+// written and read with csql in the member's Pod right after it is ready, a
+// client through the Broker Services from second 80 to 100, and the row read
+// again with csql at the end of the smoke checks.
+func s00Smoke() []SmokeSQL {
+	return []SmokeSQL{
+		{Start: at(44), End: at(46), Write: true, OK: true, What: "csql write"},
+		{Start: at(46), End: at(48), OK: true, What: "csql read"},
+		{Start: at(80), End: at(100), Broker: true, Write: true, OK: true, What: "broker client"},
+		{Start: at(110), End: at(112), OK: true, What: "csql read at the end"},
+	}
+}
+
+// s00Obs is an S00 run read every two seconds from the creation of the
+// cluster (second 0) to the end of the smoke checks (second 114), with a
+// heartbeat sweep in every round that finds no heartbeat on the member.
+func s00Obs() Observations {
+	var obs Observations
+	for s := 0.0; s <= 114; s += 2 {
+		obs.Samples = append(obs.Samples, standalone(s))
+		obs.Sweeps = append(obs.Sweeps, RoleSweep{Start: at(s + 0.3), End: at(s + 0.5),
+			Roles: map[string]string{s00Member: ""}, NodeStates: map[string]string{s00Member: ""}})
+	}
+	return obs
+}
+
+func s00Run(sql []SmokeSQL) S00Run {
+	return S00Run{Member: s00Member, PodReady: at(40), SmokeEnd: at(114), SQL: sql}
+}
+
+func TestS00Rules(t *testing.T) {
+	rules := S00Rules(s00Run(s00Smoke()))
+	if len(rules) == 0 {
+		t.Fatal("S00Rules returned no rules")
+	}
+	// set changes the reads from second from to second to.
+	set := func(from, to float64, f func(ConditionSample) ConditionSample) Observations {
+		return replace(s00Obs(), from, func(s ConditionSample) ConditionSample {
+			if s.ReadStart.Before(at(to)) {
+				return f(s)
+			}
+			return s
+		})
+	}
+	resolved := set(60, 62, func(s ConditionSample) ConditionSample {
+		s = with(s, "PrimaryResolved", "True", "PrimaryResolved")
+		s.CurrentPrimary = s00Member
+		return s
+	})
+	haReady := set(20, 22, func(s ConditionSample) ConditionSample { return with(s, "HAReady", "True", "") })
+	primaryNamed := set(90, 92, func(s ConditionSample) ConditionSample {
+		s.CurrentPrimary = s00Member
+		return s
+	})
+	masterRole := set(30, 32, func(s ConditionSample) ConditionSample {
+		s.Instances = []MemberStatus{{Name: s00Member, Role: roleMaster}}
+		return s
+	})
+	routingWithoutBroker := set(60, 62, func(s ConditionSample) ConditionSample {
+		return with(s, "RoutingReady", "True", "StandaloneServerReady")
+	})
+	// A standalone cluster carries no ReplicationHealthy, so the shared rule
+	// on it has no evidence; a read that has it is still judged.
+	namesNonSlave := set(90, 92, func(s ConditionSample) ConditionSample {
+		s = with(s, "ReplicationHealthy", "False", "ReplicationStalled")
+		c := s.Conditions["ReplicationHealthy"]
+		c.Message = "replication stalled on: " + s00Member
+		s.Conditions["ReplicationHealthy"] = c
+		return s
+	})
+	// Ready is True from the first read, and csql fails right after the
+	// member's Pod is ready while Ready stays True.
+	readyEarly := set(0, 42, func(s ConditionSample) ConditionSample { return with(s, "Ready", "True", "ClusterReady") })
+	failedCSQL := s00Smoke()
+	failedCSQL[0].OK = false
+	// csql fails at the start of the smoke checks, and Ready turns False 10
+	// seconds later, within the tolerance.
+	followed := set(56, 70, func(s ConditionSample) ConditionSample {
+		return with(s, "Ready", "False", "InstancesNotReady")
+	})
+	// csql fails at the very end, with no read for the tolerance after it.
+	lastFails := s00Smoke()
+	lastFails[3].OK = false
+	// Ready is True only after the last csql operation.
+	readyLate := set(42, 113, func(s ConditionSample) ConditionSample {
+		return with(s, "Ready", "False", "InstancesNotReady")
+	})
+	// The sampler started only after the member's Pod was ready.
+	startedLate := s00Obs()
+	startedLate.Samples = startedLate.Samples[21:]
+	few := s00Obs()
+	few.Samples = few.Samples[20:22]
+	// The client through the Brokers ran before routing was ready, and
+	// another one failed while it was.
+	brokerEarly := s00Smoke()
+	brokerEarly[2].Start, brokerEarly[2].End = at(50), at(60)
+	brokerFailed := s00Smoke()
+	brokerFailed[2].OK = false
+	// csql succeeded before Ready was True.
+	sqlBeforeReady := s00Smoke()
+	sqlBeforeReady[0].Start, sqlBeforeReady[0].End = at(30), at(32)
+
+	checkCases(t, rules, map[string]agreementCase{
+		"a run whose Conditions agree with the smoke SQL": {obs: s00Obs(), judged: true},
+		"PrimaryResolved=True on a standalone cluster":    {obs: resolved, disagree: ruleS00NoPrimary},
+		"HAReady=True on a standalone cluster":            {obs: haReady, disagree: ruleS00NoPrimary},
+		"a primary named on a standalone cluster":         {obs: primaryNamed, disagree: ruleS00NoPrimary},
+		"a master role in status.instances":               {obs: masterRole, disagree: ruleS00NoPrimary},
+		"RoutingReady=True without a write endpoint": {
+			obs: routingWithoutBroker, disagree: ruleRoutingNeedsWriteEndpoint},
+		"a shared rule whose Condition a standalone cluster lacks still fails a read that has it": {
+			obs: namesNonSlave, disagree: ruleReplicationNamesSlaves},
+		"no sweep found a heartbeat master, and that is noted": {obs: s00Obs(), note: "no member answered as an HA master"},
+	})
+	checkCases(t, S00Rules(s00Run(failedCSQL)), map[string]agreementCase{
+		"csql fails while Ready stays True beyond the tolerance": {obs: readyEarly, disagree: ruleS00ReadyFollowedBySQL},
+		"csql fails and Ready turns False within the tolerance":  {obs: followed, note: ruleS00SQLFailedWhileTrue},
+	})
+	if got := CheckAgreement(followed, S00Rules(s00Run(failedCSQL))); len(got.Disagreements) > 0 {
+		t.Errorf("Ready turned False within the tolerance after the failure: %v", got.Disagreements)
+	}
+	checkCases(t, S00Rules(s00Run(lastFails)), map[string]agreementCase{
+		"csql fails at the end, with no reads for the tolerance after it": {obs: s00Obs(), note: "not judged"},
+	})
+	if got := CheckAgreement(s00Obs(), S00Rules(s00Run(lastFails))); len(got.Disagreements) > 0 {
+		t.Errorf("a failure the reads do not cover for the tolerance was judged: %v", got.Disagreements)
+	}
+	checkCases(t, rules, map[string]agreementCase{
+		"Ready was never True before csql ran in the Pod": {obs: readyLate, notJudged: ruleS00ReadyFollowedBySQL},
+		"no read before the member's Pod was ready":       {obs: startedLate, notJudged: ruleS00NoPrimary},
+		"too few reads":  {obs: few, notJudged: ruleS00NoPrimary},
+		"no read at all": {obs: Observations{}, notJudged: ruleS00NoPrimary},
+		"the HA-only shared rules do not block a standalone run": {obs: s00Obs(), note: "not required"},
+	})
+	unready := s00Run(s00Smoke())
+	unready.PodReady = time.Time{}
+	checkCases(t, S00Rules(unready), map[string]agreementCase{
+		"the member's Pod was never seen ready": {obs: s00Obs(), notJudged: ruleS00NoPrimary},
+	})
+	checkCases(t, S00Rules(s00Run(nil)), map[string]agreementCase{
+		"no SQL in the Pod was recorded": {obs: s00Obs(), notJudged: ruleS00ReadyFollowedBySQL},
+	})
+	for name, c := range map[string]struct {
+		sql  []SmokeSQL
+		rule string
+	}{
+		"the Broker client succeeded before RoutingReady": {brokerEarly, ruleS00SQLBeforeCondition},
+		"the Broker client failed while RoutingReady":     {brokerFailed, ruleS00SQLFailedWhileTrue},
+		"csql succeeded before Ready":                     {sqlBeforeReady, ruleS00SQLBeforeCondition},
+	} {
+		got := CheckAgreement(s00Obs(), S00Rules(s00Run(c.sql)))
+		if len(got.Disagreements) > 0 || len(got.NotJudged) > 0 || !mentions(got.Notes, c.rule) {
+			t.Errorf("%s: %+v, want only a note of %s", name, got, c.rule)
+		}
+	}
+}
+
+func TestReadyTolerance(t *testing.T) {
+	// Three failed readiness probes 5 seconds apart, each given 5 seconds,
+	// then the StatefulSet's status, the reconcile and the sampling.
+	if ReadyTolerance < 25*time.Second || ReadyTolerance > 35*time.Second {
+		t.Errorf("ReadyTolerance = %s, want 20s of probes plus a few seconds", ReadyTolerance)
 	}
 }

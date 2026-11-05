@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -85,6 +86,20 @@ func s00Scenario() {
 		var podDeletionOutcome *faults.Outcome
 		// createdAt is when the CubridCluster was created.
 		var createdAt time.Time
+		// sampler reads the CubridCluster's status and asks the member for its
+		// heartbeat role every 2 seconds, from the creation of the cluster to
+		// the end of the smoke checks; s00Run and steps are what the reads are
+		// compared with (Conditions during the fault, scenario contract).
+		var sampler *conditionSampler
+		s00Run := faults.S00Run{Member: pod}
+		var steps []faults.Step
+		step := func(t time.Time, kind, detail string) {
+			steps = append(steps, faults.Step{T: t.UTC(), Kind: kind, Detail: detail})
+		}
+		smokeSQL := func(what string, broker, write bool, start time.Time, ok bool) {
+			s00Run.SQL = append(s00Run.SQL, faults.SmokeSQL{Start: start.UTC(), End: time.Now().UTC(), Broker: broker,
+				Write: write, OK: ok, What: what})
+		}
 
 		kubectl := func(args ...string) (string, error) {
 			return utils.Run(exec.Command("kubectl", append([]string{"-n", s00Namespace}, args...)...))
@@ -155,6 +170,11 @@ spec:
 			createdAt = time.Now()
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create the CubridCluster")
+			step(createdAt, "cluster_created", "CubridCluster "+s00Namespace+"/"+clusterName+" applied")
+
+			By("reading the CubridCluster's status every 2 seconds until the end of the smoke checks")
+			sampler = (&haRun{namespace: s00Namespace, cluster: clusterName, database: database,
+				members: []string{pod}}).sampleConditions(conditionSampling{roles: true})
 		})
 
 		AfterAll(func() {
@@ -167,6 +187,17 @@ spec:
 			// The record is written below, so it must already say that the load
 			// failed: the summary and the record agree on the result.
 			loadErr := record.blockByImageLoad(instanceManagerImageErr)
+			var rounds []conditionRound
+			if sampler != nil {
+				// A failed csql operation is compared with the reads for
+				// ReadyTolerance after it, so the reads go on that long.
+				for _, op := range s00Run.SQL {
+					if wait := time.Until(op.End.Add(faults.ReadyTolerance + conditionSampleEvery)); !op.OK && !op.Broker && wait > 0 {
+						time.Sleep(wait)
+					}
+				}
+				rounds = sampler.stop()
+			}
 			// What a reader needs to judge the run, pass or fail.
 			if out, err := kubectl("get", "events", "--field-selector", "reason=Unhealthy",
 				"-o", `jsonpath={range .items[*]}{.involvedObject.name}{": "}{.message}{"\n"}{end}`); err == nil {
@@ -203,14 +234,20 @@ spec:
 				result.Evidence = []string{file}
 			}
 			// The fault's own verdict wins over the default: a deletion that
-			// was not confirmed is blocked, not failed.
+			// was not confirmed is blocked, not failed. The timeline has the
+			// steps of the installation and the smoke checks, then the
+			// deletion's.
+			timeline := steps
 			if o := podDeletionOutcome; o != nil {
 				flow := o.Scenario("S00", "", podDeletionLimits)
 				result.Limits, result.CleanupSucceeded = flow.Limits, flow.CleanupSucceeded
 				if o.Result != evidence.Pass {
 					result.Result, result.Reason = o.Result, o.Reason
 				}
-				if file := writeTimeline("S00/timeline.jsonl", o.Timeline); file != "" {
+				timeline = append(slices.Clone(steps), o.Timeline...)
+			}
+			if len(timeline) > 0 {
+				if file := writeTimeline("S00/timeline.jsonl", timeline); file != "" {
 					result.Evidence = append(result.Evidence, file)
 				}
 			}
@@ -228,6 +265,9 @@ spec:
 			result = faults.JudgeS00Limits(result,
 				faults.Bound{Limit: installLimit, Measured: installTime, Unmeasured: !installMeasured},
 				faults.Bound{Limit: readyLimit, Measured: ready, Unmeasured: record.ReadySeconds == 0})
+			// The Conditions are judged however the run ended: a disagreement
+			// fails it, and a rule without enough evidence keeps it from passing.
+			result = s00Conditions(result, rounds, s00Run, steps)
 			recordScenario(result)
 			updateSummary(func(s *evidence.Summary) {
 				s.Environment.CubridImageDigest = record.InstanceManagerID
@@ -242,6 +282,8 @@ spec:
 		It("becomes Ready as a non-root Pod and answers SQL", func() {
 			By("waiting for the first start: createdb, server start, then the manager")
 			record.FirstStartSeconds = waitPodReady(15 * time.Minute).Seconds()
+			s00Run.PodReady = time.Now().UTC()
+			step(s00Run.PodReady, "pod_ready", "Pod "+pod+" is ready")
 
 			uid, err := kubectl("get", "pod", pod, "-o", "jsonpath={.metadata.uid}")
 			Expect(err).NotTo(HaveOccurred())
@@ -262,8 +304,14 @@ spec:
 
 			By("writing and reading a row through csql")
 			sql := csqlInPod(context.Background(), s00Namespace, pod, database)
-			Expect(writeS00Row(sql, marker)).To(Succeed())
-			Expect(readS00Row(sql, marker)).To(Succeed())
+			start := time.Now()
+			err = writeS00Row(sql, marker)
+			smokeSQL("csql write of the marker row in "+pod, false, true, start, err == nil)
+			Expect(err).NotTo(HaveOccurred())
+			start = time.Now()
+			err = readS00Row(sql, marker)
+			smokeSQL("csql read of the marker row in "+pod, false, false, start, err == nil)
+			Expect(err).NotTo(HaveOccurred())
 			// An upper bound: it includes the checks above.
 			record.ReadySeconds = time.Since(createdAt).Seconds()
 
@@ -278,6 +326,7 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(ready).To(Equal("True"))
 			}).Should(Succeed())
+			step(time.Now(), "ready_observed", "the CubridCluster's Ready is True")
 			_, err = kubectl("get", "service", pod)
 			Expect(err).NotTo(HaveOccurred())
 		})
@@ -292,7 +341,10 @@ spec:
 				Expect(err).NotTo(HaveOccurred(), "the %s Brokers did not become available", mode)
 			}
 
+			step(time.Now(), "brokers_available", "a Broker of each access mode is available")
+
 			By("running a client with a CUBRID driver against the two Services")
+			clientStart := time.Now()
 			_, err := utils.Run(exec.Command("kubectl", "create", "ns", clientNamespace))
 			Expect(err).NotTo(HaveOccurred())
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
@@ -308,6 +360,8 @@ spec:
 			logs, err := utils.Run(exec.Command("kubectl", "-n", clientNamespace, "logs", "broker-client"))
 			Expect(err).NotTo(HaveOccurred())
 			_, _ = fmt.Fprintf(GinkgoWriter, "broker client output:\n%s\n", logs)
+			smokeSQL("client through "+clusterName+"-rw and "+clusterName+"-ro from "+clientNamespace, true, true,
+				clientStart, strings.Contains(logs, "BROKER-CHECK-OK"))
 			Expect(logs).To(ContainSubstring("BROKER-CHECK-OK"), "client output:\n%s", logs)
 
 			By("checking that the operator reports both endpoints and the route to the server")
@@ -319,6 +373,16 @@ spec:
 					g.Expect(status).To(Equal("True"), conditionType)
 				}
 			}, 2*time.Minute, 3*time.Second).Should(Succeed())
+
+			By("reading the row with csql again at the end of the smoke checks, after Ready was True")
+			start := time.Now()
+			err = readS00Row(csqlInPod(context.Background(), s00Namespace, pod, database), marker)
+			smokeSQL("csql read of the marker row in "+pod+" at the end of the smoke checks", false, false, start,
+				err == nil)
+			Expect(err).NotTo(HaveOccurred())
+			s00Run.SmokeEnd = time.Now().UTC()
+			step(s00Run.SmokeEnd, "smoke_checks_ended", "")
+			sampler.stop()
 		})
 
 		It("keeps the data when the Pod is deleted", func() {
@@ -460,4 +524,23 @@ func writeTimeline(rel string, steps []faults.Step) string {
 		b.WriteByte('\n')
 	}
 	return writeScenarioFile(rel, []byte(b.String()))
+}
+
+// s00Conditions applies S00's rules on the Conditions to the sampled reads of
+// the run and gives result what they found (withAgreement). It stores the
+// heartbeat sweeps in S00/roles.jsonl, the reads in S00/conditions.jsonl and
+// the verdict in S00/agreement.txt, and adds the conditionAgreement
+// measurement. steps are the steps of the installation and the smoke checks.
+func s00Conditions(result evidence.Scenario, rounds []conditionRound, run faults.S00Run,
+	steps []faults.Step) evidence.Scenario {
+	if f := writeRoleSweeps("S00/roles.jsonl", rounds); f != "" {
+		result.Evidence = append(result.Evidence, f)
+	}
+	agreement, files, measured := checkConditions("S00", rounds, nil, steps, faults.S00Rules(run))
+	result.Evidence = append(result.Evidence, files...)
+	if result.Measurements == nil {
+		result.Measurements = map[string]any{}
+	}
+	result.Measurements["conditionAgreement"] = measured
+	return withAgreement(result, agreement)
 }
