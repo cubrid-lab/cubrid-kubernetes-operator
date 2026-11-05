@@ -1320,8 +1320,10 @@ it needs more.
     unchanged master after the Operator Pod is killed (`restart`), the
     member CUBRID elected while the Operator was absent
     (`absent-during-failover`). Only reads that are not stale and whose
-    `status.lastObservedTime` is not before the return, so that the returned
-    Operator wrote them, are judged; the Operator's return is when the old
+    `status.lastObservedTime` is not before the return (for `restart`, in a
+    later second than the return, since the killed process can outlive its
+    Pod and write in the same second), so that the returned Operator wrote
+    them, are judged; the Operator's return is when the old
     Pod was confirmed gone (`restart`) or when its Deployment was scaled
     back (`absent-during-failover`). In the second variant the outcome is
     reached while the Operator is still absent, so the reads between the

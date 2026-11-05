@@ -611,7 +611,7 @@ func s06Conditions(variant string, result evidence.Scenario, rounds []conditionR
 		result.Evidence = append(result.Evidence, f)
 	}
 	agreement, files, measured := checkConditions(dir, rounds, events, timeline,
-		slices.Concat(faults.NeverRules(), faults.HAReportRules(), faults.S06Rules(master, returnedAt)))
+		slices.Concat(faults.NeverRules(), faults.HAReportRules(), faults.S06Rules(master, returnedAt, variant == s06Restart)))
 	result.Evidence = append(result.Evidence, files...)
 	if result.Measurements == nil {
 		result.Measurements = map[string]any{}

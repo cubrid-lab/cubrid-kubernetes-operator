@@ -756,7 +756,8 @@ func reportWrites(obs Observations, match func(SQLEvent, ConditionSample) bool, 
 		if last < 0 || isStale(samples[last]) || !match(e, samples[last]) {
 			continue
 		}
-		if count == 0 {
+		// The events of several clients may be joined one after the other.
+		if count == 0 || e.T.Before(first) {
 			first = e.T
 		}
 		count++
@@ -1318,7 +1319,10 @@ func checkRoutingNeedsPrimaryInWait(obs Observations) finding {
 // when the outcome was not reached. returnedAt is the earliest time a status
 // the returned Operator wrote can carry as status.lastObservedTime: when the
 // old Pod was confirmed gone, or when the Deployment was scaled back.
-func S06Rules(master string, returnedAt time.Time) []Rule {
+// strictlyAfter is set for a restart, where the killed process can outlive its
+// Pod: only a status.lastObservedTime in a later second than returnedAt's then
+// shows that the replacement wrote it.
+func S06Rules(master string, returnedAt time.Time, strictlyAfter bool) []Rule {
 	return append([]Rule{
 		{
 			ID: ruleS03PrimaryWasMaster, Kind: Tolerance, Tolerance: AgreementTolerance,
@@ -1332,9 +1336,12 @@ func S06Rules(master string, returnedAt time.Time) []Rule {
 			ID: ruleS06PrimaryAfterReturn, Kind: Never,
 			Says: "from the later of the outcome and the Operator's return (" + stampOrUnset(returnedAt) + ") to the " +
 				"end of the stable period, a read that resolves a primary names " + orMissing(master, master != "") +
-				", in every read that is not stale and whose status.lastObservedTime is not before the return, so " +
-				"that the returned Operator wrote it; other reads are counted in a note and not judged",
-			check: func(obs Observations) finding { return checkPrimaryAfterReturn(obs, master, returnedAt) },
+				", in every read that is not stale and whose status.lastObservedTime is not before the return" +
+				strictSecond(strictlyAfter) + ", so that the returned Operator wrote it; other reads are counted in a " +
+				"note and not judged",
+			check: func(obs Observations) finding {
+				return checkPrimaryAfterReturn(obs, master, returnedAt, strictlyAfter)
+			},
 		},
 		{
 			ID: ruleS06WritesWhileStale, Kind: Report,
@@ -1357,7 +1364,14 @@ func checkPrimaryWasMasterWhileFresh(obs Observations) finding {
 	return f
 }
 
-func checkPrimaryAfterReturn(obs Observations, master string, returnedAt time.Time) finding {
+func strictSecond(strictlyAfter bool) string {
+	if strictlyAfter {
+		return " (for a restart, in a later second than the return, since the killed process can outlive its Pod)"
+	}
+	return ""
+}
+
+func checkPrimaryAfterReturn(obs Observations, master string, returnedAt time.Time, strictlyAfter bool) finding {
 	outcomeAt := outcomeTime(obs.Steps)
 	switch {
 	case outcomeAt.IsZero():
@@ -1369,8 +1383,13 @@ func checkPrimaryAfterReturn(obs Observations, master string, returnedAt time.Ti
 	if returnedAt.After(from) {
 		from = returnedAt
 	}
-	// The API server stores lastObservedTime to the second.
+	// The API server stores lastObservedTime to the second. A status of the
+	// second of the return is accepted unless the killed process may have
+	// written it: it can outlive its Pod, so a restart needs a later second.
 	written := returnedAt.Truncate(time.Second)
+	if strictlyAfter {
+		written = written.Add(time.Second)
+	}
 	var bad, notes []string
 	var evaluated []time.Time
 	considered, stale, older := 0, 0, 0
@@ -1434,7 +1453,7 @@ func reportWritesWhileStale(obs Observations) finding {
 		if last := lastReadBefore(samples, e.T); last < 0 || !isStale(samples[last]) {
 			continue
 		}
-		if first.IsZero() {
+		if first.IsZero() || e.T.Before(first) {
 			first = e.T
 		}
 		counts[e.Outcome]++
