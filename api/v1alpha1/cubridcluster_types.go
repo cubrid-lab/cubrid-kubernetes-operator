@@ -272,6 +272,38 @@ type CubridObjectStorage struct {
 	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
 }
 
+// MemberSpread decides whether the members of an HA cluster must run on
+// different nodes.
+// +kubebuilder:validation:Enum=Required;Preferred
+type MemberSpread string
+
+const (
+	// MemberSpreadRequired runs each member on a node of its own. A member
+	// that finds no such node stays Pending: with three nodes and three
+	// members, a drained node's member has nowhere else to go (#90).
+	MemberSpreadRequired MemberSpread = "Required"
+	// MemberSpreadPreferred asks the scheduler to spread the members and
+	// lets them share a node when it cannot. It is for test clusters with
+	// fewer nodes than members, such as a single-node Kind cluster: members
+	// on one node all fail with that node.
+	MemberSpreadPreferred MemberSpread = "Preferred"
+)
+
+// CubridPlacement configures where the cluster's DB Pods run.
+type CubridPlacement struct {
+	// memberSpread decides whether the members of an HA cluster must run on
+	// different nodes (kubernetes.io/hostname). Required keeps a member
+	// Pending rather than put it next to another; Preferred lets them share
+	// a node. Unset, the operator records the value once in the cluster's
+	// annotation database.cubrid.io/member-spread-default: Required for a
+	// cluster that has neither its StatefulSet nor a data PVC yet, Preferred
+	// for one that has either. A standalone cluster has one member and no
+	// placement rule. Changing it applies to a member when its Pod is next
+	// replaced; running Pods are not moved.
+	// +optional
+	MemberSpread MemberSpread `json:"memberSpread,omitempty"`
+}
+
 // CubridNetworkPolicy configures the NetworkPolicies the operator keeps for
 // the cluster's Pods. They restrict ingress only, and only where the cluster's
 // network plugin enforces NetworkPolicy; they do not encrypt traffic or
@@ -372,6 +404,12 @@ type CubridClusterSpec struct {
 	// Omitted, they are kept with their defaults.
 	// +optional
 	NetworkPolicy *CubridNetworkPolicy `json:"networkPolicy,omitempty"`
+
+	// placement configures where the DB Pods run. Omitted, each member of a
+	// new HA cluster requires a node of its own, and the members of a cluster
+	// that existed before only prefer separate nodes (see memberSpread).
+	// +optional
+	Placement *CubridPlacement `json:"placement,omitempty"`
 }
 
 // InstanceStatus reports the observed state of one CUBRID instance (ADR-0001).

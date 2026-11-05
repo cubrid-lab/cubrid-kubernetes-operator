@@ -162,6 +162,10 @@ type CubridClusterReconciler struct {
 	// conflicts holds, per cluster and group of writes, since when its writes
 	// have been rejected as a conflict without one that succeeded.
 	conflicts sync.Map
+	// placementReported holds, per cluster, the last MemberPlacement reason
+	// that was True or False when its status was written (placementEntry),
+	// so that an Unknown in between records no Event again.
+	placementReported sync.Map
 }
 
 // conflictKey names one group of a cluster's writes in conflicts.
@@ -220,6 +224,9 @@ type reconcileReport struct {
 	// kept in ApplierPositions once a write of the status they fed succeeds;
 	// nil when the roles were not observed.
 	positions map[string]applierReading
+	// placement is the MemberPlacement reason this reconcile reported, kept
+	// in placementReported once the status that carries it is written.
+	placement *placementEntry
 }
 
 type pendingEvent struct{ eventType, reason, message string }
@@ -249,6 +256,9 @@ func (r *CubridClusterReconciler) endReport(ctx context.Context, cluster *databa
 	}
 	for _, e := range report.events {
 		r.event(cluster, e.eventType, e.reason, e.message)
+	}
+	if report.placement != nil {
+		r.placementReported.Store(client.ObjectKeyFromObject(cluster), *report.placement)
 	}
 	r.reportTransitions(ctx, cluster, before)
 }
@@ -342,6 +352,7 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// via owner references.
 		r.conflicts.Delete(conflictKey{req.NamespacedName, childWrites})
 		r.conflicts.Delete(conflictKey{req.NamespacedName, brokerWrites})
+		r.placementReported.Delete(req.NamespacedName)
 		if apierrors.IsNotFound(err) {
 			metrics.DeleteCluster(req.Namespace, req.Name)
 			r.applierPositions().forget(req.NamespacedName)
@@ -386,6 +397,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// The ingress NetworkPolicies exist before the first DB Pod does.
 	if err := r.reconcileNetworkPolicies(ctx, &cluster); err != nil {
 		return r.failed(ctx, &cluster, "NetworkPolicyReconcileFailed", err)
+	}
+
+	// The member spread an unset spec falls back to is recorded before the
+	// StatefulSet exists, so that it tells a new cluster from an old one.
+	if err := r.recordMemberSpreadDefault(ctx, &cluster); err != nil {
+		return r.failed(ctx, &cluster, "PlacementReconcileFailed", err)
 	}
 
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
@@ -846,6 +863,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 	return corev1.PodSpec{
 		Volumes:        volumes,
 		InitContainers: initContainers,
+		Affinity:       memberAffinity(cluster),
 		// terminationGracePeriodSeconds >= 120s for ordered HA shutdown (ADR-0003).
 		TerminationGracePeriodSeconds: &gracePeriod,
 		SecurityContext: &corev1.PodSecurityContext{
@@ -1039,6 +1057,9 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	}
 
 	cluster.Status.ObservedGeneration = cluster.Generation
+	// Where the members run is reported in every phase, recovery included;
+	// it is a report only (#596).
+	r.reportMemberPlacement(ctx, cluster)
 	// Several steps below set Updating; only the value it ends with is compared
 	// with the one it had, so a value held in between is no transition.
 	updatingBefore := meta.FindStatusCondition(cluster.Status.Conditions, conditionUpdating).DeepCopy()

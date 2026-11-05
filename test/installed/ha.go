@@ -102,6 +102,10 @@ type HAConfig struct {
 	// StableFor is how long the starting state must keep holding, with the
 	// same master, slaves and Pods, before the workload starts.
 	StableFor time.Duration
+	// MemberSpread is set as spec.placement.memberSpread on every cluster the
+	// run creates. Under Required, a run with fewer schedulable nodes than
+	// members is refused before anything is created (#596).
+	MemberSpread databasev1alpha1.MemberSpread
 	// Fault selects a scenario after LAB01: empty for none,
 	// FaultOperatorRestart for S06 restart, which deletes the installed
 	// manager's Pod, or FaultVMPowerOff for S04 power-off, which powers off
@@ -326,6 +330,9 @@ func (c HAConfig) validate() error {
 	if err := c.validateS12(); err != nil {
 		return err
 	}
+	if !validMemberSpread(c.MemberSpread) {
+		return errors.New("the member spread must be Required or Preferred")
+	}
 	if c.Operations < 1 || c.Operations > maxOperations || c.DataCheckWithin <= 0 || c.StableFor < 0 {
 		return fmt.Errorf("operations must be 1 to %d, the data check window positive and the stable period "+
 			"not negative", maxOperations)
@@ -371,6 +378,11 @@ type haRecord struct {
 	// available before the run created anything, when a minimum was set.
 	NodeAvailableMemoryBytes map[string]int64 `json:"nodeAvailableMemoryBytes,omitempty"`
 	Seed                     seedRecord       `json:"seed"`
+	// MemberSpread is the spec.placement.memberSpread of the run's clusters.
+	MemberSpread string `json:"memberSpread"`
+	// SchedulableNodes are the nodes a member could be scheduled to, read
+	// before the run created anything when MemberSpread is Required.
+	SchedulableNodes []string `json:"schedulableNodes,omitempty"`
 	// PodSecurity are the Pod Security labels the run created its namespace
 	// with.
 	PodSecurity   map[string]string `json:"podSecurity,omitempty"`
@@ -631,16 +643,9 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	observed := record{RunID: runID}
-	err := r.observeEnvironment(ctx, cfg.Config, &observed, &summary.Environment)
-	// The free space and memory read are kept also when a node short of
-	// either refused the run.
-	h.rec.NodeFreeBytes = observed.NodeFreeBytes
-	h.rec.NodeAvailableMemoryBytes = observed.NodeAvailableMemoryBytes
-	if err != nil {
+	if err := h.observeTarget(ctx, &observed, &summary.Environment); err != nil {
 		return err
 	}
-	h.rec.KubernetesClusterUID, h.rec.Operator = observed.KubernetesClusterUID, observed.Operator
-	h.rec.StorageProvisioner = observed.StorageProvisioner
 	ns, _, err := r.prepareNamespace(ctx, cfg.Config, &observed, cfg.privileged())
 	if err != nil {
 		return err
@@ -656,6 +661,26 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	}
 	h.labPassed = true
 	return h.afterLAB01(ctx)
+}
+
+// observeTarget observes the target as every run does, then checks that
+// the run's member spread can place its members, and records what it read.
+// Nothing is created before it.
+func (h *haRun) observeTarget(ctx context.Context, observed *record, env *evidence.Environment) error {
+	err := h.observeEnvironment(ctx, h.cfg.Config, observed, env)
+	// The free space and memory read are kept also when a node short of
+	// either refused the run.
+	h.rec.NodeFreeBytes = observed.NodeFreeBytes
+	h.rec.NodeAvailableMemoryBytes = observed.NodeAvailableMemoryBytes
+	if err != nil {
+		return err
+	}
+	if err := h.checkMemberSpreadNodes(ctx, h.cfg, &h.rec); err != nil {
+		return err
+	}
+	h.rec.KubernetesClusterUID, h.rec.Operator = observed.KubernetesClusterUID, observed.Operator
+	h.rec.StorageProvisioner = observed.StorageProvisioner
+	return nil
 }
 
 // faultLane returns the lane, the requirement and the summary's first note
@@ -1021,6 +1046,7 @@ func (h *haRun) clusterSpec(prefix, secret string) databasev1alpha1.CubridCluste
 		ObjectStorage: &databasev1alpha1.CubridObjectStorage{Endpoint: h.cfg.SeedEndpoint,
 			Insecure: h.cfg.SeedInsecure, Bucket: h.cfg.SeedBucket, Prefix: prefix,
 			CredentialsSecretRef: corev1.LocalObjectReference{Name: secret}},
+		Placement: &databasev1alpha1.CubridPlacement{MemberSpread: h.cfg.MemberSpread},
 		Storage: databasev1alpha1.CubridStorage{Data: databasev1alpha1.CubridStorageSpec{
 			Size: resource.MustParse("2Gi"), StorageClassName: &h.cfg.StorageClass}}}
 }

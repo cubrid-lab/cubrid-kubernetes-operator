@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
 
@@ -227,4 +228,64 @@ func volumeNode(volume *corev1.PersistentVolume) string {
 		}
 	}
 	return evidence.Unknown
+}
+
+// MemberSpreadFlag is a command-line flag that sets *spread, starting from def.
+func MemberSpreadFlag(spread *databasev1alpha1.MemberSpread, def databasev1alpha1.MemberSpread) memberSpreadValue {
+	*spread = def
+	return memberSpreadValue{spread: spread}
+}
+
+type memberSpreadValue struct {
+	spread *databasev1alpha1.MemberSpread
+}
+
+func (v memberSpreadValue) String() string {
+	if v.spread == nil {
+		return ""
+	}
+	return string(*v.spread)
+}
+
+func (v memberSpreadValue) Set(value string) error {
+	spread := databasev1alpha1.MemberSpread(value)
+	if !validMemberSpread(spread) {
+		return fmt.Errorf("want Required or Preferred: %q", value)
+	}
+	*v.spread = spread
+	return nil
+}
+
+func validMemberSpread(spread databasev1alpha1.MemberSpread) bool {
+	return spread == databasev1alpha1.MemberSpreadRequired || spread == databasev1alpha1.MemberSpreadPreferred
+}
+
+// checkMemberSpreadNodes records the run's member spread and, under
+// Required, refuses before anything is created a run with fewer schedulable
+// nodes than members: a member with no node of its own would stay Pending
+// and the cluster would never form, which says nothing about the Operator
+// (#596). The schedulable nodes read are recorded.
+func (r *Runner) checkMemberSpreadNodes(ctx context.Context, cfg HAConfig, rec *haRecord) error {
+	rec.MemberSpread = string(cfg.MemberSpread)
+	if cfg.MemberSpread != databasev1alpha1.MemberSpreadRequired {
+		return nil
+	}
+	nodes := &corev1.NodeList{}
+	if err := r.Client.List(ctx, nodes); err != nil {
+		return fmt.Errorf("list the nodes to count those a member can be scheduled to: %w", err)
+	}
+	rec.SchedulableNodes = []string{}
+	for i := range nodes.Items {
+		if schedulable(&nodes.Items[i]) {
+			rec.SchedulableNodes = append(rec.SchedulableNodes, nodes.Items[i].Name)
+		}
+	}
+	slices.Sort(rec.SchedulableNodes)
+	if len(rec.SchedulableNodes) < haMemberCount {
+		return fmt.Errorf("not enough schedulable nodes for Required member spread: %d members need a node "+
+			"each, and %d node(s) are Ready, not cordoned and not tainted (%s); no resources were created; "+
+			"make more nodes schedulable or run with -member-spread Preferred", haMemberCount,
+			len(rec.SchedulableNodes), strings.Join(rec.SchedulableNodes, ", "))
+	}
+	return nil
 }

@@ -342,6 +342,9 @@ spec:
     bucket: seed
     credentialsSecretRef:
       name: object-storage
+  # Kind has a single node: let the members share it (#90).
+  placement:
+    memberSpread: Preferred
   storage:
     data:
       size: 100Mi
@@ -413,6 +416,90 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(resolved).To(Equal("True"))
 			}, time.Minute, time.Second).Should(Succeed())
+		})
+
+		// Not a scenario of the contract. A new HA cluster that leaves
+		// memberSpread unset resolves to Required, so on the single node of
+		// Kind the real scheduler runs one member and leaves the other two
+		// Pending, and MemberPlacement says so (#596). Which member gets the
+		// node is the scheduler's choice: the members start in parallel.
+		It("leaves two members of a new cluster Pending on one node and reports them unschedulable", Label("placement"), func() {
+			const spreadCluster = "spread"
+			repository, tag, found := strings.Cut(fakeIMImage, ":")
+			Expect(found).To(BeTrue(), "fakeIMImage needs a tag")
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(fmt.Sprintf(`apiVersion: database.cubrid.io/v1alpha1
+kind: CubridCluster
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  version: "11.4"
+  image:
+    repository: %s
+    tag: %s
+  databases:
+    - name: appdb
+  topology:
+    promotableMembers: 3
+    readReplicas: 0
+  highAvailability:
+    enabled: true
+  objectStorage:
+    endpoint: object-store.invalid:9000
+    bucket: seed
+    credentialsSecretRef:
+      name: object-storage
+  storage:
+    data:
+      size: 100Mi
+`, spreadCluster, wiringNamespace, repository, tag))
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create the CubridCluster")
+			DeferCleanup(func() {
+				if CurrentSpecReport().Failed() {
+					for _, args := range [][]string{
+						{"get", "cubridcluster", spreadCluster, "-o", "yaml"},
+						{"get", "pods", "-l", "app.kubernetes.io/instance=" + spreadCluster + ",app.kubernetes.io/component=database", "-o", "wide"},
+					} {
+						out, _ := utils.Run(exec.Command("kubectl", append([]string{"-n", wiringNamespace}, args...)...))
+						_, _ = fmt.Fprintf(GinkgoWriter, "%v:\n%s\n", args, out)
+					}
+				}
+				_, _ = utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "delete", "cubridcluster", spreadCluster,
+					"--ignore-not-found", "--timeout=3m"))
+			})
+
+			By("checking that the cluster recorded Required as its default")
+			Eventually(func(g Gomega) {
+				out, err := utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "get", "cubridcluster", spreadCluster,
+					"-o", `jsonpath={.metadata.annotations.database\.cubrid\.io/member-spread-default}`))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(Equal("Required"))
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("waiting for one member on the node, two Pending as unschedulable, and the condition to say so")
+			Eventually(func(g Gomega) {
+				out, err := utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "get", "pods",
+					"-l", "app.kubernetes.io/instance="+spreadCluster+",app.kubernetes.io/component=database", "-o",
+					`jsonpath={range .items[*]}{.metadata.name} {.spec.nodeName} {.status.conditions[?(@.type=="PodScheduled")].reason}{"\n"}{end}`))
+				g.Expect(err).NotTo(HaveOccurred())
+				var placed, unschedulable int
+				for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+					switch fields := strings.Fields(line); {
+					case len(fields) >= 2 && fields[1] != "Unschedulable":
+						placed++
+					case len(fields) == 2 && fields[1] == "Unschedulable":
+						unschedulable++
+					}
+				}
+				g.Expect(placed).To(Equal(1), "members:\n%s", out)
+				g.Expect(unschedulable).To(Equal(2), "members:\n%s", out)
+				status, err := utils.Run(exec.Command("kubectl", "-n", wiringNamespace, "get", "cubridcluster", spreadCluster,
+					"-o", `jsonpath={.status.conditions[?(@.type=="MemberPlacement")].status}/{.status.conditions[?(@.type=="MemberPlacement")].reason}`))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(status).To(Equal("False/MemberUnschedulable"))
+			}, 3*time.Minute, 2*time.Second).Should(Succeed())
 		})
 	})
 })

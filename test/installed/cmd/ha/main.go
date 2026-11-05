@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/installed"
 )
 
@@ -233,6 +234,9 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")
 	flags.DurationVar(&cfg.CleanupTimeout, "cleanup-timeout", 5*time.Minute, "independent cleanup deadline")
 	flags.DurationVar(&cfg.Poll, "poll", 3*time.Second, "polling interval")
+	flags.Var(installed.MemberSpreadFlag(&cfg.MemberSpread, databasev1alpha1.MemberSpreadRequired), "member-spread",
+		"spec.placement.memberSpread of every cluster the run creates: Required, which refuses the run as blocked "+
+			"before anything is created unless each member has a schedulable node of its own, or Preferred")
 	flags.Var(installed.FreeSpaceFlag(&cfg.MinNodeFreeSpace, "8Gi"), "min-node-free-space",
 		"free space every schedulable node must have before the run creates anything: one three-member cluster "+
 			"on one node above kubelet's eviction threshold; 0 reads none")
