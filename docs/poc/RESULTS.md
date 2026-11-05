@@ -5033,7 +5033,7 @@ merges the run's scripts and was run again only for setup and part K.
 - Stopping the master's own applier (A2, P2) is a signal stand-in for a master with no other commit.
 - The engine's use of `Final LSA` was observed, not read in its source. In particular, why it moves at the 16 KB page boundary (`<page>|0` or `<page>|32`) with pages waiting, as in some samples of A, A2 and K, was not looked at.
 
-## POC-49 — whether `cubrid heartbeat status` run beside csql on a standalone member makes csql print `ERROR CODE = -199` (server no longer responding) — **observation: not reproduced; in 7,800 short csql runs, 2,696 of them overlapping one of 7,182 `cubrid heartbeat status` calls (each exited 1 with "The server was not configured for HA."), no csql run printed -199 or -111 or exited non-zero, with or without heartbeat calls, Broker clients, other `cubrid` commands, one CPU under load, or `docker exec` per command; the -199 seen in CI was not explained**
+## POC-49 — whether `cubrid heartbeat status` run beside csql on a standalone member makes csql print `ERROR CODE = -199` (server no longer responding) — **observation: not reproduced; in 7,800 short csql runs, 2,696 of them overlapping one of 7,182 `cubrid heartbeat status` calls (each exited 1 with "The server was not configured for HA."), no csql run printed -199 or -111 or exited non-zero (csql's own log held one -199 and -111 pair, cause unknown), with or without heartbeat calls, Broker clients, other `cubrid` commands, one CPU under load, or `docker exec` per command; the -199 seen in CI was not explained**
 
 **Question.** In the Kind e2e run 41986930319 of PR #698 (2026-11-05), the
 standalone cluster's test (scenario S00) read its marker row with
@@ -5122,11 +5122,17 @@ argument`) with one `ERROR CODE = -111` (`transaction_cl.c, line 600`), both
 at 08:26:09.817 and both from csql pid 89969, in the first second of the
 three concurrent loops (parts L1 to L3). The runs in progress then were run 1
 of L1 and run 1 of L2, both `SELECT COUNT(*) FROM t`; both exited 0 and their
-captured output held neither code. Which of the two was pid 89969 was not
+captured output held neither code. Run 2 of L3 (08:26:09.810Z to .942Z) was
+also in progress but is excluded: pid 89969 had already connected at
+08:26:09.794, before that run started. Which of the two was pid 89969 was not
 recorded. An L1 `cubrid heartbeat status` call ran from 08:26:09.795Z to
 08:26:09.817Z, ending in the same millisecond. Parts A to K2 logged exactly
 one -971 entry per run and nothing else; parts L1 to L3 logged 1,323 -971
-entries for 1,500 runs, and why the rest are missing was not examined. The
+entries for 1,500 runs, and why the rest are missing was not examined. As 177
+of the 1,500 runs left no connection notice in the shared log, entries may
+have been lost, so one pair is a minimum count (hypothesis, not tested). The
+overlap counts of this entry are conservative: the runs of L2 and L3 also
+overlapped the heartbeat calls of L1, which are not counted. The
 `docker exec` parts (XA to XB2) ran csql in another directory, whose
 `csql.err` was not read. The counts, the commands that gave them and the
 quoted lines are in
@@ -5174,7 +5180,10 @@ gzipped TSVs of the recorded run.
   (95 % confidence, rule of three) is unlikely in these conditions taken
   together, and above about 1 in 900 for the 2,696 runs that overlapped a
   heartbeat call. The rate in CI was not measured: run 41986930319 showed
-  the pair twice, and how many csql calls that run made was not counted.
+  the pair twice (S00's csql read at the end of the smoke checks on the
+  standalone member s00-0, and the replication-stall step's row count on the
+  HA member hab-2 at 07:56:52 UTC, where only the -199 line is visible in the
+  truncated note and the -111 line is not), and how many csql calls that run made was not counted.
 - csql's and the server's own traces were not read beyond the `.err` logs,
   and CUBRID's source for `network_cl.c` line 177 was not read.
 - One POC is the behavior of one image in a few runs, not a general CUBRID

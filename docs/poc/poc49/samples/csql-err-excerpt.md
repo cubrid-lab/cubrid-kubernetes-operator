@@ -26,7 +26,10 @@ in `<part>.csql.tsv`: each of parts A to K2 has exactly one -971 entry per
 csql run (5,400 in all) and no other entry. Parts L1, L2 and L3 ran three
 loops at once from 08:26:09.780Z to 08:27:07.968Z: 1,323 -971 entries for
 their 1,500 csql runs, and the one -199 and -111 pair. Why 177 runs of the
-three concurrent loops left no -971 entry was not examined.
+three concurrent loops left no -971 entry was not examined; entries may have
+been lost, so the one pair is a minimum count (hypothesis, not tested). The
+overlap counts in the entry are conservative, because the runs of L2 and L3
+also overlapped the heartbeat calls of L1.
 
 ## The -199 and -111 pair
 
@@ -61,7 +64,9 @@ Program 'csql' (pid 89983) connected to database server 'appdb@localhost' on the
 The csql runs in progress at 08:26:09.817 were run 1 of L1
 (08:26:09.780Z to 08:26:09.820Z) and run 1 of L2 (08:26:09.782Z to
 08:26:09.823Z), both `SELECT COUNT(*) FROM t`; run 1 of L3 had ended at
-08:26:09.797Z. Both exited 0 and their captured output (stdout and stderr)
+08:26:09.797Z. Run 2 of L3 (08:26:09.810Z to 08:26:09.942Z) was also in
+progress, but pid 89969 had connected at 08:26:09.794, before that run
+started, so it is excluded. Both exited 0 and their captured output (stdout and stderr)
 held neither `-199` nor `-111` (`L1.csql.tsv`, `L2.csql.tsv`), so the pair
 was written to the log without being printed by the run. Which of the two
 runs was pid 89969 was not recorded. The L1 background loop's
