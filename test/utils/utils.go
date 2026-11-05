@@ -232,6 +232,10 @@ func checkKindContext(current, want string) error {
 		"cluster it runs against; switch with `kubectl config use-context %s`", current, want, want)
 }
 
+// ImageLoadProblem starts the message of an *ImageLoadError, so that a test
+// report that quotes the error can be told from other failures.
+const ImageLoadProblem = "environment problem: could not load image"
+
 // ImageLoadError reports that an image could not be loaded into the Kind
 // cluster after every attempt. Loading an image does not exercise the
 // Operator, so this is a problem of the test environment (the container
@@ -244,7 +248,7 @@ type ImageLoadError struct {
 
 func (e *ImageLoadError) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "environment problem: could not load image %q into Kind after %d attempt(s)", e.Image, len(e.Attempts))
+	fmt.Fprintf(&b, ImageLoadProblem+" %q into Kind after %d attempt(s)", e.Image, len(e.Attempts))
 	for i, a := range e.Attempts {
 		fmt.Fprintf(&b, "\n--- attempt %d ---\n%s", i+1, a)
 	}
@@ -262,18 +266,27 @@ const (
 
 // loadImageWithRetry calls load up to attempts times, sleeping backoff times
 // the attempt number between them. load returns the command's full output and
-// its error. A failure of every attempt returns an *ImageLoadError that keeps
+// its error; every failed attempt's output is also written to log as it
+// happens, so a failure that a later attempt recovers from leaves its cause.
+// A failure of every attempt returns an *ImageLoadError that keeps
 // all of the attempts' output.
 func loadImageWithRetry(image string, load func() (string, error), attempts int,
-	backoff time.Duration, sleep func(time.Duration)) error {
+	backoff time.Duration, sleep func(time.Duration), log io.Writer) error {
 	failure := &ImageLoadError{Image: image}
 	for i := 1; i <= attempts; i++ {
 		out, err := load()
 		if err == nil {
 			return nil
 		}
-		failure.Attempts = append(failure.Attempts, fmt.Sprintf("%v\n%s", redacted(err.Error()), redacted(out)))
-		_, _ = fmt.Fprintf(GinkgoWriter, "Image load attempt %d of %d failed for %s\n", i, attempts, image)
+		// Run's error embeds the output; keep the output once, with the bare
+		// exit error.
+		exit := err
+		if inner := errors.Unwrap(err); inner != nil {
+			exit = inner
+		}
+		attempt := fmt.Sprintf("%s\n%v", redacted(out), redacted(exit.Error()))
+		failure.Attempts = append(failure.Attempts, attempt)
+		_, _ = fmt.Fprintf(log, "Image load attempt %d of %d failed for %s:\n%s\n", i, attempts, image, attempt)
 		if i < attempts {
 			sleep(time.Duration(i) * backoff)
 		}
@@ -288,7 +301,7 @@ func loadImageWithRetry(image string, load func() (string, error), attempts int,
 // when every attempt fails the error is an *ImageLoadError.
 func LoadImageToKindClusterWithName(name string) error {
 	return loadImageWithRetry(name, func() (string, error) { return loadImageOnce(name) },
-		imageLoadAttempts, imageLoadBackoff, time.Sleep)
+		imageLoadAttempts, imageLoadBackoff, time.Sleep, GinkgoWriter)
 }
 
 func loadImageOnce(name string) (string, error) {
