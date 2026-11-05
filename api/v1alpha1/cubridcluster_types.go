@@ -491,8 +491,10 @@ type InstanceReplication struct {
 	// +optional
 	Applier string `json:"applier,omitempty"`
 	// stalledSince is when the operator first saw log pages waiting while the
-	// applier had applied nothing since the reading before. It is cleared
-	// as soon as the applier applies something or no page waits, and starts
+	// applier had not advanced since the reading before: its position in the
+	// copied log did not move while the copy grew or, when the Instance
+	// Manager does not report the position, it applied nothing. It is
+	// cleared as soon as the applier advances or no page waits, and starts
 	// again at the current reading when the applier process changes while
 	// pages still wait.
 	// +optional

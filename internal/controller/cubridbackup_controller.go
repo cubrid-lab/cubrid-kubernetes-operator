@@ -104,6 +104,10 @@ type CubridBackupReconciler struct {
 	Recorder record.EventRecorder
 	// Clock tells the time; nil means time.Now.
 	Clock func() time.Time
+	// Positions is the store of applier readings the CubridClusterReconciler
+	// keeps; it is only read here, to judge standbys as the cluster's status
+	// is judged. Nil holds no reading.
+	Positions *ApplierPositions
 
 	// phases holds, per backup that is being reconciled, the phase its
 	// stored status has (writeStatus).
@@ -274,8 +278,8 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		// requeue or an Operator restart neither restarts nor loses it.
 		since := backup.Status.PrimaryLogEndNotReadSince
 		logEndWaitOver := since != nil && r.now().Sub(since.Time) >= primaryLogEndWait
-		sel = selectBackupTarget(members, obs, replicationHistory(cluster), res, backup.Spec.Target.Preference, single,
-			logEndWaitOver, observedAt)
+		sel = selectBackupTarget(members, obs, replicationHistory(cluster), r.Positions.readings(cluster.UID, observedAt), res,
+			backup.Spec.Target.Preference, single, logEndWaitOver, observedAt)
 		// A selection that ended otherwise ends this wait; a later one starts
 		// it again with the whole bound. Each wait is bounded, and between
 		// them the backup waits for another reason or proceeds.

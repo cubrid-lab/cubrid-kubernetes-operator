@@ -93,7 +93,7 @@ func TestInstanceStatuses_UnfinishedDatabase(t *testing.T) {
 		"an answer naming another member": {RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave,
 			ObservedAt: testNow, Conflicting: true, Unfinished: report}, false},
 	} {
-		got := instanceStatuses([]string{c1}, map[string]RoleObservation{c1: tc.obs}, testNow, nil)[0]
+		got := instanceStatuses([]string{c1}, map[string]RoleObservation{c1: tc.obs}, testNow, nil, nil)[0]
 		if (got.UnfinishedDatabase != nil) != tc.want {
 			t.Errorf("%s: unfinishedDatabase = %+v, want present %v", name, got.UnfinishedDatabase, tc.want)
 		}
@@ -112,20 +112,20 @@ func TestInstanceStatuses_UnfinishedDatabaseKeptWithoutAnAnswer(t *testing.T) {
 		return map[string]RoleObservation{c1: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow,
 			Unfinished: u}}
 	}
-	reported := instanceStatuses([]string{c1}, answer(report), testNow, nil)
+	reported := instanceStatuses([]string{c1}, answer(report), testNow, nil, nil)
 	for name, obs := range map[string]map[string]RoleObservation{
 		"no observation":   {},
 		"unreachable":      {c1: {Reachable: false, ObservedAt: testNow}},
 		"a stale answer":   {c1: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow.Add(-2 * roleObservationTTL)}},
 		"another member's": {c1: {Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: testNow, Conflicting: true}},
 	} {
-		missed := instanceStatuses([]string{c1}, obs, testNow, reported)
+		missed := instanceStatuses([]string{c1}, obs, testNow, reported, nil)
 		if got := missed[0].UnfinishedDatabase; got == nil || *got != *report {
 			t.Errorf("%s: unfinishedDatabase = %+v, want the last report %+v kept", name, got, report)
 		}
 		before := &databasev1alpha1.CubridClusterStatus{Instances: reported}
 		again := &databasev1alpha1.CubridClusterStatus{Instances: instanceStatuses([]string{c1}, answer(report), testNow,
-			missed)}
+			missed, nil)}
 		if got := events(transitions(&databasev1alpha1.CubridClusterStatus{Instances: missed}, again)); strings.Contains(got, "unfinished") {
 			t.Errorf("%s: answering again after the miss made %q, want no unfinished-database transition", name, got)
 		}
@@ -133,7 +133,7 @@ func TestInstanceStatuses_UnfinishedDatabaseKeptWithoutAnAnswer(t *testing.T) {
 			t.Errorf("%s: the miss made %q, want no unfinished-database transition", name, got)
 		}
 	}
-	if got := instanceStatuses([]string{c1}, answer(nil), testNow, reported)[0].UnfinishedDatabase; got != nil {
+	if got := instanceStatuses([]string{c1}, answer(nil), testNow, reported, nil)[0].UnfinishedDatabase; got != nil {
 		t.Errorf("an answer without the marker: unfinishedDatabase = %+v, want none", got)
 	}
 }

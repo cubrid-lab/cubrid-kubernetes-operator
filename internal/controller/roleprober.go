@@ -220,6 +220,7 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 			FailCount:      int64(r.FailCount),
 			DelayedPages:   int64(r.DelayedPageCount),
 			Applier:        r.Applier,
+			FinalLSA:       logAddress(r.FinalLSA),
 			CopiedEOF:      logAddress(r.CopiedEOF),
 		}
 	}
