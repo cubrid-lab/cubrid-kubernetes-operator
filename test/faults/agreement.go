@@ -1503,6 +1503,12 @@ type SmokeSQL struct {
 	// Write is true for an operation that commits a change.
 	Write bool
 	OK    bool
+	// Inconclusive, when set, says why the operation's outcome is no evidence
+	// that the statement failed or succeeded in the member's Pod: the row was
+	// read but did not match, or csql could not be run there. Such an
+	// operation is left out of the rules that compare the Conditions with the
+	// SQL, and the reason is noted.
+	Inconclusive string
 	// What names the operation in agreement.txt.
 	What string
 }
@@ -1622,7 +1628,9 @@ func checkS00NoPrimary(obs Observations, run S00Run) finding {
 		f.notes = append(f.notes, "no heartbeat sweep was recorded")
 	case len(masters) == 0:
 		f.notes = append(f.notes, fmt.Sprintf("in all %d heartbeat sweeps no member answered as an HA master, "+
-			"as for a standalone member that runs no heartbeat", len(obs.Sweeps)))
+			"as for a standalone member that runs no heartbeat; its cubrid heartbeat status fails with \"The server was not "+
+			"configured for HA.\" (docs/poc/RESULTS.md, POC-26), which the sweeps record as no answer, so they cannot "+
+			"tell it from an exec that did not run", len(obs.Sweeps)))
 	default:
 		for _, member := range slices.Sorted(maps.Keys(masters)) {
 			f.notes = append(f.notes, fmt.Sprintf("heartbeat showed %s as master in %d of %d sweeps, on a "+
@@ -1652,8 +1660,12 @@ func checkS00NoPrimary(obs Observations, run S00Run) finding {
 func checkS00ReadyFollowedBySQL(obs Observations, run S00Run) finding {
 	var inPod []SmokeSQL
 	var lastEnd time.Time
+	var notes []string
 	for _, op := range run.SQL {
-		if !op.Broker {
+		if !op.Broker && op.Inconclusive != "" {
+			notes = append(notes, fmt.Sprintf("%s, from %s to %s, is not compared with Ready: %s", op.What,
+				stamp(op.Start), stamp(op.End), op.Inconclusive))
+		} else if !op.Broker {
 			inPod = append(inPod, op)
 			if op.End.After(lastEnd) {
 				lastEnd = op.End
@@ -1661,7 +1673,7 @@ func checkS00ReadyFollowedBySQL(obs Observations, run S00Run) finding {
 		}
 	}
 	if len(inPod) == 0 {
-		return finding{notJudged: "no SQL operation with csql in the member's Pod was recorded"}
+		return finding{notJudged: "no SQL operation with csql in the member's Pod was recorded", notes: notes}
 	}
 	samples := byReadStart(obs.Samples)
 	var readings []reading
@@ -1683,7 +1695,7 @@ func checkS00ReadyFollowedBySQL(obs Observations, run S00Run) finding {
 			}
 		}
 	}
-	var bad, notes []string
+	var bad []string
 	uncovered := 0
 	for _, op := range inPod {
 		if op.OK {
@@ -1728,6 +1740,9 @@ func reportS00SQL(obs Observations, run S00Run, succeeded bool) finding {
 		condition := condReady
 		if op.Broker {
 			condition = condRoutingReady
+		}
+		if op.Inconclusive != "" {
+			continue
 		}
 		last := lastReadBefore(samples, op.Start)
 		if last < 0 {

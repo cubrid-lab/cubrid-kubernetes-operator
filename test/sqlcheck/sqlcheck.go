@@ -29,21 +29,34 @@ type Runner func(string) (string, error)
 // csqlError matches the ways csql reports a failed statement.
 var csqlError = regexp.MustCompile(`(?m)^ERROR:|Failed to connect|ERROR CODE`)
 
+// StatementError is the error of Run for a statement csql reported as failed,
+// as opposed to a command that could not be run or an output that did not
+// hold what a check looked for.
+type StatementError struct{ err error }
+
+func (e *StatementError) Error() string { return e.err.Error() }
+func (e *StatementError) Unwrap() error { return e.err }
+
 // Run runs sql and fails on a command error or on an error in the output:
 // csql's exit status alone is not relied on.
 func Run(run Runner, sql string) (string, error) {
 	out, err := run(sql)
+	loc := csqlError.FindStringIndex(out)
 	if err != nil {
-		return out, fmt.Errorf("csql failed: %w\n%s", err, out)
+		err = fmt.Errorf("csql failed: %w\n%s", err, out)
+		if loc != nil {
+			return out, &StatementError{err}
+		}
+		return out, err
 	}
 	// The line csql reported comes first, so that a record cut short still
 	// shows it, and not only a NOTIFICATION csql printed before it.
-	if loc := csqlError.FindStringIndex(out); loc != nil {
+	if loc != nil {
 		line := out[loc[0]:]
 		if end := strings.IndexByte(line, '\n'); end >= 0 {
 			line = line[:end]
 		}
-		return out, fmt.Errorf("csql reported an error: %s\n%s", strings.TrimSpace(line), out)
+		return out, &StatementError{fmt.Errorf("csql reported an error: %s\n%s", strings.TrimSpace(line), out)}
 	}
 	return out, nil
 }

@@ -1115,6 +1115,18 @@ func TestS00Rules(t *testing.T) {
 	if got := CheckAgreement(followed, S00Rules(s00Run(failedCSQL))); len(got.Disagreements) > 0 {
 		t.Errorf("Ready turned False within the tolerance after the failure: %v", got.Disagreements)
 	}
+	// The row read did not match, or csql could not be run: the Conditions are
+	// not compared with it, and the reason is noted.
+	inconclusiveCSQL := s00Smoke()
+	inconclusiveCSQL[0].OK = false
+	inconclusiveCSQL[0].Inconclusive = "csql could not be run in the Pod"
+	checkCases(t, S00Rules(s00Run(inconclusiveCSQL)), map[string]agreementCase{
+		"csql fails for a reason other than the statement while Ready stays True": {
+			obs: readyEarly, note: "csql could not be run in the Pod"},
+	})
+	if got := CheckAgreement(readyEarly, S00Rules(s00Run(inconclusiveCSQL))); len(got.Disagreements) > 0 {
+		t.Errorf("an operation that is no evidence of a failed statement was judged: %v", got.Disagreements)
+	}
 	checkCases(t, S00Rules(s00Run(lastFails)), map[string]agreementCase{
 		"csql fails at the end, with no reads for the tolerance after it": {obs: s00Obs(), note: "not judged"},
 	})

@@ -22,6 +22,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 )
 
@@ -99,6 +101,13 @@ func s00Scenario() {
 		smokeSQL := func(what string, broker, write bool, start time.Time, ok bool) {
 			s00Run.SQL = append(s00Run.SQL, faults.SmokeSQL{Start: start.UTC(), End: time.Now().UTC(), Broker: broker,
 				Write: write, OK: ok, What: what})
+		}
+		// smokeCSQL records a csql operation in the Pod from the error of its
+		// check (smokeOutcome).
+		smokeCSQL := func(what string, write bool, start time.Time, err error) {
+			ok, inconclusive := smokeOutcome(err)
+			smokeSQL(what, false, write, start, ok)
+			s00Run.SQL[len(s00Run.SQL)-1].Inconclusive = inconclusive
 		}
 
 		kubectl := func(args ...string) (string, error) {
@@ -177,7 +186,7 @@ spec:
 				members: []string{pod}}).sampleConditions(conditionSampling{roles: true})
 		})
 
-		AfterAll(func() {
+		AfterAll(func(ctx SpecContext) {
 			if record.Host == "" {
 				// Skipped: nothing ran, and that is not a pass.
 				recordScenario(evidence.Scenario{ID: "S00", Result: evidence.NotRun,
@@ -193,7 +202,10 @@ spec:
 				// ReadyTolerance after it, so the reads go on that long.
 				for _, op := range s00Run.SQL {
 					if wait := time.Until(op.End.Add(faults.ReadyTolerance + conditionSampleEvery)); !op.OK && !op.Broker && wait > 0 {
-						time.Sleep(wait)
+						select {
+						case <-ctx.Done():
+						case <-time.After(wait):
+						}
 					}
 				}
 				rounds = sampler.stop()
@@ -306,11 +318,11 @@ spec:
 			sql := csqlInPod(context.Background(), s00Namespace, pod, database)
 			start := time.Now()
 			err = writeS00Row(sql, marker)
-			smokeSQL("csql write of the marker row in "+pod, false, true, start, err == nil)
+			smokeCSQL("csql write of the marker row in "+pod, true, start, err)
 			Expect(err).NotTo(HaveOccurred())
 			start = time.Now()
 			err = readS00Row(sql, marker)
-			smokeSQL("csql read of the marker row in "+pod, false, false, start, err == nil)
+			smokeCSQL("csql read of the marker row in "+pod, false, start, err)
 			Expect(err).NotTo(HaveOccurred())
 			// An upper bound: it includes the checks above.
 			record.ReadySeconds = time.Since(createdAt).Seconds()
@@ -377,8 +389,7 @@ spec:
 			By("reading the row with csql again at the end of the smoke checks, after Ready was True")
 			start := time.Now()
 			err = readS00Row(csqlInPod(context.Background(), s00Namespace, pod, database), marker)
-			smokeSQL("csql read of the marker row in "+pod+" at the end of the smoke checks", false, false, start,
-				err == nil)
+			smokeCSQL("csql read of the marker row in "+pod+" at the end of the smoke checks", false, start, err)
 			Expect(err).NotTo(HaveOccurred())
 			s00Run.SmokeEnd = time.Now().UTC()
 			step(s00Run.SmokeEnd, "smoke_checks_ended", "")
@@ -543,4 +554,22 @@ func s00Conditions(result evidence.Scenario, rounds []conditionRound, run faults
 	}
 	result.Measurements["conditionAgreement"] = measured
 	return withAgreement(result, agreement)
+}
+
+// smokeOutcome says how an SQL operation in the member's Pod is recorded
+// from err, the error of its check. It failed (ok false, no reason) only when
+// csql reported the statement as failed. A row that did not match, or a
+// command that could not be run, is not evidence of that: it is recorded
+// with a reason, and the rule that compares Ready with failed SQL leaves it
+// out.
+func smokeOutcome(err error) (ok bool, inconclusive string) {
+	var statement *sqlcheck.StatementError
+	switch {
+	case err == nil:
+		return true, ""
+	case errors.As(err, &statement):
+		return false, ""
+	}
+	first, _, _ := strings.Cut(err.Error(), "\n")
+	return false, "the check did not show a failed statement: " + first
 }

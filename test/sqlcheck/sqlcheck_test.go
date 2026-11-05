@@ -205,3 +205,37 @@ func TestSQLChecksRunNamesTheErrorLineFirst(t *testing.T) {
 		t.Errorf("error = %v, want it to start with the line csql reported", err)
 	}
 }
+
+// TestSQLChecksStatementError checks that only an error csql reported is a
+// StatementError: not a command that could not be run, and not a row that
+// does not match.
+func TestSQLChecksStatementError(t *testing.T) {
+	for name, tc := range map[string]struct {
+		run  func() error
+		want bool
+	}{
+		"reported statement": {func() error {
+			_, err := Run(func(string) (string, error) { return "ERROR: bad SQL", nil }, "x")
+			return err
+		}, true},
+		"connection failure with a failed command": {func() error {
+			_, err := Run(func(string) (string, error) { return "Failed to connect", errors.New("exit 1") }, "x")
+			return err
+		}, true},
+		"command that could not be run": {func() error {
+			_, err := Run(func(string) (string, error) { return "", errors.New("transport") }, "x")
+			return err
+		}, false},
+		"row of another marker": {func() error {
+			return ReadRow(func(string) (string, error) { return "1 'other'\n1 row selected", nil }, "m")
+		}, false},
+		"read statement that failed": {func() error {
+			return ReadRow(func(string) (string, error) { return "ERROR: no table", nil }, "m")
+		}, true},
+	} {
+		var se *StatementError
+		if got := errors.As(tc.run(), &se); got != tc.want {
+			t.Errorf("%s: StatementError = %v, want %v", name, got, tc.want)
+		}
+	}
+}

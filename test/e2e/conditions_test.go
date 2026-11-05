@@ -23,6 +23,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -252,11 +254,14 @@ func checkConditions(dir string, rounds []conditionRound, events []workload.Even
 	fmt.Fprintf(&text, "Agreement of the CubridCluster's Conditions with SQL and the fault, %s\n\n", dir)
 	fmt.Fprintf(&text, "Status reads: %d, of which %d could not be read; heartbeat sweeps: %d; "+
 		"client operations with an outcome: %d\n", len(rounds), unread, len(obs.Sweeps), len(obs.SQL))
-	fmt.Fprintf(&text, "Tolerance of the rules that compare sources: %s\n\nRules:\n", faults.AgreementTolerance)
+	text.WriteString("\nRules:\n")
 	for _, rule := range rules {
 		judged := ""
+		if rule.Kind == faults.Tolerance {
+			judged = ", tolerance " + rule.Tolerance.String()
+		}
 		if n, ok := agreement.Evaluated[rule.ID]; ok {
-			judged = fmt.Sprintf(", %d status reads judged", n)
+			judged += fmt.Sprintf(", %d status reads judged", n)
 		}
 		fmt.Fprintf(&text, "- %s (%s%s): %s\n", rule.ID, rule.Kind, judged, rule.Says)
 	}
@@ -713,5 +718,32 @@ func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
 		!strings.HasPrefix(got.Reason, reasonConditionsNotJudged) {
 		t.Errorf("a run without SQL in the Pod gave %s (%s), want blocked with %s", got.Result, got.Reason,
 			reasonConditionsNotJudged)
+	}
+}
+
+// TestAgreementTextGivesEachToleranceRuleItsOwnTolerance checks that
+// agreement.txt states the tolerance of every rule that compares sources, not
+// one for all: S00's csql rule uses ReadyTolerance, the others
+// AgreementTolerance.
+func TestAgreementTextGivesEachToleranceRuleItsOwnTolerance(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("E2E_EVIDENCE_DIR", dir)
+	run := faults.S00Run{Member: "m-0"}
+	checkConditions("S00/tol", nil, nil, nil, faults.S00Rules(run))
+	text, err := os.ReadFile(filepath.Join(dir, "S00/tol/agreement.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line string
+	for l := range strings.SplitSeq(string(text), "\n") {
+		if strings.HasPrefix(l, "- ready-true-is-followed-by-sql-in-the-pod (") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "tolerance "+faults.ReadyTolerance.String()) {
+		t.Errorf("the line of the csql rule, %q, does not give its tolerance %s", line, faults.ReadyTolerance)
+	}
+	if strings.Contains(string(text), faults.AgreementTolerance.String()) {
+		t.Errorf("agreement.txt gives the tolerance %s, which no S00 rule uses:\n%s", faults.AgreementTolerance, text)
 	}
 }

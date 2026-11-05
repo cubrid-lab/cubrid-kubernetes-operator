@@ -1085,7 +1085,10 @@ it needs more.
   compared with the SQL of the smoke checks, and no rule waits for the
   status to be fresh. Each round still asks the member with
   `cubrid heartbeat status`, which confirms that no member answers as an HA
-  master. The rules:
+  master. A standalone member answers that command with exit status 1 and
+  "The server was not configured for HA." (`docs/poc/RESULTS.md`, POC-26),
+  which the sweeps record as no answer, so they cannot tell a standalone
+  member from an exec that did not run. The rules:
   - **Never:** the Never rules for an HA cluster above hold in every read.
     Four of them start from a Condition a standalone cluster never carries
     (`PrimaryResolved=True`, `HAReady=True` or `ReplicationHealthy=False`):
@@ -1112,7 +1115,13 @@ it needs more.
     `csql` once more at the end of the smoke checks, after `Ready` was seen
     `True`. When a `csql` operation failed, the reads go on for 30 seconds
     after it before they are judged. The statement that is meant to fail is
-    not counted.
+    not counted. An operation counts as failed only when `csql` reported the
+    statement as failed in the Pod; a row that did not match or a `csql` that
+    could not be run is left out of this rule and noted. This rule can only
+    refine the reason of a run that already failed, since every failed `csql`
+    operation in the Pod already fails S00 through its own check; on a passing
+    run it can only block it, when no read with `Ready=True` came before the
+    last `csql` operation.
   - **Report:** SQL that succeeded while the last read before it had `Ready`
     (for `csql` in the Pod) or `RoutingReady` (for the client through the
     Brokers) not `True`, and SQL that failed while it was `True`. A failure of

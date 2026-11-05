@@ -20,6 +20,8 @@ limitations under the License.
 package e2e
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -54,5 +56,33 @@ func TestSQLChecks(t *testing.T) {
 		return "1 'other'\n1 row selected", nil
 	}, "marker-123"); err == nil {
 		t.Fatal("accepted wrong marker")
+	}
+}
+
+// TestSmokeOutcome checks that a csql operation is recorded as failed only
+// when csql reported the statement as failed in the Pod; a row that does not
+// match and a command that could not be run are recorded with their own
+// reason instead (S00).
+func TestSmokeOutcome(t *testing.T) {
+	statement := func() error {
+		return readS00Row(func(string) (string, error) { return "ERROR: no table", nil }, "m")
+	}
+	for name, tc := range map[string]struct {
+		err      error
+		ok       bool
+		reasoned bool
+	}{
+		"no error":        {nil, true, false},
+		"statement error": {statement(), false, false},
+		"wrong row": {readS00Row(func(string) (string, error) { return "1 'other'\n1 row selected", nil }, "m"),
+			false, true},
+		"transport error": {readS00Row(func(string) (string, error) { return "", errors.New("transport") }, "m"),
+			false, true},
+		"wrapped statement error": {fmt.Errorf("check: %w", statement()), false, false},
+	} {
+		ok, reason := smokeOutcome(tc.err)
+		if ok != tc.ok || (reason != "") != tc.reasoned {
+			t.Errorf("%s: smokeOutcome = %v, %q; want ok %v, a reason %v", name, ok, reason, tc.ok, tc.reasoned)
+		}
 	}
 }
