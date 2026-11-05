@@ -171,9 +171,10 @@ func (r *haRun) conditionRound(ctx context.Context, sampling conditionSampling) 
 		round.Rows = &counts
 	}
 	if sampling.roles {
-		sweep := faults.RoleSweep{Start: time.Now().UTC(), Roles: make(map[string]string, len(r.members))}
+		sweep := faults.RoleSweep{Start: time.Now().UTC(), Roles: make(map[string]string, len(r.members)),
+			NodeStates: make(map[string]string, len(r.members))}
 		for _, pod := range r.members {
-			sweep.Roles[pod] = r.heartbeatRole(ctx, pod)
+			sweep.Roles[pod], sweep.NodeStates[pod] = r.heartbeatRole(ctx, pod)
 		}
 		sweep.End = time.Now().UTC()
 		round.Roles = &sweep
@@ -203,13 +204,14 @@ func (r *haRun) ledgerRows(ctx context.Context, pod string) (int, error) {
 }
 
 // heartbeatRole is the role CUBRID's heartbeat reports on pod, as
-// heartbeatRoleIn reads it, and "" when the member did not answer.
-func (r *haRun) heartbeatRole(ctx context.Context, pod string) string {
+// heartbeatRoleIn reads it, and the state of its own node, as
+// heartbeatNodeStateIn reads it; both "" when the member did not answer.
+func (r *haRun) heartbeatRole(ctx context.Context, pod string) (role, nodeState string) {
 	out, err := r.kubectlQuiet(ctx, "exec", pod, "--", "bash", "-c", heartbeatStatus)
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	return heartbeatRoleIn(pod, out)
+	return heartbeatRoleIn(pod, out), heartbeatNodeStateIn(pod, out)
 }
 
 // checkConditions compares the sampled Conditions with the clients'
@@ -444,4 +446,76 @@ func stallVerdict(a faults.Agreement) error {
 		return fmt.Errorf("a rule on the Conditions could not be judged: %s", strings.Join(a.NotJudged, "; "))
 	}
 	return nil
+}
+
+// TestNotTrueWindowFromTheSampledReads checks how S03 measures from the
+// sampled reads how long a Condition was not True between the fault and the
+// outcome: from the first read in which it was not True to the first later
+// read in which it was again.
+func TestNotTrueWindowFromTheSampledReads(t *testing.T) {
+	start := time.Now().UTC()
+	read := func(second int, status string) conditionRound {
+		at := start.Add(time.Duration(second) * time.Second)
+		return conditionRound{Status: &faults.ConditionSample{ReadStart: at, ReadEnd: at,
+			Conditions: map[string]faults.ConditionState{"PrimaryResolved": {Status: status}}}}
+	}
+	rounds := []conditionRound{read(0, "False"), read(2, "True"), read(4, "False"), {StatusError: "no answer"},
+		read(8, "Unknown"), read(10, "True"), read(12, "False")}
+	w := notTrueWindow(rounds, "PrimaryResolved", start.Add(time.Second), start.Add(11*time.Second))
+	if !w.from.Equal(start.Add(4*time.Second)) || !w.to.Equal(start.Add(10*time.Second)) {
+		t.Errorf("window = %s to %s, want 4s to 10s after the start", w.from.Sub(start), w.to.Sub(start))
+	}
+	if open := notTrueWindow(rounds, "PrimaryResolved", start.Add(11*time.Second), start.Add(20*time.Second)); open.length() != "not ended" {
+		t.Errorf("a window still open at the outcome: %s", open.length())
+	}
+}
+
+func TestHeartbeatNodeStateIn(t *testing.T) {
+	for out, want := range map[string]string{
+		" HA-Node Info (current c-0, state master)\n  Server db (pid 1, state registered_and_to_be_active)": "master",
+		" HA-Node Info (current c-0, state to-be-slave)":                                                    "to-be-slave",
+		" HA-Node Info (current c-1, state master)":                                                         "",
+		"cubrid heartbeat is not running":                                                                   "",
+	} {
+		if got := heartbeatNodeStateIn("c-0", out); got != want {
+			t.Errorf("heartbeatNodeStateIn(%q) = %q, want %q", out, got, want)
+		}
+	}
+}
+
+// notTrueWindow is, among the reads that started between from and to, the
+// window from the first read in which the Condition was not True to the first
+// later read in which it was True again.
+func notTrueWindow(rounds []conditionRound, condition string, from, to time.Time) window {
+	var w window
+	for _, round := range rounds {
+		s := round.Status
+		if s == nil || s.ReadStart.Before(from) || s.ReadStart.After(to) {
+			continue
+		}
+		holds := s.Conditions[condition].Status != "True"
+		switch {
+		case holds && w.from.IsZero():
+			w.from = s.ReadStart
+		case !holds && !w.from.IsZero() && w.to.IsZero():
+			w.to = s.ReadStart
+		}
+	}
+	return w
+}
+
+// writeRoleSweeps stores the heartbeat sweeps of the rounds as JSON lines,
+// one per sweep with its start and end, and returns the file written.
+func writeRoleSweeps(rel string, rounds []conditionRound) string {
+	var b strings.Builder
+	for _, round := range rounds {
+		if round.Roles == nil {
+			continue
+		}
+		if line, err := json.Marshal(round.Roles); err == nil {
+			b.Write(line)
+			b.WriteByte('\n')
+		}
+	}
+	return writeScenarioFile(rel, []byte(b.String()))
 }

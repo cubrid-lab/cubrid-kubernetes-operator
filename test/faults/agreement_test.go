@@ -627,3 +627,92 @@ func TestStallReportsHowLongTheConditionLagsTheRows(t *testing.T) {
 		t.Errorf("notes %v do not report that ReplicationHealthy turned True 20s after the rows matched", got.Notes)
 	}
 }
+
+// s03Run is an abrupt failure of the master m-0 at second 10, after which
+// CUBRID makes m-1 master: its node state is master from second 20 and its
+// server active from second 24. The Operator resolves m-0 until second 12,
+// nothing from 12 to 60, and m-1 from 60; the outcome is reached at second
+// 100. A status read and a heartbeat sweep every two seconds to second last.
+func s03Run(last float64) Observations {
+	var obs Observations
+	for s := 0.0; s <= last; s += 2 {
+		sample := healthy(s)
+		switch {
+		case s >= 12 && s < 60:
+			sample = falseSince(falseSince(falseSince(sample, "PrimaryResolved", "PrimaryObservationIncomplete", 12),
+				"HAReady", "PrimaryObservationIncomplete", 12), "RoutingReady", "PrimaryObservationIncomplete", 12)
+			sample.CurrentPrimary = ""
+		case s >= 60:
+			sample.CurrentPrimary = m1
+		}
+		obs.Samples = append(obs.Samples, sample)
+		sw := RoleSweep{Start: at(s + 0.3), End: at(s + 1.3),
+			Roles:      map[string]string{m0: roleSlave, m1: roleSlave, m2: roleSlave},
+			NodeStates: map[string]string{m0: roleSlave, m1: roleSlave, m2: roleSlave}}
+		switch {
+		case s < 10:
+			sw.Roles[m0], sw.NodeStates[m0] = roleMaster, roleMaster
+		case s < 20:
+			sw.Roles[m0], sw.NodeStates[m0] = "", ""
+		default:
+			sw.NodeStates[m1] = roleMaster
+			if s >= 24 {
+				sw.Roles[m1] = roleMaster
+			}
+		}
+		obs.Sweeps = append(obs.Sweeps, sw)
+	}
+	obs.Steps = []Step{{T: at(10), Kind: "fault_issued"}, {T: at(100), Kind: "outcome_reached"}}
+	return obs
+}
+
+func TestS03Rules(t *testing.T) {
+	names := func(member string, from, to float64) func(Observations) Observations {
+		return func(obs Observations) Observations {
+			return replace(obs, from, func(s ConditionSample) ConditionSample {
+				if s.ReadStart.Before(at(to)) {
+					s.CurrentPrimary = member
+				}
+				return s
+			})
+		}
+	}
+	// m-1 is resolved at second 22, while its node state is master and its
+	// server is not active yet: the Instance Manager reports the node state.
+	early := s03Run(200)
+	early = replace(early, 22, func(s ConditionSample) ConditionSample {
+		if s.ReadStart.Before(at(60)) {
+			s = healthy(s.ReadStart.Sub(t0).Seconds())
+			s.CurrentPrimary = m1
+		}
+		return s
+	})
+	noSweeps := s03Run(200)
+	noSweeps.Sweeps = nil
+	routing := s03Run(200)
+	routing.Samples[10] = with(routing.Samples[10], "RoutingReady", "True", "PrimaryResolved")
+	acknowledged := s03Run(200)
+	acknowledged.SQL = []SQLEvent{{T: at(30.5), Write: true, Outcome: SQLAcknowledged}}
+
+	checkCases(t, S03Rules(m1), map[string]agreementCase{
+		"the status names each master after heartbeat showed it": {obs: s03Run(200), judged: true},
+		"a member resolved while heartbeat shows its node as master and its server not active yet": {
+			obs: early, judged: true},
+		"after the outcome the status names another member than the new master": {
+			obs: names(m2, 150, 160)(s03Run(200)), disagree: ruleS03PrimaryAfterOutcome},
+		"before the outcome the status names a member heartbeat never showed as master": {
+			obs: names(m2, 60, 70)(s03Run(200)), disagree: ruleS03PrimaryWasMaster},
+		"without a heartbeat sweep the primary is not compared with heartbeat": {
+			obs: noSweeps, notJudged: ruleS03PrimaryWasMaster},
+		"without a read after the outcome the rule on the new master is not judged": {
+			obs: s03Run(98), notJudged: ruleS03PrimaryAfterOutcome},
+		"routing ready while the primary is not resolved in the same read": {
+			obs: routing, disagree: ruleS03RoutingNeedsPrimary},
+		"a write acknowledged while the primary is not resolved is reported": {
+			obs: acknowledged, note: ruleWritesWithoutRouting},
+	})
+	got := CheckAgreement(names(m2, 150, 160)(s03Run(200)), S03Rules(m1))
+	if mentions(got.Disagreements, ruleS03PrimaryAfterOutcome, "12:00:1") || !mentions(got.Disagreements, "m-2") {
+		t.Errorf("the rule on the new master judged reads before the outcome: %v", got.Disagreements)
+	}
+}

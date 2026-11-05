@@ -36,8 +36,14 @@ func Run(run Runner, sql string) (string, error) {
 	if err != nil {
 		return out, fmt.Errorf("csql failed: %w\n%s", err, out)
 	}
-	if csqlError.MatchString(out) {
-		return out, fmt.Errorf("csql reported an error:\n%s", out)
+	// The line csql reported comes first, so that a record cut short still
+	// shows it, and not only a NOTIFICATION csql printed before it.
+	if loc := csqlError.FindStringIndex(out); loc != nil {
+		line := out[loc[0]:]
+		if end := strings.IndexByte(line, '\n'); end >= 0 {
+			line = line[:end]
+		}
+		return out, fmt.Errorf("csql reported an error: %s\n%s", strings.TrimSpace(line), out)
 	}
 	return out, nil
 }

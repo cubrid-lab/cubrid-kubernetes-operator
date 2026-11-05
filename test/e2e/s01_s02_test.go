@@ -110,6 +110,22 @@ func (r *haRun) kubectlQuiet(ctx context.Context, args ...string) (string, error
 // heartbeatStatus is the command that asks CUBRID on a member for its role.
 const heartbeatStatus = `PATH="${CUBRID}/bin:${PATH}" cubrid heartbeat status`
 
+// heartbeatNodeStateIn reads the state cubrid heartbeat status printed on pod
+// gives its own node ("current <pod>, state <state>"), whatever the state of
+// its server: the state the Instance Manager reports as the member's role. It
+// is "" when the output does not name pod's node.
+func heartbeatNodeStateIn(pod, out string) string {
+	_, rest, found := strings.Cut(out, "current "+pod+", state ")
+	if !found {
+		return ""
+	}
+	state, _, found := strings.Cut(rest, ")")
+	if !found {
+		return ""
+	}
+	return strings.TrimSpace(state)
+}
+
 // heartbeatRoleIn reads what cubrid heartbeat status printed on pod: "master"
 // for an active master, "slave" for a standby slave, and "" for anything else.
 func heartbeatRoleIn(pod, out string) string {

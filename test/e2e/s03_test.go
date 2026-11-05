@@ -179,15 +179,6 @@ type window struct {
 	from, to time.Time
 }
 
-func (w *window) sample(holds bool) {
-	switch {
-	case holds && w.from.IsZero():
-		w.from = time.Now()
-	case !holds && !w.from.IsZero() && w.to.IsZero():
-		w.to = time.Now()
-	}
-}
-
 // length is the window's duration, or "not observed" when no sample fell in
 // it and "not ended" when it was still open at the last sample.
 func (w window) length() string {
@@ -269,8 +260,8 @@ func (r *haRun) collectClient(id string) (string, error) {
 	return text, nil
 }
 
-// roleLog records what CUBRID reports on every member, each time it changes.
-// It is evidence for a run that does not end as expected.
+// roleLog records what CUBRID reports on every member, each time it changes,
+// for the message of a step that does not end as expected.
 type roleLog struct {
 	lines []string
 	last  string
@@ -300,10 +291,6 @@ func (l *roleLog) sample(ctx context.Context, r *haRun) {
 	l.last = now
 	line, _ := json.Marshal(map[string]string{"t": time.Now().UTC().Format(time.RFC3339Nano), "roles": now})
 	l.lines = append(l.lines, string(line))
-}
-
-func (l *roleLog) write(rel string) string {
-	return writeScenarioFile(rel, []byte(strings.Join(l.lines, "\n")+"\n"))
 }
 
 // replicationStateLimit bounds how long replicationState may take in all;
@@ -441,13 +428,13 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	r.startClient(client)
 	defer r.killClient(client)
 
+	By("reading the cluster's Conditions and every member's heartbeat every two seconds")
+	sampler := r.sampleConditions(conditionSampling{roles: true})
+	defer sampler.stop()
+
 	By("deleting the master Pod and waiting for a new master, the operator's status and the client")
 	var newMaster string
 	var electedAt, noticedAt time.Time
-	// How long the operator reported the primary as not resolved and the
-	// routing as not ready, as far as the samples of the wait show.
-	var unresolved, notRouting window
-	roles := &roleLog{}
 	outcome := r.runFault(faults.Scenario{
 		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful},
 		Limits: s03FlowLimits,
@@ -468,20 +455,9 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			return nil
 		},
 		Check: func(ctx context.Context) (bool, error) {
-			roles.sample(ctx, r)
-			// The operator's own view, from one read of its status. It must
-			// never offer the write endpoint while the primary is not
-			// resolved (ADR-0005, section 6).
-			if s, err := r.status(ctx); err == nil {
-				resolved := s.conditions["PrimaryResolved"] == "True"
-				routing := s.conditions["RoutingReady"] == "True"
-				if routing && !resolved {
-					return false, fmt.Errorf("RoutingReady is True while PrimaryResolved is %q",
-						s.conditions["PrimaryResolved"])
-				}
-				unresolved.sample(!resolved)
-				notRouting.sample(!routing)
-			}
+			// The Operator's own view is read by the sampler, and judged after
+			// the run (conditions_test.go): it must never offer the write
+			// endpoint while the primary is not resolved (ADR-0005, section 6).
 			// Two members that are active masters at once must never happen.
 			// One sweep asks the members one after another and can see both
 			// sides of a handover, so a second sweep confirms it.
@@ -528,10 +504,11 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		},
 	})
 	timeline := writeTimeline("S03/"+variant+"/timeline.jsonl", outcome.Timeline)
-	rolesFile := roles.write("S03/" + variant + "/roles.jsonl")
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
 	if outcome.Result != evidence.Pass {
+		// Keep the sweeps of the wait: the scenario ends here.
+		writeRoleSweeps("S03/"+variant+"/roles.jsonl", sampler.stop())
 		result.Result, result.Reason = outcome.Result, outcome.Reason
 		// Keep what the client saw: the scenario ends here.
 		if text, err := r.client(context.Background(), fmt.Sprintf("cat /tmp/%s.jsonl", client)); err == nil {
@@ -548,6 +525,13 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		}
 		return faults.CheckOneMaster(masters, r.activeMasters(context.Background()))
 	}, stablePeriod.Value+2*time.Second, 3*time.Second).Should(Succeed())
+	rounds := sampler.stop()
+	rolesFile := writeRoleSweeps("S03/"+variant+"/roles.jsonl", rounds)
+	// How long the operator reported the primary as not resolved and the
+	// routing as not ready between the fault and the outcome, as far as the
+	// sampled reads show.
+	unresolved := notTrueWindow(rounds, "PrimaryResolved", outcome.FaultIssuedAt, outcome.OutcomeAt)
+	notRouting := notTrueWindow(rounds, "RoutingReady", outcome.FaultIssuedAt, outcome.OutcomeAt)
 	events, history := r.stopClient(client)
 
 	recoveredAt, stable, recovered := workload.Recovery(events, outcome.FaultIssuedAt)
@@ -627,6 +611,9 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		}
 	}
 	lossWindow, lossResolution := r.observedLoss(report, outcome.FaultIssuedAt, client)
+	agreement, agreementFiles, agreementMeasured := checkConditions("S03/"+variant, rounds, events,
+		outcome.Timeline, slices.Concat(faults.NeverRules(), faults.S03Rules(newMaster)))
+	files = append(files, agreementFiles...)
 	result = judged(evidence.Scenario{
 		ID: "S03", Variant: variant,
 		FaultConfirmed: &outcome.FaultConfirmed, CleanupSucceeded: &outcome.CleanupSucceeded,
@@ -647,6 +634,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			"primaryUnresolvedFor":               unresolved.length(),
 			"routingNotReadyFor":                 notRouting.length(),
 			"acknowledgedWhilePrimaryUnresolved": acknowledgedWhileUnresolved,
+			"conditionAgreement":                 agreementMeasured,
 		},
 		Operations: &evidence.Operations{
 			Attempted: history.Counts[workload.Attempted], Acknowledged: history.Counts[workload.Acknowledged],
@@ -655,4 +643,9 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		Evidence: files,
 	}, within(failoverLimit, recovery), stableFor(stable),
 		within(rejoinLimit, outcome.OutcomeAt.Sub(outcome.FaultIssuedAt)))
+	result = withAgreement(result, agreement)
+	Expect(agreement.Disagreements).To(BeEmpty(),
+		"S03/%s: the Conditions disagreed with CUBRID's heartbeat; see agreement.txt", variant)
+	Expect(agreement.NotJudged).To(BeEmpty(),
+		"S03/%s: a rule on the Conditions could not be judged; see agreement.txt", variant)
 }
