@@ -409,8 +409,8 @@ func (h *haRun) waitFormed(ctx context.Context, created *databasev1alpha1.Cubrid
 		return true, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("the first %s was not formed: %s: %w", created.Name, cmp.Or(waiting,
-			"no reading was taken"), err)
+		return nil, h.runEnded(ctx, clusterMembers(created.Name), fmt.Errorf("the first %s was not formed: %s: %w",
+			created.Name, cmp.Or(waiting, "no reading was taken"), err))
 	}
 	return roles, nil
 }
@@ -605,11 +605,11 @@ func (h *haRun) waitWrongTargetRefused(ctx context.Context, created *databasev1a
 	switch {
 	case err == nil:
 		return refusedAt, nil
-	case ctx.Err() == nil && wctx.Err() != nil && readErr != nil:
+	case limitEnded(ctx, wctx, err) && readErr != nil:
 		// The state at the limit is not known: the run could not judge.
-		return time.Time{}, fmt.Errorf("the cluster restored over the volumes could not be read before "+
-			"restore_limit %s passed: %w", h.cfg.RestoreLimit, readErr)
-	case ctx.Err() == nil && wctx.Err() != nil:
+		return time.Time{}, h.limitUnread(restoreTarget(created.Name), fmt.Errorf("the cluster restored over the "+
+			"volumes could not be read before restore_limit %s passed: %w", h.cfg.RestoreLimit, readErr))
+	case limitEnded(ctx, wctx, err):
 		phase, reason := noBootstrapPhase, noBootstrapCondition
 		if n := len(rec.Bootstrap); n > 0 {
 			last := rec.Bootstrap[n-1]
@@ -618,11 +618,11 @@ func (h *haRun) waitWrongTargetRefused(ctx context.Context, created *databasev1a
 				reason = c.Reason + ": " + c.Message
 			}
 		}
-		return time.Time{}, restoreVerdict{fmt.Errorf("the restore over the volumes that hold a database was not "+
-			"refused within restore_limit %s; its last bootstrap phase was %q, BootstrapReady %s",
-			h.cfg.RestoreLimit, phase, reason)}
+		return time.Time{}, h.limitPassed(restoreTarget(created.Name), fmt.Errorf("the restore over the volumes "+
+			"that hold a database was not refused within restore_limit %s; its last bootstrap phase was %q, BootstrapReady %s",
+			h.cfg.RestoreLimit, phase, reason))
 	}
-	return time.Time{}, err
+	return time.Time{}, h.runEnded(ctx, restoreTarget(created.Name), err)
 }
 
 // wrongTargetReading records one reading of the cluster restored over the

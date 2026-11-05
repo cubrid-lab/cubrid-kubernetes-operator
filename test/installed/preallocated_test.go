@@ -862,6 +862,45 @@ func preallocatedManagerFixture(t *testing.T, sameNamespace bool) *fixture {
 	return newPreallocatedFixture(t, cfg)
 }
 
+// A member the scheduler cannot place explains why the run could not judge the
+// cluster. It does not explain a manager that restarted during the cleanup,
+// which fails the run even though the cleanup itself completed.
+func TestPreallocatedManagerRestartDuringCleanupStaysFailedBesideAnUnschedulableMember(t *testing.T) {
+	f := preallocatedManagerFixture(t, false)
+	f.cfg.Timeout = 300 * time.Millisecond
+	f.afterCluster = func(ctx context.Context, c client.WithWatch) {
+		key := client.ObjectKey{Namespace: f.cfg.Namespace, Name: clusterName + "-0"}
+		if err := leavePending(ctx, c, key, &testUnschedulable); err != nil {
+			t.Error(err)
+		}
+	}
+	f.deleteHook = func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+		if err := c.Delete(ctx, obj, opts...); err != nil {
+			return err
+		}
+		restartManager(t, f, testPodKind)
+		for _, child := range append([]client.Object{&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: clusterName,
+			Namespace: f.cfg.Namespace}}, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0",
+			Namespace: f.cfg.Namespace}}}, brokerTier(f.cfg.Namespace, obj.GetUID())...) {
+			if err := c.Delete(ctx, child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	err := f.runner.Run(t.Context(), f.cfg)
+	if err == nil || !strings.Contains(err.Error(), "incarnation changed before cleanup completed") {
+		t.Fatalf("a manager restart during cleanup did not fail the run: %v", err)
+	}
+	s := readSummary(t, f.cfg.EvidenceDir).Scenarios[0]
+	if s.Result != evidence.Fail || !strings.Contains(s.Reason, testNoFit) {
+		t.Fatalf("LAB00 = %+v; want a failure that still names the scheduler's message", s)
+	}
+	if cleaned := s.CleanupSucceeded; cleaned == nil || !*cleaned {
+		t.Fatalf("cleanup did not finish: %+v", s)
+	}
+}
+
 // A manager that restarts only while cleanup waits for the workloads to stop
 // does not stop that cleanup, but it still fails the run.
 func TestPreallocatedManagerRestartDuringCleanupFailsTheRun(t *testing.T) {

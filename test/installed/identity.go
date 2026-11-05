@@ -41,6 +41,10 @@ type imageIdentity struct {
 	Image       string `json:"image"`
 	ImageID     string `json:"imageID"`
 	ContainerID string `json:"containerID"`
+	// MemoryRequest and CPURequest are what the container declares; empty
+	// when it declares none.
+	MemoryRequest string `json:"memoryRequest,omitempty"`
+	CPURequest    string `json:"cpuRequest,omitempty"`
 }
 
 type managerIdentity struct {
@@ -65,6 +69,12 @@ func podIdentity(pod *corev1.Pod, container, expected string) (imageIdentity, er
 	for _, c := range pod.Spec.Containers {
 		if c.Name == container {
 			identity.Image = c.Image
+			if request, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+				identity.MemoryRequest = request.String()
+			}
+			if request, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+				identity.CPURequest = request.String()
+			}
 		}
 	}
 	if identity.Image != expected {

@@ -68,6 +68,7 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.Var(installed.FreeSpaceFlag(&cfg.MinNodeFreeMemory, "1Gi"), "min-node-free-memory",
 		"memory kubelet must report available on every schedulable node before the run creates anything; 0 "+
 			"reads none")
+	installed.MemberRequestFlags(flags, &cfg)
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

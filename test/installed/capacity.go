@@ -20,13 +20,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
@@ -39,13 +43,14 @@ import (
 // kubelet evicts Pods when it runs low, and a run's members can all land on
 // one node, so a run that starts on a full node can evict the shared clusters
 // and its own volumes' delete helpers with them. Memory is read for the same
-// reason: database Pods request none, so the scheduler does not avoid a node
-// whose memory the shared clusters already use, and there the kernel kills
-// cub_server (#672). A node under cfg.MinNodeFreeSpace or
-// cfg.MinNodeFreeMemory, or one that does not report a figure a minimum asks
-// for, refuses the run. A minimum of zero reads nothing, and so does a
-// preallocated namespace's run, whose cluster-wide reads are limited to fixed
-// names. What was read is recorded in bytes per node.
+// reason: the shared clusters' database Pods request none, so the scheduler
+// does not count the memory they use, even when the run's own members declare
+// requests, and on a full node the kernel kills cub_server (#672). A node
+// under cfg.MinNodeFreeSpace or cfg.MinNodeFreeMemory, or one that does not
+// report a figure a minimum asks for, refuses the run. A minimum of zero reads
+// nothing, and so does a preallocated namespace's run, whose cluster-wide
+// reads are limited to fixed names. What was read is recorded in bytes per
+// node.
 func (r *Runner) checkNodeFreeSpace(ctx context.Context, cfg Config, rec *record) error {
 	readSpace, readMemory := cfg.MinNodeFreeSpace > 0, cfg.MinNodeFreeMemory > 0
 	if !readSpace && !readMemory || cfg.NamespaceMode == PreallocatedNamespace {
@@ -228,6 +233,201 @@ func volumeNode(volume *corev1.PersistentVolume) string {
 		}
 	}
 	return evidence.Unknown
+}
+
+// unschedulableMember is a member the scheduler refused when a wait for it
+// ended, with the scheduler's message. RefusedSince is the lastTransitionTime
+// of the Pod's PodScheduled condition, null when the Pod reports none, and
+// ReadAt when the harness read it. The time does not move when only the
+// message changes, so it says how long the member has been refused, not how
+// long this message has held. BlocksRun is whether this refusal shows nodes
+// without room (refusalBlocks).
+type unschedulableMember struct {
+	Pod          string      `json:"pod"`
+	PodUID       string      `json:"podUID"`
+	Message      string      `json:"message"`
+	RefusedSince metav1.Time `json:"refusedSince"`
+	ReadAt       time.Time   `json:"readAt"`
+	BlocksRun    bool        `json:"blocksRun"`
+}
+
+// membersUnschedulable is the error of a wait that ended while the scheduler
+// refused a member for memory or CPU. A run on nodes that are full cannot judge
+// the Operator (#671), so the error blocks the scenario instead of failing it.
+// It deliberately wraps nothing: the verdict the wait would otherwise have
+// given must not be found in it.
+type membersUnschedulable struct{ error }
+
+// schedulingReadTimeout bounds the read of the members once a wait ended. It
+// uses a context of its own because the end of the run may have ended the
+// wait.
+const schedulingReadTimeout = 30 * time.Second
+
+// refusalMinimumHold is how long a refusal must have held to block a run. The
+// run reads its members once, when the wait ends, and the scheduler tries a
+// Pending Pod again as the cluster changes: a refusal seconds old can belong
+// to a member just created beside Pods that are going away, and has not shown
+// that the member does not fit. kube-scheduler backs off for at most 10 s by
+// default, so this leaves room for a few tries. It is a chosen value, not a
+// measurement.
+const refusalMinimumHold = 30 * time.Second
+
+// blockOnUnschedulable reads the members of a wait that ended with ended. A
+// member the scheduler refuses is added to recorded with the scheduler's
+// message, whatever the refusal says. When a refusal blocks the run
+// (refusalBlocks), the error returned is membersUnschedulable, which a
+// confirmed never-event still turns into a failure. Otherwise ended is
+// returned, with any refusal and what could not be read added to it.
+func (r *Runner) blockOnUnschedulable(namespace string, members []string, recorded *[]unschedulableMember,
+	ended error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), schedulingReadTimeout)
+	defer cancel()
+	var found []unschedulableMember
+	var failed []error
+	for _, name := range members {
+		pod := &corev1.Pod{}
+		err := r.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, pod)
+		switch {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			failed = append(failed, err)
+			continue
+		}
+		if member, refused := schedulerRefusal(pod, time.Now().UTC()); refused {
+			found = append(found, member)
+		}
+	}
+	*recorded = append(*recorded, found...)
+	blocks := false
+	refusals := make([]string, 0, len(found))
+	for _, member := range found {
+		blocks = blocks || member.BlocksRun
+		refusals = append(refusals, member.Pod+": "+member.Message)
+	}
+	if blocks {
+		return membersUnschedulable{fmt.Errorf("%s; the scheduler refused a member for memory or CPU, so the "+
+			"environment did not let the run judge the Operator: %s", ended, strings.Join(refusals, "; "))}
+	}
+	if len(found) > 0 {
+		ended = fmt.Errorf("%w; the scheduler refused the member(s), which does not block the run because the "+
+			"refusal names neither memory nor CPU or has not held for %s: %s", ended, refusalMinimumHold,
+			strings.Join(refusals, "; "))
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%w; whether the scheduler could place every member could not be read: %v", ended,
+			errors.Join(failed...))
+	}
+	return ended
+}
+
+// waitCut reports whether ctx, and not a reading the wait made as it ended,
+// ended a wait with err. A reading can span the end of ctx, and what it found
+// stays that reading's error.
+func waitCut(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && errors.Is(err, ctx.Err())
+}
+
+// unfinishedResult is the result of LAB00 or LAB01 when runErr ended it. A run
+// that created nothing is blocked. One that did has failed, unless nodes
+// without room for a member left it with no verdict on the Operator; a cleanup
+// that failed, or that saw the manager change, is a failure either way.
+func unfinishedResult(created, cleaned bool, runErr error) evidence.Result {
+	if created && (!cleaned || !errors.As(runErr, new(membersUnschedulable))) {
+		return evidence.Fail
+	}
+	return evidence.Blocked
+}
+
+// schedulerRefusal returns the scheduler's refusal, as read at now, when pod is
+// an unready member that the scheduler reported it could not place. Any other
+// Pending member, such as one that is bound and starting, says nothing about
+// the scheduler.
+func schedulerRefusal(pod *corev1.Pod, now time.Time) (unschedulableMember, bool) {
+	if podReady(pod) || !pod.DeletionTimestamp.IsZero() {
+		return unschedulableMember{}, false
+	}
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse &&
+			condition.Reason == corev1.PodReasonUnschedulable {
+			return unschedulableMember{Pod: pod.Name, PodUID: string(pod.UID), Message: condition.Message,
+				RefusedSince: condition.LastTransitionTime, ReadAt: now,
+				BlocksRun: refusalBlocks(condition, now)}, true
+		}
+	}
+	return unschedulableMember{}, false
+}
+
+// refusalBlocks reports whether a PodScheduled refusal shows nodes without
+// room: its message names memory or CPU, and it has held for
+// refusalMinimumHold. The scheduler counts the nodes per reason, so a message
+// that also names another reason still counts. Anti-affinity, an unbound claim
+// or a node selector can come from the Pod the Operator rendered, and the
+// harness does not read MemberPlacement, so those keep the wait's verdict. The
+// message is the scheduler's text, not an API. How long a refusal without a
+// transition time has held is unknown, and that is not taken as long enough.
+func refusalBlocks(refusal corev1.PodCondition, now time.Time) bool {
+	capacity := strings.Contains(refusal.Message, "Insufficient memory") ||
+		strings.Contains(refusal.Message, "Insufficient cpu")
+	return capacity && !refusal.LastTransitionTime.IsZero() &&
+		now.Sub(refusal.LastTransitionTime.Time) >= refusalMinimumHold
+}
+
+// The requests a member of a run declares unless a flag says otherwise. The
+// memory is the about 575 MiB kubectl top showed for each long-lived member on
+// the VM lab on 2026-11-03 (#671), rounded up to 600Mi, the figure per member
+// that the memory pre-flight counts with; use during a bootstrap or a SQL
+// workload was not measured. No CPU use of a member has been measured, so the
+// CPU is a small value chosen without a measurement. It is low enough for the
+// nine members a restore lane can hold at once (three clusters: the source,
+// S12 exact's and one other S12 variant's, whose flags exclude each other) to
+// declare 900m in total beside the shared clusters on 2 vCPU workers.
+const (
+	DefaultMemberMemoryRequest = "600Mi"
+	DefaultMemberCPURequest    = "100m"
+)
+
+// MemberRequestFlags registers the flags of a run's member requests.
+func MemberRequestFlags(flags *flag.FlagSet, cfg *Config) {
+	flags.Var(requestFlag(&cfg.MemberMemoryRequest, DefaultMemberMemoryRequest), "member-memory-request",
+		"spec.resources.requests.memory of every cluster the run creates: about 575 MiB observed per "+
+			"long-lived member on the VM lab, rounded up; must be positive")
+	flags.Var(requestFlag(&cfg.MemberCPURequest, DefaultMemberCPURequest), "member-cpu-request",
+		"spec.resources.requests.cpu of every cluster the run creates: a small value, not a measurement; must be "+
+			"positive")
+}
+
+// requestFlag is a command-line flag that sets *quantity, starting from def.
+func requestFlag(quantity *resource.Quantity, def string) requestValue {
+	*quantity = resource.MustParse(def)
+	return requestValue{quantity: quantity}
+}
+
+type requestValue struct{ quantity *resource.Quantity }
+
+func (v requestValue) String() string {
+	if v.quantity == nil {
+		return ""
+	}
+	return v.quantity.String()
+}
+
+func (v requestValue) Set(value string) error {
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil || quantity.Sign() <= 0 {
+		return fmt.Errorf("want a positive quantity such as 600Mi or 100m: %q", value)
+	}
+	*v.quantity = quantity
+	return nil
+}
+
+// memberResources is spec.resources of every cluster the run creates. It sets
+// requests only: a limit would kill a member at a peak nobody has measured.
+func (c Config) memberResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{Requests: corev1.ResourceList{
+		corev1.ResourceMemory: c.MemberMemoryRequest,
+		corev1.ResourceCPU:    c.MemberCPURequest,
+	}}
 }
 
 // MemberSpreadFlag is a command-line flag that sets *spread, starting from def.

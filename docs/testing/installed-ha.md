@@ -87,6 +87,16 @@ In addition to the smoke's inputs:
   nothing about separate-node placement. The value is recorded as
   `memberSpread`, and under `Required` the nodes counted as
   `schedulableNodes`, in `LAB01/record.json` (#596).
+- `-member-memory-request` (default `600Mi`) and `-member-cpu-request`
+  (default `100m`) are set as `spec.resources.requests` on every cluster the
+  run creates: the source cluster and the S11 and S12 ones. Both must be
+  positive, so a run cannot turn them off. A member whose request does not
+  fit stays `Pending`, and the run ends `blocked`
+  ([Database member requests](#database-member-requests)); do not lower the
+  request to get a pass. No limit is set. Each member's declared values are
+  recorded with its node as `memoryRequest` and `cpuRequest` under `members`
+  in `LAB01/record.json`, and the same fields record what each manager Pod
+  declares, under `operator.pods`.
 
 The account needs, beyond the smoke's:
 - `get` on the seed Secret;
@@ -98,6 +108,123 @@ as the smoke's does. The lab's object store admits that label on its S3 port
 only (`object-store/networkpolicy.yaml` in the lab's GitOps repository).
 Without such a rule, the first member cannot upload the seed backup, and the
 run ends with the bootstrap's `SeedBackupFailed` reason.
+
+## Database member requests
+
+`bin/installed-ha` and `bin/installed-smoke` declare these requests on every
+member they create, which matches this manifest:
+
+```yaml
+spec:
+  resources:
+    requests:
+      memory: 600Mi
+      cpu: 100m
+```
+
+These are starting values for the three-worker VM lab (2 vCPU, 8 GiB each),
+not a production sizing guarantee. Size any other cluster from its own
+measurements.
+
+- **Memory.** `kubectl top` showed about 575 MiB for each long-lived member
+  on the lab on 2026-11-03 UTC (#671). `600Mi` is that figure rounded up, and
+  it is the per-member figure `-min-node-free-memory` already counts with. Use
+  during a bootstrap or a SQL workload was not measured, and neither was any
+  overhead of the manager, Brokers or the system, so a member can use more.
+- **CPU.** No CPU use of a member has been measured. `100m` is a small value
+  chosen so that the members of a run that restores (S12) declare little beside
+  the shared clusters on 2 vCPU workers: six at once with S12 `exact` alone, in
+  two clusters, and up to nine, 900m in total, in a lane with a further variant.
+  S12 `exact`'s cluster stays until the namespace goes, and the flags of the
+  further variants exclude each other, so a run has at most three clusters at
+  once: the source, `ha-restore` and one of `ha-restart`, `ha-imrestart`,
+  `ha-gracefulstop`, `ha-wt` or `ha-tampered`. It is not evidence of what a
+  member needs.
+
+The Operator itself has no default: a cluster that sets no `spec.resources`
+gets no requests, and the flags apply only to clusters a run creates. The same
+`spec.resources` also goes to an HA member's `wait-for-peer` init container, and
+Broker Pods do not use it.
+
+**A member that does not fit.** Declared requests make `Insufficient memory` and
+`Insufficient cpu` possible, and a run whose nodes have no room cannot judge the
+Operator. When a wait for the members of LAB00, LAB01 or any S12 variant ends,
+the run reads each member the wait depends on: the restore target `<cluster>-0`
+until a restore or its refusal ends, because the restore runs there alone and
+members start in parallel, `<cluster>-0` and `<cluster>-1` for the first seed
+backup and seed restore, because the Operator seeds the members in ordinal order
+and a later member cannot hold either up, and every member for `Ready`. An
+unready member with `PodScheduled` `False` and reason `Unschedulable` is recorded
+as `unschedulableMembers` in the run's record, with its Pod UID, the scheduler's
+message, the condition's `lastTransitionTime` as `refusedSince`, the time of the
+reading as `readAt`, and whether it blocks the run as `blocksRun`. The message
+also goes into the reason.
+
+The scenario ends `blocked` instead of `fail` only when the message contains
+`Insufficient memory` or `Insufficient cpu` and the refusal has held for at least
+30 s (`refusalMinimumHold`), a value chosen to leave the scheduler a few more
+tries, not a measurement. One reading decides, so a younger refusal, or one with
+no transition time, keeps the result the wait gives. `refusedSince` does not move
+when only the message changes, so the 30 s count how long the member has been
+refused, not how long that message has held. Any other refusal, such as an
+anti-affinity rule, an unbound claim or a node selector, keeps the wait's result
+with the message recorded: those can come from the Pod the Operator rendered,
+and the harness does not read the `MemberPlacement` Condition. A message that
+names both, such as `1 Insufficient memory, 2 didn't match pod anti-affinity`,
+still blocks, so a wrong anti-affinity selector can hide behind a full node, and
+an Operator that rendered the wrong requests would also end `blocked`. The match
+is on the scheduler's text, which is not an API.
+
+A never-event already confirmed, a verdict a reading returned as the limit
+passed, or for LAB00 and LAB01 a cleanup that failed or saw the manager change,
+keeps the `fail`. A member `Pending` for another reason, such as one that is
+bound and starting, keeps the result the wait gives without it. There is no
+pre-flight that compares a node's allocatable resources with its requests, since
+one would need a cluster-wide read of every Pod, which the documented account
+does not grant.
+
+Requests change what the scheduler counts, not what a member uses, so they do
+not replace `-min-node-free-memory`:
+- The scheduler adds up declared requests and ignores actual use. On
+  2026-11-05 UTC the lab's workers reported 832Mi, 512Mi and 0 requested
+  memory by `kubectl describe`, and 28%, 48% and 90% used by `kubectl top`
+  ([readings on #671](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/671#issuecomment-6656452061)).
+  The worker with 0 is the one holding the long-lived members, which declare
+  no requests.
+- As a hypothesis, not a confirmed cause: the scheduler sees that worker as
+  the emptiest, which could explain why new members landed there. Requests on
+  new Pods alone may not change that while the old Pods declare none.
+- `-min-node-free-memory` reads the memory a node really has available, so it
+  still refuses a run on such a node. It is unchanged, and it is independent
+  of the requests.
+- A Pod with no requests and no limits has the `BestEffort` Quality of Service
+  class, and a member with these requests has `Burstable`. Under memory
+  pressure the kubelet does not rank Pods by that class: it evicts Pods whose
+  use is above their requests first, by priority and then by how far above
+  ([node-pressure eviction](https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/#pod-selection-for-kubelet-eviction)).
+  A long-lived member without requests is always in that group. A member with
+  these requests is outside it only while it uses less than `600Mi`, and above
+  that it ranks with the `BestEffort` Pods, so the request protects it less
+  than the class name suggests. The kernel's OOM killer is a separate path that
+  does use the class, through the `oom_score_adj` the kubelet sets: 1000 for
+  `BestEffort`, and for `Burstable` a value scaled down as the memory request
+  grows. That is the path where, as `ROADMAP.md` records, the kernel killed
+  `cub_server`.
+
+**Existing clusters.** Nothing here resizes or moves an existing Pod or PVC.
+To give an existing cluster requests, set `spec.resources` on it. The Operator
+then updates the StatefulSet's Pod template, but it deletes no Pod for that:
+automatic replacement is switched off (#196, and nothing in `cmd/` turns on
+`AutomaticReplacement`), so the `Updating` condition reports
+`AutomaticReplacementDisabled` and a running Pod keeps its old values until it
+is replaced by hand or recreated after a failure
+([ADR-0009](../adr/0009-update-vs-upgrade.md)). A slave can be replaced
+directly; a master needs a planned failover first. A replaced member returns to
+the node of its `local-path` volume. If its request does not fit there, it
+stays `Pending`, and the scheduler cannot move it. To place the data elsewhere,
+take a backup and restore it into a new cluster (the README's "Member
+placement"). Check the requested and available memory of the volume's node
+before replacing a member, and replace slaves one at a time.
 
 ## What the run checks
 
@@ -2437,7 +2564,9 @@ resolved (`selectBackupTarget` in `internal/controller/backuptarget.go`,
      readings once S12's steps end, whichever step ended them; a reading
      the run did not take is not judged.
    - A cluster read but not Ready when `-restore-limit` passes fails S12,
-     with the last phase and what did not hold. A master whose `cubrid
+     with the last phase and what did not hold, unless the scheduler refused a
+     member for memory or CPU, which blocks it
+     ([A member that does not fit](#database-member-requests)). A master whose `cubrid
      heartbeat status` reports `registered_and_to_be_active` is not yet
      active (POC-13, POC-14 in `docs/poc/RESULTS.md`), so the wait goes on;
      one still in that state at the limit fails S12 before any data is read.
@@ -2572,12 +2701,15 @@ reads `cubridclusters`, StatefulSets, Deployments and Pods and runs
 cluster's Secret, as LAB01 creates its own. It reads no Secret there; the
 keys it copies are those it read from the seed Secret for LAB01.
 
-The lab's three workers have 2 vCPU and 8 GiB each. Neither the clusters the
-run creates nor the Broker Deployments set resource requests
-(`spec.resources` is empty), so two clusters, six DB Pods and eight Broker
-Pods, are scheduled whatever they use. Whether their memory fits beside each
-other on the lab was not measured; a run that runs short would show it as a
-member that does not become Ready, which fails S12 at `-restore-limit`.
+The lab's three workers have 2 vCPU and 8 GiB each. The run's DB Pods declare
+only the [member requests](#database-member-requests), and the Broker
+Deployments declare none, so two clusters, six DB Pods and eight Broker Pods
+are scheduled on those figures, not on what they use. Whether their memory
+fits beside each other on the lab was not measured. A run whose requests do not
+fit shows a member the scheduler cannot place, which blocks S12 at
+`-restore-limit` with the scheduler's message. A member that fits by its
+requests and then runs out of real memory is not recognised as such: it does
+not become Ready, and that fails S12 at the same limit.
 
 S12 `exact` here does not check:
 - the variants `wrong-target` (a target volume that already holds a

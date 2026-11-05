@@ -243,6 +243,7 @@ func run(ctx context.Context, args []string) (runErr error) {
 	flags.Var(installed.FreeSpaceFlag(&cfg.MinNodeFreeMemory, "2Gi"), "min-node-free-memory",
 		"memory kubelet must report available on every schedulable node before the run creates anything: one "+
 			"three-member cluster, at about 600Mi a member, on one node; 0 reads none")
+	installed.MemberRequestFlags(flags, &cfg.Config)
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

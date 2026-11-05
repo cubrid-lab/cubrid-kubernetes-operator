@@ -68,6 +68,8 @@ func testConfig(t *testing.T) Config {
 		StorageClass: "test-storage", EvidenceDir: t.TempDir(), Level: "unit",
 		ClusterUID: "selected-lab",
 		Timeout:    time.Second, CleanupTimeout: time.Second, Poll: time.Millisecond,
+		MemberMemoryRequest: resource.MustParse(DefaultMemberMemoryRequest),
+		MemberCPURequest:    resource.MustParse(DefaultMemberCPURequest),
 	}
 }
 
@@ -168,6 +170,20 @@ type fixture struct {
 	// store bypasses the write hooks so a test can act as the Operator; it is
 	// set once the runner creates the cluster.
 	store client.WithWatch
+	// afterCluster runs once the cluster and its children exist.
+	afterCluster func(ctx context.Context, c client.WithWatch)
+}
+
+// createChildren stores what the simulated reconciliation made, then runs
+// afterCluster.
+func (f *fixture) createChildren(ctx context.Context, c client.WithWatch, children ...client.Object) error {
+	if err := createAll(ctx, c, children...); err != nil {
+		return err
+	}
+	if f.afterCluster != nil {
+		f.afterCluster(ctx, c)
+	}
+	return nil
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -224,14 +240,15 @@ func newConfiguredFixture(t *testing.T, cfg Config, extra ...client.Object) *fix
 						return err
 					}
 				}
-				return createAll(ctx, c, append(brokerTier(f.cfg.Namespace, value.UID),
+				return f.createChildren(ctx, c, append(brokerTier(f.cfg.Namespace, value.UID),
 					&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: clusterName + "-0", Namespace: f.cfg.Namespace,
 						UID:             "database-pod",
 						OwnerReferences: []metav1.OwnerReference{owner("StatefulSet", clusterName, sts.UID)}},
 						Spec: corev1.PodSpec{NodeName: "node-1", Volumes: []corev1.Volume{{Name: dataClaimName,
 							VolumeSource: corev1.VolumeSource{
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: smokePVCName}}}},
-							Containers: []corev1.Container{{Name: databaseContainer, Image: f.cfg.InstanceManagerImage}}},
+							Containers: []corev1.Container{{Name: databaseContainer, Image: f.cfg.InstanceManagerImage,
+								Resources: value.Spec.Resources}}},
 						Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 							ContainerStatuses: []corev1.ContainerStatus{{Name: databaseContainer, Ready: true,
 								ContainerID: "containerd://database-container",

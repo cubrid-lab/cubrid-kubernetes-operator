@@ -390,10 +390,13 @@ type haRecord struct {
 	OperatorAfter managerIdentity   `json:"operatorAfter"`
 	// Waiting is the last part of the starting state that did not hold
 	// while the run waited for it.
-	Waiting       string          `json:"waiting,omitempty"`
-	StartingState *startingState  `json:"startingState,omitempty"`
-	Members       []imageIdentity `json:"members"`
-	MembersAfter  []imageIdentity `json:"membersAfter"`
+	Waiting string `json:"waiting,omitempty"`
+	// UnschedulableMembers are the members the scheduler could not place
+	// when a wait for them ended, with its message (blockOnUnschedulable).
+	UnschedulableMembers []unschedulableMember `json:"unschedulableMembers,omitempty"`
+	StartingState        *startingState        `json:"startingState,omitempty"`
+	Members              []imageIdentity       `json:"members"`
+	MembersAfter         []imageIdentity       `json:"membersAfter"`
 	// RolesAfter is the master and slaves CUBRID reported at the end.
 	RolesAfter *startingState `json:"rolesAfter,omitempty"`
 	Client     *imageIdentity `json:"client,omitempty"`
@@ -612,9 +615,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 			scenario.Reason = "LAB01's starting state, a subset of S01's, held for the stable period, and the data " +
 				"rules held on every member and both Services"
 		} else {
-			if owned != nil {
-				scenario.Result = evidence.Fail
-			}
+			scenario.Result = unfinishedResult(owned != nil, cleanupErr == nil, runErr)
 			scenario.Reason = runErr.Error()
 		}
 		if n := len(h.rec.LostSessions); n > 0 {
@@ -1046,6 +1047,7 @@ func (h *haRun) clusterSpec(prefix, secret string) databasev1alpha1.CubridCluste
 		ObjectStorage: &databasev1alpha1.CubridObjectStorage{Endpoint: h.cfg.SeedEndpoint,
 			Insecure: h.cfg.SeedInsecure, Bucket: h.cfg.SeedBucket, Prefix: prefix,
 			CredentialsSecretRef: corev1.LocalObjectReference{Name: secret}},
+		Resources: h.cfg.memberResources(),
 		Placement: &databasev1alpha1.CubridPlacement{MemberSpread: h.cfg.MemberSpread},
 		Storage: databasev1alpha1.CubridStorage{Data: databasev1alpha1.CubridStorageSpec{
 			Size: resource.MustParse("2Gi"), StorageClassName: &h.cfg.StorageClass}}}
@@ -1109,11 +1111,62 @@ func (h *haRun) waitStartingState(ctx context.Context, cluster *databasev1alpha1
 	})
 	if err != nil {
 		if h.rec.Waiting != "" {
-			return fmt.Errorf("the starting state of S01 was not reached: %s: %w", h.rec.Waiting, err)
+			return h.runEnded(ctx, clusterMembers(cluster.Name), fmt.Errorf("the starting state of S01 was not reached: %s: %w",
+				h.rec.Waiting, err))
 		}
-		return fmt.Errorf("the starting state of S01 was not reached: %w", err)
+		return h.runEnded(ctx, clusterMembers(cluster.Name), fmt.Errorf("the starting state of S01 was not reached: %w", err))
 	}
 	return checkpoint()
+}
+
+// restoreTarget names the member a restore, and the refusal of one, runs on
+// (reconcileRecovery). Members start in Parallel, so the wait for it depends
+// on no other member.
+func restoreTarget(cluster string) []string {
+	return []string{cluster + "-0"}
+}
+
+// seedingMembers names the members the first seed backup and the first seed
+// restore of a restored cluster depend on: the restore target, which holds
+// the database and is the backup's source, and the first member after it,
+// which the Operator seeds first (reconcileSeeding in
+// internal/controller/habootstrap.go walks the members in ordinal order). A
+// later member is seeded only after both, so the scheduler's refusal of it
+// does not hold either up.
+func seedingMembers(cluster string) []string {
+	return []string{cluster + "-0", cluster + "-1"}
+}
+
+// limitEnded reports whether restore_limit, which wctx carries, ended a wait
+// under ctx with err: not the run, and not a verdict that a reading spanning
+// the limit returned.
+func limitEnded(ctx, wctx context.Context, err error) bool {
+	return ctx.Err() == nil && wctx.Err() != nil && !errors.As(err, new(restoreVerdict))
+}
+
+// limitPassed is the error of a wait for members that reached restore_limit
+// with verdict unmet: the verdict, unless the scheduler refused one of them for
+// memory or CPU, which blocks the scenario.
+func (h *haRun) limitPassed(members []string, verdict error) error {
+	return h.blockOnUnschedulable(h.cfg.Namespace, members, &h.rec.UnschedulableMembers, restoreVerdict{verdict})
+}
+
+// limitUnread is the error of a wait for members that reached restore_limit
+// when the last reading could not be made: err, which already blocks the
+// scenario, with the scheduler's refusal of a member when there is one.
+func (h *haRun) limitUnread(members []string, err error) error {
+	return h.blockOnUnschedulable(h.cfg.Namespace, members, &h.rec.UnschedulableMembers, err)
+}
+
+// runEnded is the error of a wait for members that ctx may have ended: err,
+// which already blocks the scenario, with the scheduler's refusal of a member
+// when there is one. A verdict, an error of a reading that spanned the end of
+// ctx, or an error of a run that goes on, stays err.
+func (h *haRun) runEnded(ctx context.Context, members []string, err error) error {
+	if !waitCut(ctx, err) || errors.As(err, new(restoreVerdict)) {
+		return err
+	}
+	return h.blockOnUnschedulable(h.cfg.Namespace, members, &h.rec.UnschedulableMembers, err)
 }
 
 // unread joins what could not be read to its retryable API error in what
