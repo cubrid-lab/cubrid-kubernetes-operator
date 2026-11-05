@@ -206,7 +206,7 @@ func (r *haRun) s05(variant string) {
 	}
 
 	By("reading the cluster's Conditions every two seconds until the end of the stable period")
-	sampler := r.sampleConditions(true)
+	sampler := r.sampleConditions(conditionSampling{roles: true})
 	defer sampler.stop()
 
 	By("failing the Broker and waiting for two available Brokers and for every client")

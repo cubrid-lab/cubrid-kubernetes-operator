@@ -765,6 +765,9 @@ The Never rules, for every read of an HA cluster:
   every member answered.
 - Every member that `ReplicationHealthy=False` names is a slave in
   `status.instances`.
+- `HAReady` is not `True` while `ReplicationHealthy=False`: `HAReady` takes
+  `ReplicationHealthy`'s `False` in the same step, and holds an earlier value
+  only while `ReplicationHealthy` is not `False`.
 
 `RoutingReady=True` with `PrimaryResolved` not `True` is reported only:
 after a conflicting write of a Broker object, the Broker Conditions are kept
@@ -772,6 +775,40 @@ as they were while the primary is resolved again, so the two can differ in one
 read. Writes acknowledged while `RoutingReady` or `PrimaryResolved` was not
 `True` (as in open question Q2), and writes that failed while `RoutingReady`
 was `True`, are reported only.
+
+The replication-stall step, which is not a scenario of this contract, uses the
+same reads (`replication-stall/conditions.jsonl` and `agreement.txt`), from
+the moment heartbeat is started again on the stalled slave until
+`ReplicationHealthy` is `True` after its Pod was replaced. Each round also
+counts the ledger rows on the stalled slave and on the master, with csql on
+each member. Its fault is the start of the stall and its outcome the first
+report of it, for the evidence limits above. Besides the Never rules:
+
+- **Never:** the healthy slave, which is the former master's replacement
+  Pod, is never named with reason `ReplicationStalled` in a read that names
+  the stalled slave as stalled. While it rejoins it may be named for apply
+  failures, and after the stalled slave's repair for a stalled log copy; those
+  are not disagreements.
+- **Tolerance** (80 seconds, as for every rule that rests on the role
+  observation): the Operator judges a stall by log pages, not rows, and the
+  failover writes log of its own, so the stall may be reported before the
+  step's writes reach the master. A read naming the stalled slave as stalled
+  is compared with the rows only once the 80 seconds before it lie after the
+  writes were acknowledged: it then never says `ReplicationStalled` when
+  every row count in those 80 seconds, none more than 10 seconds apart,
+  showed the slave holding at least the master's rows. At least one read
+  naming it as stalled after the writes must have a row count taken within
+  5 seconds of it, or the rule is not judged. The evidence limits of this
+  rule count only the reads from the writes to the deletion of the stalled
+  slave's Pod, since its rows cannot be counted while the Pod is replaced.
+  Each count is bounded to 8 seconds, and every count that failed is kept in
+  `conditions.jsonl` and noted in `agreement.txt`.
+- **Report:** how long after the row counts of the slave matched the master's
+  again `ReplicationHealthy` was `True`.
+
+`result.txt` carries the `conditionAgreement` measurement. The step has no
+`blocked` result, so a disagreement or a rule that could not be judged fails
+it.
 
 ### `summary.json`
 

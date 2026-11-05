@@ -34,8 +34,19 @@ type sqlRunner = sqlcheck.Runner
 
 // csqlInPod runs csql inside a DB Pod, as a client on that host would.
 func csqlInPod(ctx context.Context, namespace, pod, database string) sqlRunner {
+	return csqlRunner(ctx, namespace, pod, database, utils.Run)
+}
+
+// csqlInPodQuiet is csqlInPod without announcing the command in the test
+// output, for statements repeated every few seconds in the background.
+func csqlInPodQuiet(ctx context.Context, namespace, pod, database string) sqlRunner {
+	return csqlRunner(ctx, namespace, pod, database, utils.RunQuiet)
+}
+
+func csqlRunner(ctx context.Context, namespace, pod, database string,
+	run func(*exec.Cmd) (string, error)) sqlRunner {
 	return func(sql string) (string, error) {
-		return utils.Run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "exec", pod, "--",
+		return run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "exec", pod, "--",
 			"bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`, database+"@localhost", sql))
 	}
 }

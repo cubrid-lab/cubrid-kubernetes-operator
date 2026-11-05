@@ -66,7 +66,9 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 			var roles roleLog
 			roles.sample(ctx, r)
 		},
-		"conditionRound":    func(ctx context.Context) { _ = r.conditionRound(ctx, true) },
+		"conditionRound": func(ctx context.Context) {
+			_ = r.conditionRound(ctx, conditionSampling{roles: true, rows: []string{pod0}})
+		},
 		"heartbeatRole":     func(ctx context.Context) { _ = r.heartbeatRole(ctx, pod0) },
 		"operatorAvailable": func(ctx context.Context) { _ = operatorAvailable(ctx) },
 		"readS00Row": func(ctx context.Context) {
@@ -95,7 +97,7 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 func TestConditionSamplerStopsWhileKubectlHangs(t *testing.T) {
 	r := newHARun("ns", "client-ns", "cluster", "db", []string{pod0, "pod-1", "pod-2"})
 	hangingKubectl(t)
-	sampler := r.sampleConditions(true)
+	sampler := r.sampleConditions(conditionSampling{roles: true, rows: []string{pod0}})
 	time.Sleep(200 * time.Millisecond)
 	done := make(chan []conditionRound)
 	go func() { done <- sampler.stop() }()

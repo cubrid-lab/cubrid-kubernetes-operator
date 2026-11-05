@@ -32,6 +32,7 @@ import (
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -50,14 +51,29 @@ const conditionSampleEvery = 2 * time.Second
 // conditionReadLimit bounds one round of reads.
 const conditionReadLimit = 20 * time.Second
 
+// rowCountLimit bounds one count of the ledger rows on one member.
+const rowCountLimit = 8 * time.Second
+
 // conditionRound is one line of conditions.jsonl: one read of the status, the
 // read-write Broker Deployment's available Pods, and, when asked for, the
-// role CUBRID's heartbeat reports on each member.
+// role CUBRID's heartbeat reports on each member and the count of the ledger
+// rows on some members.
 type conditionRound struct {
 	Status *faults.ConditionSample `json:"status,omitempty"`
 	// StatusError says why the status could not be read.
 	StatusError string            `json:"statusError,omitempty"`
 	Roles       *faults.RoleSweep `json:"roles,omitempty"`
+	Rows        *faults.RowCounts `json:"rows,omitempty"`
+}
+
+// conditionSampling says what a round reads besides the status and the
+// read-write Broker Deployment.
+type conditionSampling struct {
+	// roles asks every member for its role with cubrid heartbeat status.
+	roles bool
+	// rows are the members whose ledger rows are counted, each on the member
+	// itself.
+	rows []string
 }
 
 // conditionSampler reads the status in the background until it is stopped.
@@ -71,15 +87,15 @@ type conditionSampler struct {
 }
 
 // sampleConditions starts reading the status every conditionSampleEvery, and
-// with roles also asks every member for its role in each round.
-func (r *haRun) sampleConditions(roles bool) *conditionSampler {
+// in each round what the sampling asks for besides.
+func (r *haRun) sampleConditions(sampling conditionSampling) *conditionSampler {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &conditionSampler{cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(c.done)
 		for {
 			start := time.Now()
-			round := r.conditionRound(ctx, roles)
+			round := r.conditionRound(ctx, sampling)
 			if ctx.Err() != nil {
 				return // a round cut short by stop is not kept
 			}
@@ -104,7 +120,7 @@ func (c *conditionSampler) stop() []conditionRound {
 	return c.rounds
 }
 
-func (r *haRun) conditionRound(ctx context.Context, roles bool) conditionRound {
+func (r *haRun) conditionRound(ctx context.Context, sampling conditionSampling) conditionRound {
 	ctx, cancel := context.WithTimeout(ctx, conditionReadLimit)
 	defer cancel()
 	var round conditionRound
@@ -133,7 +149,28 @@ func (r *haRun) conditionRound(ctx context.Context, roles bool) conditionRound {
 		sample.ReadEnd = time.Now().UTC()
 		round.Status = &sample
 	}
-	if roles {
+	if len(sampling.rows) > 0 {
+		counts := faults.RowCounts{Start: time.Now().UTC(), Rows: make(map[string]int, len(sampling.rows))}
+		for _, pod := range sampling.rows {
+			n, err := r.ledgerRows(ctx, pod)
+			if err != nil {
+				if counts.Errors == nil {
+					counts.Errors = map[string]string{}
+				}
+				// The whole output of csql would bury the reason.
+				why := err.Error()
+				if len(why) > 300 {
+					why = why[:300] + " ..."
+				}
+				counts.Errors[pod] = why
+				continue
+			}
+			counts.Rows[pod] = n
+		}
+		counts.End = time.Now().UTC()
+		round.Rows = &counts
+	}
+	if sampling.roles {
 		sweep := faults.RoleSweep{Start: time.Now().UTC(), Roles: make(map[string]string, len(r.members))}
 		for _, pod := range r.members {
 			sweep.Roles[pod] = r.heartbeatRole(ctx, pod)
@@ -142,6 +179,27 @@ func (r *haRun) conditionRound(ctx context.Context, roles bool) conditionRound {
 		round.Roles = &sweep
 	}
 	return round
+}
+
+// ledgerRows counts the workload's ledger rows on a member, with csql inside
+// its Pod, without announcing the command in the test output.
+// Each count is given rowCountLimit, so that a member whose Pod is being
+// replaced does not hold up the round.
+func (r *haRun) ledgerRows(ctx context.Context, pod string) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, rowCountLimit)
+	defer cancel()
+	out, err := runSQL(csqlInPodQuiet(ctx, r.namespace, pod, r.database), "SELECT TO_CHAR(COUNT(*)) AS v FROM ledger;")
+	if err != nil {
+		return 0, err
+	}
+	values, err := sqlcheck.Values(out)
+	if err != nil {
+		return 0, err
+	}
+	if len(values) != 1 {
+		return 0, fmt.Errorf("the count of the ledger rows on %s: %v", pod, values)
+	}
+	return strconv.Atoi(values[0])
 }
 
 // heartbeatRole is the role CUBRID's heartbeat reports on pod, as
@@ -175,6 +233,9 @@ func checkConditions(dir string, rounds []conditionRound, events []workload.Even
 		}
 		if round.Roles != nil {
 			obs.Sweeps = append(obs.Sweeps, *round.Roles)
+		}
+		if round.Rows != nil {
+			obs.Rows = append(obs.Rows, *round.Rows)
 		}
 	}
 	for _, e := range events {
@@ -350,4 +411,37 @@ func withAgreement(result evidence.Scenario, agreement faults.Agreement) evidenc
 		result.Reason = reasonConditionsNotJudged + ": " + strings.Join(agreement.NotJudged, "; ")
 	}
 	return result
+}
+
+// TestStallVerdictFailsOnADisagreementOrARuleNotJudged checks the verdict of
+// the replication-stall step, which is not a scenario of the contract and so
+// has no blocked result: a disagreement fails it, and so does a rule that
+// could not be judged, with a message that says which of the two it was.
+func TestStallVerdictFailsOnADisagreementOrARuleNotJudged(t *testing.T) {
+	if err := stallVerdict(faults.Agreement{}); err != nil {
+		t.Errorf("an agreement without findings: %v", err)
+	}
+	for want, a := range map[string]faults.Agreement{
+		"disagreed":     {Disagreements: []string{"never: healthy-slave-never-named-unhealthy: read at x"}},
+		"not be judged": {NotJudged: []string{"stall-reported-while-the-slave-lacks-rows: no row count"}},
+	} {
+		if err := stallVerdict(a); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("verdict of %+v = %v, want an error saying %q", a, err, want)
+		}
+	}
+}
+
+// stallVerdict is the replication-stall step's verdict on its Conditions. The
+// step is not a scenario of the contract and has no blocked result, so a
+// rule that could not be judged fails it too: the step cannot say that the
+// Conditions agreed.
+func stallVerdict(a faults.Agreement) error {
+	switch {
+	case len(a.Disagreements) > 0:
+		return fmt.Errorf("the Conditions disagreed with the rows or with each other: %s",
+			strings.Join(a.Disagreements, "; "))
+	case len(a.NotJudged) > 0:
+		return fmt.Errorf("a rule on the Conditions could not be judged: %s", strings.Join(a.NotJudged, "; "))
+	}
+	return nil
 }
