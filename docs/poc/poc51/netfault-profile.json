@@ -1,0 +1,1 @@
+{"securityContext": {"runAsUser": 0, "runAsNonRoot": false, "allowPrivilegeEscalation": true, "capabilities": {"add": ["NET_ADMIN", "NET_RAW"]}}}
