@@ -20,13 +20,16 @@ every trial is one fault with its own directory of raw files.
 | `holder.py` | Runs on the master: a client left connected through its stop, or a write load |
 | `analyse.py` | Recomputes the tables and the facts RESULTS.md quotes from each trial's raw files, and lists there what it cannot: `python3 analyse.py samples --trials` |
 | `samples/` | The recorded run, one directory per trial |
+| `PROVENANCE.md` | Which code and which starting state produced each trial, which files and logs it has, and which trials each stated result rests on. Generated: `python3 analyse.py samples --provenance > PROVENANCE.md` |
+| `provenance/` | What that file is built from: `runs.json`, each script version rebuilt after the run in `scripts/`, `replay.py` that rebuilt them, and the runs' own output in `run-output/` |
 
 ## How to run it
 
 ```
 export POC53_OUT=/some/dir
 python3 harness.py setup x
-python3 harness.py campaign x first 300 1     # run twice: the first start of a lone master was abandoned, see RESULTS.md
+python3 harness.py campaign x first 600 1     # stopped by hand: the first start of a lone master was abandoned, see RESULTS.md
+python3 harness.py campaign x first 300 1
 python3 harness.py campaign x holders 900 0
 python3 harness.py campaign x main 2280 0     # stopped by hand after its first four trials
 python3 harness.py campaign x lag 1500 0     # stopped by hand after three trials and one abandoned
@@ -36,6 +39,9 @@ python3 harness.py campaign x again 780 0     # stopped by hand after its first 
 python3 harness.py campaign x gaps 420 0
 python3 harness.py cleanup x
 ```
+
+These are the commands that ran, in order. The scripts here are the last versions, so
+running them does not repeat the recorded run: the versions that ran are in `PROVENANCE.md`.
 
 ## How a trial runs
 
@@ -97,7 +103,7 @@ data. Each trial's `spec.json` holds its details.
 - `events.tsv.gz`: each step with its time; `pre-fault-load.txt.gz`: the load just before the fault;
 - `h-*.tsv.gz`, `h-*.raw.gz`: the sampler's rows, and the raw status output at each change;
 - `h-*.writes.tsv.gz`, `h-*.refused.txt.gz`: every write attempt, and the whole output of each that was not a committed row, which is where `ERROR CODE` lines are kept;
-- `h-*.master.err.gz`, `h-*.server.err.gz`, `h-*.logdb.err.gz`: what `cub_master`, the server and the copier and applier logged during this trial. Chained trials hold only their own part of each log, so a line from before a trial can be in the trial before it, and `analyse.py` reads a member's log across trials where that matters. The first trials differ: `idle-session`, `open-txn` and `long-query` have `h-1` and `h-2` without these logs, and those and `stop0-master1-left2-graceful-gap2-n1` have no `logdb` file, because the harvest was fixed after them;
+- `h-*.master.err.gz`, `h-*.server.err.gz`, `h-*.logdb.err.gz`: what `cub_master`, the server and the copier and applier logged during this trial. Chained trials hold only their own part of each log, so a line from before a trial can be in the trial before it, and `analyse.py` reads a member's log across trials where that matters. The first trials differ, because the harvest was fixed after them: `idle-session`, `open-txn` and `long-query` have only `h-0`'s `master.err`, so no member has a `server.err` there, and those, `stop0-master1-left2-graceful-gap2-n1` and the abandoned `stop0-master1-left2-kill-gap2-n1` have no `logdb` file;
 - `holder.log.gz`: the holder client's output, where a holder ran.
 
-The harness changed during the run, and every trial ran the version of its time: the writer's retry with its own key came after `control-master2-left0-graceful-gap2-writes60-n1`, the harness's explicit key for its own writes after the abandoned `stop1-master0-left2-kill-gap2-writes60-n1`, and `master-kill-begin` in `events.tsv` after `stop0-master2-left1-kill-gap2-writes-n1`, whose kill time comes from `result.json`.
+The harness and the writer changed during the run, and every trial ran the version of its time. No version was saved while it ran. [`PROVENANCE.md`](PROVENANCE.md) gives each trial's version, rebuilt afterwards from the session's command log, its starting state and its missing logs, and says where a stated result spans a change. The changes that touch a write: the writer's retry with its own key came after `control-master2-left0-graceful-gap2-writes60-n1`, and the harness's explicit key for its own writes and `master-kill-begin` in `events.tsv` both came after `control-master2-left0-kill-gap2-writes60-n1`, so the two kills `stop0-master2-left1-kill-gap2-writes-n1` and that control take their kill time from `result.json`.

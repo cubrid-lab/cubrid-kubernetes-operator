@@ -1,0 +1,1 @@
+{"trial": "stop0-master1-left2-graceful-gap2-frozen-server-back30-fresh-settle0-n1", "outcome": "not-promoted", "promoted_member": "", "commit_after_end_begin_s": "", "commit_after_end_done_s": "", "master_hb_stop_s": 61.504, "final_view": "[\"h-0\", [\"h-1\", \"h-2\"]]", "rows": "{\"h-0\": 1, \"h-1\": 1, \"h-2\": 1}", "why": null, "load_end": "6.39"}

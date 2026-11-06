@@ -1,0 +1,2 @@
+{"trial": "stop0-master1-left2-graceful-gap2-n1", "outcome": "promoted", "promoted_member": "h-2", "commit_after_end_begin_s": 4.66, "commit_after_end_done_s": -0.59, "master_hb_stop_s": 2.086, "final_view": "[\"h-2\", [\"h-0\", \"h-1\"]]", "rows": "{\"h-0\": 122, \"h-1\": 122, \"h-2\": 122}", "why": null, "load_end": "13.47"}
+first: 1 run, 0 left out by the time limit

@@ -1,0 +1,234 @@
+{
+ "session_log": {
+  "name": "agent-a9c94d05417ccf297.jsonl",
+  "sha256": "d1f0c4abc945b1a8029fd1d6be315b08e777e1c6458f488371fb088f80e53155",
+  "kept": "on the host that ran the trials, not in this repository"
+ },
+ "setup": {
+  "harness_sha256": "346623e1b6da5f264e32c6c72f32f0fa1e7317edac6cc9aec75371c48d00a82c",
+  "began": "2026-11-06T11:34:41Z",
+  "formed": "2026-11-06T11:43:10Z"
+ },
+ "runs": [
+  {
+   "name": "first-a",
+   "command": "campaign x first 600 1",
+   "log": "first.log",
+   "part": 0,
+   "changed": "The version the first trial ran. A member started alone had to report `master` with `registered_and_active`."
+  },
+  {
+   "name": "first-b",
+   "command": "campaign x first 300 1",
+   "log": "first2.log",
+   "part": 0,
+   "changed": "A member started alone counts once it reports `master`, so the start no longer waits for `registered_and_active`."
+  },
+  {
+   "name": "holders",
+   "command": "campaign x holders 900 0",
+   "log": "holders.log",
+   "part": 0,
+   "changed": "Trials can chain on a healthy cluster. Logs are cut per trial, in a harvest that a dangling log link stops. The wait after a stopped slave returns falls from 45 s to 20 s."
+  },
+  {
+   "name": "main",
+   "command": "campaign x main 2280 0",
+   "log": "main.log",
+   "part": 0,
+   "changed": "Frozen server and return at +30 s added. Copier and applier logs harvested, and dangling links skipped."
+  },
+  {
+   "name": "lag-a",
+   "command": "campaign x lag 1500 0",
+   "log": "lag.log",
+   "part": 0,
+   "changed": "`writes60`, 60 s of writes before the fault, added."
+  },
+  {
+   "name": "lag-b",
+   "command": "campaign x lag 390 0",
+   "log": "lag2.log",
+   "part": 0,
+   "changed": "`master-kill-begin` logged. `fresh` and `settle` added. The harness's own write before the fault uses an explicit key, and its last row retries with one after -670."
+  },
+  {
+   "name": "recent",
+   "command": "campaign x recent 1100 0",
+   "log": "lag2.log",
+   "part": 1,
+   "changed": "Plans only."
+  },
+  {
+   "name": "again",
+   "command": "campaign x again 780 0",
+   "log": "again.log",
+   "part": 0,
+   "changed": "Plans only."
+  },
+  {
+   "name": "gaps",
+   "command": "campaign x gaps 420 0",
+   "log": "gaps.log",
+   "part": 0,
+   "changed": "`together`, both stops started at once, added."
+  }
+ ],
+ "edits": [
+  {
+   "at": "2026-11-06T11:23:00.729Z",
+   "file": "harness.py",
+   "sha256": "bd8aa71fd8c39ddf54b3068dd6165817c5c43a109f6e39eb5f9646180bf25128"
+  },
+  {
+   "at": "2026-11-06T11:23:00.729Z",
+   "file": "plans.py",
+   "sha256": "1dfdfcc062adce13bc252291cb27aae4f22d4d22aa2759a398c9dc4f47c18889"
+  },
+  {
+   "at": "2026-11-06T11:23:00.729Z",
+   "file": "writer.py",
+   "sha256": "a6b20ebfa1aae18d0dab23aeadcf6fdbdecc987684ec80490abc741917e02acd"
+  },
+  {
+   "at": "2026-11-06T11:23:00.729Z",
+   "file": "sampler.py",
+   "sha256": "75febe86863b005f9c7034b679df37590dd7494a1b4abe53d29be0b871eddf8e"
+  },
+  {
+   "at": "2026-11-06T11:23:17.949Z",
+   "file": "holder.py",
+   "sha256": "fcf80347ceaf3de24cf57d0cb326da8a68473f088fb4152237ad6a68ab0338af"
+  },
+  {
+   "at": "2026-11-06T11:31:28.923Z",
+   "file": "harness.py",
+   "sha256": "4c421bec3918eedf77af3fc96c394cba3b6f7801fb6ca4040a2c8104148e2400"
+  },
+  {
+   "at": "2026-11-06T11:34:41.026Z",
+   "file": "harness.py",
+   "sha256": "346623e1b6da5f264e32c6c72f32f0fa1e7317edac6cc9aec75371c48d00a82c"
+  },
+  {
+   "at": "2026-11-06T11:35:26.530Z",
+   "file": "harness.py",
+   "sha256": "b0e90e5b313fb59e873cfcd193f3be28152747dd01c91af7fb8d4e979c7b7123"
+  },
+  {
+   "at": "2026-11-06T11:47:22.111Z",
+   "file": "plans.py",
+   "sha256": "a7a0b713d87b33dfc292a8bccd2f51e5dcd82367cf42bab08a150739dcd4390d"
+  },
+  {
+   "at": "2026-11-06T11:56:23.600Z",
+   "file": "harness.py",
+   "sha256": "a814cb947c2c04b71cf737150024190c2e02efaba5a4987fa36b5a9ebb87be5f"
+  },
+  {
+   "at": "2026-11-06T12:02:42.746Z",
+   "file": "harness.py",
+   "sha256": "fbd1c70ba576098eb38188ab6951b12c75480cfa83d83f6bc38c8741769bb239"
+  },
+  {
+   "at": "2026-11-06T12:05:48.180Z",
+   "file": "harness.py",
+   "sha256": "bf5f5695a37fced7424be0b447542601a59c069c4124f4b1da67d2d068693632"
+  },
+  {
+   "at": "2026-11-06T12:06:05.058Z",
+   "file": "plans.py",
+   "sha256": "38471f133cee6b6f6a4f06ab0de13bf4ee3d24d5bf60e8d50ccb792ec73af5e2"
+  },
+  {
+   "at": "2026-11-06T12:13:58.043Z",
+   "file": "harness.py",
+   "sha256": "495439983e7ec456ad2fecabec1b383f762d6598e68459b2543ef1a4f3d3af07"
+  },
+  {
+   "at": "2026-11-06T12:19:38.578Z",
+   "file": "harness.py",
+   "sha256": "15ce8e5144bad295ad4f4082fe4e4a3ab948ddc91da99e6efece28a250397305"
+  },
+  {
+   "at": "2026-11-06T12:19:38.578Z",
+   "file": "plans.py",
+   "sha256": "5fdbbdb0dee289768d05bc76b05caa0f576e09fe75574a2183a435945b330601"
+  },
+  {
+   "at": "2026-11-06T12:21:51.962Z",
+   "file": "holder.py",
+   "sha256": "b19f225967f24ee600f4220be67d70446f3c0d31bf33f22d5e4d599fa80c5a47"
+  },
+  {
+   "at": "2026-11-06T12:27:09.634Z",
+   "file": "harness.py",
+   "sha256": "e8182400941ffbc9d015ade3af5f0fbb87836f0121a185790454ac2372be03f6"
+  },
+  {
+   "at": "2026-11-06T12:27:09.634Z",
+   "file": "plans.py",
+   "sha256": "1bf5f54c506c92c98b8b7846cd397c6b31f43a63e889e81f22c79ad5978f0596"
+  },
+  {
+   "at": "2026-11-06T12:27:37.898Z",
+   "file": "harness.py",
+   "sha256": "a76893b12301d3f3d7768b40dac211836485656103dfd31298ea06ca523b2b33"
+  },
+  {
+   "at": "2026-11-06T12:32:07.052Z",
+   "file": "harness.py",
+   "sha256": "890c0ffd207986fd96ecae9fe57f216b427ead5030a90c70b64a422ef8311739"
+  },
+  {
+   "at": "2026-11-06T12:32:07.052Z",
+   "file": "plans.py",
+   "sha256": "3f452adc1921a16d08db694c342fce2a531d77217a27343c27dd40840260e0dd"
+  },
+  {
+   "at": "2026-11-06T12:41:25.433Z",
+   "file": "harness.py",
+   "sha256": "6519bc54a35db74d85a92a74ea8f86394754c5f56b0049b08ac16fdce5f736fe"
+  },
+  {
+   "at": "2026-11-06T12:45:17.565Z",
+   "file": "harness.py",
+   "sha256": "0258aa1fe65777aed0b384d668533b53983f1e30cca9564143d29a6e729cab83"
+  },
+  {
+   "at": "2026-11-06T12:45:17.565Z",
+   "file": "plans.py",
+   "sha256": "b238fb9232e77d944342e0a5742979b393a7f07c8d46860964b39369b7b3f838"
+  },
+  {
+   "at": "2026-11-06T12:49:10.748Z",
+   "file": "writer.py",
+   "sha256": "ce959cf5de2a0b2eb6f79b55e9b3ec54ac39f2aaa83269ebf9debd06d2db8104"
+  },
+  {
+   "at": "2026-11-06T12:52:21.099Z",
+   "file": "harness.py",
+   "sha256": "66c5828aea70b02a9aeba75402700acd8c772dfe017b61c40bbfcf2d2007e623"
+  },
+  {
+   "at": "2026-11-06T12:55:05.269Z",
+   "file": "plans.py",
+   "sha256": "748f88f3ddbdeeca39dff681807e49cb9e5cb5bf988fa46947f50ec67f430ceb"
+  },
+  {
+   "at": "2026-11-06T13:04:30.581Z",
+   "file": "plans.py",
+   "sha256": "bb228b8625f84c890a50b7df1df37fa0b6e3cca29d247cb573a8225f7fdb68b1"
+  },
+  {
+   "at": "2026-11-06T13:05:11.589Z",
+   "file": "harness.py",
+   "sha256": "5163a8b330f6fe9d0bec6c7f137b3ea57a534e8927194e26164a136de74bbe88"
+  },
+  {
+   "at": "2026-11-06T13:05:11.589Z",
+   "file": "plans.py",
+   "sha256": "6c0395a88fd89e967b3bf3b3a5d8fec586da973c9bcbde31674fba12f4982192"
+  }
+ ]
+}
