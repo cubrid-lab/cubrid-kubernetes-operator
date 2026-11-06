@@ -73,10 +73,25 @@ func TestSettledRolesWaitsOutAShortToBeMaster(t *testing.T) {
 			wantErr: "m-1"},
 		"to-be-master with no active master": {read: reads(
 			memberRoles{"m-0": {state: "to-be-master"}, "m-1": slave, "m-2": slave}, stable),
-			wantErr: "m-0"},
+			wantErr: "m-0", wantNoted: "m-0 to-be-master with no active master"},
 		"a failed read": {read: reads(waiting, readErr, stable), wantErr: "exec failed", wantNoted: "m-1 to-be-master"},
 		"to-be-master past the bound": {read: reads(waiting),
 			wantErr: "still to-be-master", wantNoted: "m-1 to-be-master"},
+		"two active masters beside a to-be-master": {read: reads(
+			memberRoles{"m-0": master, "m-1": master, "m-2": tbm}, stable),
+			wantErr: "masters [m-0 m-1]", wantNoted: "m-2 to-be-master"},
+		"the master gone during the wait": {read: reads(waiting,
+			memberRoles{"m-0": slave, "m-1": tbm, "m-2": slave}, stable),
+			wantErr: "no active master", wantNoted: "m-1 to-be-master"},
+		"a master whose server is not active": {read: reads(
+			memberRoles{"m-0": master, "m-1": {state: "master"}, "m-2": slave}, stable),
+			wantErr: "role on m-1: neither an active master"},
+		"to-be-master, then every member a slave": {read: reads(waiting,
+			memberRoles{"m-0": slave, "m-1": slave, "m-2": slave}),
+			wantErr: "masters [], slaves [m-0 m-1 m-2]", wantNoted: "m-1 to-be-master"},
+		"another state beside a to-be-master": {read: reads(
+			memberRoles{"m-0": master, "m-1": tbm, "m-2": {state: "unknown"}}, stable),
+			wantErr: "m-2", wantNoted: "m-1 to-be-master"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := settledRoles(context.Background(), members, tc.read, 200*time.Millisecond, 10*time.Millisecond)

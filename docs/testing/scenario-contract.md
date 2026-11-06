@@ -1894,7 +1894,10 @@ because they move the master.
   while the only other state read is `to-be-master` beside that master. POC-50
   measured that state ending by itself within 3.6 s (#704). Any other state,
   `to-be-master` with no active master, two active masters, a change of the
-  active master or a state that outlasts the 15 seconds fails the step. A
+  active master or a state that outlasts the 15 seconds fails the step. Then
+  `PrimaryResolved` is read for up to 30 seconds, two Operator passes, until
+  it is `True` with `SinglePrimaryObserved` and that master: a pass that read
+  the member in `to-be-master` leaves it `False` until the next pass. A
   member read in `to-be-master` is recorded in `S14/<variant>/result.txt`,
   in the measurement `startingToBeMasterSeen` and, on a failure, in the
   failure message.

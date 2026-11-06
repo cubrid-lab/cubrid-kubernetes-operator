@@ -393,13 +393,21 @@ func (r *haRun) s14Token(variant string) {
 	roles, err := settledRoles(context.Background(), r.members, r.readRoles, 15*time.Second, time.Second)
 	if roles.noted != "" {
 		note("starting roles: %s", roles.noted)
+		result.Reason += "; starting roles: " + roles.noted
 	}
 	Expect(err).NotTo(HaveOccurred(), roles.noted)
 	master, slaves := roles.master, roles.slaves
-	status, _, since, primary, err := r.primaryResolved()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(status).To(Equal("True"))
-	Expect(primary).To(Equal(master))
+	// An operator pass that read a member in that state leaves PrimaryResolved
+	// False until the next pass, up to haResyncInterval (10 s) later, so it is
+	// read for two passes.
+	var since string
+	Eventually(func(g Gomega) {
+		status, reason, at, primary, err := r.primaryResolved()
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(status + " " + reason).To(Equal("True SinglePrimaryObserved"))
+		g.Expect(primary).To(Equal(master))
+		since = at
+	}, 30*time.Second, 2*time.Second).Should(Succeed(), roles.noted)
 	counts := map[string]int{}
 	for _, reason := range []string{"InstanceManagerTokenRotated", "InstanceManagerTokenOverlapEnded",
 		"InstanceManagerTokenRegenerated", "InstanceManagerTokenRefused", "PrimaryUnresolved"} {
@@ -676,9 +684,13 @@ func settledRoles(ctx context.Context, members []string, read func(context.Conte
 			return
 		}
 		var b strings.Builder
+		beside := "with no active master"
+		if first != "" {
+			beside = "beside the active master " + first
+		}
 		for _, m := range order {
-			fmt.Fprintf(&b, "%s to-be-master beside the active master %s, read from %.1f s to %.1f s after the first read; ",
-				m, first, firstSeen[m].Seconds(), lastSeen[m].Seconds())
+			fmt.Fprintf(&b, "%s to-be-master %s, read from %.1f s to %.1f s after the first read; ",
+				m, beside, firstSeen[m].Seconds(), lastSeen[m].Seconds())
 		}
 		res.noted = b.String() + end
 	}
@@ -690,6 +702,7 @@ func settledRoles(ctx context.Context, members []string, read func(context.Conte
 			return res, err
 		}
 		var masters, slaves, waiting []string
+		other := ""
 		for _, m := range members {
 			r := roles[m]
 			switch {
@@ -699,36 +712,12 @@ func settledRoles(ctx context.Context, members []string, read func(context.Conte
 				slaves = append(slaves, m)
 			case r.state == "to-be-master":
 				waiting = append(waiting, m)
-			default:
-				note(fmt.Sprintf("%s was in another state at read %d", m, n))
-				return res, &faults.Unmet{Member: m, Kind: faults.UnmetRole,
-					Detail: "neither an active master nor a standby slave:\n" + r.out}
+			case other == "":
+				other = m
 			}
 		}
-		if len(masters) > 1 {
-			note(fmt.Sprintf("two active masters at read %d", n))
-			return res, &faults.Unmet{Kind: faults.UnmetRole, Detail: fmt.Sprintf("masters %v, slaves %v", masters, slaves)}
-		}
-		if len(masters) == 1 && first == "" {
-			first = masters[0]
-		} else if len(masters) == 1 && masters[0] != first {
-			note(fmt.Sprintf("the master changed at read %d", n))
-			return res, &faults.Unmet{Member: masters[0], Kind: faults.UnmetRole,
-				Detail: fmt.Sprintf("master changed from %s to %s while a member was to-be-master", first, masters[0])}
-		}
-		if len(waiting) > 0 && len(masters) == 0 {
-			note(fmt.Sprintf("no active master at read %d", n))
-			return res, &faults.Unmet{Member: waiting[0], Kind: faults.UnmetRole,
-				Detail: "to-be-master with no active master:\n" + roles[waiting[0]].out}
-		}
-		if len(waiting) == 0 {
-			if len(masters) != 1 || len(slaves) != len(members)-1 {
-				return res, &faults.Unmet{Kind: faults.UnmetRole, Detail: fmt.Sprintf("masters %v, slaves %v", masters, slaves)}
-			}
-			res.master, res.slaves = masters[0], slaves
-			note(fmt.Sprintf("the roles settled at read %d, %.1f s after the first", n, at.Seconds()))
-			return res, nil
-		}
+		// The members in the state are recorded before any check, so that a
+		// reading that fails still says who was `to-be-master`.
 		for _, m := range waiting {
 			if _, ok := firstSeen[m]; !ok {
 				firstSeen[m] = at
@@ -736,16 +725,37 @@ func settledRoles(ctx context.Context, members []string, read func(context.Conte
 			}
 			lastSeen[m] = at
 		}
-		if time.Since(start) >= bound {
+		if first == "" && len(masters) == 1 {
+			first = masters[0]
+		}
+		switch {
+		case other != "":
+			note(fmt.Sprintf("%s was in another state at read %d", other, n))
+			return res, &faults.Unmet{Member: other, Kind: faults.UnmetRole,
+				Detail: "neither an active master nor a standby slave:\n" + roles[other].out}
+		case len(masters) > 1:
+			note(fmt.Sprintf("two active masters at read %d", n))
+			return res, &faults.Unmet{Kind: faults.UnmetRole, Detail: fmt.Sprintf("masters %v, slaves %v", masters, slaves)}
+		case len(masters) == 1 && masters[0] != first:
+			note(fmt.Sprintf("the master changed at read %d", n))
+			return res, &faults.Unmet{Member: masters[0], Kind: faults.UnmetRole,
+				Detail: fmt.Sprintf("master changed from %s to %s while a member was to-be-master", first, masters[0])}
+		case len(waiting) > 0 && len(masters) == 0:
+			note(fmt.Sprintf("no active master at read %d", n))
+			return res, &faults.Unmet{Member: waiting[0], Kind: faults.UnmetRole,
+				Detail: "to-be-master with no active master:\n" + roles[waiting[0]].out}
+		case len(waiting) == 0 && (len(masters) != 1 || len(slaves) != len(members)-1):
+			note(fmt.Sprintf("masters %v, slaves %v at read %d", masters, slaves, n))
+			return res, &faults.Unmet{Kind: faults.UnmetRole, Detail: fmt.Sprintf("masters %v, slaves %v", masters, slaves)}
+		case len(waiting) == 0:
+			res.master, res.slaves = masters[0], slaves
+			note(fmt.Sprintf("the roles settled at read %d, %.1f s after the first", n, at.Seconds()))
+			return res, nil
+		case time.Since(start) >= bound:
 			note(fmt.Sprintf("still so after %s", bound))
 			return res, &faults.Unmet{Member: waiting[0], Kind: faults.UnmetRole,
 				Detail: fmt.Sprintf("still to-be-master after %s:\n%s", bound, roles[waiting[0]].out)}
 		}
-		select {
-		case <-ctx.Done():
-			note("the step ended during the wait")
-			return res, ctx.Err()
-		case <-time.After(interval):
-		}
+		time.Sleep(interval)
 	}
 }
