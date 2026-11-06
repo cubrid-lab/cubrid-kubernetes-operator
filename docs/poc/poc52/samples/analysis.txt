@@ -253,6 +253,17 @@ the score pass against the status call, full cuts of h-0 with a parameter (secon
   check went off: 11 with the call ended before the pass: 11 | held: 11 largest gap between pass and call end 0.03000000000000025
   no status call on h-0: pass at 2.44 to 5.61 s, 22 trials, 11 at 4.7 s or later
 
+the two delay values at the catch-up reading (harness.py stored the first, for copying):
+  long-1 h-0: applying 1, Final LSA ('150', '7424'), copied EOF ('151', '10888')
+  long-1 h-2: applying 1, Final LSA ('150', '8816'), copied EOF ('151', '10888')
+  160 readings: [(('copying 0', 'applying 0', 'Final LSA at the copied EOF'), 118), (('copying 0', 'applying 0', 'behind, same page'), 40), (('copying 0', 'applying 1', 'behind, earlier page'), 2)]
+  forming a cluster, h-0 reading 1: {'Copying Active Log': '0', 'Applying Copied Log': '2'}, table: n 1, ERROR: before ' ORDER BY id' Unknown class "dba.marks".
+  forming a cluster, h-0 reading 2: {'Copying Active Log': '0', 'Applying Copied Log': '0'}, table: # read 1793958989.789 to 1793958990.175 
+  forming a cluster, h-0 reading 3: {'Copying Active Log': '0', 'Applying Copied Log': '0'}, table: 1 rows
+  forming a cluster, h-2 reading 1: {'Copying Active Log': '0', 'Applying Copied Log': '2'}, table: n 1, ERROR: before ' ORDER BY id' Unknown class "dba.marks".
+  forming a cluster, h-2 reading 2: {'Copying Active Log': '0', 'Applying Copied Log': '1'}, table: # read 1793958989.790 to 1793958991.259 
+  forming a cluster, h-2 reading 3: {'Copying Active Log': '0', 'Applying Copied Log': '0'}, table: 1 rows
+
 results of every write, by code:
   34250 [('disabled', 21695), ('ack', 7708), ('other:-353', 4584), ('other:-191', 137), ('other:-670', 118), ('ack-199-111', 6), ('other:-199', 1), ('other:-671', 1)]
 

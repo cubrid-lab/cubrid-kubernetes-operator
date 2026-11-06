@@ -65,10 +65,14 @@ command runs as part of each case:
 
 **The catch-up reading.** On one reading: the table of `h-0`, of `h-2` and of
 the master are equal by key and row, and `cubrid applyinfo -L … -r h-1 -a -v`
-on both slaves prints `Delayed log page count : 0`, and `Fail count` is
-recorded. Neither half alone is enough: while forming a cluster the applier
-reported 0 waiting pages on slaves that did not yet hold the table
-(`samples/setup-reading/`). It is a reading before the fault. Writes resume at
+on both slaves prints `Delayed log page count : 0` under "Delay in Copying
+Active Log", and `Fail count` is recorded. `applyinfo` prints that line twice,
+and `harness.py` reads the first; it is left as what ran. The value under
+"Delay in Applying Copied Log" was 0 in 79 of the 80 trials and 1 on both slaves
+in the long hold, and `analyse.py` prints both. Neither half of the reading is
+enough alone: while forming a cluster the copying value read 0 on slaves that
+did not yet hold the table, and the applying value read 0 once on `h-0` with its
+table still empty (`samples/setup-reading/`). It is a reading before the fault. Writes resume at
 the cut, so a member that takes over later is behind. In `idle` trials and
 kills, writes are turned on just before the fault.
 

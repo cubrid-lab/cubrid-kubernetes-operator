@@ -327,6 +327,29 @@ def extra(rs, root):
     q = sorted(r["diagnosis"] for r in rs if r["kind"] == "cut" and r["victim"] == "h-0" and r["poll"] == "quiet" and r["diagnosis"] is not None)
     print(f"  no status call on h-0: pass at {q[0]} to {q[-1]} s, {len(q)} trials, {sum(x >= 4.7 for x in q)} at 4.7 s or later")
 
+    print("\nthe two delay values at the catch-up reading (harness.py stored the first, for copying):")
+    c = collections.Counter()
+    delayed = re.compile(r"(Copying Active Log|Applying Copied Log).*?Delayed log page count\s*:\s*(-?\d+)", re.S)
+    for r in rs:
+        n = (r["caught"] or {}).get("reading")
+        for m in ("h-0", "h-2"):
+            t = text(f"{root}/{r['lane']}/{r['id']}/{m}.applyinfo.precut-{n}.txt") if n else ""
+            if not t:
+                continue
+            v = dict(delayed.findall(t))
+            fin = re.search(r"Final LSA\s*:\s*(\d+) \| (\d+)", t).groups()
+            eof = re.search(r"^EOF LSA\s*:\s*(\d+) \| (\d+)", t, re.M).groups()
+            where = "Final LSA at the copied EOF" if fin == eof else "behind, same page" if fin[0] == eof[0] else "behind, earlier page"
+            c[(f"copying {v['Copying Active Log']}", f"applying {v['Applying Copied Log']}", where)] += 1
+            if v["Applying Copied Log"] != "0":
+                print(f"  {r['id']} {m}: applying {v['Applying Copied Log']}, Final LSA {fin}, copied EOF {eof}")
+    print(" ", sum(c.values()), "readings:", c.most_common())
+    setup = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples", "setup-reading")
+    for m, n in (("h-0", 1), ("h-0", 2), ("h-0", 3), ("h-2", 1), ("h-2", 2), ("h-2", 3)):
+        t, rows = text(f"{setup}/{m}.applyinfo.precut-{n}.txt"), text(f"{setup}/{m}.rows.precut-{n}.tsv").splitlines()
+        if t:
+            print(f"  forming a cluster, {m} reading {n}: {dict(delayed.findall(t))}, table: {rows[0][-60:] if len(rows) == 1 else str(len(rows) - 1) + ' rows'}")
+
     print("\nresults of every write, by code:")
     codes = collections.Counter()
     for r in rs:
