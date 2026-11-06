@@ -82,6 +82,10 @@ stays `:dev`; to use a development image, pass it to the manager with
 
 - API version: `v1alpha1` — breaking changes may occur between alpha
   revisions.
+- Operator and Instance Manager: no combination of different builds is
+  declared supported. What each side does today when they differ, and what
+  nothing tests, is in
+  [ADR-0013](adr/0013-operator-instance-manager-compatibility.md).
 - The Kubernetes support range and any additional CUBRID patch versions are
   recorded here only after they pass CI, not asserted upfront.
 
