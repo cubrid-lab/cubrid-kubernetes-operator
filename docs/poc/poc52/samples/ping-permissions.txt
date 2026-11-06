@@ -1,0 +1,25 @@
+### docker run -u 1000
+1000
+0	2147483647
+PING 10.78.86.200 (10.78.86.200) 56(84) bytes of data.
+64 bytes from 10.78.86.200: icmp_seq=1 ttl=64 time=0.058 ms
+
+--- 10.78.86.200 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 0.058/0.058/0.058/0.000 ms
+rc=0
+### docker run -u 1000 --cap-drop ALL --security-opt no-new-privileges
+1000
+0	2147483647
+PING 10.78.86.200 (10.78.86.200) 56(84) bytes of data.
+64 bytes from 10.78.86.200: icmp_seq=1 ttl=64 time=0.060 ms
+
+--- 10.78.86.200 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 0.060/0.060/0.060/0.000 ms
+rc=0
+### docker run -u 1000 --cap-drop ALL --security-opt no-new-privileges --sysctl net.ipv4.ping_group_range=1 0
+1000
+1	0
+rc=2
+ping: socket: Operation not permitted

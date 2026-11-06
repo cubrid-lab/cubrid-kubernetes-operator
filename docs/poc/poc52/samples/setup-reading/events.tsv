@@ -1,0 +1,15 @@
+1793958959.517	formed	('h-0', ['h-1', 'h-2'])
+1793958983.832	master-moved	('h-1', ['h-0', 'h-2'])
+1793958987.075	table	precut-1	h-2	1793958986.997	1793958987.051	unread	In line 1, column 1, ERROR: before ' ORDER BY id' Unknown class "dba.marks".
+1793958987.075	table	precut-1	h-1	1793958986.994	1793958987.065	1	
+1793958987.075	table	precut-1	h-0	1793958986.994	1793958987.075	unread	In line 1, column 1, ERROR: before ' ORDER BY id' Unknown class "dba.marks".
+1793958987.788	catchup	{"reading": 1, "rows": 1, "same": {"h-0": false, "h-2": false}, "delayed": {"h-0": 0, "h-2": 0}, "fail": {"h-0": 0, "h-2": 0}}
+1793958991.259	table	precut-2	h-1	1793958989.790	1793958989.852	1	
+1793958991.259	table	precut-2	h-0	1793958989.789	1793958990.175	0	
+1793958991.260	table	precut-2	h-2	1793958989.790	1793958991.259	0	
+1793958991.615	catchup	{"reading": 2, "rows": 1, "same": {"h-0": false, "h-2": false}, "delayed": {"h-0": 0, "h-2": 0}, "fail": {"h-0": 0, "h-2": 0}}
+1793958993.723	table	precut-3	h-2	1793958993.619	1793958993.712	1	
+1793958993.723	table	precut-3	h-1	1793958993.619	1793958993.722	1	
+1793958993.723	table	precut-3	h-0	1793958993.619	1793958993.723	1	
+1793958993.824	catchup	{"reading": 3, "rows": 1, "same": {"h-0": true, "h-2": true}, "delayed": {"h-0": 0, "h-2": 0}, "fail": {"h-0": 0, "h-2": 0}}
+1793958993.824	caught-up	{"reading": 3, "rows": 1, "same": {"h-0": true, "h-2": true}, "delayed": {"h-0": 0, "h-2": 0}, "fail": {"h-0": 0, "h-2": 0}, "reached": true, "secs": 6.8}
