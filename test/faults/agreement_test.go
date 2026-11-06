@@ -1158,6 +1158,27 @@ func TestS00Rules(t *testing.T) {
 		"Ready is False until after the first read and the last read is inconclusive": {
 			obs: readyAfterFirstRead, notJudged: ruleS00ReadyFollowedBySQL},
 	})
+	// Ready was True long before the last read, which alone leaves the rule
+	// evidence, but a last read that was inconclusive does not show that SQL
+	// worked up to the end, so S00 cannot pass on it.
+	checkCases(t, S00Rules(s00Run(lastInconclusive)), map[string]agreementCase{
+		"the last read is inconclusive, with Ready True long before it": {
+			obs: s00Obs(), notJudged: ruleS00ReadyFollowedBySQL, note: "is not compared with Ready"},
+	})
+	readAgain := append(slices.Clone(lastInconclusive), SmokeSQL{Start: at(112), End: at(113), OK: true,
+		What: "csql read again"})
+	checkCases(t, S00Rules(s00Run(readAgain)), map[string]agreementCase{
+		"an inconclusive read, then a conclusive one": {obs: s00Obs(), judged: true,
+			note: "is not compared with Ready"},
+	})
+	// A client through the Brokers after the last csql read does not make
+	// that read conclusive.
+	brokerLast := append(slices.Clone(lastInconclusive), SmokeSQL{Start: at(112), End: at(113), Broker: true,
+		OK: true, What: "broker client"})
+	checkCases(t, S00Rules(s00Run(brokerLast)), map[string]agreementCase{
+		"the last read in the Pod is inconclusive, and a Broker client comes after it": {
+			obs: s00Obs(), notJudged: ruleS00ReadyFollowedBySQL},
+	})
 	checkCases(t, S00Rules(s00Run(lastFails)), map[string]agreementCase{
 		"csql fails at the end, with no reads for the tolerance after it": {obs: s00Obs(), note: "not judged"},
 	})
@@ -1197,7 +1218,32 @@ func TestS00Rules(t *testing.T) {
 func TestReadyTolerance(t *testing.T) {
 	// Three failed readiness probes 5 seconds apart, each given 5 seconds,
 	// then the StatefulSet's status, the reconcile and the sampling.
-	if ReadyTolerance < 25*time.Second || ReadyTolerance > 35*time.Second {
-		t.Errorf("ReadyTolerance = %s, want 20s of probes plus a few seconds", ReadyTolerance)
+	if ReadyTolerance != 30*time.Second {
+		t.Errorf("ReadyTolerance = %s, want 30s: 20s of probes plus a few seconds", ReadyTolerance)
+	}
+	// A csql operation fails at second 60 and Ready turns False at the given
+	// second. Reads one second apart lie on either side of the end of the
+	// window, second 90: Ready turning False in the last read of the window
+	// agrees, and turning False in the first read after it is a disagreement.
+	failed := []SmokeSQL{{Start: at(58), End: at(60), What: "csql read"}}
+	falseFrom := func(second float64) Observations {
+		var obs Observations
+		for s := 44.0; s <= 100; s++ {
+			read := standalone(s)
+			if s >= second {
+				read = with(read, "Ready", "False", "InstancesNotReady")
+			}
+			obs.Samples = append(obs.Samples, read)
+		}
+		return obs
+	}
+	checkCases(t, S00Rules(s00Run(failed)), map[string]agreementCase{
+		"Ready turns False at the last read of the window":     {obs: falseFrom(90), note: ruleS00SQLFailedWhileTrue},
+		"Ready turns False at the first read after the window": {obs: falseFrom(91), disagree: ruleS00ReadyFollowedBySQL},
+	})
+	for _, second := range []float64{89, 90} {
+		if got := CheckAgreement(falseFrom(second), S00Rules(s00Run(failed))); len(got.Disagreements) > 0 {
+			t.Errorf("Ready turned False at second %v, within the tolerance: %v", second, got.Disagreements)
+		}
 	}
 }

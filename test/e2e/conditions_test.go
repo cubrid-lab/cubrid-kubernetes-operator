@@ -252,8 +252,15 @@ func checkConditions(dir string, rounds []conditionRound, events []workload.Even
 
 	var text strings.Builder
 	fmt.Fprintf(&text, "Agreement of the CubridCluster's Conditions with SQL and the fault, %s\n\n", dir)
-	fmt.Fprintf(&text, "Status reads: %d, of which %d could not be read; heartbeat sweeps: %d; "+
-		"client operations with an outcome: %d\n", len(rounds), unread, len(obs.Sweeps), len(obs.SQL))
+	fmt.Fprintf(&text, "Status reads: %d, of which %d could not be read; heartbeat sweeps: %d", len(rounds), unread,
+		len(obs.Sweeps))
+	// A run without a client workload has no such count: S00 lists its SQL in
+	// the rules that compare it, and a zero would say that the SQL had no
+	// outcome.
+	if events != nil {
+		fmt.Fprintf(&text, "; client operations with an outcome: %d", len(obs.SQL))
+	}
+	text.WriteString("\n")
 	text.WriteString("\nRules:\n")
 	for _, rule := range rules {
 		judged := ""
@@ -650,16 +657,10 @@ func TestS06ConditionsAreJudgedOnEveryResult(t *testing.T) {
 	}
 }
 
-// TestS00ConditionsAreJudgedOnEveryResult checks that S00 judges its sampled
-// reads whatever the rest of the scenario ended with: a read of the
-// standalone cluster that names a primary, which the Operator never writes
-// for it, fails the scenario with the disagreement as its reason, and the
-// reads and the verdict are kept as evidence. A run in
-// which no SQL ran in the member's Pod has nothing to compare Ready with, so
-// it cannot pass on the Conditions.
-func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
-	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
-	const member = "s00-0"
+// s00Fixture is a run of S00 on a standalone cluster whose reads agree with
+// its SQL: 30 status reads two seconds apart, Ready=True from the eleventh on,
+// and a csql write that succeeded right after the member's Pod was ready.
+func s00Fixture() ([]conditionRound, faults.S00Run) {
 	start := time.Now().UTC()
 	rounds := make([]conditionRound, 0, 30)
 	for i := range 30 {
@@ -674,17 +675,31 @@ func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
 		for _, c := range []string{"RoutingReady", "BrokerReady", "WriteEndpointReady", "ReadEndpointReady"} {
 			conditions[c] = faults.ConditionState{Status: "False"}
 		}
-		primary := ""
-		if i == 15 {
-			primary = member
-		}
 		rounds = append(rounds, conditionRound{
-			Status: &faults.ConditionSample{ReadStart: at, ReadEnd: at, CurrentPrimary: primary, Conditions: conditions},
+			Status: &faults.ConditionSample{ReadStart: at, ReadEnd: at, Conditions: conditions},
 		})
 	}
-	run := faults.S00Run{Member: member, PodReady: start.Add(18 * time.Second), SmokeEnd: start.Add(58 * time.Second),
+	return rounds, faults.S00Run{Member: "s00-0", PodReady: start.Add(18 * time.Second),
+		SmokeEnd: start.Add(58 * time.Second),
 		SQL: []faults.SmokeSQL{{Start: start.Add(22 * time.Second), End: start.Add(24 * time.Second), Write: true,
 			OK: true, What: "csql write"}}}
+}
+
+// TestS00ConditionsAreJudgedOnEveryResult checks that S00 judges its sampled
+// reads whatever the rest of the scenario ended with: a read of the
+// standalone cluster that names a primary, which the Operator never writes
+// for it, fails the scenario with the disagreement as its reason, and the
+// reads and the verdict are kept as evidence. A run in
+// which no SQL ran in the member's Pod has nothing to compare Ready with, so
+// it cannot pass on the Conditions.
+func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
+	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	const member = "s00-0"
+	agreeing, run := s00Fixture()
+	rounds := slices.Clone(agreeing)
+	named := *rounds[15].Status
+	named.CurrentPrimary = member
+	rounds[15].Status = &named
 	for _, ended := range []evidence.Scenario{
 		{ID: "S00", Result: evidence.Pass},
 		{ID: "S00", Result: evidence.Fail, Reason: "a step of the scenario failed; see the test output"},
@@ -708,8 +723,6 @@ func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
 			t.Errorf("a run ending with %s has no conditionAgreement measurement", ended.Result)
 		}
 	}
-	agreeing := slices.Clone(rounds)
-	agreeing[15] = rounds[14]
 	passed := evidence.Scenario{ID: "S00", Result: evidence.Pass}
 	if got := s00Conditions(passed, agreeing, run, nil); got.Result != evidence.Pass {
 		t.Errorf("a run whose Conditions agree gave %s (%s)", got.Result, got.Reason)
@@ -720,6 +733,113 @@ func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
 		!strings.HasPrefix(got.Reason, reasonConditionsNotJudged) {
 		t.Errorf("a run without SQL in the Pod gave %s (%s), want blocked with %s", got.Result, got.Reason,
 			reasonConditionsNotJudged)
+	}
+	if got := s00Conditions(passed, agreeing, run, nil); got.Measurements["csqlLostSessionReads"] != evidence.Unknown {
+		t.Errorf("a run without a csql read has csqlLostSessionReads %v, want %s",
+			got.Measurements["csqlLostSessionReads"], evidence.Unknown)
+	}
+	// The default reads say Ready=True long before the end, so only the
+	// outcome of the last read decides. A last read that was inconclusive
+	// proves nothing, whatever Ready said earlier, so the run is blocked.
+	lastRead := func(reasons ...string) faults.S00Run {
+		r := run
+		r.SQL = slices.Clone(run.SQL)
+		for i, reason := range reasons {
+			at := agreeing[0].Status.ReadStart.Add(time.Duration(50+2*i) * time.Second)
+			r.SQL = append(r.SQL, faults.SmokeSQL{Start: at, End: at.Add(time.Second), OK: reason == "",
+				Inconclusive: reason, What: "csql read"})
+		}
+		return r
+	}
+	for name, tc := range map[string]struct {
+		reasons []string
+		want    evidence.Result
+		lost    int
+	}{
+		"the last read is conclusive":                   {[]string{""}, evidence.Pass, 0},
+		"the last read lost its session":                {[]string{s00LostSession}, evidence.Blocked, 1},
+		"two reads lost their session":                  {[]string{s00LostSession, s00LostSession}, evidence.Blocked, 2},
+		"a read that lost its session, then a good one": {[]string{s00LostSession, ""}, evidence.Pass, 1},
+		"the last read could not be run":                {[]string{"csql could not be run"}, evidence.Blocked, 0},
+		"a read that lost its session, then one that could not be run": {
+			[]string{s00LostSession, "csql could not be run"}, evidence.Blocked, 1},
+	} {
+		got := s00Conditions(passed, agreeing, lastRead(tc.reasons...), nil)
+		if got.Result != tc.want {
+			t.Errorf("%s: the run gave %s (%s), want %s", name, got.Result, got.Reason, tc.want)
+		}
+		if tc.want == evidence.Blocked && !strings.Contains(got.Reason, "inconclusive") {
+			t.Errorf("%s: the reason %q does not say that the last read was inconclusive", name, got.Reason)
+		}
+		if lost := got.Measurements["csqlLostSessionReads"]; lost != tc.lost {
+			t.Errorf("%s: csqlLostSessionReads = %v, want %d", name, lost, tc.lost)
+		}
+	}
+}
+
+// TestS00VerdictAgreesWithTheRecord checks that S00/record.json holds the
+// result and the reason the summary gets on every way a run can end, and
+// that the Conditions are judged before it is written.
+func TestS00VerdictAgreesWithTheRecord(t *testing.T) {
+	agreeing, run := s00Fixture()
+	named := slices.Clone(agreeing)
+	status := *named[15].Status
+	status.CurrentPrimary = run.Member
+	named[15].Status = &status
+	lostRead := run
+	lostRead.SQL = append(slices.Clone(run.SQL), faults.SmokeSQL{Start: run.SmokeEnd.Add(-4 * time.Second),
+		End: run.SmokeEnd.Add(-2 * time.Second), Inconclusive: s00LostSession, What: "csql read"})
+	for name, tc := range map[string]struct {
+		ended  evidence.Scenario
+		rounds []conditionRound
+		run    faults.S00Run
+		want   evidence.Result
+	}{
+		"every check passed and the Conditions agree": {
+			evidence.Scenario{Result: evidence.Pass}, agreeing, run, evidence.Pass},
+		"every check passed and the Conditions disagree": {
+			evidence.Scenario{Result: evidence.Pass}, named, run, evidence.Fail},
+		"every check passed and the last read lost its session": {
+			evidence.Scenario{Result: evidence.Pass}, agreeing, lostRead, evidence.Blocked},
+		"every check passed and no SQL was recorded": {
+			evidence.Scenario{Result: evidence.Pass}, agreeing, faults.S00Run{Member: run.Member}, evidence.Blocked},
+		"a step failed": {
+			evidence.Scenario{Result: evidence.Fail, Reason: "a step of the scenario failed; see the test output"},
+			agreeing, run, evidence.Fail},
+		"a step failed and the Conditions disagree": {
+			evidence.Scenario{Result: evidence.Fail, Reason: "a step of the scenario failed; see the test output"},
+			named, run, evidence.Fail},
+		"the fault's verdict blocked the run": {
+			evidence.Scenario{Result: evidence.Blocked, Reason: faults.ReasonStepStillRunning},
+			agreeing, run, evidence.Blocked},
+		"the image could not be loaded and nothing ran": {
+			evidence.Scenario{Result: evidence.Blocked, Reason: "image load"}, nil, faults.S00Run{}, evidence.Blocked},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("E2E_EVIDENCE_DIR", dir)
+			tc.ended.ID = "S00"
+			record := &s00Evidence{Scenario: "S00", Result: string(evidence.Fail), ProbeFailureEvents: []string{}}
+			got := s00Verdict(tc.ended, record, tc.rounds, tc.run, nil)
+			if got.Result != tc.want {
+				t.Fatalf("the verdict is %s (%s), want %s", got.Result, got.Reason, tc.want)
+			}
+			if !slices.Contains(got.Evidence, "S00/record.json") {
+				t.Errorf("the evidence %v does not list S00/record.json", got.Evidence)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "S00/record.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var written s00Evidence
+			if err := json.Unmarshal(data, &written); err != nil {
+				t.Fatal(err)
+			}
+			if written.Result != string(got.Result) || written.Reason != got.Reason {
+				t.Errorf("S00/record.json says %s (%s), the summary %s (%s)", written.Result, written.Reason,
+					got.Result, got.Reason)
+			}
+		})
 	}
 }
 
@@ -747,5 +867,16 @@ func TestAgreementTextGivesEachToleranceRuleItsOwnTolerance(t *testing.T) {
 	}
 	if strings.Contains(string(text), faults.AgreementTolerance.String()) {
 		t.Errorf("agreement.txt gives the tolerance %s, which no S00 rule uses:\n%s", faults.AgreementTolerance, text)
+	}
+	if strings.Contains(string(text), "client operations with an outcome") {
+		t.Errorf("agreement.txt counts the operations of a client workload S00 does not have:\n%s", text)
+	}
+	checkConditions("S05/count", nil, []workload.Event{}, nil, faults.S00Rules(run))
+	text, err = os.ReadFile(filepath.Join(dir, "S05/count/agreement.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(text), "client operations with an outcome: 0") {
+		t.Errorf("agreement.txt does not count a client workload's operations:\n%s", text)
 	}
 }

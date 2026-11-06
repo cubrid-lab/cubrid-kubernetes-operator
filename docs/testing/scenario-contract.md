@@ -1123,21 +1123,33 @@ it needs more.
     (`docs/poc/RESULTS.md`) saw `csql` print that pair as it exited after
     statements that had taken effect, on the VM lab, and POC-49 did not make
     csql print it on a standalone member by running `cubrid heartbeat status`
-    beside `csql` (csql's own log held one pair); its cause is unknown, so such a read is evidence neither
-    that SQL failed nor that it succeeded. A `-199` without the row, without
-    `-111`, with another error or with a non-zero exit, and a write that
-    printed the pair, whose output holds no row, still count as failed. The
-    write and the first read keep failing S00 through their own checks as
-    before; the read at the end of the smoke checks is judged by the row it
-    returned, as the installed test of a graceful stop judges its statements
-    by the rows counted, and a pair printed with the row adds the step
-    `csql_lost_session_after_row` to `S00/timeline.jsonl` and is noted in
-    `S00/agreement.txt`. A read left out does not count as the last `csql`
-    operation either. This rule can only
-    refine the reason of a run that already failed, since every failed `csql`
-    operation in the Pod already fails S00 through its own check; on a passing
-    run it can only block it, when no read with `Ready=True` came before the
-    last `csql` operation that is not left out.
+    beside `csql` (csql's own log held one pair); its cause is unknown, so
+    such a read is evidence neither that SQL failed nor that it succeeded.
+    A `-199` without the row, without `-111`, with another error or with a
+    non-zero exit, and a write that printed the pair, whose output holds no
+    row, still count as failed.
+
+    Such a read is never a conclusive read and never yields a pass on its
+    own. The write and the first read keep failing S00 through their own
+    checks, and so does the read before the Pod deletion. When the read at the
+    end of the smoke checks prints the pair, it is read once more, as the
+    installed lab harness does: the first read is noted in `S00/agreement.txt`
+    and adds the step `csql_lost_session_after_row` to `S00/timeline.jsonl`,
+    and the second read decides. If it succeeded, it is the last `csql`
+    operation the rule compares with; if `csql` reported its statement as
+    failed, S00 fails. If it is inconclusive, because it printed the pair
+    again, `csql` could not be run or the row did not match, the last `csql`
+    operation is inconclusive, this rule is not judged and S00 ends `blocked`
+    however early `Ready` was `True`, unless something else failed it.
+    `measurements.csqlLostSessionReads` counts the `csql` reads that printed
+    the pair, also on a run that passed, and is `unknown` when the run made
+    no `csql` read.
+
+    This rule can only refine the reason of a run that already failed, since
+    every failed `csql` operation in the Pod already fails S00 through its own
+    check; on a passing run it can only block it, when no read with
+    `Ready=True` came before the last `csql` operation that is not left out,
+    or when the last `csql` operation is inconclusive.
   - **Report:** SQL that succeeded while the last read before it had `Ready`
     (for `csql` in the Pod) or `RoutingReady` (for the client through the
     Brokers) not `True`, and SQL that failed while it was `True`. A failure of
@@ -1150,7 +1162,9 @@ it needs more.
   earlier check did not pass, and a rule without enough evidence keeps a run
   that passed everything else `blocked`. `S00/conditions.jsonl`
   and `S00/agreement.txt` are always written (S00 has no `S00/roles.jsonl`), and
-  `measurements.conditionAgreement` is added. `S00/timeline.jsonl` starts with
+  `measurements.conditionAgreement` is added. `S00/record.json` is written
+  after that judgement, so it holds the result and reason of the summary.
+  `S00/timeline.jsonl` starts with
   the steps of the installation and the smoke checks (`cluster_created`,
   `pod_ready`, `ready_observed`, `brokers_available`, `smoke_checks_ended`)
   before the steps of the Pod deletion. The checks above, and the limits

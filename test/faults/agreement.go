@@ -1506,9 +1506,10 @@ type SmokeSQL struct {
 	// Inconclusive, when set, says why the operation's outcome is no evidence
 	// that the statement failed or succeeded in the member's Pod: the row was
 	// read but did not match, csql could not be run there, or csql printed
-	// the row read with -199 and -111 (POC-44). Such an
-	// operation is left out of the rules that compare the Conditions with the
-	// SQL, and the reason is noted.
+	// the row read with -199 and -111 (POC-44). Such an operation is left out
+	// of the rules that compare the Conditions with the SQL, and the reason
+	// is noted. When it is the last csql operation, the rule on Ready and SQL
+	// cannot be judged.
 	Inconclusive string
 	// What names the operation in agreement.txt.
 	What string
@@ -1530,8 +1531,8 @@ type S00Run struct {
 // is standalone: from its creation through the member's formation, Ready and
 // the smoke SQL there is no fault. A standalone member runs no heartbeat and
 // the Operator resolves no primary for it, so the Conditions are compared
-// with the SQL of the smoke checks and no heartbeat is asked. Its status has no status.lastObservedTime, so no
-// rule here waits for it to be fresh.
+// with the SQL of the smoke checks and no heartbeat is asked. Its status has
+// no status.lastObservedTime, so no rule here waits for it to be fresh.
 //
 // The shared Never rules are applied to every read. Four of them read
 // Conditions a standalone cluster never carries (PrimaryResolved,
@@ -1569,8 +1570,9 @@ func S00Rules(run S00Run) []Rule {
 			Says: "Ready=True is not read while SQL fails (ADR-0003): SQL with csql in the member's Pod that failed " +
 				"is a disagreement when the last read before it and every read for " + ReadyTolerance.String() +
 				" after it, none more than " + readingGap.String() + " apart, said Ready=True. The reads that " +
-				"started before the last of those operations ended are the reads it judges, and at least one of " +
-				"them must say Ready=True",
+				"started before the last conclusive one of those operations ended are the reads it judges, and at " +
+				"least one of them must say Ready=True. An operation left out as inconclusive cannot be the last " +
+				"csql operation of the run: the rule then is not judged",
 			check: func(obs Observations) finding { return checkS00ReadyFollowedBySQL(obs, run) },
 		},
 		Rule{
@@ -1637,7 +1639,12 @@ func checkS00ReadyFollowedBySQL(obs Observations, run S00Run) finding {
 	var inPod []SmokeSQL
 	var lastEnd time.Time
 	var notes []string
+	// last is the last operation in the Pod, conclusive or not.
+	var last SmokeSQL
 	for _, op := range run.SQL {
+		if !op.Broker && !op.End.Before(last.End) {
+			last = op
+		}
 		if !op.Broker && op.Inconclusive != "" {
 			notes = append(notes, fmt.Sprintf("%s, from %s to %s, is not compared with Ready: %s", op.What,
 				stamp(op.Start), stamp(op.End), op.Inconclusive))
@@ -1694,6 +1701,9 @@ func checkS00ReadyFollowedBySQL(obs Observations, run S00Run) finding {
 	}
 	f := finding{disagreements: bad, notes: notes, evaluated: evaluated, considered: considered}
 	switch {
+	case last.Inconclusive != "":
+		f.notJudged = fmt.Sprintf("the last SQL operation in the member's Pod, %s, was inconclusive, so it does not "+
+			"show that SQL worked to the end of the smoke checks: %s", last.What, last.Inconclusive)
 	case considered == 0:
 		f.notJudged = "no status read started before an SQL operation in the member's Pod ended"
 	case ready == 0:
