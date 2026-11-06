@@ -8,6 +8,8 @@ This record states what the Operator and the Instance Manager do today when
 their builds differ, with the code and the test that show it, and names the
 cases that nothing shows. The rules it lists under "Decision" are the ones the
 issue asks for; they await a maintainer decision and are not in force.
+Merging this record accepts no compatibility policy, changes no behavior and
+does not complete #322.
 
 ## Context
 
@@ -160,7 +162,12 @@ These were found while reading the code and are recorded, not fixed here.
    ignores the field and answers as if it were absent; the Operator does not
    learn that the check did not run. For the cluster UID the Operator takes
    the artifact from the location it has just written, which lowers the
-   practical risk, but nothing makes the old combination refuse.
+   practical risk, but nothing makes the old combination refuse. The caller
+   cannot infer that the check was enforced, so this remains an open defect on
+   #733. Before any mix of builds is declared supported, the contract needs a
+   fail-closed capability, version or response acknowledgement, or an explicit
+   refusal, for `ExpectedClusterUID`, `Seed` and `SeedFromMaster` alike, and a
+   regression test across real builds.
 2. **The Operator cannot tell an older manager from a manager that has
    nothing to report.** An answer without `unfinished` is stored as "no
    unfinished database" and clears an earlier report (`instanceStatuses`);
