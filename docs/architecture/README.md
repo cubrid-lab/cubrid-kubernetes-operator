@@ -32,7 +32,9 @@ defined below, so a box with the same name is the same thing on every page.
 5. **[Failure and recovery responsibilities](failure-recovery.md)** — what
    Kubernetes, CUBRID native HA and the Operator each do when the master's
    Pod is lost, and which parts are planned rather than implemented.
-6. **Details** — the [ADRs](../adr/), [DESIGN.md](../../DESIGN.md),
+6. **[Voluntary disruption](voluntary-disruption.md)** — what a node drain
+   may take, for each topology, and what a PodDisruptionBudget cannot protect.
+7. **Details** — the [ADRs](../adr/), [DESIGN.md](../../DESIGN.md),
    [docs/observability.md](../observability.md), the
    [scenario contract](../testing/scenario-contract.md) and
    [ROADMAP.md](../../ROADMAP.md) hold the full decisions and evidence. These

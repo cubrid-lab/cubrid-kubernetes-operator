@@ -182,7 +182,9 @@ Validation rules for the member count are in
 - NetworkPolicies are drawn as one box. They only take effect with a network
   plugin that enforces them; see
   [README — Network access](../../README.md#network-access).
-- Placement of the database members, PodDisruptionBudgets and multi-zone
-  layouts are not shown because the Operator does not manage them yet
-  (ROADMAP.md, "Hardening"). The Broker Deployments only carry a preferred
-  anti-affinity on the node name (`brokerPodSpec` in `broker.go`).
+- Multi-zone layouts are not shown because the Operator does not manage them
+  (ROADMAP.md, "Hardening"). Node placement and PodDisruptionBudgets are not
+  drawn: members are placed as in
+  [README — Member placement](../../README.md#member-placement), and the
+  Brokers carry a preferred anti-affinity on the node name (`brokerPodSpec` in
+  `broker.go`); see [Voluntary disruption](voluntary-disruption.md).

@@ -2124,7 +2124,8 @@ because they move the master.
   at a time; this is the rule issue
   [#90](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/90),
   "feat(lifecycle): enforce placement, retention and voluntary-disruption
-  policy", is to implement. No accepted ADR states it yet (see Q5).
+  policy", is to implement. [ADR-0012](../adr/0012-voluntary-disruption.md),
+  still Proposed, states it (see Q5).
 - **Expected:** a drain never takes a second member down while one is already
   unavailable; draining the master's node ends as S03 `graceful`; with no
   spare node the Pod stays `Pending`, the cluster reports that it is degraded,
@@ -2256,7 +2257,7 @@ is written.
 | Q2 | While the old master cannot be observed, the Operator keeps `PrimaryResolved` not `True`. Do new connections through the read-write Broker still reach the new master, and should they? ADR-0005 leaves this to an experiment ("relaxable if POC proves brokers safe"). **Observed in S03 on Kind:** yes, they do. While the Operator reported `PrimaryResolved` and `RoutingReady` as not `True` for 17 to 19 seconds, the client's writes were acknowledged after 1 to 2 seconds and none was lost. Whether that is to be allowed is still to be decided. | S04, S07 | One day on the VM lab, with issue [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113), "feat(safety): enforce and release managed write quarantine". |
 | Q3 | With `ha_ping_hosts` set, does an isolated master stop accepting writes by itself, and how quickly? The generated configuration does not set it. | S07 | One day, with issue [#114](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/114), "test(faults): add verified network partition and replication-delay controls". |
 | Q4 | When a lagging slave is promoted, what happens to the rows it had not applied, and can a second failure promote a member that lacks them? | S08 | One day on the VM lab. |
-| Q5 | Which disruption budget is correct for three members given Q1: one member at a time, or none while a member is already missing? | S15 | Decided after Q1; needs a decision record or an amendment. |
+| Q5 | Which disruption budget is correct for three members given Q1: one member at a time, or none while a member is already missing? | S15 | Proposed in [ADR-0012](../adr/0012-voluntary-disruption.md): both, through `maxUnavailable: 1`, which allows one eviction with all members ready and none with one missing. Not accepted, and not observed on real nodes. |
 | Q6 | How long does an already-open session keep writing to an isolated old master? ADR-0005 names this the stale-write exposure measurement. | S07 | Measured in the S07 run itself; reported, not judged. |
 | Q7 | Does a backup interrupted by a Pod kill leave files that `restoredb` accepts? | S11 | Half a day under Podman. |
 | Q8 | What evidence shows that a former master did not accept writes the others lack, so that it may rejoin without a rebuild? POC-3 saw a stopped master return as a slave on its own; ADR-0006 blocks a former master until it is verified. | S03, S09 | One day, with issue [#116](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/116), "feat(recovery): rejoin retained-PVC members without unsafe failback". |
