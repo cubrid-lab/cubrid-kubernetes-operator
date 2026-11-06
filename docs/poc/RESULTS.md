@@ -909,7 +909,7 @@ written again naming `appdb_h-1`, `applyinfo` showed `Insert count : 2`, and
 - The only signals were the applying delay in `applyinfo`, the applier's error
   log, and the data itself. Role, server state and fail count showed nothing.
 
-**Reading of the cause (not confirmed in CUBRID's source or manual).** The
+**Reading of the cause (not confirmed by an experiment; CUBRID's source was read later, see the end of POC-21).** The
 file under `$CUBRID/var/APPLYLOGDB` records which copied log is being applied
 for the database, and an applier for another log is refused while it names a
 different one. `h-2` was stopped while it was applying `h-0`'s log, so the
@@ -1278,7 +1278,7 @@ healthy slave.
 **Not tested here:** whether a slave that had unapplied work from the old
 master's log loses it when it starts without the lock file; the Operator's
 `ReplicationHealthy` condition during part 2, which ran before that condition
-existed; what CUBRID's manual or source says the lock file is for.
+existed; what CUBRID's manual or source says the lock file is for (read afterwards, below).
 
 **Later observation, in the e2e step that repeats part 2 (#342).** The
 Instance Manager ends a member whose CUBRID processes stay away for longer
@@ -1294,6 +1294,99 @@ Why `hab-2` was not promoted is not known: that run kept no heartbeat status
 of the members during the wait (issue #355). The step waits 20 seconds for
 the failover, records what each member reports on every poll when it does not
 come, and starts again with a new attempt.
+
+**What CUBRID's source and manual say about the lock file (#226; source
+reading, not an experiment).** This section only reads code. Reading the
+source explains the observations above and does not prove them: nothing here
+was run, and the reading may be wrong where a path was not followed to its
+end. The source is github.com/CUBRID/cubrid, tag `v11.4.6` (commit
+`0e7d3c11e62ed8a4d354d0c951412f739e6be9ce`, the build POC-17 ran:
+11.4.6.1963-0e7d3c1). The tip of `release/11.4` at the time of reading,
+`v11.4.7` (`1df4af4`), has the same two lock functions; its `log_applier.c`
+differs from `v11.4.6` by 8 lines, which were not examined. Line numbers are
+those of `v11.4.6`.
+
+- **What the file is.** `fileio_lock_la_dbname()` (`src/storage/file_io.c`
+  1512) makes `$CUBRID/var/APPLYLOGDB/<db name>` (directory at 1524), takes a
+  POSIX write lock on it with `fcntl` `F_SETLK` (1601, through
+  `fileio_lock_file_write`, defined at 297) and writes one line,
+  `<pid> <db name> <copied log path>` (1615). That is the line seen in POC-16
+  (`579  appdb /var/lib/cubrid/databases/appdb_h-0`). It holds no log position.
+  The applier's position (`committed_lsa`, `final_lsa` and the counters) is
+  read from the table `db_ha_apply_info` in the slave's own database, by
+  database name and copied log path (`la_get_last_ha_applied_info()`,
+  `src/transaction/log_applier.c` 1960 and 1975; the query at 1554).
+- **What it is for.** The code has no comment saying so. By what it does, it
+  lets only one `applylogdb` process at a time write to the slave's database
+  `<db>`, although a slave runs one applier per copied log (its own master's
+  and the other slave's). The kernel lock is released when the process ends.
+- **Why a dead process still blocks.** Before the lock call, the function
+  reads the file and, when it parses three fields and the copied log path in
+  it differs from the caller's (`file_io.c` 1579), returns at once with the
+  error `ER_IO_MOUNT_LOCKED` (1581), printed with `-` for user, host and
+  time and the pid from the file. That is the line seen in POC-16, 17 and 21,
+  `in use by user - on process 579 of host - since -` (message 11 in
+  `msg/en_US.utf8/cubrid.msg` 83). Whether the pid is alive and whether any
+  lock is held is not looked at in this branch. This matches POC-38, where an
+  applier for the same log started while the file named a dead process, and
+  its reading that a kernel lock was not what refused.
+- **Why it does not clear by itself.** The applier that was refused repeats
+  the call every 3 seconds without limit (`la_lock_dbname()`, 6889, sleep at
+  6907), which matches the error repeated every few seconds. The content is
+  cleared (overwritten with blanks, 1703) only by `la_unlock_dbname(...,
+  clear_owner = true)`, and that function returns at once when the process
+  holds no lock descriptor (6924). It is called with `true` when the applier
+  of the lock's own log sees the master's state change (`is_role_changed`,
+  6342, used at 8635), has no more to apply and the log's server state is not
+  active (8338), or, if `ha_applylogdb_log_wait_time_in_secs` (default -1,
+  `system_parameter.c` 1543) is set, the log has not grown for that time
+  while the server is dead (8319). A shutdown calls it with `false`
+  (`la_shutdown()`, 7012, `clear_owner` at 7036), as does anything that ends
+  the process, so the file keeps the name of the log being applied when the
+  applier stopped. A restarted applier for the old master's log has no
+  descriptor and, as read, does not take the lock before it has a committed
+  transaction to apply (5812), so it has nothing to clear. This is a reading
+  of how the stale file stays: the code does not say so and it was not
+  traced in a running applier.
+- **A blank or empty file does not refuse.** The comparison happens only when
+  the file parses as three fields (1575). A file cleared by
+  `clear_owner = true`, or empty, parses as fewer, so by this reading it would
+  not block (the open question in POC-38 about a 0-byte file). Not run.
+- **Whether work is lost without the file.** By this reading, no position
+  is kept in the file. A member that starts without it keeps its
+  `db_ha_apply_info` rows, so an applier for the old master's log resumes from
+  the position stored there when it later takes the lock. What the file's
+  absence cannot bring back is log that was never copied: the slave's
+  `copylogdb` for the old master, which was stopped or killed, copied nothing
+  after it stopped. Whether rows the old master acknowledged but the slave had not copied
+  survive on the new master is a question about failover and the copy
+  mode (`ha_copy_sync_mode`), not about this file, and was not read.
+- **What the manual says.** The 11.4 manual's HA page
+  (cubrid.org/manual/en/11.4/ha.html, read on 2026-11-06 through a fetch tool
+  that summarised it, so a missing mention is not proof of absence) does not
+  describe the file, the "Unable to mount disk volume" message for this case,
+  or a stuck applier after a failover. It names the file once, as a step: in
+  "Rebuild a Slave during Service", step 1, the commands for the slave being
+  rebuilt include `rm $CUBRID/var/APPLYLOGDB/testdb`, with no reason given.
+  `cubrid applyinfo` is documented as the way to check "the copied and applied
+  status of replication logs", and the page says to check the error logs of
+  `copylogdb` and `applylogdb` when replication differs. No text calls a stale
+  file a known limitation. CUBRID's issue tracker was not searched.
+- **So, is it a known limitation with a documented procedure?** Not in the
+  manual read. The only documented use of removing the file is in rebuilding a
+  slave, which is the same act as the workaround of POC-16 and POC-17 case 5.
+  For a running member that was stopped while its master failed, the source
+  suggests removing the file while the member's heartbeat is stopped, but no
+  CUBRID text says it is supported, and POC-16 and POC-17 are the only
+  evidence that it works.
+
+**Consequence for the Operator.** The source reading agrees with POC-21: a
+container that starts without the file does not meet this state, and a
+member left in it needs a restart of its container or the removal of the
+file, neither of which the applier does itself. It found nothing that would
+lose the old master's already copied log when the file is absent; that is
+still a reading, not a run. Detection is #229. No separate recovery issue
+exists (see #226).
 
 ---
 
@@ -3693,7 +3786,7 @@ hypothesis 1, but it was not examined further.
 - **The other slave's applier was never seen to take the file.** On both slaves, including the one that joined last, that applier was never seen to write the file and never logged a refusal. The part of hypothesis 1 that "Not shown" names, an applier for a standby's log taking the lock, was not observed in any of 60 slave observations.
 - **The file appears only with the first applied write.** Before it, the file was absent, as POC-35 saw. A master that stays idle while both slaves join leaves no file for anyone to race for.
 - **A pid in the file was not enough to block an applier.** In no sample did a process hold the file under a kernel lock (`/proc/locks`). The live master-log applier held it open, and a killed one left only its pid and log name behind. The file named a dead process for over a minute in variant (a'), and an applier for the same log still started, applied and rewrote the file.
-  - How CUBRID decides "in use" is not established here. A reading not confirmed in its source: it compares the log name in the file, as in POC-16/17, and the content and the dead pid are not checked as a kernel lock would be.
+  - How CUBRID decides "in use" is not established here. A source reading (end of POC-21) agrees: it compares the log path in the file, and neither the pid nor a kernel lock is checked on that branch.
 - **The lab baseline differs from these files.** PR #600's read-only check of the VM lab's healthy slave `cubrid-test/ha-0`, on 2026-10-27, found the file at 0 bytes, mtime 2026-10-24 11:01:06Z. It had no lock in `/proc/locks`, and no process held it open. Every sample here with the file showed 52 bytes and the live master-log applier holding it open.
   - Whether a 0-byte file blocks an applier was not tested.
   - A file the live applier does not hold open is a state these runs did not produce.
@@ -3720,7 +3813,7 @@ still stand as possible causes:
 - Kills of the other slave's applier, of `copylogdb`, or of a whole member.
 - Runs longer than about 3.5 minutes per formation, and members that ran for days.
 - The cause of the late writes in `r09` and `t0`.
-- CUBRID's source or manual on what `APPLYLOGDB/<db>` holds and how "in use" is decided.
+- CUBRID's source or manual on what `APPLYLOGDB/<db>` holds and how "in use" is decided (read later; see the end of POC-21).
 
 ## POC-39 — whether a NET_ADMIN ephemeral container can cut and delay one Pod's traffic on the VM lab, by direction, without touching the node or the kubelet's probes (#114) — **observation: yes, under Pod Security `privileged` only; restricted and baseline refused the container; iptables (nf_tables) and tc netem worked in the Pod's namespace on kernel 6.8.0-142; a drop rule there cut traffic to a Pod on another node, counting rules at the receiver told the two directions apart where a TCP connect could not, the kubelet's TCP probes kept passing, and a 300 ms netem delay to one peer added 300 ms to that peer only**
 
