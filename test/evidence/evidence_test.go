@@ -506,7 +506,7 @@ func TestConclude_JUnitCarriesTheLaneVerdict(t *testing.T) {
 				t.Errorf("junit.xml tests=%d, want %d scenarios and the run case", j.tests, len(tc.summary.Scenarios))
 			}
 			for _, sc := range tc.summary.Scenarios {
-				if (sc.Result == NotRun || sc.Result == NotApplicable) && !slices.Contains(j.skipped, sc.DisplayName()) {
+				if (sc.Result == NotRun || sc.Result == NotApplicable) && !slices.Contains(j.skipped, sc.Name()) {
 					t.Errorf("junit.xml skipped cases %q, want %s among them", j.skipped, sc.Name())
 				}
 			}
@@ -629,6 +629,7 @@ func TestWriteJUnit(t *testing.T) {
 		Skipped  int    `xml:"skipped,attr"`
 		Cases    []struct {
 			Name    string `xml:"name,attr"`
+			SystemOut string `xml:"system-out"`
 			Failure *struct {
 				Message string `xml:"message,attr"`
 			} `xml:"failure"`
@@ -650,11 +651,17 @@ func TestWriteJUnit(t *testing.T) {
 	if len(c) != 5 {
 		t.Fatalf("test cases = %d, want 5", len(c))
 	}
-	if c[0].Name != (Scenario{ID: s00}).DisplayName() || c[0].Failure != nil || c[0].Error != nil || c[0].Skipped != nil {
-		t.Errorf("pass must have no child element: %+v", c[0])
+	if c[0].Name != s00 || c[0].Failure != nil || c[0].Error != nil || c[0].Skipped != nil {
+		t.Errorf("pass must have no verdict child element: %+v", c[0])
 	}
-	if c[1].Name != (Scenario{ID: s03, Variant: abrupt}).DisplayName() || c[1].Failure == nil {
+	if c[0].SystemOut != (Scenario{ID: s00}).DisplayName() {
+		t.Errorf("pass testcase output %q, want a descriptive name", c[0].SystemOut)
+	}
+	if c[1].Name != "S03/abrupt" || c[1].Failure == nil {
 		t.Errorf("fail must be a failure: %+v", c[1])
+	}
+	if c[1].SystemOut != (Scenario{ID: s03, Variant: abrupt}).DisplayName() {
+		t.Errorf("fail testcase output %q, want a descriptive name", c[1].SystemOut)
 	}
 	if c[2].Skipped == nil || c[2].Skipped.Message != "not_applicable: needs the VM lab" {
 		t.Errorf("not applicable must be skipped with its reason: %+v", c[2])
