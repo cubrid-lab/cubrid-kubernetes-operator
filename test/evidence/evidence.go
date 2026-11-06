@@ -127,6 +127,50 @@ func (s Scenario) Name() string {
 	return s.ID + "/" + s.Variant
 }
 
+// scenarioDescriptions are descriptive report labels, not a replacement for
+// the stable IDs used by required-lane gates and historical evidence.
+var scenarioDescriptions = map[string]string{
+	"S00":   "Standalone database installation and SQL",
+	"S01":   "High-availability Broker read/write access",
+	"S02":   "High-availability replication",
+	"S03":   "Primary database Pod failure recovery",
+	"S04":   "Primary database VM failure recovery",
+	"S05":   "Broker failure recovery",
+	"S06":   "Operator interruption and recovery",
+	"S07":   "High-availability network partition",
+	"S08":   "Replication lag with repeated failures",
+	"S09":   "Former primary member rejoins",
+	"S10":   "Rebuild after persistent-volume loss",
+	"S11":   "Backup completion and failure recovery",
+	"S12":   "Restore into a new cluster",
+	"S13":   "Cluster deletion and data retention",
+	"S14":   "Instance Manager authentication and credential security",
+	"S15":   "Node drain and disruption policy",
+	"LAB00": "Installed standalone SQL smoke test",
+	"LAB01": "Installed three-member high-availability SQL smoke test",
+}
+
+// DisplayName makes JUnit case names understandable without a scenario-code
+// lookup. Name() and the ID/variant fields remain unchanged for gate matching,
+// filters, JSON evidence and historical result comparisons.
+func (s Scenario) DisplayName() string {
+	name := s.Name()
+	switch name {
+	case "S14/token-rotation":
+		return "Instance Manager token rotation (" + name + ")"
+	case "S14/token-migration":
+		return "Migration from a legacy Instance Manager token (" + name + ")"
+	}
+	description, ok := scenarioDescriptions[s.ID]
+	if !ok {
+		return name
+	}
+	if s.Variant != "" {
+		return fmt.Sprintf("%s - %s (%s)", description, strings.ReplaceAll(s.Variant, "-", " "), name)
+	}
+	return description + " (" + name + ")"
+}
+
 // Judge returns the result a reader may rely on, given the run directory. A
 // claimed pass becomes a fail when the fault was not confirmed, when an
 // outcome that must never happen was seen, or when its evidence is missing.
@@ -335,7 +379,7 @@ const junitRunCase = "run"
 func (s Summary) junit() junitSuite {
 	suite := junitSuite{Name: s.RunID, Tests: len(s.Scenarios)}
 	for _, sc := range s.Scenarios {
-		c := junitCase{Name: sc.Name(), Classname: "scenario"}
+		c := junitCase{Name: sc.DisplayName(), Classname: "scenario"}
 		switch sc.Result {
 		case Pass:
 		case Fail:
