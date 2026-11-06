@@ -18,15 +18,17 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -37,6 +39,14 @@ const (
 	conditionWriteEndpointReady = "WriteEndpointReady"
 	conditionReadEndpointReady  = "ReadEndpointReady"
 	conditionRoutingReady       = "RoutingReady"
+
+	// reasonBrokerReconcileFailed is the reason of the Broker conditions in a
+	// reconcile that could not reconcile the Broker tier.
+	reasonBrokerReconcileFailed = "BrokerReconcileFailed"
+
+	// refusedBrokerRetryInterval is how soon a cluster whose Broker object was
+	// refused is reconciled again when nothing else would bring it back.
+	refusedBrokerRetryInterval = 30 * time.Second
 )
 
 func brokerConfigMapName(cluster string) string        { return cluster + "-broker-config" }
@@ -117,6 +127,7 @@ func (r *CubridClusterReconciler) brokerTier(ctx context.Context, cluster *datab
 		logf.FromContext(ctx).V(1).Info("Skipped broker tier because the namespace is being deleted")
 	case err != nil:
 		logf.FromContext(ctx).Error(err, "Failed to reconcile broker tier")
+		r.reportBrokerRefusal(cluster, err)
 		setBrokerConditionsUnobserved(cluster, res, err)
 	default:
 		return available, true
@@ -124,17 +135,34 @@ func (r *CubridClusterReconciler) brokerTier(ctx context.Context, cluster *datab
 	return nil, false
 }
 
+// reportBrokerRefusal records a Warning Event for a Broker object refused
+// because the cluster does not control it, once while the refusal stays the
+// same, and notes it for the reconcile's report: removing such an object sends
+// the operator no event, so the reconcile has to come back by itself. Any other
+// failure of the Broker tier is reported by the conditions alone.
+func (r *CubridClusterReconciler) reportBrokerRefusal(cluster *databasev1alpha1.CubridCluster, err error) {
+	if _, refused := errors.AsType[*childNotOwnedError](err); !refused {
+		return
+	}
+	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok {
+		report.(*reconcileReport).brokerRefused = true
+	}
+	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionBrokerReady)
+	if was == nil || was.Reason != reasonBrokerReconcileFailed || was.Message != err.Error() {
+		r.statusEvent(cluster, corev1.EventTypeWarning, reasonBrokerReconcileFailed, err.Error())
+	}
+}
+
 func (r *CubridClusterReconciler) reconcileBrokerConfig(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	data map[string]string) error {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: brokerConfigMapName(cluster.Name), Namespace: cluster.Namespace},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+	return r.reconcileChild(ctx, cluster, cm, func() error {
 		cm.Labels = brokerLabelsFor(cluster)
 		cm.Data = data
-		return controllerutil.SetControllerReference(cluster, cm, r.Scheme)
+		return nil
 	})
-	return err
 }
 
 // deleteLegacyBrokerDeployment removes the single read-write Deployment that
@@ -178,7 +206,7 @@ func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context,
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: brokerDeploymentName(cluster.Name, mode), Namespace: cluster.Namespace},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+	err := r.reconcileChild(ctx, cluster, dep, func() error {
 		dep.Labels = labels
 		if dep.CreationTimestamp.IsZero() {
 			dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
@@ -190,16 +218,13 @@ func (r *CubridClusterReconciler) reconcileBrokerDeployment(ctx context.Context,
 				MaxUnavailable: &noneUnavailable, MaxSurge: &oneMore,
 			},
 		}
-		if err := setPodTemplate(dep, &dep.Spec.Template, corev1.PodTemplateSpec{
+		return setPodTemplate(dep, &dep.Spec.Template, corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels:      labels,
 				Annotations: map[string]string{brokerConfigHashAnnotation: configHash},
 			},
 			Spec: r.brokerPodSpec(cluster, mode, image),
-		}); err != nil {
-			return err
-		}
-		return controllerutil.SetControllerReference(cluster, dep, r.Scheme)
+		})
 	})
 	return dep, err
 }
@@ -278,15 +303,14 @@ func (r *CubridClusterReconciler) reconcileBrokerService(ctx context.Context, cl
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+	return r.reconcileChild(ctx, cluster, svc, func() error {
 		svc.Labels = brokerLabelsFor(cluster)
 		svc.Spec.Selector = selector
 		svc.Spec.Ports = []corev1.ServicePort{
 			{Name: componentBroker, Protocol: corev1.ProtocolTCP, Port: port, TargetPort: intOrString(port)},
 		}
-		return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
+		return nil
 	})
-	return err
 }
 
 // setBrokerConditions sets the broker/routing conditions of an HA cluster
@@ -383,12 +407,11 @@ func setRoutingUnresolved(cluster *databasev1alpha1.CubridCluster, res PrimaryRe
 // res is nil for a standalone cluster, which has no primary: its routing is
 // then Unknown.
 func setBrokerConditionsUnobserved(cluster *databasev1alpha1.CubridCluster, res *PrimaryResolution, cause error) {
-	const reason = "BrokerReconcileFailed"
 	msg := "the Brokers were not observed in this reconcile: " + cause.Error()
-	setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, reason, cause.Error())
-	setCondition(cluster, conditionWriteEndpointReady, metav1.ConditionUnknown, reason, msg)
-	setCondition(cluster, conditionReadEndpointReady, metav1.ConditionUnknown, reason, msg)
+	setCondition(cluster, conditionBrokerReady, metav1.ConditionFalse, reasonBrokerReconcileFailed, cause.Error())
+	setCondition(cluster, conditionWriteEndpointReady, metav1.ConditionUnknown, reasonBrokerReconcileFailed, msg)
+	setCondition(cluster, conditionReadEndpointReady, metav1.ConditionUnknown, reasonBrokerReconcileFailed, msg)
 	if res == nil || setRoutingUnresolved(cluster, *res) {
-		setCondition(cluster, conditionRoutingReady, metav1.ConditionUnknown, reason, msg)
+		setCondition(cluster, conditionRoutingReady, metav1.ConditionUnknown, reasonBrokerReconcileFailed, msg)
 	}
 }

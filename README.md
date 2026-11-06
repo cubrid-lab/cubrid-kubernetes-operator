@@ -120,7 +120,9 @@ it writes, every Pod of its workloads and every data PVC its StatefulSets
 create carry. A `<cluster>-im-token`
 Secret without that label is neither read nor adopted: the cluster reports
 `Ready=False` with reason `SecretReconcileFailed`, naming the Secret and the
-label, until that Secret is deleted or renamed. A member Pod whose label is
+label, until that Secret is deleted or renamed. The same reason reports a
+labeled Secret of that name that the cluster does not control, which is
+neither changed nor adopted either. A member Pod whose label is
 removed is no longer seen by the operator: updates that replace members wait
 for it, and backups report the Pod as not found. The label limits what the
 manager holds in memory, not what its role allows it to read.

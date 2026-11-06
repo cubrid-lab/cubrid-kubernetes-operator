@@ -227,8 +227,14 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 			c := haCluster("place-old-sts")
 			create(c)
 			// A StatefulSet written by an operator that set no placement rule.
+			// Every operator version made the cluster its controller.
 			old := &appsv1.StatefulSet{
-				ObjectMeta: metav1.ObjectMeta{Name: c.Name, Namespace: c.Namespace, Labels: labelsFor(c)},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: c.Name, Namespace: c.Namespace, Labels: labelsFor(c),
+					OwnerReferences: []metav1.OwnerReference{
+						*metav1.NewControllerRef(c, databasev1alpha1.GroupVersion.WithKind(ownerKind)),
+					},
+				},
 				Spec: appsv1.StatefulSetSpec{
 					Selector:    &metav1.LabelSelector{MatchLabels: labelsFor(c)},
 					ServiceName: instancesServiceName(c.Name),

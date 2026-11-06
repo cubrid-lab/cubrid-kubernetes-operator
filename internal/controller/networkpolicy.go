@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
@@ -66,22 +65,15 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 		brokerNetworkPolicyName(cluster.Name):   brokerNetworkPolicy(cluster),
 	}
 	for name, spec := range policies {
-		existing := &networkingv1.NetworkPolicy{}
-		err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, existing)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("get NetworkPolicy %s: %w", name, err)
-		}
-		found := err == nil
 		// A policy of that name which this cluster does not control is never
 		// taken over or removed: it is someone else's.
-		if found && !metav1.IsControlledBy(existing, cluster) {
-			if !networkPolicyEnabled(cluster) {
-				continue
-			}
-			return fmt.Errorf("a NetworkPolicy named %q exists and is not owned by this cluster", name)
-		}
 		if !networkPolicyEnabled(cluster) {
-			if found {
+			existing := &networkingv1.NetworkPolicy{}
+			err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, existing)
+			if err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("get NetworkPolicy %s: %w", name, err)
+			}
+			if err == nil && metav1.IsControlledBy(existing, cluster) {
 				if err := client.IgnoreNotFound(r.Delete(ctx, existing)); err != nil {
 					return fmt.Errorf("delete NetworkPolicy %s: %w", name, err)
 				}
@@ -89,10 +81,10 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 			continue
 		}
 		np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace}}
-		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
+		err := r.reconcileChild(ctx, cluster, np, func() error {
 			np.Labels = labelsFor(cluster)
 			np.Spec = spec
-			return controllerutil.SetControllerReference(cluster, np, r.Scheme)
+			return nil
 		})
 		if err != nil {
 			return fmt.Errorf("NetworkPolicy %s: %w", name, err)

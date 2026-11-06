@@ -42,7 +42,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -227,6 +226,9 @@ type reconcileReport struct {
 	// placement is the MemberPlacement reason this reconcile reported, kept
 	// in placementReported once the status that carries it is written.
 	placement *placementEntry
+	// brokerRefused says that the Broker tier met an object the cluster does
+	// not control.
+	brokerRefused bool
 }
 
 type pendingEvent struct{ eventType, reason, message string }
@@ -509,7 +511,7 @@ func (r *CubridClusterReconciler) reconcileHeadlessService(ctx context.Context, 
 			Namespace: cluster.Namespace,
 		},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+	return r.reconcileChild(ctx, cluster, svc, func() error {
 		svc.Labels = labelsFor(cluster)
 		svc.Spec.ClusterIP = corev1.ClusterIPNone
 		// publishNotReadyAddresses keeps peer DNS resolvable during startup/
@@ -521,9 +523,8 @@ func (r *CubridClusterReconciler) reconcileHeadlessService(ctx context.Context, 
 			{Name: "broker", Protocol: corev1.ProtocolTCP, Port: cubridBrokerPort, TargetPort: intOrString(cubridBrokerPort)},
 			{Name: portNameManager, Protocol: corev1.ProtocolTCP, Port: instanceManagerPort, TargetPort: intOrString(instanceManagerPort)},
 		}
-		return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
+		return nil
 	})
-	return err
 }
 
 // instanceManagerBinary is the Instance Manager in the image
@@ -553,7 +554,7 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 	}
 	request := cluster.Annotations[rotateIMTokenAnnotation]
 	var generated, rotated, overlapEnded bool
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+	err := r.reconcileChild(ctx, cluster, secret, func() error {
 		secret.Labels = labelsFor(cluster)
 		secret.Type = corev1.SecretTypeOpaque
 		if secret.Data == nil {
@@ -599,7 +600,7 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 				secret.Annotations[rotateIMTokenAnnotation] = request
 			}
 		}
-		return controllerutil.SetControllerReference(cluster, secret, r.Scheme)
+		return nil
 	})
 	if apierrors.IsAlreadyExists(err) {
 		return r.imTokenSecretRefused(ctx, secret, err)
@@ -736,7 +737,7 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: cluster.Name, Namespace: cluster.Namespace},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
+	err := r.reconcileChild(ctx, cluster, sts, func() error {
 		sts.Labels = labels
 		// Immutable fields (selector, volumeClaimTemplates, serviceName) are only
 		// set on creation; CreateOrUpdate skips them on update by leaving the
@@ -754,13 +755,10 @@ func (r *CubridClusterReconciler) reconcileStatefulSet(ctx context.Context, clus
 		// OnDelete: the operator owns pod replacement sequencing (ADR-0003/0009).
 		sts.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
 		sts.Spec.PersistentVolumeClaimRetentionPolicy = pvcRetentionPolicy(cluster)
-		if err := setPodTemplate(sts, &sts.Spec.Template, corev1.PodTemplateSpec{
+		return setPodTemplate(sts, &sts.Spec.Template, corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec:       r.podSpec(cluster, r.imageToRun(cluster, sts)),
-		}); err != nil {
-			return err
-		}
-		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
+		})
 	})
 	if err != nil {
 		return nil, err
@@ -1166,13 +1164,24 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	if cluster.Spec.HighAvailability.Enabled && r.Prober != nil {
 		return ctrl.Result{RequeueAfter: haResyncInterval}, nil
 	}
+	return ctrl.Result{RequeueAfter: r.idleRetry(cluster)}, nil
+}
+
+// idleRetry is how soon a cluster that nothing else brings back is reconciled
+// again, zero when it can wait for the next event.
+func (r *CubridClusterReconciler) idleRetry(cluster *databasev1alpha1.CubridCluster) time.Duration {
 	// A standalone member is not observed periodically (#155), but a member
 	// whose engine version is not known yet is asked again: otherwise an idle
 	// cluster stays blocked until an unrelated event.
 	if r.standaloneVersionPending(cluster) {
-		return ctrl.Result{RequeueAfter: standaloneVersionRetryInterval}, nil
+		return standaloneVersionRetryInterval
 	}
-	return ctrl.Result{}, nil
+	// Removing a refused object, which has no reference to this cluster,
+	// starts no reconcile.
+	if report, ok := r.reports.Load(client.ObjectKeyFromObject(cluster)); ok && report.(*reconcileReport).brokerRefused {
+		return refusedBrokerRetryInterval
+	}
+	return 0
 }
 
 // setReady sets Ready. Every instance ready makes the cluster
