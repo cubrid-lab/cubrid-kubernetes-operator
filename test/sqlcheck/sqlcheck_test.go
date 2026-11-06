@@ -144,25 +144,44 @@ func TestSQLChecksWriteRowKeepsAnOldRow(t *testing.T) {
 	if s.rows != 1 {
 		t.Fatalf("rows %d, want the old one only", s.rows)
 	}
-	if err := ReadRow(func(string) (string, error) { return "1 'old-marker'\n1 row selected", nil },
+	if err := ReadRow(func(string) (string, error) { return rowResult("1  'old-marker'", "1 row selected."), nil },
 		"marker-123"); err == nil {
 		t.Fatal("ReadRow accepted the old row")
 	}
 }
 
+// rowResult is csql's output of ReadRow's query with the given row lines and
+// the count line after them.
+func rowResult(row, count string) string {
+	return "\n=== <Result of SELECT Command in Line 1> ===\n\n" +
+		"           id  marker\n===================================\n" +
+		"            " + row + "\n\n" + count + " (0.001000 sec) Committed. (0.000000 sec) \n"
+}
+
 func TestSQLChecksReadRow(t *testing.T) {
+	const right = "1  'marker-123'"
 	for _, tc := range []struct {
 		name      string
 		output    string
 		wantError bool
 	}{
-		{name: "success", output: "1 'marker-123'\n1 row selected"},
+		{name: "success", output: rowResult(right, "1 row selected.")},
 		{name: "missing marker", output: "1 row selected", wantError: true},
-		{name: "wrong marker", output: "1 'other'\n1 row selected", wantError: true},
-		{name: "unquoted marker", output: "1 marker-123\n1 row selected", wantError: true},
-		{name: "wrong row count", output: "1 'marker-123'\n2 rows selected", wantError: true},
-		{name: "missing row count", output: "1 'marker-123'", wantError: true},
+		{name: "wrong marker", output: rowResult("1  'other'", "1 row selected."), wantError: true},
+		{name: "unquoted marker", output: rowResult("1  marker-123", "1 row selected."), wantError: true},
+		{name: "wrong row count", output: rowResult(right, "2 rows selected."), wantError: true},
+		{name: "missing row count", output: strings.Split(rowResult(right, ""), " (0.001")[0], wantError: true},
 		{name: "statement error", output: "ERROR: query failed", wantError: true},
+		{name: "the right marker with another id", output: rowResult("2  'marker-123'", "1 row selected."),
+			wantError: true},
+		{name: "a count that only ends in one row", output: rowResult(right, "21 row selected."), wantError: true},
+		{name: "the row and the count outside a result table", output: "1  'marker-123'\n1 row selected.\n",
+			wantError: true},
+		{name: "the row in a line after the count, with another row in the table",
+			output: rowResult("1  'other'", "1 row selected.") + "1  'marker-123'\n", wantError: true},
+		{name: "a log line that quotes the marker and the count",
+			output:    "NOTIFICATION: 1 'marker-123' 1 row selected\n" + rowResult("1  'other'", "1 row selected."),
+			wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ReadRow(func(sql string) (string, error) {
@@ -203,5 +222,129 @@ func TestSQLChecksRunNamesTheErrorLineFirst(t *testing.T) {
 	// the line csql reported, not only the NOTIFICATION before it.
 	if err == nil || !strings.HasPrefix(err.Error(), "csql reported an error: ERROR: Server is not ready yet.") {
 		t.Errorf("error = %v, want it to start with the line csql reported", err)
+	}
+}
+
+// TestSQLChecksStatementError checks that only an error csql reported is a
+// StatementError: not a command that could not be run, and not a row that
+// does not match.
+func TestSQLChecksStatementError(t *testing.T) {
+	for name, tc := range map[string]struct {
+		run  func() error
+		want bool
+	}{
+		"reported statement": {func() error {
+			_, err := Run(func(string) (string, error) { return "ERROR: bad SQL", nil }, "x")
+			return err
+		}, true},
+		"connection failure with a failed command": {func() error {
+			_, err := Run(func(string) (string, error) { return "Failed to connect", errors.New("exit 1") }, "x")
+			return err
+		}, true},
+		"command that could not be run": {func() error {
+			_, err := Run(func(string) (string, error) { return "", errors.New("transport") }, "x")
+			return err
+		}, false},
+		"row of another marker": {func() error {
+			return ReadRow(func(string) (string, error) { return rowResult("1  'other'", "1 row selected."), nil }, "m")
+		}, false},
+		"read statement that failed": {func() error {
+			return ReadRow(func(string) (string, error) { return "ERROR: no table", nil }, "m")
+		}, true},
+	} {
+		var se *StatementError
+		if got := errors.As(tc.run(), &se); got != tc.want {
+			t.Errorf("%s: StatementError = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// ciLostSessionRead is csql's output of the read of S00's marker row at the
+// end of the smoke checks in the Kind e2e run 41986930319 of PR #698
+// (2026-11-05), as the run's log printed it: the row and "1 row selected",
+// with -199 and -111 printed on stderr, which came before stdout.
+const ciLostSessionRead = "\n" +
+	"Time: 11/05/26 08:08:58.431 - NOTIFICATION *** file " +
+	"/home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  " +
+	"CODE = -971, Tran = -1, EID = 1\n" +
+	"Program 'csql' (pid 376) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).\n" +
+	"\n" +
+	"Time: 11/05/26 08:08:58.445 - ERROR *** file " +
+	"/home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 " +
+	"ERROR CODE = -199, Tran = 3, EID = 2\n" +
+	"Server no longer responding.... Invalid argument\n" +
+	"\n" +
+	"Time: 11/05/26 08:08:58.445 - ERROR *** file " +
+	"/home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 " +
+	"ERROR CODE = -111, Tran = 3, EID = 3\n" +
+	"Your transaction has been aborted by the system due to server failure or mode change.\n" +
+	"\n" +
+	"=== <Result of SELECT Command in Line 1> ===\n" +
+	"\n" +
+	"           id  marker              \n" +
+	"===================================\n" +
+	"            1  's00-before-pod-delete'\n" +
+	"\n" +
+	"1 row selected. (0.001000 sec) Committed. (0.000000 sec) \n"
+
+// ciMarker is the marker of the row in ciLostSessionRead.
+const ciMarker = "s00-before-pod-delete"
+
+// TestSessionLostNeedsBothErrors checks that csql's output is taken for a
+// lost session only when it holds both -199 (server no longer responding)
+// and -111 (transaction aborted), the pair POC-44 saw csql print after
+// statements that took effect.
+func TestSessionLostNeedsBothErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		out  string
+		want bool
+	}{
+		"the read of the Kind run": {ciLostSessionRead, true},
+		"-199 alone":               {"ERROR CODE = -199, Tran = 6, EID = 2\nServer no longer responding", false},
+		"-111 alone":               {"ERROR CODE = -111, Tran = 6, EID = 3\nYour transaction has been aborted", false},
+		"other codes":              {"ERROR CODE = -1990, Tran = 6\nERROR CODE = -1110, Tran = 6", false},
+		"a clean read":             {"=== <Result of SELECT Command in Line 1> ===\n\n1 row selected.", false},
+	} {
+		if got := SessionLost(tc.out); got != tc.want {
+			t.Errorf("%s: SessionLost = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// TestLostSessionAfterRow checks which errors of ReadRow are only csql's
+// report of a lost session after it printed the row: both -199 and -111,
+// exactly the row WriteRow wrote, and no command error. A -199 without the
+// row, or with only one of the two codes, stays a failed statement.
+func TestLostSessionAfterRow(t *testing.T) {
+	read := func(out string, cmdErr error) error {
+		return ReadRow(func(string) (string, error) { return out, cmdErr }, ciMarker)
+	}
+	cut, _, _ := strings.Cut(ciLostSessionRead, "=== <Result")
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"the read of the Kind run": {read(ciLostSessionRead, nil), true},
+		"the same output after a failed command": {read(ciLostSessionRead, errors.New("exit status 1")),
+			false},
+		"-199 and -111 without a result": {read(cut, nil), false},
+		"-199 alone with the row": {read(strings.Replace(ciLostSessionRead, "ERROR CODE = -111", "CODE = -971",
+			1), nil), false},
+		"another marker": {read(strings.Replace(ciLostSessionRead, ciMarker, "other", 1), nil), false},
+		"two rows": {read(strings.Replace(ciLostSessionRead, "1 row selected", "2 rows selected", 1), nil),
+			false},
+		"a clean read":  {nil, false},
+		"another error": {read("ERROR: no table", nil), false},
+		"another error besides the pair": {read(strings.Replace(ciLostSessionRead, "=== <Result",
+			"ERROR CODE = -1, Tran = 3, EID = 4\n=== <Result", 1), nil), false},
+		"another code that starts with -199, besides the pair": {read(strings.Replace(ciLostSessionRead, "=== <Result",
+			"ERROR CODE = -1990, Tran = 3, EID = 4\n=== <Result", 1), nil), false},
+	} {
+		if got := LostSessionAfterRow(tc.err, ciMarker); got != tc.want {
+			t.Errorf("%s: LostSessionAfterRow = %v, want %v", name, got, tc.want)
+		}
+	}
+	if err := read(ciLostSessionRead, nil); err == nil {
+		t.Error("ReadRow accepted the read of the Kind run; it keeps reporting the -199 as an error")
 	}
 }

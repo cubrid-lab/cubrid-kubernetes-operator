@@ -22,10 +22,12 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,7 @@ import (
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 )
 
@@ -85,6 +88,21 @@ func s00Scenario() {
 		var podDeletionOutcome *faults.Outcome
 		// createdAt is when the CubridCluster was created.
 		var createdAt time.Time
+		// sampler reads the CubridCluster's status every 2 seconds, from the
+		// creation of the cluster to the end of the smoke checks; it asks the
+		// member for no heartbeat role, since a standalone member runs none.
+		// s00Run and steps are what the reads are compared with (Conditions
+		// during the fault, scenario contract).
+		var sampler *conditionSampler
+		s00Run := faults.S00Run{Member: pod}
+		var steps []faults.Step
+		step := func(t time.Time, kind, detail string) {
+			steps = append(steps, faults.Step{T: t.UTC(), Kind: kind, Detail: detail})
+		}
+		smokeSQL := func(what string, broker, write bool, start time.Time, ok bool) {
+			s00Run.SQL = append(s00Run.SQL, faults.SmokeSQL{Start: start.UTC(), End: time.Now().UTC(), Broker: broker,
+				Write: write, OK: ok, What: what})
+		}
 
 		kubectl := func(args ...string) (string, error) {
 			return utils.Run(exec.Command("kubectl", append([]string{"-n", s00Namespace}, args...)...))
@@ -155,18 +173,37 @@ spec:
 			createdAt = time.Now()
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create the CubridCluster")
+			step(createdAt, "cluster_created", "CubridCluster "+s00Namespace+"/"+clusterName+" applied")
+
+			By("reading the CubridCluster's status every 2 seconds until the end of the smoke checks")
+			sampler = (&haRun{namespace: s00Namespace, cluster: clusterName, database: database,
+				members: []string{pod}}).sampleConditions(conditionSampling{})
 		})
 
-		AfterAll(func() {
+		AfterAll(func(ctx SpecContext) {
 			if record.Host == "" {
 				// Skipped: nothing ran, and that is not a pass.
 				recordScenario(evidence.Scenario{ID: "S00", Result: evidence.NotRun,
 					Reason: "needs linux/amd64, ran on " + runtime.GOOS + "/" + runtime.GOARCH})
 				return
 			}
-			// The record is written below, so it must already say that the load
-			// failed: the summary and the record agree on the result.
+			// A failed load decides the result the scenario starts from below.
 			loadErr := record.blockByImageLoad(instanceManagerImageErr)
+			var rounds []conditionRound
+			if sampler != nil {
+				// A failed csql operation is compared with the reads for
+				// ReadyTolerance after it, so the reads go on that long. An
+				// inconclusive one is not judged, so waiting collects nothing.
+				for _, op := range s00Run.SQL {
+					if wait := time.Until(op.End.Add(faults.ReadyTolerance + conditionSampleEvery)); !op.OK && !op.Broker && op.Inconclusive == "" && wait > 0 {
+						select {
+						case <-ctx.Done():
+						case <-time.After(wait):
+						}
+					}
+				}
+				rounds = sampler.stop()
+			}
 			// What a reader needs to judge the run, pass or fail.
 			if out, err := kubectl("get", "events", "--field-selector", "reason=Unhealthy",
 				"-o", `jsonpath={range .items[*]}{.involvedObject.name}{": "}{.message}{"\n"}{end}`); err == nil {
@@ -199,18 +236,21 @@ spec:
 			if result.Result != evidence.Pass {
 				result.Reason = "a step of the scenario failed; see the test output"
 			}
-			if file := writeEvidence(record); file != "" {
-				result.Evidence = []string{file}
-			}
 			// The fault's own verdict wins over the default: a deletion that
-			// was not confirmed is blocked, not failed.
+			// was not confirmed is blocked, not failed. The timeline has the
+			// steps of the installation and the smoke checks, then the
+			// deletion's.
+			timeline := steps
 			if o := podDeletionOutcome; o != nil {
 				flow := o.Scenario("S00", "", podDeletionLimits)
 				result.Limits, result.CleanupSucceeded = flow.Limits, flow.CleanupSucceeded
 				if o.Result != evidence.Pass {
 					result.Result, result.Reason = o.Result, o.Reason
 				}
-				if file := writeTimeline("S00/timeline.jsonl", o.Timeline); file != "" {
+				timeline = append(slices.Clone(steps), o.Timeline...)
+			}
+			if len(timeline) > 0 {
+				if file := writeTimeline("S00/timeline.jsonl", timeline); file != "" {
 					result.Evidence = append(result.Evidence, file)
 				}
 			}
@@ -228,6 +268,7 @@ spec:
 			result = faults.JudgeS00Limits(result,
 				faults.Bound{Limit: installLimit, Measured: installTime, Unmeasured: !installMeasured},
 				faults.Bound{Limit: readyLimit, Measured: ready, Unmeasured: record.ReadySeconds == 0})
+			result = s00Verdict(result, record, rounds, s00Run, steps)
 			recordScenario(result)
 			updateSummary(func(s *evidence.Summary) {
 				s.Environment.CubridImageDigest = record.InstanceManagerID
@@ -242,6 +283,8 @@ spec:
 		It("becomes Ready as a non-root Pod and answers SQL", func() {
 			By("waiting for the first start: createdb, server start, then the manager")
 			record.FirstStartSeconds = waitPodReady(15 * time.Minute).Seconds()
+			s00Run.PodReady = time.Now().UTC()
+			step(s00Run.PodReady, "pod_ready", "Pod "+pod+" is ready")
 
 			uid, err := kubectl("get", "pod", pod, "-o", "jsonpath={.metadata.uid}")
 			Expect(err).NotTo(HaveOccurred())
@@ -262,8 +305,9 @@ spec:
 
 			By("writing and reading a row through csql")
 			sql := csqlInPod(context.Background(), s00Namespace, pod, database)
-			Expect(writeS00Row(sql, marker)).To(Succeed())
-			Expect(readS00Row(sql, marker)).To(Succeed())
+			operations, err := s00WriteAndRead(sql, pod, marker)
+			s00Run.SQL = append(s00Run.SQL, operations...)
+			Expect(err).NotTo(HaveOccurred())
 			// An upper bound: it includes the checks above.
 			record.ReadySeconds = time.Since(createdAt).Seconds()
 
@@ -278,6 +322,7 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(ready).To(Equal("True"))
 			}).Should(Succeed())
+			step(time.Now(), "ready_observed", "the CubridCluster's Ready is True")
 			_, err = kubectl("get", "service", pod)
 			Expect(err).NotTo(HaveOccurred())
 		})
@@ -292,7 +337,10 @@ spec:
 				Expect(err).NotTo(HaveOccurred(), "the %s Brokers did not become available", mode)
 			}
 
+			step(time.Now(), "brokers_available", "a Broker of each access mode is available")
+
 			By("running a client with a CUBRID driver against the two Services")
+			clientStart := time.Now()
 			_, err := utils.Run(exec.Command("kubectl", "create", "ns", clientNamespace))
 			Expect(err).NotTo(HaveOccurred())
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
@@ -308,6 +356,8 @@ spec:
 			logs, err := utils.Run(exec.Command("kubectl", "-n", clientNamespace, "logs", "broker-client"))
 			Expect(err).NotTo(HaveOccurred())
 			_, _ = fmt.Fprintf(GinkgoWriter, "broker client output:\n%s\n", logs)
+			smokeSQL("client through "+clusterName+"-rw and "+clusterName+"-ro from "+clientNamespace, true, true,
+				clientStart, strings.Contains(logs, "BROKER-CHECK-OK"))
 			Expect(logs).To(ContainSubstring("BROKER-CHECK-OK"), "client output:\n%s", logs)
 
 			By("checking that the operator reports both endpoints and the route to the server")
@@ -319,6 +369,20 @@ spec:
 					g.Expect(status).To(Equal("True"), conditionType)
 				}
 			}, 2*time.Minute, 3*time.Second).Should(Succeed())
+
+			By("reading the row with csql again at the end of the smoke checks, after Ready was True")
+			reads, err := s00LastRead(csqlInPod(context.Background(), s00Namespace, pod, database), pod, marker)
+			s00Run.SQL = append(s00Run.SQL, reads...)
+			for _, read := range reads {
+				if read.Inconclusive == s00LostSession {
+					step(read.End, "csql_lost_session_after_row",
+						read.What+" returned the row, and csql printed ERROR CODE -199 and -111")
+				}
+			}
+			Expect(err).NotTo(HaveOccurred())
+			s00Run.SmokeEnd = time.Now().UTC()
+			step(s00Run.SmokeEnd, "smoke_checks_ended", "")
+			sampler.stop()
 		})
 
 		It("keeps the data when the Pod is deleted", func() {
@@ -460,4 +524,145 @@ func writeTimeline(rel string, steps []faults.Step) string {
 		b.WriteByte('\n')
 	}
 	return writeScenarioFile(rel, []byte(b.String()))
+}
+
+// s00Verdict ends a run of S00 that got as far as its cleanup. The Conditions
+// are judged however the run ended: a disagreement fails it, and a rule
+// without enough evidence keeps it from passing. S00/record.json is written
+// after that, with the result and reason the summary gets, so that the two
+// never disagree.
+func s00Verdict(result evidence.Scenario, record *s00Evidence, rounds []conditionRound, run faults.S00Run,
+	steps []faults.Step) evidence.Scenario {
+	result = s00Conditions(result, rounds, run, steps)
+	record.Result, record.Reason = string(result.Result), result.Reason
+	if file := writeEvidence(record); file != "" {
+		result.Evidence = append(result.Evidence, file)
+	}
+	return result
+}
+
+// s00Conditions applies S00's rules on the Conditions to the sampled reads of
+// the run and gives result what they found (withAgreement). It stores the
+// reads in S00/conditions.jsonl and the verdict in S00/agreement.txt, and adds
+// the conditionAgreement and csqlLostSessionReads measurements. steps are the
+// steps of the installation and the smoke checks.
+func s00Conditions(result evidence.Scenario, rounds []conditionRound, run faults.S00Run,
+	steps []faults.Step) evidence.Scenario {
+	agreement, files, measured := checkConditions("S00", rounds, nil, steps, faults.S00Rules(run))
+	result.Evidence = append(result.Evidence, files...)
+	if result.Measurements == nil {
+		result.Measurements = map[string]any{}
+	}
+	result.Measurements["conditionAgreement"] = measured
+	result.Measurements["csqlLostSessionReads"] = s00LostSessionReads(run)
+	return withAgreement(result, agreement)
+}
+
+// s00LostSessionReads counts the csql reads of the run that printed the row
+// with -199 and -111, or says unknown when the run made no csql read: zero
+// would read as a measurement.
+func s00LostSessionReads(run faults.S00Run) any {
+	reads, lost := 0, 0
+	for _, op := range run.SQL {
+		if op.Broker || op.Write {
+			continue
+		}
+		reads++
+		if op.Inconclusive == s00LostSession {
+			lost++
+		}
+	}
+	if reads == 0 {
+		return evidence.Unknown
+	}
+	return lost
+}
+
+// s00LostSession is the reason recorded for a csql read that printed its row
+// with -199 and -111 (sqlcheck.LostSessionAfterRow).
+const s00LostSession = "csql printed the row with ERROR CODE -199 (server no longer responding) and -111 " +
+	"(transaction aborted), which POC-44 saw csql print after statements that took effect; the cause is " +
+	"unknown (POC-49)"
+
+// s00CSQL runs one csql check in the member's Pod and returns its record
+// (smokeOutcome) with the error of the check. readMarker is the marker a read
+// looks for, empty for a write.
+func s00CSQL(what string, write bool, readMarker string, check func() error) (faults.SmokeSQL, error) {
+	start := time.Now().UTC()
+	err := check()
+	ok, inconclusive := smokeOutcome(err, readMarker)
+	return faults.SmokeSQL{Start: start, End: time.Now().UTC(), Write: write, OK: ok, Inconclusive: inconclusive,
+		What: what}, err
+}
+
+// s00WriteAndRead writes the marker row with csql and reads it back. It stops
+// at the first error and returns it: both checks are strict, so a read that
+// printed its row with -199 and -111 fails the step here, and only its record
+// says that the outcome was inconclusive.
+func s00WriteAndRead(sql sqlRunner, pod, marker string) ([]faults.SmokeSQL, error) {
+	write, err := s00CSQL("csql write of the marker row in "+pod, true, "", func() error {
+		return writeS00Row(sql, marker)
+	})
+	if err != nil {
+		return []faults.SmokeSQL{write}, err
+	}
+	read, err := s00CSQL("csql read of the marker row in "+pod, false, marker, func() error {
+		return readS00Row(sql, marker)
+	})
+	return []faults.SmokeSQL{write, read}, err
+}
+
+// s00LastRead makes the csql read at the end of the smoke checks and returns
+// a record of each read it made, with the error that fails the step, if any.
+// A read that printed its row with -199 and -111 is never conclusive, so it
+// is read once more, as the installed lab harness does in test/installed/ha.go,
+// and the second read decides: one that succeeded is what the Ready rule
+// compares with. A second read that printed the same pair returns no error:
+// S00 then has no conclusive last read, and the Ready rule blocks it
+// (faults.S00Rules). Any other error of either read, such as a failed
+// statement or a row that does not match, fails the step, like the write and
+// the first read of S00.
+func s00LastRead(sql sqlRunner, pod, marker string) ([]faults.SmokeSQL, error) {
+	what := "csql read of the marker row in " + pod + " at the end of the smoke checks"
+	read := func(what string) (faults.SmokeSQL, error) {
+		return s00CSQL(what, false, marker, func() error { return readS00Row(sql, marker) })
+	}
+	first, err := read(what)
+	if first.Inconclusive != s00LostSession {
+		return []faults.SmokeSQL{first}, err
+	}
+	_, _ = fmt.Fprintf(GinkgoWriter, "csql returned the row and printed -199 and -111 (POC-44), reading again:\n%v\n", err)
+	second, err := read(what + ", read again after csql printed -199 and -111")
+	reads := []faults.SmokeSQL{first, second}
+	if second.Inconclusive == s00LostSession {
+		_, _ = fmt.Fprintf(GinkgoWriter, "the second csql read printed -199 and -111 too:\n%v\n", err)
+		return reads, nil
+	}
+	return reads, err
+}
+
+// smokeOutcome says how an SQL operation in the member's Pod is recorded
+// from err, the error of its check; readMarker is the marker a read looked
+// for, empty for a write. It failed (ok false, no reason) only when csql
+// reported the statement as failed. A row that did not match, or a command
+// that could not be run, is not evidence of that, and neither is a read that
+// printed its row with -199 and -111 (sqlcheck.LostSessionAfterRow): POC-44
+// saw csql print that pair as it exited after statements that took effect,
+// and POC-49 did not make csql print it by running heartbeat status beside
+// csql (csql's own log held one pair). Such an operation is recorded with a
+// reason, is not a success either, and the rule that compares Ready with
+// failed SQL leaves it out. A write's output holds no row, so a write that
+// printed the pair stays failed.
+func smokeOutcome(err error, readMarker string) (ok bool, inconclusive string) {
+	var statement *sqlcheck.StatementError
+	switch {
+	case err == nil:
+		return true, ""
+	case readMarker != "" && sqlcheck.LostSessionAfterRow(err, readMarker):
+		return false, s00LostSession
+	case errors.As(err, &statement):
+		return false, ""
+	}
+	first, _, _ := strings.Cut(err.Error(), "\n")
+	return false, "the check did not show a failed statement: " + first
 }

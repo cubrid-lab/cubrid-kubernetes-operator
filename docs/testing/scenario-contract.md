@@ -710,11 +710,12 @@ reader can tell what to expect.
 
 In a scenario that names this section, a background reader reads the
 CubridCluster's status every 2 seconds, from before the fault is issued to
-the end of the stable period. Each read records every Condition with its
+the end of the stable period; in S00, which has no fault, from the creation
+of the cluster to the end of the smoke checks. Each read records every Condition with its
 status, reason, message and `lastTransitionTime`, `status.currentPrimary`,
 `status.lastObservedTime` and each member's role and `lastObservedTime` in
 `status.instances`, and the number of available Pods of the read-write Broker
-Deployment. The same round asks every member for its role with
+Deployment. Except in S00, the same round asks every member for its role with
 `cubrid heartbeat status`. Each round is one line of `conditions.jsonl`.
 
 The reads are then compared, by the code in `test/faults/agreement.go`, with
@@ -1073,6 +1074,102 @@ it needs more.
   second time over existing data; a successful write through `<cluster>-ro`.
 - **Data check:** the rows written before the Pod deletion are present after
   it.
+- **Conditions during the installation** (see
+  [Conditions during the fault](#conditions-during-the-fault)): S00 has no
+  fault. The status is read every 2 seconds from the creation of the
+  `CubridCluster` to the end of the smoke checks, which end when the client
+  through the Brokers has finished, the four Broker and routing Conditions
+  are `True`, and the row has been read with `csql` once more. The cluster is
+  standalone: its member runs no heartbeat, the Operator resolves no primary
+  for it and writes no `status.lastObservedTime`, so the Conditions are
+  compared with the SQL of the smoke checks, and no rule waits for the
+  status to be fresh. The sampler does not ask the member for its role with
+  `cubrid heartbeat status`, because a standalone member has no heartbeat: the
+  command fails with exit status 1 and "The server was not configured for HA."
+  (`docs/poc/RESULTS.md`, POC-26), which would prove nothing about the member.
+  The rules:
+  - **Never:** the Never rules for an HA cluster above hold in every read.
+    Four of them start from a Condition a standalone cluster never carries
+    (`PrimaryResolved=True`, `HAReady=True` or `ReplicationHealthy=False`):
+    a read that breaks them still fails the run, but they are not required to
+    have judged enough reads, since the next rule judges every read for those
+    claims, and that is noted.
+  - **Never:** a standalone cluster claims no primary and no HA. In every
+    read, `PrimaryResolved` and `HAReady` are not `True`,
+    `status.currentPrimary` is empty and no member of `status.instances` has
+    the role `master`. Besides the limits above, at least one read before the
+    member's Pod was ready and one from then to the end of the smoke checks
+    must have been judged, so that the formation and the time after it are
+    both covered.
+  - **Tolerance** (30 seconds): `Ready=True` is not read while SQL fails
+    (ADR-0003). SQL run with `csql` in the member's Pod that failed is a
+    disagreement when the last read before it and every read for 30 seconds
+    after it, none more than 6 seconds apart, said `Ready=True`. `Ready`
+    follows the Pod's readiness: the kubelet probes `/readyz` every 5
+    seconds, gives each probe 5 seconds and marks the Pod not ready after 3
+    failures, up to 20 seconds; the StatefulSet's status and the reconcile add
+    a few seconds and the sampling 5. The reads this rule judges are those
+    that started before the last of those `csql` operations ended, and at
+    least one of them must say `Ready=True`: that is why the row is read with
+    `csql` once more at the end of the smoke checks, after `Ready` was seen
+    `True`. When a `csql` operation failed, the reads go on for 30 seconds
+    after it before they are judged. The statement that is meant to fail is
+    not counted. An operation counts as failed only when `csql` reported the
+    statement as failed in the Pod; a row that did not match or a `csql` that
+    could not be run is left out of this rule and noted. So is a read whose
+    `csql` exited 0 and printed the marker row and `1 row selected` together
+    with `ERROR CODE = -199` (server no longer responding) and
+    `ERROR CODE = -111` (transaction aborted), and no other error: POC-44
+    (`docs/poc/RESULTS.md`) saw `csql` print that pair as it exited after
+    statements that had taken effect, on the VM lab, and POC-49 did not make
+    csql print it on a standalone member by running `cubrid heartbeat status`
+    beside `csql` (csql's own log held one pair); its cause is unknown, so
+    such a read is evidence neither that SQL failed nor that it succeeded.
+    A `-199` without the row, without `-111`, with another error or with a
+    non-zero exit, and a write that printed the pair, whose output holds no
+    row, still count as failed.
+
+    Such a read is never a conclusive read and never yields a pass on its
+    own. The write and the first read keep failing S00 through their own
+    checks, and so does the read before the Pod deletion. When the read at the
+    end of the smoke checks prints the pair, it is read once more, as the
+    installed lab harness does: the first read is noted in `S00/agreement.txt`
+    and adds the step `csql_lost_session_after_row` to `S00/timeline.jsonl`,
+    and the second read decides. If it succeeded, it is the last `csql`
+    operation the rule compares with. If it printed the pair again, the last
+    `csql` operation is inconclusive, this rule is not judged and S00 ends
+    `blocked` however early `Ready` was `True`, unless something else failed
+    it. Any other result fails S00, as on the first read: a failed statement,
+    a row that did not match, or a `csql` that could not be run.
+    `measurements.csqlLostSessionReads` counts the `csql` reads of the smoke
+    checks that printed the pair, also on a run that passed, and is `unknown`
+    when the run made no such read. The read before the Pod deletion and the
+    reads after it are not counted.
+
+    This rule can only refine the reason of a run that already failed, since
+    every failed `csql` operation in the Pod already fails S00 through its own
+    check; on a passing run it can only block it, when no read with
+    `Ready=True` came before the last `csql` operation that is not left out,
+    or when the last `csql` operation is inconclusive.
+  - **Report:** SQL that succeeded while the last read before it had `Ready`
+    (for `csql` in the Pod) or `RoutingReady` (for the client through the
+    Brokers) not `True`, and SQL that failed while it was `True`. A failure of
+    the client through the Brokers is reported only: the Broker Conditions say
+    that Pods are available, not that a client can run SQL, as for every
+    scenario above.
+
+  The reads are judged in the scenario's cleanup, however the run ended, so a
+  disagreement fails it with reason `condition_disagreement` also when an
+  earlier check did not pass, and a rule without enough evidence keeps a run
+  that passed everything else `blocked`. `S00/conditions.jsonl`
+  and `S00/agreement.txt` are always written (S00 has no `S00/roles.jsonl`), and
+  `measurements.conditionAgreement` is added. `S00/record.json` is written
+  after that judgement, so it holds the result and reason of the summary.
+  `S00/timeline.jsonl` starts with
+  the steps of the installation and the smoke checks (`cluster_created`,
+  `pod_ready`, `ready_observed`, `brokers_available`, `smoke_checks_ended`)
+  before the steps of the Pod deletion. The checks above, and the limits
+  below, are made as before.
 - **Limits:** `install_limit`, `ready_limit`.
 
 ### S01: three-member HA with read-write and read-only access

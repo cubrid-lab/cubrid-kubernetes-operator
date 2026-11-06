@@ -23,6 +23,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,5 +112,35 @@ func TestConditionSamplerStopsWhileKubectlHangs(t *testing.T) {
 	}
 	if rounds := sampler.stop(); len(rounds) != 0 {
 		t.Errorf("a second stop returned %+v", rounds)
+	}
+}
+
+// TestConditionRoundRunsNoHeartbeatWithoutSweep checks that a round which is
+// not asked for the roles runs no command in any Pod, as in S00, whose
+// standalone member has no heartbeat to ask, and that a round which is asked
+// runs one in every member.
+func TestConditionRoundRunsNoHeartbeatWithoutSweep(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\necho \"$@\" >> " + log + "\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r := newHARun("ns", "client-ns", "cluster", "db", []string{pod0})
+	execs := func(sampling conditionSampling) int {
+		_ = os.Remove(log)
+		round := r.conditionRound(context.Background(), sampling)
+		if (round.Roles != nil) != sampling.roles {
+			t.Errorf("sampling %+v gave sweep %+v", sampling, round.Roles)
+		}
+		calls, _ := os.ReadFile(log)
+		return strings.Count(string(calls), " exec ")
+	}
+	if n := execs(conditionSampling{}); n != 0 {
+		t.Errorf("a round without a sweep ran %d commands in a Pod, want 0", n)
+	}
+	if n := execs(conditionSampling{roles: true}); n != 1 {
+		t.Errorf("a round with a sweep ran %d commands in a Pod, want 1", n)
 	}
 }

@@ -125,6 +125,10 @@ type Rule struct {
 	// Says is the rule in words, for agreement.txt.
 	Says  string
 	check func(Observations) finding
+	// optional, when set, says why the rule's evidence is not required: a
+	// rule that could not be judged leaves a note instead of blocking the
+	// scenario, while a disagreement it finds still fails it.
+	optional string
 }
 
 // finding is what one rule found.
@@ -276,6 +280,10 @@ func CheckAgreement(obs Observations, rules []Rule) Agreement {
 					considered = f.considered
 				}
 				f.notJudged = insufficient(f.evaluated, considered, obs.Steps, f.afterOutcome, f.inWait)
+			}
+			if f.notJudged != "" && r.optional != "" {
+				f.notes = append(f.notes, "evidence not required ("+r.optional+"): "+f.notJudged)
+				f.notJudged = ""
 			}
 		}
 		a.Disagreements = append(a.Disagreements, prefixed(string(r.Kind)+": "+r.ID, f.disagreements)...)
@@ -1464,4 +1472,283 @@ func reportWritesWhileStale(obs Observations) finding {
 	return finding{notes: append(notes, fmt.Sprintf("while the last status read before them was stale: %d "+
 		"acknowledged, %d failed, %d without a known outcome, the first at %s%s", counts[SQLAcknowledged],
 		counts[SQLFailed], counts[SQLUnknown], stamp(first), sinceFault(obs.Steps, first)))}
+}
+
+// Rule IDs of the install and smoke test (S00).
+const (
+	ruleS00NoPrimary          = "standalone-cluster-resolves-no-primary"
+	ruleS00ReadyFollowedBySQL = "ready-true-is-followed-by-sql-in-the-pod"
+	ruleS00SQLBeforeCondition = "sql-succeeded-before-the-condition-was-true"
+	ruleS00SQLFailedWhileTrue = "sql-failed-while-the-condition-was-true"
+)
+
+const condReady = "Ready"
+
+// ReadyTolerance is how long Ready may stay True after SQL in the member's Pod
+// failed. Ready follows the Pod's readiness, which the kubelet takes from
+// /readyz every 5 seconds, each probe given 5 seconds, and turns off after 3
+// failed probes: up to 20 seconds after the server stopped answering
+// (readinessProbe in internal/controller/cubridcluster_controller.go). The
+// StatefulSet's status and the Operator's reconcile that follows add a few
+// seconds, and the sampling samplingSlack.
+const ReadyTolerance = 3*5*time.Second + 5*time.Second + 5*time.Second + samplingSlack
+
+// SmokeSQL is one SQL operation of the install and smoke test (S00), with
+// when it started and when its outcome was known.
+type SmokeSQL struct {
+	Start, End time.Time
+	// Broker is true for a client through the Broker Services, false for
+	// csql in the member's Pod.
+	Broker bool
+	// Write is true for an operation that commits a change.
+	Write bool
+	OK    bool
+	// Inconclusive, when set, says why the operation's outcome is no evidence
+	// that the statement failed or succeeded in the member's Pod: the row was
+	// read but did not match, csql could not be run there, or csql printed
+	// the row read with -199 and -111 (POC-44). Such an operation is left out
+	// of the rules that compare the Conditions with the SQL, and the reason
+	// is noted. When it is the last csql operation, the rule on Ready and SQL
+	// cannot be judged.
+	Inconclusive string
+	// What names the operation in agreement.txt.
+	What string
+}
+
+// S00Run describes one run of the install and smoke test (S00).
+type S00Run struct {
+	// Member is the one member of the standalone cluster.
+	Member string
+	// PodReady is when the member's Pod was first seen ready; zero when it
+	// was not.
+	PodReady time.Time
+	// SmokeEnd is when the smoke checks ended; zero when they did not.
+	SmokeEnd time.Time
+	SQL      []SmokeSQL
+}
+
+// S00Rules are the rules of the install and smoke test (S00), whose cluster
+// is standalone: from its creation through the member's formation, Ready and
+// the smoke SQL there is no fault. A standalone member runs no heartbeat and
+// the Operator resolves no primary for it, so the Conditions are compared
+// with the SQL of the smoke checks and no heartbeat is asked. Its status has
+// no status.lastObservedTime, so no rule here waits for it to be fresh.
+//
+// The shared Never rules are applied to every read. Four of them read
+// Conditions a standalone cluster never carries (PrimaryResolved,
+// ReplicationHealthy, and HAReady only as False): they still fail a read that
+// breaks them, but their lack of judged reads does not block the run, since
+// standalone-cluster-resolves-no-primary judges every read for the claims
+// they start from.
+func S00Rules(run S00Run) []Rule {
+	optional := map[string]string{
+		ruleHAReadyFollowsReplication: "HAReady=True, which " + ruleS00NoPrimary + " judges in every read",
+		ruleHAReadyNeedsPrimary:       "HAReady=True, which " + ruleS00NoPrimary + " judges in every read",
+		rulePrimaryNeedsEveryAnswer:   "PrimaryResolved=True, which " + ruleS00NoPrimary + " judges in every read",
+		ruleReplicationNamesSlaves: "ReplicationHealthy=False, which a standalone cluster never carries, " +
+			"having no replication",
+	}
+	var rules []Rule
+	for _, r := range NeverRules() {
+		if premise, ok := optional[r.ID]; ok {
+			r.optional = "on a standalone cluster this rule starts from " + premise
+			r.Says += "; on a standalone cluster its evidence is not required, since it starts from " + premise
+		}
+		rules = append(rules, r)
+	}
+	return append(rules,
+		Rule{
+			ID: ruleS00NoPrimary, Kind: Never,
+			Says: "a standalone cluster claims no primary and no HA: in every read PrimaryResolved and HAReady are " +
+				"not True, status.currentPrimary is empty and no member of status.instances has the role master, " +
+				"since its member runs no heartbeat and the Operator resolves no primary for it. At least one judged " +
+				"read must come before the member's Pod was ready and one from then to the end of the smoke checks",
+			check: func(obs Observations) finding { return checkS00NoPrimary(obs, run) },
+		},
+		Rule{
+			ID: ruleS00ReadyFollowedBySQL, Kind: Tolerance, Tolerance: ReadyTolerance,
+			Says: "Ready=True is not read while SQL fails (ADR-0003): SQL with csql in the member's Pod that failed " +
+				"is a disagreement when the last read before it and every read for " + ReadyTolerance.String() +
+				" after it, none more than " + readingGap.String() + " apart, said Ready=True. The reads that " +
+				"started before the last conclusive one of those operations ended are the reads it judges, and at " +
+				"least one of them must say Ready=True. An operation left out as inconclusive cannot be the last " +
+				"csql operation of the run: the rule then is not judged",
+			check: func(obs Observations) finding { return checkS00ReadyFollowedBySQL(obs, run) },
+		},
+		Rule{
+			ID: ruleS00SQLBeforeCondition, Kind: Report,
+			Says: "SQL that succeeded while the last read before it had Ready (csql in the member's Pod) or " +
+				"RoutingReady (a client through the Broker Services) not True; the Conditions are no guarantee " +
+				"about SQL (docs/observability.md)",
+			check: func(obs Observations) finding { return reportS00SQL(obs, run, true) },
+		},
+		Rule{
+			ID: ruleS00SQLFailedWhileTrue, Kind: Report,
+			Says: "SQL that failed while the last read before it had Ready (csql in the member's Pod) or " +
+				"RoutingReady (a client through the Broker Services) True; a failure of the client through the " +
+				"Brokers is reported only, since the Broker Conditions say that Pods are available, not that a " +
+				"client can run SQL",
+			check: func(obs Observations) finding { return reportS00SQL(obs, run, false) },
+		},
+	)
+}
+
+func checkS00NoPrimary(obs Observations, run S00Run) finding {
+	f := perRead(nil, func(s ConditionSample) (string, string) {
+		var claims []string
+		for _, c := range []string{condPrimaryResolved, condHAReady} {
+			if isTrue(s, c) {
+				claims = append(claims, c+"=True")
+			}
+		}
+		if s.CurrentPrimary != "" {
+			claims = append(claims, "status.currentPrimary "+s.CurrentPrimary)
+		}
+		for _, in := range s.Instances {
+			if in.Role == roleMaster {
+				claims = append(claims, in.Name+" with the role master")
+			}
+		}
+		if len(claims) == 0 {
+			return "", ""
+		}
+		return fmt.Sprintf("read at %s: a standalone cluster's status claims %s", stamp(s.ReadStart),
+			strings.Join(claims, ", ")), ""
+	})(obs)
+
+	if f.notJudged != "" {
+		return f
+	}
+	in := func(from, to time.Time) bool {
+		return slices.ContainsFunc(f.evaluated, func(t time.Time) bool {
+			return !t.Before(from) && (to.IsZero() || t.Before(to))
+		})
+	}
+	switch {
+	case run.PodReady.IsZero():
+		f.notJudged = "the member's Pod was never seen ready, so no read after the formation could be judged"
+	case !in(time.Time{}, run.PodReady):
+		f.notJudged = "no status read before the member's Pod was ready, at " + stamp(run.PodReady) + ", was recorded"
+	case !in(run.PodReady, run.SmokeEnd):
+		f.notJudged = "no status read from the member's Pod being ready to the end of the smoke checks was recorded"
+	}
+	return f
+}
+
+func checkS00ReadyFollowedBySQL(obs Observations, run S00Run) finding {
+	var inPod []SmokeSQL
+	var lastEnd time.Time
+	var notes []string
+	// last is the last operation in the Pod, conclusive or not.
+	var last SmokeSQL
+	for _, op := range run.SQL {
+		if !op.Broker && !op.End.Before(last.End) {
+			last = op
+		}
+		if !op.Broker && op.Inconclusive != "" {
+			notes = append(notes, fmt.Sprintf("%s, from %s to %s, is not compared with Ready: %s", op.What,
+				stamp(op.Start), stamp(op.End), op.Inconclusive))
+		} else if !op.Broker {
+			inPod = append(inPod, op)
+			if op.End.After(lastEnd) {
+				lastEnd = op.End
+			}
+		}
+	}
+	if len(inPod) == 0 {
+		return finding{notJudged: "no SQL operation with csql in the member's Pod was recorded", notes: notes}
+	}
+	samples := byReadStart(obs.Samples)
+	var readings []reading
+	var evaluated []time.Time
+	considered, ready := 0, 0
+	for _, s := range samples {
+		_, ok := s.Conditions[condReady]
+		if ok {
+			readings = append(readings, reading{s.ReadStart, isTrue(s, condReady)})
+		}
+		if !s.ReadStart.Before(lastEnd) {
+			continue
+		}
+		considered++
+		if ok {
+			evaluated = append(evaluated, s.ReadStart)
+			if isTrue(s, condReady) {
+				ready++
+			}
+		}
+	}
+	var bad []string
+	uncovered := 0
+	for _, op := range inPod {
+		if op.OK {
+			continue
+		}
+		w := windowBefore(readings, op.Start, op.End.Add(ReadyTolerance), readingGap)
+		switch {
+		case !w.covered || w.gap:
+			uncovered++
+		case w.allHold:
+			bad = append(bad, fmt.Sprintf("%s failed from %s to %s, while every one of the %d reads from %s to %s "+
+				"after the failure said Ready=True", op.What, stamp(op.Start), stamp(op.End), w.seen, stamp(w.from),
+				ReadyTolerance))
+		}
+	}
+	if uncovered > 0 {
+		notes = append(notes, fmt.Sprintf("not judged for %d failed operations: the reads do not cover the time "+
+			"from the last read before each to %s after it, none more than %s apart", uncovered, ReadyTolerance,
+			readingGap))
+	}
+	f := finding{disagreements: bad, notes: notes, evaluated: evaluated, considered: considered}
+	switch {
+	case last.Inconclusive != "":
+		f.notJudged = fmt.Sprintf("the last SQL operation in the member's Pod, %s, was inconclusive, so it does not "+
+			"show that SQL worked to the end of the smoke checks: %s", last.What, last.Inconclusive)
+	case considered == 0:
+		f.notJudged = "no status read started before an SQL operation in the member's Pod ended"
+	case ready == 0:
+		f.notJudged = "no read with Ready=True came before an SQL operation in the member's Pod, so no claim " +
+			"of Ready was followed by SQL"
+	}
+	return f
+}
+
+// reportS00SQL compares each smoke SQL operation with the last read that
+// ended before it started: csql in the member's Pod with Ready, a client
+// through the Brokers with RoutingReady. succeeded picks the operations that
+// succeeded while the Condition was not True, otherwise those that failed
+// while it was.
+func reportS00SQL(obs Observations, run S00Run, succeeded bool) finding {
+	samples := byReadStart(obs.Samples)
+	var notes []string
+	unread := 0
+	for _, op := range run.SQL {
+		condition := condReady
+		if op.Broker {
+			condition = condRoutingReady
+		}
+		if op.Inconclusive != "" {
+			continue
+		}
+		last := lastReadBefore(samples, op.Start)
+		if last < 0 {
+			unread++
+			continue
+		}
+		s := samples[last]
+		status := orMissing(s.Conditions[condition].Status, s.Conditions[condition].Status != "")
+		switch {
+		case succeeded && op.OK && !isTrue(s, condition):
+			notes = append(notes, fmt.Sprintf("%s succeeded from %s to %s, while the last read before it, at %s, "+
+				"had %s=%s", op.What, stamp(op.Start), stamp(op.End), stamp(s.ReadStart), condition, status))
+		case !succeeded && !op.OK && isTrue(s, condition):
+			notes = append(notes, fmt.Sprintf("%s failed from %s to %s, while the last read before it, at %s, "+
+				"had %s=True", op.What, stamp(op.Start), stamp(op.End), stamp(s.ReadStart), condition))
+		}
+	}
+	if unread > 0 && succeeded {
+		notes = append(notes, fmt.Sprintf("%d SQL operations came before the first status read and were not "+
+			"compared", unread))
+	}
+	return finding{notes: notes}
 }

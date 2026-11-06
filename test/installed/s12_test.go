@@ -1164,23 +1164,6 @@ func TestRunS12ExactIsBlockedWhenTheReadIsLostTwice(t *testing.T) {
 	}
 }
 
-func TestSessionLostNeedsBothErrors(t *testing.T) {
-	for name, tc := range map[string]struct {
-		out  string
-		want bool
-	}{
-		"both":         {testLostSession, true},
-		"-199 alone":   {"ERROR CODE = -199, Tran = 6, EID = 2\nServer no longer responding", false},
-		"-111 alone":   {"ERROR CODE = -111, Tran = 6, EID = 3\nYour transaction has been aborted", false},
-		"another code": {"ERROR CODE = -1990, Tran = 6\nERROR CODE = -1110, Tran = 6", false},
-		"a clean read": {"=== <Result of SELECT Command in Line 1> ===\n\n1 row selected.", false},
-	} {
-		if got := sessionLost(tc.out); got != tc.want {
-			t.Errorf("%s: sessionLost = %v, want %v", name, got, tc.want)
-		}
-	}
-}
-
 func TestRunS12ExactRecordsTheStateOfAMemberThatLacksTheNormalWrite(t *testing.T) {
 	cfg := testS12Config(t)
 	f := newS12Fixture(t, cfg)

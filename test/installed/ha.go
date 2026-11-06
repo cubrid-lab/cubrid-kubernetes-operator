@@ -1682,7 +1682,7 @@ func (h *haRun) csqlRead(ctx context.Context, pod string) sqlcheck.Runner {
 		}
 		h.reads[h.scenario]++
 		out, err := run()
-		if err != nil || !sessionLost(out) {
+		if err != nil || !sqlcheck.SessionLost(out) {
 			return out, err
 		}
 		lost := lostSession{At: time.Now().UTC(), Scenario: h.scenario, Pod: pod, Query: firstLine(sql),
@@ -1691,7 +1691,7 @@ func (h *haRun) csqlRead(ctx context.Context, pod string) sqlcheck.Runner {
 		switch {
 		case err != nil:
 			lost.Again = "the read failed: " + err.Error()
-		case sessionLost(again):
+		case sqlcheck.SessionLost(again):
 			lost.Again = "the session was lost again"
 		default:
 			lost.Again = "answered"
@@ -1699,24 +1699,6 @@ func (h *haRun) csqlRead(ctx context.Context, pod string) sqlcheck.Runner {
 		h.rec.LostSessions = append(h.rec.LostSessions, lost)
 		return again, err
 	}
-}
-
-// lostSessionErrors are the two errors csql prints when the server dropped
-// its session, before or after the result.
-var lostSessionErrors = []*regexp.Regexp{
-	regexp.MustCompile(`ERROR CODE = -199\b`),
-	regexp.MustCompile(`ERROR CODE = -111\b`),
-}
-
-// sessionLost reports whether csql's output holds both errors of a dropped
-// session.
-func sessionLost(out string) bool {
-	for _, re := range lostSessionErrors {
-		if !re.MatchString(out) {
-			return false
-		}
-	}
-	return true
 }
 
 // errorLines are the lines of csql's output that name an error code, each with
