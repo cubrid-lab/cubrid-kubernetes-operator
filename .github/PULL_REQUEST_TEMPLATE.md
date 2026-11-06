@@ -11,7 +11,11 @@ See CONTRIBUTING.md#pull-request-and-commit-titles.
 -->
 ## Summary
 
-<!-- Brief description of changes -->
+<!-- Begin with a plain-language explanation of the behavior or test being changed.
+A reviewer must understand the purpose without knowing internal identifiers.
+On first mention, expand scenario/lab/POC IDs into descriptive names:
+"HA token rotation and migration end-to-end tests (S14)", not just "S14".
+IDs are secondary traceability references, not the subject of the summary. -->
 
 ## Changes
 
@@ -39,6 +43,7 @@ See CONTRIBUTING.md#pull-request-and-commit-titles.
 - [ ] I have run `go mod tidy` if imports or dependencies changed
 - [ ] I have added a reproduction or regression test for a fix, and tests for new functionality (if applicable)
 - [ ] The title, summary, changed files, issue closure and test claims match the final diff and acceptance criteria
+- [ ] A reviewer unfamiliar with internal scenario/test IDs can understand the Summary; any IDs are expanded into descriptive names on first mention
 - [ ] If scenario limits or CI gates changed, I tested set, unset/zero, missing-measurement, boundary and exceeded cases; required scenarios cannot silently pass without their mandatory limits
 - [ ] For measured baseline changes, I linked the underlying run IDs/artifacts or a reproducible data set and aggregation method, and documented known sampling limits
 - [ ] Required independent maintainer reviews are complete before merge; an AI-agent review or green CI does not replace them or authorize a waiver
