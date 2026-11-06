@@ -176,6 +176,12 @@ type haFixture struct {
 	imRestartCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
 	imRestartRead    func(ctx context.Context, c client.WithWatch, key client.ObjectKey) error
 	memberHook       func(ctx context.Context, pod, script string) (string, error, bool)
+	// stagingAfterFailure answers the read of a failed backup's staging
+	// directory on its target member (failedStagingScript) with the
+	// script's output; unset, the directory is not there. stagingReads are
+	// the members it was asked on.
+	stagingAfterFailure func(pod string) (string, error)
+	stagingReads        []string
 	// gracefulStopCreated and gracefulStopRead play the Operator for the
 	// cluster of S12 graceful-stop, as restoreCreated and restoreRead do.
 	gracefulStopCreated func(ctx context.Context, c client.WithWatch, cluster *databasev1alpha1.CubridCluster) error
@@ -689,13 +695,8 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 	if container != databaseContainer {
 		f.t.Fatalf("member command in container %s", container)
 	}
-	f.mu.Lock()
-	memberHook := f.memberHook
-	f.mu.Unlock()
-	if memberHook != nil {
-		if out, err, done := memberHook(ctx, pod, script); done {
-			return out, err
-		}
+	if out, err, done := f.hookedMemberCommand(ctx, pod, script); done {
+		return out, err
 	}
 	if f.csqlHook != nil && strings.Contains(script, "csql") {
 		if out, err, done := f.csqlHook(pod, args[len(args)-1]); done {
@@ -736,6 +737,38 @@ func (f *haFixture) command(ctx context.Context, args ...string) (string, error)
 	}
 	f.t.Fatalf("unexpected member command %q", args)
 	return "", nil
+}
+
+// hookedMemberCommand answers a member command with memberHook, then with
+// the read of a failed backup's staging directory, and reports false for
+// any other.
+func (f *haFixture) hookedMemberCommand(ctx context.Context, pod, script string) (string, error, bool) {
+	f.mu.Lock()
+	memberHook := f.memberHook
+	f.mu.Unlock()
+	if memberHook != nil {
+		if out, err, done := memberHook(ctx, pod, script); done {
+			return out, err, true
+		}
+	}
+	return f.stagingRead(pod, script)
+}
+
+// stagingRead plays the read of a failed backup's staging directory
+// (failedStagingScript), and reports false for any other script.
+func (f *haFixture) stagingRead(pod, script string) (string, error, bool) {
+	if !strings.HasPrefix(script, "w='"+imBackupStagingRoot+"/") {
+		return "", nil, false
+	}
+	f.mu.Lock()
+	f.stagingReads = append(f.stagingReads, pod+" "+script)
+	answer := f.stagingAfterFailure
+	f.mu.Unlock()
+	if answer != nil {
+		out, err := answer(pod)
+		return out, err, true
+	}
+	return stagingAbsent + "\n" + stagingEndMarker + "\n", nil, true
 }
 
 // testAppliersOutput is what the fake applier state of a member prints.

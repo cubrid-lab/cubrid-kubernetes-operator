@@ -204,7 +204,12 @@ exist` (SeaweedFS); the bucket was still absent with no object, no credential
 was in 5 statuses or 81 Events, and the run deleted its `CubridBackup`. One
 run is not a baseline; the target member's staging directory afterwards and
 the Operator's and Instance Manager's logs were not checked. Other invalid
-destinations and an interrupted upload are not covered.
+destinations and an interrupted upload are not covered. Since then the harness
+also reads the target member's backup staging directory after the failed
+upload, by name and size only: a staged file left there fails the variant
+unless a recorded process held it, and a directory that could not be read
+blocks it (#636). Unit tests cover it with fakes; no VM-lab run has used that
+check yet.
 
 S11 `denied-credentials` also follows S11 `complete`, in a run of its own
 (`lab-installed-ha-s11-denied-credentials`, `-backup-denied-credentials`,
@@ -226,7 +231,10 @@ statuses or 114 Events, and the deletions of the backup, the cluster and the
 Secret were accepted. One run is not a baseline; the target member's staging
 directory and the Operator's and Instance Manager's logs were not checked.
 Only an unknown access key was tested there; the seed Secret's access key
-with a wrong secret key is S11 `signature-mismatch`.
+with a wrong secret key is S11 `signature-mismatch`. The staging check
+described for S11 `missing-destination` applies to this variant and to
+S11 `signature-mismatch` and `interrupted-upload` too; no VM-lab run has used
+it yet.
 
 S11 `signature-mismatch` also follows S11 `complete`, in a run of its own
 (`lab-installed-ha-s11-signature-mismatch`, `-backup-signature-mismatch`,
