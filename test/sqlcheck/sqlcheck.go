@@ -118,31 +118,47 @@ func ReadRow(run Runner, marker string) error {
 	return rowRead(out, marker)
 }
 
+// rowCount matches the line in which csql counts one selected row.
+var rowCount = regexp.MustCompile(`(?m)^1 row selected\b`)
+
 // rowRead checks that out, csql's output of ReadRow's query, holds exactly
-// the row written by WriteRow.
+// the row written by WriteRow: in the result table, the row with id 1 and the
+// marker, then the count of one row. csql's other output, such as its
+// messages on stderr, can come before or after the table and is not looked at.
 func rowRead(out, marker string) error {
-	if !strings.Contains(out, "'"+marker+"'") {
-		return fmt.Errorf("row with marker %q not found:\n%s", marker, out)
+	_, result, found := strings.Cut(out, "=== <Result of SELECT")
+	if found {
+		_, result, found = strings.Cut(result, "\n==")
 	}
-	if !strings.Contains(out, "1 row selected") {
+	if !found {
+		return fmt.Errorf("no result table in the output of csql:\n%s", out)
+	}
+	count := rowCount.FindStringIndex(result)
+	if count == nil {
 		return fmt.Errorf("expected exactly one row:\n%s", out)
+	}
+	row := regexp.MustCompile(`(?m)^\s*1\s+'` + regexp.QuoteMeta(marker) + `'\s*$`)
+	if !row.MatchString(result[:count[0]]) {
+		return fmt.Errorf("row with id 1 and marker %q not found:\n%s", marker, out)
 	}
 	return nil
 }
 
-// lostSessionErrors are the two errors csql prints when the server dropped
-// its session, before or after the result.
+// lostSessionErrors are the two errors csql prints, before or after the
+// result, when it reports that the server stopped responding and that its
+// transaction was aborted. The output does not say what happened to the
+// session on the server.
 var lostSessionErrors = []*regexp.Regexp{
 	regexp.MustCompile(`ERROR CODE = -199\b`),
 	regexp.MustCompile(`ERROR CODE = -111\b`),
 }
 
-// SessionLost reports whether csql's output holds both errors of a dropped
-// session: -199 (server no longer responding) and -111 (transaction
-// aborted). POC-44 saw csql print the pair as it exited after statements
-// that had committed, and POC-49 once found it in csql's own log for a run
-// that printed neither; its cause is unknown. The pair alone does not say
-// whether the statement took effect.
+// SessionLost reports whether csql's output holds both of those errors:
+// -199 (server no longer responding) and -111 (transaction aborted). POC-44
+// saw csql print the pair as it exited after statements that had committed,
+// and POC-49 once found it in csql's own log for a run that printed neither;
+// its cause is unknown. The pair alone does not say whether the statement
+// took effect.
 func SessionLost(out string) bool {
 	for _, re := range lostSessionErrors {
 		if !re.MatchString(out) {
@@ -157,10 +173,11 @@ func SessionLost(out string) bool {
 var lostSessionCodes = regexp.MustCompile(`ERROR CODE = -(199|111)\b`)
 
 // LostSessionAfterRow reports whether err, an error of ReadRow, holds only
-// csql's report of a dropped session (SessionLost) from a read that exited 0
-// and whose output holds exactly the row WriteRow wrote. Any other error in
-// the output, a -199 without -111 or without the row, and a command that
-// failed are not such a report.
+// the pair of SessionLost from a read that exited 0 and whose output holds
+// exactly the row WriteRow wrote. Any other error in the output, a -199
+// without -111 or without the row, and a command that failed are not such a
+// report. It does not make the read conclusive: the pair leaves unknown what
+// happened to the session, so a caller reads again rather than accept the row.
 func LostSessionAfterRow(err error, marker string) bool {
 	var statement *StatementError
 	return errors.As(err, &statement) && !statement.commandFailed && SessionLost(statement.out) &&

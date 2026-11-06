@@ -384,7 +384,8 @@ func (f *fixture) answer(t *testing.T, args []string) (string, error) {
 		f.marker = match[1]
 		return "COMMIT WORK", nil
 	}
-	return fmt.Sprintf("'%s'\n1 row selected", f.marker), nil
+	return fmt.Sprintf("=== <Result of SELECT Command in Line 1> ===\n\n  id  marker\n=====\n  1  '%s'\n\n"+
+		"1 row selected.\n", f.marker), nil
 }
 
 func TestRunWritesSQLAndRetainsItsScopedEvidence(t *testing.T) {

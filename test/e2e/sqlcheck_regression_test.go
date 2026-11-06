@@ -43,7 +43,8 @@ func TestSQLChecks(t *testing.T) {
 		if sql != "SELECT id, marker FROM "+s00Table+" ORDER BY id;" {
 			t.Errorf("unexpected read SQL: %q", sql)
 		}
-		return "1 'marker-123'\n1 row selected", nil
+		return "=== <Result of SELECT Command in Line 1> ===\n\n  id  marker\n=====\n  1  'marker-123'\n\n" +
+			"1 row selected.\n", nil
 	}, "marker-123"); err != nil {
 		t.Fatal(err)
 	}

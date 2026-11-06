@@ -144,25 +144,44 @@ func TestSQLChecksWriteRowKeepsAnOldRow(t *testing.T) {
 	if s.rows != 1 {
 		t.Fatalf("rows %d, want the old one only", s.rows)
 	}
-	if err := ReadRow(func(string) (string, error) { return "1 'old-marker'\n1 row selected", nil },
+	if err := ReadRow(func(string) (string, error) { return rowResult("1  'old-marker'", "1 row selected."), nil },
 		"marker-123"); err == nil {
 		t.Fatal("ReadRow accepted the old row")
 	}
 }
 
+// rowResult is csql's output of ReadRow's query with the given row lines and
+// the count line after them.
+func rowResult(row, count string) string {
+	return "\n=== <Result of SELECT Command in Line 1> ===\n\n" +
+		"           id  marker\n===================================\n" +
+		"            " + row + "\n\n" + count + " (0.001000 sec) Committed. (0.000000 sec) \n"
+}
+
 func TestSQLChecksReadRow(t *testing.T) {
+	const right = "1  'marker-123'"
 	for _, tc := range []struct {
 		name      string
 		output    string
 		wantError bool
 	}{
-		{name: "success", output: "1 'marker-123'\n1 row selected"},
+		{name: "success", output: rowResult(right, "1 row selected.")},
 		{name: "missing marker", output: "1 row selected", wantError: true},
-		{name: "wrong marker", output: "1 'other'\n1 row selected", wantError: true},
-		{name: "unquoted marker", output: "1 marker-123\n1 row selected", wantError: true},
-		{name: "wrong row count", output: "1 'marker-123'\n2 rows selected", wantError: true},
-		{name: "missing row count", output: "1 'marker-123'", wantError: true},
+		{name: "wrong marker", output: rowResult("1  'other'", "1 row selected."), wantError: true},
+		{name: "unquoted marker", output: rowResult("1  marker-123", "1 row selected."), wantError: true},
+		{name: "wrong row count", output: rowResult(right, "2 rows selected."), wantError: true},
+		{name: "missing row count", output: strings.Split(rowResult(right, ""), " (0.001")[0], wantError: true},
 		{name: "statement error", output: "ERROR: query failed", wantError: true},
+		{name: "the right marker with another id", output: rowResult("2  'marker-123'", "1 row selected."),
+			wantError: true},
+		{name: "a count that only ends in one row", output: rowResult(right, "21 row selected."), wantError: true},
+		{name: "the row and the count outside a result table", output: "1  'marker-123'\n1 row selected.\n",
+			wantError: true},
+		{name: "the row in a line after the count, with another row in the table",
+			output: rowResult("1  'other'", "1 row selected.") + "1  'marker-123'\n", wantError: true},
+		{name: "a log line that quotes the marker and the count",
+			output:    "NOTIFICATION: 1 'marker-123' 1 row selected\n" + rowResult("1  'other'", "1 row selected."),
+			wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ReadRow(func(sql string) (string, error) {
@@ -227,7 +246,7 @@ func TestSQLChecksStatementError(t *testing.T) {
 			return err
 		}, false},
 		"row of another marker": {func() error {
-			return ReadRow(func(string) (string, error) { return "1 'other'\n1 row selected", nil }, "m")
+			return ReadRow(func(string) (string, error) { return rowResult("1  'other'", "1 row selected."), nil }, "m")
 		}, false},
 		"read statement that failed": {func() error {
 			return ReadRow(func(string) (string, error) { return "ERROR: no table", nil }, "m")
@@ -318,6 +337,8 @@ func TestLostSessionAfterRow(t *testing.T) {
 		"another error": {read("ERROR: no table", nil), false},
 		"another error besides the pair": {read(strings.Replace(ciLostSessionRead, "=== <Result",
 			"ERROR CODE = -1, Tran = 3, EID = 4\n=== <Result", 1), nil), false},
+		"another code that starts with -199, besides the pair": {read(strings.Replace(ciLostSessionRead, "=== <Result",
+			"ERROR CODE = -1990, Tran = 3, EID = 4\n=== <Result", 1), nil), false},
 	} {
 		if got := LostSessionAfterRow(tc.err, ciMarker); got != tc.want {
 			t.Errorf("%s: LostSessionAfterRow = %v, want %v", name, got, tc.want)
