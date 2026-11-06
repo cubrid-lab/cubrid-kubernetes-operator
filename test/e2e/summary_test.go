@@ -66,33 +66,35 @@ func updateSummary(change func(s *evidence.Summary)) {
 // them the cluster Instance Manager tokens the suite reads (S14).
 var redactor = evidence.NewRedactor()
 
-// evidenceAcquired is set once the run has accepted E2E_EVIDENCE_DIR as its
-// own, which acquireEvidenceDir does only for a missing or empty directory.
-// Ginkgo runs AfterSuite and the per-spec reports even when BeforeSuite
-// refused the directory, so every write to it is gated on this (#310).
-var evidenceAcquired = false
+// acquiredEvidenceDir is the directory this run accepted as its own, which
+// acquireEvidenceDir does only for a missing or empty directory, and is empty
+// otherwise. Ginkgo runs AfterSuite and the per-spec reports even when
+// BeforeSuite refused the directory, so every write goes through this path,
+// not through E2E_EVIDENCE_DIR, which can name a directory that was never
+// accepted (#310).
+var acquiredEvidenceDir string
 
 // acquireEvidenceDir makes E2E_EVIDENCE_DIR this run's evidence directory
-// when it is missing or empty. It returns an error, and the run writes
-// nothing there, when the directory holds the files of an earlier run.
+// when it is missing or empty. It returns an error when the directory holds
+// the files of an earlier run. An earlier acquisition ends first, so that a
+// refused run holds no directory and writes nowhere, whatever was accepted
+// before in this process.
 func acquireEvidenceDir() error {
-	if dir := os.Getenv("E2E_EVIDENCE_DIR"); dir != "" {
-		if err := evidence.RequireEmptyDir(dir); err != nil {
-			return err
-		}
+	acquiredEvidenceDir = ""
+	dir := os.Getenv("E2E_EVIDENCE_DIR")
+	if dir == "" {
+		return nil
 	}
-	evidenceAcquired = true
+	if err := evidence.RequireEmptyDir(dir); err != nil {
+		return err
+	}
+	acquiredEvidenceDir = dir
 	return nil
 }
 
 // evidenceDir is where the run's evidence goes; empty when none is kept or
 // the run did not acquire the directory, and then no scenario can pass.
-func evidenceDir() string {
-	if !evidenceAcquired {
-		return ""
-	}
-	return os.Getenv("E2E_EVIDENCE_DIR")
-}
+func evidenceDir() string { return acquiredEvidenceDir }
 
 // recordScenario adds a scenario's result to the run's summary, in place of
 // the placeholder planRun left for it.
