@@ -376,6 +376,9 @@ type junitSuite struct {
 type junitCase struct {
 	Name      string        `xml:"name,attr"`
 	Classname string        `xml:"classname,attr"`
+	// SystemOut explains a scenario without changing the historical JUnit
+	// testcase name used for result grouping and comparisons.
+	SystemOut string        `xml:"system-out,omitempty"`
 	Failure   *junitMessage `xml:"failure,omitempty"`
 	Error     *junitMessage `xml:"error,omitempty"`
 	Skipped   *junitMessage `xml:"skipped,omitempty"`
@@ -395,7 +398,7 @@ const junitRunCase = "run"
 func (s Summary) junit() junitSuite {
 	suite := junitSuite{Name: s.RunID, Tests: len(s.Scenarios)}
 	for _, sc := range s.Scenarios {
-		c := junitCase{Name: sc.DisplayName(), Classname: "scenario"}
+		c := junitCase{Name: sc.Name(), Classname: "scenario", SystemOut: sc.DisplayName()}
 		switch sc.Result {
 		case Pass:
 		case Fail:
