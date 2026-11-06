@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,6 +35,17 @@ import (
 // script's stderr, the downloaded file's content, if any, and its error.
 func fetchVerified(t *testing.T, want []byte, attempts string,
 	serve func(n int32, w http.ResponseWriter)) (stderr string, got []byte, err error) {
+	t.Helper()
+	stderr, got, _, err = fetchVerifiedWaits(t, want, attempts, nil, serve)
+	return stderr, got, err
+}
+
+// fetchVerifiedWaits is fetchVerified with extra environment settings. A
+// stand-in sleep command records each requested wait instead of waiting, so
+// the test can check the waits without taking the time, and it returns them
+// in seconds, in order.
+func fetchVerifiedWaits(t *testing.T, want []byte, attempts string, env []string,
+	serve func(n int32, w http.ResponseWriter)) (stderr string, got []byte, waits []string, err error) {
 	t.Helper()
 	for _, tool := range []string{"curl", "sha256sum"} {
 		if _, err := exec.LookPath(tool); err != nil {
@@ -54,7 +66,14 @@ func fetchVerified(t *testing.T, want []byte, attempts string,
 	out := filepath.Join(t.TempDir(), "driver.jar")
 	cmd := exec.Command("sh", script, srv.URL+"/driver.jar",
 		hex.EncodeToString(sum[:]), out, attempts)
-	cmd.Env = append(os.Environ(), "FETCH_BACKOFF=0")
+	binDir := t.TempDir()
+	waitsFile := filepath.Join(binDir, "waits")
+	fakeSleep := "#!/bin/sh\necho \"$1\" >> '" + waitsFile + "'\n"
+	if err := os.WriteFile(filepath.Join(binDir, "sleep"), []byte(fakeSleep), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"), "FETCH_BACKOFF=0")
+	cmd.Env = append(cmd.Env, env...)
 	var errOut strings.Builder
 	cmd.Stderr = &errOut
 	err = cmd.Run()
@@ -62,7 +81,8 @@ func fetchVerified(t *testing.T, want []byte, attempts string,
 	if _, statErr := os.Stat(out + ".part"); !os.IsNotExist(statErr) {
 		t.Errorf("the unverified download %s.part was left behind (stat: %v)", out, statErr)
 	}
-	return errOut.String(), got, err
+	recorded, _ := os.ReadFile(waitsFile)
+	return errOut.String(), got, strings.Fields(string(recorded)), err
 }
 
 // One bad answer, a body with another digest or a server error, is asked for
@@ -106,5 +126,157 @@ func TestFetchVerified_RefusesABodyThatStaysWrong(t *testing.T) {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr does not name %q:\n%s", want, stderr)
 		}
+	}
+}
+
+func rateLimited(retryAfter string) func(w http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		if retryAfter != "" {
+			w.Header().Set("Retry-After", retryAfter)
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}
+}
+
+// A rate-limited answer (429) that names a wait in Retry-After is waited out
+// for that long, and the verified body that follows is kept (#718).
+func TestFetchVerified_WaitsForRetryAfter(t *testing.T) {
+	good := []byte("the driver")
+	stderr, got, waits, err := fetchVerifiedWaits(t, good, "3", nil, func(n int32, w http.ResponseWriter) {
+		if n == 1 {
+			rateLimited("7")(w)
+			return
+		}
+		_, _ = w.Write(good)
+	})
+	if err != nil || string(got) != string(good) {
+		t.Fatalf("err = %v, file = %q, want the verified body; stderr:\n%s", err, got, stderr)
+	}
+	if strings.Join(waits, ",") != "7" {
+		t.Errorf("waits = %v, want [7] from Retry-After", waits)
+	}
+}
+
+// Without Retry-After a rate-limited answer is waited out with a longer
+// backoff than other failures, which keep the short wait of FETCH_BACKOFF.
+func TestFetchVerified_RateLimitBacksOffLongerThanOtherFailures(t *testing.T) {
+	good := []byte("the driver")
+	serveAfter := func(first func(w http.ResponseWriter)) func(int32, http.ResponseWriter) {
+		return func(n int32, w http.ResponseWriter) {
+			if n <= 2 {
+				first(w)
+				return
+			}
+			_, _ = w.Write(good)
+		}
+	}
+	env := []string{"FETCH_BACKOFF=1"}
+	_, _, limited, err := fetchVerifiedWaits(t, good, "3", env, serveAfter(rateLimited("")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, other, err := fetchVerifiedWaits(t, good, "3", env, serveAfter(func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(other, ",") != "1,2" {
+		t.Errorf("waits after a plain failure = %v, want [1 2] as before", other)
+	}
+	if strings.Join(limited, ",") != "15,30" {
+		t.Errorf("waits after 429 = %v, want [15 30]", limited)
+	}
+}
+
+// A 503 is treated like a 429.
+func TestFetchVerified_ServiceUnavailableIsWaitedOutWithRetryAfter(t *testing.T) {
+	good := []byte("the driver")
+	_, got, waits, err := fetchVerifiedWaits(t, good, "2", nil, func(n int32, w http.ResponseWriter) {
+		if n == 1 {
+			w.Header().Set("Retry-After", "3")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(good)
+	})
+	if err != nil || string(got) != string(good) || strings.Join(waits, ",") != "3" {
+		t.Errorf("err = %v, file = %q, waits = %v; want success after one wait of 3", err, got, waits)
+	}
+}
+
+// A Retry-After the server sends never causes more than the cap for one
+// wait, nor a non-numeric sleep: a huge value is cut to the cap, and text or
+// an HTTP date falls back to the backoff.
+func TestFetchVerified_RetryAfterIsBounded(t *testing.T) {
+	good := []byte("the driver")
+	for name, c := range map[string]struct{ header, want string }{
+		"a huge number":          {"99999999999999999999999999", "20"},
+		"a number above the cap": {"500", "20"},
+		"leading zeros":          {"007", "7"},
+		"text":                   {"soon; rm -rf /", "15"},
+		"an HTTP date":           {"Wed, 21 Oct 2026 07:28:00 GMT", "15"},
+		"a negative number":      {"-5", "15"},
+		"an empty value":         {" ", "15"},
+		"a fraction":             {"1.5", "15"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := []string{"FETCH_BACKOFF=1", "FETCH_RATE_LIMIT_CAP=20"}
+			_, got, waits, err := fetchVerifiedWaits(t, good, "2", env, func(n int32, w http.ResponseWriter) {
+				if n == 1 {
+					rateLimited(c.header)(w)
+					return
+				}
+				_, _ = w.Write(good)
+			})
+			if err != nil || string(got) != string(good) {
+				t.Fatalf("err = %v, file = %q, want the verified body", err, got)
+			}
+			if strings.Join(waits, ",") != c.want {
+				t.Errorf("waits = %v, want [%s]", waits, c.want)
+			}
+		})
+	}
+}
+
+// A server that rate-limits forever fails, nothing is kept, and the waits
+// together stay within the budget even when Retry-After asks for more.
+func TestFetchVerified_RateLimitForeverFailsWithinTheBudget(t *testing.T) {
+	good := []byte("the driver")
+	env := []string{"FETCH_RATE_LIMIT_CAP=40", "FETCH_RATE_LIMIT_BUDGET=100"}
+	stderr, got, waits, err := fetchVerifiedWaits(t, good, "6", env, func(_ int32, w http.ResponseWriter) {
+		rateLimited("1000")(w)
+	})
+	if err == nil || got != nil {
+		t.Fatalf("err = %v, file = %q; want a failure and no file", err, got)
+	}
+	total := 0
+	for _, w := range waits {
+		n, convErr := strconv.Atoi(w)
+		if convErr != nil || n > 40 {
+			t.Errorf("wait %q is not a number up to the cap of 40", w)
+		}
+		total += n
+	}
+	if total > 100 {
+		t.Errorf("waited %d s in total (%v), want at most the budget of 100", total, waits)
+	}
+	if !strings.Contains(stderr, "rate limit") {
+		t.Errorf("stderr does not say that the server rate-limited: %s", stderr)
+	}
+}
+
+// A body with another digest is discarded even after a rate-limited wait.
+func TestFetchVerified_WrongDigestAfterRateLimitIsStillDiscarded(t *testing.T) {
+	good := []byte("the driver")
+	stderr, got, _, err := fetchVerifiedWaits(t, good, "3", nil, func(n int32, w http.ResponseWriter) {
+		if n == 1 {
+			rateLimited("1")(w)
+			return
+		}
+		_, _ = w.Write([]byte("not the driver"))
+	})
+	if err == nil || got != nil {
+		t.Errorf("err = %v, file = %q; want a failure and no file; stderr:\n%s", err, got, stderr)
 	}
 }
