@@ -10,7 +10,8 @@ ARG JDBC_VERSION=11.3.2.0053
 ARG JDBC_SHA256=ab8ab5632382a3042c0f354dd903d53b4f15c67b462afbeddb4edcf0bf43ad1f
 WORKDIR /build
 # A response whose digest differs is asked for again, a few times, and never
-# kept (#521). The driver must be readable by the unprivileged user of the
+# kept (#521). A 429 or 503 from the server is waited out for up to about five
+# minutes (#718). The driver must be readable by the unprivileged user of the
 # final image.
 COPY test/workload/client/fetch-verified.sh /usr/local/bin/fetch-verified
 RUN fetch-verified \
