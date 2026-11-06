@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-49, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-50, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -29,8 +29,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > Operator's Instance Manager image; POC-47 ran in Docker on a native
 > linux/amd64 host, with the official image and the Instance Manager's
 > `ExecCLI`; POC-48 ran in Docker on a native linux/amd64 host, with the
-> official image; POC-49 ran in Docker on a native linux/amd64 host, with the
-> Operator's Instance Manager image. Each states its own environment. Each POC is the
+> official image; POC-49 and POC-50 ran in Docker on a native linux/amd64 host,
+> with the Operator's Instance Manager image. Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -5188,3 +5188,117 @@ gzipped TSVs of the recorded run.
   and CUBRID's source for `network_cl.c` line 177 was not read.
 - One POC is the behavior of one image in a few runs, not a general CUBRID
   guarantee.
+
+---
+
+## POC-50 — whether a CUBRID HA member can stay `to-be-master` beside an active master, for how long, and whether it can end in two masters (#392) — **observation: `to-be-master` always ended by itself, within 3.6 s in all 192 sampled intervals, as `slave` when heartbeats had returned and as `master` when they had not; when the member losing heartbeats had a higher priority than the active master, it could become a second active server: both members acknowledged writes in overlapping spans in 4 of 26 such trials (up to 40.6 s), and the active master then stood down; separately, and also in trials with no such overlap, members were left holding different acknowledged rows under the same primary keys; with the highest-priority member as master, no second server ever accepted a write, in 85 trials including a 600 s hold**
+
+**Question (#392).** In the Kind e2e suite a member has been seen in the heartbeat state `to-be-master` while another member was an active master, four times so far, each in the token steps right after every member was replaced. Can a member stay in that state beside an active master, how long, and can it end in two masters? The issue's triage note says that a second active master would make it critical. This is the behavior of one build in Docker, not a general CUBRID guarantee, and Docker is neither Kind nor the VM lab.
+
+**Environment (2026-11-05, 13:47Z to 16:14Z).**
+- Native linux/amd64 host, 6 CPUs, 32 GB, Linux 5.15, Docker 29.2.1.
+- Image `example.com/cubrid-instance-manager:e2e`, built locally by the e2e workflow (`sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70`), `cubrid_rel`: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`, the build of `cubrid/cubrid:11.4`. Entrypoint replaced by `sleep`; the Instance Manager did not run.
+- Fault image `nicolaka/netshoot@sha256:7f08c4aff13ff61a35d30e30c5c1ea8396eac6ab4ce19fd02d5a4b3b5d0d09a2` (`netfault.Image`).
+- **The host was shared and loaded.** Load average was about 5 until 14:47Z. From then until the end it was 21 to 38, with up to four clusters at once, other users' processes, and 23 % I/O wait in the one reading taken. A and B ran side by side from 13:49Z to about 15:20Z, so about half of each fell in the loaded period, and C, D, E and F ran wholly in it. A graceful stop of a member took about 2 s in POC-26 and up to 140 s here.
+
+**The cluster, each experiment.** Three members `h-0`, `h-1`, `h-2` on one Docker network, formed with the commands of POC-13 and POC-23 (`createdb`, `backupdb -C`, `restoreslave -u -s master -m h-0`). `cubrid_ha.conf` holds what `generateHAConf` renders and nothing else: `ha_node_list=cubrid@h-0:h-1:h-2`, `ha_db_list=appdb`, `ha_port_id=59901`. So `h-0` has the highest priority, and every timing parameter has its default. `data_buffer_size=64M`, `log_buffer_size=16M`, 64M volumes.
+
+Each member is two containers, as a Pod is: a netshoot container that holds the network namespace, the host name and the IP, and the database container that joins it. A member is replaced as `Shutdown` does it (`cubrid heartbeat stop`, `cubrid server stop appdb`), then its container is removed and created again on the same volume, then `cubrid heartbeat start`. For a new IP, as a replaced Pod gets, the network container is replaced as well, and Docker's DNS follows, as the headless alias Service does.
+
+**Method.**
+- **Sampling:** in each member, `cubrid heartbeat status` back to back with a 100 ms sleep. Gaps were 130 to 430 ms where measured. A sample counts for 1 s, because the members are sampled apart. 192 `to-be-master` intervals were found. For each, the duration is given as a lower bound (first to last sample in the state) and an upper bound (last sample before to first sample after).
+- **SQL write check:** in each member, once a second, one `INSERT` of a marker row (trial, member, sequence) with `csql` on the member's own server. An acknowledged row is `csql` exit 0 with `1 row affected`. The table's key is `AUTO_INCREMENT`. This is a local client: it was not cut, and it did not go through a Broker.
+- **Loss:** `iptables` DROP at the receiver's INPUT, inside the network container. Except in F, only UDP 59901 was dropped, so the copiers' TCP stayed open. `master.err` confirmed each effect, and the rules' drop counters are in `events.tsv`.
+- **At the end:** each member's table was compared by key with the acknowledged markers, after the writers had stopped and 300 s had passed.
+- **What can be recomputed:** the committed samples are thinned (see `docs/poc/poc50/README.md`). The intervals can be recomputed from `occurrences.tsv.gz`, not by running `analyse.py` on the thinned samples, and the thresholds and the acknowledged overlaps from the other committed files. The row tables are kept for C, E and F only. The span counts cannot be recomputed: the raw samples of A to D are not kept, and the thinned ones of E and F give 14, 12 and 6 spans where the table, read from the full samples, gives 12, 10 and 5. B's statement that no other member acknowledged a marker rests on `verify.tsv`, since B's write logs are not kept, and the `master.err` and `applyinfo` readings quoted below are not committed.
+
+| Experiment | Trials | `to-be-master` beside an active master | Two self-reported masters | Two active servers sampled | Cuts with both acknowledging |
+|---|---|---|---|---|---|
+| A. Every member replaced, master last, then 45 s watched (12 graceful with a new IP, 6 graceful on the same IP, 5 killed) | 23 | 0 | 0 | 0 | not applicable |
+| B. Heartbeat loss, `h-0` the master, 6 shapes for 1 to 20 s, then 120 s and 600 s holds | 85 | 75 intervals | 62 spans | 0 | 0 |
+| C. Master replaced, loss at 0 to 20 s after `heartbeat start` for 2 to 8 s | 22 | 6 | 7 | 1 span, 1.5 s | 0 |
+| D, added. One member frozen with `docker pause` for 1 to 10 s, `h-0` the master | 32 | 6 | 7 | 0 | 0 |
+| E, added. Heartbeat loss, the master not `h-0`, `h-0` the slave cut, 4 to 20 s | 16 | 15 | 12 | 2 spans | **1** |
+| F, added. Every packet cut between `h-0` and its peers, the master not `h-0`, 10 to 60 s | 10 | 10 | 10 | 5 spans | **3** |
+
+D, E and F were not in the plan. D was added because no CI occurrence had a cut, and E and F because in B the master always had the highest priority, while the rule in the source below treats the two priorities differently.
+
+**What the state is (read from `master_heartbeat.c` of CUBRID's `release/11.4` branch, as an explanation; the measurements below stand by themselves).** A slave recomputes its view every 3 s (`ha_calc_score_interval`). A peer not heard from for more than 5 heartbeats of 500 ms becomes `unknown`. If the slave then ranks itself first, it sets `to-be-master`, logs `[Failover] [Diagnosis]`, and queues one decision after 0.5 s if it has heard every peer, otherwise after 3 s (`ha_failover_wait_time`; a ping check can run first, which this summary leaves out). That decision either promotes it, or logs `[Failover] [Cancelled] New master has been found`. A master that sees a second master of higher priority stands down. That is why the header can say `to-be-master` while the node list still says `slave`: the list was written before the state changed. `master.err` held these lines in the trials read.
+
+**How long, and how it ends.** Every one of the 192 intervals ended by itself: 36 as `slave`, 156 as `master`. The longest lower bound was 3.25 s, and the longest upper bound 3.59 s. Of the 112 beside an active master, the median lower bound was about 2.9 s and the shortest 0.13 s. The server stayed `registered_and_standby` in all but 2 of them, which ran into `registered_and_to_be_active`. All 3 views in the issue were reproduced: self `to-be-master` with self listed `slave`; both peers `unknown`; a peer listed `to-be-master` beside a `master`.
+
+How it ended depended on how long heartbeats were missing (B, all six shapes):
+
+| Loss held (s) | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 10 | 12 | 15 | 20 | 120 | 600 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Trials | 6 | 6 | 6 | 7 | 7 | 7 | 8 | 7 | 7 | 6 | 7 | 10 | 1 |
+| With `to-be-master` beside the active master | 0 | 0 | 1 | 6 | 6 | 7 | 8 | 7 | 7 | 6 | 6 | 9 | 1 |
+| With one ending `master` | 0 | 0 | 0 | 0 | 0 | 3 | 8 | 7 | 7 | 6 | 6 | 9 | 1 |
+
+The trials without the state at 4 s and more are cuts of the lowest-priority slave from the master only: it still hears a slave that ranks above it.
+
+**A, rolling replacement.** No `to-be-master` beside an active master in 23 rounds (69 replacements), with or without a new IP or a kill. Each of the 23 intervals was the failover after the master stopped, 0 to 3.0 s, ending `master`. So on this host a replacement alone did not produce the CI picture; whether Kind's network or a loaded runner does is not known.
+
+**B, the active master has the highest priority.** A promoted member called itself master beside `h-0` in 62 spans, up to 594.6 s in the 600 s hold. Its server reached `registered_and_to_be_active` and no further, and its writes failed with `Attempted to update the database when updates are disabled` (error -581). `h-0` acknowledged all 1,805 markers, and no other member acknowledged any. On healing, every promoted member went back to `slave` by itself, and `h-0` stayed master. This agrees with POC-40 and POC-41, where the master also had the highest priority.
+
+**D, frozen member.** A frozen slave produced no `to-be-master` in 16 trials up to 10 s. A frozen master did: a slave entered the state from 2 s frozen, and from 5 s a slave was self-reported master beside the resuming master for 0.9 to 2.3 s, then stood down, with no write acknowledged except on the master. So a stall of the master, with no packet dropped on purpose, gives the CI picture. Whether a stall caused the CI occurrences is not known.
+
+**E and F, a member of higher priority than the active master.** Here the master was `h-1` and the cut member `h-0`, the state a cluster is in after a failover away from `h-0`.
+
+- **The active master stood down.** `h-0` promoted itself in 12 of the 16 E trials and in all 10 of F. Each time a later trial followed, `h-0` was then the master and the healthy `h-1` had given up: its server process went away and came back as a slave. In E the cut was only 6 s in the shortest such trial, and with `s-deaf` it was one way, into `h-0`.
+- **Two writable masters, by SQL.** In F-5 (60 s) `h-1` acknowledged 19 markers and `h-0` 29, both within 40.6 s, and both servers were sampled `registered_and_active` for 43.6 s. F-9 (30 s): 12 and 17 within 23.7 s. F-3 (20 s): 8 and 6 within 7.4 s. E-6 (15 s, heartbeats only, TCP open): 6 and 3 within 3.1 s. Timeline of F-5, from the cut:
+
+| Time | `h-1` (priority 2, active master) | `h-0` (priority 1, cut) |
+|---|---|---|
+| +3.9 s | `master`, `registered_and_active`, acknowledging | `to-be-master` |
+| +7.0 s | unchanged | `master`, `registered_and_standby` |
+| +7.3 s | unchanged | `registered_and_to_be_active` |
+| +16.9 s | acknowledging | first acknowledged write |
+| +17.0 s | unchanged | `registered_and_active` |
+| +57.5 s | last acknowledged write | acknowledging |
+| +60.2 s | the cut is removed | |
+| +60.5 s | `slave` | `master` |
+
+- **Acknowledged rows diverged, and not only because of the overlap.** After the writers stopped, every acknowledged marker was on at least one member, and on the member that acknowledged it, and many were not on all. The two findings are separate: in F, both members acknowledged in 3 of 10 trials, while differing keys came in 7 separate runs of keys, and some of those keys hold a marker written before the first cut (11 of the 68 in F, 6 of the 42 in E). The harness waits for heartbeat state only, not for a member to have caught up, and `h-0` had just been restarted before each of the 10 F trials and 13 of the 16 E trials. A member that takes over while behind reuses keys the master has already handed out, which would explain these, but that explanation is not established. Keys under which members differ:
+
+| Cluster | Keys | Keys not identical on all three | Acknowledged markers | Not on every member |
+|---|---|---|---|---|
+| F | 210 | 68 | 271 | 134 |
+| E | 266 | 42 | 296 | 82 |
+| C | 486 | 75 | 541 | 138 |
+
+  In F and E all of those keys hold different rows. In C, 68 of the 75 do, and 7 are missing on some member, which may be a slave running behind. The row counts for C also differ slightly between `verify.tsv` and the saved tables (476 and 479 on `h-0`), for a reason not recorded.
+
+  In E-1 (15 s, one way into `h-0`), for example, keys 6 to 11 on `h-0` hold its own acknowledged markers and on `h-1` and `h-2` hold `h-1`'s. There was no overlap there: `h-0`'s first acknowledgement, at +20.8 s, came 14.9 s after `h-1`'s last. `h-0` had taken over with its table at key 5, while `h-1` had acknowledged up to key 21. Its applier for `h-1`'s log had reported `done`. The appliers of the slaves then logged `failed to apply insert replication log ... server error: -670` (unique constraint) for each such key, and `applyinfo` counted the failures (`Fail count` 68 in F). The members' roles returned to one master and two slaves, and the rows stayed different.
+- **Reading the heartbeat state is not enough.** Writes were acknowledged while the same member's samples said `registered_and_standby` or `registered_and_to_be_active`, by up to several seconds (E-1, A-7). The SQL marker is the stronger evidence, and "no two `registered_and_active`" is weaker evidence than "no two members acknowledging".
+
+**C, loss while the master returns.** `h-0` and `h-1` took turns as master, so this mixes both priorities. 6 intervals were beside an active master, 7 spans had two self-reported masters and 1 had two active servers (C-17, 1.5 s), with no cut in which both acknowledged. The table above shows that keys differed here too, from 11 of the 22 trials. Those were failovers from a stopped master, not two masters at once, so the cause there may be a takeover by a member behind the master and not the loss, which remains unverified. The tables of A were not compared by key. **The first 7 C trials did not test their offset:** a stop outlasted the harness's 60 s wait, so the loss fell during the stop. They are kept and marked here; the 15 after them are as named.
+
+**The Operator (read from the code, not run).**
+- `to-be-master` maps to `RoleUnknown` (`internal/instancemanager/role.go:131`). `authoritative` is false, so `resolvePrimary` reports `PrimaryResolved=False`, reason `PrimaryObservationIncomplete`, if a pass falls in the state, even with one active master listed. `HAReady` follows it, `RoutingReady=False`, and the Event `PrimaryUnresolved` is recorded. A pass runs every 10 s and the state lasts about 3 s, so many occurrences would never be seen.
+- `/readyz` answers not ready in the state (`notReadyReason`). With a 5 s period and a threshold of 3, a state of about 3 s does not make a Pod NotReady.
+- The Operator acts on nothing here: no promotion, no fencing, no restart. Backup target selection and the rolling update wait on the resolution, and `setReady` leaves `Ready` to the instances. This fits ADR-0005.
+- A promoted member with its server not active is `Conflicting` (`MasterNotYetActive`), and the old master's node list contradicts it too, so the reason is `AmbiguousPrimaryObservation`. Two members with active claims set `MultipleMasters`, and `Ready=False` follows (`setReady`), as #339 intended. Neither was run against a real two-master state. Nothing stops the writes: the quarantine is #113, and the Brokers were not in this POC.
+- `ReplicationHealthy` should report the slaves' applier failures. That was not run.
+
+**What the S14 token step would need (not changed).** `test/e2e/s14_token_test.go:389` calls `r.master()` once, and that fails on any state but `master` and `slave`; that is the read that failed in the later occurrences, reported at line 390, and the failure at line 264 in the first occurrence was in the older form of this step. The call at `:517` is already inside an `Eventually`. A bounded retry of that read would ride out the transition: the longest measured was 3.59 s, so about 15 s covers it and one heartbeat recalculation. It should not hide the event: it should note that the state was seen, and the step should still fail if the master changed or two masters remain. A CI run that shows `to-be-master` means a member missed heartbeats for several seconds, which is itself worth keeping in the evidence.
+
+**Not established.**
+- **Why a promoted `h-0` went active while a promoted `h-1` beside `h-0` stayed `to_be_active` for 594.6 s.** The difference followed the priority in these runs. The mechanism was not read, and a promoted lower-priority member beside a higher-priority master that it can reach has only UDP cuts behind it here.
+- **Why `h-0` went active in 5 of the 10 F trials (the odd-numbered ones) and not in the others.** The cause is not known. 26 trials are few, and the fractions here are counts, not rates.
+- **What causes the CI occurrences.** Nothing here shows packet loss or a stall in CI, and #357's NetworkPolicy guess remains a guess. D and B only show that either would produce the picture. All four CI views fit a `to-be-master` cancelled by heartbeats returning, which is not evidence that it was. Where recorded, the master was `hab-0`, priority 1.
+- **Why a member took over behind the master.** The copier or the applier, and how much the loaded host contributed, are not known. Slaves also ran behind without any takeover:
+  - in B, the master held all 1,805 markers, and `h-1` and `h-2` were still 487 and 472 short 307 s after the writers stopped, all in the 120 s and 600 s holds and after, with a failure count not read;
+  - in D, the slaves were 170 and 155 short after 60 s, and that read was not repeated.
+
+  The B and D clusters were removed before this was understood, so whether those were late or stalled is unknown, and this may be the POC-38 or #357 lag.
+- **6 markers of A-7, a graceful replacement, are on no member,** and 11 rows on all members were never acknowledged. All three members held 884 rows. The keys were not recorded, so it is not known whether the 6 were really committed (`csql` printed a success as the server stopped) or lost. This run does not show an acknowledged write lost on a graceful stop, and it does not exclude one. `writer.py` counts an acknowledgement from `csql` exit 0 and `row affected`, relying on autocommit, so its output has no line saying the commit held. POC-44's -199 and -111 pair, printed with exit 0, would be logged as acknowledged, which is one candidate for these 6. This does not touch the overlaps in E and F: every acknowledged marker in C, E and F is on the member that acknowledged it.
+- **Brokers, the Instance Manager and the Operator did not run.** Writes came from a client inside each member, so a member cut from everything still had a client. Through Brokers, whether the cut member gets any write depends on what the Brokers can reach, which F does not show.
+- `ha_ping_hosts` is unset, as the Operator renders it. `master.err` shows that CUBRID cancels its isolation check for that reason (`No hosts are registered in ha_ping_hosts`). POC-40 saw no demotion with it set by hand, for a different case. It was not tested here.
+- Whether this reproduces on Kind or on the VM lab, and with a real power or network fault, was not tested. Kind and Docker are not evidence of VM failure behavior.
+
+**Consequences.**
+- For the minimum acceptance of #392: on this image, `to-be-master` beside an active master is a transition of at most about 3.6 s that ends by itself. It does not always end harmlessly: it can end in a second self-reported master, and when the member has a higher priority than the active master, in two writable masters. Separately, a failover here could leave members holding different acknowledged rows, with or without two writable masters.
+- ADR-0005, section 4, says of an isolated slave: `CUBRID (usually none)` for the promotion, and `not proven self-promoted`. Here an isolated slave of higher priority promoted itself in every F trial. POC-40's and POC-41's results hold for a master of the highest priority, and after a failover the master often is not that.
+- The harness (`docs/poc/poc50/`) produces the case that #113 and #115 need, with no VM lab, and ROADMAP's "no real two-master state has been produced" no longer holds in Docker.
+- One POC is the behavior of one image in a few runs, not a general CUBRID guarantee.

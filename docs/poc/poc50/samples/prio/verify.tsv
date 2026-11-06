@@ -1,0 +1,5 @@
+# read 307 s after the writers stopped
+member	rows	acked	acked_missing	never_acked	duplicates	trials_missing
+h-0	266	296	41	11	0	['E-11-m-mute-15s', 'E-3-m-mute-4s', 'E-6-m-s-15s', 'E-8-s-deaf-6s', 'between', 'none']
+h-1	266	296	41	11	0	['E-1-s-deaf-15s', 'E-11-m-mute-15s', 'E-15-m-s-6s', 'E-4-s-deaf-20s', 'E-6-m-s-15s', 'E-8-s-deaf-6s', 'between']
+h-2	266	296	40	10	0	['E-1-s-deaf-15s', 'E-11-m-mute-15s', 'E-15-m-s-6s', 'E-4-s-deaf-20s', 'E-6-m-s-15s', 'E-8-s-deaf-6s', 'between']

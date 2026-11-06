@@ -1,0 +1,5 @@
+# read 307 s after the writers stopped
+member	rows	acked	acked_missing	never_acked	duplicates	trials_missing
+h-0	1805	1805	0	0	0	[]
+h-1	1318	1805	487	0	0	['BL-0-all-120s', 'BL-1-all-120s', 'BL-1-m-isolated-120s', 'BL-1-m-mute-120s', 'BL-1-m-s-120s', 'BL-1-s-isolated-120s', 'BL-long-m-mute-600s', 'between']
+h-2	1333	1805	472	0	0	['BL-0-all-120s', 'BL-1-all-120s', 'BL-1-m-isolated-120s', 'BL-1-m-mute-120s', 'BL-1-m-s-120s', 'BL-1-s-isolated-120s', 'BL-long-m-mute-600s', 'between']
