@@ -46,6 +46,24 @@ command runs as part of each case:
 - `10hz`: every member with a 100 ms sleep between calls, as POC-50's sampler.
 - `once`: one call on the cut member 0.5, 1.5 or 2 s after the cut (`once_at`), and no other.
 
+## What this does not show
+
+- It is no proof of write fencing. In the tested conditions `ha_ping_hosts` did
+  not reliably stop a second master from taking writes, and a status call could
+  change the result, so neither turning the setting on by default nor a healthy
+  condition or status sampling loop shows that writes are fenced.
+- A partition test that uses this setting has to record whether its own
+  measurement calls `cubrid heartbeat status`, and how often, because the
+  measurement can change the experiment (#115).
+- The writers here connect to each member directly. A client routed by the
+  Operator's read-write Brokers is a different case, and POC-51 covers that one
+  on Kind.
+- It ran in Docker, without the installed Operator and its real readiness
+  cadence and without the VM lab. The 5 s case copies the probe's period only.
+- The acknowledged writes missing from the final master need their own
+  data-safety decision on #703; these trials do not settle durability or what
+  happens on the VM lab.
+
 ## A trial
 
 1. Remove the database containers and copy the stopped files back, so that no
