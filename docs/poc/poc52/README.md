@@ -40,9 +40,11 @@ command runs as part of each case:
   the tables have been read. Its state comes from `modeprobe.py`, its writer
   and `master.err`.
 - `5s`: every member every 5 s, at a random phase relative to the fault. This
-  is the kubelet's readiness probe period: `/readyz` runs the same command.
+  is the period of the Operator's readiness probe: `/readyz` runs the same
+  command, as do `/v1/role`, called every 10 s, and `/v1/ha/status`. No Pod ran
+  here, so this is a stand-in and the link is reasoned.
 - `10hz`: every member with a 100 ms sleep between calls, as POC-50's sampler.
-- `once`: one call on the cut member 2 s after the cut, and no other.
+- `once`: one call on the cut member 0.5, 1.5 or 2 s after the cut (`once_at`), and no other.
 
 ## A trial
 
@@ -63,9 +65,12 @@ command runs as part of each case:
 
 **The catch-up reading.** On one reading: the table of `h-0`, of `h-2` and of
 the master are equal by key and row, and `cubrid applyinfo -L … -r h-1 -a -v`
-on both slaves prints `Delayed log page count : 0` and `Fail count : 0` is
-recorded. Neither half alone is enough: in the setup run the applier reported 0
-waiting pages while the slave did not yet hold the table at all.
+on both slaves prints `Delayed log page count : 0`, and `Fail count` is
+recorded. Neither half alone is enough: while forming a cluster the applier
+reported 0 waiting pages on slaves that did not yet hold the table
+(`samples/setup-reading/`). It is a reading before the fault. Writes resume at
+the cut, so a member that takes over later is behind. In `idle` trials and
+kills, writes are turned on just before the fault.
 
 **What an acknowledgement is.** csql prints `Committed.` only in autocommit
 mode; with `--no-auto-commit` a `COMMIT` prints `Execute OK.` alone on this
@@ -75,11 +80,12 @@ autocommit mode, and counts `ack` only for `1 row affected` with `Committed.`,
 followed by the -199 and -111 pair is `ack-199-111`, counted apart. Each
 csql output holding `ERROR CODE` is kept in `<member>.csql-errors.txt`.
 
-**Positive controls.** In the same trial, the writers show `disabled`
+**Positive controls.** In each trial that writes, the writers show `disabled`
 (-581) when the server answered and refused, not a timeout, so an absent
 acknowledgement is a refusal and not a dead client. The master's acknowledgements
 before and during the fault show that the same client can write. Writes after
-the fault show which member took them.
+the fault show which member took them. First-start trials write nothing, so
+they have no such control.
 
 ## Reproduce
 
@@ -142,4 +148,13 @@ thinned, with times in epoch seconds:
 `smoke/` holds the two trials before the writer was corrected and `abandoned/`
 the four stopped before any fault; `analyse.py` skips both. `analysis.txt` is
 the output of `analyse.py --trials`, and `ping-permissions.txt` the ping test
-under the Operator's container restrictions.
+under the Operator's container restrictions. `setup-reading/` holds the
+catch-up readings of forming one cluster, outside the archive, which show the
+applier's value at 0 before the slaves held the table.
+
+`analyse.py` recomputes the tables of the entry, the writes not on the final
+master, the score pass against the status call, error codes, -670 by member and
+time, status call lengths, mode times, writes between the reading and the
+fault, and the load of the busiest trials. The 220 s disk copy and the host's
+load between trials were read by hand. Files were on `/dev/shm`, except the
+long hold's, so durability and disk timing are not covered.

@@ -216,3 +216,94 @@ never acknowledged rows on a member [('p-full-once05-1', 1)]
 acknowledged on no member []
 -199/-111 [('p-full-once-2', 1), ('i-p-5-2', 2), ('m-p-5-2', 1), ('c-ms-q-1', 1), ('p-ms-q-2', 1)]
 write results Counter({'disabled': 21695, 'ack': 7708, 'other': 4841, 'ack-199-111': 6})
+
+acknowledged writes not on the member that ended as master:
+  922 writes in 23 of 78 trials with final tables, of 7684 acknowledged in those; each 4 to 46, median 44
+  no single final master: []
+  all acknowledged after the fault began: True earliest 0.0 s
+  by who acknowledged: Counter({'h-1': 922}) by result: Counter({'ack': 921, 'ack-199-111': 1})
+  held by: Counter({'h-1+h-2': 778, 'h-1': 144})
+  held only by the old master, by case: Counter({('h-1', 'ping', '5s'): 90, ('h-1', 'none', 'quiet'): 44, ('h-1', 'ping', 'quiet'): 10})
+  trials with such writes on h-1 alone: ['m-c-q-1', 'm-p-5-1', 'm-p-5-2', 'm-p-q-1', 'm-p-q-2']
+  every member's own acknowledged writes checked on it, trials: 65 of 78 (the killed member has no table)
+
+the score pass against the status call, full cuts of h-0 with a parameter (seconds from the cut):
+  p-full-hz-2        ping  call ended  0.97 pass 2.98 check off at 2.0 promoted 6.1
+  p-full-5-5         ping  call ended  1.09 pass 5.12 check off at 2.1 promoted 8.2
+  p-full-hz-1        ping  call ended   1.1 pass 4.25 check off at 2.1 promoted 7.4
+  p-full-once05-1    ping  call ended   1.6 pass 2.91 check off at 2.6 promoted 6.0
+  p-full-once05-2    ping  call ended   1.6 pass 3.39 check off at 2.6 promoted 6.5
+  p-full-once05-3    ping  call ended   1.6 pass 3.38 check off at 2.6 promoted 6.5
+  p-full-once05-4    ping  call ended   1.6 pass 3.31 check off at 2.6 promoted 6.4
+  p-full-5-4         ping  call ended  1.99 pass 2.99 check off at 3.0 promoted 6.1
+  p-full-5-3         ping  call ended  2.31 pass 4.0 check off at 3.3 promoted 7.1
+  p-full-5-2         ping  call ended  2.37 pass 3.38 check off at 3.4 promoted 6.5
+  p-full-once15-1    ping  call ended   2.6 pass 3.59 check off at 3.6 promoted 6.7
+  p-full-once15-2    ping  call ended   2.6 pass 2.58 check off at None held
+  p-full-once-1      ping  call ended   3.1 pass 3.09 check off at None held
+  p-full-once-2      ping  call ended   3.1 pass 3.11 check off at None held
+  p-full-once-3      ping  call ended   3.2 pass 3.17 check off at None held
+  t-full-5-2         tcp   call ended  5.08 pass 5.08 check off at None held
+  p-full-5-1         ping  call ended  5.45 pass 5.45 check off at None held
+  t-full-once05-1    tcp   call ended   5.6 pass 5.6 check off at None held
+  t-full-once05-2    tcp   call ended   5.6 pass 5.57 check off at None held
+  t-full-once05-3    tcp   call ended   5.6 pass 5.57 check off at None held
+  t-full-5-1         tcp   call ended  7.96 pass 7.96 check off at None held
+  t-full-5-3         tcp   call ended  9.62 pass 9.62 check off at None held
+  check went off: 11 with the call ended before the pass: 11 | held: 11 largest gap between pass and call end 0.03000000000000025
+  no status call on h-0: pass at 2.44 to 5.61 s, 22 trials, 11 at 4.7 s or later
+
+results of every write, by code:
+  34250 [('disabled', 21695), ('ack', 7708), ('other:-353', 4584), ('other:-191', 137), ('other:-670', 118), ('ack-199-111', 6), ('other:-199', 1), ('other:-671', 1)]
+
+client writes refused with -670:
+  118 in 22 trials, by member Counter({'h-0': 118}), at +70.2 to +75.7 s from the fault, per trial [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6]
+  trials where they were consecutive writes: 22
+  divergent trials without one: ['p-full-5-2'] ; with one and not divergent: []
+  trials with -670 in applier logs: 23
+
+status call length, ms, median and longest, with the target up (before the fault) and down:
+  i-p-q-2 ping quiet up (30.0, 45, 110) down (None, None, 0)
+  k-t-down-5-1 tcp 5s up (31.0, 5049, 130) down (5026, 10029, 9)
+  i-p-5-1 ping 5s up (30.0, 77, 112) down (1030.5, 1122, 60)
+  i-p-5-2 ping 5s up (50, 1060, 115) down (1041, 2599, 69)
+  i-p-hz-1 ping 10hz up (38.0, 1937, 176) down (1028, 1130, 377)
+  i-p-q-1 ping quiet up (29, 57, 107) down (None, None, 0)
+  i-t-5-1 tcp 5s up (27.0, 57, 114) down (3094.0, 10033, 44)
+  i-t-5-2 tcp 5s up (51.5, 361, 118) down (3122, 20055, 47)
+  i-t-5-3 tcp 5s up (26, 5875, 117) down (3093, 20027, 41)
+  i-t-q-1 tcp quiet up (27, 72, 111) down (None, None, 0)
+  i-t-q-2 tcp quiet up (28.0, 1148, 108) down (None, None, 0)
+  per-trial medians: {'target up': (26, 51.5), 'target down, ping': (1028, 1041), 'longest, target down, ping': (1038, 2599), 'target down, tcp': (3093, 5026), 'longest, target down, tcp': (10029, 20055)}
+
+times from the server modes:
+  heartbeat-only faults: h-0 active 0.7 to 4.2 s after the fault ended
+  full cuts, h-0 promoted: active 8.8 to 10.5 s after the cut, and once 54.9 s
+  promotion after the target came back: [('k-t-down-q-1', 4.1)]
+
+writes between the catch-up reading and the fault:
+  23 of 80 trials: Counter({'kill': 13, 'idle': 10})
+  idle: writes on 1.13 to 9.75 s before, acknowledged after the reading, most 9
+  kill: writes on 0.07 to 0.1 s before, acknowledged after the reading, most 1
+  cuts with writes on before the cut: []
+
+the -199/-111 rows, on which members in the last read:
+  p-full-once-2 h-1 key 35: ['h-0', 'h-1', 'h-2']
+  i-p-5-2 h-1 key 24: ['h-0', 'h-1', 'h-2']
+  i-p-5-2 h-1 key 111: ['h-0', 'h-1', 'h-2']
+  m-p-5-2 h-1 key 27: ['h-1']
+  c-ms-q-1 h-0 key 88: ['h-0', 'h-1', 'h-2']
+  p-ms-q-2 h-0 key 67: ['h-0', 'h-1', 'h-2']
+
+trials at once, and load:
+  most clusters at once: 6 at 11:23:02Z
+  p-full-q-3: load 28.72 at start, 54.24 at end; 4 of 4 siblings have the same promotion and overlap
+  p-full-q-4: load 52.22 at start, 18.42 at end; 4 of 4 siblings have the same promotion and overlap
+  c-full-q-3: load 9.71 at start, 50.36 at end; 2 of 2 siblings have the same promotion and overlap
+  p-full-5-5: load 50.25 at start, 17.43 at end; 2 of 4 siblings have the same promotion and overlap
+  i-p-5-2: load 49.19 at start, 20.26 at end; 1 of 1 siblings have the same promotion and overlap
+  p-peers-q-2: load 12.2 at start, 47.9 at end; 1 of 1 siblings have the same promotion and overlap
+  p-full-5-4: load 43.67 at start, 13.06 at end; 2 of 4 siblings have the same promotion and overlap
+  p-full-once-3: load 13.56 at start, 43.99 at end; 2 of 2 siblings have the same promotion and overlap
+  load at the moment of a cut is not recorded
+  additions on lane m, not shuffled: 15
