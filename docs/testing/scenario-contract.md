@@ -949,11 +949,16 @@ that measurement, not measured budgets.
 ### `junit.xml`
 
 One `<testsuite>` per run, one `<testcase>` per scenario and variant, named
-`S03/abrupt`.
+`S03/abrupt`. The testcase `name` remains the stable historical identifier
+for result matching and comparison. When a description is known, the testcase
+also includes a `<system-out>` element such as
+`Primary database Pod failure recovery - abrupt (S03/abrupt)`. A descriptive
+label does not replace its identity; a future schema migration must explicitly
+version any identity change (see #715).
 
 | Result | JUnit |
 |---|---|
-| `pass` | test case with no child element |
+| `pass` | test case with no failure/error/skip element |
 | `fail` | `<failure>` |
 | `blocked` | `<error>` with the reason |
 | `not_run`, `not_applicable` | `<skipped>` with the reason |
