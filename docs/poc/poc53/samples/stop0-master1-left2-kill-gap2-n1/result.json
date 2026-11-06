@@ -1,0 +1,18 @@
+{
+"began": "2026-11-06T12:10:04.590Z",
+"end": "kill",
+"ended": "2026-11-06T12:13:01.983Z",
+"gap": 2,
+"holder": "none",
+"load_begin": "12.25",
+"load_end": "11.88",
+"master": "h-1",
+"outcome": "abandoned",
+"remaining": "h-2",
+"return_at": "after",
+"slave_return": "restart",
+"stop_slave": true,
+"stopped": "h-0",
+"trial": "stop0-master1-left2-kill-gap2-n1",
+"why": "h-1 did not become master alone: {'h-0': {'t': 1793967181.734, 'self': '-', 'nodes': '-', 'proc': '-', 'server': '-'}, 'h-1': {'t': 1793967181.565, 'self': 'master', 'nodes': 'h-2=unknown,h-1=master,h-0=unknown', 'proc': 'master', 'server': 'registered_and_to_be_active'}, 'h-2': {'t': 1793967181.733, 'self': '-', 'nodes': '-', 'proc': '-', 'server': '-'}}"
+}

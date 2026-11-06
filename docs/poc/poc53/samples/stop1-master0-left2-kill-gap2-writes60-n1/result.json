@@ -1,0 +1,18 @@
+{
+"began": "2026-11-06T12:49:14.262Z",
+"end": "kill",
+"ended": "2026-11-06T12:49:18.099Z",
+"gap": 2,
+"holder": "writes60",
+"load_begin": "4.09",
+"load_end": "4.01",
+"master": "h-0",
+"outcome": "abandoned",
+"remaining": "h-2",
+"return_at": "after",
+"slave_return": "restart",
+"stop_slave": true,
+"stopped": "h-1",
+"trial": "stop1-master0-left2-kill-gap2-writes60-n1",
+"why": "master refused the first write: \nIn the command from line 1,\n\nERROR: Operation would have caused one or more unique constraint violations. INDEX pk_marks_id(B+tree: 1|256|257) ON CLASS dba.marks(CLASS_OID: 0|197|3). key: 3616(OID: 1|347|229).\n\n"
+}
