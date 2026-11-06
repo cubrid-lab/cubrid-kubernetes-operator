@@ -31,14 +31,23 @@ import (
 const (
 	s00         = "S00"
 	s03         = "S03"
+	s07         = "S07"
+	s14         = "S14"
+	s98         = "S98"
+	s99         = "S99"
 	graceful    = "graceful"
 	abrupt      = "abrupt"
+	rotation    = "token-rotation"
+	migration   = "token-migration"
+	setupFailed = "setup failed"
+	s03Abrupt   = "S03/abrupt"
 	kind        = "kind"
 	vmLab       = "needs the VM lab"
 	s00Record   = "S00/record.json"
 	s03History  = "S03/history.jsonl"
 	notProven   = "fault_not_confirmed"
 	testRunName = "run-1"
+	imRestart   = "instance-manager-restart"
 )
 
 // runDir returns a run directory holding the given evidence files.
@@ -58,11 +67,93 @@ func runDir(t *testing.T, files ...string) string {
 }
 
 func TestScenarioName(t *testing.T) {
-	if got := (Scenario{ID: s03, Variant: abrupt}).Name(); got != "S03/abrupt" {
+	if got := (Scenario{ID: s03, Variant: abrupt}).Name(); got != s03Abrupt {
 		t.Errorf("name = %q, want S03/abrupt", got)
 	}
 	if got := (Scenario{ID: s00}).Name(); got != s00 {
 		t.Errorf("name = %q, want S00", got)
+	}
+}
+
+// Each description says what the scenario checks, following the "What is
+// checked" column of docs/testing/scenario-name-migration.md, so that wrong
+// text such as S04 described as a Broker failure fails here. S09 is the one
+// deliberate difference: "Former primary member rejoins" would read as a
+// positive claim next to a failure, so it names the check instead.
+func TestScenarioDescriptions(t *testing.T) {
+	want := map[string]string{
+		"S00":     "Standalone database installation and real SQL",
+		"S01":     "Three-member HA and read-write/read-only Broker access",
+		"S02":     "Normal HA replication",
+		s03:       "Primary database Pod termination and recovery",
+		s03Abrupt: "Primary database Pod termination and recovery - abrupt, later master",
+		"S04":     "Primary database VM failure",
+		"S05":     "Broker process/Pod failure recovery",
+		"S06":     "Operator interruption and HA continuity",
+		s07:       "HA network partition",
+		"S08":     "Replication lag under repeated faults",
+		"S09":     "Rejoin of a former primary member",
+		"S10":     "Rebuild after persistent-volume data loss",
+		"S11":     "Backup completion, faults and recovery",
+		"S12":     "Restore into a new cluster and fault handling",
+		"S12/" + imRestart: "Restore into a new cluster and fault handling - " +
+			"instance manager restart, restoring placement",
+		"S13": "Cluster deletion and data-retention policy",
+		s14: "Instance Manager network isolation, token-checked requests, service-account permissions " +
+			"and a search for leaked credentials",
+		"S14/" + rotation:    "HA Instance Manager token rotation",
+		"S14/" + migration:   "Migration from legacy Instance Manager token",
+		"S15":                "Node drain and PodDisruptionBudget behavior",
+		"LAB00":              "Installed Operator standalone connection and SQL smoke",
+		"LAB00/preallocated": "Installed standalone preallocated ownership smoke",
+		"LAB01":              "Installed three-member HA and SQL smoke",
+	}
+	for key := range scenarioDescriptions {
+		if _, ok := want[key]; !ok {
+			t.Errorf("the description of %s is not pinned here", key)
+		}
+	}
+	for key, description := range want {
+		id, variant, _ := strings.Cut(key, "/")
+		sc := Scenario{ID: id, Variant: variant}
+		if got := sc.description(); got != description {
+			t.Errorf("%s: description = %q, want %q", key, got, description)
+		}
+		display := description + " (" + key + ")"
+		if got := sc.DisplayName(); got != display {
+			t.Errorf("%s: display name = %q, want %q", key, got, display)
+		}
+		// A description that looked like a credential would lose words, or
+		// its closing tag, on the way to junit.xml.
+		if got := string(NewRedactor().Redact([]byte(display))); got != display {
+			t.Errorf("%s: the redactor changed the display name to %q", key, got)
+		}
+	}
+}
+
+func TestScenarioDisplayName(t *testing.T) {
+	tests := []struct {
+		name string
+		sc   Scenario
+		want string
+	}{
+		{"a variant without its own description", Scenario{ID: s03, Variant: "abrupt-first-member"},
+			"Primary database Pod termination and recovery - abrupt first member (S03/abrupt-first-member)"},
+		{"unknown scenario", Scenario{ID: s99}, s99},
+		{"unknown scenario with a variant", Scenario{ID: s99, Variant: "legacy"}, "S99/legacy"},
+		{"reserved scenario with no accepted contract", Scenario{ID: "S16"}, "S16"},
+		{"a variant that is not a lower-case slug", Scenario{ID: s03, Variant: "a b"}, "S03/a b"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.sc.DisplayName(); got != tc.want {
+				t.Errorf("display name = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	// Report readability must never change the matching key used by gates.
+	if got := (Scenario{ID: s03, Variant: abrupt}).Name(); got != s03Abrupt {
+		t.Errorf("gate key changed to %q", got)
 	}
 }
 
@@ -187,7 +278,7 @@ func TestGate(t *testing.T) {
 			append(passing, Scenario{ID: s03, Variant: abrupt, Result: Fail, Reason: "x"}), "S03/abrupt: fail: x"},
 		"a lane that requires nothing": {Lane{Name: "kind-filtered"}, nil, "no scenario recorded"},
 		"a scenario the lane does not require failed": {lane,
-			append(passing, Scenario{ID: "S07", Result: Fail, Reason: "x"}), "S07: fail: x"},
+			append(passing, Scenario{ID: s07, Result: Fail, Reason: "x"}), "S07: fail: x"},
 	}
 	for name, tc := range tests {
 		problems := tc.lane.Gate(Summary{Scenarios: tc.scenarios}, dir)
@@ -197,6 +288,120 @@ func TestGate(t *testing.T) {
 		case tc.want != "" && (len(problems) != 1 || !strings.Contains(problems[0], tc.want)):
 			t.Errorf("%s: problems = %q, want one containing %q", name, problems, tc.want)
 		}
+	}
+}
+
+// A problem line keeps the "<key>: <result>: <reason>" start of schema
+// version 1, which test/installed/s11signature_test.go and readers of older
+// results match, and a description only follows it.
+func TestGateProblemLinesKeepTheStableKeyFirst(t *testing.T) {
+	dir := runDir(t, s00Record)
+	s00Pass := Scenario{ID: s00, Result: Pass, Evidence: []string{s00Record}}
+	s00Lane := Lane{Required: []Requirement{{ID: s00}}}
+	rotationLane := Lane{Required: []Requirement{{ID: s14, Variant: rotation}}}
+	const rotationText = "(HA Instance Manager token rotation)"
+	for _, tc := range []struct {
+		name      string
+		lane      Lane
+		scenarios []Scenario
+		want      string
+	}{
+		{"a missing requirement", rotationLane, nil,
+			"S14/token-rotation: missing: no result was recorded " + rotationText},
+		{"a blocked requirement", rotationLane,
+			[]Scenario{{ID: s14, Variant: rotation, Result: Blocked, Reason: setupFailed}},
+			"S14/token-rotation: blocked: setup failed " + rotationText},
+		{"a requirement that was not run", rotationLane,
+			[]Scenario{{ID: s14, Variant: rotation, Result: NotRun, Reason: setupFailed}},
+			"S14/token-rotation: not_run: setup failed " + rotationText},
+		{"a failed requirement", rotationLane,
+			[]Scenario{{ID: s14, Variant: rotation, Result: Fail, Reason: "x"}},
+			"S14/token-rotation: fail: x " + rotationText},
+		{"a claimed pass without evidence", rotationLane,
+			[]Scenario{{ID: s14, Variant: rotation, Result: Pass}},
+			"S14/token-rotation: fail: claimed a pass, but no evidence is listed " + rotationText},
+		{"a failure the lane does not require", s00Lane,
+			[]Scenario{s00Pass, {ID: "S15", Result: Fail, Reason: "x"}},
+			"S15: fail: x (Node drain and PodDisruptionBudget behavior)"},
+		{"a missing requirement of unknown name", Lane{Required: []Requirement{{ID: s99}}}, nil,
+			"S99: missing: no result was recorded"},
+		{"a failure of unknown name the lane does not require", s00Lane,
+			[]Scenario{s00Pass, {ID: s98, Result: Fail, Reason: "x"}}, "S98: fail: x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			problems := tc.lane.Gate(Summary{Scenarios: tc.scenarios}, dir)
+			if len(problems) != 1 || problems[0] != tc.want {
+				t.Errorf("problems = %q, want exactly %q", problems, tc.want)
+			}
+		})
+	}
+}
+
+// Conclude's error, summary.json and the run case of junit.xml carry the same
+// line, starting with the same key.
+func TestConcludeKeepsTheStableKeyFirstEverywhere(t *testing.T) {
+	const line = "S14/token-rotation: blocked: setup failed (HA Instance Manager token rotation)"
+	dir := t.TempDir()
+	summary := Summary{Scenarios: []Scenario{{ID: s14, Variant: rotation, Result: Blocked, Reason: setupFailed}}}
+	err := summary.Conclude(dir, NewRedactor(), Lane{Name: kind, Required: []Requirement{{ID: s14, Variant: rotation}}})
+	if want := "the run did not pass lane kind:\n" + line; err == nil || err.Error() != want {
+		t.Errorf("error = %v, want %q", err, want)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "summary.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Summary
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Problems) != 1 || got.Problems[0] != line {
+		t.Errorf("problems = %q, want exactly %q", got.Problems, line)
+	}
+	if j := junitVerdict(t, dir); !j.runIsFailure || j.run != line {
+		t.Errorf("the run case of junit.xml says %q, want exactly %q", j.run, line)
+	}
+}
+
+// Only the stable key matches a result to a requirement. Two scenarios with
+// no description have the same empty description, a variant that differs only
+// in a space or a hyphen reads the same to a person, and a result recorded
+// under the readable name of a requirement is still a different scenario.
+func TestGateMatchesTheStableKeyNotTheDisplayedText(t *testing.T) {
+	dir := runDir(t, s00Record)
+	pass := func(id, variant string) Scenario {
+		return Scenario{ID: id, Variant: variant, Result: Pass, Evidence: []string{s00Record}}
+	}
+	const spaced, hyphenated = "a b", "a-b"
+	for _, tc := range []struct {
+		name      string
+		required  Requirement
+		scenarios []Scenario
+		want      string
+	}{
+		{"a passing S98 does not satisfy a required S99", Requirement{ID: s99},
+			[]Scenario{pass(s98, "")}, "S99: missing: no result was recorded"},
+		{"a variant with a space does not satisfy one with a hyphen", Requirement{ID: s03, Variant: hyphenated},
+			[]Scenario{pass(s03, spaced)},
+			"S03/a-b: missing: no result was recorded (Primary database Pod termination and recovery - a b)"},
+		{"a variant with a hyphen does not satisfy one with a space", Requirement{ID: s03, Variant: spaced},
+			[]Scenario{pass(s03, hyphenated)}, "S03/a b: missing: no result was recorded"},
+		{"a result recorded under the readable name does not satisfy the key", Requirement{ID: s03},
+			[]Scenario{pass(Scenario{ID: s03}.DisplayName(), "")},
+			"S03: missing: no result was recorded (Primary database Pod termination and recovery)"},
+		{"a failure with no description is not taken for a required one", Requirement{ID: s99},
+			[]Scenario{pass(s99, ""), {ID: s98, Result: Fail, Reason: "x"}}, "S98: fail: x"},
+		{"a failure recorded under the readable name is not taken for the required one", Requirement{ID: s03},
+			[]Scenario{pass(s03, ""), {ID: Scenario{ID: s03}.DisplayName(), Result: Fail, Reason: "x"}},
+			Scenario{ID: s03}.DisplayName() + ": fail: x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lane := Lane{Required: []Requirement{tc.required}}
+			problems := lane.Gate(Summary{Scenarios: tc.scenarios}, dir)
+			if len(problems) != 1 || problems[0] != tc.want {
+				t.Errorf("problems = %q, want exactly %q", problems, tc.want)
+			}
+		})
 	}
 }
 
@@ -416,12 +621,12 @@ func TestConclude_JUnitCarriesTheLaneVerdict(t *testing.T) {
 		{"a missing required variant", Summary{Scenarios: []Scenario{s00Pass, abruptNA}}, nil, false,
 			"S03/graceful: missing"},
 		{"a required scenario that was not run", Summary{Scenarios: []Scenario{
-			s00Pass, {ID: s03, Variant: graceful, Result: NotRun, Reason: "setup failed"}, abruptNA}}, nil, false,
+			s00Pass, {ID: s03, Variant: graceful, Result: NotRun, Reason: setupFailed}, abruptNA}}, nil, false,
 			"S03/graceful: not_run"},
 		{"a problem of the run alone", Summary{Scenarios: []Scenario{s00Pass, gracefulPass, abruptNA}},
 			[]string{"S03/abrupt: no step of the suite carries the label S03-abrupt"}, false, "S03-abrupt"},
 		{"a failing conclusion that replaces a checkpoint", Summary{Scenarios: []Scenario{
-			s00Pass, {ID: s03, Variant: graceful, Result: NotRun, Reason: "setup failed"}, abruptNA}}, nil, true,
+			s00Pass, {ID: s03, Variant: graceful, Result: NotRun, Reason: setupFailed}, abruptNA}}, nil, true,
 			"S03/graceful: not_run"},
 		{"a passing run with a permitted skip", Summary{Scenarios: []Scenario{s00Pass, gracefulPass, abruptNA}}, nil,
 			true, ""},
@@ -517,7 +722,7 @@ func testSummary() Summary {
 				Measurements: map[string]any{"recoveryTime": Unknown, "acknowledgedMissing": 0}},
 			{ID: s03, Variant: abrupt, Result: Pass, FaultConfirmed: new(false), Evidence: []string{s00Record}},
 			{ID: "S04", Result: NotApplicable, Reason: vmLab},
-			{ID: "S07", Result: Blocked, Reason: notProven},
+			{ID: s07, Result: Blocked, Reason: notProven},
 			{ID: "S10", Result: NotRun, Reason: "linux/arm64"},
 		},
 	}
@@ -563,6 +768,68 @@ func TestWriteSummaryJSON(t *testing.T) {
 	}
 }
 
+// The readable text of a scenario is additive: a scenario with no description
+// has no <system-out> at all, and the element follows the verdict's element.
+func TestWriteJUnitDescribesOnlyKnownScenarios(t *testing.T) {
+	dir := t.TempDir()
+	summary := Summary{RunID: testRunName, Scenarios: []Scenario{
+		{ID: s98, Result: Fail, Reason: "x"},
+		{ID: s03, Variant: abrupt, Result: Fail, Reason: "x"},
+		{ID: s00, Result: NotRun, Reason: "x"},
+	}}
+	if err := summary.Write(dir, NewRedactor()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "junit.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := string(data)
+	unknown, known, _ := strings.Cut(report, `<testcase name="S03/abrupt"`)
+	if strings.Contains(unknown, "<system-out>") {
+		t.Errorf("a scenario with no description has a <system-out>:\n%s", report)
+	}
+	verdict, description := strings.Index(known, "<failure"), strings.Index(known, "<system-out>")
+	if verdict < 0 || description < verdict {
+		t.Errorf("<system-out> must follow <failure>:\n%s", report)
+	}
+	skipped, description := strings.Index(known, "<skipped"), strings.LastIndex(known, "<system-out>")
+	if skipped < 0 || description < skipped {
+		t.Errorf("<system-out> must follow <skipped>:\n%s", report)
+	}
+}
+
+// The redactor works on the text of the file, and takes "token: value" for a
+// credential up to the next space or quote. A variant of that form in
+// <system-out> would lose the closing tag with the value, so only a slug is
+// ever copied into element text. junit.xml stays well-formed.
+func TestWriteJUnitStaysWellFormedAfterRedaction(t *testing.T) {
+	dir := t.TempDir()
+	summary := Summary{RunID: testRunName, Scenarios: []Scenario{
+		{ID: s03, Variant: "token: value", Result: Fail, Reason: "x"},
+		{ID: s99, Variant: "token: value", Result: Fail, Reason: "x"},
+	}}
+	if err := summary.Write(dir, NewRedactor()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "junit.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var suite junitSuite
+	if err := xml.Unmarshal(data, &suite); err != nil {
+		t.Fatalf("junit.xml cannot be parsed after redaction: %v\n%s", err, data)
+	}
+	if len(suite.Cases) != 2 {
+		t.Errorf("test cases = %d, want 2:\n%s", len(suite.Cases), data)
+	}
+	for _, c := range suite.Cases {
+		if c.SystemOut != "" {
+			t.Errorf("%s has <system-out> %q, want none for a variant that is not a slug", c.Name, c.SystemOut)
+		}
+	}
+}
+
 func TestWriteJUnit(t *testing.T) {
 	dir := runDir(t, s00Record)
 	if err := testSummary().Write(dir, NewRedactor()); err != nil {
@@ -579,8 +846,9 @@ func TestWriteJUnit(t *testing.T) {
 		Errors   int    `xml:"errors,attr"`
 		Skipped  int    `xml:"skipped,attr"`
 		Cases    []struct {
-			Name    string `xml:"name,attr"`
-			Failure *struct {
+			Name      string `xml:"name,attr"`
+			SystemOut string `xml:"system-out"`
+			Failure   *struct {
 				Message string `xml:"message,attr"`
 			} `xml:"failure"`
 			Error *struct {
@@ -602,10 +870,16 @@ func TestWriteJUnit(t *testing.T) {
 		t.Fatalf("test cases = %d, want 5", len(c))
 	}
 	if c[0].Name != s00 || c[0].Failure != nil || c[0].Error != nil || c[0].Skipped != nil {
-		t.Errorf("pass must have no child element: %+v", c[0])
+		t.Errorf("pass must have no verdict child element: %+v", c[0])
 	}
-	if c[1].Name != "S03/abrupt" || c[1].Failure == nil {
+	if want := "Standalone database installation and real SQL (S00)"; c[0].SystemOut != want {
+		t.Errorf("pass testcase output %q, want %q", c[0].SystemOut, want)
+	}
+	if c[1].Name != s03Abrupt || c[1].Failure == nil {
 		t.Errorf("fail must be a failure: %+v", c[1])
+	}
+	if want := (Scenario{ID: s03, Variant: abrupt}).DisplayName(); c[1].SystemOut != want {
+		t.Errorf("fail testcase output %q, want %q", c[1].SystemOut, want)
 	}
 	if c[2].Skipped == nil || c[2].Skipped.Message != "not_applicable: needs the VM lab" {
 		t.Errorf("not applicable must be skipped with its reason: %+v", c[2])

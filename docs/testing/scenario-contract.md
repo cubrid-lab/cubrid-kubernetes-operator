@@ -889,7 +889,11 @@ it.
 - `level` is `unit`, `envtest`, `kind` or `vm-lab`.
 - `lane` names the [required scenarios](#required-scenarios) the run was
   judged against, `passed` says whether it passed them, and `problems` lists
-  why not, one line per problem.
+  why not, one line per problem. A line about a scenario starts
+  `<key>: <result>: <reason>`, for example `S03/abrupt: fail: ...`, and when
+  the scenario's description is known it ends with that description in
+  parentheses. The start of the line is the stable format; the description is
+  for people only and is not part of the scenario's identity.
 - `result` is one of the five results above; `reason` is required for every
   result except `pass`.
 - A measurement that was not taken has the string value `"unknown"`.
@@ -949,11 +953,22 @@ that measurement, not measured budgets.
 ### `junit.xml`
 
 One `<testsuite>` per run, one `<testcase>` per scenario and variant, named
-`S03/abrupt`.
+`S03/abrupt`. The testcase `name` remains the stable historical identifier
+for result matching and comparison. A testcase whose scenario has a known
+description also has a `<system-out>` element after its verdict element, such
+as `Primary database Pod termination and recovery - abrupt, later master
+(S03/abrupt)`; a scenario with no known description has none. The description
+does not replace the identity, and nothing matches on it. A future schema
+migration must explicitly version any identity change (see #715).
+
+`junit.xml` is uploaded with the run's evidence and nothing in this repository
+reads it, so the description is seen by opening the file. The run's returned
+error and the `problems` of `summary.json` carry the description of each
+scenario they report as well.
 
 | Result | JUnit |
 |---|---|
-| `pass` | test case with no child element |
+| `pass` | test case with no failure/error/skip element |
 | `fail` | `<failure>` |
 | `blocked` | `<error>` with the reason |
 | `not_run`, `not_applicable` | `<skipped>` with the reason |

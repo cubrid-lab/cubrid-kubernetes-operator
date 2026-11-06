@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -212,6 +213,21 @@ func kindRequired() []evidence.Requirement {
 		}
 	}
 	return required
+}
+
+// A failed Kind run is read by people, so every result the lane requires must
+// have a description: a requirement left without one would be reported as a
+// bare scenario key. Matching never uses it. test/evidence pins the text.
+func TestKindRequirementsHaveReadableNames(t *testing.T) {
+	if len(kindLane.Required) == 0 {
+		t.Fatal("the Kind lane requires nothing")
+	}
+	for _, req := range kindLane.Required {
+		sc := evidence.Scenario{ID: req.ID, Variant: req.Variant}
+		if sc.DisplayName() == sc.Name() {
+			t.Errorf("required result %s has no description", sc.Name())
+		}
+	}
 }
 
 // runLane returns the lane this run is judged against. A run that selects
