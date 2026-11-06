@@ -1,0 +1,5 @@
+# read 307 s after the writers stopped
+member	rows	acked	acked_missing	never_acked	duplicates	trials_missing
+h-0	210	271	67	6	0	['F-1-s-partition-10s', 'F-3-s-partition-20s', 'F-5-s-partition-60s', 'F-9-s-partition-30s', 'between', 'none']
+h-1	210	271	67	6	0	['F-1-s-partition-10s', 'F-3-s-partition-20s', 'F-5-s-partition-60s', 'F-9-s-partition-30s', 'between']
+h-2	210	271	68	7	0	['F-1-s-partition-10s', 'F-3-s-partition-20s', 'F-5-s-partition-60s', 'F-9-s-partition-30s', 'between', 'none']

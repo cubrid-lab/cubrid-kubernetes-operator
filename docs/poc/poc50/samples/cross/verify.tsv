@@ -1,0 +1,5 @@
+# read 307 s after the writers stopped
+member	rows	acked	acked_missing	never_acked	duplicates	trials_missing
+h-0	476	541	74	9	0	['C-1-returning-deaf-at6-for4s', 'C-11-all-at12-for2s', 'C-20-returning-deaf-at9-for2s', 'C-3-all-at20-for2s', 'C-7-all-at9-for2s', 'between']
+h-1	486	541	67	12	0	['C-10-returning-deaf-at0-for4s', 'C-17-returning-deaf-at9-for8s', 'C-19-returning-deaf-at20-for2s', 'C-2-returning-deaf-at20-for2s', 'C-21-all-at3-for4s', 'C-6-all-at0-for4s', 'between']
+h-2	478	541	73	10	0	['C-11-all-at12-for2s', 'C-2-returning-deaf-at20-for2s', 'C-20-returning-deaf-at9-for2s', 'C-21-all-at3-for4s', 'C-3-all-at20-for2s', 'C-7-all-at9-for2s', 'between']

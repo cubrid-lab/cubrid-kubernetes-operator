@@ -1,0 +1,5 @@
+# read 307 s after the writers stopped
+member	rows	acked	acked_missing	never_acked	duplicates	trials_missing
+h-0	884	879	6	11	0	['A-7-graceful-sameip']
+h-1	884	879	6	11	0	['A-7-graceful-sameip']
+h-2	884	879	6	11	0	['A-7-graceful-sameip']
