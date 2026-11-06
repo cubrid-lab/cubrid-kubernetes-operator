@@ -153,22 +153,38 @@ var scenarioDescriptions = map[string]string{
 // DisplayName makes JUnit case names understandable without a scenario-code
 // lookup. Name() and the ID/variant fields remain unchanged for gate matching,
 // filters, JSON evidence and historical result comparisons.
-func (s Scenario) DisplayName() string {
-	name := s.Name()
-	switch name {
+// description is for people, not the canonical requirement key.
+func (s Scenario) description() string {
+	switch s.Name() {
 	case "S14/token-rotation":
-		return "Instance Manager token rotation (" + name + ")"
+		return "Instance Manager token rotation"
 	case "S14/token-migration":
-		return "Migration from a legacy Instance Manager token (" + name + ")"
+		return "Migration from a legacy Instance Manager token"
 	}
 	description, ok := scenarioDescriptions[s.ID]
 	if !ok {
-		return name
+		return ""
 	}
 	if s.Variant != "" {
-		return fmt.Sprintf("%s - %s (%s)", description, strings.ReplaceAll(s.Variant, "-", " "), name)
+		return fmt.Sprintf("%s - %s", description, strings.ReplaceAll(s.Variant, "-", " "))
 	}
-	return description + " (" + name + ")"
+	return description
+}
+
+func (s Scenario) DisplayName() string {
+	if description := s.description(); description != "" {
+		return description + " (" + s.Name() + ")"
+	}
+	return s.Name()
+}
+
+// problemName places the explanation first while retaining the exact legacy
+// key and message format for historical error matching.
+func (s Scenario) problemName() string {
+	if description := s.description(); description != "" {
+		return description + " | " + s.Name()
+	}
+	return s.Name()
 }
 
 // Judge returns the result a reader may rely on, given the run directory. A
@@ -233,7 +249,7 @@ func (l Lane) Gate(s Summary, dir string) []string {
 		problems = append(problems, "no scenario recorded: the lane requires nothing, so the run proved nothing")
 	}
 	for _, req := range l.Required {
-		name := Scenario{ID: req.ID, Variant: req.Variant}.Name()
+		name := Scenario{ID: req.ID, Variant: req.Variant}.problemName()
 		seen := false
 		for _, sc := range s.Scenarios {
 			if sc.ID != req.ID || sc.Variant != req.Variant {
@@ -255,7 +271,7 @@ func (l Lane) Gate(s Summary, dir string) []string {
 			continue
 		}
 		if result, reason := sc.Judge(dir); result == Fail {
-			problems = append(problems, fmt.Sprintf("%s: %s: %s", sc.Name(), result, reason))
+			problems = append(problems, fmt.Sprintf("%s: %s: %s", sc.problemName(), result, reason))
 		}
 	}
 	return problems
