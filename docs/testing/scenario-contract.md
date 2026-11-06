@@ -510,6 +510,59 @@ that selected none does not pass, and its `summary.json` names that lane so
 it cannot be mistaken for a full run. The scenarios it did not select are
 listed as `not_run`.
 
+### When CI runs the Kind lane
+
+Which pull requests and pushes run the `kind` lane is decided by
+`.github/workflows/ci-impact.yml`, which `test-e2e.yml`, `test.yml`, `lint.yml`,
+`security.yml` and `codeql.yml` each call. The workflow files and the runs
+below were read on 2026-11-06 (UTC). Runs on the GitHub-hosted `ubuntu-latest`
+runner are the only Kind evidence; this is not evidence of any VM-lab behavior.
+
+| Trigger and changed files | What the workflow does | Observed run |
+|---|---|---|
+| Push to `main`, any files | Runs the lane in full; the classifier does not look at files. A documentation-only merge still runs it | [merge of #713 (documentation only)](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42166067651) ran the full suite and failed in one real-database scenario; [merge of #707 (PR template only)](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42158404731) did the same. Neither run was skipped. A [push of code](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42205955465) passed |
+| Pull request from a branch of this repository: only `.md`, `.mdx`, `.rst` files, images under `docs/`, or issue forms | `Run on Ubuntu` is skipped; the workflow run is reported as success | [#713, documentation under `docs/testing`](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42165989190), [#728, one `.md` file (`docs/poc/RESULTS.md`)](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42225372816), [#707, only the PR template](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42153995978) |
+| Pull request that touches any other file under `docs/`, such as a Python, shell, CSV or Dockerfile file | Runs the lane: only the listed documentation and image types are exempt | [#699, `.py` and `.sh` files under `docs/poc`](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/41998648417); [#683, a `.csv` under `docs/reviews`](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/41835513012) |
+| Pull request that changes Go code, tests, scenario code, `Makefile`, `go.mod`, `config/`, `build/` or anything not listed in `ci-impact.yml` | Runs the lane | [#725](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42223069102), [#719](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42199827451), [#714](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42189332734) |
+| Pull request that changes a workflow | `test-e2e.yml` and `ci-impact.yml` run the lane; `pr-title.yml` alone does not; an unknown workflow runs every check | Not observed since the classifier was added. The classifier's own example list (run on every pull request) covers each workflow file |
+| Pull request whose file list cannot be read, is incomplete, or is shorter than `changed_files` | Runs the lane (fails open) | Not observed. Only the code path is reviewed |
+| Renamed file | Both the old and the new name are classified, so moving Go code into `docs/` still runs the lane | Not observed; the rename handling is not in the example list |
+| Superseded push to a pull request | The older run is cancelled and shows `cancelled`, never success; the run for the newest commit decides | [cancelled](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42198853444), then [success on the next commit](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42199827451). Runs on `main` and manual runs are never cancelled |
+| Pull request from a fork | The same `pull_request` workflow, with a read-only token. The classifier only needs `pull-requests: read`. First-time contributors wait for a maintainer to approve the run (repository setting `first_time_contributors`) | Not observed since the classifier was added. The only fork pull request, #470, was opened on 2026-10-18, before the classifier existed (2026-11-04) |
+| Manual run (`workflow_dispatch`) | `test-e2e.yml`, `test.yml` and `lint.yml` accept it and run the lane in full | Not observed since the classifier was added; the last manual runs date from 2026-10-12 |
+
+What the table means for the rules that must hold:
+
+- A change that needs the lane cannot select `go_e2e=false`: the exemption is a
+  short allow-list of documentation and image suffixes, and every other path,
+  including an unknown one, selects every check. If the classifier fails or
+  its step does not succeed, `test-e2e.yml` runs the lane (`needs.impact.result
+  != 'success'`). A change to `ci-impact.yml` itself runs every check.
+- Nothing in the workflow narrows the scenarios: `make test-e2e` runs without
+  `E2E_LABEL_FILTER`, and a filtered run is judged as `kind-filtered`, which
+  cannot be mistaken for `kind` (see above). A scenario that was skipped is
+  `not_run` and fails the lane.
+- The `.md` exemption has no Go reader: no test or build step reads a
+  documentation file. A change to this contract, `ROADMAP.md` or a PR template
+  therefore runs no test, and its only gate is review. This section, the
+  scenario list above and the Go registry (`test/e2e/summary_test.go`) are
+  changed together or the review must catch the difference.
+- A skipped job is not a failure. GitHub reports the skipped `Run on Ubuntu`
+  job, and the run, as successful, and a required status check treats a
+  skipped job as passing. That is the intended path for documentation-only
+  pull requests; it is only safe because the classifier above decides when to
+  skip.
+- `main` has no branch protection and no ruleset (checked 2026-11-06 with the
+  GitHub API), so no status check, skipped or failed, blocks a merge; the
+  maintainers' review and the PR checklist are the only gate. Turning
+  protection on is a maintainer decision and is not part of this
+  documentation. If it is turned on, note that the `Tests`, `Lint` and `E2E
+  Tests` workflows each have a job named `Run on Ubuntu`, so a required
+  check must be chosen with care, and that a failed push to `main` after a
+  merge (as in the two runs above) is reported only afterwards.
+- `codeql.yml` runs on pull requests that target `main` only; the other
+  workflows run for any base branch.
+
 ### Confirming the fault
 
 A fault scenario has three checks, each with its own time limit:
