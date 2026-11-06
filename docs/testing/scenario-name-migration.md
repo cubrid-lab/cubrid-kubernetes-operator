@@ -10,9 +10,21 @@ In `test/evidence/evidence.go`, `Scenario.ID` and `Scenario.Variant` identify re
 
 **Invariant:** missing, skipped, blocked, failed, evidence-less, filtered-out or misidentified mandatory checks must never be interpreted as success. A migration must not downgrade a real-database or VM-lab requirement to a unit or Kind result.
 
+How the five results and the filtered and unfiltered lanes are kept apart today (read the code for the exact rules; this section only says what a migration has to preserve):
+
+- A required scenario passes only with at least one recorded result and every result of it `pass`. `fail`, `blocked` and `not_run` fail the lane, and a claimed `pass` is turned into a failure when its evidence file is missing, its fault was not confirmed or an outcome that must never happen was seen (`Scenario.Judge` and `Lane.Gate` in `test/evidence/evidence.go`).
+- `not_applicable` satisfies a requirement only where the lane explicitly allows it for that scenario; the Kind lane allows it nowhere. Work that was skipped is `not_run`, never `not_applicable`.
+- A scenario the lane does not require but that ends as `fail` still fails the run, and a lane that requires nothing never passes.
+- An unfiltered run is judged against the full `kind` lane. A run selected with a label filter or focus is judged as `kind-filtered`: only the scenarios it selected a step of are required, the others stay in the summary as `not_run`, and the summary names the lane so a filtered run cannot be read as a validation of the full lane (`runLane` in `test/e2e/summary_test.go`). A registered step that no required scenario can label is reported as a problem (`UnlabelledSteps` in `test/evidence/plan.go`).
+- Installed-lab lanes are assembled from the requirements of the selected options in `test/installed/run.go` and `test/installed/ha.go`; a variant a lane does not name is not part of it, and is not `not_applicable`.
+
+A renamed key must keep every one of these outcomes for the same input.
+
 ## Contract families: candidate readable names
 
 These are **proposals for review**, not active selectors or evidence keys. The contract headings below do not mean every case is implemented. The current S-number is recorded only to locate older documents and artifacts.
+
+**How keys stay unique.** A concrete result key is `[installed-]<family key>[-<variant>]`. Every result at the VM-lab level (the installed Operator on the lab) starts with `installed-`; no Kind result key does. The same contract variant at two evidence levels therefore gets two keys and never one shared result. Families used only on the lab (S04, S11, S12, LAB00, LAB01) carry the prefix in the family key itself. Each concrete key below appears once. Whether a contract variant is registered at runtime is for #711 to confirm; the tables list contract variants and the current lane definitions.
 
 | Existing contract | What is checked | Proposed descriptive family key |
 | --- | --- | --- |
@@ -20,17 +32,17 @@ These are **proposals for review**, not active selectors or evidence keys. The c
 | S01 | Three-member HA and read-write/read-only Broker access | `ha-broker-access` |
 | S02 | Normal HA replication | `ha-replication` |
 | S03 | Primary database Pod termination and recovery | `ha-primary-pod-recovery` |
-| S04 | Primary database VM failure | `ha-primary-vm-failure` |
+| S04 | Primary database VM failure | `installed-ha-primary-vm-failure` |
 | S05 | Broker process/Pod failure recovery | `broker-failure-recovery` |
 | S06 | Operator interruption and HA continuity | `operator-failure-recovery` |
 | S07 | HA network partition | `ha-network-partition` |
 | S08 | Replication lag under repeated faults | `ha-replication-lag-repeated-faults` |
 | S09 | Former primary member rejoins | `ha-former-primary-rejoin` |
 | S10 | Rebuild after persistent-volume data loss | `ha-pvc-loss-rebuild` |
-| S11 | Backup completion, faults and recovery | `backup-operation-recovery` |
-| S12 | Restore into a new cluster and fault handling | `restore-new-cluster` |
+| S11 | Backup completion, faults and recovery | `installed-backup` |
+| S12 | Restore into a new cluster and fault handling | `installed-restore-new-cluster` |
 | S13 | Cluster deletion and data-retention policy | `cluster-deletion-retention` |
-| S14 (base) | Instance Manager authentication, access controls and credential protection | `instance-manager-authentication-security` |
+| S14 (base) | Instance Manager network isolation, token-checked requests, service-account permissions and a search for leaked credentials | `instance-manager-access-and-secret-protection` |
 | S14/token-rotation | HA Instance Manager token rotation | `ha-token-rotation` |
 | S14/token-migration | Migration from legacy Instance Manager token | `ha-legacy-token-migration` |
 | S15 | Node drain and PodDisruptionBudget behavior | `node-drain-disruption-policy` |
@@ -39,32 +51,46 @@ These are **proposals for review**, not active selectors or evidence keys. The c
 | LAB00/preallocated | Installed standalone preallocated ownership smoke | `installed-preallocated-standalone-smoke` |
 | LAB01 | Installed three-member HA and SQL smoke | `installed-ha-sql-smoke` |
 
-The base S14 security check and the two token variants must remain **three independently required Kind results**. Do not combine their results under one descriptive family label. The descriptive keys above are candidates; naming alone does not split or consolidate a required gate.
+The base S14 check is the only Kind result that also covers NetworkPolicy isolation, RBAC answers and the secret-leak search, so its key names all of that. The base S14 check and the two token variants must remain **three independently required Kind results**. Do not combine their results under one descriptive family label. The descriptive keys above are candidates; naming alone does not split or consolidate a required gate.
 
 ## Currently required Kind results
 
-The current `kind` lane requires these exact legacy keys, as defined in `test/e2e/summary_test.go` and the [required-lane contract](scenario-contract.md#required-scenarios):
+The `kind` lane requires the results below; the [required-lane contract](scenario-contract.md#required-scenarios) and `kindRequired` in `test/e2e/summary_test.go` are the authority for the list and for the rule that none may be `not_applicable`. This table only maps them to candidate names.
 
 | Existing requirement(s) | Candidate names for individual checks |
 | --- | --- |
 | S00, S01, S02 | `standalone-database-sql`, `ha-broker-access`, `ha-replication` |
-| S03/abrupt-first-member, S03/abrupt, S03/graceful | `ha-primary-pod-recovery-abrupt-first-member`, `ha-primary-pod-recovery-abrupt`, `ha-primary-pod-recovery-graceful` |
+| S03/abrupt-first-member, S03/abrupt, S03/graceful | `ha-primary-pod-recovery-abrupt-first-member`, `ha-primary-pod-recovery-abrupt-later-master`, `ha-primary-pod-recovery-graceful` |
 | S05/broker-process, S05/one-broker-pod, S05/all-rw-brokers | `broker-failure-recovery-process`, `broker-failure-recovery-one-pod`, `broker-failure-recovery-all-rw-pods` |
 | S06/restart, S06/absent-during-failover | `operator-failure-recovery-restart`, `operator-failure-recovery-absent-during-failover` |
-| S14, S14/token-rotation, S14/token-migration | `instance-manager-authentication-security`, `ha-token-rotation`, `ha-legacy-token-migration` |
+| S14, S14/token-rotation, S14/token-migration | `instance-manager-access-and-secret-protection`, `ha-token-rotation`, `ha-legacy-token-migration` |
 
-All **14 results** above must remain mandatory in an unfiltered Kind lane. Filters are for local diagnostic runs and cannot certify the full lane.
+The S03 names follow the contract: `abrupt-first-member` runs while the master is the first member of the node list, where CUBRID was observed to make the same member master again in most runs; `abrupt` runs later with whichever member is then master. The candidate `-abrupt-later-master` says that, so the two abrupt checks are not mistaken for one. They stay separate required results.
+
+Filters are for local diagnostic runs and cannot certify the full lane (see the invariant above).
 
 ## Installed-lab variants to preserve
 
-The [required-lane contract](scenario-contract.md#required-scenarios) includes LAB00/LAB01 and additional installed HA validations. Preserve the following **existing variant suffixes** under distinct semantic keys, with their current prerequisites and distinct lab lanes:
+The [required-lane contract](scenario-contract.md#required-scenarios) includes LAB00/LAB01 and additional installed HA validations. Preserve the following **existing variant suffixes** under distinct semantic keys, with their current prerequisites and distinct lab lanes. All keys below are VM-lab results and start with `installed-`, so none can collide with a Kind key (for example the Kind `operator-failure-recovery-restart` is a different test from the lab one below, which deletes the installed manager's Pod).
 
-- Primary VM failure: `S04/power-off` → candidate `ha-primary-vm-failure-power-off`.
-- Operator interruption: `S06/restart` → candidate `operator-failure-recovery-restart`.
-- Backup: `S11/complete`, `missing-destination`, `denied-credentials`, `signature-mismatch`, `interrupted-upload`, `operator-restart`, `instance-manager-restart`, `overlapping`, `operation-store-loss`, `graceful-stop`. Candidate pattern: `backup-operation-<variant>`. These are **distinct checks**, not interchangeable results.
-- Restore: `S12/exact`, `tampered`, `wrong-target`, `operator-restart`, `instance-manager-restart-preparing`, `instance-manager-restart-seeding`, `graceful-stop`. The contract also describes the general `instance-manager-restart` lane, whose two stages need separate audit before the canonical registry is finalized. Candidate pattern: `restore-new-cluster-<variant>`.
+- Primary VM failure: `S04/power-off` → `installed-ha-primary-vm-failure-power-off`.
+- Operator interruption: `S06/restart` → `installed-operator-failure-recovery-restart`.
+- Backup (`S11`, code: `s11*.go` in `test/installed/`), ten variants, each a distinct check: `complete` → `installed-backup-complete`; `missing-destination` → `installed-backup-missing-destination`; `denied-credentials` → `installed-backup-denied-credentials`; `signature-mismatch` → `installed-backup-signature-mismatch`; `interrupted-upload` → `installed-backup-interrupted-upload`; `operator-restart` → `installed-backup-operator-restart`; `instance-manager-restart` → `installed-backup-instance-manager-restart`; `overlapping` → `installed-backup-overlapping`; `operation-store-loss` → `installed-backup-operation-store-loss`; `graceful-stop` → `installed-backup-graceful-stop`.
+- Restore (`S12`), ten variants, each a distinct check: `exact` → `installed-restore-new-cluster-exact`; `tampered` → `installed-restore-new-cluster-tampered`; `wrong-target` → `installed-restore-new-cluster-wrong-target`; `operator-restart` → `installed-restore-new-cluster-operator-restart`; `graceful-stop` → `installed-restore-new-cluster-graceful-stop`; and the Instance Manager restart, which has **five placements** of the kill (`IMRestartAt*` and `imRestartVariant` in `test/installed/s12imrestart.go`; each runs in its own lane, and a pass at one placement is no evidence for another, see [the contract](scenario-contract.md#required-scenarios)):
 
-**Important:** a lane name, a contract variant and a code-level `Requirement` are not automatically synonymous. Confirm actual runtime registrations (including each restore stage) before migrating keys. The table above inventories contract variants; it does **not** assert that every variant has a passing real-lab run.
+  | Placement (what is killed when) | Existing variant | Candidate key |
+  | --- | --- | --- |
+  | `restoring`: the target member's Instance Manager during its restore (the default) | `instance-manager-restart` | `installed-restore-new-cluster-instance-manager-restart-restoring` |
+  | `preparing`: the target's Instance Manager while the bootstrap is Preparing with an operation | `instance-manager-restart-preparing` | `installed-restore-new-cluster-instance-manager-restart-preparing` |
+  | `seeding`: the Instance Manager of a member being seeded, during its seed restore | `instance-manager-restart-seeding` | `installed-restore-new-cluster-instance-manager-restart-seeding` |
+  | `starting`: the target's Instance Manager once `restoredb` has succeeded and the database is being started | `instance-manager-restart-starting` | `installed-restore-new-cluster-instance-manager-restart-starting` |
+  | `seed-backup`: the restored member's Instance Manager while it takes the seed backup for a peer | `instance-manager-restart-seed-backup` | `installed-restore-new-cluster-instance-manager-restart-seed-backup` |
+
+  The existing unsuffixed variant `instance-manager-restart` means the `restoring` placement, not a general lane covering the others. Its candidate key carries the explicit `-restoring`; the unsuffixed form can be kept as its historical alias.
+
+Both S11 `operator-restart` and S12 `operator-restart` exist; they are told apart by the family (`installed-backup-` versus `installed-restore-new-cluster-`), which is why a variant name alone is never a key.
+
+**Important:** a lane name, a contract variant and a code-level `Requirement` are not automatically synonymous. Note that the contract's lane table currently names only the `preparing` and `seeding` placements as lanes, while the code and [installed-ha.md](installed-ha.md) also define `starting` and `seed-backup`; reconcile that before the canonical registry is finalized. The lists above inventory contract variants and code definitions; they do **not** assert that every variant has a passing real-lab run.
 
 ## Compatibility surfaces to audit before any key migration
 
@@ -77,10 +103,8 @@ The [required-lane contract](scenario-contract.md#required-scenarios) includes L
 | Documentation and workflow | `scenario-contract.md`, `CONTRIBUTING.md`, `ROADMAP.md`, `.github/workflows/test-e2e.yml` | Explain test selection in ordinary language, retain exact prerequisites and environment limits |
 | Research records | `docs/poc/RESULTS.md`, ADRs and existing issue references | Preserve historic numbered records for audit; avoid rewriting old experimental observations |
 
-## Required implementation order
+## Constraints on later changes
 
-1. [#710](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/710): render readable names **without changing identity or gate behavior**.
-2. [#711](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/711): define and test a unique canonical registry, aliases, and unknown/duplicate key rejection; reconcile contract variants with actual registration.
-3. [#712](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/712): migrate one bounded end-to-end vertical slice at a time, including selectors, evidence and documentation, under strict fail-closed compatibility tests.
+The follow-up work is tracked under [#708](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/708), which owns its order and dependencies.
 
 Do not merge code that changes a mandatory requirement, fail/blocked semantics, observed SQL/VM evidence level, or the set of required Kind checks merely as a naming cleanup. Existing independent maintainer and runtime validation requirements still apply.
