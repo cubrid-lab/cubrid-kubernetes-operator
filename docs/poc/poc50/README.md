@@ -26,7 +26,7 @@ network namespace, the host name and the IP, and the database container that
 joins it. Replacing a member removes the database container and keeps its
 volume. With a new IP, the network container is replaced as well. Packet loss
 is `iptables` DROP on UDP 59901 at the receiver's INPUT, in the network
-container.
+container, except in F, which drops every packet.
 
 ## Reproduce
 

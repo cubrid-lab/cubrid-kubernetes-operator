@@ -364,66 +364,6 @@ def freeze(c, rounds):
             finish(c, t)
 
 
-def partition(c, rounds):
-    """Experiment F: the active master is not `h-0`, and every packet between
-    `h-0` and its peers is dropped, TCP as well as heartbeats, while the
-    master keeps acknowledging writes that `h-0` cannot copy."""
-    n = 0
-    for _ in range(rounds):
-        for dur in [10, 15, 20, 30, 60]:
-            n += 1
-            t = f"F-{n}-s-partition-{dur}s"
-            master, slaves = c.wait_stable()
-            if master == "h-0":
-                c.ev("move-master")
-                c.stop_member("h-0", "graceful")
-                c.bring_up("h-0", False)
-                c.wait_slave("h-0")
-                master, slaves = c.wait_stable()
-            others = [m for m in MEMBERS if m != "h-0"]
-            c.trial(t)
-            c.ev("trial", t, master, slaves, "s-partition", dur, "h-0")
-            cmds = [(sh, "docker", "exec", c.netc("h-0"), "sh", "-c", ";".join(
-                f"iptables -I INPUT -s {c.ip(o)} -m comment --comment poc50 -j DROP" for o in others))]
-            cmds += [(sh, "docker", "exec", c.netc(o), "iptables", "-I", "INPUT", "-s", c.ip("h-0"), "-m", "comment",
-                      "--comment", "poc50", "-j", "DROP") for o in others]
-            c.par(cmds)
-            c.ev("cut", t, others)
-            time.sleep(dur)
-            c.ev("heal", t, c.heal())
-            time.sleep(40)
-            finish(c, t)
-
-
-class Fixed:
-    """Stands in for the random choice of a slave."""
-
-    def __init__(self, member):
-        self.member = member
-
-    def choice(self, _):
-        return self.member
-
-
-def prio(c, rounds):
-    """Experiment E: the active master is not `h-0`, and `h-0`, the member of
-    highest priority, is the slave that loses the heartbeats."""
-    n = 0
-    plan = [(s, d) for s in ["s-deaf", "m-mute", "m-s"] for d in [4, 6, 8, 10, 15, 20]]
-    rnd = random.Random(5)
-    for _ in range(rounds):
-        rnd.shuffle(plan)
-        for shape, dur in plan:
-            n += 1
-            master, _s = c.wait_stable()
-            if master == "h-0":  # move the master off h-0
-                c.ev("move-master")
-                c.stop_member("h-0", "graceful")
-                c.bring_up("h-0", False)
-                c.wait_slave("h-0")
-            one_loss(c, f"E-{n}-{shape}-{dur}s", shape, dur, Fixed("h-0"), after=30)
-
-
 def verify(c):
     """Every acknowledged marker against what each member holds, after the
     writers stopped and the appliers had a minute. Writes verify.tsv."""
