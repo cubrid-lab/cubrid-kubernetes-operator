@@ -118,8 +118,8 @@ type Summary struct {
 	planned map[Requirement]int
 }
 
-// Name is the scenario's name in reports: "S03/abrupt", or "S00" without a
-// variant.
+// Name is the stable scenario key used by required-lane gates and evidence:
+// "S03/abrupt", or "S00" without a variant. Use DisplayName for reports.
 func (s Scenario) Name() string {
 	if s.Variant == "" {
 		return s.ID
