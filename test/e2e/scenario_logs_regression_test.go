@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -27,6 +28,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	. "github.com/onsi/ginkgo/v2"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
@@ -54,6 +57,15 @@ esac
 	// hangingKubectl never answers, and neither does the child that holds its
 	// output open.
 	silentKubectl = "#!/bin/sh\nsleep 60\n"
+	// partialKubectl answers for the Operator and then stops answering, as an
+	// API server does that goes down during the collection.
+	partialKubectl = `#!/bin/sh
+case "$*" in
+*"get pods -l control-plane"*) printf 'manager-1\tuid-m\tcontrol\t0\n' ;;
+*"logs manager-1"*) echo '2026-11-06T09:10:00.000000000Z the Operator saw the fault' ;;
+*) sleep 60 ;;
+esac
+`
 )
 
 // useKubectl puts a stand-in kubectl first on PATH and returns the file its
@@ -168,6 +180,100 @@ func TestScenarioLogsBoundAHungKubectl(t *testing.T) {
 	}
 	if !slices.Contains(result.Evidence, testLogIndex) {
 		t.Fatalf("evidence %v", result.Evidence)
+	}
+}
+
+// logIndexOf reads the index of the bundle below the run directory dir.
+func logIndexOf(t *testing.T, dir string) evidence.LogIndex {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, testLogIndex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index evidence.LogIndex
+	if err := json.Unmarshal(data, &index); err != nil {
+		t.Fatal(err)
+	}
+	return index
+}
+
+// The suite's deadline cancels a running scenario's context before its
+// deferred collection runs, and the suite's grace period exists so that a
+// failed run keeps its evidence. So the logs a working cluster can still give
+// are read and stored, and the result is untouched.
+func TestScenarioThatReachedTheDeadlineStillKeepsItsLogs(t *testing.T) {
+	useKubectl(t, fakeKubectl)
+	dir := t.TempDir()
+	scenario, cancel := context.WithCancel(t.Context())
+	cancel()
+	result := evidence.Scenario{ID: "S03", Variant: "abrupt", Result: evidence.Fail, Reason: "the scenario's reason"}
+
+	testLogs(dir).conclude(scenario, true, &result)
+
+	sources := map[string]evidence.LogStatus{}
+	for _, s := range logIndexOf(t, dir).Checkpoints[0].Sources {
+		sources[s.Component] = s.Status
+	}
+	for _, component := range []string{evidence.LogOperator, evidence.LogInstanceManager, evidence.LogEngine,
+		evidence.LogHeartbeat, evidence.LogBrokerProcess, evidence.LogBroker} {
+		if sources[component] != evidence.LogCollected {
+			t.Errorf("%s: %q, want collected", component, sources[component])
+		}
+	}
+	if !slices.Contains(result.Evidence, testLogIndex) {
+		t.Errorf("evidence %v", result.Evidence)
+	}
+	if result.Result != evidence.Fail || result.Reason != "the scenario's reason" {
+		t.Errorf("the result changed: %+v", result)
+	}
+}
+
+// When the cluster stops answering after the deadline, what was read is kept,
+// what was not is named, and the collection ends once its grace is over: an
+// expired suite is never held for the checkpoint's own 90 seconds.
+func TestDeadlineCollectionKeepsPartialLogsAndStaysBounded(t *testing.T) {
+	useKubectl(t, partialKubectl)
+	dir := t.TempDir()
+	logs := testLogs(dir)
+	logs.grace = 500 * time.Millisecond
+	scenario, cancel := context.WithCancel(t.Context())
+	cancel()
+	var result evidence.Scenario
+
+	start := time.Now()
+	logs.conclude(scenario, true, &result)
+	took := time.Since(start)
+
+	// The grace, then a second each for kubectl to end and for the read that
+	// was told to stop, and scheduling on a loaded machine.
+	if limit := logs.grace + 4*time.Second; took > limit {
+		t.Errorf("took %s, want at most %s", took, limit)
+	}
+	collected, stopped := 0, 0
+	for _, s := range logIndexOf(t, dir).Checkpoints[0].Sources {
+		switch {
+		case s.Component == evidence.LogOperator && s.Status == evidence.LogCollected:
+			collected++
+		case s.Status == evidence.LogUnavailable && strings.Contains(s.Reason, "stopped"):
+			stopped++
+		}
+	}
+	if collected != 1 || stopped == 0 {
+		t.Errorf("%d Operator logs kept and %d sources named as stopped: %+v", collected, stopped,
+			logIndexOf(t, dir).Checkpoints[0].Sources)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, testLogScenario, "logs", "ordered.log"))
+	if err != nil || !strings.Contains(string(data), "the Operator saw the fault") {
+		t.Errorf("the merged log holds no partial logs: %q, %v", data, err)
+	}
+}
+
+// A step has the suite's grace period to return, and it records its result
+// after collecting, so the collection takes half of that period and not all.
+func TestConcludingCollectionLeavesTimeToRecordTheResult(t *testing.T) {
+	suite, _ := GinkgoConfiguration()
+	if got := testLogs(t.TempDir()).grace; got != suite.GracePeriod/2 || got <= 0 {
+		t.Fatalf("grace %s of a suite grace period of %s", got, suite.GracePeriod)
 	}
 }
 

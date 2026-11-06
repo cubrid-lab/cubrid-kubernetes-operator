@@ -649,6 +649,111 @@ func TestCancelledBeforeTheStartLeavesAnIndex(t *testing.T) {
 	}
 }
 
+// A scenario that reached its deadline has its context cancelled before its
+// deferred collection runs. The collection's own context goes on for the grace
+// and no longer, so an expired suite still gets its logs and is not extended.
+func TestLogContextOutlivesAnEndedScenarioOnlyByItsGrace(t *testing.T) {
+	const grace = 200 * time.Millisecond
+	scenario, cancel := context.WithCancel(t.Context())
+	cancel()
+	start := time.Now()
+	ctx, stop := LogContext(scenario, grace)
+	defer stop()
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("the grace was not given: %v", err)
+	}
+	select {
+	case <-ctx.Done():
+		if took := time.Since(start); took < grace {
+			t.Errorf("ended after %s, before its grace of %s", took, grace)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the context outlived its grace")
+	}
+}
+
+// A collection that started in time is not cut short while the scenario's
+// context lives, and has only the grace once it ends. Checkpoint's own timeout
+// stays what bounds it in between.
+func TestLogContextFollowsAScenarioThatEndsLater(t *testing.T) {
+	const grace = 100 * time.Millisecond
+	scenario, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx, stop := LogContext(scenario, grace)
+	defer stop()
+	select {
+	case <-ctx.Done():
+		t.Fatal("the context ended while the scenario's lives")
+	case <-time.After(3 * grace):
+	}
+	cancel()
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the context outlived the scenario's by more than the grace")
+	}
+}
+
+// Ending the collection releases its context at once.
+func TestLogContextEndsWithItsCollection(t *testing.T) {
+	ctx, stop := LogContext(t.Context(), time.Hour)
+	stop()
+	if ctx.Err() == nil {
+		t.Fatal("the context is still live")
+	}
+}
+
+// No grace means the collection stops with the scenario, as Checkpoint does
+// on the scenario's own context.
+func TestLogContextWithoutAGraceEndsWithTheScenario(t *testing.T) {
+	scenario, cancel := context.WithCancel(t.Context())
+	cancel()
+	ctx, stop := LogContext(scenario, 0)
+	defer stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the context did not end")
+	}
+}
+
+// A hung source after the deadline costs the grace and the wait for the read
+// that was told to stop, however long the source's own timeout is. What was
+// read before it stays in the bundle, and what comes after it is named.
+func TestReaderThatHangsAfterTheDeadlineIsBoundedByTheGrace(t *testing.T) {
+	const grace = 200 * time.Millisecond
+	f := newFakeLogs()
+	release := make(chan struct{})
+	defer close(release)
+	f.hook = func(_ context.Context, key string, _ io.Writer) error {
+		if key == testMaster {
+			<-release // Ignores its context, like a stuck client.
+		}
+		return nil
+	}
+	limits := testLimits()
+	limits.SourceTimeout, limits.CheckpointTimeout = time.Minute, time.Minute
+	b, dir := newTestBundle(t, f, limits, nil)
+	scenario, cancel := context.WithCancel(t.Context())
+	cancel()
+	ctx, stop := LogContext(scenario, grace)
+	defer stop()
+
+	start := time.Now()
+	b.Checkpoint(ctx, LogsAfterVerdict, true)
+	if took, limit := time.Since(start), grace+logReadGrace+2*time.Second; took > limit {
+		t.Errorf("took %s, want at most %s", took, limit)
+	}
+	index := readIndex(t, dir)
+	if s := findSource(t, index, LogOperator, testManager); s.Status != LogCollected {
+		t.Errorf("the source before the hung one: %+v", s)
+	}
+	if s := findSource(t, index, LogBrokerProcess, ""); s.Status != LogUnavailable ||
+		!strings.Contains(s.Reason, "stopped") {
+		t.Errorf("the source after the hung one: %+v", s)
+	}
+}
+
 // `cubrid heartbeat status` is not a passive read during a fault: it can turn
 // off CUBRID's ping check, and change what the test measures (POC-52). It runs
 // only once the fault has ended and the verdict is reached.

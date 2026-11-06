@@ -120,8 +120,8 @@ type LogLimits struct {
 	CheckpointTimeout time.Duration `json:"checkpointTimeoutNanoseconds"`
 }
 
-// DefaultLogLimits are the limits of a run. They are starting values: no run
-// has measured how much of them a scenario uses.
+// DefaultLogLimits are the limits of a run. They are starting values, and
+// docs/testing/scenario-contract.md records what a run has measured of them.
 func DefaultLogLimits() LogLimits {
 	return LogLimits{SourceBytes: 1 << 20, BundleBytes: 16 << 20, OrderedBytes: 2 << 20, TailLines: 5000,
 		EngineFiles: 8, Checkpoints: 2, SourceTimeout: 15 * time.Second, CheckpointTimeout: 90 * time.Second}
@@ -454,6 +454,23 @@ func (b *LogBundle) Checkpoint(ctx context.Context, name string, faultEnded bool
 	b.budget.spendTime(took)
 	b.checkpoint().FinishedAt = start.Add(took)
 	b.writeIndex()
+}
+
+// LogContext returns the context of a collection that concludes a scenario,
+// and the function that releases it. A deadline cancels the scenario's context
+// before its deferred collection runs, and a read on that context fails at
+// once, so the logs of the failure the deadline stopped would be lost while
+// the cluster can still give them. This context goes on after ctx ends, also
+// when ctx has already ended, for grace and no longer. Checkpoint's own bounds
+// still apply, so an expired run is never held longer than grace plus
+// logReadGrace for a read that does not stop.
+func LogContext(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
+	logs, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, func() { time.AfterFunc(grace, cancel) })
+	return logs, func() {
+		stop()
+		cancel()
+	}
 }
 
 func (b *LogBundle) checkpoint() *LogCheckpoint {

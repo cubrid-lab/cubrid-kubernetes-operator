@@ -941,16 +941,18 @@ the one inside it may still do:
 
 | Deadline | Default | What happens |
 |---|---|---|
-| Suite (`E2E_SUITE_TIMEOUT`) | 50 minutes | Ginkgo abandons the current step, which keeps running in the background, and skips the remaining steps. Each cleanup node that starts after the deadline, and then the suite's own cleanup that concludes `summary.json`, gets up to `E2E_GRACE_PERIOD` (1 minute); a node already running at the deadline gets none. The HA group, whose `AfterAll` Ginkgo then skips, shows its diagnostics after the abandoned step instead |
+| Suite (`E2E_SUITE_TIMEOUT`) | 50 minutes | Ginkgo abandons the current step, which keeps running in the background, and skips the remaining steps. Each cleanup node that starts after the deadline, and then the suite's own cleanup that concludes `summary.json`, gets up to `E2E_GRACE_PERIOD` (1 minute). Of the nodes already running at the deadline, one that takes a context has that context cancelled and gets the same grace to return; one that takes no context gets none. The HA group, whose `AfterAll` Ginkgo then skips, shows its diagnostics after the abandoned step instead |
 | Test process (`E2E_GO_TIMEOUT`) | 58 minutes | Go kills the process with no cleanup at all. Only the provisional summary remains |
 | CI step | 70 minutes | Also covers creating the Kind cluster and building before the run. The evidence is still uploaded |
 | CI job | 80 minutes | Last resort. Nothing after it is guaranteed |
 
 A run the suite's deadline stopped does not pass: its summary names the
 abandoned step as a problem, and a result the abandoned step records after
-its step has been reported is not kept. A full run took about 33 minutes on a GitHub-hosted
-runner in October 2026. The defaults are starting values with headroom over
-that measurement, not measured budgets.
+its step has been reported is not kept. The 20 successful runs on `main` from
+2026-11-04 to 2026-11-06, on GitHub-hosted runners and without log collection,
+spent 34.5 to 42.8 minutes in the suite (median 39.4), and the CI step around it
+36.5 to 45.5. The defaults are starting values with headroom over that
+measurement, not measured budgets.
 
 ### `junit.xml`
 
@@ -1077,9 +1079,13 @@ checkpoints, one source takes at most 15 seconds and a checkpoint at most 90.
 What is stored of a source is its end, at most 1 MiB, of the last 5,000 lines of
 a container log; at most the 8 newest files of a Pod are read; a scenario stores
 at most 16 MiB, of which `ordered.log` takes at most 2 MiB; and all the
-scenarios of a Kind run together store at most 128 MiB and spend at most 6
-minutes. These are starting values, not measured budgets. What a bound stopped
-is named in the index. Only whole lines are kept, because a part of a line may
+scenarios of a Kind run together store at most 128 MiB and spend at most 5
+minutes. These are starting values, not measured budgets. The first full run
+with collection, in which every scenario passed, stored 10.8 MB and spent 3.3
+minutes across 24 checkpoints, the slowest taking 10 seconds. The 5 minutes
+leave room for a slower runner, and added to the slowest suite without
+collection (42.8 minutes) still end before the suite's 50-minute deadline. What
+a bound stopped is named in the index. Only whole lines are kept, because a part of a line may
 hold a part of a credential that no redaction pattern can recognize.
 
 **What is copied.** From `$CUBRID/log`: the error logs of the server,
@@ -1108,6 +1114,20 @@ disappears keeps what was read. The index is replaced after each source, so a
 killed process leaves whole files, and a source the collection did not reach is
 named as `unavailable` when it was stopped and could say so. A read that does
 not stop within a second of its deadline is left behind and its output ignored.
+
+**The suite's deadline.** A scenario step that takes a context, as S00's
+cleanup and S03 do, has that context cancelled at the deadline and gets the
+suite's grace period to return. Its last collection then does not use the
+cancelled context: it goes on for half of `E2E_GRACE_PERIOD` (30 seconds) after
+the cancellation or after it starts, whichever is later, and within the other
+bounds above, so the logs of the failure the
+deadline stopped are kept and the step can still record its result. What is not
+read in that time is named in the index, and a read that does not stop costs
+one more second. A step that takes no context, as S01, S02, S05, S06 and S14 do,
+is abandoned at the deadline with no grace. Its collection runs only if the
+abandoned step reaches it while the process and the cluster still exist, so
+such a step may leave no `after-verdict` logs. A collection before a fault never
+outlives its scenario's context.
 
 ### Secrets
 

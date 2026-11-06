@@ -36,10 +36,12 @@ import (
 
 const (
 	// runLogBytes and runLogTime bound what all the scenarios of a run spend
-	// on diagnostic logs together. They are starting values, sized so that a
-	// hung API server costs a run minutes and not its deadline.
+	// on diagnostic logs together. They are sized so that a hung API server
+	// costs a run minutes and not its deadline: runLogTime added to the
+	// slowest suite without collection still ends before E2E_SUITE_TIMEOUT
+	// (docs/testing/scenario-contract.md, section "Bounds").
 	runLogBytes int64 = 128 << 20
-	runLogTime        = 6 * time.Minute
+	runLogTime        = 5 * time.Minute
 	// kubectlLogTimeout bounds one request of a log read.
 	kubectlLogTimeout = "15s"
 	// kubectlStderrLimit bounds what is kept of kubectl's error output.
@@ -48,6 +50,16 @@ const (
 	// was killed.
 	kubectlStopDelay = time.Second
 )
+
+// concludeLogGrace is how long a scenario's concluding collection goes on after
+// the scenario's context ended: half of the suite's grace period, because a
+// step that takes a context has that period to return, and it still has to
+// record its result after collecting. The slowest checkpoint measured took 10
+// seconds, so the default of 30 reads a working cluster to its end.
+func concludeLogGrace() time.Duration {
+	suite, _ := GinkgoConfiguration()
+	return suite.GracePeriod / 2
+}
 
 // runLogBudget is what the scenarios of this run may still spend on logs.
 var runLogBudget = evidence.NewLogBudget(runLogBytes, runLogTime)
@@ -113,6 +125,7 @@ func (kubectlLogs) Exec(ctx context.Context, set evidence.LogPodSet, pod evidenc
 type scenarioLogs struct {
 	bundle   *evidence.LogBundle
 	scenario string
+	grace    time.Duration
 }
 
 // newScenarioLogs returns the logs of scenario below the run directory dir.
@@ -121,7 +134,7 @@ func newScenarioLogs(dir, scenario string, plan evidence.LogPlan, reader evidenc
 	if dir == "" {
 		return &scenarioLogs{scenario: scenario}
 	}
-	return &scenarioLogs{scenario: scenario,
+	return &scenarioLogs{scenario: scenario, grace: concludeLogGrace(),
 		bundle: evidence.NewLogBundle(dir, scenario, redactor, reader, plan, limits, budget)}
 }
 
@@ -143,11 +156,14 @@ func (l *scenarioLogs) beforeFault(ctx context.Context) {
 // bundle's index to result's evidence. faultEnded says that the scenario's
 // fault was removed, or that it injected none: only then may cubrid heartbeat
 // status run. It is meant for a deferred call, so that a failed check still
-// leaves its logs, and it reads result and sets nothing but result.Evidence.
+// leaves its logs, also once a deadline has cancelled ctx (evidence.LogContext),
+// and it reads result and sets nothing but result.Evidence.
 func (l *scenarioLogs) conclude(ctx context.Context, faultEnded bool, result *evidence.Scenario) {
 	if l.bundle == nil {
 		return
 	}
+	ctx, stop := evidence.LogContext(ctx, l.grace)
+	defer stop()
 	l.bundle.Checkpoint(ctx, evidence.LogsAfterVerdict, faultEnded)
 	if err := l.bundle.Problem(); err != nil {
 		_, _ = fmt.Fprintf(GinkgoWriter, "warning: diagnostic logs of %s: %v\n", l.scenario, err)
