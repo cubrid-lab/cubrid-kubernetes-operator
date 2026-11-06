@@ -1,0 +1,86 @@
+# POC-51 cluster: a throwaway S3 mock (the HA members seed each other through
+# object storage), the three-member HA CubridCluster with its Brokers, and the
+# two clients of the -rw Service. The namespaces' Pod Security level is set by
+# the commands in README.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: s3mock, namespace: cubrid-poc51-store}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: s3mock}}
+  template:
+    metadata: {labels: {app: s3mock}}
+    spec:
+      containers:
+        - name: s3mock
+          image: docker.io/adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92
+          env:
+            - {name: COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS, value: seed}
+          ports: [{containerPort: 9090}]
+          readinessProbe: {tcpSocket: {port: 9090}, periodSeconds: 3}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: s3mock, namespace: cubrid-poc51-store}
+spec:
+  selector: {app: s3mock}
+  ports: [{port: 9090, targetPort: 9090}]
+---
+apiVersion: database.cubrid.io/v1alpha1
+kind: CubridCluster
+metadata: {name: hab, namespace: cubrid-poc51}
+spec:
+  version: "11.4"
+  image: {repository: poc51/instance-manager, tag: d3998bd}
+  databases: [{name: appdb}]
+  topology: {promotableMembers: 3, readReplicas: 0}
+  highAvailability: {enabled: true}
+  objectStorage:
+    endpoint: s3mock.cubrid-poc51-store.svc:9090
+    insecure: true
+    bucket: seed
+    credentialsSecretRef: {name: object-storage}
+  placement: {memberSpread: Preferred}
+  storage: {data: {size: 2Gi}}
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: client-new, namespace: cubrid-poc51}
+spec:
+  restartPolicy: Always
+  volumes: [{name: src, configMap: {name: client-src}}]
+  securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+  containers:
+    - name: client
+      image: poc51/client:1
+      imagePullPolicy: Never
+      command: ["python3", "-u", "/src/client.py"]
+      args: ["new", "new"]
+      volumeMounts: [{name: src, mountPath: /src}]
+      env:
+        - {name: RW_HOST, value: hab-rw.cubrid-poc51.svc}
+        - {name: DATABASE, value: appdb}
+        - {name: PERIOD, value: "3"}
+        - {name: PAUSED, value: "1"}
+      securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: client-keep, namespace: cubrid-poc51}
+spec:
+  restartPolicy: Always
+  volumes: [{name: src, configMap: {name: client-src}}]
+  securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+  containers:
+    - name: client
+      image: poc51/client:1
+      imagePullPolicy: Never
+      command: ["python3", "-u", "/src/client.py"]
+      args: ["keep", "keep"]
+      volumeMounts: [{name: src, mountPath: /src}]
+      env:
+        - {name: RW_HOST, value: hab-rw.cubrid-poc51.svc}
+        - {name: DATABASE, value: appdb}
+        - {name: PERIOD, value: "3"}
+        - {name: PAUSED, value: "1"}
+      securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}

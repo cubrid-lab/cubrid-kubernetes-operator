@@ -1,0 +1,7 @@
+# POC-51 client: the Python driver the e2e suite uses for its Broker check
+# (test/e2e/ha_bootstrap_test.go), with the script of this directory.
+FROM docker.io/library/python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+RUN pip install --no-cache-dir pycubrid==1.9.0
+COPY client.py /client.py
+USER 65532:65532
+ENTRYPOINT ["python3", "-u", "/client.py"]
