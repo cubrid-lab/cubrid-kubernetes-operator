@@ -309,7 +309,7 @@ func checkConditions(dir string, rounds []conditionRound, events []workload.Even
 // the sampled status reaches the scenario, that a round whose status could
 // not be read is counted, and that both evidence files are written.
 func TestCheckConditionsReadsRoundsAndClientEvents(t *testing.T) {
-	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	useEvidenceDir(t, t.TempDir())
 	now := time.Now().UTC()
 	read := func(routingReady, writeEndpointReady string) *faults.ConditionSample {
 		return &faults.ConditionSample{ReadStart: now, ReadEnd: now, LastObserved: now,
@@ -364,7 +364,7 @@ func TestHeartbeatRoleIn(t *testing.T) {
 // reads never carried a Condition a required rule reads is blocked, not
 // passed, and that a disagreement fails a run that passed everything else.
 func TestS05CannotPassWithARuleNeverEvaluated(t *testing.T) {
-	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	useEvidenceDir(t, t.TempDir())
 	start := time.Now().UTC()
 	var rounds []conditionRound
 	for i := range 20 {
@@ -555,7 +555,7 @@ func writeRoleSweeps(rel string, rounds []conditionRound) string {
 // with the disagreement as its reason (ADR-0005, section 6), whatever the wait
 // ended with, and the reads and the verdict are kept as evidence.
 func TestS03ConditionsAreJudgedOnEveryResult(t *testing.T) {
-	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	useEvidenceDir(t, t.TempDir())
 	start := time.Now().UTC()
 	rounds := make([]conditionRound, 0, 10)
 	for i := range 10 {
@@ -603,7 +603,7 @@ func TestS03ConditionsAreJudgedOnEveryResult(t *testing.T) {
 // outcome was not reached has no master to compare with after the Operator's
 // return, so it cannot pass on the Conditions.
 func TestS06ConditionsAreJudgedOnEveryResult(t *testing.T) {
-	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	useEvidenceDir(t, t.TempDir())
 	start := time.Now().UTC()
 	rounds := make([]conditionRound, 0, 10)
 	for i := range 10 {
@@ -693,7 +693,7 @@ func s00Fixture() ([]conditionRound, faults.S00Run) {
 // which no SQL ran in the member's Pod has nothing to compare Ready with, so
 // it cannot pass on the Conditions.
 func TestS00ConditionsAreJudgedOnEveryResult(t *testing.T) {
-	t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+	useEvidenceDir(t, t.TempDir())
 	const member = "s00-0"
 	agreeing, run := s00Fixture()
 	rounds := slices.Clone(agreeing)
@@ -817,7 +817,7 @@ func TestS00VerdictAgreesWithTheRecord(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			t.Setenv("E2E_EVIDENCE_DIR", dir)
+			useEvidenceDir(t, dir)
 			tc.ended.ID = "S00"
 			record := &s00Evidence{Scenario: "S00", Result: string(evidence.Fail), ProbeFailureEvents: []string{}}
 			got := s00Verdict(tc.ended, record, tc.rounds, tc.run, nil)
@@ -849,7 +849,7 @@ func TestS00VerdictAgreesWithTheRecord(t *testing.T) {
 // AgreementTolerance.
 func TestAgreementTextGivesEachToleranceRuleItsOwnTolerance(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("E2E_EVIDENCE_DIR", dir)
+	useEvidenceDir(t, dir)
 	run := faults.S00Run{Member: "m-0"}
 	checkConditions("S00/tol", nil, nil, nil, faults.S00Rules(run))
 	text, err := os.ReadFile(filepath.Join(dir, "S00/tol/agreement.txt"))

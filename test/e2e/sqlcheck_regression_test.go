@@ -250,7 +250,7 @@ func TestS00LastRead(t *testing.T) {
 			reasons: []string{otherReason}, stepErr: true, result: evidence.Fail},
 	} {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("E2E_EVIDENCE_DIR", t.TempDir())
+			useEvidenceDir(t, t.TempDir())
 			calls := 0
 			reads, err := s00LastRead(func(sql string) (string, error) {
 				if sql != "SELECT id, marker FROM "+s00Table+" ORDER BY id;" {

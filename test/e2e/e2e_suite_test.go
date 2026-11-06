@@ -30,7 +30,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 )
 
@@ -76,9 +75,8 @@ var _ = BeforeSuite(func() {
 	utils.SetRedaction(func(text string) string { return string(redactor.Redact([]byte(text))) })
 	// Before anything is built: a run whose evidence would be mixed with an
 	// earlier run's is not started (#310).
-	if dir := evidenceDir(); dir != "" {
-		Expect(evidence.RequireEmptyDir(dir)).To(Succeed())
-	}
+	// AfterSuite still runs after a refusal, but writes nothing there.
+	Expect(acquireEvidenceDir()).To(Succeed())
 	planRun()
 	Expect(checkBreakSettings()).To(Succeed())
 	// Before anything reaches a cluster, and before AfterSuite may undeploy.
