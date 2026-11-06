@@ -229,6 +229,26 @@ func TestGate(t *testing.T) {
 	}
 }
 
+func TestGateProblemsExplainScenarioBeforeLegacyKey(t *testing.T) {
+	lane := Lane{Required: []Requirement{{ID: "S14", Variant: "token-rotation"}}}
+	dir := t.TempDir()
+	want := "Instance Manager token rotation | S14/token-rotation: missing"
+	if problems := lane.Gate(Summary{}, dir); len(problems) != 1 || !strings.Contains(problems[0], want) {
+		t.Errorf("missing requirement = %q, want readable failure containing %q", problems, want)
+	}
+
+	sc := Scenario{ID: "S14", Variant: "token-rotation", Result: Blocked, Reason: "setup failed"}
+	want = "Instance Manager token rotation | S14/token-rotation: blocked: setup failed"
+	if problems := lane.Gate(Summary{Scenarios: []Scenario{sc}}, dir); len(problems) != 1 || !strings.Contains(problems[0], want) {
+		t.Errorf("blocked requirement = %q, want readable failure containing %q", problems, want)
+	}
+
+	unknown := Lane{Required: []Requirement{{ID: "S99"}}}
+	if problems := unknown.Gate(Summary{}, dir); len(problems) != 1 || problems[0] != "S99: missing: no result was recorded" {
+		t.Errorf("unknown requirement was silently renamed: %q", problems)
+	}
+}
+
 // Conclude writes the verdict before it reports it, and a summary that could
 // not be written fails the run.
 func TestConclude(t *testing.T) {
