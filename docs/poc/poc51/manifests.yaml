@@ -13,7 +13,7 @@ spec:
     spec:
       containers:
         - name: s3mock
-          image: docker.io/adobe/s3mock:5.2.3
+          image: docker.io/adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92
           env:
             - {name: COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS, value: seed}
           ports: [{containerPort: 9090}]

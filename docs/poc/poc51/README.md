@@ -4,9 +4,10 @@ The harness and the samples of POC-51 in [`../RESULTS.md`](../RESULTS.md) (searc
 POC-51 asks whether, with the Operator and Brokers running on Kind, a client of
 the `-rw` Service can be acknowledged by two members while a member of higher
 priority than the active master is cut off (#702). It repeats the two fault
-shapes of POC-50 that produced overlaps, with two corrections from the review
-of that POC: the member to be cut must have caught up first, and a write counts
-as acknowledged only when the client saw its commit succeed.
+shapes of POC-50 that produced overlaps, with two changes from the review of
+that POC: the member to be cut must have caught up first (the recorded run did
+not manage that, see RESULTS.md), and a write counts as acknowledged only when
+the client saw its commit succeed.
 
 It needs Docker, Kind, `kubectl`, `make`, Go and Python 3. Nothing in it holds a
 credential: the database user is CUBRID's default `dba` with no password, the
@@ -19,9 +20,9 @@ made for the run and removed after it.
 |---|---|
 | `kind-config.yaml` | The Kind cluster: one node, with longer kubeadm timeouts for a loaded host |
 | `manifests.yaml` | The object-store mock, the three-member HA `CubridCluster` (with its Brokers, which the Operator creates), and the two clients |
-| `client.py`, `Dockerfile.client` | The client of the `-rw` Service (pycubrid 1.9.0): one `INSERT` about once a second, an explicit commit, and a record of every outcome |
-| `sampler.py` | Runs inside a member: `cubrid heartbeat status` back to back with a 100 ms sleep |
-| `tablepoll.py` | Runs inside a member: reads the recent rows of `marks` from the member's own server every second and records when each row was first seen there |
+| `client.py`, `Dockerfile.client` | The client of the `-rw` Service (pycubrid 1.9.0): one `INSERT` every `PERIOD` seconds (3 s in the recorded run), an explicit commit, and a record of every outcome |
+| `sampler.py` | Runs inside a member: `cubrid heartbeat status` back to back with a 300 ms sleep |
+| `tablepoll.py` | Runs inside a member: reads the recent rows of `marks` from the member's own server every 1.5 s and records when each row was first seen there |
 | `harness.py` | Runs the trials: moves the master off the first member, waits for the first member to catch up, cuts, holds, heals, harvests |
 | `run-all.sh` | Runs the shapes in turn, one trial of each per round |
 | `netfault-profile.json`, `Dockerfile.netshoot` | The ephemeral container that carries the packet-drop rules, as `test/faults/netfault` does |
@@ -47,7 +48,7 @@ kubectl -n cubrid-poc51 create secret generic object-storage --from-literal=acce
 #   CREATE TABLE marks (id BIGINT AUTO_INCREMENT PRIMARY KEY, client VARCHAR(8), seq INT, at_ms BIGINT)
 kubectl -n cubrid-poc51 create configmap client-src --from-file=client.py=docs/poc/poc51/client.py
 # apply the two client Pods of manifests.yaml
-docs/poc/poc51/run-all.sh 4 60
+docs/poc/poc51/run-all.sh 4 60      # the recorded run used run-all.sh for the first trial and run-seq.sh all:2 all-brokers:1 after it
 python3 docs/poc/poc51/analyse.py $POC51_OUT
 kind delete cluster --name second-master
 ```
@@ -62,10 +63,15 @@ and `audit` at `restricted`) because the packet-drop container needs
    the first member, its Pod is deleted so that another member takes over.
 2. Start `sampler.py` and `tablepoll.py` in each member, and attach the
    packet-drop container to each member Pod.
-3. Pause the client's writes (a file the client checks), and wait until the
-   first member's `cubrid applyinfo -L <copy of the master's log> -a -v appdb`
-   shows `Delayed log page count: 0` and `Fail count: 0` in three readings in
-   a row. Resume the writes, wait 6 s and read once more, which is recorded.
+3. Pause the client's writes (a file the client checks), and wait for the first
+   member to catch up: first the strict reading, `cubrid applyinfo -L <copy of
+   the master's log> -a -v appdb` showing `Delayed log page count: 0` and
+   `Fail count: 0` in three readings in a row (never reached in the recorded
+   run); after 60 s, table equality with the master (count, highest key,
+   highest seq) twice in a row; after 150 s the trial goes on and says
+   `BEHIND`. Then resume the writes, start the samplers, wait 8 s, read the
+   applier once more (recorded) and cut. So writes go on for about 15 to 23 s
+   between the reading and the cut.
 4. Cut. Rules are `iptables` DROPs at the receiver's INPUT in a chain of their
    own, as in POC-39 and POC-50. Shapes: `udp` (UDP 59901 only, between the
    first member and the other two), `all` (every packet between the first
@@ -83,7 +89,7 @@ and `audit` at `restricted`) because the packet-drop container needs
 - `conditions.tsv.gz`: the `CubridCluster`'s primary and Conditions every 2 s (sample start, end, type, status, reason, message);
 - `pods.tsv.gz`: every Pod's readiness, phase, restart count and IP every 2 s;
 - `client-new.log.gz`, `client-keep.log.gz`: every write the two clients tried (start, end, client, sequence, result, key, the driver's text), for the whole run;
-- `udp-1/`, `all-2/`, `all-brokers-1/`: per trial `meta.json` (shape, master, cut and heal times, the readings before the cut, the rules' counters), `hab-*.hb.tsv.gz` (the heartbeat samples, thinned only by the 300 ms sleep), `hab-*.tab.tsv.gz` (when each row was first seen in the member's table) and `hab-*.rows.tsv.gz` (the member's rows since the trial began, two reads, first column the read number).
+- `udp-1/`, `all-2/`, `all-brokers-1/`: per trial `meta.json` (shape, master, cut and heal times, the readings before the cut, the rules' counters), `hab-*.hb.tsv.gz` (the heartbeat samples, every call, 300 ms apart; up to 1,366 rows per member and trial), `hab-*.tab.tsv.gz` (when each row was first seen in the member's table) and `hab-*.rows.tsv.gz` (the member's rows since the trial began, two reads, first column the read number).
 
 `python3 analyse.py samples` recomputes the counts and times in RESULTS.md's POC-51 table. The `cub_master` logs and `applyinfo` output other than the readings in `events.tsv.gz` and `meta.json` were read by hand and are not kept.
 

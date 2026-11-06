@@ -8,7 +8,7 @@ Usage:
   harness.py prepare              namespace, table, client Pods
   harness.py trial <shape> <n> [hold seconds]
                                   n trials of one shape: udp, all, all-brokers
-  harness.py compare              key-by-key comparison of the three tables
+  harness.py final <seconds>      pause the writes, wait, read every table twice (written, not run)
 Output goes to $POC51_OUT (default ./out)."""
 import gzip
 import json
@@ -481,7 +481,7 @@ def final(wait):
     for rep in (1, 2):
         for p in MEMBERS:
             snaps.setdefault(p, []).append(table_snapshot(p, since))
-            events("final-read", rep, p, len(snaps[p][-1]), applier_reading(p, "hab-0") if False else "")
+            events("final-read", rep, p, len(snaps[p][-1]))
         time.sleep(30)
     for p in MEMBERS:
         with gzip.open(d / f"{p}.rows.tsv.gz", "wt") as f:

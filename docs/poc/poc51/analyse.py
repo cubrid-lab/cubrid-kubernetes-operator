@@ -185,6 +185,30 @@ def trial(tid, acks, bad):
               f"keys not identical on all three {len(differ)}")
         if rep == 2 and differ:
             print("   e.g.", [(k, {m[-1]: tabs[m][2].get(k) for m in MEMBERS}) for k in differ[:4]])
+
+    # How long before the cut the catch-up reading was taken, and what was written in between.
+    ev = [l.split("\t") for l in rd(D / "events.tsv")]
+    reading = max((float(e[0]) for e in ev if len(e) > 3 and e[1] == "caught-up-reading" and float(e[0]) < cut0), default=None)
+    if reading is not None:
+        between = [a for a in acks if reading <= a["t1"] < cut0]
+        print(f" catch-up reading {cut0 - reading:.1f} s before the cut; writes acknowledged between the reading and the cut: "
+              f"{len(between)}, keys {sorted(int(a['key']) for a in between if a['key'].isdigit())[:3]}...")
+        # Keys the client was told for those writes, against the rows the members hold under the same keys at the second read.
+        told = {a["key"]: (a["client"], a["seq"]) for a in acks if reading <= a["t1"] <= heal and a["key"].isdigit()}
+        for m in MEMBERS:
+            clash = [k for k, v in tabs[m][2].items() if k in told and told[k] != v]
+            print(f"   {m}: keys the client was told for writes since the reading that this member's second read holds with another row (client-reported keys): {len(clash)}"
+                  f" ({min(map(int, clash))}-{max(map(int, clash))})" if clash else f"   {m}: none")
+        notread = [k for k in told if all(k not in tabs[m][2] for m in MEMBERS)]
+        print(f"   keys told to the client and held by no member in the second read (before the read's start time, or lost): {len(notread)}")
+    # Up to the start of the next trial or attempt (the client logs run through all of them).
+    nxt_start = min((float(e[0]) for e in ev if len(e) > 3 and e[1] == "trial" and e[3] == "start" and float(e[0]) > heal),
+                    default=float("inf"))
+    after = sorted((b for b in bad if heal < b["t0"] < nxt_start), key=lambda b: b["t0"])
+    ok_after = sorted((a for a in acks if heal < a["t0"] < nxt_start), key=lambda a: a["t0"])
+    print(f" after the heal until the next trial or attempt started (+{min(nxt_start - heal, 9999):.0f} s): {len(after)} failed writes, "
+          f"the last at +{(after[-1]['t0'] - heal):.0f} s from the heal; {len(ok_after)} acknowledged"
+          + (f", the last at +{(ok_after[-1]['t0'] - heal):.0f} s" if ok_after else "") if after else " after the heal: no failed write")
     held = {m: {v for v in tabs[m][2].values()} for m in MEMBERS}
     anyone = set().union(*held.values())
     miss = [a for a in window + [a for a in acks if a["t1"] > heal and a["t1"] < heal + 120]
