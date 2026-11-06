@@ -230,6 +230,14 @@ func TestKindRequirementsHaveReadableNames(t *testing.T) {
 	}
 }
 
+// The registry must describe this lane exactly: a requirement that maps to no
+// registered result, or a registered result nothing requires, fails here.
+func TestKindLaneIsRegistered(t *testing.T) {
+	for _, problem := range kindLane.RegistryProblems(evidence.LevelKind) {
+		t.Error(problem)
+	}
+}
+
 // runLane returns the lane this run is judged against. A run that selects
 // specs with a label filter or focus is a local baseline, not a validation of
 // the Kind lane: it must select a step of at least one scenario and pass

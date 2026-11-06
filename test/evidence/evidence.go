@@ -127,40 +127,6 @@ func (s Scenario) Name() string {
 	return s.ID + "/" + s.Variant
 }
 
-// scenarioDescriptions says what a scenario checks, for people reading a
-// result, by stable key: a scenario ID, or a full "ID/variant" key where the
-// variant's own name would mislead. The text follows the "What is checked"
-// column of docs/testing/scenario-name-migration.md. It is not an identity:
-// nothing matches on it. This map is provisional and must not grow into a
-// second source of truth: the scenario registry of #711 is to replace it.
-var scenarioDescriptions = map[string]string{
-	"S00":        "Standalone database installation and real SQL",
-	"S01":        "Three-member HA and read-write/read-only Broker access",
-	"S02":        "Normal HA replication",
-	"S03":        "Primary database Pod termination and recovery",
-	"S03/abrupt": "Primary database Pod termination and recovery - abrupt, later master",
-	"S04":        "Primary database VM failure",
-	"S05":        "Broker process/Pod failure recovery",
-	"S06":        "Operator interruption and HA continuity",
-	"S07":        "HA network partition",
-	"S08":        "Replication lag under repeated faults",
-	"S09":        "Rejoin of a former primary member",
-	"S10":        "Rebuild after persistent-volume data loss",
-	"S11":        "Backup completion, faults and recovery",
-	"S12":        "Restore into a new cluster and fault handling",
-	"S12/instance-manager-restart": "Restore into a new cluster and fault handling - " +
-		"instance manager restart, restoring placement",
-	"S13": "Cluster deletion and data-retention policy",
-	"S14": "Instance Manager network isolation, token-checked requests, service-account permissions " +
-		"and a search for leaked credentials",
-	"S14/token-rotation":  "HA Instance Manager token rotation",
-	"S14/token-migration": "Migration from legacy Instance Manager token",
-	"S15":                 "Node drain and PodDisruptionBudget behavior",
-	"LAB00":               "Installed Operator standalone connection and SQL smoke",
-	"LAB00/preallocated":  "Installed standalone preallocated ownership smoke",
-	"LAB01":               "Installed three-member HA and SQL smoke",
-}
-
 // variantSlug is what a variant must look like for its name to be copied into
 // a description. The redactor reads "token: value" in the text of junit.xml
 // as a credential and removes everything up to the next space or quote, which
@@ -173,10 +139,10 @@ func (s Scenario) description() string {
 	if !variantSlug.MatchString(s.Variant) {
 		return ""
 	}
-	if description, ok := scenarioDescriptions[s.Name()]; ok {
+	if description, ok := registry.description(s.Name()); ok {
 		return description
 	}
-	description, ok := scenarioDescriptions[s.ID]
+	description, ok := registry.description(s.ID)
 	if !ok || s.Variant == "" {
 		return description
 	}

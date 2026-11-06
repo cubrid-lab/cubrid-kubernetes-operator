@@ -224,6 +224,15 @@ func (c Config) validate() error {
 
 // validateBudgets checks the run's durations, the minimum free space and
 // memory a node must have, and the requests of the run's members.
+// smokeLane returns the lane of a connection smoke run and the variant of
+// the scenario it requires.
+func (c Config) smokeLane() (string, string) {
+	if c.NamespaceMode == PreallocatedNamespace {
+		return preallocatedLane, "preallocated"
+	}
+	return laneName, ""
+}
+
 func (c Config) validateBudgets() error {
 	if c.Timeout <= 0 || c.CleanupTimeout <= 0 || c.Poll <= 0 {
 		return errors.New("run, cleanup and poll durations must be positive")
@@ -292,10 +301,8 @@ func (r *Runner) Run(ctx context.Context, cfg Config) (runErr error) {
 			"Commit is selected by the campaign; actual runtime image identities are recorded separately",
 			"A fresh namespace's cleanup waits until the volumes bound to its claims are deleted; a preallocated " +
 				"namespace's retained volumes are not deleted"}}
-	lane := laneName
-	variant := ""
+	lane, variant := cfg.smokeLane()
 	if cfg.NamespaceMode == PreallocatedNamespace {
-		lane, variant = preallocatedLane, "preallocated"
 		rec.CleanupScope = ownedWorkloadsScope
 		rec.FixtureReusable, rec.ResetRequired = new(false), new(true)
 		rec.OwnershipEpoch = &ownershipEpoch{ConfigMap: cfg.OwnerConfigMap, UID: cfg.OwnerUID, Nonce: cfg.OwnerNonce}
