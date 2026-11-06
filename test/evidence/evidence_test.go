@@ -66,6 +66,35 @@ func TestScenarioName(t *testing.T) {
 	}
 }
 
+func TestScenarioDisplayName(t *testing.T) {
+	tests := []struct {
+		name string
+		sc   Scenario
+		want string
+	}{
+		{"standalone database", Scenario{ID: s00}, "Standalone database installation and SQL (S00)"},
+		{"primary Pod termination", Scenario{ID: s03, Variant: abrupt},
+			"Primary database Pod failure recovery - abrupt (S03/abrupt)"},
+		{"token rotation", Scenario{ID: "S14", Variant: "token-rotation"},
+			"Instance Manager token rotation (S14/token-rotation)"},
+		{"legacy token migration", Scenario{ID: "S14", Variant: "token-migration"},
+			"Migration from a legacy Instance Manager token (S14/token-migration)"},
+		{"installed smoke", Scenario{ID: "LAB00"}, "Installed standalone SQL smoke test (LAB00)"},
+		{"unknown historical ID", Scenario{ID: "S99", Variant: "legacy"}, "S99/legacy"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.sc.DisplayName(); got != tc.want {
+				t.Errorf("display name = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	// Report readability must never change the matching key used by gates.
+	if got := (Scenario{ID: s03, Variant: abrupt}).Name(); got != "S03/abrupt" {
+		t.Errorf("gate key changed to %q", got)
+	}
+}
+
 // A pass is only a pass when the fault was confirmed, nothing forbidden was
 // seen and every listed evidence file exists.
 func TestJudge(t *testing.T) {
@@ -457,7 +486,7 @@ func TestConclude_JUnitCarriesTheLaneVerdict(t *testing.T) {
 				t.Errorf("junit.xml tests=%d, want %d scenarios and the run case", j.tests, len(tc.summary.Scenarios))
 			}
 			for _, sc := range tc.summary.Scenarios {
-				if (sc.Result == NotRun || sc.Result == NotApplicable) && !slices.Contains(j.skipped, sc.Name()) {
+				if (sc.Result == NotRun || sc.Result == NotApplicable) && !slices.Contains(j.skipped, sc.DisplayName()) {
 					t.Errorf("junit.xml skipped cases %q, want %s among them", j.skipped, sc.Name())
 				}
 			}
@@ -601,10 +630,10 @@ func TestWriteJUnit(t *testing.T) {
 	if len(c) != 5 {
 		t.Fatalf("test cases = %d, want 5", len(c))
 	}
-	if c[0].Name != s00 || c[0].Failure != nil || c[0].Error != nil || c[0].Skipped != nil {
+	if c[0].Name != (Scenario{ID: s00}).DisplayName() || c[0].Failure != nil || c[0].Error != nil || c[0].Skipped != nil {
 		t.Errorf("pass must have no child element: %+v", c[0])
 	}
-	if c[1].Name != "S03/abrupt" || c[1].Failure == nil {
+	if c[1].Name != (Scenario{ID: s03, Variant: abrupt}).DisplayName() || c[1].Failure == nil {
 		t.Errorf("fail must be a failure: %+v", c[1])
 	}
 	if c[2].Skipped == nil || c[2].Skipped.Message != "not_applicable: needs the VM lab" {
