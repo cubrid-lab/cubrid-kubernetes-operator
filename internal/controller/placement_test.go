@@ -331,7 +331,7 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 				foreign := &appsv1.StatefulSet{
 					ObjectMeta: metav1.ObjectMeta{Name: c.Name, Namespace: c.Namespace, Labels: labels, OwnerReferences: holder.owners(c)},
 					Spec: appsv1.StatefulSetSpec{
-						ServiceName: "someone-elses",
+						ServiceName: foreignName,
 						Selector:    &metav1.LabelSelector{MatchLabels: labels},
 						Template: corev1.PodTemplateSpec{
 							ObjectMeta: metav1.ObjectMeta{Labels: labels},

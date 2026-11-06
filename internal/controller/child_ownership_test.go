@@ -54,6 +54,7 @@ type childPath struct {
 }
 
 const (
+	foreignName      = "someone-elses"
 	foreignContainer = "foreign-app"
 	ownerKind        = "CubridCluster"
 )
@@ -94,7 +95,7 @@ func foreignDeployment(name string) client.Object {
 
 func foreignStatefulSet(name string) client.Object {
 	return &appsv1.StatefulSet{ObjectMeta: foreignMeta(name), Spec: appsv1.StatefulSetSpec{
-		ServiceName: "someone-elses",
+		ServiceName: foreignName,
 		Selector:    &metav1.LabelSelector{MatchLabels: foreignLabels},
 		Template:    foreignPodTemplate(),
 	}}
@@ -143,7 +144,7 @@ var childHolders = []struct {
 	{"another controller", func(*databasev1alpha1.CubridCluster) []metav1.OwnerReference {
 		yes := true
 		return []metav1.OwnerReference{{
-			APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "someone-elses", UID: "other-controller", Controller: &yes,
+			APIVersion: "apps/v1", Kind: "ReplicaSet", Name: foreignName, UID: "other-controller", Controller: &yes,
 		}}
 	}},
 	// A cluster of the same name that was deleted: only the UID tells it from
