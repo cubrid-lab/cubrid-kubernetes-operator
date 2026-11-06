@@ -554,9 +554,12 @@ What the table means for the rules that must hold:
   skip.
 - `main` has no branch protection and no ruleset (checked 2026-11-06 with the
   GitHub API), so no status check, skipped or failed, blocks a merge; the
-  maintainers' review and the PR checklist are the only gate. Turning
-  protection on is a maintainer decision and is not part of this
-  documentation. If it is turned on, note that the `Tests`, `Lint` and `E2E
+  maintainers' review and the PR checklist are the only gate. A green or
+  failed workflow is therefore a report, not an enforcement boundary. Turning
+  protection on, and choosing which checks must block an unvalidated change, is
+  a maintainer decision that is not part of this documentation; it is tracked
+  with the release guard on #94 and #124. If it is turned on, note that the
+  `Tests`, `Lint` and `E2E
   Tests` workflows each have a job named `Run on Ubuntu`, so a required
   check must be chosen with care, and that a failed push to `main` after a
   merge (as in the two runs above) is reported only afterwards.
