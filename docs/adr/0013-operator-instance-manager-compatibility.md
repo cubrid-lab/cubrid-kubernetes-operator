@@ -1,4 +1,4 @@
-# ADR-0012: Compatibility between the Operator and existing Instance Managers
+# ADR-0013: Compatibility between the Operator and existing Instance Managers
 
 ## Status
 

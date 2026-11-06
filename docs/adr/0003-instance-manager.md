@@ -173,7 +173,7 @@ waited on like an unavailable manager, and any other 409 is a
 conflict of no named cause (`InstanceManagerConflict`) after which the key
 is looked up. What the Operator does today when it and an Instance Manager
 are of different versions is recorded in
-[ADR-0012](./0012-operator-instance-manager-compatibility.md) (#322); this change only adds a
+[ADR-0013](./0013-operator-instance-manager-compatibility.md) (#322); this change only adds a
 field and keeps every earlier answer readable.
 
 ### Role discovery
