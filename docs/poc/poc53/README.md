@@ -18,7 +18,7 @@ every trial is one fault with its own directory of raw files.
 | `sampler.py` | POC-50's sampler: runs inside a member, `cubrid heartbeat status` in a loop, one TSV row per call |
 | `writer.py` | Runs on each remaining member: once a second a marker row with autocommit off and an explicit `COMMIT`, then read back over a new connection |
 | `holder.py` | Runs on the master: a client left connected through its stop, or a write load |
-| `analyse.py` | Recomputes every count in RESULTS.md from a trial's raw files: `python3 analyse.py samples --trials` |
+| `analyse.py` | Recomputes the tables and the facts RESULTS.md quotes from each trial's raw files, and lists there what it cannot: `python3 analyse.py samples --trials` |
 | `samples/` | The recorded run, one directory per trial |
 
 ## How to run it
@@ -93,11 +93,11 @@ data. Each trial's `spec.json` holds its details.
 `samples/<trial>/`, times in epoch seconds with `events.tsv` also in UTC:
 
 - `results.jsonl`: every trial's `result.json`, in the order they ran, and `skipped.txt`: what the time limit left out of `lag` and `gaps`;
-- `spec.json`, `result.json`, `rows.json` (the trial's marker rows per member);
-- `events.tsv.gz`: each step with its time;
+- `spec.json`, `result.json`, `rows.json` (the trial's marker rows per member; two rows in it were never logged by a writer, and `analyse.py` names them);
+- `events.tsv.gz`: each step with its time; `pre-fault-load.txt.gz`: the load just before the fault;
 - `h-*.tsv.gz`, `h-*.raw.gz`: the sampler's rows, and the raw status output at each change;
 - `h-*.writes.tsv.gz`, `h-*.refused.txt.gz`: every write attempt, and the whole output of each that was not a committed row, which is where `ERROR CODE` lines are kept;
-- `h-*.master.err.gz`, `h-*.server.err.gz`, `h-*.logdb.err.gz`: what `cub_master`, the server and the copier and applier logged during this trial. Chained trials hold only their own part of each log. The first trials differ: `idle-session`, `open-txn` and `long-query` have `h-1` and `h-2` without these logs, and those and `stop0-master1-left2-graceful-gap2-n1` have no `logdb` file, because the harvest was fixed after them;
+- `h-*.master.err.gz`, `h-*.server.err.gz`, `h-*.logdb.err.gz`: what `cub_master`, the server and the copier and applier logged during this trial. Chained trials hold only their own part of each log, so a line from before a trial can be in the trial before it, and `analyse.py` reads a member's log across trials where that matters. The first trials differ: `idle-session`, `open-txn` and `long-query` have `h-1` and `h-2` without these logs, and those and `stop0-master1-left2-graceful-gap2-n1` have no `logdb` file, because the harvest was fixed after them;
 - `holder.log.gz`: the holder client's output, where a holder ran.
 
 The harness changed during the run, and every trial ran the version of its time: the writer's retry with its own key came after `control-master2-left0-graceful-gap2-writes60-n1`, the harness's explicit key for its own writes after the abandoned `stop1-master0-left2-kill-gap2-writes60-n1`, and `master-kill-begin` in `events.tsv` after `stop0-master2-left1-kill-gap2-writes-n1`, whose kill time comes from `result.json`.

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""POC-53: recomputes every count in RESULTS.md from the raw files of each
-trial, and takes nothing from the harness's result.json except the trial's
-"why" text when it was abandoned and the final view. Usage:
-  analyse.py <samples-dir> [--trials]   table per condition; --trials adds one line per trial
+"""POC-53: recomputes the counts and times in RESULTS.md from each trial's raw
+files: samples, write logs, events, rows and logs. From result.json it reads
+only what no raw file holds: the load at the trial's edges, and the start of a
+kill in the trials from before `master-kill-begin` was logged. What it cannot
+recompute is listed in RESULTS.md. Usage:
+  analyse.py <samples-dir> [--trials]   table per condition, then the facts the
+                                        entry quotes; --trials adds one line per trial
 Times are seconds from the start of the master's end unless named otherwise."""
 import gzip
 import json
@@ -14,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MEMBERS = ["h-0", "h-1", "h-2"]
+ACTIVE_TO_STANDBY = "from 'active' to 'standby'"
+WORKING_TO_RECOVERING = "'working' to 'recovering'"
 
 
 def lines(p):
@@ -62,20 +67,39 @@ def when(ev, name):
     return next((t for t, n, _ in ev if n == name), None)
 
 
+def records(path):
+    """(epoch, text) of each line of a CUBRID log, stamped by its `Time:` line."""
+    out, last = [], None
+    for line in lines(path):
+        found = re.match(r"Time: (\d\d/\d\d/\d\d \d\d:\d\d:\d\d\.\d+)", line)
+        if found:
+            last = datetime.strptime(found.group(1), "%m/%d/%y %H:%M:%S.%f").replace(tzinfo=timezone.utc).timestamp()
+        elif last and line.strip():
+            out.append((last, line.strip()))
+    return out
+
+
 def trial(d):
     spec = json.loads((d / "spec.json").read_text())
     res = json.loads((d / "result.json").read_text()) if (d / "result.json").exists() else {}
     ev = events(d)
     s, m, r = spec["stopped"], spec["master"], spec["remaining"]
-    out = dict(name=d.name, spec=spec, abandoned=when(ev, "abandoned") is not None, why=res.get("why", ""),
-               final=res.get("final_view", ""), final_write=res.get("final_write", ""), load=[res.get("load_begin"), res.get("load_end")], rows=res.get("rows", ""))
+    final = next((" ".join(f) for _, n, f in ev if n == "final-view"), "")
+    if final.startswith("not stable"):
+        final = ""
+    stored = json.loads((d / "rows.json").read_text()) if (d / "rows.json").exists() else {}
+    pre = [lines(d / "pre-fault-load.txt")]
+    out = dict(name=d.name, spec=spec, abandoned=when(ev, "abandoned") is not None,
+               why=next((" ".join(f) for _, n, f in ev if n == "abandoned"), ""),
+               final=final, final_write="committed" if any(q.endswith(":0") for v in stored.values() for q in v) else "",
+               load=[res.get("load_begin"), res.get("load_end")] + (pre[0][:1] if pre[0] else []),
+               rows=str({k: len(v) for k, v in stored.items()}), ev=ev, dir=d)
     if out["abandoned"]:
         return out
-    t_end = when(ev, "master-hb-stop-begin")
-    t_done = when(ev, "master-removed")
-    if t_end is None:  # killed: the event comes after `docker kill` returns, so the start is the harness's own note
+    t_end = when(ev, "master-hb-stop-begin") or when(ev, "master-kill-begin")
+    t_done = when(ev, "master-removed") or when(ev, "master-killed")
+    if t_end is None:  # an early kill: its event comes after `docker kill` returns
         t_end = datetime.strptime(res["end_begin"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc).timestamp()
-        t_done = when(ev, "master-killed")
     t_hb = when(ev, "master-hb-stop-done")
     t_slave = when(ev, "slave-hb-stop-begin")
     t_slave_done = when(ev, "slave-hb-stop-done")
@@ -99,10 +123,10 @@ def trial(d):
     out["commit_s"] = got[out["promoted"]] - t_end if got else None
     out["commit_after_done_s"] = got[out["promoted"]] - t_done if got else None
     # After recovery: every committed row on every member?
-    stored = json.loads((d / "rows.json").read_text()) if (d / "rows.json").exists() else {}
     acked = set().union(*[seqs(d, x) for x in MEMBERS])
     out["acked"] = len(acked)
     out["missing"] = {x: len(acked - set(stored.get(x, []))) for x in MEMBERS} if stored else None
+    out["unlogged"] = sorted({q for v in stored.values() for q in v if q not in acked and not q.endswith(":0")})
     # What the remaining member's own heartbeat view said.
     view = samp[r]
     after = [a for a in view if a["t"] >= t_end]
@@ -129,6 +153,11 @@ def trial(d):
     out["to_be_active_samples"] = sum(1 for a in tv if t_end <= a["t"] <= watch_end and a["server"] == "registered_and_to_be_active")
     selfm2 = next((a["t"] for a in tv if a["t"] >= t_end and a["self"] == "master"), None)
     out["took_self_master_s"] = selfm2 - t_end if selfm2 else None
+    tob = next((a["t"] for a in tv if a["t"] >= t_end and a["self"] == "to-be-master"), None)
+    out["to_be_to_master_s"] = selfm2 - tob if tob and selfm2 else None
+    act2 = next((a["t"] for a in tv if a["t"] >= t_end and a["self"] == "master" and a["server"] == "registered_and_active"), None)
+    out["active_sampled_s"] = act2 - t_end if act2 else None
+    out["recovery_s"] = (when(ev, "final-view") - when(ev, "watch-end")) if when(ev, "final-view") else None
     out["active_log_s"], out["applier_done_from_active"] = activation(d, took[0], t_end) if took else (None, None)
     # The ended master's own view of itself during its stop.
     during = [a for a in samp[m] if t_end <= a["t"] <= (t_hb or t_end)]
@@ -161,6 +190,92 @@ def activation(d, member, t_end):
         return None, None
     done = log_stamps(d / f"{member}.logdb.err", "to 'done'")
     return active[0] - t_end, (min(abs(t - active[0]) for t in done) if done else None)
+
+
+def facts(rows):
+    """Everything else the entry quotes, each line recomputed from raw files."""
+    ok = [t for t in rows if not t["abandoned"]]
+    fmt = lambda v: "-" if v is None else f"{v:.1f}"
+    print("\nFacts quoted in RESULTS.md")
+    plain = [t["stop_hb"] for t in ok if t["spec"]["end"] == "graceful" and t["spec"]["holder"] != "frozen-server"]
+    frozen = [t["stop_hb"] for t in ok if t["spec"]["holder"] == "frozen-server"]
+    print(f"graceful heartbeat stops: {len(plain)} at {min(plain):.2f}-{max(plain):.2f} s; frozen server {min(frozen):.1f}-{max(frozen):.1f} s")
+    stops = [(t["stop_total"], t["name"]) for t in ok if t["spec"]["end"] == "kill"]
+    print(f"kills: longest `docker kill` {max(stops)[0]:.1f} s in {max(stops)[1]}; graceful end including its docker kill, longest unfrozen "
+          f"{max((t['stop_total'], t['name']) for t in ok if t['spec']['end'] == 'graceful' and t['spec']['holder'] != 'frozen-server')}")
+    rec = [t["recovery_s"] for t in ok if t["recovery_s"]]
+    print(f"recovery from the watch's end to one master and two slaves: {min(rec):.1f}-{max(rec):.1f} s")
+    print(f"last row committed in {sum(1 for t in ok if t['final_write'])} of {len(ok)} trials")
+    un = [(t["name"], t["unlogged"]) for t in ok if t["unlogged"]]
+    print(f"rows in rows.json the writer never logged: {un}")
+    d = [t["to_be_to_master_s"] for t in ok if t["to_be_to_master_s"] is not None]
+    print("to-be-master to master, s, by trial:", " ".join(f"{t['name'].split('-n')[0][:44]}={t['to_be_to_master_s']:.1f}" for t in ok if t["to_be_to_master_s"] is not None))
+    print("remaining member's first listing of the stopped slave and the master as not alive, s (together trials):",
+          [(t["name"], fmt(t.get("r_slave_unknown_s")), fmt(t["r_master_gone_s"]), t["r_view_at_end"]) for t in ok if t["spec"]["gap"] == "together"])
+    print("\nIn `to_be_active` after a takeover: master, active by log, active by sample, lag of the sample, refused writes on that member")
+    for t in ok:
+        if t["to_be_active_samples"]:
+            c = "".join(lines(t["dir"] / f"{t['took_over']}.refused.txt"))
+            print(f"  {t['name']}: {fmt(t['took_self_master_s'])}, {t['active_log_s']:.1f}, {fmt(t['active_sampled_s'])}, "
+                  f"{t['active_sampled_s'] - t['active_log_s']:.1f}, -581 x {c.count('ERROR CODE = -581')}, -670 x {c.count('result=other:-670')}, "
+                  f"applier done {t['applier_done_from_active']:.3f} s from active")
+    near = [t["applier_done_from_active"] for t in ok if t["applier_done_from_active"] is not None and not t["to_be_active_samples"]]
+    print(f"closest applier done to active in the other {len(near)} trials with logs: {min(near):.3f} s or more")
+    print("\n`is changed to standby` then `done` 59.5 to 60.6 s later, on one member's log, by trial")
+    n = hit = 0
+    for t in ok:
+        for m in MEMBERS:
+            log = records(t["dir"] / f"{m}.logdb.err")
+            done = [a for a, b in log if "to 'done'" in b]
+            for a, b in log:
+                if "is changed to standby" in b:
+                    n += 1
+                    gap = next((x - a for x in done if 59.5 < x - a < 60.6), None)
+                    hit += gap is not None
+                    print(f"  {t['name']} {m} at {a - t['t_end']:.2f}: {'done +%.3f' % gap if gap else 'none'}")
+    print(f"  {hit} of {n} lines have that done")
+    print("\nLast applier start before the master's end on the member that took over, s before it, with no `standby` line within 60 s:")
+    # Chained trials hold only their part of a log, so a member's log is read across all trials.
+    whole = {m: sorted(r for t in rows for name in ("logdb", "server") for r in records(t["dir"] / f"{m}.{name}.err")) for m in MEMBERS}
+    for t in ok:
+        log = whole[t["took_over"]]
+        st = [a for a, b in log if "log applier started" in b and a < t["t_end"]]
+        if st and t["t_end"] - st[-1] < 60 and not any("is changed to standby" in b and 0 <= a - st[-1] < 60 for a, b in log):
+            print(f"  {t['name']}: {t['t_end'] - st[-1]:.1f}, first commit {fmt(t['commit_s'])}")
+    print("\nHow the wait of the returned member ended")
+    for t in ok:
+        if t["spec"]["return_at"] == "after":
+            continue
+        log = records(t["dir"] / "h-0.logdb.err")
+        rel = [(a - t["t_end"], b) for a, b in log]
+        first = lambda text, after=0.0: next((a for a, b in rel if text in b and a > after), None)
+        srv = [a - t["t_end"] for a, b in records(t["dir"] / "h-0.server.err") if "from 'to-be-active' to 'active'" in b]
+        dead = next((a - t["t_end"] for a, b in records(t["dir"] / "h-2.logdb.err") if "to 'dead'" in b and a > t["t_end"]), None)
+        print(f"  {t['name']}: `Cannot connect` {sum(1 for _, b in rel if 'Cannot connect to server' in b)} times, first {first('Cannot connect to server', -5):.1f}; "
+              f"`Cannot make connection` {sum(1 for _, b in rel if 'Cannot make connection' in b)} times; "
+              f"copier connected {first('connected to database server', 100):.3f}; header active to standby {first(ACTIVE_TO_STANDBY, 100):.3f}; "
+              f"working to recovering {first(WORKING_TO_RECOVERING, 100):.3f}; server active {srv[0]:.3f}; h-2's copier active to dead {dead:.2f}")
+    print("\nDuplicate keys (-670)")
+    for t in rows:
+        text = " ".join(b for m in MEMBERS for _, b in records(t["dir"] / f"{m}.server.err")) + t["why"]
+        keys = sorted({int(k) for k in re.findall(r"key: (\d+)\(OID", text)})
+        if keys:
+            kind = "chained" if when(t["ev"], "chained") else "fresh"
+            print(f"  {t['name']} ({kind}): {len(keys)} keys, {keys[0]} to {keys[-1]}")
+    for t in ok:
+        tries = [l for l in lines(t["dir"] / "h-0.refused.txt") if "result=other:-670" in l]
+        if tries:
+            at = [float(l.split()[1]) for l in tries]
+            print(f"  writer in {t['name']}: {len(at)} attempts from {at[0] - t['t_end']:.1f} to {at[-1] - t['t_end']:.1f} s, "
+                  f"{at[-1] - at[0]:.1f} s; the watch ended at {when(t['ev'], 'watch-end') - t['t_end']:.1f} s")
+    lone = [t for t in rows if t["abandoned"] and "alone" in t["why"]]
+    for t in lone:
+        h = samples(t["dir"], t["spec"]["master"])
+        first = next(a["t"] for a in h if a["self"] == "master")
+        tba = [a["t"] for a in h if a["server"] == "registered_and_to_be_active"]
+        print(f"\nmaster started alone: `master` {first - when(t['ev'], 'reset-done'):.1f} s after the reset; `to_be_active` for {tba[-1] - tba[0]:.1f} s of samples, to the end")
+    all581 = sum("".join(lines(p.with_suffix("")) ).count("ERROR CODE = -581") for t in ok for p in t["dir"].glob("h-*.refused.txt.gz"))
+    print(f"-581 refusals in all write logs: {all581}")
 
 
 def label(s):
@@ -208,7 +323,8 @@ def main():
     print(f"trials with a duplicate-key refusal on a remaining member: {sum(1 for t in ok if sum(t['dup_key'].values()))}")
     loads = [float(x) for t in rows for x in t["load"] if x]
     if loads:
-        print(f"load average at trial edges: {min(loads)} to {max(loads)}")
+        print(f"load average at trial edges and before the fault: {min(loads)} to {max(loads)}")
+    facts(rows)
     if "--trials" in sys.argv:
         for t in rows:
             if t["abandoned"]:
