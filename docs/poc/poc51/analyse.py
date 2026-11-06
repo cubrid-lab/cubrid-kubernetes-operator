@@ -206,8 +206,8 @@ def trial(tid, acks, bad):
                     default=float("inf"))
     after = sorted((b for b in bad if heal < b["t0"] < nxt_start), key=lambda b: b["t0"])
     ok_after = sorted((a for a in acks if heal < a["t0"] < nxt_start), key=lambda a: a["t0"])
-    window = "to the end of the run" if nxt_start - heal > 9999 else f"to the next trial or attempt, +{nxt_start - heal:.0f} s"
-    print(f" after the heal ({window}): {len(after)} failed writes, "
+    span = "to the end of the run" if nxt_start - heal > 9999 else f"to the next trial or attempt, +{nxt_start - heal:.0f} s"
+    print(f" after the heal ({span}): {len(after)} failed writes, "
           f"the last at +{(after[-1]['t0'] - heal):.0f} s from the heal; {len(ok_after)} acknowledged"
           + (f", the last started at +{(ok_after[-1]['t0'] - heal):.0f} s" if ok_after else "") if after else " after the heal: no failed write")
     held = {m: {v for v in tabs[m][2].values()} for m in MEMBERS}

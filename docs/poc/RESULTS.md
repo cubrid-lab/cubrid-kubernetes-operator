@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-50, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-51, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -30,7 +30,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > linux/amd64 host, with the official image and the Instance Manager's
 > `ExecCLI`; POC-48 ran in Docker on a native linux/amd64 host, with the
 > official image; POC-49 and POC-50 ran in Docker on a native linux/amd64 host,
-> with the Operator's Instance Manager image. Each states its own environment. Each POC is the
+> with the Operator's Instance Manager image; POC-51 ran on Kind on a native
+> linux/amd64 host, with the Operator and Brokers. Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
