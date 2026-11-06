@@ -171,10 +171,10 @@ the status as before codes existed: 401 and 403 refuse the token, 412 means
 no object storage, 400, 413 and 422 refuse the request, another 4xx is
 waited on like an unavailable manager, and any other 409 is a
 conflict of no named cause (`InstanceManagerConflict`) after which the key
-is looked up. The rules for
-running an operator and Instance Managers of different versions together are
-decided in #322; this change only adds a field and keeps every earlier
-answer readable.
+is looked up. What the Operator does today when it and an Instance Manager
+are of different versions is recorded in
+[ADR-0012](./0012-operator-instance-manager-compatibility.md) (#322); this change only adds a
+field and keeps every earlier answer readable.
 
 ### Role discovery
 
