@@ -105,8 +105,11 @@ type s11MissingRecord struct {
 	// ManagerAfter as this variant read it at its end.
 	ManagerBefore *managerIdentity `json:"managerBefore,omitempty"`
 	ManagerAfter  *managerIdentity `json:"managerAfter,omitempty"`
-	Source        *s12Source       `json:"source,omitempty"`
-	Credentials   *s11Credentials  `json:"credentials,omitempty"`
+	// StagingAfterFailure is the target member's backup staging directory
+	// as read once the backup ended Failed (checkStagingAfterFailure).
+	StagingAfterFailure *s11StagingAfterFailure `json:"stagingAfterFailure,omitempty"`
+	Source              *s12Source              `json:"source,omitempty"`
+	Credentials         *s11Credentials         `json:"credentials,omitempty"`
 	// JudgedAt is when the run reached its verdict.
 	JudgedAt *time.Time `json:"judgedAt,omitempty"`
 	Notes    []string   `json:"notes,omitempty"`
@@ -159,6 +162,7 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 	defer func() {
 		cleaned := h.deleteMissingBackup(ctx, created, &rec.Cleanup)
 		result.CleanupSucceeded = &cleaned
+		rec.Residue = withStagingResidue(rec.Residue, rec.StagingAfterFailure)
 		// A pass without its evidence is a failure; a blocked or failed S11
 		// missing-destination keeps its result, with the evidence that could
 		// not be written.
@@ -174,7 +178,7 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 		})
 	}()
 	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String()}
-	result.Measurements = map[string]any{"failedWithin": evidence.Unknown}
+	result.Measurements = map[string]any{"failedWithin": evidence.Unknown, measStagingFilesLeft: evidence.Unknown}
 	err := h.missingSteps(ctx, &result, &rec, &created)
 	// A credential found in any status read or Event is a failure, whichever
 	// step ended S11 missing-destination.
@@ -210,7 +214,8 @@ func (h *haRun) runS11MissingDestination(ctx context.Context) (result evidence.S
 			"ended Failed within backup_limit for its upload, never Completed and without status.artifact; the " +
 			"bucket was still absent at the end; the source was unchanged; no credential was in the statuses read " +
 			"or the Events, nor in the installed Operator's manager log or the Instance Manager's log in the " +
-			"backup's target Pod, each read from " + logSinceMargin.String() + " before the variant started"
+			"backup's target Pod, each read from " + logSinceMargin.String() + " before the variant started; " +
+			rec.StagingAfterFailure.passClause()
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -241,6 +246,7 @@ func (h *haRun) missingSteps(ctx context.Context, result *evidence.Scenario, rec
 	rec.BackupUID, rec.RequestedAt = string(backup.UID), &requested
 	backup, err = h.waitBackup(ctx, backup, &rec.Phases, rec.Credentials)
 	errs := []error{h.judgeMissing(backup, err, requested, rec, result)}
+	errs = append(errs, h.checkStagingAfterFailure(ctx, rec.Phases, rec.BackupUID, &rec.StagingAfterFailure, result))
 	errs = append(errs, h.missingAtEnd(ctx, rec.Bucket))
 	if b := rec.Bucket; b.CheckedAtEnd != nil && !b.AbsentAtEnd {
 		rec.Residue = "bucket " + b.Name + " exists at the end; the run did not create it and does not remove it" +

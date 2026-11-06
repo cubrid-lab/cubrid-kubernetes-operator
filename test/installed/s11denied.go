@@ -173,8 +173,11 @@ type s11DeniedRecord struct {
 	// ManagerAfter as this variant read it at its end.
 	ManagerBefore *managerIdentity `json:"managerBefore,omitempty"`
 	ManagerAfter  *managerIdentity `json:"managerAfter,omitempty"`
-	Source        *s12Source       `json:"source,omitempty"`
-	Credentials   *s11Credentials  `json:"credentials,omitempty"`
+	// StagingAfterFailure is the target member's backup staging directory
+	// as read once the backup ended Failed (checkStagingAfterFailure).
+	StagingAfterFailure *s11StagingAfterFailure `json:"stagingAfterFailure,omitempty"`
+	Source              *s12Source              `json:"source,omitempty"`
+	Credentials         *s11Credentials         `json:"credentials,omitempty"`
 	// JudgedAt is when the run reached its verdict.
 	JudgedAt *time.Time `json:"judgedAt,omitempty"`
 	Notes    []string   `json:"notes,omitempty"`
@@ -252,6 +255,7 @@ func (h *haRun) runS11KeyFault(ctx context.Context, v s11KeyFault) (result evide
 	defer func() {
 		cleaned := h.deleteDenied(ctx, v, made, &rec)
 		result.CleanupSucceeded = &cleaned
+		rec.Residue = withStagingResidue(rec.Residue, rec.StagingAfterFailure)
 		// A pass without its evidence is a failure; a blocked or failed
 		// variant keeps its result, with the evidence that could not be
 		// written.
@@ -266,7 +270,7 @@ func (h *haRun) runS11KeyFault(ctx context.Context, v s11KeyFault) (result evide
 		})
 	}()
 	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String()}
-	result.Measurements = map[string]any{"failedWithin": evidence.Unknown}
+	result.Measurements = map[string]any{"failedWithin": evidence.Unknown, measStagingFilesLeft: evidence.Unknown}
 	err := h.deniedSteps(ctx, v, &result, &rec, &made)
 	// A credential found in any status read or Event is a failure, whichever
 	// step ended the variant.
@@ -308,7 +312,7 @@ func (h *haRun) runS11KeyFault(ctx context.Context, v s11KeyFault) (result evide
 			"its prefix at the end; the source was unchanged; neither the seed keys nor " + v.keys + " were in " +
 			"the statuses read, the Events, the installed Operator's manager log, read from " +
 			logSinceMargin.String() + " before the variant started, or the whole Instance Manager's log in " +
-			v.cluster + "'s member Pod"
+			v.cluster + "'s member Pod; " + rec.StagingAfterFailure.passClause()
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -346,6 +350,7 @@ func (h *haRun) deniedSteps(ctx context.Context, v s11KeyFault, result *evidence
 	rec.BackupUID, rec.RequestedAt = string(backup.UID), &requested
 	backup, err = h.waitBackup(ctx, backup, &rec.Phases, rec.Credentials)
 	errs := []error{h.judgeDenied(v, backup, err, requested, rec, result)}
+	errs = append(errs, h.checkStagingAfterFailure(ctx, rec.Phases, rec.BackupUID, &rec.StagingAfterFailure, result))
 	errs = append(errs, h.deniedAtEnd(ctx, rec))
 	if len(rec.ObjectsAtEnd) > 0 {
 		rec.Residue = fmt.Sprintf("%d objects under %s/%s at the end; the run did not write them and does not "+
