@@ -18,6 +18,9 @@ package installed
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -141,6 +144,107 @@ func TestFailedStagingScriptListsNamesAndSizesNeverContents(t *testing.T) {
 	}
 	if !strings.Contains(script, "-printf 'E %y %s %P") || !strings.HasSuffix(script, "echo "+stagingEndMarker) {
 		t.Errorf("script = %q, want names and sizes only, ended by the marker", script)
+	}
+}
+
+// runStagingScript runs failedStagingScript for dir under bash, with stubs
+// holds the directory of commands that replace the real ones on PATH, and
+// reads the answer as checkStagingAfterFailure does: a script that exits
+// with a failure is a read error, any other answer is parsed.
+func runStagingScript(t *testing.T, dir, stubs string) (*s11StagingAfterFailure, error) {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not available")
+	}
+	cmd := exec.Command(bash, "-c", failedStagingScript(dir))
+	cmd.Env = append(os.Environ(), "PATH="+stubs+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, runErr := cmd.Output()
+	st := &s11StagingAfterFailure{Dir: dir, Entries: []string{}, Holders: []string{}, Unreadable: []string{},
+		Left: []string{}}
+	if runErr != nil {
+		st.ReadError = runErr.Error()
+	} else {
+		parseStagingAfterFailure(st, string(out))
+	}
+	return st, st.judge()
+}
+
+// stubCommand writes an executable named name with the given shell body in a
+// new directory, and returns the directory.
+func stubCommand(t *testing.T, name, body string) string {
+	t.Helper()
+	stubs := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stubs, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return stubs
+}
+
+func TestFailedStagingScriptPassesAnEmptyDirectoryAndFailsOnAStagedFile(t *testing.T) {
+	dir := t.TempDir()
+	if st, err := runStagingScript(t, dir, t.TempDir()); err != nil || st.Present == nil || st.Files != 0 {
+		t.Fatalf("empty directory: staging = %+v, err = %v; want a clean reading", st, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "appdb_bk0v000"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := runStagingScript(t, dir, t.TempDir()); !errors.As(err, new(backupVerdict)) || st.Files != 1 {
+		t.Fatalf("staged file: staging = %+v, err = %v; want a verdict that fails the variant", st, err)
+	}
+}
+
+// If the staged entries cannot all be listed, a directory that is there
+// without a listed file is not the same as an empty one: the variant must be
+// blocked, never passed.
+func TestFailedStagingScriptIsBlockedWhenFindFailsOnAnExistingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "appdb_bk0v000"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"find fails before listing": "echo 'find: I/O error' >&2; exit 1",
+		"find fails after listing some entries": "echo 'E f 1 appdb_bk0v000'; " +
+			"echo \"find: 'sub': Permission denied\" >&2; exit 1",
+	} {
+		st, err := runStagingScript(t, dir, stubCommand(t, "find", body))
+		if err == nil || errors.As(err, new(backupVerdict)) || st.ReadError == "" {
+			t.Errorf("%s: staging = %+v, err = %v; want an error that blocks, not a pass or a verdict", name, st, err)
+		}
+	}
+}
+
+func TestFailedStagingScriptIsBlockedWhenTheDirectoryCannotBeResolved(t *testing.T) {
+	st, err := runStagingScript(t, t.TempDir(), stubCommand(t, "readlink", "exit 1"))
+	if err == nil || errors.As(err, new(backupVerdict)) || st.ReadError == "" {
+		t.Errorf("staging = %+v, err = %v; want an error that blocks", st, err)
+	}
+	st, err = runStagingScript(t, t.TempDir(), stubCommand(t, "readlink", "exit 0"))
+	if err == nil || errors.As(err, new(backupVerdict)) || st.ReadError == "" {
+		t.Errorf("empty resolution: staging = %+v, err = %v; want an error that blocks", st, err)
+	}
+}
+
+// A child that find is not allowed to enter is the real form of the failure.
+func TestFailedStagingScriptIsBlockedWhenAChildDirectoryIsUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every directory")
+	}
+	dir := t.TempDir()
+	child := filepath.Join(dir, "op-1")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(child, "appdb_bk0v000"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(child, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(child, 0o700) })
+	st, err := runStagingScript(t, dir, t.TempDir())
+	if err == nil || errors.As(err, new(backupVerdict)) || st.ReadError == "" {
+		t.Errorf("staging = %+v, err = %v; want an error that blocks, not a pass", st, err)
 	}
 }
 

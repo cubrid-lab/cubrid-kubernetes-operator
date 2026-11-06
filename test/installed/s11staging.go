@@ -80,9 +80,17 @@ const stagingEndMarker = "."
 // CUBRID process (command cub*) whose open files it could not list, as
 // stagingHolders in internal/instancemanager/stagingwriter.go counts them.
 // It ends with stagingEndMarker and prints no file's contents.
+//
+// The script fails closed: if the directory is there but readlink cannot
+// resolve it or find cannot list every entry below it (a permission or an
+// I/O error on a child, say), the script exits with a failure before it
+// prints the marker, so the reading is an error and never an empty directory.
+// The listing of the open files is the one read that may fail for a single
+// process, which "U" records.
 func failedStagingScript(dir string) string {
-	return "w='" + dir + "'; if [ -d \"$w\" ]; then r=$(readlink -f \"$w\"); echo present; echo \"R $r\"; " +
-		"find \"$w\" -mindepth 1 -printf 'E %y %s %P\\n'; " +
+	return "w='" + dir + "'; if [ -d \"$w\" ]; then " +
+		"r=$(readlink -f \"$w\") && [ -n \"$r\" ] || exit 1; echo present; echo \"R $r\"; " +
+		"find \"$w\" -mindepth 1 -printf 'E %y %s %P\\n' || exit 1; " +
 		"for p in /proc/[0-9]*; do n=\"\"; read -r n < \"$p/comm\" 2>/dev/null || continue; " +
 		"if l=$(ls -l \"$p/fd\" 2>/dev/null); then " +
 		"while IFS= read -r x; do case \"$x\" in *\" -> $r\"|*\" -> $r/\"*) echo \"H ${p#/proc/} $n ${x#* -> }\" ;; " +
