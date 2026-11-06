@@ -127,50 +127,67 @@ func (s Scenario) Name() string {
 	return s.ID + "/" + s.Variant
 }
 
-// scenarioDescriptions are descriptive report labels, not a replacement for
-// the stable IDs used by required-lane gates and historical evidence.
+// scenarioDescriptions says what a scenario checks, for people reading a
+// result, by stable key: a scenario ID, or a full "ID/variant" key where the
+// variant's own name would mislead. The text follows the "What is checked"
+// column of docs/testing/scenario-name-migration.md. It is not an identity:
+// nothing matches on it. This map is provisional and must not grow into a
+// second source of truth: the scenario registry of #711 is to replace it.
 var scenarioDescriptions = map[string]string{
-	"S00":   "Standalone database installation and SQL",
-	"S01":   "High-availability Broker read/write access",
-	"S02":   "High-availability replication",
-	"S03":   "Primary database Pod failure recovery",
-	"S04":   "Primary database VM failure recovery",
-	"S05":   "Broker failure recovery",
-	"S06":   "Operator interruption and recovery",
-	"S07":   "High-availability network partition",
-	"S08":   "Replication lag with repeated failures",
-	"S09":   "Former primary member rejoins",
-	"S10":   "Rebuild after persistent-volume loss",
-	"S11":   "Backup completion and failure recovery",
-	"S12":   "Restore into a new cluster",
-	"S13":   "Cluster deletion and data retention",
-	"S14":   "Instance Manager authentication and credential security",
-	"S15":   "Node drain and disruption policy",
-	"LAB00": "Installed standalone SQL smoke test",
-	"LAB01": "Installed three-member high-availability SQL smoke test",
+	"S00":        "Standalone database installation and real SQL",
+	"S01":        "Three-member HA and read-write/read-only Broker access",
+	"S02":        "Normal HA replication",
+	"S03":        "Primary database Pod termination and recovery",
+	"S03/abrupt": "Primary database Pod termination and recovery - abrupt, later master",
+	"S04":        "Primary database VM failure",
+	"S05":        "Broker process/Pod failure recovery",
+	"S06":        "Operator interruption and HA continuity",
+	"S07":        "HA network partition",
+	"S08":        "Replication lag under repeated faults",
+	"S09":        "Rejoin of a former primary member",
+	"S10":        "Rebuild after persistent-volume data loss",
+	"S11":        "Backup completion, faults and recovery",
+	"S12":        "Restore into a new cluster and fault handling",
+	"S12/instance-manager-restart": "Restore into a new cluster and fault handling - " +
+		"instance manager restart, restoring placement",
+	"S13": "Cluster deletion and data-retention policy",
+	"S14": "Instance Manager network isolation, token-checked requests, service-account permissions " +
+		"and a search for leaked credentials",
+	"S14/token-rotation":  "HA Instance Manager token rotation",
+	"S14/token-migration": "Migration from legacy Instance Manager token",
+	"S15":                 "Node drain and PodDisruptionBudget behavior",
+	"LAB00":               "Installed Operator standalone connection and SQL smoke",
+	"LAB00/preallocated":  "Installed standalone preallocated ownership smoke",
+	"LAB01":               "Installed three-member HA and SQL smoke",
 }
 
-// DisplayName makes JUnit case names understandable without a scenario-code
-// lookup. Name() and the ID/variant fields remain unchanged for gate matching,
-// filters, JSON evidence and historical result comparisons.
-// description is for people, not the canonical requirement key.
+// variantSlug is what a variant must look like for its name to be copied into
+// a description. The redactor reads "token: value" in the text of junit.xml
+// as a credential and removes everything up to the next space or quote, which
+// in element text includes the closing tag; a slug has no such form. It also
+// keeps "a b" and "a-b" from reading the same.
+var variantSlug = regexp.MustCompile(`^[a-z0-9-]*$`)
+
+// description says what the scenario checks, or "" when that is not known.
 func (s Scenario) description() string {
-	switch s.Name() {
-	case "S14/token-rotation":
-		return "Instance Manager token rotation"
-	case "S14/token-migration":
-		return "Migration from a legacy Instance Manager token"
-	}
-	description, ok := scenarioDescriptions[s.ID]
-	if !ok {
+	if !variantSlug.MatchString(s.Variant) {
 		return ""
 	}
-	if s.Variant != "" {
-		return fmt.Sprintf("%s - %s", description, strings.ReplaceAll(s.Variant, "-", " "))
+	if description, ok := scenarioDescriptions[s.Name()]; ok {
+		return description
 	}
-	return description
+	description, ok := scenarioDescriptions[s.ID]
+	if !ok || s.Variant == "" {
+		return description
+	}
+	return description + " - " + strings.ReplaceAll(s.Variant, "-", " ")
 }
 
+// DisplayName is the scenario's name for people: its description followed by
+// its stable key, or the key alone when no description is known. It appears
+// in the <system-out> element of junit.xml, not in the testcase name. Name()
+// and the ID and Variant fields stay what gates, filters, summary.json and
+// comparisons with earlier results use.
 func (s Scenario) DisplayName() string {
 	if description := s.description(); description != "" {
 		return description + " (" + s.Name() + ")"
@@ -178,13 +195,14 @@ func (s Scenario) DisplayName() string {
 	return s.Name()
 }
 
-// problemName places the explanation first while retaining the exact legacy
-// key and message format for historical error matching.
-func (s Scenario) problemName() string {
+// problemLine is the line of a run's problems about this scenario. It starts
+// "<key>: <detail>", the format of schema version 1, which readers may match
+// on; the description, when there is one, only follows it.
+func (s Scenario) problemLine(detail string) string {
 	if description := s.description(); description != "" {
-		return description + " | " + s.Name()
+		return s.Name() + ": " + detail + " (" + description + ")"
 	}
-	return s.Name()
+	return s.Name() + ": " + detail
 }
 
 // Judge returns the result a reader may rely on, given the run directory. A
@@ -249,7 +267,7 @@ func (l Lane) Gate(s Summary, dir string) []string {
 		problems = append(problems, "no scenario recorded: the lane requires nothing, so the run proved nothing")
 	}
 	for _, req := range l.Required {
-		name := Scenario{ID: req.ID, Variant: req.Variant}.problemName()
+		required := Scenario{ID: req.ID, Variant: req.Variant}
 		seen := false
 		for _, sc := range s.Scenarios {
 			if sc.ID != req.ID || sc.Variant != req.Variant {
@@ -260,10 +278,10 @@ func (l Lane) Gate(s Summary, dir string) []string {
 			if result == Pass || (result == NotApplicable && req.NotApplicable) {
 				continue
 			}
-			problems = append(problems, fmt.Sprintf("%s: %s: %s", name, result, reason))
+			problems = append(problems, required.problemLine(fmt.Sprintf("%s: %s", result, reason)))
 		}
 		if !seen {
-			problems = append(problems, name+": missing: no result was recorded")
+			problems = append(problems, required.problemLine("missing: no result was recorded"))
 		}
 	}
 	for _, sc := range s.Scenarios {
@@ -271,7 +289,7 @@ func (l Lane) Gate(s Summary, dir string) []string {
 			continue
 		}
 		if result, reason := sc.Judge(dir); result == Fail {
-			problems = append(problems, fmt.Sprintf("%s: %s: %s", sc.problemName(), result, reason))
+			problems = append(problems, sc.problemLine(fmt.Sprintf("%s: %s", result, reason)))
 		}
 	}
 	return problems
@@ -376,12 +394,12 @@ type junitSuite struct {
 type junitCase struct {
 	Name      string        `xml:"name,attr"`
 	Classname string        `xml:"classname,attr"`
-	// SystemOut explains a scenario without changing the historical JUnit
-	// testcase name used for result grouping and comparisons.
-	SystemOut string        `xml:"system-out,omitempty"`
 	Failure   *junitMessage `xml:"failure,omitempty"`
 	Error     *junitMessage `xml:"error,omitempty"`
 	Skipped   *junitMessage `xml:"skipped,omitempty"`
+	// SystemOut explains a scenario without changing the historical JUnit
+	// testcase name used for result grouping and comparisons.
+	SystemOut string `xml:"system-out,omitempty"`
 }
 
 type junitMessage struct {
@@ -398,7 +416,10 @@ const junitRunCase = "run"
 func (s Summary) junit() junitSuite {
 	suite := junitSuite{Name: s.RunID, Tests: len(s.Scenarios)}
 	for _, sc := range s.Scenarios {
-		c := junitCase{Name: sc.Name(), Classname: "scenario", SystemOut: sc.DisplayName()}
+		c := junitCase{Name: sc.Name(), Classname: "scenario"}
+		if sc.description() != "" {
+			c.SystemOut = sc.DisplayName()
+		}
 		switch sc.Result {
 		case Pass:
 		case Fail:

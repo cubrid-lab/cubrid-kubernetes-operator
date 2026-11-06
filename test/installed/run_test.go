@@ -768,3 +768,38 @@ func TestRunStillRefusesAPendingManagerPod(t *testing.T) {
 		t.Fatalf("an unverified installation caused writes: %v", f.writes)
 	}
 }
+
+// A failed lab run is read by people, so every result an installed lane can
+// require must have a description: one left without it would be reported as a
+// bare scenario key. Matching never uses it. test/evidence pins the text. The
+// requirements are assembled by the options of a run, in run.go, ha.go and
+// each planS11 and planS12 function, so a new one has to be added here too.
+func TestInstalledRequirementsHaveReadableNames(t *testing.T) {
+	check := func(id, variant string) {
+		t.Helper()
+		sc := evidence.Scenario{ID: id, Variant: variant}
+		if sc.DisplayName() == sc.Name() {
+			t.Errorf("required result %s has no description", sc.Name())
+		}
+	}
+	check(scenarioID, "")
+	check(scenarioID, string(PreallocatedNamespace))
+	check(haScenarioID, "")
+	check(s04ID, s04Variant)
+	check(s06ID, s06Variant)
+	for _, variant := range []string{s11Variant, s11MissingVariant, s11DeniedVariant, s11SignatureVariant,
+		s11InterruptedVariant, s11RestartVariant, s11IMRestartVariant, s11OverlappingVariant, s11StoreLossVariant,
+		s11GracefulStopVariant} {
+		check(s11ID, variant)
+	}
+	for _, variant := range []string{s12Variant, s12TamperedVariant, s12WrongTargetVariant, s12RestartVariant} {
+		check(s12ID, variant)
+	}
+	for _, at := range []string{IMRestartAtRestoring, IMRestartAtPreparing, IMRestartAtSeeding, IMRestartAtStarting,
+		IMRestartAtSeedBackup} {
+		check(s12ID, imRestartVariant(at))
+	}
+	for at := range stopPlacements {
+		check(s12ID, gracefulStopVariantOf(at))
+	}
+}
