@@ -188,23 +188,43 @@ func (r *haRun) observedLoss(report workload.Report, faultAt time.Time, clients 
 	return loss.String(), loss.Resolution.Round(time.Millisecond).String()
 }
 
-// master asks CUBRID on every member for its role and returns the one master
-// and the slaves. Any other distribution of roles is an error.
-func (r *haRun) master(ctx context.Context) (string, []string, error) {
-	var masters, slaves []string
+// memberRole is what cubrid heartbeat status printed on a member: its role as
+// heartbeatRoleIn reads it, its node state, and the output.
+type memberRole struct{ role, state, out string }
+
+// memberRoles is one reading of every member, by Pod name.
+type memberRoles map[string]memberRole
+
+// readRoles asks CUBRID on every member for its role, once.
+func (r *haRun) readRoles(ctx context.Context) (memberRoles, error) {
+	roles := memberRoles{}
 	for _, pod := range r.members {
 		out, err := r.kubectl(ctx, "exec", pod, "--", "bash", "-c", heartbeatStatus)
 		if err != nil {
-			return "", nil, err
+			return nil, err
 		}
-		switch heartbeatRoleIn(pod, out) {
+		roles[pod] = memberRole{role: heartbeatRoleIn(pod, out), state: heartbeatNodeStateIn(pod, out), out: out}
+	}
+	return roles, nil
+}
+
+// master asks CUBRID on every member for its role and returns the one master
+// and the slaves. Any other distribution of roles is an error.
+func (r *haRun) master(ctx context.Context) (string, []string, error) {
+	roles, err := r.readRoles(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	var masters, slaves []string
+	for _, pod := range r.members {
+		switch roles[pod].role {
 		case "master":
 			masters = append(masters, pod)
 		case "slave":
 			slaves = append(slaves, pod)
 		default:
 			return "", nil, &faults.Unmet{Member: pod, Kind: faults.UnmetRole,
-				Detail: "neither an active master nor a standby slave:\n" + out}
+				Detail: "neither an active master nor a standby slave:\n" + roles[pod].out}
 		}
 	}
 	if len(masters) != 1 || len(slaves) != len(r.members)-1 {

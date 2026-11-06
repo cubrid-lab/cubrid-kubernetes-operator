@@ -1889,6 +1889,15 @@ because they move the master.
   operator before #326 left it. Then the DB Pods are deleted one at a time,
   slaves first and the master last, each after the one before is `Ready`
   again and CUBRID reports one master and two slaves.
+- **Starting roles:** the roles are read before the action until one member
+  is an active master and the others standby slaves, for up to 15 seconds,
+  while the only other state read is `to-be-master` beside that master. POC-50
+  measured that state ending by itself within 3.6 s (#704). Any other state,
+  `to-be-master` with no active master, two active masters, a change of the
+  active master or a state that outlasts the 15 seconds fails the step. A
+  member read in `to-be-master` is recorded in `S14/<variant>/result.txt`,
+  in the measurement `startingToBeMasterSeen` and, on a failure, in the
+  failure message.
 - **The Operator must** (ADR-0003, #324): keep the token the
   members hold as `previousToken` and keep calling them with it; drop it only
   once every member was started after the rotation and accepts the new token.
