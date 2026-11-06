@@ -78,8 +78,10 @@ func fetchVerifiedWaits(t *testing.T, want []byte, attempts string, env []string
 	cmd.Stderr = &errOut
 	err = cmd.Run()
 	got, _ = os.ReadFile(out)
-	if _, statErr := os.Stat(out + ".part"); !os.IsNotExist(statErr) {
-		t.Errorf("the unverified download %s.part was left behind (stat: %v)", out, statErr)
+	for _, leftover := range []string{out + ".part", out + ".headers"} {
+		if _, statErr := os.Stat(leftover); !os.IsNotExist(statErr) {
+			t.Errorf("the temporary file %s was left behind (stat: %v)", leftover, statErr)
+		}
 	}
 	recorded, _ := os.ReadFile(waitsFile)
 	return errOut.String(), got, strings.Fields(string(recorded)), err
@@ -129,6 +131,9 @@ func TestFetchVerified_RefusesABodyThatStaysWrong(t *testing.T) {
 	}
 }
 
+// backoffOne makes the rate-limit backoff 15 s for the first wait.
+var backoffOne = []string{"FETCH_BACKOFF=1"}
+
 func rateLimited(retryAfter string) func(w http.ResponseWriter) {
 	return func(w http.ResponseWriter) {
 		if retryAfter != "" {
@@ -170,7 +175,7 @@ func TestFetchVerified_RateLimitBacksOffLongerThanOtherFailures(t *testing.T) {
 			_, _ = w.Write(good)
 		}
 	}
-	env := []string{"FETCH_BACKOFF=1"}
+	env := backoffOne
 	_, _, limited, err := fetchVerifiedWaits(t, good, "3", env, serveAfter(rateLimited("")))
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +218,7 @@ func TestFetchVerified_RetryAfterIsBounded(t *testing.T) {
 	for name, c := range map[string]struct{ header, want string }{
 		"a huge number":          {"99999999999999999999999999", "20"},
 		"a number above the cap": {"500", "20"},
-		"leading zeros":          {"007", "7"},
+		"leading zeros":          {"0017", "17"},
 		"text":                   {"soon; rm -rf /", "15"},
 		"an HTTP date":           {"Wed, 21 Oct 2026 07:28:00 GMT", "15"},
 		"a negative number":      {"-5", "15"},
@@ -221,7 +226,7 @@ func TestFetchVerified_RetryAfterIsBounded(t *testing.T) {
 		"a fraction":             {"1.5", "15"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			env := []string{"FETCH_BACKOFF=1", "FETCH_RATE_LIMIT_CAP=20"}
+			env := []string{backoffOne[0], "FETCH_RATE_LIMIT_CAP=20"}
 			_, got, waits, err := fetchVerifiedWaits(t, good, "2", env, func(n int32, w http.ResponseWriter) {
 				if n == 1 {
 					rateLimited(c.header)(w)
@@ -261,6 +266,9 @@ func TestFetchVerified_RateLimitForeverFailsWithinTheBudget(t *testing.T) {
 	if total > 100 {
 		t.Errorf("waited %d s in total (%v), want at most the budget of 100", total, waits)
 	}
+	if strings.Join(waits, ",") != "40,40,20" {
+		t.Errorf("waits = %v, want [40 40 20] and no attempt after the budget is used up", waits)
+	}
 	if !strings.Contains(stderr, "rate limit") {
 		t.Errorf("stderr does not say that the server rate-limited: %s", stderr)
 	}
@@ -278,5 +286,76 @@ func TestFetchVerified_WrongDigestAfterRateLimitIsStillDiscarded(t *testing.T) {
 	})
 	if err == nil || got != nil {
 		t.Errorf("err = %v, file = %q; want a failure and no file; stderr:\n%s", err, got, stderr)
+	}
+}
+
+// Retry-After is a minimum: a small value never shortens the wait below the
+// rate-limit backoff, so Retry-After: 0 and 1 behave like no header, while a
+// larger value is followed.
+func TestFetchVerified_RetryAfterIsAMinimum(t *testing.T) {
+	good := []byte("the driver")
+	for header, want := range map[string]string{"0": "15", "1": "15", "14": "15", "100": "100"} {
+		t.Run("Retry-After "+header, func(t *testing.T) {
+			_, got, waits, err := fetchVerifiedWaits(t, good, "2", backoffOne, func(n int32, w http.ResponseWriter) {
+				if n == 1 {
+					rateLimited(header)(w)
+					return
+				}
+				_, _ = w.Write(good)
+			})
+			if err != nil || string(got) != string(good) || strings.Join(waits, ",") != want {
+				t.Errorf("err = %v, file = %q, waits = %v; want success after one wait of %s", err, got, waits, want)
+			}
+		})
+	}
+}
+
+// Only the Retry-After of the final answer counts: one sent by a redirect on
+// the way to a 429 is ignored.
+func TestFetchVerified_IgnoresRetryAfterOfARedirect(t *testing.T) {
+	good := []byte("the driver")
+	_, got, waits, err := fetchVerifiedWaits(t, good, "2", backoffOne, func(n int32, w http.ResponseWriter) {
+		switch n {
+		case 1:
+			w.Header().Set("Retry-After", "77")
+			w.Header().Set("Location", "/elsewhere")
+			w.WriteHeader(http.StatusFound)
+		case 2:
+			w.WriteHeader(http.StatusTooManyRequests)
+		default:
+			_, _ = w.Write(good)
+		}
+	})
+	if err != nil || string(got) != string(good) || strings.Join(waits, ",") != "15" {
+		t.Errorf("err = %v, file = %q, waits = %v; want success after one wait of 15", err, got, waits)
+	}
+}
+
+// The documented defaults: 5 attempts, waits of 30, 60, 90 and 120 s with
+// FETCH_BACKOFF=2, and a failure after the last attempt.
+func TestFetchVerified_DocumentedDefaultWaits(t *testing.T) {
+	good := []byte("the driver")
+	var requests int32
+	stderr, got, waits, err := fetchVerifiedWaits(t, good, "", []string{"FETCH_BACKOFF=2"},
+		func(n int32, w http.ResponseWriter) {
+			requests = n
+			rateLimited("")(w)
+		})
+	if err == nil || got != nil || requests != 5 || strings.Join(waits, ",") != "30,60,90,120" {
+		t.Errorf("err = %v, requests = %d, waits = %v; want a failure after 5 attempts "+
+			"and waits 30,60,90,120; stderr:\n%s", err, requests, waits, stderr)
+	}
+}
+
+// The documented default cap for one wait is 120 s, and the default budget
+// for all waits is 300 s: Retry-After: 120 is waited out twice, then 60 s of
+// the budget remain, then the script gives up without another attempt.
+func TestFetchVerified_DocumentedDefaultCapAndBudget(t *testing.T) {
+	good := []byte("the driver")
+	_, _, waits, err := fetchVerifiedWaits(t, good, "10", nil, func(_ int32, w http.ResponseWriter) {
+		rateLimited("500")(w)
+	})
+	if err == nil || strings.Join(waits, ",") != "120,120,60" {
+		t.Errorf("err = %v, waits = %v; want a failure after waits 120,120,60", err, waits)
 	}
 }

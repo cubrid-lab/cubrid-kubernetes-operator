@@ -11,17 +11,24 @@
 #
 # When the server answers 429 (Too Many Requests) or 503 (Service
 # Unavailable), as Maven Central does under a rate limit (#718), a few seconds
-# are too short, so the script waits longer. It waits the whole number of
-# seconds in the Retry-After header when there is one; a Retry-After that is
-# not a plain number (including the HTTP-date form) is ignored, and the wait
-# is then 15 times the usual one (30, 60, 90 and 120 s with the default
-# FETCH_BACKOFF). One such wait is at most FETCH_RATE_LIMIT_CAP seconds
-# (default 120) and all such waits together at most FETCH_RATE_LIMIT_BUDGET
-# seconds (default 300), after which the script fails without further
-# attempts, so a dead mirror holds a build for about five minutes of waiting
-# plus the time of the requests themselves. Other failures keep the short wait.
-# The digest check is the same for every attempt, and the exit status is 0
-# for a verified download and 1 otherwise.
+# are too short, so the script waits longer. The wait after attempt N is the
+# larger of 15 times N times FETCH_BACKOFF (30, 60, 90 and 120 s with the
+# default) and the whole number of seconds in the Retry-After header of the
+# final response, if it has one: Retry-After is a minimum, never a way to
+# shorten the wait. A Retry-After that is not a plain number (including the
+# HTTP-date form) is ignored, and one from a redirect on the way is ignored.
+# One such wait is at most FETCH_RATE_LIMIT_CAP seconds (default 120), and all
+# such waits together at most FETCH_RATE_LIMIT_BUDGET seconds (default 300),
+# after which the script fails without further attempts.
+#
+# At the defaults (5 attempts) the four waits are 30+60+90+120 = 300 s, so the
+# attempts run out at the same time as the budget; the budget limits the waits
+# when there are more attempts or the server asks for more than the backoff.
+# The whole download therefore waits at most 300 s, and takes at most that
+# plus ATTEMPTS requests of up to 300 s each (curl --max-time);
+# a dead mirror, which answers at once, holds a build for about 5 minutes.
+# Other failures keep the short wait. The digest check is the same for every
+# attempt, and the exit status is 0 for a verified download and 1 otherwise.
 set -eu
 url=$1
 want=$2
@@ -31,6 +38,7 @@ backoff=${FETCH_BACKOFF:-2}
 cap=${FETCH_RATE_LIMIT_CAP:-120}
 budget=${FETCH_RATE_LIMIT_BUDGET:-300}
 waited=0
+trap 'rm -f "$out.part" "$out.headers"' EXIT
 
 i=1
 while :; do
@@ -56,13 +64,16 @@ while :; do
 			# Only a plain run of digits is a wait: strip the header name, spaces
 			# and the carriage return, then any leading zeros. More than 6 digits
 			# is more than any cap, so it is cut to the cap without arithmetic.
-			ra=$(sed -n 's/^[Rr][Ee][Tt][Rr][Yy]-[Aa][Ff][Tt][Ee][Rr]:[[:space:]]*\([0-9]*\)[[:space:]]*$/\1/p' "$out.headers" | tail -n 1)
+			# Only the header block after the last HTTP status line (the final
+			# response, not a redirect) is read.
+			ra=$(awk '/^HTTP\//{v=""} tolower(substr($0,1,12))=="retry-after:"{v=$0} END{print v}' "$out.headers" |
+				sed -n 's/^[^:]*:[[:space:]]*\([0-9]*\)[[:space:]]*$/\1/p')
 			ra=${ra#"${ra%%[!0]*}"}
 			case $ra in
 			'') ;;
 			*[!0-9]*) ;;
 			???????*) pause=$cap ;;
-			*) pause=$ra ;;
+			*) [ "$ra" -gt "$pause" ] && pause=$ra ;;
 			esac
 			;;
 		esac
