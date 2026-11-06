@@ -254,9 +254,9 @@ func checkConditions(dir string, rounds []conditionRound, events []workload.Even
 	fmt.Fprintf(&text, "Agreement of the CubridCluster's Conditions with SQL and the fault, %s\n\n", dir)
 	fmt.Fprintf(&text, "Status reads: %d, of which %d could not be read; heartbeat sweeps: %d", len(rounds), unread,
 		len(obs.Sweeps))
-	// A run without a client workload has no such count: S00 lists its SQL in
-	// the rules that compare it, and a zero would say that the SQL had no
-	// outcome.
+	// A step that passes no client events has no such count, such as S00, which
+	// lists its SQL in the rules that compare it, the replication-stall step, and
+	// an early exit: a zero would say that the operations had no outcome.
 	if events != nil {
 		fmt.Fprintf(&text, "; client operations with an outcome: %d", len(obs.SQL))
 	}

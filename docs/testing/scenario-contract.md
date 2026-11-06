@@ -1141,9 +1141,10 @@ it needs more.
     `blocked` however early `Ready` was `True`, unless something else failed
     it. Any other result fails S00, as on the first read: a failed statement,
     a row that did not match, or a `csql` that could not be run.
-    `measurements.csqlLostSessionReads` counts the `csql` reads that printed
-    the pair, also on a run that passed, and is `unknown` when the run made
-    no `csql` read.
+    `measurements.csqlLostSessionReads` counts the `csql` reads of the smoke
+    checks that printed the pair, also on a run that passed, and is `unknown`
+    when the run made no such read. The read before the Pod deletion and the
+    reads after it are not counted.
 
     This rule can only refine the reason of a run that already failed, since
     every failed `csql` operation in the Pod already fails S00 through its own
