@@ -15,7 +15,7 @@ How the five results and the filtered and unfiltered lanes are kept apart today 
 - A required scenario passes only with at least one recorded result and every result of it `pass`. `fail`, `blocked` and `not_run` fail the lane, and a claimed `pass` is turned into a failure when its evidence file is missing, its fault was not confirmed or an outcome that must never happen was seen (`Scenario.Judge` and `Lane.Gate` in `test/evidence/evidence.go`).
 - `not_applicable` satisfies a requirement only where the lane explicitly allows it for that scenario; the Kind lane allows it nowhere. Work that was skipped is `not_run`, never `not_applicable`.
 - A scenario the lane does not require but that ends as `fail` still fails the run, and a lane that requires nothing never passes.
-- An unfiltered run is judged against the full `kind` lane. A run selected with a label filter or focus is judged as `kind-filtered`: only the scenarios it selected a step of are required, the others stay in the summary as `not_run`, and the summary names the lane so a filtered run cannot be read as a validation of the full lane (`runLane` in `test/e2e/summary_test.go`). A registered step that no required scenario can label is reported as a problem (`UnlabelledSteps` in `test/evidence/plan.go`).
+- An unfiltered run is judged against the full `kind` lane. A run selected with a label filter or focus is judged as `kind-filtered`: only the scenarios it selected a step of are required, the others stay in the summary as `not_run`, and the summary names the lane so a filtered run cannot be read as a validation of the full lane (`runLane` in `test/e2e/summary_test.go`). A required scenario that no step of the suite carries the label of is reported as a problem (`UnlabelledSteps` in `test/evidence/plan.go`).
 - Installed-lab lanes are assembled from the requirements of the selected options in `test/installed/run.go` and `test/installed/ha.go`; a variant a lane does not name is not part of it, and is not `not_applicable`.
 
 A renamed key must keep every one of these outcomes for the same input.
@@ -24,7 +24,7 @@ A renamed key must keep every one of these outcomes for the same input.
 
 These are **proposals for review**, not active selectors or evidence keys. The contract headings below do not mean every case is implemented. The current S-number is recorded only to locate older documents and artifacts.
 
-**How keys stay unique.** A concrete result key is `[installed-]<family key>[-<variant>]`. Every result at the VM-lab level (the installed Operator on the lab) starts with `installed-`; no Kind result key does. The same contract variant at two evidence levels therefore gets two keys and never one shared result. Families used only on the lab (S04, S11, S12, LAB00, LAB01) carry the prefix in the family key itself. Each concrete key below appears once. Whether a contract variant is registered at runtime is for #711 to confirm; the tables list contract variants and the current lane definitions.
+**How keys stay unique.** A concrete result key is `[installed-]<family key>[-<variant>]`. Every result at the VM-lab level (the installed Operator on the lab) starts with `installed-`; no Kind result key does. The same contract variant at two evidence levels therefore gets two keys and never one shared result. Families used only on the lab (S04, S11, S12, LAB00, LAB01) carry the prefix in the family key itself. Each concrete key identifies one test. Whether a contract variant is registered at runtime is for #711 to confirm; the tables list contract variants and the current lane definitions.
 
 | Existing contract | What is checked | Proposed descriptive family key |
 | --- | --- | --- |
@@ -90,7 +90,7 @@ The [required-lane contract](scenario-contract.md#required-scenarios) includes L
 
 Both S11 `operator-restart` and S12 `operator-restart` exist; they are told apart by the family (`installed-backup-` versus `installed-restore-new-cluster-`), which is why a variant name alone is never a key.
 
-**Important:** a lane name, a contract variant and a code-level `Requirement` are not automatically synonymous. Note that the contract's lane table currently names only the `preparing` and `seeding` placements as lanes, while the code and [installed-ha.md](installed-ha.md) also define `starting` and `seed-backup`; reconcile that before the canonical registry is finalized. The lists above inventory contract variants and code definitions; they do **not** assert that every variant has a passing real-lab run.
+**Important:** a lane name, a contract variant and a code-level `Requirement` are not automatically synonymous. Note that the contract's lane table currently names only the default, `preparing` and `seeding` lanes, while the code and [installed-ha.md](installed-ha.md) also define `starting` and `seed-backup`; reconcile that before the canonical registry is finalized. The lists above inventory contract variants and code definitions; they do **not** assert that every variant has a passing real-lab run.
 
 ## Compatibility surfaces to audit before any key migration
 
