@@ -103,11 +103,12 @@ func memberAffinity(cluster *databasev1alpha1.CubridCluster) *corev1.Affinity {
 }
 
 // recordMemberSpreadDefault writes memberSpreadDefaultAnnotation once, before
-// the StatefulSet is created: Required for a cluster that has neither its
-// StatefulSet nor a data PVC, Preferred for one that has either. Such a
-// cluster was created by an operator without the rule, and its members may
-// share a node their volumes are bound to; under Required a recreated member
-// would stay Pending there. An annotation that is already present is kept.
+// the StatefulSet is created: Required for a cluster that has neither a
+// StatefulSet it controls nor a data PVC, Preferred for one that has either.
+// Such a cluster was created by an operator without the rule, and its members
+// may share a node their volumes are bound to; under Required a recreated
+// member would stay Pending there. An annotation that is already present is
+// kept.
 func (r *CubridClusterReconciler) recordMemberSpreadDefault(ctx context.Context, cluster *databasev1alpha1.CubridCluster) error {
 	if !spreadsMembers(cluster) {
 		return nil
@@ -139,16 +140,33 @@ func (r *CubridClusterReconciler) recordMemberSpreadDefault(ctx context.Context,
 // memberStateExists names the cluster's StatefulSet or one of its data PVCs
 // (data-<cluster>-<ordinal>) when one exists, read past the cache. It is
 // empty when there is none.
+//
+// A StatefulSet counts only when this cluster controls it, by UID, as when
+// the reconcile decides whether to change it: a StatefulSet of the same name
+// that someone else, or an earlier cluster, holds is no evidence of this
+// cluster's members, and the reconcile refuses it. Counting it would record
+// Preferred for good on a new cluster.
+//
+// A data PVC counts by its name alone. The StatefulSet controller creates it
+// from the volume claim template with no owner reference, so a claim of an
+// earlier cluster of the same name cannot be told from one of this cluster's
+// members. If it is the claim of an older member, its volume may bind that
+// member to a node another member uses, and Required would leave it Pending;
+// Preferred never does. The cost is that a stale or unrelated claim with such
+// a name makes a new cluster record Preferred until memberSpread is set in
+// the spec.
 func (r *CubridClusterReconciler) memberStateExists(ctx context.Context, cluster *databasev1alpha1.CubridCluster) (string, error) {
 	reader := client.Reader(r.Client)
 	if r.APIReader != nil {
 		reader = r.APIReader
 	}
-	err := reader.Get(ctx, client.ObjectKeyFromObject(cluster), &appsv1.StatefulSet{})
+	var sts appsv1.StatefulSet
+	err := reader.Get(ctx, client.ObjectKeyFromObject(cluster), &sts)
 	if err == nil {
-		return "StatefulSet " + cluster.Name, nil
-	}
-	if !apierrors.IsNotFound(err) {
+		if metav1.IsControlledBy(&sts, cluster) {
+			return "StatefulSet " + cluster.Name, nil
+		}
+	} else if !apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("read StatefulSet %s: %w", cluster.Name, err)
 	}
 	var pvcs corev1.PersistentVolumeClaimList

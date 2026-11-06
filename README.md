@@ -270,10 +270,17 @@ spec:
   one node all go down with it.
 - **Unset**, the Operator decides once per cluster and records the result in
   the cluster's annotation `database.cubrid.io/member-spread-default`, before
-  it creates the StatefulSet: `Required` when neither the StatefulSet nor any
-  data PVC `data-<cluster>-<ordinal>` exists, so for a new cluster, and
-  `Preferred` when either exists, so for a cluster created by an earlier
-  version. The Operator never changes the recorded value. A value set in
+  it creates the StatefulSet: `Required` when the cluster controls no
+  StatefulSet of its name and no data PVC `data-<cluster>-<ordinal>` exists,
+  so for a new cluster, and `Preferred` when either exists, so for a cluster
+  created by an earlier version. A StatefulSet of that name which the cluster
+  does not control (one without an owner, or held by another controller or by
+  an earlier cluster of the same name, by UID) is refused and does not count.
+  A data PVC counts by its name alone, because it carries no owner that names
+  a cluster: a leftover or unrelated claim with such a name makes a new
+  cluster record `Preferred`, the choice that never leaves a member Pending
+  behind a volume bound to a node. Set `memberSpread: Required` in the spec
+  to override it. The Operator never changes the recorded value. A value set in
   `spec.placement.memberSpread` always takes precedence over it.
 - **The recorded value goes with the CubridCluster object.** Removing the
   annotation, or replacing or recreating the CubridCluster while its
