@@ -13,6 +13,10 @@ scenario is implemented or validated. That status is kept only in
 scenarios learn from are recorded in
 [upstream-scenarios.md](upstream-scenarios.md).
 
+For the proposed human-readable scenario naming migration, its safety invariants
+and compatibility mapping, see [scenario-name-migration.md](scenario-name-migration.md).
+This reference does **not** change any required scenario or acceptance rule.
+
 ## Terms
 
 - **HA**: high availability, here CUBRID's own heartbeat-based replication
