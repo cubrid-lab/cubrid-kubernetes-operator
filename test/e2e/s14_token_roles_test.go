@@ -43,14 +43,22 @@ func TestSettledRolesWaitsOutAShortToBeMaster(t *testing.T) {
 	waiting := memberRoles{"m-0": master, "m-1": tbm, "m-2": slave}
 	readErr := errors.New("exec failed")
 
+	// partial is a read that failed after reading some members.
+	type partial struct {
+		roles memberRoles
+		err   error
+	}
 	// reads answers each call with the next reading, and the last one after.
 	reads := func(seq ...any) func(context.Context) (memberRoles, error) {
 		i := 0
 		return func(context.Context) (memberRoles, error) {
 			next := seq[min(i, len(seq)-1)]
 			i++
-			if err, ok := next.(error); ok {
-				return nil, err
+			switch next := next.(type) {
+			case error:
+				return nil, next
+			case partial:
+				return next.roles, next.err
 			}
 			return next.(memberRoles), nil
 		}
@@ -89,6 +97,9 @@ func TestSettledRolesWaitsOutAShortToBeMaster(t *testing.T) {
 		"to-be-master, then every member a slave": {read: reads(waiting,
 			memberRoles{"m-0": slave, "m-1": slave, "m-2": slave}),
 			wantErr: "masters [], slaves [m-0 m-1 m-2]", wantNoted: "m-1 to-be-master"},
+		"a read that fails after a to-be-master": {read: reads(
+			partial{memberRoles{"m-0": master, "m-1": tbm}, readErr}, stable),
+			wantErr: "exec failed", wantNoted: "m-1 to-be-master beside the active master m-0"},
 		"another state beside a to-be-master": {read: reads(
 			memberRoles{"m-0": master, "m-1": tbm, "m-2": {state: "unknown"}}, stable),
 			wantErr: "m-2", wantNoted: "m-1 to-be-master"},
@@ -111,8 +122,43 @@ func TestSettledRolesWaitsOutAShortToBeMaster(t *testing.T) {
 					t.Errorf("error %T is neither the read's error nor an unmet role", err)
 				}
 			}
+			if (len(got.waited) > 0) != (tc.wantNoted != "") {
+				t.Errorf("waited %v with noted %q", got.waited, got.noted)
+			}
 			if !strings.Contains(got.noted, tc.wantNoted) || (tc.wantNoted == "") != (got.noted == "") {
 				t.Errorf("noted %q, want %q", got.noted, tc.wantNoted)
+			}
+		})
+	}
+}
+
+// TestStartingPrimaryToleratesOnlyAnIncompleteObservation checks the read of
+// PrimaryResolved after the starting roles settled (#704): a False left by an
+// Operator pass that read a member in `to-be-master` is read again, and any
+// other reading, two primaries above all, ends the wait at once.
+func TestStartingPrimaryToleratesOnlyAnIncompleteObservation(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status, reason, primary string
+		wantDone                bool
+		wantErr                 string
+	}{
+		"resolved to the master":    {status: "True", reason: "SinglePrimaryObserved", primary: "m-0", wantDone: true},
+		"an incomplete observation": {status: "False", reason: "PrimaryObservationIncomplete"},
+		"two primaries": {status: "False", reason: "MultiplePrimariesObserved",
+			wantErr: "MultiplePrimariesObserved"},
+		"no primary": {status: "False", reason: "NoPrimaryObserved", wantErr: "NoPrimaryObserved"},
+		"an ambiguous observation": {status: "False", reason: "AmbiguousPrimaryObservation",
+			wantErr: "AmbiguousPrimaryObservation"},
+		"another primary":   {status: "True", reason: "SinglePrimaryObserved", primary: "m-1", wantErr: "m-1"},
+		"an unknown status": {status: "Unknown", reason: "PrimaryObservationIncomplete", wantErr: "Unknown"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			done, err := startingPrimary(tc.status, tc.reason, tc.primary, "m-0")
+			if done != tc.wantDone {
+				t.Errorf("done %v, want %v", done, tc.wantDone)
+			}
+			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Errorf("error %v, want one containing %q", err, tc.wantErr)
 			}
 		})
 	}

@@ -231,9 +231,6 @@ func (r *haRun) master(ctx context.Context) (string, []string, error) {
 				Detail: "neither an active master nor a standby slave:\n" + got.out}
 		}
 	}
-	if err != nil {
-		return "", nil, err
-	}
 	if len(masters) != 1 || len(slaves) != len(r.members)-1 {
 		return "", nil, &faults.Unmet{Kind: faults.UnmetRole, Detail: fmt.Sprintf("masters %v, slaves %v", masters, slaves)}
 	}
