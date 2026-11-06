@@ -617,11 +617,11 @@ func s00WriteAndRead(sql sqlRunner, pod, marker string) ([]faults.SmokeSQL, erro
 // A read that printed its row with -199 and -111 is never conclusive, so it
 // is read once more, as the installed lab harness does in test/installed/ha.go,
 // and the second read decides: one that succeeded is what the Ready rule
-// compares with, and a statement that failed fails the step. A second read
-// that is inconclusive returns no error: S00 then has no conclusive last read,
-// and the Ready rule blocks it (faults.S00Rules). An error of the first read
-// that is not that pair fails the step without another read, like the write
-// and the first read of S00.
+// compares with. A second read that printed the same pair returns no error:
+// S00 then has no conclusive last read, and the Ready rule blocks it
+// (faults.S00Rules). Any other error of either read, such as a failed
+// statement or a row that does not match, fails the step, like the write and
+// the first read of S00.
 func s00LastRead(sql sqlRunner, pod, marker string) ([]faults.SmokeSQL, error) {
 	what := "csql read of the marker row in " + pod + " at the end of the smoke checks"
 	read := func(what string) (faults.SmokeSQL, error) {
@@ -634,8 +634,8 @@ func s00LastRead(sql sqlRunner, pod, marker string) ([]faults.SmokeSQL, error) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "csql returned the row and printed -199 and -111 (POC-44), reading again:\n%v\n", err)
 	second, err := read(what + ", read again after csql printed -199 and -111")
 	reads := []faults.SmokeSQL{first, second}
-	if second.Inconclusive != "" {
-		_, _ = fmt.Fprintf(GinkgoWriter, "the second csql read was inconclusive too: %s\n%v\n", second.Inconclusive, err)
+	if second.Inconclusive == s00LostSession {
+		_, _ = fmt.Fprintf(GinkgoWriter, "the second csql read printed -199 and -111 too:\n%v\n", err)
 		return reads, nil
 	}
 	return reads, err

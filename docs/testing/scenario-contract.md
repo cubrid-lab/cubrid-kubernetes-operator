@@ -1136,11 +1136,11 @@ it needs more.
     installed lab harness does: the first read is noted in `S00/agreement.txt`
     and adds the step `csql_lost_session_after_row` to `S00/timeline.jsonl`,
     and the second read decides. If it succeeded, it is the last `csql`
-    operation the rule compares with; if `csql` reported its statement as
-    failed, S00 fails. If it is inconclusive, because it printed the pair
-    again, `csql` could not be run or the row did not match, the last `csql`
-    operation is inconclusive, this rule is not judged and S00 ends `blocked`
-    however early `Ready` was `True`, unless something else failed it.
+    operation the rule compares with. If it printed the pair again, the last
+    `csql` operation is inconclusive, this rule is not judged and S00 ends
+    `blocked` however early `Ready` was `True`, unless something else failed
+    it. Any other result fails S00, as on the first read: a failed statement,
+    a row that did not match, or a `csql` that could not be run.
     `measurements.csqlLostSessionReads` counts the `csql` reads that printed
     the pair, also on a run that passed, and is `unknown` when the run made
     no `csql` read.

@@ -229,10 +229,10 @@ func TestS00LastRead(t *testing.T) {
 			reasons: []string{s00LostSession, failedReason}, stepErr: true, result: evidence.Fail, lost: 1},
 		"the pair, then a csql that could not be run": {
 			answers: []s00Answer{{lostSession, nil}, {"", transport}},
-			reasons: []string{s00LostSession, otherReason}, result: evidence.Blocked, lost: 1},
+			reasons: []string{s00LostSession, otherReason}, stepErr: true, result: evidence.Fail, lost: 1},
 		"the pair, then another row": {
 			answers: []s00Answer{{lostSession, nil}, {wrongRow, nil}},
-			reasons: []string{s00LostSession, otherReason}, result: evidence.Blocked, lost: 1},
+			reasons: []string{s00LostSession, otherReason}, stepErr: true, result: evidence.Fail, lost: 1},
 		"a statement that failed first": {
 			answers: []s00Answer{{"ERROR: no table", nil}},
 			reasons: []string{failedReason}, stepErr: true, result: evidence.Fail},
