@@ -177,6 +177,9 @@ func (r *haRun) s05(variant string) {
 		Reason: "a check of S05 failed; see the test output"}
 	// Reported also when a check below fails.
 	defer func() { recordScenario(result) }()
+	logs := r.scenarioLogs("S05/" + variant)
+	faultEnded := true
+	defer func() { logs.conclude(context.Background(), faultEnded, &result) }()
 
 	By("recording the starting state")
 	master, _, err := r.master(context.Background())
@@ -184,6 +187,9 @@ func (r *haRun) s05(variant string) {
 	brokers, err := r.rwBrokerPods()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(brokers).To(HaveLen(2), "read-write Broker Pods")
+
+	By("keeping the logs a deleted Broker Pod would take with it")
+	logs.beforeFault(context.Background())
 
 	var fault faults.Fault
 	switch variant {
@@ -211,6 +217,7 @@ func (r *haRun) s05(variant string) {
 
 	By("failing the Broker and waiting for two available Brokers and for every client")
 	newConnection := "not tried"
+	faultEnded = false
 	outcome := r.runFault(faults.Scenario{
 		Fault:  fault,
 		Limits: s03FlowLimits,
@@ -268,6 +275,7 @@ func (r *haRun) s05(variant string) {
 			return true, nil
 		},
 	})
+	faultEnded = outcome.CleanupSucceeded
 	timeline := writeTimeline("S05/"+variant+"/timeline.jsonl", outcome.Timeline)
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded

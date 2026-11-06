@@ -269,6 +269,10 @@ spec:
 				faults.Bound{Limit: installLimit, Measured: installTime, Unmeasured: !installMeasured},
 				faults.Bound{Limit: readyLimit, Measured: ready, Unmeasured: record.ReadySeconds == 0})
 			result = s00Verdict(result, record, rounds, s00Run, steps)
+			// The standalone member has no heartbeat to ask.
+			newScenarioLogs(evidenceDir(), "S00", evidence.ClusterLogPlan(namespace, s00Namespace, clusterName,
+				[]string{pod}, false), kubectlLogs{}, evidence.DefaultLogLimits(), runLogBudget).
+				conclude(ctx, true, &result)
 			recordScenario(result)
 			updateSummary(func(s *evidence.Summary) {
 				s.Environment.CubridImageDigest = record.InstanceManagerID

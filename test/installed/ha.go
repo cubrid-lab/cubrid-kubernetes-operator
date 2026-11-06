@@ -585,6 +585,8 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 	var owned *corev1.Namespace
 	defer func() {
 		var cleanupErr error
+		// The cleanup removes the Pods and their logs with the namespace.
+		summary.Notes = append(summary.Notes, h.failureLogNotes(owned != nil)...)
 		if owned != nil {
 			cleanupErr = r.cleanupRun(cfg.Config, owned, nil)
 			cleaned := cleanupErr == nil

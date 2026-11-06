@@ -173,6 +173,9 @@ func (r *haRun) s06Restart() {
 	result := evidence.Scenario{ID: "S06", Variant: s06Restart, Result: evidence.Fail,
 		Reason: "a check of S06 failed; see the test output"}
 	defer func() { recordScenario(result) }()
+	logs := r.scenarioLogs("S06/" + s06Restart)
+	faultEnded := true
+	defer func() { logs.conclude(context.Background(), faultEnded, &result) }()
 
 	By("recording the starting state")
 	master, _, err := r.master(context.Background())
@@ -181,6 +184,9 @@ func (r *haRun) s06Restart() {
 	pods, err := operatorPods(context.Background())
 	Expect(err).NotTo(HaveOccurred())
 	Expect(pods).To(HaveLen(1), "Operator Pods")
+
+	By("keeping the log the killed Operator Pod would take with it")
+	logs.beforeFault(context.Background())
 
 	By("starting clients that keep writing through the read-write Service")
 	clients := []string{"s06r1", "s06r2"}
@@ -213,6 +219,7 @@ func (r *haRun) s06Restart() {
 	}()
 
 	By("killing the Operator Pod and waiting for its replacement to write a fresh observation")
+	faultEnded = false
 	outcome = r.runFault(faults.Scenario{
 		Fault:  operatorPodKill{pod: pods[0]},
 		Limits: s03FlowLimits,
@@ -258,6 +265,7 @@ func (r *haRun) s06Restart() {
 			return err == nil, nil
 		},
 	})
+	faultEnded = outcome.CleanupSucceeded
 	timeline := writeTimeline("S06/"+s06Restart+"/timeline.jsonl", outcome.Timeline)
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded
@@ -359,6 +367,9 @@ func (r *haRun) s06Absent() {
 	result := evidence.Scenario{ID: "S06", Variant: s06Absent, Result: evidence.Fail,
 		Reason: "a check of S06 failed; see the test output"}
 	defer func() { recordScenario(result) }()
+	logs := r.scenarioLogs("S06/" + s06Absent)
+	faultEnded := true
+	defer func() { logs.conclude(context.Background(), faultEnded, &result) }()
 
 	const client = "s06a1"
 
@@ -367,6 +378,9 @@ func (r *haRun) s06Absent() {
 	Expect(err).NotTo(HaveOccurred())
 	masterUID, err := r.kubectl(context.Background(), "get", "pod", master, "-o", "jsonpath={.metadata.uid}")
 	Expect(err).NotTo(HaveOccurred())
+
+	By("keeping the logs the removed Operator and the deleted master Pod would take with them")
+	logs.beforeFault(context.Background())
 
 	By("starting a client that keeps writing through the read-write Service")
 	r.startClient(client)
@@ -406,6 +420,7 @@ func (r *haRun) s06Absent() {
 	var membersBeforeReturn map[string]string
 	var masterDeletedAt, lastObservedDuringAbsence time.Time
 	var ageBeforeAbsence time.Duration
+	faultEnded = false
 	outcome = r.runFault(faults.Scenario{
 		Fault:  absence,
 		Limits: s03FlowLimits,
@@ -500,6 +515,7 @@ func (r *haRun) s06Absent() {
 			return true, nil
 		},
 	})
+	faultEnded = outcome.CleanupSucceeded
 	timeline := writeTimeline("S06/"+s06Absent+"/timeline.jsonl", outcome.Timeline)
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded

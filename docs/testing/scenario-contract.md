@@ -702,9 +702,11 @@ reader can tell what to expect.
     cluster/            CubridCluster YAML and conditions at each checkpoint
     conditions.jsonl    one line per read of the status during the fault
     agreement.txt       how the Conditions compared with SQL and the fault
-    logs/               Operator, Instance Manager and CUBRID logs
+    logs/               Operator, Instance Manager, CUBRID and Broker logs
     data-check.json     result of each data rule, per member and endpoint
 ```
+
+A scenario with variants keeps these files below `<scenario-id>/<variant>/`.
 
 ### Conditions during the fault
 
@@ -1020,6 +1022,93 @@ confirmed, fault removed, observation of roles and conditions, cleanup. Each
 line has a timestamp, a `kind` and the observed values. Recovery time is
 computed from this file and `history.jsonl`, so a reader can recompute it.
 
+### `logs/`
+
+The diagnostic logs of one scenario, collected by `LogBundle` in
+`test/evidence`. On Kind each scenario of the lane collects them whatever its
+result, so that a passing run also shows the bundle. On the VM lab they are
+collected only when LAB01 did not pass, before the run removes its namespace
+and the logs with it, into `LAB01/logs/`; a scenario after LAB01 keeps no
+bundle.
+
+```text
+<scenario-id>/logs/
+  index.json            every source, read or not, in the order it was read
+  ordered.log           the container log lines of all sources, by timestamp
+  before-fault/         what was read just before a fault that replaces a Pod
+  after-verdict/        what was read once the result was reached
+```
+
+A checkpoint reads, in this order: each Operator Pod's container log; each
+member's container log, its CUBRID files and its `cubrid heartbeat status`;
+each Broker Pod's container log and CUBRID files. A container that restarted
+also has the log of its previous instance read. The member's container log
+holds the Instance Manager's lines and the database entrypoint's; the Broker
+Pod's holds the Broker entrypoint's.
+
+`index.json` has the fixed limits of the bundle and, per checkpoint, one entry
+per source: its `component`, Pod, UID, node, container, `origin`, `file`,
+`status`, `reason`, bytes read and stored, and when it was read. `status` is:
+
+| Status | Meaning |
+|---|---|
+| `collected` | All of the source is in `file` |
+| `truncated` | `file` holds a part of the source; `reason` says which |
+| `empty` | The source answered and held nothing |
+| `unavailable` | Nothing of the source was kept; `reason` says why |
+| `deferred` | Left to a later checkpoint on purpose; `reason` says why |
+
+A source that could not be read is `unavailable`, never `empty`. A Pod a
+checkpoint read and a later one no longer finds under the same UID has an
+`unavailable` entry under its old UID: what it logged after the earlier
+checkpoint went with it. The `before-fault` checkpoint therefore shows such a
+Pod up to just before the fault, not its last seconds.
+
+**Order.** Sources are in the order of their `order` field. `ordered.log` holds
+the container log lines of the bundle by the timestamp the kubelet of each
+Pod's node gave them, one line each even when two checkpoints saw it. Those are
+the clocks of different nodes, which the bundle does not compare, so the order
+of lines from different nodes is not proven. CUBRID's files have their own
+timestamps with no time zone, so their lines are not merged; they are in
+`file` as the engine wrote them.
+
+**Bounds.** There is no periodic collection: a scenario has at most two
+checkpoints, one source takes at most 15 seconds and a checkpoint at most 90.
+What is stored of a source is its end, at most 1 MiB, of the last 5,000 lines of
+a container log; at most the 8 newest files of a Pod are read; a scenario stores
+at most 16 MiB, of which `ordered.log` takes at most 2 MiB; and all the
+scenarios of a Kind run together store at most 128 MiB and spend at most 6
+minutes. These are starting values, not measured budgets. What a bound stopped
+is named in the index. Only whole lines are kept, because a part of a line may
+hold a part of a credential that no redaction pattern can recognize.
+
+**What is copied.** From `$CUBRID/log`: the error logs of the server,
+`cub_master`, the log copiers and appliers, the Broker's CAS error logs and
+`broker/cubrid_broker.log`. Nothing else is copied: a Broker's SQL logs hold
+statements and their bound values, so they stay in the Pod, and the index
+counts the listed files it refused.
+
+**What runs in a Pod.** Only three fixed commands: a listing of those files,
+`tail` of one of them, and `cubrid heartbeat status`. None of them starts, stops
+or changes anything in CUBRID. `cubrid heartbeat status` is not a passive read
+during a fault, because it pings the hosts of `ha_ping_hosts` under the
+heartbeat lock and can turn CUBRID's isolation check off (POC-52, #722). It
+runs only in a checkpoint the scenario marks as `faultEnded`: its fault was
+removed and its result reached, or it injected none. In any other checkpoint
+it is `deferred`.
+
+**The verdict.** The logs never decide a result. A read or a write that fails
+is named in the index or in the run's `notes`, and the scenario's `result` and
+`reason` stay as they were. The index joins the scenario's `evidence` only once
+it exists. A credential of the run found in a bundle fails the run like one in
+any other evidence file: see [Secrets](#secrets).
+
+**An interrupted collection.** A deadline, a cancellation or a Pod that
+disappears keeps what was read. The index is replaced after each source, so a
+killed process leaves whole files, and a source the collection did not reach is
+named as `unavailable` when it was stopped and could say so. A read that does
+not stop within a second of its deadline is left behind and its output ignored.
+
 ### Secrets
 
 No evidence file and no line the suite prints may contain a password, a
@@ -1036,7 +1125,8 @@ The redaction removes:
   token, also in URL encoding, JSON escaping and, for a value of at least
   eight bytes, base64 (as a Secret's `data` holds it);
 - a value named `password`, `passwd`, `token`, `secret`, `secretKey`,
-  `secretAccessKey`, `accessKey`, `accessKeyId`, `apiKey` or `privateKey`
+  `secretAccessKey`, `accessKey`, `accessKeyId`, `apiKey`, `privateKey`,
+  `client-key-data` or `client-certificate-data`
   (with `_` or `-` also accepted between the words), written as `name=value`
   or `name: value`. A value in escaped JSON is removed up to its closing
   `\"` or the end of the line, and a quoted value up to its closing quote on
@@ -1045,9 +1135,12 @@ The redaction removes:
   or `;`. An empty value, such as `password=""`, is kept;
 - a `Bearer` credential, a `Basic` credential (a word after "Basic" that
   decodes to `user:password`), the password of `curl -u` or `--user`, a PEM private key
-  (to the end of the text when its end marker is missing), an AWS access key
-  ID, the password of a URL's user part and the password field of a CUBRID
-  JDBC URL (`jdbc:cubrid:host:port:database:user:password:`).
+  (to the end of the text when its end marker is missing, and from the start of
+  the text when its begin marker is), a signed JSON Web Token such as a service
+  account token, an AWS access key ID, the password of a URL's user part, the
+  password field of a CUBRID JDBC URL
+  (`jdbc:cubrid:host:port:database:user:password:`) and the quoted password of a
+  statement such as `CREATE USER app PASSWORD 'value'`.
 
 A registered value is matched in base64 reliably only as the encoding of
 the value alone, and a credential split across two writes to `GinkgoWriter`
