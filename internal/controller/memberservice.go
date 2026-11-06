@@ -23,9 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
@@ -65,18 +63,8 @@ func (r *CubridClusterReconciler) reconcileMemberServices(ctx context.Context, c
 	for _, name := range members {
 		wanted[name] = true
 
-		existing := &corev1.Service{}
-		err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, existing)
-		if err == nil && !metav1.IsControlledBy(existing, cluster) {
-			return fmt.Errorf("a Service named %q exists and is not owned by this cluster; "+
-				"member %q needs that name for its HA host name", name, name)
-		}
-		if err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("get member Service %s: %w", name, err)
-		}
-
 		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cluster.Namespace}}
-		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		err := r.reconcileChild(ctx, cluster, svc, func() error {
 			svc.Labels = memberServiceLabels(cluster)
 			svc.Spec.ClusterIP = corev1.ClusterIPNone
 			// Peers and the operator must reach a member that is not Ready yet.
@@ -90,7 +78,7 @@ func (r *CubridClusterReconciler) reconcileMemberServices(ctx context.Context, c
 					Port: haHeartbeatPort, TargetPort: intOrString(haHeartbeatPort),
 				},
 			}
-			return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
+			return nil
 		})
 		if err != nil {
 			return fmt.Errorf("member Service %s: %w", name, err)

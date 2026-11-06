@@ -24,7 +24,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 )
@@ -105,10 +104,9 @@ func (r *CubridClusterReconciler) reconcileHAConfig(ctx context.Context, cluster
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: haConfigMapName(cluster.Name), Namespace: cluster.Namespace},
 	}
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+	return r.reconcileChild(ctx, cluster, cm, func() error {
 		cm.Labels = labelsFor(cluster)
 		cm.Data = map[string]string{haConfFileName: conf}
-		return controllerutil.SetControllerReference(cluster, cm, r.Scheme)
+		return nil
 	})
-	return err
 }

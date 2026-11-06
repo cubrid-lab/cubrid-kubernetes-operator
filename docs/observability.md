@@ -104,6 +104,25 @@ they were not observed, so what an earlier reconcile saw is not kept:
 `RoutingReady` unless the primary of an HA cluster is unresolved, which is
 reported either way.
 
+An object that has a name the cluster needs, but that the cluster does not
+control, is refused before anything is written (#657): its spec, data, labels
+and owner references stay as they are, and it is never adopted. Only a
+controller owner reference with this cluster's UID makes an object the
+cluster's, so an object with no owner, one controlled by something else, and
+one left by a deleted cluster of the same name are all refused. The message
+names the kind and the object, and its controller when it has one. A refused
+object of the cluster's own step fails that step as above, with that step's
+reason: `ServiceReconcileFailed`, `MemberServiceReconcileFailed`,
+`SecretReconcileFailed`, `HAConfigReconcileFailed`,
+`NetworkPolicyReconcileFailed` or `StatefulSetReconcileFailed`, and the steps
+after it do not run in that reconcile. A refused Broker object gives
+`BrokerReady=False` with `BrokerReconcileFailed` as above, leaves `Ready` to the
+members, and records a Warning Event of that reason. Either way the refusal is
+retried, so the cluster continues once the name is free. A cluster deleted and
+created again under the same name waits in this way until Kubernetes has
+removed the children of the deleted one; a child orphaned on purpose stays
+refused until it is removed.
+
 A write the API server refuses because the cluster's namespace is being
 deleted is no failure (#526). When it is one of the cluster's own objects,
 the reconcile ends there: no Condition is changed, no Event is recorded, no
@@ -361,6 +380,7 @@ underscores.
 | `MemberPlacement` takes the reason `MembersShareNode`, `SpreadBlockedByVolume` or `MemberUnschedulable`, or returns from one of them to `MembersOnSeparateNodes`, compared with the last `True` or `False` reason: an `Unknown` in between, as while a member's Pod is recreated, records no Event and is not compared with. The last reason is kept in the manager's memory; after a restart of the manager the stored Condition is compared with, so a problem that is `Unknown` at that moment can be reported once more | that reason, with the Condition's message | Warning; `MembersOnSeparateNodes` is Normal | `condition_changed` |
 | Any other Condition changes its status or reason | none | | `condition_changed` |
 | `Ready` becomes `True` | `ClusterReady` | Normal | `condition_changed` (`Ready`) |
+| A Broker object is refused because the cluster does not control it (see [Conditions](#conditions)) | `BrokerReconcileFailed`, once for a refusal that stays the same; a Broker write that fails for another reason makes no Event | Warning | `condition_changed` (`BrokerReady`) |
 | A step could not write an object of the cluster (`Ready` takes that step's reason, see [Conditions](#conditions)) | the step's reason, such as `StatefulSetReconcileFailed`, once for a failure that stays the same | Warning | `condition_changed` (`Ready`) |
 | The bootstrap reaches its next phase | `DatabaseCreated`, `DatabaseRestored` (a recovery restore completed and seeding starts), `PeersSeeded` | Normal | no log event of its own; `condition_changed` when `BootstrapReady` changes |
 | A bootstrap step failed: attempts remain, or the last one failed | the step's failure reason with `Retrying` (`DatabaseCreationFailedRetrying`, `SeedBackupFailedRetrying`, `SeedRestoreFailedRetrying`, `RestoreFailedRetrying`), or without it after the last attempt; `RecordedOperationLost` when the record of an HA bootstrap or seeding step stayed missing, `RecordedOperationMismatch` or `SeedSourceContradicted` when its record is contradicted | Warning | `condition_changed` (`BootstrapReady`); a failed recovery also `restore_failed` |
