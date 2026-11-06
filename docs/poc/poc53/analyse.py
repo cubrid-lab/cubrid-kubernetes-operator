@@ -216,8 +216,10 @@ def facts(rows):
     for t in ok:
         if t["to_be_active_samples"]:
             c = "".join(lines(t["dir"] / f"{t['took_over']}.refused.txt"))
+            after = sum(1 for w in writes(t["dir"], t["took_over"]) if w["result"] == "disabled" and w["t0"] >= t["t_end"] + t["took_self_master_s"])
             print(f"  {t['name']}: {fmt(t['took_self_master_s'])}, {t['active_log_s']:.1f}, {fmt(t['active_sampled_s'])}, "
-                  f"{t['active_sampled_s'] - t['active_log_s']:.1f}, -581 x {c.count('ERROR CODE = -581')}, -670 x {c.count('result=other:-670')}, "
+                  f"{t['active_sampled_s'] - t['active_log_s']:.1f}, -581 x {c.count('ERROR CODE = -581')} ({after} after it reported master), "
+                  f"-670 x {c.count('result=other:-670')}, "
                   f"applier done {t['applier_done_from_active']:.3f} s from active")
     near = [t["applier_done_from_active"] for t in ok if t["applier_done_from_active"] is not None and not t["to_be_active_samples"]]
     print(f"closest applier done to active in the other {len(near)} trials with logs: {min(near):.3f} s or more")
@@ -255,6 +257,17 @@ def facts(rows):
               f"`Cannot make connection` {sum(1 for _, b in rel if 'Cannot make connection' in b)} times; "
               f"copier connected {first('connected to database server', 100):.3f}; header active to standby {first(ACTIVE_TO_STANDBY, 100):.3f}; "
               f"working to recovering {first(WORKING_TO_RECOVERING, 100):.3f}; server active {srv[0]:.3f}; h-2's copier active to dead {dead:.2f}")
+    print("\n`Process killed` in the master's log with a frozen server, s from the start of its stop (first kills, cub_server)")
+    for t in ok:
+        if t["spec"]["holder"] == "frozen-server":
+            log = [(a - t["t_end"], b) for a, b in records(t["dir"] / f"{t['spec']['master']}.master.err") if "Process killed" in b and a > t["t_end"] - 5]
+            print(f"  {t['name']}: {log[0][0]:.2f}, {next(a for a, b in log if 'cub_server' in b):.2f}")
+    print("\n`Unable to mount disk volume` on the member that took over, before the master's end, s (first line, last line, lines)")
+    for t in ok:
+        at = [a - t["t_end"] for a, b in records(t["dir"] / f"{t['took_over']}.logdb.err") if "Unable to mount" in b and a < t["t_end"]]
+        if at:
+            whole_log = records(t["dir"] / f"{t['took_over']}.logdb.err")
+            print(f"  {t['name']}: {at[0]:.1f}, {at[-1]:.1f}, {len(at)}; this trial's log starts at {min(a for a, _ in whole_log) - t['t_end']:.1f}")
     print("\nDuplicate keys (-670)")
     for t in rows:
         text = " ".join(b for m in MEMBERS for _, b in records(t["dir"] / f"{m}.server.err")) + t["why"]

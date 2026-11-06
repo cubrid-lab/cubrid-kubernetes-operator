@@ -42,8 +42,8 @@ PLANS = {
     "first": [(spec(0, 1, 2, "graceful"), 1), (spec(0, 1, 2, "kill"), 1)],
     "holders": [(spec(0, 1, 2, "graceful", holder="idle-session"), 1), (spec(0, 2, 1, "graceful", holder="open-txn"), 1),
                 (spec(0, 1, 2, "graceful", holder="long-query"), 1)],
-    # In this order, chained from a master h-2: frozen-server replays the CI run's
-    # slow stop, with the stopped slave returning at +30 s as the watchdog did.
+    # In this order, chained from a master h-2.
+    # frozen-server stands in for a slow stop, whose cause in CI is not known, with the stopped slave returning at +30 s.
     "main": [(spec(*t, end, gap=g, holder=h, return_at=b, stop_slave=c), n) for t, end, g, h, b, c, n in [
         ((0, 2, 1), "graceful", 2, "writes", "after", True, 1),
         ((0, 1, 2), "graceful", 2, "frozen-server", "after", True, 1),
