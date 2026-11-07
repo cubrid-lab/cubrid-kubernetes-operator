@@ -188,23 +188,47 @@ func (r *haRun) observedLoss(report workload.Report, faultAt time.Time, clients 
 	return loss.String(), loss.Resolution.Round(time.Millisecond).String()
 }
 
-// master asks CUBRID on every member for its role and returns the one master
-// and the slaves. Any other distribution of roles is an error.
-func (r *haRun) master(ctx context.Context) (string, []string, error) {
-	var masters, slaves []string
+// memberRole is what cubrid heartbeat status printed on a member: its role as
+// heartbeatRoleIn reads it, its node state, and the output.
+type memberRole struct{ role, state, out string }
+
+// memberRoles is one reading of every member, by Pod name.
+type memberRoles map[string]memberRole
+
+// readRoles asks CUBRID on every member for its role, once, in the order of
+// r.members. A failed read returns the members read before it with the error.
+func (r *haRun) readRoles(ctx context.Context) (memberRoles, error) {
+	roles := memberRoles{}
 	for _, pod := range r.members {
 		out, err := r.kubectl(ctx, "exec", pod, "--", "bash", "-c", heartbeatStatus)
 		if err != nil {
+			return roles, err
+		}
+		roles[pod] = memberRole{role: heartbeatRoleIn(pod, out), state: heartbeatNodeStateIn(pod, out), out: out}
+	}
+	return roles, nil
+}
+
+// master asks CUBRID on every member for its role and returns the one master
+// and the slaves. Any other distribution of roles is an error.
+func (r *haRun) master(ctx context.Context) (string, []string, error) {
+	// A member read before a failed read and in neither role is reported as
+	// an unmet role, before the read's error, as when each was read in turn.
+	roles, err := r.readRoles(ctx)
+	var masters, slaves []string
+	for _, pod := range r.members {
+		got, read := roles[pod]
+		if !read {
 			return "", nil, err
 		}
-		switch heartbeatRoleIn(pod, out) {
+		switch got.role {
 		case "master":
 			masters = append(masters, pod)
 		case "slave":
 			slaves = append(slaves, pod)
 		default:
 			return "", nil, &faults.Unmet{Member: pod, Kind: faults.UnmetRole,
-				Detail: "neither an active master nor a standby slave:\n" + out}
+				Detail: "neither an active master nor a standby slave:\n" + got.out}
 		}
 	}
 	if len(masters) != 1 || len(slaves) != len(r.members)-1 {

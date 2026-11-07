@@ -36,6 +36,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
@@ -391,12 +392,42 @@ func (r *haRun) s14Token(variant string) {
 	before, err := r.imTokens()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(before.current != "" && before.previous == "").To(BeTrue(), "a token and no previous one")
-	master, slaves, err := r.master(context.Background())
-	Expect(err).NotTo(HaveOccurred())
-	status, _, since, primary, err := r.primaryResolved()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(status).To(Equal("True"))
-	Expect(primary).To(Equal(master))
+	// A member can be `to-be-master` for a few seconds here, right after the
+	// previous step replaced every member (#392, #704), so the roles are read
+	// until they settle, and a member seen in that state is noted.
+	roles, err := settledRoles(context.Background(), r.members, r.readRoles, 15*time.Second, time.Second)
+	if roles.noted != "" {
+		note("starting roles: %s", roles.noted)
+		result.Reason += "; starting roles: " + roles.noted
+	}
+	Expect(err).NotTo(HaveOccurred(), roles.noted)
+	master, slaves := roles.master, roles.slaves
+	// An operator pass that read a member in that state leaves PrimaryResolved
+	// False with PrimaryObservationIncomplete until the next pass, up to
+	// haResyncInterval (10 s) later, so it is read for two passes. That is the
+	// only reading read again, and each one is noted.
+	var since string
+	incomplete := 0
+	settledAt := time.Now()
+	Eventually(func(g Gomega) {
+		status, reason, at, primary, err := r.primaryResolved()
+		g.Expect(err).NotTo(HaveOccurred())
+		done, err := startingPrimary(status, reason, primary, master)
+		if !done {
+			reading := fmt.Sprintf("PrimaryResolved %s %s %.1f s after the roles settled",
+				status, reason, time.Since(settledAt).Seconds())
+			note("starting primary: %s", reading)
+			result.Reason += "; starting primary: " + reading
+		}
+		if err != nil {
+			StopTrying(strings.TrimSuffix(err.Error()+"; "+roles.noted, "; ")).Now()
+		}
+		if !done {
+			incomplete++
+		}
+		g.Expect(done).To(BeTrue(), "PrimaryResolved %s %s", status, reason)
+		since = at
+	}, 30*time.Second, 2*time.Second).Should(Succeed(), roles.noted)
 	counts := map[string]int{}
 	for _, reason := range []string{"InstanceManagerTokenRotated", "InstanceManagerTokenOverlapEnded",
 		"InstanceManagerTokenRegenerated", "InstanceManagerTokenRefused", "PrimaryUnresolved"} {
@@ -629,6 +660,8 @@ func (r *haRun) s14Token(variant string) {
 		ID: "S14", Variant: variant, Result: evidence.Pass,
 		Measurements: map[string]any{
 			"membersReplaced":             replaced,
+			"startingToBeMasterMembers":   len(roles.waited),
+			"startingIncompleteReads":     incomplete,
 			"overlapEndedAfter":           overlap.Round(time.Second).String(),
 			"requestsRefusedWhileSettle":  settling,
 			"requestsRefusedAfterSettle":  later,
@@ -641,5 +674,134 @@ func (r *haRun) s14Token(variant string) {
 			"acknowledgedMissing":         report.AcknowledgedMissing,
 		},
 		Evidence: files,
+	}
+}
+
+// settled is the outcome of settledRoles: the one active master, the standby
+// slaves and, when members were read in `to-be-master` on the way, those
+// members and a note of it.
+type settled struct {
+	master string
+	slaves []string
+	waited []string
+	noted  string
+}
+
+// startingPrimary judges one reading of PrimaryResolved after the starting
+// roles settled on master. It is done when the condition is True with
+// SinglePrimaryObserved and that master. A False with
+// PrimaryObservationIncomplete is read again: an Operator pass that read a
+// member in `to-be-master` leaves it until the next pass. Any other reading,
+// two primaries above all (#702), is an error, and the wait ends.
+func startingPrimary(status, reason, primary, master string) (bool, error) {
+	switch {
+	case status == "True" && reason == "SinglePrimaryObserved" && primary == master:
+		return true, nil
+	case status == "False" && reason == "PrimaryObservationIncomplete":
+		return false, nil
+	}
+	return false, fmt.Errorf("PrimaryResolved %s %s with the primary %q, not True SinglePrimaryObserved with %s",
+		status, reason, primary, master)
+}
+
+// settledRoles reads the members' roles until one is an active master and
+// every other a standby slave, for up to bound. A member in the heartbeat
+// state `to-be-master` beside one active master is read again: POC-50
+// measured that state ending by itself within 3.6 s (#704). Every other
+// reading fails at once: a failed read, another state, `to-be-master` with no
+// active master, two active masters, or an active master other than the one
+// first read. The note says which member was in the state, and for how long,
+// so that the wait does not hide it.
+func settledRoles(ctx context.Context, members []string, read func(context.Context) (memberRoles, error),
+	bound, interval time.Duration) (settled, error) {
+	start := time.Now()
+	var res settled
+	var first string
+	var order []string
+	firstSeen, lastSeen := map[string]time.Duration{}, map[string]time.Duration{}
+	note := func(end string) {
+		if len(order) == 0 {
+			return
+		}
+		var b strings.Builder
+		beside := "with no active master"
+		if first != "" {
+			beside = "beside the active master " + first
+		}
+		for _, m := range order {
+			fmt.Fprintf(&b, "%s to-be-master %s, read from %.1f s to %.1f s after the first read; ",
+				m, beside, firstSeen[m].Seconds(), lastSeen[m].Seconds())
+		}
+		res.noted, res.waited = b.String()+end, order
+	}
+	// record notes the members read in `to-be-master` and the first master.
+	record := func(roles memberRoles, at time.Duration) (masters, slaves, waiting []string, other string) {
+		for _, m := range members {
+			r, read := roles[m]
+			switch {
+			case !read:
+			case r.role == "master":
+				masters = append(masters, m)
+			case r.role == "slave":
+				slaves = append(slaves, m)
+			case r.state == "to-be-master":
+				waiting = append(waiting, m)
+			case other == "":
+				other = m
+			}
+		}
+		// The members in the state are recorded before any check, so that a
+		// reading that fails still says who was `to-be-master`.
+		for _, m := range waiting {
+			if _, ok := firstSeen[m]; !ok {
+				firstSeen[m] = at
+				order = append(order, m)
+			}
+			lastSeen[m] = at
+		}
+		if first == "" && len(masters) == 1 {
+			first = masters[0]
+		}
+		return masters, slaves, waiting, other
+	}
+	for n := 1; ; n++ {
+		at := time.Since(start)
+		roles, err := read(ctx)
+		if err != nil {
+			// A failed read can still return the members read before it.
+			record(roles, at)
+			note(fmt.Sprintf("read %d failed", n))
+			return res, err
+		}
+		masters, slaves, waiting, other := record(roles, at)
+		switch {
+		case other != "":
+			note(fmt.Sprintf("%s was in another state at read %d", other, n))
+			return res, &faults.Unmet{Member: other, Kind: faults.UnmetRole,
+				Detail: "neither an active master nor a standby slave:\n" + roles[other].out}
+		case len(masters) > 1:
+			note(fmt.Sprintf("two active masters at read %d", n))
+			return res, &faults.Unmet{Kind: faults.UnmetRole, Detail: fmt.Sprintf("masters %v, slaves %v", masters, slaves)}
+		case len(masters) == 1 && masters[0] != first:
+			note(fmt.Sprintf("the master changed at read %d", n))
+			return res, &faults.Unmet{Member: masters[0], Kind: faults.UnmetRole,
+				Detail: fmt.Sprintf("master changed from %s to %s while a member was to-be-master", first, masters[0])}
+		case len(waiting) > 0 && len(masters) == 0:
+			note(fmt.Sprintf("no active master at read %d", n))
+			return res, &faults.Unmet{Member: waiting[0], Kind: faults.UnmetRole,
+				Detail: "to-be-master with no active master:\n" + roles[waiting[0]].out}
+		case len(waiting) == 0 && (len(masters) != 1 || len(slaves) != len(members)-1):
+			note(fmt.Sprintf("masters %v, slaves %v at read %d", masters, slaves, n))
+			return res, &faults.Unmet{Kind: faults.UnmetRole, Detail: fmt.Sprintf("masters %v, slaves %v", masters, slaves)}
+		case len(waiting) == 0:
+			res.master, res.slaves = masters[0], slaves
+			note(fmt.Sprintf("the roles settled at read %d, %.1f s after the first", n, at.Seconds()))
+			return res, nil
+		case time.Since(start) >= bound:
+			note(fmt.Sprintf("still so after %s", bound))
+			return res, &faults.Unmet{Member: waiting[0], Kind: faults.UnmetRole,
+				Detail: fmt.Sprintf("still to-be-master after %s:\n%s", bound, roles[waiting[0]].out)}
+		}
+		time.Sleep(interval)
 	}
 }
