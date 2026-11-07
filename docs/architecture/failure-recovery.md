@@ -125,7 +125,7 @@ sequenceDiagram
 | Bring the returning member back as a slave | — | yes | **planned:** verify a former master before it rejoins |
 | Report roles, primary and routing state | — | — | yes: `PrimaryResolved`, `HAReady`, `RoutingReady`, `currentPrimary`, Events, metrics |
 | Close the write endpoint while the primary is ambiguous | — | — | **planned:** today only reported |
-| Fence a suspected stale master | — | heartbeat-level split-brain avoidance | never automatically in `v1alpha1`; manual intervention |
+| Fence a suspected stale master | — | native heartbeat handles roles but does not guarantee split-brain prevention | never automatically in `v1alpha1`; manual investigation/intervention |
 | Fail back to the former master | — | — | never automatically |
 
 The responsibility split is decided in
@@ -135,7 +135,12 @@ split", and section 6, "Hard NEVER rules".
 ## Planned and partial behavior
 
 These are design decisions, not current behavior. Do not read the diagram as
-if they were in place.
+if they were in place. **CUBRID itself can temporarily have two writable
+masters under a partition** (POC-6 and #702/#703); those native experiments
+do not establish that two writes reached the Operator-managed RW Broker, and
+the Operator never decides which CUBRID member to promote. #113/#115 must
+measure the managed new-connection path separately from existing sessions
+and direct database clients.
 
 - **Write quarantine is reported, not enforced.** When the primary cannot be
   resolved, the Operator sets `RoutingReady=False`, but the read-write

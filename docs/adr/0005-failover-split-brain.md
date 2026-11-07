@@ -4,17 +4,24 @@
 
 Accepted (POC-gated) — tracked in issue #5
 
-The responsibility split, fencing posture, detection algorithm, and
-condition set are accepted; the broker/write-quarantine mechanics and
-per-scenario behavior are confirmed by the POC/E2E checklist below.
+The responsibility split, observation rules, and conservative fencing posture
+are accepted. **Managed write-path quarantine is a required design target, not
+yet an implemented or validated safety mechanism**: the Operator currently
+reports `RoutingReady=False` without removing the `-rw` Service endpoints
+(#113/#115). The checklist below defines tests still to be completed; it
+must not be read as confirmation that every scenario passed.
 
 ## Context
 
 Failover and split-brain handling is the highest-risk area of the
 operator. The boundary between CUBRID native HA and the operator must be
 explicit, and ambiguous states must be surfaced, never guessed. CUBRID
-avoids split-brain at the heartbeat level, but Kubernetes network
-partitions and pod lifecycle add failure modes CUBRID does not see.
+heartbeat owns native role transitions, **but it does not guarantee prevention
+of two writable masters under network partition**: POC-6 reproduced that
+state with divergent writes, and POC-50/52 investigated additional native
+HA failure cases (#702/#703). Those Docker observations do not by themselves
+prove two writable masters were exposed through the Operator-managed RW Broker
+in Kubernetes; that path needs separate evidence (#115).
 
 ## Constraints
 
@@ -38,24 +45,27 @@ Grounded in CUBRID 11.4 + prior ADRs:
 > For v1alpha1 the operator is a **conservative HA observer and
 > Kubernetes reconciler, not a database failover authority.** It never
 > creates, chooses, or fences a primary automatically during ambiguous
-> evidence; it delegates role transitions to CUBRID native HA,
-> quarantines write routing when primary safety cannot be proven, and
-> requires manual intervention for split-brain or unverified old-primary
-> states.
+> evidence; it delegates role transitions to CUBRID native HA and reports
+> unresolved or conflicting observations. The accepted design **requires**
+> managed write-path quarantine under the policy being validated in #113/#115;
+> the current code does not enforce it. Split-brain and unverified old-primary
+> states require manual investigation rather than guessed role changes.
 
 ### 1. Responsibility split
 
 **CUBRID native HA owns:** master/slave election; automatic failover;
-promotion priority (`ha_node_list`); heartbeat-level split-brain
-avoidance; replication state and catch-up.
+promotion priority (`ha_node_list`); heartbeat processing and native
+conflict resolution where possible; replication state and catch-up. Native
+heartbeat is **not** a quorum/fencing guarantee against split brain.
 
 **The operator owns:** rendering HA topology/config and stable
 identities; observing roles via `/v1/role` (as implemented, the operator
 does not call `/v1/ha/status`); aggregating
 `status`/Conditions/Events/metrics; reconciling Kubernetes/broker
 resources around observed HA state; detecting unresolved/incomplete/
-conflicting primaries; **quarantining write routing** when safety is not
-provable; failed-instance recovery, old-primary verification, rejoin,
+conflicting primaries; **planned** managed write-path quarantine when safety
+is not provable (#113; not enforced today); failed-instance recovery,
+old-primary verification, rejoin,
 rebuild, and manual failback; planned lifecycle shutdown via
 `/v1/shutdown`.
 
@@ -69,7 +79,7 @@ reachability as database liveness.
 CUBRID owns native failover.
 Operator does NOT perform automatic emergency DB fencing.
 Operator may perform planned lifecycle fencing via /v1/shutdown.
-Operator performs write-path quarantine on ambiguous primary.
+Operator reports ambiguous primary today; managed RW quarantine is planned.
 Manual intervention is required for confirmed/suspected split-brain.
 ```
 
@@ -141,6 +151,16 @@ never by weakening `PrimaryResolved`.
 
 ### 4. Per-scenario behavior
 
+**Policy scenarios, not an implementation/validation report.** Any row that
+says “quarantine”, “drop RW readiness”, “manual intervention” or
+`FencingRequired` describes the intended behavior or an operator action still
+to be qualified. Currently `RoutingReady=False` is reported but does **not**
+remove managed RW endpoints, close existing sessions, or fence the database.
+Unknown observations are not proof that CUBRID has elected an unsafe master;
+a policy choice must balance safe native failover against write exposure.
+Use #113/#115 for implementation and SQL evidence, and #702/#703 for native
+HA findings.
+
 | Scenario | Promotion decided by | `-rw` | Stale master identified | Stale writes minimized | Fencing / surfacing |
 |---|---|---|---|---|---|
 | Master reachable, slave isolated | CUBRID (usually none) | RW brokers seek master natively | isolated slave is `unknown`, not proven self-promoted | `PrimaryObservationIncomplete` → RW quarantine (relaxable if POC proves brokers safe) | no auto-fence; `Degraded / InstanceObservationIncomplete` |
@@ -197,8 +217,9 @@ selectors for the write endpoint.
 ### 7. Operator-partition safety
 
 CUBRID keeps serving and failing over without the operator; brokers keep
-their config; the operator does no automatic promotion/fencing, so it
-**cannot** create a second writable master. After restart it rebuilds
+their config; the operator performs no master election or automatic emergency
+fencing. **This limits Operator-induced role decisions but does not prevent
+native split brain** during a partition. After restart it rebuilds
 from Kubernetes objects + persisted status + fresh observations; incomplete
 data → incomplete/ambiguous status, never action on stale memory. Worst
 case is reduced availability, not operator-induced split-brain.
@@ -207,24 +228,29 @@ case is reduced availability, not operator-induced split-brain.
 
 ### Positive
 
-- The operator cannot manufacture split-brain; safety is the default.
+- The Operator does not introduce a separate master election or arbitrarily
+  promote a member. This is an architectural boundary, **not** a claim that
+  native HA cannot encounter split brain or data divergence.
 - Ambiguity is surfaced (conditions/events), enabling informed manual
   action.
 - Degrades safely under operator partition/restart.
 
 ### Negative
 
-- Conservative `PrimaryResolved` reduces availability during partial
-  observation (write quarantine) — an intentional safety trade-off.
+- Conservative `PrimaryResolved` reports incomplete observation today. A
+  *future* managed quarantine may trade availability for reduced exposure,
+  but only after #113/#115 define and verify its behavior; missing Operator
+  observations alone do not prove the native SQL path is unsafe.
 - Confirmed split-brain / unverified old-primary needs manual
   intervention in v1alpha1.
-- **Write-path quarantine withholds the RW endpoint for *new*
-  connections but does not terminate existing broker/client sessions.**
-  An already-isolated old primary (or a long-lived connection to it) may
-  keep accepting writes until CUBRID or manual intervention resolves it —
-  a real divergence/data-loss window in v1alpha1. Its size is measured by
-  the stale-write POC and mitigated only by CUBRID-native behavior and
-  manual action, not by the operator.
+- **Planned write-path quarantine** would withhold the managed RW endpoint
+  for *new* connections; it would not by itself terminate already-open
+  Broker/client sessions or block direct database connections. **Neither
+  behavior is enforced by the current Operator.** An isolated former master
+  or an existing session may continue accepting writes until CUBRID or an
+  administrator resolves the state. The exposure must be measured through
+  each actual SQL path (#115), not inferred from `RoutingReady=False` or
+  from a Docker-only direct-client experiment.
 
 ## Validation (POC/E2E checklist)
 

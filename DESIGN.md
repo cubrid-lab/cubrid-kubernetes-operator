@@ -1036,22 +1036,24 @@ Hard invariant:
 
 ### Decision (ADR-0005, issue #5)
 
-**Accepted (POC-gated): a conservative, safety-first posture.** For
-v1alpha1 the operator is an **HA observer and reconciler, not a failover
-authority**:
+**Accepted responsibility boundary (POC-gated safety behavior).** For
+v1alpha1 the Operator is an **HA observer and reconciler, not a failover
+authority**. The status/detection rules are implemented; the managed
+write-path quarantine and related SQL validation remain open (#113/#115):
 
 - **CUBRID native HA owns** role election, automatic failover, promotion
-  priority, and heartbeat split-brain avoidance. **Failback is not
-  automatic** — the operator owns rejoin.
+  priority, heartbeat coordination and replication. **Native split brain is
+  possible** under network partitions (POC-6, POC-50/52); heartbeat is not a
+  guaranteed fence or quorum. **Failback is not automatic** — the Operator
+  must verify a rejoining former master before trusting its data.
 - **The operator only** observes roles (Instance Manager `/v1/role`; the
   Operator does not call `/v1/ha/status`), aggregates status/conditions, reconciles
   Kubernetes/broker resources, and recovers failed members.
-- **No automatic emergency DB fencing.** Only planned lifecycle fencing
-  via `/v1/shutdown`, plus **write-path quarantine** (`RoutingReady=False`,
-  withhold the RW endpoint) on ambiguous/incomplete/multi-primary
-  evidence. The Operator itself never calls `/v1/shutdown` (only a Pod's
-  preStop hook stops its member), and `RoutingReady=False` withholds
-  nothing: the write quarantine is reported, not enforced
+- **No automatic emergency DB fencing.** The planned lifecycle shutdown
+  uses `/v1/shutdown` through the Pod's preStop hook (the Operator controller
+  does not call it). **Managed write-path quarantine** is a required, *not
+  yet implemented* policy: setting `RoutingReady=False` does **not** withhold
+  the RW endpoint or close existing sessions today
   ([docs/observability.md](docs/observability.md#what-routingreadyfalse-does-not-do), #113). Pod delete / scale-down / cordon / NetworkPolicy isolation
   are **rejected** as automatic split-brain resolution.
 - **Detection:** `PrimaryResolved=True` only when **all** promotable
@@ -1068,10 +1070,12 @@ authority**:
   (`Disabled | Manual | Automatic`, default `Manual`) keeps future active
   fencing non-breaking.
 
-The operator never promotes/picks/fences a primary on ambiguous evidence,
-never auto-failbacks, and degrades safely under its own partition/restart
-(it cannot manufacture a second writable master). Confirmed split-brain
-or an unverified old primary requires manual intervention. See ADR-0005
+The Operator never promotes/picks/fences a primary on ambiguous evidence
+and never auto-failbacks. Its absence does not replace CUBRID's role decisions
+or remove the risk of native split brain; `RoutingReady=False` is a reported
+observation, **not a SQL safety gate** until #113 is implemented. Suspected
+split brain or an unverified former master requires investigation and an
+explicit recovery decision, not an Operator-selected winner. See ADR-0005
 for the full per-scenario table, hard NEVER rules, and POC/E2E checklist.
 
 ---
