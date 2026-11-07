@@ -330,17 +330,16 @@ version 11.4.
 
 These are findings for the maintainers. This catalog changes no decision.
 
-- **Seeding a new cluster.** Architecture Decision Record 0010 states, as a
-  CUBRID constraint, that slaves are seeded from the master and that
-  `createdb` is not run independently on each member. Fact 2 says the manual
-  and CUBRID's own test helper create an empty database on every node of a
-  *new* group. The record's rule is still the documented way to add a node to
-  a group that holds data. Whether a new, empty cluster may use the simpler
-  path, which would remove the need for object storage during the bootstrap,
-  is a decision to revisit (issue #218). The experiment POC-15 in
-  `docs/poc/RESULTS.md` ran both cases on a real engine: the simpler path
-  forms a working group when it is new and empty, and leaves a member without
-  the earlier data when the group already holds rows.
+- **Seeding a new cluster.** Fact 2 says the manual and CUBRID's own test
+  helper create an empty database on every node of a *new* group. The
+  project does not do that: the first member creates the database and the
+  other members are seeded from it. This is a project decision (issue #218,
+  Architecture Decision Record 0010), not a limit of the engine. The
+  experiment POC-15 in `docs/poc/RESULTS.md` ran both cases on a real engine:
+  creating on every member forms a working group when it is new and empty,
+  and leaves a member without the earlier data when the group already holds
+  rows. Seeding is also the documented way to add a node to a group that
+  holds data.
 - **The command used for seeding.** The operator seeds a member from a
   running master with `cubrid restoreslave -u -s master -m <master>`
   (`internal/instancemanager/restore.go`); a recovery restore uses
