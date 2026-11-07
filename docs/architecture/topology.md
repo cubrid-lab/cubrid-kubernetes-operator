@@ -16,49 +16,59 @@ three-member HA cluster named `demo`. A standalone cluster is the same with
 one member and no HA member list (see [Standalone and HA](#standalone-and-ha)).
 The Operator runs in its own Pod and is never one of the database Pods.
 
-The picture is drawn as two diagrams that use the same names: the control
-path (who writes and runs what) and the data path (where SQL and replication
-go).
+The picture is drawn as two consistent views of **one fixed runtime
+layout**, not as two alternatives: the control path (who writes and runs
+what) and the SQL path (who serves client traffic). The SQL path uses the
+same `demo-rw`, `demo-ro`, `demo-broker-rw`, `demo-broker-ro`,
+and `demo-0/1/2` identities as [Client and data path](data-path.md).
+No ordinal is a permanent Master: CUBRID Native HA decides roles at runtime.
+The Kubernetes controller-manager's Lease elects an **Operator process**,
+never a CUBRID database Master.
 
 ### Control path
 
 ```mermaid
 flowchart TB
-    mgr["Operator manager Pod<br/>(own namespace):<br/>cluster controller and<br/>backup controller"]:::op
+    mgr["Operator manager Pod<br/>Cluster controller + Backup controller<br/>(Operator namespace)"]:::op
 
     subgraph cp["Kubernetes control plane"]
         api["Kubernetes API server"]:::k8s
-        builtin["Built-in controllers<br/>and kubelet"]:::k8s
+        builtin["Built-in controllers + kubelet"]:::k8s
     end
 
-    subgraph objs["Objects the Operator writes (cluster namespace)"]
-        wl["StatefulSet demo,<br/>Broker Deployments"]:::op
-        cfg["Services, ConfigMaps,<br/>token Secret, NetworkPolicies"]:::op
-        crs["CubridCluster and<br/>CubridBackup status"]:::op
+    subgraph objs["Operator-owned objects (demo namespace)"]
+        crs["CubridCluster demo + CubridBackup<br/>status / Conditions"]:::op
+        workload["StatefulSet demo<br/>Deployments demo-broker-rw / demo-broker-ro"]:::op
+        config["demo-instances + demo-0/1/2 Services<br/>HA + Broker ConfigMaps<br/>Instance Manager token Secret"]:::op
+        safety["demo-rw / demo-ro Services<br/>NetworkPolicies + PodDisruptionBudgets"]:::op
     end
 
-    subgraph run["Pods that Kubernetes runs"]
-        members["Member Pods<br/>demo-0, demo-1<br/>and demo-2:<br/>Instance Manager<br/>on port 9090,<br/>CUBRID server<br/>and heartbeat"]:::cubrid
-        brokers["Broker Pods<br/>2 read-write,<br/>2 read-only"]:::cubrid
+    subgraph runtime["Kubernetes-managed runtime (demo namespace)"]
+        db["Member Pods demo-0 / demo-1 / demo-2<br/>Instance Manager HTTP 9090<br/>CUBRID server TCP 1523<br/>Native heartbeat UDP 59901"]:::cubrid
+        broker["Broker Pods (2 RW + 2 RO)<br/>CUBRID native SQL routing"]:::cubrid
+        pvc[("Per-member PVCs<br/>data-demo-0 / 1 / 2")]:::k8s
     end
 
-    objstore[("Object storage")]:::ext
+    store[("Object storage")]:::ext
 
-    mgr -. "watch and write" .-> api
+    mgr -. "watch / reconcile" .-> api
     builtin -. "watch" .-> api
     api -. "stores" .-> objs
-    builtin -. "run Pods,<br/>attach volumes" .-> run
-    mgr -. "HTTP + token<br/>port 9090" .-> members
-    members == "backups, seeding" ==> objstore
+    builtin -. "creates / restarts Pods" .-> db
+    builtin -. "creates / restarts Pods" .-> broker
+    builtin -. "binds data volumes" .-> pvc
+    mgr -. "authenticated HTTP :9090<br/>role / backup / bootstrap" .-> db
+    db == "backup upload" ==> store
+    store == "seed / restore download" ==> db
 
     classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
     classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
     classDef cubrid fill:#dcfce7,stroke:#15803d,color:#0f172a
     classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
 
-    style objs fill:#fff7ed,stroke:#c2410c,color:#0f172a
     style cp fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
-    style run fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
+    style objs fill:#fff7ed,stroke:#c2410c,color:#0f172a
+    style runtime fill:#eff6ff,stroke:#1d4ed8,color:#0f172a
 ```
 
 ### Data path
@@ -67,17 +77,17 @@ flowchart TB
 flowchart TB
     client(["Application client"]):::ext
 
-    subgraph svcs["Services written by the Operator"]
-        rw["Service<br/>demo-rw<br/>port 33000"]:::op
-        ro["Service<br/>demo-ro<br/>port 33001"]:::op
+    subgraph services["Application Services (Operator-owned)"]
+        rw["Service demo-rw<br/>TCP 33000"]:::op
+        ro["Service demo-ro<br/>TCP 33001"]:::op
     end
 
-    subgraph brokers["Broker Pods"]
-        brw["Deployment<br/>demo-broker-rw<br/>2 read-write Brokers"]:::cubrid
-        bro["Deployment<br/>demo-broker-ro<br/>2 read-only Brokers"]:::cubrid
+    subgraph brokerPods["CUBRID Broker Pods (separate Deployments)"]
+        brw["demo-broker-rw<br/>2 RW Broker Pods"]:::cubrid
+        bro["demo-broker-ro<br/>2 RO Broker Pods"]:::cubrid
     end
 
-    subgraph members["Member Pods: heartbeat and replication run between them"]
+    subgraph dbMembers["StatefulSet demo: CUBRID Native HA members (runtime roles)"]
         direction LR
         m0["demo-0<br/>CUBRID server"]:::cubrid
         m1["demo-1<br/>CUBRID server"]:::cubrid
@@ -87,18 +97,19 @@ flowchart TB
 
     client == "SQL" ==> rw
     client == "SQL" ==> ro
-    rw ==> brw
-    ro ==> bro
-    brokers == "port 1523" ==> members
+    rw == "to a ready Broker" ==> brw
+    ro == "to a ready Broker" ==> bro
+    brw == "native RW selection: current Master<br/>DB TCP 1523" ==> dbMembers
+    bro == "native RO read routing<br/>DB TCP 1523" ==> dbMembers
 
     classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
     classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
     classDef cubrid fill:#dcfce7,stroke:#15803d,color:#0f172a
     classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
 
-    style svcs fill:#fff7ed,stroke:#c2410c,color:#0f172a
-    style brokers fill:#f0fdf4,stroke:#15803d,color:#0f172a
-    style members fill:#f0fdf4,stroke:#15803d,color:#0f172a
+    style services fill:#fff7ed,stroke:#c2410c,color:#0f172a
+    style brokerPods fill:#f0fdf4,stroke:#15803d,color:#0f172a
+    style dbMembers fill:#f0fdf4,stroke:#15803d,color:#0f172a
 ```
 
 ## Key components
@@ -141,8 +152,10 @@ All names are those of the [shared component table](README.md#shared-components)
    **application client**: SQL goes to a Service, a Broker and a CUBRID
    server. The Operator is not on that path.
 5. Between the members, **CUBRID heartbeat and replication** run directly,
-   without the Operator, as the member group's label says. The
-   [data path](data-path.md) page draws them.
+   without the Operator, as the member group's label says. Their direction
+   depends on CUBRID's *current* roles: a fixed `demo-0 → demo-1` edge
+   would incorrectly imply that the Operator pins the Master. The
+   [data path](data-path.md) explains the native selection and replication.
 
 ## Standalone and HA
 
@@ -179,12 +192,14 @@ Validation rules for the member count are in
   [README — Manager watch namespace](../../README.md#manager-watch-namespace)).
 - Non-promotable read replicas are not supported in `v1alpha1`
   (`readReplicas` must be 0).
-- NetworkPolicies are drawn as one box. They only take effect with a network
-  plugin that enforces them; see
+- NetworkPolicies and PodDisruptionBudgets are grouped as Operator-owned
+  safety objects. NetworkPolicies only take effect with a network
+  plugin that enforces them; PDBs govern voluntary Evictions, **not** CUBRID
+  failover or split-brain prevention. See
   [README — Network access](../../README.md#network-access).
 - Multi-zone layouts are not shown because the Operator does not manage them
-  (ROADMAP.md, "Hardening"). Node placement and PodDisruptionBudgets are not
-  drawn: members are placed as in
-  [README — Member placement](../../README.md#member-placement), and the
-  Brokers carry a preferred anti-affinity on the node name (`brokerPodSpec` in
-  `broker.go`); see [Voluntary disruption](voluntary-disruption.md).
+  (ROADMAP.md, "Hardening"). **PDB resource identities** are shown in the
+  control path, but actual node placement and allowed evictions are not:
+  members are placed as in [README — Member placement](../../README.md#member-placement),
+  and Brokers prefer distinct nodes; see
+  [Voluntary disruption](voluntary-disruption.md).
