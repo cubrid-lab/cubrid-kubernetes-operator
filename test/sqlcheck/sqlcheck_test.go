@@ -348,3 +348,37 @@ func TestLostSessionAfterRow(t *testing.T) {
 		t.Error("ReadRow accepted the read of the Kind run; it keeps reporting the -199 as an error")
 	}
 }
+
+func TestRefusedAsReadOnly(t *testing.T) {
+	const notification = "Time: 11/07/26 00:10:23.827 - NOTIFICATION *** CODE = -971, Tran = -1, EID = 1\n"
+	const refusal = notification + "ERROR: Attempted to update the database when updates are disabled.\n" +
+		"Time: 11/07/26 00:10:23.990 - ERROR *** ERROR CODE = -581, Tran = 1, EID = 2\n"
+	const pair = notification +
+		"Time: 11/07/26 00:10:23.990 - ERROR *** ERROR CODE = -199, Tran = 7, EID = 2\n" +
+		"Time: 11/07/26 00:10:23.990 - ERROR *** ERROR CODE = -111, Tran = 7, EID = 3\n"
+	cases := map[string]struct {
+		out     string
+		cmdErr  error
+		refused bool
+	}{
+		"the read-only refusal":                     {out: refusal, refused: true},
+		"the refusal with a non-zero exit":          {out: refusal, cmdErr: errors.New("exit status 1"), refused: true},
+		"a statement that succeeded":                {out: notification + "1 row affected. (0.001 sec)\n"},
+		"the pair, which says nothing of a refusal": {out: pair},
+		"the refusal beside the pair":               {out: refusal + pair},
+		"another statement error":                   {out: notification + "ERROR: Table s00_check does not exist.\n"},
+		"a longer code that starts the same":        {out: notification + "ERROR CODE = -5810, Tran = 1\n"},
+		"a command that could not be run":           {cmdErr: errors.New("error dialing backend: EOF")},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Run(func(string) (string, error) { return c.out, c.cmdErr }, "INSERT")
+			if got := RefusedAsReadOnly(err); got != c.refused {
+				t.Fatalf("RefusedAsReadOnly = %v, want %v, for %v", got, c.refused, err)
+			}
+		})
+	}
+	if RefusedAsReadOnly(nil) {
+		t.Fatal("no error is not a refusal")
+	}
+}
