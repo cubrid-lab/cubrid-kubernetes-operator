@@ -21,9 +21,7 @@ Grounded in CUBRID 11.4 HA behavior:
 - `ha_db_list` = comma-separated DB names under HA control in
   `cubrid_ha.conf`. **All HA nodes must share an identical `ha_db_list`.**
 - A CUBRID database must be created (`cubrid createdb`) before HA
-  replication can run. Slaves are seeded from the master (backup/restore
-  or `ha_make_slavedb`), **not** by running `createdb` independently on
-  each member.
+  replication can run.
 - Starting HA against an `ha_db_list` naming a database that does not yet
   exist on the master is invalid.
 
@@ -33,7 +31,8 @@ Grounded in CUBRID 11.4 HA behavior:
   Simple but allows the invalid state where `ha_db_list` names a
   nonexistent database, and gives no bootstrap guarantee.
 - **B — Operator owns creation on the master, seeds slaves, then starts
-  HA.** Prevents the invalid state; matches CUBRID's seeding model.
+  HA.** Prevents the invalid state and uses one path for every member that
+  needs the data, whether the cluster is new or a member is rebuilt.
 - **C — Multi-database from day one.** `ha_db_list` supports it, but
   multi-DB bootstrap, backup-target, deletion, and partial-failure
   semantics add significant complexity for v1alpha1.
@@ -66,8 +65,44 @@ volume **only if the database is absent** (idempotent adoption if it
 already exists), then seeds slave members from the master via the
 supported CUBRID HA seeding path (backup/restore or `ha_make_slavedb`),
 then starts HA with an identical `ha_db_list` on every node. The operator
-must not run `createdb` independently on slave members for the same HA
-database.
+does not run `createdb` independently on slave members for the same HA
+database. This is a choice of this project, not a limit of the engine (see
+"Why seeding and not `createdb` on every member").
+
+### Why seeding and not `createdb` on every member
+
+Issue #218 asked whether a new, empty cluster may create its database on
+every member, as the CUBRID 11.4 manual's HA quick start does. The decision of
+2026-10-06 is that it may not: the first member creates the one authoritative
+database and the other members are seeded from it. The engine does not forbid
+the other way. POC-15 in `docs/poc/RESULTS.md` (CUBRID 11.4.6, three nodes
+under Podman) formed a new, empty HA group by running the same
+`cubrid createdb` on every node and then `cubrid heartbeat start`, with no
+backup copied between nodes. The reasons for the choice are these:
+
+- `cubrid createdb` makes an independent database. It is not a way to copy
+  one.
+- POC-15 showed the danger on a member that was created empty and joined a
+  group that already held rows: `cubrid heartbeat status` reported a healthy
+  slave, while the member had none of the earlier rows and its log applier
+  failed on the first new row. Role and server state do not show the
+  difference.
+- Creating on every member would be safe only if the operator could tell a
+  first bootstrap from a member that lost its data with certainty, for
+  example from a durable record that the first bootstrap completed. Seeding
+  has one code path for both cases and was validated on Kind.
+- The other database operators that were looked at (CloudNativePG, Patroni,
+  Percona, the Oracle MySQL Operator) initialize one member and copy the
+  others.
+
+POC-15 did not test `createdb` options that differ between nodes, heartbeat
+started on all nodes at once, or the procedure run through the Instance
+Manager on Kubernetes. It does not show that creating on every member is
+unsafe for a new cluster, only that it is unsafe when applied to a member
+that joins a group holding data.
+
+Removing the need for object storage during a bootstrap is a separate design
+about how the backup travels (#256).
 
 Reconcile order (bootstrap):
 
