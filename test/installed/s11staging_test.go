@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -165,9 +166,20 @@ func runStagingScript(t *testing.T, dir, stubs string) (*s11StagingAfterFailure,
 	if runErr != nil {
 		st.ReadError = runErr.Error()
 	} else {
-		parseStagingAfterFailure(st, string(out))
+		parseStagingAfterFailure(st, withoutHostProcesses(string(out)))
 	}
 	return st, st.judge()
+}
+
+// withoutHostProcesses drops the script's "U" lines. In a member's container
+// they name that member's own CUBRID processes, but here the script reads the
+// host's /proc, where any CUBRID process of another user or container would
+// turn the verdict into blocked. The parser tests cover those lines.
+func withoutHostProcesses(out string) string {
+	lines := strings.Split(out, "\n")
+	return strings.Join(slices.DeleteFunc(lines, func(line string) bool {
+		return strings.HasPrefix(line, "U ")
+	}), "\n")
 }
 
 // stubCommand writes an executable named name with the given shell body in a
