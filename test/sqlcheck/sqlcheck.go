@@ -184,3 +184,17 @@ func LostSessionAfterRow(err error, marker string) bool {
 		!csqlError.MatchString(lostSessionCodes.ReplaceAllString(statement.out, "")) &&
 		rowRead(statement.out, marker) == nil
 }
+
+// readOnlyRefusal matches the error of a statement refused because the server
+// does not take updates, as a slave answers a client (POC-52).
+var readOnlyRefusal = regexp.MustCompile(`ERROR CODE = -581\b`)
+
+// RefusedAsReadOnly reports whether err, an error of Run, is a statement the
+// server refused with -581. Any other failure, such as a command that could
+// not be run or the pair of SessionLost, says nothing about what the server
+// would have done with the statement, so it is not a refusal, and neither is
+// a -581 beside that pair.
+func RefusedAsReadOnly(err error) bool {
+	var statement *StatementError
+	return errors.As(err, &statement) && readOnlyRefusal.MatchString(statement.out) && !SessionLost(statement.out)
+}
