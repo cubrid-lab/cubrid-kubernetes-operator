@@ -19,7 +19,7 @@ func mermaidBlocks(t *testing.T, filename string) []string {
 	}
 
 	parts := strings.Split(string(raw), "```mermaid\n")
-	var blocks []string
+	blocks := make([]string, 0, len(parts)-1)
 	for _, part := range parts[1:] {
 		body, _, ok := strings.Cut(part, "\n```")
 		if !ok {
