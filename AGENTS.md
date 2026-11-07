@@ -662,3 +662,9 @@ section adds nothing to them.
 
 This is a shared writing convention, not a new CI check, reviewer approval,
 or merge gate. Keep existing repository-specific technical and safety rules.
+
+## Repository-specific issue and PR evidence
+
+This repository owns **Kubernetes reconciliation and CUBRID native HA cluster operations**. Issue and PR titles, bodies, ADR/design discussions and release or publication claims must start with **this repository's** affected files and observable behavior. Check Go controller code, CRD schemas, HA topology, actual cluster state, isolated kind/e2e tests, and safe operational runbooks. Do not reuse the rationale, issue tracker, implementation plan, test command, supported version claim or release schedule of another CUBRID Lab repository.
+
+External Kubernetes operators may be research references, but cannot override CUBRID's native heartbeat/master election or replace verified cluster tests. When an external link represents a real integration, specification or independent comparison, explain why it is needed and distinguish external context from locally tested evidence. Before review, scan the issue/PR title and description, contributor/agent guidance, documentation and published notes for incorrect project names or cross-language tooling. Keep the existing local CI, security and maintainer approval rules unchanged; this is a manual writing check, not an additional CI gate.
