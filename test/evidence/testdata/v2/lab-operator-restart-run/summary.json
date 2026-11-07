@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "2",
+  "runId": "2026-10-30T02-15-00Z-5f3c1e",
+  "startedAt": "2026-10-30T02:15:00Z",
+  "finishedAt": "2026-10-30T02:41:09Z",
+  "environment": {
+    "level": "vm-lab",
+    "kubernetesVersion": "v1.33.1",
+    "operatorCommit": "0782259",
+    "operatorImageDigest": "sha256:1111111111111111",
+    "cubridImageDigest": "sha256:2222222222222222",
+    "engineVersion": "11.4.6.1963",
+    "clientDriver": "csql"
+  },
+  "lane": "lab-installed-ha-s06",
+  "passed": true,
+  "problems": [],
+  "notes": [
+    "Derived for this test from the synthetic version 1 result by the writer of schema version 2; no lab run produced it"
+  ],
+  "scenarios": [
+    {
+      "key": "installed-ha-sql-smoke",
+      "displayName": "Installed three-member HA and SQL smoke",
+      "id": "LAB01",
+      "result": "pass",
+      "reason": "",
+      "cleanupSucceeded": true,
+      "neverEvents": [],
+      "evidence": [
+        "LAB01/record.json"
+      ]
+    },
+    {
+      "key": "installed-operator-failure-recovery-restart",
+      "displayName": "Operator interruption and HA continuity - restart of the installed manager",
+      "id": "S06",
+      "variant": "restart",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "failover_limit": "60s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "outcomeUnknown": "unknown",
+        "recoveryTime": "21.4s"
+      },
+      "operations": {
+        "attempted": 1840,
+        "acknowledged": 1832,
+        "failed": 6,
+        "unknown": 2
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S06/restart/history.jsonl"
+      ]
+    }
+  ]
+}

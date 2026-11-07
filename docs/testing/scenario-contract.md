@@ -911,7 +911,7 @@ it.
 
 ```json
 {
-  "schemaVersion": "1",
+  "schemaVersion": "2",
   "runId": "2026-10-12T09-30-00Z-a1b2c3",
   "startedAt": "2026-10-12T09:30:00Z",
   "finishedAt": "2026-10-12T10:05:12Z",
@@ -929,6 +929,8 @@ it.
   "problems": [],
   "scenarios": [
     {
+      "key": "ha-primary-pod-recovery-abrupt-later-master",
+      "displayName": "Primary database Pod termination and recovery - abrupt, later master",
       "id": "S03",
       "variant": "abrupt",
       "result": "pass",
@@ -951,11 +953,18 @@ it.
 }
 ```
 
+- `key` is the canonical key of the result in `test/evidence/registry.go`,
+  under this run's `lane` and `level`, and `displayName` its name for people.
+  Both are left out for a result the registry does not hold there, such as a
+  lab lane run at the `kind` level. `id` and `variant` stay as they were: the
+  gates, the labels, the evidence paths and the JUnit case names still use
+  them ([Result format versions](#result-format-versions-migration-and-rollback)).
 - `level` is `unit`, `envtest`, `kind` or `vm-lab`.
 - `lane` names the [required scenarios](#required-scenarios) the run was
   judged against, `passed` says whether it passed them, and `problems` lists
-  why not, one line per problem. A line about a scenario starts
-  `<key>: <result>: <reason>`, for example `S03/abrupt: fail: ...`, and when
+  why not, one line per problem. A line about a scenario starts with its
+  `id` and `variant`, `<id>/<variant>: <result>: <reason>`, for example
+  `S03/abrupt: fail: ...`, and when
   the scenario's description is known it ends with that description in
   parentheses. The start of the line is the stable format; the description is
   for people only and is not part of the scenario's identity.
@@ -1025,12 +1034,14 @@ for result matching and comparison. A testcase whose scenario has a known
 description also has a `<system-out>` element after its verdict element, such
 as `Primary database Pod termination and recovery - abrupt, later master
 (S03/abrupt)`; a scenario with no known description has none. The description
-does not replace the identity, and nothing matches on it. A future schema
-migration must explicitly version any identity change (see #715).
+does not replace the identity, and nothing matches on it. Schema version 2
+of `summary.json` leaves this file as it was: a case maps to its canonical key
+through the entry of `summary.json` at the same place, and any change to a
+testcase `name` needs its own versioned migration (see #715).
 
-`junit.xml` is uploaded with the run's evidence and nothing in this repository
-reads it, so the description is seen by opening the file. The run's returned
-error and the `problems` of `summary.json` carry the description of each
+`junit.xml` is uploaded with the run's evidence and only `ReadRun` in this
+repository reads it, so the description is seen by opening the file. The run's
+returned error and the `problems` of `summary.json` carry the description of each
 scenario they report as well.
 
 | Result | JUnit |
@@ -1063,14 +1074,16 @@ under the `lane` and `environment.level` in its own `summary.json`, never under
 another: `S06/restart` is `operator-failure-recovery-restart` in
 a `kind` run, and `installed-operator-failure-recovery-restart` in a
 `lab-installed-ha-s06` run at the `vm-lab` level. The JUnit testcase `name` and
-the `id` and `variant` fields stay the identity of schema version 1.
+the `id` and `variant` fields stay the identity of a version 1 result, and a
+version 2 result must record the key they resolve to.
 
 | The reader finds | What it does |
 |---|---|
-| A `schemaVersion` other than the string `"1"`, or none | Refuses the file with an error and returns no results |
-| A field schema version 1 never had, or a file that is not one JSON object | Refuses the file with an error and returns no results |
+| A `schemaVersion` other than the string `"1"` or `"2"`, or none | Refuses the file with an error and returns no results |
+| A field its schema version never had, such as a `key` in a version 1 file, or a file that is not one JSON object | Refuses the file with an error and returns no results |
 | A lane that is not registered, or a lane at a level it is not judged at | Keeps every result readable, resolves none of them, and does not validate the run |
 | A legacy name unknown at that level, shared by two results, or recorded in the wrong field | Keeps the result without a key; it counts for no requirement |
+| A version 2 result with no `key` or `displayName`, or a `key` other than the one its legacy name resolves to under the run's lane and level | Keeps what it recorded, gives it no key, and does not validate the run; it counts for no requirement |
 | Two legacy names of one result in one run | Reports the conflict; neither replaces another requirement |
 | A required result missing, or not passed | Reports it in the words of the gate, with `Lane.Gate` applied to the registered lane |
 | A claimed pass whose evidence file is gone, with no evidence, an unconfirmed fault or a never-event | Reports it as a `fail`, and keeps the recorded `pass` |
@@ -1082,15 +1095,96 @@ The read keeps three things apart. `Summary` is what the run recorded, with its
 own verdict, and is never changed. `Results` adds to each entry its key and what
 its files support now. `Problems` says why the run does not prove the lane
 **as it is registered today**, so a run that passed an earlier, shorter list of
-requirements stays `passed` in `Summary` and is not validated. The directory
+requirements stays `passed` in `Summary` and is not validated. A version 2
+result also keeps its `RecordedKey` and `DisplayName` beside `Summary`; a
+version 1 result has no recorded key, and its display name comes from the
+registry. The display name is not compared with the registry: its wording may
+improve, and an earlier run keeps the words it was written with. The directory
 and the SHA-256 digests of the two files refer to the unmodified source. A name
 repeated within a run keeps the rule of the gate: every record of it must pass,
 and it can never stand for a different requirement.
 
-Schema version 1 is the only version. A later version must be added to the
-reader, with frozen results of version 1 still read the same, before anything
-writes it. Fixtures of version 1 are in `test/evidence/testdata/v1`; their bytes
-do not change.
+A later version must be added to the reader, with frozen results of the earlier
+versions still read the same, before anything writes it. Fixtures are in
+`test/evidence/testdata/v1` and `test/evidence/testdata/v2`; their bytes do not
+change. The version 2 fixtures are derived: the version 2 writer wrote them from
+the version 1 fixtures, so no CI or lab run produced them.
+
+### Result format versions, migration and rollback
+
+The writer in `test/evidence` writes schema version 2. Version 1 stays readable
+for as long as its results are kept.
+
+A new version was needed, rather than two more fields in version 1, because
+version 1 is closed: `ReadRun` refuses a field it never had, so that nothing is
+lost without a trace. Version 2 is additive in content. A scenario of version 1
+such as
+
+```json
+{
+  "schemaVersion": "1",
+  "scenarios": [
+    { "id": "S03", "variant": "abrupt", "result": "pass", "reason": "" }
+  ]
+}
+```
+
+is written in version 2 of a `kind` run as
+
+```json
+{
+  "schemaVersion": "2",
+  "scenarios": [
+    {
+      "key": "ha-primary-pod-recovery-abrupt-later-master",
+      "displayName": "Primary database Pod termination and recovery - abrupt, later master",
+      "id": "S03",
+      "variant": "abrupt",
+      "result": "pass",
+      "reason": ""
+    }
+  ]
+}
+```
+
+and both are the same `junit.xml` case, whose bytes do not depend on the version:
+
+```xml
+<testcase name="S03/abrupt" classname="scenario">
+  <system-out>Primary database Pod termination and recovery - abrupt, later master (S03/abrupt)</system-out>
+</testcase>
+```
+
+Removing `key` and `displayName` and restoring the version number gives the
+version 1 summary, with `notes` moved before `scenarios`; JSON readers do not
+depend on that order. What version 2 leaves unchanged:
+
+- **The verdict.** `Lane.Gate` matches on `id` and `variant` and does not read
+  the key. A result with a key is still failed, blocked, not run or without
+  evidence, and the five results and the Kind and filtered lanes mean what they
+  did. Writing a key decides nothing: a result with no key keeps its verdict in
+  the file, and `ReadRun` reports it.
+- **The problem lines.** They start with the legacy name as in version 1.
+- **Selectors and evidence paths.** They are the subject of #712.
+- **`junit.xml`.** A test compares the writer's output with the frozen version 1
+  file byte by byte. Presenting a key or alias metadata in it is not specified
+  yet, and is not done until consumers of the file have been checked.
+
+A key is permanent once it is written: `ReadRun` compares it with the registry,
+so renaming a key leaves earlier version 2 runs unvalidated until a new version
+says how the old key is read. A change to a display name needs no new version.
+
+A reader written for version 1 only refuses a version 2 file with an error,
+which fails closed. In this repository, nothing outside `test/evidence` depends
+on the version: the workflows upload the evidence directory without reading it,
+and the tests in `test/installed` read the fields of version 1, which version 2
+keeps. A tool outside this repository that requires `schemaVersion` to be `"1"`
+has to accept `"2"`; one that reads `id` and `variant` is unaffected.
+
+To roll back, set `SchemaVersion` to `"1"` and write the `Summary` itself in
+`Summary.Write`. Keep the reader. Results written as version 2 in the meantime
+stay as they are and are read as version 2: no file of either version is
+converted, in either direction.
 
 ### `history.jsonl`
 

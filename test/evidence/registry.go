@@ -404,6 +404,17 @@ func (r scenarioRegistry) resolveAlias(lane, level, alias string) (ResolvedScena
 	return ResolvedScenario{}, fmt.Errorf("%s names %d %s results", alias, len(matches), level)
 }
 
+// resolveResult returns the registered result a scenario's record stands for
+// in a run of the lane and level. The legacy name must also be recorded in its
+// fields: S03 with no variant is not S03/abrupt written into the ID.
+func (r scenarioRegistry) resolveResult(lane, level string, sc Scenario) (ResolvedScenario, error) {
+	entry, err := r.resolveAlias(lane, level, sc.Name())
+	if err == nil && entry.Family != sc.ID {
+		return ResolvedScenario{}, fmt.Errorf("%s is recorded with the ID %s, not %s", sc.Name(), sc.ID, entry.Family)
+	}
+	return entry, err
+}
+
 func (r scenarioRegistry) laneProblems(l Lane, level string) []string {
 	if err := r.checkLaneLevel(l.Name, level); err != nil {
 		return []string{err.Error()}
