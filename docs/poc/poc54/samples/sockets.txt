@@ -1,0 +1,58 @@
+2026-11-07T02:41:40Z
+# ss -xpn, sockets of processes named csql or on the master path
+u_str ESTAB 2712   0                                                      * 76216925            * 76215964 users:(("csql",pid=924,fd=3))      
+u_str ESTAB 0      4864                                     /tmp/CUBRID1523 76214334            * 76215326 users:(("cub_server",pid=48,fd=63))
+u_str ESTAB 2712   0                                                      * 76218001            * 76214133 users:(("csql",pid=926,fd=3))      
+u_str ESTAB 3940   0                                                      * 76214310            * 76214333 users:(("csql",pid=914,fd=3))      
+u_str ESTAB 2620   0                                                      * 76217934            * 76213184 users:(("csql",pid=923,fd=3))      
+u_str ESTAB 0      4864                                     /tmp/CUBRID1523 76214338            * 76210166 users:(("cub_server",pid=48,fd=65))
+u_str ESTAB 0      4864                                     /tmp/CUBRID1523 76214333            * 76214310 users:(("cub_server",pid=48,fd=64))
+u_str ESTAB 4104   0                                                      * 76210983            * 76214343 users:(("csql",pid=919,fd=3))      
+u_str ESTAB 2712   0                                                      * 76215271            * 76213174 users:(("csql",pid=922,fd=3))      
+u_str ESTAB 0      4864                                     /tmp/CUBRID1523 76212450            * 76212449 users:(("cub_server",pid=48,fd=57))
+u_str ESTAB 0      4352                                     /tmp/CUBRID1523 76214133            * 76218001 users:(("cub_server",pid=48,fd=54))
+u_str ESTAB 0      4352                                     /tmp/CUBRID1523 76213174            * 76215271 users:(("cub_server",pid=48,fd=49))
+u_str ESTAB 0      4352                                     /tmp/CUBRID1523 76215965            * 76213182 users:(("cub_server",pid=48,fd=53))
+u_str ESTAB 2712   0                                                      * 76213182            * 76215965 users:(("csql",pid=925,fd=3))      
+u_str ESTAB 0      4352                                     /tmp/CUBRID1523 76215964            * 76216925 users:(("cub_server",pid=48,fd=52))
+u_str ESTAB 0      4864                                     /tmp/CUBRID1523 76214343            * 76210983 users:(("cub_server",pid=48,fd=66))
+u_str ESTAB 3940   0                                                      * 76212184            * 76212454 users:(("csql",pid=913,fd=3))      
+u_str ESTAB 3940   0                                                      * 76212449            * 76212450 users:(("csql",pid=911,fd=3))      
+u_str ESTAB 0      4352                                     /tmp/CUBRID1523 76214134            * 76218448 users:(("cub_server",pid=48,fd=55))
+u_str ESTAB 4068   0                                                      * 76210166            * 76214338 users:(("csql",pid=917,fd=3))      
+u_str ESTAB 0      4864                                     /tmp/CUBRID1523 76212454            * 76212184 users:(("cub_server",pid=48,fd=61))
+u_str ESTAB 0      4352                                     /tmp/CUBRID1523 76213184            * 76217934 users:(("cub_server",pid=48,fd=50))
+u_str ESTAB 3976   0                                                      * 76215326            * 76214334 users:(("csql",pid=915,fd=3))      
+u_str ESTAB 2712   0                                                      * 76218448            * 76214134 users:(("csql",pid=927,fd=3))      
+# ss -tpn, TCP port 1523
+ESTAB 0      0        172.17.0.21:1523   172.17.0.21:34946 users:(("cub_server",pid=48,fd=56))
+ESTAB 224    0        172.17.0.21:34956  172.17.0.21:1523  users:(("csql",pid=942,fd=3))      
+ESTAB 0      0        172.17.0.21:1523   172.17.0.21:34984 users:(("cub_server",pid=48,fd=60))
+ESTAB 0      0        172.17.0.21:1523   172.17.0.21:34994 users:(("cub_server",pid=48,fd=67))
+ESTAB 0      0        172.17.0.21:1523   172.17.0.21:34956 users:(("cub_server",pid=48,fd=58))
+ESTAB 0      0        172.17.0.21:1523   172.17.0.21:34990 users:(("cub_server",pid=48,fd=62))
+ESTAB 224    0        172.17.0.21:34946  172.17.0.21:1523  users:(("csql",pid=941,fd=3))      
+ESTAB 224    0        172.17.0.21:34990  172.17.0.21:1523  users:(("csql",pid=945,fd=3))      
+ESTAB 224    0        172.17.0.21:34994  172.17.0.21:1523  users:(("csql",pid=946,fd=3))      
+ESTAB 220    0        172.17.0.21:34972  172.17.0.21:1523  users:(("csql",pid=943,fd=3))      
+ESTAB 224    0        172.17.0.21:34984  172.17.0.21:1523  users:(("csql",pid=944,fd=3))      
+ESTAB 0      0        172.17.0.21:1523   172.17.0.21:34972 users:(("cub_server",pid=48,fd=59))
+# each csql: its command line and socket fd target
+911 csql -u dba appdb@localhost -c INSERT INTO t VALUES (300004, 1); COMMIT;  => socket:[76212449]
+913 csql -u dba appdb@localhost -c INSERT INTO t VALUES (100004, 1); COMMIT;  => socket:[76212184]
+914 csql -u dba appdb@localhost -c INSERT INTO t VALUES (200004, 1); COMMIT;  => socket:[76214310]
+915 csql -u dba appdb@localhost -c INSERT INTO t VALUES (500004, 1); COMMIT;  => socket:[76215326]
+917 csql -u dba appdb@localhost -c INSERT INTO t VALUES (4, 1); COMMIT;  => socket:[76210166]
+919 csql -u dba appdb@localhost -c INSERT INTO t VALUES (400004, 1); COMMIT;  => socket:[76210983]
+922 csql -u dba appdb@localhost -c SELECT 1  => socket:[76215271]
+923 csql -u dba appdb@localhost -c SELECT 1  => socket:[76217934]
+924 csql -u dba appdb@localhost -c SELECT 1  => socket:[76216925]
+925 csql -u dba appdb@localhost -c SELECT 1  => socket:[76213182]
+926 csql -u dba appdb@localhost -c SELECT 1  => socket:[76218001]
+927 csql -u dba appdb@localhost -c SELECT 1  => socket:[76218448]
+941 csql -u dba appdb@poc54-member -c SELECT 1  => socket:[76220533]
+942 csql -u dba appdb@poc54-member -c SELECT 1  => socket:[76216308]
+943 csql -u dba appdb@poc54-member -c SELECT 1  => socket:[76217160]
+944 csql -u dba appdb@poc54-member -c SELECT 1  => socket:[76219572]
+945 csql -u dba appdb@poc54-member -c SELECT 1  => socket:[76217227]
+946 csql -u dba appdb@poc54-member -c SELECT 1  => socket:[76220603]
