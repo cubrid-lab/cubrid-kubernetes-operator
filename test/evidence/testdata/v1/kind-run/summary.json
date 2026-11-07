@@ -1,0 +1,671 @@
+{
+  "schemaVersion": "1",
+  "runId": "2026-11-07T01-00-38Z",
+  "startedAt": "2026-11-07T01:00:38.166251423Z",
+  "finishedAt": "2026-11-07T01:43:15.60259563Z",
+  "environment": {
+    "level": "kind",
+    "kubernetesVersion": "v1.37.0",
+    "operatorCommit": "72df6b130500e8360d742b4017a194b0bdfeb221",
+    "operatorImageDigest": "sha256:3b1950c3309ee9cfc04451f0f04b0dc2f50b384fa305b14183bd87dadcc3cea6",
+    "cubridImageDigest": "docker.io/library/import-2026-11-07@sha256:5883ea9101b1fa311ac0a378416eba20088926405d93f610c94a9681545c287e",
+    "engineVersion": "CUBRID 11.4.7 (11.4.7.1994-1df4af4) (64bit release build for Linux) (Oct 30 2026 18:26:16)",
+    "clientDriver": "cubrid-jdbc 11.3.2.0053"
+  },
+  "lane": "kind",
+  "passed": true,
+  "problems": [],
+  "scenarios": [
+    {
+      "id": "S00",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "cleanup": "1m0s",
+        "confirm": "5m0s",
+        "install_limit": "1m0s",
+        "outcome": "15m0s",
+        "ready_limit": "1m30s"
+      },
+      "measurements": {
+        "conditionAgreement": {
+          "disagreements": 0,
+          "evaluated": {
+            "broker-ready-needs-both-endpoints": 12,
+            "ha-ready-needs-resolved-primary": 0,
+            "ha-ready-not-true-while-replication-unhealthy": 0,
+            "ready-true-is-followed-by-sql-in-the-pod": 12,
+            "replication-unhealthy-names-slaves": 0,
+            "resolved-primary-needs-every-member-answer": 0,
+            "routing-ready-needs-write-endpoint": 12,
+            "standalone-cluster-resolves-no-primary": 13
+          },
+          "notJudged": 0,
+          "notes": 4,
+          "statusReads": 13,
+          "unreadStatus": 0
+        },
+        "createdToSQLSeconds": 17.944259212,
+        "csqlLostSessionReads": 0,
+        "firstStartToReadySeconds": 17.125270442,
+        "installSeconds": 11,
+        "podDeleteToReadySeconds": 19.149442708,
+        "timeLimitVerdict": "pass"
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S00/timeline.jsonl",
+        "S00/conditions.jsonl",
+        "S00/agreement.txt",
+        "S00/record.json",
+        "S00/logs/index.json"
+      ]
+    },
+    {
+      "id": "S01",
+      "result": "pass",
+      "reason": "",
+      "limits": {
+        "formation_limit": "5m0s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "formationTime": "1m34s"
+      },
+      "operations": {
+        "attempted": 61,
+        "acknowledged": 60,
+        "failed": 1,
+        "unknown": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S01/history.jsonl",
+        "S01/data-check.json",
+        "S01/logs/index.json"
+      ]
+    },
+    {
+      "id": "S02",
+      "result": "pass",
+      "reason": "",
+      "limits": {
+        "replication_limit": "30s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "fullCheckPassedWithin": "2.341s",
+        "replicationObservedWithin": "536ms",
+        "slaveReplacementTime": "10.615s"
+      },
+      "operations": {
+        "attempted": 123,
+        "acknowledged": 122,
+        "failed": 1,
+        "unknown": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S02/history.jsonl",
+        "S02/data-check.json",
+        "S02/timeline.jsonl",
+        "S02/logs/index.json"
+      ]
+    },
+    {
+      "id": "S14",
+      "result": "pass",
+      "reason": "",
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "connectionsDropped": 4,
+        "objectStorageSecretFound": 0,
+        "placesSearched": 10,
+        "rbacChecks": 19,
+        "requestsAccepted": 2,
+        "requestsRefused": 84,
+        "tokenFound": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S14/history.jsonl",
+        "S14/data-check.json",
+        "S14/result.txt",
+        "S14/rbac.txt",
+        "S14/logs/index.json"
+      ]
+    },
+    {
+      "id": "S03",
+      "variant": "abrupt-first-member",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "failover_limit": "30s",
+        "rejoin_limit": "5m0s",
+        "stable_period": "30s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "acknowledgedWhilePrimaryUnresolved": 120,
+        "allMembersBackWithin": "22.705s",
+        "conditionAgreement": {
+          "disagreements": 0,
+          "evaluated": {
+            "broker-ready-needs-both-endpoints": 28,
+            "ha-ready-needs-resolved-primary": 28,
+            "ha-ready-not-true-while-replication-unhealthy": 28,
+            "replication-unhealthy-names-slaves": 28,
+            "resolved-primary-is-the-new-master-after-the-outcome": 16,
+            "resolved-primary-needs-every-member-answer": 28,
+            "resolved-primary-was-a-heartbeat-master": 27,
+            "routing-ready-needs-resolved-primary": 11,
+            "routing-ready-needs-write-endpoint": 28
+          },
+          "notJudged": 0,
+          "notes": 3,
+          "statusReads": 28,
+          "unreadStatus": 0
+        },
+        "electionObservedWithin": "3.417s",
+        "masterAfter": "hab-1",
+        "masterBefore": "hab-0",
+        "observedDataLossResolution": "70ms",
+        "observedDataLossWindow": "0s",
+        "operatorNoticedWithin": "21.932s",
+        "outcomeUnknown": 0,
+        "primaryUnresolvedFor": "20.006s",
+        "recoveryTime": "2.257s",
+        "routingNotReadyFor": "20.006s",
+        "sameMemberMasterAgain": false,
+        "stableFor": "52.854s"
+      },
+      "operations": {
+        "attempted": 524,
+        "acknowledged": 515,
+        "failed": 9,
+        "unknown": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S03/abrupt-first-member/history.jsonl",
+        "S03/abrupt-first-member/data-check.json",
+        "S03/abrupt-first-member/timeline.jsonl",
+        "S03/abrupt-first-member/roles.jsonl",
+        "S03/abrupt-first-member/conditions.jsonl",
+        "S03/abrupt-first-member/agreement.txt",
+        "S03/abrupt-first-member/replication-state.txt",
+        "S03/abrupt-first-member/logs/index.json"
+      ]
+    },
+    {
+      "id": "S03",
+      "variant": "abrupt",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "failover_limit": "30s",
+        "rejoin_limit": "5m0s",
+        "stable_period": "30s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "acknowledgedWhilePrimaryUnresolved": 99,
+        "allMembersBackWithin": "24.889s",
+        "conditionAgreement": {
+          "disagreements": 0,
+          "evaluated": {
+            "broker-ready-needs-both-endpoints": 27,
+            "ha-ready-needs-resolved-primary": 27,
+            "ha-ready-not-true-while-replication-unhealthy": 27,
+            "replication-unhealthy-names-slaves": 27,
+            "resolved-primary-is-the-new-master-after-the-outcome": 16,
+            "resolved-primary-needs-every-member-answer": 27,
+            "resolved-primary-was-a-heartbeat-master": 26,
+            "routing-ready-needs-resolved-primary": 10,
+            "routing-ready-needs-write-endpoint": 27
+          },
+          "notJudged": 0,
+          "notes": 2,
+          "statusReads": 27,
+          "unreadStatus": 0
+        },
+        "electionObservedWithin": "7.769s",
+        "masterAfter": "hab-1",
+        "masterBefore": "hab-0",
+        "observedDataLossResolution": "264ms",
+        "observedDataLossWindow": "0s",
+        "operatorNoticedWithin": "20.982s",
+        "outcomeUnknown": 0,
+        "primaryUnresolvedFor": "16.004s",
+        "recoveryTime": "5.147s",
+        "routingNotReadyFor": "16.004s",
+        "sameMemberMasterAgain": false,
+        "stableFor": "52.181s"
+      },
+      "operations": {
+        "attempted": 526,
+        "acknowledged": 526,
+        "failed": 0,
+        "unknown": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S03/abrupt/history.jsonl",
+        "S03/abrupt/data-check.json",
+        "S03/abrupt/timeline.jsonl",
+        "S03/abrupt/roles.jsonl",
+        "S03/abrupt/conditions.jsonl",
+        "S03/abrupt/agreement.txt",
+        "S03/abrupt/replication-state.txt",
+        "S03/abrupt/logs/index.json"
+      ]
+    },
+    {
+      "id": "S03",
+      "variant": "graceful",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "failover_limit": "30s",
+        "rejoin_limit": "5m0s",
+        "stable_period": "30s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "acknowledgedWhilePrimaryUnresolved": 126,
+        "allMembersBackWithin": "26.905s",
+        "conditionAgreement": {
+          "disagreements": 0,
+          "evaluated": {
+            "broker-ready-needs-both-endpoints": 30,
+            "ha-ready-needs-resolved-primary": 30,
+            "ha-ready-not-true-while-replication-unhealthy": 30,
+            "replication-unhealthy-names-slaves": 30,
+            "resolved-primary-is-the-new-master-after-the-outcome": 16,
+            "resolved-primary-needs-every-member-answer": 30,
+            "resolved-primary-was-a-heartbeat-master": 29,
+            "routing-ready-needs-resolved-primary": 11,
+            "routing-ready-needs-write-endpoint": 30
+          },
+          "notJudged": 0,
+          "notes": 3,
+          "statusReads": 30,
+          "unreadStatus": 0
+        },
+        "electionObservedWithin": "5.032s",
+        "masterAfter": "hab-0",
+        "masterBefore": "hab-1",
+        "observedDataLossResolution": "104ms",
+        "observedDataLossWindow": "0s",
+        "operatorNoticedWithin": "26.221s",
+        "outcomeUnknown": 1,
+        "primaryUnresolvedFor": "22.005s",
+        "recoveryTime": "2.265s",
+        "routingNotReadyFor": "22.005s",
+        "sameMemberMasterAgain": false,
+        "stableFor": "56.913s"
+      },
+      "operations": {
+        "attempted": 576,
+        "acknowledged": 566,
+        "failed": 9,
+        "unknown": 1
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S03/graceful/history.jsonl",
+        "S03/graceful/data-check.json",
+        "S03/graceful/timeline.jsonl",
+        "S03/graceful/roles.jsonl",
+        "S03/graceful/conditions.jsonl",
+        "S03/graceful/agreement.txt",
+        "S03/graceful/logs/index.json"
+      ]
+    },
+    {
+      "id": "S05",
+      "variant": "broker-process",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "broker_recovery_limit": "1m0s",
+        "stable_period": "30s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "brokersAvailableWithin": "11.273s",
+        "clientsInterrupted": 2,
+        "clientsNotInterrupted": 2,
+        "conditionAgreement": {
+          "disagreements": 0,
+          "evaluated": {
+            "broker-ready-needs-both-endpoints": 22,
+            "ha-ready-needs-resolved-primary": 22,
+            "ha-ready-not-true-while-replication-unhealthy": 22,
+            "replication-unhealthy-names-slaves": 22,
+            "resolved-primary-is-heartbeat-master": 21,
+            "resolved-primary-needs-every-member-answer": 22,
+            "routing-ready-needs-write-endpoint": 22,
+            "write-endpoint-follows-rw-deployment": 22
+          },
+          "notJudged": 0,
+          "notes": 1,
+          "statusReads": 22,
+          "unreadStatus": 0
+        },
+        "databaseFailoverObserved": false,
+        "newConnectionAfterFault": "succeeded on attempt 1",
+        "observedDataLossResolution": "19ms",
+        "observedDataLossWindow": "0s",
+        "outcomeUnknown": 0,
+        "recoveryTime": "2.654s",
+        "shortestStableFor": "43.066s"
+      },
+      "operations": {
+        "attempted": 1913,
+        "acknowledged": 1911,
+        "failed": 2,
+        "unknown": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S05/broker-process/history.jsonl",
+        "S05/broker-process/data-check.json",
+        "S05/broker-process/timeline.jsonl",
+        "S05/broker-process/conditions.jsonl",
+        "S05/broker-process/agreement.txt",
+        "S05/broker-process/logs/index.json"
+      ]
+    },
+    {
+      "id": "S05",
+      "variant": "one-broker-pod",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "broker_recovery_limit": "1m0s",
+        "stable_period": "30s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "brokersAvailableWithin": "7.303s",
+        "clientsInterrupted": 0,
+        "clientsNotInterrupted": 4,
+        "conditionAgreement": {
+          "disagreements": 0,
+          "evaluated": {
+            "broker-ready-needs-both-endpoints": 20,
+            "ha-ready-needs-resolved-primary": 20,
+            "ha-ready-not-true-while-replication-unhealthy": 20,
+            "replication-unhealthy-names-slaves": 20,
+            "resolved-primary-is-heartbeat-master": 19,
+            "resolved-primary-needs-every-member-answer": 20,
+            "routing-ready-needs-write-endpoint": 20,
+            "write-endpoint-follows-rw-deployment": 20
+          },
+          "notJudged": 0,
+          "notes": 0,
+          "statusReads": 20,
+          "unreadStatus": 0
+        },
+        "databaseFailoverObserved": false,
+        "newConnectionAfterFault": "succeeded on attempt 1",
+        "observedDataLossResolution": "15ms",
+        "observedDataLossWindow": "0s",
+        "outcomeUnknown": 0,
+        "recoveryTime": "423ms",
+        "shortestStableFor": "39.116s"
+      },
+      "operations": {
+        "attempted": 1729,
+        "acknowledged": 1729,
+        "failed": 0,
+        "unknown": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S05/one-broker-pod/history.jsonl",
+        "S05/one-broker-pod/data-check.json",
+        "S05/one-broker-pod/timeline.jsonl",
+        "S05/one-broker-pod/conditions.jsonl",
+        "S05/one-broker-pod/agreement.txt",
+        "S05/one-broker-pod/logs/index.json"
+      ]
+    },
+    {
+      "id": "S05",
+      "variant": "all-rw-brokers",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "broker_recovery_limit": "1m0s",
+        "stable_period": "30s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "brokersAvailableWithin": "7.486s",
+        "clientsInterrupted": 4,
+        "clientsNotInterrupted": 0,
+        "conditionAgreement": {
+          "disagreements": 0,
+          "evaluated": {
+            "broker-ready-needs-both-endpoints": 20,
+            "ha-ready-needs-resolved-primary": 20,
+            "ha-ready-not-true-while-replication-unhealthy": 20,
+            "replication-unhealthy-names-slaves": 20,
+            "resolved-primary-is-heartbeat-master": 19,
+            "resolved-primary-needs-every-member-answer": 20,
+            "routing-ready-needs-write-endpoint": 20
+          },
+          "notJudged": 0,
+          "notes": 3,
+          "statusReads": 20,
+          "unreadStatus": 0
+        },
+        "databaseFailoverObserved": false,
+        "newConnectionAfterFault": "failed",
+        "observedDataLossResolution": "97ms",
+        "observedDataLossWindow": "0s",
+        "outcomeUnknown": 1,
+        "recoveryTime": "7.13s",
+        "shortestStableFor": "32.592s"
+      },
+      "operations": {
+        "attempted": 1547,
+        "acknowledged": 1536,
+        "failed": 10,
+        "unknown": 1
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S05/all-rw-brokers/history.jsonl",
+        "S05/all-rw-brokers/data-check.json",
+        "S05/all-rw-brokers/timeline.jsonl",
+        "S05/all-rw-brokers/conditions.jsonl",
+        "S05/all-rw-brokers/agreement.txt",
+        "S05/all-rw-brokers/logs/index.json"
+      ]
+    },
+    {
+      "id": "S06",
+      "variant": "restart",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "operator_resync_limit": "2m0s",
+        "stable_period": "30s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "conditionAgreement": {
+          "disagreements": 0,
+          "evaluated": {
+            "broker-ready-needs-both-endpoints": 25,
+            "ha-ready-needs-resolved-primary": 25,
+            "ha-ready-not-true-while-replication-unhealthy": 25,
+            "replication-unhealthy-names-slaves": 25,
+            "resolved-primary-is-the-master-after-the-operator-returned": 16,
+            "resolved-primary-needs-every-member-answer": 25,
+            "resolved-primary-was-a-heartbeat-master": 24,
+            "routing-ready-needs-write-endpoint": 25
+          },
+          "notJudged": 0,
+          "notes": 2,
+          "statusReads": 25,
+          "unreadStatus": 0
+        },
+        "databaseFailoverObserved": false,
+        "membersRestarted": 0,
+        "observedDataLossResolution": "36ms",
+        "observedDataLossWindow": "0s",
+        "operationsNotAcknowledged": 0,
+        "operatorBackWithin": "17.27s",
+        "shortestStableFor": "49.16s"
+      },
+      "operations": {
+        "attempted": 1000,
+        "acknowledged": 1000,
+        "failed": 0,
+        "unknown": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S06/restart/history.jsonl",
+        "S06/restart/data-check.json",
+        "S06/restart/timeline.jsonl",
+        "S06/restart/roles.jsonl",
+        "S06/restart/conditions.jsonl",
+        "S06/restart/agreement.txt",
+        "S06/restart/logs/index.json"
+      ]
+    },
+    {
+      "id": "S06",
+      "variant": "absent-during-failover",
+      "result": "pass",
+      "reason": "",
+      "faultConfirmed": true,
+      "cleanupSucceeded": true,
+      "limits": {
+        "failover_limit": "30s",
+        "operator_resync_limit": "2m0s",
+        "stable_period": "30s"
+      },
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "conditionAgreement": {
+          "disagreements": 0,
+          "evaluated": {
+            "broker-ready-needs-both-endpoints": 50,
+            "ha-ready-needs-resolved-primary": 50,
+            "ha-ready-not-true-while-replication-unhealthy": 50,
+            "replication-unhealthy-names-slaves": 50,
+            "resolved-primary-is-the-master-after-the-operator-returned": 16,
+            "resolved-primary-needs-every-member-answer": 50,
+            "resolved-primary-was-a-heartbeat-master": 41,
+            "routing-ready-needs-write-endpoint": 50
+          },
+          "notJudged": 0,
+          "notes": 6,
+          "statusReads": 50,
+          "unreadStatus": 0
+        },
+        "lastObservedAgeBeforeAbsence": "6s",
+        "membersRestartedOnReturn": 0,
+        "observedDataLossResolution": "94ms",
+        "observedDataLossWindow": "0s",
+        "operatorAbsentFor": "54.431s",
+        "operatorResyncTime": "17.146s",
+        "outcomeUnknown": 1,
+        "recoveryTime": "10.496s",
+        "stableFor": "1m30.738s",
+        "statusDuringAbsence": "currentPrimary=hab-1 PrimaryResolved=True lastObservedTime=2026-11-07T01:20:46Z age=1m1s"
+      },
+      "operations": {
+        "attempted": 929,
+        "acknowledged": 916,
+        "failed": 12,
+        "unknown": 1
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S06/absent-during-failover/history.jsonl",
+        "S06/absent-during-failover/data-check.json",
+        "S06/absent-during-failover/timeline.jsonl",
+        "S06/absent-during-failover/roles.jsonl",
+        "S06/absent-during-failover/conditions.jsonl",
+        "S06/absent-during-failover/agreement.txt",
+        "S06/absent-during-failover/logs/index.json"
+      ]
+    },
+    {
+      "id": "S14",
+      "variant": "token-rotation",
+      "result": "pass",
+      "reason": "",
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "membersReplaced": 3,
+        "newTokenAcceptedBy": 3,
+        "oldTokenRefusedBy": 3,
+        "overlapEndedAfter": "2m31s",
+        "placesSearched": 10,
+        "requestsRefusedAfterOverlap": 0,
+        "requestsRefusedAfterSettle": 0,
+        "requestsRefusedWhileSettle": 0,
+        "tokenFound": 0,
+        "tokenRefusedEvents": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S14/token-rotation/history.jsonl",
+        "S14/token-rotation/data-check.json",
+        "S14/token-rotation/result.txt",
+        "S14/token-rotation/logs/index.json"
+      ]
+    },
+    {
+      "id": "S14",
+      "variant": "token-migration",
+      "result": "pass",
+      "reason": "",
+      "measurements": {
+        "acknowledgedMissing": 0,
+        "membersReplaced": 3,
+        "newTokenAcceptedBy": 3,
+        "oldTokenRefusedBy": 3,
+        "overlapEndedAfter": "2m31s",
+        "placesSearched": 10,
+        "requestsRefusedAfterOverlap": 0,
+        "requestsRefusedAfterSettle": 0,
+        "requestsRefusedWhileSettle": 0,
+        "tokenFound": 0,
+        "tokenRefusedEvents": 0
+      },
+      "neverEvents": [],
+      "evidence": [
+        "S14/token-migration/history.jsonl",
+        "S14/token-migration/data-check.json",
+        "S14/token-migration/result.txt",
+        "S14/token-migration/logs/index.json"
+      ]
+    }
+  ]
+}
