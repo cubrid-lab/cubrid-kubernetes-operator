@@ -12,7 +12,8 @@
 How an application's SQL reaches a CUBRID server in a three-member HA cluster
 named `demo`, and who decides each hop. The SQL path (thick arrows) goes from
 the client to a Kubernetes Service, to a Broker Pod and to a CUBRID server;
-replication runs between the servers. The Operator's management path (dotted
+native heartbeat and master-to-slave replication take place inside the member
+set, with no permanently assigned master ordinal. The Operator's management path (dotted
 arrows) only writes the objects and configuration that the data path uses. No
 SQL passes through the Operator, and the Operator does not switch the
 read-write endpoint between database Pods when the master changes.
@@ -106,10 +107,13 @@ flowchart TB
     style dbMembers fill:#f0fdf4,stroke:#15803d,color:#0f172a
 ```
 
-The diagram draws `demo-0` as the master at this moment. Which member is
-master is decided by CUBRID at run time and can change; after a failover the
-read-write Brokers reach the new master through the same host list, and the
-Services do not change.
+Neither diagram assigns a fixed Master to `demo-0`, `demo-1` or `demo-2`.
+CUBRID decides which member is Master at runtime, and the RW Broker resolves
+that member using its full host list. The `demo-rw`/`demo-ro` Services and
+Broker Deployments **do not change targets when a database role changes**.
+Native heartbeat (UDP 59901) and replication are deliberately described by
+the member group rather than drawn as a fixed `demo-0 → demo-1/2` arrow:
+replication direction follows the elected CUBRID Master.
 
 ## Key components
 
