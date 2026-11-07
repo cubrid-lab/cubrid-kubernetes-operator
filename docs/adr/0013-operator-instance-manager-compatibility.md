@@ -93,6 +93,7 @@ manager was run.
 | A response field the manager does not send | The Operator reads absent as zero or nil. `engineVersion` absent leaves the member's version empty, which the update guard reports as `UpdateBlockedEngineVersionUnknown` and which a standalone member is asked about again every 30 seconds. `replication` absent leaves `ReplicationHealthy` at `ReplicationNotObserved`. `logEnd` absent leaves the primary's log end unread, which a standby backup selection waits on (`PrimaryLogEndNotRead`) up to 30 seconds and then takes the master. `unfinished` absent is stored as "none reported". | `observationFromStatus`, `instanceStatuses` (`haresolve.go`), `replicationCondition` (`replication.go`), `backuptarget.go`. Not tested with an older manager's answer. Tests such as `TestObservationFromStatus_CarriesEngineVersion` and `TestInstanceStatuses_VersionNeedsAFreshAnswer` show how a given answer is read, not that an older manager sends it. |
 | The bearer token | The manager reads one token from `IM_TOKEN` when it starts and refuses any other with 401 before it acts. The Operator sends the current token, and on a 401 sends the previous one, remembering which a member accepted. A member that holds the shared token of older versions is reached through the overlap of a rotation. | `acceptedTokens.send`, `ClusterTokens` in `imclient.go`; ADR-0003 "Security". Tested with the Secret in the state an older Operator left (`asOlderOperator` in `imtoken_rotation_test.go`) and by `imtoken_*_test.go`; none starts a manager of an older build. |
 | An operation recorded under the key for another request body | The manager hashes the raw request body (`HashRequest`, `opstore.go`), so a body that differs by any byte, such as a field added by a newer Operator, conflicts with the operation held under the same key (409 `IdempotencyConflict`). The Operator then looks the key up and follows that operation instead of starting the changed one (`operationOfKey`). | Tested: the controller specs "follows the operation its key names when the member holds it for another request" and "names the conflict when the operation its key names cannot be found", and `TestOperationOfKey`. |
+| A backup started while the member's role differs from the role the request names | The manager that predates #755 does not compare them: it runs the backup and copies the role from the request into the manifest, so the old mislabelling stays possible on that member until its Pod is replaced. The Operator sends the same request and reads the same `Operation` either way. | `runBackup` before #755, read from the history of `server.go`. Not tested with an older manager. |
 
 ### The Instance Manager is newer than the Operator
 
@@ -104,6 +105,13 @@ to what the repository records.
   location (ADR-0007, "A new Operator with an older Instance Manager ...").
   The ADR states there is no version-negotiation guarantee for mixed
   versions and that the Operator is deployed before the managers. Not tested.
+- A backup whose request names a role the member does not have, as an
+  older Operator sends it after a failover between its selection and the
+  start, now ends as a failed operation with a reason naming both roles,
+  where the manager before #755 completed it with the requested role in the
+  manifest. The request and the `Operation` answer have the same shape, so
+  the older Operator reports it as any failed backup. Not tested with an
+  older Operator.
 - The error body gained `code` additively and keeps the `error` text
   (ADR-0003 "Error answers", `errorcode_test.go` checks that the text an
   earlier manager sent is unchanged). How an older Operator reads the added

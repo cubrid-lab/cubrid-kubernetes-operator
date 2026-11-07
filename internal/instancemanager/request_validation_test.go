@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The endpoints that take a request body.
@@ -59,8 +60,12 @@ func newValidationFixture(t *testing.T) *validationFixture {
 	}
 	t.Cleanup(func() { awaitTerminalOperations(t, store) })
 	objects, _, _ := stageUploadedArtifact(t)
-	f.handler = NewServer(f.cli, "tok").WithOperationStore(store).WithObjectStore(objects).
-		WithBackupStagingRoot(f.staging).WithReplication(dbName, f.databases).Handler()
+	srv := NewServer(f.cli, "tok").WithOperationStore(store).WithObjectStore(objects).
+		WithBackupStagingRoot(f.staging).WithReplication(dbName, f.databases)
+	// These tests are about admission: an accepted backup ends quickly on a
+	// member that reports no role.
+	srv.backupRoleBound, srv.backupRolePoll = time.Millisecond, time.Millisecond
+	f.handler = srv.Handler()
 	return f
 }
 
