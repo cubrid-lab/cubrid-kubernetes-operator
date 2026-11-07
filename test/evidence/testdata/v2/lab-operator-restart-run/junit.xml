@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="2026-10-30T02-15-00Z-5f3c1e" tests="2" failures="0" errors="0" skipped="0">
+  <testcase name="LAB01" classname="scenario">
+    <system-out>Installed three-member HA and SQL smoke (LAB01)</system-out>
+  </testcase>
+  <testcase name="S06/restart" classname="scenario">
+    <system-out>Operator interruption and HA continuity - restart (S06/restart)</system-out>
+  </testcase>
+</testsuite>
