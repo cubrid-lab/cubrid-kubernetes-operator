@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -87,6 +88,34 @@ func (c clusterLogs) Exec(ctx context.Context, set evidence.LogPodSet, pod evide
 	return err
 }
 
+// clusterState lists the run's cluster for a snapshot, the way a member's
+// commands run, after the check that the namespace is still the run's own.
+type clusterState struct {
+	h *haRun
+}
+
+func (c clusterState) List(ctx context.Context, list evidence.StateList, w io.Writer) error {
+	if err := c.h.guard(ctx); err != nil {
+		return err
+	}
+	args := []string{"-n", list.Namespace, "get", list.Resource, "-o", "json"}
+	if list.Selector != "" {
+		args = append(args, "-l", list.Selector)
+	}
+	if list.Field != "" {
+		args = append(args, "--field-selector", list.Field)
+	}
+	read := c.h.read
+	if read == nil {
+		read = c.h.Command
+	}
+	out, err := read(ctx, args...)
+	if _, werr := io.WriteString(w, out); err == nil {
+		err = werr
+	}
+	return err
+}
+
 // failureLogNotes keeps the logs of a run that created its namespace and did
 // not pass LAB01, and returns what a reader of the summary should know of them.
 func (h *haRun) failureLogNotes(namespaced bool) []string {
@@ -99,24 +128,37 @@ func (h *haRun) failureLogNotes(namespaced bool) []string {
 	return nil
 }
 
-// keepFailureLogs stores a bundle of the Operator's, the members' and the
-// Brokers' logs below LAB01's directory, for a run that did not pass LAB01 and
-// whose namespace is about to be removed with them. LAB01 injects no fault, so
-// a member's cubrid heartbeat status reads nothing a test is measuring. It
-// takes the bundle's own bound in its own context: a run that stopped at its
-// deadline still has its logs. It returns only why the bundle is incomplete;
-// that never changes LAB01's result.
+// keepFailureLogs stores a Kubernetes snapshot and a bundle of the Operator's,
+// the members' and the Brokers' logs below LAB01's directory, for a run that
+// did not pass LAB01 and whose namespace is about to be removed with them.
+// LAB01 injects no fault, so a member's cubrid heartbeat status reads nothing a
+// test is measuring. Each takes its own bound in its own context: a run that
+// stopped at its deadline still has its logs. It returns only why they are
+// incomplete; that never changes LAB01's result.
 func (h *haRun) keepFailureLogs() error {
+	stateLimits := evidence.DefaultStateLimits()
+	// The run created the namespace, so every Event in it is the run's own.
+	state := evidence.NewStateBundle(h.cfg.EvidenceDir, haScenarioID, h.redactor, clusterState{h: h},
+		evidence.ClusterStatePlan(h.cfg.OperatorNamespace, h.cfg.Namespace, haClusterName, h.members), stateLimits,
+		evidence.NewLogBudget(stateLimits.BundleBytes, stateLimits.CheckpointTimeout), time.Time{})
+	state.Checkpoint(context.Background(), evidence.LogsAfterVerdict)
 	limits := evidence.DefaultLogLimits()
 	bundle := evidence.NewLogBundle(h.cfg.EvidenceDir, haScenarioID, h.redactor, clusterLogs{h: h},
 		evidence.ClusterLogPlan(h.cfg.OperatorNamespace, h.cfg.Namespace, haClusterName, h.members, true), limits,
 		evidence.NewLogBudget(limits.BundleBytes, limits.CheckpointTimeout))
 	bundle.Checkpoint(context.Background(), evidence.LogsAfterVerdict, true)
-	if file := bundle.IndexFile(); file != "" && !slices.Contains(h.files, file) {
-		h.files = append(h.files, file)
+	for _, file := range []string{state.IndexFile(), bundle.IndexFile()} {
+		if file != "" && !slices.Contains(h.files, file) {
+			h.files = append(h.files, file)
+		}
 	}
-	if err := bundle.Problem(); err != nil {
-		return fmt.Errorf("the diagnostic logs of %s are incomplete: %w", haScenarioID, err)
+	return errors.Join(evidenceProblem("Kubernetes snapshots", state.Problem()),
+		evidenceProblem("diagnostic logs", bundle.Problem()))
+}
+
+func evidenceProblem(what string, err error) error {
+	if err != nil {
+		return fmt.Errorf("the %s of %s are incomplete: %w", what, haScenarioID, err)
 	}
 	return nil
 }

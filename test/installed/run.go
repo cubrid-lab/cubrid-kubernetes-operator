@@ -92,6 +92,9 @@ type Runner struct {
 	Client   client.Client
 	Command  func(context.Context, ...string) (string, error)
 	Redactor *evidence.Redactor
+	// read is Command for output that is parsed: it returns standard output
+	// alone. nil selects Command.
+	read func(context.Context, ...string) (string, error)
 	// host runs a shell script on the run's host with extra environment;
 	// nil selects hostCommand. S04 runs the lab's VM controls with it.
 	host func(ctx context.Context, script string, env []string) (string, error)
