@@ -22,11 +22,14 @@ package e2e
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 )
 
 // TestSQLChecks preserves the existing Kind helpers' behavior when they forward
@@ -142,34 +145,55 @@ func TestSmokeOutcome(t *testing.T) {
 	}
 }
 
-// TestS00WriteAndReadAreStrict checks that the csql write and the first read
-// of S00 stop the step on any error: a read that printed its row with -199
-// and -111 is recorded as inconclusive and still fails the step, as it did
-// before S00 compared its Conditions with SQL, and only the read at the end
-// of the smoke checks reads again.
+// sameServer is a Guard whose server never changes.
+func sameServer() sqlcheck.Guard {
+	return sqlcheck.Guard{Identity: func() (string, error) { return "cub_server 77 123456\n", nil }}
+}
+
+// readThrough is a one-shot read that runs on run, with guard.
+func readThrough(guard sqlcheck.Guard, run sqlRunner) oneShotRead {
+	return func(sql string, check func(string) error) (sqlcheck.ReadResult, error) {
+		return sqlcheck.Read(guard, run, sql, check)
+	}
+}
+
+// TestS00WriteAndReadAreStrict checks that the csql write of S00 stops the step
+// on any error, the pair of -199 and -111 among them, and is never repeated.
+// The first read follows the rule of sqlcheck.Read: when it printed its row
+// with the pair it is recorded as inconclusive and read once more, and a
+// second pair still fails the step. Any other error of a read stops it.
 func TestS00WriteAndReadAreStrict(t *testing.T) {
 	const pod = "s00-0"
 	for name, tc := range map[string]struct {
 		write, read  string
+		again        string // what the read made once more prints
 		wantOps      int
 		wantErr      bool
 		wantLastOK   bool
 		wantLastNote string
 	}{
-		"both succeed":               {"Committed.", cleanRead, 2, false, true, ""},
-		"the read printed the pair":  {"Committed.", lostSession, 2, true, false, s00LostSession},
-		"the read failed":            {"Committed.", "ERROR: no table", 2, true, false, ""},
-		"the write failed":           {"ERROR: read only", cleanRead, 1, true, false, ""},
-		"the write printed the pair": {lostSession, cleanRead, 1, true, false, ""},
+		"both succeed":              {"Committed.", cleanRead, "", 2, false, true, ""},
+		"the read printed the pair": {"Committed.", lostSession, lostSession, 3, true, false, s00LostSession},
+		"the read printed the pair and then its row": {
+			"Committed.", lostSession, cleanRead, 3, false, true, ""},
+		"the read printed the pair and then failed": {
+			"Committed.", lostSession, "ERROR: no table", 3, true, false, ""},
+		"the read failed":            {"Committed.", "ERROR: no table", "", 2, true, false, ""},
+		"the write failed":           {"ERROR: read only", cleanRead, "", 1, true, false, ""},
+		"the write printed the pair": {lostSession, cleanRead, cleanRead, 1, true, false, ""},
 	} {
 		calls := 0
-		ops, err := s00WriteAndRead(func(string) (string, error) {
+		run := func(string) (string, error) {
 			calls++
-			if calls == 1 {
+			switch calls {
+			case 1:
 				return tc.write, nil
+			case 2:
+				return tc.read, nil
 			}
-			return tc.read, nil
-		}, pod, s00TestMarker)
+			return tc.again, nil
+		}
+		ops, err := s00WriteAndRead(run, readThrough(sameServer(), run), pod, s00TestMarker)
 		if (err != nil) != tc.wantErr || len(ops) != tc.wantOps || calls != tc.wantOps {
 			t.Errorf("%s: %d operations in %d csql calls, error %v; want %d, error %v", name, len(ops), calls, err,
 				tc.wantOps, tc.wantErr)
@@ -180,8 +204,8 @@ func TestS00WriteAndReadAreStrict(t *testing.T) {
 			t.Errorf("%s: the last operation is %+v, want OK %v and reason %q", name, last, tc.wantLastOK,
 				tc.wantLastNote)
 		}
-		if !ops[0].Write || (len(ops) == 2 && ops[1].Write) {
-			t.Errorf("%s: operations %+v are not a write and then a read", name, ops)
+		if !ops[0].Write || slices.ContainsFunc(ops[1:], func(op faults.SmokeSQL) bool { return op.Write }) {
+			t.Errorf("%s: operations %+v are not a write and then reads", name, ops)
 		}
 	}
 }
@@ -252,7 +276,7 @@ func TestS00LastRead(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			useEvidenceDir(t, t.TempDir())
 			calls := 0
-			reads, err := s00LastRead(func(sql string) (string, error) {
+			reads, err := s00LastRead(readThrough(sameServer(), func(sql string) (string, error) {
 				if sql != "SELECT id, marker FROM "+s00Table+" ORDER BY id;" {
 					t.Errorf("unexpected SQL: %q", sql)
 				}
@@ -261,7 +285,7 @@ func TestS00LastRead(t *testing.T) {
 					t.Fatalf("csql call %d, want %d", calls, len(tc.answers))
 				}
 				return tc.answers[calls-1].out, tc.answers[calls-1].err
-			}, "s00-0", s00TestMarker)
+			}), "s00-0", s00TestMarker)
 			if calls != len(tc.reasons) || len(reads) != len(tc.reasons) {
 				t.Fatalf("%d csql calls and %d records %+v, want %d", calls, len(reads), reads, len(tc.reasons))
 			}

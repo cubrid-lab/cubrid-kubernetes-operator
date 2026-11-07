@@ -62,6 +62,9 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 		"memberValues": func(ctx context.Context) {
 			_, _ = r.memberValues(ctx, pod0, "SELECT 1;")
 		},
+		"memberValuesOnce": func(ctx context.Context) {
+			_, _ = r.memberValuesOnce(ctx, pod0, "SELECT 1;")
+		},
 		"identities": func(ctx context.Context) { _ = r.identities(ctx, []string{pod0}) },
 		"roleLog.sample": func(ctx context.Context) {
 			var roles roleLog

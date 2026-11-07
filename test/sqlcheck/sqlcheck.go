@@ -109,13 +109,21 @@ func WriteRow(run Runner, marker string) error {
 	return err
 }
 
+// ReadRowQuery is the query of ReadRow.
+const ReadRowQuery = "SELECT id, marker FROM " + s00Table + " ORDER BY id;"
+
 // ReadRow checks that exactly the row written by WriteRow is there.
 func ReadRow(run Runner, marker string) error {
-	out, err := Run(run, fmt.Sprintf("SELECT id, marker FROM %s ORDER BY id;", s00Table))
+	out, err := Run(run, ReadRowQuery)
 	if err != nil {
 		return err
 	}
 	return rowRead(out, marker)
+}
+
+// RowCheck returns the check of ReadRow for the marker, for Read.
+func RowCheck(marker string) func(string) error {
+	return func(out string) error { return rowRead(out, marker) }
 }
 
 // rowCount matches the line in which csql counts one selected row.
@@ -180,8 +188,7 @@ var lostSessionCodes = regexp.MustCompile(`ERROR CODE = -(199|111)\b`)
 // happened to the session, so a caller reads again rather than accept the row.
 func LostSessionAfterRow(err error, marker string) bool {
 	var statement *StatementError
-	return errors.As(err, &statement) && !statement.commandFailed && SessionLost(statement.out) &&
-		!csqlError.MatchString(lostSessionCodes.ReplaceAllString(statement.out, "")) &&
+	return errors.As(err, &statement) && !statement.commandFailed && OnlyLostSession(statement.out) &&
 		rowRead(statement.out, marker) == nil
 }
 

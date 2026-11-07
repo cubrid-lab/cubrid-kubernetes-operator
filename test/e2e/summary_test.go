@@ -106,6 +106,13 @@ func recordScenario(s evidence.Scenario) {
 			s.Name(), s.Result)
 		return
 	}
+	if s.Result != evidence.NotRun {
+		if s.Measurements == nil {
+			s.Measurements = map[string]any{}
+		}
+		s.Measurements[lostSessionsMeasurement] = csqlLedger.measure(
+			evidence.Requirement{ID: s.ID, Variant: s.Variant}.Label())
+	}
 	runSummary.Record(s)
 }
 
@@ -329,6 +336,9 @@ func concludeRun() error {
 			"the suite's deadline passed during %s: the steps after it did not run", timedOutStep))
 	}
 	problems = append(problems, credentialLeaks(evidenceDir())...)
+	if note := csqlLedger.note(); note != "" {
+		runSummary.Notes = append(runSummary.Notes, note)
+	}
 	return runSummary.Conclude(evidenceDir(), redactor, runLane(), problems...)
 }
 
