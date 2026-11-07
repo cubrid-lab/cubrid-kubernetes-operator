@@ -382,6 +382,46 @@ Use the closest issue form: **Bug Report**, **Feature Request**,
 failure cause) or **Task** (documentation and maintenance). A blank issue is
 fine when no form fits.
 
+### Same-signature reports and report classes
+
+This section describes how a maintainer applies the steps of
+[Before opening an issue](#before-opening-an-issue) and the triage lifecycle
+in `AGENTS.md`. It adds no label, form field or required check.
+
+**Update the owning issue or open a child.** Compare a report with open and
+closed issues, linked PRs and recorded incidents by its *signature*: the
+symptom, the layer, a reproducible signature, the environment and version, and
+the first failing step.
+
+- A new run with the same signature adds its evidence (UTC run URL or commit,
+  image and cluster identity, logs and resources without secrets) to the
+  owning issue. It is not a new issue.
+- Open a child issue only for a gap that can be implemented and verified on
+  its own, with the parent or dependency named and no acceptance copied from
+  the parent.
+- A PR that uncovers a repeat of a known failure links the original issue and
+  says whether its scope or acceptance changes; it does not open a new issue
+  only because the failure appeared during a new PR.
+- Issues that share one confirmed root cause keep their own test and
+  acceptance owners, with one implementation owner and explicit dependencies.
+  A merged fix does not close an independent safety or release scenario.
+
+**Classify the report.** State one class in the issue, with the evidence, the
+impact, what is still uncertain and how confident the root cause is:
+
+| Class | Meaning |
+|-------|---------|
+| Confirmed product defect | Reproduced or shown by evidence in the Operator or Instance Manager |
+| Confirmed harness or CI defect | The test harness, workflow or lab script is wrong; the product is not shown to be |
+| Environment or capacity incident | Node, disk, memory, network or image import failed; record it as blocked, not as a product failure |
+| Test or evidence gap | The behavior may be right, but no test or evidence shows it |
+| Unverified hypothesis | A suspected cause or fault without evidence; keep it labelled as a hypothesis |
+
+Keep `status: needs triage` until this review is complete. Do not assign a
+speculative priority, and do not promote an environment incident to a product
+defect. Track a suspected safety-critical fault promptly without waiting for a
+destructive reproduction.
+
 ### Writing an issue
 
 These sections are recommended; use only the ones the issue needs:
