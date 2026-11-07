@@ -17,8 +17,12 @@ arrows) only writes the objects and configuration that the data path uses. No
 SQL passes through the Operator, and the Operator does not switch the
 read-write endpoint between database Pods when the master changes.
 
-The SQL path and the management path are drawn as two diagrams with the
-same names.
+The SQL view below deliberately **reuses the exact same runtime layout** as
+[the canonical topology diagram](topology.md#data-path): the application
+Services, separate RW/RO Broker Deployments, and three CUBRID member Pods.
+No Member Pod ordinal is a permanent Master. CUBRID decides the active Master
+and the Broker's database connection destination at runtime; the Operator
+neither relabels the Master nor selects a new database endpoint.
 
 ### SQL path
 
@@ -26,39 +30,39 @@ same names.
 flowchart TB
     client(["Application client"]):::ext
 
-    subgraph svc["Services: Kubernetes routes to ready Pods"]
-        rw["Service<br/>demo-rw<br/>port 33000"]:::op
-        ro["Service<br/>demo-ro<br/>port 33001"]:::op
+    subgraph services["Application Services (Operator-owned)"]
+        rw["Service demo-rw<br/>TCP 33000"]:::op
+        ro["Service demo-ro<br/>TCP 33001"]:::op
     end
 
-    subgraph brokers["Broker Pods"]
-        brw["Deployment<br/>demo-broker-rw<br/>2 read-write Brokers"]:::cubrid
-        bro["Deployment<br/>demo-broker-ro<br/>2 read-only Brokers"]:::cubrid
+    subgraph brokerPods["CUBRID Broker Pods (separate Deployments)"]
+        brw["demo-broker-rw<br/>2 RW Broker Pods"]:::cubrid
+        bro["demo-broker-ro<br/>2 RO Broker Pods"]:::cubrid
     end
 
-    subgraph members["Member Pods"]
-        m0["demo-0<br/>CUBRID server, master now"]:::cubrid
+    subgraph dbMembers["StatefulSet demo: CUBRID Native HA members (runtime roles)"]
+        direction LR
+        m0["demo-0<br/>CUBRID server"]:::cubrid
         m1["demo-1<br/>CUBRID server"]:::cubrid
         m2["demo-2<br/>CUBRID server"]:::cubrid
+        m0 ~~~ m1 ~~~ m2
     end
 
     client == "SQL" ==> rw
-    client == "SQL, reads" ==> ro
-    rw == "to a ready Broker Pod" ==> brw
-    ro == "to a ready Broker Pod" ==> bro
-    brw == "to the current master,<br/>found through its host list" ==> m0
-    bro == "reads, writes refused" ==> members
-    m0 == "replication" ==> m1
-    m0 == "replication" ==> m2
+    client == "SQL" ==> ro
+    rw == "to a ready Broker" ==> brw
+    ro == "to a ready Broker" ==> bro
+    brw == "native RW selection: current Master<br/>DB TCP 1523" ==> dbMembers
+    bro == "native RO read routing<br/>DB TCP 1523" ==> dbMembers
 
     classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
     classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
     classDef cubrid fill:#dcfce7,stroke:#15803d,color:#0f172a
     classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
 
-    style svc fill:#fff7ed,stroke:#c2410c,color:#0f172a
-    style brokers fill:#f0fdf4,stroke:#15803d,color:#0f172a
-    style members fill:#f0fdf4,stroke:#15803d,color:#0f172a
+    style services fill:#fff7ed,stroke:#c2410c,color:#0f172a
+    style brokerPods fill:#f0fdf4,stroke:#15803d,color:#0f172a
+    style dbMembers fill:#f0fdf4,stroke:#15803d,color:#0f172a
 ```
 
 ### Management path
@@ -73,14 +77,24 @@ flowchart TB
         status["CubridCluster status<br/>Conditions,<br/>current primary"]:::op
     end
 
-    brokers["Broker Pods"]:::cubrid
-    members["Member Pods<br/>demo-0, demo-1<br/>and demo-2"]:::cubrid
+    subgraph brokerPods["CUBRID Broker Pods (separate Deployments)"]
+        brw["demo-broker-rw<br/>2 RW Broker Pods"]:::cubrid
+        bro["demo-broker-ro<br/>2 RO Broker Pods"]:::cubrid
+    end
+    subgraph dbMembers["StatefulSet demo: CUBRID Native HA members (runtime roles)"]
+        direction LR
+        m0["demo-0<br/>CUBRID server"]:::cubrid
+        m1["demo-1<br/>CUBRID server"]:::cubrid
+        m2["demo-2<br/>CUBRID server"]:::cubrid
+        m0 ~~~ m1 ~~~ m2
+    end
 
     cc -. "writes" .-> cfg
     cc -. "creates" .-> svc
     cc -. "writes" .-> status
-    cfg -. "read once at<br/>Broker start" .-> brokers
-    cc -. "asks each<br/>member its role" .-> members
+    cfg -. "read once at<br/>Broker start" .-> brw
+    cfg -. "read once at<br/>Broker start" .-> bro
+    cc -. "asks each member's Instance Manager<br/>HTTP 9090" .-> dbMembers
 
     classDef k8s fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
     classDef op fill:#ffedd5,stroke:#c2410c,color:#0f172a
@@ -88,6 +102,8 @@ flowchart TB
     classDef ext fill:#f1f5f9,stroke:#475569,color:#0f172a
 
     style opside fill:#fff7ed,stroke:#c2410c,color:#0f172a
+    style brokerPods fill:#f0fdf4,stroke:#15803d,color:#0f172a
+    style dbMembers fill:#f0fdf4,stroke:#15803d,color:#0f172a
 ```
 
 The diagram draws `demo-0` as the master at this moment. Which member is
