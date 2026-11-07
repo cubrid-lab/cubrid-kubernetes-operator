@@ -18,6 +18,7 @@ package instancemanager
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -158,6 +159,13 @@ func TestRestore_SeedRefusesAnArtifactOfAnotherSource(t *testing.T) {
 			}
 			if got := databasesTxtEntry(t, req.TargetDir, dbName); got != nil {
 				t.Errorf("the database was registered: %q", got)
+			}
+			// The member's database directory is unchanged and no object of
+			// the refused artifact was downloaded into staging.
+			for _, dir := range []string{req.TargetDir, req.StagingDir} {
+				if entries, err := os.ReadDir(dir); err == nil && len(entries) != 0 {
+					t.Errorf("%s was changed by a refused seed: %v", dir, entries)
+				}
 			}
 		})
 	}
