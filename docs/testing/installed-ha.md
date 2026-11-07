@@ -795,6 +795,40 @@ store's and is not required.
    recorded there and in the scenario's `cleanupSucceeded`, and the backup
    goes with the namespace. It does not judge S11 `missing-destination`.
 
+**The staging directory.** Once the wait has seen the backup `Failed`, the
+run reads the target member's backup staging directory,
+`/var/lib/cubrid/backup-staging/<backup UID>`, in the database container of
+the Pod named by `status.targetInstance`, through `pods/exec`. It records
+what it saw as `stagingAfterFailure`, with the time in UTC (`checkedAt`):
+whether the directory was there, each entry as its type, its size in bytes
+and its path below the directory, and each open file below it as the process
+ID, the command name and the path, found from the `/proc/<pid>/fd` links.
+Names and sizes only: the run never reads a staged file's contents. The
+Instance Manager removes an operation's staging directory before it records
+the operation `Failed`, and keeps it, unused, only while a process still
+holds a file below it (`runBackup` and `awaitStagingWriters` in
+`internal/instancemanager/server.go` and `stagingwriter.go`; the rule of
+#469). The staged files are a full copy of the database, and a repeated
+leftover could fill the member's volume, so:
+- a directory that is not there, or that holds directories only, is
+  recorded and passes;
+- a staged entry that is not a directory fails the variant, unless the same
+  reading recorded a process that held a file in the same operation
+  directory; the file and its holder are then recorded, and the variant
+  passes;
+- a directory that could not be read (the exec failed, or its answer was cut
+  short or not understood) blocks the variant. It is never counted as empty;
+- a staged file whose holders cannot be told, because the open files of a
+  CUBRID process could not be listed, blocks the variant;
+- a backup that was not seen `Failed`, or whose target member was not
+  recorded, leaves the directory unread and blocks the variant, so that a
+  pass always carries this record.
+
+The measurement `stagingFilesLeftAfterFailure` counts the staged entries
+that are not directories; it stays `unknown` when the directory was not
+read. The record's residue says what the run saw. The run removes nothing:
+a staging directory left behind goes with the member's data volume.
+
 The time of the verdict is recorded as `judgedAt`. As in S11 `complete`, a
 run that ends before S11 `missing-destination` is judged, an API error that
 keeps the run from reading the backup, the store, the Events or the source,
@@ -807,7 +841,6 @@ run namespace.
 S11 `missing-destination` here does not check:
 - the Operator's log from before one minute before the variant started, and
   the Instance Managers' logs of the members the backup did not run on;
-- the member's staging directory after the failed upload;
 - denied credentials: that is S11 `denied-credentials`, with
   `-backup-denied-credentials`, and S11 `signature-mismatch`, with
   `-backup-signature-mismatch`;
@@ -961,6 +994,12 @@ reason `BackupFailed`, with the operation's reason as the message.
     namespace; the record's residue says so. Cleanup does not judge S11
     `denied-credentials`.
 
+**The staging directory.** As in S11 `missing-destination`: once the backup
+is seen `Failed`, the run reads the target member's backup staging directory
+and records it as `stagingAfterFailure`. A staged file left there fails the
+variant unless a recorded process held it; a directory that could not be
+read blocks it.
+
 The time of the verdict is recorded as `judgedAt`. As in S11 `complete`, a
 run that ends before S11 `denied-credentials` is judged, an API error that
 keeps the run from reading the cluster, the backup, the store, the Events or
@@ -977,7 +1016,6 @@ S11 `denied-credentials` here does not check:
 - the standalone member's environment: that its Instance Manager holds the
   denied keys follows from the cluster's Secret, and the run does not read
   the member;
-- the member's staging directory after the failed upload;
 - the seed Secret's access key with a wrong secret key: that is S11
   `signature-mismatch`, with `-backup-signature-mismatch`;
 - a key that is valid but lacks permission on the bucket, keys changed in a
@@ -1282,6 +1320,12 @@ the client's later attempts are refused at once as well.
     there too, and blocks it (step 8). The cluster's data PVC is retained
     and goes with the namespace.
 
+**The staging directory.** As in S11 `missing-destination`: once the backup
+is seen `Failed`, the run reads the target member's backup staging directory
+and records it as `stagingAfterFailure`. A staged file left there fails the
+variant unless a recorded process held it; a directory that could not be
+read blocks it.
+
 The time of the verdict is recorded as `judgedAt`. As in S11 `complete`, a
 run that ends before S11 `interrupted-upload` is judged, an API error, a
 fault that cannot be installed, confirmed or read, and a port-forward or
@@ -1302,8 +1346,7 @@ S11 `interrupted-upload` here does not check:
 - a cut store whose traffic comes back during the backup, so a backup that
   resumes after the store returns;
 - a backup large enough to be uploaded in parts: the S11 backup is one
-  object below minio-go's 16 MiB part size;
-- the member's staging directory after the failed upload.
+  object below minio-go's 16 MiB part size.
 
 ## S11 operator-restart
 

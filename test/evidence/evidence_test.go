@@ -31,8 +31,10 @@ import (
 const (
 	s00         = "S00"
 	s03         = "S03"
+	s06         = "S06"
 	s07         = "S07"
 	s14         = "S14"
+	s16         = "S16"
 	s98         = "S98"
 	s99         = "S99"
 	graceful    = "graceful"
@@ -79,7 +81,9 @@ func TestScenarioName(t *testing.T) {
 // checked" column of docs/testing/scenario-name-migration.md, so that wrong
 // text such as S04 described as a Broker failure fails here. S09 is the one
 // deliberate difference: "Former primary member rejoins" would read as a
-// positive claim next to a failure, so it names the check instead.
+// positive claim next to a failure, so it names the check instead. Every
+// family is pinned here, and what a variant reads when it has no name of its
+// own in the registry is pinned by TestScenarioDisplayName.
 func TestScenarioDescriptions(t *testing.T) {
 	want := map[string]string{
 		"S00":     "Standalone database installation and real SQL",
@@ -89,7 +93,7 @@ func TestScenarioDescriptions(t *testing.T) {
 		s03Abrupt: "Primary database Pod termination and recovery - abrupt, later master",
 		"S04":     "Primary database VM failure",
 		"S05":     "Broker process/Pod failure recovery",
-		"S06":     "Operator interruption and HA continuity",
+		s06:       "Operator interruption and HA continuity",
 		s07:       "HA network partition",
 		"S08":     "Replication lag under repeated faults",
 		"S09":     "Rejoin of a former primary member",
@@ -108,9 +112,9 @@ func TestScenarioDescriptions(t *testing.T) {
 		"LAB00/preallocated": "Installed standalone preallocated ownership smoke",
 		"LAB01":              "Installed three-member HA and SQL smoke",
 	}
-	for key := range scenarioDescriptions {
-		if _, ok := want[key]; !ok {
-			t.Errorf("the description of %s is not pinned here", key)
+	for _, family := range registry.families {
+		if _, ok := want[family.ID]; !ok {
+			t.Errorf("the description of %s is not pinned here", family.ID)
 		}
 	}
 	for key, description := range want {
@@ -141,7 +145,11 @@ func TestScenarioDisplayName(t *testing.T) {
 			"Primary database Pod termination and recovery - abrupt first member (S03/abrupt-first-member)"},
 		{"unknown scenario", Scenario{ID: s99}, s99},
 		{"unknown scenario with a variant", Scenario{ID: s99, Variant: "legacy"}, "S99/legacy"},
-		{"reserved scenario with no accepted contract", Scenario{ID: "S16"}, "S16"},
+		{"reserved scenario with no accepted contract", Scenario{ID: s16}, s16},
+		{"a legacy name with a result at each level reads as neither level's name", Scenario{ID: s06, Variant: testRestart},
+			"Operator interruption and HA continuity - restart (S06/restart)"},
+		{"a default placement keeps the text of schema version 1", Scenario{ID: "S12", Variant: "graceful-stop"},
+			"Restore into a new cluster and fault handling - graceful stop (S12/graceful-stop)"},
 		{"a variant that is not a lower-case slug", Scenario{ID: s03, Variant: "a b"}, "S03/a b"},
 	}
 	for _, tc := range tests {

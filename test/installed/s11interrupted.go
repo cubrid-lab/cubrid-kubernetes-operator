@@ -244,10 +244,13 @@ type s11InterruptedRecord struct {
 	// ManagerAfter as this variant read it at its end.
 	ManagerBefore *managerIdentity `json:"managerBefore,omitempty"`
 	ManagerAfter  *managerIdentity `json:"managerAfter,omitempty"`
-	Source        *s12Source       `json:"source,omitempty"`
-	Credentials   *s11Credentials  `json:"credentials,omitempty"`
-	JudgedAt      *time.Time       `json:"judgedAt,omitempty"`
-	Notes         []string         `json:"notes,omitempty"`
+	// StagingAfterFailure is the target member's backup staging directory
+	// as read once the backup ended Failed (checkStagingAfterFailure).
+	StagingAfterFailure *s11StagingAfterFailure `json:"stagingAfterFailure,omitempty"`
+	Source              *s12Source              `json:"source,omitempty"`
+	Credentials         *s11Credentials         `json:"credentials,omitempty"`
+	JudgedAt            *time.Time              `json:"judgedAt,omitempty"`
+	Notes               []string                `json:"notes,omitempty"`
 	// Cleanup says whether the faults were removed and the CubridBackup and
 	// the cluster the run created were deleted; Residue is what the run
 	// leaves.
@@ -387,6 +390,7 @@ func (h *haRun) runS11InterruptedUpload(ctx context.Context) (result evidence.Sc
 		deleted := h.deleteInterrupted(ctx, made, &rec.Faults.s11Throttle, &rec.Cleanup, &rec.Residue)
 		cleaned := removed && deleted
 		result.CleanupSucceeded = &cleaned
+		rec.Residue = withStagingResidue(rec.Residue, rec.StagingAfterFailure)
 		if made.throttle != nil {
 			maps.Copy(result.Measurements, prefixed("rateLimit.", made.throttle.Measurements()))
 		}
@@ -409,7 +413,7 @@ func (h *haRun) runS11InterruptedUpload(ctx context.Context) (result evidence.Sc
 	}()
 	result.Limits = map[string]string{backupLimitName: h.cfg.BackupLimit.String()}
 	result.Measurements = map[string]any{failedWithinKey: evidence.Unknown, "failedAfterCut": evidence.Unknown,
-		"uploadBytesBeforeCut": evidence.Unknown}
+		"uploadBytesBeforeCut": evidence.Unknown, measStagingFilesLeft: evidence.Unknown}
 	err := h.interruptedSteps(ctx, &result, &rec, &made)
 	if found := rec.Credentials.FoundIn; len(found) > 0 {
 		result.NeverEvents = append(result.NeverEvents, credentialEvent(found))
@@ -449,7 +453,7 @@ func (h *haRun) runS11InterruptedUpload(ctx context.Context) (result evidence.Sc
 			"was unchanged before the cut and at the end; the source was unchanged; no seed key was in the " +
 			"statuses read, the Events, the installed Operator's manager log, read from " +
 			logSinceMargin.String() + " before the variant started, or the whole Instance Manager's log in the " +
-			"member's Pod"
+			"member's Pod; " + rec.StagingAfterFailure.passClause()
 	}
 	judged := time.Now().UTC()
 	rec.JudgedAt = &judged
@@ -503,6 +507,7 @@ func (h *haRun) interruptedSteps(ctx context.Context, result *evidence.Scenario,
 	errs := []error{err, h.throttleAtEnd(ctx, made, &rec.Faults.s11Throttle)}
 	errs = append(errs, h.interruptedAtEnd(ctx, rec, result))
 	errs = append(errs, h.interruptedBackupAtEnd(ctx, made.backup, rec, result))
+	errs = append(errs, h.checkStagingAfterFailure(ctx, rec.Phases, rec.BackupUID, &rec.StagingAfterFailure, result))
 	if err := h.checkS11Credentials(ctx, made.backup, nil, rec.Credentials); err != nil {
 		errs = append(errs, fmt.Errorf("look for credentials: %w", err))
 	}

@@ -514,72 +514,7 @@ func (r *Runner) RunHA(ctx context.Context, cfg HAConfig) (runErr error) {
 		Notes: []string{"Three-member HA cluster against an installed Operator; no fault and no S00-S15 qualification",
 			"Commit is selected by the campaign; actual runtime image identities are recorded separately",
 			"Namespace cleanup does not certify deletion of retained backend volumes or of the seed backups"}}
-	lane, requirements := haLane, []evidence.Requirement{{ID: haScenarioID}}
-	switch {
-	case cfg.Fault != "":
-		var requirement evidence.Requirement
-		lane, requirement, summary.Notes[0] = faultLane(cfg.Fault)
-		requirements = append(requirements, requirement)
-	case cfg.Restore:
-		lane = s12Lane
-		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant},
-			evidence.Requirement{ID: s12ID, Variant: s12Variant})
-		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete and S12 " +
-			"exact: a full backup to object storage, restored into a new cluster in the run namespace; no other " +
-			"S00-S15 qualification"
-		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket; the restored "+
-			"cluster's seed backups are left under the run's prefix")
-		if cfg.RestoreTampered {
-			lane = s12TamperedLane
-			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12TamperedVariant})
-			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
-				"exact and S12 tampered: a full backup to object storage, restored into a new cluster in the run " +
-				"namespace, and a copy of it with one byte changed refused by another; no other S00-S15 " +
-				"qualification"
-		}
-		if cfg.RestoreWrongTarget {
-			lane = s12WrongTargetLane
-			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12WrongTargetVariant})
-			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
-				"exact and S12 wrong-target: a full backup to object storage, restored into a new cluster in the " +
-				"run namespace, and refused by a cluster created over the retained volumes of another that hold a " +
-				"database; no other S00-S15 qualification"
-		}
-		if cfg.RestoreOperatorRestart {
-			lane = s12RestartLane
-			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12RestartVariant})
-			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
-				"exact and S12 operator-restart: a full backup to object storage, restored into a new cluster in " +
-				"the run namespace, and into another while the manager Pod is deleted without a grace period " +
-				"during its restore; no other S00-S15 qualification"
-		}
-		if cfg.RestoreInstanceManagerRestart {
-			at := cfg.imRestartAt()
-			lane = imRestartLane(at)
-			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: imRestartVariant(at)})
-			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
-				"exact and S12 " + imRestartVariant(at) + ": a full backup to object storage, restored into a new " +
-				"cluster in the run namespace, and into another while " + imRestartPlacementNote[at] +
-				"; no other S00-S15 qualification"
-			summary.Notes = append(summary.Notes, imRestartSummaryNotes[at]...)
-		}
-		lane, requirements = planS12GracefulStop(cfg, lane, requirements, &summary)
-	case cfg.BackupBucket != "":
-		lane = s11Lane
-		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant})
-		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete: a full " +
-			"backup to object storage, downloaded and checked by the run; no other S00-S15 qualification"
-		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket for S12")
-		lane, requirements = planS11MissingDestination(cfg, lane, requirements, &summary)
-		lane, requirements = planS11DeniedCredentials(cfg, lane, requirements, &summary)
-		lane, requirements = planS11SignatureMismatch(cfg, lane, requirements, &summary)
-		lane, requirements = planS11InterruptedUpload(cfg, lane, requirements, &summary)
-		lane, requirements = planS11OperatorRestart(cfg, lane, requirements, &summary)
-		lane, requirements = planS11InstanceManagerRestart(cfg, lane, requirements, &summary)
-		lane, requirements = planS11Overlapping(cfg, lane, requirements, &summary)
-		lane, requirements = planS11OperationStoreLoss(cfg, lane, requirements, &summary)
-		lane, requirements = planS11GracefulStop(cfg, lane, requirements, &summary)
-	}
+	lane, requirements := planHARun(cfg, &summary)
 	summary.Plan(requirements, "the HA run has not started")
 	scenario := evidence.Scenario{ID: haScenarioID, Result: evidence.Blocked, NeverEvents: []string{}}
 	var owned *corev1.Namespace
@@ -684,6 +619,78 @@ func (h *haRun) observeTarget(ctx context.Context, observed *record, env *eviden
 	h.rec.KubernetesClusterUID, h.rec.Operator = observed.KubernetesClusterUID, observed.Operator
 	h.rec.StorageProvisioner = observed.StorageProvisioner
 	return nil
+}
+
+// planHARun returns the lane of the run and its requirements, and says what
+// the run does in the summary's notes.
+func planHARun(cfg HAConfig, summary *evidence.Summary) (string, []evidence.Requirement) {
+	lane, requirements := haLane, []evidence.Requirement{{ID: haScenarioID}}
+	switch {
+	case cfg.Fault != "":
+		var requirement evidence.Requirement
+		lane, requirement, summary.Notes[0] = faultLane(cfg.Fault)
+		requirements = append(requirements, requirement)
+	case cfg.Restore:
+		lane = s12Lane
+		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant},
+			evidence.Requirement{ID: s12ID, Variant: s12Variant})
+		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete and S12 " +
+			"exact: a full backup to object storage, restored into a new cluster in the run namespace; no other " +
+			"S00-S15 qualification"
+		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket; the restored "+
+			"cluster's seed backups are left under the run's prefix")
+		if cfg.RestoreTampered {
+			lane = s12TamperedLane
+			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12TamperedVariant})
+			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
+				"exact and S12 tampered: a full backup to object storage, restored into a new cluster in the run " +
+				"namespace, and a copy of it with one byte changed refused by another; no other S00-S15 " +
+				"qualification"
+		}
+		if cfg.RestoreWrongTarget {
+			lane = s12WrongTargetLane
+			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12WrongTargetVariant})
+			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
+				"exact and S12 wrong-target: a full backup to object storage, restored into a new cluster in the " +
+				"run namespace, and refused by a cluster created over the retained volumes of another that hold a " +
+				"database; no other S00-S15 qualification"
+		}
+		if cfg.RestoreOperatorRestart {
+			lane = s12RestartLane
+			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: s12RestartVariant})
+			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
+				"exact and S12 operator-restart: a full backup to object storage, restored into a new cluster in " +
+				"the run namespace, and into another while the manager Pod is deleted without a grace period " +
+				"during its restore; no other S00-S15 qualification"
+		}
+		if cfg.RestoreInstanceManagerRestart {
+			at := cfg.imRestartAt()
+			lane = imRestartLane(at)
+			requirements = append(requirements, evidence.Requirement{ID: s12ID, Variant: imRestartVariant(at)})
+			summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete, S12 " +
+				"exact and S12 " + imRestartVariant(at) + ": a full backup to object storage, restored into a new " +
+				"cluster in the run namespace, and into another while " + imRestartPlacementNote[at] +
+				"; no other S00-S15 qualification"
+			summary.Notes = append(summary.Notes, imRestartSummaryNotes[at]...)
+		}
+		lane, requirements = planS12GracefulStop(cfg, lane, requirements, summary)
+	case cfg.BackupBucket != "":
+		lane = s11Lane
+		requirements = append(requirements, evidence.Requirement{ID: s11ID, Variant: s11Variant})
+		summary.Notes[0] = "Three-member HA cluster against an installed Operator, then S11 complete: a full " +
+			"backup to object storage, downloaded and checked by the run; no other S00-S15 qualification"
+		summary.Notes = append(summary.Notes, "The S11 artifact is left in the backup bucket for S12")
+		lane, requirements = planS11MissingDestination(cfg, lane, requirements, summary)
+		lane, requirements = planS11DeniedCredentials(cfg, lane, requirements, summary)
+		lane, requirements = planS11SignatureMismatch(cfg, lane, requirements, summary)
+		lane, requirements = planS11InterruptedUpload(cfg, lane, requirements, summary)
+		lane, requirements = planS11OperatorRestart(cfg, lane, requirements, summary)
+		lane, requirements = planS11InstanceManagerRestart(cfg, lane, requirements, summary)
+		lane, requirements = planS11Overlapping(cfg, lane, requirements, summary)
+		lane, requirements = planS11OperationStoreLoss(cfg, lane, requirements, summary)
+		lane, requirements = planS11GracefulStop(cfg, lane, requirements, summary)
+	}
+	return lane, requirements
 }
 
 // faultLane returns the lane, the requirement and the summary's first note

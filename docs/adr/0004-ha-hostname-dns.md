@@ -129,7 +129,8 @@ The operator creates the alias Service of every promotable member, also for a
 standalone cluster, because it calls each member's Instance Manager by that
 name. A Service of a member's name that the cluster does not control is left
 untouched and the reconcile fails with `MemberServiceReconcileFailed`; it is
-not adopted. Alias Services whose member no longer exists are deleted. Each
+not adopted. The same holds for every other object the cluster writes under a
+fixed name. Alias Services whose member no longer exists are deleted. Each
 carries `database.cubrid.io/service-role: member` to tell it from the governing
 Service.
 

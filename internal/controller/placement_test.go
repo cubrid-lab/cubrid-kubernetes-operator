@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
@@ -54,6 +55,16 @@ func (c podGetFails) Get(ctx context.Context, key client.ObjectKey, obj client.O
 		return errors.New("the API server did not answer")
 	}
 	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+// stsGetFails is a reader whose every read of a StatefulSet fails.
+type stsGetFails struct{ client.Reader }
+
+func (c stsGetFails) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*appsv1.StatefulSet); ok {
+		return errors.New("the API server did not answer")
+	}
+	return c.Reader.Get(ctx, key, obj, opts...)
 }
 
 // podAntiAffinity returns the DB Pods' anti-affinity, failing when there is none.
@@ -227,8 +238,14 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 			c := haCluster("place-old-sts")
 			create(c)
 			// A StatefulSet written by an operator that set no placement rule.
+			// Every operator version made the cluster its controller.
 			old := &appsv1.StatefulSet{
-				ObjectMeta: metav1.ObjectMeta{Name: c.Name, Namespace: c.Namespace, Labels: labelsFor(c)},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: c.Name, Namespace: c.Namespace, Labels: labelsFor(c),
+					OwnerReferences: []metav1.OwnerReference{
+						*metav1.NewControllerRef(c, databasev1alpha1.GroupVersion.WithKind(ownerKind)),
+					},
+				},
 				Spec: appsv1.StatefulSetSpec{
 					Selector:    &metav1.LabelSelector{MatchLabels: labelsFor(c)},
 					ServiceName: instancesServiceName(c.Name),
@@ -244,6 +261,8 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 					},
 				},
 			}
+			// The operator has always set the cluster as its controller.
+			Expect(controllerutil.SetControllerReference(c, old, k8sClient.Scheme())).To(Succeed())
 			Expect(k8sClient.Create(ctx, old)).To(Succeed())
 			DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, old))).To(Succeed()) })
 			reconcileOnce(c)
@@ -276,6 +295,92 @@ var _ = Describe("Database member placement (#90, #596)", func() {
 			dataPVC(other, 0, "")
 			sts := reconcileSts(c)
 			expectRequired(sts)
+		})
+
+		const clusterKind = "CubridCluster"
+		// A StatefulSet of the cluster's name that the cluster does not control
+		// says nothing about this cluster's members: an operator without the
+		// rule never created them. Recording Preferred for it would weaken the
+		// new cluster for good, although #657 refuses to use that StatefulSet.
+		for who, holder := range map[string]struct {
+			name   string
+			owners func(c *databasev1alpha1.CubridCluster) []metav1.OwnerReference
+		}{
+			"no owner": {"place-foreign-none", func(*databasev1alpha1.CubridCluster) []metav1.OwnerReference { return nil }},
+			"another controller": {"place-foreign-other", func(*databasev1alpha1.CubridCluster) []metav1.OwnerReference {
+				yes := true
+				return []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "other", UID: "other-controller", Controller: &yes}}
+			}},
+			"an earlier cluster of the same name": {"place-foreign-earlier", func(c *databasev1alpha1.CubridCluster) []metav1.OwnerReference {
+				yes := true
+				return []metav1.OwnerReference{{
+					APIVersion: databasev1alpha1.GroupVersion.String(), Kind: clusterKind, Name: c.Name,
+					UID: "deleted-cluster", Controller: &yes,
+				}}
+			}},
+			"this cluster as an owner that is not the controller": {"place-foreign-owner", func(c *databasev1alpha1.CubridCluster) []metav1.OwnerReference {
+				return []metav1.OwnerReference{{
+					APIVersion: databasev1alpha1.GroupVersion.String(), Kind: clusterKind, Name: c.Name, UID: c.UID,
+				}}
+			}},
+		} {
+			It("records Required, not Preferred, while an unrelated StatefulSet of its name is held by "+who, func() {
+				c := haCluster(holder.name)
+				create(c)
+				labels := map[string]string{"claimed-by": "unrelated-tool"}
+				foreign := &appsv1.StatefulSet{
+					ObjectMeta: metav1.ObjectMeta{Name: c.Name, Namespace: c.Namespace, Labels: labels, OwnerReferences: holder.owners(c)},
+					Spec: appsv1.StatefulSetSpec{
+						ServiceName: foreignName,
+						Selector:    &metav1.LabelSelector{MatchLabels: labels},
+						Template: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{Labels: labels},
+							Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "foreign-app", Image: "registry.example/app:1"}}},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+				DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, foreign))).To(Succeed()) })
+
+				// Reconcile may refuse the StatefulSet; the decision is made first.
+				_, _ = reconciler(c).Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(c)})
+				Expect(stored(c).Annotations).To(HaveKeyWithValue(spreadDefaultAnnotation, "Required"))
+
+				By("creating its own StatefulSet once the name is free, still under Required")
+				Expect(k8sClient.Delete(ctx, foreign)).To(Succeed())
+				Eventually(func() error {
+					return k8sClient.Get(ctx, client.ObjectKeyFromObject(c), &appsv1.StatefulSet{})
+				}).ShouldNot(Succeed())
+				reconcileOnce(c)
+				expectRequired(statefulSet(c))
+			})
+		}
+
+		// A volume claim carries no owner that names a cluster, so a claim
+		// named data-<cluster>-<ordinal> cannot be told from the one of an
+		// older cluster whose volume binds a member to a node. Preferred is
+		// the answer that leaves no member Pending.
+		It("still prefers separate nodes for a data PVC that no owner reference ties to the cluster", func() {
+			c := haCluster("place-foreign-pvc")
+			create(c)
+			dataPVC(c, 0, "")
+			foreign := &corev1.PersistentVolumeClaim{}
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "data-" + c.Name + "-0", Namespace: c.Namespace}, foreign)).To(Succeed())
+			Expect(foreign.OwnerReferences).To(BeEmpty())
+			reconcileOnce(c)
+			expectPreferred(statefulSet(c))
+			Expect(stored(c).Annotations).To(HaveKeyWithValue(spreadDefaultAnnotation, "Preferred"))
+		})
+
+		It("does not record Required when the StatefulSet cannot be read", func() {
+			c := haCluster("place-read-fails")
+			create(c)
+			broken := &CubridClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: recorder,
+				APIReader: stsGetFails{k8sClient},
+			}
+			Expect(broken.recordMemberSpreadDefault(ctx, stored(c))).To(MatchError(ContainSubstring("read StatefulSet")))
+			Expect(stored(c).Annotations).NotTo(HaveKey(spreadDefaultAnnotation))
 		})
 
 		It("keeps Required recorded after the StatefulSet is deleted", func() {

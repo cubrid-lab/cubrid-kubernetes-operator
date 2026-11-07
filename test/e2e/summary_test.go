@@ -66,9 +66,35 @@ func updateSummary(change func(s *evidence.Summary)) {
 // them the cluster Instance Manager tokens the suite reads (S14).
 var redactor = evidence.NewRedactor()
 
-// evidenceDir is where the run's evidence goes; empty when none is kept, and
-// then no scenario can pass.
-func evidenceDir() string { return os.Getenv("E2E_EVIDENCE_DIR") }
+// acquiredEvidenceDir is the directory this run accepted as its own, which
+// acquireEvidenceDir does only for a missing or empty directory, and is empty
+// otherwise. Ginkgo runs AfterSuite and the per-spec reports even when
+// BeforeSuite refused the directory, so every write goes through this path,
+// not through E2E_EVIDENCE_DIR, which can name a directory that was never
+// accepted (#310).
+var acquiredEvidenceDir string
+
+// acquireEvidenceDir makes E2E_EVIDENCE_DIR this run's evidence directory
+// when it is missing or empty. It returns an error when the directory holds
+// the files of an earlier run. An earlier acquisition ends first, so that a
+// refused run holds no directory and writes nowhere, whatever was accepted
+// before in this process.
+func acquireEvidenceDir() error {
+	acquiredEvidenceDir = ""
+	dir := os.Getenv("E2E_EVIDENCE_DIR")
+	if dir == "" {
+		return nil
+	}
+	if err := evidence.RequireEmptyDir(dir); err != nil {
+		return err
+	}
+	acquiredEvidenceDir = dir
+	return nil
+}
+
+// evidenceDir is where the run's evidence goes; empty when none is kept or
+// the run did not acquire the directory, and then no scenario can pass.
+func evidenceDir() string { return acquiredEvidenceDir }
 
 // recordScenario adds a scenario's result to the run's summary, in place of
 // the placeholder planRun left for it.
@@ -227,6 +253,14 @@ func TestKindRequirementsHaveReadableNames(t *testing.T) {
 		if sc.DisplayName() == sc.Name() {
 			t.Errorf("required result %s has no description", sc.Name())
 		}
+	}
+}
+
+// The registry must describe this lane exactly: a requirement that maps to no
+// registered result, or a registered result nothing requires, fails here.
+func TestKindLaneIsRegistered(t *testing.T) {
+	for _, problem := range kindLane.RegistryProblems(evidence.LevelKind) {
+		t.Error(problem)
 	}
 }
 

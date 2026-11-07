@@ -596,25 +596,33 @@ func TestRunStopsTheCommandWhenNoRenewalSucceedsInTime(t *testing.T) {
 // non-interactive shell starts with SIGINT ignored, a repeated signal ends
 // the wait: the second sends SIGTERM to the group, the third SIGKILL. The
 // Lease is released after.
+//
+// The signals are sent only once the background job says it is ready, that
+// is, after the shell that started it has set up its signal handling in the
+// job. A signal that reaches a freshly forked job earlier finds the default
+// handling and ends it, and with it the wait, on the first signal; on a
+// loaded host that happened in about half of the runs.
 func TestARepeatedSignalEndsTheWaitForBackgroundJobs(t *testing.T) {
 	for _, tc := range []struct {
 		name, job string
 		signals   int
 	}{
-		{"SIGINT ignored", `sleep 30`, 2},
-		{"SIGINT and SIGTERM ignored", `trap '' TERM; sleep 30`, 3},
+		{"SIGINT ignored", `: > "$1"; sleep 30`, 2},
+		{"SIGINT and SIGTERM ignored", `trap '' TERM; : > "$1"; sleep 30`, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeLab(t, labA, "ok", "ok")
 			signals := newSignalSource()
 			leader := filepath.Join(t.TempDir(), "leader")
+			ready := filepath.Join(t.TempDir(), "ready")
 			done := make(chan int, 1)
 			go func() {
-				done <- run(labArgs("sh", "-c", `(`+tc.job+`) & echo $$ > "$0"; exit 0`, leader),
+				done <- run(labArgs("sh", "-c", `(`+tc.job+`) & echo $$ > "$0"; exit 0`, leader, ready),
 					callerEnviron(t), f.kubectl, signals.notify)
 			}()
 			c := <-signals.ch
 			pid := killGroupOf(t, leader)
+			waitUntil(t, func() bool { _, err := os.Stat(ready); return err == nil })
 			waitUntil(t, func() bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) })
 			for i := 1; i < tc.signals; i++ {
 				c <- syscall.SIGINT

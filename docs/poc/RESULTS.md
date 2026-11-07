@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-51, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-52, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -31,7 +31,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > `ExecCLI`; POC-48 ran in Docker on a native linux/amd64 host, with the
 > official image; POC-49 and POC-50 ran in Docker on a native linux/amd64 host,
 > with the Operator's Instance Manager image; POC-51 ran on Kind on a native
-> linux/amd64 host, with the Operator and Brokers. Each states its own environment. Each POC is the
+> linux/amd64 host, with the Operator and Brokers; POC-52 ran in Docker on a native
+> linux/amd64 host, with the Operator's Instance Manager image. Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -909,7 +910,7 @@ written again naming `appdb_h-1`, `applyinfo` showed `Insert count : 2`, and
 - The only signals were the applying delay in `applyinfo`, the applier's error
   log, and the data itself. Role, server state and fail count showed nothing.
 
-**Reading of the cause (not confirmed in CUBRID's source or manual).** The
+**Reading of the cause (not confirmed by an experiment; CUBRID's source was read later, see the end of POC-21).** The
 file under `$CUBRID/var/APPLYLOGDB` records which copied log is being applied
 for the database, and an applier for another log is refused while it names a
 different one. `h-2` was stopped while it was applying `h-0`'s log, so the
@@ -1278,7 +1279,7 @@ healthy slave.
 **Not tested here:** whether a slave that had unapplied work from the old
 master's log loses it when it starts without the lock file; the Operator's
 `ReplicationHealthy` condition during part 2, which ran before that condition
-existed; what CUBRID's manual or source says the lock file is for.
+existed; what CUBRID's manual or source says the lock file is for (read afterwards, below).
 
 **Later observation, in the e2e step that repeats part 2 (#342).** The
 Instance Manager ends a member whose CUBRID processes stay away for longer
@@ -1294,6 +1295,99 @@ Why `hab-2` was not promoted is not known: that run kept no heartbeat status
 of the members during the wait (issue #355). The step waits 20 seconds for
 the failover, records what each member reports on every poll when it does not
 come, and starts again with a new attempt.
+
+**What CUBRID's source and manual say about the lock file (#226; source
+reading, not an experiment).** This section only reads code. Reading the
+source explains the observations above and does not prove them: nothing here
+was run, and the reading may be wrong where a path was not followed to its
+end. The source is github.com/CUBRID/cubrid, tag `v11.4.6` (commit
+`0e7d3c11e62ed8a4d354d0c951412f739e6be9ce`, the build POC-17 ran:
+11.4.6.1963-0e7d3c1). The tip of `release/11.4` at the time of reading,
+`v11.4.7` (`1df4af4`), has the same two lock functions; its `log_applier.c`
+differs from `v11.4.6` by 8 lines, which were not examined. Line numbers are
+those of `v11.4.6`.
+
+- **What the file is.** `fileio_lock_la_dbname()` (`src/storage/file_io.c`
+  1512) makes `$CUBRID/var/APPLYLOGDB/<db name>` (directory at 1524), takes a
+  POSIX write lock on it with `fcntl` `F_SETLK` (1601, through
+  `fileio_lock_file_write`, defined at 297) and writes one line,
+  `<pid> <db name> <copied log path>` (1615). That is the line seen in POC-16
+  (`579  appdb /var/lib/cubrid/databases/appdb_h-0`). It holds no log position.
+  The applier's position (`committed_lsa`, `final_lsa` and the counters) is
+  read from the table `db_ha_apply_info` in the slave's own database, by
+  database name and copied log path (`la_get_last_ha_applied_info()`,
+  `src/transaction/log_applier.c` 1960 and 1975; the query at 1554).
+- **What it is for.** The code has no comment saying so. By what it does, it
+  lets only one `applylogdb` process at a time write to the slave's database
+  `<db>`, although a slave runs one applier per copied log (its own master's
+  and the other slave's). The kernel lock is released when the process ends.
+- **Why a dead process still blocks.** Before the lock call, the function
+  reads the file and, when it parses three fields and the copied log path in
+  it differs from the caller's (`file_io.c` 1579), returns at once with the
+  error `ER_IO_MOUNT_LOCKED` (1581), printed with `-` for user, host and
+  time and the pid from the file. That is the line seen in POC-16, 17 and 21,
+  `in use by user - on process 579 of host - since -` (message 11 in
+  `msg/en_US.utf8/cubrid.msg` 83). Whether the pid is alive and whether any
+  lock is held is not looked at in this branch. This matches POC-38, where an
+  applier for the same log started while the file named a dead process, and
+  its reading that a kernel lock was not what refused.
+- **Why it does not clear by itself.** The applier that was refused repeats
+  the call every 3 seconds without limit (`la_lock_dbname()`, 6889, sleep at
+  6907), which matches the error repeated every few seconds. The content is
+  cleared (overwritten with blanks, 1703) only by `la_unlock_dbname(...,
+  clear_owner = true)`, and that function returns at once when the process
+  holds no lock descriptor (6924). It is called with `true` when the applier
+  of the lock's own log sees the master's state change (`is_role_changed`,
+  6342, used at 8635), has no more to apply and the log's server state is not
+  active (8338), or, if `ha_applylogdb_log_wait_time_in_secs` (default -1,
+  `system_parameter.c` 1543) is set, the log has not grown for that time
+  while the server is dead (8319). A shutdown calls it with `false`
+  (`la_shutdown()`, 7012, `clear_owner` at 7036), as does anything that ends
+  the process, so the file keeps the name of the log being applied when the
+  applier stopped. A restarted applier for the old master's log has no
+  descriptor and, as read, does not take the lock before it has a committed
+  transaction to apply (5812), so it has nothing to clear. This is a reading
+  of how the stale file stays: the code does not say so and it was not
+  traced in a running applier.
+- **A blank or empty file does not refuse.** The comparison happens only when
+  the file parses as three fields (1575). A file cleared by
+  `clear_owner = true`, or empty, parses as fewer, so by this reading it would
+  not block (the open question in POC-38 about a 0-byte file). Not run.
+- **Whether work is lost without the file.** By this reading, no position
+  is kept in the file. A member that starts without it keeps its
+  `db_ha_apply_info` rows, so an applier for the old master's log resumes from
+  the position stored there when it later takes the lock. What the file's
+  absence cannot bring back is log that was never copied: the slave's
+  `copylogdb` for the old master, which was stopped or killed, copied nothing
+  after it stopped. Whether rows the old master acknowledged but the slave had not copied
+  survive on the new master is a question about failover and the copy
+  mode (`ha_copy_sync_mode`), not about this file, and was not read.
+- **What the manual says.** The 11.4 manual's HA page
+  (cubrid.org/manual/en/11.4/ha.html, read on 2026-11-06 through a fetch tool
+  that summarised it, so a missing mention is not proof of absence) does not
+  describe the file, the "Unable to mount disk volume" message for this case,
+  or a stuck applier after a failover. It names the file once, as a step: in
+  "Rebuild a Slave during Service", step 1, the commands for the slave being
+  rebuilt include `rm $CUBRID/var/APPLYLOGDB/testdb`, with no reason given.
+  `cubrid applyinfo` is documented as the way to check "the copied and applied
+  status of replication logs", and the page says to check the error logs of
+  `copylogdb` and `applylogdb` when replication differs. No text calls a stale
+  file a known limitation. CUBRID's issue tracker was not searched.
+- **So, is it a known limitation with a documented procedure?** Not in the
+  manual read. The only documented use of removing the file is in rebuilding a
+  slave, which is the same act as the workaround of POC-16 and POC-17 case 5.
+  For a running member that was stopped while its master failed, the source
+  suggests removing the file while the member's heartbeat is stopped, but no
+  CUBRID text says it is supported, and POC-16 and POC-17 are the only
+  evidence that it works.
+
+**Consequence for the Operator.** The source reading agrees with POC-21: a
+container that starts without the file does not meet this state, and a
+member left in it needs a restart of its container or the removal of the
+file, neither of which the applier does itself. It found nothing that would
+lose the old master's already copied log when the file is absent; that is
+still a reading, not a run. Detection is #229. No separate recovery issue
+exists (see #226).
 
 ---
 
@@ -3693,7 +3787,7 @@ hypothesis 1, but it was not examined further.
 - **The other slave's applier was never seen to take the file.** On both slaves, including the one that joined last, that applier was never seen to write the file and never logged a refusal. The part of hypothesis 1 that "Not shown" names, an applier for a standby's log taking the lock, was not observed in any of 60 slave observations.
 - **The file appears only with the first applied write.** Before it, the file was absent, as POC-35 saw. A master that stays idle while both slaves join leaves no file for anyone to race for.
 - **A pid in the file was not enough to block an applier.** In no sample did a process hold the file under a kernel lock (`/proc/locks`). The live master-log applier held it open, and a killed one left only its pid and log name behind. The file named a dead process for over a minute in variant (a'), and an applier for the same log still started, applied and rewrote the file.
-  - How CUBRID decides "in use" is not established here. A reading not confirmed in its source: it compares the log name in the file, as in POC-16/17, and the content and the dead pid are not checked as a kernel lock would be.
+  - How CUBRID decides "in use" is not established here. A source reading (end of POC-21) agrees: it compares the log path in the file, and neither the pid nor a kernel lock is checked on that branch.
 - **The lab baseline differs from these files.** PR #600's read-only check of the VM lab's healthy slave `cubrid-test/ha-0`, on 2026-10-27, found the file at 0 bytes, mtime 2026-10-24 11:01:06Z. It had no lock in `/proc/locks`, and no process held it open. Every sample here with the file showed 52 bytes and the live master-log applier holding it open.
   - Whether a 0-byte file blocks an applier was not tested.
   - A file the live applier does not hold open is a state these runs did not produce.
@@ -3720,7 +3814,7 @@ still stand as possible causes:
 - Kills of the other slave's applier, of `copylogdb`, or of a whole member.
 - Runs longer than about 3.5 minutes per formation, and members that ran for days.
 - The cause of the late writes in `r09` and `t0`.
-- CUBRID's source or manual on what `APPLYLOGDB/<db>` holds and how "in use" is decided.
+- CUBRID's source or manual on what `APPLYLOGDB/<db>` holds and how "in use" is decided (read later; see the end of POC-21).
 
 ## POC-39 — whether a NET_ADMIN ephemeral container can cut and delay one Pod's traffic on the VM lab, by direction, without touching the node or the kubelet's probes (#114) — **observation: yes, under Pod Security `privileged` only; restricted and baseline refused the container; iptables (nf_tables) and tc netem worked in the Pod's namespace on kernel 6.8.0-142; a drop rule there cut traffic to a Pod on another node, counting rules at the receiver told the two directions apart where a TCP connect could not, the kubelet's TCP probes kept passing, and a 300 ms netem delay to one peer added 300 ms to that peer only**
 
@@ -5393,3 +5487,120 @@ The trials without the state at 4 s and more are cuts of the lowest-priority sla
 - The `-rw` Brokers' readiness does not follow the database, so a Broker Pod's `Ready` says nothing about whether a master is writable.
 
 **Cleanup.** The Kind cluster `second-master`, its node container and the images `poc51/*` made for this run were removed at the end; nothing of this POC was left running.
+
+## POC-52 — whether `ha_ping_hosts` stops an isolated member of higher priority than the master from promoting itself, and what it costs, in Docker on the pinned image (#702, #703) — **observation: with all the member's traffic cut, the ping target included, and no `cubrid heartbeat status` on it, the parameter stopped the promotion in all 5 trials, against 3 of 3 promotions without it under the same sampling; a status call early in the cut turned the ping check off, and the member then promoted anyway, in the 11 trials where the call returned before the score pass that counts the member isolated, which follows the 3 s score timer and is not a threshold in seconds (4 of 4, 1 of 2 and 0 of 3 for one call ended at +1.6, +2.6 and +3.1 s); a call every 5 s, the period of the Operator's readiness probe, let it promote in 4 of 5 trials; with heartbeats lost and the target still reachable the member promoted in all 14 trials, parameter or not; with the target down and no status call a real failover waited 57 min in the one long hold, and a member could not start; 922 of 7,684 acknowledged writes, in 23 of 78 trials with final tables (4 to 46 each), are not on the member that ended as master, and in all 23 that member was caught up before the cut and behind at takeover, which matches #703's hypothesis and does not show whether a member caught up at takeover can diverge; no acknowledged write was missing from the final master in the 14 heartbeat-only trials or the 12 kills of a master**
+
+**Question (#702, #703).** POC-50 and POC-51 showed that a member of higher priority than the active master, when cut off, promotes itself, and that the healthy master stands down after the cut ends. The Operator renders no `ha_ping_hosts`, and `master.err` reports that CUBRID cancels its isolation check for that reason. On the pinned image, does setting `ha_ping_hosts` stop an isolated member from promoting itself? In which fault shapes? Can it stop a legitimate failover, for example when the ping target is down or unreachable from every member? Separately, on a member that is really caught up before the cut, do acknowledged rows diverge? This is the behavior of one build in Docker, not a general CUBRID guarantee. Docker is neither Kind nor the VM lab.
+
+**What the source says (read from `master_heartbeat.c` and `heartbeat.h`, tag `v11.4.6.1963`, which for this file matches `release/11.4`; an explanation, the measurements below stand by themselves).**
+- A slave that ranks itself first goes `to-be-master` and runs a ping check (`hb_cluster_job_check_ping`). If every target fails, it logs `[Failover] [Cancelled] Ping check has been failed` and returns to slave. If a target answers, it goes on to promote. An isolated master does the reverse: if every target fails three times it stands down, and if one answers it stays.
+- If `is_ping_check_enabled` is false, a slave promotes without pinging, and a master logs `[Failback] [Cancelled] No hosts are registered in ha_ping_hosts, or all registered hosts are invalid`.
+- That flag is turned off only by the validity check (`hb_cluster_job_check_valid_ping_server`), when no target answers **and** the node is not isolated. The check runs at start and then every hour, or every 5 minutes while the flag is off (`heartbeat.h`; the manual says the same). The flag stays off while no target answers, including once the node is isolated.
+- `cubrid heartbeat status` asks for the ping host list, and `hb_get_ping_host_info_string` pings every target while holding the heartbeat lock. When the result disagrees with the flag, it makes the validity check run at once. So a status call is not a passive reading. A peer counts as lost at a score pass, which runs every 3 s, once more than 5 heartbeats of 500 ms were missed or more than 3 s have passed since its last heartbeat (`master_heartbeat.c:1580`). Until such a pass, a cut member is not isolated. The status call and the validity job hold the lock, so a pass that comes due meanwhile waits.
+- At start and on `reload`, `hb_cluster_check_valid_ping_server` failing makes `heartbeat start` fail: no target answering is fatal at start.
+- `hb_check_ping` runs `ping -w 1 -c 1 <host>` through `popen`. `hb_check_tcp_ping` opens a TCP connection, limited by `ha_ping_timeout` (default 5 s), and `ha_tcp_ping_hosts` is ignored when `ha_ping_hosts` is set. The manual for `ha_ping_hosts` says the check runs when a failover starts, and that hosts are checked hourly, with the check paused when they fail.
+
+**Environment (2026-11-06, 09:46Z to 12:22Z).**
+- Native linux/amd64 host, 6 CPUs, 32 GB, Linux 5.15, Docker 29.2.1, one spinning disk for Docker.
+- Image `example.com/cubrid-instance-manager:e2e` (`sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70`), `cubrid_rel`: `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`. Entrypoint replaced by `sleep`; the Instance Manager did not run. Fault and target image `nicolaka/netshoot@sha256:7f08c4aff13ff61a35d30e30c5c1ea8396eac6ab4ce19fd02d5a4b3b5d0d09a2`.
+- **Load.** The host was shared. One-minute load at trial starts and ends had a median of 11.4 and a range of 3.6 to 54.2, from up to six of these clusters at once (at about 11:23Z) and other users' work. It is in each trial's `events.tsv`. Load at the moment of a cut was not recorded. Eight trials had 40 or more at their start or end. Six of them match all their siblings by promotion and overlap: `p-full-q-3`, `p-full-q-4`, `c-full-q-3`, `i-p-5-2`, `p-peers-q-2`, `p-full-once-3`. The two others, `p-full-5-4` and `p-full-5-5`, are in the 5 s case, whose outcomes vary with the call's timing, and they match each other and one low-load sibling.
+- **Files in memory, a change from POC-50.** Copying a trial's files on the disk took about 220 s with four lanes, so from the first counted trial the database files and logs were on `/dev/shm`. Only the long hold's cluster stayed on Docker volumes. So commits did not wait for a disk: durability and anything that depends on disk timing are untested here, and timings are not comparable with POC-50's. Each member's client wrote about once a second.
+- No Kubernetes, no Operator, no Brokers, no VM lab.
+
+**The cluster, each trial.** Three members `h-0`, `h-1`, `h-2` built as in POC-50, each a network container and a database container, on `cubrid_ha.conf` as `generateHAConf` renders it plus the parameter under test. So `h-0` has the highest priority, and every timing parameter has its default. Each trial starts from one stopped copy of the cluster, in which `h-1` was the master: `h-1` is started alone, then `h-0` and `h-2`. So no trial inherits a diverged table, a stuck applier or a changed master. The 67 planned trials were shuffled across four lanes, so control and parameter trials ran mixed under the same load. The 15 additions below ran in order on a fifth lane, and the long hold on its own.
+
+**The target, and why.** A fourth container on the same Docker bridge, not a member, which answers ICMP and has a TCP listener on port 8443. The healthy members reach it; a full cut drops its packets at both ends, in each receiver's INPUT as `docs/testing/network-faults.md` does. That meets the requirement of being reachable from healthy members and unreachable from a cut one, and it is the best case by construction: the cut drops the target together with the peers, one hop away. On Kubernetes, none of this was tested. What each candidate would mean there is reasoned from how they work:
+- **The Pod's gateway (the node's bridge address).** It is on the member's own node, so it would still answer when the node or the Pod is cut off from the other members, unless the fault is inside the Pod. That would be the `peers` shape below: the check passes, and the member promotes. Gateways may also not answer ICMP on every CNI, which would be the first-start failure below.
+- **A Service's ClusterIP, such as the API server's.** It is a virtual address. kube-proxy in iptables mode rewrites TCP, UDP and SCTP, so ICMP to it normally gets no reply, and with no reply `ha_ping_hosts` makes `heartbeat start` fail (next section). It can serve `ha_tcp_ping_hosts`, which connects by TCP, and the connection goes through the Pod's own node.
+- **The API server's real address, or another node's.** It answers ICMP where no firewall stops it, and it is off the node for a member on a worker. On a member on the same node as that address it is the gateway case. It is a dependency: when the control plane restarts, it is the "target down" case below.
+- **A dedicated Pod or a small witness.** Its IP changes unless something keeps it fixed, and it needs placing away from the members, which is a design of its own.
+- **`ping` in a restricted Pod.** The image's `ping` has neither setuid nor, as far as seen, a file capability. As UID 1000 with `--cap-drop ALL` and `no-new-privileges`, as the Operator's Pods run, it worked here because Docker opens `net.ipv4.ping_group_range` (`0 2147483647`). With that range closed it failed with `ping: socket: Operation not permitted`, rc 2. So on a runtime that leaves the range closed, the check would fail on every member (`docs/poc/poc52/samples/ping-permissions.txt`). POC-40 saw `ping` work as UID 1000 on the VM lab.
+
+**Method.**
+- **Status calls are a variable of each trial,** because of the source above. `quiet`: none on the cut member from before the fault to the end of the trial; its state comes from `cubrid changemode appdb@localhost`, its writer and `master.err`. `5s`: every member every 5 s at a random phase to the fault, the period of the Operator's readiness probe. `10hz`: as POC-50's sampler. `once`: one call on the cut member started 0.5, 1.5 or 2 s after the cut, ended 1.6, 2.6 or 3.1 to 3.2 s after it. **No Pod ran, so the link to the readiness probe is reasoned, not shown:** `/readyz` runs this command (`internal/instancemanager/server.go:456`) with a 5 s period, and a plain call stood in for it. `/v1/role` (`server.go:521`), which the Operator calls every `haResyncInterval` of 10 s, and `/v1/ha/status` (`server.go:558`) run the same command, so if the Operator can reach a cut member, calls are more frequent than the probe alone.
+- **Faults, member `h-0`, master `h-1`.** `full`: all traffic between `h-0` and its peers and the target, for 45 s. `m-s` (the POC-50 shape that overlapped): heartbeats lost between `h-0` and the master only. `s-isolated`: heartbeats lost both ways with both peers. `peers`: all traffic cut to the peers, target still reachable. Each fault was confirmed from each member's namespace by a ping and TCP connects, and the drop counters are in `events.tsv`. Added, not asked for: the same `full` cut on the master `h-1`.
+- **Catch-up reading.** `Delayed log page count: 0` under "Delay in Copying Active Log", which is the value the harness recorded, in all 80 trials that needed it, on `h-0` and `h-2`, with `Fail count` 0. The value under "Delay in Applying Copied Log" was 0 in 79 of them, and 1 on both slaves in the long hold, where `Final LSA` was on page 150 and the copied `EOF LSA` on page 151, with the rows equal by key. In the 158 other readings `Final LSA` equalled the copied `EOF LSA` in 118 and was behind it on the same page in 40. The reading is the copying value **and** the same rows by key on all three members, in one reading, with writes already stopped. The value alone is not enough: while forming a cluster the copying value read 0 on slaves that did not yet hold the table, and the applying value read 0 once on `h-0` with its table still empty (`samples/setup-reading/`). In all 55 cuts, writes stayed stopped until the cut was in place, and the cut followed the reading after about 1.4 s at the median. In the other trials they did not: in the 10 target-down trials with no other fault they were turned on 1.1 to 9.8 s before the target went down, with up to 9 acknowledged after the reading, and in the 13 kills 0.07 to 0.10 s before the kill returned, with at most 1. Those 23 are not the divergent trials, which are all cuts. The readings are kept (`h-*.applyinfo.precut-*.txt`, `h-*.rows.precut-*.tsv`), with `Final LSA` and the copied `EOF LSA`. No member was restarted between its reading and a fault. **This is caught up before the fault, not at takeover:** writes resumed at the cut.
+- **An acknowledgement proves the commit.** csql prints `Committed.` only in autocommit mode; with `--no-auto-commit` a `COMMIT` prints `Execute OK.` alone on this build. So the client sent `INSERT …; SELECT LAST_INSERT_ID(); COMMIT;` in autocommit mode, and counted a row only with `1 row affected`, `Committed.`, `Execute OK.`, no `ERROR CODE` and exit 0. Each output holding `ERROR CODE` was kept. The -199/-111 pair after `Committed.` counts apart.
+- **Keys.** Each acknowledged write records its key, and each table read keeps every row. All 7,714 acknowledged writes have a key.
+- **Reads.** After writes stopped, the tables were read at once and then every 20 s, keeping the last read when all three agreed and at least 60 s had passed, or at 300 s. In the trials where keys differ below, the differing rows did not change while waiting, except in the trial noted.
+- **Positive controls, in the 80 trials that wrote.** The master acknowledged writes before the fault, and the same client on `h-0` was refused with -581, so a missing acknowledgement on `h-0` is a refusal by a server that answered, not a dead client. The 3 first-start trials have no writes and no such control. A state is never taken for a write: "acknowledged" below always means a row with a key.
+- **Counts.** 83 trials ran to the end: 67 from the shuffled plan, the long hold, and 15 additions on a fifth lane that were not shuffled and were chosen after the first results: all the `once` trials at 0.5 and 1.5 s, all those with `ha_tcp_ping_hosts` at 0.5 s, and 6 target-down trials with `ha_tcp_ping_hosts`. 4 more were abandoned before any fault, when the disk copy proved too slow, and were run again. 2 smoke trials came first and are not counted: they used a writer that did not yet read acknowledgements correctly. None failed or was skipped otherwise.
+
+**The answer, by fault shape, all members caught up before the fault** (`full` means the cut includes the target; "h-0 wrote" means it acknowledged at least one write during the cut):
+
+| Fault | Parameter | Status calls on `h-0` | Trials | `h-0` promoted | `h-0` wrote | Both wrote | `h-1` stood down | Keys differ |
+|---|---|---|---|---|---|---|---|---|
+| full | none | none | 3 | 3 | 3 | 3 | 3 | 3 |
+| full | none | every 5 s | 2 | 2 | 2 | 2 | 2 | 2 |
+| full | `ha_ping_hosts` | none | 5 | **0** | 0 | 0 | 0 | 0 |
+| full | `ha_ping_hosts` | one, ended by +1.6 s | 4 | **4** | 4 | 4 | 4 | 4 |
+| full | `ha_ping_hosts` | one, ended +2.6 s | 2 | 1 | 1 | 1 | 1 | 1 |
+| full | `ha_ping_hosts` | one, ended +3.1 s | 3 | 0 | 0 | 0 | 0 | 0 |
+| full | `ha_ping_hosts` | every 5 s | 5 | **4** | 3 | 3 | 4 | 4 |
+| full | `ha_ping_hosts` | every 100 ms | 2 | 2 | 2 | 2 | 2 | 2 |
+| full | `ha_tcp_ping_hosts` | none | 2 | 0 | 0 | 0 | 0 | 0 |
+| full | `ha_tcp_ping_hosts` | every 5 s | 3 | 0 | 0 | 0 | 0 | 0 |
+| full | `ha_tcp_ping_hosts` | one, started +0.5 s | 3 | 0 | 0 | 0 | 0 | 0 |
+| peers cut, target reachable | `ha_ping_hosts` | none | 2 | 2 | 2 | 2 | 2 | 2 |
+| heartbeats only, `m-s` | none | none | 2 | 2 | 0 | 0 | 2 | 0 |
+| heartbeats only, `m-s` | `ha_ping_hosts` | none | 3 | 3 | 0 | 0 | 3 | 0 |
+| heartbeats only, `m-s` | `ha_ping_hosts` | every 5 s | 2 | 2 | 0 | 0 | 2 | 0 |
+| heartbeats only, `s-isolated` | none | none | 2 | 2 | 0 | 0 | 2 | 0 |
+| heartbeats only, `s-isolated` | `ha_ping_hosts` | none | 3 | 3 | 0 | 0 | 3 | 0 |
+| heartbeats only, `s-isolated` | `ha_ping_hosts` | every 5 s | 2 | 2 | 0 | 0 | 2 | 0 |
+
+What that shows:
+- **Full cut, no status call: the parameter did what the manual says.** `master.err` logged `PING failed`, then `[Failover] [Cancelled] Ping check has been failed`, about every 4 s through the cut, and `h-0` stayed `standby` by `changemode`. `h-1` kept writing, did not stand down, and the tables ended equal.
+- **A status call early in the cut undid it, and what decided that was the order of two events, not a time.** One call ended at +1.6, +2.6 and +3.1 to +3.2 s gave 4 of 4, 1 of 2 and 0 of 3 promotions, but these are not a threshold. A reading of the archive: `[Failover] [Diagnosis]` in `master.err` marks the score pass that counted the member isolated, which came 2.44 to 5.61 s after the cut without a status call (11 of 22 trials at 4.7 s or later). In all 11 trials where the check went off, the status call had returned before that pass. In all 11 where it held (the 5 with `ha_ping_hosts` at +2.6 to +5.45 s and the 6 with `ha_tcp_ping_hosts` below), the pass ran within 0.03 s of the call's end. The validity job then holds the lock in its turn, so a pass can wait for it: in the two trials with the call ended at +1.99 and +2.6 s, the pass and the check going off came together at 2.99 and 3.59 s. So the variable looks like the phase of the 3 s score timer against the call's end, and the 1-of-2 split fits that. The +3.1 s trials do not close the window: a later pass would leave it open, and 3 trials are too few to say otherwise. Once off, `h-0` promoted 6.0 to 8.2 s after the cut, and both members acknowledged writes for up to 37.9 s.
+- **A status call every 5 s lands in that window often.** The first call after the cut ended at +1.09, +1.99, +2.31 and +2.37 s in the 4 trials that promoted, each before the pass. It ended at +5.45 s in the one that held, as the pass ran. Five trials give no rate.
+- **POC-40's `ha_ping_hosts` result fits the same mechanism, though POC-40's run itself was not repeated.** With the full cut on the master `h-1`: no status call and the parameter set, `h-1` stood down after 4 and 6 acknowledged writes, and `h-0` took over (2 of 2). A status call every 5 s: `master.err` on `h-1` logged the check disabled and then `[Failback] [Cancelled] No hosts are registered…`, as in POC-40, and `h-1` went on writing for the whole cut beside `h-0`, 42 and 44 writes (2 of 2). Without the parameter: 43, the same picture (1 trial). So here "a master does not demote with a ping host set" was not a property of the parameter alone: it depended on the status calls. POC-40's Pods had the readiness probe, and that run also read the status by hand.
+- **Heartbeats only: the parameter changed nothing.** The target stayed reachable, the ping check passed, and `h-0` promoted in all 14 trials, 6.2 to 8.7 s after the cut. No trial had both writing: `h-0`'s server stayed `to-be-active` until the fault ended and became `active` 0.7 to 4.2 s after it (`changemode`). `h-1` then stood down, in all 14, and writes moved to `h-0`. POC-50's one overlap of this shape (heartbeats lost with the master only for 15 s, both writing for 3.1 s) did not occur. There the member was behind and here it was caught up, but the difference has not been shown to be the cause.
+- **A target the cut member still reaches changes nothing either.** In `peers`, the same result as with no parameter: promotion, both writing for 34.6 and 37.6 s, keys differing. So the choice of target decides whether the parameter acts at all.
+- **`ha_tcp_ping_hosts` held in all 8 full-cut trials,** with no status call, one, or one every 5 s. With the target cut, a status call took about 5 s. A hypothesis, from the relation above: a 5 s call always spans a score pass, so the pass runs first and the member is isolated before the validity job. In all 6 trials with a call, the pass ran within 0.03 s of its end. No shorter `ha_ping_timeout` was tried. See its cost below.
+
+**The cost.** Every case with the target down had members that could reach each other, and all target-up baselines worked: with the master killed, a slave took writes 7.0 to 7.5 s later, parameter or not (4 of 4).
+
+| Case | Parameter | Status calls | Trials | What happened |
+|---|---|---|---|---|
+| Target down, master killed 20 s later | `ha_ping_hosts` | every 5 s | 3 | Failover as normal: the status call had turned the check off, promoted 6.2 to 7.9 s after the kill |
+| Same | `ha_ping_hosts` | none, 150 s, then one on `h-0` | 3 | **No failover for the 150 s**: 36 `[Failover] [Cancelled]` lines on `h-0`. The one status call released it: promoted about 5 s later in all 3 |
+| Same, held until something changed | `ha_ping_hosts` | none | 1 | **No master for 57 min 8 s** (3,428 s, 832 cancellations), until the validity check, due an hour after `cub_master` started, turned the check off |
+| Same | `ha_tcp_ping_hosts` | none, 150 s, then one on `h-0` | 1 | No failover for 150 s, and the status call did not release it. `h-0` promoted 4.1 s after the target came back, 315.7 s after the kill. Why the call did not release it is not known |
+| Target down, nothing else, 120 s | `ha_ping_hosts` | none, 5 s, 100 ms | 5 | No role changed and the master kept writing. With status calls the check went off on each member. Each status call took about 1.0 s, against about 30 ms with the target up |
+| Same | `ha_tcp_ping_hosts` | none | 2 | No role changed |
+| Target down | `ha_tcp_ping_hosts` | every 5 s | 4 (3 + 1 before its kill) | **Failovers with no member failed:** a member promoted itself in all 4, and in 3 the healthy master stood down and writes moved, in one of them twice. Status calls took 3.1 s at the median and up to 20 s |
+| Target down, a member restarts its heartbeat | `ha_ping_hosts` | every 1 s, the sampler | 2 | **`cubrid heartbeat start` failed** in 1.1 s, and worked once the target was back. The check went off in `master.err` |
+| Target not answering, first start | `ha_ping_hosts` | every 1 s, the sampler | 2 (down, or ICMP dropped) | **`cubrid heartbeat start` failed.** With ICMP dropped this stands for a ClusterIP that does not answer ping |
+| Target answering TCP only, first start | `ha_tcp_ping_hosts` | every 1 s, the sampler | 1 | Started |
+
+So in these trials the parameter traded the isolated promotion for a loss of availability, and status calls moved the trade: with them, the check was off when it would have blocked a failover, and off when it would have blocked an isolated promotion. A hypothesis for the TCP failovers, not tested separately: a status call holds the heartbeat lock for up to 5 s, so the member sends no heartbeats meanwhile; a member with an unreachable TCP target looks dead to its peers. In a Pod, `/readyz` has a 5 s timeout, so such a member would also go not ready; that was not run.
+
+**A member caught up before the cut, and behind at takeover.** All 80 trials with a fault after a reading had the required catch-up reading, but that holds only up to the cut. Writes resumed at the cut, so in all the trials below the member that took over lacked rows the old master acknowledged after the cut. This matches #703's hypothesis, that a member takes over while behind and reissues keys, and does not refute it. It does not answer that issue's question of whether a member caught up at takeover can diverge while the old master still runs: no cut trial is known to have had that state. In the 12 kills of a master the new master held every acknowledged row, but the old master was dead and could not diverge. In the 14 heartbeat-only trials `h-0`'s position at takeover was not read.
+
+- **922 acknowledged writes are not on the member that ended as master,** across 23 of the 78 trials with final tables: 4 to 46 in each, median 44, of 7,684 acknowledged. All 922 were acknowledged by `h-1`, 921 as `ack` and 1 with the -199/-111 pair, all after the fault began. 778 are on both `h-1` and `h-2`, so two of three members hold rows the master lacks. 144 are only on `h-1`, in the 5 trials that cut the master. In every such trial `h-0` ended as master.
+- **What stayed.** No acknowledged write is on no member, in the 78 trials with final tables, and each member holds its own in the 65 where all three tables were read; the killed member's table is unread in the 13 kills. That does not offset the line above: a client of the final master no longer sees those 922 writes.
+- **How.** 43 to 46 keys differed in the 20 trials with both writing, and 4, 6 and 20 in the three below, always a run from key 17 or 18, right after the rows written before the cut. Both members handed out the same keys. In `c-full-q-1`, for example, key 18 on `h-0` holds `h-0`'s marker 26, and on `h-1` and `h-2` it holds `h-1`'s marker 17. Waiting changed nothing: the last read at 300 s equalled the first, except in the 5 s trial below, where the slaves were still applying. The roles returned to one master and two slaves, the rows stayed different, and all 23 trials show -670 in applier logs.
+- **The new master's client was refused too.** All 118 client writes refused with -670 are on `h-0`, in 22 of the 23 trials, 5 or 6 consecutive writes at +70.2 to +75.7 s from the fault. Why at that moment is not known.
+- **Also when the old master stopped writing early.** With the master cut and `ha_ping_hosts` set, no status call (2 of 2 trials), `h-1` acknowledged 4 and 6 writes before it stood down, and those 4 and 6 keys differ. No trial had both writing at once there: this is divergence without an overlap.
+- **One 5 s trial without an overlap.** In one trial (`p-full-5-2`) `h-0` promoted and stayed `to-be-active` for the cut, as in the heartbeat shape, so both never wrote at once. It became `active` when the cut ended and took 20 writes, on keys `h-1` had used while `h-0` could not copy them: 20 keys differ. In the 15 other promoted trials with this fault `h-0` went active 8.8 to 10.5 s into the cut. Why this one stayed `to-be-active` is not known.
+- **When it did not.** None in the 14 heartbeat-only trials, where `h-0` went on copying over TCP: `h-1` stood down, `h-0` took over and every acknowledged marker was on all three. None in the 13 kills, 12 of them of the master (in one, `h-1` had already stood down), the 10 target-down trials with no other fault, or the 18 full cuts of `h-0` in which a parameter held.
+So in these trials rows diverged when a member took writes without the other's last acknowledged rows, and being caught up before the cut did not prevent that. That is an observation of these trials, not a proof of the only way it can happen.
+
+**Writes.** 34,250 attempts: 7,708 acknowledged, 6 with `Committed.` then -199/-111, 21,695 refused with -581, 4,584 with -353 and 137 with -191 (no server to connect to, mostly the killed master's client), 118 with -670, 1 with -199 alone and 1 with -671. Of the 6 with the pair, counted apart and not treated as failures, 5 rows are on all three members, and one (the second 5 s master-cut trial, key 27) is only on `h-1`, and is the one in the 922 above. One write printed `Committed.` for the `INSERT` and -671 on the explicit `COMMIT` (a single-call trial, `h-0`, key 26): it is the only row on a member that the client did not see acknowledged.
+
+**What can be recomputed.** Run `python3 docs/poc/poc52/analyse.py <directory> --trials` on the extracted `samples/trials.tar.xz`: the tables and the figures above come from it, and `samples/analysis.txt` holds its output, including the score-pass table, the writes not on the final master, the -670 and error-code counts, status call lengths and mode times. The samples are not thinned. The two smoke trials and the four abandoned ones are in the archive under their own folders and are skipped. Not recomputable: the 220 s disk copy and the host's load between trials, read by hand. The setup reading is in `samples/setup-reading/`, not in the archive.
+
+**Unexplained.**
+- Why a status call on `ha_tcp_ping_hosts` did not release a blocked failover (1 trial). The hypothesis above for the cut does not cover it, because that member was not isolated.
+- Why a promoted member's server stayed `to-be-active` until the fault ended in the heartbeat shapes and in one 5 s full cut, and went `active` about 10 s into the full cut otherwise.
+- Why the new master's client was refused with -670 at about +70 s, and not earlier.
+
+**Not run.** Kind and the VM lab; the Operator and Brokers; any Pod, so the readiness probe and the Operator's calls were stood in for by a plain status call; a real gateway, ClusterIP or API server as the target; `reload` with the parameter; several targets; other `ha_ping_timeout` values; a target that is reachable from some members only; a member measured as caught up at takeover with the old master still running; disk-backed trial files, except the long hold; the replacement of a member during a cut; the graceful replacement part of #703. Rates: the counts are counts, the trials few, and the 5 s row is five trials.
+
+**What this changes (a reading, for a maintainer to decide).**
+- In Docker, with a plain 5 s call standing in for the probe, rendering `ha_ping_hosts` alone did not stop the promotion in 4 of 5 full cuts, and in heartbeat-only faults it did nothing. Whether the Operator's Pods behave the same was not run. Any target also added a failure mode: a member could not start while it did not answer, and with no status calls a real failover waited up to an hour.
+- Reasoned, not tested: a ClusterIP cannot be a `ha_ping_hosts` target if it does not answer ICMP, and a gateway on the member's node would not detect the fault, and may not answer ICMP on every CNI.
+- `ha_tcp_ping_hosts` held the cut here, but with the target down and status calls it caused failovers with nothing failed. It needs care before any use, and perhaps a shorter `ha_ping_timeout`, which was not run.
+- ADR-0005, section 4, and the #113 and #115 designs cannot count on `ha_ping_hosts` to rule out the isolated promotion on this evidence. Acknowledged writes missing from the final master, in 23 of 78 trials here, are what those designs would have to weigh. No production code changed here.
+
+**Cleanup.** Every container, volume and network named `poc52-*` and the memory files under `/dev/shm/poc52` were removed at the end; nothing of this POC was left running. Other users' containers were not touched.

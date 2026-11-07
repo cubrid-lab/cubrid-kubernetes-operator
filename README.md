@@ -120,7 +120,9 @@ it writes, every Pod of its workloads and every data PVC its StatefulSets
 create carry. A `<cluster>-im-token`
 Secret without that label is neither read nor adopted: the cluster reports
 `Ready=False` with reason `SecretReconcileFailed`, naming the Secret and the
-label, until that Secret is deleted or renamed. A member Pod whose label is
+label, until that Secret is deleted or renamed. The same reason reports a
+labeled Secret of that name that the cluster does not control, which is
+neither changed nor adopted either. A member Pod whose label is
 removed is no longer seen by the operator: updates that replace members wait
 for it, and backups report the Pod as not found. The label limits what the
 manager holds in memory, not what its role allows it to read.
@@ -268,10 +270,17 @@ spec:
   one node all go down with it.
 - **Unset**, the Operator decides once per cluster and records the result in
   the cluster's annotation `database.cubrid.io/member-spread-default`, before
-  it creates the StatefulSet: `Required` when neither the StatefulSet nor any
-  data PVC `data-<cluster>-<ordinal>` exists, so for a new cluster, and
-  `Preferred` when either exists, so for a cluster created by an earlier
-  version. The Operator never changes the recorded value. A value set in
+  it creates the StatefulSet: `Required` when the cluster controls no
+  StatefulSet of its name and no data PVC `data-<cluster>-<ordinal>` exists,
+  so for a new cluster, and `Preferred` when either exists, so for a cluster
+  created by an earlier version. A StatefulSet of that name which the cluster
+  does not control (one without an owner, or held by another controller or by
+  an earlier cluster of the same name, by UID) is refused and does not count.
+  A data PVC counts by its name alone, because it carries no owner that names
+  a cluster: a leftover or unrelated claim with such a name makes a new
+  cluster record `Preferred`, the choice that never leaves a member Pending
+  behind a volume bound to a node. Set `memberSpread: Required` in the spec
+  to override it. The Operator never changes the recorded value. A value set in
   `spec.placement.memberSpread` always takes precedence over it.
 - **The recorded value goes with the CubridCluster object.** Removing the
   annotation, or replacing or recreating the CubridCluster while its

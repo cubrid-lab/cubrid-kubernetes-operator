@@ -1,0 +1,320 @@
+c-full-5-1 none 5s full h-0 caught done promo 7.9 cancel 0 voff None st1 2.3 acks {'h-0': 37, 'h-1': 43, 'h-2': 0} after {'h-0': 24, 'h-1': 2, 'h-2': 0} overlap 38.0 fr ['not-equal', '303'] nw None pbk None keys 78 differ 45 miss 0 ackmiss {'h-0': 45, 'h-1': 45, 'h-2': 45} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+c-iso-q-2 none quiet s-isolated h-0 caught done promo 8.7 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 27, 'h-1': 3, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 93 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+c-ms-q-2 none quiet m-s h-0 caught done promo 6.6 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 30, 'h-1': 0, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 92 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+i-p-q-2 ping quiet - h-0 caught done promo None cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 122, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 171 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+k-c-1 none quiet - h-0 caught done promo 6.7 cancel 0 voff None st1 None acks {'h-0': 26, 'h-1': 0, 'h-2': 0} after {'h-0': 0, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '7.0'] pbk None keys 43 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+k-p-down-5-2 ping 5s - h-0 caught done promo 7.9 cancel 0 voff -16.2 st1 5.9 acks {'h-0': 17, 'h-1': 0, 'h-2': 0} after {'h-0': 10, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '8.0'] pbk 0 keys 43 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+p-full-5-1 ping 5s full h-0 caught done promo None cancel 10 voff None st1 4.4 acks {'h-0': 0, 'h-1': 43, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 89 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+p-full-hz-2 ping 10hz full h-0 caught done promo 6.1 cancel 0 voff 2.0 st1 1.1 acks {'h-0': 36, 'h-1': 43, 'h-2': 0} after {'h-0': 25, 'h-1': 3, 'h-2': 0} overlap 37.9 fr ['not-equal', '303'] nw None pbk None keys 78 differ 46 miss 0 ackmiss {'h-0': 46, 'h-1': 46, 'h-2': 46} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-once-1 ping once full h-0 caught done promo None cancel 11 voff None st1 None acks {'h-0': 0, 'h-1': 43, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+p-full-q-3 ping quiet full h-0 caught done promo None cancel 10 voff None st1 None acks {'h-0': 0, 'h-1': 43, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '63'] nw None pbk None keys 89 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+p-full-q-4 ping quiet full h-0 caught done promo None cancel 10 voff None st1 None acks {'h-0': 0, 'h-1': 43, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 89 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+p-iso-5-2 ping 5s s-isolated h-0 caught done promo 8.4 cancel 0 voff None st1 3.1 acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 28, 'h-1': 2, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 92 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-ms-q-1 ping quiet m-s h-0 caught done promo 6.6 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 29, 'h-1': 1, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 92 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-peers-q-1 ping quiet peers h-0 caught done promo 8.7 cancel 0 voff None st1 None acks {'h-0': 36, 'h-1': 43, 'h-2': 0} after {'h-0': 25, 'h-1': 0, 'h-2': 0} overlap 34.6 fr ['not-equal', '303'] nw None pbk None keys 78 differ 43 miss 0 ackmiss {'h-0': 43, 'h-1': 43, 'h-2': 43} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+r-p-1 ping quiet - h-0 caught done promo None cancel 0 voff 1.7 st1 1.7 acks {'h-0': 0, 'h-1': 0, 'h-2': 0} after {'h-0': 0, 'h-1': 0, 'h-2': 0} overlap None fr None nw None pbk None keys None differ 0 miss 0 ackmiss {} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+t-full-5-3 tcp 5s full h-0 caught done promo None cancel 3 voff None st1 4.6 acks {'h-0': 0, 'h-1': 43, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 88 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+t-full-q-1 tcp quiet full h-0 caught done promo None cancel 5 voff None st1 None acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+c-full-q-3 none quiet full h-0 caught done promo 6.5 cancel 0 voff None st1 None acks {'h-0': 36, 'h-1': 44, 'h-2': 0} after {'h-0': 25, 'h-1': 0, 'h-2': 0} overlap 35.7 fr ['not-equal', '305'] nw None pbk None keys 77 differ 44 miss 0 ackmiss {'h-0': 44, 'h-1': 44, 'h-2': 44} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+c-iso-q-1 none quiet s-isolated h-0 caught done promo 8.7 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 30, 'h-1': 0, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 93 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+k-p-down-5-3 ping 5s - h-0 caught done promo 6.2 cancel 0 voff -17.0 st1 5.1 acks {'h-0': 20, 'h-1': 0, 'h-2': 0} after {'h-0': 9, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '7.0'] pbk 0 keys 46 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+k-p-down-q-2 ping quiet - h-0 caught done promo 155.5 cancel 36 voff 151.5 st1 None acks {'h-0': 18, 'h-1': 0, 'h-2': 0} after {'h-0': 9, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '5.5', 'after-status'] pbk 0 keys 44 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+k-p-up-1 ping quiet - h-0 caught done promo 6.6 cancel 0 voff None st1 None acks {'h-0': 26, 'h-1': 0, 'h-2': 0} after {'h-0': 0, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '7.5'] pbk None keys 42 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+k-t-down-5-1 tcp 5s - h-0 caught done promo None cancel 0 voff -16.9 st1 3.2 acks {'h-0': 16, 'h-1': 0, 'h-2': 0} after {'h-0': 10, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '1.0'] pbk 1 keys 43 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+m-p-q-2 ping quiet full h-1 caught done promo None cancel 8 voff None st1 None acks {'h-0': 37, 'h-1': 4, 'h-2': 0} after {'h-0': 24, 'h-1': 0, 'h-2': 0} overlap None fr ['not-equal', '303'] nw None pbk None keys 77 differ 4 miss 0 ackmiss {'h-0': 4, 'h-1': 4, 'h-2': 4} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-5-5 ping 5s full h-0 caught done promo 8.2 cancel 0 voff 2.1 st1 0.0 acks {'h-0': 37, 'h-1': 43, 'h-2': 0} after {'h-0': 24, 'h-1': 0, 'h-2': 0} overlap 36.0 fr ['not-equal', '303'] nw None pbk None keys 77 differ 43 miss 0 ackmiss {'h-0': 43, 'h-1': 43, 'h-2': 43} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-hz-1 ping 10hz full h-0 caught done promo 7.4 cancel 0 voff 2.1 st1 0.1 acks {'h-0': 37, 'h-1': 44, 'h-2': 0} after {'h-0': 24, 'h-1': 1, 'h-2': 0} overlap 37.4 fr ['not-equal', '303'] nw None pbk None keys 77 differ 45 miss 0 ackmiss {'h-0': 45, 'h-1': 45, 'h-2': 45} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-once-2 ping once full h-0 caught done promo None cancel 11 voff None st1 None acks {'h-0': 0, 'h-1': 43, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+p-full-q-1 ping quiet full h-0 caught done promo None cancel 11 voff None st1 None acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+p-full-q-2 ping quiet full h-0 caught done promo None cancel 10 voff None st1 None acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 91 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+p-iso-5-1 ping 5s s-isolated h-0 caught done promo 6.7 cancel 0 voff None st1 3.8 acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 29, 'h-1': 1, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 93 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-iso-q-1 ping quiet s-isolated h-0 caught done promo 6.5 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 29, 'h-1': 1, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 92 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+s-p-noicmp-1 ping quiet - h-0 NOT-CAUGHT done promo None cancel 0 voff None st1 None acks {} after {'h-0': 0, 'h-1': 0, 'h-2': 0} overlap None fr None nw None pbk None keys None differ 0 miss 0 ackmiss {} nowhere 0 never 0 final {'h-0': '-', 'h-1': '-', 'h-2': '-'}
+t-full-5-2 tcp 5s full h-0 caught done promo None cancel 4 voff None st1 0.0 acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 89 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+t-full-q-2 tcp quiet full h-0 caught done promo None cancel 5 voff None st1 None acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+i-p-5-1 ping 5s - h-0 caught done promo None cancel 0 voff 4.5 st1 2.5 acks {'h-0': 0, 'h-1': 123, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 171 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+i-p-5-2 ping 5s - h-0 caught done promo None cancel 0 voff 0.8 st1 4.8 acks {'h-0': 0, 'h-1': 139, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 192 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+i-p-hz-1 ping 10hz - h-0 caught done promo None cancel 0 voff -3.0 st1 0.5 acks {'h-0': 0, 'h-1': 126, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 178 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+i-p-q-1 ping quiet - h-0 caught done promo None cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 122, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 170 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+k-p-down-q-1 ping quiet - h-0 caught done promo 154.9 cancel 36 voff 151.8 st1 None acks {'h-0': 18, 'h-1': 0, 'h-2': 0} after {'h-0': 9, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '5.0', 'after-status'] pbk 0 keys 43 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+k-p-up-2 ping quiet - h-0 caught done promo 6.7 cancel 0 voff None st1 None acks {'h-0': 26, 'h-1': 0, 'h-2': 0} after {'h-0': 0, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '7.0'] pbk None keys 43 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+m-c-q-1 none quiet full h-1 caught done promo None cancel 0 voff None st1 None acks {'h-0': 36, 'h-1': 43, 'h-2': 0} after {'h-0': 25, 'h-1': 1, 'h-2': 0} overlap 35.9 fr ['not-equal', '303'] nw None pbk None keys 77 differ 44 miss 0 ackmiss {'h-0': 44, 'h-1': 44, 'h-2': 44} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+m-p-5-1 ping 5s full h-1 caught done promo None cancel 0 voff 2.4 st1 0.4 acks {'h-0': 37, 'h-1': 42, 'h-2': 0} after {'h-0': 24, 'h-1': 2, 'h-2': 0} overlap 37.8 fr ['not-equal', '303'] nw None pbk None keys 77 differ 44 miss 0 ackmiss {'h-0': 44, 'h-1': 44, 'h-2': 44} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+m-p-5-2 ping 5s full h-1 caught done promo None cancel 0 voff 4.2 st1 2.2 acks {'h-0': 37, 'h-1': 44, 'h-2': 0} after {'h-0': 24, 'h-1': 2, 'h-2': 0} overlap 38.2 fr ['not-equal', '303'] nw None pbk None keys 77 differ 46 miss 0 ackmiss {'h-0': 46, 'h-1': 46, 'h-2': 46} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-5-2 ping 5s full h-0 caught done promo 6.5 cancel 0 voff 3.4 st1 1.3 acks {'h-0': 0, 'h-1': 42, 'h-2': 0} after {'h-0': 20, 'h-1': 1, 'h-2': 0} overlap None fr ['not-equal', '303'] nw None pbk None keys 59 differ 20 miss 0 ackmiss {'h-0': 20, 'h-1': 20, 'h-2': 20} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-5-3 ping 5s full h-0 caught done promo 7.1 cancel 0 voff 3.3 st1 1.3 acks {'h-0': 37, 'h-1': 44, 'h-2': 0} after {'h-0': 24, 'h-1': 1, 'h-2': 0} overlap 37.6 fr ['not-equal', '303'] nw None pbk None keys 77 differ 45 miss 0 ackmiss {'h-0': 45, 'h-1': 45, 'h-2': 45} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-q-5 ping quiet full h-0 caught done promo None cancel 10 voff None st1 None acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+p-iso-q-2 ping quiet s-isolated h-0 caught done promo 6.6 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 29, 'h-1': 1, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 92 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-iso-q-3 ping quiet s-isolated h-0 caught done promo 7.6 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 45, 'h-2': 0} after {'h-0': 28, 'h-1': 2, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-ms-q-3 ping quiet m-s h-0 caught done promo 8.2 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 30, 'h-1': 0, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 92 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-peers-q-2 ping quiet peers h-0 caught done promo 8.5 cancel 0 voff None st1 None acks {'h-0': 36, 'h-1': 44, 'h-2': 0} after {'h-0': 25, 'h-1': 2, 'h-2': 0} overlap 37.6 fr ['not-equal', '305'] nw None pbk None keys 78 differ 46 miss 0 ackmiss {'h-0': 46, 'h-1': 46, 'h-2': 46} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+s-t-noicmp-1 tcp quiet - h-0 NOT-CAUGHT done promo None cancel 0 voff None st1 None acks {} after {'h-0': 0, 'h-1': 0, 'h-2': 0} overlap None fr None nw None pbk None keys None differ 0 miss 0 ackmiss {} nowhere 0 never 0 final {'h-0': '-', 'h-1': 'master', 'h-2': '-'}
+long-1 ping quiet - h-0 caught done promo 3427.7 cancel 832 voff 3423.0 st1 None acks {'h-0': 18, 'h-1': 0, 'h-2': 0} after {'h-0': 6, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '3429.4'] pbk 0 keys 35 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+i-t-5-1 tcp 5s - h-0 caught done promo None cancel 1 voff 28.3 st1 3.3 acks {'h-0': 0, 'h-1': 91, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 140 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+i-t-5-2 tcp 5s - h-0 caught done promo 33.9 cancel 1 voff 25.8 st1 0.7 acks {'h-0': 70, 'h-1': 2, 'h-2': 10} after {'h-0': 28, 'h-1': 0, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 130 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+i-t-5-3 tcp 5s - h-0 caught done promo 28.4 cancel 2 voff 20.4 st1 5.3 acks {'h-0': 76, 'h-1': 3, 'h-2': 0} after {'h-0': 29, 'h-1': 0, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 130 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+i-t-q-1 tcp quiet - h-0 caught done promo None cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 124, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 175 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+i-t-q-2 tcp quiet - h-0 caught done promo None cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 128, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 182 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+k-t-down-q-1 tcp quiet - h-0 caught done promo 315.7 cancel 68 voff None st1 None acks {'h-0': 0, 'h-1': 0, 'h-2': 0} after {'h-0': 6, 'h-1': 0, 'h-2': 0} overlap None fr None nw None pbk 0 keys 23 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+p-full-once05-1 ping once full h-0 caught done promo 6.0 cancel 0 voff 2.6 st1 None acks {'h-0': 35, 'h-1': 44, 'h-2': 0} after {'h-0': 25, 'h-1': 0, 'h-2': 0} overlap 35.3 fr ['not-equal', '303'] nw None pbk None keys 77 differ 44 miss 0 ackmiss {'h-0': 44, 'h-1': 43, 'h-2': 43} nowhere 0 never 1 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-once05-2 ping once full h-0 caught done promo 6.5 cancel 0 voff 2.6 st1 None acks {'h-0': 37, 'h-1': 43, 'h-2': 0} after {'h-0': 24, 'h-1': 2, 'h-2': 0} overlap 37.7 fr ['not-equal', '303'] nw None pbk None keys 77 differ 45 miss 0 ackmiss {'h-0': 45, 'h-1': 45, 'h-2': 45} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-once05-3 ping once full h-0 caught done promo 6.5 cancel 0 voff 2.6 st1 None acks {'h-0': 37, 'h-1': 44, 'h-2': 0} after {'h-0': 24, 'h-1': 1, 'h-2': 0} overlap 37.1 fr ['not-equal', '303'] nw None pbk None keys 77 differ 45 miss 0 ackmiss {'h-0': 45, 'h-1': 45, 'h-2': 45} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-once05-4 ping once full h-0 caught done promo 6.4 cancel 0 voff 2.6 st1 None acks {'h-0': 36, 'h-1': 44, 'h-2': 0} after {'h-0': 25, 'h-1': 0, 'h-2': 0} overlap 35.6 fr ['not-equal', '303'] nw None pbk None keys 77 differ 44 miss 0 ackmiss {'h-0': 44, 'h-1': 44, 'h-2': 44} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-once15-1 ping once full h-0 caught done promo 6.7 cancel 0 voff 3.6 st1 None acks {'h-0': 36, 'h-1': 44, 'h-2': 0} after {'h-0': 25, 'h-1': 1, 'h-2': 0} overlap 36.2 fr ['not-equal', '303'] nw None pbk None keys 77 differ 45 miss 0 ackmiss {'h-0': 45, 'h-1': 45, 'h-2': 45} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-once15-2 ping once full h-0 caught done promo None cancel 11 voff None st1 None acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+t-full-once05-1 tcp once full h-0 caught done promo None cancel 4 voff None st1 None acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 89 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+t-full-once05-2 tcp once full h-0 caught done promo None cancel 4 voff None st1 None acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+t-full-once05-3 tcp once full h-0 caught done promo None cancel 4 voff None st1 None acks {'h-0': 0, 'h-1': 43, 'h-2': 0} after {'h-0': 0, 'h-1': 29, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 88 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+c-full-5-2 none 5s full h-0 caught done promo 8.4 cancel 0 voff None st1 3.0 acks {'h-0': 36, 'h-1': 44, 'h-2': 0} after {'h-0': 25, 'h-1': 2, 'h-2': 0} overlap 37.5 fr ['not-equal', '303'] nw None pbk None keys 78 differ 46 miss 0 ackmiss {'h-0': 46, 'h-1': 46, 'h-2': 46} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+c-full-q-1 none quiet full h-0 caught done promo 8.6 cancel 0 voff None st1 None acks {'h-0': 36, 'h-1': 44, 'h-2': 0} after {'h-0': 25, 'h-1': 0, 'h-2': 0} overlap 35.5 fr ['not-equal', '303'] nw None pbk None keys 78 differ 44 miss 0 ackmiss {'h-0': 44, 'h-1': 44, 'h-2': 44} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+c-full-q-2 none quiet full h-0 caught done promo 6.4 cancel 0 voff None st1 None acks {'h-0': 36, 'h-1': 44, 'h-2': 0} after {'h-0': 25, 'h-1': 0, 'h-2': 0} overlap 35.5 fr ['not-equal', '303'] nw None pbk None keys 77 differ 44 miss 0 ackmiss {'h-0': 44, 'h-1': 44, 'h-2': 44} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+c-ms-q-1 none quiet m-s h-0 caught done promo 8.6 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 30, 'h-1': 0, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 93 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+k-c-2 none quiet - h-0 caught done promo 6.5 cancel 0 voff None st1 None acks {'h-0': 26, 'h-1': 0, 'h-2': 0} after {'h-0': 0, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '7.0'] pbk None keys 43 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+k-p-down-5-1 ping 5s - h-0 caught done promo 6.7 cancel 0 voff -24.4 st1 3.7 acks {'h-0': 19, 'h-1': 0, 'h-2': 0} after {'h-0': 10, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '7.0'] pbk 0 keys 46 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+k-p-down-q-3 ping quiet - h-0 caught done promo 154.8 cancel 36 voff 151.7 st1 None acks {'h-0': 21, 'h-1': 0, 'h-2': 0} after {'h-0': 10, 'h-1': 0, 'h-2': 0} overlap None fr None nw ['h-0', '5.0', 'after-status'] pbk 0 keys 48 differ 0 miss 0 ackmiss {'h-0': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': '-', 'h-2': 'slave'}
+m-p-q-1 ping quiet full h-1 caught done promo None cancel 8 voff None st1 None acks {'h-0': 36, 'h-1': 6, 'h-2': 0} after {'h-0': 25, 'h-1': 0, 'h-2': 0} overlap None fr ['not-equal', '303'] nw None pbk None keys 77 differ 6 miss 0 ackmiss {'h-0': 6, 'h-1': 6, 'h-2': 6} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-5-4 ping 5s full h-0 caught done promo 6.1 cancel 0 voff 3.0 st1 1.0 acks {'h-0': 35, 'h-1': 44, 'h-2': 0} after {'h-0': 25, 'h-1': 0, 'h-2': 0} overlap 35.3 fr ['not-equal', '303'] nw None pbk None keys 76 differ 44 miss 0 ackmiss {'h-0': 44, 'h-1': 44, 'h-2': 44} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-full-once-3 ping once full h-0 caught done promo None cancel 11 voff None st1 None acks {'h-0': 0, 'h-1': 44, 'h-2': 0} after {'h-0': 0, 'h-1': 31, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 91 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+p-ms-5-1 ping 5s m-s h-0 caught done promo 6.2 cancel 0 voff None st1 0.2 acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 29, 'h-1': 0, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 91 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-ms-5-2 ping 5s m-s h-0 caught done promo 8.5 cancel 0 voff None st1 4.9 acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 27, 'h-1': 3, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 92 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+p-ms-q-2 ping quiet m-s h-0 caught done promo 6.6 cancel 0 voff None st1 None acks {'h-0': 0, 'h-1': 46, 'h-2': 0} after {'h-0': 29, 'h-1': 1, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 92 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+r-p-2 ping quiet - h-0 caught done promo None cancel 0 voff 0.7 st1 0.7 acks {'h-0': 0, 'h-1': 0, 'h-2': 0} after {'h-0': 0, 'h-1': 0, 'h-2': 0} overlap None fr None nw None pbk None keys None differ 0 miss 0 ackmiss {} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+s-p-down-1 ping quiet - h-0 NOT-CAUGHT done promo None cancel 0 voff None st1 None acks {} after {'h-0': 0, 'h-1': 0, 'h-2': 0} overlap None fr None nw None pbk None keys None differ 0 miss 0 ackmiss {} nowhere 0 never 0 final {'h-0': '-', 'h-1': '-', 'h-2': '-'}
+t-full-5-1 tcp 5s full h-0 caught done promo None cancel 3 voff None st1 2.9 acks {'h-0': 0, 'h-1': 43, 'h-2': 0} after {'h-0': 0, 'h-1': 30, 'h-2': 0} overlap None fr ['equal', '61'] nw None pbk None keys 90 differ 0 miss 0 ackmiss {'h-0': 0, 'h-1': 0, 'h-2': 0} nowhere 0 never 0 final {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+trials 83; done 83; other []
+one-minute load at trial starts and ends: median 11.4, range 3.6 to 54.2
+acknowledged markers 7714, without a key 0, committed then -199/-111 6, csql outputs with ERROR CODE kept 26542
+case: trials, caught up, cut member promoted (master.err), ping-cancelled trials, cut member acknowledged in the fault, both acknowledged, old master stood down, trials with differing keys, trials with acked markers missing on a member
+('coldstart', 'ping', 'quiet', '-', 'h-0', False) 2 caught 0 promoted 0 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('coldstart', 'tcp', 'quiet', '-', 'h-0', False) 1 caught 0 promoted 0 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('cut', 'none', '5s', 'full', 'h-0', False) 2 caught 2 promoted 2 pingcancel 0 validityoff 0 victim-acks 2 both 2 stooddown 2 differ 2 ackmiss 2
+('cut', 'none', 'quiet', 'full', 'h-0', False) 3 caught 3 promoted 3 pingcancel 0 validityoff 0 victim-acks 3 both 3 stooddown 3 differ 3 ackmiss 3
+('cut', 'none', 'quiet', 'full', 'h-1', False) 1 caught 1 promoted 0 pingcancel 0 validityoff 0 victim-acks 1 both 1 stooddown 1 differ 1 ackmiss 1
+('cut', 'none', 'quiet', 'm-s', 'h-0', False) 2 caught 2 promoted 2 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 2 differ 0 ackmiss 0
+('cut', 'none', 'quiet', 's-isolated', 'h-0', False) 2 caught 2 promoted 2 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 2 differ 0 ackmiss 0
+('cut', 'ping', '10hz', 'full', 'h-0', False) 2 caught 2 promoted 2 pingcancel 0 validityoff 2 victim-acks 2 both 2 stooddown 2 differ 2 ackmiss 2
+('cut', 'ping', '5s', 'full', 'h-0', False) 5 caught 5 promoted 4 pingcancel 1 validityoff 4 victim-acks 3 both 3 stooddown 4 differ 4 ackmiss 4
+('cut', 'ping', '5s', 'full', 'h-1', False) 2 caught 2 promoted 0 pingcancel 0 validityoff 2 victim-acks 2 both 2 stooddown 2 differ 2 ackmiss 2
+('cut', 'ping', '5s', 'm-s', 'h-0', False) 2 caught 2 promoted 2 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 2 differ 0 ackmiss 0
+('cut', 'ping', '5s', 's-isolated', 'h-0', False) 2 caught 2 promoted 2 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 2 differ 0 ackmiss 0
+('cut', 'ping', 'once', 'full', 'h-0', False) 9 caught 9 promoted 5 pingcancel 4 validityoff 5 victim-acks 5 both 5 stooddown 5 differ 5 ackmiss 5
+('cut', 'ping', 'quiet', 'full', 'h-0', False) 5 caught 5 promoted 0 pingcancel 5 validityoff 0 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('cut', 'ping', 'quiet', 'full', 'h-1', False) 2 caught 2 promoted 0 pingcancel 2 validityoff 0 victim-acks 2 both 0 stooddown 2 differ 2 ackmiss 2
+('cut', 'ping', 'quiet', 'm-s', 'h-0', False) 3 caught 3 promoted 3 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 3 differ 0 ackmiss 0
+('cut', 'ping', 'quiet', 'peers', 'h-0', False) 2 caught 2 promoted 2 pingcancel 0 validityoff 0 victim-acks 2 both 2 stooddown 2 differ 2 ackmiss 2
+('cut', 'ping', 'quiet', 's-isolated', 'h-0', False) 3 caught 3 promoted 3 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 3 differ 0 ackmiss 0
+('cut', 'tcp', '5s', 'full', 'h-0', False) 3 caught 3 promoted 0 pingcancel 3 validityoff 0 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('cut', 'tcp', 'once', 'full', 'h-0', False) 3 caught 3 promoted 0 pingcancel 3 validityoff 0 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('cut', 'tcp', 'quiet', 'full', 'h-0', False) 2 caught 2 promoted 0 pingcancel 2 validityoff 0 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('idle', 'ping', '10hz', '-', 'h-0', False) 1 caught 1 promoted 0 pingcancel 0 validityoff 1 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('idle', 'ping', '5s', '-', 'h-0', False) 2 caught 2 promoted 0 pingcancel 0 validityoff 2 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('idle', 'ping', 'quiet', '-', 'h-0', False) 2 caught 2 promoted 0 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('idle', 'tcp', '5s', '-', 'h-0', False) 3 caught 3 promoted 2 pingcancel 3 validityoff 3 victim-acks 2 both 0 stooddown 2 differ 0 ackmiss 0
+('idle', 'tcp', 'quiet', '-', 'h-0', False) 2 caught 2 promoted 0 pingcancel 0 validityoff 0 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('kill', 'none', 'quiet', '-', 'h-0', False) 2 caught 2 promoted 2 pingcancel 0 validityoff 0 victim-acks 2 both 0 stooddown 0 differ 0 ackmiss 0
+('kill', 'ping', '5s', '-', 'h-0', True) 3 caught 3 promoted 3 pingcancel 0 validityoff 3 victim-acks 3 both 0 stooddown 0 differ 0 ackmiss 0
+('kill', 'ping', 'quiet', '-', 'h-0', False) 2 caught 2 promoted 2 pingcancel 0 validityoff 0 victim-acks 2 both 0 stooddown 0 differ 0 ackmiss 0
+('kill', 'ping', 'quiet', '-', 'h-0', True) 4 caught 4 promoted 4 pingcancel 4 validityoff 4 victim-acks 4 both 0 stooddown 0 differ 0 ackmiss 0
+('kill', 'tcp', '5s', '-', 'h-0', True) 1 caught 1 promoted 0 pingcancel 0 validityoff 1 victim-acks 1 both 0 stooddown 0 differ 0 ackmiss 0
+('kill', 'tcp', 'quiet', '-', 'h-0', True) 1 caught 1 promoted 1 pingcancel 1 validityoff 0 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+('restart', 'ping', 'quiet', '-', 'h-0', False) 2 caught 2 promoted 0 pingcancel 0 validityoff 2 victim-acks 0 both 0 stooddown 0 differ 0 ackmiss 0
+
+all cuts of h-0 with the parameter, by the time of the first status call after the cut:
+  p-full-5-5 5s first call 0.0 one call ended None ping check off at 2.1 promoted at 8.2 h-0 acks 37 span 36.0
+  p-full-hz-1 10hz first call 0.1 one call ended None ping check off at 2.1 promoted at 7.4 h-0 acks 37 span 37.4
+  p-full-5-4 5s first call 1.0 one call ended None ping check off at 3.0 promoted at 6.1 h-0 acks 35 span 35.3
+  p-full-hz-2 10hz first call 1.1 one call ended None ping check off at 2.0 promoted at 6.1 h-0 acks 36 span 37.9
+  p-full-5-2 5s first call 1.3 one call ended None ping check off at 3.4 promoted at 6.5 h-0 acks 0 span None
+  p-full-5-3 5s first call 1.3 one call ended None ping check off at 3.3 promoted at 7.1 h-0 acks 37 span 37.6
+  p-full-once05-1 once first call None one call ended 1.6 ping check off at 2.6 promoted at 6.0 h-0 acks 35 span 35.3
+  p-full-once05-2 once first call None one call ended 1.6 ping check off at 2.6 promoted at 6.5 h-0 acks 37 span 37.7
+  p-full-once05-3 once first call None one call ended 1.6 ping check off at 2.6 promoted at 6.5 h-0 acks 37 span 37.1
+  p-full-once05-4 once first call None one call ended 1.6 ping check off at 2.6 promoted at 6.4 h-0 acks 36 span 35.6
+  p-full-once15-1 once first call None one call ended 2.6 ping check off at 3.6 promoted at 6.7 h-0 acks 36 span 36.2
+  p-full-once15-2 once first call None one call ended 2.6 ping check off at None promoted at None h-0 acks 0 span None
+  p-full-once-1 once first call None one call ended 3.1 ping check off at None promoted at None h-0 acks 0 span None
+  p-full-once-2 once first call None one call ended 3.1 ping check off at None promoted at None h-0 acks 0 span None
+  p-full-once-3 once first call None one call ended 3.2 ping check off at None promoted at None h-0 acks 0 span None
+  p-full-5-1 5s first call 4.4 one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  p-full-q-3 quiet first call None one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  p-full-q-4 quiet first call None one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  p-full-q-1 quiet first call None one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  p-full-q-2 quiet first call None one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  p-full-q-5 quiet first call None one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  t-full-5-2 5s first call 0.0 one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  t-full-5-1 5s first call 2.9 one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  t-full-5-3 5s first call 4.6 one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  t-full-once05-1 once first call None one call ended 5.6 ping check off at None promoted at None h-0 acks 0 span None
+  t-full-once05-2 once first call None one call ended 5.6 ping check off at None promoted at None h-0 acks 0 span None
+  t-full-once05-3 once first call None one call ended 5.6 ping check off at None promoted at None h-0 acks 0 span None
+  t-full-q-1 quiet first call None one call ended None ping check off at None promoted at None h-0 acks 0 span None
+  t-full-q-2 quiet first call None one call ended None ping check off at None promoted at None h-0 acks 0 span None
+
+divergence, caught-up trials, last read:
+  c-full-5-1 caught acks {'h-0': 37, 'h-1': 43, 'h-2': 0} keys 78 differ 45 range 18 62 on no member 0 missing {'h-0': 45, 'h-1': 45, 'h-2': 45} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-hz-2 caught acks {'h-0': 36, 'h-1': 43, 'h-2': 0} keys 78 differ 46 range 18 63 on no member 0 missing {'h-0': 46, 'h-1': 46, 'h-2': 46} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-peers-q-1 caught acks {'h-0': 36, 'h-1': 43, 'h-2': 0} keys 78 differ 43 range 18 60 on no member 0 missing {'h-0': 43, 'h-1': 43, 'h-2': 43} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  c-full-q-3 caught acks {'h-0': 36, 'h-1': 44, 'h-2': 0} keys 77 differ 44 range 17 60 on no member 0 missing {'h-0': 44, 'h-1': 44, 'h-2': 44} changed by waiting 0 final read ['not-equal', '305'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  m-p-q-2 caught acks {'h-0': 37, 'h-1': 4, 'h-2': 0} keys 77 differ 4 range 17 20 on no member 0 missing {'h-0': 4, 'h-1': 4, 'h-2': 4} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-5-5 caught acks {'h-0': 37, 'h-1': 43, 'h-2': 0} keys 77 differ 43 range 17 59 on no member 0 missing {'h-0': 43, 'h-1': 43, 'h-2': 43} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-hz-1 caught acks {'h-0': 37, 'h-1': 44, 'h-2': 0} keys 77 differ 45 range 17 61 on no member 0 missing {'h-0': 45, 'h-1': 45, 'h-2': 45} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  m-c-q-1 caught acks {'h-0': 36, 'h-1': 43, 'h-2': 0} keys 77 differ 44 range 17 60 on no member 0 missing {'h-0': 44, 'h-1': 44, 'h-2': 44} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  m-p-5-1 caught acks {'h-0': 37, 'h-1': 42, 'h-2': 0} keys 77 differ 44 range 17 60 on no member 0 missing {'h-0': 44, 'h-1': 44, 'h-2': 44} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  m-p-5-2 caught acks {'h-0': 37, 'h-1': 44, 'h-2': 0} keys 77 differ 46 range 17 62 on no member 0 missing {'h-0': 46, 'h-1': 46, 'h-2': 46} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-5-2 caught acks {'h-0': 0, 'h-1': 42, 'h-2': 0} keys 59 differ 20 range 17 36 on no member 0 missing {'h-0': 20, 'h-1': 20, 'h-2': 20} changed by waiting 23 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-5-3 caught acks {'h-0': 37, 'h-1': 44, 'h-2': 0} keys 77 differ 45 range 17 61 on no member 0 missing {'h-0': 45, 'h-1': 45, 'h-2': 45} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-peers-q-2 caught acks {'h-0': 36, 'h-1': 44, 'h-2': 0} keys 78 differ 46 range 18 63 on no member 0 missing {'h-0': 46, 'h-1': 46, 'h-2': 46} changed by waiting 0 final read ['not-equal', '305'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-once05-1 caught acks {'h-0': 35, 'h-1': 44, 'h-2': 0} keys 77 differ 44 range 17 60 on no member 0 missing {'h-0': 44, 'h-1': 43, 'h-2': 43} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-once05-2 caught acks {'h-0': 37, 'h-1': 43, 'h-2': 0} keys 77 differ 45 range 17 61 on no member 0 missing {'h-0': 45, 'h-1': 45, 'h-2': 45} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-once05-3 caught acks {'h-0': 37, 'h-1': 44, 'h-2': 0} keys 77 differ 45 range 17 61 on no member 0 missing {'h-0': 45, 'h-1': 45, 'h-2': 45} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-once05-4 caught acks {'h-0': 36, 'h-1': 44, 'h-2': 0} keys 77 differ 44 range 17 60 on no member 0 missing {'h-0': 44, 'h-1': 44, 'h-2': 44} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-once15-1 caught acks {'h-0': 36, 'h-1': 44, 'h-2': 0} keys 77 differ 45 range 17 61 on no member 0 missing {'h-0': 45, 'h-1': 45, 'h-2': 45} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  c-full-5-2 caught acks {'h-0': 36, 'h-1': 44, 'h-2': 0} keys 78 differ 46 range 18 63 on no member 0 missing {'h-0': 46, 'h-1': 46, 'h-2': 46} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  c-full-q-1 caught acks {'h-0': 36, 'h-1': 44, 'h-2': 0} keys 78 differ 44 range 18 61 on no member 0 missing {'h-0': 44, 'h-1': 44, 'h-2': 44} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  c-full-q-2 caught acks {'h-0': 36, 'h-1': 44, 'h-2': 0} keys 77 differ 44 range 17 60 on no member 0 missing {'h-0': 44, 'h-1': 44, 'h-2': 44} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  m-p-q-1 caught acks {'h-0': 36, 'h-1': 6, 'h-2': 0} keys 77 differ 6 range 17 22 on no member 0 missing {'h-0': 6, 'h-1': 6, 'h-2': 6} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  p-full-5-4 caught acks {'h-0': 35, 'h-1': 44, 'h-2': 0} keys 76 differ 44 range 17 60 on no member 0 missing {'h-0': 44, 'h-1': 44, 'h-2': 44} changed by waiting 0 final read ['not-equal', '303'] ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+
+kills:
+  k-c-1 none quiet target up promoted 6.7 ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} new writer ['h-0', '7.0'] no writer False promotions before the kill None stand-downs before None
+  k-p-down-5-2 ping 5s target down promoted 7.9 ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} new writer ['h-0', '8.0'] no writer False promotions before the kill 0 stand-downs before 0
+  k-p-down-5-3 ping 5s target down promoted 6.2 ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} new writer ['h-0', '7.0'] no writer False promotions before the kill 0 stand-downs before 0
+  k-p-down-q-2 ping quiet target down promoted 155.5 ping cancels {'h-0': 36, 'h-1': 0, 'h-2': 0} new writer ['h-0', '5.5', 'after-status'] no writer True promotions before the kill 0 stand-downs before 0
+  k-p-up-1 ping quiet target up promoted 6.6 ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} new writer ['h-0', '7.5'] no writer False promotions before the kill None stand-downs before None
+  k-t-down-5-1 tcp 5s target down promoted 6.2 ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} new writer ['h-0', '1.0'] no writer False promotions before the kill 1 stand-downs before 1
+  k-p-down-q-1 ping quiet target down promoted 154.9 ping cancels {'h-0': 36, 'h-1': 0, 'h-2': 0} new writer ['h-0', '5.0', 'after-status'] no writer True promotions before the kill 0 stand-downs before 0
+  k-p-up-2 ping quiet target up promoted 6.7 ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} new writer ['h-0', '7.0'] no writer False promotions before the kill None stand-downs before None
+  long-1 ping quiet target down promoted 3427.7 ping cancels {'h-0': 832, 'h-1': 0, 'h-2': 0} new writer ['h-0', '3429.4'] no writer False promotions before the kill 0 stand-downs before 0
+  k-t-down-q-1 tcp quiet target down promoted 315.7 ping cancels {'h-0': 52, 'h-1': 0, 'h-2': 16} new writer None no writer True promotions before the kill 0 stand-downs before 0
+  k-c-2 none quiet target up promoted 6.5 ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} new writer ['h-0', '7.0'] no writer False promotions before the kill None stand-downs before None
+  k-p-down-5-1 ping 5s target down promoted 6.7 ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} new writer ['h-0', '7.0'] no writer False promotions before the kill 0 stand-downs before 0
+  k-p-down-q-3 ping quiet target down promoted 154.8 ping cancels {'h-0': 36, 'h-1': 0, 'h-2': 0} new writer ['h-0', '5.0', 'after-status'] no writer True promotions before the kill 0 stand-downs before 0
+
+target down with no other fault:
+  i-p-q-2 ping quiet promotions {'h-0': 0, 'h-1': 0, 'h-2': 0} failbacks {'h-0': 0, 'h-1': 0, 'h-2': 0} acks {'h-0': 0, 'h-1': 122, 'h-2': 0} validity off {'h-0': 0, 'h-1': 0, 'h-2': 0} ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} differ 0 ended {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  i-p-5-1 ping 5s promotions {'h-0': 0, 'h-1': 0, 'h-2': 0} failbacks {'h-0': 0, 'h-1': 0, 'h-2': 0} acks {'h-0': 0, 'h-1': 123, 'h-2': 0} validity off {'h-0': 1, 'h-1': 1, 'h-2': 1} ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} differ 0 ended {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  i-p-5-2 ping 5s promotions {'h-0': 0, 'h-1': 0, 'h-2': 0} failbacks {'h-0': 0, 'h-1': 0, 'h-2': 0} acks {'h-0': 0, 'h-1': 139, 'h-2': 0} validity off {'h-0': 1, 'h-1': 1, 'h-2': 1} ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} differ 0 ended {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  i-p-hz-1 ping 10hz promotions {'h-0': 0, 'h-1': 0, 'h-2': 0} failbacks {'h-0': 0, 'h-1': 0, 'h-2': 0} acks {'h-0': 0, 'h-1': 126, 'h-2': 0} validity off {'h-0': 1, 'h-1': 1, 'h-2': 1} ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} differ 0 ended {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  i-p-q-1 ping quiet promotions {'h-0': 0, 'h-1': 0, 'h-2': 0} failbacks {'h-0': 0, 'h-1': 0, 'h-2': 0} acks {'h-0': 0, 'h-1': 122, 'h-2': 0} validity off {'h-0': 0, 'h-1': 0, 'h-2': 0} ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} differ 0 ended {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  i-t-5-1 tcp 5s promotions {'h-0': 0, 'h-1': 0, 'h-2': 1} failbacks {'h-0': 0, 'h-1': 0, 'h-2': 1} acks {'h-0': 0, 'h-1': 91, 'h-2': 0} validity off {'h-0': 1, 'h-1': 1, 'h-2': 1} ping cancels {'h-0': 1, 'h-1': 0, 'h-2': 0} differ 0 ended {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  i-t-5-2 tcp 5s promotions {'h-0': 1, 'h-1': 0, 'h-2': 1} failbacks {'h-0': 0, 'h-1': 1, 'h-2': 1} acks {'h-0': 70, 'h-1': 2, 'h-2': 10} validity off {'h-0': 1, 'h-1': 1, 'h-2': 1} ping cancels {'h-0': 1, 'h-1': 0, 'h-2': 0} differ 0 ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  i-t-5-3 tcp 5s promotions {'h-0': 1, 'h-1': 0, 'h-2': 0} failbacks {'h-0': 0, 'h-1': 1, 'h-2': 0} acks {'h-0': 76, 'h-1': 3, 'h-2': 0} validity off {'h-0': 1, 'h-1': 1, 'h-2': 1} ping cancels {'h-0': 1, 'h-1': 0, 'h-2': 1} differ 0 ended {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  i-t-q-1 tcp quiet promotions {'h-0': 0, 'h-1': 0, 'h-2': 0} failbacks {'h-0': 0, 'h-1': 0, 'h-2': 0} acks {'h-0': 0, 'h-1': 124, 'h-2': 0} validity off {'h-0': 0, 'h-1': 0, 'h-2': 0} ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} differ 0 ended {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  i-t-q-2 tcp quiet promotions {'h-0': 0, 'h-1': 0, 'h-2': 0} failbacks {'h-0': 0, 'h-1': 0, 'h-2': 0} acks {'h-0': 0, 'h-1': 128, 'h-2': 0} validity off {'h-0': 0, 'h-1': 0, 'h-2': 0} ping cancels {'h-0': 0, 'h-1': 0, 'h-2': 0} differ 0 ended {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+
+starts with the target unavailable:
+  r-p-1 ping None restart-with-target-down 1.1 @ cubrid heartbeat start ++ cubrid heartbeat start: fail rc=1
+  r-p-1 ping None restart-with-target-up ++ HA processes start: success ++ cubrid heartbeat start: success rc=0
+  s-p-noicmp-1 ping no-icmp start t ++ cubrid master start: success ++ cubrid heartbeat start: fail rc=1
+  s-t-noicmp-1 tcp no-icmp start ++ HA processes start: success ++ cubrid heartbeat start: success rc=0
+  r-p-2 ping None restart-with-target-down 1.1 @ cubrid heartbeat start ++ cubrid heartbeat start: fail rc=1
+  r-p-2 ping None restart-with-target-up ++ HA processes start: success ++ cubrid heartbeat start: success rc=0
+  s-p-down-1 ping down start t ++ cubrid master start: success ++ cubrid heartbeat start: fail rc=1
+
+caught up 80 of 80 reading to fault: median 1.4 max 43.78
+never acknowledged rows on a member [('p-full-once05-1', 1)]
+acknowledged on no member []
+-199/-111 [('p-full-once-2', 1), ('i-p-5-2', 2), ('m-p-5-2', 1), ('c-ms-q-1', 1), ('p-ms-q-2', 1)]
+write results Counter({'disabled': 21695, 'ack': 7708, 'other': 4841, 'ack-199-111': 6})
+
+acknowledged writes not on the member that ended as master:
+  922 writes in 23 of 78 trials with final tables, of 7684 acknowledged in those; each 4 to 46, median 44
+  no single final master: []
+  all acknowledged after the fault began: True earliest 0.0 s
+  by who acknowledged: Counter({'h-1': 922}) by result: Counter({'ack': 921, 'ack-199-111': 1})
+  held by: Counter({'h-1+h-2': 778, 'h-1': 144})
+  held only by the old master, by case: Counter({('h-1', 'ping', '5s'): 90, ('h-1', 'none', 'quiet'): 44, ('h-1', 'ping', 'quiet'): 10})
+  trials with such writes on h-1 alone: ['m-c-q-1', 'm-p-5-1', 'm-p-5-2', 'm-p-q-1', 'm-p-q-2']
+  every member's own acknowledged writes checked on it, trials: 65 of 78 (the killed member has no table)
+
+the score pass against the status call, full cuts of h-0 with a parameter (seconds from the cut):
+  p-full-hz-2        ping  call ended  0.97 pass 2.98 check off at 2.0 promoted 6.1
+  p-full-5-5         ping  call ended  1.09 pass 5.12 check off at 2.1 promoted 8.2
+  p-full-hz-1        ping  call ended   1.1 pass 4.25 check off at 2.1 promoted 7.4
+  p-full-once05-1    ping  call ended   1.6 pass 2.91 check off at 2.6 promoted 6.0
+  p-full-once05-2    ping  call ended   1.6 pass 3.39 check off at 2.6 promoted 6.5
+  p-full-once05-3    ping  call ended   1.6 pass 3.38 check off at 2.6 promoted 6.5
+  p-full-once05-4    ping  call ended   1.6 pass 3.31 check off at 2.6 promoted 6.4
+  p-full-5-4         ping  call ended  1.99 pass 2.99 check off at 3.0 promoted 6.1
+  p-full-5-3         ping  call ended  2.31 pass 4.0 check off at 3.3 promoted 7.1
+  p-full-5-2         ping  call ended  2.37 pass 3.38 check off at 3.4 promoted 6.5
+  p-full-once15-1    ping  call ended   2.6 pass 3.59 check off at 3.6 promoted 6.7
+  p-full-once15-2    ping  call ended   2.6 pass 2.58 check off at None held
+  p-full-once-1      ping  call ended   3.1 pass 3.09 check off at None held
+  p-full-once-2      ping  call ended   3.1 pass 3.11 check off at None held
+  p-full-once-3      ping  call ended   3.2 pass 3.17 check off at None held
+  t-full-5-2         tcp   call ended  5.08 pass 5.08 check off at None held
+  p-full-5-1         ping  call ended  5.45 pass 5.45 check off at None held
+  t-full-once05-1    tcp   call ended   5.6 pass 5.6 check off at None held
+  t-full-once05-2    tcp   call ended   5.6 pass 5.57 check off at None held
+  t-full-once05-3    tcp   call ended   5.6 pass 5.57 check off at None held
+  t-full-5-1         tcp   call ended  7.96 pass 7.96 check off at None held
+  t-full-5-3         tcp   call ended  9.62 pass 9.62 check off at None held
+  check went off: 11 with the call ended before the pass: 11 | held: 11 largest gap between pass and call end 0.03000000000000025
+  no status call on h-0: pass at 2.44 to 5.61 s, 22 trials, 11 at 4.7 s or later
+
+the two delay values at the catch-up reading (harness.py stored the first, for copying):
+  long-1 h-0: applying 1, Final LSA ('150', '7424'), copied EOF ('151', '10888')
+  long-1 h-2: applying 1, Final LSA ('150', '8816'), copied EOF ('151', '10888')
+  160 readings: [(('copying 0', 'applying 0', 'Final LSA at the copied EOF'), 118), (('copying 0', 'applying 0', 'behind, same page'), 40), (('copying 0', 'applying 1', 'behind, earlier page'), 2)]
+  forming a cluster, h-0 reading 1: {'Copying Active Log': '0', 'Applying Copied Log': '2'}, table: n 1, ERROR: before ' ORDER BY id' Unknown class "dba.marks".
+  forming a cluster, h-0 reading 2: {'Copying Active Log': '0', 'Applying Copied Log': '0'}, table: # read 1793958989.789 to 1793958990.175 
+  forming a cluster, h-0 reading 3: {'Copying Active Log': '0', 'Applying Copied Log': '0'}, table: 1 rows
+  forming a cluster, h-2 reading 1: {'Copying Active Log': '0', 'Applying Copied Log': '2'}, table: n 1, ERROR: before ' ORDER BY id' Unknown class "dba.marks".
+  forming a cluster, h-2 reading 2: {'Copying Active Log': '0', 'Applying Copied Log': '1'}, table: # read 1793958989.790 to 1793958991.259 
+  forming a cluster, h-2 reading 3: {'Copying Active Log': '0', 'Applying Copied Log': '0'}, table: 1 rows
+
+results of every write, by code:
+  34250 [('disabled', 21695), ('ack', 7708), ('other:-353', 4584), ('other:-191', 137), ('other:-670', 118), ('ack-199-111', 6), ('other:-199', 1), ('other:-671', 1)]
+
+client writes refused with -670:
+  118 in 22 trials, by member Counter({'h-0': 118}), at +70.2 to +75.7 s from the fault, per trial [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6]
+  trials where they were consecutive writes: 22
+  divergent trials without one: ['p-full-5-2'] ; with one and not divergent: []
+  trials with -670 in applier logs: 23
+
+status call length, ms, median and longest, with the target up (before the fault) and down:
+  i-p-q-2 ping quiet up (30.0, 45, 110) down (None, None, 0)
+  k-t-down-5-1 tcp 5s up (31.0, 5049, 130) down (5026, 10029, 9)
+  i-p-5-1 ping 5s up (30.0, 77, 112) down (1030.5, 1122, 60)
+  i-p-5-2 ping 5s up (50, 1060, 115) down (1041, 2599, 69)
+  i-p-hz-1 ping 10hz up (38.0, 1937, 176) down (1028, 1130, 377)
+  i-p-q-1 ping quiet up (29, 57, 107) down (None, None, 0)
+  i-t-5-1 tcp 5s up (27.0, 57, 114) down (3094.0, 10033, 44)
+  i-t-5-2 tcp 5s up (51.5, 361, 118) down (3122, 20055, 47)
+  i-t-5-3 tcp 5s up (26, 5875, 117) down (3093, 20027, 41)
+  i-t-q-1 tcp quiet up (27, 72, 111) down (None, None, 0)
+  i-t-q-2 tcp quiet up (28.0, 1148, 108) down (None, None, 0)
+  per-trial medians: {'target up': (26, 51.5), 'target down, ping': (1028, 1041), 'longest, target down, ping': (1038, 2599), 'target down, tcp': (3093, 5026), 'longest, target down, tcp': (10029, 20055)}
+
+times from the server modes:
+  heartbeat-only faults: h-0 active 0.7 to 4.2 s after the fault ended
+  full cuts, h-0 promoted: active 8.8 to 10.5 s after the cut, and once 54.9 s
+  promotion after the target came back: [('k-t-down-q-1', 4.1)]
+
+writes between the catch-up reading and the fault:
+  23 of 80 trials: Counter({'kill': 13, 'idle': 10})
+  idle: writes on 1.13 to 9.75 s before, acknowledged after the reading, most 9
+  kill: writes on 0.07 to 0.1 s before, acknowledged after the reading, most 1
+  cuts with writes on before the cut: []
+
+the -199/-111 rows, on which members in the last read:
+  p-full-once-2 h-1 key 35: ['h-0', 'h-1', 'h-2']
+  i-p-5-2 h-1 key 24: ['h-0', 'h-1', 'h-2']
+  i-p-5-2 h-1 key 111: ['h-0', 'h-1', 'h-2']
+  m-p-5-2 h-1 key 27: ['h-1']
+  c-ms-q-1 h-0 key 88: ['h-0', 'h-1', 'h-2']
+  p-ms-q-2 h-0 key 67: ['h-0', 'h-1', 'h-2']
+
+trials at once, and load:
+  most clusters at once: 6 at 11:23:02Z
+  p-full-q-3: load 28.72 at start, 54.24 at end; 4 of 4 siblings have the same promotion and overlap
+  p-full-q-4: load 52.22 at start, 18.42 at end; 4 of 4 siblings have the same promotion and overlap
+  c-full-q-3: load 9.71 at start, 50.36 at end; 2 of 2 siblings have the same promotion and overlap
+  p-full-5-5: load 50.25 at start, 17.43 at end; 2 of 4 siblings have the same promotion and overlap
+  i-p-5-2: load 49.19 at start, 20.26 at end; 1 of 1 siblings have the same promotion and overlap
+  p-peers-q-2: load 12.2 at start, 47.9 at end; 1 of 1 siblings have the same promotion and overlap
+  p-full-5-4: load 43.67 at start, 13.06 at end; 2 of 4 siblings have the same promotion and overlap
+  p-full-once-3: load 13.56 at start, 43.99 at end; 2 of 2 siblings have the same promotion and overlap
+  load at the moment of a cut is not recorded
+  additions on lane m, not shuffled: 15

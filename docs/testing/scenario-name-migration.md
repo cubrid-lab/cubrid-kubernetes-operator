@@ -20,13 +20,27 @@ How the five results and the filtered and unfiltered lanes are kept apart today 
 
 A renamed key must keep every one of these outcomes for the same input.
 
-## Contract families: candidate readable names
+## The scenario registry
 
-These are **proposals for review**, not active selectors or evidence keys. The contract headings below do not mean every case is implemented. The current S-number is recorded only to locate older documents and artifacts.
+`test/evidence/registry.go` is the one source of scenario identity. It holds, for each contract scenario, a family with its descriptive key, its description and its contract section, and, for each test that records a result, the canonical key, a readable name, its evidence level, its legacy names and the lanes that require it. The readable text of a report comes from it, and the provisional table of [#710](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/710) is gone.
 
-**How keys stay unique.** A concrete result key is `[installed-]<family key>[-<variant>]`. Every result at the VM-lab level (the installed Operator on the lab) starts with `installed-`; no Kind result key does. The same contract variant at two evidence levels therefore gets two keys and never one shared result. Families used only on the lab (S04, S11, S12, LAB00, LAB01) carry the prefix in the family key itself. Each concrete key identifies one test. Whether a contract variant is registered at runtime is for #711 to confirm; the tables list contract variants and the current lane definitions.
+No gate, Ginkgo label, `summary.json` field, JUnit `name` or evidence path reads a canonical key yet; [#712](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/712) and [#715](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/715) own that. `Lane.Gate` does not read the registry at all, so a result that fails to map stays a missing result there, and the lists of requirements stay explicit where each run assembles them.
 
-| Existing contract | What is checked | Proposed descriptive family key |
+Validation (`validate` in the same file, with lookups that fail on bad data even if it did not run) rejects a repeated key, name or lane, a result that takes its family's key without being that family's own result, a key of the wrong form, an unknown family, level or lane key, a key with `installed-` at the Kind level or without it at the VM-lab level, a lane whose results are of another level, the filtered lane, and an alias that is repeated within a level, belongs to another family or has the wrong form. A required result must have a legacy name, because the gates match on it.
+
+**A legacy name is unique within its level, not overall.** `S06/restart` is the Kind test (`operator-failure-recovery-restart`) and the lab test (`installed-operator-failure-recovery-restart`). `ResolveAlias` therefore takes the lane and the environment level that `summary.json` records, and never falls back from one level to the other. Because the installed commands also accept `-level kind`, a lab lane recorded at the Kind level resolves to nothing: such a result is neither the Kind suite's nor a VM-lab result. Reports keep the schema version 1 text for both (`Operator interruption and HA continuity - restart`), while the registry's own names differ.
+
+Tests compare the registry with its sources in both directions: `kindRequired` by reading its source and, in `test/e2e`, by value; every option and placement of the installed commands (`planHARun`, `smokeLane`) in `test/installed`; and the lane table and scenario sections of the contract in `test/evidence`.
+
+## Contract families: readable names
+
+These names are registered, but they are not yet active selectors or evidence keys. The contract headings below do not mean every case is implemented. The current S-number is recorded only to locate older documents and artifacts.
+
+**How keys stay unique.** A concrete result key is `[installed-]<family key>[-<variant>]`. Every result at the VM-lab level (the installed Operator on the lab) starts with `installed-`; no Kind result key does. The same contract variant at two evidence levels therefore gets two keys and never one shared result. Families used only on the lab (S04, S11, S12, LAB00, LAB01) carry the prefix in the family key itself. Each concrete key identifies one test. Only a result a run records today has a concrete key; the tables list those and the current lane definitions.
+
+The following have a family and no concrete key, because no run records them: S07, S08, S09, S10, S13, S15, and the S11 contract variant `interrupted-pod`. S04 applies only to the lab, and S16 and S17 are reserved. A family key is not a result, so it does not resolve to one.
+
+| Existing contract | What is checked | Descriptive family key |
 | --- | --- | --- |
 | S00 | Standalone database installation and real SQL | `standalone-database-sql` |
 | S01 | Three-member HA and read-write/read-only Broker access | `ha-broker-access` |
@@ -51,13 +65,13 @@ These are **proposals for review**, not active selectors or evidence keys. The c
 | LAB00/preallocated | Installed standalone preallocated ownership smoke | `installed-preallocated-standalone-smoke` |
 | LAB01 | Installed three-member HA and SQL smoke | `installed-ha-sql-smoke` |
 
-The base S14 check is the only Kind result that also covers NetworkPolicy isolation, RBAC answers and the secret-leak search, so its key names all of that. The base S14 check and the two token variants must remain **three independently required Kind results**. Do not combine their results under one descriptive family label. The descriptive keys above are candidates; naming alone does not split or consolidate a required gate.
+The base S14 check is the only Kind result that also covers NetworkPolicy isolation, RBAC answers and the secret-leak search, so its key names all of that. The base S14 check and the two token variants must remain **three independently required Kind results**. Do not combine their results under one descriptive family label. Naming alone does not split or consolidate a required gate.
 
 ## Currently required Kind results
 
-The `kind` lane requires the results below; the [required-lane contract](scenario-contract.md#required-scenarios) and `kindRequired` in `test/e2e/summary_test.go` are the authority for the list and for the rule that none may be `not_applicable`. This table only maps them to candidate names.
+The `kind` lane requires the results below; the [required-lane contract](scenario-contract.md#required-scenarios) and `kindRequired` in `test/e2e/summary_test.go` are the authority for the list and for the rule that none may be `not_applicable`. This table only maps them to their keys.
 
-| Existing requirement(s) | Candidate names for individual checks |
+| Existing requirement(s) | Keys of the individual checks |
 | --- | --- |
 | S00, S01, S02 | `standalone-database-sql`, `ha-broker-access`, `ha-replication` |
 | S03/abrupt-first-member, S03/abrupt, S03/graceful | `ha-primary-pod-recovery-abrupt-first-member`, `ha-primary-pod-recovery-abrupt-later-master`, `ha-primary-pod-recovery-graceful` |
@@ -65,7 +79,7 @@ The `kind` lane requires the results below; the [required-lane contract](scenari
 | S06/restart, S06/absent-during-failover | `operator-failure-recovery-restart`, `operator-failure-recovery-absent-during-failover` |
 | S14, S14/token-rotation, S14/token-migration | `instance-manager-access-and-secret-protection`, `ha-token-rotation`, `ha-legacy-token-migration` |
 
-The S03 names follow the contract: `abrupt-first-member` runs while the master is the first member of the node list, where CUBRID was observed to make the same member master again in most runs; `abrupt` runs later with whichever member is then master. The candidate `-abrupt-later-master` says that, so the two abrupt checks are not mistaken for one. They stay separate required results.
+The S03 names follow the contract: `abrupt-first-member` runs while the master is the first member of the node list, where CUBRID was observed to make the same member master again in most runs; `abrupt` runs later with whichever member is then master. The key's `-abrupt-later-master` says that, so the two abrupt checks are not mistaken for one. They stay separate required results.
 
 Filters are for local diagnostic runs and cannot certify the full lane (see the invariant above).
 
@@ -76,9 +90,14 @@ The [required-lane contract](scenario-contract.md#required-scenarios) includes L
 - Primary VM failure: `S04/power-off` → `installed-ha-primary-vm-failure-power-off`.
 - Operator interruption: `S06/restart` → `installed-operator-failure-recovery-restart`.
 - Backup (`S11`, code: `s11*.go` in `test/installed/`), ten variants, each a distinct check: `complete` → `installed-backup-complete`; `missing-destination` → `installed-backup-missing-destination`; `denied-credentials` → `installed-backup-denied-credentials`; `signature-mismatch` → `installed-backup-signature-mismatch`; `interrupted-upload` → `installed-backup-interrupted-upload`; `operator-restart` → `installed-backup-operator-restart`; `instance-manager-restart` → `installed-backup-instance-manager-restart`; `overlapping` → `installed-backup-overlapping`; `operation-store-loss` → `installed-backup-operation-store-loss`; `graceful-stop` → `installed-backup-graceful-stop`.
-- Restore (`S12`), ten variants, each a distinct check: `exact` → `installed-restore-new-cluster-exact`; `tampered` → `installed-restore-new-cluster-tampered`; `wrong-target` → `installed-restore-new-cluster-wrong-target`; `operator-restart` → `installed-restore-new-cluster-operator-restart`; `graceful-stop` → `installed-restore-new-cluster-graceful-stop`; and the Instance Manager restart, which has **five placements** of the kill (`IMRestartAt*` and `imRestartVariant` in `test/installed/s12imrestart.go`; each runs in its own lane, and a pass at one placement is no evidence for another, see [the contract](scenario-contract.md#required-scenarios)):
+- Restore (`S12`), eleven variants, each a distinct check: `exact` → `installed-restore-new-cluster-exact`; `tampered` → `installed-restore-new-cluster-tampered`; `wrong-target` → `installed-restore-new-cluster-wrong-target`; `operator-restart` → `installed-restore-new-cluster-operator-restart`; the graceful stop, which has **two placements** (`GracefulStopAt*` and `gracefulStopVariantOf` in `test/installed/s12gracefulstop.go`); and the Instance Manager restart, which has **five placements** of the kill (`IMRestartAt*` and `imRestartVariant` in `test/installed/s12imrestart.go`). Each placement runs in its own lane, and a pass at one placement is no evidence for another, see [the contract](scenario-contract.md#required-scenarios):
 
-  | Placement (what is killed when) | Existing variant | Candidate key |
+  | Placement (what is stopped when) | Existing variant | Key |
+  | --- | --- | --- |
+  | `restoring`: the restore target's Pod is deleted with its grace period while `restoredb` runs (the default) | `graceful-stop` | `installed-restore-new-cluster-graceful-stop-restoring` |
+  | `seeding`: the Pod of the first member being seeded is deleted with its grace period while `restoreslave` runs | `graceful-stop-seeding` | `installed-restore-new-cluster-graceful-stop-seeding` |
+
+  | Placement (what is killed when) | Existing variant | Key |
   | --- | --- | --- |
   | `restoring`: the target member's Instance Manager during its restore (the default) | `instance-manager-restart` | `installed-restore-new-cluster-instance-manager-restart-restoring` |
   | `preparing`: the target's Instance Manager while the bootstrap is Preparing with an operation | `instance-manager-restart-preparing` | `installed-restore-new-cluster-instance-manager-restart-preparing` |
@@ -86,11 +105,11 @@ The [required-lane contract](scenario-contract.md#required-scenarios) includes L
   | `starting`: the target's Instance Manager once `restoredb` has succeeded and the database is being started | `instance-manager-restart-starting` | `installed-restore-new-cluster-instance-manager-restart-starting` |
   | `seed-backup`: the restored member's Instance Manager while it takes the seed backup for a peer | `instance-manager-restart-seed-backup` | `installed-restore-new-cluster-instance-manager-restart-seed-backup` |
 
-  The existing unsuffixed variant `instance-manager-restart` means the `restoring` placement, not a general lane covering the others. Its candidate key carries the explicit `-restoring`; the unsuffixed form can be kept as its historical alias.
+  The existing unsuffixed variants `instance-manager-restart` and `graceful-stop` mean the `restoring` placement, not a general lane covering the others. Their keys carry the explicit `-restoring`; the unsuffixed form is kept as their legacy name. The text reports show for `graceful-stop` does not say so: it stays the schema version 1 text until the result migration changes it.
 
 Both S11 `operator-restart` and S12 `operator-restart` exist; they are told apart by the family (`installed-backup-` versus `installed-restore-new-cluster-`), which is why a variant name alone is never a key.
 
-**Important:** a lane name, a contract variant and a code-level `Requirement` are not automatically synonymous. Note that the contract's lane table currently names only the default, `preparing` and `seeding` lanes, while the code and [installed-ha.md](installed-ha.md) also define `starting` and `seed-backup`; reconcile that before the canonical registry is finalized. The lists above inventory contract variants and code definitions; they do **not** assert that every variant has a passing real-lab run.
+**Important:** a lane name, a contract variant and a code-level `Requirement` are not automatically synonymous. The contract's lane table now lists every lane the commands can assemble, which adds `lab-installed-ha-s04` and the `starting`, `seed-backup` and `graceful-stop-seeding` lanes to it; these lanes already existed in the code and in [installed-ha.md](installed-ha.md). The lists above inventory contract variants and code definitions; they do **not** assert that every variant has a passing real-lab run.
 
 ## Compatibility surfaces to audit before any key migration
 

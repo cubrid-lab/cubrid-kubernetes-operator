@@ -127,12 +127,13 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-smoke` | The [installed-Operator connection command](installed-smoke.md), under an authorized launcher on its explicitly selected environment | LAB00: create a new standalone cluster, commit/read SQL and verify scoped cleanup | none |
 | `lab-preallocated-component-smoke` | The installed command with explicit preallocated ownership inputs on its selected environment | LAB00 (`preallocated`): commit/read SQL, UID-delete only the created CR, observe owned StatefulSet/DB Pod disappearance, retain/report PVCs | none |
 | `lab-installed-ha` | The [installed-Operator HA command](installed-ha.md), under an authorized launcher on its explicitly selected environment | LAB01: create a new three-member HA cluster, reach the common starting state, run the workload client and check the data rules on every member and both Services, verify scoped cleanup | none |
+| `lab-installed-ha-s04` | The installed-Operator HA command with `-fault vm-power-off` and the lab's VM power commands, at the `vm-lab` level only ([details](installed-ha.md#s04-power-off)) | LAB01, then S04 (`power-off`) on the same cluster: the VM of the master's node is powered off without a shutdown and powered on again | none |
 | `lab-installed-ha-s06` | The installed-Operator HA command with `-fault operator-restart` | LAB01, then S06 (`restart`) on the same cluster: the installed manager's Pod deleted without a grace period | none |
 | `lab-installed-ha-s11` | The installed-Operator HA command with `-backup-bucket` | LAB01, then S11 (`complete`) on the same cluster: a full backup to object storage, its artifact downloaded and checked by the run | none |
-| `lab-installed-ha-s11-missing-destination` | The installed-Operator HA command with `-backup-bucket` and `-backup-missing-destination` | LAB01, S11 (`complete`), then S11 (`missing-destination`): a backup of the same cluster to a bucket the run found absent must end `Failed` for its upload, never `Completed` and without an artifact, with the bucket still absent at the end and the source unchanged | none |
-| `lab-installed-ha-s11-denied-credentials` | The installed-Operator HA command with `-backup-bucket` and `-backup-denied-credentials` | LAB01, S11 (`complete`), then S11 (`denied-credentials`): a backup of a new standalone cluster whose object store Secret holds keys the run first saw the store refuse must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged | none |
-| `lab-installed-ha-s11-signature-mismatch` | The installed-Operator HA command with `-backup-bucket` and `-backup-signature-mismatch` | LAB01, S11 (`complete`), then S11 (`signature-mismatch`): a backup of a new standalone cluster whose object store Secret holds the seed access key with a random secret key, which the run first saw the store refuse with `SignatureDoesNotMatch`, must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged | none |
-| `lab-installed-ha-s11-interrupted-upload` | The installed-Operator HA command with `-backup-bucket` and `-backup-interrupted-upload`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`interrupted-upload`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is reset there once seen under way; it must end `Failed` for its upload, never `Completed` and without an artifact, with no manifest under its prefix at the end and the source unchanged | none |
+| `lab-installed-ha-s11-missing-destination` | The installed-Operator HA command with `-backup-bucket` and `-backup-missing-destination` | LAB01, S11 (`complete`), then S11 (`missing-destination`): a backup of the same cluster to a bucket the run found absent must end `Failed` for its upload, never `Completed` and without an artifact, with the bucket still absent at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
+| `lab-installed-ha-s11-denied-credentials` | The installed-Operator HA command with `-backup-bucket` and `-backup-denied-credentials` | LAB01, S11 (`complete`), then S11 (`denied-credentials`): a backup of a new standalone cluster whose object store Secret holds keys the run first saw the store refuse must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
+| `lab-installed-ha-s11-signature-mismatch` | The installed-Operator HA command with `-backup-bucket` and `-backup-signature-mismatch` | LAB01, S11 (`complete`), then S11 (`signature-mismatch`): a backup of a new standalone cluster whose object store Secret holds the seed access key with a random secret key, which the run first saw the store refuse with `SignatureDoesNotMatch`, must end `Failed` for its upload, never `Completed` and without an artifact, with nothing under its prefix at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
+| `lab-installed-ha-s11-interrupted-upload` | The installed-Operator HA command with `-backup-bucket` and `-backup-interrupted-upload`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`interrupted-upload`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is reset there once seen under way; it must end `Failed` for its upload, never `Completed` and without an artifact, with no manifest under its prefix at the end and the source unchanged; the target member's backup staging directory was read after the backup ended, and no staged file may be left unless a recorded process held it | none |
 | `lab-installed-ha-s11-operator-restart` | The installed-Operator HA command with `-backup-bucket` and `-backup-operator-restart` | LAB01, S11 (`complete`), then S11 (`operator-restart`): a second backup of the same cluster, during which the installed manager's Pod is deleted without a grace period once a reading shows the backup `Running` or `Uploading` with an operation; the replacement must hold the leader Lease within `operator_resync_limit`, and the backup must end `Completed` within `backup_limit`, judged written by the replacement (by the managers' node clocks), under the same operation, target and role, with an artifact that passes `complete`'s verification, one attempt prefix with one manifest under its prefix, and the source unchanged | none |
 | `lab-installed-ha-s11-instance-manager-restart` | The installed-Operator HA command with `-backup-bucket` and `-backup-instance-manager-restart`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`instance-manager-restart`): a backup of a new standalone cluster whose upload, slowed by a rate limit in its member's Pod, is seen under way, and whose member's Instance Manager is then killed with `SIGKILL`; it must end `Failed` with `BackupFailed` and the Instance Manager's restart reason, under the same operation, never `Completed` and without an artifact, with no manifest under its prefix at the end, the member's container restarted once, and not before the kill, and a reading of the cluster after the restarted container was ready showing `Ready`, and the source unchanged | none |
 | `lab-installed-ha-s11-overlapping` | The installed-Operator HA command with `-backup-bucket` and `-backup-overlapping`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), then S11 (`overlapping`): two backups of a new standalone cluster whose upload is slowed by a rate limit in its member's Pod, requested back to back, each under a prefix of its own; a reading must show the second held with `InstanceManagerOperationInProgress`; both must end `Completed` within `backup_limit`, each with its own operation, never shared, and a target and role that never change, an artifact that passes `complete`'s verification for that cluster, a manifest that names its own operation, and one attempt prefix with one manifest and no other object under its prefix; the member's record of the second's operation must not have been created before the record of the first's was written as ended, by the member's clock; the limit must be seen removed and the source unchanged | none |
@@ -145,7 +146,10 @@ lane's environment rules the scenario out; work that was skipped is
 | `lab-installed-ha-s12-instance-manager-restart` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-instance-manager-restart` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart`): S11's artifact restored into another new cluster while the Instance Manager of the restore's target member is killed during the restore, which restarts that member's database container on the same Pod and volume; the interrupted attempt must end with one retry and the restore complete as `exact` does, under the next attempt's operation | none |
 | `lab-installed-ha-s12-instance-manager-restart-preparing` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at preparing` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-preparing`): as `instance-manager-restart`, with the kill after a reading of the bootstrap `Preparing` with its operation; the target's record of the killed operation must show that `restoredb` had not succeeded | none |
 | `lab-installed-ha-s12-instance-manager-restart-seeding` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at seeding` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-seeding`): S11's artifact restored into another new cluster, and the Instance Manager of a member being seeded from the restored one killed during its seed restore; the seed attempt must end with one seed retry, the restore must not run again, and the cluster complete as `exact` does | none |
+| `lab-installed-ha-s12-instance-manager-restart-starting` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at starting` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-starting`): as `instance-manager-restart`, with the kill after a reading of the target's operation record `Starting`, while the restored database is being started; the killed record must hold the restored artifact, and the operation that completes the restore must hold the same one without `restoredb` being seen to run again | none |
+| `lab-installed-ha-s12-instance-manager-restart-seed-backup` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-instance-manager-restart` and `-restore-instance-manager-restart-at seed-backup`, in a namespace that enforces Pod Security `privileged` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`instance-manager-restart-seed-backup`): S11's artifact restored into another new cluster, and the Instance Manager of the restored member killed while it takes the seed backup for its first peer, whose traffic to the object store is slowed by a rate limit; the seed attempt must end with one seed retry and a new seed backup, the restore must not run again, and the cluster complete as `exact` does | none |
 | `lab-installed-ha-s12-graceful-stop` | The installed-Operator HA command with `-backup-bucket`, `-restore` and `-restore-graceful-stop`, in a namespace that keeps Pod Security `restricted` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`graceful-stop`): S11's artifact restored into another new cluster whose restore target's Pod is deleted with its grace period as soon as a sampler in the target shows `restoredb` running; the target's log must show `restoredb`'s end, the restore operation's `Operation failed` with a reason that starts with `the member is stopping: restore failed: restoredb failed: `, and then the shutdown's `heartbeat stop` (and `server stop` when logged), in that order, with `restoredb` killed; no sampler reading from the first one without the database directory on may show a CUBRID process holding a file of the database or staging directory, nor `restoredb` after it, and none started after `Operation failed` either directory, at least one reading having started after it; exactly one retry naming the stop, and the restore complete as `exact` does under another operation | none |
+| `lab-installed-ha-s12-graceful-stop-seeding` | The installed-Operator HA command with `-backup-bucket`, `-restore`, `-restore-graceful-stop` and `-restore-graceful-stop-at seeding`, in a namespace that keeps Pod Security `restricted` | LAB01, S11 (`complete`), S12 (`exact`), then S12 (`graceful-stop-seeding`): as `graceful-stop`, on the first member the restored cluster seeds, whose Pod is deleted with its grace period as soon as a sampler in it shows `restoreslave` running; that seed restore must end for the stop, with one seed retry under another operation, the restore must not run again, and the cluster complete as `exact` does | none |
 
 `lab-installed-smoke` is a connection baseline. Its `passed` verdict applies
 to LAB00 and establishes neither S00 installation validation nor S00–S15
@@ -340,15 +344,18 @@ bound on the `preStop` hook's latency.
 `lab-installed-ha-s12-operator-restart` S12 `exact` and `operator-restart`,
 `lab-installed-ha-s12-instance-manager-restart` S12 `exact` and
 `instance-manager-restart`, and
-`lab-installed-ha-s12-instance-manager-restart-preparing` and
-`lab-installed-ha-s12-instance-manager-restart-seeding` S12 `exact` and the
-variant their name ends with, and `lab-installed-ha-s12-graceful-stop` S12
-`exact` and `graceful-stop`. A variant a lane does
+`lab-installed-ha-s12-instance-manager-restart-preparing`,
+`lab-installed-ha-s12-instance-manager-restart-seeding`,
+`lab-installed-ha-s12-instance-manager-restart-starting` and
+`lab-installed-ha-s12-instance-manager-restart-seed-backup` S12 `exact` and the
+variant their name ends with, `lab-installed-ha-s12-graceful-stop` S12
+`exact` and `graceful-stop`, and `lab-installed-ha-s12-graceful-stop-seeding`
+S12 `exact` and `graceful-stop-seeding`. A variant a lane does
 not name is not part of it, rather than `not_applicable`: the lab does not
 rule it out, the command does not run it in that lane. The command runs
 `tampered`, `wrong-target`, `operator-restart`, each placement of
-`instance-manager-restart` and `graceful-stop` in separate runs, one lane
-each: a pass at one placement is no evidence for another.
+`instance-manager-restart` and each placement of `graceful-stop` in separate
+runs, one lane each: a pass at one placement is no evidence for another.
 
 `lab-installed-ha-s12-graceful-stop` keeps Pod Security `restricted`: it adds
 no container. It restores S11's artifact as it is, without filler data: in
@@ -509,6 +516,62 @@ lane `kind-filtered`: every scenario it selected a step of must pass, a run
 that selected none does not pass, and its `summary.json` names that lane so
 it cannot be mistaken for a full run. The scenarios it did not select are
 listed as `not_run`.
+
+### When CI runs the Kind lane
+
+Which pull requests and pushes run the `kind` lane is decided by
+`.github/workflows/ci-impact.yml`, which `test-e2e.yml`, `test.yml`, `lint.yml`,
+`security.yml` and `codeql.yml` each call. The workflow files and the runs
+below were read on 2026-11-06 (UTC). Runs on the GitHub-hosted `ubuntu-latest`
+runner are the only Kind evidence; this is not evidence of any VM-lab behavior.
+
+| Trigger and changed files | What the workflow does | Observed run |
+|---|---|---|
+| Push to `main`, any files | Runs the lane in full; the classifier does not look at files. A documentation-only merge still runs it | [merge of #713 (documentation only)](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42166067651) ran the full suite and failed in one real-database scenario; [merge of #707 (PR template only)](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42158404731) did the same. Neither run was skipped. A [push of code](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42205955465) passed |
+| Pull request from a branch of this repository: only `.md`, `.mdx`, `.rst` files, images under `docs/`, or issue forms | `Run on Ubuntu` is skipped; the workflow run is reported as success | [#713, documentation under `docs/testing`](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42165989190), [#728, one `.md` file (`docs/poc/RESULTS.md`)](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42225372816), [#707, only the PR template](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42153995978) |
+| Pull request that touches any other file under `docs/`, such as a Python, shell, CSV or Dockerfile file | Runs the lane: only the listed documentation and image types are exempt | [#699, `.py` and `.sh` files under `docs/poc`](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/41998648417); [#683, a `.csv` under `docs/reviews`](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/41835513012) |
+| Pull request that changes Go code, tests, scenario code, `Makefile`, `go.mod`, `config/`, `build/` or anything not listed in `ci-impact.yml` | Runs the lane | [#725](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42223069102), [#719](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42199827451), [#714](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42189332734) |
+| Pull request that changes a workflow | `test-e2e.yml` and `ci-impact.yml` run the lane; `pr-title.yml` alone does not; an unknown workflow runs every check | Not observed since the classifier was added. The classifier's own example list (run on every pull request) covers each workflow file |
+| Pull request whose file list cannot be read, is incomplete, or is shorter than `changed_files` | Runs the lane (fails open) | Not observed. Only the code path is reviewed |
+| Renamed file | Both the old and the new name are classified, so moving Go code into `docs/` still runs the lane | Not observed; the rename handling is not in the example list |
+| Superseded push to a pull request | The older run is cancelled and shows `cancelled`, never success; the run for the newest commit decides | [cancelled](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42198853444), then [success on the next commit](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/42199827451). Runs on `main` and manual runs are never cancelled |
+| Pull request from a fork | The same `pull_request` workflow, with a read-only token. The classifier only needs `pull-requests: read`. First-time contributors wait for a maintainer to approve the run (repository setting `first_time_contributors`) | Not observed since the classifier was added. The only fork pull request, #470, was opened on 2026-10-18, before the classifier existed (2026-11-04) |
+| Manual run (`workflow_dispatch`) | `test-e2e.yml`, `test.yml` and `lint.yml` accept it and run the lane in full | Not observed since the classifier was added; the last manual runs date from 2026-10-12 |
+
+What the table means for the rules that must hold:
+
+- A change that needs the lane cannot select `go_e2e=false`: the exemption is a
+  short allow-list of documentation and image suffixes, and every other path,
+  including an unknown one, selects every check. If the classifier fails or
+  its step does not succeed, `test-e2e.yml` runs the lane (`needs.impact.result
+  != 'success'`). A change to `ci-impact.yml` itself runs every check.
+- Nothing in the workflow narrows the scenarios: `make test-e2e` runs without
+  `E2E_LABEL_FILTER`, and a filtered run is judged as `kind-filtered`, which
+  cannot be mistaken for `kind` (see above). A scenario that was skipped is
+  `not_run` and fails the lane.
+- The `.md` exemption has no Go reader: no test or build step reads a
+  documentation file. A change to this contract, `ROADMAP.md` or a PR template
+  therefore runs no test, and its only gate is review. This section, the
+  scenario list above and the Go registry (`test/e2e/summary_test.go`) are
+  changed together or the review must catch the difference.
+- A skipped job is not a failure. GitHub reports the skipped `Run on Ubuntu`
+  job, and the run, as successful, and a required status check treats a
+  skipped job as passing. That is the intended path for documentation-only
+  pull requests; it is only safe because the classifier above decides when to
+  skip.
+- `main` has no branch protection and no ruleset (checked 2026-11-06 with the
+  GitHub API), so no status check, skipped or failed, blocks a merge; the
+  maintainers' review and the PR checklist are the only gate. A green or
+  failed workflow is therefore a report, not an enforcement boundary. Turning
+  protection on, and choosing which checks must block an unvalidated change, is
+  a maintainer decision that is not part of this documentation; it is tracked
+  with the release guard on #94 and #124. If it is turned on, note that the
+  `Tests`, `Lint` and `E2E
+  Tests` workflows each have a job named `Run on Ubuntu`, so a required
+  check must be chosen with care, and that a failed push to `main` after a
+  merge (as in the two runs above) is reported only afterwards.
+- `codeql.yml` runs on pull requests that target `main` only; the other
+  workflows run for any base branch.
 
 ### Confirming the fault
 
@@ -1436,6 +1499,7 @@ it needs more.
 ### S04: primary VM failure
 
 - **Level:** VM lab. `not_applicable` on Kind.
+- **Variants:** `power-off`, the fault below.
 - **Fault:** the VM that runs the master is powered off without a shutdown.
 - **Fault confirmed by:** the hypervisor reports the VM as powered off, and
   the Kubernetes node becomes `NotReady`.
@@ -1911,8 +1975,19 @@ it needs more.
   bootstrap `Preparing` with its operation),
   `instance-manager-restart-seeding` (the same kill on a member being seeded
   from the restored one, after a reading of `SeedingReplicas` with a seed
-  restore recorded for that member) and `graceful-stop` (the restore
-  target's Pod is deleted with its grace period while `restoredb` runs).
+  restore recorded for that member),
+  `instance-manager-restart-starting` (the same kill on the restore's target
+  after a reading of its operation record `Starting`, while the restored
+  database is being started),
+  `instance-manager-restart-seed-backup` (the same kill on the restored member
+  while it takes the seed backup for its first peer),
+  `graceful-stop` (the restore target's Pod is deleted with its grace period
+  while `restoredb` runs) and `graceful-stop-seeding` (the same on the first
+  member being seeded, while `restoreslave` runs). The expected outcomes of
+  `instance-manager-restart-starting`, `instance-manager-restart-seed-backup`
+  and `graceful-stop-seeding` are in the lane table above, and in full in
+  [installed-ha.md](installed-ha.md#s12-instance-manager-restart-at-preparing-seeding-starting-and-seed-backup)
+  and [its section on the seeding stop](installed-ha.md#s12-graceful-stop-at-seeding).
 - **Expected, `exact`:** the new cluster holds exactly the rows that were
   acknowledged before the marker, the marker itself, and no row written after
   the backup finished.
