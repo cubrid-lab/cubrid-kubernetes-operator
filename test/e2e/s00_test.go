@@ -94,6 +94,7 @@ func s00Scenario() {
 		// s00Run and steps are what the reads are compared with (Conditions
 		// during the fault, scenario contract).
 		var sampler *conditionSampler
+		var serverAtWrite sqlcheck.Watch
 		s00Run := faults.S00Run{Member: pod}
 		var steps []faults.Step
 		step := func(t time.Time, kind, detail string) {
@@ -317,7 +318,11 @@ spec:
 
 			By("writing and reading a row through csql")
 			sql := csqlInPod(context.Background(), s00Namespace, pod, database)
-			member := memberCSQL(context.Background(), s00Namespace, pod, database)
+			member := memberCSQL(context.Background(), s00Namespace, pod, database, false)
+			// Read before the write and compared at the end of the smoke checks:
+			// a server that cub_master revived before a call's own identity read
+			// is seen only across the whole span.
+			serverAtWrite = member.guard.Before()
 			operations, err := s00WriteAndRead(sql, member.read, pod, marker)
 			s00Run.SQL = append(s00Run.SQL, operations...)
 			noteLostReads(operations)
@@ -385,9 +390,13 @@ spec:
 			}, 2*time.Minute, 3*time.Second).Should(Succeed())
 
 			By("reading the row with csql again at the end of the smoke checks, after Ready was True")
-			reads, err := s00LastRead(memberCSQL(context.Background(), s00Namespace, pod, database).read, pod, marker)
+			reads, err := s00LastRead(memberCSQL(context.Background(), s00Namespace, pod, database, false).read, pod,
+				marker)
 			s00Run.SQL = append(s00Run.SQL, reads...)
 			noteLostReads(reads)
+			Expect(err).NotTo(HaveOccurred())
+			held, err := s00ServerHeld(serverAtWrite)
+			step(time.Now(), "server_identity_compared", "cub_server since the write: "+string(held))
 			Expect(err).NotTo(HaveOccurred())
 			s00Run.SmokeEnd = time.Now().UTC()
 			step(s00Run.SmokeEnd, "smoke_checks_ended", "")
@@ -636,6 +645,21 @@ func s00Read(read oneShotRead, what, marker string) ([]faults.SmokeSQL, error) {
 			Inconclusive: inconclusive, What: name})
 	}
 	return records, err
+}
+
+// s00ServerHeld compares the identity of cub_server read before the write of
+// the marker row with the one at the end of the smoke checks. cub_master
+// revives a killed server within 0.04 s and the container does not restart
+// (POC-55), so a server that died and came back before a call's own identity
+// read is seen only here. Any result but unchanged fails S00, an unreadable one
+// too: then nothing shows that the server ran the whole time.
+func s00ServerHeld(atWrite sqlcheck.Watch) (sqlcheck.IdentityResult, error) {
+	held := atWrite.Compare()
+	if held != sqlcheck.IdentityUnchanged {
+		return held, fmt.Errorf("the identity of cub_server is %s between the write of the marker row and the end "+
+			"of the smoke checks: the server may have died and been revived by cub_master", held)
+	}
+	return held, nil
 }
 
 // s00LastRead makes the csql read at the end of the smoke checks and returns

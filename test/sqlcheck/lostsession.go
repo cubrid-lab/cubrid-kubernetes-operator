@@ -45,6 +45,18 @@ const ServerIdentityScript = `for p in /proc/[0-9]*; do ` +
 	`s=$( { cat "$p/stat"; } 2>/dev/null) || continue; s=${s##*) }; set -- $s; ` +
 	`case "$1" in Z|X) continue ;; esac; echo "cub_server ${p#/proc/} ${20}"; done`
 
+// HAServerIdentityScript is ServerIdentityScript for an HA member. It also
+// prints "ha_mode <mode>" from cubrid changemode with no mode argument, which
+// asks cub_server for its HA mode without a heartbeat status call (POC-52): a
+// standby promoted to active keeps its pid and start time, and -111's message
+// names a mode change as one of its causes. A mode it cannot read is printed
+// as "ha_mode ?". POC-52 measured the call at 18 ms in the median and 7.7 s at
+// most, so it is bounded at 10 s.
+const HAServerIdentityScript = ServerIdentityScript + `; ` +
+	`m=$(PATH="${CUBRID}/bin:${PATH}" timeout 10 cubrid changemode "$0@localhost" 2>&1); ` +
+	`case "$m" in *"current HA running mode is "*) m=${m##*current HA running mode is }; ` +
+	`echo "ha_mode ${m%%.*}" ;; *) echo "ha_mode ?" ;; esac`
+
 // IdentityResult is what the comparison of cub_server's identity found.
 type IdentityResult string
 
@@ -60,8 +72,11 @@ const (
 	IdentityVanished IdentityResult = "vanished"
 	// IdentityAmbiguous is several cub_server processes on one of the reads.
 	IdentityAmbiguous IdentityResult = "ambiguous"
-	// IdentityUnreadable is a read that failed or printed something else.
+	// IdentityUnreadable is a read that failed or printed something else,
+	// and on an HA member also an HA mode that could not be read.
 	IdentityUnreadable IdentityResult = "unreadable"
+	// IdentityModeChanged is the same process in another HA mode.
+	IdentityModeChanged IdentityResult = "HA mode changed"
 )
 
 // How the second call of Read answered.
@@ -69,41 +84,60 @@ const (
 	ReReadNotMade  = "not made"
 	ReReadAnswered = "answered"
 	ReReadLost     = "printed -199 and -111 again"
-	reReadFailed   = "failed: "
+	// The second read failed: these say how, and keep its output, which can be
+	// long, out of the record.
+	reReadStatement = "failed: csql reported an error"
+	reReadCommand   = "failed: csql could not be run"
+	reReadCheck     = "failed: the result did not pass the check"
 )
 
-// identityLine is one line of ServerIdentityScript.
-var identityLine = regexp.MustCompile(`^cub_server \d+ \d+$`)
+// identityLine and modeLine are the lines of HAServerIdentityScript.
+var (
+	identityLine = regexp.MustCompile(`^cub_server \d+ \d+$`)
+	modeLine     = regexp.MustCompile(`^ha_mode [a-z-]+$`)
+)
 
-// readIdentity returns the identity in the output of ServerIdentityScript,
-// or the result that says why there is none to compare.
-func readIdentity(out string, err error) (string, IdentityResult) {
+// readIdentity returns the identity in the output of ServerIdentityScript, or
+// of HAServerIdentityScript when ha is set, with the HA mode, or the result
+// that says why there is none to compare.
+func readIdentity(out string, err error, ha bool) (id, mode string, result IdentityResult) {
 	if err != nil {
-		return "", IdentityUnreadable
+		return "", "", IdentityUnreadable
 	}
-	var found []string
+	var found, modes []string
 	for line := range strings.SplitSeq(out, "\n") {
-		if line = strings.TrimSpace(line); line == "" {
-			continue
+		switch line = strings.TrimSpace(line); {
+		case line == "":
+		case identityLine.MatchString(line):
+			found = append(found, line)
+		case ha && modeLine.MatchString(line):
+			modes = append(modes, line)
+		default:
+			return "", "", IdentityUnreadable
 		}
-		if !identityLine.MatchString(line) {
-			return "", IdentityUnreadable
-		}
-		found = append(found, line)
+	}
+	if ha && len(modes) != 1 {
+		return "", "", IdentityUnreadable
+	}
+	if ha {
+		mode = modes[0]
 	}
 	switch len(found) {
 	case 0:
-		return "", IdentityVanished
+		return "", "", IdentityVanished
 	case 1:
-		return found[0], IdentityUnchanged
+		return found[0], mode, IdentityUnchanged
 	}
-	return "", IdentityAmbiguous
+	return "", "", IdentityAmbiguous
 }
 
 // Guard is how the rule reads the identity of one member's cub_server.
 type Guard struct {
-	// Identity returns the output of ServerIdentityScript on the member.
+	// Identity returns the output of ServerIdentityScript on the member, or of
+	// HAServerIdentityScript when HA is set.
 	Identity func() (string, error)
+	// HA is set for an HA member: its HA mode must then be read and unchanged.
+	HA bool
 	// Settle is the wait after a pair before the identity is read again: POC-55
 	// read one server that had just been killed as unchanged at csql's exit.
 	Settle time.Duration
@@ -111,40 +145,72 @@ type Guard struct {
 
 // Watch holds the identity read before a call.
 type Watch struct {
-	guard  Guard
-	before string
-	result IdentityResult
+	guard        Guard
+	before, mode string
+	result       IdentityResult
 }
 
 // Before reads the identity. It must come before the call: cub_master revives
 // a killed server within 0.04 s, so nothing read afterwards shows the restart.
 // A read that failed fails only the rule, and only if a pair is printed.
 func (g Guard) Before() Watch {
+	if g.Identity == nil {
+		return Watch{guard: g, result: IdentityUnreadable}
+	}
 	out, err := g.Identity()
-	before, result := readIdentity(out, err)
-	return Watch{guard: g, before: before, result: result}
+	before, mode, result := readIdentity(out, err, g.HA)
+	return Watch{guard: g, before: before, mode: mode, result: result}
 }
 
-// compare reads the identity again, after the settle, and compares it with the
-// one read before the call. A read that failed or found no single process
-// never counts as unchanged, whichever of the two it was.
-func (w Watch) compare() IdentityResult {
+// Compare reads the identity again, after the settle, and compares it with the
+// one read by Before. A read that failed or found no single process never
+// counts as unchanged, whichever of the two it was, and neither does an HA
+// mode that could not be read or changed. A Watch that was never started
+// is unreadable.
+func (w Watch) Compare() IdentityResult {
+	if w.guard.Identity == nil {
+		return IdentityUnreadable
+	}
 	time.Sleep(w.guard.Settle)
 	out, err := w.guard.Identity()
-	after, result := readIdentity(out, err)
+	after, mode, result := readIdentity(out, err, w.guard.HA)
 	for _, worst := range []IdentityResult{IdentityUnreadable, IdentityAmbiguous, IdentityVanished} {
 		if w.result == worst || result == worst {
 			return worst
 		}
 	}
-	if w.before != after {
+	switch {
+	case w.before != after:
 		return IdentityChanged
+	case w.mode != mode:
+		return IdentityModeChanged
 	}
 	return IdentityUnchanged
 }
 
 // lostSessionHeader is what csql prints before an error's code.
-var lostSessionHeader = regexp.MustCompile(` - ERROR \*\*\* `)
+const lostSessionHeader = " - ERROR *** "
+
+// withoutPair removes from line each code of the pair, and the header just
+// before it when nothing that names an error comes between the two. Any other
+// header, and any other text, is left for OnlyLostSession to find.
+func withoutPair(line string) string {
+	var b strings.Builder
+	for {
+		loc := lostSessionCodes.FindStringIndex(line)
+		if loc == nil {
+			b.WriteString(line)
+			return b.String()
+		}
+		before := line[:loc[0]]
+		if h := strings.LastIndex(before, lostSessionHeader); h >= 0 &&
+			!strings.Contains(before[h+len(lostSessionHeader):], "ERROR") {
+			before = before[:h]
+		}
+		b.WriteString(before)
+		line = line[loc[1]:]
+	}
+}
 
 // OnlyLostSession reports whether out holds both errors of SessionLost and
 // no other error. Each line is looked at, and any "ERROR" or failed connection
@@ -155,9 +221,7 @@ func OnlyLostSession(out string) bool {
 		return false
 	}
 	for line := range strings.SplitSeq(out, "\n") {
-		if lostSessionCodes.MatchString(line) {
-			line = lostSessionHeader.ReplaceAllString(lostSessionCodes.ReplaceAllString(line, ""), "")
-		}
+		line = withoutPair(line)
 		if strings.Contains(line, "ERROR") || strings.Contains(line, "Failed to connect") {
 			return false
 		}
@@ -194,7 +258,7 @@ func (w Watch) judge(out string, complete func(string) error, cause error) (Iden
 	if !OnlyLostSession(out) || complete(out) != nil {
 		return IdentityNotRead, cause
 	}
-	identity := w.compare()
+	identity := w.Compare()
 	if identity != IdentityUnchanged {
 		return identity, &LostSessionError{Identity: identity, err: cause}
 	}
@@ -276,11 +340,13 @@ func Read(g Guard, run Runner, sql string, check func(string) error) (ReadResult
 		return result, fmt.Errorf("%w: %s", ErrNotARead, sql)
 	}
 	watch := g.Before()
+	checkFailed := false
 	call := func() Attempt {
 		attempt := Attempt{Start: time.Now().UTC()}
 		attempt.Out, attempt.Err = Run(run, sql)
 		if attempt.Err == nil {
 			attempt.Err = check(attempt.Out)
+			checkFailed = attempt.Err != nil
 		}
 		attempt.End = time.Now().UTC()
 		result.Attempts = append(result.Attempts, attempt)
@@ -304,8 +370,15 @@ func Read(g Guard, run Runner, sql string, check func(string) error) (ReadResult
 		result.ReRead = ReReadLost
 		return result, &LostSessionError{Identity: result.Identity, Twice: true, err: second.Err}
 	}
-	line, _, _ := strings.Cut(second.Err.Error(), "\n")
-	result.ReRead = reReadFailed + line
+	var statement *StatementError
+	switch {
+	case checkFailed:
+		result.ReRead = reReadCheck
+	case errors.As(second.Err, &statement):
+		result.ReRead = reReadStatement
+	default:
+		result.ReRead = reReadCommand
+	}
 	return result, second.Err
 }
 

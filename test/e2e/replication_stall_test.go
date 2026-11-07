@@ -500,7 +500,7 @@ func openTransactionStep(r *haRun) {
 		By("creating a table with a primary key and without AUTO_INCREMENT on " + master)
 		// The verdict on this statement is the count on each slave below, so it
 		// runs once under the rule of sqlcheck.RunOnce and is never repeated.
-		err = memberCSQL(context.Background(), r.namespace, master, r.database).
+		err = r.memberCSQL(context.Background(), master).
 			runOnce("CREATE TABLE "+table+" (id INT PRIMARY KEY, pad VARCHAR(1000));", statementFinished)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() {
@@ -525,7 +525,7 @@ func openTransactionStep(r *haRun) {
 			openTxRounds, openTxRows, table, int(openTxPause.Seconds()), r.database)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(openTxRounds)*openTxPause+2*time.Minute)
 		defer cancel()
-		masterServer := serverGuard(context.Background(), r.namespace, master, r.database).Before()
+		masterServer := r.memberCSQL(context.Background(), master).guard.Before()
 		type result struct {
 			out string
 			err error

@@ -388,3 +388,67 @@ func TestS00LastReadNeedsTheSameServer(t *testing.T) {
 		t.Errorf("the records are %+v", records)
 	}
 }
+
+// S00 compares cub_server across the smoke checks: a server that died and was
+// revived before a call's own identity read is seen only that way.
+func TestS00ServerHeld(t *testing.T) {
+	sequence := func(outs ...string) sqlcheck.Guard {
+		reads := 0
+		return sqlcheck.Guard{Identity: func() (string, error) {
+			reads++
+			if reads > len(outs) {
+				return "", errors.New("the exec could not be run")
+			}
+			return outs[reads-1], nil
+		}}
+	}
+	const a, b = "cub_server 77 100\n", "cub_server 91 160\n"
+	for name, tc := range map[string]struct {
+		guard sqlcheck.Guard
+		want  sqlcheck.IdentityResult
+	}{
+		"the same server":         {sequence(a, a), sqlcheck.IdentityUnchanged},
+		"a revived server":        {sequence(a, b), sqlcheck.IdentityChanged},
+		"no server at the end":    {sequence(a, ""), sqlcheck.IdentityVanished},
+		"an unreadable end":       {sequence(a), sqlcheck.IdentityUnreadable},
+		"an unreadable start":     {sequence("bash: error\n", a), sqlcheck.IdentityUnreadable},
+		"never read at the write": {sqlcheck.Guard{}, sqlcheck.IdentityUnreadable},
+	} {
+		held, err := s00ServerHeld(tc.guard.Before())
+		if held != tc.want || (err == nil) != (tc.want == sqlcheck.IdentityUnchanged) {
+			t.Errorf("%s: %s, error %v; want %s", name, held, err, tc.want)
+		}
+	}
+	if held, err := s00ServerHeld(sqlcheck.Watch{}); err == nil || held != sqlcheck.IdentityUnreadable {
+		t.Errorf("a Watch that was never started: %s, error %v", held, err)
+	}
+}
+
+// A member of the HA cluster has its HA mode read with its identity, by
+// cubrid changemode; the standalone member of S00 has none.
+func TestHAMembersReadTheirMode(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r := newHARun("ns", "client-ns", "cluster", "appdb", []string{pod0, "pod-1", "pod-2"})
+	ha := r.memberCSQL(context.Background(), pod0).guard
+	standalone := memberCSQL(context.Background(), "ns", "s00-0", "appdb", false).guard
+	if !ha.HA || standalone.HA {
+		t.Fatalf("HA %v for an HA member and %v for a standalone one", ha.HA, standalone.HA)
+	}
+	for name, tc := range map[string]struct {
+		guard sqlcheck.Guard
+		want  bool
+	}{"an HA member": {ha, true}, "a standalone member": {standalone, false}} {
+		out, err := tc.guard.Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, "cubrid changemode") != tc.want || !strings.Contains(out, "/proc/[0-9]*") {
+			t.Errorf("%s runs:\n%s", name, out)
+		}
+	}
+}

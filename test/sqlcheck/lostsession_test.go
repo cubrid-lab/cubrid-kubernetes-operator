@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,8 +155,8 @@ func TestReadSecondAnswer(t *testing.T) {
 			if _, lost := errors.AsType[*LostSessionError](err); lost {
 				t.Errorf("the error %v is the report of a second pair", err)
 			}
-			if !strings.HasPrefix(got.ReRead, "failed: ") {
-				t.Errorf("the second read is recorded as %q", got.ReRead)
+			if !slices.Contains([]string{reReadStatement, reReadCommand, reReadCheck}, got.ReRead) {
+				t.Errorf("the second read is recorded as %q, want one of the fixed reasons", got.ReRead)
 			}
 		})
 	}
@@ -451,13 +452,13 @@ func TestServerIdentityScript(t *testing.T) {
 	if want := fmt.Sprintf("cub_server %d %s\n", first.Process.Pid, fields[19]); before != want {
 		t.Errorf("the script printed %q, want %q", before, want)
 	}
-	if id, result := readIdentity(before, nil); id == "" || result != IdentityUnchanged {
+	if id, _, result := readIdentity(before, nil, false); id == "" || result != IdentityUnchanged {
 		t.Errorf("readIdentity(%q) = %q, %s", before, id, result)
 	}
 
 	second := startServerCopy(t, bash, database)
 	two := awaitComm(t, script, regexp.MustCompile(`^(cub_server \d+ \d+\n){2}$`))
-	if _, result := readIdentity(two, nil); result != IdentityAmbiguous {
+	if _, _, result := readIdentity(two, nil, false); result != IdentityAmbiguous {
 		t.Errorf("two servers: %s", result)
 	}
 	_ = second.Process.Kill()
@@ -500,5 +501,143 @@ func TestValuesComplete(t *testing.T) {
 		if err := ValuesComplete(tc.out); (err == nil) != tc.want {
 			t.Errorf("%s: error %v, want a pass: %v", name, err, tc.want)
 		}
+	}
+}
+
+// The second read's failure is recorded by kind, never with its output, which
+// holds the command line and everything csql printed.
+func TestReadRecordsHowTheSecondReadFailed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		second answer
+		want   string
+	}{
+		"a statement error": {answer{out: "ERROR: In line 1, a long message about the table t"}, reReadStatement},
+		"a failed command": {answer{err: errors.New(`"kubectl -n ns exec pod -- csql" failed with output`)},
+			reReadCommand},
+		"a result that fails": {answer{out: strings.Replace(cleanValue, "'0'", "'1'", 1)}, reReadCheck},
+	} {
+		run, _ := fakeRunner(t, answer{out: lostValue}, tc.second)
+		got, err := Read(stable(t), run, readSQL, func(out string) error {
+			if strings.Contains(out, "'1'") {
+				return errors.New("the row does not match")
+			}
+			return ValuesComplete(out)
+		})
+		if err == nil || got.ReRead != tc.want {
+			t.Errorf("%s: the second read is recorded as %q, want %q; error %v", name, got.ReRead, tc.want, err)
+		}
+	}
+}
+
+// On an HA member the HA mode is part of the identity: a standby promoted to
+// active keeps its process, and -111's message names a mode change.
+func TestReadNeedsTheSameHAMode(t *testing.T) {
+	const standby, active = "ha_mode standby\n", "ha_mode active\n"
+	for name, tc := range map[string]struct {
+		before, after string
+		want          IdentityResult
+	}{
+		"the same process and mode":     {serverA + standby, serverA + standby, IdentityUnchanged},
+		"the same process, promoted":    {serverA + standby, serverA + active, IdentityModeChanged},
+		"to-be-active after":            {serverA + standby, serverA + "ha_mode to-be-active\n", IdentityModeChanged},
+		"another process, same mode":    {serverA + standby, serverB + standby, IdentityChanged},
+		"no mode after":                 {serverA + standby, serverA, IdentityUnreadable},
+		"no mode before":                {serverA, serverA + standby, IdentityUnreadable},
+		"a mode that could not be read": {serverA + standby, serverA + "ha_mode ?\n", IdentityUnreadable},
+		"two modes":                     {serverA + standby, serverA + standby + active, IdentityUnreadable},
+		"a mode and no server":          {serverA + standby, standby, IdentityVanished},
+		"the mode and two servers":      {serverA + standby, serverA + serverB + standby, IdentityAmbiguous},
+	} {
+		t.Run(name, func(t *testing.T) {
+			run, calls := fakeRunner(t, answer{out: lostValue}, answer{out: cleanValue})
+			guard := identities(t, answer{out: tc.before}, answer{out: tc.after})
+			guard.HA = true
+			got, err := Read(guard, run, readSQL, ValuesComplete)
+			if tc.want == IdentityUnchanged {
+				if err != nil || got.Identity != IdentityUnchanged || *calls != 2 {
+					t.Errorf("%d calls, %+v, error %v", *calls, got, err)
+				}
+				return
+			}
+			wantLost(t, err, tc.want, false)
+			if *calls != 1 {
+				t.Errorf("%d calls after a mode that did not hold", *calls)
+			}
+		})
+	}
+	// A member that is not HA has no mode line, and one in its output is
+	// something else.
+	if _, _, result := readIdentity(serverA+standby, nil, false); result != IdentityUnreadable {
+		t.Errorf("a mode line from a member that is not HA reads as %s", result)
+	}
+	if got := (Watch{}).Compare(); got != IdentityUnreadable {
+		t.Errorf("a Watch that was never started compares as %s", got)
+	}
+	if got := (Guard{}).Before().Compare(); got != IdentityUnreadable {
+		t.Errorf("a Guard without a reader compares as %s", got)
+	}
+}
+
+// The HA script runs here with a stand-in cubrid on $CUBRID/bin that prints
+// what POC-52 recorded from cubrid changemode.
+func TestHAServerIdentityScript(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	if _, err := exec.LookPath("timeout"); err != nil {
+		t.Skip("no timeout")
+	}
+	database := fmt.Sprintf("hadb%d", os.Getpid())
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "bin"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CUBRID", home)
+	server := startServerCopy(t, bash, database)
+	for name, tc := range map[string]struct {
+		cubrid string
+		want   *regexp.Regexp
+	}{
+		"active": {`echo "The server '$2''s current HA running mode is active."`,
+			regexp.MustCompile(`^cub_server \d+ \d+\nha_mode active\n$`)},
+		"to-be-active": {`echo "The server '$2''s current HA running mode is to-be-active."`,
+			regexp.MustCompile(`\nha_mode to-be-active\n$`)},
+		"no server": {`echo "Failed to connect to database server, '$2', on the following host(s): localhost"; exit 1`,
+			regexp.MustCompile(`\nha_mode \?\n$`)},
+		"not HA": {`echo "The server was not configured for HA."; exit 1`, regexp.MustCompile(`\nha_mode \?\n$`)},
+	} {
+		script := "#!/bin/sh\n[ \"$1\" = changemode ] && [ \"$2\" = \"" + database + "@localhost\" ] || exit 2\n" +
+			tc.cubrid + "\n"
+		if err := os.WriteFile(filepath.Join(home, "bin", "cubrid"), []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var out []byte
+		for range 200 {
+			if out, err = exec.Command(bash, "-c", HAServerIdentityScript, database).CombinedOutput(); err != nil {
+				t.Fatalf("%s: the script failed: %v\n%s", name, err, out)
+			}
+			if strings.HasPrefix(string(out), fmt.Sprintf("cub_server %d ", server.Process.Pid)) {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if !tc.want.Match(out) {
+			t.Errorf("%s: the script printed %q", name, out)
+		}
+	}
+}
+
+// Only the header just before a code of the pair goes with it: another header
+// on the line is another error.
+func TestOnlyLostSessionKeepsAnotherHeader(t *testing.T) {
+	line := "Time: 11/07/26 01:26:15.045 - ERROR *** file a.c, line 1 - ERROR *** file network_cl.c, line 177 " +
+		"ERROR CODE = -199, Tran = 3, EID = 2"
+	if OnlyLostSession(strings.Replace(lostValue, lostValue[strings.Index(lostValue, "Time:"):strings.Index(lostValue,
+		"\nServer no longer")], line, 1)) {
+		t.Error("a second header on the line of -199 was taken as part of the pair")
+	}
+	if !OnlyLostSession(lostValue) {
+		t.Error("the pair as the Kind runs print it is not only the pair")
 	}
 }

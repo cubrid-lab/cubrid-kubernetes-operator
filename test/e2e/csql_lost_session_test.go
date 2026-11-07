@@ -45,7 +45,10 @@ const (
 
 	// lostSessionsFile holds one JSON line for each time csql printed the pair.
 	lostSessionsFile = "suite/csql-lost-sessions.jsonl"
-	// lostSessionsMeasurement is the count of them in a scenario's result.
+	// lostSessionsMeasurement is the count of them in a scenario's result. It
+	// is unknown when the scenario made no read and printed no pair: a write
+	// alone is not counted as a chance to see one, because the decision rests on
+	// reads, so a scenario that only wrote and printed none says unknown.
 	lostSessionsMeasurement = "csqlLostSessions"
 	// reReadIsThisCall is recorded for the pair of a read made once more.
 	reReadIsThisCall = "this call was the read made once more"
@@ -92,6 +95,11 @@ func newLostSessionLedger() *lostSessionLedger {
 // observe counts one csql call and, when it printed the pair, gives the new
 // record to seen, which may be nil. The command's error does not matter: a
 // call that also failed printed the pair as well.
+//
+// The call is credited to the labels of the spec running when it returns. A
+// background read, such as the sampler of the conditions, that outlives its
+// spec is therefore credited to the next one; the run-wide count and the file
+// do not depend on that, only the per-scenario measurement does.
 func (l *lostSessionLedger) observe(member, sql, out string, seen func(*lostSessionRecord)) {
 	read := sqlcheck.ReadOnly(sql)
 	report := CurrentSpecReport()
@@ -193,13 +201,17 @@ func (l *lostSessionLedger) note() string {
 }
 
 // serverGuard reads the identity of a member's cub_server, in the container
-// csql runs in.
-func serverGuard(ctx context.Context, namespace, pod, database string) sqlcheck.Guard {
-	return sqlcheck.Guard{Settle: identitySettle, Identity: func() (string, error) {
+// csql runs in, and on an HA member also its HA mode.
+func serverGuard(ctx context.Context, namespace, pod, database string, ha bool) sqlcheck.Guard {
+	script := sqlcheck.ServerIdentityScript
+	if ha {
+		script = sqlcheck.HAServerIdentityScript
+	}
+	return sqlcheck.Guard{Settle: identitySettle, HA: ha, Identity: func() (string, error) {
 		bounded, cancel := context.WithTimeout(ctx, identityTimeout)
 		defer cancel()
 		return utils.RunQuiet(exec.CommandContext(bounded, "kubectl", "-n", namespace, "exec", pod, "--",
-			"bash", "-c", sqlcheck.ServerIdentityScript, database))
+			"bash", "-c", script, database))
 	}}
 }
 
@@ -217,9 +229,14 @@ type csqlMember struct {
 	guard                    sqlcheck.Guard
 }
 
-func memberCSQL(ctx context.Context, namespace, pod, database string) csqlMember {
+func memberCSQL(ctx context.Context, namespace, pod, database string, ha bool) csqlMember {
 	return csqlMember{ctx: ctx, namespace: namespace, pod: pod, database: database, run: utils.Run,
-		guard: serverGuard(ctx, namespace, pod, database)}
+		guard: serverGuard(ctx, namespace, pod, database, ha)}
+}
+
+// memberCSQL is memberCSQL for a member of this HA cluster.
+func (r *haRun) memberCSQL(ctx context.Context, pod string) csqlMember {
+	return memberCSQL(ctx, r.namespace, pod, r.database, true)
 }
 
 // runner is csqlRunner that also hands over the record of each pair.

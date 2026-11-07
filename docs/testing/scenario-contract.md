@@ -131,6 +131,15 @@ stays open. What is known limits what a test may do with it:
   the call only after a short bounded wait, because one server in POC-55 read
   as unchanged at `csql`'s exit while it was dying. That is a comparison over
   recorded runs and is not a guarantee on another build or host.
+- A process identity does not show a change of HA mode: a standby promoted to
+  active keeps its process, and the message of `-111` names a mode change as
+  one of its causes. On an HA member the same read therefore also asks for the
+  server's HA mode with `cubrid changemode <db>@localhost` and no mode
+  argument, which POC-52 used because it does not call `cubrid heartbeat
+  status`; the mode must be readable and the same before and after.
+- A server that died and was revived by `cub_master` before a call's own
+  identity read is not seen by that call. S00 also compares the identity read
+  before its write with the one at the end of its smoke checks.
 
 **What is tolerated.** A pair is tolerated at a listed step only when all of
 these hold; otherwise the step fails as it did before:
@@ -139,8 +148,9 @@ these hold; otherwise the step fails as it did before:
 2. the output holds both codes and no other error: no other `ERROR CODE`, no
    `ERROR:` line and no other `ERROR`;
 3. the step's result is complete in the output;
-4. the identity read before the call equals the one read after it, and a read
-   that failed, found no server or found several never counts as equal;
+4. the identity read before the call equals the one read after it, and on an
+   HA member so does its HA mode; a read that failed, found no server, found
+   several or could not read the mode never counts as equal;
 5. an independent check then passes. It decides the step: the tolerance says
    nothing about whether the statement took effect.
 
@@ -168,10 +178,14 @@ they already read again, and they do not pay for an identity read.
 held session, is counted for the whole run, also on reads a loop absorbs and on
 a run that passes. `suite/csql-lost-sessions.jsonl` has a line for each: its
 time, step, member, the first line of the query, whether it was a read or a
-write, what the identity comparison found and how the second read answered.
+write, what the identity comparison found and how the second read answered,
+as a fixed reason without the read's output.
 A run with any has a line in the `notes` of `summary.json`, and each scenario
 result has `measurements.csqlLostSessions`, which is `unknown` when the scenario
-made no `csql` read and printed no pair. These counts are recorded and judge
+made no `csql` read and printed no pair: only reads count as a chance to see
+one, so a scenario that only wrote and printed none says `unknown`. A call is
+credited to the step running when it returns, so a background read that
+outlives its step counts toward the next one. These counts are recorded and judge
 nothing: no limit applies to them.
 
 ### Required scenarios
@@ -1678,7 +1692,11 @@ it needs more.
     is inconclusive, this rule is not judged and S00 ends `blocked` however
     early `Ready` was `True`, unless something else failed it. Any other result
     fails S00: a failed statement, a row that did not match, or a `csql` that
-    could not be run. `measurements.csqlLostSessionReads` counts the `csql`
+    could not be run. The identity of `cub_server` read before the write must
+    also equal the one read at the end of the smoke checks, which adds the step
+    `server_identity_compared` to `S00/timeline.jsonl`: a changed, missing,
+    ambiguous or unreadable identity fails S00, because nothing then shows that
+    the server ran the whole time. `measurements.csqlLostSessionReads` counts the `csql`
     reads of the smoke checks that printed the pair, also on a run that passed,
     and is `unknown` when the run made no such read. The read before the Pod
     deletion and the reads after it are not counted.
@@ -1704,7 +1722,8 @@ it needs more.
   after that judgement, so it holds the result and reason of the summary.
   `S00/timeline.jsonl` starts with
   the steps of the installation and the smoke checks (`cluster_created`,
-  `pod_ready`, `ready_observed`, `brokers_available`, `smoke_checks_ended`)
+  `pod_ready`, `ready_observed`, `brokers_available`, `server_identity_compared`,
+  `smoke_checks_ended`)
   before the steps of the Pod deletion. The checks above, and the limits
   below, are made as before.
 - **Limits:** `install_limit`, `ready_limit`.

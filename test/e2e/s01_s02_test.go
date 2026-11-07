@@ -251,7 +251,7 @@ func (r *haRun) memberValues(ctx context.Context, pod, query string) ([]string, 
 // retried by a loop. It follows the rule of sqlcheck.Read, which costs one
 // more kubectl exec on each call, so the retried reads stay on memberValues.
 func (r *haRun) memberValuesOnce(ctx context.Context, pod, query string) ([]string, error) {
-	result, err := memberCSQL(ctx, r.namespace, pod, r.database).read(query, sqlcheck.ValuesComplete)
+	result, err := r.memberCSQL(ctx, pod).read(query, sqlcheck.ValuesComplete)
 	if err != nil {
 		return nil, err
 	}
