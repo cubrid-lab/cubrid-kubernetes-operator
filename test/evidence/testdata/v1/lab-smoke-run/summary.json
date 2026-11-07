@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1",
+  "runId": "97a4fa0e-0976-4692-b3d6-afd28eaefb94",
+  "startedAt": "2026-10-19T01:07:53.170554701Z",
+  "finishedAt": "2026-10-19T01:09:03.227466524Z",
+  "environment": {
+    "level": "kind",
+    "kubernetesVersion": "v1.37.0",
+    "operatorCommit": "20afeaa46694a43e82360a34cbe5a5f491d0dc89",
+    "operatorImageDigest": "docker.io/library/import-2026-10-19@sha256:eb798ad2d65c77ac2b5d7d3a894ba94bf8fff772e4a4501e87afc030fd9d4023",
+    "cubridImageDigest": "sha256:f489a9bab2e8ae65930641deb37236fed614dc15bdff043d4add9d922b933165",
+    "engineVersion": "11.4.6.1963",
+    "clientDriver": "csql"
+  },
+  "lane": "lab-installed-smoke",
+  "passed": true,
+  "problems": [],
+  "scenarios": [
+    {
+      "id": "LAB00",
+      "result": "pass",
+      "reason": "",
+      "cleanupSucceeded": true,
+      "neverEvents": [],
+      "evidence": [
+        "LAB00/record.json"
+      ]
+    }
+  ],
+  "notes": [
+    "Connection smoke against an installed Operator; no installation, VM fault or S00-S15 qualification",
+    "Commit is selected by the campaign; actual runtime image identities are recorded separately",
+    "Namespace cleanup does not certify deletion of retained backend volumes"
+  ]
+}

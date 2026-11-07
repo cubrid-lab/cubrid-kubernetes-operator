@@ -1050,6 +1050,48 @@ with a `<failure>` that lists the run's problems, the same ones as in
 problem of the run alone. So a report whose scenarios are all skipped still
 fails when the lane did. A passing run has no `run` case (#460).
 
+### Reading the results of an earlier run
+
+`ReadRun` in `test/evidence/read.go` reads a run directory back so that a
+result stays usable after the code that wrote it has moved on. It writes
+nothing: no `summary.json`, `junit.xml` or evidence file of an earlier run is
+ever converted or rewritten, so there is nothing to migrate back, and rolling
+the reader back is a revert of the code alone.
+
+A run is identified by what it recorded. Each result resolves to a registry key
+under the `lane` and `environment.level` in its own `summary.json`, never under
+another: `S06/restart` is `operator-failure-recovery-restart` in
+a `kind` run, and `installed-operator-failure-recovery-restart` in a
+`lab-installed-ha-s06` run at the `vm-lab` level. The JUnit testcase `name` and
+the `id` and `variant` fields stay the identity of schema version 1.
+
+| The reader finds | What it does |
+|---|---|
+| A `schemaVersion` other than the string `"1"`, or none | Refuses the file with an error and returns no results |
+| A field schema version 1 never had, or a file that is not one JSON object | Refuses the file with an error and returns no results |
+| A lane that is not registered, or a lane at a level it is not judged at | Keeps every result readable, resolves none of them, and does not validate the run |
+| A legacy name unknown at that level, shared by two results, or recorded in the wrong field | Keeps the result without a key; it counts for no requirement |
+| Two legacy names of one result in one run | Reports the conflict; neither replaces another requirement |
+| A required result missing, or not passed | Reports it in the words of the gate, with `Lane.Gate` applied to the registered lane |
+| A claimed pass whose evidence file is gone, with no evidence, an unconfirmed fault or a never-event | Reports it as a `fail`, and keeps the recorded `pass` |
+| A run with no `finishedAt`, or one that says it did not pass | Marks an unfinished run provisional, and does not validate it |
+| A filtered `kind-filtered` run | Resolves its results and does not validate it: it chose its own requirements |
+| A missing or unreadable `junit.xml`, one of another run, or cases that differ in name, order, number or verdict from `summary.json` | Reports the difference and does not validate the run |
+
+The read keeps three things apart. `Summary` is what the run recorded, with its
+own verdict, and is never changed. `Results` adds to each entry its key and what
+its files support now. `Problems` says why the run does not prove the lane
+**as it is registered today**, so a run that passed an earlier, shorter list of
+requirements stays `passed` in `Summary` and is not validated. The directory
+and the SHA-256 digests of the two files refer to the unmodified source. A name
+repeated within a run keeps the rule of the gate: every record of it must pass,
+and it can never stand for a different requirement.
+
+Schema version 1 is the only version. A later version must be added to the
+reader, with frozen results of version 1 still read the same, before anything
+writes it. Fixtures of version 1 are in `test/evidence/testdata/v1`; their bytes
+do not change.
+
 ### `history.jsonl`
 
 One JSON object per line, written by the client as it happens and never
