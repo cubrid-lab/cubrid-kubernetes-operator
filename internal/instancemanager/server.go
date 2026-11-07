@@ -94,6 +94,11 @@ type Server struct {
 	// keeps the defaults (awaitStagingWriters).
 	stagingWriterBound time.Duration
 	stagingWriterPoll  time.Duration
+	// backupRoleBound and backupRolePoll override how long and how often a
+	// backup looks for the role it was asked to run in; zero keeps the
+	// defaults (backupSourceRole).
+	backupRoleBound time.Duration
+	backupRolePoll  time.Duration
 	// procRoot is the process list that wait reads; empty is defaultProcRoot.
 	procRoot string
 	// restoreRoots confine every path a restore request names (#119).
@@ -489,6 +494,13 @@ const (
 	// read of its applier or an active master's read of its log end, so a
 	// slow applyinfo leaves that value unknown instead of losing the role.
 	replicationBudget = 2 * time.Second
+	// backupRoleBound bounds how long a backup looks for the role it names.
+	// It lies above the 12.3 s in which a returning master settled on that
+	// role (docs/poc/RESULTS.md), and a real change of role costs only this
+	// wait before the backup fails. backupRolePoll is the pause between
+	// readings.
+	backupRoleBound = 30 * time.Second
+	backupRolePoll  = time.Second
 )
 
 // logMissingApplier logs once that heartbeat lists no applier process for
@@ -745,6 +757,11 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			fail("backup refused: " + err.Error())
 			return
 		}
+		role, err := s.backupSourceRole(ctx, requestedRole(req))
+		if err != nil {
+			fail("backup refused: " + err.Error())
+			return
+		}
 		if err := s.createBackupStaging(req.Destination); err != nil {
 			fail(err.Error())
 			return
@@ -758,6 +775,17 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 		if s.objects == nil || req.Upload == nil {
 			fail("backupdb succeeded but no object-storage destination is configured")
 			return
+		}
+		// A role that changed while backupdb ran is not one the manifest may
+		// name. This narrows the window; it does not close it: a role can
+		// change and return between the two readings, or change right after
+		// the second. A member with no role to compare with has nothing to
+		// read again.
+		if role != RoleUnknown {
+			if _, err := s.backupSourceRole(ctx, role); err != nil {
+				fail("backup not uploaded: its role changed or could not be read after backupdb: " + err.Error())
+				return
+			}
 		}
 
 		if _, err := s.store.Update(id, func(op *Operation) { op.State = OpUploading }); err != nil {
@@ -775,7 +803,7 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 				CubridVersion:  engine,
 				Level:          req.Level,
 				SourceInstance: req.Upload.SourceInstance,
-				SourceRole:     req.Upload.SourceRole,
+				SourceRole:     string(role),
 				CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 				OperationID:    id,
 			},
@@ -798,6 +826,61 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			}
 		})
 	}()
+}
+
+// requestedRole is the role a backup request names for its member; empty when
+// the request has no upload.
+func requestedRole(req BackupRequest) Role {
+	if req.Upload == nil {
+		return ""
+	}
+	return Role(req.Upload.SourceRole)
+}
+
+// backupSourceRole returns the role this member reports, from the same
+// `cubrid heartbeat status` that answers /v1/role, which is what a backup's
+// manifest records. A request that names no role, or the role unknown, as the
+// Operator's for a standalone member, claims nothing to compare: one reading
+// is returned, and that can be unknown. For any other role the reading must
+// match. It is read again for backupRoleBound before the backup is refused,
+// because a read that fails once, or a state that passes in seconds, does not
+// show a change of role, and a seed backup refused for it would use up an
+// attempt of the bootstrap. A role that was not read never counts as the
+// requested one.
+//
+// A master whose server is not active yet is a master here: that is the
+// member a new cluster's first peer is copied from (docs/poc/RESULTS.md,
+// POC-13).
+func (s *Server) backupSourceRole(ctx context.Context, want Role) (Role, error) {
+	bound, poll := s.backupRoleBound, s.backupRolePoll
+	if bound <= 0 {
+		bound = backupRoleBound
+	}
+	if poll <= 0 {
+		poll = backupRolePoll
+	}
+	start := time.Now()
+	for {
+		roleCtx, cancel := context.WithTimeout(ctx, roleBudget)
+		st := HeartbeatStatus(roleCtx, s.cli)
+		cancel()
+		if want == "" || want == RoleUnknown || st.Role == want {
+			return st.Role, nil
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+		}
+		if ctx.Err() != nil || time.Since(start) >= bound {
+			msg := fmt.Sprintf("the backup names this member as %s, but it reports %s after %s", want, st.Role, time.Since(start).Round(time.Millisecond))
+			if st.Reason != "" {
+				msg += " (" + st.Reason + ")"
+			}
+			return "", errors.New(msg)
+		}
+	}
 }
 
 // backupEngineVersion returns the engine version a backup of req records in

@@ -167,7 +167,7 @@ func TestServer_Backup_StopsWhenAStateCannotBeRecorded(t *testing.T) {
 		WithBackupStagingRoot(filepath.Dir(staging))
 	h := srv.Handler()
 
-	body := `{"database":"appdb","destination":"` + staging + `","upload":{"bucket":"cubrid-backups","prefix":"prod/uid-1","clusterUID":"cuid","cubridVersion":"11.4.6","sourceInstance":"appdb-1","sourceRole":"slave"}}`
+	body := `{"database":"appdb","destination":"` + staging + `","upload":{"bucket":"cubrid-backups","prefix":"prod/uid-1","clusterUID":"cuid","cubridVersion":"11.4.6","sourceInstance":"appdb-1","sourceRole":"unknown"}}`
 	rr := postBackup(t, h, "key-1", body)
 	var op Operation
 	if err := json.Unmarshal(rr.Body.Bytes(), &op); err != nil {
@@ -286,7 +286,7 @@ func TestServer_Backup_UnrecordedStagingClaimIsNotAnsweredAsPending(t *testing.T
 		WithBackupStagingRoot(staging)
 	h := srv.Handler()
 
-	body := `{"database":"appdb","destination":"` + filepath.Join(staging, "bk") + `","upload":{"bucket":"cubrid-backups","prefix":"prod/uid-1","clusterUID":"cuid","cubridVersion":"11.4.6","sourceInstance":"appdb-1","sourceRole":"slave"}}`
+	body := `{"database":"appdb","destination":"` + filepath.Join(staging, "bk") + `","upload":{"bucket":"cubrid-backups","prefix":"prod/uid-1","clusterUID":"cuid","cubridVersion":"11.4.6","sourceInstance":"appdb-1","sourceRole":"unknown"}}`
 	rr := postBackup(t, h, "key-1", body)
 	if rr.Code == http.StatusAccepted {
 		t.Errorf("POST /v1/backup = 202 %s although neither its staging nor its failure is on record", rr.Body.String())

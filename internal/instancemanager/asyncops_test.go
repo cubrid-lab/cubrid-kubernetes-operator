@@ -176,7 +176,7 @@ func TestServer_Backup_CompletesAfterUpload(t *testing.T) {
 		WithBackupStagingRoot(root).
 		Handler()
 
-	body := `{"database":"appdb","destination":"` + staging + `","upload":{"bucket":"cubrid-backups","prefix":"prod/uid-1","clusterUID":"cuid","cubridVersion":"11.4.6","sourceInstance":"appdb-1","sourceRole":"slave"}}`
+	body := `{"database":"appdb","destination":"` + staging + `","upload":{"bucket":"cubrid-backups","prefix":"prod/uid-1","clusterUID":"cuid","cubridVersion":"11.4.6","sourceInstance":"appdb-1","sourceRole":"unknown"}}`
 	rr := postBackup(t, h, "key-1", body)
 	var op Operation
 	_ = json.Unmarshal(rr.Body.Bytes(), &op)
@@ -277,8 +277,11 @@ var testStagingRoot = filepath.Join(os.TempDir(), "im-test-staging")
 // testUpload is the upload of the handler tests' backup requests: an
 // asynchronous backup without one is refused (#290), and so is an upload
 // without every field the manifest needs (#301).
+// testUpload names the role unknown, so that the CLI stand-ins of tests that
+// are not about the role need not answer `cubrid heartbeat status` as a
+// member with that role (backup_role_test.go is about it).
 var testUpload = &BackupUpload{Bucket: "cubrid-backups", Prefix: "prod/uid-1", ClusterUID: "uid-1",
-	CubridVersion: "11.4", SourceInstance: "db-0", SourceRole: "slave"}
+	CubridVersion: "11.4", SourceInstance: "db-0", SourceRole: "unknown"}
 
 // backupBody is a backup request of appdb staged at destination.
 func backupBody(destination string) string {

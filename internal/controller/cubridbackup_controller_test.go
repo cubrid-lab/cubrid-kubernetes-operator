@@ -665,4 +665,67 @@ var _ = Describe("CubridBackup Controller", func() {
 			Expect(ready.Reason).To(Equal(reasonRecordedTargetNotEligible))
 		})
 	})
+
+	// A failover between the selection and the start of the backup: the
+	// member refuses the role the request names (#755). The operation has
+	// ended, and a CubridBackup never moves to another target, so the backup
+	// ends Failed with the member's reason. It neither waits nor starts
+	// again; a new CubridBackup selects from the roles of that moment.
+	It("ends a backup whose target refused the requested role, and a new backup selects again", func() {
+		cluster := haCluster("bk-role")
+		cluster.Spec.Databases = []databasev1alpha1.CubridDatabase{{Name: demoDB}}
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+		createAppliedMemberPods(ctx, cluster)
+
+		backup := newBackup("bk-role", "bk-role")
+		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+
+		const master, standby = "bk-role-0", "bk-role-1"
+		const refusal = "backup refused: the backup names this member as slave, but it reports master after 30s"
+		prober := &memberProber{master: master}
+		fake := &fakeBackupClient{state: instancemanager.OpFailed, failureReason: refusal}
+		r := &CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: prober, Backup: fake}
+		key := client.ObjectKeyFromObject(backup)
+
+		By("starting the backup on the standby the Operator selected")
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fake.started).To(BeTrue())
+
+		By("the standby's refusal reaching the status")
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		failed := &databasev1alpha1.CubridBackup{}
+		Expect(k8sClient.Get(ctx, key, failed)).To(Succeed())
+		Expect(failed.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+		Expect(failed.Status.CompletedAt).NotTo(BeNil())
+		Expect(failed.Status.Artifact).To(BeNil())
+		Expect(failed.Status.TargetInstance).To(Equal(standby))
+		ready := meta.FindStatusCondition(failed.Status.Conditions, conditionBackupReady)
+		Expect(ready).NotTo(BeNil())
+		Expect(ready.Reason).To(Equal("BackupFailed"))
+		Expect(ready.Message).To(Equal(refusal))
+
+		By("nothing being started again for that backup")
+		fake.started = false
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fake.started).To(BeFalse())
+
+		By("a new backup choosing from the roles after the failover")
+		prober.master = standby
+		retry := newBackup("bk-role-retry", "bk-role")
+		Expect(k8sClient.Create(ctx, retry)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, retry) })
+		fake.state = instancemanager.OpRunningBackup
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(retry)})
+		Expect(err).NotTo(HaveOccurred())
+		running := &databasev1alpha1.CubridBackup{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(retry), running)).To(Succeed())
+		Expect(running.Status.TargetInstance).NotTo(Equal(standby), "the former standby is the master now")
+		Expect(running.Status.TargetRole).To(Equal(string(databasev1alpha1.RoleSlave)))
+		Expect(running.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+	})
 })
