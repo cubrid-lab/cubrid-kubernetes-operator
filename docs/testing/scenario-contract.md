@@ -1045,15 +1045,43 @@ for result matching and comparison. A testcase whose scenario has a known
 description also has a `<system-out>` element after its verdict element, such
 as `Primary database Pod termination and recovery - abrupt, later master
 (S03/abrupt)`; a scenario with no known description has none. The description
-does not replace the identity, and nothing matches on it. Schema version 2
-of `summary.json` leaves this file as it was: a case maps to its canonical key
-through the entry of `summary.json` at the same place, and any change to a
-testcase `name` needs its own versioned migration (see #715).
+does not replace the identity, and nothing matches on it.
+
+A testcase the registry holds under this run's `lane` and `level` also has its
+canonical key as a property, before its verdict element, and one it does not
+hold has no property:
+
+```xml
+<testcase name="S03/abrupt" classname="scenario">
+  <properties>
+    <property name="key" value="ha-primary-pod-recovery-abrupt-later-master"></property>
+  </properties>
+  <system-out>Primary database Pod termination and recovery - abrupt, later master (S03/abrupt)</system-out>
+</testcase>
+```
+
+The `name` does not change, so anything that groups cases by it reads what it
+did. Cases are correlated across runs by key, never by `name` alone: `S06/restart`
+is one `name` at two levels and two different tests. A case's key is the property
+when the case has one, and otherwise the `key` of the entry of `summary.json` at
+the same place, which is all a file from before the property has; a version 1
+result gets its key from the registry, under its own lane and level. Any change
+to a testcase `name` needs its own versioned migration.
 
 `junit.xml` is uploaded with the run's evidence and only `ReadRun` in this
 repository reads it, so the description is seen by opening the file. The run's
 returned error and the `problems` of `summary.json` carry the description of each
 scenario they report as well.
+
+Consumers were checked on 2026-11-07 UTC before the property was added. In this
+repository, no workflow reads the file, and `.github/workflows/test-e2e.yml`
+only uploads the evidence directory; the tests in `test/installed` look for
+problem lines in its text. A code search of the `cubrid-lab` organization found
+`junit.xml` only in `sqlalchemy-cubrid` and `cubrid-mcp-server`, which handle the
+reports of their own pytest runs. A search covers default branches and public code, so
+a tool elsewhere is not excluded; one that reads `name` and the verdict elements
+is unaffected, and one that validates the file against a strict schema may have to
+allow `<properties>` in a `<testcase>`.
 
 | Result | JUnit |
 |---|---|
@@ -1101,6 +1129,7 @@ version 2 result must record the key they resolve to.
 | A run with no `finishedAt`, or one that says it did not pass | Marks an unfinished run provisional, and does not validate it |
 | A filtered `kind-filtered` run | Resolves its results and does not validate it: it chose its own requirements |
 | A missing or unreadable `junit.xml`, one of another run, or cases that differ in name, order, number or verdict from `summary.json` | Reports the difference and does not validate the run |
+| A `junit.xml` case with a key other than the one `summary.json` recorded at the same place, or with a key beside a version 1 result, which records none | Reports the difference and does not validate the run. A case with no key is an older file, not a defect |
 
 The read keeps three things apart. `Summary` is what the run recorded, with its
 own verdict, and is never changed. `Results` adds to each entry its key and what
@@ -1120,6 +1149,67 @@ versions still read the same, before anything writes it. Fixtures are in
 `test/evidence/testdata/v1` and `test/evidence/testdata/v2`; their bytes do not
 change. The version 2 fixtures are derived: the version 2 writer wrote them from
 the version 1 fixtures, so no CI or lab run produced them.
+
+### Comparing two runs
+
+`CompareRuns` in `test/evidence/compare.go` sets two runs that `ReadRun` read side
+by side. It writes nothing, keeps both runs as read, with their directories,
+digests and evidence paths, and converts neither. Results are paired by the key
+each resolved to under its own run's lane and level, and a display name or a
+similar spelling pairs nothing. Each key either run holds or either run's lane
+requires gets one entry, sorted by key, followed by one entry for each result
+without a key, so two comparisons of one pair are equal.
+
+| Change | What it means |
+|---|---|
+| `unchanged` | One key under one legacy name in both runs |
+| `renamed` | One key under two legacy names, both of which the registry holds as aliases of that key. This is the only way a rename is shown |
+| `added` | Only the new run holds the result |
+| `removed` | Only the old run holds the result, and neither run's lane requires it as registered today |
+| `not_run` | A run recorded it as `not_run`: the test still exists, and that run says nothing of it. It comes before `added`, so a placeholder never reads as a new test |
+| `missing` | A lane requires it and the new run, or both runs, hold no record |
+| `unresolved` | It has no single identity, because its name is unknown at the run's level or shared by two results, a run holds it under two names, or the registry does not hold a name as an alias of its key. It is paired with nothing, even under the same legacy name in both runs |
+
+The change says what became of the identity, and each side's verdict says how
+the result went: the worst judged result of the run's records, or none when it
+has no record. So a required result that turned `blocked` stays `unchanged` with
+the verdict `blocked`, rather than reading as gone.
+
+`Matches` is true only when both runs are validated (`ReadRun` found no
+problem), are of one lane and one level, and every entry is `unchanged` or
+`renamed` with a judged `pass` on both sides. Everything else is listed in
+`Problems`:
+
+| The comparison finds | What it does |
+|---|---|
+| Runs of two levels | Reports it and pairs nothing: `S06/restart` at the `kind` level is not `S06/restart` at the `vm-lab` level, and neither is added or removed |
+| Runs of two lanes, including `kind` and `kind-filtered` | Reports it and still shows each result. A key a `kind-filtered` run left out is required, because its results are read as the Kind suite's |
+| A run that did not finish, failed its lane, or whose `junit.xml` differs from its summary | Reports each of `ReadRun`'s problems under that run |
+| A result `fail`, `blocked`, `not_run`, `not_applicable` or missing on either side, or a claimed `pass` its files do not support | Reports it, also when both runs agree on it: the same `blocked` result twice is not a match |
+| A result recorded more than once in a run | Reports it, because its records cannot be paired, and takes the worst record as the verdict, as the gate requires every record to hold |
+| One key judged by a different limit, by an `unset` limit or by a limit only one run recorded | Reports it: the same pass under another limit is a different check |
+| A fault in only one of the two runs | Reports it for the same reason |
+| Nothing to compare | Reports it; an empty comparison never matches |
+
+What a run measured and what it ran on are shown beside the results and decide
+nothing, because they differ between any two runs; `Matches` does not say that the
+two runs tested one candidate. Each value is `same`, `changed` or `unknown`. A
+value a run did not record, or recorded as `"unknown"`, is `unknown` beside
+anything, even beside `"unknown"` in the other run, and is never zero. A run with
+no `operations` has unknown counts, not counts of zero.
+
+To rename a legacy name, add the new name to the `Aliases` of the result in the
+registry and keep the old one. The key stays, and earlier runs stay readable.
+To retire a result, take its key out of the lanes and keep its entry: its earlier
+results still resolve, and a later run shows it as `removed`. Deleting the entry
+makes those results `unresolved` instead, which fails closed and loses the
+history. A renamed key is not a rename here: a version 2 run that recorded the old
+key no longer resolves ([Result format versions](#result-format-versions-migration-and-rollback)).
+
+The real registry holds one alias per result, so no real pair of runs shows a
+rename: the tests register an alias in a copy of it. A comparison looks at the
+results a run recorded and does not read the evidence files beyond their
+existence, so it does not replace reviewing a scenario's evidence.
 
 ### Result format versions, migration and rollback
 
@@ -1158,7 +1248,9 @@ is written in version 2 of a `kind` run as
 }
 ```
 
-and both are the same `junit.xml` case, whose bytes do not depend on the version:
+and both are the same `junit.xml` case, with the same `name`, class, verdict and
+text. A file written before cases carried their key has no `<properties>` element;
+the writer's current output adds it, as [`junit.xml`](#junitxml) shows:
 
 ```xml
 <testcase name="S03/abrupt" classname="scenario">
@@ -1177,9 +1269,10 @@ depend on that order. What version 2 leaves unchanged:
   the file, and `ReadRun` reports it.
 - **The problem lines.** They start with the legacy name as in version 1.
 - **Selectors and evidence paths.** They are the subject of #712.
-- **`junit.xml`.** A test compares the writer's output with the frozen version 1
-  file byte by byte. Presenting a key or alias metadata in it is not specified
-  yet, and is not done until consumers of the file have been checked.
+- **`junit.xml`.** A test removes the key property from the writer's output and
+  compares the rest with the frozen version 1 file byte by byte. The `name` stays
+  the legacy one; the key is added beside it after the check of its consumers
+  described under [`junit.xml`](#junitxml).
 
 A key is permanent once it is written: `ReadRun` compares it with the registry,
 so renaming a key leaves earlier version 2 runs unvalidated until a new version
@@ -1192,10 +1285,88 @@ and the tests in `test/installed` read the fields of version 1, which version 2
 keeps. A tool outside this repository that requires `schemaVersion` to be `"1"`
 has to accept `"2"`; one that reads `id` and `variant` is unaffected.
 
-To roll back, set `SchemaVersion` to `"1"` and write the `Summary` itself in
-`Summary.Write`. Keep the reader. Results written as version 2 in the meantime
-stay as they are and are read as version 2: no file of either version is
-converted, in either direction.
+To roll back, set `SchemaVersion` to `"1"`, write the `Summary` itself in
+`Summary.Write`, and stop setting `Properties` in `Summary.junit`. Keep the
+reader. Results written as version 2 in the meantime, with or without a key in
+`junit.xml`, stay as they are and are read as version 2: no file of either version
+is converted, in either direction.
+
+### Release evidence index
+
+A release decision needs to name the runs behind one candidate after their
+CI artifacts have expired. The release evidence index is the record that does
+so. This section defines what it holds; it is not a store, and the retention,
+integrity checks and acceptance of a candidate's evidence belong to #94 and #126.
+An index is written once for a candidate and never edited. A changed candidate
+or a new run gets a new index, and the files it refers to are never rewritten.
+
+```json
+{
+  "indexVersion": "1",
+  "createdAt": "2026-11-30T09:00:00Z",
+  "candidate": {
+    "commit": "<the 40-character commit of the candidate>",
+    "operatorImageDigest": "sha256:<digest>",
+    "cubridImageDigest": "sha256:<digest>"
+  },
+  "runs": [
+    {
+      "runId": "2026-11-29T01-00-38Z",
+      "source": "https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/<run>",
+      "schemaVersion": "2",
+      "lane": "kind",
+      "level": "kind",
+      "startedAt": "2026-11-29T01:00:38Z",
+      "finishedAt": "2026-11-29T01:43:15Z",
+      "environment": {
+        "operatorCommit": "<as summary.json records it>",
+        "operatorImageDigest": "<as summary.json records it>",
+        "cubridImageDigest": "<as summary.json records it>"
+      },
+      "scenarios": [
+        {
+          "key": "ha-primary-pod-recovery-abrupt-later-master",
+          "id": "S03",
+          "variant": "abrupt",
+          "recorded": "pass",
+          "judged": "pass",
+          "evidence": ["S03/abrupt/history.jsonl"]
+        }
+      ],
+      "files": [
+        { "path": "summary.json", "sha256": "<digest>", "state": "archived", "location": "<durable locator>" },
+        { "path": "S03/abrupt/history.jsonl", "sha256": "<digest>", "state": "listed" },
+        { "path": "S03/abrupt/cluster/index.json", "sha256": "unknown", "state": "unavailable", "reason": "<why>" }
+      ]
+    }
+  ]
+}
+```
+
+- **`candidate`** is what is being decided on. **`environment`** is what the run
+  observed, copied from `summary.json`. The two are kept apart so that a run of
+  another candidate shows as one; `unknown` stays `unknown` and matches nothing.
+- **`source`** is the run's URL or another durable locator of the original
+  bundle. An index never replaces that bundle.
+- **`schemaVersion`** is the version of that run's `summary.json`. A later reader
+  uses it to read the original file through `ReadRun`.
+- **`scenarios`** has one entry per result of the run. `key` is what `ReadRun`
+  resolved, and is left out for a result that has none; `id` and `variant` are as
+  recorded. `recorded` is the result the file holds and `judged` what its files
+  supported when the index was made, so a recorded `pass` whose evidence is gone
+  stays visible as `fail`. `evidence` lists the paths exactly as the run did.
+- **`files`** lists every file the run listed, plus `summary.json` and
+  `junit.xml`, and states what is known of each:
+
+  | `state` | What it claims |
+  |---|---|
+  | `archived` | The bytes were copied to `location`, and a copy read back from there has this SHA-256 digest |
+  | `listed` | The digest was taken from the run directory; no copy is claimed |
+  | `unavailable` | The file could not be read when the index was made, `sha256` is `unknown`, and `reason` says why |
+
+An index proves only what it says of each file. `listed` and `unavailable` never
+count as preserved, a pathname or a digest does not show that the file survived,
+and no entry turns a `blocked`, `not_run`, `fail` or missing result into a `pass`.
 
 ### `history.jsonl`
 
