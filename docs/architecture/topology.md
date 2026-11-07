@@ -36,8 +36,8 @@ flowchart TB
         builtin["Built-in controllers + kubelet"]:::k8s
     end
 
-    subgraph objs["Operator-owned objects (demo namespace)"]
-        crs["CubridCluster demo + CubridBackup<br/>status / Conditions"]:::op
+    subgraph objs["Objects reconciled by the Operator (demo namespace)"]
+        crs["User-created CubridCluster demo + CubridBackup<br/>Operator-written status / Conditions"]:::op
         workload["StatefulSet demo<br/>Deployments demo-broker-rw / demo-broker-ro"]:::op
         config["demo-instances + demo-0/1/2 Services<br/>HA + Broker ConfigMaps<br/>Instance Manager token Secret"]:::op
         safety["demo-rw / demo-ro Services<br/>NetworkPolicies + PodDisruptionBudgets"]:::op
