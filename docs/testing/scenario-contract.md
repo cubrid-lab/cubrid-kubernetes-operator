@@ -1309,7 +1309,7 @@ it is `deferred`.
 is named in the index or in the run's `notes`, and the scenario's `result` and
 `reason` stay as they were. The index joins the scenario's `evidence` only once
 it exists. A credential of the run found in a bundle fails the run like one in
-any other evidence file: see [Secrets](#secrets).
+any other evidence file: see [Secrets](#secrets). Such a run, or one whose evidence could not be searched, also leaves `e2e-evidence.held` beside the directory, naming the files, and the workflow then publishes nothing. A run killed before the search leaves no marker.
 
 **An interrupted collection.** A deadline, a cancellation or a Pod that
 disappears keeps what was read. The index is replaced after each source, so a
