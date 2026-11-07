@@ -22,6 +22,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,6 +33,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 )
 
 const (
@@ -46,6 +48,18 @@ case "$*" in
 *"get pods -l control-plane"*) printf 'manager-1\tuid-m\tcontrol\t0\n' ;;
 *"get pods -l app.kubernetes.io/instance"*) printf 'ha-0\tuid-0\tn0\t1\n' ;;
 *"get pods -l database.cubrid.io"*) printf 'ha-broker-rw-1\tuid-b\tn1\t\n' ;;
+*"-o json"*)
+	case "$*" in
+	*cubridclusters*"--field-selector metadata.name=ha"*)
+		echo '{"items":[{"metadata":{"name":"ha","uid":"cluster-uid","generation":1},"status":{"observedGeneration":1}}]}' ;;
+	*"get pods -o json -l app.kubernetes.io/instance=ha"*)
+		echo '{"items":[{"metadata":{"name":"ha-0","uid":"uid-0"},"spec":{"nodeName":"n0"},"status":{"phase":"Running"}}]}' ;;
+	*"-n system get pods -o json -l control-plane=controller-manager"*)
+		echo '{"items":[{"metadata":{"name":"manager-1","uid":"uid-m"},"spec":{"nodeName":"control"}}]}' ;;
+	*"get services -o json"*|*"get endpointslices.discovery.k8s.io -o json"*|*"get events -o json"*)
+		echo '{"items":[]}' ;;
+	*) echo "unexpected: $*" >&2; exit 1 ;;
+	esac ;;
 *"logs "*"--previous"*) echo '2026-11-06T09:09:00.000000000Z before the restart' ;;
 *"logs "*) echo '2026-11-06T09:10:00.000000000Z a line' ;;
 *"ls -1t"*) echo 'server/appdb_20261106_0910.err' ;;
@@ -338,5 +352,148 @@ func TestScenarioLogsNeedAnEvidenceDirectory(t *testing.T) {
 	}
 	if len(result.Evidence) != 0 {
 		t.Fatalf("evidence %v", result.Evidence)
+	}
+}
+
+// testFault plays a fault and records what the snapshot's wrapper passes on.
+type testFault struct {
+	confirmed bool
+	confirm   error
+	remove    error
+	removed   bool
+}
+
+func (f *testFault) Name() string                          { return "a test fault" }
+func (f *testFault) Inject(context.Context) error          { return nil }
+func (f *testFault) Confirm(context.Context) (bool, error) { return f.confirmed, f.confirm }
+func (f *testFault) Remove(context.Context) error {
+	f.removed = true
+	return f.remove
+}
+
+func testStateLogs(dir string, limits evidence.StateLimits) *scenarioLogs {
+	logs := testLogs(dir)
+	logs.keepState(dir, evidence.ClusterStatePlan("system", "ns", "ha", []string{"ha-0"}), kubectlState{}, limits,
+		evidence.NewLogBudget(1<<30, time.Hour))
+	return logs
+}
+
+// A scenario leaves a snapshot before the fault, at the fault and after the
+// verdict through kubectl gets alone, and its index joins the evidence.
+func TestScenarioSnapshotsAtEachStepOfTheFaultAndOnlyRead(t *testing.T) {
+	calls := useKubectl(t, fakeKubectl)
+	dir := t.TempDir()
+	logs := testStateLogs(dir, evidence.DefaultStateLimits())
+	logs.beforeFault(t.Context())
+	fault := logs.observeFault(&testFault{confirmed: true})
+	if err := fault.Inject(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if done, err := fault.Confirm(t.Context()); !done || err != nil {
+			t.Fatalf("confirm %t %v", done, err)
+		}
+	}
+	if err := fault.Remove(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var result evidence.Scenario
+	logs.conclude(t.Context(), true, &result)
+
+	const index = testLogScenario + "/cluster/index.json"
+	if !slices.Contains(result.Evidence, index) {
+		t.Fatalf("evidence %v", result.Evidence)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, index))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got evidence.StateIndex
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(got.Checkpoints))
+	for _, cp := range got.Checkpoints {
+		names = append(names, cp.Name)
+		for _, s := range cp.Sources {
+			if s.Source == evidence.StateOperatorMetrics {
+				continue
+			}
+			if s.Status != evidence.LogCollected && s.Status != evidence.LogEmpty {
+				t.Errorf("%s of %s: %+v", s.Source, cp.Name, s)
+			}
+		}
+	}
+	want := []string{evidence.LogsBeforeFault, evidence.StateFaultConfirmed, evidence.LogsAfterVerdict}
+	if !slices.Equal(names, want) || got.ClusterUID != "cluster-uid" {
+		t.Fatalf("checkpoints %v, index %+v", names, got)
+	}
+	observations, err := os.ReadFile(filepath.Join(dir, got.Observations))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []string{"fault_issued", "fault_confirmed", "fault_removed"} {
+		if strings.Count(string(observations), step) != 1 {
+			t.Errorf("%s is not there once:\n%s", step, observations)
+		}
+	}
+	for _, line := range recorded(t, calls) {
+		if fields := strings.Fields(line); slices.Contains(fields, "json") && fields[3] != "get" {
+			t.Errorf("a snapshot command that is not a get: %q", line)
+		}
+	}
+}
+
+// The wrapper reports what the fault reported, and a kubectl that never answers
+// holds no step of the fault: the snapshot runs beside it.
+func TestObservedFaultNeverChangesOrDelaysItsFault(t *testing.T) {
+	useKubectl(t, silentKubectl)
+	dir := t.TempDir()
+	limits := evidence.DefaultStateLimits()
+	limits.SourceTimeout, limits.CheckpointTimeout = 3*time.Second, 4*time.Second
+	logs := testStateLogs(dir, limits)
+	t.Cleanup(logs.duringFault.Wait)
+	broken := errors.New("broken")
+	inner := &testFault{confirm: broken, remove: broken}
+	fault := logs.observeFault(inner)
+	if fault.Name() != inner.Name() {
+		t.Fatalf("name %q", fault.Name())
+	}
+	if done, err := fault.Confirm(t.Context()); done || !errors.Is(err, broken) {
+		t.Fatalf("confirm %t %v", done, err)
+	}
+	if err := fault.Remove(t.Context()); !errors.Is(err, broken) || !inner.removed {
+		t.Fatalf("remove %v", err)
+	}
+	inner.confirm, inner.confirmed = nil, true
+	start := time.Now()
+	if done, err := fault.Confirm(t.Context()); !done || err != nil {
+		t.Fatalf("confirm %t %v", done, err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("the confirmation waited %s for the snapshot", took)
+	}
+	// The snapshot of the fault outlives a deadline by its own bound only, and
+	// what concludes the scenario is not held for it.
+	expired, cancel := context.WithCancel(t.Context())
+	cancel()
+	logs.grace = 50 * time.Millisecond
+	result := evidence.Scenario{ID: "S03", Result: evidence.Fail, Reason: "the check failed"}
+	start = time.Now()
+	logs.conclude(expired, true, &result)
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("the conclusion took %s", took)
+	}
+	if result.Result != evidence.Fail || result.Reason != "the check failed" {
+		t.Fatalf("the verdict changed: %+v", result)
+	}
+}
+
+// A run without an evidence directory runs its fault as it is.
+func TestFaultIsNotWrappedWithoutAnEvidenceDirectory(t *testing.T) {
+	logs := testStateLogs("", evidence.DefaultStateLimits())
+	inner := &testFault{}
+	if logs.observeFault(inner) != faults.Fault(inner) {
+		t.Fatal("the fault was wrapped")
 	}
 }

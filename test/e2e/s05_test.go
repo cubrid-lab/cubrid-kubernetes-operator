@@ -219,7 +219,7 @@ func (r *haRun) s05(variant string) {
 	newConnection := "not tried"
 	faultEnded = false
 	outcome := r.runFault(faults.Scenario{
-		Fault:  fault,
+		Fault:  logs.observeFault(fault),
 		Limits: s03FlowLimits,
 		Before: func(ctx context.Context) error {
 			now, _, err := r.master(ctx)

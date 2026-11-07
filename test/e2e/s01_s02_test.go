@@ -347,7 +347,8 @@ func s01AndS02Steps(r *haRun) {
 		result := evidence.Scenario{ID: "S01", Result: evidence.Fail, Reason: "a check of S01 failed; see the test output"}
 		// Recorded also when a check below fails.
 		defer func() { recordScenario(result) }()
-		defer func() { r.scenarioLogs("S01").conclude(context.Background(), true, &result) }()
+		logs := r.scenarioLogs("S01")
+		defer func() { logs.conclude(context.Background(), true, &result) }()
 
 		By("asking CUBRID for the roles and comparing them with the operator's status")
 		master, _, err := r.master(context.Background())
@@ -395,7 +396,8 @@ func s01AndS02Steps(r *haRun) {
 		result := evidence.Scenario{ID: "S02", Result: evidence.Fail, Reason: "a check of S02 failed; see the test output"}
 		// Recorded also when a check below fails.
 		defer func() { recordScenario(result) }()
-		defer func() { r.scenarioLogs("S02").conclude(context.Background(), true, &result) }()
+		logs := r.scenarioLogs("S02")
+		defer func() { logs.conclude(context.Background(), true, &result) }()
 
 		master, slaves, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
@@ -495,7 +497,7 @@ func s01AndS02Steps(r *haRun) {
 		uid, err := r.kubectl(context.Background(), "get", "pod", replaced, "-o", "jsonpath={.metadata.uid}")
 		Expect(err).NotTo(HaveOccurred())
 		outcome := r.runFault(faults.Scenario{
-			Fault:  podDeletion{namespace: r.namespace, pod: replaced, uid: uid},
+			Fault:  logs.observeFault(podDeletion{namespace: r.namespace, pod: replaced, uid: uid}),
 			Limits: podDeletionLimits,
 			Before: func(ctx context.Context) error { _, _, err := r.master(ctx); return err },
 			// The same master, the replaced member a standby slave again, and

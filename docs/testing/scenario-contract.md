@@ -762,7 +762,7 @@ reader can tell what to expect.
   <scenario-id>/
     history.jsonl       one line per client operation event
     timeline.jsonl      one line per test step, fault and observation
-    cluster/            CubridCluster YAML and conditions at each checkpoint
+    cluster/            Kubernetes state at each checkpoint and its UTC observations
     conditions.jsonl    one line per read of the status during the fault
     agreement.txt       how the Conditions compared with SQL and the fault
     logs/               Operator, Instance Manager, CUBRID and Broker logs
@@ -1330,6 +1330,112 @@ is abandoned at the deadline with no grace. Its collection runs only if the
 abandoned step reaches it while the process and the cluster still exist, so
 such a step may leave no `after-verdict` logs. A collection before a fault never
 outlives its scenario's context.
+
+### `cluster/`
+
+What Kubernetes showed of one scenario's cluster, collected by `StateBundle` in
+`test/evidence` next to the [logs](#logs). On Kind each scenario that collects
+logs also keeps these snapshots. On the VM lab they are kept in the same case
+as the logs, into `LAB01/cluster/`. S00 uses a cluster of its own and collects
+neither.
+
+```text
+<scenario-id>/cluster/
+  index.json            every source of every checkpoint, read or not
+  observations.jsonl    the times of the objects and of the fault, each with its clock
+  before-fault/         just before the fault
+  fault-confirmed/      as soon as the fault was confirmed
+  after-verdict/        once the result was reached
+```
+
+A checkpoint lists, in this order: the `CubridCluster`, the cluster's Pods, the
+Operator's Pods, the cluster's Services and EndpointSlices, and the Events of
+the namespace. The Operator's Pods are found by their label, so a Pod that
+replaced another one is found. The file of a source is one JSON document. Only
+named fields are copied: a Pod's identity, node, phase, Conditions and container
+states, for example, and never its environment, its specification or an
+annotation of any object. The `CubridCluster` keeps its identity, generation
+and whole `status`. A scenario that injects no fault has no `fault-confirmed/`,
+and S01 has only `after-verdict/`.
+
+`index.json` names the cluster, its UID, and when the scenario began. Per
+checkpoint it has one entry per source, with the `status` of the
+[logs table](#logs) and these additions:
+
+| Field or status | Meaning |
+|---|---|
+| `obsolete` | The source answered with nothing current: no Event observed in this scenario since the last checkpoint, or a `status` behind the object's `metadata.generation` |
+| `objects` | The name, UID and node of what the file holds, except for Events |
+| `missing` | Expected objects that were not found. `status` is then `truncated`, or `unavailable` when nothing could be read |
+| `gone` | Objects an earlier checkpoint saw that no longer exist under the same UID |
+| `excluded` | How many Events were left out, by why |
+
+A missing `CubridCluster` is `unavailable`, never `empty`. A Pod a fault removed
+leaves the rest of the checkpoint in place: the snapshot is partial, not
+absent.
+
+**Events.** An Event is evidence of a scenario only if it was observed during
+it, and a repeated Event keeps the name of its first occurrence. So the last of
+`lastTimestamp`, `eventTime` and `series.lastObservedTime` decides, not the
+name. An Event last observed before the scenario began is excluded as
+`olderThanScenario`; one that began earlier and repeated during it is kept with
+`beganBeforeScenario`. One that a checkpoint already stored and that did not
+change since is excluded as `unchangedSinceEarlierCheckpoint`, which needs no
+clock. One with no time is `undated`. One about a `CubridCluster` of this name
+with another UID is `otherCluster`. The start of the scenario is rounded down to
+the second, because that is the resolution of these timestamps. It is a
+comparison between the runner's clock and the reporter's, so an Event close to
+the start can fall on the wrong side when those clocks differ. On the VM lab
+the run created the namespace, so no Event is excluded by age.
+
+**Clocks.** Every line of `observations.jsonl` has a time in UTC and a `clock`:
+
+| `clock` | Whose time | Used for |
+|---|---|---|
+| `test-runner` | The machine that runs the suite | Checkpoints and the fault steps `fault_issued`, `fault_confirmed` and `fault_removed` |
+| `operator` | The Operator's Pod | The transition of a Condition |
+| `node/<node>` | The kubelet of that node | The start and the end of a container |
+| `reporter/<component>` | The component that reported it | An Event |
+
+The file is sorted by time as a reading aid. The clocks are not compared, so
+the skew of each in `index.json` is `unknown`, and the order of two lines of
+different clocks is not proven. An interval between them is not a measured
+recovery time: that remains the one `timeline.jsonl` gives, on one clock. On Kind
+the clocks are one machine's; this says nothing of the VM lab's.
+
+**Not collected.** The Operator's metrics are not read. The endpoint answers
+only a bearer token of an authorized service account, which a read-only
+snapshot neither holds nor creates, so each checkpoint names
+`operator-metrics` as `unavailable`.
+
+**Bounds.** There is no periodic collection: a scenario has at most three
+checkpoints, one source takes at most 10 seconds and a checkpoint at most 20. A
+listing of more than 8 MiB is not parsed and is `unavailable`, since a part of a
+JSON document is no part of the cluster. A source stores at most 512 KiB, the
+newest objects that fit, whole; a scenario stores at most 4 MiB, of which
+`observations.jsonl` takes at most 512 KiB; and all the scenarios of a Kind run
+store at most 64 MiB and spend at most 90 seconds. This budget is apart from the
+logs', which a run with every scenario passing used almost to its end, so that
+neither can use up the other. Added to the 5 minutes of the logs and the slowest
+suite without collection (42.8 minutes), the 90 seconds end 5.7 minutes before
+the deadline of 55. These are starting values: no full run has measured them
+yet. `startedAt` and `finishedAt` of each checkpoint show what a run spent. The
+`fault-confirmed` snapshot runs beside the scenario and costs it no time, though
+it is charged to the budget.
+
+**The verdict.** Like the logs, a snapshot never decides a result. Nothing reads
+these files to judge a scenario: the SQL checks, the fault's confirmation and
+`conditions.jsonl` stay what they were. The `fault-confirmed` snapshot watches a
+fault without changing what the fault reports. A read or a write that fails is
+named in the index or in the run's `notes`, and the index joins the scenario's
+`evidence` only once it exists. A credential of the run found in these files
+fails the run like one in any other evidence file: see [Secrets](#secrets).
+
+**An interrupted collection.** A deadline, a cancellation or a Pod that
+disappears keeps what was read, the index is replaced after each source, and the
+last snapshot shares the logs' time after a deadline. If the `fault-confirmed`
+snapshot still runs when that time ends, the last one is not taken and the run's
+`notes` say so.
 
 ### Secrets
 
