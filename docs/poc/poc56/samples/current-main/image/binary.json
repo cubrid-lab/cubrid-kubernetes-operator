@@ -1,0 +1,9 @@
+{
+ "bytes": 12906931,
+ "holds": {
+  "does not match required": true,
+  "is not of the series of": true,
+  "seed upload needs master": true
+ },
+ "sha256": "3191a2835fb0c771d22cc87fef690540d7f3a39571888b655d8eeddbe172c2ef"
+}

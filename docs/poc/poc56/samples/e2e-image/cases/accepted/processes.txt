@@ -1,0 +1,2022 @@
+sample 05:14:08.106362137
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:08.212971998
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:08.319472055
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:08.428586070
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:08.534719897
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:08.640401800
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:08.751145156
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:08.858283019
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:08.964610999
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:09.072359892
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:09.178787942
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:09.287548072
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+/usr/local/bin/instance-manager 
+sample 05:14:09.402646282
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:09.510337528
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:09.619994078
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:09.735331690
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:09.857309315
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:09.971329051
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:10.079930984
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:10.189565397
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:10.299759222
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:10.410599356
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:10.533629215
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:10.651864975
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid restoreslave                                                                                                                  
+cubrid restoreslave -u -s master -m demo-0 -B /var/lib/cubrid/restore-staging/seed-7562cf27-7bea-462d-94c7-941fb764f768/backup appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:10.760381789
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat status 
+/usr/local/bin/instance-manager 
+sample 05:14:10.867601495
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:10.983407366
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:11.088992687
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:11.196069918
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:11.303117907
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:11.415341342
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:11.521003709
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:11.628210973
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:11.734802731
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:11.844338228
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:11.950048979
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:12.057218267
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:12.162652692
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:12.268792032
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:12.377997357
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:12.489550032
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:12.595049785
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:12.700816884
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:12.806994741
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+/usr/local/bin/instance-manager 
+sample 05:14:12.914902449
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+/usr/local/bin/instance-manager 
+sample 05:14:13.023746626
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+/usr/local/bin/instance-manager 
+sample 05:14:13.132312926
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+/usr/local/bin/instance-manager 
+sample 05:14:13.242257175
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+/usr/local/bin/instance-manager 
+sample 05:14:13.351077326
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+/usr/local/bin/instance-manager 
+sample 05:14:13.461146884
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+/usr/local/bin/instance-manager 
+sample 05:14:13.572267876
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+/usr/local/bin/instance-manager 
+sample 05:14:13.681510868
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+/usr/local/bin/instance-manager 
+sample 05:14:13.794820911
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+/usr/local/bin/instance-manager 
+sample 05:14:13.905536823
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:14.016010536
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:14.128860054
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:14.238442912
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:14.346983176
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:14.457397259
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:14.566807082
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:14.675721727
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:14.787365476
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:14.900309394
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:15.009859392
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:15.121398505
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:15.230875363
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:15.342154266
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:15.452186214
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:15.562440383
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:15.676150208
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:15.789030613
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:15.898123120
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:16.007413437
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:16.184314530
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:16.297000069
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:16.410655268
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:16.520197776
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:16.631151307
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:16.743448621
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:17.040701189
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:17.156578956
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:17.269982311
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:17.379886172
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:17.494189387
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:17.605973623
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:17.723433838
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:17.892713001
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:18.003235591
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sh -c /home/cubrid/CUBRID/bin/cub_commdb -O 
+sample 05:14:18.118046401
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sh -c /home/cubrid/CUBRID/bin/cub_commdb -O 
+sample 05:14:18.227966406
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sh -c /home/cubrid/CUBRID/bin/cub_commdb -O 
+sample 05:14:18.340732613
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sh -c /home/cubrid/CUBRID/bin/cub_commdb -O 
+sample 05:14:18.464374343
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sh -c /home/cubrid/CUBRID/bin/cub_commdb -O 
+sample 05:14:18.575511846
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:18.685128935
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:18.799422384
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:18.909611418
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:19.028319756
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:19.140744547
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:19.253333197
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:19.365079919
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:19.479302090
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:19.592071563
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:19.702097195
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:19.814159902
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:19.937473998
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:20.050381575
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:20.159933506
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:20.271069592
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:20.381203265
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:20.491933075
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:20.601676783
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:20.714353643
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:20.825197766
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:20.936156540
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:21.047420136
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:21.165980737
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:21.466556840
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:21.576819384
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:21.686966791
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:21.801769726
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:21.913122340
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:22.335615488
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:22.445874652
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:22.557086935
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+sample 05:14:22.667350883
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:22.786069186
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:22.901271636
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:23.017581508
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:23.137969894
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:23.252249388
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:23.371902523
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:23.486063509
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:23.600838216
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:23.717558648
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:23.834492878
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:23.955890033
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:24.087183558
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:24.203876078
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:24.320140475
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:24.434042133
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:24.551757831
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:24.668910918
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:24.796365228
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:24.929686164
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:25.054458021
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:25.191965227
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:25.311110173
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:25.427650057
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:25.542987265
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:25.664986848
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:25.783846129
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:25.900075061
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:26.015207515
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:26.130532576
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:26.250102355
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:26.364214471
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:26.491391103
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:26.607214144
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:26.722390176
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:26.837989466
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:26.954742924
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:27.067853138
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:27.184910381
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:27.310357532
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:27.424364587
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:27.545639404
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:27.684739046
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:27.799446254
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:27.923089922
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:28.052473800
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:28.170579564
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:28.304266869
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:28.418503557
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:28.533699937
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:28.652202397
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:28.767061766
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:28.884425290
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:29.004424001
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:29.131549134
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:29.249392925
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:29.363266770
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:29.492148226
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:29.607256676
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:29.730861064
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:29.849766763
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:29.967685327
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:30.088778591
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:30.213521061
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:30.330746069
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:30.446968819
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:30.571464091
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:30.691326940
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:30.812790237
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:30.933635540
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:31.054040634
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:31.174930270
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:31.305132599
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:31.437949424
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:31.562239270
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:31.682665482
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:31.807508192
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:31.928668257
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:32.055286738
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:32.172029169
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:32.293230502
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:32.409862595
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:32.529968940
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cubrid heartbeat start 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:32.646248119
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:32.763350749
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:32.882258599
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:33.004681587
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:33.127147219
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:33.244181701
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:33.358846901
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:33.473395419
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:33.591109886
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:33.733847539
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:33.852892574
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:33.969971413
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:34.097196346
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:34.222360947
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:34.343274200
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:34.461491031
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:34.578783192
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 
+sample 05:14:34.701868693
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+cub_master 
+cub_server appdb 
+cub_pl appdb 
+/usr/local/bin/instance-manager 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-0 -m sync appdb@demo-0 
+cub_admin copylogdb -L /var/lib/cubrid/databases/appdb_demo-1 -m sync appdb@demo-1 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-0 --max-mem-size=500 appdb@localhost 
+cub_admin applylogdb -L /var/lib/cubrid/databases/appdb_demo-1 --max-mem-size=500 appdb@localhost 

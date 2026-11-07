@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 1,
+  "database": "appdb",
+  "clusterUID": "5183e3ea-f6b9-490d-b3b1-034da02198a1",
+  "cubridVersion": "11.4",
+  "level": 0,
+  "sourceInstance": "demo-0",
+  "sourceRole": "master",
+  "createdAt": "2026-11-07T05:13:15Z",
+  "operationID": "op-02199d54927b007d55bdd49195e2ff08",
+  "objects": [
+    {
+      "key": "backup/appdb_bk0v000",
+      "sizeBytes": 2110464,
+      "sha256": "01e445b6c36a4b73dc4f2a8af954786ff1a8620713051e8a67061878343057a3"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+drwxrwx---	1000	80	1794028372926908370	1	-	/var/lib/cubrid
+drwxr-xr-x	1000	60	1794028371382921695	2	-	/var/lib/cubrid/databases
+-rw-r--r--	1000	0	1794028371382921695	3	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	/var/lib/cubrid/databases/.member-lock
+drwxr-x---	1000	60	1794028418310516194	4	-	/var/lib/cubrid/operations
+-rw-------	1000	541	1794028418310516194	8	1353e4a9c8446044bc31ae62ea3f3ac1a1510f50fc6a7efd42e786382fe8828d	/var/lib/cubrid/operations/op-57b5ed5830a82d2a6173660638dad728.json

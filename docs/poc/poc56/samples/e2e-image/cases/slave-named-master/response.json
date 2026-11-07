@@ -1,0 +1,13 @@
+{
+ "body": {
+  "createdAt": "2026-11-07T05:13:45.561228482Z",
+  "database": "appdb",
+  "id": "op-3a591713343376283c7b3e7a62e1be97",
+  "idempotencyKey": "seed-restore-slave-named-master-7562cf27-7bea-462d-94c7-941fb764f768",
+  "kind": "restore",
+  "requestHash": "d9fec1b0dcaa8d68acaba89c6eaf97683baecdaf2d4e813d83f6457767d834ed",
+  "state": "Pending",
+  "updatedAt": "2026-11-07T05:13:45.561228482Z"
+ },
+ "status": 202
+}

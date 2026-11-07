@@ -1,0 +1,10 @@
+{
+ "objects": [
+  {
+   "key": "backup/appdb_bk0v000",
+   "sha256": "01e445b6c36a4b73dc4f2a8af954786ff1a8620713051e8a67061878343057a3",
+   "size": 2110464
+  }
+ ],
+ "prefix": "cubrid/5183e3ea-f6b9-490d-b3b1-034da02198a1/seed/appdb"
+}

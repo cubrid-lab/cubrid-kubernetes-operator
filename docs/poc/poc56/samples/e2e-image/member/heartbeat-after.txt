@@ -1,0 +1,15 @@
+@ cubrid heartbeat status
+
+ HA-Node Info (current demo-2, state slave)
+   Node demo-2 (priority 3, state slave)
+   Node demo-1 (priority 2, state slave)
+   Node demo-0 (priority 1, state master)
+
+
+ HA-Process Info (master 1863, state slave)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_demo-1 (pid 2922, state registered)
+   Applylogdb appdb@localhost:/var/lib/cubrid/databases/appdb_demo-0 (pid 2920, state registered)
+   Copylogdb appdb@demo-1:/var/lib/cubrid/databases/appdb_demo-1 (pid 2918, state registered)
+   Copylogdb appdb@demo-0:/var/lib/cubrid/databases/appdb_demo-0 (pid 2916, state registered)
+   Server appdb (pid 1944, state registered_and_standby)
+
