@@ -8,13 +8,11 @@ rules:
   - ""
   resources:
   - configmaps
-  - services
+  - secrets
   verbs:
   - create
-  - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -44,56 +42,60 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - secrets
+  - services
   verbs:
   - create
+  - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
   - apps
   resources:
   - deployments
-  - statefulsets
   verbs:
   - create
   - delete
   - get
   - list
-  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - create
+  - get
+  - list
   - update
   - watch
 - apiGroups:
   - database.cubrid.io
   resources:
   - cubridbackups
-  - cubridclusters
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - database.cubrid.io
   resources:
-  - cubridbackups/finalizers
+  - cubridbackups/status
   - cubridclusters/finalizers
+  - cubridclusters/status
   verbs:
   - update
 - apiGroups:
   - database.cubrid.io
   resources:
-  - cubridbackups/status
-  - cubridclusters/status
+  - cubridclusters
   verbs:
   - get
+  - list
   - patch
-  - update
+  - watch
 - apiGroups:
   - networking.k8s.io
   resources:
@@ -103,7 +105,6 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -114,6 +115,5 @@ rules:
   - create
   - get
   - list
-  - patch
   - update
   - watch

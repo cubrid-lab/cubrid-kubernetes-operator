@@ -113,11 +113,16 @@ limits cached reads, including each cluster's Instance Manager token Secret.
 Cluster references and object-storage Secret references remain in the
 resource's own namespace.
 
-With or without a watch namespace, the manager caches only Secrets, Pods and
-PersistentVolumeClaims labeled
-`app.kubernetes.io/managed-by=cubrid-kubernetes-operator`, which every Secret
+With or without a watch namespace, the manager caches only Secrets, Pods,
+PersistentVolumeClaims, ConfigMaps, Services, StatefulSets, Deployments,
+NetworkPolicies and PodDisruptionBudgets labeled
+`app.kubernetes.io/managed-by=cubrid-kubernetes-operator`, which every object
 it writes, every Pod of its workloads and every data PVC its StatefulSets
-create carry. A `<cluster>-im-token`
+create carry. An object other than a Secret that has a name a cluster needs
+but not the label is read from the API server when the cluster needs that
+name: if the cluster does not control it, it is refused and left unchanged
+like any other object of that name; if the cluster does, the label is restored.
+A `<cluster>-im-token`
 Secret without that label is neither read nor adopted: the cluster reports
 `Ready=False` with reason `SecretReconcileFailed`, naming the Secret and the
 label, until that Secret is deleted or renamed. The same reason reports a

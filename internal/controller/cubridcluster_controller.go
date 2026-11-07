@@ -99,8 +99,8 @@ const (
 	appName = "cubrid"
 
 	// ManagedByLabel and ManagedByOperator mark every object the operator
-	// writes and every Pod of its workloads. The manager caches only Secrets
-	// and Pods that carry them.
+	// writes and every Pod of its workloads. The manager caches no object of a
+	// kind it writes without them.
 	ManagedByLabel    = "app.kubernetes.io/managed-by"
 	ManagedByOperator = "cubrid-kubernetes-operator"
 )
@@ -330,19 +330,19 @@ func (r *CubridClusterReconciler) now() time.Time {
 	return time.Now()
 }
 
-// +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters/status,verbs=update
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters/finalizers,verbs=update
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update
 
 // Reconcile drives the CubridCluster toward its desired state: a headless
 // governing Service and a StatefulSet with a data PVC template; HA role
@@ -645,7 +645,7 @@ func (r *CubridClusterReconciler) reconcileIMTokenSecret(ctx context.Context, cl
 	}
 	// A new token under an existing StatefulSet: its running Pods still hold
 	// the old one and refuse the operator until each of them is replaced.
-	err = r.Get(ctx, client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}, &appsv1.StatefulSet{})
+	err = r.childClient().Get(ctx, client.ObjectKey{Name: cluster.Name, Namespace: cluster.Namespace}, &appsv1.StatefulSet{})
 	if apierrors.IsNotFound(err) {
 		return nil
 	}

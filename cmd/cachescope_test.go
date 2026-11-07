@@ -21,16 +21,21 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,10 +48,10 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/controller"
 )
 
-// TestManagedCacheScope runs the manager's cache options against an API
-// server that also holds Secrets and Pods the operator does not manage, and
-// a Secret under the name of a cluster's token Secret that the operator did
-// not write.
+// TestManagedCacheScope runs the manager's cache options, under an identity
+// that holds only config/rbac/role.yaml, against an API server that also holds
+// objects of every namespaced kind the operator does not manage, and a Secret
+// under the name of a cluster's token Secret that the operator did not write.
 func TestManagedCacheScope(t *testing.T) {
 	environment := &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "config", "crd", "bases")},
@@ -63,10 +68,10 @@ func TestManagedCacheScope(t *testing.T) {
 	})
 	admin, err := client.New(adminConfig, client.Options{Scheme: scheme})
 	mustWatch(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	const namespace, unrelated = "cache-scope", "unrelated"
+	const namespace, unrelated, managedCluster = "cache-scope", "unrelated", "managed"
 	mustWatch(t, admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}))
 	managed := map[string]string{controller.ManagedByLabel: controller.ManagedByOperator}
 	podSpec := corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "busybox"}}}
@@ -97,7 +102,7 @@ func TestManagedCacheScope(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "collide-im-token", Namespace: namespace},
 		Data:       foreignData,
 	}))
-	for _, name := range []string{"managed", "collide"} {
+	for _, name := range []string{managedCluster, "collide"} {
 		cluster := &databasev1alpha1.CubridCluster{}
 		data, err := os.ReadFile(filepath.Join("..", "config", "samples", "database_v1alpha1_cubridcluster.yaml"))
 		mustWatch(t, err)
@@ -106,10 +111,14 @@ func TestManagedCacheScope(t *testing.T) {
 		mustWatch(t, admin.Create(ctx, cluster))
 	}
 
+	for _, object := range unmanagedObjects(unrelated, namespace) {
+		mustWatch(t, admin.Create(ctx, object))
+	}
+
 	options, err := watchCacheOptions("")
 	mustWatch(t, err)
 	skipNameValidation := true
-	manager, err := ctrl.NewManager(adminConfig, ctrl.Options{
+	manager, err := ctrl.NewManager(generatedRoleConfig(t, ctx, environment, adminConfig, admin), ctrl.Options{
 		Scheme: scheme, Cache: options, Metrics: metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0", Controller: config.Controller{SkipNameValidation: &skipNameValidation},
 	})
@@ -148,7 +157,7 @@ func TestManagedCacheScope(t *testing.T) {
 	// Every member Pod carries the label the cache selects on.
 	sts := &appsv1.StatefulSet{}
 	waitWatch(t, ctx, func() bool {
-		return admin.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "managed"}, sts) == nil
+		return admin.Get(ctx, client.ObjectKey{Namespace: namespace, Name: managedCluster}, sts) == nil
 	})
 	if got := sts.Spec.Template.Labels[controller.ManagedByLabel]; got != controller.ManagedByOperator {
 		t.Errorf("StatefulSet Pod template label %s = %q, want %q",
@@ -177,6 +186,25 @@ func TestManagedCacheScope(t *testing.T) {
 		t.Errorf("cached read of an unmanaged PersistentVolumeClaim = %v, want NotFound", err)
 	}
 
+	for _, object := range unmanagedObjects(unrelated, namespace) {
+		err = cached.Get(ctx, client.ObjectKeyFromObject(object), object)
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("cached read of an unmanaged %T = %v, want NotFound", object, err)
+		}
+	}
+
+	// The cluster's own objects of those kinds are still cached.
+	for _, list := range []client.ObjectList{
+		&corev1.ConfigMapList{}, &corev1.ServiceList{}, &appsv1.StatefulSetList{}, &appsv1.DeploymentList{},
+		&networkingv1.NetworkPolicyList{}, &policyv1.PodDisruptionBudgetList{},
+	} {
+		waitWatch(t, ctx, func() bool {
+			mustWatch(t, cached.List(ctx, list, client.InNamespace(namespace),
+				client.MatchingLabels{"app.kubernetes.io/instance": managedCluster}))
+			return meta.LenList(list) > 0
+		})
+	}
+
 	// A token Secret the operator did not write is neither adopted nor
 	// overwritten, and the cluster says why.
 	cluster := &databasev1alpha1.CubridCluster{}
@@ -195,5 +223,118 @@ func TestManagedCacheScope(t *testing.T) {
 	if len(foreign.OwnerReferences) != 0 || len(foreign.Labels) != 0 || !reflect.DeepEqual(foreign.Data, foreignData) {
 		t.Errorf("unmanaged Secret was changed: owners=%v labels=%v data=%q",
 			foreign.OwnerReferences, foreign.Labels, foreign.Data)
+	}
+}
+
+// unmanagedObjects returns one object of each kind the manager writes, none
+// with the managed-by label.
+func unmanagedObjects(name, namespace string) []client.Object {
+	objectMeta := metav1.ObjectMeta{Name: name, Namespace: namespace}
+	selected := map[string]string{"app": name}
+	template := corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Labels: selected},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "busybox"}}},
+	}
+	return []client.Object{
+		&corev1.ConfigMap{ObjectMeta: objectMeta},
+		&corev1.Service{ObjectMeta: objectMeta, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}}},
+		&appsv1.StatefulSet{ObjectMeta: objectMeta, Spec: appsv1.StatefulSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: selected}, Template: template,
+		}},
+		&appsv1.Deployment{ObjectMeta: objectMeta, Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: selected}, Template: template,
+		}},
+		&networkingv1.NetworkPolicy{ObjectMeta: objectMeta},
+		&policyv1.PodDisruptionBudget{ObjectMeta: objectMeta},
+	}
+}
+
+// generatedRoleConfig returns the credentials of an identity bound to the
+// generated ClusterRole and nothing else, so that a call the role does not
+// allow fails as it would for the deployed manager.
+func generatedRoleConfig(t *testing.T, ctx context.Context, environment *envtest.Environment,
+	adminConfig *rest.Config, admin client.Client,
+) *rest.Config {
+	t.Helper()
+	identity := envtest.User{Name: "generated-role"}
+	user, err := environment.AddUser(identity, adminConfig)
+	mustWatch(t, err)
+	role := generatedRole(t)
+	role.Name = identity.Name
+	mustWatch(t, admin.Create(ctx, role))
+	mustWatch(t, admin.Create(ctx, &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: identity.Name},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name},
+		Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "User", Name: identity.Name}},
+	}))
+	return user.Config()
+}
+
+func generatedRole(t *testing.T) *rbacv1.ClusterRole {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "config", "rbac", "role.yaml"))
+	mustWatch(t, err)
+	role := &rbacv1.ClusterRole{}
+	mustWatch(t, yaml.Unmarshal(data, role))
+	return role
+}
+
+// TestGeneratedRoleGrantsOnlyWhatTheManagerCalls pins the verbs of the
+// generated ClusterRole to the calls of cmd/ and internal/controller. A verb
+// that nothing calls is authority a stolen manager token would have for no
+// reason, and a verb removed from here must have lost its last caller.
+func TestGeneratedRoleGrantsOnlyWhatTheManagerCalls(t *testing.T) {
+	const (
+		read     = "get list watch"
+		update   = "update"
+		writes   = read + " create " + update
+		removals = writes + " delete"
+	)
+	want := map[string]string{
+		// reconcileChild creates and updates; a ConfigMap is never removed.
+		"/configmaps": writes,
+		// Member Services of members that no longer exist are removed.
+		"/services": removals,
+		// The token Secret is created and updated, never removed.
+		"/secrets": writes,
+		// Replacing a member during an update deletes its Pod.
+		"/pods":                   read + " delete",
+		"/persistentvolumeclaims": read,
+		// The recorder creates an Event and patches a repeated one.
+		"/events":           "create patch",
+		"apps/statefulsets": writes,
+		// The single Deployment of earlier versions is removed.
+		"apps/deployments": removals,
+		// Policies are removed when spec.networkPolicy turns them off.
+		"networking.k8s.io/networkpolicies": removals,
+		"policy/poddisruptionbudgets":       writes,
+		// The member spread default is recorded in an annotation by a patch.
+		"database.cubrid.io/cubridclusters":        read + " patch",
+		"database.cubrid.io/cubridclusters/status": update,
+		// The owner references of a cluster's children block its deletion,
+		// which the API server may check against this subresource.
+		"database.cubrid.io/cubridclusters/finalizers": update,
+		"database.cubrid.io/cubridbackups":             read,
+		"database.cubrid.io/cubridbackups/status":      update,
+	}
+	got := map[string]string{}
+	for _, rule := range generatedRole(t).Rules {
+		verbs := strings.Join(rule.Verbs, " ")
+		for _, group := range rule.APIGroups {
+			for _, name := range rule.Resources {
+				got[group+"/"+name] = verbs
+			}
+		}
+	}
+	for granted, verbs := range want {
+		wanted := strings.Fields(verbs)
+		slices.Sort(wanted)
+		if strings.Join(wanted, " ") != got[granted] {
+			t.Errorf("verbs on %s = %q, want %q", granted, got[granted], strings.Join(wanted, " "))
+		}
+		delete(got, granted)
+	}
+	for granted, verbs := range got {
+		t.Errorf("verbs on %s = %q, want none", granted, verbs)
 	}
 }

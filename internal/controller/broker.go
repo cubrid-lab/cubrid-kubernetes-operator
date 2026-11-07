@@ -171,7 +171,7 @@ func (r *CubridClusterReconciler) reconcileBrokerConfig(ctx context.Context, clu
 func (r *CubridClusterReconciler) deleteLegacyBrokerDeployment(ctx context.Context, cluster *databasev1alpha1.CubridCluster) error {
 	old := &appsv1.Deployment{}
 	key := types.NamespacedName{Name: legacyBrokerDeploymentName(cluster.Name), Namespace: cluster.Namespace}
-	if err := r.Get(ctx, key, old); err != nil {
+	if err := r.childClient().Get(ctx, key, old); err != nil {
 		return client.IgnoreNotFound(err)
 	}
 	if !metav1.IsControlledBy(old, cluster) {
