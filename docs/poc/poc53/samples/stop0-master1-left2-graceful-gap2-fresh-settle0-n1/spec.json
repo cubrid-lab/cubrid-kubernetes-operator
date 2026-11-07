@@ -1,0 +1,1 @@
+{"stopped": "h-0", "master": "h-1", "remaining": "h-2", "stop_slave": true, "gap": 2, "end": "graceful", "holder": "none", "return_at": "after", "slave_return": "restart", "fresh": true, "settle": 0}

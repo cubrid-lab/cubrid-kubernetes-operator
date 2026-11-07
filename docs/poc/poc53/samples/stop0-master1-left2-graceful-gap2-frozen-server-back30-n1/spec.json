@@ -1,0 +1,1 @@
+{"stopped": "h-0", "master": "h-1", "remaining": "h-2", "stop_slave": true, "gap": 2, "end": "graceful", "holder": "frozen-server", "return_at": 30, "slave_return": "restart"}

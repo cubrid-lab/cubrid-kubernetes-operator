@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-52, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-53, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -31,8 +31,9 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > `ExecCLI`; POC-48 ran in Docker on a native linux/amd64 host, with the
 > official image; POC-49 and POC-50 ran in Docker on a native linux/amd64 host,
 > with the Operator's Instance Manager image; POC-51 ran on Kind on a native
-> linux/amd64 host, with the Operator and Brokers; POC-52 ran in Docker on a native
-> linux/amd64 host, with the Operator's Instance Manager image. Each states its own environment. Each POC is the
+> linux/amd64 host, with the Operator and Brokers; POC-52 and POC-53 ran in Docker on a native
+> linux/amd64 host, with the Operator's Instance Manager image and the members' data in
+> memory. Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -5488,6 +5489,8 @@ The trials without the state at 4 s and more are cuts of the lowest-priority sla
 
 **Cleanup.** The Kind cluster `second-master`, its node container and the images `poc51/*` made for this run were removed at the end; nothing of this POC was left running.
 
+---
+
 ## POC-52 — whether `ha_ping_hosts` stops an isolated member of higher priority than the master from promoting itself, and what it costs, in Docker on the pinned image (#702, #703) — **observation: with all the member's traffic cut, the ping target included, and no `cubrid heartbeat status` on it, the parameter stopped the promotion in all 5 trials, against 3 of 3 promotions without it under the same sampling; a status call early in the cut turned the ping check off, and the member then promoted anyway, in the 11 trials where the call returned before the score pass that counts the member isolated, which follows the 3 s score timer and is not a threshold in seconds (4 of 4, 1 of 2 and 0 of 3 for one call ended at +1.6, +2.6 and +3.1 s); a call every 5 s, the period of the Operator's readiness probe, let it promote in 4 of 5 trials; with heartbeats lost and the target still reachable the member promoted in all 14 trials, parameter or not; with the target down and no status call a real failover waited 57 min in the one long hold, and a member could not start; 922 of 7,684 acknowledged writes, in 23 of 78 trials with final tables (4 to 46 each), are not on the member that ended as master, and in all 23 that member was caught up before the cut and behind at takeover, which matches #703's hypothesis and does not show whether a member caught up at takeover can diverge; no acknowledged write was missing from the final master in the 14 heartbeat-only trials or the 12 kills of a master**
 
 **Question (#702, #703).** POC-50 and POC-51 showed that a member of higher priority than the active master, when cut off, promotes itself, and that the healthy master stands down after the cut ends. The Operator renders no `ha_ping_hosts`, and `master.err` reports that CUBRID cancels its isolation check for that reason. On the pinned image, does setting `ha_ping_hosts` stop an isolated member from promoting itself? In which fault shapes? Can it stop a legitimate failover, for example when the ping target is down or unreachable from every member? Separately, on a member that is really caught up before the cut, do acknowledged rows diverge? This is the behavior of one build in Docker, not a general CUBRID guarantee. Docker is neither Kind nor the VM lab.
@@ -5604,3 +5607,139 @@ So in these trials rows diverged when a member took writes without the other's l
 - ADR-0005, section 4, and the #113 and #115 designs cannot count on `ha_ping_hosts` to rule out the isolated promotion on this evidence. Acknowledged writes missing from the final master, in 23 of 78 trials here, are what those designs would have to weigh. No production code changed here.
 
 **Cleanup.** Every container, volume and network named `poc52-*` and the memory files under `/dev/shm/poc52` were removed at the end; nothing of this POC was left running. Other users' containers were not touched.
+
+---
+
+## POC-53 — whether CUBRID promotes the only remaining member when the master leaves while another member's heartbeat is stopped (#355) — **observation (partial: the time limit was reached): yes in all 16 trials where the slave was still stopped when the master left, in 1.7 to 10.0 s in 14 of them, with one member of three left; in the 2 frozen-server trials with the slave back at +30 s, where the higher-priority slave had returned first, the remaining member stayed a slave and no row was committed during the watch: the remaining member refused every write, none was tried on the returned member, which reported `master` with `registered_and_to_be_active` for over three minutes; these 2 trials held the master's stop for about 60 s with a frozen server, and what slowed it in CI is not known; 1 of 3 controls committed nothing in 188 s**
+
+**Question (#355).** In one recorded CI run with priorities `hab-0` 1, `hab-1` 2, `hab-2` 3, `cubrid heartbeat stop` ran on slave `hab-0`, 2 s later the master `hab-1` was ended gracefully and took about 63 s, and `hab-2` did not report `state master` / `registered_and_active` in 3 minutes. Does CUBRID promote the only remaining member when the master leaves while another member's heartbeat is stopped? The issue lists three unverified explanations: CUBRID deferring to a higher-priority node not yet seen as dead, a graceful `heartbeat stop` leaving a state the slave does not fail over from, and a need for a majority of reachable nodes. This is the behavior of one build in Docker, not a general CUBRID guarantee. Docker is neither Kind nor the VM lab.
+
+**Environment (2026-11-06, trials 12:10Z to 13:19Z).**
+- Native linux/amd64 host, 6 CPUs, 32 GB, Linux 5.15, Docker 29.2.1.
+- Image `example.com/cubrid-instance-manager:e2e` (`sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70`), `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`, the image of POC-50. Entrypoint replaced by `sleep`, so the Instance Manager, its watchdog and the Brokers did not run. Network holder image `nicolaka/netshoot@sha256:7f08c4aff13ff61a35d30e30c5c1ea8396eac6ab4ce19fd02d5a4b3b5d0d09a2`.
+- **The host was shared.** One cluster ran at a time. POC-52, on another branch and not merged, ran beside it until some time before 12:54Z, and another session's CPU loops ran at times. Load average was 2.46 to 16.44 at the readings taken, and 42 to 47 during the first cluster formation, before any trial. Load was read at each trial's start, just before its fault, and at its end. The first trial began about 53 minutes into the 2-hour budget, after host congestion and a harness error that wiped the first saved data, which is why some planned trials were not run.
+- **Data in memory.** The members' `databases` and `log` directories were in `/dev/shm`, not on disk, because copying them from the shared disk took minutes (about 215 ms await) and disturbed what else ran. So no stop here includes disk time. That may be why a graceful stop always took 2.1 s unless the server was frozen.
+
+**The cluster.** Three members `h-0`, `h-1`, `h-2`, each two containers as a Pod is, a network holder and the database container, with what `generateHAConf` renders and nothing else: `ha_node_list=cubrid@h-0:h-1:h-2`, `ha_db_list=appdb`, `ha_port_id=59901`. So `h-0` has priority 1, `h-1` 2, `h-2` 3, as `hab-0`, `hab-1`, `hab-2` had, and every timing parameter has its default.
+
+**Method.**
+- **The fault.** `cubrid heartbeat stop` in the slave's running container, as the e2e step runs it; when it has returned, the gap; then the master ends, gracefully with the two steps of the Instance Manager's `Shutdown` (`cubrid heartbeat stop`, `cubrid server stop appdb`) and then `docker kill`, or with `docker kill` at once. `together` starts the master's end as the slave's stop starts.
+- **"Promoted" is a commit.** Once a second on each remaining member, `csql` with autocommit off, one `INSERT` and an explicit `COMMIT`, then the row read back over a new connection. Every other attempt's whole output is kept, including each `ERROR CODE`. A write control ran before each fault: the master committed a row and both slaves showed it, and the remaining member's writer was refused until the fault.
+- **Sampling.** `cubrid heartbeat status` in each member with a 500 ms sleep, UTC epoch times: median 0.53 s and longest 0.6 s between the remaining member's samples during the watch.
+- **The watch.** Until a committed row plus 15 s, or at least 185 s after the master ended.
+- **Recovery, every completed trial.** The stopped slave returned (a container restart on the same data, what the watchdog leads to), then the master, then up to 180 s for one master and two slaves that agree; the trial's rows were then compared on all three.
+- **Starting state.** The first trial of each run started from saved cold data; later ones continued from the healthy cluster the last one left, when its master was the one wanted (`chained` in `events.tsv`). So chained trials are not independent. A kill's time is the start of `docker kill`, which took up to 34.2 s to return here at load 8 to 14, so the moment of death is known only to within that, and the 10.0 s is an upper bound from the start of the kill. A graceful end's last `docker kill` was slow in the same way: 37.5 s in total, with a heartbeat stop of 2.1 s.
+- **What can be recomputed.** `python3 analyse.py samples --trials` in `docs/poc/poc53/` recomputes the tables and the facts quoted here from the raw samples, write logs, events, rows and logs. It reads `result.json` only for the load at a trial's edges, and for the start of a kill in the trials from before `master-kill-begin` was logged. It does not recompute: the 42 to 47 load, the disk await and the `docker run` times, which were read by hand and not kept; the first cluster formation's logs; the 53 minutes before the first trial, the six stopped runs and when POC-52 ended, which have no file; or anything from the source reading. `h-1` and `h-2` have no `cub_master` log in three trials (`idle-session`, `open-txn`, `long-query`), and those and the first CI-order trial have no copier or applier logs, because the harvest was fixed after them, so the applier comparison below covers the others only.
+
+| Condition (`h-0` priority 1, `h-1` 2, `h-2` 3) | Trials | Remaining member committed | First commit, s from the start of the master's end |
+|---|---|---|---|
+| CI order (`h-0` stopped, master `h-1`, `h-2` left), graceful, gap 2 s, no load | 2 | 2 | 4.7, 4.9 |
+| CI order, graceful, gap 15 s | 1 | 1 | 4.3 |
+| CI order, graceful, the stops together | 1 | 1 | 1.7 |
+| CI order, killed, gap 2 s | 1 | 1 | 6.9 |
+| CI order, graceful, an idle client, or a long query, on the master | 2 | 2 | 4.8, 4.9 |
+| CI order, graceful, 60 s of writes on the master | 1 | 1 | 4.9 |
+| `h-1` stopped, master `h-0`, `h-2` left, killed | 1 | 1 | 10.0 |
+| `h-1` stopped, master `h-2`, `h-0` left, graceful | 1 | 1 | 4.9 |
+| `h-2` stopped, master `h-0`, `h-1` left, graceful, together | 1 | 1 | 2.8 |
+| `h-0` stopped, master `h-2`, `h-1` left, graceful, a transaction left open | 1 | 1 | 4.9 |
+| `h-0` stopped, master `h-2`, `h-1` left, killed, together | 1 | 1 | 7.9 |
+| `h-0` stopped, master `h-2`, `h-1` left, killed, short writes | 1 | 1 | 9.1 |
+| `h-0` stopped, master `h-2`, `h-1` left, graceful, short writes | 1 | 1 | **35.9** |
+| CI order, graceful, server frozen, slave back after the watch | 1 | 1 | **63.9** |
+| CI order, graceful, server frozen, slave back at +30 s (shaped like the CI run) | 2 | **0** | none in 185 s after the master ended |
+| Control, no slave stopped, graceful, no load | 1 | 1 (`h-1`) | 2.7 |
+| Control, killed, 60 s of writes | 1 | 1 (`h-0`) | 7.9 |
+| Control, graceful, 60 s of writes | 1 | **0**, see below | none: `active` at +62.0 s, then every write refused |
+| Abandoned | 2 | | |
+
+**Provenance.** The harness and the writer changed during these trials, so some figures below span a change: the three controls with writes, the recovery time, the count of last rows committed and the -670 refusals. [`poc53/PROVENANCE.md`](poc53/PROVENANCE.md) splits each of them by version and says which code, which starting state and which logs lie behind each trial. Earlier versions were not kept while the trials ran, so they are rebuilt afterwards.
+
+These are counts of one or two trials, not rates. 23 trials were started and 21 completed. One was abandoned because a master started alone stayed `to-be-active`, which became a finding below, and one because the harness's first write hit the -670 condition described below, on the same server as the trial before it. Six times a run was stopped by hand or by a harness error during a start, before any fault, which left no trial and is not counted. The time limit left out the trials in `samples/skipped.txt`, which names `lag` and `gaps` only, one of them run later under `gaps`. The rest of `main`, `recent` and `again` were stopped by hand to run the trials that mattered more, as listed in `What was not run`.
+
+**The answer.** In all 16 trials where the slave was still stopped when the master left, the remaining member took over and committed a row: with one member of three, with the remaining member of the lowest priority (10 trials), of the middle (5), and of the highest (1 trial, so that case rests on one run). Graceful ends with no frozen server and no write delay took 1.7 to 4.9 s to the first commit, and kills 6.9 to 10.0 s. Of the 3 controls, 2 committed, in 2.7 and 7.9 s, and the third committed nothing in the 188 s of its watch: its server went active at +62.0 s and then refused every write with -670, below.
+
+**The three explanations.**
+- **Deferring to a higher-priority node not yet seen as dead: not tested directly, since the slave's end was never seen after the master's.** With the CI order the slave was already `unknown`: `heartbeat stop` announces that at its end, so with a gap the remaining member listed the slave `unknown` 0.6 to 1.0 s before the stop returned. In the 3 `together` trials it still listed the slave `slave` when the master's end began, but the two graceful ones listed both peers gone in one sample (+1.4 s), the kill listed the slave gone at +1.4 s and the master at +4.0 s, and one of the three stopped `h-2`, of lower priority than the remaining member. The source's wait for an unheard peer is 3 s, which fits 2.6 to 3.3 s here against 0.5 s without one. That accounts for seconds, not minutes. What did hold the remaining member back was a member of higher priority that was alive: in the 2 frozen-server trials with the slave back at +30 s it logged no failover line at all, and the returned `h-0` took the role.
+- **A graceful stop leaving a state the slave does not fail over from: supported in a narrower form, as a delay and not a permanent state.** While the master's server is being stopped, the master goes on telling its peers it is master. With the server frozen, `heartbeat stop` took 61.5 to 61.7 s, and the remaining member listed `h-1=master` in 113 of 115, 114 of 116 and 115 of 117 samples of that time, though `h-1`'s server was already `deregistered`. `master.err` logged `No response to shutdown request. Process killed` for `cub_server` at about +60.1 s, and the remaining member's samples changed at +60.9 s to +61.0 s, about 0.8 s later. With no frozen server the stop took 2.1 s in all 13 graceful trials.
+- **A majority of reachable nodes: rejected on this image.** 16 trials ended with one member of three committing. Nothing in the source reading below counts a majority.
+
+**A sequence shaped like the CI run, twice (the frozen server stands in for whatever slowed the stop).** Timeline of `stop0-master1-left2-graceful-gap2-frozen-server-back30-n1`, from the start of the master's stop (12:35:13.8Z):
+
+| Time | `h-0` (priority 1, slave stopped) | `h-1` (priority 2, master) | `h-2` (priority 3, remaining) |
+|---|---|---|---|
+| −4.2 s | `heartbeat stop` begins | | refusing writes with -581 |
+| 0 | stopped | server frozen, `heartbeat stop` begins | `slave`, lists `h-1=master` |
+| +25.8 s | container restarted, as the watchdog leads to | | unchanged |
+| +37.1 s | `slave`, `registered_and_standby` | `master`, server `deregistered` | lists `h-0=slave` since +34.8 s |
+| about +60.1 s | | `cub_server` killed by heartbeat, by the two other frozen trials: this trial's `master.err` stamps read about 1 s early, its first kills 0.83 s before the stop began | |
+| +61.6 s | `master`, `registered_and_to_be_active` | stopped | `slave`, lists `h-0` master |
+| +64 to +249 s | still `to_be_active`, no write tried | stopped | still `slave`, every write refused with -581 |
+| +249.1 s | | container restarted | |
+| +251.9 s | `to-be-active` to `active`, by the server log | | |
+| +267.8 s | `master` | `slave` | `slave` |
+
+The second run matched: 61.5 s stop, `h-0` master at +60.8 s, active at +255.5 s, 3.4 s after `h-1`'s return began. In both, `h-2` never left `slave`, and the end state was one master and two slaves. No slave return was run without a frozen server, so this does not show that the frozen server is needed for this shape. The CI run reported the same shape: `hab-2` not promoted, and `hab-0` master with the two others slaves of it by 11:11:44Z, 21 s after `hab-1`'s replacement Pod. The state of `hab-0`'s server in that run is not recorded, so it is not known that it was `to_be_active`.
+
+**A fourth reading, not in the issue: `master` is not writable until `active`.** The CI check asked for `state master` and `registered_and_active`, and these are two separate moments here. In 4 completed trials and the abandoned one, a member reported `master` while its server stayed `registered_and_to_be_active`. In the 2 trials with a writer on that member, all its writes failed with `ERROR CODE = -581` (`Attempted to update the database when updates are disabled`) until the server log said `active` (30 and 58 attempts after it reported `master`, 41 and 65 in all). These 2 frozen-server trials had their writer on `h-2`, so no write was tried on `h-0` in that state, and POC-50 saw writes acknowledged in that state for a few seconds.
+
+| Trial | `master` at | `active` by the server log | Applier that went last |
+|---|---|---|---|
+| Sequence shaped like the CI run, 2 trials | +61.6, +60.8 s | +251.9, +255.5 s | for `h-1`'s log, the master that had left: `working` until `h-0`'s copier reached `h-1` |
+| `h-0` stopped, master `h-2`, short writes | +4.6 s | +35.7 s | for `h-0`'s log, the stopped slave: `is changed to standby` at −24.33 s, `done` at +35.73 s |
+| Control, graceful, 60 s of writes | +1.8 s | +62.0 s | for `h-1`'s log, a healthy slave: blocked on the applier's database lock (`Unable to mount disk volume` every 3 s, −67.1 s, the start of that trial's log, to −1.1 s), first registered at +1.92 s, `is changed to standby` at +1.93 s, `done` at +61.99 s |
+| Abandoned, a member started alone | 14.1 s after its reset | not in the 133.8 s sampled in that state | not logged |
+
+In all 4 completed trials, the server went active in the same millisecond as an applier reported `done` (`applier-done-from-active` 0.000). In the other 13 trials with those logs the closest applier change was 1.2 s or more away, and the server went active when it became master. `cubrid heartbeat status` lagged the server log by 0.4 to 4.8 s in these 4 trials, which fits heartbeat asking the server for its mode every 5 s (`ha_changemode_interval_in_msecs`), so a status check can report `to_be_active` for seconds after the server has gone active.
+
+**Two different waits are behind this, and neither was tested on its own.**
+
+*The two delays with no return.* An applier that logged `is changed to standby` reported nothing for 60.06 s in both (60.062 and 60.063 s). The same 60.066 s interval is in the first of those frozen-server trials on `h-0`'s other applier, but the `working` applier outlasted it, so it did not decide that trial. That matches a fixed 60 s sleep in `la_unlock_dbname` (`log_applier.c`). This is a candidate from the source and log timing, and it was not tested on its own. In all samples 7 of 11 such lines have a `done` 60.06 s later; the other 4 have none in that window, for a reason not established, and all 4 are outside the fault window.
+
+- A recent start alone is not sufficient: five trials with appliers 32 to 48 s old were not delayed this way.
+- Backlog does not explain it: 60 s of writes with a slave stopped took 4.9 s, and short writes took 35.9 s.
+- Both delays came with a graceful end and the two kills in matching conditions had none, but each pair also differs as fresh against chained, in opposite directions, with one trial each. So this says nothing about graceful against killed.
+- The stopped slave is not needed for it: the control had the delay with a healthy slave.
+
+*The 2 frozen-server trials with the slave back at +30 s.* `h-0`'s copier, restarted at +25.8 s, got `Cannot connect to server "appdb" on "h-1"` from +38.6 s (+31.1 s in the second of these 2 trials), then `Cannot make connection` 374 and 382 times, until it connected at +251.841 s (+255.350 s). `h-2`'s copier, already connected, logged `h-1` going from `active` to `dead` at +60.18 s (+60.15 s). So `h-0`'s copy of `h-1`'s log kept a header saying `active`, and its applier stayed `working`. The end of the first of these 2 trials, in order: copier connected +251.841 s, header `active` to `standby` +251.890 s, applier `working` to `recovering` to `done` by +251.891 s, server `active` +251.892 s. This wait depends on the returned member's copier never reaching the old master's server, which happened here with the server frozen and then gone. Whether a server that is stopping but not frozen would accept the copier was not run. A slow server that still accepts connections was not run, so this is not evidence that the wait would last in CI. Its 190 s is also bounded by the harness: the old master returned only because the watch ended.
+
+**How it ended.** All 21 completed trials ended with one master and two slaves, 18.7 to 111.7 s after the watch ended. None failed back: in every trial where a row was committed, the member that took over was still master after the higher-priority members returned. All 1,256 rows the writers logged as committed were on all three members. These rows were all written after the takeover. Writes acknowledged by the ended master were not compared, so this does not bear on what POC-52, on another branch, reports about acknowledged writes. `rows.json` also holds 2 rows the writer never logged, in `stop0-master1-left2-graceful-gap2-writes60-n1` and `stop1-master2-left0-graceful-gap2-n1`, on all three members, probably committed as the writer was stopped. Stopped slaves and ended masters rejoined as slaves, also when killed. The last row of each trial was committed in 19 of 21 trials.
+
+**Writes refused with -670 after a failover, in 3 trials, all chained.** In the graceful control with 60 s of writes, the active `h-0` refused all 140 of the writer's attempts with `ERROR CODE = -670`, a unique constraint on the table's `AUTO_INCREMENT` key, from +62.7 to +206.4 s. That is 143.7 s, ending 18 s after the watch only because the writer was stopped there, so it never cleared. The refused keys rose by one per attempt, from 3475 to 3614. The trial's last row then hit 3615, and the next trial's first write, on the same server, hit 3616: that is the abandoned trial, so it was this condition and not a separate fault. The third is the first frozen-server trial with the slave back at +30 s, whose last row hit key 1151. The same frozen sequence from fresh data had none. This is why the table says "none" for that control and not "not promoted": the server was active, and the writer did not count these as commits. The writer retries with its own key since that trial, and no trial after the abandoned one had this refusal, so a row under such a key was never tested on a member that hit it. POC-50 found keys reused after a takeover, and this looks like the same thing, a counter behind the rows it applied, but that is a hypothesis. A client using `AUTO_INCREMENT` would see an active master refuse its inserts.
+
+**Why (read from CUBRID's `release/11.4` branch at commit `1df4af4`, as an explanation; the measurements stand by themselves).** That commit is 31 commits after the build's `0e7d3c1`. `master_heartbeat.c`, `server_support.c` and `heartbeat.h` are the same in both. `log_applier.c` differs in a debug message, and the sleep below is line 6939 in the build and 6941 at `1df4af4`. `system_parameter.c` differs in one added parameter unrelated to HA.
+- `master_heartbeat.c`: `hb_cluster_calc_score` makes the lowest score the master, and a slave fails over when that is itself. `unknown` scores worst, so a live slave of higher priority wins, and an `unknown` one does not. Nothing counts a majority. `hb_cluster_is_isolated` is consulted for a master, and with no `ha_ping_hosts` a slave goes on to the failover job. That job waits 0.5 s if every peer was heard and otherwise `ha_failover_wait_time_in_msecs`, 3,000 by default.
+- `heartbeat stop` first queues the shutdown of the HA processes while the cluster jobs go on sending heartbeats in the current state. Only `hb_cluster_cleanup`, after that, sets `HB_NSTATE_UNKNOWN` and tells the peers. `hb_resource_job_confirm_cleanup_all` waits up to `ha_max_process_dereg_confirm` (120) times `ha_process_dereg_confirm_interval_in_msecs` (500), which is 60 s, then kills what did not answer. That fits both the 61.5 s here and, as a number, CI's "about 63 s".
+- `server_support.c`: `css_check_ha_log_applier_done` requires every peer's applier to be `done` before `to-be-active` becomes `active`. `log_applier.c`: `la_change_state` chooses the state from the server state in the copied log's header, so a copy whose header still says `active` keeps the applier in `working`, as these 2 trials showed.
+- `log_applier.c`: an applier that reads `is changed to standby` sets `is_role_changed`. Its main loop then calls `la_unlock_dbname` with `clear_owner` true, and that runs `LA_SLEEP (60, 0)`, which blocks the loop.
+
+**This also bears on POC-13, POC-23, POC-40, POC-50 and POC-51,** which all saw a master in `to_be_active`. POC-50 left open why a promoted member beside `h-0` stayed there for 594.6 s. The applier rule above is a candidate, not an established answer: that trial's applier logs were not kept.
+
+**How this differs from the CI run.**
+- **Kubernetes.** No Pod, kubelet, preStop hook or `instance-manager shutdown`. The two commands of `Shutdown` ran by `docker exec`.
+- **Why the master's stop was slow.** Unknown in CI. Here a client did not slow it (an idle session, an open transaction, a long query, ended at the stop in 0.06 s), so a SIGSTOP on `cub_server` stood in for it. That is a stand-in, and it says nothing about what happened in CI. The 63 s in CI is the time to a replacement Pod, which also includes Kubernetes' part, and the time CUBRID's stop took there is not known.
+- **The watchdog.** The harness restarted `h-0`'s container at +30 s from its stop, about what `grace` 30 s checked every 5 s gives; no watchdog ran.
+- **Network and identity.** One Docker network, and a returning member kept its IP, its network namespace and its container's writable layer. A replacement Pod has a new IP. No NetworkPolicy, and no Service in between.
+- **Storage.** Memory, not a disk.
+- **Load and history.** Fresh or chained clusters of one small table, not a run with a long e2e history.
+
+So the CI run has not been reproduced as it happened. A sequence of its shape was produced under two assumptions: that the master's stop lasted about 60 s, and that the stopped slave returned before it ended. A member refusing promotion for another reason was not seen in any trial, which does not exclude it in CI.
+
+**The Operator (read from the code, not run).** A member reporting `master` with a server not active is `Conflicting` with `MasterNotYetActive` (`internal/controller/roleprober.go:53`, `:248`), which is the state above. It was written for a group whose members have not all joined once; here it also followed a failover. `haresolve.go` ranks ambiguous above incomplete, so the reason is `AmbiguousPrimaryObservation` and `PrimaryResolved` stays not `True`. Neither that nor the `-670` refusal was run against the Operator.
+
+**Not established.**
+- What slowed `hab-1`'s stop in the CI run, and whether `hab-0`'s server was active at 11:11:44Z.
+- Whether the 60 s sleep is what delayed the two trials, and why 4 of 11 `is changed to standby` lines have no `done` 60.06 s later.
+- How long a cluster stays without a writable member if the old master never returns: these 2 trials stopped waiting 185 s after it ended, and the wait they showed depends on the frozen server.
+- Whether `-670` comes from a counter behind its rows, and when it ends: it had not ended when the writer stopped.
+
+**What was not run.** A member of the lowest priority stopped with the master at `h-1` (`h-2` stopped, master `h-1`); the `h-2`-stopped order with a gap; gaps of 0 s and 5 s; a slave's end seen after the master's; `heartbeat start` in the same container, which is what the e2e step does, since every return here was a container restart; a graceful and killed pair at each order, and repeats of the delayed trials; a fault placed inside the 60 s after an `is changed to standby` line; a return of the slave before the master's end without a frozen server; a slow master server that still accepts connections; real power or network faults; Kubernetes, Kind, the VM lab, Brokers, and the Instance Manager. `ha_ping_hosts` was unset, as the Operator renders it.
+
+**Consequences.**
+- **For #355.** The first half of its minimum acceptance has an answer on this image in Docker: CUBRID promoted the only remaining member once the master had left and the stopped slave had not returned, without a majority, whichever priority it had in the trials run, while a master still announcing itself or a live member of higher priority holds it back. The second half, that ADR-0005 and the e2e preconditions rely only on what was observed, is not done by this entry, and the issue's plan named Kind or the VM lab and seeing both outcomes, which this does not provide: Docker only, and the second outcome only with a stand-in.
+- **ADR-0005.** "On failure the highest-priority slave in `ha_node_list` is promoted" agrees with this, and needs three additions, proposed here and not made: failover is held until a stopping master's stop ends, up to about 60 s by default here; the highest-priority slave includes a member that has just returned; and "promoted" does not mean writable: a member reported `master` for 31 and 60 s with its server `to_be_active` without a frozen server, and for over three minutes with one, a wait that depends on it, and members in that state refused writes where they were tried. Section 3's conflict row covers this state by the code; not run here. Nothing here asks the Operator to act: promoting, killing a server or forcing the mode would all break the ADR's rules.
+- **The e2e precondition.** `failoverWait` of 20 s in `test/e2e/replication_stall_test.go` is only met if the master's stop ends within about 15 s, and the watchdog's grace leaves no room to wait the 60 s out, so the step's retry remains the right response. The wait also needs the candidate's appliers to be outside the 60 s window above, if that candidate holds. Each attempt should record how long the master's `heartbeat stop` took. `activeMasterAmong`'s check of `registered_and_active` is the right one and should stay, with its lag of up to about 5 s in mind. The step's comment that the remaining member stayed a slave until the stopped member returned fits what was seen here. Its "CUBRID does not always make it" may be a master that had not left, which is what the recorded stop time would show.
+- **Client writes.** Any test or client should treat a failover as ended by a committed write, not by a heartbeat state, as POC-50 also found.
+- One POC is the behavior of one image in a few runs, not a general CUBRID guarantee.
+
+**Cleanup.** Every container, volume, network and `/dev/shm/poc53` path of this POC was removed at the end, and no container of POC-52 was touched.
