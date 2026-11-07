@@ -1004,8 +1004,8 @@ the one inside it may still do:
 
 | Deadline | Default | What happens |
 |---|---|---|
-| Suite (`E2E_SUITE_TIMEOUT`) | 50 minutes | Ginkgo abandons the current step, which keeps running in the background, and skips the remaining steps. Each cleanup node that starts after the deadline, and then the suite's own cleanup that concludes `summary.json`, gets up to `E2E_GRACE_PERIOD` (1 minute). Of the nodes already running at the deadline, one that takes a context has that context cancelled and gets the same grace to return; one that takes no context gets none. The HA group, whose `AfterAll` Ginkgo then skips, shows its diagnostics after the abandoned step instead |
-| Test process (`E2E_GO_TIMEOUT`) | 58 minutes | Go kills the process with no cleanup at all. Only the provisional summary remains |
+| Suite (`E2E_SUITE_TIMEOUT`) | 55 minutes | Ginkgo abandons the current step, which keeps running in the background, and skips the remaining steps. Each cleanup node that starts after the deadline, and then the suite's own cleanup that concludes `summary.json`, gets up to `E2E_GRACE_PERIOD` (1 minute). Of the nodes already running at the deadline, one that takes a context has that context cancelled and gets the same grace to return; one that takes no context gets none. The HA group, whose `AfterAll` Ginkgo then skips, shows its diagnostics after the abandoned step instead |
+| Test process (`E2E_GO_TIMEOUT`) | 63 minutes | Go kills the process with no cleanup at all. Only the provisional summary remains |
 | CI step | 70 minutes | Also covers creating the Kind cluster and building before the run. The evidence is still uploaded |
 | CI job | 80 minutes | Last resort. Nothing after it is guaranteed |
 
@@ -1143,11 +1143,14 @@ What is stored of a source is its end, at most 1 MiB, of the last 5,000 lines of
 a container log; at most the 8 newest files of a Pod are read; a scenario stores
 at most 16 MiB, of which `ordered.log` takes at most 2 MiB; and all the
 scenarios of a Kind run together store at most 128 MiB and spend at most 5
-minutes. These are starting values, not measured budgets. The first full run
-with collection, in which every scenario passed, stored 10.8 MB and spent 3.3
-minutes across 24 checkpoints, the slowest taking 10 seconds. The 5 minutes
-leave room for a slower runner, and added to the slowest suite without
-collection (42.8 minutes) still end before the suite's 50-minute deadline. What
+minutes. These are starting values, not measured budgets. The first two full
+runs with collection, in which every scenario passed, took 44.4 and 46.6
+minutes and spent 3.3 and 4.6 minutes across 24 checkpoints, the slowest taking
+13 seconds. Without collection those runs come to 41.1 and 42.0 minutes, beside
+the median of `main` (41.3 minutes over 11 runs), which is two runs and not a
+controlled measurement. The suite deadline was raised from 50 to 55 minutes for
+this cost: added to the slowest suite without collection (42.8 minutes), the 5
+minutes left 2.2 minutes under the old deadline. What
 a bound stopped is named in the index. Only whole lines are kept, because a part of a line may
 hold a part of a credential that no redaction pattern can recognize.
 
