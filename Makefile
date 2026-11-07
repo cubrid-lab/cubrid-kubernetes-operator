@@ -140,9 +140,9 @@ E2E_EVIDENCE_DIR ?= $(CURDIR)/e2e-evidence
 # cleanup node gets after it, and Go's process timeout, which kills without any
 # cleanup. The CI step and job limits lie outside them. See
 # docs/testing/scenario-contract.md, section "A run that does not finish".
-E2E_SUITE_TIMEOUT ?= 50m
+E2E_SUITE_TIMEOUT ?= 55m
 E2E_GRACE_PERIOD ?= 1m
-E2E_GO_TIMEOUT ?= 58m
+E2E_GO_TIMEOUT ?= 63m
 
 .PHONY: setup-test-e2e
 setup-test-e2e: container-tool kind ## Create the Kind cluster KIND_CLUSTER if it does not exist, for E2E_REUSE_CLUSTER=1 runs

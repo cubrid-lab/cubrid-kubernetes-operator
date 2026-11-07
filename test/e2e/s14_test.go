@@ -198,6 +198,9 @@ func s14Step(r *haRun) {
 		result := evidence.Scenario{ID: "S14", Result: evidence.Fail,
 			Reason: "a check of S14 failed; see the test output"}
 		defer func() { recordScenario(result) }()
+		// No fault cuts the members off: the only NetworkPolicy of this step
+		// admits a caller to the Instance Manager port.
+		defer func() { r.scenarioLogs("S14").conclude(context.Background(), true, &result) }()
 
 		// A member has a role before its Pod is Ready: CUBRID is started
 		// before the Instance Manager listens. The step before this one

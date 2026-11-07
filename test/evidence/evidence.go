@@ -439,6 +439,12 @@ var (
 	// and to the end of the text when the end marker was cut off.
 	pemPattern = regexp.MustCompile(
 		`-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]*\z)`)
+	// What remains of a private key whose start was cut off, as the tail of a
+	// log may be: from the start of the text to an end marker with no begin
+	// marker left before it.
+	pemEndPattern = regexp.MustCompile(`\A[\s\S]*-----END [A-Z ]*PRIVATE KEY-----`)
+	// A signed JSON Web Token, the form of a Kubernetes service account token.
+	jwtPattern       = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+`)
 	accessKeyPattern = regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)
 	urlUserPattern   = regexp.MustCompile(`(://[^/\s:@]+:)[^@\s/]+@`)
 	// A CUBRID JDBC URL: jdbc:cubrid:host:port:database:user:password:.
@@ -454,7 +460,8 @@ var (
 // query's & or ;. An empty value is left as it is.
 var fieldPatterns = func() []*regexp.Regexp {
 	const key = `(?i)((?:password|passwd|token|secret[_-]?access[_-]?key|secret[_-]?key|secret|` +
-		`access[_-]?key(?:[_-]?id)?|api[_-]?key|private[_-]?key)(?:\\?["'])?\s*[=:]\s*`
+		`access[_-]?key(?:[_-]?id)?|api[_-]?key|private[_-]?key|client[_-]?key[_-]?data|` +
+		`client[_-]?certificate[_-]?data)(?:\\?["'])?\s*[=:]\s*`
 	return []*regexp.Regexp{
 		// Inside escaped JSON: \\ and \" stand for an escaped backslash and
 		// quote of the inner JSON, \ and a letter for its other escapes.
@@ -464,6 +471,9 @@ var fieldPatterns = func() []*regexp.Regexp {
 		regexp.MustCompile(key + `')(?:''|[^'\n])+(')`),
 		regexp.MustCompile(key + `["'])()[^\s"']+`),
 		regexp.MustCompile(key + `)()[^\s"'\\,;&}]+`),
+		// The password of CREATE USER and ALTER USER in a statement a log quotes.
+		regexp.MustCompile(`(?i)(\bpassword\s+')(?:''|[^'\n])+(')`),
+		regexp.MustCompile(`(?i)(\bpassword\s+")(?:""|[^"\n])+(")`),
 	}
 }()
 
@@ -572,6 +582,8 @@ func (r *Redactor) Redact(data []byte) []byte {
 		r.mu.Unlock()
 	}
 	text = pemPattern.ReplaceAllString(text, redacted)
+	text = pemEndPattern.ReplaceAllString(text, redacted)
+	text = jwtPattern.ReplaceAllString(text, redacted)
 	text = bearerPattern.ReplaceAllString(text, "${1}"+redacted)
 	text = basicPattern.ReplaceAllStringFunc(text, func(m string) string {
 		parts := basicPattern.FindStringSubmatch(m)

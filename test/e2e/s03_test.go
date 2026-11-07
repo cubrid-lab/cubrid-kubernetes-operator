@@ -409,6 +409,9 @@ func (r *haRun) s03(spec context.Context, variant string) {
 		Reason: "a check of S03 failed; see the test output"}
 	// Reported also when a check below fails.
 	defer func() { recordScenario(result) }()
+	logs := r.scenarioLogs("S03/" + variant)
+	faultEnded := true
+	defer func() { logs.conclude(spec, faultEnded, &result) }()
 	// Runs before the scenario is recorded, also when a check below failed.
 	defer func() { r.replicationState(spec, variant, &result) }()
 
@@ -423,6 +426,9 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	// Pods and containers.
 	untouched := r.identities(context.Background(),
 		slices.DeleteFunc(slices.Clone(r.members), func(m string) bool { return m == master }))
+
+	By("keeping the logs the deleted Pod would take with it")
+	logs.beforeFault(spec)
 
 	By("starting a client that keeps writing through the read-write Service")
 	r.startClient(client)
@@ -454,6 +460,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 
 	By("deleting the master Pod and waiting for a new master, the operator's status and the client")
 	var electedAt, noticedAt time.Time
+	faultEnded = false
 	outcome = r.runFault(faults.Scenario{
 		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful},
 		Limits: s03FlowLimits,
@@ -522,6 +529,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 			return r.lastAnswerAcknowledged(ctx, client), nil
 		},
 	})
+	faultEnded = outcome.CleanupSucceeded
 	timeline := writeTimeline("S03/"+variant+"/timeline.jsonl", outcome.Timeline)
 	result.FaultConfirmed = &outcome.FaultConfirmed
 	result.CleanupSucceeded = &outcome.CleanupSucceeded

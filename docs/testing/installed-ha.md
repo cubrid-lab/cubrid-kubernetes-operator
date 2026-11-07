@@ -4462,6 +4462,17 @@ three `kubectl exec` calls and is repeated every `-poll`, so it is an upper
 bound. `dataRulesHeldAfterSeconds`
 runs from the client's last answer until the data rules held everywhere.
 
+## Logs of a failed run
+
+When LAB01 does not pass, the run reads the logs of the Operator's Pods, of
+each member and of each Broker Pod, the CUBRID error files of the members and
+Brokers, and each member's raw `cubrid heartbeat status`, before the cleanup
+removes the namespace with them. They are in `LAB01/logs/`, in the format of
+[`logs/`](scenario-contract.md#logs), and `LAB01/logs/index.json` is in the
+scenario's evidence. LAB01 injects no fault, so `cubrid heartbeat status` runs
+here. The reading takes at most 90 seconds and never changes LAB01's result. A
+run that passed LAB01 keeps no bundle, also when a later scenario fails.
+
 ## Cleanup
 
 The run deletes its namespace with a UID precondition and waits until it is

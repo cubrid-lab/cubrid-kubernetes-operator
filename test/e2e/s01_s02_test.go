@@ -347,6 +347,7 @@ func s01AndS02Steps(r *haRun) {
 		result := evidence.Scenario{ID: "S01", Result: evidence.Fail, Reason: "a check of S01 failed; see the test output"}
 		// Recorded also when a check below fails.
 		defer func() { recordScenario(result) }()
+		defer func() { r.scenarioLogs("S01").conclude(context.Background(), true, &result) }()
 
 		By("asking CUBRID for the roles and comparing them with the operator's status")
 		master, _, err := r.master(context.Background())
@@ -394,6 +395,7 @@ func s01AndS02Steps(r *haRun) {
 		result := evidence.Scenario{ID: "S02", Result: evidence.Fail, Reason: "a check of S02 failed; see the test output"}
 		// Recorded also when a check below fails.
 		defer func() { recordScenario(result) }()
+		defer func() { r.scenarioLogs("S02").conclude(context.Background(), true, &result) }()
 
 		master, slaves, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())

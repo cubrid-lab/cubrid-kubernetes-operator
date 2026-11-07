@@ -342,6 +342,11 @@ func (r *haRun) s14Token(variant string) {
 	result := evidence.Scenario{ID: "S14", Variant: variant, Result: evidence.Fail,
 		Reason: "a check of S14/" + variant + " failed; see the test output"}
 	defer func() { recordScenario(result) }()
+	logs := r.scenarioLogs("S14/" + variant)
+	// A token change injects no fault: nothing cuts the members off.
+	defer func() { logs.conclude(context.Background(), true, &result) }()
+	// Replacing the members takes their logs with them.
+	logs.beforeFault(context.Background())
 	var summary strings.Builder
 	note := func(format string, args ...any) {
 		_, _ = fmt.Fprintf(&summary, format+"\n", args...)
