@@ -61,7 +61,9 @@ Confirm those commands resolve the *intended* cluster before taking any
 action. Capture evidence without dumping tokens, Secrets, passwords,
 connection strings or unredacted application data. The Operator's
 `status.currentPrimary` is an **observation**, never authority to elect
-or fence a master. Check `status.lastObservedTime` for freshness
+or fence a master. For a **three-member HA cluster**, check
+`status.lastObservedTime` for freshness; this field records an HA role
+observation and may be unset for a standalone cluster
 ([observability](../observability.md#freshness)).
 
 **Security boundary:** in current `v1alpha1`, SQL/Broker and Operator-to-
