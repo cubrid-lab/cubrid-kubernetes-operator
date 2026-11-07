@@ -33,10 +33,13 @@ This reference does **not** change any required scenario or acceptance rule.
 - **ADR**: Architecture Decision Record, in [docs/adr](../adr/).
 - **POC**: a proof-of-concept experiment on a real engine, recorded in
   [docs/poc/RESULTS.md](../poc/RESULTS.md).
-- **RTO**: recovery time objective. Here always the *measured* recovery time
-  defined in [Measurements](#measurements).
-- **RPO**: recovery point objective. Here always the *observed* data loss
-  defined in [Measurements](#measurements).
+- **RTO (Recovery Time Objective)**: an explicit *target* maximum acceptable
+  recovery duration. This contract measures actual recovery duration, which
+  must not be described as an RTO target unless a target was agreed.
+- **RPO (Recovery Point Objective)**: an explicit *target* maximum acceptable
+  data-loss window. The contract reports actual acknowledged writes missing
+  and an observed data-loss window; these are observations, not RPO targets.
+  No zero-loss RTO/RPO objective is inferred from a passing scenario.
 - **PVC**: PersistentVolumeClaim, the Kubernetes object that holds a member's
   data volume.
 - **VM**: virtual machine.
@@ -619,19 +622,24 @@ removed, and no later variant of the same system is started.
 
 These are different things and are never reported as one another:
 
-1. **Removing endpoints from the managed write path.** The Operator stops
-   offering the read-write endpoint: new connections through the `-rw`
-   Service fail or are refused. This is the only one the Operator does on
-   its own (write quarantine, ADR-0005 section 2). Reporting
-   `RoutingReady=False` is not this: a scenario checks it with new
-   connections through `-rw`, never with the Condition.
+1. **Removing endpoints from the managed write path (planned, not yet
+   implemented).** If the #113 policy is implemented, the Operator would
+   withhold the managed read-write Service endpoint so *new* connections
+   through `-rw` fail or are refused. **Today the Operator does not do this:**
+   it sets `RoutingReady=False` while Brokers and Service endpoints remain.
+   A scenario must test actual SQL through `-rw`, never infer enforcement
+   from a Condition. A missing/stale observation alone does not prove native
+   CUBRID has entered a two-master state; #113/#115 must establish the
+   accepted availability/safety policy.
 2. **Closing existing connections.** Sessions that were open before the
-   quarantine are ended. ADR-0005 states that the Operator does *not* do
-   this: an open session may keep writing.
+   proposed quarantine would have to be ended separately. ADR-0005 does
+   **not** claim the Operator does this: an open session may keep writing.
+   Any future claim must be supported by direct SQL/session evidence.
 3. **Fencing the database.** The database process itself is stopped or
-   isolated so that it cannot accept writes from anyone. The Operator does
-   this only as a planned step against a known, reachable member
-   (`/v1/shutdown`), never automatically to resolve an ambiguous state.
+   isolated so that it cannot accept writes from anyone. In the current
+   design, `/v1/shutdown` is used by the Pod's planned lifecycle preStop
+   action against its own member; the Operator controller does not use it
+   as automatic emergency split-brain fencing.
 
 A scenario that involves quarantine states its expectation for **new
 connections** and for **already-open connections** separately.
@@ -724,7 +732,7 @@ present, it must be present exactly once and with the values that were sent.
 
 ### Measurements
 
-- **Recovery time (RTO).** The time from the start of the fault (the moment
+- **Observed recovery duration (not the RTO target).** The time from the start of the fault (the moment
   the injection command was issued) until the first moment after which a
   write and a read through the read-write endpoint succeed without
   interruption for the scenario's `stable_period`. Only an acknowledged insert
@@ -732,7 +740,7 @@ present, it must be present exactly once and with the values that were sent.
   acknowledged rollback committed nothing and neither counts nor interrupts.
   A client that does not read is judged on its writes alone. Any `failed` or
   `unknown` outcome interrupts (`workload.Recovery`).
-- **Observed data loss (observed RPO).** The number of `acknowledged`
+- **Observed data loss (not the RPO target).** The number of `acknowledged`
   operations missing after recovery (`acknowledgedMissing`), and the time
   between the oldest of them and the start of the fault
   (`observedDataLossWindow`; `0s` when none is missing). The window is taken
@@ -749,6 +757,9 @@ present, it must be present exactly once and with the values that were sent.
   record their skew.
 - A measurement that could not be taken is reported as `unknown`, with the
   reason, and never as zero. Zero means "measured, and it was zero".
+  The existing evidence keys remain unchanged for backward compatibility;
+  terminology clarification does not rename measurements, verdicts, or
+  alter any required fault/SQL oracle.
 
 ## Evidence
 
