@@ -105,7 +105,11 @@ func (c clusterState) List(ctx context.Context, list evidence.StateList, w io.Wr
 	if list.Field != "" {
 		args = append(args, "--field-selector", list.Field)
 	}
-	out, err := c.h.Command(ctx, args...)
+	read := c.h.read
+	if read == nil {
+		read = c.h.Command
+	}
+	out, err := read(ctx, args...)
 	if _, werr := io.WriteString(w, out); err == nil {
 		err = werr
 	}

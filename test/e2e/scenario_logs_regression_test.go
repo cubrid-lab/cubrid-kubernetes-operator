@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,10 +40,11 @@ import (
 const (
 	testLogScenario = "S03/abrupt"
 	testLogIndex    = testLogScenario + "/logs/index.json"
+	testStateIndex  = testLogScenario + "/cluster/index.json"
 	// fakeKubectl plays a cluster of one Operator Pod, one member and one
 	// Broker, and records each command it is given.
-	fakeKubectl = `#!/bin/sh
-echo "$*" | tr '\n' ' ' >> "$KUBECTL_CALLS"
+	fakeKubectl     = "#!/bin/sh\n" + fakeKubectlBody
+	fakeKubectlBody = `echo "$*" | tr '\n' ' ' >> "$KUBECTL_CALLS"
 echo >> "$KUBECTL_CALLS"
 case "$*" in
 *"get pods -l control-plane"*) printf 'manager-1\tuid-m\tcontrol\t0\n' ;;
@@ -55,7 +57,7 @@ case "$*" in
 	*"get pods -o json -l app.kubernetes.io/instance=ha"*)
 		echo '{"items":[{"metadata":{"name":"ha-0","uid":"uid-0"},"spec":{"nodeName":"n0"},"status":{"phase":"Running"}}]}' ;;
 	*"-n system get pods -o json -l control-plane=controller-manager"*)
-		echo '{"items":[{"metadata":{"name":"manager-1","uid":"uid-m"},"spec":{"nodeName":"control"}}]}' ;;
+		echo '{"items":[{"metadata":{"name":"manager-1","uid":"uid-m"},"spec":{"nodeName":"control"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
 	*"get services -o json"*|*"get endpointslices.discovery.k8s.io -o json"*|*"get events -o json"*)
 		echo '{"items":[]}' ;;
 	*) echo "unexpected: $*" >&2; exit 1 ;;
@@ -80,6 +82,14 @@ case "$*" in
 *) sleep 60 ;;
 esac
 `
+	// unlistableKubectl gives every log and hangs on every listing a snapshot
+	// reads, as a cluster does whose API server answers slowly while its Pods'
+	// logs are still there. The logs' own Pod listing uses -o jsonpath.
+	unlistableKubectl = `#!/bin/sh
+case "$*" in
+*"-o json "*|*"-o json") sleep 60 ;;
+esac
+` + fakeKubectlBody
 )
 
 // useKubectl puts a stand-in kubectl first on PATH and returns the file its
@@ -358,14 +368,22 @@ func TestScenarioLogsNeedAnEvidenceDirectory(t *testing.T) {
 // testFault plays a fault and records what the snapshot's wrapper passes on.
 type testFault struct {
 	confirmed bool
+	inject    error
 	confirm   error
 	remove    error
 	removed   bool
+	// duringConfirm, when set, runs inside each Confirm.
+	duringConfirm func(context.Context)
 }
 
-func (f *testFault) Name() string                          { return "a test fault" }
-func (f *testFault) Inject(context.Context) error          { return nil }
-func (f *testFault) Confirm(context.Context) (bool, error) { return f.confirmed, f.confirm }
+func (f *testFault) Name() string                 { return "a test fault" }
+func (f *testFault) Inject(context.Context) error { return f.inject }
+func (f *testFault) Confirm(ctx context.Context) (bool, error) {
+	if f.duringConfirm != nil {
+		f.duringConfirm(ctx)
+	}
+	return f.confirmed, f.confirm
+}
 func (f *testFault) Remove(context.Context) error {
 	f.removed = true
 	return f.remove
@@ -400,21 +418,12 @@ func TestScenarioSnapshotsAtEachStepOfTheFaultAndOnlyRead(t *testing.T) {
 	var result evidence.Scenario
 	logs.conclude(t.Context(), true, &result)
 
-	const index = testLogScenario + "/cluster/index.json"
-	if !slices.Contains(result.Evidence, index) {
+	if !slices.Contains(result.Evidence, testStateIndex) {
 		t.Fatalf("evidence %v", result.Evidence)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, index))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got evidence.StateIndex
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	names := make([]string, 0, len(got.Checkpoints))
+	got := stateIndexOf(t, dir)
+	names := checkpointNames(got)
 	for _, cp := range got.Checkpoints {
-		names = append(names, cp.Name)
 		for _, s := range cp.Sources {
 			if s.Source == evidence.StateOperatorMetrics {
 				continue
@@ -445,19 +454,26 @@ func TestScenarioSnapshotsAtEachStepOfTheFaultAndOnlyRead(t *testing.T) {
 }
 
 // The wrapper reports what the fault reported, and a kubectl that never answers
-// holds no step of the fault: the snapshot runs beside it.
+// holds no step of the fault: the snapshot runs beside it. The limits on the two
+// waits are below the snapshot's own bound of 6 seconds, so that a step or a
+// conclusion that waits for it fails here.
 func TestObservedFaultNeverChangesOrDelaysItsFault(t *testing.T) {
 	useKubectl(t, silentKubectl)
 	dir := t.TempDir()
 	limits := evidence.DefaultStateLimits()
-	limits.SourceTimeout, limits.CheckpointTimeout = 3*time.Second, 4*time.Second
+	limits.SourceTimeout, limits.CheckpointTimeout = 5*time.Second, 6*time.Second
 	logs := testStateLogs(dir, limits)
 	t.Cleanup(logs.duringFault.Wait)
+	oldNotes := runSummary.Notes
+	t.Cleanup(func() { runSummary.Notes = oldNotes })
 	broken := errors.New("broken")
-	inner := &testFault{confirm: broken, remove: broken}
+	inner := &testFault{inject: broken, confirm: broken, remove: broken}
 	fault := logs.observeFault(inner)
 	if fault.Name() != inner.Name() {
 		t.Fatalf("name %q", fault.Name())
+	}
+	if err := fault.Inject(t.Context()); !errors.Is(err, broken) {
+		t.Fatalf("inject %v", err)
 	}
 	if done, err := fault.Confirm(t.Context()); done || !errors.Is(err, broken) {
 		t.Fatalf("confirm %t %v", done, err)
@@ -474,18 +490,186 @@ func TestObservedFaultNeverChangesOrDelaysItsFault(t *testing.T) {
 		t.Fatalf("the confirmation waited %s for the snapshot", took)
 	}
 	// The snapshot of the fault outlives a deadline by its own bound only, and
-	// what concludes the scenario is not held for it.
+	// what concludes the scenario is not held for it. The run's notes say that
+	// the last snapshot was not taken.
 	expired, cancel := context.WithCancel(t.Context())
 	cancel()
 	logs.grace = 50 * time.Millisecond
 	result := evidence.Scenario{ID: "S03", Result: evidence.Fail, Reason: "the check failed"}
 	start = time.Now()
 	logs.conclude(expired, true, &result)
-	if took := time.Since(start); took > 10*time.Second {
+	if took := time.Since(start); took > 4*time.Second {
 		t.Fatalf("the conclusion took %s", took)
 	}
 	if result.Result != evidence.Fail || result.Reason != "the check failed" {
 		t.Fatalf("the verdict changed: %+v", result)
+	}
+	if !slices.ContainsFunc(runSummary.Notes, func(note string) bool {
+		return strings.Contains(note, "Kubernetes snapshots of "+testLogScenario+" are incomplete")
+	}) {
+		t.Fatalf("the notes do not say that the last snapshot is missing: %q", runSummary.Notes)
+	}
+}
+
+// stateIndexOf reads the snapshots' index below the run directory dir.
+func stateIndexOf(t *testing.T, dir string) evidence.StateIndex {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, testStateIndex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index evidence.StateIndex
+	if err := json.Unmarshal(data, &index); err != nil {
+		t.Fatal(err)
+	}
+	return index
+}
+
+func checkpointNames(index evidence.StateIndex) []string {
+	names := make([]string, 0, len(index.Checkpoints))
+	for _, cp := range index.Checkpoints {
+		names = append(names, cp.Name)
+	}
+	return names
+}
+
+// A fault's step that the runner left behind can still return true when the
+// scenario is concluding or has concluded. The snapshot it would start is
+// refused: the last snapshot is the last one, and no two run side by side.
+func TestFaultLeftRunningTakesNoSnapshotOnceTheScenarioConcludes(t *testing.T) {
+	useKubectl(t, fakeKubectl)
+	dir := t.TempDir()
+	logs := testStateLogs(dir, evidence.DefaultStateLimits())
+	entered, release := make(chan struct{}), make(chan struct{})
+	fault := logs.observeFault(&testFault{confirmed: true, duringConfirm: func(context.Context) {
+		close(entered)
+		<-release
+	}})
+	var left sync.WaitGroup
+	left.Go(func() {
+		if done, err := fault.Confirm(context.WithoutCancel(t.Context())); !done || err != nil {
+			t.Errorf("confirm %t %v", done, err)
+		}
+	})
+	<-entered
+	var result evidence.Scenario
+	logs.conclude(t.Context(), true, &result)
+	close(release)
+	left.Wait()
+	logs.duringFault.Wait()
+
+	if got := checkpointNames(stateIndexOf(t, dir)); !slices.Equal(got, []string{evidence.LogsAfterVerdict}) {
+		t.Fatalf("checkpoints %v", got)
+	}
+}
+
+// The same step returning at the moment the conclusion starts must leave one
+// snapshot running at a time; the race detector checks it (go test -race).
+func TestFaultConfirmedDuringTheConclusionIsNoRace(t *testing.T) {
+	useKubectl(t, fakeKubectl)
+	dir := t.TempDir()
+	logs := testStateLogs(dir, evidence.DefaultStateLimits())
+	fault := logs.observeFault(&testFault{confirmed: true})
+	var result evidence.Scenario
+	var both sync.WaitGroup
+	both.Go(func() {
+		if _, err := fault.Confirm(t.Context()); err != nil {
+			t.Error(err)
+		}
+	})
+	both.Go(func() { logs.conclude(t.Context(), true, &result) })
+	both.Wait()
+	logs.duringFault.Wait()
+	if got := checkpointNames(stateIndexOf(t, dir)); len(got) == 0 ||
+		got[len(got)-1] != evidence.LogsAfterVerdict {
+		t.Fatalf("checkpoints %v", got)
+	}
+}
+
+// After a deadline a snapshot may use up the time the logs had before snapshots
+// existed. They come first, or the snapshot stops at the deadline, so a kubectl
+// that hangs on every listing costs the logs nothing. The cases are a deadline
+// before the conclusion and one in the middle of its snapshot.
+func TestLogsKeepTheirGracePeriodWhenASnapshotHangs(t *testing.T) {
+	for name, cancelAfter := range map[string]time.Duration{"before the conclusion": 0, "during the snapshot": 200 * time.Millisecond} {
+		t.Run(name, func(t *testing.T) {
+			useKubectl(t, unlistableKubectl)
+			dir := t.TempDir()
+			logs := testStateLogs(dir, evidence.DefaultStateLimits())
+			logs.grace = 6 * time.Second
+			scenario, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if cancelAfter == 0 {
+				cancel()
+			} else {
+				time.AfterFunc(cancelAfter, cancel)
+			}
+			var result evidence.Scenario
+			logs.conclude(scenario, true, &result)
+
+			sources := map[string]evidence.LogStatus{}
+			for _, s := range logIndexOf(t, dir).Checkpoints[0].Sources {
+				sources[s.Component] = s.Status
+			}
+			if sources[evidence.LogOperator] != evidence.LogCollected {
+				t.Fatalf("the Operator's log is %q, after a snapshot that hangs: %v", sources[evidence.LogOperator], sources)
+			}
+		})
+	}
+}
+
+// The wrapper through the fault runner: a blocked result stays the fault's own,
+// and a step that returned true as its limit passed, which the runner discards,
+// leaves no fault_confirmed and no snapshot that would contradict that result.
+func TestObservedFaultThroughTheFaultRunner(t *testing.T) {
+	limits := faults.Limits{Confirm: 300 * time.Millisecond, Outcome: time.Second, Cleanup: time.Second,
+		Poll: 10 * time.Millisecond, Stop: 5 * time.Second}
+	ready := func(context.Context) error { return nil }
+	reached := func(context.Context) (bool, error) { return true, nil }
+	for name, tc := range map[string]struct {
+		fault     *testFault
+		result    evidence.Result
+		reason    string
+		confirmed bool
+	}{
+		"a fault that is confirmed": {fault: &testFault{confirmed: true}, result: evidence.Pass, confirmed: true},
+		"a failed injection": {fault: &testFault{inject: errors.New("broken")}, result: evidence.Blocked,
+			reason: faults.ReasonInjectionFailed + ": broken"},
+		"a fault that is never confirmed": {fault: &testFault{}, result: evidence.Blocked,
+			reason: faults.ReasonFaultNotConfirmed},
+		"a confirmation as the limit passes": {result: evidence.Blocked, reason: faults.ReasonFaultNotConfirmed,
+			fault: &testFault{confirmed: true, duringConfirm: func(ctx context.Context) { <-ctx.Done() }}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			useKubectl(t, fakeKubectl)
+			dir := t.TempDir()
+			logs := testStateLogs(dir, evidence.DefaultStateLimits())
+			outcome := faults.Run(t.Context(), faults.Scenario{Fault: logs.observeFault(tc.fault), Limits: limits,
+				Before: ready, Check: reached})
+			if outcome.Result != tc.result || !strings.HasPrefix(outcome.Reason, tc.reason) {
+				t.Fatalf("outcome %q %q, want %q %q", outcome.Result, outcome.Reason, tc.result, tc.reason)
+			}
+			if !tc.fault.removed {
+				t.Fatal("the fault was not removed")
+			}
+			result := outcome.Scenario("S03", "abrupt", limits)
+			logs.conclude(t.Context(), true, &result)
+			if result.Result != tc.result || !strings.HasPrefix(result.Reason, tc.reason) {
+				t.Fatalf("the collection changed the result: %+v", result)
+			}
+
+			index := stateIndexOf(t, dir)
+			observations, err := os.ReadFile(filepath.Join(dir, index.Observations))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(string(observations), "fault_confirmed"); got != tc.confirmed {
+				t.Errorf("fault_confirmed recorded %t, want %t:\n%s", got, tc.confirmed, observations)
+			}
+			if got := slices.Contains(checkpointNames(index), evidence.StateFaultConfirmed); got != tc.confirmed {
+				t.Errorf("checkpoints %v, want a fault-confirmed snapshot %t", checkpointNames(index), tc.confirmed)
+			}
+		})
 	}
 }
 

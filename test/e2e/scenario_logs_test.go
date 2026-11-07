@@ -159,6 +159,10 @@ type scenarioLogs struct {
 	grace    time.Duration
 	// duringFault waits for the snapshot taken when the fault was confirmed.
 	duringFault sync.WaitGroup
+	// concluding, under mu, refuses that snapshot once conclude began, so that
+	// duringFault has nothing to add while it is waited for.
+	mu         sync.Mutex
+	concluding bool
 }
 
 // newScenarioLogs returns the logs of scenario below the run directory dir.
@@ -206,7 +210,10 @@ func (l *scenarioLogs) beforeFault(ctx context.Context) {
 // snapshot once the fault was confirmed. It only watches: every result is the
 // fault's own, the runner of the fault does not know of it, and the snapshot
 // runs beside the scenario, so that it neither delays the check of the outcome
-// nor can decide it.
+// nor can decide it. A confirmation whose context has ended is the fault's to
+// report, and faults.Run discards it, so nothing here records it. The check can
+// lose by the moment between it and the runner's: that is why a reader of the
+// result goes by the outcome and not by the snapshot's presence.
 type observedFault struct {
 	faults.Fault
 	logs      *scenarioLogs
@@ -229,15 +236,24 @@ func (f *observedFault) Inject(ctx context.Context) error {
 
 func (f *observedFault) Confirm(ctx context.Context) (bool, error) {
 	done, err := f.Fault.Confirm(ctx)
-	if done && err == nil {
-		f.confirmed.Do(func() {
-			f.logs.state.Mark("fault_confirmed", f.Name())
-			f.logs.duringFault.Go(func() {
-				f.logs.state.Checkpoint(context.Background(), evidence.StateFaultConfirmed)
-			})
-		})
+	if done && err == nil && ctx.Err() == nil {
+		f.confirmed.Do(func() { f.logs.faultConfirmed(f.Name()) })
 	}
 	return done, err
+}
+
+// faultConfirmed marks the confirmation and starts its snapshot, unless the
+// scenario is already concluding, as it is for a step the runner left behind.
+func (l *scenarioLogs) faultConfirmed(name string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.concluding {
+		return
+	}
+	l.state.Mark("fault_confirmed", name)
+	l.duringFault.Go(func() {
+		l.state.Checkpoint(context.Background(), evidence.StateFaultConfirmed)
+	})
 }
 
 func (f *observedFault) Remove(ctx context.Context) error {
@@ -254,22 +270,36 @@ func (f *observedFault) Remove(ctx context.Context) error {
 // status run. It is meant for a deferred call, so that a failed check still
 // leaves its logs, also once a deadline has cancelled ctx (evidence.LogContext),
 // and it reads result and sets nothing but result.Evidence.
+//
+// The last snapshot comes first because it is the closest to the verdict and
+// costs a few reads, but the logs keep the whole grace period they had without
+// it. So it ends with ctx, and the grace period starts after it. A scenario
+// whose ctx has already ended takes the logs first, and the snapshot gets what
+// is left of the grace period.
 func (l *scenarioLogs) conclude(ctx context.Context, faultEnded bool, result *evidence.Scenario) {
 	if l.bundle == nil {
 		return
 	}
-	ctx, stop := evidence.LogContext(ctx, l.grace)
+	l.mu.Lock()
+	l.concluding = true
+	l.mu.Unlock()
+	expired := ctx.Err() != nil
+	if !expired {
+		l.concludeState(ctx, result)
+	}
+	logs, stop := evidence.LogContext(ctx, l.grace)
 	defer stop()
-	l.concludeState(ctx, result)
-	l.bundle.Checkpoint(ctx, evidence.LogsAfterVerdict, faultEnded)
+	l.bundle.Checkpoint(logs, evidence.LogsAfterVerdict, faultEnded)
 	l.noteProblem("diagnostic logs", l.bundle.Problem())
 	addEvidence(result, l.bundle.IndexFile())
+	if expired {
+		l.concludeState(logs, result)
+	}
 }
 
-// concludeState takes the last snapshot, first of what conclude collects
-// because it is the closest to the verdict and costs a few reads. The snapshot
-// of the fault still running at the end of ctx is left to its own bound, and
-// the last one is then not taken: a snapshot is for one goroutine at a time.
+// concludeState takes the last snapshot. The snapshot of the fault still
+// running at the end of ctx is left to its own bound, and the last one is then
+// not taken: the run's notes say so.
 func (l *scenarioLogs) concludeState(ctx context.Context, result *evidence.Scenario) {
 	if l.state == nil {
 		return

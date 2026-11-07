@@ -52,7 +52,7 @@ const (
 
 // statusStaleAfter is the reader's rule of docs/observability.md
 // ("Freshness"): the HA status is stale when status.lastObservedTime is older.
-const statusStaleAfter = 60 * time.Second
+const statusStaleAfter = evidence.StatusStaleAfter
 
 // operatorPods lists the Operator's Pods as "name uid" lines, also those
 // that are being deleted.

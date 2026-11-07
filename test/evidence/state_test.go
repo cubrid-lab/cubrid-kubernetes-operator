@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -43,6 +44,10 @@ const (
 		`"state":{"running":{"startedAt":"2026-11-06T09:00:05Z"}}}]}}`
 	testClusterStatus = `"status":{"observedGeneration":3,"currentPrimary":"ha-0","conditions":[{"type":"Ready",` +
 		`"status":"True","reason":"AllGood","observedGeneration":3,"lastTransitionTime":"2026-11-06T09:00:10Z"}]}`
+	testOperatorPod = `{"metadata":{"name":"manager-1","uid":"uid-m"},"spec":{"nodeName":"control"},` +
+		`"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}`
+	// noOperator starts the reason of a status no running Operator keeps current.
+	noOperator      = "no Operator Pod"
 	testMemberUID   = "uid-0"
 	testNode        = "node-a"
 	testManagerNode = "control"
@@ -73,10 +78,9 @@ type fakeState struct {
 
 func newFakeState() *fakeState {
 	return &fakeState{errs: map[string]error{}, lists: map[string]string{
-		StateCluster: testStateList(testClusterItem),
-		StatePods:    testStateList(testMemberPod),
-		StateOperatorPods: testStateList(`{"metadata":{"name":"manager-1","uid":"uid-m"},` +
-			`"spec":{"nodeName":"control"},"status":{"phase":"Running"}}`),
+		StateCluster:      testStateList(testClusterItem),
+		StatePods:         testStateList(testMemberPod),
+		StateOperatorPods: testStateList(testOperatorPod),
 		StateServices: testStateList(`{"metadata":{"name":"ha-rw","uid":"uid-s","annotations":{"note":` +
 			`"password=hidden-in-annotation"}},"spec":{"type":"ClusterIP","clusterIP":"10.0.0.1"}}`),
 		StateEndpointSlices: testStateList(`{"metadata":{"name":"ha-rw-abc","uid":"uid-e"},"addressType":"IPv4",` +
@@ -283,7 +287,7 @@ func TestSnapshotExcludesEventsOlderThanTheScenario(t *testing.T) {
 	if source.Excluded == nil || *source.Excluded != want {
 		t.Fatalf("excluded %+v, want %+v", source.Excluded, want)
 	}
-	if source.Listed != 6 || source.Stored != 3 || source.Status != LogCollected {
+	if *source.Listed != 6 || source.Stored != 3 || source.Status != LogCollected {
 		t.Fatalf("source %+v", source)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, source.File))
@@ -380,8 +384,10 @@ func TestMissingSourcesAreNamedAndTheRestIsKept(t *testing.T) {
 			t.Errorf("%s: %+v, want the reason %q", source, got, want)
 		}
 	}
-	if got := stateSource(t, index, LogsAfterVerdict, StatePods); !slices.Equal(got.Missing, []string{testMaster}) {
-		t.Errorf("the member is not named: %+v", got)
+	// Nothing was looked for in a listing that failed, so nothing is called
+	// missing: the reason says the listing failed.
+	if got := stateSource(t, index, LogsAfterVerdict, StatePods); len(got.Missing) != 0 {
+		t.Errorf("a member is named as missing from a listing that was not read: %+v", got)
 	}
 	if got := stateSource(t, index, LogsAfterVerdict, StateEvents); got.Status != LogCollected || got.File == "" {
 		t.Errorf("a source that answered was not kept: %+v", got)
@@ -395,7 +401,7 @@ func TestUnreadMetricsAreNamed(t *testing.T) {
 	b := testState(dir, newFakeState())
 	b.Checkpoint(t.Context(), LogsAfterVerdict)
 	got := stateSource(t, readStateIndex(t, dir), LogsAfterVerdict, StateOperatorMetrics)
-	if got.Status != LogUnavailable || got.Reason == "" {
+	if got.Status != LogUnavailable || got.Reason == "" || strings.Contains(got.Reason, redacted) {
 		t.Fatalf("source %+v", got)
 	}
 }
@@ -666,6 +672,380 @@ func TestMarkIsSafeDuringACheckpoint(t *testing.T) {
 	}
 	if count != 100 {
 		t.Fatalf("%d marks kept", count)
+	}
+}
+
+// testObservedCluster is the CubridCluster of an unchanged generation whose
+// Conditions are all True and whose status was last observed age ago.
+func testObservedCluster(age time.Duration) string {
+	return `{"metadata":{"name":"ha","uid":"cluster-uid","generation":3},"status":{"observedGeneration":3,` +
+		`"lastObservedTime":"` + time.Now().Add(-age).UTC().Format(time.RFC3339) + `","conditions":[{"type":"Ready",` +
+		`"status":"True","observedGeneration":3}]}}`
+}
+
+// A stopped Operator cannot mark its own status as stale, so a status of an
+// unchanged generation can say True long after anything checked it. The first
+// real snapshot of an Operator being replaced (S06) held Ready, HAReady and
+// PrimaryResolved True, 17 seconds old, beside a replacement Pod that was
+// Running with its manager container not ready yet: that source must not read
+// as collected and healthy. Below the limit, with a ready Operator, it must.
+func TestStatusNobodyKeepsCurrentIsObsolete(t *testing.T) {
+	const fresh, stale = 17 * time.Second, 2 * time.Minute
+	ready := testStateList(testOperatorPod)
+	unready := `{"metadata":{"name":"manager-2","uid":"uid-n"},"spec":{"nodeName":"control"},` +
+		`"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}],` +
+		`"containerStatuses":[{"name":"manager","ready":false,` +
+		`"state":{"running":{"startedAt":"2026-11-07T03:35:14Z"}}}]}}`
+	deleting := `{"metadata":{"name":"manager-3","uid":"uid-d","deletionTimestamp":"2026-11-07T03:35:14Z"},` +
+		`"spec":{"nodeName":"control"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}`
+	for name, tc := range map[string]struct {
+		age      time.Duration
+		operator string
+		want     LogStatus
+		reason   string
+	}{
+		"fresh with a ready Operator": {age: fresh, operator: ready, want: LogCollected},
+		"past the limit":              {age: stale, operator: ready, want: StateObsolete, reason: "older than"},
+		"no Operator Pod":             {age: fresh, operator: testStateList(), want: StateObsolete, reason: noOperator},
+		"an Operator Pod not ready yet": {age: fresh, operator: testStateList(unready), want: StateObsolete,
+			reason: noOperator},
+		"an Operator Pod being deleted": {age: fresh, operator: testStateList(deleting), want: StateObsolete,
+			reason: noOperator},
+		"a ready Pod beside one not ready": {age: fresh, operator: testStateList(unready, testOperatorPod),
+			want: LogCollected},
+		"both at once": {age: stale, operator: testStateList(), want: StateObsolete, reason: noOperator},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			f := newFakeState()
+			f.lists[StateCluster] = testStateList(testObservedCluster(tc.age))
+			f.lists[StateOperatorPods] = tc.operator
+			b := testState(dir, f)
+			b.Checkpoint(t.Context(), StateFaultConfirmed)
+
+			got := stateSource(t, readStateIndex(t, dir), StateFaultConfirmed, StateCluster)
+			if got.Status != tc.want || !strings.Contains(got.Reason, tc.reason) || got.File == "" {
+				t.Fatalf("source %+v, want %q with a reason naming %q", got, tc.want, tc.reason)
+			}
+			age, err := time.ParseDuration(got.StatusAge)
+			if err != nil || age < tc.age-time.Second || age > tc.age+time.Minute {
+				t.Fatalf("status age %q of a status %s old: %v", got.StatusAge, tc.age, err)
+			}
+			if got.LastObservedTime == nil {
+				t.Fatalf("source %+v has no lastObservedTime", got)
+			}
+		})
+	}
+}
+
+// The limit is the reader rule of docs/observability.md, with the one second
+// the whole-second times are allowed in test/faults.
+func TestStatusAgeLimitIsTheReaderRule(t *testing.T) {
+	if StatusStaleAfter != time.Minute {
+		t.Fatalf("limit %s", StatusStaleAfter)
+	}
+	for age, want := range map[time.Duration]LogStatus{StatusStaleAfter - time.Second: LogCollected,
+		StatusStaleAfter + 3*time.Second: StateObsolete} {
+		dir := t.TempDir()
+		f := newFakeState()
+		f.lists[StateCluster] = testStateList(testObservedCluster(age))
+		b := testState(dir, f)
+		b.Checkpoint(t.Context(), LogsAfterVerdict)
+		if got := stateSource(t, readStateIndex(t, dir), LogsAfterVerdict, StateCluster); got.Status != want {
+			t.Errorf("age %s: %+v, want %q", age, got, want)
+		}
+	}
+}
+
+// What is not known stays unknown: a status with no observation time has no age
+// of zero, and an Operator listing that failed proves neither a running nor a
+// stopped Operator.
+func TestStatusAgeAndOperatorThatAreNotKnownAreSaid(t *testing.T) {
+	t.Run("no observation time", func(t *testing.T) {
+		dir := t.TempDir()
+		b := testState(dir, newFakeState())
+		b.Checkpoint(t.Context(), LogsAfterVerdict)
+		got := stateSource(t, readStateIndex(t, dir), LogsAfterVerdict, StateCluster)
+		if got.StatusAge != Unknown || got.LastObservedTime != nil || !strings.Contains(got.Reason, "lastObservedTime") {
+			t.Fatalf("source %+v", got)
+		}
+	})
+	t.Run("an Operator listing that failed", func(t *testing.T) {
+		dir := t.TempDir()
+		f := newFakeState()
+		f.lists[StateCluster] = testStateList(testObservedCluster(time.Second))
+		f.errs[StateOperatorPods] = errors.New("the API server is gone")
+		b := testState(dir, f)
+		b.Checkpoint(t.Context(), LogsAfterVerdict)
+		got := stateSource(t, readStateIndex(t, dir), LogsAfterVerdict, StateCluster)
+		if got.Status != LogCollected || !strings.Contains(got.Reason, "not known") {
+			t.Fatalf("source %+v", got)
+		}
+	})
+}
+
+// The reasons of a status behind its generation and of a status past its age
+// are both kept.
+func TestObsoleteStatusKeepsEveryReason(t *testing.T) {
+	dir := t.TempDir()
+	f := newFakeState()
+	item := strings.Replace(testObservedCluster(time.Hour), `"generation":3`, `"generation":5`, 1)
+	f.lists[StateCluster] = testStateList(item)
+	f.lists[StateOperatorPods] = testStateList()
+	b := testState(dir, f)
+	b.Checkpoint(t.Context(), LogsAfterVerdict)
+	got := stateSource(t, readStateIndex(t, dir), LogsAfterVerdict, StateCluster)
+	for _, want := range []string{"generation 5", "older than", noOperator} {
+		if got.Status != StateObsolete || !strings.Contains(got.Reason, want) {
+			t.Errorf("source %+v, want the reason %q", got, want)
+		}
+	}
+}
+
+// An Event counts as stored only once a file holds it. Each way of losing one
+// leaves it to the next checkpoint, instead of counting it as unchanged.
+func TestEventIsRememberedOnlyOnceStored(t *testing.T) {
+	event := testEvent("event-now", "Killing", 1, "2026-11-06T09:00:20Z", "2026-11-06T09:00:20Z")
+	check := func(t *testing.T, dir string) {
+		t.Helper()
+		got := stateSource(t, readStateIndex(t, dir), LogsAfterVerdict, StateEvents)
+		if got.Status != LogCollected || got.Stored != 1 || got.Excluded.UnchangedSinceEarlierCheckpoint != 0 {
+			t.Fatalf("source %+v, excluded %+v", got, got.Excluded)
+		}
+	}
+	t.Run("a failed write", func(t *testing.T) {
+		dir := t.TempDir()
+		b := testState(dir, newFakeState())
+		// A file where the directory of the first checkpoint has to be.
+		if err := os.MkdirAll(filepath.Join(dir, testStateDir), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, testStateDir, LogsBeforeFault), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b.Checkpoint(t.Context(), LogsBeforeFault)
+		b.Checkpoint(t.Context(), LogsAfterVerdict)
+		check(t, dir)
+	})
+	t.Run("a listing with a malformed item", func(t *testing.T) {
+		dir := t.TempDir()
+		f := newFakeState()
+		f.lists[StateEvents] = testStateList(event, `{"metadata":"not an object"}`)
+		b := testState(dir, f)
+		b.Checkpoint(t.Context(), LogsBeforeFault)
+		if got := stateSource(t, readStateIndex(t, dir), LogsBeforeFault, StateEvents); got.Status != LogUnavailable {
+			t.Fatalf("source %+v", got)
+		}
+		f.lists[StateEvents] = testStateList(event)
+		b.Checkpoint(t.Context(), LogsAfterVerdict)
+		check(t, dir)
+	})
+	t.Run("the size bound", func(t *testing.T) {
+		dir := t.TempDir()
+		f := newFakeState()
+		events := make([]string, 0, 50)
+		for i := range 50 {
+			stamp := fmt.Sprintf("2026-11-06T09:%02d:00Z", i)
+			events = append(events, testEvent(fmt.Sprintf("event-%02d", i), fmt.Sprintf("Reason%02d", i), 1, stamp, stamp))
+		}
+		f.lists[StateEvents] = testStateList(events...)
+		limits := DefaultStateLimits()
+		limits.SourceBytes = 2048
+		b := NewStateBundle(dir, testLogScenario, NewRedactor(), f, testStatePlan(), limits,
+			NewLogBudget(1<<30, time.Hour), testStateSince)
+		b.Checkpoint(t.Context(), LogsBeforeFault)
+		first := stateSource(t, readStateIndex(t, dir), LogsBeforeFault, StateEvents)
+		b.Checkpoint(t.Context(), LogsAfterVerdict)
+		second := stateSource(t, readStateIndex(t, dir), LogsAfterVerdict, StateEvents)
+		if first.Stored == 0 || second.Stored == 0 || second.Excluded.UnchangedSinceEarlierCheckpoint != first.Stored {
+			t.Fatalf("first %+v, second %+v, excluded %+v", first, second, second.Excluded)
+		}
+	})
+}
+
+// Two snapshots never run side by side: the state of one scenario's snapshots
+// has one writer. The fault's snapshot runs beside the scenario, which is why
+// this has to hold for any caller.
+func TestCheckpointsRunOneAtATime(t *testing.T) {
+	dir := t.TempDir()
+	f := newFakeState()
+	var running, overlapped atomic.Int32
+	f.hook = func(context.Context, StateList) error {
+		if running.Add(1) > 1 {
+			overlapped.Add(1)
+		}
+		time.Sleep(time.Millisecond)
+		running.Add(-1)
+		return nil
+	}
+	b := testState(dir, f)
+	var wg sync.WaitGroup
+	wg.Go(func() { b.Checkpoint(t.Context(), LogsBeforeFault) })
+	wg.Go(func() { b.Checkpoint(t.Context(), StateFaultConfirmed) })
+	wg.Go(func() {
+		for b.Problem() == nil && b.IndexFile() == "" {
+			time.Sleep(time.Millisecond)
+		}
+	})
+	wg.Wait()
+	if n := overlapped.Load(); n != 0 {
+		t.Fatalf("%d reads ran beside another snapshot", n)
+	}
+	if got := readStateIndex(t, dir); len(got.Checkpoints) != 2 {
+		t.Fatalf("index %+v", got)
+	}
+}
+
+// A source that was not read has no count: an unknown number is not zero. In
+// the same index a source that answered with nothing does say zero.
+func TestUnreadSourceHasNoCount(t *testing.T) {
+	dir := t.TempDir()
+	f := newFakeState()
+	f.errs[StatePods] = errors.New("the API server is gone")
+	f.lists[StateServices] = testStateList()
+	b := testState(dir, f)
+	b.Checkpoint(t.Context(), LogsAfterVerdict)
+
+	data, err := os.ReadFile(filepath.Join(dir, testStateDir, stateIndexName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index struct {
+		Checkpoints []struct {
+			Sources []map[string]any `json:"sources"`
+		} `json:"checkpoints"`
+	}
+	if err := json.Unmarshal(data, &index); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range index.Checkpoints[0].Sources {
+		listed, has := s["listed"]
+		switch s["source"] {
+		case StatePods, StateOperatorMetrics:
+			if has {
+				t.Errorf("%v was not read and says listed %v", s["source"], listed)
+			}
+		case StateServices:
+			if listed != float64(0) {
+				t.Errorf("services answered with nothing and say listed %v, present %t", listed, has)
+			}
+		}
+	}
+}
+
+// The index names what the file holds, so a truncated source names the objects
+// a reader can open, and no others.
+func TestTruncatedSourceNamesOnlyWhatItsFileHolds(t *testing.T) {
+	dir := t.TempDir()
+	f := newFakeState()
+	services := make([]string, 0, 40)
+	for i := range 40 {
+		services = append(services, fmt.Sprintf(`{"metadata":{"name":"service-%02d","uid":"uid-%02d"},`+
+			`"spec":{"type":"ClusterIP"}}`, i, i))
+	}
+	f.lists[StateServices] = testStateList(services...)
+	limits := DefaultStateLimits()
+	limits.SourceBytes = 1024
+	b := NewStateBundle(dir, testLogScenario, NewRedactor(), f, testStatePlan(), limits,
+		NewLogBudget(1<<30, time.Hour), testStateSince)
+	b.Checkpoint(t.Context(), LogsAfterVerdict)
+
+	got := stateSource(t, readStateIndex(t, dir), LogsAfterVerdict, StateServices)
+	if got.Status != LogTruncated || *got.Listed != 40 || got.Stored == 0 || len(got.Objects) != got.Stored {
+		t.Fatalf("source %+v", got)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, got.File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range got.Objects {
+		if !strings.Contains(string(data), `"`+object.Name+`"`) {
+			t.Errorf("%s is named and not in the file", object.Name)
+		}
+	}
+}
+
+// observations.jsonl keeps the newest lines its bound allows, and the index says
+// how many it had to drop.
+func TestObservationBoundKeepsTheNewestAndCountsTheRest(t *testing.T) {
+	dir := t.TempDir()
+	limits := DefaultStateLimits()
+	limits.ObservationBytes = 2048
+	b := NewStateBundle(dir, testLogScenario, NewRedactor(), newFakeState(), testStatePlan(), limits,
+		NewLogBudget(1<<30, time.Hour), testStateSince)
+	const steps = 200
+	for i := range steps {
+		b.Mark("fault_step", fmt.Sprintf("step-%03d", i))
+		time.Sleep(time.Microsecond)
+	}
+	b.Checkpoint(t.Context(), LogsAfterVerdict)
+
+	index := readStateIndex(t, dir)
+	data, err := os.ReadFile(filepath.Join(dir, index.Observations))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(data)) > limits.ObservationBytes {
+		t.Fatalf("%d bytes past the bound of %d", len(data), limits.ObservationBytes)
+	}
+	lines := readStateObservations(t, dir)
+	if index.DroppedObservations == 0 || len(lines) == 0 {
+		t.Fatalf("%d lines kept, %d dropped", len(lines), index.DroppedObservations)
+	}
+	if !strings.Contains(string(data), "checkpoint_finished") || strings.Contains(string(data), "step-000") {
+		t.Fatalf("the newest lines were not the ones kept:\n%s", data)
+	}
+	// The checkpoint adds two lines, and the Conditions and containers of the
+	// fixture a few more; every line kept or dropped is counted once.
+	if total := len(lines) + index.DroppedObservations; total <= steps {
+		t.Fatalf("%d lines kept and %d dropped of more than %d", len(lines), index.DroppedObservations, steps)
+	}
+}
+
+// Everything a scenario stores stays within BundleBytes, the wrapper of each
+// file included, and a source past it is named, not silently left out.
+func TestBundleBoundHoldsWhatAScenarioStores(t *testing.T) {
+	dir := t.TempDir()
+	f := newFakeState()
+	services := make([]string, 0, 40)
+	for i := range 40 {
+		services = append(services, fmt.Sprintf(`{"metadata":{"name":"service-%02d","uid":"uid-%02d"},`+
+			`"spec":{"type":"ClusterIP"}}`, i, i))
+	}
+	f.lists[StateServices] = testStateList(services...)
+	limits := DefaultStateLimits()
+	limits.SourceBytes, limits.ObservationBytes, limits.BundleBytes = 1024, 1024, 4096
+	b := NewStateBundle(dir, testLogScenario, NewRedactor(), f, testStatePlan(), limits,
+		NewLogBudget(1<<30, time.Hour), testStateSince)
+	for _, name := range []string{LogsBeforeFault, StateFaultConfirmed, LogsAfterVerdict} {
+		b.Checkpoint(t.Context(), name)
+	}
+
+	var total int64
+	err := filepath.WalkDir(filepath.Join(dir, testStateDir), func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || entry.Name() == stateIndexName {
+			return err
+		}
+		info, err := entry.Info()
+		if err == nil {
+			total += info.Size()
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total > limits.BundleBytes {
+		t.Errorf("%d bytes stored past the bound of %d", total, limits.BundleBytes)
+	}
+	bounded := false
+	for _, cp := range readStateIndex(t, dir).Checkpoints {
+		for _, s := range cp.Sources {
+			bounded = bounded || (s.Status != LogCollected && strings.Contains(s.Reason, "size bound"))
+		}
+	}
+	if !bounded {
+		t.Errorf("no source names the bound, with %d bytes stored", total)
 	}
 }
 

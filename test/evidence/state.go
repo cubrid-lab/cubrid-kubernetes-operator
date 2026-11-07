@@ -96,8 +96,9 @@ const (
 		"clocks are not proven to be in the order the file shows, and an interval between them is not a measured " +
 		"recovery time."
 	// metricsNotRead says why no checkpoint holds the Operator's metrics.
-	metricsNotRead = "not read: the Operator's metrics endpoint answers only a bearer token of an authorized " +
-		"service account, which a read-only snapshot does not hold or create"
+	// The wording avoids the phrase the redaction takes for a credential.
+	metricsNotRead = "not read: the Operator's metrics endpoint needs the token of an authorized service account, " +
+		"which a read-only snapshot does not hold or create"
 )
 
 // StateList is one listing a snapshot reads.
@@ -113,6 +114,11 @@ type StateList struct {
 	// Names are the objects that must exist; one that does not is named.
 	Names []string
 }
+
+// StatusStaleAfter is the reader rule of docs/observability.md ("Freshness"):
+// the HA status is stale when status.lastObservedTime is older than this. The
+// times are written in whole seconds, so a reader allows one second more.
+const StatusStaleAfter = 60 * time.Second
 
 // StatePlan is what a snapshot reads, in order.
 type StatePlan struct {
@@ -175,11 +181,18 @@ type StateSource struct {
 	File   string    `json:"file,omitempty"`
 	Status LogStatus `json:"status"`
 	Reason string    `json:"reason,omitempty"`
-	// Listed is how many objects the listing returned, Stored how many the
+	// Listed is how many objects the listing returned, and is left out when
+	// nothing was read: an unknown count is not zero. Stored is how many the
 	// file holds.
-	Listed int `json:"listed"`
-	Stored int `json:"stored"`
-	// Objects identifies the objects stored, except for Events.
+	Listed *int `json:"listed,omitempty"`
+	Stored int  `json:"stored"`
+	// LastObservedTime is the CubridCluster's status.lastObservedTime, by the
+	// Operator's clock. StatusAge is how old that time was when the runner read
+	// it, or Unknown when it is unset. The two clocks were not compared, so the
+	// age carries their skew.
+	LastObservedTime *time.Time `json:"lastObservedTime,omitempty"`
+	StatusAge        string     `json:"statusAge,omitempty"`
+	// Objects identifies the objects the file holds, except for Events.
 	Objects []StateObject `json:"objects,omitempty"`
 	// Missing are expected objects that were not found.
 	Missing []string `json:"missing,omitempty"`
@@ -243,9 +256,13 @@ type StateIndex struct {
 // only lists, it copies only the fields of the types below, so that a Pod's
 // environment or an annotation never reaches a file, everything is written
 // through Redactor.WriteFile, and the index is rewritten after every source.
+// Three parts of those types are copied whole, as raw JSON, because they hold
+// no credential of their own: a CubridCluster's status, the ports of a Service
+// or an EndpointSlice, and the conditions of an endpoint. What they hold still
+// goes through the redaction.
 // Nothing here can fail the caller, and a problem is only reported by Problem.
 //
-// Checkpoint is for one goroutine at a time; Mark may be called from any.
+// Any method may be called from any goroutine. Checkpoints run one at a time.
 type StateBundle struct {
 	dir      string
 	scenario string
@@ -256,17 +273,21 @@ type StateBundle struct {
 	budget   *LogBudget
 	since    time.Time
 
-	mu    sync.Mutex
-	marks []StateObservation
+	// mu guards the fields a caller reads or adds to during a checkpoint.
+	mu      sync.Mutex
+	marks   []StateObservation
+	written bool
+	problem error
 
-	index        StateIndex
-	stored       int64
-	order        int
-	seen         map[string]map[string]StateObject
-	events       map[string]string
-	observations map[StateObservation]bool
-	written      bool
-	problem      error
+	// running holds a checkpoint, and guards the fields below.
+	running       sync.Mutex
+	index         StateIndex
+	stored        int64
+	order         int
+	seen          map[string]map[string]StateObject
+	events        map[string]string
+	observations  map[StateObservation]bool
+	operatorReady *bool
 }
 
 // NewStateBundle returns the snapshots of scenario ("S03/abrupt") below the run
@@ -297,6 +318,8 @@ func NewStateBundle(dir, scenario string, r *Redactor, reader StateReader, plan 
 // IndexFile is the index's path relative to the run directory, or "" until
 // one was written.
 func (b *StateBundle) IndexFile() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if !b.written {
 		return ""
 	}
@@ -304,7 +327,17 @@ func (b *StateBundle) IndexFile() string {
 }
 
 // Problem is the last reason a file of the snapshots could not be written.
-func (b *StateBundle) Problem() error { return b.problem }
+func (b *StateBundle) Problem() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.problem
+}
+
+func (b *StateBundle) setProblem(err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.problem = err
+}
 
 func (b *StateBundle) rel(name string) string { return b.scenario + "/" + stateDirName + "/" + name }
 
@@ -320,11 +353,14 @@ func (b *StateBundle) Mark(kind, detail string) {
 // limits' CheckpointTimeout, plus logReadGrace for a read that does not stop,
 // and what the run's budget still allows; what it did not read is named in the
 // index. It runs in a deferred call of a scenario, also while a failed
-// assertion panics: the recover below ends only a panic of its own.
+// assertion panics: the recover below ends only a panic of its own. A second
+// call waits for the first, and its time starts when it gets its turn.
 func (b *StateBundle) Checkpoint(ctx context.Context, name string) {
+	b.running.Lock()
+	defer b.running.Unlock()
 	defer func() {
 		if p := recover(); p != nil {
-			b.problem = fmt.Errorf("the snapshot panicked: %v", p)
+			b.setProblem(fmt.Errorf("the snapshot panicked: %v", p))
 			b.writeIndex()
 		}
 	}()
@@ -334,6 +370,7 @@ func (b *StateBundle) Checkpoint(ctx context.Context, name string) {
 		return
 	}
 	start := time.Now().UTC()
+	b.operatorReady = nil
 	b.index.Checkpoints = append(b.index.Checkpoints, StateCheckpoint{Name: name, StartedAt: start,
 		Sources: []StateSource{}})
 	b.observe(StateObservation{T: start, Clock: ClockRunner, Kind: "checkpoint_started", Detail: name})
@@ -343,6 +380,7 @@ func (b *StateBundle) Checkpoint(ctx context.Context, name string) {
 	for _, list := range b.plan.Lists {
 		b.collect(ctx, list)
 	}
+	b.judgeStatusKeeper()
 	b.note(StateSource{Source: StateOperatorMetrics, Status: LogUnavailable, Reason: metricsNotRead})
 	took := time.Since(start)
 	b.budget.spendTime(took)
@@ -369,7 +407,6 @@ func (b *StateBundle) collect(ctx context.Context, list StateList) {
 		Selector: cmp.Or(list.Selector, list.Field)}
 	unavailable := func(reason string) {
 		source.Status, source.Reason = LogUnavailable, reason
-		source.Missing = list.Names
 		b.note(source)
 	}
 	if err := collectionStopped(ctx); err != nil {
@@ -407,7 +444,12 @@ func (b *StateBundle) collect(ctx context.Context, list StateList) {
 		unavailable("the answer holds an object that could not be read: " + indexReason(b.redactor, err.Error()))
 		return
 	}
-	source.Listed = len(*listing.Items)
+	listed := len(*listing.Items)
+	source.Listed = &listed
+	if list.Source == StateOperatorPods {
+		ready := slices.ContainsFunc(found, func(i stateItem) bool { return i.value.(statePod).serving() })
+		b.operatorReady = &ready
+	}
 	b.store(list, found, room, &source)
 	b.note(source)
 }
@@ -440,6 +482,8 @@ type stateItem struct {
 	value  any
 	// observations are the times the object carries.
 	observations []StateObservation
+	// eventState tells a later checkpoint whether an Event changed.
+	eventState string
 }
 
 func parseItems[T any](items []json.RawMessage, convert func(T) (stateItem, error)) ([]stateItem, error) {
@@ -461,9 +505,6 @@ func parseItems[T any](items []json.RawMessage, convert func(T) (stateItem, erro
 // store keeps the newest objects that fit, whole, and names what is missing.
 func (b *StateBundle) store(list StateList, items []stateItem, room int64, source *StateSource) {
 	for _, item := range items {
-		if item.object.Name != "" && list.Source != StateEvents {
-			source.Objects = append(source.Objects, item.object)
-		}
 		b.observe(item.observations...)
 	}
 	for _, name := range list.Names {
@@ -473,27 +514,39 @@ func (b *StateBundle) store(list StateList, items []stateItem, room int64, sourc
 	}
 	source.Gone = b.lost(list.Source, items)
 
-	lines, kept := b.encode(items, room)
+	file := stateFile{Source: list.Source, Checkpoint: b.checkpoint().Name, CollectedAt: time.Now().UTC(),
+		Clock: ClockRunner}
+	lines, kept := b.encode(items, room-fileOverhead(file))
 	source.Stored = kept
 	var clean []byte
 	if kept > 0 {
 		var err error
-		clean, err = json.Marshal(stateFile{Source: list.Source, Checkpoint: b.checkpoint().Name,
-			CollectedAt: time.Now().UTC(), Clock: ClockRunner, Items: lines})
+		file.Items = lines
+		clean, err = json.Marshal(file)
 		if err != nil {
 			source.Status, source.Reason = LogUnavailable, "the snapshot could not be encoded"
 			return
 		}
 		rel := b.rel(b.checkpoint().Name + "/" + fileName(list.Source) + ".json")
 		if err := b.redactor.WriteFile(b.dir, rel, append(clean, '\n')); err != nil {
-			b.problem = err
+			b.setProblem(err)
 			source.Status, source.Reason = LogUnavailable, "the file could not be written: "+
 				indexReason(b.redactor, err.Error())
 			return
 		}
 		source.File = rel
-		b.stored += int64(len(clean))
-		b.budget.spendBytes(int64(len(clean)))
+		b.stored += int64(len(clean)) + 1
+		b.budget.spendBytes(int64(len(clean)) + 1)
+		// Only now is an Event stored, so a later checkpoint may count it as
+		// unchanged, and the index may name the objects the file holds.
+		for _, item := range items[len(items)-kept:] {
+			switch {
+			case list.Source == StateEvents:
+				b.events[item.object.UID] = item.eventState
+			case item.object.Name != "":
+				source.Objects = append(source.Objects, item.object)
+			}
+		}
 	}
 	switch {
 	case source.Status != "":
@@ -517,7 +570,17 @@ func (b *StateBundle) store(list StateList, items []stateItem, room int64, sourc
 	}
 }
 
-// encode redacts each object and returns the newest that fit in room.
+// fileOverhead is what a source's file holds besides its objects.
+func fileOverhead(file stateFile) int64 {
+	data, err := json.Marshal(file)
+	if err != nil {
+		return 0
+	}
+	return int64(len(data)) + int64(len("[]\n"))
+}
+
+// encode redacts each object and returns the newest that fit in room, with the
+// comma that separates each from the next.
 func (b *StateBundle) encode(items []stateItem, room int64) ([]json.RawMessage, int) {
 	var lines []json.RawMessage
 	for _, item := range slices.Backward(items) {
@@ -526,7 +589,7 @@ func (b *StateBundle) encode(items []stateItem, room int64) ([]json.RawMessage, 
 			break
 		}
 		clean := b.redactor.Redact(data)
-		if room -= int64(len(clean)); room < 0 {
+		if room -= int64(len(clean)) + 1; room < 0 {
 			break
 		}
 		lines = append(lines, clean)
@@ -561,13 +624,16 @@ func (b *StateBundle) lost(source string, items []stateItem) []StateObject {
 	return gone
 }
 
-// clusterItem reads the CubridCluster: its UID and generation, and whether its
-// status still describes that generation.
+// clusterItem reads the CubridCluster: its UID and generation, whether its
+// status still describes that generation, and how old that status is. A
+// status of an unchanged generation is not proven current: a stopped Operator
+// keeps it, and its Conditions, as they were.
 func (b *StateBundle) clusterItem(source *StateSource) func(stateCluster) (stateItem, error) {
 	return func(c stateCluster) (stateItem, error) {
 		b.index.ClusterUID = c.Metadata.UID
 		var status struct {
 			ObservedGeneration int64            `json:"observedGeneration"`
+			LastObservedTime   *time.Time       `json:"lastObservedTime"`
 			Conditions         []stateCondition `json:"conditions"`
 		}
 		if len(c.Status) > 0 {
@@ -592,11 +658,56 @@ func (b *StateBundle) clusterItem(source *StateSource) func(stateCluster) (state
 			}
 		}
 		if len(behind) > 0 {
-			source.Status = StateObsolete
-			source.Reason = fmt.Sprintf("the status describes an older specification than generation %d: %s",
-				c.Metadata.Generation, strings.Join(behind, ", "))
+			source.obsolete(fmt.Sprintf("the status describes an older specification than generation %d: %s",
+				c.Metadata.Generation, strings.Join(behind, ", ")))
+		}
+		source.StatusAge = Unknown
+		if at := status.LastObservedTime; at != nil {
+			observed := at.UTC()
+			age := time.Since(observed)
+			source.LastObservedTime, source.StatusAge = &observed, age.Round(time.Millisecond).String()
+			if age > StatusStaleAfter+time.Second {
+				source.obsolete(fmt.Sprintf("status.lastObservedTime is older than the %s after which the status is "+
+					"stale, by the runner's clock against the Operator's", StatusStaleAfter))
+			}
+		} else {
+			source.addReason("status.lastObservedTime is unset, so the age of the status is not known")
 		}
 		return item, nil
+	}
+}
+
+// obsolete marks a source as holding nothing current, for one reason more.
+func (s *StateSource) obsolete(reason string) {
+	s.Status = StateObsolete
+	s.addReason(reason)
+}
+
+func (s *StateSource) addReason(reason string) {
+	if s.Reason != "" {
+		reason = s.Reason + "; " + reason
+	}
+	s.Reason = reason
+}
+
+// judgeStatusKeeper checks the CubridCluster's status against the Operator's
+// Pods of the same checkpoint, which are read after it. Without a Pod that
+// serves, nothing keeps the status current, however young it is: a Pod that
+// replaced a killed Operator is Running well before it is Ready. A listing that
+// could not be read proves neither, so the reason says that it is not known.
+func (b *StateBundle) judgeStatusKeeper() {
+	sources := b.checkpoint().Sources
+	i := slices.IndexFunc(sources, func(s StateSource) bool { return s.Source == StateCluster })
+	if i < 0 || sources[i].Status == LogUnavailable {
+		return
+	}
+	switch {
+	case b.operatorReady == nil:
+		sources[i].addReason("whether an Operator Pod was running is not known, so neither is whether anything " +
+			"keeps this status current")
+	case !*b.operatorReady:
+		sources[i].obsolete("no Operator Pod was running and Ready at this checkpoint, so nothing was keeping this " +
+			"status current")
 	}
 }
 
@@ -651,13 +762,12 @@ func (b *StateBundle) currentEvents(items []json.RawMessage, source *StateSource
 			excluded.UnchangedSinceEarlierCheckpoint++
 			return stateItem{}, nil
 		}
-		b.events[e.Metadata.UID] = state
 		e.ObservedAt = &at
 		first := e.firstObserved()
 		e.BeganBeforeScenario = !first.IsZero() && first.Before(since)
 		clock := clockReporter + cmp.Or(e.ReportingComponent, e.Source.Component, Unknown)
 		object := e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name
-		return stateItem{object: StateObject{Name: e.Metadata.Name, UID: e.Metadata.UID}, value: e,
+		return stateItem{object: StateObject{Name: e.Metadata.Name, UID: e.Metadata.UID}, value: e, eventState: state,
 			observations: []StateObservation{{T: at, Clock: clock, Kind: "event", Object: object,
 				Detail: e.Reason + ": " + e.Message}}}, nil
 	})
@@ -709,7 +819,7 @@ func (b *StateBundle) writeObservations() {
 	b.index.DroppedObservations = len(lines) - len(encoded)
 	rel := b.rel(stateObservationsName)
 	if err := b.redactor.WriteFile(b.dir, rel, slices.Concat(encoded...)); err != nil {
-		b.problem = errors.Join(b.problem, err)
+		b.setProblem(errors.Join(b.Problem(), err))
 		return
 	}
 	b.index.Observations = rel
@@ -734,9 +844,11 @@ func (b *StateBundle) writeIndex() {
 		err = b.redactor.WriteFile(b.dir, b.rel(stateIndexName), append(data, '\n'))
 	}
 	if err != nil {
-		b.problem = err
+		b.setProblem(err)
 		return
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.written = true
 }
 
@@ -750,7 +862,7 @@ type stateFile struct {
 }
 
 // The types below read and write the same JSON: a field that is not named here
-// is not copied.
+// is not copied, and a json.RawMessage is copied with everything it holds.
 
 type stateMeta struct {
 	Name              string            `json:"name"`
@@ -878,6 +990,14 @@ type stateEvent struct {
 	// BeganBeforeScenario marks an aggregated Event whose first occurrence is
 	// older than the scenario: only its later occurrences belong to it.
 	BeganBeforeScenario bool `json:"beganBeforeScenario,omitempty"`
+}
+
+// serving says that the Pod runs and is Ready, and is not being deleted.
+func (p statePod) serving() bool {
+	return p.Metadata.DeletionTimestamp == nil && p.Status.Phase == "Running" &&
+		slices.ContainsFunc(p.Status.Conditions, func(c stateCondition) bool {
+			return c.Type == "Ready" && c.Status == "True"
+		})
 }
 
 // lastObserved is the latest time of the Event in UTC, or zero when it has none.
