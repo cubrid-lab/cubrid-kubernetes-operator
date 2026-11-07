@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-53, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-54, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -33,7 +33,8 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > with the Operator's Instance Manager image; POC-51 ran on Kind on a native
 > linux/amd64 host, with the Operator and Brokers; POC-52 and POC-53 ran in Docker on a native
 > linux/amd64 host, with the Operator's Instance Manager image and the members' data in
-> memory. Each states its own environment. Each POC is the
+> memory; POC-54 ran in Docker on a native linux/amd64 host, on the official image's 11.4.7
+> with its database in memory. Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -5743,3 +5744,178 @@ So the CI run has not been reproduced as it happened. A sequence of its shape wa
 - One POC is the behavior of one image in a few runs, not a general CUBRID guarantee.
 
 **Cleanup.** Every container, volume, network and `/dev/shm/poc53` path of this POC was removed at the end, and no container of POC-52 was touched.
+
+## POC-54 — whether csql's `-199` and `-111` after its statements come from the hang-up that follows the server's reply to csql's last request, in Docker on 11.4.7 (#238) — **observation: yes as a mechanism, not shown for CI; when csql's read of the reply to its last request came 102 ms or more after that request on the Unix socket that `localhost` uses, csql printed the pair in every run, with CI's source lines, exit 0 and the statements' results, and each of the 400 rows it had committed was there; over TCP, and with POLLHUP hidden from csql, it never did; but the socket closed only at the server handler's 100 ms poll timer, never within the 20 to 98 ms holds of 2,200 runs, while five of the six sightings in #238 that give both times came 13 to 28 ms after csql connected, too soon for this route; what closes the socket that early there, if anything does, was not found**
+
+**Question.** #238 records csql printing `-199` (`Server no longer responding.... Invalid
+argument`) and `-111` after its statements, with exit 0, on Kind and on the VM lab, and POC-44
+and POC-49 did not find why. Reading the source of tags `v11.4.6.1963` and `v11.4.7` gave a
+hypothesis, not yet observed:
+
+1. csql's last request is `NET_SERVER_BO_UNREGISTER_CLIENT` (`boot_shutdown_client`,
+   `boot_cl.c`). The server replies, and then closes the socket
+   (`sboot_notify_unregister_client`, then `css_connection_handler_thread` sees `CONN_CLOSING`).
+2. `localhost` on the master port is a Unix socket (`css_sockaddr`, `tcp.c`). A peer that wrote
+   and then closed gives POLLIN with POLLHUP there.
+3. `css_readn` (`connection_support.c`) checks POLLERR and POLLHUP before `recv`, so it sets
+   `EINVAL` although the reply is readable. That is `-199`, `boot_server_die_or_changed` then
+   gives a client-only `-111`, and `boot_shutdown_client` drops the error, so csql exits 0.
+
+If that is so, delaying csql's read past the close should print the pair on `localhost` and
+never over TCP, and every committed row should be there. If `localhost` did not print it, the
+hypothesis was refuted.
+
+**Environment (2026-11-07 02:38Z to 03:35Z).** Native linux/amd64 host, 6 CPUs, Linux 5.15,
+shared and loaded: load average 24 to 39 at the recorded points.
+- Image `cubrid/cubrid@sha256:1835d7fa5c64217c3f8797ca569628e84006bcd1c8bb33a1c96703732a62efca`,
+  what `cubrid/cubrid:11.4` pointed to that day; `cubrid_rel`: `CUBRID 11.4.7
+  (11.4.7.1994-1df4af4) (64bit release build for Linux) (Oct 30 2026 18:26:16)`, the engine
+  recent CI runs report. The local `example.com/cubrid-instance-manager:e2e` is 11.4.6 and was not
+  run. Of the files read, the two tags differ only in `network.h`, by two requests appended at the
+  end, and in `network_interface_sr.c`, outside `sboot_notify_unregister_client`.
+- One container `poc54-member`, default bridge, no CPU limit, `--memory 2g`, entrypoint `sleep`,
+  one standalone database of 64M volumes on a tmpfs, the image's `cubrid.conf`. No Instance Manager,
+  Broker, Kind or lab.
+- `localhost` is 127.0.0.1. The hostname is 172.17.0.21, from `/etc/hosts`. Every csql ran as uid
+  1000 from `/`, which it cannot write, so its log went to stderr; `/csql.err` did not exist at the
+  end. stdout, stderr and the exit status were kept apart for each run.
+
+**Method.** `shim.c`, an `LD_PRELOAD` library, delayed `poll()` and logged each `connect`, `send`,
+`poll` and `recv` with the request's function code. strace is not in the image, so the host's was
+copied in for an independent check with no shim loaded. Every run was `SELECT 1`, or
+`INSERT …; COMMIT;` in the commit arms, each followed by a separate read of that row with no delay.
+A run "printed the pair" when its stderr held both codes.
+
+One run took about 42 s with every poll delayed, because csql makes about 281 polls. So the
+every-poll arms ran on six lanes each, at the same time as each other, which is not the single
+client of the other arms. The shim can tell the final request, which strace cannot, so the
+serial arms delayed only what follows it, one client at a time, one run of each arm per round. The
+arms below `final-*` were added after the first results: the `dose` arms because the first ones
+needed a threshold, `one-read-*` because a `dose` adds up over the four reads of a reply,
+`final-hup-hidden` as a direct test of step 3, and `contended-*` to look for a close sooner than
+100 ms. The two `contended` parts pinned the server's threads as they then stood, csql and eight busy
+loops to two CPUs.
+
+| Arm | Runs | Pair | Exit not 0 | Socket | What was done |
+|---|---|---|---|---|---|
+| `every-poll-localhost` | 200 | **200** | 0 | Unix `/tmp/CUBRID1523` | every poll +150 ms, `SELECT 1` |
+| `every-poll-hostname` | 200 | **0** | 0 | TCP 172.17.0.21:1523 | the same |
+| `every-poll-commit` | 200 | 200 | 0 | Unix | every poll +150 ms, `INSERT`, `COMMIT` |
+| `beside-no-delay` | 200 | 0 | 0 | not logged | no delay, no shim, beside those lanes |
+| `no-shim` | 200 | 0 | 0 | not logged | no delay, no shim, serial |
+| `shim-no-delay` | 200 | 0 | 0 | Unix | shim loaded, no delay |
+| `final-localhost` | 200 | **200** | 0 | Unix | +150 ms only after the final request |
+| `final-hostname` | 200 | **0** | 0 | TCP | the same |
+| `final-commit` | 200 | 200 | 0 | Unix | the same, `INSERT`, `COMMIT` |
+| `final-hup-hidden` | 200 | **0** | 0 | Unix | as `final-localhost`, POLLHUP hidden when POLLIN is set |
+| `dose-1ms`, `-5ms`, `-20ms` | 600 | 0 | 0 | Unix | that delay on every poll after the final request |
+| `dose-50ms`, `-80ms`, `-95ms`, `-105ms`, `-120ms` | 1,000 | 1,000 | 0 | Unix | the same; these add up, see below |
+| `one-read-20ms` to `-98ms` (six delays) | 1,200 | **0** | 0 | Unix | that delay on the first read after the final request only |
+| `one-read-102ms`, `-105ms`, `-110ms` | 600 | **600** | 0 | Unix | the same |
+| `contended-no-shim` | 600 | 0 | 0 | not logged | no delay, no shim, two CPUs with eight busy loops |
+| `contended-localhost` | 600 | 0 | 0 | Unix | the same, shim logging only |
+| `contended-hostname` | 600 | 0 | 0 | TCP | the same |
+| `contended-hold-20ms` | 1,000 | 0 | 0 | Unix | the same, first read after the final request held 20 ms |
+| strace, `localhost` | 20 | 20 | 0 | Unix | every poll +150 ms, no shim loaded |
+| strace, hostname | 20 | 0 | 0 | TCP | the same |
+
+So 2,400 of the 8,200 runs in the arms printed the pair, and 20 of the 40 strace runs. No run exited
+non-zero or timed out, no run printed one code without the other, and every run printed its
+statement's result. Rows for 0 are bounded, not zero rates: 0 of 200 is at most 1.9 %, 0 of 1,000
+at most 0.4 %, by a 95 % Wilson interval, on this host.
+
+**What was shown, on this image.**
+- **The pair is the one CI saw.** All 2,400 hold `network_cl.c, line 177`, `-199`, `Server no longer
+  responding.... Invalid argument`, and `transaction_cl.c, line 600`, `-111`. stdout ends
+  with `1 row selected. … Committed.`, or `Execute OK.` after `Committed.` in the commit arms, and
+  stderr ends with the `-111` text.
+- **The failing read is the last request's.** In all 2,400, a poll while code 4,
+  `NET_SERVER_BO_UNREGISTER_CLIENT`, was outstanding returned POLLIN with POLLHUP, and the log ends
+  there, with no `recv`. POLLHUP or POLLERR never came while any other request was outstanding. strace
+  shows `revents=POLLIN|POLLHUP` on the last read of all 20 `localhost` runs, and POLLIN on the 20
+  hostname runs.
+- **Hiding POLLHUP alone removes the pair.** In `final-hup-hidden` all 200 first reads returned
+  POLLIN with POLLHUP. With POLLHUP hidden, `recv` then read the whole reply (4, 32, 4 and 4 bytes) in
+  all 200, and none printed the pair. So the reply was there, and step 3 of the hypothesis holds here.
+- **The transports were as stated.** `localhost` connected over `AF_UNIX` and the hostname over
+  `AF_INET` to 172.17.0.21:1523, by the shim, by strace, and by `ss` taken during the lanes with no
+  shim involved (`samples/sockets.txt`). Over TCP, the read returned POLLIN alone after the same
+  delay, in all 1,000 such runs delayed or not, and the reply was read.
+- **The rows were there.** In the two commit arms all 400 runs printed the pair and `Committed.`, and
+  all 400 separate reads found the row; 400 rows were in the table at the end.
+- **The server was not disturbed.** It stayed pid 48. Its log has no `-199` or `-111`.
+- **The close came at about 100 ms, with a sharp step.** With one read held, 0 of 200 at each of 20,
+  50, 80, 90, 95 and 98 ms, and 200 of 200 at each of 102, 105 and 110 ms. Across the arms on the Unix
+  socket the earliest POLLHUP was at 100.1 ms after the final request and the latest clean read at
+  100.2 ms. The `dose` arms agree once added up: `dose-50ms` saw POLLHUP at the second or third read,
+  100.1 to 150.3 ms, and `dose-20ms`'s four reads ended at up to 82.3 ms with none. That matches the
+  source: the handler reads the request, goes back to a `poll` of 100 ms, and meets `CONN_CLOSING` when
+  it times out.
+
+**What was not shown.**
+- **That this route produced what CI and the lab saw, and the timing goes against it for most
+  sightings.** This route needs csql's read at least 100 ms after its final request. #238 gives both
+  the connect notice's time and the pair's for six sightings: about 17 ms apart in the first Kind
+  one, 14, 13 and 15 ms in three later ones, and 28 ms on the lab. The final request comes after the
+  notice, so in those five the read came sooner than the route allows. Only the 163 ms of
+  2026-11-07 00:10Z leaves room. Here the shortest such gap was 105 ms. A stamp's seconds can be off by
+  one here (below), so a gap could hide a whole second, but that would have to happen in each of
+  them, and these fit an ordinary csql run: its median was 0.016 s here with no delay.
+- **A close sooner than 100 ms.** The source allows one: if the worker sets `CONN_CLOSING` before the
+  handler is back at the top of its loop, the handler closes as soon as the reply is sent. Whether that
+  is what CI saw is a **hypothesis**. It was not produced: the 1,200 holds of 20 to 98 ms, and 1,000
+  holds of 20 ms under contention, had no POLLHUP on the held read. That is an unforced search on one
+  host of a race that may need Kind's CPU limits, and it was not forced, because a stall placed in the
+  handler at that point needs more than a wrapper around `recv` can do.
+- **Natural occurrence.** No run printed the pair without an injected delay: 0 of the 2,400 runs
+  in the arms that had none, 1,800 of them on the Unix socket, and 0 of the 400 read-backs.
+- **Any other cause.** The same lines would follow POLLHUP on any read. That all of #238's sightings
+  share one cause is a hypothesis. The aborts POC-36 linked to one transaction index, the two
+  failures in a row on one member, and the pair printed *before* a statement's output in some
+  sightings, where the order of two streams may or may not be real, were not tested.
+- **Why the rate rose on 2026-11-05, or why the lab's rate is higher.** This POC does not explain
+  either. CI's engine did change: the job logs read show 11.4.6 for runs created at
+  2026-11-05 07:23Z and 10:42Z, and 11.4.7 at 2026-11-06 04:33Z and 23:58Z, and
+  `build/instance-manager/Dockerfile` builds on the floating tag `cubrid/cubrid:11.4`. But the pair
+  was seen on 11.4.6 too, in those two runs of 2026-11-05 among others, the code of this route as read
+  is the same in both tags, and no comparison was run on 11.4.6.
+- **That a row is safe after every pair.** The 400 rows hold for this route, where the commit finished
+  before the last request. A pair that comes by another route is not covered.
+
+**Limits.**
+- Docker is not Kind or the VM lab: no Instance Manager, `kubectl exec`, Broker, HA or CPU limits.
+  One POC is this image's behaviour in a few runs, not a general CUBRID guarantee.
+- The database was on a tmpfs, so no commit here waited on a disk.
+- The delay is injected at `poll` entry. The every-poll arms had 18 delayed clients at once, the
+  serial arms one.
+- The host's load was not controlled, and other work shared the two contended CPUs. The contention
+  pinned the threads present at its start; the arms were run once, in one order.
+- The shim's log is kept whole only for the first three runs of each lane (`poc54/README.md`). No
+  POLLHUP is dropped.
+- **csql's stamps.** A stamp's seconds come from an earlier `er_time` and its milliseconds from
+  `gettimeofday` (`error_manager.c:1687` to `1695`). Here that gave differences such as −845 ms between
+  stamps, off by exactly a second, so `analyse.py` uses the milliseconds alone, and the gaps above are
+  good only below 1 s. The same is true of every stamp difference quoted from CI.
+- `-982` (`Set interrupt`) and `-1066` (`Session expired`), the lines #238 followed on the lab, appeared
+  here too: `-982` for two of 8,600 sessions, one a no-delay read-back that printed nothing unusual and
+  one a `dose-50ms` run that also had `-1066`, 5 ms after that run's connect notice. Why is not
+  known. They did not go with the pair: the other 2,399 pair runs had neither line.
+
+**Outcome of the prediction.** `localhost` with the delay printed the pair every time, with exit 0;
+the hostname never did; no delay never did; all the rows were there; and the failing read was the last
+one. So the hypothesis was **not refuted as a mechanism**. Its claim that the server closes "soon
+after" did not hold here, where that took 100 ms, and with it the claim that this explains #238's
+sightings stays **unconfirmed, and doubtful for those at 13 to 28 ms**.
+
+**Consequences (proposed, none made).**
+- **#238 stays open.** Its cause is not established. The next measurement that could settle it is the
+  time from the final request to the failing read on a member where the pair really happens, for
+  example `shim.c`'s log on a Kind member.
+- **For the tests.** Moving a read to the hostname would take it off the Unix socket and so off this
+  route, but it is untested on Kind, and would hide the question rather than answer it.
+- **The harness's treatment of the pair as inconclusive** (PR #698) is not changed by this: this POC
+  does not show that a pair in CI came after a finished commit.
+
+**Cleanup.** The container `poc54-member` and the image pulled by digest were removed. No volume was
+created, and no other container was touched. Local tags, including `cubrid/cubrid:11.4`, were not
+changed.

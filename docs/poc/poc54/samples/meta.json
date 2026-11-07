@@ -1,0 +1,30 @@
+{
+ "container": "one container poc54-member, default bridge, --memory 2g, no CPU limit, entrypoint sleep, every csql as uid 1000 from /",
+ "contended_hold_start": "2026-11-07T03:33:24Z  12:33:24 up 5 days, 20:28,  6 users,  load average: 25.91, 26.81, 29.15",
+ "contended_start": "2026-11-07T03:29:47Z  12:29:47 up 5 days, 20:24,  6 users,  load average: 24.90, 26.05, 29.52",
+ "csql_err_in_root": "ls: cannot access '/csql.err': No such file or directory",
+ "cubrid_rel": "CUBRID 11.4.7 (11.4.7.1994-1df4af4) (64bit release build for Linux) (Oct 30 2026 18:26:16)",
+ "cwd_owner": "root 755 /",
+ "end": "2026-11-07T03:35:28Z  12:35:28 up 5 days, 20:30,  6 users,  load average: 27.79, 27.09, 28.95",
+ "every_poll_start": "2026-11-07T02:38:45Z  11:38:45 up 5 days, 19:33,  6 users,  load average: 38.73, 35.52, 34.39",
+ "final_request_start": "2026-11-07T03:07:43Z  12:07:43 up 5 days, 20:02,  6 users,  load average: 38.96, 35.70, 35.46",
+ "final_row_count": 400,
+ "hosts_line": "172.17.0.21\tpoc54-member",
+ "image": "cubrid/cubrid@sha256:1835d7fa5c64217c3f8797ca569628e84006bcd1c8bb33a1c96703732a62efca (the digest of cubrid/cubrid:11.4 on 2026-11-07, untagged here)",
+ "ipv4_of_hostname": "172.17.0.21     STREAM poc54-member",
+ "ipv4_of_localhost": "127.0.0.1       STREAM localhost",
+ "nsswitch_hosts": "hosts:      files dns myhostname",
+ "one_read_start": "2026-11-07T03:25:45Z  12:25:45 up 5 days, 20:20,  6 users,  load average: 23.84, 27.57, 30.93",
+ "server_log_checks": [
+  "/home/cubrid/CUBRID/log/appdb_createdb.err: 0 lines with -199, -111, -982 or -1066",
+  "/home/cubrid/CUBRID/log/cub_client.err: 0 lines with -199, -111, -982 or -1066",
+  "/home/cubrid/CUBRID/log/cub_server.err: 0 lines with -199, -111, -982 or -1066",
+  "/home/cubrid/CUBRID/log/poc54-member_master.err: 0 lines with -199, -111, -982 or -1066",
+  "/home/cubrid/CUBRID/log/server/appdb_20261107_0232.err: 3 lines with -199, -111, -982 or -1066",
+  "/home/cubrid/CUBRID/log/server/appdb_latest.err: 3 lines with -199, -111, -982 or -1066",
+  "client logs under $CUBRID/log/: none",
+  "server process: Server appdb (rel 11.4.7, pid 48)"
+ ],
+ "storage": "database and logs on a container tmpfs",
+ "strace_start": "2026-11-07T03:18:54Z  12:18:54 up 5 days, 20:13,  6 users,  load average: 27.44, 30.72, 33.05"
+}
