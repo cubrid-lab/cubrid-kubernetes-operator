@@ -376,15 +376,31 @@ remains a compatibility consideration, separate from ordinary artifact safety.
   no role: it takes one reading, which a standalone member, having no HA
   role, gives as `unknown`. A master whose server is not active yet is
   `master`, which is the member a new cluster's first peer is copied from
-  (POC-13). The role is read again after `backupdb`, and a difference stops
-  the upload. That only narrows the window: a role that changes and returns
-  between the readings, or changes after the second, is not seen, so a
-  manifest states the role at the start and does not state that it held for
-  the whole backup. A `CubridBackup` that fails this way ends `Failed`
+  (POC-13). The role is read again after `backupdb`. For a backup that
+  started as `master`, and for every seed backup, a role that differs then,
+  or cannot be read within the same 30 s, stops the upload: a master demoted
+  while `backupdb` ran may hold acknowledged writes the cluster no longer has
+  (POC-52), and a seed is followed as the master's log. A backup that
+  started as `slave` or `replica` and is not a seed is uploaded with the role
+  observed at the start even when the second reading differs, and the change
+  is only logged (`backup_role_changed`); neither the operation nor the
+  manifest has a field for it. That is the trade: a standby that CUBRID
+  promotes near the end of a long `PreferStandby` backup still leaves a
+  consistent backup of a standby, and discarding it would lose the backup
+  for good, since a `CubridBackup` is never started again; in exchange the
+  manifest does not show that the role changed during the backup. The second
+  reading only narrows the window: a role that changes and returns between
+  the readings, or changes after the second, is not seen, so a manifest
+  states the role at the start and does not state that it held for the
+  whole backup. A `CubridBackup` that fails this way ends `Failed`
   (`BackupFailed`, with the member's reason) and is not moved to another
   member; a new `CubridBackup` selects again from the roles of that moment. A
-  seed backup that fails this way ends the attempt, and the next attempt
-  selects its source again. A manifest written by an older Instance Manager,
+  seed backup that fails this way ends the bootstrap attempt. For a member
+  after the first peer, the next attempt selects its source again from the
+  observed roles. The first peer is always copied from the member that holds
+  the database, so its next attempt asks that member again, and after the
+  third failed attempt the database is `Failed` and needs a person. A
+  manifest written by an older Instance Manager,
   and every backup taken by one, still carries the requested role; the
   request and the operation's answer did not change, so the two sides
   interoperate as before (ADR-0013).

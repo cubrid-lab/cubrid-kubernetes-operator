@@ -93,6 +93,12 @@ func (c *backupRoleCLI) Run(ctx context.Context, name string, args ...string) (s
 	return c.writingCLI.Run(ctx, name, args...)
 }
 
+func (c *backupRoleCLI) statusReads() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.statusCalls
+}
+
 func (c *backupRoleCLI) ranBackup() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -112,6 +118,24 @@ type roleBackup struct {
 // short, so a refusal takes milliseconds.
 func runRoleBackup(t *testing.T, role Role, seed, standalone bool, before, after []heartbeatAnswer) roleBackup {
 	t.Helper()
+	r := startRoleBackup(t, role, seed, standalone, before, after, 100*time.Millisecond)
+	r.final = pollUntilSettled(t, r.srv, r.h, r.id)
+	return r.roleBackup
+}
+
+// roleRun is a backup of a fake member that was started and not yet waited
+// for.
+type roleRun struct {
+	roleBackup
+	srv *Server
+	h   http.Handler
+	id  string
+}
+
+// startRoleBackup starts the backup of runRoleBackup, with bound as the
+// wait for the role, and returns without waiting for it.
+func startRoleBackup(t *testing.T, role Role, seed, standalone bool, before, after []heartbeatAnswer, bound time.Duration) roleRun {
+	t.Helper()
 	store, err := NewOperationStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewOperationStore: %v", err)
@@ -120,7 +144,7 @@ func runRoleBackup(t *testing.T, role Role, seed, standalone bool, before, after
 	objects := newFakeStore()
 	root := t.TempDir()
 	srv := NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(objects).WithBackupStagingRoot(root)
-	srv.backupRoleBound, srv.backupRolePoll = 100*time.Millisecond, 5*time.Millisecond
+	srv.backupRoleBound, srv.backupRolePoll = bound, 5*time.Millisecond
 	if standalone {
 		srv = srv.WithStandaloneDatabase(dbName)
 	}
@@ -145,7 +169,7 @@ func runRoleBackup(t *testing.T, role Role, seed, standalone bool, before, after
 	if err := json.Unmarshal(rr.Body.Bytes(), &op); err != nil {
 		t.Fatal(err)
 	}
-	return roleBackup{cli: cli, objects: objects, final: pollUntilSettled(t, srv, h, op.ID), root: root}
+	return roleRun{roleBackup: roleBackup{cli: cli, objects: objects, root: root}, srv: srv, h: h, id: op.ID}
 }
 
 // manifestRole returns the role the manifest of a completed backup records.
@@ -289,8 +313,8 @@ func TestServer_Backup_StandaloneMemberRecordsUnknown(t *testing.T) {
 	if got := b.manifestRole(t); got != RoleUnknown {
 		t.Errorf("manifest sourceRole = %q, want unknown", got)
 	}
-	if b.cli.statusCalls != 1 {
-		t.Errorf("heartbeat status ran %d times, want once", b.cli.statusCalls)
+	if n := b.cli.statusReads(); n != 1 {
+		t.Errorf("heartbeat status ran %d times, want once", n)
 	}
 }
 
@@ -324,30 +348,109 @@ func TestServer_Backup_SeedOnASlaveIsRefused(t *testing.T) {
 	b.refused(t, "backup refused", RoleMaster, RoleSlave)
 }
 
-// The role is read again once backupdb has ended, so a change of role that
-// CUBRID made while it ran does not reach object storage. The manifest could
-// only say what the member was when the backup began.
+// The role is read again once backupdb has ended. A master demoted while it
+// ran may hold writes the cluster no longer has (POC-52), and a seed is
+// followed as the master's log, so neither reaches object storage unless the
+// role held. The reason says both readings.
 func TestServer_Backup_RoleChangedWhileBackupdbRanIsNotUploaded(t *testing.T) {
 	cases := []struct {
 		name      string
 		requested Role
+		seed      bool
 		before    heartbeatAnswer
 		after     heartbeatAnswer
 		want      []Role
 	}{
-		{"the master became a slave", RoleMaster, heartbeatMaster, heartbeatSlave, []Role{RoleMaster, RoleSlave}},
-		{"the slave became master", RoleSlave, heartbeatSlave, heartbeatMaster, []Role{RoleSlave, RoleMaster}},
-		{"the role can no longer be read", RoleMaster, heartbeatMaster, heartbeatFailed, []Role{RoleMaster, RoleUnknown}},
-		{"a request without a role, then another role", RoleUnknown, heartbeatMaster, heartbeatSlave, []Role{RoleMaster, RoleSlave}},
+		{"the master became a slave", RoleMaster, false, heartbeatMaster, heartbeatSlave, []Role{RoleMaster, RoleSlave}},
+		{"the seed source became a slave", RoleMaster, true, heartbeatMaster, heartbeatSlave, []Role{RoleMaster, RoleSlave}},
+		{"the master's role can no longer be read", RoleMaster, false, heartbeatMaster, heartbeatFailed, []Role{RoleMaster, RoleUnknown}},
+		{"a request without a role on a master that became a slave", RoleUnknown, false, heartbeatMaster, heartbeatSlave, []Role{RoleMaster, RoleSlave}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := runRoleBackup(t, tc.requested, false, false, []heartbeatAnswer{tc.before}, []heartbeatAnswer{tc.after})
+			b := runRoleBackup(t, tc.requested, tc.seed, false, []heartbeatAnswer{tc.before}, []heartbeatAnswer{tc.after})
 			b.refused(t, "not uploaded", tc.want...)
+			if !strings.Contains(b.final.FailureReason, "observed "+string(tc.want[0])+" at start, "+string(tc.want[1])+" after backupdb") {
+				t.Errorf("reason %q does not give both readings", b.final.FailureReason)
+			}
 			if !b.cli.ranBackup() {
 				t.Fatal("backupdb did not run, so the second reading was not reached")
 			}
 		})
+	}
+}
+
+// A master's or a seed source's second reading is waited for like the first,
+// so one failed status command after backupdb does not discard the backup.
+func TestServer_Backup_SecondReadingWaitsForTheRole(t *testing.T) {
+	for _, seed := range []bool{false, true} {
+		b := runRoleBackup(t, RoleMaster, seed, false, []heartbeatAnswer{heartbeatMaster}, []heartbeatAnswer{heartbeatFailed, heartbeatMaster})
+		if got := b.manifestRole(t); got != RoleMaster {
+			t.Errorf("seed %t: manifest sourceRole = %q, want master", seed, got)
+		}
+	}
+}
+
+// A standby's backup is a consistent backup of a standby also when CUBRID
+// promotes it, or its role cannot be read, after backupdb. Discarding it
+// would lose the backup for good, since a CubridBackup is never started
+// again, so it is uploaded with the role observed at the start.
+func TestServer_Backup_StandbyBackupIsKeptAfterARoleChange(t *testing.T) {
+	cases := []struct {
+		name   string
+		role   Role
+		before heartbeatAnswer
+		after  heartbeatAnswer
+	}{
+		{"the slave became master", RoleSlave, heartbeatSlave, heartbeatMaster},
+		{"the slave's role can no longer be read", RoleSlave, heartbeatSlave, heartbeatFailed},
+		{"the replica became a slave", RoleReplica, heartbeatAnswer{out: replicaOut}, heartbeatSlave},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := runRoleBackup(t, tc.role, false, false, []heartbeatAnswer{tc.before}, []heartbeatAnswer{tc.after})
+			if got := b.manifestRole(t); got != tc.role {
+				t.Errorf("manifest sourceRole = %q, want the role at the start, %q", got, tc.role)
+			}
+		})
+	}
+}
+
+// A stop that comes while a backup waits for its role ends the backup at
+// once, as Failed with a reason that says the member is stopping, and leaves
+// no staging; the wait does not run out its bound.
+func TestServer_Backup_StopDuringTheRoleWait(t *testing.T) {
+	r := startRoleBackup(t, RoleMaster, false, false, []heartbeatAnswer{heartbeatSlave}, nil, time.Hour)
+	deadline := time.Now().Add(5 * time.Second)
+	for r.cli.statusReads() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the backup never read its role")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	started := time.Now()
+	r.srv.endOps()
+	r.final = pollUntilSettled(t, r.srv, r.h, r.id)
+	if waited := time.Since(started); waited > 5*time.Second {
+		t.Errorf("the backup ended %s after the stop", waited)
+	}
+	r.refused(t, errStopping.Error(), RoleMaster, RoleSlave)
+	if !strings.Contains(r.final.FailureReason, "the wait for that role ended") {
+		t.Errorf("reason %q does not say the wait ended", r.final.FailureReason)
+	}
+	if r.cli.ranBackup() {
+		t.Error("backupdb ran after the stop")
+	}
+}
+
+// Without overrides the wait is backupRoleBound, read every backupRolePoll.
+func TestBackupRoleTiming_Defaults(t *testing.T) {
+	bound, poll := NewServer(&failingCLI{}, "tok").backupRoleTiming()
+	if bound != backupRoleBound || poll != backupRolePoll {
+		t.Errorf("timing = %s, %s; want %s, %s", bound, poll, backupRoleBound, backupRolePoll)
+	}
+	if backupRoleBound != 30*time.Second {
+		t.Errorf("backupRoleBound = %s, want the 30 s ADR-0007 states", backupRoleBound)
 	}
 }
 

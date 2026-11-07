@@ -105,6 +105,13 @@ to what the repository records.
   location (ADR-0007, "A new Operator with an older Instance Manager ...").
   The ADR states there is no version-negotiation guarantee for mixed
   versions and that the Operator is deployed before the managers. Not tested.
+- A backup whose request names a role the member does not have, as an
+  older Operator sends it after a failover between its selection and the
+  start, now ends as a failed operation with a reason naming both roles,
+  where the manager before #755 completed it with the requested role in the
+  manifest. The request and the `Operation` answer have the same shape, so
+  the older Operator reports it as any failed backup. Not tested with an
+  older Operator.
 - The error body gained `code` additively and keeps the `error` text
   (ADR-0003 "Error answers", `errorcode_test.go` checks that the text an
   earlier manager sent is unchanged). How an older Operator reads the added

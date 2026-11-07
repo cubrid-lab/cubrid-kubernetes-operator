@@ -757,9 +757,10 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			fail("backup refused: " + err.Error())
 			return
 		}
-		role, err := s.backupSourceRole(ctx, requestedRole(req))
+		want := requestedRole(req)
+		role, err := s.backupSourceRole(ctx, want)
 		if err != nil {
-			fail("backup refused: " + err.Error())
+			fail(fmt.Sprintf("backup refused: the request names this member as %s, but %v", want, err))
 			return
 		}
 		if err := s.createBackupStaging(req.Destination); err != nil {
@@ -776,15 +777,27 @@ func (s *Server) runBackup(id string, req BackupRequest) {
 			fail("backupdb succeeded but no object-storage destination is configured")
 			return
 		}
-		// A role that changed while backupdb ran is not one the manifest may
-		// name. This narrows the window; it does not close it: a role can
+		// The role is read again once backupdb has ended. A master that was
+		// demoted while it ran may hold writes the cluster no longer has
+		// (docs/poc/RESULTS.md, POC-52), and a seed is followed as that
+		// master's log, so either is not uploaded unless the role held. A
+		// standby's backup stays a consistent backup of a standby when CUBRID
+		// promotes it meanwhile; discarding it would lose the backup, which
+		// is never started again (ADR-0007). It is uploaded with the role
+		// observed at the start, as the manifest states, and the change is
+		// logged. This narrows the window; it does not close it: a role can
 		// change and return between the two readings, or change right after
-		// the second. A member with no role to compare with has nothing to
-		// read again.
-		if role != RoleUnknown {
-			if _, err := s.backupSourceRole(ctx, role); err != nil {
-				fail("backup not uploaded: its role changed or could not be read after backupdb: " + err.Error())
+		// the second. A member with no role to compare with is not read again.
+		switch {
+		case role == RoleMaster || req.Upload.Seed:
+			if after, err := s.backupSourceRole(ctx, role); err != nil {
+				fail(fmt.Sprintf("backup not uploaded: this member was observed %s at start, %s after backupdb; %v", role, after, err))
 				return
+			}
+		case role != RoleUnknown:
+			if after := s.readBackupRole(ctx); after.Role != role {
+				s.log().Warn("Uploading a backup whose member reported another role after backupdb", "event", "backup_role_changed",
+					"operationID", id, "roleAtStart", role, "roleAfterBackupdb", after.Role, reasonKey, after.Reason)
 			}
 		}
 
@@ -851,19 +864,13 @@ func requestedRole(req BackupRequest) Role {
 // A master whose server is not active yet is a master here: that is the
 // member a new cluster's first peer is copied from (docs/poc/RESULTS.md,
 // POC-13).
+//
+// On an error the role is the last one read, for the caller's reason.
 func (s *Server) backupSourceRole(ctx context.Context, want Role) (Role, error) {
-	bound, poll := s.backupRoleBound, s.backupRolePoll
-	if bound <= 0 {
-		bound = backupRoleBound
-	}
-	if poll <= 0 {
-		poll = backupRolePoll
-	}
+	bound, poll := s.backupRoleTiming()
 	start := time.Now()
 	for {
-		roleCtx, cancel := context.WithTimeout(ctx, roleBudget)
-		st := HeartbeatStatus(roleCtx, s.cli)
-		cancel()
+		st := s.readBackupRole(ctx)
 		if want == "" || want == RoleUnknown || st.Role == want {
 			return st.Role, nil
 		}
@@ -873,14 +880,39 @@ func (s *Server) backupSourceRole(ctx context.Context, want Role) (Role, error) 
 		case <-ctx.Done():
 			timer.Stop()
 		}
-		if ctx.Err() != nil || time.Since(start) >= bound {
-			msg := fmt.Sprintf("the backup names this member as %s, but it reports %s after %s", want, st.Role, time.Since(start).Round(time.Millisecond))
-			if st.Reason != "" {
-				msg += " (" + st.Reason + ")"
-			}
-			return "", errors.New(msg)
+		why := ""
+		if st.Reason != "" {
+			why = " (" + st.Reason + ")"
+		}
+		waited := time.Since(start).Round(time.Millisecond)
+		if err := ctx.Err(); err != nil {
+			return st.Role, fmt.Errorf("the wait for that role ended after %s (%w); it last reported %s%s", waited, err, st.Role, why)
+		}
+		if waited >= bound {
+			return st.Role, fmt.Errorf("it reports %s after %s%s", st.Role, waited, why)
 		}
 	}
+}
+
+// backupRoleTiming is how long and how often backupSourceRole reads the
+// role: the server's overrides, or backupRoleBound and backupRolePoll.
+func (s *Server) backupRoleTiming() (bound, poll time.Duration) {
+	bound, poll = s.backupRoleBound, s.backupRolePoll
+	if bound <= 0 {
+		bound = backupRoleBound
+	}
+	if poll <= 0 {
+		poll = backupRolePoll
+	}
+	return bound, poll
+}
+
+// readBackupRole is one reading of this member's role, bounded like a role
+// answer.
+func (s *Server) readBackupRole(ctx context.Context) HAStatus {
+	roleCtx, cancel := context.WithTimeout(ctx, roleBudget)
+	defer cancel()
+	return HeartbeatStatus(roleCtx, s.cli)
 }
 
 // backupEngineVersion returns the engine version a backup of req records in

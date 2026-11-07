@@ -708,11 +708,19 @@ var _ = Describe("CubridBackup Controller", func() {
 		Expect(ready.Reason).To(Equal("BackupFailed"))
 		Expect(ready.Message).To(Equal(refusal))
 
-		By("nothing being started again for that backup")
-		fake.started = false
+		By("the ended backup staying Failed, whatever its target answers later")
+		// The target is not asked again: an answer that its operation
+		// completed would otherwise turn the backup Completed.
+		fake.started, fake.completed = false, true
 		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fake.started).To(BeFalse())
+		ended := &databasev1alpha1.CubridBackup{}
+		Expect(k8sClient.Get(ctx, key, ended)).To(Succeed())
+		Expect(ended.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+		Expect(ended.Status.Artifact).To(BeNil())
+		Expect(ended.Status.CompletedAt.Equal(failed.Status.CompletedAt)).To(BeTrue())
+		fake.completed = false
 
 		By("a new backup choosing from the roles after the failover")
 		prober.master = standby
