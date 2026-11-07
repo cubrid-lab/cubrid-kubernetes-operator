@@ -1,0 +1,8 @@
+{
+ "created": "2026-10-21T18:44:20.025364084+09:00",
+ "id": "sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70",
+ "reference": "example.com/cubrid-instance-manager:e2e",
+ "repoDigests": [
+  "example.com/cubrid-instance-manager@sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70"
+ ]
+}

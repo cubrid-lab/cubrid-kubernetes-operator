@@ -1,0 +1,19 @@
+{
+ "member": "poc56-e2e-image-a-demo-0",
+ "operation": {
+  "createdAt": "2026-11-07T05:09:14.480214595Z",
+  "database": "appdb",
+  "id": "op-33795737afb5d418e7654622fdab1026",
+  "idempotencyKey": "bootstrap-a",
+  "kind": "ha-bootstrap",
+  "requestHash": "bdfaae5dd16a67268647876590dafd5ea359dde2e38fd99e146dbc71d945f501",
+  "state": "Completed",
+  "updatedAt": "2026-11-07T05:09:30.256593433Z"
+ },
+ "path": "/v1/ha/bootstrap",
+ "request": {
+  "database": "appdb"
+ },
+ "response": "{\"id\":\"op-33795737afb5d418e7654622fdab1026\",\"kind\":\"ha-bootstrap\",\"idempotencyKey\":\"bootstrap-a\",\"requestHash\":\"bdfaae5dd16a67268647876590dafd5ea359dde2e38fd99e146dbc71d945f501\",\"database\":\"appdb\",\"state\":\"Pending\",\"createdAt\":\"2026-11-07T05:09:14.480214595Z\",\"updatedAt\":\"2026-11-07T05:09:14.480214595Z\"}\n",
+ "status": 202
+}

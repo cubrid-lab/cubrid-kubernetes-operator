@@ -1,0 +1,8 @@
+{
+ "created": "2026-11-06T11:42:58.720722416+09:00",
+ "id": "sha256:c9d6083a16d3a7b1d5bfefd612e7935d73b52bad2380d1e349a2b0dfe7294909",
+ "reference": "poc56-instance-manager:286b904",
+ "repoDigests": [
+  "poc56-instance-manager@sha256:c9d6083a16d3a7b1d5bfefd612e7935d73b52bad2380d1e349a2b0dfe7294909"
+ ]
+}

@@ -1,0 +1,2 @@
+{"current":"demo-1","role":"slave","serverActive":false,"nodes":[{"name":"demo-2","priority":3,"state":"slave"},{"name":"demo-1","priority":2,"state":"slave"},{"name":"demo-0","priority":1,"state":"master"}],"source":"heartbeat","engineVersion":"11.4.6.1963","replication":{"available":true,"insertCount":1,"commitCount":16,"failCount":0,"appliedChanges":2,"delayedPageCount":0,"source":"demo-0","applier":"pid:370:51154202"},"appliers":[{"logPath":"/var/lib/cubrid/databases/appdb_demo-0","pid":370},{"logPath":"/var/lib/cubrid/databases/appdb_demo-2","pid":372}]}
+

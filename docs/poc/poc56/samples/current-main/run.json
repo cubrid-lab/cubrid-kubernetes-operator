@@ -1,0 +1,20 @@
+{
+ "docker": "29.2.1",
+ "ended": "2026-11-07T05:24:57.690Z",
+ "ips": {
+  "poc56-current-main-a-demo-0": "192.168.64.3",
+  "poc56-current-main-a-demo-1": "192.168.64.4",
+  "poc56-current-main-a-demo-2": "192.168.64.5",
+  "poc56-current-main-b-demo-0": "192.168.80.3",
+  "poc56-current-main-b-demo-1": "192.168.80.4"
+ },
+ "label": "current-main",
+ "loadAtEnd": [
+  "24.63",
+  "24.99",
+  "25.26"
+ ],
+ "seconds": 569,
+ "started": "2026-11-07T05:15:28.922Z",
+ "storeIP": "192.168.64.2"
+}

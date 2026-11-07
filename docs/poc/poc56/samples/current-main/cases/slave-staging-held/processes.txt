@@ -1,0 +1,72 @@
+sample 05:24:09.108100840
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:09.214491928
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:09.544549926
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:09.650642624
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:09.756126560
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:09.861941367
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:09.968400822
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:10.074408740
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:10.183180432
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:10.289036057
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:10.398749947
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:10.504356793
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:10.611472917
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:10.717198944
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:11.090915723
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:11.196940190
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:11.302569967
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 
+sample 05:24:11.410028398
+/bin/bash /usr/local/bin/im-entrypoint.sh 
+/usr/local/bin/instance-manager 
+bash -c rm -f /tmp/poc56-procs /tmp/poc56-stop; while [ ! -e /tmp/poc56-stop ]; do echo "sample $(date -u +%H:%M:%S.%N)" >> /tmp/poc56-procs; for p in /proc/[0-9]*; do tr '\0' ' ' < $p/cmdline 2>/dev/null >> /tmp/poc56-procs; echo >> /tmp/poc56-procs; done; sleep 0.1; done 

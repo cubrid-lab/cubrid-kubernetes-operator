@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-54, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-54 and POC-56, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -34,7 +34,9 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > linux/amd64 host, with the Operator and Brokers; POC-52 and POC-53 ran in Docker on a native
 > linux/amd64 host, with the Operator's Instance Manager image and the members' data in
 > memory; POC-54 ran in Docker on a native linux/amd64 host, on the official image's 11.4.7
-> with its database in memory. Each states its own environment. Each POC is the
+> with its database in memory; POC-56 ran in Docker on a native linux/amd64 host, with the
+> Operator's Instance Manager image, the members' data in memory and S3Mock as the store.
+> Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -5919,3 +5921,53 @@ sightings stays **unconfirmed, and doubtful for those at 13 to 28 ms**.
 **Cleanup.** The container `poc54-member` and the image pulled by digest were removed. No volume was
 created, and no other container was touched. Local tags, including `cubrid/cubrid:11.4`, were not
 changed.
+
+## POC-56 — whether the Instance Manager refuses to seed a member from another cluster's backup or from a backup taken on a slave, on a real image with real artifacts (#686) — **observation: on both images tried, each refused request ended `Failed` with the reason naming the manifest field, after reading only `manifest.json` from the store; no backup object was read, no command ran, and every path in the member's database and staging directories was unchanged by mode, owner, size, mtime, inode and SHA-256; the matching artifact of the same cluster's master was then accepted on the same member, which joined as a slave and held the expected rows and not the other cluster's; a refused seed does leave an operation record on the volume, and is answered 202, not an HTTP error**
+
+**Question (#686).** The Operator never sends a seed request for another cluster's artifact, because its seed locations are under the cluster's own UID, so the VM-lab runs cannot produce one. Is the guard in `restoreExpectation` and `BackupManifest.Verify` real on the image, with backups the Instance Manager took itself, rather than only in unit tests with fixture manifests? POC-55 is reserved for other work.
+
+**Environment (2026-11-07, recorded runs 05:06Z to 05:25Z).**
+- Native linux/amd64 host, 6 CPUs, 32 GB, Linux 5.15, Docker 29.2.1. **The host was shared:** load average 24.29 to 26.61 at the end of each case. Other sessions' containers ran beside these, and none of them was touched.
+- **Two images, one run each, because the local image is older than the code.** `example.com/cubrid-instance-manager:e2e` (`sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70`, built 2026-10-21) has the seed guard of #510 but not the later changes on this path: its binary lacks the manifest engine check of #621, and it records the declared `11.4` in manifests. So the same harness also ran on an image built from `286b904` with `make docker-build-instance-manager` (`sha256:c9d6083a16d3a7b1d5bfefd612e7935d73b52bad2380d1e349a2b0dfe7294909`). Docker reused the final layers of 2026-11-06, and when asked again for this tree it reported every step of the build stage, `go build` included, as cached. That fits a byte-identical binary, since the manager's non-test source last changed on 2026-11-04, but a checksum against a fresh build was not obtained: the module proxy cut one attempt off and another did not end in the time given to it. No manager code changed on `main` between that commit and this entry. Both are `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`.
+- **Store: `adobe/s3mock@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92`, not MinIO.** The plan was a MinIO container pinned by digest. On this date `minio/minio` on Docker Hub answered "pull access denied", `quay.io/minio/minio` 401, and `dl.min.io` 410. S3Mock 5.2.3 is the store this repository's Kind e2e uses. It accepts any credentials, so the Instance Manager's keys were generated and sent, but nothing checked them.
+- Members ran the image's own entrypoint and Instance Manager with the environment `instanceManagerEnv` sets, `CUBRID_COMPONENTS=HA`, and `/var/lib/cubrid` in a tmpfs, not on disk. `cubrid_ha.conf` is what `generateHAConf` renders with these member names.
+
+**Method.**
+- **Requests.** A Python harness sends JSON to each member's port 9090 with the bearer token, with the fields `seedBackup` and `seedMember` send. The Operator did not run.
+- **Real artifacts.** All are the Instance Manager's own `POST /v1/backup` of a real database: `backupdb`, upload, manifest last. Nothing in a manifest was edited. Each object was read back and its size and SHA-256 match the manifest. The slave's backup was taken on the member that answered `role: slave` just before it, through the ordinary upload path, since a seed upload refuses anything but master metadata.
+- **Other cluster.** A second real cluster with its own UID, the same database name and engine, and a master also named `demo-0`, so that, of the fields checked, its manifest differs from the request in `clusterUID` alone. Without that, the earlier `sourceInstance` check would not be what refused it, in the order `Verify` reads.
+- **The empty member.** `demo-2` of cluster A was seeded, then removed and started again with the same name and an empty volume, because of the observation at the end of this entry. All six cases went to that one member, in order, so the accepted case also shows that refusals do not stop a later seed.
+- **What "unchanged" compares.** Every path below `/var/lib/cubrid`, just before the request and at least 2 s after the operation ended. Three of the five refusals had no staging directory, as on a first attempt, and two had one that already held a file, so that "unchanged" was also measured on a directory with something in it.
+- **What "nothing ran" compares.** The store's own access log of the window, the manager's log at debug level, which logs read-only commands too, and the member's process list sampled about every 0.1 s.
+- **What can be recomputed.** In `docs/poc/poc56/`, `python3 analyse.py samples` recomputes every fact above and below from the raw files and exits 0. `python3 mutate.py samples` makes eleven faults in copies of the samples, such as a file in staging, a backup object read, or a command logged, and `analyse.py` fails on all eleven. Not recomputed: the registry answers about MinIO, the host's CPU and memory, the trials not kept that are named below, and the source date of the second image's binary.
+
+**Results.** The same on both images, except where a row says so. `<A>` is the requesting cluster's UID and `<B>` the other's. The UIDs are generated per run and are in the samples.
+
+| Case (artifact, `seedFromMaster`) | HTTP | Final state | Failure reason (after `restore failed: artifact verification failed:`) | Store requests | Backup objects read | Commands logged | Paths in database and staging directories, all unchanged |
+|---|---|---|---|---|---|---|---|
+| Other cluster's master seed backup, `demo-0` | 202 | `Failed` | `manifest clusterUID "<B>" does not match expected "<A>"` | Bucket location, `manifest.json` | 0 | None | 2 |
+| Same cluster's slave backup, `demo-0` | 202 | `Failed` | `manifest sourceRole "slave" does not match required "master"` | `manifest.json` | 0 | None | 2 |
+| Same, naming the slave itself, `demo-1`, so that the role is the only difference | 202 | `Failed` | The same | `manifest.json` | 0 | None | 2 |
+| Other cluster's, with a file already in the staging directory | 202 | `Failed` | As in the first row | `manifest.json` | 0 | None | 5 |
+| Slave's, with a file already in the staging directory | 202 | `Failed` | As in the second row | `manifest.json` | 0 | None | 5 |
+| Same cluster's master seed backup, `demo-0` | 202 | `Completed` | | `manifest.json`, the 1 object | 1 of 1 | `cubrid restoreslave -u -s master -m demo-0 …`, `cubrid heartbeat start` | Database created, staging gone |
+
+- The two paths are `databases` and its `.member-lock`. The five add the staging root, its directory and the file in it. The empty member has no `databases.txt` before the seed.
+- No process sample of a refusal, 36 to 112 per case, showed a CUBRID process or command. The accepted case's samples showed `cub_admin` in 386 and 404 lines, which shows that the sampling could have seen one.
+- After the accepted case the member answered `role: slave`, `cubrid heartbeat status` showed `current demo-2, state slave`, the ownership marker was gone, and `csql` on it returned `cluster-a-before-seed-backup` and `cluster-a-after-seed-backup`, the same rows as on the master, and not `cluster-b-only`. The second row was committed after the seed backup.
+- **A refused seed is not free of side effects.** In all five, the only change on the data volume was in `/var/lib/cubrid/operations`: the directory and one new operation record of the `Failed` operation. The directories the issue names were unchanged.
+- **A refusal is answered 202, and the reason comes from polling the operation.** It is not an HTTP error, because the request is valid and the manifest is read in the background.
+- **Where the images differ.** On the `e2e` image a refused operation went `Pending`, `Downloading`, `Restoring`, `Failed`, although nothing was restored. On current code it goes `Pending`, `Downloading`, `Failed`, the behaviour since #643. Manifests record `11.4` on the `e2e` image and `11.4.6.1963` on current code, the behaviour since #621.
+- **A separate observation from the set-up.** With `demo-1` joined and `demo-2` listed but never started, the master answered `role: master`, `serverActive: false` in all 12 samples over about 55 s, in both runs. Both masters became active once every listed member had joined. In trials that were not kept, a master with no member joined refused a write with `ERROR: Attempted to update the database when updates are disabled`, and masters with a member missing were still not active after 240 s. This is why the empty member here is one that had joined before. The cause is not established: the master's applier and copier for `demo-2` were running with no log to read, which is a hypothesis only. This may be worth its own check.
+
+**What this shows.** On these two images, in Docker: both refusals happen, with those reasons, before any backup object is read or any command runs; the database and staging directories are unchanged, including a staging directory that already holds a file; and a matching artifact is accepted afterwards on the same member and opens with the expected rows. It answers #686's Done-when.
+
+**What this does not show.**
+- **Not the Operator, Kind or the VM lab.** The requests were built from the code by a harness. Docker has no Pods, no `fsGroup`, no PVC and no Service DNS, and the data volume here is a tmpfs. How the Operator reports such a refusal was not exercised.
+- **Not a real object store.** S3Mock checks no credentials, so nothing here says the keys or a store's permissions work, and the store's own behaviour was not under test. The guard reads one object, so a difference matters little here, but that is an argument and was not measured.
+- **Only these refusals.** Refusals for level, source instance, database, engine series and manifest version were not sent, and those remain unit-tested only. Each manifest here has one object, about 2 MB.
+- **The role in a manifest is what the backup request said.** By reading `runBackup`, the Instance Manager copies `sourceRole` from the request and does not compare it with its own role. The harness sent the role it had just observed. A mislabelled backup was not tried, and this guard could not tell.
+- **By reading only:** `ExpectedClusterUID` is checked only when set, so a request without it would not be refused for another cluster. That is what `TestRestore_SeedAcceptsTheNamedMastersFullBackup` documents, and it was not sent here.
+- **Few runs.** One run on each image, on one engine build, with each refusal sent in the forms above. The sampling of processes can miss what lasts under about 0.1 s, and more under this load, which is why the manager's log is the first evidence for commands.
+- **The rows do not separate backup from replication** for `cluster-a-before-seed-backup`, which was committed before the backup. Only the second row is known to come through replication.
+- **A member that lost its volume, not one that never joined.** The master's peers had seen `demo-2` before, for the reason given above.

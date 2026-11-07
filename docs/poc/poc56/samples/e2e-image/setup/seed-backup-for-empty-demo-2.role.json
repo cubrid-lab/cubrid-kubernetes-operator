@@ -1,0 +1,2 @@
+{"current":"demo-0","role":"master","serverActive":true,"nodes":[{"name":"demo-2","priority":3,"state":"unknown"},{"name":"demo-1","priority":2,"state":"slave"},{"name":"demo-0","priority":1,"state":"master"}],"source":"heartbeat","engineVersion":"11.4.6.1963","appliers":[{"logPath":"/var/lib/cubrid/databases/appdb_demo-2","pid":311},{"logPath":"/var/lib/cubrid/databases/appdb_demo-1","pid":309}]}
+
