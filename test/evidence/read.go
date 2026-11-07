@@ -199,13 +199,25 @@ func (c junitCase) junitResult() Result {
 // junitLine names a case and its verdict in a problem.
 func (c junitCase) junitLine() string { return c.Name + ": " + string(c.junitResult()) }
 
+// junitKey is the canonical key a case records, or "" for a file written before
+// cases recorded one.
+func (c junitCase) junitKey() string {
+	for _, property := range c.Properties {
+		if property.Name == junitKeyProperty {
+			return property.Value
+		}
+	}
+	return ""
+}
+
 // checkJUnit compares junit.xml with summary.json. Both come from one write of
 // one run, so they name the same run and hold the same scenarios in the same
 // order with the same verdicts; anything else is a mixed or edited bundle. The
 // case name is the identity in schema versions 1 and 2, and the system-out text
 // and the messages are not compared. A case is not looked up by a looser name, so
 // that a renamed one shows up here and not as a check that went missing. A
-// case maps to its key through the entry of summary.json at the same place.
+// case maps to its key through the entry of summary.json at the same place, and
+// a key the case records itself must be the one that entry recorded.
 func (r *RecordedRun) checkJUnit() {
 	data, err := os.ReadFile(filepath.Join(r.Dir, junitFile))
 	if err != nil {
@@ -241,6 +253,10 @@ func (r *RecordedRun) checkJUnit() {
 		if got[i].junitLine() != want[i].junitLine() {
 			r.Problems = append(r.Problems, fmt.Sprintf("%s has %s where %s has %s",
 				junitFile, got[i].junitLine(), summaryFile, want[i].junitLine()))
+		}
+		if key := got[i].junitKey(); key != "" && key != r.Results[i].RecordedKey {
+			r.Problems = append(r.Problems, fmt.Sprintf("%s case %s has the key %s where %s has %q",
+				junitFile, got[i].Name, key, summaryFile, r.Results[i].RecordedKey))
 		}
 	}
 }

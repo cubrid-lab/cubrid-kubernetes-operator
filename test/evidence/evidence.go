@@ -395,11 +395,14 @@ type junitSuite struct {
 }
 
 type junitCase struct {
-	Name      string        `xml:"name,attr"`
-	Classname string        `xml:"classname,attr"`
-	Failure   *junitMessage `xml:"failure,omitempty"`
-	Error     *junitMessage `xml:"error,omitempty"`
-	Skipped   *junitMessage `xml:"skipped,omitempty"`
+	Name      string `xml:"name,attr"`
+	Classname string `xml:"classname,attr"`
+	// Properties holds the canonical key of a case the registry knows. The
+	// name stays the legacy one, which a case is matched on.
+	Properties []junitProperty `xml:"properties>property,omitempty"`
+	Failure    *junitMessage   `xml:"failure,omitempty"`
+	Error      *junitMessage   `xml:"error,omitempty"`
+	Skipped    *junitMessage   `xml:"skipped,omitempty"`
 	// SystemOut explains a scenario without changing the historical JUnit
 	// testcase name used for result grouping and comparisons.
 	SystemOut string `xml:"system-out,omitempty"`
@@ -408,6 +411,14 @@ type junitCase struct {
 type junitMessage struct {
 	Message string `xml:"message,attr"`
 }
+
+type junitProperty struct {
+	Name  string `xml:"name,attr"`
+	Value string `xml:"value,attr"`
+}
+
+// junitKeyProperty names the property that holds a case's canonical key.
+const junitKeyProperty = "key"
 
 // junitRunCase names the JUnit case of the run as a whole.
 const junitRunCase = "run"
@@ -422,6 +433,9 @@ func (s Summary) junit() junitSuite {
 		c := junitCase{Name: sc.Name(), Classname: "scenario"}
 		if sc.description() != "" {
 			c.SystemOut = sc.DisplayName()
+		}
+		if entry, err := registry.resolveResult(s.Lane, s.Environment.Level, sc); err == nil {
+			c.Properties = []junitProperty{{Name: junitKeyProperty, Value: entry.Key}}
 		}
 		switch sc.Result {
 		case Pass:
