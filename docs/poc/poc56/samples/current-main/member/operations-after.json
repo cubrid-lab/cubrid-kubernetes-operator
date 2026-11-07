@@ -1,0 +1,24 @@
+{
+ "operations": [
+  {
+   "artifact": {
+    "cubridVersion": "11.4.6.1963",
+    "database": "appdb",
+    "manifestURI": "s3://poc56-seed/cubrid/d6776415-621e-4bea-a101-f199031a838b/seed-demo-2-from-demo-0-r1/appdb/manifest.json"
+   },
+   "createdAt": "2026-11-07T05:24:12.998575657Z",
+   "database": "appdb",
+   "id": "op-93e0ede66ec104fee85c323003ac634c",
+   "idempotencyKey": "seed-restore-accepted-d6776415-621e-4bea-a101-f199031a838b",
+   "kind": "restore",
+   "requestHash": "33e90f84143f720f29adeb32eeff267d451940b66bfa0202f45d6c6de00234d5",
+   "restored": {
+    "cubridVersion": "11.4.6.1963",
+    "database": "appdb",
+    "manifestURI": "s3://poc56-seed/cubrid/d6776415-621e-4bea-a101-f199031a838b/seed-demo-2-from-demo-0-r1/appdb/manifest.json"
+   },
+   "state": "Completed",
+   "updatedAt": "2026-11-07T05:24:51.897874149Z"
+  }
+ ]
+}

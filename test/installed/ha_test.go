@@ -669,12 +669,24 @@ func jsonLines(rows []workload.Row) []string {
 	return lines
 }
 
+// testClusterRead answers the reads outside a Pod: the version of the cluster,
+// and the lists of a Kubernetes snapshot of a failed run.
+func testClusterRead(args []string) (string, bool) {
+	switch {
+	case slices.Equal(args, []string{"version", "-o", "json"}):
+		return testVersionJSON, true
+	case len(args) >= 6 && args[2] == "get" && args[4] == "-o" && args[5] == "json":
+		return `{"items":[]}`, true
+	}
+	return "", false
+}
+
 func (f *haFixture) command(ctx context.Context, args ...string) (string, error) {
 	f.mu.Lock()
 	f.ran = append(f.ran, strings.Join(args, " "))
 	f.mu.Unlock()
-	if slices.Equal(args, []string{"version", "-o", "json"}) {
-		return testVersionJSON, nil
+	if out, read := testClusterRead(args); read {
+		return out, nil
 	}
 	if len(args) < 9 || args[0] != "-n" || args[1] != f.cfg.Namespace || args[2] != "exec" || args[4] != "-c" {
 		f.t.Fatalf("unexpected command %q", args)

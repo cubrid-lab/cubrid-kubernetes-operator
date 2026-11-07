@@ -462,7 +462,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	var electedAt, noticedAt time.Time
 	faultEnded = false
 	outcome = r.runFault(faults.Scenario{
-		Fault:  podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful},
+		Fault:  logs.observeFault(podDeletion{namespace: r.namespace, pod: master, uid: uid, force: variant != s03Graceful}),
 		Limits: s03FlowLimits,
 		Before: func(ctx context.Context) error {
 			now, _, err := r.master(ctx)

@@ -161,7 +161,7 @@ func (t *Target) Runner() (*Runner, error) {
 	followLogs := func(ctx context.Context, namespace, pod string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
 		return followClientset.CoreV1().Pods(namespace).GetLogs(pod, opts).Stream(ctx)
 	}
-	return &Runner{Client: c, Command: t.command, Redactor: t.redactor, forward: t.forward, podLogs: podLogs,
+	return &Runner{Client: c, Command: t.command, read: t.read, Redactor: t.redactor, forward: t.forward, podLogs: podLogs,
 		followLogs: followLogs, execStream: t.execStream}, nil
 }
 
@@ -325,4 +325,16 @@ func (t *Target) command(ctx context.Context, args ...string) (string, error) {
 		return string(output), fmt.Errorf("kubectl failed: %s: %s", err, t.redactor.Redact(output))
 	}
 	return string(output), nil
+}
+
+// read runs a command whose output is parsed: only its standard output is
+// returned, so a warning on its error output cannot reach the parser.
+func (t *Target) read(ctx context.Context, args ...string) (string, error) {
+	cmd := t.Kubectl(ctx, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return stdout.String(), fmt.Errorf("kubectl failed: %s: %s", err, t.redactor.Redact(stderr.Bytes()))
+	}
+	return stdout.String(), nil
 }

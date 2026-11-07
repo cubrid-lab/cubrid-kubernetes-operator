@@ -1,0 +1,13 @@
+{
+ "body": {
+  "createdAt": "2026-11-07T05:14:04.490417499Z",
+  "database": "appdb",
+  "id": "op-06e436b3f629f0ed8e9594b41e54012b",
+  "idempotencyKey": "seed-restore-slave-staging-held-7562cf27-7bea-462d-94c7-941fb764f768",
+  "kind": "restore",
+  "requestHash": "d9fec1b0dcaa8d68acaba89c6eaf97683baecdaf2d4e813d83f6457767d834ed",
+  "state": "Pending",
+  "updatedAt": "2026-11-07T05:14:04.490417499Z"
+ },
+ "status": 202
+}

@@ -33,10 +33,13 @@ This reference does **not** change any required scenario or acceptance rule.
 - **ADR**: Architecture Decision Record, in [docs/adr](../adr/).
 - **POC**: a proof-of-concept experiment on a real engine, recorded in
   [docs/poc/RESULTS.md](../poc/RESULTS.md).
-- **RTO**: recovery time objective. Here always the *measured* recovery time
-  defined in [Measurements](#measurements).
-- **RPO**: recovery point objective. Here always the *observed* data loss
-  defined in [Measurements](#measurements).
+- **RTO (Recovery Time Objective)**: an explicit *target* maximum acceptable
+  recovery duration. This contract measures actual recovery duration, which
+  must not be described as an RTO target unless a target was agreed.
+- **RPO (Recovery Point Objective)**: an explicit *target* maximum acceptable
+  data-loss window. The contract reports actual acknowledged writes missing
+  and an observed data-loss window; these are observations, not RPO targets.
+  No zero-loss RTO/RPO objective is inferred from a passing scenario.
 - **PVC**: PersistentVolumeClaim, the Kubernetes object that holds a member's
   data volume.
 - **VM**: virtual machine.
@@ -619,19 +622,24 @@ removed, and no later variant of the same system is started.
 
 These are different things and are never reported as one another:
 
-1. **Removing endpoints from the managed write path.** The Operator stops
-   offering the read-write endpoint: new connections through the `-rw`
-   Service fail or are refused. This is the only one the Operator does on
-   its own (write quarantine, ADR-0005 section 2). Reporting
-   `RoutingReady=False` is not this: a scenario checks it with new
-   connections through `-rw`, never with the Condition.
+1. **Removing endpoints from the managed write path (planned, not yet
+   implemented).** If the #113 policy is implemented, the Operator would
+   withhold the managed read-write Service endpoint so *new* connections
+   through `-rw` fail or are refused. **Today the Operator does not do this:**
+   it sets `RoutingReady=False` while Brokers and Service endpoints remain.
+   A scenario must test actual SQL through `-rw`, never infer enforcement
+   from a Condition. A missing/stale observation alone does not prove native
+   CUBRID has entered a two-master state; #113/#115 must establish the
+   accepted availability/safety policy.
 2. **Closing existing connections.** Sessions that were open before the
-   quarantine are ended. ADR-0005 states that the Operator does *not* do
-   this: an open session may keep writing.
+   proposed quarantine would have to be ended separately. ADR-0005 does
+   **not** claim the Operator does this: an open session may keep writing.
+   Any future claim must be supported by direct SQL/session evidence.
 3. **Fencing the database.** The database process itself is stopped or
-   isolated so that it cannot accept writes from anyone. The Operator does
-   this only as a planned step against a known, reachable member
-   (`/v1/shutdown`), never automatically to resolve an ambiguous state.
+   isolated so that it cannot accept writes from anyone. In the current
+   design, `/v1/shutdown` is used by the Pod's planned lifecycle preStop
+   action against its own member; the Operator controller does not use it
+   as automatic emergency split-brain fencing.
 
 A scenario that involves quarantine states its expectation for **new
 connections** and for **already-open connections** separately.
@@ -724,7 +732,7 @@ present, it must be present exactly once and with the values that were sent.
 
 ### Measurements
 
-- **Recovery time (RTO).** The time from the start of the fault (the moment
+- **Observed recovery duration (not the RTO target).** The time from the start of the fault (the moment
   the injection command was issued) until the first moment after which a
   write and a read through the read-write endpoint succeed without
   interruption for the scenario's `stable_period`. Only an acknowledged insert
@@ -732,7 +740,7 @@ present, it must be present exactly once and with the values that were sent.
   acknowledged rollback committed nothing and neither counts nor interrupts.
   A client that does not read is judged on its writes alone. Any `failed` or
   `unknown` outcome interrupts (`workload.Recovery`).
-- **Observed data loss (observed RPO).** The number of `acknowledged`
+- **Observed data loss (not the RPO target).** The number of `acknowledged`
   operations missing after recovery (`acknowledgedMissing`), and the time
   between the oldest of them and the start of the fault
   (`observedDataLossWindow`; `0s` when none is missing). The window is taken
@@ -749,6 +757,9 @@ present, it must be present exactly once and with the values that were sent.
   record their skew.
 - A measurement that could not be taken is reported as `unknown`, with the
   reason, and never as zero. Zero means "measured, and it was zero".
+  The existing evidence keys remain unchanged for backward compatibility;
+  terminology clarification does not rename measurements, verdicts, or
+  alter any required fault/SQL oracle.
 
 ## Evidence
 
@@ -762,7 +773,7 @@ reader can tell what to expect.
   <scenario-id>/
     history.jsonl       one line per client operation event
     timeline.jsonl      one line per test step, fault and observation
-    cluster/            CubridCluster YAML and conditions at each checkpoint
+    cluster/            Kubernetes state at each checkpoint and its UTC observations
     conditions.jsonl    one line per read of the status during the fault
     agreement.txt       how the Conditions compared with SQL and the fault
     logs/               Operator, Instance Manager, CUBRID and Broker logs
@@ -1330,6 +1341,137 @@ is abandoned at the deadline with no grace. Its collection runs only if the
 abandoned step reaches it while the process and the cluster still exist, so
 such a step may leave no `after-verdict` logs. A collection before a fault never
 outlives its scenario's context.
+
+### `cluster/`
+
+What Kubernetes showed of one scenario's cluster, collected by `StateBundle` in
+`test/evidence` next to the [logs](#logs). On Kind each scenario that collects
+logs also keeps these snapshots. On the VM lab they are kept in the same case
+as the logs, into `LAB01/cluster/`. S00 uses a cluster of its own and collects
+neither.
+
+```text
+<scenario-id>/cluster/
+  index.json            every source of every checkpoint, read or not
+  observations.jsonl    the times of the objects and of the fault, each with its clock
+  before-fault/         just before the fault
+  fault-confirmed/      as soon as the fault was confirmed
+  after-verdict/        once the result was reached
+```
+
+A checkpoint lists, in this order: the `CubridCluster`, the cluster's Pods, the
+Operator's Pods, the cluster's Services and EndpointSlices, and the Events of
+the namespace. The Operator's Pods are found by their label, so a Pod that
+replaced another one is found. The file of a source is one JSON document. Only
+named fields are copied: a Pod's identity, node, phase, Conditions and container
+states, for example, and never its environment, its specification or an
+annotation of any object. The `CubridCluster` keeps its identity, generation
+and whole `status`, and a Service, an EndpointSlice and an endpoint keep their
+whole `ports` and `conditions`; these parts are copied as they are, and go
+through the redaction like the rest. A scenario that injects no fault has no
+`fault-confirmed/`. S02 takes no snapshot before its fault, so it has no
+`before-fault/`, and S01 and S14 without a variant have only `after-verdict/`.
+
+`index.json` names the cluster, its UID, and when the scenario began. Per
+checkpoint it has one entry per source, with the `status` of the
+[logs table](#logs) and these additions:
+
+| Field or status | Meaning |
+|---|---|
+| `obsolete` | The source answered with nothing current: no Event observed in this scenario since the last checkpoint, a `status` behind the object's `metadata.generation`, or a `status` nothing keeps current: see below |
+| `listed` | How many objects the listing returned; left out when nothing was read, because an unknown count is not zero |
+| `objects` | The name, UID and node of what the file holds, except for Events. Of a `truncated` source these are the objects kept, and `listed` says how many there were |
+| `missing` | Expected objects a listing that was read did not hold. `status` is then `truncated`. A listing that failed names no object: its `reason` says it failed |
+| `lastObservedTime`, `statusAge` | Of the `CubridCluster`: its `status.lastObservedTime`, and how old that time was when it was read. `statusAge` is `unknown` when the field is unset, and it compares the runner's clock with the Operator's |
+| `gone` | Objects an earlier checkpoint saw that no longer exist under the same UID |
+| `excluded` | How many Events were left out, by why |
+
+A missing `CubridCluster` is `unavailable`, never `empty`. A Pod a fault removed
+leaves the rest of the checkpoint in place: the snapshot is partial, not
+absent.
+
+**A status nobody keeps current.** A stopped Operator cannot mark its own status
+as stale, and `generation` does not change with it, so its Conditions can stay
+`True`. The `CubridCluster` is therefore `obsolete` when its
+`status.lastObservedTime` is more than 60 seconds old, the reader rule of
+[Freshness](../observability.md#freshness), with the one second the times'
+resolution allows, or when no Operator Pod of the same checkpoint is running and
+Ready and not being deleted. Ready matters: the snapshot of the Operator's
+restart (S06) in E2E run 42333021727 found the replacement Pod `Running` with
+its manager not ready yet, and a status 17 seconds old. If the Operator's Pods
+could not be read, the `reason` says that this is not known, and the status of
+the source stays what it was. This reads a status, and it says nothing of
+whether the Operator would have changed it.
+
+**Events.** An Event is evidence of a scenario only if it was observed during
+it, and a repeated Event keeps the name of its first occurrence. So the last of
+`lastTimestamp`, `eventTime` and `series.lastObservedTime` decides, not the
+name. An Event last observed before the scenario began is excluded as
+`olderThanScenario`; one that began earlier and repeated during it is kept with
+`beganBeforeScenario`. One that a checkpoint already stored and that did not
+change since is excluded as `unchangedSinceEarlierCheckpoint`, which needs no
+clock. One with no time is `undated`. One about a `CubridCluster` of this name
+with another UID is `otherCluster`. The start of the scenario is rounded down to
+the second, because that is the resolution of these timestamps. It is a
+comparison between the runner's clock and the reporter's, so an Event close to
+the start can fall on the wrong side when those clocks differ. On the VM lab
+the run created the namespace, so no Event is excluded by age.
+
+**Clocks.** Every line of `observations.jsonl` has a time in UTC and a `clock`:
+
+| `clock` | Whose time | Used for |
+|---|---|---|
+| `test-runner` | The machine that runs the suite | Checkpoints and the fault steps `fault_issued`, `fault_confirmed` and `fault_removed` |
+| `operator` | The Operator's Pod | The transition of a Condition |
+| `node/<node>` | The kubelet of that node | The start and the end of a container |
+| `reporter/<component>` | The component that reported it | An Event |
+
+The file is sorted by time as a reading aid. The clocks are not compared, so
+the skew of each in `index.json` is `unknown`, and the order of two lines of
+different clocks is not proven. An interval between them is not a measured
+recovery time: that remains the one `timeline.jsonl` gives, on one clock. On Kind
+the clocks are one machine's; this says nothing of the VM lab's.
+
+**Not collected.** The Operator's metrics are not read. The endpoint answers
+only the token of an authorized service account, which a read-only
+snapshot neither holds nor creates, so each checkpoint names
+`operator-metrics` as `unavailable`.
+
+**Bounds.** There is no periodic collection: a scenario has at most three
+checkpoints, one source takes at most 10 seconds and a checkpoint at most 20. A
+listing of more than 8 MiB is not parsed and is `unavailable`, since a part of a
+JSON document is no part of the cluster. A source stores at most 512 KiB, the
+newest objects that fit, whole; a scenario stores at most 4 MiB, of which
+`observations.jsonl` takes at most 512 KiB; and all the scenarios of a Kind run
+store at most 64 MiB and spend at most 90 seconds. This budget is apart from the
+logs', which a run with every scenario passing used almost to its end, so that
+neither can use up the other. Added to the 5 minutes of the logs and the slowest
+suite without collection (42.8 minutes), the 90 seconds end 5.7 minutes before
+the deadline of 55. These are starting values. One passing Kind run, E2E run
+42333021727, took 46.4 minutes for the suite and spent 40.7 seconds on 32
+snapshots, the longest 2.28 seconds, stored 1.3 MiB, and spent 264.7 seconds on
+the logs of 24 scenarios. A failing run and the VM lab have not been measured.
+`startedAt` and `finishedAt` of each checkpoint show what a run spent. The
+`fault-confirmed` snapshot runs beside the scenario and costs it no time, though
+it is charged to the budget.
+
+**The verdict.** Like the logs, a snapshot never decides a result. Nothing reads
+these files to judge a scenario: the SQL checks, the fault's confirmation and
+`conditions.jsonl` stay what they were. The `fault-confirmed` snapshot watches a
+fault without changing what the fault reports. A confirmation whose context has
+ended, which the fault's runner discards, leaves neither `fault_confirmed` nor a
+snapshot, and neither does one that arrives once the scenario is concluding. A
+read or a write that fails is named in the index or in the run's `notes`, and
+the index joins the scenario's `evidence` only once it exists. A credential of the run found in these files
+fails the run like one in any other evidence file: see [Secrets](#secrets).
+
+**An interrupted collection.** A deadline, a cancellation or a Pod that
+disappears keeps what was read, and the index is replaced after each source.
+The logs keep the whole time they have after a deadline: the last snapshot, which
+otherwise comes first, stops at the deadline and the logs' time starts after it,
+and a scenario already past its deadline takes the logs first and gives the
+snapshot what is left. If the `fault-confirmed` snapshot still runs when that
+time ends, the last one is not taken and the run's `notes` say so.
 
 ### Secrets
 

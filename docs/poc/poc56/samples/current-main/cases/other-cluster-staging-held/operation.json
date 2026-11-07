@@ -1,0 +1,11 @@
+{
+ "createdAt": "2026-11-07T05:24:05.312574749Z",
+ "database": "appdb",
+ "failureReason": "restore failed: artifact verification failed: manifest clusterUID \"6fc1f563-24c8-4777-a0b3-683f29c63121\" does not match expected \"d6776415-621e-4bea-a101-f199031a838b\"",
+ "id": "op-0e9865e18aabda542a7c6ae58674d75e",
+ "idempotencyKey": "seed-restore-other-cluster-staging-held-d6776415-621e-4bea-a101-f199031a838b",
+ "kind": "restore",
+ "requestHash": "de383eb49e2b7b3240fcf87ef6a7bbca3b4070418113b53dda7d70c0e47de497",
+ "state": "Failed",
+ "updatedAt": "2026-11-07T05:24:05.315797637Z"
+}

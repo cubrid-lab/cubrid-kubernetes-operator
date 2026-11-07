@@ -141,6 +141,26 @@ func TestTargetCommandsHonorCancellationAndRedactErrors(t *testing.T) {
 	}
 }
 
+// A warning kubectl writes to its error output must not reach the JSON a caller
+// parses, and a read that fails still says why, without a credential.
+func TestTargetReadKeepsErrorOutputOutOfItsResult(t *testing.T) {
+	target, err := OpenTarget(kubeconfigFile(t), "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = target.Close() }()
+	fakeKubectl(t, "echo 'Warning: a deprecated API' >&2\necho '{\"items\":[]}'\n")
+	out, err := target.read(t.Context(), "get", "pods", "-o", "json")
+	if err != nil || out != "{\"items\":[]}\n" {
+		t.Fatalf("read %q, %v", out, err)
+	}
+	fakeKubectl(t, "printf 'refused selected-private-token' >&2\nexit 1\n")
+	_, err = target.read(t.Context(), "get", "pods")
+	if err == nil || !strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "selected-private-token") {
+		t.Fatalf("read error %v", err)
+	}
+}
+
 func TestTargetRejectsImplicitOrMissingContexts(t *testing.T) {
 	path := kubeconfigFile(t)
 	for _, pair := range [][2]string{{"", "selected"}, {path, ""}, {path, "missing"}} {

@@ -1,0 +1,11 @@
+{
+ "createdAt": "2026-11-07T05:23:51.198611106Z",
+ "database": "appdb",
+ "failureReason": "restore failed: artifact verification failed: manifest sourceRole \"slave\" does not match required \"master\"",
+ "id": "op-f84e076a65acb2c99f766a3bf5e81404",
+ "idempotencyKey": "seed-restore-slave-named-master-d6776415-621e-4bea-a101-f199031a838b",
+ "kind": "restore",
+ "requestHash": "c17c2c061248f09c5c1221117740bfc2bb1c5af0b47d0e02355097e573928853",
+ "state": "Failed",
+ "updatedAt": "2026-11-07T05:23:51.202531705Z"
+}

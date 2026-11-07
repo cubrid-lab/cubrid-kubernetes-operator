@@ -1,0 +1,2 @@
+192.168.64.5 - - [07/Nov/2026:05:23:43 +0000] "GET /poc56-seed/?location= HTTP/1.1" 200 142
+192.168.64.5 - - [07/Nov/2026:05:23:43 +0000] "GET /poc56-seed/cubrid/6fc1f563-24c8-4777-a0b3-683f29c63121/seed-demo-2-from-demo-0-r1/appdb/manifest.json HTTP/1.1" 200 484

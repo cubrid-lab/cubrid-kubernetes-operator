@@ -1,0 +1,20 @@
+{
+ "docker": "29.2.1",
+ "ended": "2026-11-07T05:14:38.919Z",
+ "ips": {
+  "poc56-e2e-image-a-demo-0": "192.168.64.3",
+  "poc56-e2e-image-a-demo-1": "192.168.64.4",
+  "poc56-e2e-image-a-demo-2": "192.168.64.5",
+  "poc56-e2e-image-b-demo-0": "192.168.80.3",
+  "poc56-e2e-image-b-demo-1": "192.168.80.4"
+ },
+ "label": "e2e-image",
+ "loadAtEnd": [
+  "24.27",
+  "25.93",
+  "25.26"
+ ],
+ "seconds": 500,
+ "started": "2026-11-07T05:06:19.112Z",
+ "storeIP": "192.168.64.2"
+}

@@ -143,7 +143,10 @@ func TestFailureLogsHoldTheBrokerAndTheHeartbeat(t *testing.T) {
 			case strings.Contains(script, "tail -c"):
 				return testBrokerLine, nil
 			}
-			t.Fatalf("unexpected command %q", args)
+			if slices.Contains(args, "get") && slices.Contains(args, "json") {
+				return `{"items":[]}`, nil
+			}
+			t.Errorf("unexpected command %q", args)
 			return "", nil
 		},
 		podLogs: func(context.Context, string, string, *corev1.PodLogOptions) (io.ReadCloser, error) {
@@ -183,9 +186,15 @@ func TestFailureLogsHoldTheBrokerAndTheHeartbeat(t *testing.T) {
 	if !slices.Contains(h.files, haScenarioID+"/logs/index.json") {
 		t.Errorf("files %v", h.files)
 	}
+	if !slices.Contains(h.files, haScenarioID+"/cluster/index.json") {
+		t.Errorf("files %v", h.files)
+	}
+	// Every command is a fixed read in a Pod of the run's namespace, or a get
+	// of a Kubernetes snapshot.
 	for _, args := range commands {
-		if !strings.HasPrefix(strings.Join(args, " "), "-n "+namespace+" exec ") {
-			t.Errorf("not a command in a Pod of the run's namespace: %q", args)
+		line := strings.Join(args, " ")
+		if !strings.HasPrefix(line, "-n "+namespace+" exec ") && (args[2] != "get" || !slices.Contains(args, "json")) {
+			t.Errorf("neither a command in a Pod of the run's namespace nor a snapshot: %q", args)
 		}
 	}
 }

@@ -1,0 +1,2 @@
+192.168.64.5 - - [07/Nov/2026:05:14:08 +0000] "GET /poc56-seed/cubrid/7562cf27-7bea-462d-94c7-941fb764f768/seed-demo-2-from-demo-0-r1/appdb/manifest.json HTTP/1.1" 200 477
+192.168.64.5 - - [07/Nov/2026:05:14:08 +0000] "GET /poc56-seed/cubrid/7562cf27-7bea-462d-94c7-941fb764f768/seed-demo-2-from-demo-0-r1/appdb/backup/appdb_bk0v000 HTTP/1.1" 200 2110464

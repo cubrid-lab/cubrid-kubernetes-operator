@@ -1,0 +1,10 @@
+2026-11-07T05:14:37.867Z
+
+=== <Result of SELECT Command in Line 1> ===
+
+  'row='||origin      
+======================
+  'row=cluster-a-after-seed-backup'
+  'row=cluster-a-before-seed-backup'
+
+2 rows selected. (0.004000 sec) Committed. (0.000000 sec) 

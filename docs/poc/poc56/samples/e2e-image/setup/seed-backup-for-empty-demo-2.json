@@ -1,0 +1,36 @@
+{
+ "member": "poc56-e2e-image-a-demo-0",
+ "operation": {
+  "artifact": {
+   "database": "appdb",
+   "manifestDigest": "482436e80d54806561899f678d12d95c7ce042fc3a890dc3ea86548c3b20b1b8",
+   "manifestURI": "s3://poc56-seed/cubrid/7562cf27-7bea-462d-94c7-941fb764f768/seed-demo-2-from-demo-0-r1/appdb/manifest.json",
+   "sizeBytes": 2110464
+  },
+  "createdAt": "2026-11-07T05:12:54.049512048Z",
+  "database": "appdb",
+  "id": "op-177213b8892e6816c920b59662bba2ca",
+  "idempotencyKey": "seed-backup-demo-2-r1",
+  "kind": "backup",
+  "requestHash": "59c8c3a6b0bdd674b2bdb9a87cf5313fca66391239413ee0078a1aba81617267",
+  "stagingDir": "/var/lib/cubrid/backup-staging/seed-backup-for-empty-demo-2/op-177213b8892e6816c920b59662bba2ca",
+  "state": "Completed",
+  "updatedAt": "2026-11-07T05:12:54.620157176Z"
+ },
+ "path": "/v1/backup",
+ "request": {
+  "database": "appdb",
+  "destination": "/var/lib/cubrid/backup-staging/seed-backup-for-empty-demo-2",
+  "upload": {
+   "bucket": "poc56-seed",
+   "clusterUID": "7562cf27-7bea-462d-94c7-941fb764f768",
+   "cubridVersion": "11.4",
+   "prefix": "cubrid/7562cf27-7bea-462d-94c7-941fb764f768/seed-demo-2-from-demo-0-r1/appdb",
+   "seed": true,
+   "sourceInstance": "demo-0",
+   "sourceRole": "master"
+  }
+ },
+ "response": "{\"id\":\"op-177213b8892e6816c920b59662bba2ca\",\"kind\":\"backup\",\"idempotencyKey\":\"seed-backup-demo-2-r1\",\"requestHash\":\"59c8c3a6b0bdd674b2bdb9a87cf5313fca66391239413ee0078a1aba81617267\",\"database\":\"appdb\",\"state\":\"Pending\",\"createdAt\":\"2026-11-07T05:12:54.049512048Z\",\"updatedAt\":\"2026-11-07T05:12:54.049512048Z\"}\n",
+ "status": 202
+}
