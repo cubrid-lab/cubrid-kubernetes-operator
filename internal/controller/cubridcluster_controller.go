@@ -1191,20 +1191,41 @@ func (r *CubridClusterReconciler) idleRetry(cluster *databasev1alpha1.CubridClus
 	return 0
 }
 
+// reasonPrimaryUnresolved is Ready's reason while the primary has stayed
+// unresolved for longer than primaryUnresolvedGrace (#716).
+const reasonPrimaryUnresolved = "PrimaryUnresolved"
+
+// primaryUnresolvedGrace is how long PrimaryResolved may stay False before
+// Ready follows it. A failover leaves the primary unresolved for a few
+// seconds (5 to 13 s in docs/poc/RESULTS.md); in POC-51 it stayed unresolved
+// for more than 8 minutes while the clients of -rw were refused.
+const primaryUnresolvedGrace = 60 * time.Second
+
 // setReady sets Ready. Every instance ready makes the cluster
 // Ready, except while more than one master is observed: two masters are never
 // reported as a healthy cluster (ADR-0001). A primary that is only unresolved,
 // as during a failover or while a member is unreachable, leaves Ready to the
-// instances; HAReady and RoutingReady report it.
+// instances for primaryUnresolvedGrace; HAReady and RoutingReady report it at
+// once. Past that, Ready is False with PrimaryUnresolved (#716): this reports
+// only, and the Operator still chooses no primary (ADR-0005).
 func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridCluster, ready, desired int32, multiplePrimaries bool) {
 	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
 	instancesReady := ready >= desired && desired > 0
+	unresolved := meta.FindStatusCondition(cluster.Status.Conditions, conditionPrimaryResolved)
+	unresolvedLong := unresolved != nil && unresolved.Status == metav1.ConditionFalse &&
+		r.now().Sub(unresolved.LastTransitionTime.Time) >= primaryUnresolvedGrace
 	switch {
 	case instancesReady && multiplePrimaries:
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMultiplePrimaries,
 			fmt.Sprintf("%d/%d instances ready, but more than one member reports itself master", ready, desired))
 		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled",
 			"cluster reconciled; the operator does not choose between masters, see PrimaryResolved")
+	case instancesReady && unresolvedLong:
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonPrimaryUnresolved,
+			fmt.Sprintf("%d/%d instances ready, but no single primary is resolved since %s (%s)", ready, desired,
+				unresolved.LastTransitionTime.UTC().Format(time.RFC3339), unresolved.Reason))
+		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled",
+			"cluster reconciled; the operator does not choose a primary, see PrimaryResolved")
 	case instancesReady:
 		setCondition(cluster, conditionReady, metav1.ConditionTrue, "ClusterReady",
 			fmt.Sprintf("%d/%d instances ready", ready, desired))

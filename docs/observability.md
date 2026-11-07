@@ -77,7 +77,7 @@ the fixed names below; free text belongs in `message`.
 
 | Condition | `True` means | `False` or `Unknown` reasons |
 |---|---|---|
-| `Ready` | The expected members are ready, no bootstrap is in progress, and no more than one master is observed (`ClusterReady`) | `InvalidClusterName`: the cluster's name is not a DNS-1035 label of at most 53 characters, so the Operator writes no object for it and does not retry (recreate it under a name of at most 52 characters; ADR-0004); `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved`, or the reason of a step that could not write an object of the cluster, such as `StatefulSetReconcileFailed` or `DisruptionBudgetReconcileFailed` (see below) |
+| `Ready` | The expected members are ready, no bootstrap is in progress, no more than one master is observed, and `PrimaryResolved` (HA) has not been `False` for 60 seconds or more (`ClusterReady`) | `InvalidClusterName`: the cluster's name is not a DNS-1035 label of at most 53 characters, so the Operator writes no object for it and does not retry (recreate it under a name of at most 52 characters; ADR-0004); `InstancesNotReady`, `BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`, `BootstrapRecoveryFailed`, `MultiplePrimariesObserved`, `PrimaryUnresolved` (HA: `PrimaryResolved` has been `False` for 60 seconds or more, whatever its reason, which the message names; #716), or the reason of a step that could not write an object of the cluster, such as `StatefulSetReconcileFailed` or `DisruptionBudgetReconcileFailed` (see below) |
 | `Progressing` | The Operator is still working towards the spec: members are starting (`InstancesStarting`), a recovery bootstrap runs (`BootstrapRecoveryInProgress`, `RecoverySeedingReplicas`), or a step failed and is retried (that step's reason) | `Reconciled` once the cluster is reconciled, also while more than one master is observed; `BootstrapRecoveryFailed`; `InvalidClusterName` |
 | `PrimaryResolved` | All members observed freshly, exactly one master (`SinglePrimaryObserved`) | `NoPrimaryObserved`, `MultiplePrimariesObserved`, `PrimaryObservationIncomplete`, `AmbiguousPrimaryObservation`, `InstanceManagerTokenRefused` (a member refused the cluster's token; it is no evidence, as an unreachable member); `Unknown` with `RolesNotObserved` |
 | `HAReady` | `PrimaryResolved` is `True`, every member other than the primary is observed as a slave, and `ReplicationHealthy` is `True` (a single-member cluster: `PrimaryResolved` alone) | the reason of `PrimaryResolved`; the reason of `ReplicationHealthy` (`ReplicationStalled`, `ApplyFailures`, `LogCopyStalled`); `HADisabled`; `Unknown` with `ReplicasNotObserved`, `ReplicationNotObserved`, `RoleDiscoveryDisabled` or `RolesNotObserved` |
@@ -183,6 +183,22 @@ counts for `Ready`; two such members give `Ready=False` and
 `cubrid_cluster_ready=0`. A stale response, wrong or missing identity,
 inactive server, or contradictory local entry does not count as that claim.
 Members that are not ready still give `InstancesNotReady` first.
+A primary that is unresolved for any other reason leaves `Ready` to the
+members for 60 seconds, measured from the `lastTransitionTime` of
+`PrimaryResolved`: a failover leaves it unresolved for a few seconds (5 to
+13 s in docs/poc/RESULTS.md), and `Ready` does not follow that. Past 60
+seconds `Ready` is `False` with `PrimaryUnresolved` (#716), from the first
+reconcile after that; an HA cluster is reconciled again 10 s after each pass,
+so it follows up to one pass later (72 to 73 s after `lastTransitionTime` on
+Kind, where a pass came about every 14 s). In POC-51 the
+primary stayed unresolved for more than 8 minutes while every client of
+`-rw` was refused. This reports only: the Operator still chooses no primary
+and blocks no write (ADR-0005), and `WriteEndpointReady` still says only
+that a read-write Broker Pod is available. A cluster whose writes go
+through while a member cannot be observed, such as one whose Instance
+Manager refuses the token or whose `cubrid heartbeat status` times out on a
+loaded node, also reads `Ready=False` after 60 seconds, because no single
+primary can be confirmed.
 A primary that is only unresolved, as during a failover or while
 a member is unreachable, leaves `Ready` to the members' readiness, so that it
 does not change on every failover; `PrimaryResolved`, `HAReady` and
