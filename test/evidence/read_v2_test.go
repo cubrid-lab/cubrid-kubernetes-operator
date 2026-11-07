@@ -18,10 +18,12 @@ package evidence
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -36,6 +38,9 @@ const (
 	labRestartKey  = "installed-operator-failure-recovery-restart"
 	kindRestartKey = "operator-failure-recovery-restart"
 )
+
+// junitKeyProperties finds the key of a case in junit.xml with the line it is on.
+var junitKeyProperties = regexp.MustCompile(`\n *<properties>\n? *<property name="key"[^\n]*(\n *</properties>)?`)
 
 // frozenSummary decodes the summary.json of a directory with its measurements
 // kept exact, as a version 1 reader of the Go type sees it.
@@ -169,8 +174,9 @@ func TestReadRunKeepsAVersion2RecordIntactAndChangesNothing(t *testing.T) {
 }
 
 // Version 2 adds a key and a display name and nothing else: stripped of them,
-// the summary is the frozen version 1 file, and junit.xml is the same bytes, so
-// a JUnit case keeps its identity across the two versions.
+// the summary is the frozen version 1 file, and stripped of the key of each case
+// junit.xml is the same bytes, so a JUnit case keeps its name, class, verdict
+// and text across the two versions.
 func TestWriterAddsOnlyTheIdentityToTheVersion1Record(t *testing.T) {
 	for _, fixture := range []string{kindRun, labRestartRun} {
 		t.Run(fixture, func(t *testing.T) {
@@ -193,8 +199,59 @@ func TestWriterAddsOnlyTheIdentityToTheVersion1Record(t *testing.T) {
 			if !reflect.DeepEqual(stripped, frozen) {
 				t.Errorf("version 2 changed the version 1 record:\n got %v\nwant %v", stripped, frozen)
 			}
-			if got := snapshot(t, dir)[filepath.Join(dir, junitFile)]; got != frozenJUnit {
-				t.Errorf("junit.xml changed:\n got %s\nwant %s", got, frozenJUnit)
+			got := snapshot(t, dir)[filepath.Join(dir, junitFile)]
+			if stripped := junitKeyProperties.ReplaceAllString(got, ""); stripped != frozenJUnit {
+				t.Errorf("junit.xml changed:\n got %s\nwant %s", stripped, frozenJUnit)
+			}
+			scenarios := written[fieldScenarios].([]any)
+			if keys := junitKeyProperties.FindAllString(got, -1); len(keys) != len(scenarios) {
+				t.Fatalf("junit.xml has %d keys for %d results", len(keys), len(scenarios))
+			}
+			for _, item := range scenarios {
+				sc := item.(map[string]any)
+				want := fmt.Sprintf(`<property name="key" value="%s"></property>`, sc[fieldKey])
+				if !strings.Contains(got, want) {
+					t.Errorf("junit.xml has no %s", want)
+				}
+			}
+			run, err := ReadRun(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !run.Validated() {
+				t.Errorf("problems = %q, want none", run.Problems)
+			}
+		})
+	}
+}
+
+// A key in junit.xml is a claim of the file, like the one in summary.json. The
+// entry at the same place of summary.json decides it, so a key cannot move a
+// case to another result. A case with no key is an older file, not a defect.
+func TestReadRunComparesAJUnitKeyWithTheSummary(t *testing.T) {
+	keyed := func(key string) string {
+		return s03AbruptCase + "\n    <properties><property name=\"key\" value=\"" + key + "\"></property></properties>"
+	}
+	tests := map[string]struct {
+		version, key, want string
+	}{
+		"the key of the summary":      {version: version2, key: abruptKey},
+		"the key of another result":   {version: version2, key: gracefulKey, want: "has the key " + gracefulKey},
+		"a key in a version 1 bundle": {version: version1, key: abruptKey, want: "has the key " + abruptKey},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := copyRunOf(t, tc.version, kindRun)
+			editJUnit(t, dir, s03AbruptCase, keyed(tc.key))
+			run, err := ReadRun(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" && !run.Validated() {
+				t.Errorf("problems = %q, want none", run.Problems)
+			}
+			if tc.want != "" && (run.Validated() || !hasProblem(run, tc.want)) {
+				t.Errorf("problems = %q, want %q", run.Problems, tc.want)
 			}
 		})
 	}
@@ -248,6 +305,9 @@ func TestWriterRecordsNoIdentityForAResultTheRegistryDoesNotHold(t *testing.T) {
 		if _, ok := sc[fieldDisplayName]; ok {
 			t.Errorf("a result of a lab lane at the kind level has a display name: %v", sc)
 		}
+	}
+	if junit := snapshot(t, dir)[filepath.Join(dir, junitFile)]; junitKeyProperties.MatchString(junit) {
+		t.Errorf("a result of a lab lane at the kind level has a key in junit.xml:\n%s", junit)
 	}
 	run, err := ReadRun(dir)
 	if err != nil {

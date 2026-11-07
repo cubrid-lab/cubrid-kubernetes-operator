@@ -576,8 +576,8 @@ func TestReadRunRefusesWhatItCannotInterpret(t *testing.T) {
 
 // aliasRun writes a run of the small test registry's Kind lane in which every
 // given scenario claims a pass with its evidence. It is turned into schema
-// version 1, which records no key: the writer knows only the real registry, and
-// what these tests check is how legacy names resolve.
+// version 1, which records no key in either file: the writer knows only the real
+// registry, and what these tests check is how legacy names resolve.
 func aliasRun(t *testing.T, scenarios ...Scenario) string {
 	t.Helper()
 	dir := runDir(t, s00Record)
@@ -592,6 +592,14 @@ func aliasRun(t *testing.T, scenarios ...Scenario) string {
 	written := withoutIdentity(loadSummary(t, dir))
 	written[fieldSchemaVersion] = schemaV1
 	saveSummary(t, dir, written)
+	path := filepath.Join(dir, junitFile)
+	junit, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, junitKeyProperties.ReplaceAll(junit, nil), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
