@@ -779,4 +779,4 @@ what a collector can pick up later without a change here.
 | CUBRID's own log files | [#252](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/252) |
 | Metrics | [#253](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/253) |
 | Evidence of the scenarios on one timeline | [#254](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/254) |
-| Alert and dashboard examples | [#255](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/255) |
+| Alert and dashboard examples ([monitoring.md](monitoring.md)) | [#255](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/255) |

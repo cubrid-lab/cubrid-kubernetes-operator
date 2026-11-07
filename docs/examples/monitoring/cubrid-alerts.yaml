@@ -1,0 +1,157 @@
+# Example PrometheusRule for the CUBRID Kubernetes Operator.
+#
+# This is an optional starting point (see docs/monitoring.md). Every metric
+# below is exported by the Operator (docs/observability.md#metrics).
+#
+# Status of these rules:
+#   - The thresholds and "for" durations are STARTING VALUES TO TUNE. They are
+#     not measured on a real cluster and not validated.
+#   - The expressions have not been run against a live Prometheus. A Go test
+#     (test/monitoring) only checks that the YAML parses and that every
+#     cubrid_ metric name exists in internal/metrics.
+#
+# Rules followed:
+#   - "Known unhealthy" (a sample with value 0) and "unknown or stale" (no
+#     sample, or an old observation) are separate alerts. A missing sample is
+#     never read as healthy.
+#   - Each alert needs a state that lasts ("for"), not one failed observation.
+#   - Ordinary reconcile retries are not alerted on.
+#   - Alerts are named after the Condition they mirror.
+#
+# Not included, because the Operator exports no metric for it yet: failover
+# time and the age of the last successful backup.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cubrid-kubernetes-operator
+  labels:
+    app.kubernetes.io/name: cubrid-kubernetes-operator
+spec:
+  groups:
+    - name: cubrid-operator
+      rules:
+        # Adjust the job to the name of your scrape job. With the ServiceMonitor
+        # in config/prometheus it is the name of the metrics Service.
+        - alert: CubridOperatorDown
+          expr: up{job="cubrid-kubernetes-operator-controller-manager-metrics-service"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: The Operator's metrics endpoint cannot be scraped.
+            description: >-
+              Prometheus has failed to scrape the Operator for 5 minutes. The
+              Operator may be down, or only the scrape is broken. Cluster
+              status and metrics are not being refreshed meanwhile.
+        - alert: CubridOperatorTargetMissing
+          expr: absent(up{job="cubrid-kubernetes-operator-controller-manager-metrics-service"})
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: No scrape target exists for the Operator.
+            description: >-
+              Prometheus has no target for the Operator. Nothing is known
+              about the clusters; this is not a healthy state.
+
+    - name: cubrid-cluster
+      rules:
+        - alert: CubridClusterNotReady
+          expr: cubrid_cluster_ready == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CubridCluster {{ $labels.namespace }}/{{ $labels.cluster }} has Ready=False."
+            description: >-
+              The Ready Condition has been False for 10 minutes. The reason is
+              in the Condition (kubectl describe cubridcluster).
+        - alert: CubridClusterReadyUnknown
+          expr: cubrid_cluster_instances unless on (namespace, cluster) cubrid_cluster_ready
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CubridCluster {{ $labels.namespace }}/{{ $labels.cluster }} has no Ready sample."
+            description: >-
+              The cluster is known, but its Ready Condition is not
+              published. This is unknown, not healthy.
+        - alert: CubridClusterPrimaryResolvedFalse
+          expr: >-
+            (cubrid_cluster_primary_resolved == 0)
+            and on (namespace, cluster)
+            (time() - cubrid_cluster_last_observation_timestamp_seconds <= 60)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "CubridCluster {{ $labels.namespace }}/{{ $labels.cluster }} has no resolved primary."
+            description: >-
+              PrimaryResolved is not True although the last observation is
+              fresh: none or several masters, or an incomplete answer from the
+              members. The metric is 0 for both False and Unknown.
+        - alert: CubridClusterMultiplePrimariesObserved
+          expr: count by (namespace, cluster) (cubrid_instance_role{role="master"} == 1) > 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "More than one master observed in {{ $labels.namespace }}/{{ $labels.cluster }}."
+            description: >-
+              Two or more members report the master role. Do not write to the
+              cluster until it is understood (docs/adr/0005-failover-split-brain.md).
+        - alert: CubridClusterReplicationUnhealthy
+          expr: cubrid_cluster_replication_healthy == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ReplicationHealthy is False for {{ $labels.namespace }}/{{ $labels.cluster }}."
+            description: >-
+              A slave does not apply the master's log. See the reason of the
+              ReplicationHealthy Condition.
+        - alert: CubridClusterReplicationNotObserved
+          expr: >-
+            (cubrid_cluster_instances > 1)
+            unless on (namespace, cluster) cubrid_cluster_replication_healthy
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Replication of {{ $labels.namespace }}/{{ $labels.cluster }} is not observed."
+            description: >-
+              ReplicationHealthy is Unknown, so no sample exists. This is not
+              healthy. It also fires for a multi-member cluster that has no
+              role discovery, which never publishes the sample.
+        - alert: CubridInstanceReplicationStalled
+          expr: cubrid_instance_replication_stalled == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Applier of {{ $labels.member }} in {{ $labels.namespace }}/{{ $labels.cluster }} is stalled."
+            description: >-
+              The slave's applier applies nothing (status stalledSince is
+              set). See the runbook in docs/observability.md.
+        - alert: CubridInstanceReplicationReadingMissing
+          expr: cubrid_instance_replication_observation_available == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "No applier reading for {{ $labels.member }} in {{ $labels.namespace }}/{{ $labels.cluster }}."
+            description: >-
+              The status holds no reading of this slave's applier, so its
+              replication state is unknown.
+        - alert: CubridClusterObservationStale
+          expr: time() - cubrid_cluster_last_observation_timestamp_seconds > 60
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "HA status of {{ $labels.namespace }}/{{ $labels.cluster }} is stale."
+            description: >-
+              The last observation of the members is more than 60 seconds old
+              (the reader rule in docs/observability.md#freshness). Status
+              and Conditions must not be read as the current state. Clock
+              skew between Prometheus and the Operator adds to the age.
