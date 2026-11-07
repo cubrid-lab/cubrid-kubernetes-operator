@@ -2,12 +2,20 @@
 
 > **Important:** This is a full **306-issue inventory and evidence-gap audit**, **not a claim that all 306 technical assertions or implementations have been independently verified**. Do not merge, close issues, or change release claims based on a status count or an automated source-path match alone.
 
+## Historical snapshot — not the current implementation status
+
+**As of 2026-11-04 UTC only.** The issue states, source-path checks, CI observations and all 306 CSV rows are frozen to the baseline stated below. They are **superseded for current-state decisions** and must not be copied into a current backlog, release assessment or defect claim without checking the latest source and owning issue.
+
+Subsequent merged changes include ownership and placement work (#724/#725), test/evidence changes (#721/#727/#729) and generated disruption budgets (#732). The #292 and #657 issue states also changed after this inventory. In particular, the historical #657 row describing missing ownership guards is **not evidence of an outstanding defect on current `main`** after #724. Preserve the historical row values; consult the current issue and accepted implementation PR for the latest disposition.
+
+**Validation handoff:** Use the existing [technical review coordinator #308](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/308) to route each actionable finding to its **existing owner issue**. For each issue, verify the exact acceptance criteria; link the accepted implementation PR and pinned commit; name the regression test and assertion; attach the CI run/artifact or actual Kind/VM fault and SQL evidence as applicable; record **not reviewed**, **source-only**, **automated integration**, or **real-environment validated**, plus the reviewer and remaining gap. Put detailed observations and raw runs on the owning issue, not in the coordinator or this frozen CSV. Neither a source-path match nor a green workflow proves a real failover, restore, split-brain or data-consistency claim.
+
 ## Scope and reproducibility
 
 - Repository: [cubrid-lab/cubrid-kubernetes-operator](https://github.com/cubrid-lab/cubrid-kubernetes-operator).
 - Code baseline: [main at `168626b7`](https://github.com/cubrid-lab/cubrid-kubernetes-operator/tree/168626b7b1543ac8dfb50e768179087168ef1ce1) (commit time 2026-11-04 11:04 UTC).
 - Full issue search: **306 unique issues**, **68 open**, **238 closed**, split into non-overlapping creation-date intervals so the issue-search result cap did not silently omit closed issues.
-- Current Git tree: **466 entries** including directories. **213** issues name at least one recognisable source/document path; **10** reference one or more named paths not present in the snapshot (some are historical or proposed test files, not necessarily missing implementations).
+- Baseline Git tree (2026-11-04): **466 entries** including directories. **213** issues name at least one recognisable source/document path; **10** reference one or more named paths not present in the snapshot (some are historical or proposed test files, not necessarily missing implementations).
 - **98** closed issue bodies still contain unchecked task boxes. This is a documentation signal, not a proof of unfinished work; confirm closure from the accepted PR and evidence.
 - Machine-readable [306-row inventory](./issue-evidence-inventory-2026-11-04.csv) shows one row per issue, its state, category, matching/missing named source paths, whether extra real-environment evidence is indicated, and an evidence follow-up.
 - **12** issues have the limited, specifically described code/artifact checks below. All other issues remain **technical verification pending** beyond the indexed metadata. Where a row says "limited", it does **not** mean every claim in that issue was proven.
@@ -21,7 +29,7 @@
 - [PR #681](https://github.com/cubrid-lab/cubrid-kubernetes-operator/pull/681) proposes fixing the exception. A downloaded E2E artifact for [run #41822579879](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/41822579879) records S00 `pass` with `timeLimitVerdict: pass`, thresholds `1m0s` and `1m30s`, and measurements of **11 s** and **17.635305778 s**. This is evidence for that tested PR snapshot, not for unreviewed future commits or the VM lab.
 - The PR's previously checked final-head `Tests` and `Lint` failed on **three lines over 120 characters** in `test/faults/limits_test.go`. Follow-up formatting commits (latest checked update `4ba36ca`) were submitted after the failures; only successful CI on the latest PR head and the independent maintainer review can close the validation gap.
 
-### Narrow, source-level findings (not production proofs)
+### Narrow, source-level findings at the pinned baseline (not current defects or production proofs)
 
 | Issue | Current-source result | What remains |
 |---|---|---|
@@ -48,6 +56,6 @@
 
 ## How to use the 306-row inventory
 
-Each CSV row is a **triage record**, not a pass/fail certification. Source-path existence answers only whether a named file exists at the pinned revision. A checked box, a merged PR, a successful combined workflow, and a real CUBRID/VM fault outcome are different evidence levels. Before marking a specific issue *technically verified*, inspect its exact acceptance criteria, implementation commits, regression tests and raw result at a pinned revision. For VM-lab claims, obtain the actual isolated environment and recorded SQL, Kubernetes and fault timelines. No private VM lab was accessed in this review.
+Each CSV row is a **historical 2026-11-04 triage record**, not today's issue state or a pass/fail certification. Source-path existence answers only whether a named file exists at the pinned revision. A checked box, a merged PR, a successful combined workflow, and a real CUBRID/VM fault outcome are different evidence levels. Before marking a specific issue *technically verified*, inspect its exact acceptance criteria, implementation commits, regression tests and raw result at a pinned revision. For VM-lab claims, obtain the actual isolated environment and recorded SQL, Kubernetes and fault timelines. No private VM lab was accessed in this review.
 
 Do **not** bulk-close issues, rewrite historical test claims as verified, or replace the independent two-maintainer approval with automated scanning. This report does not change ownership, priorities or release-scope decisions.
