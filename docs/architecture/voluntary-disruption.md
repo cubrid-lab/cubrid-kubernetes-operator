@@ -13,8 +13,10 @@ Eviction API may take at a time. A node drain asks that API, so a PDB limits a
 drain. It gives no high availability, it does not prevent split brain, and it
 knows nothing about CUBRID roles or replication.
 
-The decision and the alternatives that were rejected are in
-[ADR-0012](../adr/0012-voluntary-disruption.md).
+The **proposed** policy, its alternatives and current code status are in
+[ADR-0012](../adr/0012-voluntary-disruption.md). The PDB resources are
+implemented (#732), but a maintainer has not yet accepted the ADR (#613),
+and real node-drain/SQL behavior has not been observed in S15 (#614).
 
 ## What the Operator generates
 
