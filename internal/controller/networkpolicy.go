@@ -69,7 +69,7 @@ func (r *CubridClusterReconciler) reconcileNetworkPolicies(ctx context.Context, 
 		// taken over or removed: it is someone else's.
 		if !networkPolicyEnabled(cluster) {
 			existing := &networkingv1.NetworkPolicy{}
-			err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, existing)
+			err := r.childClient().Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, existing)
 			if err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("get NetworkPolicy %s: %w", name, err)
 			}

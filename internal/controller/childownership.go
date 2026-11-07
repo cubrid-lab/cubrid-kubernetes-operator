@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -45,6 +47,33 @@ func (e *childNotOwnedError) Error() string {
 	return msg + "; it was left unchanged, and the cluster cannot use the name until it is free"
 }
 
+// cacheMissReads is a client that asks the API server for an object the
+// manager's cache does not hold. The cache holds only objects with the
+// managed-by label, so a miss says nothing about a name: it may be taken by an
+// object of someone else, or by the cluster's own object whose label was
+// removed or that the cache has not caught up with.
+type cacheMissReads struct {
+	client.Client
+	apiServer client.Reader
+}
+
+func (c cacheMissReads) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	err := c.Client.Get(ctx, key, obj, opts...)
+	if apierrors.IsNotFound(err) {
+		return c.apiServer.Get(ctx, key, obj, opts...)
+	}
+	return err
+}
+
+// childClient reads a cluster's child objects by name whether or not the
+// cache holds them.
+func (r *CubridClusterReconciler) childClient() client.Client {
+	if r.APIReader == nil {
+		return r.Client
+	}
+	return cacheMissReads{Client: r.Client, apiServer: r.APIReader}
+}
+
 // reconcileChild creates the object, or updates it if this cluster controls
 // it, with what mutate sets, and makes the cluster its controller. An object of
 // that name which the cluster does not control is someone else's, whatever its
@@ -58,9 +87,19 @@ func (e *childNotOwnedError) Error() string {
 // which the API server refuses if the name was taken meanwhile, and an update
 // carries the resource version that was checked, which the API server refuses
 // if the object changed meanwhile.
+//
+// An object the cache does not hold is checked in the same way, so that an
+// object of someone else is refused rather than reported as AlreadyExists on
+// every reconcile, and the cluster's own object gets its label back and
+// returns to the cache. The token Secret is the exception: an unlabeled Secret
+// is not read as a child, and imTokenSecretRefused explains the refused create.
 func (r *CubridClusterReconciler) reconcileChild(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	obj client.Object, mutate func() error) error {
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+	writer := r.childClient()
+	if _, secret := obj.(*corev1.Secret); secret {
+		writer = r.Client
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, writer, obj, func() error {
 		if obj.GetResourceVersion() != "" && !metav1.IsControlledBy(obj, cluster) {
 			gvk, err := apiutil.GVKForObject(obj, r.Scheme)
 			if err != nil {

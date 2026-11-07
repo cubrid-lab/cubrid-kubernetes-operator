@@ -28,7 +28,10 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -311,10 +314,12 @@ func main() {
 
 // watchCacheOptions scopes namespaced informers and cached reads. Empty keeps
 // controller-runtime's cluster-wide default; API authorization is separate.
-// Secrets, Pods and PersistentVolumeClaims are cached only when they carry
-// the operator's managed-by label, so a cached read of any other finds
-// nothing. The StatefulSet controller labels each data PVC with the
-// StatefulSet's selector, which carries the label.
+// Every kind the manager reads apart from its own resources is cached only
+// when it carries the operator's managed-by label, so a cached read of any other finds nothing.
+// Every object the operator writes carries the label, and has since the first
+// version that wrote its kind. The StatefulSet controller labels each data PVC
+// with the StatefulSet's selector, which carries the label. A read that must
+// see an object without the label goes past the cache (reconcileChild).
 func watchCacheOptions(namespace string) (cache.Options, error) {
 	managed := labels.SelectorFromSet(labels.Set{controller.ManagedByLabel: controller.ManagedByOperator})
 	options := cache.Options{ByObject: map[client.Object]cache.ByObject{
@@ -322,6 +327,12 @@ func watchCacheOptions(namespace string) (cache.Options, error) {
 		&corev1.Pod{}:    {Label: managed},
 		// The members' data PVCs, which MemberPlacement reads.
 		&corev1.PersistentVolumeClaim{}: {Label: managed},
+		&corev1.ConfigMap{}:             {Label: managed},
+		&corev1.Service{}:               {Label: managed},
+		&appsv1.StatefulSet{}:           {Label: managed},
+		&appsv1.Deployment{}:            {Label: managed},
+		&networkingv1.NetworkPolicy{}:   {Label: managed},
+		&policyv1.PodDisruptionBudget{}: {Label: managed},
 	}}
 	if namespace == "" {
 		return options, nil

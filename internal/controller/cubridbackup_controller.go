@@ -132,9 +132,8 @@ const backupTargetWait = 30 * time.Minute
 // status.operationMissingSince.
 const backupOperationMissingWait = 30 * time.Minute
 
-// +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups,verbs=get;list;watch
+// +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridbackups/status,verbs=update
 // +kubebuilder:rbac:groups=database.cubrid.io,resources=cubridclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 

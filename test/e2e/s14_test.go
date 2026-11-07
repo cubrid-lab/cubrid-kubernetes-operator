@@ -138,7 +138,7 @@ func (r *haRun) rbacChecks(dbServiceAccount string) []rbacCheck {
 		{manager, ns, "get", "secrets", "", true},
 		{manager, ns, "create", "statefulsets", "", true},
 		{manager, ns, "delete", "pods", "", true},
-		{manager, ns, "patch", "cubridclusters", "status", true},
+		{manager, ns, "update", "cubridclusters", "status", true},
 		{manager, ns, "create", "networkpolicies", "", true},
 		{manager, ns, "create", "pods", "", false},
 		{manager, ns, "create", "pods", "exec", false},

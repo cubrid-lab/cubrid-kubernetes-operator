@@ -233,7 +233,86 @@ var _ = Describe("Children that already exist under the cluster's names", func()
 		return meta.FindStatusCondition(fresh.Status.Conditions, conditionType)
 	}
 
+	// behindLabelledCache makes the reconciler read as the manager does: the
+	// client finds only objects with the managed-by label, as the manager's
+	// cache holds no others, and APIReader finds every object.
+	behindLabelledCache := func(r *CubridClusterReconciler) {
+		base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		r.APIReader = k8sClient
+		r.Client = interceptor.NewClient(base, interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, cluster := obj.(*databasev1alpha1.CubridCluster); cluster {
+					return c.Get(ctx, key, obj, opts...)
+				}
+				probe := obj.DeepCopyObject().(client.Object)
+				if err := c.Get(ctx, key, probe, opts...); err != nil {
+					return err
+				}
+				if probe.GetLabels()[ManagedByLabel] != ManagedByOperator {
+					return apierrors.NewNotFound(schema.GroupResource{Resource: "not in the cache"}, key.Name)
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+	}
+
 	for p, path := range childPaths() {
+		// The token Secret has a path of its own for a Secret the cache does
+		// not hold (imtoken_collision_test.go).
+		if _, secret := path.foreign("").(*corev1.Secret); !secret {
+			// The cache does not hold an object without the label, so the
+			// read finds nothing, yet the name is taken. Without a read past
+			// the cache the cluster would try to create the object for ever
+			// and report only the API server's AlreadyExists.
+			It(fmt.Sprintf("refuses a %s the cache does not hold and leaves it unchanged", path.what), func() {
+				name := fmt.Sprintf("child-uncached-%d", p)
+				cluster := haCluster(name)
+				createCluster(cluster)
+				foreign := path.foreign(name)
+				createObject(foreign)
+				before := stored(foreign)
+
+				r := reconciler(name)
+				behindLabelledCache(r)
+				_, err := r.Reconcile(ctx, request(cluster))
+
+				Expect(stored(foreign)).To(Equal(before), "the object was changed")
+				reported := condition(cluster, conditionBrokerReady)
+				if path.reason != "" {
+					Expect(err).To(MatchError(ContainSubstring(refusal)))
+					reported = condition(cluster, conditionReady)
+				}
+				Expect(reported.Status).To(Equal(metav1.ConditionFalse))
+				Expect(reported.Message).To(And(ContainSubstring(refusal), ContainSubstring(foreign.GetName())))
+			})
+
+			// A label removed by hand takes the cluster's own object out of
+			// the cache. It is still the cluster's: the write restores the
+			// label, and the object returns to the cache.
+			It(fmt.Sprintf("restores the label of its own %s the cache stopped holding", path.what), func() {
+				name := fmt.Sprintf("child-unlabelled-%d", p)
+				cluster := haCluster(name)
+				createCluster(cluster)
+				r := reconciler(name)
+				_, err := r.Reconcile(ctx, request(cluster))
+				Expect(err).NotTo(HaveOccurred())
+
+				child := path.foreign(name)
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(child), child)).To(Succeed())
+				uid, labels := child.GetUID(), child.GetLabels()
+				child.SetLabels(nil)
+				Expect(k8sClient.Update(ctx, child)).To(Succeed())
+
+				behindLabelledCache(r)
+				_, err = r.Reconcile(ctx, request(cluster))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(child), child)).To(Succeed())
+				Expect(child.GetLabels()).To(Equal(labels))
+				Expect(child.GetUID()).To(Equal(uid), "the object was replaced")
+			})
+		}
+
 		for h, holder := range childHolders {
 			It(fmt.Sprintf("refuses a %s held by %s and leaves it unchanged", path.what, holder.what), func() {
 				name := fmt.Sprintf("child-refused-%d-%d", p, h)
@@ -391,6 +470,51 @@ var _ = Describe("Children that already exist under the cluster's names", func()
 			Expect(stored(replacement)).To(Equal(before), "the object was overwritten")
 		})
 	}
+
+	// Two paths remove an object rather than write it, so no write brings an
+	// object whose label was removed by hand back: the read must find it.
+	It("removes its own NetworkPolicy the cache stopped holding when policies are disabled", func() {
+		const name = "child-uncached-policy"
+		cluster := haCluster(name)
+		createCluster(cluster)
+		r := reconciler(name)
+		_, err := r.Reconcile(ctx, request(cluster))
+		Expect(err).NotTo(HaveOccurred())
+
+		policy := &networkingv1.NetworkPolicy{}
+		key := client.ObjectKey{Name: databaseNetworkPolicyName(name), Namespace: cluster.Namespace}
+		Expect(k8sClient.Get(ctx, key, policy)).To(Succeed())
+		policy.Labels = nil
+		Expect(k8sClient.Update(ctx, policy)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
+		disabled := false
+		cluster.Spec.NetworkPolicy = &databasev1alpha1.CubridNetworkPolicy{Enabled: &disabled}
+		Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
+
+		behindLabelledCache(r)
+		_, err = r.Reconcile(ctx, request(cluster))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, key, policy))).To(BeTrue(), "the NetworkPolicy was left in place")
+	})
+
+	It("removes the legacy Broker Deployment it controls that the cache does not hold", func() {
+		const name = "child-uncached-legacy"
+		cluster := haCluster(name)
+		createCluster(cluster)
+		legacy := foreignDeployment(legacyBrokerDeploymentName(name))
+		yes := true
+		legacy.SetOwnerReferences([]metav1.OwnerReference{{
+			APIVersion: databasev1alpha1.GroupVersion.String(), Kind: ownerKind, Name: name, UID: cluster.UID, Controller: &yes,
+		}})
+		createObject(legacy)
+
+		r := reconciler(name)
+		behindLabelledCache(r)
+		_, err := r.Reconcile(ctx, request(cluster))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(legacy), &appsv1.Deployment{}))).
+			To(BeTrue(), "the Deployment was left in place")
+	})
 
 	// Nothing about the removal of an object without an owner reference starts
 	// a reconcile, and a standalone cluster has no periodic one.
