@@ -99,6 +99,14 @@ func s00Scenario() {
 		step := func(t time.Time, kind, detail string) {
 			steps = append(steps, faults.Step{T: t.UTC(), Kind: kind, Detail: detail})
 		}
+		noteLostReads := func(operations []faults.SmokeSQL) {
+			for _, op := range operations {
+				if op.Inconclusive == s00LostSession {
+					step(op.End, "csql_lost_session_after_row",
+						op.What+" returned the row, and csql printed ERROR CODE -199 and -111")
+				}
+			}
+		}
 		smokeSQL := func(what string, broker, write bool, start time.Time, ok bool) {
 			s00Run.SQL = append(s00Run.SQL, faults.SmokeSQL{Start: start.UTC(), End: time.Now().UTC(), Broker: broker,
 				Write: write, OK: ok, What: what})
@@ -309,8 +317,10 @@ spec:
 
 			By("writing and reading a row through csql")
 			sql := csqlInPod(context.Background(), s00Namespace, pod, database)
-			operations, err := s00WriteAndRead(sql, pod, marker)
+			member := memberCSQL(context.Background(), s00Namespace, pod, database)
+			operations, err := s00WriteAndRead(sql, member.read, pod, marker)
 			s00Run.SQL = append(s00Run.SQL, operations...)
+			noteLostReads(operations)
 			Expect(err).NotTo(HaveOccurred())
 			// An upper bound: it includes the checks above.
 			record.ReadySeconds = time.Since(createdAt).Seconds()
@@ -375,14 +385,9 @@ spec:
 			}, 2*time.Minute, 3*time.Second).Should(Succeed())
 
 			By("reading the row with csql again at the end of the smoke checks, after Ready was True")
-			reads, err := s00LastRead(csqlInPod(context.Background(), s00Namespace, pod, database), pod, marker)
+			reads, err := s00LastRead(memberCSQL(context.Background(), s00Namespace, pod, database).read, pod, marker)
 			s00Run.SQL = append(s00Run.SQL, reads...)
-			for _, read := range reads {
-				if read.Inconclusive == s00LostSession {
-					step(read.End, "csql_lost_session_after_row",
-						read.What+" returned the row, and csql printed ERROR CODE -199 and -111")
-				}
-			}
+			noteLostReads(reads)
 			Expect(err).NotTo(HaveOccurred())
 			s00Run.SmokeEnd = time.Now().UTC()
 			step(s00Run.SmokeEnd, "smoke_checks_ended", "")
@@ -599,46 +604,53 @@ func s00CSQL(what string, write bool, readMarker string, check func() error) (fa
 		What: what}, err
 }
 
-// s00WriteAndRead writes the marker row with csql and reads it back. It stops
-// at the first error and returns it: both checks are strict, so a read that
-// printed its row with -199 and -111 fails the step here, and only its record
-// says that the outcome was inconclusive.
-func s00WriteAndRead(sql sqlRunner, pod, marker string) ([]faults.SmokeSQL, error) {
+// s00WriteAndRead writes the marker row with csql and reads it back, and stops
+// at the first error. The write is strict and stays on sqlRunner: the contract
+// counts a write that printed -199 and -111 as failed, and relaxing that is a
+// maintainer's decision (#238). The read follows the rule of sqlcheck.Read, so
+// a read that printed its row with the pair is read once more, on a server
+// whose identity held; a second pair fails this step.
+func s00WriteAndRead(sql sqlRunner, read oneShotRead, pod, marker string) ([]faults.SmokeSQL, error) {
 	write, err := s00CSQL("csql write of the marker row in "+pod, true, "", func() error {
 		return writeS00Row(sql, marker)
 	})
 	if err != nil {
 		return []faults.SmokeSQL{write}, err
 	}
-	read, err := s00CSQL("csql read of the marker row in "+pod, false, marker, func() error {
-		return readS00Row(sql, marker)
-	})
-	return []faults.SmokeSQL{write, read}, err
+	reads, err := s00Read(read, "csql read of the marker row in "+pod, marker)
+	return append([]faults.SmokeSQL{write}, reads...), err
+}
+
+// s00Read makes one read under the rule of sqlcheck.Read and returns a record
+// of each csql call it made, with the error of the rule.
+func s00Read(read oneShotRead, what, marker string) ([]faults.SmokeSQL, error) {
+	result, err := read(sqlcheck.ReadRowQuery, sqlcheck.RowCheck(marker))
+	records := make([]faults.SmokeSQL, 0, len(result.Attempts))
+	for i, attempt := range result.Attempts {
+		ok, inconclusive := smokeOutcome(attempt.Err, marker)
+		name := what
+		if i > 0 {
+			name += ", read again after csql printed -199 and -111"
+		}
+		records = append(records, faults.SmokeSQL{Start: attempt.Start, End: attempt.End, OK: ok,
+			Inconclusive: inconclusive, What: name})
+	}
+	return records, err
 }
 
 // s00LastRead makes the csql read at the end of the smoke checks and returns
 // a record of each read it made, with the error that fails the step, if any.
 // A read that printed its row with -199 and -111 is never conclusive, so it
-// is read once more, as the installed lab harness does in test/installed/ha.go,
-// and the second read decides: one that succeeded is what the Ready rule
-// compares with. A second read that printed the same pair returns no error:
-// S00 then has no conclusive last read, and the Ready rule blocks it
-// (faults.S00Rules). Any other error of either read, such as a failed
-// statement or a row that does not match, fails the step, like the write and
-// the first read of S00.
-func s00LastRead(sql sqlRunner, pod, marker string) ([]faults.SmokeSQL, error) {
-	what := "csql read of the marker row in " + pod + " at the end of the smoke checks"
-	read := func(what string) (faults.SmokeSQL, error) {
-		return s00CSQL(what, false, marker, func() error { return readS00Row(sql, marker) })
-	}
-	first, err := read(what)
-	if first.Inconclusive != s00LostSession {
-		return []faults.SmokeSQL{first}, err
-	}
-	_, _ = fmt.Fprintf(GinkgoWriter, "csql returned the row and printed -199 and -111 (POC-44), reading again:\n%v\n", err)
-	second, err := read(what + ", read again after csql printed -199 and -111")
-	reads := []faults.SmokeSQL{first, second}
-	if second.Inconclusive == s00LostSession {
+// is read once more under the rule of sqlcheck.Read, and the second read
+// decides: one that succeeded is what the Ready rule compares with. A second
+// read that printed the same pair returns no error here: S00 then has no
+// conclusive last read, and the Ready rule blocks it (faults.S00Rules). A
+// server whose identity did not hold, and any other error of either read, such
+// as a failed statement or a row that does not match, fail the step.
+func s00LastRead(read oneShotRead, pod, marker string) ([]faults.SmokeSQL, error) {
+	reads, err := s00Read(read, "csql read of the marker row in "+pod+" at the end of the smoke checks", marker)
+	var lost *sqlcheck.LostSessionError
+	if errors.As(err, &lost) && lost.Twice {
 		_, _ = fmt.Fprintf(GinkgoWriter, "the second csql read printed -199 and -111 too:\n%v\n", err)
 		return reads, nil
 	}

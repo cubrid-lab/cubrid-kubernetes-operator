@@ -111,6 +111,69 @@ Where the judging logic can run without a cluster, it is unit-tested with
 deliberately wrong inputs, including each "Must never happen" case, and the
 real system is exercised by the scenario itself.
 
+#### When `csql` prints `-199` and `-111`
+
+`csql` sometimes prints `ERROR CODE = -199` (server no longer responding) and
+`ERROR CODE = -111` (transaction aborted) together with the results of its
+statements. The pair is not harmless and this contract does not call it so:
+its cause is unknown and [#238](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/238)
+stays open. What is known limits what a test may do with it:
+
+- The output cannot separate it from a real server death. In POC-55
+  (`docs/poc/RESULTS.md`) a server killed or stopped during `csql`'s session
+  printed exactly this shape, exit 0, only the two codes and complete results,
+  in 260 of 997 forced runs. That is a share of forced moments, not a field
+  rate.
+- The identity of `cub_server`, its process ID and start time from
+  `/proc/<pid>/stat`, changed or vanished in all of those 260 and held in all
+  75 runs of that shape with no fault. It has to be read before the call:
+  `cub_master` revives a killed server within 0.04 seconds. It is read after
+  the call only after a short bounded wait, because one server in POC-55 read
+  as unchanged at `csql`'s exit while it was dying. That is a comparison over
+  recorded runs and is not a guarantee on another build or host.
+
+**What is tolerated.** A pair is tolerated at a listed step only when all of
+these hold; otherwise the step fails as it did before:
+
+1. the command exited 0;
+2. the output holds both codes and no other error: no other `ERROR CODE`, no
+   `ERROR:` line and no other `ERROR`;
+3. the step's result is complete in the output;
+4. the identity read before the call equals the one read after it, and a read
+   that failed, found no server or found several never counts as equal;
+5. an independent check then passes. It decides the step: the tolerance says
+   nothing about whether the statement took effect.
+
+| Step | Why it is listed | The independent check |
+|---|---|---|
+| `CREATE TABLE` of the check that holds a transaction open | Not a contract step; the statement runs once | The table's count on each slave |
+| The `csql` session that holds that transaction open | Not a contract step; its command's error and any other `ERROR` still fail it | The row count on every member after the commit |
+| S00's read after its write and its read at the end of the smoke checks | Read-only | A second read, the only repeat there is |
+| S02's count of the ledger rows on the master before its marker row | Read-only and made once | A second read |
+| The count on a slave halfway through the held transaction | Read-only and made once | A second read |
+
+A read may be made once more, so at most two `csql` calls, and only a single
+SELECT can be repeated: any other text, also a script that holds a SELECT and
+another statement, is refused before anything runs. A second pair never passes.
+A statement that is not a read is never repeated.
+
+**What stays strict.** A write that printed the pair counts as failed: S00's
+write of the marker row and S02's schema change and marker row, because the
+output does not show whether they committed, and relaxing a mandatory check
+needs a maintainer's decision (#238). Everything in the histories of the fault
+scenarios stays as it is too. Reads that a loop retries are not given the rule:
+they already read again, and they do not pay for an identity read.
+
+**What is counted.** Every pair in a `csql` call of the Kind suite, and in the
+held session, is counted for the whole run, also on reads a loop absorbs and on
+a run that passes. `suite/csql-lost-sessions.jsonl` has a line for each: its
+time, step, member, the first line of the query, whether it was a read or a
+write, what the identity comparison found and how the second read answered.
+A run with any has a line in the `notes` of `summary.json`, and each scenario
+result has `measurements.csqlLostSessions`, which is `unknown` when the scenario
+made no `csql` read and printed no pair. These counts are recorded and judge
+nothing: no limit applies to them.
+
 ### Required scenarios
 
 Each lane names the scenarios, and the variants of each, that a run of it
@@ -1602,21 +1665,23 @@ it needs more.
     row, still count as failed.
 
     Such a read is never a conclusive read and never yields a pass on its
-    own. The write and the first read keep failing S00 through their own
-    checks, and so does the read before the Pod deletion. When the read at the
-    end of the smoke checks prints the pair, it is read once more, as the
-    installed lab harness does: the first read is noted in `S00/agreement.txt`
-    and adds the step `csql_lost_session_after_row` to `S00/timeline.jsonl`,
-    and the second read decides. If it succeeded, it is the last `csql`
-    operation the rule compares with. If it printed the pair again, the last
-    `csql` operation is inconclusive, this rule is not judged and S00 ends
-    `blocked` however early `Ready` was `True`, unless something else failed
-    it. Any other result fails S00, as on the first read: a failed statement,
-    a row that did not match, or a `csql` that could not be run.
-    `measurements.csqlLostSessionReads` counts the `csql` reads of the smoke
-    checks that printed the pair, also on a run that passed, and is `unknown`
-    when the run made no such read. The read before the Pod deletion and the
-    reads after it are not counted.
+    own. The write keeps failing S00 through its own check, and so does the
+    read before the Pod deletion. When the read after the write or the read
+    at the end of the smoke checks prints the pair, the rule of
+    [When `csql` prints `-199` and `-111`](#when-csql-prints--199-and--111)
+    applies: a server whose identity did not hold fails S00, and otherwise the
+    read is made once more. The first read is noted in `S00/agreement.txt` and
+    adds the step `csql_lost_session_after_row` to `S00/timeline.jsonl`, and the
+    second read decides. If it succeeded, it is the operation the rule compares
+    with. If the read after the write printed the pair again, that fails S00.
+    If the read at the end of the smoke checks did, the last `csql` operation
+    is inconclusive, this rule is not judged and S00 ends `blocked` however
+    early `Ready` was `True`, unless something else failed it. Any other result
+    fails S00: a failed statement, a row that did not match, or a `csql` that
+    could not be run. `measurements.csqlLostSessionReads` counts the `csql`
+    reads of the smoke checks that printed the pair, also on a run that passed,
+    and is `unknown` when the run made no such read. The read before the Pod
+    deletion and the reads after it are not counted.
 
     This rule can only refine the reason of a run that already failed, since
     every failed `csql` operation in the Pod already fails S00 through its own

@@ -247,6 +247,17 @@ func (r *haRun) memberValues(ctx context.Context, pod, query string) ([]string, 
 	return sqlcheck.Values(out)
 }
 
+// memberValuesOnce is memberValues for a read that is made once and not
+// retried by a loop. It follows the rule of sqlcheck.Read, which costs one
+// more kubectl exec on each call, so the retried reads stay on memberValues.
+func (r *haRun) memberValuesOnce(ctx context.Context, pod, query string) ([]string, error) {
+	result, err := memberCSQL(ctx, r.namespace, pod, r.database).read(query, sqlcheck.ValuesComplete)
+	if err != nil {
+		return nil, err
+	}
+	return sqlcheck.Values(result.Out)
+}
+
 // memberRows reads the ledger rows a member holds, not through a Broker.
 func (r *haRun) memberRows(ctx context.Context, pod string) ([]workload.Row, error) {
 	values, err := r.memberValues(ctx, pod, workload.LedgerQuery)
@@ -426,6 +437,8 @@ func s01AndS02Steps(r *haRun) {
 		master, slaves, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 
+		// This write and the marker row's are strict: a write that printed -199
+		// and -111 counts as failed until a maintainer decides otherwise (#238).
 		By("changing the schema on the master")
 		_, err = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database),
 			"ALTER TABLE ledger ADD COLUMN extra VARCHAR(16);"+
@@ -445,7 +458,7 @@ func s01AndS02Steps(r *haRun) {
 		// is an upper bound; the full check below is not part of it.
 		By("committing a marker row on the master and timing until every slave returns it with every row")
 		ledgerRows := "SELECT CAST(COUNT(*) AS VARCHAR(20)) AS n FROM ledger;"
-		wantRows, err := r.memberValues(context.Background(), master, ledgerRows)
+		wantRows, err := r.memberValuesOnce(context.Background(), master, ledgerRows)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(wantRows).To(HaveLen(1), "the ledger row count on the master")
 		marker := fmt.Sprintf("marker-%d", time.Now().UnixNano())
