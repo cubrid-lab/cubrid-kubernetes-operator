@@ -314,7 +314,31 @@ spec:
   `volume.kubernetes.io/selected-node`); `MemberUnschedulable` when a
   member is `Pending` because the scheduler found no node for it. It is a
   report only: the Operator takes no action on it.
-- PodDisruptionBudgets and Broker placement are separate work (#90).
+
+## Voluntary disruption
+
+The Operator limits what a node drain can take. A PodDisruptionBudget of
+`maxUnavailable: 1` covers the members of an HA cluster and each Broker access
+mode, so that one Pod goes at a time and no member goes while another is
+missing. A standalone member has no budget, because none could work. There is
+nothing to configure. Brokers prefer separate nodes for each access mode, and
+still run when they cannot have them.
+
+- **A budget limits evictions only.** It does nothing against a VM failure, a
+  network partition or a deleted Pod. It gives no high availability and does
+  not prevent split brain.
+- **It sees readiness, not replication.** Between two node drains, wait for
+  `HAReady=True`.
+- **On three nodes with no spare, a drained node's member stays `Pending`** until
+  the node is uncordoned, and a drain of another node is blocked until then.
+- **A node that holds several members with volumes bound to it stays blocked**
+  until it is uncordoned (`MemberPlacement=False/MembersShareNode`).
+- **Remove any budget of your own over these Pods before upgrading:** the API
+  server refuses to evict a Pod that two budgets select.
+
+[docs/architecture/voluntary-disruption.md](./docs/architecture/voluntary-disruption.md)
+has the result for each topology and degraded state, and what to do about a
+blocked drain. No drain has been run against these budgets yet (#614).
 
 ## Scope and validation
 
@@ -335,7 +359,8 @@ Core API, HA safety and recovery changes require design agreement.
 
 - [docs/architecture/](./docs/architecture/README.md) — the architecture in
   diagrams: where the Operator runs, what it reconciles, how clients reach
-  the database and who handles a failure; start here
+  the database, who handles a failure and what a node drain may take; start
+  here
 - [DESIGN.md](./DESIGN.md) — architecture and design principles
 - [ROADMAP.md](./ROADMAP.md) — delivery scope, stages and validation status
 - [docs/adr/](./docs/adr/) — architecture decision records

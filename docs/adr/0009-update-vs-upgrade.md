@@ -156,9 +156,10 @@ master known/stable; target role known; **target is not the current
 master** (except the explicit master-update flow); ≥2 members remain
 healthy (3-node HA); PDB permits disruption; catch-up acceptable; no other
 member updating/catching-up/ambiguous. As implemented, the `FencingRequired`
-and PDB checks have no input (no step sets `FencingRequired`, and no
-PodDisruptionBudget is created or read: `pdbAllows` is fixed to true in
-`internal/controller/update.go`), and catch-up is taken from readiness.
+and PDB checks have no input (no step sets `FencingRequired`, and the
+PodDisruptionBudgets of ADR-0012 are not read: `pdbAllows` is fixed to true in
+`internal/controller/update.go`, because a budget limits evictions and this
+step deletes a Pod), and catch-up is taken from readiness.
 
 ### Safe restart sequence (3-node HA)
 

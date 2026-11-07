@@ -31,6 +31,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -341,6 +342,7 @@ func (r *CubridClusterReconciler) now() time.Time {
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch
 
 // Reconcile drives the CubridCluster toward its desired state: a headless
 // governing Service and a StatefulSet with a data PVC template; HA role
@@ -411,6 +413,11 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	sts, err := r.reconcileStatefulSet(ctx, &cluster)
 	if err != nil {
 		return r.failed(ctx, &cluster, "StatefulSetReconcileFailed", err)
+	}
+
+	// The budgets that limit a node drain (docs/architecture/voluntary-disruption.md).
+	if err := r.reconcileDisruptionBudgets(ctx, &cluster); err != nil {
+		return r.failed(ctx, &cluster, "DisruptionBudgetReconcileFailed", err)
 	}
 
 	r.conflicts.Delete(conflictKey{req.NamespacedName, childWrites})
@@ -1286,6 +1293,7 @@ func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Named("cubridcluster").
 		Complete(r)
 }

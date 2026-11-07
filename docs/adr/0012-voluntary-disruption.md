@@ -1,0 +1,109 @@
+# ADR-0012: Voluntary disruption budgets and Broker placement
+
+## Status
+
+Proposed — tracked in issue #613. It answers question Q5 of the
+[scenario contract](../testing/scenario-contract.md). It changes nothing in
+ADR-0005: CUBRID performs failover, and no role decision reads these objects.
+
+## Context
+
+Nothing limited how many Pods a node drain could take, so a drain could stop
+every member of a cluster that shares a node, or both Brokers of a mode. The
+scenario contract (S15) requires that a drain never takes a second member down
+while one is already unavailable, and left the budget to a decision record.
+
+v1alpha1 supports two topologies (ADR-0001): one standalone member, or three
+promotable members. Each cluster has two Brokers per access mode. Database
+members are placed by `spec.placement.memberSpread` (#596).
+
+## Constraints
+
+- POC-16 (Q1): a master keeps accepting writes with slaves absent, so a budget
+  protects a promotion candidate, not a quorum.
+- A PDB selects Pods by label and counts readiness. A member's readiness says
+  it holds an authoritative role, not that a slave has caught up (`/readyz`).
+- There is no planned switchover: only CUBRID moves the master (ADR-0005).
+- An eviction of a Pod that two PDBs select fails, whatever they allow.
+- Evictions are what a PDB limits. A deleted Pod and a failed node are not
+  limited, and the Operator's rolling update deletes Pods.
+- A rule must not leave a Broker `Pending` on a one- or two-node cluster.
+
+## Options
+
+### Member budget
+
+- **A: `maxUnavailable: 1`, role-blind.** One member at a time, none while one
+  is missing, and the first drain of a healthy cluster finishes.
+- **B: `minAvailable` equal to the member count.** Rejected: every eviction is
+  refused, so no node of the cluster can ever be drained.
+- **C: a budget over the master only.** Rejected: it needs a role label on Pods
+  and would block the master's node for good, as no switchover exists.
+- **D: budget lowered to 0 while `HAReady` is not `True`.** Not selected: it
+  adds replication knowledge the PDB lacks, but a slave that stays stalled then
+  holds every node, and the budget follows the Operator's latest observation.
+  Open for a maintainer; see below.
+
+### Not-ready Pods
+
+- `IfHealthyBudget` for members: a member that is not ready can go only while
+  two are ready. `AlwaysAllow` would let a drain take a master whose readiness
+  flapped while a slave was already away.
+- `AlwaysAllow` for Brokers: they hold no data, and `IfHealthyBudget` would let
+  Brokers that all fail hold their nodes.
+
+### Broker placement
+
+- **A: keep the preferred anti-affinity per mode.**
+- **B: required anti-affinity.** Rejected: `Pending` on one node, and during a
+  rollout's surge on two.
+- **C: `topologySpreadConstraints` with `DoNotSchedule`.** Rejected: it can
+  leave a Broker `Pending` when the only other node is full, and counts nodes
+  the Broker cannot use unless their taints are honored.
+- **D: `ScheduleAnyway` spread.** Rejected: another preference, of the same
+  strength, for a Pod template change that replaces every Broker on upgrade.
+- **E: a `spec.placement` field for Brokers.** Not selected: the CRD API is a
+  maintainer's decision, and the safe value is the current behavior.
+
+## Decision
+
+Member budget option A with `IfHealthyBudget`; one budget per Broker mode with
+`maxUnavailable: 1` and `AlwaysAllow`; no member budget for a standalone
+cluster; Broker placement option A, unchanged. No API field is added. Results
+for each topology are in
+[docs/architecture/voluntary-disruption.md](../architecture/voluntary-disruption.md).
+
+## Consequences
+
+### Positive
+
+- A drain cannot take two members at once, and no budget blocks a drain of a
+  healthy cluster whose members are on separate nodes.
+- An upgrade replaces no Pod.
+- Q5 is answered with both of its alternatives: one member at a time, and none
+  while one is missing.
+
+### Negative
+
+- A drain of a node that holds several members with volumes bound to it stays
+  blocked until the node is uncordoned. Without the budget it would stop them
+  all.
+- A slave that is ready but behind counts as healthy, so an operator must wait
+  for `HAReady=True` between drains.
+- A drain of the master's node causes a failover. A PDB cannot avoid that.
+- Two Brokers of a mode can still share a node, and nothing moves a running
+  Broker.
+- A PDB of the user's own over the same Pods makes evictions fail.
+
+## Validation
+
+Envtest covers the generated objects and the API server's answer to an eviction
+for a given PDB status. Real drains on real nodes, with endpoints and SQL
+clients, are #614 (S15).
+
+## Revisit When
+
+- Readiness or a PDB-visible signal can express catch-up, or a maintainer wants
+  option D.
+- A planned switchover exists (ADR-0009), so a drain could move the master first.
+- A maintainer decides whether Brokers need a required rule or an API field.

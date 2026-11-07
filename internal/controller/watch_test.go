@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -134,6 +135,25 @@ var _ = Describe("Events that start a CubridCluster reconcile (#269)", func() {
 		reconciles := (prober.probes.Load() - start) / 3
 		Expect(reconciles).To(BeNumerically("<=", 1),
 			"a status write must not start the next observation; the HA resync does")
+	})
+
+	It("restores a deleted PodDisruptionBudget of a standalone cluster, which has no periodic reconcile", func() {
+		const namespace = "watch-budget"
+		startManager(namespace, &CubridClusterReconciler{Recorder: record.NewFakeRecorder(100)})
+		Expect(k8sClient.Create(ctx, inNamespace(standaloneCluster("budget"), namespace))).To(Succeed())
+		key := types.NamespacedName{Name: "budget-broker-rw", Namespace: namespace}
+
+		pdb := &policyv1.PodDisruptionBudget{}
+		Eventually(func() error { return k8sClient.Get(ctx, key, pdb) }).WithTimeout(10 * time.Second).Should(Succeed())
+		first := pdb.UID
+		By("waiting until the events of the new child objects have settled, so that only the deletion can start a reconcile")
+		time.Sleep(2 * time.Second)
+		Expect(k8sClient.Delete(ctx, pdb)).To(Succeed())
+
+		Eventually(func() (types.UID, error) {
+			err := k8sClient.Get(ctx, key, pdb)
+			return pdb.UID, client.IgnoreNotFound(err)
+		}).WithTimeout(10 * time.Second).ShouldNot(Or(Equal(first), BeEmpty()))
 	})
 
 	It("reconciles an image acceptance that changes only an annotation", func() {

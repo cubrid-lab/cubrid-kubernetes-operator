@@ -1487,7 +1487,8 @@ operation.
   not evaluated separately from readiness: a member counts as caught up
   when it is ready, so `WaitingForCatchUp` is never reached. The
   `FencingRequired` and PDB checks have no input: nothing sets that
-  Condition and no PodDisruptionBudget is created or read.
+  Condition, and the planner does not read the PodDisruptionBudgets of
+  ADR-0012, which limit evictions and not the Pod deletes of an update.
 
 **Non-goals (future engine-upgrade ADR):** engine version migration,
 volume/on-disk format migration, cross-version HA, downgrade. See ADR-0009

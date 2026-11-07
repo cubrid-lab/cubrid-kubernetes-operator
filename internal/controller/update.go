@@ -182,7 +182,9 @@ func (r *CubridClusterReconciler) reconcileRollingUpdate(ctx context.Context, cl
 	}
 
 	fencing := meta.IsStatusConditionTrue(cluster.Status.Conditions, "FencingRequired")
-	pdbAllows := true // v1alpha1: no PDB object yet; the healthy-count gate provides the invariant.
+	// A PodDisruptionBudget limits evictions, and this delete is not one. It
+	// is not read here: the healthy-count gate is the same limit.
+	pdbAllows := true
 	plan := planRollingUpdate(members, res.Status == metav1.ConditionTrue, fencing, pdbAllows, minHealthyHA)
 
 	switch plan.Action {

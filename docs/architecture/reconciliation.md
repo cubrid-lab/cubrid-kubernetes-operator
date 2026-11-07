@@ -49,6 +49,7 @@ sequenceDiagram
     CC->>API: HA member list ConfigMap<br/>(HA only)
     CC->>API: NetworkPolicies
     CC->>API: StatefulSet
+    CC->>API: PodDisruptionBudgets
     API-->>K8S: watch
     K8S->>K8S: create Pods, recreate<br/>deleted ones, bind volumes<br/>#nbsp;
 ```
@@ -58,7 +59,7 @@ sequenceDiagram
 ```mermaid
 %%{init: {"sequence": {"actorMargin": 30, "width": 120}}}%%
 sequenceDiagram
-    autonumber 10
+    autonumber 11
     box rgb(255,237,213) Operator
         participant T as Trigger
         participant CC as Cluster controller
@@ -108,13 +109,13 @@ sequenceDiagram
 1. **Steps 1–2:** a trigger arrives and the controller reads the current
    `CubridCluster`. A deleted cluster ends the pass; its objects are removed
    by Kubernetes garbage collection through owner references.
-2. **Steps 3–7:** the Kubernetes objects are written in a fixed order, so
+2. **Steps 3–8:** the Kubernetes objects are written in a fixed order, so
    that member DNS names, the token and the NetworkPolicies exist before the
    first database Pod. A failure at any step ends the pass with a `Ready=False`
    Condition naming the step.
-3. **Steps 8–9:** Kubernetes, not the Operator, turns the StatefulSet into
+3. **Steps 9–10:** Kubernetes, not the Operator, turns the StatefulSet into
    running Pods with their volumes.
-4. **Steps 10 onward (part 2):** the controller observes and acts according
+4. **Steps 11 onward (part 2):** the controller observes and acts according
    to the cluster's state. For an HA cluster, the primary is resolved only from the
    answers of this pass: exactly one master among freshly observed members, or
    no resolved primary. The Broker tier is reconciled after that, and the
@@ -133,7 +134,7 @@ It is not a fixed one-second poll.
 | Situation | Next pass | Why | Source |
 |---|---|---|---|
 | Spec, annotation or deletion change of a `CubridCluster` | immediately | the `clusterEvents` filter passes these; status-only changes do not start a pass, because the controller writes the status itself | `clusterEvents` in [`cubridcluster_controller.go`](../../internal/controller/cubridcluster_controller.go) |
-| Change of an owned StatefulSet, Deployment, Service, ConfigMap, Secret or NetworkPolicy | immediately | `Owns(...)` watches | `CubridClusterReconciler.SetupWithManager` in `cubridcluster_controller.go` |
+| Change of an owned StatefulSet, Deployment, Service, ConfigMap, Secret, NetworkPolicy or PodDisruptionBudget | immediately | `Owns(...)` watches | `CubridClusterReconciler.SetupWithManager` in `cubridcluster_controller.go` |
 | HA cluster with role discovery configured, after a successful status write | 10 seconds | a CUBRID failover changes no Kubernetes object, so no event would report the new roles | the end of `updateStatus` in `cubridcluster_controller.go`; `haResyncInterval` in [`haresolve.go`](../../internal/controller/haresolve.go) |
 | Restore into a new cluster in progress | 10 seconds | poll the restore operation | `restorePollAfter` in [`bootstrap.go`](../../internal/controller/bootstrap.go) |
 | Standalone cluster whose engine version is not known yet | 30 seconds | otherwise an idle cluster would stay blocked until an unrelated event | `standaloneVersionPending` and `standaloneVersionRetryInterval` in [`update.go`](../../internal/controller/update.go), used by `updateStatus` |
