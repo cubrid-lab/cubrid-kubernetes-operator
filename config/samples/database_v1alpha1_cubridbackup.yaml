@@ -1,3 +1,7 @@
+# For the database in database_v1alpha1_cubridcluster.yaml.
+# This is not a self-contained backup setup: first configure an accessible,
+# credentialed object store in the CubridCluster's spec.objectStorage and
+# confirm the destination bucket and credentials. See docs/operations/README.md.
 apiVersion: database.cubrid.io/v1alpha1
 kind: CubridBackup
 metadata:
@@ -8,7 +12,7 @@ metadata:
 spec:
   clusterRef:
     name: cubridcluster-sample
-  database: demodb
+  database: appdb
   target:
     preference: PreferStandby
   level: Full
