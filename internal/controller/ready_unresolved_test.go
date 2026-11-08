@@ -84,6 +84,77 @@ func TestReadyFollowsAPrimaryUnresolvedPastTheGracePeriod(t *testing.T) {
 	}
 }
 
+// A pass that ends before the roles are observed sets PrimaryResolved to
+// Unknown, and the next pass that observes them sets it False again with a new
+// lastTransitionTime. The grace period goes on from the first False: a write
+// that fails more often than primaryUnresolvedGrace must not keep Ready True
+// while the primary stays unresolved. Only a resolved primary ends it.
+func TestReadyUnresolvedPrimaryKeepsItsStartAcrossAnUnobservedPass(t *testing.T) {
+	cluster := haCluster("unresolved-unknown")
+	clock := testNow
+	r := &CubridClusterReconciler{Prober: &HTTPRoleProber{}, Clock: func() time.Time { return clock }}
+	primary := func(status metav1.ConditionStatus, reason string) {
+		t.Helper()
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type: conditionPrimaryResolved, Status: status, Reason: reason,
+			LastTransitionTime: metav1.NewTime(clock),
+		})
+	}
+	ready := func(want string) {
+		t.Helper()
+		r.setReady(cluster, 3, 3, false)
+		if got := meta.FindStatusCondition(cluster.Status.Conditions, conditionReady); got == nil || got.Reason != want {
+			t.Fatalf("at %s Ready = %+v, want %s", clock.Sub(testNow), got, want)
+		}
+	}
+
+	primary(metav1.ConditionFalse, noPrimary)
+	ready("ClusterReady")
+	clock = testNow.Add(2 * time.Minute)
+	ready(reasonPrimaryUnresolved)
+
+	// A failed write: Ready is False with its own reason and the roles are
+	// Unknown. markRolesNotObserved stamps the wall clock, so put the
+	// transition at this test's clock.
+	clock = clock.Add(10 * time.Second)
+	r.markRolesNotObserved(cluster, "StatefulSetReconcileFailed")
+	primary(metav1.ConditionUnknown, reasonRolesNotObserved)
+
+	clock = clock.Add(10 * time.Second)
+	primary(metav1.ConditionFalse, noPrimary)
+	ready(reasonPrimaryUnresolved)
+	got := meta.FindStatusCondition(cluster.Status.Conditions, conditionReady)
+	if want := testNow.UTC().Format(time.RFC3339); !strings.Contains(got.Message, want) {
+		t.Errorf("Ready's message %q does not name the first False at %s", got.Message, want)
+	}
+
+	// One resolved primary ends the span; the next False starts a new one.
+	clock = clock.Add(10 * time.Second)
+	primary(metav1.ConditionTrue, singlePrimary)
+	ready("ClusterReady")
+	clock = clock.Add(10 * time.Second)
+	primary(metav1.ConditionFalse, ambiguous)
+	ready("ClusterReady")
+	clock = clock.Add(primaryUnresolvedGrace)
+	ready(reasonPrimaryUnresolved)
+}
+
+// A reconciler that has seen nothing yet, as after a restart of the Operator,
+// measures the span from PrimaryResolved's lastTransitionTime.
+func TestReadyUnresolvedPrimaryAfterARestartCountsFromTheTransition(t *testing.T) {
+	cluster := haCluster("unresolved-restart")
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		Type: conditionPrimaryResolved, Status: metav1.ConditionFalse, Reason: noPrimary,
+		LastTransitionTime: metav1.NewTime(testNow.Add(-primaryUnresolvedGrace)),
+	})
+	r := &CubridClusterReconciler{Prober: &HTTPRoleProber{}, Clock: func() time.Time { return testNow }}
+	r.setReady(cluster, 3, 3, false)
+	if got := meta.FindStatusCondition(cluster.Status.Conditions, conditionReady); got == nil ||
+		got.Reason != reasonPrimaryUnresolved {
+		t.Fatalf("Ready = %+v, want %s", got, reasonPrimaryUnresolved)
+	}
+}
+
 // Two masters turn Ready false at once, with no grace period.
 func TestReadyMultiplePrimariesNeedNoGracePeriod(t *testing.T) {
 	cluster := haCluster("two-masters")
