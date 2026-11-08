@@ -189,7 +189,7 @@ members for 60 seconds, measured from the `lastTransitionTime` of
 13 s in docs/poc/RESULTS.md), and `Ready` does not follow that. Past 60
 seconds `Ready` is `False` with `PrimaryUnresolved` (#716), from the first
 reconcile after that; an HA cluster is reconciled again 10 s after each pass,
-so it follows up to one pass later (72 to 73 s after `lastTransitionTime` on
+so it follows up to one pass later (63 to 73 s after `lastTransitionTime` on
 Kind, where a pass came about every 14 s). In POC-51 the
 primary stayed unresolved for more than 8 minutes while every client of
 `-rw` was refused. This reports only: the Operator still chooses no primary
