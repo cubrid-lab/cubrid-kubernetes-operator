@@ -198,11 +198,9 @@ that a read-write Broker Pod is available. A cluster whose writes go
 through while a member cannot be observed, such as one whose Instance
 Manager refuses the token or whose `cubrid heartbeat status` times out on a
 loaded node, also reads `Ready=False` after 60 seconds, because no single
-primary can be confirmed.
-A primary that is only unresolved, as during a failover or while
-a member is unreachable, leaves `Ready` to the members' readiness, so that it
-does not change on every failover; `PrimaryResolved`, `HAReady` and
-`RoutingReady` report that state.
+primary can be confirmed. Within the 60 seconds, as during a failover or
+while a member is unreachable, `PrimaryResolved`, `HAReady` and
+`RoutingReady` report the unresolved primary, and `Ready` does not.
 
 A slave is stalled (`stalledSince` set in `status.instances[].replication`)
 when log pages wait to be applied and its applier did not advance between
