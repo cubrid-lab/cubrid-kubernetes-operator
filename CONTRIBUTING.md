@@ -355,9 +355,7 @@ their messages meaningful and keep any `Co-authored-by:` trailers intact.
 
 ### Human-readable issue titles, scope, and UTC evidence
 
-These rules apply the
-[cubrid-lab issue, pull request and commit writing standard](https://github.com/cubrid-lab/.github/blob/main/docs/ISSUE_PR_COMMIT_STANDARD.md)
-to this repository; where this file is stricter, this file applies.
+These are the repository-local rules for issue and PR writing, evidence and review. Existing Operator-specific safety, CI and contribution requirements remain authoritative.
 
 - Lead with one plain-language problem or outcome, prefixed by a short type: `bug:`, `feat:`, `test:`, `docs:`, `ci:` or `chore:`. Other accurate types are allowed. An internal issue/test code, priority, phase, status or detailed component name must not replace the outcome. A component scope in parentheses is optional, not mandatory. For issues use `bug:` for observed defects; PRs and squash commits retain conventional `fix:`.
 - Keep internal scenario, lab and review codes (for example, `S04` and
