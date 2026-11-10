@@ -633,19 +633,26 @@ type DatabaseSeeding struct {
 	// operation clears it.
 	// +optional
 	OperationMissingSince *metav1.Time `json:"operationMissingSince,omitempty"`
-	// sourceObservedActive is set once the source answered as a master whose
-	// server is active during this copy. From then on the member is recorded
-	// as seeded only once it is shown to have caught up with the source
-	// (catchUpTarget), and a gap of more than 30 seconds without a verified
-	// reading stops the bootstrap (ADR-0010).
+	// activeMasterSince is the time of the first reading during this copy in
+	// which a member that holds the database answered as a master whose
+	// server is active. From then on the member is recorded as seeded only
+	// once it is shown to have caught up with the source (catchUpTarget), a
+	// change of master is recorded, and a gap of more than 30 seconds
+	// without a verified reading stops the bootstrap (ADR-0010).
 	// +optional
-	SourceObservedActive bool `json:"sourceObservedActive,omitempty"`
-	// masterChange is the first reading during this copy that showed another
-	// master than the source: another member, or the member being seeded,
+	ActiveMasterSince *metav1.Time `json:"activeMasterSince,omitempty"`
+	// masterChange is the first reading during this copy, once an active
+	// master was seen, that showed another master than the source: another
+	// member, or the member being seeded once its restore was started,
 	// reporting itself master, or the source reporting itself a slave. It is
 	// never cleared, and the member is then not recorded as seeded.
 	// +optional
 	MasterChange *SeedMasterChange `json:"masterChange,omitempty"`
+	// catchUpSince is when the copy's restore was first found completed while
+	// the member was not yet shown caught up with its source. After ten
+	// minutes a Warning event is emitted; the copy keeps waiting.
+	// +optional
+	CatchUpSince *metav1.Time `json:"catchUpSince,omitempty"`
 	// lastVerifiedAt is the time of the last reading during this copy in
 	// which every member that holds the database answered and the source was
 	// the only master among them.

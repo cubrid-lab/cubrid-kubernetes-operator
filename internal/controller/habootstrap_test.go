@@ -164,7 +164,7 @@ func withoutOperations(s *databasev1alpha1.DatabaseSeeding) *databasev1alpha1.Da
 	}
 	c := *s
 	c.BackupOperationID, c.OperationMissingSince = "", nil
-	c.SourceObservedActive, c.MasterChange, c.LastVerifiedAt, c.CatchUpTarget = false, nil, nil, nil
+	c.ActiveMasterSince, c.MasterChange, c.LastVerifiedAt, c.CatchUpTarget, c.CatchUpSince = nil, nil, nil, nil, nil
 	return &c
 }
 

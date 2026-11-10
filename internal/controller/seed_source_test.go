@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,10 +124,12 @@ func TestSeedVerdict(t *testing.T) {
 		member    RoleObservation
 		want      seedOutcome
 	}{
-		{"a source never seen active, restore running", false, nil, nil, false, false, doesNotAnswer, seedRestoring},
-		{"a source never seen active, restore completed", false, nil, nil, false, true, doesNotAnswer, seedSeeded},
-		{"a source never seen active, a change of master between masters not yet active", false, change, nil, false, true, doesNotAnswer, seedSeeded},
-		{"a source never seen active, a gap", false, nil, nil, true, true, doesNotAnswer, seedSeeded},
+		{"no active master seen, restore running", false, nil, nil, false, false, doesNotAnswer, seedRestoring},
+		{"no active master seen, restore completed", false, nil, nil, false, true, doesNotAnswer, seedSeeded},
+		{"no active master seen, a gap", false, nil, nil, true, true, doesNotAnswer, seedSeeded},
+		// recordSeedReading records no change before an active master is
+		// seen; one recorded then still stops the copy.
+		{"an active master seen, a change recorded before the restore completed", true, change, logAt(10, 0), false, true, caughtUpAnswer, seedSourceChanged},
 		{"an active source, restore running", true, nil, nil, false, false, doesNotAnswer, seedRestoring},
 		{"an active source, a change while the restore runs", true, change, nil, false, false, doesNotAnswer, seedSourceChanged},
 		{"an active source, a change after the member caught up", true, change, logAt(10, 0), false, true, caughtUpAnswer, seedSourceChanged},
@@ -148,7 +151,11 @@ func TestSeedVerdict(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			seeding := &databasev1alpha1.DatabaseSeeding{Member: seededMember, Source: source,
-				SourceObservedActive: c.active, MasterChange: c.change, CatchUpTarget: c.target}
+				MasterChange: c.change, CatchUpTarget: c.target}
+			if c.active {
+				since := metav1.NewTime(now.Add(-time.Minute))
+				seeding.ActiveMasterSince = &since
+			}
 			if got := seedVerdict(seeding, c.gap, c.completed, c.member, now); got != c.want {
 				t.Fatalf("seedVerdict = %d, want %d", got, c.want)
 			}
@@ -171,35 +178,53 @@ func TestRecordSeedReading(t *testing.T) {
 	cases := []struct {
 		name             string
 		first, src, peer RoleObservation
-		lastVerifiedAgo  time.Duration
-		completed        bool
-		wantChange       string
-		wantActive       bool
-		wantVerified     bool
-		wantTarget       *databasev1alpha1.LogAddress
-		wantGap          bool
+		// activeAgo is how long ago an active master was first seen, zero
+		// for never; lastVerifiedAgo the last verified reading, zero for
+		// none.
+		activeAgo, lastVerifiedAgo time.Duration
+		restoreStarted, completed  bool
+		wantChange                 string
+		wantActive, wantVerified   bool
+		wantTarget                 *databasev1alpha1.LogAddress
+		wantGap                    bool
 	}{
 		{name: "the source is the only active master", first: answersSlave, src: activeSource, peer: doesNotAnswer,
 			wantActive: true, wantVerified: true},
 		{name: "the log end after the restore completed is the target", first: answersSlave, src: activeSource, peer: answersSlave,
-			completed: true, wantActive: true, wantVerified: true, wantTarget: logAt(7, 3)},
+			restoreStarted: true, completed: true, wantActive: true, wantVerified: true, wantTarget: logAt(7, 3)},
 		{name: "a master not active yet", first: answersSlave, src: answersMasterNotYetActive, peer: doesNotAnswer, wantVerified: true},
 		{name: "another holder reports master", first: answersMaster, src: activeSource, peer: doesNotAnswer,
 			wantChange: holderFirst, wantActive: true},
-		{name: "another holder reports master, not active yet", first: answersMasterNotYetActive, src: answersSlave, peer: doesNotAnswer,
-			wantChange: holderFirst},
-		{name: "the member reports master", first: answersSlave, src: activeSource, peer: answersMaster,
-			wantChange: member, wantActive: true, wantVerified: true},
-		{name: "the source reports slave", first: answersSlave, src: answersSlave, peer: doesNotAnswer, wantChange: holderPeer},
+		{name: "another holder is the active master while the source is not active", first: answersMaster,
+			src: answersMasterNotYetActive, peer: doesNotAnswer, wantChange: holderFirst, wantActive: true},
+		{name: "a change before any master is active is not recorded", first: answersMasterNotYetActive, src: answersSlave,
+			peer: doesNotAnswer},
+		{name: "a change once an active master was seen", first: answersMasterNotYetActive, src: answersSlave, peer: doesNotAnswer,
+			activeAgo: 10 * time.Second, lastVerifiedAgo: 10 * time.Second, wantChange: holderFirst, wantActive: true},
+		{name: "the member reports master during its restore", first: answersSlave, src: activeSource, peer: answersMaster,
+			restoreStarted: true, wantChange: member, wantActive: true, wantVerified: true},
+		{name: "the member reports master before its restore", first: answersSlave, src: activeSource, peer: answersMaster,
+			wantActive: true, wantVerified: true},
+		{name: "the source reports slave before any master is active", first: answersSlave, src: answersSlave, peer: doesNotAnswer},
+		{name: "the source reports slave once an active master was seen", first: answersSlave, src: answersSlave,
+			peer: doesNotAnswer, activeAgo: 10 * time.Second, wantChange: holderPeer, wantActive: true},
 		{name: "a holder does not answer", first: doesNotAnswer, src: activeSource, peer: doesNotAnswer, wantActive: true},
 		{name: "a contradictory master is no change", first: answersContradictingMaster, src: activeSource, peer: doesNotAnswer,
 			wantActive: true},
 		{name: "a verified reading after more than the bound", first: answersSlave, src: activeSource, peer: doesNotAnswer,
-			lastVerifiedAgo: seedReadingGap + time.Second, wantActive: true, wantGap: true},
+			activeAgo: time.Hour, lastVerifiedAgo: seedReadingGap + time.Second, wantActive: true, wantGap: true},
 		{name: "a missing answer within the bound", first: doesNotAnswer, src: activeSource, peer: doesNotAnswer,
-			lastVerifiedAgo: seedReadingGap, wantActive: true},
-		{name: "a gap before the source was seen active", first: answersSlave, src: answersMasterNotYetActive, peer: doesNotAnswer,
+			activeAgo: time.Hour, lastVerifiedAgo: seedReadingGap, wantActive: true},
+		{name: "a gap before any master was active", first: answersSlave, src: answersMasterNotYetActive, peer: doesNotAnswer,
 			lastVerifiedAgo: 2 * seedReadingGap, wantVerified: true},
+		{name: "the first active master after a long reading gap", first: answersSlave, src: activeSource, peer: doesNotAnswer,
+			lastVerifiedAgo: 2 * seedReadingGap, wantActive: true, wantVerified: true},
+		{name: "no verified reading since the first active master, within the bound", first: doesNotAnswer, src: activeSource,
+			peer: doesNotAnswer, activeAgo: seedReadingGap, wantActive: true},
+		{name: "no verified reading since the first active master, past the bound", first: doesNotAnswer, src: activeSource,
+			peer: doesNotAnswer, activeAgo: seedReadingGap + time.Second, wantActive: true, wantGap: true},
+		{name: "a verified reading before the first active master does not start the bound", first: doesNotAnswer,
+			src: activeSource, peer: doesNotAnswer, activeAgo: 10 * time.Second, lastVerifiedAgo: time.Hour, wantActive: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -209,14 +234,19 @@ func TestRecordSeedReading(t *testing.T) {
 				b := metav1.NewTime(now.Add(-c.lastVerifiedAgo))
 				seeding.LastVerifiedAt, before = &b, &b
 			}
+			if c.activeAgo > 0 {
+				a := metav1.NewTime(now.Add(-c.activeAgo))
+				seeding.ActiveMasterSince = &a
+			}
 			obs := map[string]RoleObservation{holderFirst: at(c.first), holderPeer: at(c.src), member: at(c.peer)}
-			gap := recordSeedReading(seeding, holders, obs, now, c.completed)
+			gap := recordSeedReading(seeding, holders, obs, now, c.restoreStarted, c.completed)
 			changed := ""
 			if seeding.MasterChange != nil {
 				changed = seeding.MasterChange.Member
 			}
-			if changed != c.wantChange || seeding.SourceObservedActive != c.wantActive || gap != c.wantGap {
-				t.Fatalf("change %q, active %t, gap %t; want %q, %t, %t", changed, seeding.SourceObservedActive, gap,
+			active := seeding.ActiveMasterSince != nil
+			if changed != c.wantChange || active != c.wantActive || gap != c.wantGap {
+				t.Fatalf("change %q, active %t, gap %t; want %q, %t, %t", changed, active, gap,
 					c.wantChange, c.wantActive, c.wantGap)
 			}
 			verified := seeding.LastVerifiedAt != nil && seeding.LastVerifiedAt != before
@@ -232,8 +262,9 @@ func TestRecordSeedReading(t *testing.T) {
 
 	t.Run("the first change is kept", func(t *testing.T) {
 		first := &databasev1alpha1.SeedMasterChange{Member: holderFirst, Role: databasev1alpha1.RoleMaster, ObservedAt: metav1.NewTime(now.Add(-time.Minute))}
-		seeding := &databasev1alpha1.DatabaseSeeding{Member: member, Source: holderPeer, MasterChange: first}
-		recordSeedReading(seeding, holders, map[string]RoleObservation{holderFirst: at(answersSlave), holderPeer: at(answersSlave)}, now, false)
+		since := metav1.NewTime(now.Add(-time.Minute))
+		seeding := &databasev1alpha1.DatabaseSeeding{Member: member, Source: holderPeer, MasterChange: first, ActiveMasterSince: &since}
+		recordSeedReading(seeding, holders, map[string]RoleObservation{holderFirst: at(answersSlave), holderPeer: at(answersSlave)}, now, true, false)
 		if seeding.MasterChange != first {
 			t.Fatalf("the change was replaced by %+v", seeding.MasterChange)
 		}
@@ -630,7 +661,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		f.seed.backupOn = nil
 		status = reconcileOnce(f)
 		Expect(withoutOperations(status.Seeding)).To(Equal(withoutOperations(started)))
-		Expect(status.Seeding.SourceObservedActive).To(BeFalse())
+		Expect(status.Seeding.ActiveMasterSince).To(BeNil())
 		Expect(f.seed.restores[f.last]).To(Equal(request), "the restore in progress was asked for with another request")
 		Expect(f.seed.backups).To(HaveLen(backups))
 		Expect(f.seed.backupOn).To(BeEmpty(), "the source of a restore in progress need not be reachable")
@@ -706,7 +737,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		reconcileOnce(f)
 		status := reconcileOnce(f)
 		Expect(status.Seeding.RestoreOperationID).NotTo(BeEmpty())
-		Expect(status.Seeding.SourceObservedActive).To(BeTrue())
+		Expect(status.Seeding.ActiveMasterSince).NotTo(BeNil())
 		Expect(reason(f)).To(Equal("SeedRestoreInProgress"))
 		return f
 	}
@@ -894,13 +925,131 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
 	})
 
+	// While no master's server is active nothing can be committed (POC-23),
+	// so a change of master seen then does not stop a copy whose source
+	// becomes the active master later.
+	It("records the member once caught up when a master change was seen only before any master was active", func() {
+		f := newFixture("src-earlychange")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMasterNotYetActive
+		reconcileOnce(f)
+		reconcileOnce(f)
+		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
+
+		By("the first member reporting itself master before any server is active")
+		f.prober.answers[f.first] = answersMasterNotYetActive
+		f.prober.answers[f.peer] = answersSlave
+		reconcileOnce(f)
+
+		By("the source being the active master when the restore completed, and the member caught up")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = activeSourceEndingAt(10)
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 0, 0)
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		status := reconcileOnce(f)
+		Expect(status.Phase).NotTo(Equal(databasePhaseFailed))
+		Expect(status.SeededMembers).To(Equal([]string{f.peer, f.last}))
+	})
+
+	It("stops when another holder is an active master while the source's server is not active", func() {
+		f := newFixture("src-otheractive")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMasterNotYetActive
+		reconcileOnce(f)
+		reconcileOnce(f)
+		backups, restores := len(f.seed.backupOn), len(f.seed.restoreOn)
+
+		By("the first member answering as an active master, and the restore completing")
+		f.prober.answers[f.first] = answersMaster
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		status := reconcileOnce(f)
+		expectStopped(f, status, "SeedSourceChangedDuringSeed", backups, restores)
+	})
+
+	It("does not count the time before any master was active toward the 30-second bound", func() {
+		now := time.Now()
+		f := newFixture("src-lateactive")
+		f.r.Clock = func() time.Time { return now }
+		f.prober.clock = f.r.Clock
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMasterNotYetActive
+		reconcileOnce(f)
+		reconcileOnce(f)
+
+		By("the first reading in which the source is active, 40 seconds after the last one")
+		now = now.Add(40 * time.Second)
+		f.prober.answers[f.peer] = activeSourceEndingAt(10)
+		status := reconcileOnce(f)
+		Expect(status.Phase).NotTo(Equal(databasePhaseFailed))
+		Expect(reason(f)).To(Equal("SeedRestoreInProgress"))
+	})
+
+	It("starts no new round when the member being seeded reports itself master before its restore", func() {
+		f := newFixture("src-peerclaim")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMaster
+		f.prober.answers[f.last] = answersMaster
+		f.seed.backupStates = map[string]instancemanager.OperationState{f.peer: instancemanager.OpRunningBackup}
+		for range 3 {
+			status := reconcileOnce(f)
+			Expect(status.Seeding.Round).To(BeZero())
+		}
+		Expect(backupsOn(f, f.peer)).To(HaveLen(1), "a new backup was taken for every claim of the member being seeded")
+
+		f.seed.backupStates[f.peer] = instancemanager.OpCompleted
+		f.prober.answers[f.last] = doesNotAnswer
+		reconcileOnce(f)
+		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
+	})
+
+	It("keeps waiting and warns once when the member has not caught up after 10 minutes", func() {
+		now := time.Now()
+		f := newFixture("src-slowcatchup")
+		f.r.Clock = func() time.Time { return now }
+		f.prober.clock = f.r.Clock
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = activeSourceEndingAt(10)
+		reconcileOnce(f)
+		reconcileOnce(f)
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 7, 0)
+		reconcileOnce(f)
+		since := now
+		events(f)
+
+		By("readings every 20 seconds for more than 10 minutes with 7 pages waiting")
+		var warnings []string
+		for range 33 {
+			now = now.Add(20 * time.Second)
+			status := reconcileOnce(f)
+			Expect(status.Phase).NotTo(Equal(databasePhaseFailed))
+			Expect(status.SeededMembers).To(Equal([]string{f.peer}))
+			Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
+			for _, e := range events(f) {
+				if strings.Contains(e, "SeedCatchUpOverdue") {
+					warnings = append(warnings, e)
+				}
+			}
+		}
+		Expect(warnings).To(HaveLen(1))
+		Expect(warnings[0]).To(HavePrefix("Warning"))
+		Expect(message(f)).To(ContainSubstring("since " + since.UTC().Format(time.RFC3339)))
+		Expect(message(f)).To(ContainSubstring("7 pages wait to be applied"))
+
+		By("the member catching up")
+		now = now.Add(20 * time.Second)
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 0, 0)
+		status := reconcileOnce(f)
+		Expect(status.SeededMembers).To(Equal([]string{f.peer, f.last}))
+	})
+
 	It("stops the copy to the first peer when the member it is seeded from loses the role of an active master", func() {
 		f := newFixture("src-firstpeer")
 		f.seed.restore[f.peer] = instancemanager.OpRestoring
 		f.prober.answers[f.first] = activeSourceEndingAt(10)
 		status := reconcileOnce(f)
 		Expect(status.Seeding.Member).To(Equal(f.peer))
-		Expect(status.Seeding.SourceObservedActive).To(BeTrue())
+		Expect(status.Seeding.ActiveMasterSince).NotTo(BeNil())
 		Expect(reason(f)).To(Equal("SeedRestoreInProgress"))
 
 		By("the first peer reporting itself master while its restore runs")

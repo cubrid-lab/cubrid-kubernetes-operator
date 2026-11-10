@@ -569,10 +569,18 @@ func (in *DatabaseSeeding) DeepCopyInto(out *DatabaseSeeding) {
 		in, out := &in.OperationMissingSince, &out.OperationMissingSince
 		*out = (*in).DeepCopy()
 	}
+	if in.ActiveMasterSince != nil {
+		in, out := &in.ActiveMasterSince, &out.ActiveMasterSince
+		*out = (*in).DeepCopy()
+	}
 	if in.MasterChange != nil {
 		in, out := &in.MasterChange, &out.MasterChange
 		*out = new(SeedMasterChange)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.CatchUpSince != nil {
+		in, out := &in.CatchUpSince, &out.CatchUpSince
+		*out = (*in).DeepCopy()
 	}
 	if in.LastVerifiedAt != nil {
 		in, out := &in.LastVerifiedAt, &out.LastVerifiedAt

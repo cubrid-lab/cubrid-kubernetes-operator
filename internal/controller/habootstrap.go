@@ -27,6 +27,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -423,8 +424,8 @@ func (r *CubridClusterReconciler) seedReading(ctx context.Context, cluster *data
 }
 
 // seedReadingGap bounds the time between two verified readings of a copy
-// whose source was observed as an active master: three HA resync intervals.
-// A longer gap may hide a change of master, so the copy is not relied on.
+// in which an active master was seen, counted from the first such reading:
+// three HA resync intervals. A longer gap may hide a change of master, so the copy is not relied on.
 const seedReadingGap = 3 * haResyncInterval
 
 // Reasons of a copy whose source could not be shown to stay the master
@@ -437,6 +438,9 @@ const (
 	reasonSeedCatchUpInProgress       = "SeedCatchUpInProgress"
 	reasonSeedSourceChangedDuringSeed = "SeedSourceChangedDuringSeed"
 	reasonSeedSourceUnverified        = "SeedSourceUnverified"
+	// reasonSeedCatchUpOverdue is the Warning event of a catch-up that has
+	// waited longer than seedCatchUpWarnAfter.
+	reasonSeedCatchUpOverdue = "SeedCatchUpOverdue"
 )
 
 // isMasterAnswer reports whether o is a fresh answer of a member that reports
@@ -456,46 +460,69 @@ func isActiveMasterAnswer(o RoleObservation, now time.Time) bool {
 
 // recordSeedReading adds the reading obs, taken at now, to the record of the
 // copy seeding, whose holders hold the database and whose member is being
-// seeded. completed says that the copy's restore was read as Completed before
-// the reading was taken.
+// seeded. restoreStarted says that the copy's restore was started, completed
+// that it was read as Completed before the reading was taken.
 //
-// It records the first answer that shows another master than the source:
-// another holder or the member reporting itself master, or the source
-// reporting itself a slave. A missing or contradictory answer shows nothing,
-// and neither changes nor confirms anything. A reading is verified when every
-// holder answered and the source is the only master among them
-// (seedSourceAmong). The source's log end is the catch-up target once the
-// restore completed and the source was observed active.
+// The first reading in which a holder answers as an active master is
+// recorded (activeMasterSince). From then on, the first answer that shows
+// another master than the source is recorded: another holder reporting itself
+// master, the member reporting itself master once its restore was started,
+// or the source reporting itself a slave. Before any master is active nothing
+// can be committed (docs/poc/RESULTS.md, POC-23), and before its restore the
+// member holds no data, so its claims then show nothing. A missing or
+// contradictory answer shows nothing, and neither changes nor confirms
+// anything. A reading is verified when every holder answered and the source
+// is the only master among them (seedSourceAmong). The source's log end is
+// the catch-up target once the restore completed and the source answered as
+// an active master.
 //
-// gap reports that the source was observed active and that more than
-// seedReadingGap passed since the verified reading before this one, or, for a
-// reading that is not verified, until now.
+// gap reports that an active master was seen and that more than
+// seedReadingGap passed since the later of the first such reading and the
+// verified reading before this one, or, for a reading that is not verified,
+// until now.
 func recordSeedReading(seeding *databasev1alpha1.DatabaseSeeding, holders []string, obs map[string]RoleObservation,
-	now time.Time, completed bool) (gap bool) {
+	now time.Time, restoreStarted, completed bool) (gap bool) {
 	source, peer := seeding.Source, seeding.Member
-	if seeding.MasterChange == nil {
-		for _, m := range append(slices.Clone(holders), peer) {
+	if seeding.ActiveMasterSince == nil {
+		for _, m := range holders {
+			if isActiveMasterAnswer(obs[m], now) {
+				at := metav1.NewTime(now)
+				seeding.ActiveMasterSince = &at
+				break
+			}
+		}
+	}
+	src := obs[source]
+	if seeding.ActiveMasterSince != nil && seeding.MasterChange == nil {
+		claimants := slices.Clone(holders)
+		if restoreStarted {
+			claimants = append(claimants, peer)
+		}
+		for _, m := range claimants {
 			if m != source && isMasterAnswer(obs[m], now) {
 				seeding.MasterChange = &databasev1alpha1.SeedMasterChange{
 					Member: m, Role: databasev1alpha1.RoleMaster, ObservedAt: metav1.NewTime(obs[m].ObservedAt)}
 				break
 			}
 		}
-	}
-	src := obs[source]
-	if seeding.MasterChange == nil && fresh(src, now) && src.Role == databasev1alpha1.RoleSlave && !src.Conflicting {
-		seeding.MasterChange = &databasev1alpha1.SeedMasterChange{
-			Member: source, Role: databasev1alpha1.RoleSlave, ObservedAt: metav1.NewTime(src.ObservedAt)}
-	}
-	if isActiveMasterAnswer(src, now) {
-		seeding.SourceObservedActive = true
-		if completed && seeding.CatchUpTarget == nil && src.LogEnd != nil {
-			seeding.CatchUpTarget = src.LogEnd.DeepCopy()
+		if seeding.MasterChange == nil && fresh(src, now) && src.Role == databasev1alpha1.RoleSlave && !src.Conflicting {
+			seeding.MasterChange = &databasev1alpha1.SeedMasterChange{
+				Member: source, Role: databasev1alpha1.RoleSlave, ObservedAt: metav1.NewTime(src.ObservedAt)}
 		}
 	}
+	if completed && seeding.CatchUpTarget == nil && isActiveMasterAnswer(src, now) && src.LogEnd != nil {
+		seeding.CatchUpTarget = src.LogEnd.DeepCopy()
+	}
+	// The bound counts from the later of the first active master and the
+	// last verified reading: a time without an active master is not a gap.
 	// A gap keeps the time of the verified reading before it, for a person.
-	last := seeding.LastVerifiedAt
-	gap = seeding.SourceObservedActive && last != nil && now.Sub(last.Time) > seedReadingGap
+	if since := seeding.ActiveMasterSince; since != nil {
+		from := since.Time
+		if last := seeding.LastVerifiedAt; last != nil && last.After(from) {
+			from = last.Time
+		}
+		gap = now.Sub(from) > seedReadingGap
+	}
 	if verified, _ := seedSourceAmong(holders, obs, now); verified == source && !gap {
 		at := metav1.NewTime(now)
 		seeding.LastVerifiedAt = &at
@@ -527,12 +554,11 @@ const (
 // (recordSeedReading), whether its restore completed, and member, the answer
 // of the member being seeded in that reading.
 //
-// A source that was never observed as an active master leaves the copy as it
-// was before #768: the member is seeded once its restore completed, also when
-// another member reported itself master meanwhile. No master's server is
-// active before every member has joined once, so nothing can be committed
-// then (docs/poc/RESULTS.md, POC-23). Once the source was observed active, a
-// change of master or a gap stops the copy: a member seeded across a change
+// A copy in which no holder was ever observed as an active master is left as
+// it was before #768: the member is seeded once its restore completed. No
+// master's server is active before every member has joined once, so nothing
+// can be committed then (docs/poc/RESULTS.md, POC-23). Once an active master
+// was seen, a change of master or a gap stops the copy: a member seeded across a change
 // of master can lack what the new master committed without showing it
 // (POC-57). Otherwise the member is seeded only when it is a slave that
 // applies the source's log with no failed change and no page waiting, and its
@@ -540,7 +566,7 @@ const (
 // member applied everything up to the target is not verified on the engine.
 func seedVerdict(seeding *databasev1alpha1.DatabaseSeeding, gap, completed bool, member RoleObservation, now time.Time) seedOutcome {
 	switch {
-	case !seeding.SourceObservedActive:
+	case seeding.ActiveMasterSince == nil:
 		if completed {
 			return seedSeeded
 		}
@@ -569,8 +595,8 @@ func caughtUp(seeding *databasev1alpha1.DatabaseSeeding, member RoleObservation,
 		r.CopiedEOF != nil && !logBefore(*r.CopiedEOF, *seeding.CatchUpTarget)
 }
 
-// seedStopped ends the bootstrap for the copy seeding, whose source was
-// observed active, after a change of master or a gap in the readings
+// seedStopped ends the bootstrap for the copy seeding, in which an active
+// master was seen, after a change of master or a gap in the readings
 // (seedVerdict). The member is not recorded as seeded, the record is kept,
 // and nothing is started or deleted.
 func (r *CubridClusterReconciler) seedStopped(cluster *databasev1alpha1.CubridCluster,
@@ -692,7 +718,7 @@ func (r *CubridClusterReconciler) seedCopy(ctx context.Context, cluster *databas
 		// The first peer has only one possible source, so a change of
 		// master before its restore stops the copy as one after it does.
 		status.Seeding = seeding
-		gap := recordSeedReading(seeding, holders, obs, r.now(), false)
+		gap := recordSeedReading(seeding, holders, obs, r.now(), false, false)
 		if outcome := seedVerdict(seeding, gap, false, obs[peer], r.now()); outcome == seedSourceChanged || outcome == seedSourceUnverified {
 			r.seedStopped(cluster, status, outcome)
 			return nil, nil, false, false
@@ -704,7 +730,7 @@ func (r *CubridClusterReconciler) seedCopy(ctx context.Context, cluster *databas
 	// resolve yet.
 	gap := false
 	if seeding != nil {
-		gap = recordSeedReading(seeding, holders, obs, r.now(), false)
+		gap = recordSeedReading(seeding, holders, obs, r.now(), false, false)
 	}
 	observed, why := r.selectSeedSource(status, holder, obs)
 	if observed == "" {
@@ -720,7 +746,7 @@ func (r *CubridClusterReconciler) seedCopy(ctx context.Context, cluster *databas
 	case seeding.Source != observed:
 		seeding = &databasev1alpha1.DatabaseSeeding{Member: peer, Source: observed, Round: seeding.Round + 1}
 		sourceRecorded = false
-	case seeding.SourceObservedActive && (seeding.MasterChange != nil || gap):
+	case seeding.MasterChange != nil || gap:
 		// Nothing was restored yet: a change of master, or a gap in the
 		// readings, seen while the source stayed the same begins the copy
 		// again with a backup of its own.
@@ -728,7 +754,7 @@ func (r *CubridClusterReconciler) seedCopy(ctx context.Context, cluster *databas
 		sourceRecorded = false
 	}
 	if !sourceRecorded {
-		recordSeedReading(seeding, holders, obs, r.now(), false)
+		recordSeedReading(seeding, holders, obs, r.now(), false, false)
 		if observed != holder {
 			r.statusEvent(cluster, corev1.EventTypeNormal, "SeedSourceChanged",
 				"database "+database+" will be copied to "+peer+" from "+observed+", the master; "+holder+" is no longer the master")
@@ -754,7 +780,7 @@ func (r *CubridClusterReconciler) seedCopy(ctx context.Context, cluster *databas
 // The roles of the members that hold the database and of peer are read at
 // every reconcile of a copy until peer is recorded as seeded, and the
 // reading is recorded in status.databases[].seeding (recordSeedReading), so
-// that it survives an Operator restart. Once the source was observed as an
+// that it survives an Operator restart. Once a holder was observed as an
 // active master, a change of master or a gap in the readings begins the copy
 // again before its restore is started, and stops the bootstrap for a person
 // afterwards; peer is then recorded as seeded only once it caught up with its
@@ -879,10 +905,10 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 	seeding.RestoreOperationID = restore.ID
 	switch restore.State {
 	case instancemanager.OpCompleted:
-		// A restore that completed at its start, from a source observed
-		// active, has no reading after it yet; it is judged at the next
+		// A restore that completed at its start, once an active master was
+		// seen, has no reading after it yet; it is judged at the next
 		// reconcile.
-		if !r.seedCaughtUp(cluster, status, gap, restoreStarted || !seeding.SourceObservedActive, obs[peer]) {
+		if !r.seedCaughtUp(cluster, status, gap, restoreStarted || seeding.ActiveMasterSince == nil, obs[peer]) {
 			return false
 		}
 		status.SeededMembers = append(status.SeededMembers, peer)
@@ -913,7 +939,7 @@ func (r *CubridClusterReconciler) seedReadingAfterPoll(ctx context.Context, clus
 	seeding := status.Seeding
 	completed := err == nil && restore.State == instancemanager.OpCompleted
 	obs = r.seedReading(ctx, cluster, status, holder, seeding.Member)
-	gap = recordSeedReading(seeding, seedHolders(status, holder), obs, r.now(), completed)
+	gap = recordSeedReading(seeding, seedHolders(status, holder), obs, r.now(), true, completed)
 	if err == nil && restore.State == instancemanager.OpFailed {
 		return obs, gap, false
 	}
@@ -924,15 +950,27 @@ func (r *CubridClusterReconciler) seedReadingAfterPoll(ctx context.Context, clus
 	return obs, gap, false
 }
 
+// seedCatchUpWarnAfter is how long a member may wait in SeedCatchUpInProgress
+// before a Warning event says so. The wait goes on: a member that has not
+// caught up is not at risk while it is not recorded as seeded, and a person
+// decides (#768).
+const seedCatchUpWarnAfter = 10 * time.Minute
+
+// catchUpOverdue marks the message of a catch-up that has waited longer than
+// seedCatchUpWarnAfter, so that the Warning event is emitted once.
+const catchUpOverdue = "it has waited longer than "
+
 // seedCaughtUp reports whether the member of the copy in status.databases[].
 // seeding, whose restore completed, is recorded as seeded now (seedVerdict),
 // from member, its answer in this reconcile's reading. completed says that a
 // reading followed the restore's completion, or that none is needed. The
-// condition says what it waits for otherwise.
+// condition says what it waits for otherwise, since when, and which reading
+// is missing; after seedCatchUpWarnAfter a Warning event says so once.
 func (r *CubridClusterReconciler) seedCaughtUp(cluster *databasev1alpha1.CubridCluster,
 	status *databasev1alpha1.DatabaseStatus, gap, completed bool, member RoleObservation) bool {
 	seeding := status.Seeding
-	switch seedVerdict(seeding, gap, completed, member, r.now()) {
+	now := r.now()
+	switch seedVerdict(seeding, gap, completed, member, now) {
 	case seedSeeded:
 		return true
 	case seedSourceChanged, seedSourceUnverified:
@@ -940,16 +978,63 @@ func (r *CubridClusterReconciler) seedCaughtUp(cluster *databasev1alpha1.CubridC
 		// again, before this point is reached.
 		return false
 	}
-	target := "the end of its log, which is read after the restore completed"
-	if t := seeding.CatchUpTarget; t != nil {
-		target = fmt.Sprintf("log page %d offset %d, the end of its log after the restore completed", t.Page, t.Offset)
+	if seeding.CatchUpSince == nil {
+		at := metav1.NewTime(now)
+		seeding.CatchUpSince = &at
 	}
-	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonSeedCatchUpInProgress, fmt.Sprintf(
-		"the restore of database %s on %s completed; %s is recorded as seeded once it answers as a slave that "+
-			"applies the log of %s, the master it was copied from, with no failed change, no page waiting, and its "+
-			"copy of that log at or past %s",
-		status.Name, seeding.Member, seeding.Member, seeding.Source, target))
+	since := seeding.CatchUpSince.UTC().Format(time.RFC3339)
+	msg := fmt.Sprintf(
+		"the restore of database %s on %s completed; waiting since %s for %s to answer as a slave that applies the "+
+			"log of %s, the master it was copied from, with no failed change, no page waiting, and its copy of that "+
+			"log at or past the end of the source's log read after the restore completed. Missing: %s",
+		status.Name, seeding.Member, since, seeding.Member, seeding.Source, catchUpMissing(seeding, member, now))
+	if now.Sub(seeding.CatchUpSince.Time) > seedCatchUpWarnAfter {
+		msg += "; " + catchUpOverdue + seedCatchUpWarnAfter.String() + ", and the member is not recorded as seeded " +
+			"until it catches up"
+		before := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady)
+		if before == nil || !strings.Contains(before.Message, catchUpOverdue) {
+			r.statusEvent(cluster, corev1.EventTypeWarning, reasonSeedCatchUpOverdue, fmt.Sprintf(
+				"%s has not caught up with %s since %s, more than %s after the restore of database %s completed. "+
+					"It is not recorded as seeded and the bootstrap keeps waiting; missing: %s",
+				seeding.Member, seeding.Source, since, seedCatchUpWarnAfter, status.Name, catchUpMissing(seeding, member, now)))
+		}
+	}
+	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonSeedCatchUpInProgress, msg)
 	return false
+}
+
+// catchUpMissing says which reading keeps member, the answer of the member
+// being seeded, from showing that it caught up with the copy's source.
+func catchUpMissing(seeding *databasev1alpha1.DatabaseSeeding, member RoleObservation, now time.Time) string {
+	r := member.Replication
+	t := seeding.CatchUpTarget
+	switch {
+	case t == nil:
+		return "the end of the source's log was not read after the restore completed"
+	case !fresh(member, now):
+		return seeding.Member + " did not answer"
+	case member.Role != databasev1alpha1.RoleSlave || member.Conflicting:
+		return seeding.Member + " does not answer as a slave"
+	case r == nil:
+		return "the applier of " + seeding.Member + " was not read"
+	case r.Source != seeding.Source:
+		return "it applies the log of " + r.Source + ", not of " + seeding.Source
+	}
+	var missing []string
+	if r.FailCount > 0 {
+		missing = append(missing, fmt.Sprintf("%d changes failed", r.FailCount))
+	}
+	if r.DelayedPages > 0 {
+		missing = append(missing, fmt.Sprintf("%d pages wait to be applied", r.DelayedPages))
+	}
+	switch {
+	case r.CopiedEOF == nil:
+		missing = append(missing, "the end of its copy was not read")
+	case logBefore(*r.CopiedEOF, *t):
+		missing = append(missing, fmt.Sprintf("its copy ends at log page %d offset %d, before page %d offset %d",
+			r.CopiedEOF.Page, r.CopiedEOF.Offset, t.Page, t.Offset))
+	}
+	return strings.Join(missing, ", ")
 }
 
 // recordedSeedRestore polls the restore recorded for the copy to peer. It
