@@ -10,11 +10,13 @@
 
 ## What it shows
 
-One representative failure: the Pod of the current master in a three-member
-HA cluster named `demo` is deleted while clients write through `demo-rw`. The
-diagram shows which part each of the three actors plays. Kubernetes recreates
-the Pod with its volume. CUBRID native HA promotes a slave and the read-write
-Brokers follow it. The Operator observes the new roles and reports them; it
+One **illustrative** failure: the Pod of the member that was Master in a
+three-member HA cluster named `demo` is deleted while clients write
+through `demo-rw`. Kubernetes recreates the Pod with its volume. The
+sequence illustrates the case where CUBRID native HA promotes a surviving
+member and RW Brokers follow it. A sufficiently rapid old-Pod return can
+instead keep the old member as Master (POC-19); **the Operator does not choose
+which outcome occurs**. The Operator observes the new roles and reports them; it
 does not promote, fence or fail back. The steps marked as planned are design
 decisions that the code does not carry out yet.
 
@@ -39,6 +41,7 @@ sequenceDiagram
         participant BRW as Read-write<br/>Brokers
     end
 
+    Note over OLD: demo-0 was Master before this example fault<br/>CUBRID may instead retain it on a rapid return (POC-19)
     Note over OLD: The master's Pod is deleted
     K8S->>OLD: run the preStop hook,<br/>then stop the container
     OLD->>OLD: Instance Manager starts<br/>an ordered stop of CUBRID<br/>#nbsp;
@@ -81,8 +84,10 @@ sequenceDiagram
 - **Kubernetes** — the StatefulSet controller recreates the Pod under the
   same name, and the kubelet attaches the same volume. Kubernetes knows
   nothing about CUBRID roles.
-- **CUBRID heartbeat** — detects the lost master and promotes a slave in the
-  order of the HA member list. This is CUBRID's own failover.
+- **CUBRID heartbeat** — detects peer availability and determines whether
+  a slave is promoted under native HA rules and member-list priority. The
+  same three members from the canonical topology remain; `demo-0` is not
+  pinned as the permanent Master.
 - **Read-write Brokers** — reconnect through their host list to whichever
   member is master. No Service or selector changes.
 - **Cluster controller** — keeps asking each member for its role, resolves a
@@ -96,8 +101,9 @@ sequenceDiagram
    can finish. Without one, the Pod object disappears at once, and on the
    pinned Kind the old container was killed about three seconds later, so the
    stop may not finish (scenario contract, S03 "Fault confirmed by").
-2. **Step 3:** CUBRID heartbeat on the remaining members promotes a slave.
-   The Operator takes no part in this.
+2. **Step 3 (this representative branch):** CUBRID heartbeat promotes a
+   surviving member to Master. A rapid return may mean no promotion occurs
+   (POC-19). The Operator takes no part in either decision.
 3. **Step 4:** the read-write Brokers find the new master through the
    same host list. Open transactions can fail; new ones succeed once the new
    master accepts writes.

@@ -212,7 +212,9 @@ the implementation.
 - Agree an owner for shared test infrastructure. Feature authors still write
   their own tests; do not hand tests and implementation to different people.
 - The other maintainer reviews the scenario, expected results and failure
-  paths. A passing CI run does not replace maintainer review.
+  paths. A passing CI run does not replace maintainer review. Until v0.1 is
+  released, one maintainer's review is enough to merge
+  ([Until v0.1 is released](#until-v01-is-released)).
 - A dependency names the exact result needed, rather than requiring a whole
   tracking issue to finish. Keep GitHub Assignees current and record the next handoff on the issue.
 - Runs using all three lab VMs happen one at a time. Reserve the run with the
@@ -233,7 +235,28 @@ to [Testing expectations](#testing-expectations). Optional Oracle,
 Copilot or `agent-review` observations are advisory only, never a
 tool-specific approval route. Existing independent two-maintainer review,
 safety-invariant assessment and maintainer merge decisions remain
-unchanged for **every** implementation method.
+unchanged for **every** implementation method, except as
+[Until v0.1 is released](#until-v01-is-released) allows.
+
+### Until v0.1 is released
+
+Decided by a maintainer on 2026-11-10. Until the v0.1 release is published, a
+PR may be merged with one maintainer's review, without the second
+maintainer's approval. Everything else stays as written here:
+
+- the required GitHub Actions checks pass on the final head, and a check that
+  failed is explained, not waived;
+- the real-cluster, VM-lab and SQL evidence a scenario requires is still
+  required, and Kind evidence is still not VM evidence;
+- every review comment is answered and every finding is fixed or explicitly
+  declined with a reason on the PR;
+- the PR says on itself that it merged without a second maintainer's review;
+- changes to the safety contract still need ADR-0005 amended first, and
+  maintainer decisions on scope, safety policy and release candidates stay
+  with the maintainers.
+
+The two-maintainer independent review applies again from the first change
+after v0.1 is published.
 
 ## Pull requests
 
@@ -355,9 +378,7 @@ their messages meaningful and keep any `Co-authored-by:` trailers intact.
 
 ### Human-readable issue titles, scope, and UTC evidence
 
-These rules apply the
-[cubrid-lab issue, pull request and commit writing standard](https://github.com/cubrid-lab/.github/blob/main/docs/ISSUE_PR_COMMIT_STANDARD.md)
-to this repository; where this file is stricter, this file applies.
+These are the repository-local rules for issue and PR writing, evidence and review. Existing Operator-specific safety, CI and contribution requirements remain authoritative.
 
 - Lead with one plain-language problem or outcome, prefixed by a short type: `bug:`, `feat:`, `test:`, `docs:`, `ci:` or `chore:`. Other accurate types are allowed. An internal issue/test code, priority, phase, status or detailed component name must not replace the outcome. A component scope in parentheses is optional, not mandatory. For issues use `bug:` for observed defects; PRs and squash commits retain conventional `fix:`.
 - Keep internal scenario, lab and review codes (for example, `S04` and

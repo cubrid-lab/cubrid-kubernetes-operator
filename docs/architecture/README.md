@@ -94,6 +94,32 @@ and [CONTRIBUTING.md](../../CONTRIBUTING.md#testing-expectations) separate them:
 | **Implemented** | Present in the code on `main`, checked by reading it and by unit or envtest tests; not by itself proof of behavior on a real cluster |
 | **Observed** | Seen in a recorded scenario run, with the level named: Kind in CI, or the VM lab. One run on one environment is not a general guarantee |
 
+## Canonical runtime topology
+
+The [system topology](topology.md#data-path) is the canonical **three-member
+HA layout** for all these diagrams. The [data-path SQL view](data-path.md#sql-path)
+uses the same service names, Pod/Deployment names, number of Pods and
+edges; a management or failure sequence can show a *subset*, but must not
+invent a different deployment or routing architecture.
+
+| Invariant | Same on every page |
+|---|---|
+| Application-to-SQL path | Client → `demo-rw` (TCP 33000) or `demo-ro` (TCP 33001) → matching Broker Pods → CUBRID member server (TCP 1523) |
+| Broker workloads | `demo-broker-rw` = 2 RW Broker Pods; `demo-broker-ro` = 2 RO Broker Pods; **separate from** the database StatefulSet |
+| HA members | StatefulSet `demo`, members `demo-0`, `demo-1`, `demo-2`, one member PVC each; CUBRID heartbeat UDP 59901 and replication between native members |
+| Role ownership | **CUBRID Native HA** elects/changes Master. The Operator observes roles, never pins a permanent master to any ordinal or rewrites a Service to target a master Pod |
+| Operator control | An Operator manager Pod with two reconcilers, outside the SQL path, writes Kubernetes objects through the API and contacts each member's Instance Manager over authenticated HTTP TCP 9090 |
+| Node placement and disruption | Member spreading and PodDisruptionBudgets are Kubernetes placement/eviction controls; they do not elect a Master or provide failover fencing |
+| Standalone exception | Same two application Services and Broker Deployments, but **only `demo-0`**; no HA heartbeat, replication peers or three-member StatefulSet |
+
+The labels `demo-0`/`demo-1`/`demo-2` are **member identities, not
+primary/replica roles**. A failure-sequence diagram may annotate, for example,
+“`demo-0`: Master *before this fault*”, but must explicitly state that the
+example does not fix the winner for other faults or runs. Likewise, a
+read-only Broker has an RO access mode, **not** a hardwired “slave Service”.
+The canonical graph expresses the HA peer group without a permanent
+master-to-slave arrow, since that direction changes when CUBRID changes roles.
+
 ## Shared components
 
 All pages use these names. The examples use a cluster named `demo` in one
@@ -173,13 +199,17 @@ reconciled together rather than independent subsystems.
 
 ## Keeping the diagrams current
 
-- Each diagram exists in exactly one place, as a Mermaid block in the page
-  that explains it. GitHub renders Mermaid natively, so there are no
-  generated image files to regenerate or keep in step. Other documents link
-  to these pages rather than copying a diagram.
-- Use the component names and the `classDef` colors from this page in every
-  diagram, and plain-language labels. Scenario codes and issue numbers belong
-  in the text and evidence tables, not as diagram labels.
+- [Topology](topology.md) defines one **canonical** set of physical and SQL
+  connections. The [SQL-path page](data-path.md) deliberately repeats that
+  layout for context; when the topology changes, update both projections in
+  the **same PR**. Other sequence diagrams focus on actions but must reuse
+  those runtime identities and ownership boundaries. GitHub renders Mermaid
+  natively, with no separate generated images to maintain.
+- Use the canonical identity table above, these four owner colors and the
+  dotted-control/thick-data line convention for every diagram. Mermaid
+  sequence participant groups use the same owner colors. Scenario codes and
+  issue numbers belong in prose/evidence tables, not boxes. Do not draw a
+  fixed `demo-0` Master or place the Operator in the client SQL path.
 - When a change moves a behavior from planned to implemented, or adds
   scenario evidence, update the affected page in the same pull request and
   check it against [ROADMAP.md](../../ROADMAP.md).
