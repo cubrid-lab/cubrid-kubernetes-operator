@@ -61,7 +61,8 @@ type fakeLab struct {
 // still in flight when the command ends, which kills the script; killed
 // before that rename, it has changed nothing a replace or delete checks
 // (#777). With the file slow-store, every renewal after the flaky one pauses
-// just before that rename, so that the run's cancellation lands there.
+// just before that rename, so that the run's cancellation lands there; with
+// slow-answer, just after it, so that the run never hears it was stored.
 func newFakeLab(t *testing.T, marker, create, renew string) *fakeLab {
 	t.Helper()
 	dir := t.TempDir()
@@ -139,6 +140,10 @@ case "$*" in
 	echo "$v" > "$dir/version.new"
 	mv "$dir/version.new" "$dir/version"
 	rm -f "$dir/storing"
+	if [ -e "$dir/slow-answer" ] && [ -e "$dir/flaked" ]; then
+		: > "$dir/answering"
+		sleep 2
+	fi
 	if [ "$renew" = flaky ] && ! [ -e "$dir/flaked" ]; then
 		: > "$dir/flaked"
 		echo 'Unable to connect to the server: net/http: request canceled (Client.Timeout exceeded)' >&2
@@ -519,6 +524,26 @@ func TestRunReleasesTheLeaseAfterARenewalCancelledWhileItWasStored(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, "storing")); err != nil {
 		t.Fatal("no renewal was cancelled while it was stored")
+	}
+	if !f.released() {
+		t.Error("the Lease was not released")
+	}
+}
+
+// A renewal retried after a Conflict, which the API server stores but whose
+// answer the run never hears, still carries a renewal time this run sent: the
+// release recognises the Lease as this run's and deletes it.
+func TestRunReleasesTheLeaseAfterARetriedRenewalWasStoredUnheard(t *testing.T) {
+	f := newFakeLab(t, labA, "ok", "flaky")
+	if err := os.WriteFile(filepath.Join(f.dir, "slow-answer"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code := run(labArgsFor(3*time.Second, "sleep", "1.5"), callerEnviron(t), f.kubectl, newSignalSource().notify)
+	if code != 0 {
+		t.Fatalf("run() = %d, want 0", code)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "answering")); err != nil {
+		t.Fatal("no renewal was stored and then cancelled before its answer")
 	}
 	if !f.released() {
 		t.Error("the Lease was not released")
