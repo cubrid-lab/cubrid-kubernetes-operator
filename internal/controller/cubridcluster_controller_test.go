@@ -122,11 +122,11 @@ type memberProber struct{ master string }
 func (p *memberProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
 	if podName == p.master {
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now(),
-			LogEnd: &databasev1alpha1.LogAddress{Page: 10}}
+			LogEnd: &databasev1alpha1.LogAddress{Page: 10}, Capabilities: allCapabilities}
 	}
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now(),
 		Replication: &ReplicationObservation{Source: p.master, AppliedChanges: 1,
-			CopiedEOF: &databasev1alpha1.LogAddress{Page: 10}}}
+			CopiedEOF: &databasev1alpha1.LogAddress{Page: 10}}, Capabilities: allCapabilities}
 }
 
 // applierProber reports one master and slaves with the given appliers, at the

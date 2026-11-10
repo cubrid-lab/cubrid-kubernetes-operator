@@ -17,6 +17,7 @@ limitations under the License.
 package instancemanager
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -538,6 +539,7 @@ func (s *Server) role(w http.ResponseWriter, r *http.Request) {
 	st.LogEnd = logEndOf(replCtx, s.cli, st, s.replicationDB)
 	s.logMissingApplier(ctx, st)
 	st.Unfinished = s.unfinishedDatabase()
+	st.Capabilities = Capabilities()
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -581,8 +583,7 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req BackupRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+	if !decodeRequest(w, body, &req) {
 		return
 	}
 	// Nothing is done for a request this manager does not support: no
@@ -954,8 +955,7 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req RestoreRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+	if !decodeRequest(w, body, &req) {
 		return
 	}
 	// The request is checked before it is admitted and recorded, so an
@@ -1328,6 +1328,30 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 		return nil, false
 	}
 	return body, true
+}
+
+// decodeRequest decodes the JSON body of a request into req and reports
+// whether it could. A body that is not one JSON value of req's form is
+// answered 400 here. So is a body with a field this manager does not know:
+// a check that field carries would otherwise not run, and the answer would
+// be the same as for a request without it (ADR-0013).
+func decodeRequest(w http.ResponseWriter, body []byte, req any) bool {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(req)
+	if err == nil && dec.Decode(&json.RawMessage{}) != io.EOF {
+		err = errors.New("more than one JSON value")
+	}
+	switch {
+	case err != nil && strings.HasPrefix(err.Error(), "json: unknown field "):
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "the request body has a field this Instance Manager does not know: " +
+			strings.TrimPrefix(err.Error(), "json: unknown field ")})
+		return false
+	case err != nil:
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+		return false
+	}
+	return true
 }
 
 // validateBackupRequest rejects a backup request this manager does not carry

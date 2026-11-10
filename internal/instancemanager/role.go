@@ -64,6 +64,39 @@ type HAStatus struct {
 	// neither Role nor Reason. Absent for a database without the marker and
 	// for a member that was not told its database.
 	Unfinished *UnfinishedDatabase `json:"unfinished,omitempty"`
+	// Capabilities are the request checks this manager enforces
+	// (Capabilities). GET /v1/role always reports them; an answer without
+	// them comes from a build that enforces none it can show.
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// The checks a manager enforces on a request field, as GET /v1/role reports
+// them (ADR-0013). A manager of another build may decode a field it does not
+// know, ignore it and answer as if it had applied the check, so the Operator
+// sends a request that relies on a check only to a manager that reports it.
+// A name is never reused for another check.
+const (
+	// CapabilityExpectedClusterUID: a restore with seedFromMaster refuses an
+	// artifact whose manifest names a cluster UID other than
+	// expectedClusterUID.
+	CapabilityExpectedClusterUID = "expected-cluster-uid"
+	// CapabilitySeedFromMaster: a restore with seedFromMaster refuses an
+	// artifact that was not taken on that member as master, and restores the
+	// member as a slave of it.
+	CapabilitySeedFromMaster = "seed-from-master"
+	// CapabilitySeedUpload: a backup with upload.seed is uploaded only to a
+	// seed location of its cluster and database, with master metadata.
+	CapabilitySeedUpload = "seed-upload"
+	// CapabilityBackupSourceRole: a backup records the role the member itself
+	// reports, and a backup whose request names it master, or a seed backup,
+	// is refused or not uploaded when the member does not report that role
+	// before and after backupdb.
+	CapabilityBackupSourceRole = "backup-source-role"
+)
+
+// Capabilities returns every check this manager enforces, for GET /v1/role.
+func Capabilities() []string {
+	return []string{CapabilityExpectedClusterUID, CapabilitySeedFromMaster, CapabilitySeedUpload, CapabilityBackupSourceRole}
 }
 
 // ApplierProcess is one "Applylogdb" line of `cubrid heartbeat status`.

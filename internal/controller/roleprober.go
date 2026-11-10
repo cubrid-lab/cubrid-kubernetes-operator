@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -81,6 +83,9 @@ type RoleObservation struct {
 	// when the database carries the marker of an unfinished createdb or
 	// restoredb; nil when it reports none. It is independent of Role.
 	Unfinished *databasev1alpha1.InstanceUnfinishedDatabase
+	// Capabilities are the request checks the Instance Manager reports that
+	// it enforces (instancemanager.Capabilities); nil when it reports none.
+	Capabilities []string
 }
 
 // RoleProber polls one instance's Instance Manager /v1/role endpoint.
@@ -155,6 +160,49 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	return o
 }
 
+// Reasons of a request that is not sent because the member's Instance
+// Manager is not shown to enforce a check the request relies on (ADR-0013):
+// its fresh answer to GET /v1/role does not report the check, or there is no
+// fresh answer to read it from.
+const (
+	reasonCapabilityMissing    = "InstanceManagerCapabilityMissing"
+	reasonCapabilityUnverified = "InstanceManagerCapabilityUnverified"
+)
+
+// capabilityHold says whether the step, a request to member that relies on
+// the checks needed, waits, from o, the member's answer to GET /v1/role read
+// in this reconcile. It waits unless o is fresh and reports every check. A
+// 2xx answer to the request itself would not show that the check ran: an
+// Instance Manager of another build may ignore the field that carries it. The
+// step uses up no attempt while it waits, and nothing is deleted or replaced.
+func capabilityHold(member, step string, o RoleObservation, now time.Time, needed ...string) (reason, msg string, held bool) {
+	if !fresh(o, now) {
+		why := ""
+		if o.Reason != "" {
+			why = " (" + o.Reason + ")"
+		}
+		return reasonCapabilityUnverified, fmt.Sprintf(
+			"the %s is not sent to %s: it relies on the Instance Manager checks %s, and %s gave no fresh answer to "+
+				"GET /v1/role%s that shows them. The step waits and uses up no attempt",
+			step, member, strings.Join(needed, ", "), member, why), true
+	}
+	var missing []string
+	for _, c := range needed {
+		if !slices.Contains(o.Capabilities, c) {
+			missing = append(missing, c)
+		}
+	}
+	if len(missing) == 0 {
+		return "", "", false
+	}
+	return reasonCapabilityMissing, fmt.Sprintf(
+		"the %s is not sent to %s: its Instance Manager does not report the checks %s, which the request relies "+
+			"on. An Instance Manager of another build may accept the request and skip them. Replace the Pod of %s "+
+			"so that it runs the Instance Manager of the Operator's build; the step waits, uses up no attempt, and "+
+			"nothing is deleted",
+		step, member, strings.Join(missing, ", "), member), true
+}
+
 // TokenChecker asks one member's Instance Manager whether it accepts a token.
 type TokenChecker interface {
 	AcceptsToken(ctx context.Context, podName, namespace, token string) (bool, error)
@@ -203,6 +251,7 @@ func observationFromStatus(st instancemanager.HAStatus, at time.Time) RoleObserv
 	o := RoleObservation{
 		Reachable: true, Role: databasev1alpha1.CubridRole(st.Role), ObservedAt: at,
 		EngineVersion: st.EngineVersion, Unfinished: unfinishedFromStatus(st.Unfinished),
+		Capabilities: st.Capabilities,
 	}
 	if st.Role != instancemanager.RoleMaster && st.Role != instancemanager.RoleSlave {
 		if st.Role == instancemanager.RoleUnknown || st.Role == "" {

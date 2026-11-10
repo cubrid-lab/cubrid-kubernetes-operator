@@ -156,7 +156,7 @@ each:
 | 409 | `NotAnHAMember` | an HA request reached a standalone member | terminal for the member until its Pod runs as an HA member: the operator does not look the key up, reports `InstanceManagerNotAnHAMember` and asks again later without using up an attempt |
 | 412 | `ObjectStorageNotApplied` | the manager was started without object storage (#290) | terminal until the Pod is restarted with it; the operator waits, bounded (ADR-0007) |
 | 500 | `OperationRecordUnreadable` | a start, and the manager's operation store holds a record it cannot read or decode, which may be the operation the key names (#427) | retryable once the record is readable or removed by hand; nothing was started. The operator reports `InstanceManagerOperationRecordUnreadable`, with a message that points at the runbook, waits and uses up no attempt (#481) |
-| 400, 413, 422 | none | the request is malformed or invalid (400), too large (413) or cannot be processed (422) | terminal for the request: the same request is refused again, so the operator counts a refused start as a failed attempt (`InstanceManagerRequestRefused` for a `CubridBackup`, which ends unless the target holds an operation of it) |
+| 400, 413, 422 | none | the request is malformed or invalid (400), including a body with a field the manager does not know (ADR-0013), too large (413) or cannot be processed (422) | terminal for the request: the same request is refused again, so the operator counts a refused start as a failed attempt (`InstanceManagerRequestRefused` for a `CubridBackup`, which ends unless the target holds an operation of it) |
 | 404, 405, 408, 429 and any other 4xx | none | the manager could not be asked: an earlier image without the route (404 or 405 from its mux), a timeout (408), load shedding (429) | retryable, like an unavailable manager: the operator waits and uses up no attempt (`InstanceManagerUnavailable`, `RestoreStartFailed` at a recovery start) |
 
 An operation recorded under a key conflicts with every other request body
@@ -188,7 +188,9 @@ field and keeps every earlier answer readable.
 ```
 
 As implemented, the answer is `{current, role, serverActive, nodes, source,
-reason, engineVersion, replication, appliers, unfinished}` (`internal/instancemanager/role.go`),
+reason, engineVersion, replication, appliers, unfinished, capabilities}` (`internal/instancemanager/role.go`);
+`capabilities` names the request checks the manager enforces, which the
+Operator reads before it sends a request that relies on one (ADR-0013),
 the role is derived from `cubrid heartbeat status` alone, and `source` is
 always `heartbeat`. The manager does not run `changemode` and does not
 cross-check the configuration.
