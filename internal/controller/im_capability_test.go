@@ -338,7 +338,154 @@ var _ = Describe("A CubridBackup on the master of an Instance Manager that does 
 		Expect(fake.lookups).To(ContainElement(recordedMaster), "the recorded target is asked whether it holds the backup")
 		Expect(readyOf(backup).reason).To(Equal("InstanceManagerCapabilityMissing"))
 	})
+
+	It("follows the operation a recorded master holds although it no longer reports the check", func() {
+		const recordedMaster = "cap-bk-adopt-0"
+		backup := newMasterBackup("cap-bk-adopt")
+		prober := &olderMemberProber{memberProber: memberProber{master: recordedMaster}}
+		fake := &lostResponseBackupClient{lose: 1}
+		r := &CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: prober, Backup: fake}
+		run(r, backup)
+		Expect(fake.instances).To(Equal([]string{recordedMaster}))
+
+		By("the master holding the operation the lost start began, and its Pod replaced by one of an older build")
+		fake.held = &instancemanager.Operation{ID: opFake, State: instancemanager.OpRunningBackup}
+		prober.older = map[string]bool{recordedMaster: true}
+		run(r, backup)
+		Expect(fake.instances).To(HaveLen(1), "the start was sent again")
+		got := stored(backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseRunning))
+		Expect(got.Status.OperationRef).To(Equal(opFake))
+	})
+
+	It("ends a recorded master's backup that waited for the check for the whole bound, with nothing started", func() {
+		const recordedMaster = "cap-bk-bound-0"
+		backup := newMasterBackup("cap-bk-bound")
+		prober := &olderMemberProber{memberProber: memberProber{master: recordedMaster}}
+		fake := &lostResponseBackupClient{lose: 1}
+		now := time.Now()
+		r := &CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: prober, Backup: fake,
+			Clock: func() time.Time { return now }}
+		run(r, backup)
+		Expect(fake.instances).To(Equal([]string{recordedMaster}))
+
+		prober.older = map[string]bool{recordedMaster: true}
+		now = now.Add(backupTargetWait / 2)
+		run(r, backup)
+		Expect(readyOf(backup).reason).To(Equal("InstanceManagerCapabilityMissing"))
+
+		now = now.Add(backupTargetWait)
+		run(r, backup)
+		Expect(fake.instances).To(HaveLen(1))
+		got := stored(backup)
+		Expect(got.Status.Phase).To(Equal(databasev1alpha1.BackupPhaseFailed))
+		Expect(readyOf(backup).reason).To(Equal(reasonRecordedTargetNotStarted))
+	})
+
+	// A backup on the master is held on the check only once the master is
+	// resolved, which takes a fresh, readable answer from it: a master that
+	// cannot be asked, or whose answer is stale, is no target, and the
+	// backup waits for a safe target instead (ADR-0005). The capability
+	// reasons of an unanswered member therefore do not arise here.
+	It("starts nothing on a master that cannot be asked, and waits for a target instead", func() {
+		backup := newMasterBackup("cap-bk-silent")
+		prober := &silentProber{master: "cap-bk-silent-0", silent: true}
+		fake := &fakeBackupClient{}
+		r := &CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: prober, Backup: fake}
+		run(r, backup)
+		Expect(fake.started).To(BeFalse())
+		Expect(stored(backup).Status.TargetInstance).To(BeEmpty())
+		Expect(readyOf(backup).reason).NotTo(HavePrefix("InstanceManagerCapability"))
+	})
+
+	It("records one Warning Event when a backup begins to wait for the check", func() {
+		backup := newMasterBackup("cap-bk-event")
+		prober := &olderMemberProber{memberProber: memberProber{master: "cap-bk-event-0"}, older: map[string]bool{"cap-bk-event-0": true}}
+		recorder := record.NewFakeRecorder(20)
+		r := &CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: prober, Backup: &fakeBackupClient{},
+			Recorder: recorder}
+		for range 3 {
+			run(r, backup)
+		}
+		var holds []string
+		for _, e := range drain(recorder) {
+			if strings.Contains(e, "InstanceManagerCapabilityMissing") {
+				holds = append(holds, e)
+			}
+		}
+		Expect(holds).To(HaveLen(1))
+		Expect(holds[0]).To(And(HavePrefix("Warning"), ContainSubstring("cap-bk-event-0"), ContainSubstring("backup-source-role")))
+	})
+
+	// A PreferStandby backup falls back to the master once the master's log
+	// end stayed unread for its bound. When that master does not report the
+	// check, the backup stays on the capability wait: the log-end wait is
+	// not begun again, which would switch the condition back and forth.
+	It("stays on the capability wait after the log-end fallback to a master without the check", func() {
+		const name = "cap-bk-logend"
+		cluster := haCluster(name)
+		cluster.Spec.Databases = []databasev1alpha1.CubridDatabase{{Name: demoDB}}
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, cluster) })
+		createAppliedMemberPods(ctx, cluster)
+		backup := &databasev1alpha1.CubridBackup{}
+		backup.Name, backup.Namespace = name, cluster.Namespace
+		backup.Spec = databasev1alpha1.CubridBackupSpec{
+			ClusterRef: databasev1alpha1.LocalObjectRef{Name: name},
+			Database:   demoDB,
+			Level:      databasev1alpha1.CubridBackupFull,
+			Target:     databasev1alpha1.CubridBackupTarget{Preference: databasev1alpha1.PreferStandby},
+			Destination: databasev1alpha1.CubridBackupDestination{
+				Type:          databasev1alpha1.DestinationObjectStorage,
+				ObjectStorage: &databasev1alpha1.ObjectStorageDestination{Bucket: destinationBucket},
+			},
+		}
+		Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backup) })
+
+		prober := withoutChecks{RoleProber: &logEndUnreadProber{master: name + "-0"}, older: map[string]bool{name + "-0": true}}
+		fake := &lostResponseBackupClient{}
+		recorder := record.NewFakeRecorder(50)
+		t0 := time.Now()
+		at := t0
+		r := &CubridBackupReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Prober: prober, Backup: fake,
+			Recorder: recorder, Clock: func() time.Time { return at }}
+		run(r, backup)
+		Expect(readyOf(backup).reason).To(Equal(reasonPrimaryLogEndNotRead))
+
+		for _, step := range []time.Duration{primaryLogEndWait + time.Second, primaryLogEndWait + 20*time.Second,
+			primaryLogEndWait + 40*time.Second, primaryLogEndWait + 80*time.Second} {
+			at = t0.Add(step)
+			run(r, backup)
+			got := stored(backup)
+			Expect(fake.instances).To(BeEmpty(), "at %s", step)
+			Expect(got.Status.TargetInstance).To(BeEmpty(), "at %s", step)
+			Expect(readyOf(backup).reason).To(Equal("InstanceManagerCapabilityMissing"), "at %s", step)
+		}
+		var holds int
+		for _, e := range drain(recorder) {
+			if strings.Contains(e, "InstanceManagerCapabilityMissing") {
+				holds++
+			}
+		}
+		Expect(holds).To(Equal(1))
+	})
 })
+
+// withoutChecks answers like RoleProber, from an Instance Manager that
+// reports no checks for each member in older.
+type withoutChecks struct {
+	RoleProber
+	older map[string]bool
+}
+
+func (p withoutChecks) ProbeRole(ctx context.Context, podName, namespace string) RoleObservation {
+	o := p.RoleProber.ProbeRole(ctx, podName, namespace)
+	if p.older[podName] {
+		o.Capabilities = nil
+	}
+	return o
+}
 
 // metaCondition is the part of a condition these specs compare.
 type metaCondition struct{ reason, message string }

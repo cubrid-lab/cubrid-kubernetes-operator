@@ -1339,6 +1339,10 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 // without it (ADR-0013). Such a body is told apart by decoding it again
 // without the rule: only the unknown field makes the two differ.
 func decodeRequest(w http.ResponseWriter, body []byte, req any) bool {
+	if t := reflect.TypeOf(req); t == nil || t.Kind() != reflect.Pointer {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: "the request cannot be decoded by this manager"})
+		return false
+	}
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	err := dec.Decode(req)

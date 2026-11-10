@@ -421,9 +421,13 @@ the member), `InstanceManagerCapabilityUnverified` when the answer is older
 than 15 seconds or cannot be decoded, or `InstanceManagerUnavailable` or
 `InstanceManagerTokenRefused` when the member cannot be asked. While no
 target is recorded the backup stays `Pending` and records none, so a later
-selection may take a standby. A recorded master is not sent the start again;
-an operation it holds under the backup's key is followed, and otherwise the
-wait is bounded as below.
+selection may take a standby. That wait has no time limit, unlike the wait
+for object storage: a Warning Event with the condition's reason and message
+is recorded once when it begins. A `PreferStandby` backup that fell back to
+the master because the master's log end was not read stays on this wait and
+does not begin the log-end wait again. A recorded master is not sent the
+start again; an operation it holds under the backup's key is followed, and
+otherwise the wait is bounded as below.
 
 The `BackupFailed` Event carries the message of the CubridBackup's `Ready`
 condition. A backup whose start was not confirmed within 30 minutes

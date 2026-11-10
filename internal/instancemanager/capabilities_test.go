@@ -19,6 +19,7 @@ package instancemanager
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -91,4 +92,16 @@ func TestServer_RefusesARequestFieldItDoesNotKnow(t *testing.T) {
 		}
 		f.wantNoWork("two JSON values")
 	})
+}
+
+// decodeRequest takes a pointer to the request it fills. Anything else is a
+// fault of the manager, not of the request, and is answered 500.
+func TestDecodeRequest_RefusesAValueThatIsNoPointer(t *testing.T) {
+	rr := httptest.NewRecorder()
+	if decodeRequest(rr, []byte(`{"database":"`+dbName+`"}`), HABootstrapRequest{}) {
+		t.Fatal("a request was decoded into a value that is no pointer")
+	}
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("answered %d, want 500", rr.Code)
+	}
 }

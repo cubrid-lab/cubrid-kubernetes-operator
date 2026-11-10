@@ -217,7 +217,8 @@ open one.
    The wait uses up no attempt, and nothing is deleted, overwritten or
    replaced. A seed backup is not taken while the member being seeded does
    not show the checks of its restore. A `CubridBackup` whose target is not
-   recorded yet records none while it waits, so a later selection may take a
+   recorded yet records none while it waits, without a time limit and with
+   one Warning Event when the wait begins, so a later selection may take a
    standby; one whose recorded master stops showing the check is not sent
    its start again, an operation the master holds under the backup's key is
    followed, and the wait is bounded like any wait on a recorded target

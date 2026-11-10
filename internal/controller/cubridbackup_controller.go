@@ -273,6 +273,7 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		// The start is not sent again to a recorded master whose manager does
 		// not show the role check; an operation it holds is followed.
 		if reason, msg, held := backupCapabilityHold(sel, obs, observedAt); held {
+			r.capabilityHoldEvent(backup, reason, msg)
 			return r.holdRecordedTarget(ctx, backup, reason, msg)
 		}
 	} else {
@@ -286,8 +287,13 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 			backup.Spec.Target.Preference, single, logEndWaitOver, observedAt)
 		// A selection that ended otherwise ends this wait; a later one starts
 		// it again with the whole bound. Each wait is bounded, and between
-		// them the backup waits for another reason or proceeds.
+		// them the backup waits for another reason or proceeds. A fallback
+		// to a master held on its Instance Manager's checks keeps the wait
+		// over, so that the next selection falls back again and the backup
+		// stays on that hold instead of beginning this wait anew.
+		_, _, fallbackHeld := backupCapabilityHold(sel, obs, observedAt)
 		switch {
+		case sel.Reason == reasonMasterFallbackPrimaryLogEndNotRead && fallbackHeld:
 		case sel.Reason != reasonPrimaryLogEndNotRead:
 			backup.Status.PrimaryLogEndNotReadSince = nil
 		case since == nil:
@@ -314,6 +320,7 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		// take a standby, or the master once its Pod runs a manager that
 		// shows the role check.
 		if reason, msg, held := backupCapabilityHold(sel, obs, observedAt); held {
+			r.capabilityHoldEvent(backup, reason, msg)
 			backup.Status.ObjectStorageNotAppliedSince = nil
 			if backup.Status.Phase == "" {
 				backup.Status.Phase = databasev1alpha1.BackupPhasePending
@@ -594,6 +601,18 @@ func backupCapabilityHold(sel TargetSelection, obs map[string]RoleObservation, n
 		return "", "", false
 	}
 	return capabilityHold(sel.Instance, "backup", obs[sel.Instance], now, instancemanager.CapabilityBackupSourceRole)
+}
+
+// capabilityHoldEvent records a Warning Event when the backup begins to
+// wait on its target's Instance Manager checks: the Ready condition did not
+// carry reason before. The wait has no time limit while no target is
+// recorded, so the Event is the notice that a Pod needs replacing.
+func (r *CubridBackupReconciler) capabilityHoldEvent(backup *databasev1alpha1.CubridBackup, reason, msg string) {
+	if ready := meta.FindStatusCondition(backup.Status.Conditions, conditionBackupReady); r.Recorder == nil ||
+		ready != nil && ready.Reason == reason {
+		return
+	}
+	r.Recorder.Event(backup, corev1.EventTypeWarning, reason, msg)
 }
 
 func (r *CubridBackupReconciler) buildBackupRequest(backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster, sel TargetSelection) instancemanager.BackupRequest {
