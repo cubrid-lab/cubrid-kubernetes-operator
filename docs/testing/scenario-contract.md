@@ -832,10 +832,12 @@ present, it must be present exactly once and with the values that were sent.
 
 On Kind, S01, S02, S03, S05, S06 and S14 write the client's history to
 `<scenario>/history.jsonl` and the last report to `<scenario>/data-check.json`
-under the run directory, whether the rules held or not. A failed check keeps
-both, so that its violation can be placed in time against the logs. When no
-check produced a report, for example because a member could not be read,
-only the history is written.
+under the run directory when the scenario completes. They also write both
+when the data rules never held within the check's time limit, so that a
+violation can be placed in time against the logs. When no check produced a
+report, for example because a member could not be read, only the history is
+written. S02 also writes them when a later step fails; the other scenarios
+do not.
 
 ### Measurements
 
