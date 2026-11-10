@@ -277,7 +277,7 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		// requeue or an Operator restart neither restarts nor loses it.
 		since := backup.Status.PrimaryLogEndNotReadSince
 		logEndWaitOver := since != nil && r.now().Sub(since.Time) >= primaryLogEndWait
-		sel = selectBackupTarget(members, obs, replicationHistory(cluster), r.Positions.readings(cluster.UID, observedAt), res,
+		sel = selectBackupTarget(members, obs, replicationHistory(cluster), r.Positions.readings(cluster.UID, observedAt), seedAdmitted(cluster), res,
 			backup.Spec.Target.Preference, single, logEndWaitOver, observedAt)
 		// A selection that ended otherwise ends this wait; a later one starts
 		// it again with the whole bound. Each wait is bounded, and between

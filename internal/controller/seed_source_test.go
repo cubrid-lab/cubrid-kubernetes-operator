@@ -18,12 +18,14 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,10 +35,12 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
 
-// The two members of the unit tests that hold the database.
+// The two members of the unit tests that hold the database, and the member
+// they seed.
 const (
-	holderFirst = "ha-0"
-	holderPeer  = "ha-1"
+	holderFirst  = "ha-0"
+	holderPeer   = "ha-1"
+	seededMember = "ha-2"
 )
 
 // The answers a member can give about its role.
@@ -97,6 +101,215 @@ func TestSeedSourceAmong(t *testing.T) {
 	}
 }
 
+func TestSeedVerdict(t *testing.T) {
+	now := time.Now()
+	const source = holderPeer
+	caughtUpAnswer := RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now,
+		Replication: &ReplicationObservation{Source: source, CopiedEOF: logAt(10, 5)}}
+	with := func(edit func(*RoleObservation)) RoleObservation {
+		o := caughtUpAnswer
+		r := *o.Replication
+		o.Replication = &r
+		edit(&o)
+		return o
+	}
+	change := &databasev1alpha1.SeedMasterChange{Member: holderFirst, Role: databasev1alpha1.RoleMaster}
+	cases := []struct {
+		name      string
+		active    bool
+		change    *databasev1alpha1.SeedMasterChange
+		target    *databasev1alpha1.LogAddress
+		gap       bool
+		completed bool
+		member    RoleObservation
+		want      seedOutcome
+	}{
+		{"no active master seen, restore running", false, nil, nil, false, false, doesNotAnswer, seedRestoring},
+		{"no active master seen, restore completed", false, nil, nil, false, true, doesNotAnswer, seedSeeded},
+		{"no active master seen, a gap", false, nil, nil, true, true, doesNotAnswer, seedSeeded},
+		// recordSeedReading records no change before an active master is
+		// seen; one recorded then still stops the copy.
+		{"an active master seen, a change recorded before the restore completed", true, change, logAt(10, 0), false, true, caughtUpAnswer, seedSourceChanged},
+		{"an active source, restore running", true, nil, nil, false, false, doesNotAnswer, seedRestoring},
+		{"an active source, a change while the restore runs", true, change, nil, false, false, doesNotAnswer, seedSourceChanged},
+		{"an active source, a change after the member caught up", true, change, logAt(10, 0), false, true, caughtUpAnswer, seedSourceChanged},
+		{"an active source, a gap while the restore runs", true, nil, nil, true, false, doesNotAnswer, seedSourceUnverified},
+		{"an active source, a gap after the member caught up", true, nil, logAt(10, 0), true, true, caughtUpAnswer, seedSourceUnverified},
+		{"caught up exactly at the target", true, nil, logAt(10, 5), false, true, caughtUpAnswer, seedSeeded},
+		{"caught up past the target", true, nil, logAt(9, 100), false, true, caughtUpAnswer, seedSeeded},
+		{"no target read yet", true, nil, nil, false, true, caughtUpAnswer, seedCatchingUp},
+		{"the copy ends before the target", true, nil, logAt(10, 6), false, true, caughtUpAnswer, seedCatchingUp},
+		{"pages wait", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Replication.DelayedPages = 1 }), seedCatchingUp},
+		{"a failed change", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Replication.FailCount = 1 }), seedCatchingUp},
+		{"another source", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Replication.Source = holderFirst }), seedCatchingUp},
+		{"no copy end read", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Replication.CopiedEOF = nil }), seedCatchingUp},
+		{"no applier read", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Replication = nil }), seedCatchingUp},
+		{"an answer too old", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.ObservedAt = now.Add(-2 * roleObservationTTL) }), seedCatchingUp},
+		{"a contradictory answer", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Conflicting = true }), seedCatchingUp},
+		{"the member is not a slave", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Role = databasev1alpha1.RoleUnknown }), seedCatchingUp},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			seeding := &databasev1alpha1.DatabaseSeeding{Member: seededMember, Source: source,
+				MasterChange: c.change, CatchUpTarget: c.target}
+			if c.active {
+				since := metav1.NewTime(now.Add(-time.Minute))
+				seeding.ActiveMasterSince = &since
+			}
+			if got := seedVerdict(seeding, c.gap, c.completed, c.member, now); got != c.want {
+				t.Fatalf("seedVerdict = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRecordSeedReading(t *testing.T) {
+	now := time.Now()
+	at := func(o RoleObservation) RoleObservation {
+		if o.Reachable {
+			o.ObservedAt = now
+		}
+		return o
+	}
+	holders := []string{holderFirst, holderPeer}
+	const member = seededMember
+	activeSource := answersMaster
+	activeSource.LogEnd = logAt(7, 3)
+	cases := []struct {
+		name             string
+		first, src, peer RoleObservation
+		// activeAgo is how long ago an active master was first seen, zero
+		// for never; lastVerifiedAgo the last verified reading, zero for
+		// none.
+		activeAgo, lastVerifiedAgo time.Duration
+		restoreStarted, completed  bool
+		wantChange                 string
+		wantActive, wantVerified   bool
+		target, wantTarget         *databasev1alpha1.LogAddress
+		wantGap                    bool
+	}{
+		{name: "the source is the only active master", first: answersSlave, src: activeSource, peer: doesNotAnswer,
+			wantActive: true, wantVerified: true},
+		{name: "the log end after the restore completed is the target", first: answersSlave, src: activeSource, peer: answersSlave,
+			restoreStarted: true, completed: true, wantActive: true, wantVerified: true, wantTarget: logAt(7, 3)},
+		{name: "a master not active yet", first: answersSlave, src: answersMasterNotYetActive, peer: doesNotAnswer, wantVerified: true},
+		{name: "another holder reports master", first: answersMaster, src: activeSource, peer: doesNotAnswer,
+			wantChange: holderFirst, wantActive: true},
+		{name: "another holder is the active master while the source is not active", first: answersMaster,
+			src: answersMasterNotYetActive, peer: doesNotAnswer, wantChange: holderFirst, wantActive: true},
+		{name: "a change before any master is active is not recorded", first: answersMasterNotYetActive, src: answersSlave,
+			peer: doesNotAnswer},
+		{name: "a change once an active master was seen", first: answersMasterNotYetActive, src: answersSlave, peer: doesNotAnswer,
+			activeAgo: 10 * time.Second, lastVerifiedAgo: 10 * time.Second, wantChange: holderFirst, wantActive: true},
+		{name: "the member reports master during its restore", first: answersSlave, src: activeSource, peer: answersMaster,
+			restoreStarted: true, wantChange: member, wantActive: true, wantVerified: true},
+		{name: "the member reports master before its restore", first: answersSlave, src: activeSource, peer: answersMaster,
+			wantActive: true, wantVerified: true},
+		{name: "the source reports slave before any master is active", first: answersSlave, src: answersSlave, peer: doesNotAnswer},
+		{name: "the source reports slave once an active master was seen", first: answersSlave, src: answersSlave,
+			peer: doesNotAnswer, activeAgo: 10 * time.Second, wantChange: holderPeer, wantActive: true},
+		{name: "a holder does not answer", first: doesNotAnswer, src: activeSource, peer: doesNotAnswer, wantActive: true},
+		{name: "a contradictory master is no change", first: answersContradictingMaster, src: activeSource, peer: doesNotAnswer,
+			wantActive: true},
+		{name: "a verified reading after more than the bound", first: answersSlave, src: activeSource, peer: doesNotAnswer,
+			activeAgo: time.Hour, lastVerifiedAgo: seedReadingGap + time.Second, wantActive: true, wantGap: true},
+		{name: "a missing answer within the bound", first: doesNotAnswer, src: activeSource, peer: doesNotAnswer,
+			activeAgo: time.Hour, lastVerifiedAgo: seedReadingGap, wantActive: true},
+		{name: "a gap before any master was active", first: answersSlave, src: answersMasterNotYetActive, peer: doesNotAnswer,
+			lastVerifiedAgo: 2 * seedReadingGap, wantVerified: true},
+		{name: "the first active master after a long reading gap", first: answersSlave, src: activeSource, peer: doesNotAnswer,
+			lastVerifiedAgo: 2 * seedReadingGap, wantActive: true, wantGap: true},
+		{name: "the member is an active master during its restore", first: answersSlave, src: answersMasterNotYetActive,
+			peer: answersMaster, restoreStarted: true, wantChange: member, wantActive: true, wantVerified: true},
+		{name: "the member is an active master before its restore", first: answersSlave, src: answersMasterNotYetActive,
+			peer: answersMaster, wantVerified: true},
+		{name: "no verified reading since the first active master, within the bound", first: doesNotAnswer, src: activeSource,
+			peer: doesNotAnswer, activeAgo: seedReadingGap, wantActive: true},
+		{name: "no verified reading since the first active master, past the bound", first: doesNotAnswer, src: activeSource,
+			peer: doesNotAnswer, activeAgo: seedReadingGap + time.Second, wantActive: true, wantGap: true},
+		{name: "the bound counts from the last verified reading, also before the first active master", first: doesNotAnswer,
+			src: activeSource, peer: doesNotAnswer, activeAgo: 10 * time.Second, lastVerifiedAgo: time.Hour, wantActive: true,
+			wantGap: true},
+		{name: "a catch-up target shows an active master", first: doesNotAnswer, src: answersMasterNotYetActive,
+			peer: doesNotAnswer, target: logAt(1, 0), wantActive: true, wantTarget: logAt(1, 0)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			seeding := &databasev1alpha1.DatabaseSeeding{Member: member, Source: holderPeer}
+			var before *metav1.Time
+			if c.lastVerifiedAgo > 0 {
+				b := metav1.NewTime(now.Add(-c.lastVerifiedAgo))
+				seeding.LastVerifiedAt, before = &b, &b
+			}
+			if c.activeAgo > 0 {
+				a := metav1.NewTime(now.Add(-c.activeAgo))
+				seeding.ActiveMasterSince = &a
+			}
+			seeding.CatchUpTarget = c.target
+			obs := map[string]RoleObservation{holderFirst: at(c.first), holderPeer: at(c.src), member: at(c.peer)}
+			gap := recordSeedReading(seeding, holders, obs, now, c.restoreStarted, c.completed)
+			changed := ""
+			if seeding.MasterChange != nil {
+				changed = seeding.MasterChange.Member
+			}
+			active := seeding.ActiveMasterSince != nil
+			if changed != c.wantChange || active != c.wantActive || gap != c.wantGap {
+				t.Fatalf("change %q, active %t, gap %t; want %q, %t, %t", changed, active, gap,
+					c.wantChange, c.wantActive, c.wantGap)
+			}
+			verified := seeding.LastVerifiedAt != nil && seeding.LastVerifiedAt != before
+			if verified != c.wantVerified {
+				t.Fatalf("verified = %t, want %t", verified, c.wantVerified)
+			}
+			if (seeding.CatchUpTarget == nil) != (c.wantTarget == nil) ||
+				(c.wantTarget != nil && *seeding.CatchUpTarget != *c.wantTarget) {
+				t.Fatalf("target = %v, want %v", seeding.CatchUpTarget, c.wantTarget)
+			}
+		})
+	}
+
+	t.Run("the first change is kept", func(t *testing.T) {
+		first := &databasev1alpha1.SeedMasterChange{Member: holderFirst, Role: databasev1alpha1.RoleMaster, ObservedAt: metav1.NewTime(now.Add(-time.Minute))}
+		since := metav1.NewTime(now.Add(-time.Minute))
+		seeding := &databasev1alpha1.DatabaseSeeding{Member: member, Source: holderPeer, MasterChange: first, ActiveMasterSince: &since}
+		recordSeedReading(seeding, holders, map[string]RoleObservation{holderFirst: at(answersSlave), holderPeer: at(answersSlave)}, now, true, false)
+		if seeding.MasterChange != first {
+			t.Fatalf("the change was replaced by %+v", seeding.MasterChange)
+		}
+	})
+}
+
+func TestSeedAdmitted(t *testing.T) {
+	cluster := func(seeded ...string) *databasev1alpha1.CubridCluster {
+		c := &databasev1alpha1.CubridCluster{}
+		c.Name = "ha"
+		c.Spec.HighAvailability.Enabled = true
+		c.Spec.Topology.PromotableMembers = 3
+		c.Status.Databases = []databasev1alpha1.DatabaseStatus{{Name: testDatabase, PrimaryCreated: true, SeededMembers: seeded}}
+		return c
+	}
+	admitted := seedAdmitted(cluster(holderPeer))
+	for member, want := range map[string]bool{holderFirst: true, holderPeer: true, seededMember: false} {
+		if admitted(member) != want {
+			t.Fatalf("admitted(%s) = %t, want %t", member, admitted(member), want)
+		}
+	}
+	recovered := cluster(holderFirst)
+	recovered.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{Recovery: &databasev1alpha1.RecoverySource{}}
+	recovered.Status.Bootstrap = &databasev1alpha1.BootstrapStatus{TargetMember: seededMember}
+	admitted = seedAdmitted(recovered)
+	for member, want := range map[string]bool{holderFirst: true, holderPeer: false, seededMember: true} {
+		if admitted(member) != want {
+			t.Fatalf("after a recovery, admitted(%s) = %t, want %t", member, admitted(member), want)
+		}
+	}
+	notCreated := cluster()
+	notCreated.Status.Databases[0].PrimaryCreated = false
+	if seedAdmitted(notCreated) != nil {
+		t.Fatal("a cluster with no database recorded as created rejects members")
+	}
+}
+
 func TestObservationFromStatus_MasterNotYetActive(t *testing.T) {
 	nodes := func(states ...string) []instancemanager.NodeState {
 		out := make([]instancemanager.NodeState, 0, len(states))
@@ -140,13 +353,20 @@ func TestObservationFromStatus_MasterNotYetActive(t *testing.T) {
 }
 
 // answeringProber answers for each member what the test set for it; a member
-// without an entry does not answer.
-type answeringProber struct{ answers map[string]RoleObservation }
+// without an entry does not answer. An answer is received at clock, or now
+// when clock is nil.
+type answeringProber struct {
+	answers map[string]RoleObservation
+	clock   func() time.Time
+}
 
 func (p *answeringProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
 	o := p.answers[podName]
 	if o.Reachable {
 		o.ObservedAt = time.Now()
+		if p.clock != nil {
+			o.ObservedAt = p.clock()
+		}
 	}
 	return o
 }
@@ -316,7 +536,9 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Entry("the first member does not answer", "src-wait-absent", doesNotAnswer, answersMaster),
 		Entry("the peer does not answer", "src-wait-peer", answersMasterNotYetActive, doesNotAnswer),
 		Entry("no holder is master", "src-wait-none", answersSlave, answersSlave),
-		Entry("both holders are master", "src-wait-two", answersMaster, answersMasterNotYetActive),
+		// The first member is not an active master here: one would stop the
+		// copy to the first peer, which reports itself master too (#768).
+		Entry("both holders are master", "src-wait-two", answersMasterNotYetActive, answersMaster),
 		Entry("a holder has no role", "src-wait-unknown", answersUnknown, answersMaster),
 		Entry("the master contradicts its node list", "src-wait-conflict", answersSlave, answersContradictingMaster),
 	)
@@ -424,10 +646,15 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(before).NotTo(ContainElement(f.seed.restores[f.last].Prefix))
 	})
 
-	It("keeps the source of a restore in progress when the master changes", func() {
+	// No master's server is active before every member has joined once, so
+	// nothing can be committed while the last member of a new group is
+	// restored (docs/poc/RESULTS.md, POC-23). A change of master between
+	// masters that are not active yet keeps the copy as it is; one with an
+	// active master stops it (#768, the test above).
+	It("keeps the source of a restore in progress when the master changes before any master is active", func() {
 		f := newFixture("src-pinned")
 		f.prober.answers[f.first] = answersSlave
-		f.prober.answers[f.peer] = answersMaster
+		f.prober.answers[f.peer] = answersMasterNotYetActive
 		reconcileOnce(f)
 		status := reconcileOnce(f)
 		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
@@ -437,11 +664,12 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		backups := len(f.seed.backups)
 
 		By("the first member becoming master, and the source not answering, while the restore runs")
-		f.prober.answers[f.first] = answersMaster
+		f.prober.answers[f.first] = answersMasterNotYetActive
 		f.prober.answers[f.peer] = doesNotAnswer
 		f.seed.backupOn = nil
 		status = reconcileOnce(f)
-		Expect(status.Seeding).To(Equal(started))
+		Expect(withoutOperations(status.Seeding)).To(Equal(withoutOperations(started)))
+		Expect(status.Seeding.ActiveMasterSince).To(BeNil())
 		Expect(f.seed.restores[f.last]).To(Equal(request), "the restore in progress was asked for with another request")
 		Expect(f.seed.backups).To(HaveLen(backups))
 		Expect(f.seed.backupOn).To(BeEmpty(), "the source of a restore in progress need not be reachable")
@@ -452,6 +680,481 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		status = reconcileOnce(f)
 		Expect(status.SeededMembers).To(Equal([]string{f.peer, f.last}))
 		Expect(status.HAConfigured).To(BeTrue())
+	})
+
+	// A member seeded from an active master that loses the role before the
+	// member has applied that master's log past the backup lacks what the new
+	// master committed, and nothing in its readings shows it
+	// (docs/poc/RESULTS.md, POC-57). Such a member must not be recorded as
+	// seeded (#768).
+	It("does not record a member as seeded when the active master changed while its restore ran", func() {
+		f := newFixture("src-changed")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMaster
+		reconcileOnce(f)
+		status := reconcileOnce(f)
+		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
+		Expect(status.Seeding.RestoreOperationID).NotTo(BeEmpty())
+		restoreID := status.Seeding.RestoreOperationID
+		backups, restoreStarts := len(f.seed.backupOn), len(f.seed.restoreOn)
+
+		By("the first member becoming master while the restore runs")
+		f.prober.answers[f.first] = answersMaster
+		f.prober.answers[f.peer] = answersSlave
+		reconcileOnce(f)
+
+		By("the restore completing")
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		for range 2 {
+			status = reconcileOnce(f)
+			Expect(status.SeededMembers).To(Equal([]string{f.peer}), "a member seeded across a change of master was recorded as seeded")
+			Expect(status.HAConfigured).To(BeFalse())
+			Expect(status.Phase).To(Equal(databasePhaseFailed))
+			Expect(status.BootstrapAttempts).To(BeZero())
+			Expect(status.Seeding).NotTo(BeNil(), "the seeding record must be kept for a person")
+			Expect(status.Seeding.Member).To(Equal(f.last))
+			Expect(status.Seeding.Source).To(Equal(f.peer))
+			Expect(status.Seeding.RestoreOperationID).To(Equal(restoreID))
+			Expect(reason(f)).To(Equal("SeedSourceChangedDuringSeed"))
+		}
+		Expect(f.seed.backupOn).To(HaveLen(backups), "no backup is started after a change of master")
+		Expect(f.seed.restoreOn).To(HaveLen(restoreStarts), "no restore is started after a change of master")
+	})
+
+	// The copies of the last member below are seeded from the first peer,
+	// which answers as an active master whose log ends on page 10.
+	activeSourceEndingAt := func(page int64) RoleObservation {
+		o := answersMaster
+		o.LogEnd = logAt(page, 0)
+		return o
+	}
+	// slaveOf is the answer of a slave whose applier applies the log of
+	// source, whose copy of that log ends on page copied, with delayed pages
+	// waiting and failed changes that could not be applied.
+	slaveOf := func(source string, copied, delayed, failed int64) RoleObservation {
+		o := answersSlave
+		o.Replication = &ReplicationObservation{Source: source, CopiedEOF: logAt(copied, 0), DelayedPages: delayed, FailCount: failed}
+		return o
+	}
+	// restoringFromActiveSource starts the restore of the last member from
+	// the first peer as an active master.
+	restoringFromActiveSource := func(name string) *fixture {
+		f := newFixture(name)
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = activeSourceEndingAt(10)
+		reconcileOnce(f)
+		status := reconcileOnce(f)
+		Expect(status.Seeding.RestoreOperationID).NotTo(BeEmpty())
+		Expect(status.Seeding.ActiveMasterSince).NotTo(BeNil())
+		Expect(reason(f)).To(Equal("SeedRestoreInProgress"))
+		return f
+	}
+	message := func(f *fixture) string {
+		got := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, f.key, got)).To(Succeed())
+		return meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady).Message
+	}
+	// expectStopped checks that the bootstrap stopped for reason with the
+	// copy of the last member kept and nothing started since starts.
+	expectStopped := func(f *fixture, status *databasev1alpha1.DatabaseStatus, why string, backups, restores int) {
+		Expect(status.SeededMembers).NotTo(ContainElement(f.last))
+		Expect(status.HAConfigured).To(BeFalse())
+		Expect(status.Phase).To(Equal(databasePhaseFailed))
+		Expect(status.BootstrapAttempts).To(BeZero())
+		Expect(status.Seeding).NotTo(BeNil())
+		Expect(status.Seeding.Member).To(Equal(f.last))
+		Expect(status.Seeding.RestoreOperationID).NotTo(BeEmpty())
+		Expect(reason(f)).To(Equal(why))
+		Expect(f.seed.backupOn).To(HaveLen(backups))
+		Expect(f.seed.restoreOn).To(HaveLen(restores))
+	}
+
+	It("records the member as seeded once it caught up with an active source and no master change was seen", func() {
+		f := restoringFromActiveSource("src-caught")
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 0, 0)
+		status := reconcileOnce(f)
+		Expect(status.SeededMembers).To(Equal([]string{f.peer, f.last}))
+		Expect(status.HAConfigured).To(BeTrue())
+		Expect(status.Seeding).To(BeNil())
+	})
+
+	DescribeTable("waits without using an attempt while the member has not caught up with an active source",
+		func(name string, member func(f *fixture) RoleObservation) {
+			f := restoringFromActiveSource(name)
+			f.seed.restore[f.last] = instancemanager.OpCompleted
+			f.prober.answers[f.last] = member(f)
+			for range 2 {
+				status := reconcileOnce(f)
+				Expect(status.SeededMembers).To(Equal([]string{f.peer}))
+				Expect(status.Phase).NotTo(Equal(databasePhaseFailed))
+				Expect(status.BootstrapAttempts).To(BeZero())
+				Expect(status.Seeding.CatchUpTarget).To(Equal(logAt(10, 0)), "the source's log end after the restore completed")
+				Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
+			}
+
+			By("the member catching up")
+			f.prober.answers[f.peer] = activeSourceEndingAt(12)
+			f.prober.answers[f.last] = slaveOf(f.peer, 11, 0, 0)
+			status := reconcileOnce(f)
+			Expect(status.SeededMembers).To(Equal([]string{f.peer, f.last}))
+			Expect(status.HAConfigured).To(BeTrue())
+		},
+		Entry("its copy ends before the source's log end", "src-behind",
+			func(f *fixture) RoleObservation { return slaveOf(f.peer, 9, 0, 0) }),
+		Entry("pages wait to be applied", "src-delayed",
+			func(f *fixture) RoleObservation { return slaveOf(f.peer, 10, 2, 0) }),
+		Entry("a change failed", "src-failcount",
+			func(f *fixture) RoleObservation { return slaveOf(f.peer, 10, 0, 1) }),
+		Entry("it applies another member's log", "src-othersource",
+			func(f *fixture) RoleObservation { return slaveOf(f.first, 10, 0, 0) }),
+		Entry("its applier was not read", "src-noapplier",
+			func(*fixture) RoleObservation { return answersSlave }),
+		Entry("it does not answer", "src-silentmember",
+			func(*fixture) RoleObservation { return doesNotAnswer }),
+	)
+
+	It("stops when the master changes after the restore completed and before the member caught up", func() {
+		f := restoringFromActiveSource("src-latechange")
+		backups, restores := len(f.seed.backupOn), len(f.seed.restoreOn)
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		f.prober.answers[f.last] = slaveOf(f.peer, 5, 3, 0)
+		reconcileOnce(f)
+		Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
+
+		By("the first member taking over before the member caught up")
+		f.prober.answers[f.first] = answersMaster
+		f.prober.answers[f.peer] = answersSlave
+		status := reconcileOnce(f)
+		expectStopped(f, status, "SeedSourceChangedDuringSeed", backups, restores)
+		Expect(status.Seeding.MasterChange.Member).To(Equal(f.first))
+		Expect(message(f)).To(ContainSubstring("the master changed from " + f.peer + " to " + f.first))
+		Expect(message(f)).To(MatchRegexp(`reported itself master at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ`))
+	})
+
+	It("stops when the source reports itself a slave", func() {
+		f := restoringFromActiveSource("src-demoted")
+		backups, restores := len(f.seed.backupOn), len(f.seed.restoreOn)
+		f.prober.answers[f.peer] = answersSlave
+		status := reconcileOnce(f)
+		expectStopped(f, status, "SeedSourceChangedDuringSeed", backups, restores)
+		Expect(status.Seeding.MasterChange.Member).To(Equal(f.peer))
+		Expect(status.Seeding.MasterChange.Role).To(Equal(databasev1alpha1.RoleSlave))
+	})
+
+	It("stops when the member being seeded reports itself master", func() {
+		f := restoringFromActiveSource("src-peermaster")
+		backups, restores := len(f.seed.backupOn), len(f.seed.restoreOn)
+		f.prober.answers[f.last] = answersMaster
+		status := reconcileOnce(f)
+		expectStopped(f, status, "SeedSourceChangedDuringSeed", backups, restores)
+		Expect(status.Seeding.MasterChange.Member).To(Equal(f.last))
+	})
+
+	It("stays stopped after an Operator restart once a change of master is recorded", func() {
+		f := restoringFromActiveSource("src-restart")
+		backups, restores := len(f.seed.backupOn), len(f.seed.restoreOn)
+
+		By("a status in which an earlier Operator recorded a change of master")
+		got := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, f.key, got)).To(Succeed())
+		got.Status.Databases[0].Seeding.MasterChange = &databasev1alpha1.SeedMasterChange{
+			Member: f.first, Role: databasev1alpha1.RoleMaster, ObservedAt: metav1.NewTime(time.Now().Add(-time.Minute)),
+		}
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+
+		By("a new reconciler finding the source master again and the member caught up")
+		f.r = &CubridClusterReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: f.recorder, Prober: f.prober,
+			HABootstrap: &fakeHABootstrapClient{state: instancemanager.OpCompleted}, Backup: f.seed, Restore: f.seed,
+		}
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 0, 0)
+		status := reconcileOnce(f)
+		expectStopped(f, status, "SeedSourceChangedDuringSeed", backups, restores)
+	})
+
+	It("goes on when one answer is missing, and stops after more than 30 seconds without a verified reading", func() {
+		now := time.Now()
+		f := newFixture("src-gap")
+		f.r.Clock = func() time.Time { return now }
+		f.prober.clock = f.r.Clock
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = activeSourceEndingAt(10)
+		reconcileOnce(f)
+		reconcileOnce(f)
+		backups, restores := len(f.seed.backupOn), len(f.seed.restoreOn)
+
+		By("the first member not answering once, 10 seconds later")
+		now = now.Add(10 * time.Second)
+		f.prober.answers[f.first] = doesNotAnswer
+		status := reconcileOnce(f)
+		Expect(status.Phase).NotTo(Equal(databasePhaseFailed))
+		Expect(status.Seeding.MasterChange).To(BeNil())
+		Expect(reason(f)).To(Equal("SeedRestoreInProgress"))
+
+		By("a verified reading 10 seconds after that")
+		now = now.Add(10 * time.Second)
+		f.prober.answers[f.first] = answersSlave
+		status = reconcileOnce(f)
+		Expect(status.Phase).NotTo(Equal(databasePhaseFailed))
+		verified := status.Seeding.LastVerifiedAt.Time
+
+		By("the next reading 31 seconds later, as after an Operator that was away")
+		now = now.Add(31 * time.Second)
+		status = reconcileOnce(f)
+		expectStopped(f, status, "SeedSourceUnverified", backups, restores)
+		Expect(message(f)).To(ContainSubstring(verified.UTC().Format(time.RFC3339)))
+	})
+
+	It("begins the copy again with a new backup when a change of master is seen before the restore", func() {
+		f := newFixture("src-flap")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMaster
+		f.seed.backupStates = map[string]instancemanager.OperationState{f.peer: instancemanager.OpRunningBackup}
+		status := reconcileOnce(f)
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer}))
+
+		By("both holders reporting themselves master while the backup runs")
+		f.prober.answers[f.first] = answersMaster
+		status = reconcileOnce(f)
+		Expect(reason(f)).To(Equal("SeedSourceNotResolved"))
+		Expect(status.Seeding.MasterChange).NotTo(BeNil())
+
+		By("the peer being the only master again")
+		f.prober.answers[f.first] = answersSlave
+		f.seed.backupStates[f.peer] = instancemanager.OpCompleted
+		status = reconcileOnce(f)
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.peer, Round: 1}))
+		Expect(status.Seeding.MasterChange).To(BeNil())
+		Expect(backupsOn(f, f.peer)).To(HaveLen(2), "the backup taken across the change of master is not used")
+		Expect(f.seed.restores).NotTo(HaveKey(f.last))
+		reconcileOnce(f)
+		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
+	})
+
+	// While no master's server is active nothing can be committed (POC-23),
+	// so a change of master seen then does not stop a copy whose source
+	// becomes the active master later.
+	It("records the member once caught up when a master change was seen only before any master was active", func() {
+		f := newFixture("src-earlychange")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMasterNotYetActive
+		reconcileOnce(f)
+		reconcileOnce(f)
+		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
+
+		By("the first member reporting itself master before any server is active")
+		f.prober.answers[f.first] = answersMasterNotYetActive
+		f.prober.answers[f.peer] = answersSlave
+		reconcileOnce(f)
+
+		By("the source being the active master when the restore completed, and the member caught up")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = activeSourceEndingAt(10)
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 0, 0)
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		status := reconcileOnce(f)
+		Expect(status.Phase).NotTo(Equal(databasePhaseFailed))
+		Expect(status.SeededMembers).To(Equal([]string{f.peer, f.last}))
+	})
+
+	It("stops when another holder is an active master while the source's server is not active", func() {
+		f := newFixture("src-otheractive")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMasterNotYetActive
+		reconcileOnce(f)
+		reconcileOnce(f)
+		backups, restores := len(f.seed.backupOn), len(f.seed.restoreOn)
+
+		By("the first member answering as an active master, and the restore completing")
+		f.prober.answers[f.first] = answersMaster
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		status := reconcileOnce(f)
+		expectStopped(f, status, "SeedSourceChangedDuringSeed", backups, restores)
+	})
+
+	// A reading in which no master is active shows nothing about the time
+	// after it, so 40 seconds without a reading count toward the bound also
+	// when the first active master appears at their end.
+	It("stops when the first reading with an active master comes more than 30 seconds after the last verified one", func() {
+		now := time.Now()
+		f := newFixture("src-lateactive")
+		f.r.Clock = func() time.Time { return now }
+		f.prober.clock = f.r.Clock
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMasterNotYetActive
+		reconcileOnce(f)
+		reconcileOnce(f)
+		backups, restores := len(f.seed.backupOn), len(f.seed.restoreOn)
+
+		By("the first reading in which the source is active, 40 seconds after the last one")
+		now = now.Add(40 * time.Second)
+		f.prober.answers[f.peer] = activeSourceEndingAt(10)
+		status := reconcileOnce(f)
+		expectStopped(f, status, "SeedSourceUnverified", backups, restores)
+	})
+
+	It("keeps the end of the exemption across a new round once an active master was seen", func() {
+		f := newFixture("src-roundactive")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMaster
+		f.seed.backupStates = map[string]instancemanager.OperationState{f.peer: instancemanager.OpRunningBackup}
+		reconcileOnce(f)
+
+		By("the first member becoming the master, with a server that is not active, before the peer's backup completed")
+		f.prober.answers[f.first] = answersMasterNotYetActive
+		f.prober.answers[f.peer] = answersSlave
+		status := reconcileOnce(f)
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first, Round: 1}))
+		reconcileOnce(f)
+		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.first))
+
+		By("the restore completing while no reading shows an active master")
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		status = reconcileOnce(f)
+		Expect(status.SeededMembers).To(Equal([]string{f.peer}), "the member was recorded as seeded without catching up")
+		Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
+	})
+
+	It("keeps the end of the exemption across a failed attempt once an active master was seen", func() {
+		f := newFixture("src-attemptactive")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMaster
+		reconcileOnce(f)
+		reconcileOnce(f)
+		f.seed.restore[f.last] = instancemanager.OpFailed
+		f.seed.reason = restoreslaveFailed
+		status := reconcileOnce(f)
+		Expect(status.BootstrapAttempts).To(BeEquivalentTo(1))
+		Expect(status.Seeding).To(BeNil())
+
+		By("the next attempt seeing the source only as a master whose server is not active")
+		f.prober.answers[f.peer] = answersMasterNotYetActive
+		f.seed.restore[f.last] = instancemanager.OpRestoring
+		reconcileOnce(f)
+		reconcileOnce(f)
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		status = reconcileOnce(f)
+		Expect(status.SeededMembers).To(Equal([]string{f.peer}), "the member was recorded as seeded without catching up")
+		Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
+	})
+
+	It("ends the exemption when the member being seeded answers as an active master during its restore", func() {
+		f := newFixture("src-memberactive")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMasterNotYetActive
+		reconcileOnce(f)
+		reconcileOnce(f)
+		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
+		backups, restores := len(f.seed.backupOn), len(f.seed.restoreOn)
+
+		By("the member answering as an active master while no holder's server is active, and the restore completing")
+		f.prober.answers[f.last] = answersMaster
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		status := reconcileOnce(f)
+		expectStopped(f, status, "SeedSourceChangedDuringSeed", backups, restores)
+		Expect(status.Seeding.MasterChange.Member).To(Equal(f.last))
+	})
+
+	It("starts no new round when the member being seeded reports itself master before its restore", func() {
+		f := newFixture("src-peerclaim")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMaster
+		f.prober.answers[f.last] = answersMaster
+		f.seed.backupStates = map[string]instancemanager.OperationState{f.peer: instancemanager.OpRunningBackup}
+		for range 3 {
+			status := reconcileOnce(f)
+			Expect(status.Seeding.Round).To(BeZero())
+		}
+		Expect(backupsOn(f, f.peer)).To(HaveLen(1), "a new backup was taken for every claim of the member being seeded")
+
+		f.seed.backupStates[f.peer] = instancemanager.OpCompleted
+		f.prober.answers[f.last] = doesNotAnswer
+		reconcileOnce(f)
+		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
+	})
+
+	It("keeps waiting and warns once when the member has not caught up after 10 minutes", func() {
+		now := time.Now()
+		f := newFixture("src-slowcatchup")
+		f.r.Clock = func() time.Time { return now }
+		f.prober.clock = f.r.Clock
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = activeSourceEndingAt(10)
+		reconcileOnce(f)
+		reconcileOnce(f)
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 7, 0)
+		reconcileOnce(f)
+		since := now
+		events(f)
+
+		By("readings every 20 seconds for more than 10 minutes with 7 pages waiting")
+		var warnings []string
+		for range 33 {
+			now = now.Add(20 * time.Second)
+			status := reconcileOnce(f)
+			Expect(status.Phase).NotTo(Equal(databasePhaseFailed))
+			Expect(status.SeededMembers).To(Equal([]string{f.peer}))
+			Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
+			for _, e := range events(f) {
+				if strings.Contains(e, "SeedCatchUpOverdue") {
+					warnings = append(warnings, e)
+				}
+			}
+		}
+		Expect(warnings).To(HaveLen(1))
+		Expect(warnings[0]).To(HavePrefix("Warning"))
+		Expect(message(f)).To(ContainSubstring("since " + since.UTC().Format(time.RFC3339)))
+		Expect(message(f)).To(ContainSubstring("7 pages wait to be applied"))
+
+		By("another message on BootstrapReady in between, which does not emit the warning again")
+		got := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, f.key, got)).To(Succeed())
+		meta.SetStatusCondition(&got.Status.Conditions, metav1.Condition{Type: conditionBootstrapReady,
+			Status: metav1.ConditionFalse, Reason: "SeedCatchUpInProgress", Message: "written in between"})
+		Expect(k8sClient.Status().Update(ctx, got)).To(Succeed())
+		now = now.Add(20 * time.Second)
+		reconcileOnce(f)
+		for _, e := range events(f) {
+			Expect(e).NotTo(ContainSubstring("SeedCatchUpOverdue"), "the warning was emitted again")
+		}
+
+		By("the member catching up")
+		now = now.Add(20 * time.Second)
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 0, 0)
+		status := reconcileOnce(f)
+		Expect(status.SeededMembers).To(Equal([]string{f.peer, f.last}))
+	})
+
+	It("stops the copy to the first peer when the member it is seeded from loses the role of an active master", func() {
+		f := newFixture("src-firstpeer")
+		f.seed.restore[f.peer] = instancemanager.OpRestoring
+		f.prober.answers[f.first] = activeSourceEndingAt(10)
+		status := reconcileOnce(f)
+		Expect(status.Seeding.Member).To(Equal(f.peer))
+		Expect(status.Seeding.ActiveMasterSince).NotTo(BeNil())
+		Expect(reason(f)).To(Equal("SeedRestoreInProgress"))
+
+		By("the first peer reporting itself master while its restore runs")
+		f.prober.answers[f.peer] = answersMaster
+		status = reconcileOnce(f)
+		Expect(status.SeededMembers).To(BeEmpty())
+		Expect(status.Phase).To(Equal(databasePhaseFailed))
+		Expect(status.Seeding.MasterChange.Member).To(Equal(f.peer))
+		Expect(reason(f)).To(Equal("SeedSourceChangedDuringSeed"))
+	})
+
+	It("records the first peer as seeded once it caught up with an active source", func() {
+		f := newFixture("src-firstcaught")
+		f.prober.answers[f.first] = activeSourceEndingAt(10)
+		f.prober.answers[f.peer] = slaveOf(f.first, 10, 0, 0)
+		status := reconcileOnce(f)
+		Expect(status.SeededMembers).To(BeEmpty(), "no reading followed the restore that completed at its start")
+		Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
+		status = reconcileOnce(f)
+		Expect(status.SeededMembers).To(ContainElement(f.peer))
 	})
 
 	It("does not take over the record of a copy to another member", func() {
@@ -481,7 +1184,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		f.prober.answers[f.peer] = answersMaster
 		reconcileOnce(f)
 		f.seed.restore[f.last] = instancemanager.OpFailed
-		f.seed.reason = "restoreslave failed: exit status 1"
+		f.seed.reason = restoreslaveFailed
 		status := reconcileOnce(f)
 		Expect(status.BootstrapAttempts).To(BeEquivalentTo(1))
 		Expect(status.Seeding).To(BeNil())
@@ -523,7 +1226,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.first))
 	})
 
-	It("copies the first peer from the member that holds the database without asking for roles", func() {
+	It("copies the first peer from the member that holds the database while no member answers for its role", func() {
 		f := newFixture("src-alone")
 		f.seed.restore[f.peer] = instancemanager.OpRestoring
 		// Nobody answers: until a peer has joined, no role can be relied on.

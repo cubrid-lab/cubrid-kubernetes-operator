@@ -152,17 +152,22 @@ func (f *fakeSeedClient) forget() {
 	f.backups, f.restoresByKey = nil, nil
 }
 
+// restoreslaveFailed is how a seed restore that failed reports why.
+const restoreslaveFailed = "restoreslave failed: exit status 1"
+
 // anotherDatabase is a database that no step of these tests is for.
 const anotherDatabase = "anotherdb"
 
 // withoutOperations is the copy s records, without the seed backup's
-// operation and when its record went missing.
+// operation, when its record went missing, and the readings of the roles
+// taken during the copy.
 func withoutOperations(s *databasev1alpha1.DatabaseSeeding) *databasev1alpha1.DatabaseSeeding {
 	if s == nil {
 		return nil
 	}
 	c := *s
 	c.BackupOperationID, c.OperationMissingSince = "", nil
+	c.ActiveMasterSince, c.MasterChange, c.LastVerifiedAt, c.CatchUpTarget, c.CatchUpSince, c.CatchUpWarnedAt = nil, nil, nil, nil, nil, nil
 	return &c
 }
 
@@ -815,6 +820,9 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			prober := &memberProber{master: n + "-0"}
 			r.Prober = prober
 
+			// The source is an active master, so the first peer is recorded
+			// as seeded by the reading after its restore completed (#768).
+			reconcileOnce(r, key)
 			got := reconcileOnce(r, key)
 			Expect(got.Status.Databases[0].SeededMembers).To(Equal([]string{n + "-1"}))
 			got = reconcileOnce(r, key)
@@ -1199,6 +1207,10 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 				seed.restoredFrom[firstKey] = "s3://cluster-artifacts/prod/" + uid + "/seed-" + artifact + "/appdb/" + m
 				seed.restoreByKey[firstKey] = instancemanager.OpFailed
 
+				// The source is an active master, so the first peer is
+				// recorded as seeded by the reading after its restore
+				// completed (#768).
+				reconcileOnce(r, key)
 				reconcileOnce(r, key)
 				reconcileOnce(r, key)
 
@@ -1578,7 +1590,7 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			seed := newRecoverySeedClient()
 			seed.recovered, seed.backupState = instancemanager.OpCompleted, instancemanager.OpCompleted
 			seed.restore["rseed-fail-1"] = instancemanager.OpFailed
-			seed.reason = "restoreslave failed: exit status 1"
+			seed.reason = restoreslaveFailed
 			key := recoveryCluster("rseed-fail")
 			r := reconcilerFor(seed)
 

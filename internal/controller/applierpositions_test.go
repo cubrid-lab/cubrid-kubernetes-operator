@@ -319,7 +319,7 @@ func TestSelectBackupTarget_ApplierPosition(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := map[string]RoleObservation{c0: obsMaster(), c1: slave(tc.final)}
-			got := selectBackupTarget(members, obs, tc.history, tc.positions, resolvedPrimary(), databasev1alpha1.StandbyOnly,
+			got := selectBackupTarget(members, obs, tc.history, tc.positions, nil, resolvedPrimary(), databasev1alpha1.StandbyOnly,
 				false, false, testNow)
 			if got.Instance != tc.want {
 				t.Errorf("StandbyOnly = %+v, want standby %q", got, tc.want)
