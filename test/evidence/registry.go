@@ -319,6 +319,18 @@ func RegisteredLanes(level string) []string {
 	return names
 }
 
+// RegisteredKeys returns the keys of the results of a level, in the
+// registry's order.
+func RegisteredKeys(level string) []string {
+	var keys []string
+	for _, entry := range registry.entries {
+		if entry.Level == level {
+			keys = append(keys, entry.Key)
+		}
+	}
+	return keys
+}
+
 func (r scenarioRegistry) family(id string) (ScenarioFamily, bool) {
 	i := slices.IndexFunc(r.families, func(f ScenarioFamily) bool { return f.ID == id })
 	if i < 0 {

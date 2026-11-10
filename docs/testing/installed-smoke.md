@@ -147,7 +147,11 @@ volume itself.
 
 ## Explicit preallocated namespace mode
 
-A confined evaluator can opt in with `--namespace-mode=preallocated`. This is a
+A confined evaluator can opt in with `--namespace-mode=preallocated`, or with
+`--check installed-preallocated-standalone-smoke`, its key in the scenario
+registry; `--check installed-standalone-sql-smoke` selects the fresh mode.
+`--check` is refused together with `--namespace-mode` or `--level=kind`, and
+any other name, an empty one included, is refused with the two keys it takes. This is a
 separate `lab-preallocated-component-smoke` lane requiring `LAB00/preallocated`;
 it does not change the fresh LAB00 verdict or grant fixture-reset authority.
 The caller must reserve an exclusively owned disposable namespace and create an

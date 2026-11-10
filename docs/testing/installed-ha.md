@@ -109,6 +109,36 @@ only (`object-store/networkpolicy.yaml` in the lab's GitOps repository).
 Without such a rule, the first member cannot upload the seed backup, and the
 run ends with the bootstrap's `SeedBackupFailed` reason.
 
+### Selecting a check by its key
+
+The sections below select the check that follows LAB01 with options such as
+`-fault`, `-backup-<variant>`, `-restore`, `-restore-<variant>` and the
+placements `-restore-instance-manager-restart-at` and
+`-restore-graceful-stop-at`. Instead, `-check <key>` names the check by its key
+in the scenario registry (`test/evidence/registry.go`,
+[name migration](scenario-name-migration.md)) and sets exactly those options,
+so the lane, requirements, evidence paths and summary are the same:
+
+```sh
+bin/installed-ha ... -check installed-ha-sql-smoke                  # LAB01 only, as with no option
+bin/installed-ha ... -check installed-operator-failure-recovery-restart  # as -fault operator-restart
+bin/installed-ha ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -check installed-backup-denied-credentials                        # as -backup-denied-credentials
+bin/installed-ha ... -backup-bucket <bucket> -object-store-service <namespace>/<service>:<port> \
+  -check installed-restore-new-cluster-instance-manager-restart-seeding
+  # as -restore -restore-instance-manager-restart -restore-instance-manager-restart-at seeding
+```
+
+A backup or restore check still needs `-backup-bucket`, which names where the
+backup goes, and the other inputs its section lists; a check without a backup
+refuses `-backup-bucket`. The command refuses, before it opens the cluster
+and with the keys it takes, a key combined with an option that selects a
+check, a misspelled key, a family key such as `installed-backup`, a Kind key
+such as `operator-failure-recovery-restart`, a legacy name such as
+`S06/restart`, the keys of the installed smoke, an empty `-check`, and
+`-check` with `-level kind`, because a key names a VM-lab check. The options
+keep working without `-check`.
+
 ## Database member requests
 
 `bin/installed-ha` and `bin/installed-smoke` declare these requests on every
