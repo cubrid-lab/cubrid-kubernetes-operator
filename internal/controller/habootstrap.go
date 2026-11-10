@@ -27,6 +27,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -387,13 +388,7 @@ func seedAdmitted(cluster *databasev1alpha1.CubridCluster) func(string) bool {
 	if len(recorded) == 0 {
 		return nil
 	}
-	holder := memberNames(cluster, 1)[0]
-	if cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Recovery != nil {
-		holder = ""
-		if cluster.Status.Bootstrap != nil {
-			holder = cluster.Status.Bootstrap.TargetMember
-		}
-	}
+	holder := bootstrapHolder(cluster)
 	return func(member string) bool {
 		if member == holder {
 			return true
@@ -405,6 +400,85 @@ func seedAdmitted(cluster *databasev1alpha1.CubridCluster) func(string) bool {
 		}
 		return true
 	}
+}
+
+// bootstrapHolder is the member the HA bootstrap created the first database
+// on, or restored it on in a recovery bootstrap; empty while a recovery has
+// recorded no member.
+func bootstrapHolder(cluster *databasev1alpha1.CubridCluster) string {
+	if cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Recovery != nil {
+		if cluster.Status.Bootstrap != nil {
+			return cluster.Status.Bootstrap.TargetMember
+		}
+		return ""
+	}
+	return memberNames(cluster, 1)[0]
+}
+
+// Reasons of HAReady and Ready that come from the HA bootstrap (#770).
+const (
+	// reasonMemberNotSeeded is HAReady False while the HA bootstrap of a
+	// database has created or restored it and not yet recorded every other
+	// member as holding it.
+	reasonMemberNotSeeded = "MemberNotSeeded"
+	// reasonHABootstrapFailed stands for the reason of a failed HA bootstrap
+	// when BootstrapReady carries none.
+	reasonHABootstrapFailed = "HABootstrapFailed"
+)
+
+// haBootstrapFailure reports, for an HA cluster, a database whose HA bootstrap
+// stopped as Failed: its reason and message are BootstrapReady's, which the
+// step that stopped it set and which stay while it waits for a person.
+func haBootstrapFailure(cluster *databasev1alpha1.CubridCluster) (reason, msg string, failed bool) {
+	if !cluster.Spec.HighAvailability.Enabled {
+		return "", "", false
+	}
+	for _, status := range cluster.Status.Databases {
+		if status.Phase != databasePhaseFailed {
+			continue
+		}
+		reason, msg = reasonHABootstrapFailed, "the HA bootstrap of database "+status.Name+" failed"
+		if c := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady); c != nil &&
+			c.Status == metav1.ConditionFalse && c.Reason != "" {
+			reason, msg = c.Reason, msg+": "+c.Message
+		}
+		return reason, msg, true
+	}
+	return "", "", false
+}
+
+// haBootstrapUnadmitted says why HAReady cannot be True for what the HA
+// bootstrap recorded, whatever the roles and the replication show (#770). A
+// database whose bootstrap failed gives the failure's reason. A database
+// created or restored on the holder whose bootstrap has not completed
+// (haConfigured) gives MemberNotSeeded while a member other than the holder
+// is not in its seededMembers: such a member may apply the master's log with
+// nothing waiting while it lacks what the master committed (POC-57, #768).
+// Before a database is created no member holds it, and once haConfigured is
+// recorded every member was seeded, as promotableMembers cannot change. A
+// cluster that records no bootstrap gives nothing.
+func haBootstrapUnadmitted(cluster *databasev1alpha1.CubridCluster) (reason, msg string, ok bool) {
+	if reason, msg, failed := haBootstrapFailure(cluster); failed {
+		return reason, msg, true
+	}
+	holder := bootstrapHolder(cluster)
+	for _, status := range cluster.Status.Databases {
+		if !status.PrimaryCreated || status.HAConfigured {
+			continue
+		}
+		var unseeded []string
+		for _, m := range memberNames(cluster, cluster.Spec.Topology.PromotableMembers) {
+			if m != holder && !slices.Contains(status.SeededMembers, m) {
+				unseeded = append(unseeded, m)
+			}
+		}
+		if len(unseeded) > 0 {
+			return reasonMemberNotSeeded, fmt.Sprintf("the HA bootstrap has not recorded %s as holding database %s "+
+				"(status.databases[].seededMembers); a member is admitted once its copy completed and it caught up "+
+				"with its source, see BootstrapReady", strings.Join(unseeded, ", "), status.Name), true
+		}
+	}
+	return "", "", false
 }
 
 // seedReading asks the members that hold the database and peer, the member

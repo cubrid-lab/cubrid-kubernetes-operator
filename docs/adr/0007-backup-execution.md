@@ -146,7 +146,13 @@ because the Instance Manager is older and reports no replication or because
 `PreferStandby` then falls back to the master. A `failCount` greater than 0
 excludes a slave for as long as the applier's counter keeps it. A long transaction on the master can keep pages waiting
 with nothing applied and so exclude a slave that is not behind (#249); that
-only moves the backup to another slave or to the master fallback. A target
+only moves the backup to another slave or to the master fallback. A member
+the HA bootstrap has not recorded as holding the database
+(`status.databases[].seededMembers`, ADR-0010) is never eligible as a slave
+(#768), and when the resolved master is such a member, neither `PrimaryOnly`
+nor the fallback of `PreferStandby` takes it: it may lack what an earlier
+master committed, so the backup waits with `MasterNotSeeded` and no other
+member is taken in its place (#770). A target
 already recorded is not judged again on its replication (an earlier dispatch
 to it may run); it must still be authoritatively a slave. Pod readiness is
 not evaluated, and the `FencingRequired` check has no input because no step
@@ -522,7 +528,7 @@ Failed), `operationRef`, `targetInstance`, `targetRole`, `fallbackUsed`,
 `targetRecordedAt`, `objectStorageNotAppliedSince`, `primaryLogEndNotReadSince`, `startedAt`/`completedAt`, `artifact{uri(→manifest), manifestDigest,
 sizeBytes, cubridVersion, database, level}`, `conditions`
 (`Accepted`/`Ready` with open-ended reasons: `StandbySelected`,
-`MasterFallbackSelected`, `NoHealthyStandby`, `BackupRunning`,
+`MasterFallbackSelected`, `NoHealthyStandby`, `MasterNotSeeded`, `BackupRunning`,
 `UploadRunning`, `BackupCompleted`, `BackupFailed`, `ChecksumMismatch`,
 `InsufficientStagingSpace`, `InstanceManagerUnavailable`,
 `InstanceManagerTokenRefused`, `InstanceManagerOperationInProgress`,

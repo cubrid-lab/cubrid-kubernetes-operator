@@ -733,6 +733,21 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		}
 		Expect(f.seed.backupOn).To(HaveLen(backups), "no backup is started after a change of master")
 		Expect(f.seed.restoreOn).To(HaveLen(restoreStarts), "no restore is started after a change of master")
+
+		By("every member then answering as healthy: HAReady and Ready stay False with the bootstrap's reason (#770)")
+		healthy := answersSlave
+		healthy.Replication = &ReplicationObservation{Source: f.first, AppliedChanges: 1, CopiedEOF: logAt(10, 0)}
+		f.prober.answers[f.peer], f.prober.answers[f.last] = healthy, healthy
+		reconcileOnce(f)
+		got := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, f.key, got)).To(Succeed())
+		Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionReplicationHealthy)).To(BeTrue())
+		for _, condition := range []string{conditionHAReady, conditionReady} {
+			c := meta.FindStatusCondition(got.Status.Conditions, condition)
+			Expect(c).NotTo(BeNil(), condition)
+			Expect(c.Status).To(Equal(metav1.ConditionFalse), condition)
+			Expect(c.Reason).To(Equal("SeedSourceChangedDuringSeed"), condition)
+		}
 	})
 
 	// The copies of the last member below are seeded from the first peer,
@@ -791,6 +806,37 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(status.SeededMembers).To(Equal([]string{f.peer, f.last}))
 		Expect(status.HAConfigured).To(BeTrue())
 		Expect(status.Seeding).To(BeNil())
+	})
+
+	It("keeps HAReady False while a restored member is not recorded as seeded, and True once it is (#770)", func() {
+		f := restoringFromActiveSource("src-haready")
+		haReady := func() *metav1.Condition {
+			got := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, f.key, got)).To(Succeed())
+			Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionReplicationHealthy)).To(BeTrue())
+			return meta.FindStatusCondition(got.Status.Conditions, conditionHAReady)
+		}
+
+		By("the last member restored and applying its source's log with pages still waiting")
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		f.prober.answers[f.first] = slaveOf(f.peer, 10, 0, 0)
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 2, 0)
+		status := reconcileOnce(f)
+		Expect(status.SeededMembers).To(Equal([]string{f.peer}))
+		Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
+		ha := haReady()
+		Expect(ha.Status).To(Equal(metav1.ConditionFalse))
+		Expect(ha.Reason).To(Equal(reasonMemberNotSeeded))
+		Expect(ha.Message).To(ContainSubstring(f.last))
+
+		By("the member caught up and recorded as seeded")
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 0, 0)
+		status = reconcileOnce(f)
+		Expect(status.HAConfigured).To(BeTrue())
+		reconcileOnce(f)
+		ha = haReady()
+		Expect(ha.Status).To(Equal(metav1.ConditionTrue))
+		Expect(ha.Reason).To(Equal(reasonHealthyReplication))
 	})
 
 	DescribeTable("waits without using an attempt while the member has not caught up with an active source",

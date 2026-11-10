@@ -339,7 +339,11 @@ The Operator still promotes nothing and chooses no master (ADR-0005), and the
 member's data is never discarded: seeding it again needs a destructive step,
 which belongs with the rebuild of a member (#117). A member that the bootstrap
 has not recorded as seeded is never chosen as the standby a backup is taken on
-(#291).
+(#291), nor as the master a backup is taken on (`MasterNotSeeded`; the backup
+waits). While such a member exists after the database was created or
+restored, `HAReady` is `False` with `MemberNotSeeded`; once the bootstrap is
+`Failed`, `HAReady` and `Ready` are `False` with its failure reason (#770).
+This only reports: nothing is started, deleted or chosen because of it.
 
 On the VM lab (2026-11-04, Operator `16dbbf8`, two scripted runs on #281),
 a master whose CUBRID was killed while the last member's seed backup ran on

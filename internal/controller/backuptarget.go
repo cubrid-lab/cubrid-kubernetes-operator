@@ -39,6 +39,11 @@ const (
 	// reasonMasterFallbackPrimaryLogEndNotRead is the master fallback taken
 	// when that wait has lasted primaryLogEndWait.
 	reasonMasterFallbackPrimaryLogEndNotRead = "MasterFallbackPrimaryLogEndNotRead"
+	// reasonMasterNotSeeded is a selection that would take the master, by
+	// PrimaryOnly or by the fallback of PreferStandby, while the HA bootstrap
+	// has not recorded that master as holding the database (seedAdmitted).
+	// The backup waits.
+	reasonMasterNotSeeded = "MasterNotSeeded"
 )
 
 // primaryLogEndWait bounds how long a PreferStandby selection waits for the
@@ -73,6 +78,12 @@ type TargetSelection struct {
 // nil for all), res the ADR-0005 primary resolution, single reports a 1-member
 // (standalone) cluster, and primaryLogEndWaitOver that primaryLogEndWait has
 // passed since the selection began to wait for the master's log end.
+//
+// The master is never taken while admitted rejects it (MasterNotSeeded,
+// #770): CUBRID chose it, but a member the HA bootstrap did not record as
+// holding the database can lack what an earlier master committed (POC-57,
+// #768), and a backup of it would keep that gap as a backup. The selection
+// waits instead; it never takes another member in its place.
 func selectBackupTarget(
 	members []string,
 	obs map[string]RoleObservation,
@@ -87,6 +98,7 @@ func selectBackupTarget(
 ) TargetSelection {
 	standbys, logEndUnread := eligibleStandbys(members, obs, history, positions, admitted, res, now)
 	primaryResolved := res.Status == metav1.ConditionTrue && res.CurrentPrimary != ""
+	masterUnadmitted := primaryResolved && admitted != nil && !admitted(res.CurrentPrimary)
 
 	switch pref {
 	case databasev1alpha1.StandbyOnly:
@@ -98,6 +110,9 @@ func selectBackupTarget(
 	case databasev1alpha1.PrimaryOnly:
 		if !primaryResolved {
 			return TargetSelection{Reason: "PrimaryNotResolved"}
+		}
+		if masterUnadmitted {
+			return TargetSelection{Reason: reasonMasterNotSeeded}
 		}
 		return TargetSelection{Instance: res.CurrentPrimary, Role: databasev1alpha1.RoleMaster, Selected: true, Reason: "PrimarySelected"}
 
@@ -120,6 +135,9 @@ func selectBackupTarget(
 		// whole backup on the master; after primaryLogEndWait it falls back.
 		if primaryResolved && logEndUnread && !primaryLogEndWaitOver {
 			return TargetSelection{Reason: reasonPrimaryLogEndNotRead}
+		}
+		if masterUnadmitted {
+			return TargetSelection{Reason: reasonMasterNotSeeded}
 		}
 		if primaryResolved && logEndUnread {
 			return TargetSelection{Instance: res.CurrentPrimary, Role: databasev1alpha1.RoleMaster, FallbackUsed: true, Selected: true, Reason: reasonMasterFallbackPrimaryLogEndNotRead}

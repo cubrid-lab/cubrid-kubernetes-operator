@@ -306,9 +306,14 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 			// when a Pod without the settings is selected next.
 			backup.Status.ObjectStorageNotAppliedSince = nil
 			msg := "no safe backup target yet; waiting for a healthy target"
-			if sel.Reason == reasonPrimaryLogEndNotRead {
+			switch sel.Reason {
+			case reasonPrimaryLogEndNotRead:
 				msg = fmt.Sprintf("the master's own log end was not read, so no standby's copy of its log can be judged; "+
 					"asking again, and falling back to the master %s after this wait began", primaryLogEndWait)
+			case reasonMasterNotSeeded:
+				msg = "the master " + res.CurrentPrimary + " is not recorded by the HA bootstrap of cluster " + cluster.Name +
+					" as holding the database (status.databases[].seededMembers), so it may lack what an earlier master " +
+					"committed and no backup is taken on it; waiting, and no other member is taken in its place"
 			}
 			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, msg)
 			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
