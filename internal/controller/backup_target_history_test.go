@@ -42,7 +42,7 @@ func (p *stalledSlaveProber) ProbeRole(_ context.Context, podName, _ string) Rol
 	switch podName {
 	case p.master:
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now(),
-			LogEnd: &databasev1alpha1.LogAddress{Page: 10}}
+			LogEnd: &databasev1alpha1.LogAddress{Page: 10}, Capabilities: allCapabilities}
 	case p.slave:
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now(),
 			Replication: &ReplicationObservation{Source: p.master, AppliedChanges: 10, DelayedPages: 5,
@@ -143,7 +143,8 @@ type logEndUnreadProber struct {
 
 func (p *logEndUnreadProber) ProbeRole(_ context.Context, podName, _ string) RoleObservation {
 	if podName == p.master || (p.twoMasters && strings.HasSuffix(podName, "-1")) {
-		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now()}
+		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, ObservedAt: time.Now(),
+			Capabilities: allCapabilities}
 	}
 	return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: time.Now(),
 		Replication: &ReplicationObservation{Source: p.master, AppliedChanges: 1,

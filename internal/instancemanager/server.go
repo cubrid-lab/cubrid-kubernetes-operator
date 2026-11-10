@@ -31,6 +31,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -1330,28 +1331,32 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	return body, true
 }
 
-// decodeRequest decodes the JSON body of a request into req and reports
-// whether it could. A body that is not one JSON value of req's form is
-// answered 400 here. So is a body with a field this manager does not know:
-// a check that field carries would otherwise not run, and the answer would
-// be the same as for a request without it (ADR-0013).
+// decodeRequest decodes the JSON body of a request into req, a pointer, and
+// reports whether it could. A body that is not one JSON value of req's form
+// is answered 400 here. So is a body with a field this manager does not know,
+// with the code UnknownRequestField: a check that field carries would
+// otherwise not run, and the answer would be the same as for a request
+// without it (ADR-0013). Such a body is told apart by decoding it again
+// without the rule: only the unknown field makes the two differ.
 func decodeRequest(w http.ResponseWriter, body []byte, req any) bool {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	err := dec.Decode(req)
-	if err == nil && dec.Decode(&json.RawMessage{}) != io.EOF {
-		err = errors.New("more than one JSON value")
+	if err == nil {
+		if dec.Decode(&json.RawMessage{}) != io.EOF {
+			writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+			return false
+		}
+		return true
 	}
-	switch {
-	case err != nil && strings.HasPrefix(err.Error(), "json: unknown field "):
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: "the request body has a field this Instance Manager does not know: " +
-			strings.TrimPrefix(err.Error(), "json: unknown field ")})
-		return false
-	case err != nil:
+	lenient := reflect.New(reflect.TypeOf(req).Elem()).Interface()
+	if json.Unmarshal(body, lenient) != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
 		return false
 	}
-	return true
+	writeError(w, http.StatusBadRequest, CodeUnknownRequestField,
+		"the request body has a field this Instance Manager does not know: "+strings.TrimPrefix(err.Error(), "json: unknown field "))
+	return false
 }
 
 // validateBackupRequest rejects a backup request this manager does not carry

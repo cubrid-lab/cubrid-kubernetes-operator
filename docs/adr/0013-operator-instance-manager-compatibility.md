@@ -199,17 +199,32 @@ open one.
    it. A 2xx answer is not that proof: an older manager may already have
    started the operation without the check when it answers.
 3. **Mechanism.** The Instance Manager reports the checks it enforces as
-   `capabilities` in its `GET /v1/role` answer, which the Operator reads
-   before it sends a seed step. The Operator sends such a request only to a
-   manager whose fresh answer reports every check the request relies on.
-   Otherwise the step waits with the `BootstrapReady` reason
-   `InstanceManagerCapabilityMissing` (the member answered, without a check)
-   or `InstanceManagerCapabilityUnverified` (no fresh answer to read it from);
-   the message names the member and the checks. The wait uses up no attempt,
-   and nothing is deleted, overwritten or replaced. Nothing is kept between
-   reconciles, so an Operator restart reads the answer again and does not
-   skip the check. A manager with this rule also refuses, with 400, a
-   request field it does not know, so a later field cannot be skipped
+   `capabilities` in its `GET /v1/role` answer, which the Operator reads in
+   the same reconcile before it sends a seed step or a `CubridBackup` on the
+   master. The Operator sends such a request only to a manager whose fresh,
+   readable answer reports every check the request relies on. Otherwise the
+   step waits with one of these reasons, on `BootstrapReady` for a seed step
+   and on the `CubridBackup`'s `Ready`, whose message names the member and
+   the checks:
+   - `InstanceManagerCapabilityMissing`: the member answered, without a
+     check. The remedy is to replace its Pod.
+   - `InstanceManagerCapabilityUnverified`: the member answered, but not
+     within the time an observation counts (15 seconds), or not readably, so
+     the answer shows nothing.
+   - `InstanceManagerUnavailable`, or `InstanceManagerTokenRefused` when it
+     refused the cluster's token: the member could not be asked.
+
+   The wait uses up no attempt, and nothing is deleted, overwritten or
+   replaced. A seed backup is not taken while the member being seeded does
+   not show the checks of its restore. A `CubridBackup` whose target is not
+   recorded yet records none while it waits, so a later selection may take a
+   standby; one whose recorded master stops showing the check is not sent
+   its start again, an operation the master holds under the backup's key is
+   followed, and the wait is bounded like any wait on a recorded target
+   (ADR-0007). Nothing is kept between reconciles, so an Operator restart
+   reads the answer again and does not skip the check. A manager with this
+   rule also refuses a request field it does not know, with 400 and the code
+   `UnknownRequestField` (ADR-0003), so a later field cannot be skipped
    silently by a build that has the rule.
 4. **Transition rules for paths and fields** beyond these stay unwritten
    until v0.1 is released. Each change keeps the rules above.
@@ -219,17 +234,35 @@ The checks, and the requests that rely on them:
 | Capability | What the manager enforces | Request that relies on it |
 |---|---|---|
 | `seed-upload` | `upload.seed`: the backup is uploaded only to a seed location of its cluster and database, with master metadata | the seed backup on the source (`seedBackup`, `internal/controller/habootstrap.go`) |
-| `backup-source-role` | the manifest records the role the member itself reports, and a seed backup is refused or not uploaded unless the member reports master before and after `backupdb` (#756) | the seed backup |
+| `backup-source-role` | the manifest records the role the member itself reports, and a backup that names the member master, or a seed backup, is refused or not uploaded unless the member reports that role before and after `backupdb` (#756) | the seed backup, and a `CubridBackup` whose selected target is the master (`backupCapabilityHold`, `internal/controller/cubridbackup_controller.go`) |
 | `seed-from-master` | `seedFromMaster`: the artifact must have been taken on that member, as master, and the member is restored as its slave | the seed restore on the member being seeded (`seedMember`) |
 | `expected-cluster-uid` | `expectedClusterUID` with `seedFromMaster`: the artifact must have been taken in this cluster | the seed restore |
 
 Other requests rely on no such field. The HA bootstrap sends a database name
 only. A recovery restore sends `expectedCubridVersion`, which every manager
 with `/v1/restore/prepare` enforces (`2b13489`, #68), and sends neither
-`seedFromMaster` nor `expectedClusterUID`. A `CubridBackup` backup sends no
-`upload.seed`; its manifest role is not what any restore decides by, since
-a restore into a new cluster takes a master's or a standby's artifact
-(ADR-0008).
+`seedFromMaster` nor `expectedClusterUID`. A `CubridBackup` on a standby
+names the role `slave`, which an older manager also records, and for which
+a role change after `backupdb` is logged rather than refused (#756): it
+relies on no check an older manager lacks.
+
+What the capabilities do not cover:
+
+- **The window between the check and the request.** The answer is read in
+  the same reconcile, a few seconds at most before the request is sent. A
+  Pod replaced by one of another build within that window receives the
+  request unchecked. Nothing narrows it further: the manager does not echo
+  the checks it applied in its answer to the request.
+- **An operation recorded before an upgrade.** A seed backup, seed restore
+  or `CubridBackup` whose operation was started and recorded before the
+  Operator was upgraded is only polled; the rule applies to what is sent,
+  not to what already runs.
+- **Checks that no request field asks for.** The manager also refuses to
+  overwrite a database its ownership marker does not attribute to the
+  operation (#316) and confines staging and target directories to its own
+  roots (#119). These checks apply whatever the request says, so no
+  capability names them; whether an older manager has them depends on its
+  build alone.
 
 ## Consequences
 
@@ -237,8 +270,9 @@ a restore into a new cluster takes a master's or a standby's artifact
 
 - The unverified skew cases are named in one place instead of being implied
   by comments in `imclient.go` and by ADR-0007.
-- A seed step is not sent to a manager that may skip the check it relies on;
-  the condition names the member to replace.
+- A seed step or a `CubridBackup` on the master is not sent to a manager
+  that may skip the check it relies on; the condition names the member to
+  replace.
 
 ### Negative
 
@@ -246,7 +280,10 @@ a restore into a new cluster takes a master's or a standby's artifact
   an Instance Manager built before the capabilities list waits until those
   Pods are replaced. A seed step runs only during the HA bootstrap of a
   database (`reconcileHABootstrap`), so a cluster whose bootstrap ended is not
-  affected.
+  affected by that part.
+- A `CubridBackup` that selects the master (`PrimaryOnly`, or
+  `PreferStandby` falling back to it) waits while the master's Pod runs such
+  an Instance Manager; a backup on a standby is not affected.
 - A manager with this rule refuses a request field that a later build drops
   and an older Operator still sends. No field has been dropped so far.
 - No skew test exists, so an Operator upgrade over Pods that were not
@@ -256,7 +293,8 @@ a restore into a new cluster takes a master's or a standby's artifact
 
 Unit and envtest only (#733): `TestServer_Role_ReportsTheChecksItEnforces`,
 `TestServer_RefusesARequestFieldItDoesNotKnow`,
-`TestProbeRole_ReadsTheChecksTheInstanceManagerReports`, and the controller
+`TestProbeRole_ReadsTheChecksTheInstanceManagerReports`,
+`TestCapabilityHold_AnUnreadableAnswerIsUnverified`, and the controller
 specs in `internal/controller/im_capability_test.go`, which stand in an older
 manager with a fake that reports no capabilities. The same-build path runs in
 the Kind end-to-end job. Nothing was run with two real builds: a skew test

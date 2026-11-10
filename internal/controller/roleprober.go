@@ -86,6 +86,9 @@ type RoleObservation struct {
 	// Capabilities are the request checks the Instance Manager reports that
 	// it enforces (instancemanager.Capabilities); nil when it reports none.
 	Capabilities []string
+	// Unreadable is set when the member answered but the answer could not be
+	// decoded: it shows neither a role nor the checks the manager enforces.
+	Unreadable bool
 }
 
 // RoleProber polls one instance's Instance Manager /v1/role endpoint.
@@ -142,7 +145,7 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 	var st instancemanager.HAStatus
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
 		return RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, ObservedAt: p.now(),
-			Reason: "unreadable answer", RequestID: id}
+			Reason: "unreadable answer", RequestID: id, Unreadable: true}
 	}
 	o := observationFromStatus(st, p.now())
 	o.RequestID = id
@@ -162,8 +165,10 @@ func (p *HTTPRoleProber) ProbeRole(ctx context.Context, podName, namespace strin
 
 // Reasons of a request that is not sent because the member's Instance
 // Manager is not shown to enforce a check the request relies on (ADR-0013):
-// its fresh answer to GET /v1/role does not report the check, or there is no
-// fresh answer to read it from.
+// its fresh answer to GET /v1/role does not report the check, or the member
+// answered, but not freshly or not readably, so the answer shows nothing. A
+// member that could not be asked keeps the reason of an unavailable manager,
+// or of a refused token.
 const (
 	reasonCapabilityMissing    = "InstanceManagerCapabilityMissing"
 	reasonCapabilityUnverified = "InstanceManagerCapabilityUnverified"
@@ -171,19 +176,30 @@ const (
 
 // capabilityHold says whether the step, a request to member that relies on
 // the checks needed, waits, from o, the member's answer to GET /v1/role read
-// in this reconcile. It waits unless o is fresh and reports every check. A
-// 2xx answer to the request itself would not show that the check ran: an
-// Instance Manager of another build may ignore the field that carries it. The
-// step uses up no attempt while it waits, and nothing is deleted or replaced.
+// in this reconcile. It waits unless o is a fresh, readable answer that
+// reports every check. A 2xx answer to the request itself would not show that
+// the check ran: an Instance Manager of another build may ignore the field
+// that carries it. The step uses up no attempt while it waits, and nothing is
+// deleted or replaced.
 func capabilityHold(member, step string, o RoleObservation, now time.Time, needed ...string) (reason, msg string, held bool) {
-	if !fresh(o, now) {
-		why := ""
-		if o.Reason != "" {
-			why = " (" + o.Reason + ")"
+	why := ""
+	if o.Reason != "" {
+		why = " (" + o.Reason + ")"
+	}
+	switch {
+	case !o.Reachable:
+		reason = reasonInstanceManagerUnavailable
+		if o.TokenRefused {
+			reason = reasonTokenRefused
 		}
+		return reason, fmt.Sprintf(
+			"the %s is not sent to %s: its Instance Manager could not be asked GET /v1/role%s, which shows whether it "+
+				"enforces the checks %s the request relies on. The step waits and uses up no attempt",
+			step, member, why, strings.Join(needed, ", ")), true
+	case !fresh(o, now) || o.Unreadable:
 		return reasonCapabilityUnverified, fmt.Sprintf(
-			"the %s is not sent to %s: it relies on the Instance Manager checks %s, and %s gave no fresh answer to "+
-				"GET /v1/role%s that shows them. The step waits and uses up no attempt",
+			"the %s is not sent to %s: it relies on the Instance Manager checks %s, and %s gave no fresh, readable "+
+				"answer to GET /v1/role%s that shows them. The step waits and uses up no attempt",
 			step, member, strings.Join(needed, ", "), member, why), true
 	}
 	var missing []string

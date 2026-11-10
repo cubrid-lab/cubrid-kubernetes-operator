@@ -890,6 +890,15 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 				"waiting to copy database "+database+" to "+peer+": a restore of this step could not be looked up: "+err.Error())
 			return false
 		}
+		// A backup is not taken for a peer that would not be sent its
+		// restore; the restore is held on the same answer again before it is
+		// sent.
+		if !reused && seeding.BackupOperationID == "" {
+			if reason, msg, held := capabilityHold(peer, "seed restore", obs[peer], r.now(), seedRestoreChecks...); held {
+				setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
+				return false
+			}
+		}
 		if !reused && !r.seedBackup(ctx, cluster, status, source, peer, artifact, obs[source]) {
 			return false
 		}
@@ -902,8 +911,7 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonEngineVersionMismatch, msg)
 			return false
 		}
-		if reason, msg, held := capabilityHold(peer, "seed restore", obs[peer], r.now(),
-			instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID); held {
+		if reason, msg, held := capabilityHold(peer, "seed restore", obs[peer], r.now(), seedRestoreChecks...); held {
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
 			return false
 		}
@@ -1093,6 +1101,10 @@ func (r *CubridClusterReconciler) recordedSeedRestore(ctx context.Context, clust
 	}
 	return restore, true, err
 }
+
+// seedRestoreChecks are the Instance Manager checks a seed restore relies on
+// (ADR-0013).
+var seedRestoreChecks = []string{instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID}
 
 // seedBackup takes the seed backup of artifact on source, for peer, and
 // reports whether it has completed. sourceAnswer is the answer of source to

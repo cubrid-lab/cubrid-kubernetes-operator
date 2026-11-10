@@ -75,6 +75,9 @@ func TestServer_RefusesARequestFieldItDoesNotKnow(t *testing.T) {
 			if err := json.Unmarshal(rr.Body.Bytes(), &answer); err != nil || !strings.Contains(answer.Error, "expectedSomethingNew") {
 				t.Errorf("%s answered %q, want the unknown field named", c.target, rr.Body.String())
 			}
+			if answer.Code != "UnknownRequestField" {
+				t.Errorf("%s answered code %q, want UnknownRequestField", c.target, answer.Code)
+			}
 			f.wantNoWork(c.target)
 		})
 	}

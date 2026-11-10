@@ -84,9 +84,9 @@ stays `:dev`; to use a development image, pass it to the manager with
   revisions.
 - Operator and Instance Manager: only the two built and validated together
   from the same commit are supported; no combination of different builds is.
-  An Instance Manager of another build is not sent a seed step whose checks
-  it does not report, and the bootstrap waits with
-  `InstanceManagerCapabilityMissing` until its Pod is replaced. What each side
+  An Instance Manager of another build is not sent a seed step or a
+  `CubridBackup` on the master whose checks it does not report; the step
+  waits with `InstanceManagerCapabilityMissing` until its Pod is replaced. What each side
   does when they differ, and what nothing tests, is in
   [ADR-0013](adr/0013-operator-instance-manager-compatibility.md).
 - The Kubernetes support range and any additional CUBRID patch versions are

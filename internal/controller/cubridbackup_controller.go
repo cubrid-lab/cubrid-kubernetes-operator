@@ -270,6 +270,11 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 			return r.holdRecordedTarget(ctx, backup, reasonRecordedTargetNotEligible,
 				"recorded target "+sel.Instance+" is no longer eligible for its recorded role "+backup.Status.TargetRole)
 		}
+		// The start is not sent again to a recorded master whose manager does
+		// not show the role check; an operation it holds is followed.
+		if reason, msg, held := backupCapabilityHold(sel, obs, observedAt); held {
+			return r.holdRecordedTarget(ctx, backup, reason, msg)
+		}
 	} else {
 		// The wait for the master's log end counts from the first reconcile
 		// that waited for it, as recorded in status, so that a backup that
@@ -305,6 +310,17 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 	}
 
 	if backup.Status.TargetInstance == "" {
+		// Not terminal, and the target is not recorded: a later selection may
+		// take a standby, or the master once its Pod runs a manager that
+		// shows the role check.
+		if reason, msg, held := backupCapabilityHold(sel, obs, observedAt); held {
+			backup.Status.ObjectStorageNotAppliedSince = nil
+			if backup.Status.Phase == "" {
+				backup.Status.Phase = databasev1alpha1.BackupPhasePending
+			}
+			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reason, msg)
+			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+		}
 		// Not terminal: the Pod picks the settings up when it is restarted,
 		// and the backup goes on then. The target stays unrecorded, so a
 		// later selection may take another member. A recorded target is not
@@ -565,6 +581,19 @@ func (r *CubridBackupReconciler) failedBackup(ctx context.Context, backup *datab
 	backup.Status.CompletedAt = &now
 	setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "BackupFailed", reason)
 	return r.commit(ctx, backup, ctrl.Result{})
+}
+
+// backupCapabilityHold says whether the backup on sel waits for its
+// Instance Manager to show the check the request relies on (ADR-0013). A
+// backup on the master names it master, and the manager does not upload it
+// unless the member reports master before and after backupdb (#756); an
+// older manager uploads the backup of a master demoted while backupdb ran.
+// A backup on another role relies on no such check.
+func backupCapabilityHold(sel TargetSelection, obs map[string]RoleObservation, now time.Time) (reason, msg string, held bool) {
+	if sel.Role != databasev1alpha1.RoleMaster {
+		return "", "", false
+	}
+	return capabilityHold(sel.Instance, "backup", obs[sel.Instance], now, instancemanager.CapabilityBackupSourceRole)
 }
 
 func (r *CubridBackupReconciler) buildBackupRequest(backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster, sel TargetSelection) instancemanager.BackupRequest {
