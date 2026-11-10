@@ -270,4 +270,31 @@ var _ = Describe("CubridBackup target selection while the master's log end is no
 		Expect(fake.instances).To(BeEmpty())
 		Expect(readyOf(got).Reason).To(Equal(reasonPrimaryLogEndNotRead))
 	})
+
+	// A master the HA bootstrap has not recorded as seeded is not taken when
+	// the wait ends (#770). The backup then stays with MasterNotSeeded: the
+	// ended wait is kept, so the next selection does not begin it again and
+	// the condition does not alternate with PrimaryLogEndNotRead.
+	It("stays on MasterNotSeeded after the wait when the master is not recorded as seeded", func() {
+		const name = "bk-logend-unseeded"
+		backup := create(name)
+		cluster := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, cluster)).To(Succeed())
+		cluster.Status.Databases = []databasev1alpha1.DatabaseStatus{{Name: demoDB, Phase: databasePhaseCreated,
+			PrimaryCreated: true}}
+		Expect(k8sClient.Status().Update(ctx, cluster)).To(Succeed())
+		prober := &logEndUnreadProber{master: name + "-1"}
+		fake := &lostResponseBackupClient{}
+		t0 := time.Now()
+		reconcileAt(backup, prober, fake, t0)
+		Expect(readyOf(stored(ctx, backup)).Reason).To(Equal(reasonPrimaryLogEndNotRead))
+
+		for i := 1; i <= 3; i++ {
+			reconcileAt(backup, prober, fake, t0.Add(primaryLogEndWait+time.Duration(i)*backupPollAfter))
+			got := stored(ctx, backup)
+			Expect(readyOf(got).Reason).To(Equal(reasonMasterNotSeeded), "selection %d after the wait", i)
+			Expect(got.Status.TargetInstance).To(BeEmpty())
+		}
+		Expect(fake.instances).To(BeEmpty(), "a backup was started on a master not recorded as seeded")
+	})
 })

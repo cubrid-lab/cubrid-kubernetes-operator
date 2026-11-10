@@ -24,6 +24,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -311,6 +312,29 @@ func TestSeedAdmitted(t *testing.T) {
 	notCreated.Status.Databases[0].PrimaryCreated = false
 	if seedAdmitted(notCreated) != nil {
 		t.Fatal("a cluster with no database recorded as created rejects members")
+	}
+
+	// A completed bootstrap (haConfigured) seeded every member before it
+	// recorded the completion, and promotableMembers cannot change, so every
+	// member is admitted: also one whose status was written before
+	// seededMembers existed (#193), after a failover made a peer master
+	// (#770).
+	for name, seeded := range map[string][]string{"recorded": {holderPeer, seededMember}, "before seededMembers": nil} {
+		completed := cluster(seeded...)
+		completed.Status.Databases[0].HAConfigured = true
+		admitted = seedAdmitted(completed)
+		for _, member := range []string{holderFirst, holderPeer, seededMember} {
+			if admitted != nil && !admitted(member) {
+				t.Fatalf("completed bootstrap, %s: %s is not admitted", name, member)
+			}
+		}
+		peerMaster := PrimaryResolution{CurrentPrimary: holderPeer, Status: metav1.ConditionTrue, Reason: singlePrimary}
+		obs := map[string]RoleObservation{holderFirst: obsUnknown(), holderPeer: obsMaster(), seededMember: obsUnknown()}
+		got := selectBackupTarget([]string{holderFirst, holderPeer, seededMember}, obs, nil, nil, admitted, peerMaster,
+			databasev1alpha1.PrimaryOnly, false, false, testNow)
+		if !got.Selected || got.Instance != holderPeer {
+			t.Fatalf("completed bootstrap, %s: a backup on the master %s got %+v", name, holderPeer, got)
+		}
 	}
 }
 
@@ -733,6 +757,21 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		}
 		Expect(f.seed.backupOn).To(HaveLen(backups), "no backup is started after a change of master")
 		Expect(f.seed.restoreOn).To(HaveLen(restoreStarts), "no restore is started after a change of master")
+
+		By("every member then answering as healthy: HAReady and Ready stay False with the bootstrap's reason (#770)")
+		healthy := answersSlave
+		healthy.Replication = &ReplicationObservation{Source: f.first, AppliedChanges: 1, CopiedEOF: logAt(10, 0)}
+		f.prober.answers[f.peer], f.prober.answers[f.last] = healthy, healthy
+		reconcileOnce(f)
+		got := &databasev1alpha1.CubridCluster{}
+		Expect(k8sClient.Get(ctx, f.key, got)).To(Succeed())
+		Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionReplicationHealthy)).To(BeTrue())
+		for _, condition := range []string{conditionHAReady, conditionReady} {
+			c := meta.FindStatusCondition(got.Status.Conditions, condition)
+			Expect(c).NotTo(BeNil(), condition)
+			Expect(c.Status).To(Equal(metav1.ConditionFalse), condition)
+			Expect(c.Reason).To(Equal("SeedSourceChangedDuringSeed"), condition)
+		}
 	})
 
 	// The copies of the last member below are seeded from the first peer,
@@ -791,6 +830,48 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(status.SeededMembers).To(Equal([]string{f.peer, f.last}))
 		Expect(status.HAConfigured).To(BeTrue())
 		Expect(status.Seeding).To(BeNil())
+	})
+
+	It("keeps HAReady and Ready False while a restored member is not recorded as seeded, and True once it is (#770)", func() {
+		f := restoringFromActiveSource("src-haready")
+		// Every member's server runs, so every Pod is ready: only the record
+		// of the bootstrap can keep Ready off.
+		sts := &appsv1.StatefulSet{}
+		Expect(k8sClient.Get(ctx, f.key, sts)).To(Succeed())
+		sts.Status.Replicas, sts.Status.ReadyReplicas = 3, 3
+		Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
+		conditions := func() (ha, ready *metav1.Condition) {
+			got := &databasev1alpha1.CubridCluster{}
+			Expect(k8sClient.Get(ctx, f.key, got)).To(Succeed())
+			Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionReplicationHealthy)).To(BeTrue())
+			return meta.FindStatusCondition(got.Status.Conditions, conditionHAReady),
+				meta.FindStatusCondition(got.Status.Conditions, conditionReady)
+		}
+
+		By("the last member restored and applying its source's log with pages still waiting")
+		f.seed.restore[f.last] = instancemanager.OpCompleted
+		f.prober.answers[f.first] = slaveOf(f.peer, 10, 0, 0)
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 2, 0)
+		status := reconcileOnce(f)
+		Expect(status.SeededMembers).To(Equal([]string{f.peer}))
+		Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
+		ha, ready := conditions()
+		for _, c := range []*metav1.Condition{ha, ready} {
+			Expect(c.Status).To(Equal(metav1.ConditionFalse), c.Type)
+			Expect(c.Reason).To(Equal(reasonMemberNotSeeded), c.Type)
+			Expect(c.Message).To(ContainSubstring(f.last), c.Type)
+		}
+
+		By("the member caught up and recorded as seeded")
+		f.prober.answers[f.last] = slaveOf(f.peer, 10, 0, 0)
+		status = reconcileOnce(f)
+		Expect(status.HAConfigured).To(BeTrue())
+		reconcileOnce(f)
+		ha, ready = conditions()
+		Expect(ha.Status).To(Equal(metav1.ConditionTrue))
+		Expect(ha.Reason).To(Equal(reasonHealthyReplication))
+		Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+		Expect(ready.Reason).To(Equal("ClusterReady"))
 	})
 
 	DescribeTable("waits without using an attempt while the member has not caught up with an active source",

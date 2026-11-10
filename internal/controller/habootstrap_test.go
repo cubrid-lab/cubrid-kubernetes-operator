@@ -1609,6 +1609,11 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 				Expect(c.Reason).To(Equal(reasonBootstrapRecoveryFailed), t)
 				Expect(c.Message).To(ContainSubstring(cond.Message), t)
 			}
+			ha := meta.FindStatusCondition(got.Status.Conditions, conditionHAReady)
+			Expect(ha).NotTo(BeNil())
+			Expect(ha.Status).To(Equal(metav1.ConditionFalse), "HAReady of a failed recovery (#770)")
+			Expect(ha.Reason).To(Equal("SeedRestoreFailed"))
+			Expect(ha.Message).To(ContainSubstring(cond.Message))
 
 			By("starting nothing more afterwards")
 			seed.backupOn, seed.restoreOn = nil, nil

@@ -285,30 +285,22 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		logEndWaitOver := since != nil && r.now().Sub(since.Time) >= primaryLogEndWait
 		sel = selectBackupTarget(members, obs, replicationHistory(cluster), r.Positions.readings(cluster.UID, observedAt), seedAdmitted(cluster), res,
 			backup.Spec.Target.Preference, single, logEndWaitOver, observedAt)
-		// A selection that ended otherwise ends this wait; a later one starts
-		// it again with the whole bound. Each wait is bounded, and between
-		// them the backup waits for another reason or proceeds. A fallback
-		// to a master held on its Instance Manager's checks keeps the wait
-		// over, so that the next selection falls back again and the backup
-		// stays on that hold instead of beginning this wait anew.
 		_, _, fallbackHeld := backupCapabilityHold(sel, obs, observedAt)
-		switch {
-		case sel.Reason == reasonMasterFallbackPrimaryLogEndNotRead && fallbackHeld:
-		case sel.Reason != reasonPrimaryLogEndNotRead:
-			backup.Status.PrimaryLogEndNotReadSince = nil
-		case since == nil:
-			now := metav1.NewTime(r.now())
-			backup.Status.PrimaryLogEndNotReadSince = &now
-		}
+		r.recordLogEndWait(backup, sel, logEndWaitOver, fallbackHeld)
 		if !sel.Selected {
 			// Not terminal: HA may resolve later. Surface why and requeue.
 			// A wait for object storage that this interrupts starts again
 			// when a Pod without the settings is selected next.
 			backup.Status.ObjectStorageNotAppliedSince = nil
 			msg := "no safe backup target yet; waiting for a healthy target"
-			if sel.Reason == reasonPrimaryLogEndNotRead {
+			switch sel.Reason {
+			case reasonPrimaryLogEndNotRead:
 				msg = fmt.Sprintf("the master's own log end was not read, so no standby's copy of its log can be judged; "+
 					"asking again, and falling back to the master %s after this wait began", primaryLogEndWait)
+			case reasonMasterNotSeeded:
+				msg = "the master " + res.CurrentPrimary + " is not recorded by the HA bootstrap of cluster " + cluster.Name +
+					" as holding the database (status.databases[].seededMembers), so it may lack what an earlier master " +
+					"committed and no backup is taken on it; waiting, and no other member is taken in its place"
 			}
 			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, msg)
 			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
@@ -588,6 +580,30 @@ func (r *CubridBackupReconciler) failedBackup(ctx context.Context, backup *datab
 	backup.Status.CompletedAt = &now
 	setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "BackupFailed", reason)
 	return r.commit(ctx, backup, ctrl.Result{})
+}
+
+// recordLogEndWait keeps status.primaryLogEndNotReadSince for the selection
+// sel. A selection that ended otherwise ends the wait; a later one starts it
+// again with the whole bound. Each wait is bounded, and between them the
+// backup waits for another reason or proceeds. A fallback to a master held on
+// its Instance Manager's checks (fallbackHeld) keeps the wait over, so that
+// the next selection falls back again and the backup stays on that hold
+// instead of beginning this wait anew. A fallback refused because the master
+// is not recorded as seeded keeps an ended wait the same way, so the backup
+// stays on MasterNotSeeded (#770). That refusal comes from the selection,
+// before the capability hold, which is asked only of a selected master: an
+// unseeded master is refused whatever its Instance Manager shows.
+func (r *CubridBackupReconciler) recordLogEndWait(backup *databasev1alpha1.CubridBackup, sel TargetSelection,
+	waitOver, fallbackHeld bool) {
+	switch {
+	case sel.Reason == reasonMasterFallbackPrimaryLogEndNotRead && fallbackHeld:
+	case sel.Reason == reasonMasterNotSeeded && waitOver:
+	case sel.Reason != reasonPrimaryLogEndNotRead:
+		backup.Status.PrimaryLogEndNotReadSince = nil
+	case backup.Status.PrimaryLogEndNotReadSince == nil:
+		now := metav1.NewTime(r.now())
+		backup.Status.PrimaryLogEndNotReadSince = &now
+	}
 }
 
 // backupCapabilityHold says whether the backup on sel waits for its

@@ -1093,6 +1093,7 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 			setCondition(cluster, conditionReady, metav1.ConditionFalse, reason, msg+"; cluster not ready")
 			setCondition(cluster, conditionProgressing, progressing, reason, msg)
 			r.markRolesNotObserved(cluster, reason)
+			setRecoveryFailedHAReady(cluster, msg)
 			if err := r.writeStatus(ctx, cluster); err != nil {
 				if apierrors.IsConflict(err) {
 					return ctrl.Result{RequeueAfter: time.Second}, nil
@@ -1178,6 +1179,32 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	return ctrl.Result{RequeueAfter: r.idleRetry(cluster)}, nil
 }
 
+// bootstrapProgress says where the HA bootstrap stands, in BootstrapReady's
+// reason and message: it may copy a member, wait for its source or for a
+// person, or be held by its configuration.
+func bootstrapProgress(cluster *databasev1alpha1.CubridCluster) string {
+	c := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady)
+	if c == nil || c.Reason == "" {
+		return "BootstrapReady is not reported yet"
+	}
+	return fmt.Sprintf("BootstrapReady is %s with %s: %s", c.Status, c.Reason, c.Message)
+}
+
+// setRecoveryFailedHAReady keeps HAReady False with the failure's reason
+// (BootstrapReady's) once the recovery bootstrap of an HA cluster is Failed,
+// as a failed HA bootstrap does (#770); msg says that the recovery failed.
+func setRecoveryFailedHAReady(cluster *databasev1alpha1.CubridCluster, msg string) {
+	if cluster.Status.Bootstrap.Phase != databasev1alpha1.BootstrapFailed || !cluster.Spec.HighAvailability.Enabled {
+		return
+	}
+	reason := reasonBootstrapRecoveryFailed
+	if c := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady); c != nil &&
+		c.Status == metav1.ConditionFalse && c.Reason != "" {
+		reason = c.Reason
+	}
+	setCondition(cluster, conditionHAReady, metav1.ConditionFalse, reason, msg)
+}
+
 // idleRetry is how soon a cluster that nothing else brings back is reconciled
 // again, zero when it can wait for the next event.
 func (r *CubridClusterReconciler) idleRetry(cluster *databasev1alpha1.CubridCluster) time.Duration {
@@ -1213,18 +1240,43 @@ const primaryUnresolvedGrace = 60 * time.Second
 // last True (unresolvedStart); HAReady and RoutingReady report it at once.
 // Past that, Ready is False with PrimaryUnresolved (#716): this reports
 // only, and the Operator still chooses no primary (ADR-0005).
+//
+// An HA bootstrap that stopped as Failed makes Ready False with the
+// bootstrap's reason (#770), whether or not every instance is ready: it waits
+// for a person and nothing is starting. An HA bootstrap still in progress that
+// has not recorded a member as seeded keeps Ready False too: with
+// InstancesNotReady while a member's server does not run yet, and with
+// MemberNotSeeded once every instance is ready, as while the last member
+// catches up after its seed restore. The order is: two masters observed on
+// ready instances, a failed HA bootstrap, then on ready instances a member not
+// seeded, a primary unresolved past the grace period, or else ClusterReady,
+// and otherwise InstancesNotReady.
 func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridCluster, ready, desired int32, multiplePrimaries bool) {
 	wasReady := meta.IsStatusConditionTrue(cluster.Status.Conditions, conditionReady)
 	instancesReady := ready >= desired && desired > 0
 	unresolved := meta.FindStatusCondition(cluster.Status.Conditions, conditionPrimaryResolved)
 	since, unresolvedNow := r.unresolvedStart(cluster, unresolved)
 	unresolvedLong := unresolvedNow && r.now().Sub(since) >= primaryUnresolvedGrace
+	bootReason, bootMessage, bootFailed := haBootstrapFailure(cluster)
+	// Without a failure, what the bootstrap left unadmitted is a member not
+	// yet seeded (MemberNotSeeded).
+	_, unseededMessage, unseeded := haBootstrapUnadmitted(cluster)
 	switch {
 	case instancesReady && multiplePrimaries:
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMultiplePrimaries,
 			fmt.Sprintf("%d/%d instances ready, but more than one member reports itself master", ready, desired))
 		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, "Reconciled",
 			"cluster reconciled; the operator does not choose between masters, see PrimaryResolved")
+	case bootFailed:
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, bootReason,
+			fmt.Sprintf("%d/%d instances ready, but %s", ready, desired, bootMessage))
+		setCondition(cluster, conditionProgressing, metav1.ConditionFalse, bootReason,
+			"the HA bootstrap failed and waits for a person, see BootstrapReady")
+	case instancesReady && unseeded:
+		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMemberNotSeeded,
+			fmt.Sprintf("%d/%d instances ready, but %s", ready, desired, unseededMessage))
+		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reasonMemberNotSeeded,
+			"the HA bootstrap has not finished; "+bootstrapProgress(cluster))
 	case instancesReady && unresolvedLong:
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonPrimaryUnresolved,
 			fmt.Sprintf("%d/%d instances ready, but no single primary is resolved since %s (%s)", ready, desired,
