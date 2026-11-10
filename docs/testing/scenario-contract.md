@@ -602,6 +602,9 @@ key does not select the same steps as its older label, when a label or
 check such as `installed-backup-complete`, a family with no Kind check such as
 `S04`), or when the filters select no step at all. Without that check Ginkgo
 would run no step, skip the suite's setup and its gate, and report success.
+A negated term is checked the same way: `!ha-replicaton` would otherwise run
+every step, so it fails too. `make test-e2e` creates the Kind cluster before
+the suite starts, so a rejected filter still costs that cluster's creation.
 The results, `summary.json`, `junit.xml` and evidence paths keep their
 existing names; the labels only select.
 

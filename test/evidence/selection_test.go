@@ -135,7 +135,7 @@ func TestCheckLabelFilter(t *testing.T) {
 	for _, filter := range []string{
 		s02Label, "ha-replication", "HA-Replication",
 		"ha-setup || S03-graceful", "ha-setup || ha-primary-pod-recovery-graceful",
-		"ha-primary-pod-recovery", s03, "!db", "db && !S03", "/token/", "(S00, S01)",
+		"ha-primary-pod-recovery", s03, "!db", "db && !S03", "/token/", "(S00, S01)", "/a:b|token/",
 	} {
 		if err := CheckLabelFilter(filter, steps); err != nil {
 			t.Errorf("CheckLabelFilter(%q) = %v, want accepted", filter, err)

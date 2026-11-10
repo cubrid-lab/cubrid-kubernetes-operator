@@ -117,6 +117,8 @@ func CheckLabelFilter(filter string, steps [][]string) error {
 		return nil
 	}
 	var problems []string
+	// Ginkgo's own parser rejects a slash in a label before the suite runs,
+	// so this message reaches direct callers; it names the label to use.
 	for _, entry := range registry.entries {
 		for _, alias := range entry.Aliases {
 			id, variant, ok := strings.Cut(alias, "/")
@@ -130,7 +132,9 @@ func CheckLabelFilter(filter string, steps [][]string) error {
 	if len(problems) > 0 {
 		return selectionError(filter, slices.Compact(problems))
 	}
-	if strings.Contains(filter, ":") {
+	if slices.ContainsFunc(filterTerms(filter), func(term string) bool {
+		return !strings.HasPrefix(term, "/") && strings.Contains(term, ":")
+	}) {
 		return selectionError(filter, []string{"label sets (key: operation) are not used by the Kind suite"})
 	}
 	selects, err := types.ParseLabelFilter(filter)

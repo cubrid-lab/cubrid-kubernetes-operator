@@ -115,7 +115,7 @@ Both S11 `operator-restart` and S12 `operator-restart` exist; they are told apar
 
 | Surface | Current source of truth or consumer | Required migration behavior |
 | --- | --- | --- |
-| Registration/selection | `test/e2e/*_test.go`, `test/evidence/plan.go`, `test/evidence/selection.go`, Ginkgo labels, `E2E_LABEL_FILTER` | One named check selects exactly the intended test; unknown/ambiguous selectors fail visibly. Done for the Kind suite's local selection; the installed commands are not migrated |
+| Registration/selection | `test/e2e/*_test.go`, `test/evidence/plan.go`, `test/evidence/selection.go`, Ginkgo labels, `E2E_LABEL_FILTER` | One named check selects exactly the intended test; unknown/ambiguous selectors fail visibly. The Kind suite accepts a key or its legacy label and rejects a filter term no step carries; the installed commands take the legacy options only |
 | Required scenario gates | `test/e2e/summary_test.go`, `test/installed/run.go`, `test/installed/ha.go`, `test/evidence/evidence.go` | Mandatory list remains explicit; missing or duplicate results never make the lane pass |
 | Recorded outputs | `test/evidence/evidence.go`, `summary.json` (schema version 2; version 1 stays readable), `junit.xml` | Readable labels do not change identity by accident; version intentional schema changes; two runs compare by key ([comparing two runs](scenario-contract.md#comparing-two-runs)) |
 | Evidence paths | `Sxx/<variant>/...`, `LABxx/...` paths in the two test harnesses | Maintain access to historical links and artifacts; no silent evidence loss |
