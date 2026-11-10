@@ -892,7 +892,16 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 				"waiting to copy database "+database+" to "+peer+": a restore of this step could not be looked up: "+err.Error())
 			return false
 		}
-		if !reused && !r.seedBackup(ctx, cluster, status, source, peer, artifact) {
+		// A backup is not taken for a peer that would not be sent its
+		// restore; the restore is held on the same answer again before it is
+		// sent.
+		if !reused && seeding.BackupOperationID == "" {
+			if reason, msg, held := capabilityHold(peer, "seed restore", obs[peer], r.now(), seedRestoreChecks...); held {
+				setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
+				return false
+			}
+		}
+		if !reused && !r.seedBackup(ctx, cluster, status, source, peer, artifact, obs[source]) {
 			return false
 		}
 		if !sourceRecorded {
@@ -902,6 +911,10 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 		}
 		if msg, held := engineSeriesHold(cluster, peer); held {
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonEngineVersionMismatch, msg)
+			return false
+		}
+		if reason, msg, held := capabilityHold(peer, "seed restore", obs[peer], r.now(), seedRestoreChecks...); held {
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
 			return false
 		}
 		restore, err = r.Restore.StartRestore(ctx, peer, cluster.Namespace, restoreKey, restoreReq)
@@ -1091,13 +1104,19 @@ func (r *CubridClusterReconciler) recordedSeedRestore(ctx context.Context, clust
 	return restore, true, err
 }
 
+// seedRestoreChecks are the Instance Manager checks a seed restore relies on
+// (ADR-0013).
+var seedRestoreChecks = []string{instancemanager.CapabilitySeedFromMaster, instancemanager.CapabilityExpectedClusterUID}
+
 // seedBackup takes the seed backup of artifact on source, for peer, and
-// reports whether it has completed. The condition says what it waits for
-// otherwise; a backup that failed ends the attempt. Once the backup was
+// reports whether it has completed. sourceAnswer is the answer of source to
+// GET /v1/role in this reconcile; the backup is started only when it reports
+// the checks a seed backup relies on (capabilityHold). The condition says
+// what it waits for otherwise; a backup that failed ends the attempt. Once the backup was
 // started, its operation is recorded in status.databases[].seeding, which
 // holds the copy to peer, and only polled.
 func (r *CubridClusterReconciler) seedBackup(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
-	status *databasev1alpha1.DatabaseStatus, source, peer, artifact string) bool {
+	status *databasev1alpha1.DatabaseStatus, source, peer, artifact string, sourceAnswer RoleObservation) bool {
 	database := status.Name
 	uid := string(cluster.UID)
 	bucket, prefix := seedLocation(cluster, database, artifact)
@@ -1123,6 +1142,11 @@ func (r *CubridClusterReconciler) seedBackup(ctx context.Context, cluster *datab
 		}
 		if msg, held := engineSeriesHold(cluster, source); held {
 			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonEngineVersionMismatch, msg)
+			return false
+		}
+		if reason, msg, held := capabilityHold(source, "seed backup", sourceAnswer, r.now(),
+			instancemanager.CapabilitySeedUpload, instancemanager.CapabilityBackupSourceRole); held {
+			setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reason, msg)
 			return false
 		}
 		backupKey := bootstrapKey("seed-backup", cluster, status, artifact)

@@ -43,19 +43,23 @@ const (
 	seededMember = "ha-2"
 )
 
-// The answers a member can give about its role.
+// The answers a member can give about its role. Every member that answers
+// runs an Instance Manager of the Operator's build, which reports every
+// request check (ADR-0013).
 var (
-	answersMaster = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster}
-	answersSlave  = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave}
+	answersMaster = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, Capabilities: allCapabilities}
+	answersSlave  = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, Capabilities: allCapabilities}
 	// The master of a group whose members have not all joined once: its
 	// server is not active yet (docs/poc/RESULTS.md, POC-23).
 	answersMasterNotYetActive = RoleObservation{
 		Reachable: true, Role: databasev1alpha1.RoleMaster, Conflicting: true, MasterNotYetActive: true,
+		Capabilities: allCapabilities,
 	}
 	// A master whose answer contradicts its own node list.
-	answersContradictingMaster = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, Conflicting: true}
-	answersUnknown             = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown}
-	doesNotAnswer              = RoleObservation{}
+	answersContradictingMaster = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleMaster, Conflicting: true,
+		Capabilities: allCapabilities}
+	answersUnknown = RoleObservation{Reachable: true, Role: databasev1alpha1.RoleUnknown, Capabilities: allCapabilities}
+	doesNotAnswer  = RoleObservation{}
 )
 
 func TestSeedSourceAmong(t *testing.T) {
@@ -404,6 +408,10 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		// The first peer is seeded and has joined; the last member is next.
 		f.seed.restore[f.peer] = instancemanager.OpCompleted
 		f.seed.restore[f.last] = instancemanager.OpRestoring
+		// The last member has no database yet, so it reports no role. Its
+		// Instance Manager answers, which a seed restore is sent only after
+		// (ADR-0013).
+		f.prober.answers[f.last] = answersUnknown
 		return f
 	}
 	reconcileOnce := func(f *fixture) *databasev1alpha1.DatabaseStatus {
@@ -513,6 +521,12 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 	DescribeTable("starts nothing on the last member while the master among the holders is not known",
 		func(name string, first, peer RoleObservation) {
 			f := newFixture(name)
+			// The first peer is copied while both answer, as the seed steps
+			// need (ADR-0013), and the peer reports no role yet, so no
+			// source is chosen for the last member.
+			f.prober.answers[f.first] = answersMasterNotYetActive
+			f.prober.answers[f.peer] = answersUnknown
+			Expect(reconcileOnce(f).SeededMembers).To(Equal([]string{f.peer}))
 			f.prober.answers[f.first] = first
 			f.prober.answers[f.peer] = peer
 
@@ -1070,7 +1084,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(backupsOn(f, f.peer)).To(HaveLen(1), "a new backup was taken for every claim of the member being seeded")
 
 		f.seed.backupStates[f.peer] = instancemanager.OpCompleted
-		f.prober.answers[f.last] = doesNotAnswer
+		f.prober.answers[f.last] = answersUnknown
 		reconcileOnce(f)
 		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.peer))
 	})
@@ -1132,6 +1146,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		f := newFixture("src-firstpeer")
 		f.seed.restore[f.peer] = instancemanager.OpRestoring
 		f.prober.answers[f.first] = activeSourceEndingAt(10)
+		f.prober.answers[f.peer] = answersUnknown
 		status := reconcileOnce(f)
 		Expect(status.Seeding.Member).To(Equal(f.peer))
 		Expect(status.Seeding.ActiveMasterSince).NotTo(BeNil())
@@ -1226,11 +1241,22 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.first))
 	})
 
-	It("copies the first peer from the member that holds the database while no member answers for its role", func() {
+	It("waits while no Instance Manager answers, then copies the first peer from the member that holds the database though no member reports a role", func() {
 		f := newFixture("src-alone")
 		f.seed.restore[f.peer] = instancemanager.OpRestoring
-		// Nobody answers: until a peer has joined, no role can be relied on.
+		f.prober.answers[f.last] = doesNotAnswer
+
+		By("no Instance Manager answering, so none shows the checks a seed step relies on (ADR-0013)")
 		status := reconcileOnce(f)
+		Expect(f.seed.backups).To(BeEmpty())
+		Expect(f.seed.restores).To(BeEmpty())
+		Expect(status.BootstrapAttempts).To(BeZero())
+		Expect(reason(f)).To(Equal(reasonInstanceManagerUnavailable))
+
+		By("every member answering without a role: until a peer has joined, no role can be relied on")
+		f.prober.answers[f.first] = answersUnknown
+		f.prober.answers[f.peer] = answersUnknown
+		status = reconcileOnce(f)
 		Expect(f.seed.restores).To(HaveKey(f.peer))
 		Expect(f.seed.restores[f.peer].SeedFromMaster).To(Equal(f.first))
 		Expect(status.SeededMembers).To(BeEmpty())

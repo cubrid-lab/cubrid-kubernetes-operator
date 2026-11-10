@@ -18,7 +18,6 @@ package instancemanager
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -105,8 +104,7 @@ func (s *Server) haBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req HABootstrapRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+	if !decodeRequest(w, body, &req) {
 		return
 	}
 	if !databaseNamePattern.MatchString(req.Database) {

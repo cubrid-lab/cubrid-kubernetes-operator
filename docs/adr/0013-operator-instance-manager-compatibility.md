@@ -2,14 +2,14 @@
 
 ## Status
 
-Proposed — tracked in issue #322
+Accepted — tracked in issues #322 and #733
 
-This record states what the Operator and the Instance Manager do today when
-their builds differ, with the code and the test that show it, and names the
-cases that nothing shows. The rules it lists under "Decision" are the ones the
-issue asks for; they await a maintainer decision and are not in force.
-Merging this record accepts no compatibility policy, changes no behavior and
-does not complete #322.
+The maintainers decided the rules under "Decision" on 2026-11-10 UTC
+([decision on #322](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/322)).
+The change that implements #733 put them in force. The sections from "What the
+Operator knows about an Instance Manager" to "Incompatibilities found" record
+what the two sides do when their builds differ, with the code and the test
+that show it, and name the cases that nothing shows.
 
 ## Context
 
@@ -33,10 +33,11 @@ replaced with a newer image.
 ## What the Operator knows about an Instance Manager
 
 - **No build identity.** Neither the `/v1` answers nor the Operator's requests
-  carry an Instance Manager build, API revision or list of capabilities.
-  `grep` for build information, a version header or "capabilit" in
-  `cmd/` and `internal/instancemanager` finds none that the Operator reads
-  (checked at `b6f23d1`).
+  carry an Instance Manager build or API revision.
+- **The checks it enforces.** `GET /v1/role` carries `capabilities`, the
+  request checks the manager enforces (`instancemanager.Capabilities`,
+  `internal/instancemanager/role.go`). A manager built before the list
+  existed sends none. See "Decision".
 - **The engine version only.** `GET /v1/role` carries `engineVersion`, the
   CUBRID version read from `cubrid_rel` (`HAStatus.EngineVersion`,
   `internal/instancemanager/role.go`). It is the engine's, not the manager's.
@@ -89,7 +90,7 @@ manager was run.
 |---|---|---|
 | A path the manager does not have (404 or 405 from Go's mux) | A start is not counted as refused: it is waited on like an unavailable manager and uses up no attempt (`InstanceManagerUnavailable`, `RestoreStartFailed` for a recovery). A lookup by key answers an error, never "none held". A poll answered 404 is a missing record only when the body says "operation not found". | `startError`, `FindOperation`, `GetOperation` in `imclient.go`. Tested with a canned answer: `TestHTTPBackupClient_ErrorAnswersAreClassified` (rows "an endpoint an earlier member does not have", "a method an earlier member does not have"), `TestHTTPBackupClient_PollIsNotARefusedRequest`, and the controller spec "waits on a member that has no restore endpoint, without using up an attempt". No spec covers a missing `/v1/ha/bootstrap` or `/v1/backup` route, or a missing lookup route, end to end. |
 | An error body without `code` | The cause is taken from the status: 401 and 403 refuse the token, 412 means no object storage, 400, 413 and 422 refuse the request, another 4xx is waited on, and any other 409 is a conflict of no named cause after which the key is looked up. | `statusError`, `readErrorAnswer`; ADR-0003 "Error answers". Tested with canned answers (the rows "an earlier manager's conflict, without a code" and "an earlier manager without object storage" in `TestHTTPBackupClient_ErrorAnswersAreClassified`). |
-| A request field the manager does not know | **Silently ignored.** The manager decodes request bodies with `json.Unmarshal` and nowhere calls `DisallowUnknownFields` (`backup` and `restorePrepare` in `server.go`, `haBootstrap` in `habootstrap.go`; the same at `07ac3b0^`). A field the older manager lacks is dropped, so the check it carries is not applied, and the answer is the same as for a request without it. | Code only. See "Incompatibilities found". Not tested. |
+| A request field the manager does not know | A manager built before #733 ignores it: it decodes request bodies with `json.Unmarshal` (`backup` and `restorePrepare` in `server.go`, `haBootstrap` in `habootstrap.go`, before #733; the same at `07ac3b0^`). A field it lacks is dropped, so the check the field carries is not applied, and the answer is the same as for a request without it. Such a manager reports no `capabilities`, so the Operator no longer sends it a seed backup or a seed restore (see "Decision"). A manager built with #733 refuses the request with 400 before it does anything (`decodeRequest` in `server.go`). | Tested with a fake older manager: the controller spec "A seed step for an Instance Manager that does not report the checks it relies on" (`im_capability_test.go`) fails without the Operator's check, because the seed backup is sent. `TestServer_RefusesARequestFieldItDoesNotKnow` shows the refusal, and answers 202 without it. No build of one side has been run against a build of the other. |
 | A response field the manager does not send | The Operator reads absent as zero or nil. `engineVersion` absent leaves the member's version empty, which the update guard reports as `UpdateBlockedEngineVersionUnknown` and which a standalone member is asked about again every 30 seconds. `replication` absent leaves `ReplicationHealthy` at `ReplicationNotObserved`. `logEnd` absent leaves the primary's log end unread, which a standby backup selection waits on (`PrimaryLogEndNotRead`) up to 30 seconds and then takes the master. `unfinished` absent is stored as "none reported". | `observationFromStatus`, `instanceStatuses` (`haresolve.go`), `replicationCondition` (`replication.go`), `backuptarget.go`. Not tested with an older manager's answer. Tests such as `TestObservationFromStatus_CarriesEngineVersion` and `TestInstanceStatuses_VersionNeedsAFreshAnswer` show how a given answer is read, not that an older manager sends it. |
 | The bearer token | The manager reads one token from `IM_TOKEN` when it starts and refuses any other with 401 before it acts. The Operator sends the current token, and on a 401 sends the previous one, remembering which a member accepted. A member that holds the shared token of older versions is reached through the overlap of a rotation. | `acceptedTokens.send`, `ClusterTokens` in `imclient.go`; ADR-0003 "Security". Tested with the Secret in the state an older Operator left (`asOlderOperator` in `imtoken_rotation_test.go`) and by `imtoken_*_test.go`; none starts a manager of an older build. |
 | An operation recorded under the key for another request body | The manager hashes the raw request body (`HashRequest`, `opstore.go`), so a body that differs by any byte, such as a field added by a newer Operator, conflicts with the operation held under the same key (409 `IdempotencyConflict`). The Operator then looks the key up and follows that operation instead of starting the changed one (`operationOfKey`). | Tested: the controller specs "follows the operation its key names when the member holds it for another request" and "names the conflict when the operation its key names cannot be found", and `TestOperationOfKey`. |
@@ -167,15 +168,10 @@ These were found while reading the code and are recorded, not fixed here.
    manager refuse an artifact of another cluster when a member is seeded.
    `BackupUpload.Seed` and `RestoreRequest.SeedFromMaster` are the same kind
    of field. A manager built before the field existed decodes the request,
-   ignores the field and answers as if it were absent; the Operator does not
-   learn that the check did not run. For the cluster UID the Operator takes
-   the artifact from the location it has just written, which lowers the
-   practical risk, but nothing makes the old combination refuse. The caller
-   cannot infer that the check was enforced, so this remains an open defect on
-   #733. Before any mix of builds is declared supported, the contract needs a
-   fail-closed capability, version or response acknowledgement, or an explicit
-   refusal, for `ExpectedClusterUID`, `Seed` and `SeedFromMaster` alike, and a
-   regression test across real builds.
+   ignores the field and answers as if it were absent. Addressed by the
+   decision below (#733): the Operator sends these requests only to a manager
+   that reports the checks, and a manager with the rule refuses a field it
+   does not know. No run of two real builds against each other shows it.
 2. **The Operator cannot tell an older manager from a manager that has
    nothing to report.** An answer without `unfinished` is stored as "no
    unfinished database" and clears an earlier report (`instanceStatuses`);
@@ -192,20 +188,82 @@ open one.
 
 ## Decision
 
-The issue asks the decision to define the rules below. They are listed as the
-questions to answer; each is followed by what the code does today, from the
-sections above.
+1. **Supported combination until v0.1 is released:** only an Operator and an
+   Instance Manager built and validated together from the same reviewed
+   commit, each identified by an immutable digest. No other combination is
+   supported, and no "last N versions" promise or version matrix is made.
+2. **An unsupported mix still fails closed.** `OnDelete` and a Pod replaced
+   by hand can leave an older or newer Instance Manager running beside the
+   Operator. Before the Operator sends a request whose safety depends on a
+   field the manager must enforce, it must know that this manager enforces
+   it. A 2xx answer is not that proof: an older manager may already have
+   started the operation without the check when it answers.
+3. **Mechanism.** The Instance Manager reports the checks it enforces as
+   `capabilities` in its `GET /v1/role` answer, which the Operator reads in
+   the same reconcile before it sends a seed step or a `CubridBackup` on the
+   master. The Operator sends such a request only to a manager whose fresh,
+   readable answer reports every check the request relies on. Otherwise the
+   step waits with one of these reasons, on `BootstrapReady` for a seed step
+   and on the `CubridBackup`'s `Ready`, whose message names the member and
+   the checks:
+   - `InstanceManagerCapabilityMissing`: the member answered, without a
+     check. The remedy is to replace its Pod.
+   - `InstanceManagerCapabilityUnverified`: the member answered, but not
+     within the time an observation counts (15 seconds), or not readably, so
+     the answer shows nothing.
+   - `InstanceManagerUnavailable`, or `InstanceManagerTokenRefused` when it
+     refused the cluster's token: the member could not be asked.
 
-| The issue asks for | Today |
-|---|---|
-| The supported Operator and Instance Manager combinations under `OnDelete` | No combination is declared, and none is tested (see the test statement above). |
-| A check of the required capability, with a missing capability told apart from ordinary unavailability and the operation deferred | No capability exists. A missing path is already treated as unavailability and deferred (404 or 405 on a start); a missing field is not noticed. |
-| Transition rules for responses (keep `error`, add `code` and `operationID`), paths (keep `/v1/restore/prepare` after a rename) and request fields (staged removal) | Followed for `code`: `error` is unchanged (`errorcode_test.go`). No rule is written for paths or request fields, and `operationID` is not in the error body (`ErrorResponse` has `error` and `code` only). |
-| No promise of "the last N versions" without validation | None is made: `docs/compatibility.md` states that development images carry no compatibility or support claim, and names no Operator and Instance Manager combination. |
+   The wait uses up no attempt, and nothing is deleted, overwritten or
+   replaced. A seed backup is not taken while the member being seeded does
+   not show the checks of its restore. A `CubridBackup` whose target is not
+   recorded yet records none while it waits, without a time limit and with
+   one Warning Event when the wait begins, so a later selection may take a
+   standby; one whose recorded master stops showing the check is not sent
+   its start again, an operation the master holds under the backup's key is
+   followed, and the wait is bounded like any wait on a recorded target
+   (ADR-0007). Nothing is kept between reconciles, so an Operator restart
+   reads the answer again and does not skip the check. A manager with this
+   rule also refuses a request field it does not know, with 400 and the code
+   `UnknownRequestField` (ADR-0003), so a later field cannot be skipped
+   silently by a build that has the rule.
+4. **Transition rules for paths and fields** beyond these stay unwritten
+   until v0.1 is released. Each change keeps the rules above.
 
-Until the maintainers decide, the following holds without a new claim:
-the only validated combination is an Operator and an Instance Manager built
-from the same commit, as the Kind end-to-end run and the unit tests build them.
+The checks, and the requests that rely on them:
+
+| Capability | What the manager enforces | Request that relies on it |
+|---|---|---|
+| `seed-upload` | `upload.seed`: the backup is uploaded only to a seed location of its cluster and database, with master metadata | the seed backup on the source (`seedBackup`, `internal/controller/habootstrap.go`) |
+| `backup-source-role` | the manifest records the role the member itself reports, and a backup that names the member master, or a seed backup, is refused or not uploaded unless the member reports that role before and after `backupdb` (#756) | the seed backup, and a `CubridBackup` whose selected target is the master (`backupCapabilityHold`, `internal/controller/cubridbackup_controller.go`) |
+| `seed-from-master` | `seedFromMaster`: the artifact must have been taken on that member, as master, and the member is restored as its slave | the seed restore on the member being seeded (`seedMember`) |
+| `expected-cluster-uid` | `expectedClusterUID` with `seedFromMaster`: the artifact must have been taken in this cluster | the seed restore |
+
+Other requests rely on no such field. The HA bootstrap sends a database name
+only. A recovery restore sends `expectedCubridVersion`, which every manager
+with `/v1/restore/prepare` enforces (`2b13489`, #68), and sends neither
+`seedFromMaster` nor `expectedClusterUID`. A `CubridBackup` on a standby
+names the role `slave`, which an older manager also records, and for which
+a role change after `backupdb` is logged rather than refused (#756): it
+relies on no check an older manager lacks.
+
+What the capabilities do not cover:
+
+- **The window between the check and the request.** The answer is read in
+  the same reconcile, a few seconds at most before the request is sent. A
+  Pod replaced by one of another build within that window receives the
+  request unchecked. Nothing narrows it further: the manager does not echo
+  the checks it applied in its answer to the request.
+- **An operation recorded before an upgrade.** A seed backup, seed restore
+  or `CubridBackup` whose operation was started and recorded before the
+  Operator was upgraded is only polled; the rule applies to what is sent,
+  not to what already runs.
+- **Checks that no request field asks for.** The manager also refuses to
+  overwrite a database its ownership marker does not attribute to the
+  operation (#316) and confines staging and target directories to its own
+  roots (#119). These checks apply whatever the request says, so no
+  capability names them; whether an older manager has them depends on its
+  build alone.
 
 ## Consequences
 
@@ -213,23 +271,42 @@ from the same commit, as the Kind end-to-end run and the unit tests build them.
 
 - The unverified skew cases are named in one place instead of being implied
   by comments in `imclient.go` and by ADR-0007.
+- A seed step or a `CubridBackup` on the master is not sent to a manager
+  that may skip the check it relies on; the condition names the member to
+  replace.
 
 ### Negative
 
-- Until a decision and a skew test exist, an Operator upgrade over Pods that
-  were not replaced is not covered by evidence, and incompatibility 1 can
-  apply to it.
+- After an Operator upgrade, the bootstrap of a new HA cluster whose Pods run
+  an Instance Manager built before the capabilities list waits until those
+  Pods are replaced. A seed step runs only during the HA bootstrap of a
+  database (`reconcileHABootstrap`), so a cluster whose bootstrap ended is not
+  affected by that part.
+- A `CubridBackup` that selects the master (`PrimaryOnly`, or
+  `PreferStandby` falling back to it) waits while the master's Pod runs such
+  an Instance Manager; a backup on a standby is not affected.
+- A manager with this rule refuses a request field that a later build drops
+  and an older Operator still sends. No field has been dropped so far.
+- No skew test exists, so an Operator upgrade over Pods that were not
+  replaced is covered by unit and envtest evidence with fakes only.
 
 ## Validation
 
-Documentation only. Nothing was run against a cluster. A skew test needs a
-build of one side held fixed while the other changes; the repository has none
-(`ROADMAP.md`, Hardening, records that baseline and candidate orchestration
-and CRD compatibility are not covered).
+Unit and envtest only (#733): `TestServer_Role_ReportsTheChecksItEnforces`,
+`TestServer_RefusesARequestFieldItDoesNotKnow`,
+`TestProbeRole_ReadsTheChecksTheInstanceManagerReports`,
+`TestCapabilityHold_AnUnreadableAnswerIsUnverified`, and the controller
+specs in `internal/controller/im_capability_test.go`, which stand in an older
+manager with a fake that reports no capabilities. The same-build path runs in
+the Kind end-to-end job. Nothing was run with two real builds: a skew test
+needs a build of one side held fixed while the other changes, and the
+repository has none (`ROADMAP.md`, Hardening, records that baseline and
+candidate orchestration and CRD compatibility are not covered).
 
 ## Revisit When
 
-- A capability or build identity is added to a `/v1` answer.
+- A capability is added to `GET /v1/role`, or a build identity to a `/v1`
+  answer.
 - A request field is added, renamed or removed, or an idempotency key format
   changes.
 - A job runs one side's earlier build against the other.
