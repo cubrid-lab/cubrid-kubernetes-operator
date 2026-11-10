@@ -785,6 +785,61 @@ spec:
                             round, once it was started. From then on it is only polled, never
                             started again.
                           type: string
+                        catchUpTarget:
+                          description: |-
+                            catchUpTarget is the end of the source's own log, read in the first
+                            reading after the restore reported Completed. A member whose source was
+                            observed active is recorded as seeded only once its copy of the source's
+                            log has reached it.
+                          properties:
+                            offset:
+                              description: offset is the byte offset in the page.
+                              format: int64
+                              type: integer
+                            page:
+                              description: page is the log page.
+                              format: int64
+                              type: integer
+                          required:
+                          - offset
+                          - page
+                          type: object
+                        lastVerifiedAt:
+                          description: |-
+                            lastVerifiedAt is the time of the last reading during this copy in
+                            which every member that holds the database answered and the source was
+                            the only master among them.
+                          format: date-time
+                          type: string
+                        masterChange:
+                          description: |-
+                            masterChange is the first reading during this copy that showed another
+                            master than the source: another member, or the member being seeded,
+                            reporting itself master, or the source reporting itself a slave. It is
+                            never cleared, and the member is then not recorded as seeded.
+                          properties:
+                            member:
+                              description: |-
+                                member is the member whose answer showed the change: the member that
+                                reported itself master, or the source when it reported itself a slave.
+                              type: string
+                            observedAt:
+                              description: observedAt is when the answer was received.
+                              format: date-time
+                              type: string
+                            role:
+                              description: role is the role that member reported.
+                              enum:
+                              - master
+                              - slave
+                              - replica
+                              - unknown
+                              type: string
+                          required:
+                          - member
+                          - observedAt
+                          - role
+                          type: object
                         member:
                           description: member is the member the database is copied
                             to.
@@ -804,8 +859,10 @@ spec:
                           type: string
                         round:
                           description: |-
-                            round counts how often the source changed before the restore was
-                            started. Every round has a backup of its own.
+                            round counts how often the copy was begun again before the restore was
+                            started: when the source changed, or when a change of master or a gap
+                            without a verified reading was seen while the source stayed the same.
+                            Every round has a backup of its own.
                           format: int32
                           type: integer
                         source:
@@ -815,6 +872,14 @@ spec:
                             member that was last observed as the master among the members that
                             hold the database.
                           type: string
+                        sourceObservedActive:
+                          description: |-
+                            sourceObservedActive is set once the source answered as a master whose
+                            server is active during this copy. From then on the member is recorded
+                            as seeded only once it is shown to have caught up with the source
+                            (catchUpTarget), and a gap of more than 30 seconds without a verified
+                            reading stops the bootstrap (ADR-0010).
+                          type: boolean
                       required:
                       - member
                       - source
