@@ -6194,7 +6194,7 @@ One session as soon as a graceful restart returned, **no shim loaded**:
 6. **First comparison** once the restore has ended and 20 more rows are acknowledged: every table on each running member, `db_ha_apply_info`, `cubrid applyinfo`, `cubrid heartbeat status`, and the Instance Manager's `/v1/role` and `/v1/ha/convergence`. The Instance Manager of each member was also polled about every 2 s throughout.
 7. **The old master returns** (all fault trials): a new container on its volume, then a row into `gap_t` and an `UPDATE` on the master, and a **second comparison** on all three.
 
-"Acknowledged" means `csql` exited 0, printed `1 row affected` and no `ERROR`. The plan was two rounds of ten cells, interleaved. `python3 analyse.py samples/main` recomputes every number in this entry from the raw files and exits 0 only if each holds.
+"Acknowledged" means `csql` exited 0, printed `1 row affected` and no `ERROR`. The plan was two rounds of ten cells, interleaved. `python3 analyse.py samples/main` recomputes every number in this entry from the raw files and exits 0 only if each holds. The raw files are in `docs/poc/poc57/samples/main/<trial>.tar.gz` (one archive per trial, and `setup.tar.gz`), packed after the run and unedited; `analyse.py` reads them in memory, and `tar -xzf <trial>.tar.gz -C <empty directory>` unpacks one.
 
 **Results.** 20 of 20 trials ran to the end; every seed restore ended `Completed`. "Missing" counts the acknowledged writer rows that the master holds and `h-2` does not.
 

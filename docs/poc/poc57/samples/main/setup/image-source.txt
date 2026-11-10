@@ -1,1 +1,0 @@
-commit 0cd53b4 (0cd53b4b89eb1309e5aad46fd0685ac907af3bb5), built with: make docker-build-instance-manager IM_IMG=example.com/cubrid-instance-manager:poc57-0cd53b4

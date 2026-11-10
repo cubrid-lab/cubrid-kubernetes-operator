@@ -20,8 +20,8 @@ no password, inside throwaway containers.
 | `harness.py` | `setup <run> <image>` forms and loads the group and saves its cold data; `trial <run> <fault> <moment> <hold> <n>` runs one trial; `campaign <run> main` runs the plan `PLANS["main"]`; `cleanup <run>` removes the containers, the network and the run's files in `/dev/shm` |
 | `writer.py` | Runs inside the master: one `INSERT` per `csql` call, in autocommit, with its own id, and a line per call saying whether it was acknowledged |
 | `sampler.py` | POC-50's and POC-53's sampler, unchanged: `cubrid heartbeat status` about once a second inside a member, one TSV row per call |
-| `analyse.py` | Recomputes every number RESULTS.md states from `samples/main/`, and exits 0 only if each holds: `python3 analyse.py samples/main` |
-| `samples/main/` | The recorded run: `setup/` and one directory per trial |
+| `analyse.py` | Recomputes every number RESULTS.md states from the archives in `samples/main/`, read in memory, and exits 0 only if each holds: `python3 analyse.py samples/main` |
+| `samples/main/` | The recorded run: `setup.tar.gz` and one `<trial>.tar.gz` per trial |
 
 ## How it ran
 
@@ -36,7 +36,7 @@ python3 analyse.py samples/main
 ```
 
 These are the commands that ran, with this version of the files, on 2026-11-10 from
-02:38Z to 03:31Z. `samples/main/setup/image-source.txt` and `image.txt` record the
+02:38Z to 03:31Z. `setup.tar.gz` holds `setup/image-source.txt` and `image.txt`, which record the
 commit and the image ID. Probe runs came before them, to fix the harness: those of
 an earlier attempt on the older `example.com/cubrid-instance-manager:e2e` image, and
 one set-up and one held kill trial on this image. None is kept, and nothing stated
@@ -55,7 +55,7 @@ rests on them.
 - Each member has a fixed address and the other members in `/etc/hosts`, so a name
   still resolves while its member is down. The store is `adobe/s3mock`, pinned by
   digest, as in POC-56.
-- **Set-up** (`samples/main/setup/`), by the requests the Operator sends: `POST
+- **Set-up** (`samples/main/setup.tar.gz`, directory `setup/`), by the requests the Operator sends: `POST
   /v1/ha/bootstrap` on `h-0`, then a seed backup and `POST /v1/restore/prepare` for
   `h-1` and `h-2`. Then the tables `base` (ids 1 to 1000, `v = id`), `acked`, `marks`
   and `pad` (120,000 rows, which give the database a size), and the whole group is
@@ -113,7 +113,7 @@ committed.
 
 ## Samples
 
-`samples/main/<trial>/`, times in epoch seconds, with `events.tsv` also in UTC and
+`<trial>/` in `samples/main/<trial>.tar.gz`, times in epoch seconds, with `events.tsv` also in UTC and
 the load average:
 
 | File | What it is |

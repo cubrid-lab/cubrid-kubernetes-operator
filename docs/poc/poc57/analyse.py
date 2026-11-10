@@ -3,11 +3,13 @@
 the raw files of each trial, and exits 0 only if each stated fact holds.
   python3 analyse.py samples/main            the table and the checks
   python3 analyse.py samples/main --trials   one block per trial as well
-Nothing here reads the containers: only the files under the trial directories."""
+Nothing here reads the containers: only the files in the trial archives
+samples/main/<trial>.tar.gz, read in memory and never extracted."""
 import gzip
 import json
 import re
 import sys
+import tarfile
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -15,7 +17,49 @@ MEMBERS = ["h-0", "h-1", "h-2"]
 TABLES = ["base", "acked", "gap_t", "marks", "pad", "tables"]
 
 
+class Node:
+    """A path inside a trial archive: the members are held in memory, so the
+    trial reads like a directory and nothing is extracted."""
+
+    def __init__(self, files, rel="", label=""):
+        self.files, self.rel, self.label = files, rel, label
+
+    def __truediv__(self, part):
+        return Node(self.files, f"{self.rel}/{part}" if self.rel else part)
+
+    @property
+    def name(self):
+        return self.rel.rsplit("/", 1)[-1] or self.label
+
+    def is_file(self):
+        return self.rel in self.files
+
+    def exists(self):
+        return self.is_file() or any(k.startswith(self.rel + "/") for k in self.files)
+
+    def read_text(self, errors="strict"):
+        return self.files[self.rel].decode("utf-8", errors)
+
+
+def open_trial(archive, label):
+    """The regular files of one archive, keyed by their path below the trial's
+    own directory."""
+    files = {}
+    with tarfile.open(archive) as tf:
+        for m in tf.getmembers():
+            if m.isfile():
+                files[m.name.split("/", 1)[1]] = tf.extractfile(m).read()
+    return Node(files, label=label)
+
+
 def text(p):
+    if isinstance(p, Node):
+        if p.is_file():
+            return p.read_text(errors="replace")
+        g = Node(p.files, p.rel + ".gz")
+        if g.is_file():
+            return gzip.decompress(g.files[g.rel]).decode("utf-8", "replace")
+        return None
     p = Path(p)
     if p.exists():
         return p.read_text(errors="replace")
@@ -290,8 +334,9 @@ def trial(d):
 
 def load_trials(root):
     out = []
-    for d in sorted(Path(root).iterdir()):
-        if d.is_dir() and (d / "spec.json").exists():
+    for a in sorted(Path(root).glob("*.tar.gz"), key=lambda p: p.name[: -len(".tar.gz")]):
+        d = open_trial(a, a.name[: -len(".tar.gz")])
+        if (d / "spec.json").exists():
             out.append(trial(d))
     return out
 
