@@ -37,7 +37,6 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
-	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
 // curlPodManifest is a Pod outside the cluster's namespace from which the
@@ -348,13 +347,7 @@ func s14Step(r *haRun) {
 			Expect(err).NotTo(HaveOccurred())
 			_, _ = fmt.Fprintf(GinkgoWriter, "operation records on %s: %s\n", member, strings.TrimSpace(operations))
 		}
-		var report workload.Report
-		Eventually(func(g Gomega) {
-			var err error
-			report, err = r.dataCheck(context.Background())
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
-		}, 2*time.Minute, 3*time.Second).Should(Succeed())
+		report := r.passingDataCheck("S14", 2*time.Minute)
 
 		By("reading the refusals from the Instance Manager's own log")
 		for _, member := range []string{master, slaves[0]} {

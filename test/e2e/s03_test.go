@@ -605,13 +605,7 @@ func (r *haRun) s03(spec context.Context, variant string) {
 	}, time.Minute, 3*time.Second).Should(Succeed())
 
 	By("applying the data rules to every member and to both Services")
-	var report workload.Report
-	Eventually(func(g Gomega) {
-		var err error
-		report, err = r.dataCheck(context.Background())
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
-	}, 3*time.Minute, 3*time.Second).Should(Succeed())
+	report := r.passingDataCheck("S03/"+variant, 3*time.Minute)
 	for _, slave := range nowSlaves {
 		count, err := r.failCount(context.Background(), slave, newMaster)
 		Expect(err).NotTo(HaveOccurred())

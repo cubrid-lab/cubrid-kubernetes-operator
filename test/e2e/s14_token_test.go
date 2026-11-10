@@ -38,7 +38,6 @@ import (
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
-	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
 // The variants of S14 that replace the Instance Manager token, in
@@ -634,13 +633,7 @@ func (r *haRun) s14Token(variant string) {
 	note("Events PrimaryUnresolved while Pods were replaced: %d", unresolved-counts["PrimaryUnresolved"])
 
 	By("applying the data rules to every member and to both Services")
-	var report workload.Report
-	Eventually(func(g Gomega) {
-		var err error
-		report, err = r.dataCheck(context.Background())
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
-	}, 3*time.Minute, 3*time.Second).Should(Succeed())
+	report := r.passingDataCheck("S14/"+variant, 3*time.Minute)
 
 	By("looking for the tokens where they must not be")
 	places := r.tokenPlaces()

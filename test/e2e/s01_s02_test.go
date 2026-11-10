@@ -358,12 +358,39 @@ func (r *haRun) formationTime(ctx context.Context) (time.Duration, error) {
 	return last.Sub(cluster.Metadata.CreationTimestamp), nil
 }
 
+// passingDataCheck applies the data rules to every member and to both
+// Services until they hold, for at most timeout, and returns the report. When
+// they never hold, the history and the last report are stored before the
+// step fails: without them a failed check, such as a read mismatch, cannot be
+// placed in time against the logs (#786).
+func (r *haRun) passingDataCheck(id string, timeout time.Duration) workload.Report {
+	var report workload.Report
+	passed := false
+	defer func() {
+		if !passed {
+			r.evidenceFiles(id, report)
+		}
+	}()
+	EventuallyWithOffset(1, func(g Gomega) {
+		got, err := r.dataCheck(context.Background())
+		g.Expect(err).NotTo(HaveOccurred())
+		report = got
+		g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
+	}, timeout, 3*time.Second).Should(Succeed())
+	passed = true
+	return report
+}
+
 // evidenceFiles stores the history and a data check of a scenario and
-// returns the files that were written.
+// returns the files that were written. A report no data check returned is not
+// stored: its zero values would read as a check that found no rows.
 func (r *haRun) evidenceFiles(id string, report workload.Report) []string {
 	var files []string
 	if f := writeScenarioFile(id+"/history.jsonl", []byte(r.historyText())); f != "" {
 		files = append(files, f)
+	}
+	if report.Members == nil {
+		return files
 	}
 	if data, err := json.MarshalIndent(report, "", "  "); err == nil {
 		if f := writeScenarioFile(id+"/data-check.json", append(data, '\n')); f != "" {
@@ -405,13 +432,7 @@ func s01AndS02Steps(r *haRun) {
 		Expect(workload.CheckReadOnlyRefusal(refused)).To(Succeed())
 
 		By("applying the data rules to every member and to both Services")
-		var report workload.Report
-		Eventually(func(g Gomega) {
-			var err error
-			report, err = r.dataCheck(context.Background())
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
-		}, 2*time.Minute, 3*time.Second).Should(Succeed())
+		report := r.passingDataCheck("S01", 2*time.Minute)
 		Expect(report.Members).To(HaveLen(len(r.members) + 2))
 
 		history, err := workload.ReadHistory(strings.NewReader(r.historyText()))
@@ -483,10 +504,17 @@ func s01AndS02Steps(r *haRun) {
 
 		By("waiting until every member holds the same rows and the same schema")
 		var report workload.Report
+		// As in passingDataCheck: kept also when a check below fails.
+		stored := false
+		defer func() {
+			if !stored {
+				r.evidenceFiles("S02", report)
+			}
+		}()
 		converged := func(g Gomega) {
-			var err error
-			report, err = r.dataCheck(context.Background())
+			got, err := r.dataCheck(context.Background())
 			g.Expect(err).NotTo(HaveOccurred())
+			report = got
 			g.Expect(report.OK).To(BeTrue(), "data check: %+v", report)
 			want, err := r.catalog(context.Background(), master)
 			g.Expect(err).NotTo(HaveOccurred())
@@ -566,6 +594,7 @@ func s01AndS02Steps(r *haRun) {
 
 		history, err := workload.ReadHistory(strings.NewReader(r.historyText()))
 		Expect(err).NotTo(HaveOccurred())
+		stored = true
 		files := r.evidenceFiles("S02", report)
 		if timeline != "" {
 			files = append(files, timeline)
