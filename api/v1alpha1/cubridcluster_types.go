@@ -28,10 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-//
-// The spec/status below encode the accepted P0 ADRs:
+// The spec and status below encode these accepted ADRs:
 //   ADR-0001 topology (promotableMembers/readReplicas; runtime-decided master)
 //   ADR-0010 database lifecycle / ha_db_list
 //   ADR-0005 fencingPolicy (Disabled|Manual|Automatic; Automatic rejected in v1alpha1)
