@@ -129,9 +129,17 @@ recovery bootstrap (S11 and S12 have no test), so a Kind run does not
 establish backup or restore, and Kind never establishes behavior on real VM
 failures.
 
+Each scenario step also carries the descriptive key of its check from
+`test/evidence/registry.go` (for example `ha-replication` beside `S02`, and
+`ha-primary-pod-recovery-graceful` beside `S03-graceful`), and selects the
+same steps as the older label, which still works. A filter that names a label
+no step carries, such as a misspelled key or a VM-lab check, or that selects no
+step, makes the run fail before the suite starts.
+
 ```bash
-make test-e2e E2E_LABEL_FILTER=S00        # one scenario by its ID
-make test-e2e E2E_LABEL_FILTER='ha-setup || S03-graceful'  # one HA variant; always select ha-setup with it
+make test-e2e E2E_LABEL_FILTER=standalone-database-sql   # one scenario by its key (or by its ID: S00)
+make test-e2e E2E_LABEL_FILTER='ha-setup || ha-primary-pod-recovery-graceful'  # one HA variant; always select ha-setup with it
+make test-e2e E2E_LABEL_FILTER='ha-setup || S03-graceful'  # the same, by the older label
 make test-e2e E2E_LABEL_FILTER='!db'      # without the real-database scenarios
 make test-e2e E2E_EVIDENCE_DIR=$PWD/artifacts/e2e   # keep the evidence elsewhere than e2e-evidence/
 ```

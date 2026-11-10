@@ -322,7 +322,7 @@ func (r *haRun) primaryResolved() (status, reason, since, primary string, err er
 // moves the master, so the variants run after the steps that depend on which
 // member is the master.
 func s14TokenStep(r *haRun, variant string) {
-	labels := Label(evidence.Requirement{ID: "S14", Variant: variant}.Label())
+	labels := Label(evidence.KindLabels(evidence.Requirement{ID: "S14", Variant: variant}.Label())...)
 	switch variant {
 	case s14TokenRotation:
 		It("S14/"+variant+": the operator reaches every member through an Instance Manager token rotation,"+
