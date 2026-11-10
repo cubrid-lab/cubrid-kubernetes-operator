@@ -499,6 +499,30 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(f.seed.restoreOn).NotTo(ContainElement(f.first), "a member that holds the database is never restored over")
 	})
 
+	// The member chosen as the seed source lost the role before its backup
+	// began and refuses it (#755). Unlike a CubridBackup, the bootstrap
+	// recovers by itself: the next attempt asks who the master is.
+	It("chooses the source again after the source refused the role of master", func() {
+		f := newFixture("src-refused")
+		f.prober.answers[f.first] = answersSlave
+		f.prober.answers[f.peer] = answersMaster
+		f.seed.backupStates = map[string]instancemanager.OperationState{f.peer: instancemanager.OpFailed}
+		f.seed.reason = "backup refused: the backup names this member as master, but it reports slave after 30s"
+		status := reconcileOnce(f)
+		Expect(status.BootstrapAttempts).To(BeEquivalentTo(1))
+		Expect(status.Seeding).To(BeNil())
+		Expect(reason(f)).To(Equal("SeedBackupFailedRetrying"))
+		Expect(f.seed.restores).NotTo(HaveKey(f.last), "nothing is restored from a backup that was refused")
+
+		By("the first member being master at the next attempt")
+		f.prober.answers[f.first] = answersMaster
+		f.prober.answers[f.peer] = answersSlave
+		status = reconcileOnce(f)
+		Expect(withoutOperations(status.Seeding)).To(Equal(&databasev1alpha1.DatabaseSeeding{Member: f.last, Source: f.first}))
+		reconcileOnce(f)
+		Expect(f.seed.restores[f.last].SeedFromMaster).To(Equal(f.first))
+	})
+
 	It("copies the first peer from the member that holds the database without asking for roles", func() {
 		f := newFixture("src-alone")
 		f.seed.restore[f.peer] = instancemanager.OpRestoring

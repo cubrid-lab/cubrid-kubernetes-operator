@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="2026-11-07T01-00-38Z" tests="14" failures="0" errors="0" skipped="0">
+  <testcase name="S00" classname="scenario">
+    <system-out>Standalone database installation and real SQL (S00)</system-out>
+  </testcase>
+  <testcase name="S01" classname="scenario">
+    <system-out>Three-member HA and read-write/read-only Broker access (S01)</system-out>
+  </testcase>
+  <testcase name="S02" classname="scenario">
+    <system-out>Normal HA replication (S02)</system-out>
+  </testcase>
+  <testcase name="S14" classname="scenario">
+    <system-out>Instance Manager network isolation, token-checked requests, service-account permissions and a search for leaked credentials (S14)</system-out>
+  </testcase>
+  <testcase name="S03/abrupt-first-member" classname="scenario">
+    <system-out>Primary database Pod termination and recovery - abrupt first member (S03/abrupt-first-member)</system-out>
+  </testcase>
+  <testcase name="S03/abrupt" classname="scenario">
+    <system-out>Primary database Pod termination and recovery - abrupt, later master (S03/abrupt)</system-out>
+  </testcase>
+  <testcase name="S03/graceful" classname="scenario">
+    <system-out>Primary database Pod termination and recovery - graceful (S03/graceful)</system-out>
+  </testcase>
+  <testcase name="S05/broker-process" classname="scenario">
+    <system-out>Broker process/Pod failure recovery - broker process (S05/broker-process)</system-out>
+  </testcase>
+  <testcase name="S05/one-broker-pod" classname="scenario">
+    <system-out>Broker process/Pod failure recovery - one broker pod (S05/one-broker-pod)</system-out>
+  </testcase>
+  <testcase name="S05/all-rw-brokers" classname="scenario">
+    <system-out>Broker process/Pod failure recovery - all rw brokers (S05/all-rw-brokers)</system-out>
+  </testcase>
+  <testcase name="S06/restart" classname="scenario">
+    <system-out>Operator interruption and HA continuity - restart (S06/restart)</system-out>
+  </testcase>
+  <testcase name="S06/absent-during-failover" classname="scenario">
+    <system-out>Operator interruption and HA continuity - absent during failover (S06/absent-during-failover)</system-out>
+  </testcase>
+  <testcase name="S14/token-rotation" classname="scenario">
+    <system-out>HA Instance Manager token rotation (S14/token-rotation)</system-out>
+  </testcase>
+  <testcase name="S14/token-migration" classname="scenario">
+    <system-out>Migration from legacy Instance Manager token (S14/token-migration)</system-out>
+  </testcase>
+</testsuite>

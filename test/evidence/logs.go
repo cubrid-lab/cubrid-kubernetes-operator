@@ -629,12 +629,16 @@ func (b *LogBundle) collectFiles(ctx context.Context, set LogPodSet, pod LogPod,
 	}
 }
 
-// within runs read for at most the limits' SourceTimeout, and stops waiting
-// for it logReadGrace after that, or after ctx ended: a reader that ignores
-// its context cannot hold the scenario. A panic of read is returned as an
-// error.
+// within runs read for at most the limits' SourceTimeout (boundedRead).
 func (b *LogBundle) within(ctx context.Context, read func(context.Context) error) error {
-	ctx, cancel := context.WithTimeout(ctx, b.limits.SourceTimeout)
+	return boundedRead(ctx, b.limits.SourceTimeout, read)
+}
+
+// boundedRead runs read for at most timeout, and stops waiting for it
+// logReadGrace after that, or after ctx ended: a reader that ignores its
+// context cannot hold the scenario. A panic of read is returned as an error.
+func boundedRead(ctx context.Context, timeout time.Duration, read func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
@@ -659,7 +663,9 @@ func (b *LogBundle) within(ctx context.Context, read func(context.Context) error
 }
 
 // stopped says why no further source may be read, or nil.
-func (b *LogBundle) stopped(ctx context.Context) error {
+func (b *LogBundle) stopped(ctx context.Context) error { return collectionStopped(ctx) }
+
+func collectionStopped(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("the collection stopped before this source: %w", err)
 	}
@@ -783,9 +789,12 @@ func (b *LogBundle) note(source LogSource) {
 	b.writeIndex()
 }
 
-// reason is err as the text of an index entry: redacted, on one line, short.
-func (b *LogBundle) reason(err error) string {
-	text := string(b.redactor.Redact([]byte(err.Error())))
+// reason is err as the text of an index entry.
+func (b *LogBundle) reason(err error) string { return indexReason(b.redactor, err.Error()) }
+
+// indexReason is text for an index entry: redacted, on one line, short.
+func indexReason(r *Redactor, text string) string {
+	text = string(r.Redact([]byte(text)))
 	text = strings.Join(strings.Fields(text), " ")
 	if len(text) > logReasonLimit {
 		text = strings.ToValidUTF8(text[:logReasonLimit], "") + "..."

@@ -8,7 +8,7 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 ~591 MB, entrypoint `/home/cubrid/entrypoint.sh`.
 
 > **How to read this file (annotation, 2026-10-18).** The file now holds
-> POC-1 to POC-54, not only the first runs for #42–#49. "amd64/linux" is the
+> POC-1 to POC-56, not only the first runs for #42–#49. "amd64/linux" is the
 > image's platform, not where a POC ran. POC-1 to POC-9 do not record the
 > host or the container runtime: their timings (for example "within ~6 s"
 > in POC-3 and "~35 s" in POC-6) are single runs of an unknown environment,
@@ -33,8 +33,10 @@ Image: `cubrid/cubrid:11.4` — CUBRID **11.4.6** (11.4.6.1963), amd64/linux,
 > with the Operator's Instance Manager image; POC-51 ran on Kind on a native
 > linux/amd64 host, with the Operator and Brokers; POC-52 and POC-53 ran in Docker on a native
 > linux/amd64 host, with the Operator's Instance Manager image and the members' data in
-> memory; POC-54 ran in Docker on a native linux/amd64 host, on the official image's 11.4.7
-> with its database in memory. Each states its own environment. Each POC is the
+> memory; POC-54 and POC-55 ran in Docker on a native linux/amd64 host, on the official image's 11.4.7
+> with its database in memory; POC-56 ran in Docker on a native linux/amd64 host, with the
+> Operator's Instance Manager image, the members' data in memory and S3Mock as the store.
+> Each states its own environment. Each POC is the
 > behavior of one image in a few runs, not a general CUBRID guarantee. The
 > raw observations below are kept as recorded; where a later POC contradicts one, a note says so.
 > The current reading of the whole is at the top of
@@ -5919,3 +5921,256 @@ sightings stays **unconfirmed, and doubtful for those at 13 to 28 ms**.
 **Cleanup.** The container `poc54-member` and the image pulled by digest were removed. No volume was
 created, and no other container was touched. Local tags, including `cubrid/cubrid:11.4`, were not
 changed.
+
+## POC-55 — what csql prints and exits with when `cub_server` really dies or restarts around its call, and whether that can be told from the shape the tests treat as harmless, in Docker on 11.4.7 (#238) — **observation: it cannot be told from the output; 260 of 997 runs in which the server was killed or stopped during csql's session printed exactly that shape, all of them at csql's last request and none of the 430 at earlier held moments, and the printouts on `localhost` were the same with and without a fault once clock, pids, transaction indexes and timings were removed; so a rule that tolerates the pair says nothing about the server and needs a separate check, and comparing the process's pid and start time told them apart in these runs; no row csql reported as `Committed.` was lost; separately, the same shape appeared with no fault at all on a server seconds old, 0.002 to 0.156 ms after the last request, which POC-54 could not produce**
+
+**Question.** `test/sqlcheck/sqlcheck.go` treats one shape as harmless in `SessionLost` and `LostSessionAfterRow`: exit 0, both `-199` and `-111`, no other error, and the complete result. If a real server death can produce the same shape, a text classifier cannot separate them, and any rule that tolerates the pair must depend on a separate check.
+
+**Environment (2026-11-07 04:05Z to 06:29Z).** Native linux/amd64 host, 6 CPUs, Linux 5.15, shared and loaded: load average 16 to 28 at the recorded points.
+- Image `cubrid/cubrid@sha256:1835d7fa5c64217c3f8797ca569628e84006bcd1c8bb33a1c96703732a62efca`, POC-54's; `cubrid_rel`: `CUBRID 11.4.7 (11.4.7.1994-1df4af4) (64bit release build for Linux) (Oct 30 2026 18:26:16)`.
+- At most two containers at a time, `--memory 2g`, `--init`, entrypoint `sleep`, each with a database of 64M volumes on a tmpfs. `db_volume_size=64M` was added to the image's `cubrid.conf`, because its 512M temp volume does not fit. No Instance Manager, Broker, Kind or lab.
+- **`poc55-member`** had `auto_restart_server=no`, so that the method alone decided whether a server came back. **`poc55-revive`** kept the image's default. The HA pair `poc55-ha0` and `poc55-ha1` was built as in POC-53, with `data_buffer_size=64M`, `log_buffer_size=16M` and no `ha_ping_hosts`.
+- Every csql ran as uid 1000 from `/`, which it cannot write, so its log went to stderr; `/csql.err` did not exist at the end. stdout, stderr and the exit status were kept apart for each run.
+
+**Method.** `shim.c`, an `LD_PRELOAD` library built on POC-54's, holds csql at a chosen point of its conversation with the server: 13 moments from before connect to csql's last request, `NET_SERVER_BO_UNREGISTER_CLIENT`. While csql is held the server is killed or stopped, and then csql is let go. A read fetches 16,384 rows over 24 requests. A write is `INSERT …; COMMIT;`, in which csql's autocommit prints `Committed.` and the script's `COMMIT;` prints `Execute OK.`. `none` holds for 200 ms with no fault, `kill` is SIGKILL with csql let go once every thread has ended, `kill-race` is SIGKILL with csql let go at once, `stop` is `cubrid server stop`, `restart` is stop and start, `kill-restart` is SIGKILL and start, both with csql let go when the start returned, and `hb-stop` is `cubrid heartbeat stop`. Each moment and method ran in shuffled rounds. Every write's row was read after recovery, and the server's pid and start time were taken before csql began and as it exited. `poc55/README.md` defines each moment.
+
+The harmless test is the repository's. `analyse.py` copies its patterns, and a temporary test in `test/sqlcheck`, not kept, fed all 2,436 stored runs through the real `Run` and those patterns: no disagreement on exit status, pair and other errors. "Complete" is this POC's addition: all 16,384 rows in order and the count line, or all three of `1 row affected.`, `Committed.` and `Execute OK.`.
+
+**Results at each moment, Unix socket (`localhost`), `auto_restart_server=no`, grid and repeats together.** Methods that behaved alike share a line. "Row there" is the row read after recovery.
+
+| Workload | Moment | Methods | Runs | Exit 0 | Pair | Errors beyond the pair | Results complete | Row there | Output passes as harmless |
+|---|---|---|---:|---:|---:|---|---:|---:|---:|
+| read | before-connect | none | 8 | 8 | 0 | none | 8 | n/a | **0** |
+| read | before-connect | kill, stop | 16 | 0 | 0 | -191 -677 | 0 | n/a | **0** |
+| read | before-connect | restart, kill-restart | 16 | 16 | 0 | none | 16 | n/a | **0** |
+| read | before-statement | none | 8 | 8 | 0 | none | 8 | n/a | **0** |
+| read | before-statement | kill, stop, restart, kill-restart | 32 | 0 | 32 | -224 -671 | 0 | n/a | **0** |
+| read | statement-in-flight | none | 8 | 8 | 0 | none | 8 | n/a | **0** |
+| read | statement-in-flight | kill, stop, restart, kill-restart | 32 | 0 | 32 | -224 | 0 | n/a | **0** |
+| read | mid-fetch | none | 8 | 8 | 0 | none | 8 | n/a | **0** |
+| read | mid-fetch | kill, stop, restart, kill-restart | 32 | 0 | 32 | -224 | 0 | n/a | **0** |
+| read | result-held | none | 8 | 8 | 0 | none | 8 | n/a | **0** |
+| read | result-held | kill, stop, restart, kill-restart | 32 | 0 | 32 | -224 -671 | 0 | n/a | **0** |
+| read | after-commit | none | 8 | 8 | 0 | none | 8 | n/a | **0** |
+| read | after-commit | kill, stop, restart, kill-restart | 32 | 32 | 32 | -224 -671 | 32 | n/a | **0** |
+| read | before-unregister | none | 8 | 8 | 0 | none | 8 | n/a | **0** |
+| read | before-unregister | kill-race | 23 | 23 | 23 | none | 23 | n/a | **23** |
+| read | before-unregister | kill, stop, restart, kill-restart | 92 | 92 | 92 | -671 | 92 | n/a | **0** |
+| read | unregister-in-flight | none | 8 | 8 | 8 | none | 8 | n/a | **8** |
+| read | unregister-in-flight | kill, stop, restart, kill-restart | 92 | 92 | 92 | none | 92 | n/a | **92** |
+| read | unregister-in-flight | kill-race | 23 | 23 | 0 | none | 23 | n/a | **0** |
+| write | before-connect | none | 8 | 8 | 0 | none | 8 | 8 | **0** |
+| write | before-connect | kill, stop | 16 | 0 | 0 | -191 -677 | 0 | 0 | **0** |
+| write | before-connect | restart | 8 | 8 | 1 | none | 8 | 8 | **1** |
+| write | before-connect | kill-restart | 8 | 8 | 3 | none | 8 | 8 | **3** |
+| write | before-statement | none | 8 | 8 | 1 | none | 8 | 8 | **1** |
+| write | before-statement | kill, stop, restart, kill-restart | 32 | 0 | 32 | -224 -671 | 0 | 0 | **0** |
+| write | statement-in-flight | none | 8 | 8 | 0 | none | 8 | 8 | **0** |
+| write | statement-in-flight | kill, stop, restart, kill-restart | 32 | 0 | 32 | -224 | 0 | 0 | **0** |
+| write | statement-unprocessed | kill, kill-restart | 16 | 0 | 16 | -224 | 0 | 0 | **0** |
+| write | before-commit | none | 8 | 8 | 0 | none | 8 | 8 | **0** |
+| write | before-commit | kill, stop, restart, kill-restart | 32 | 0 | 32 | -224 -671 | 0 | 0 | **0** |
+| write | commit-unprocessed | kill, kill-restart | 16 | 0 | 16 | -224 | 0 | 0 | **0** |
+| write | commit-in-flight | none | 8 | 8 | 0 | -671 | 8 | 8 | **0** |
+| write | commit-in-flight | kill | 8 | 0 | 8 | -224 | 0 | 7 | **0** |
+| write | commit-in-flight | stop, restart, kill-restart | 24 | 0 | 24 | -224 | 0 | 24 | **0** |
+| write | after-commit | none | 8 | 8 | 0 | none | 8 | 8 | **0** |
+| write | after-commit | kill, stop, restart, kill-restart | 32 | 0 | 32 | -224 -671 | 0 | 32 | **0** |
+| write | after-second-commit | none | 8 | 8 | 0 | none | 8 | 8 | **0** |
+| write | after-second-commit | kill, stop, restart, kill-restart | 32 | 32 | 32 | -224 -671 | 32 | 32 | **0** |
+| write | before-unregister | none | 8 | 8 | 0 | none | 8 | 8 | **0** |
+| write | before-unregister | kill-race | 23 | 23 | 23 | none | 23 | 23 | **23** |
+| write | before-unregister | kill, stop, restart, kill-restart | 92 | 92 | 92 | -671 | 92 | 92 | **0** |
+| write | unregister-in-flight | none | 8 | 8 | 8 | none | 8 | 8 | **8** |
+| write | unregister-in-flight | kill-race | 23 | 23 | 2 | none | 23 | 23 | **2** |
+| write | unregister-in-flight | kill, stop, restart, kill-restart | 92 | 92 | 92 | none | 92 | 92 | **92** |
+
+`-671` is a network read or write error, `-224` "A database has not been restarted", and `-191` with `-677` a failed connection. "Exit 0" with a complete result and the pair, but with `-224` or `-671`, is what a death at the start of csql's exit gave: the output fails the harmless test only because of the extra code.
+
+**The key number.** Of 997 runs in which the server was killed or stopped during csql's session, **260 matched the harmless shape**. That is a share of the moments this POC chose, not a rate of anything in the field.
+- 202 were with the last request in flight: all 184 of `kill`, `stop`, `restart` and `kill-restart` above, 12 in the HA pair, 4 with the image's defaults, and 2 of `kill-race`.
+- 58 were just before the last request: all 46 of `kill-race` above, and all 12 of `kill` over TCP.
+- **0 of 430** at every earlier held moment (at most 0.9 %, 95 % Wilson), because a later request fails and csql adds `-224`.
+- **0 of 57** SIGKILLs at a random moment with csql still running, with no shim (at most 6.3 %), so the shape was not seen from an unforced kill. All 57 exited 1, and 9 of them printed `-199` without `-111`, a shape the forced moments did not give.
+
+**The output cannot separate them.** With clock, pids, transaction indexes and timings removed there were 4 distinct printouts among all harmless-shape runs. The 2 on `localhost` occurred both with a fault (248 runs) and without one (75 runs): the same source lines `network_cl.c:177` and `transaction_cl.c:600`, the same `Invalid argument`, the same stdout. The other 2 are the same text over TCP, seen only with a fault, because no no-fault run printed the pair over TCP. Those are also the lines POC-54 and #238 record.
+
+**A real death can also print nothing.** 56 runs with the server killed had exit 0, the complete result and no error at all: 44 of the 46 `unregister-in-flight` `kill-race` runs, where csql read the reply before the kernel had finished ending the server, and 12 of 12 such kills over TCP, which read the reply as well.
+
+**Over TCP (`appdb@<hostname>`), the last moments.** The pair came from a kill just before the last request, in the harmless shape, and not with that request in flight. No no-fault run printed it.
+
+| Workload | Moment | Method | Runs | Exit 0 | Pair | Codes printed | Complete | Row there | Harmless shape |
+|---|---|---|---:|---:|---:|---|---:|---:|---:|
+| read | after-commit | none | 6 | 6 | 0 | none | 6 | n/a | **0** |
+| read | after-commit | kill | 6 | 6 | 6 | -111 -199 -224 | 6 | n/a | **0** |
+| read | before-unregister | none | 6 | 6 | 0 | none | 6 | n/a | **0** |
+| read | before-unregister | kill | 6 | 6 | 6 | -111 -199 | 6 | n/a | **6** |
+| read | unregister-in-flight | none | 6 | 6 | 0 | none | 6 | n/a | **0** |
+| read | unregister-in-flight | kill | 6 | 6 | 0 | none | 6 | n/a | **0** |
+| write | after-commit | none | 6 | 6 | 0 | none | 6 | 6 of 6 | **0** |
+| write | after-commit | kill | 6 | 0 | 6 | -111 -199 -224 | 0 | 6 of 6 | **0** |
+| write | before-unregister | none | 6 | 6 | 0 | none | 6 | 6 of 6 | **0** |
+| write | before-unregister | kill | 6 | 6 | 6 | -111 -199 | 6 | 6 of 6 | **6** |
+| write | unregister-in-flight | none | 6 | 6 | 0 | none | 6 | 6 of 6 | **0** |
+| write | unregister-in-flight | kill | 6 | 6 | 0 | none | 6 | 6 of 6 | **0** |
+
+**A write can have an unknown outcome.** With the commit in flight, csql printed no `Committed.`, exited 1 and printed the pair, and the row was there in 36 of 40 runs and missing in 4 (1 in the grid, 3 in the HA pair). With the commit written to a frozen server, then killed, it was missing in all 16. Those two print the same codes, so a failed commit does not say whether it happened.
+
+**Was a commit that printed `Committed.` ever lost? Not in these runs, with one qualification.** 433 runs with a fault printed it and all 433 rows were there at the end (a loss of at most 0.9 %, 95 % Wilson). All 131 harmless-shape writes after a real death had their row. The qualification is in the HA pair below: an acknowledged row can be briefly absent from the new active member. These kills do not test durability: the data was on a tmpfs, and SIGKILL does not lose what a process has already written.
+
+**Would a process check catch it?** Pid and start time in clock ticks, compared before csql began and as it exited:
+- All 260 harmless-shape runs after a real death differed: no process in 164, a new one in 96.
+- All 75 no-fault harmless-shape runs were unchanged, so the check separated the two in every run here.
+- 1 of 1,063 runs with a fault read unchanged: a `kill-race` that ended 0.001 s after the kill, while the process was still ending. It printed nothing, so it was not a pair, but a check at csql's exit can see a dying server.
+- **How fast it comes back.** On the image's defaults `cub_master` revived all 24 kills: a new process 0.02 to 0.04 s after the kill, and a first clean read 1.10 to 2.44 s after it, median 1.23. The 2 graceful stops were not revived. A restart in the container took 1.10 to 30.91 s, median 3.10. Against the source of tag `v11.4.7` (`master.c:1065`, `master_server_monitor.cpp:155`, `:181`), `cub_master` revives a server unless it registered less than 120 s ago, so a second kill inside 120 s stays down. So a check that compares ages in whole seconds could miss a revival in the same second, which is why the comparison must be of identity. The shortest gap between old and new start times here was 1.66 s: nothing in these runs tested a server younger than that, and none tested a same-second restart.
+
+**An HA pair, csql on the active master.** 3 rounds, so each line is few runs.
+
+| Workload | Moment | Method | Runs | Exit 0 | Pair | Codes printed | Complete | Row there | Harmless shape |
+|---|---|---|---:|---:|---:|---|---:|---:|---:|
+| read | unregister-in-flight | none | 3 | 3 | 3 | -111 -199 | 3 | n/a | **3** |
+| read | unregister-in-flight | kill | 3 | 3 | 3 | -111 -199 | 3 | n/a | **3** |
+| read | unregister-in-flight | hb-stop | 3 | 3 | 3 | -111 -199 | 3 | n/a | **3** |
+| write | before-commit | none | 3 | 3 | 0 | none | 3 | 3 of 3 | **0** |
+| write | before-commit | kill | 3 | 0 | 3 | -111 -199 -224 -671 | 0 | 0 of 3 | **0** |
+| write | before-commit | hb-stop | 3 | 0 | 3 | -111 -199 -224 -671 | 0 | 0 of 3 | **0** |
+| write | commit-in-flight | none | 3 | 3 | 0 | none | 3 | 3 of 3 | **0** |
+| write | commit-in-flight | kill | 3 | 0 | 3 | -111 -199 -224 | 0 | 0 of 3 | **0** |
+| write | commit-in-flight | hb-stop | 3 | 0 | 3 | -111 -199 -224 | 0 | 3 of 3 | **0** |
+| write | after-commit | none | 3 | 3 | 0 | none | 3 | 3 of 3 | **0** |
+| write | after-commit | kill | 3 | 0 | 3 | -111 -199 -224 -671 | 0 | 3 of 3 | **0** |
+| write | after-commit | hb-stop | 3 | 0 | 3 | -111 -199 -224 -671 | 0 | 3 of 3 | **0** |
+| write | before-unregister | none | 3 | 3 | 0 | none | 3 | 3 of 3 | **0** |
+| write | before-unregister | kill | 3 | 3 | 3 | -111 -199 -671 | 3 | 3 of 3 | **0** |
+| write | before-unregister | hb-stop | 3 | 3 | 3 | -111 -199 -671 | 3 | 3 of 3 | **0** |
+| write | unregister-in-flight | none | 3 | 3 | 3 | -111 -199 | 3 | 3 of 3 | **3** |
+| write | unregister-in-flight | kill | 3 | 3 | 3 | -111 -199 | 3 | 3 of 3 | **3** |
+| write | unregister-in-flight | hb-stop | 3 | 3 | 3 | -111 -199 | 3 | 3 of 3 | **3** |
+
+"Row there" here means on both members at the end, after further commits had gone through. The active member changed in 28 of 36 faults, 18 of 18 `hb-stop` and 10 of 18 `kill`, and the shapes matched the standalone ones. All 33 rows that printed `Committed.` ended on both members.
+- **Briefly absent.** 15 of those rows had the active member change. In 5 of the 15 (4 `kill`, 1 `hb-stop`) the first read of the new active member did not find the row, after the harness had seen one active and one standby and a commit had succeeded there. It was on the other member at that moment, and on both at the end. How long that lasted was not measured, and how the row arrived was not looked at.
+- **The standby.** 10 acknowledged rows, 8 with no fault, were not on the standby within 30 s, and appeared after later commits, which looks like an applier that holds the newest transaction back.
+- Reaching one active, one standby and a committed write took 2.8 to 187.7 s after `kill`, median 11.4, and 1.2 to 4.7 s after `hb-stop`. Why three `kill` runs took over 120 s was not looked at.
+
+**Separately: the same shape with no fault, on a young server.** One grid run that connected to a just-restarted server printed the pair, then one no-fault control on a server 2.15 s old did, with nothing held near its end, and a read of its log showed POLLHUP on csql's first poll after the last request. Three arms were added to look at that, all with no fault during any session and one write each:
+
+Three sessions in a row as soon as `cubrid server start` returned, the shim only logging:
+
+| Session after the start | Method of the restart | Runs | Exit 0 | Pair | Other errors | Harmless shape | Row there |
+|---|---|---:|---:|---:|---:|---:|---:|
+| session-1 | restart | 60 | 60 | 14 | 2 | **14** | 60 |
+| session-1 | kill-restart | 60 | 60 | 14 | 0 | **14** | 60 |
+| session-2 | restart | 60 | 60 | 2 | 0 | **2** | 60 |
+| session-2 | kill-restart | 60 | 60 | 1 | 1 | **1** | 60 |
+| session-3 | restart | 60 | 60 | 1 | 0 | **1** | 60 |
+| session-3 | kill-restart | 60 | 60 | 0 | 0 | **0** | 60 |
+
+One session a set time after a graceful restart, on the image's defaults, the shim only logging; "settled" is 300 sessions on a server left alone for 5 minutes:
+
+| Wait after `cubrid server start` returned | Runs | Exit 0 | Pair | Harmless shape | `-671` alone | Row there | Server age at csql's start, median |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| after-0s | 30 | 30 | 5 | **5** | 2 | 30 | 2.1 s |
+| after-1s | 30 | 30 | 6 | **6** | 1 | 30 | 3.1 s |
+| after-2s | 30 | 30 | 2 | **2** | 2 | 30 | 4.1 s |
+| after-4s | 30 | 30 | 1 | **1** | 1 | 30 | 6.1 s |
+| after-8s | 30 | 30 | 1 | **1** | 0 | 30 | 10.1 s |
+| after-16s | 30 | 30 | 0 | **0** | 0 | 30 | 18.1 s |
+| settled | 300 | 300 | 0 | **0** | 0 | 300 | 316.3 s |
+
+One session as soon as a graceful restart returned, **no shim loaded**:
+
+| Name | Runs | Exit 0 | Pair | Harmless shape | `-671` alone | Row there |
+|---|---:|---:|---:|---:|---:|---:|
+| localhost | 100 | 100 | 5 | **5** | 0 | 100 |
+| hostname | 100 | 100 | 0 | **0** | 0 | 100 |
+
+- In the 47 pairs with a log, the last read's poll returned POLLIN with POLLHUP while the last request was outstanding, 0.002 to 0.156 ms after that request's send returned. POC-54 found 100 ms on an old server and could not produce a sooner close. POC-54's source reading allowed one.
+- The server's process was the same before and after in all of them, and all 740 rows of these young-server sessions were there.
+- A sibling shape appeared too, 9 times with the shim and once in a grid control: exit 0, the complete result, and `-671` alone, from csql's very last send.
+- Over TCP 0 of 100 printed it (at most 3.7 %).
+- These 4 grid runs that connected to a just-restarted server, and the one control, are this same observation, not deaths during a session, so they are kept out of the key number.
+
+**What was shown, on this image.**
+- A real server death, by SIGKILL, graceful stop or restart, standalone or HA, on the Unix socket or over TCP, can produce output identical to the harmless shape. So the pair cannot be told from a harmless one by text.
+- In these runs the shape came only at csql's last request, with all statements answered. An earlier death added `-224`, usually with exit 1, and a death just before the last request with the socket already closed added `-671`.
+- Pid and start time separated every harmless-shape run after a death from every no-fault one, when the first reading was taken before csql began.
+- `auto_restart_server`, on by default, brought a killed server back in about 0.02 s and accepting reads in about 1.2 s, without anyone asking.
+- The pair appeared with no fault and no shim on a server seconds old: 5 of 100 (2.2 to 11.2 %, 95 % Wilson), against 0 of 300 on a settled one with the shim (at most 1.3 %).
+
+**What was not shown.**
+- **That this is what CI and the lab saw.** The young-server result fits #238's first sighting, the first session after a Pod became Ready, and the 13 to 28 ms gaps POC-54 could not explain. That is a **hypothesis**: nothing here ran on Kind, and no sighting's server age is known.
+- **Why a young server closes so soon.** Not looked at. Whether what matters is the server's age or being its first session is not separated: the rate fell sharply from the first to the second session within the same second, and also fell with the wait in the arm where each server had one session.
+- **How the shim changes the rate.** With it, 14 of 60 first sessions after a graceful restart printed the pair; without it, 5 of 100. Different counts, on different containers and at different times, so the shim may raise the rate, and the log of a no-shim pair does not exist, so those 5 are the same route only by their text.
+- **The harmless shape from an unforced kill,** which 57 random kills did not produce. The forced moments were reached with a shim.
+- **That a process check is enough.** It was not run as a check, only computed from recorded identities, on a healthy host, with the first reading before csql. A check that reads the process too soon after csql's exit, or takes its first reading late, was not tested. A server that dies and is restarted before the first reading is invisible to it.
+- **That the harmless shape implies the row is safe.** All 131 here had it, in runs where the commit had finished first. Another route is not covered.
+- **Durability.** No power loss, disk or network fault was run.
+
+**Limits.**
+- Docker is not Kind or the VM lab: no Instance Manager, `kubectl exec`, Broker or CPU limits. One POC is this image's behaviour in a few runs, not a general CUBRID guarantee.
+- Rows for 0 are bounded, not zero rates. Each cell is few runs: 8 in the grid, up to 23 where repeated, 3 in HA, 2 with the image's defaults.
+- The grid ran beside other work on a loaded host, and in the revive and age arms beside this POC's other container.
+- The grid and repeats ran with `auto_restart_server=no`, which is not the image's default. The image's defaults were run in the smaller arm above, with the same printouts at the moments run.
+- The grid's shim log is cut at 240 lines, so a run held `before-connect` lacks its end. `fresh` exists for that.
+- 9 rows of random-kill runs were read after the arm, because the harness saw a dying server as alive (`samples/late-reads.json`). csql had exited before each of those kills.
+- A pilot round and probes came first and are not in the samples. They found three traps in the harness, described in `poc55/README.md`. `fresh`, `age` and the no-shim arm were added after the first results.
+
+**Consequences (proposed, none made).**
+- **Treating the pair as harmless.** It should mean only "csql's statements were answered", never "the server is fine". `LostSessionAfterRow`'s rule, that the pair leaves the session unknown and the caller reads again, agrees with this. Any rule that wants to say more needs a separate check, and for that this POC supports comparing pid and start time, taken before and after, not an age in seconds, and not soon after csql's exit.
+- **That re-read.** After a change of active member, one read can miss an acknowledged row (5 of 15 here), so a single empty read is not proof of loss. It should be retried or bounded in time.
+- **#238 stays open.** Its cause is not established. The next measurement that could settle it is the server's age and the time from the last request to the failing read on a member where the pair really happens, for example `shim.c`'s log on a Kind member. If a young server is the route, the readiness question in #238 comes back: whether a member can report Ready within those seconds.
+- **The harness's treatment of the pair as inconclusive** (PR #698) is supported, not changed.
+
+**Cleanup.** Every `poc55-*` container and network was removed, and the image pulled by digest was removed, twice, as the no-shim arm pulled it again. No volume was created, and no other container was touched. Local tags, including `cubrid/cubrid:11.4`, were not changed.
+
+---
+
+## POC-56 — whether the Instance Manager refuses to seed a member from another cluster's backup or from a backup taken on a slave, on a real image with real artifacts (#686) — **observation: on both images tried, each refused request ended `Failed` with the reason naming the manifest field, after reading only `manifest.json` from the store; no backup object was read, no command ran, and every path in the member's database and staging directories was unchanged by mode, owner, size, mtime, inode and SHA-256; the matching artifact of the same cluster's master was then accepted on the same member, which joined as a slave and held the expected rows and not the other cluster's; a refused seed does leave an operation record on the volume, and is answered 202, not an HTTP error**
+
+**Question (#686).** The Operator never sends a seed request for another cluster's artifact, because its seed locations are under the cluster's own UID, so the VM-lab runs cannot produce one. Is the guard in `restoreExpectation` and `BackupManifest.Verify` real on the image, with backups the Instance Manager took itself, rather than only in unit tests with fixture manifests? POC-55 is reserved for other work.
+
+**Environment (2026-11-07, recorded runs 05:06Z to 05:25Z).**
+- Native linux/amd64 host, 6 CPUs, 32 GB, Linux 5.15, Docker 29.2.1. **The host was shared:** load average 24.29 to 26.61 at the end of each case. Other sessions' containers ran beside these, and none of them was touched.
+- **Two images, one run each, because the local image is older than the code.** `example.com/cubrid-instance-manager:e2e` (`sha256:5db6422a44cadc44857ac5c112f9d3634630cd78ea37dbe80a72d84571598a70`, built 2026-10-21) has the seed guard of #510 but not the later changes on this path: its binary lacks the manifest engine check of #621, and it records the declared `11.4` in manifests. So the same harness also ran on an image built from `286b904` with `make docker-build-instance-manager` (`sha256:c9d6083a16d3a7b1d5bfefd612e7935d73b52bad2380d1e349a2b0dfe7294909`). Docker reused the final layers of 2026-11-06, and when asked again for this tree it reported every step of the build stage, `go build` included, as cached. That fits a byte-identical binary, since the manager's non-test source last changed on 2026-11-04, but a checksum against a fresh build was not obtained: the module proxy cut one attempt off and another did not end in the time given to it. No manager code changed on `main` between that commit and this entry. Both are `CUBRID 11.4.6 (11.4.6.1963-0e7d3c1)`.
+- **Store: `adobe/s3mock@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92`, not MinIO.** The plan was a MinIO container pinned by digest. On this date `minio/minio` on Docker Hub answered "pull access denied", `quay.io/minio/minio` 401, and `dl.min.io` 410. S3Mock 5.2.3 is the store this repository's Kind e2e uses. It accepts any credentials, so the Instance Manager's keys were generated and sent, but nothing checked them.
+- Members ran the image's own entrypoint and Instance Manager with the environment `instanceManagerEnv` sets, `CUBRID_COMPONENTS=HA`, and `/var/lib/cubrid` in a tmpfs, not on disk. `cubrid_ha.conf` is what `generateHAConf` renders with these member names.
+
+**Method.**
+- **Requests.** A Python harness sends JSON to each member's port 9090 with the bearer token, with the fields `seedBackup` and `seedMember` send. The Operator did not run.
+- **Real artifacts.** All are the Instance Manager's own `POST /v1/backup` of a real database: `backupdb`, upload, manifest last. Nothing in a manifest was edited. Each object was read back and its size and SHA-256 match the manifest. The slave's backup was taken on the member that answered `role: slave` just before it, through the ordinary upload path, since a seed upload refuses anything but master metadata.
+- **Other cluster.** A second real cluster with its own UID, the same database name and engine, and a master also named `demo-0`, so that, of the fields checked, its manifest differs from the request in `clusterUID` alone. Without that, the earlier `sourceInstance` check would not be what refused it, in the order `Verify` reads.
+- **The empty member.** `demo-2` of cluster A was seeded, then removed and started again with the same name and an empty volume, because of the observation at the end of this entry. All six cases went to that one member, in order, so the accepted case also shows that refusals do not stop a later seed.
+- **What "unchanged" compares.** Every path below `/var/lib/cubrid`, just before the request and at least 2 s after the operation ended. Three of the five refusals had no staging directory, as on a first attempt, and two had one that already held a file, so that "unchanged" was also measured on a directory with something in it.
+- **What "nothing ran" compares.** The store's own access log of the window, the manager's log at debug level, which logs read-only commands too, and the member's process list sampled about every 0.1 s.
+- **What can be recomputed.** In `docs/poc/poc56/`, `python3 analyse.py samples` recomputes every fact above and below from the raw files and exits 0. `python3 mutate.py samples` makes eleven faults in copies of the samples, such as a file in staging, a backup object read, or a command logged, and `analyse.py` fails on all eleven. Not recomputed: the registry answers about MinIO, the host's CPU and memory, the trials not kept that are named below, and the source date of the second image's binary.
+
+**Results.** The same on both images, except where a row says so. `<A>` is the requesting cluster's UID and `<B>` the other's. The UIDs are generated per run and are in the samples.
+
+| Case (artifact, `seedFromMaster`) | HTTP | Final state | Failure reason (after `restore failed: artifact verification failed:`) | Store requests | Backup objects read | Commands logged | Paths in database and staging directories, all unchanged |
+|---|---|---|---|---|---|---|---|
+| Other cluster's master seed backup, `demo-0` | 202 | `Failed` | `manifest clusterUID "<B>" does not match expected "<A>"` | Bucket location, `manifest.json` | 0 | None | 2 |
+| Same cluster's slave backup, `demo-0` | 202 | `Failed` | `manifest sourceRole "slave" does not match required "master"` | `manifest.json` | 0 | None | 2 |
+| Same, naming the slave itself, `demo-1`, so that the role is the only difference | 202 | `Failed` | The same | `manifest.json` | 0 | None | 2 |
+| Other cluster's, with a file already in the staging directory | 202 | `Failed` | As in the first row | `manifest.json` | 0 | None | 5 |
+| Slave's, with a file already in the staging directory | 202 | `Failed` | As in the second row | `manifest.json` | 0 | None | 5 |
+| Same cluster's master seed backup, `demo-0` | 202 | `Completed` | | `manifest.json`, the 1 object | 1 of 1 | `cubrid restoreslave -u -s master -m demo-0 …`, `cubrid heartbeat start` | Database created, staging gone |
+
+- The two paths are `databases` and its `.member-lock`. The five add the staging root, its directory and the file in it. The empty member has no `databases.txt` before the seed.
+- No process sample of a refusal, 36 to 112 per case, showed a CUBRID process or command. The accepted case's samples showed `cub_admin` in 386 and 404 lines, which shows that the sampling could have seen one.
+- After the accepted case the member answered `role: slave`, `cubrid heartbeat status` showed `current demo-2, state slave`, the ownership marker was gone, and `csql` on it returned `cluster-a-before-seed-backup` and `cluster-a-after-seed-backup`, the same rows as on the master, and not `cluster-b-only`. The second row was committed after the seed backup.
+- **A refused seed is not free of side effects.** In all five, the only change on the data volume was in `/var/lib/cubrid/operations`: the directory and one new operation record of the `Failed` operation. The directories the issue names were unchanged.
+- **A refusal is answered 202, and the reason comes from polling the operation.** It is not an HTTP error, because the request is valid and the manifest is read in the background.
+- **Where the images differ.** On the `e2e` image a refused operation went `Pending`, `Downloading`, `Restoring`, `Failed`, although nothing was restored. On current code it goes `Pending`, `Downloading`, `Failed`, the behaviour since #643. Manifests record `11.4` on the `e2e` image and `11.4.6.1963` on current code, the behaviour since #621.
+- **A separate observation from the set-up.** With `demo-1` joined and `demo-2` listed but never started, the master answered `role: master`, `serverActive: false` in all 12 samples over about 55 s, in both runs. Both masters became active once every listed member had joined. In trials that were not kept, a master with no member joined refused a write with `ERROR: Attempted to update the database when updates are disabled`, and masters with a member missing were still not active after 240 s. This is why the empty member here is one that had joined before. The cause is not established: the master's applier and copier for `demo-2` were running with no log to read, which is a hypothesis only. This may be worth its own check.
+
+**What this shows.** On these two images, in Docker: both refusals happen, with those reasons, before any backup object is read or any command runs; the database and staging directories are unchanged, including a staging directory that already holds a file; and a matching artifact is accepted afterwards on the same member and opens with the expected rows. It answers #686's Done-when.
+
+**What this does not show.**
+- **Not the Operator, Kind or the VM lab.** The requests were built from the code by a harness. Docker has no Pods, no `fsGroup`, no PVC and no Service DNS, and the data volume here is a tmpfs. How the Operator reports such a refusal was not exercised.
+- **Not a real object store.** S3Mock checks no credentials, so nothing here says the keys or a store's permissions work, and the store's own behaviour was not under test. The guard reads one object, so a difference matters little here, but that is an argument and was not measured.
+- **Only these refusals.** Refusals for level, source instance, database, engine series and manifest version were not sent, and those remain unit-tested only. Each manifest here has one object, about 2 MB.
+- **The role in a manifest is what the backup request said.** By reading `runBackup`, the Instance Manager copies `sourceRole` from the request and does not compare it with its own role. The harness sent the role it had just observed. A mislabelled backup was not tried, and this guard could not tell.
+- **By reading only:** `ExpectedClusterUID` is checked only when set, so a request without it would not be refused for another cluster. That is what `TestRestore_SeedAcceptsTheNamedMastersFullBackup` documents, and it was not sent here.
+- **Few runs.** One run on each image, on one engine build, with each refusal sent in the forms above. The sampling of processes can miss what lasts under about 0.1 s, and more under this load, which is why the manager's log is the first evidence for commands.
+- **The rows do not separate backup from replication** for `cluster-a-before-seed-backup`, which was committed before the backup. Only the second row is known to come through replication.
+- **A member that lost its volume, not one that never joined.** The master's peers had seen `demo-2` before, for the reason given above.

@@ -52,7 +52,7 @@ const (
 
 // statusStaleAfter is the reader's rule of docs/observability.md
 // ("Freshness"): the HA status is stale when status.lastObservedTime is older.
-const statusStaleAfter = 60 * time.Second
+const statusStaleAfter = evidence.StatusStaleAfter
 
 // operatorPods lists the Operator's Pods as "name uid" lines, also those
 // that are being deleted.
@@ -221,7 +221,7 @@ func (r *haRun) s06Restart() {
 	By("killing the Operator Pod and waiting for its replacement to write a fresh observation")
 	faultEnded = false
 	outcome = r.runFault(faults.Scenario{
-		Fault:  operatorPodKill{pod: pods[0]},
+		Fault:  logs.observeFault(operatorPodKill{pod: pods[0]}),
 		Limits: s03FlowLimits,
 		Before: func(ctx context.Context) error {
 			if !operatorAvailable(ctx) {
@@ -422,7 +422,7 @@ func (r *haRun) s06Absent() {
 	var ageBeforeAbsence time.Duration
 	faultEnded = false
 	outcome = r.runFault(faults.Scenario{
-		Fault:  absence,
+		Fault:  logs.observeFault(absence),
 		Limits: s03FlowLimits,
 		Before: func(ctx context.Context) error {
 			if !operatorAvailable(ctx) {

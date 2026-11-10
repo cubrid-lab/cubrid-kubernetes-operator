@@ -352,8 +352,7 @@ remains a compatibility consideration, separate from ordinary artifact safety.
   restore takes only a full backup (`level` 0) of the request's database
   and engine version; a seed restore (`seedFromMaster`) takes only a
   backup whose manifest declares that master as `sourceInstance` and
-  `master` as `sourceRole` (the role the operator declared when it
-  requested the backup), and, when the request carries
+  `master` as `sourceRole`, and, when the request carries
   `expectedClusterUID` (the operator always sends it for a seed), whose
   `clusterUID` is that cluster's. A restore into a new cluster takes
   another cluster's full backup from a standby or the master. The engine
@@ -364,6 +363,47 @@ remains a compatibility consideration, separate from ordinary artifact safety.
   unknown, or when it, the declared version and the manifest's version are
   not of one series. A `PVC` destination (reserved; not run, see below) is
   **not eligible** for ADR-0006 rebuild or disaster recovery.
+- **Source role (#755):** the manifest's `sourceRole` is the role the
+  source member reports from `cubrid heartbeat status` when the backup
+  starts, the same reading as `/v1/role`, not the role in the request. A
+  request naming `master`, `slave` or `replica` is compared with it, for up
+  to 30 s, since a failed read or a state that passes in seconds shows no
+  change of role and a refused seed backup uses up a bootstrap attempt. A
+  reading that does not match by then fails the operation before `backupdb`,
+  with a reason naming both roles, so no manifest is written and nothing is
+  uploaded; a role that cannot be read fails it the same way and never
+  passes as the requested one. A request naming `unknown` or nothing claims
+  no role: it takes one reading, which a standalone member, having no HA
+  role, gives as `unknown`. A master whose server is not active yet is
+  `master`, which is the member a new cluster's first peer is copied from
+  (POC-13). The role is read again after `backupdb`. For a backup that
+  started as `master`, and for every seed backup, a role that differs then,
+  or cannot be read within the same 30 s, stops the upload: a master demoted
+  while `backupdb` ran may hold acknowledged writes the cluster no longer has
+  (POC-52), and a seed is followed as the master's log. A backup that
+  started as `slave` or `replica` and is not a seed is uploaded with the role
+  observed at the start even when the second reading differs, and the change
+  is only logged (`backup_role_changed`); neither the operation nor the
+  manifest has a field for it. That is the trade: a standby that CUBRID
+  promotes near the end of a long `PreferStandby` backup still leaves a
+  consistent backup of a standby, and discarding it would lose the backup
+  for good, since a `CubridBackup` is never started again; in exchange the
+  manifest does not show that the role changed during the backup. The second
+  reading only narrows the window: a role that changes and returns between
+  the readings, or changes after the second, is not seen, so a manifest
+  states the role at the start and does not state that it held for the
+  whole backup. A `CubridBackup` that fails this way ends `Failed`
+  (`BackupFailed`, with the member's reason) and is not moved to another
+  member; a new `CubridBackup` selects again from the roles of that moment. A
+  seed backup that fails this way ends the bootstrap attempt. For a member
+  after the first peer, the next attempt selects its source again from the
+  observed roles. The first peer is always copied from the member that holds
+  the database, so its next attempt asks that member again, and after the
+  third failed attempt the database is `Failed` and needs a person. A
+  manifest written by an older Instance Manager,
+  and every backup taken by one, still carries the requested role; the
+  request and the operation's answer did not change, so the two sides
+  interoperate as before (ADR-0013).
 
 ### `CubridBackup` CR (v1alpha1)
 

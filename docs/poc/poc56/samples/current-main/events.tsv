@@ -1,0 +1,22 @@
+2026-11-07T05:18:53.033Z	members started
+2026-11-07T05:18:53.035Z	step	bootstrap-a	poc56-current-main-a-demo-0	202
+2026-11-07T05:19:12.262Z	step	seed-backup-a-for-demo-1	poc56-current-main-a-demo-0	202
+2026-11-07T05:19:15.782Z	step	seed-restore-a-demo-1	poc56-current-main-a-demo-1	202
+2026-11-07T05:20:33.858Z	step	seed-backup-a-for-demo-2	poc56-current-main-a-demo-0	202
+2026-11-07T05:20:34.362Z	step	seed-restore-a-demo-2	poc56-current-main-a-demo-2	202
+2026-11-07T05:20:56.360Z	active master	poc56-current-main-a-demo-0
+2026-11-07T05:20:58.211Z	step	slave-backup	poc56-current-main-a-demo-1	202
+2026-11-07T05:21:38.404Z	demo-2 is back empty
+2026-11-07T05:21:38.487Z	step	seed-backup-for-empty-demo-2	poc56-current-main-a-demo-0	202
+2026-11-07T05:21:39.907Z	step	bootstrap-b	poc56-current-main-b-demo-0	202
+2026-11-07T05:22:50.944Z	step	seed-backup-b-for-demo-1	poc56-current-main-b-demo-0	202
+2026-11-07T05:22:52.449Z	step	seed-restore-b-demo-1	poc56-current-main-b-demo-1	202
+2026-11-07T05:23:37.805Z	active master	poc56-current-main-b-demo-0
+2026-11-07T05:23:38.601Z	step	seed-backup-cluster-b	poc56-current-main-b-demo-0	202
+2026-11-07T05:23:50.544Z	case	other-cluster	202	Failed	restore failed: artifact verification failed: manifest clusterUID "6fc1f563-24c8-4777-a0b3-683f29c63121" does not match expected "d6776415-621e-4bea-a101-f199031a838b"
+2026-11-07T05:23:57.538Z	case	slave-named-master	202	Failed	restore failed: artifact verification failed: manifest sourceRole "slave" does not match required "master"
+2026-11-07T05:24:04.563Z	case	slave-named-itself	202	Failed	restore failed: artifact verification failed: manifest sourceRole "slave" does not match required "master"
+2026-11-07T05:24:08.683Z	case	other-cluster-staging-held	202	Failed	restore failed: artifact verification failed: manifest clusterUID "6fc1f563-24c8-4777-a0b3-683f29c63121" does not match expected "d6776415-621e-4bea-a101-f199031a838b"
+2026-11-07T05:24:12.269Z	case	slave-staging-held	202	Failed	restore failed: artifact verification failed: manifest sourceRole "slave" does not match required "master"
+2026-11-07T05:24:56.107Z	case	accepted	202	Completed	
+2026-11-07T05:24:57.837Z	run complete

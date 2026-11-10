@@ -106,7 +106,7 @@ the work belongs to (a classification, not a status — status lives only in
 
 For **issues**, describe one human-readable problem or outcome with a simple
 type prefix: `bug:`, `feat:`, `test:`, `docs:`, `ci:` or `chore:`, as the
-[cubrid-lab writing standard](https://github.com/cubrid-lab/.github/blob/main/docs/ISSUE_PR_COMMIT_STANDARD.md)
+[local contribution guide](CONTRIBUTING.md#human-readable-issue-titles-scope-and-utc-evidence)
 sets out.
 Do not require an internal scenario code or component scope in the title.
 For **PRs and commits**, keep the existing Conventional Commit syntax
@@ -619,9 +619,7 @@ ChatGPT, Copilot, or any other agent. It applies to issues, PRs, reviews,
 comments, checklists, status updates, commit summaries, release notes,
 documentation, presentations, and other maintainer-facing writing, and also
 to source-code comments, test names and test comments (for example in the
-installed HA harness under `test/installed/`). It is this repository's
-adoption of the cubrid-lab rule
-[Explanations in code, tests, reviews and agent-written text](https://github.com/cubrid-lab/.github/blob/main/docs/ISSUE_PR_COMMIT_STANDARD.md#6-explanations-in-code-tests-reviews-and-agent-written-text);
+installed HA harness under `test/installed/`). The local explanation requirements are specified below;
 the safety, build and test rules in this file keep precedence over it.
 
 - Write for a reader unfamiliar with the underlying test script, lab run,
@@ -660,5 +658,11 @@ Issue and pull request titles and UTC timestamps follow
 and [PR title rules](CONTRIBUTING.md#pull-request-and-commit-titles); this
 section adds nothing to them.
 
-This is a shared writing convention, not a new CI check, reviewer approval,
+This is a local writing convention, not a new CI check, reviewer approval,
 or merge gate. Keep existing repository-specific technical and safety rules.
+
+## Repository-specific issue and PR evidence
+
+This repository owns **Kubernetes reconciliation and CUBRID native HA cluster operations**. Issue and PR titles, bodies, ADR/design discussions and release or publication claims must start with **this repository's** affected files and observable behavior. Check Go controller code, CRD schemas, HA topology, actual cluster state, isolated kind/e2e tests, and safe operational runbooks. Do not reuse the rationale, issue tracker, implementation plan, test command, supported version claim or release schedule of another CUBRID Lab repository.
+
+External Kubernetes operators may be research references, but cannot override CUBRID's native heartbeat/master election or replace verified cluster tests. When an external link represents a real integration, specification or independent comparison, explain why it is needed and distinguish external context from locally tested evidence. Before review, scan the issue/PR title and description, contributor/agent guidance, documentation and published notes for incorrect project names or cross-language tooling. Keep the existing local CI, security and maintainer approval rules unchanged; this is a manual writing check, not an additional CI gate.

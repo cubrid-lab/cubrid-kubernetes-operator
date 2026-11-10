@@ -1,0 +1,9 @@
+{
+ "clusterA": "7562cf27-7bea-462d-94c7-941fb764f768",
+ "clusterB": "5183e3ea-f6b9-490d-b3b1-034da02198a1",
+ "prefixes": {
+  "good": "cubrid/7562cf27-7bea-462d-94c7-941fb764f768/seed-demo-2-from-demo-0-r1/appdb",
+  "other-cluster": "cubrid/5183e3ea-f6b9-490d-b3b1-034da02198a1/seed-demo-2-from-demo-0-r1/appdb",
+  "slave": "cubrid/7562cf27-7bea-462d-94c7-941fb764f768/backups/attempt-44d5c5e4646830356e234cc190936f6b"
+ }
+}

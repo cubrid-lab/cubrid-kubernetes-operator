@@ -22,6 +22,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 )
 
 // ConditionState is one Condition of the CubridCluster as one read returned it.
@@ -168,13 +170,13 @@ type Agreement struct {
 
 // Reading the HA status. staleAfter is the reader rule of
 // docs/observability.md ("Freshness"): a status whose lastObservedTime is more
-// than 60 seconds old is stale. The times are written in whole seconds, so one
-// second more is allowed. roleAnswerAge is roleObservationTTL in
+// than evidence.StatusStaleAfter old is stale. The times are written in whole
+// seconds, so one second more is allowed. roleAnswerAge is roleObservationTTL in
 // internal/controller/haresolve.go: the role answers an observation rests on
 // may be that much older than the observation. samplingSlack covers the
 // two-second sampling and the time one round of reads takes.
 const (
-	staleAfter    = 60*time.Second + time.Second
+	staleAfter    = evidence.StatusStaleAfter + time.Second
 	roleAnswerAge = 15 * time.Second
 	samplingSlack = 5 * time.Second
 )

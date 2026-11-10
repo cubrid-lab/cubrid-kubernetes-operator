@@ -1,0 +1,8 @@
+
+=== <Result of SELECT Command in Line 1> ===
+
+  'row='||origin      
+======================
+  'row=cluster-a-before-seed-backup'
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 

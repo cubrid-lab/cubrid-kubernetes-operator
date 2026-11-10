@@ -1,0 +1,14 @@
+{
+ "body": {
+  "bucket": "poc56-seed",
+  "database": "appdb",
+  "expectedClusterUID": "d6776415-621e-4bea-a101-f199031a838b",
+  "expectedCubridVersion": "11.4",
+  "prefix": "cubrid/d6776415-621e-4bea-a101-f199031a838b/backups/attempt-c1e198050cdc7536ddd65a26db5630c5",
+  "seedFromMaster": "demo-0",
+  "stagingDir": "/var/lib/cubrid/restore-staging/seed-d6776415-621e-4bea-a101-f199031a838b",
+  "targetDir": "/var/lib/cubrid/databases"
+ },
+ "idempotencyKey": "seed-restore-slave-staging-held-d6776415-621e-4bea-a101-f199031a838b",
+ "member": "poc56-current-main-a-demo-2"
+}

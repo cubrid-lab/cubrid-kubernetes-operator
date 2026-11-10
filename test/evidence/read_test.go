@@ -38,7 +38,13 @@ import (
 // (#489), which recorded a lab lane at the kind level.
 // lab-operator-restart-run was written by the version 1 writer for these
 // tests, because no real run of that lane is kept in this repository.
+//
+// The runs in testdata/v2 are frozen schema version 2 results of the same two
+// runs under the same names. Both are derived: the version 2 writer wrote them
+// from the version 1 results above, so no CI or lab run produced them.
 const (
+	version1           = "v1"
+	version2           = "v2"
 	kindRun            = "kind-run"
 	labSmokeRun        = "lab-smoke-run"
 	labRestartRun      = "lab-operator-restart-run"
@@ -59,15 +65,23 @@ const (
 	fieldLane          = "lane"
 	fieldRunID         = "runId"
 	fieldSchemaVersion = "schemaVersion"
+	fieldKey           = "key"
+	fieldDisplayName   = "displayName"
 )
 
 // copyRun copies a frozen run into a directory of the test's own and adds an
 // empty file for each evidence path it lists, then returns the directory.
 func copyRun(t *testing.T, name string) string {
 	t.Helper()
+	return copyRunOf(t, version1, name)
+}
+
+// copyRunOf is copyRun for a frozen run of the given schema version.
+func copyRunOf(t *testing.T, version, name string) string {
+	t.Helper()
 	dir := t.TempDir()
 	for _, file := range []string{summaryFile, junitFile} {
-		data, err := os.ReadFile(filepath.Join("testdata", "v1", name, file))
+		data, err := os.ReadFile(filepath.Join("testdata", version, name, file))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,8 +348,9 @@ func removeFirstEvidence(t *testing.T, dir string) {
 	}
 }
 
-// Each change makes a passing version 1 bundle unfit to stand as a validation
-// of its lane. The bundle stays readable, and the read says what is wrong.
+// Each change makes a passing bundle unfit to stand as a validation of its lane,
+// in the same words at both schema versions. The bundle stays readable, and the
+// read says what is wrong.
 func TestReadRunNeverValidatesABundleThatDoesNotProveItsLane(t *testing.T) {
 	tests := map[string]struct {
 		change bundleChange
@@ -422,23 +437,25 @@ func TestReadRunNeverValidatesABundleThatDoesNotProveItsLane(t *testing.T) {
 		"a JUnit case of an unknown class": {inJUnit(s03AbruptCase, `<testcase name="S03/abrupt" classname="other">`),
 			[]string{"junit.xml case S03/abrupt has the class other"}},
 	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			dir := copyRun(t, kindRun)
-			tc.change(t, dir)
-			run, err := ReadRun(dir)
-			if err != nil {
-				t.Fatalf("a readable bundle was refused: %v", err)
-			}
-			if run.Validated() {
-				t.Fatal("the bundle was validated")
-			}
-			for _, want := range tc.want {
-				if !hasProblem(run, want) {
-					t.Errorf("problems = %q, want one containing %q", run.Problems, want)
+	for _, version := range []string{version1, version2} {
+		for name, tc := range tests {
+			t.Run(version+"/"+name, func(t *testing.T) {
+				dir := copyRunOf(t, version, kindRun)
+				tc.change(t, dir)
+				run, err := ReadRun(dir)
+				if err != nil {
+					t.Fatalf("a readable bundle was refused: %v", err)
 				}
-			}
-		})
+				if run.Validated() {
+					t.Fatal("the bundle was validated")
+				}
+				for _, want := range tc.want {
+					if !hasProblem(run, want) {
+						t.Errorf("problems = %q, want one containing %q", run.Problems, want)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -496,7 +513,8 @@ func TestReadRunReadsWhatTheWriterWrites(t *testing.T) {
 	if !run.Validated() {
 		t.Errorf("problems = %q, want none", run.Problems)
 	}
-	if got := resultOf(t, run, lab00); got.Key != "installed-standalone-sql-smoke" {
+	const key = "installed-standalone-sql-smoke"
+	if got := resultOf(t, run, lab00); got.Key != key || got.RecordedKey != key {
 		t.Errorf("LAB00 = %+v", got)
 	}
 }
@@ -513,7 +531,7 @@ func TestReadRunRefusesWhatItCannotInterpret(t *testing.T) {
 		raw    string
 		want   string
 	}{
-		"a later version":   {change: version("2"), want: `schema version "2"`},
+		"a later version":   {change: version("3"), want: `schema version "3"`},
 		"an empty version":  {change: version(""), want: `schema version ""`},
 		"a similar version": {change: version("1.0"), want: `schema version "1.0"`},
 		"a numeric version": {change: version(1), want: summaryFile},
@@ -521,10 +539,13 @@ func TestReadRunRefusesWhatItCannotInterpret(t *testing.T) {
 		"no version": {change: func(summary map[string]any) { delete(summary, fieldSchemaVersion) },
 			want: noVersion},
 		"a field version 1 does not have": {change: func(summary map[string]any) { summary["key"] = "x" },
-			want: "unknown field"},
+			want: unknownField},
 		"a scenario field version 1 does not have": {change: func(summary map[string]any) {
-			summary[fieldScenarios].([]any)[0].(map[string]any)["key"] = testBaseKey
-		}, want: "unknown field"},
+			summary[fieldScenarios].([]any)[0].(map[string]any)[fieldKey] = testBaseKey
+		}, want: unknownField},
+		"a display name in a version 1 result": {change: func(summary map[string]any) {
+			summary[fieldScenarios].([]any)[0].(map[string]any)[fieldDisplayName] = "x"
+		}, want: unknownField},
 		"a truncated file":  {raw: `{"schemaVersion":"1","runId":"x"`, want: summaryFile},
 		"a second document": {raw: `{"schemaVersion":"1"}{"schemaVersion":"2"}`, want: summaryFile},
 		"not an object":     {raw: `[]`, want: summaryFile},
@@ -554,7 +575,9 @@ func TestReadRunRefusesWhatItCannotInterpret(t *testing.T) {
 }
 
 // aliasRun writes a run of the small test registry's Kind lane in which every
-// given scenario claims a pass with its evidence.
+// given scenario claims a pass with its evidence. It is turned into schema
+// version 1, which records no key in either file: the writer knows only the real
+// registry, and what these tests check is how legacy names resolve.
 func aliasRun(t *testing.T, scenarios ...Scenario) string {
 	t.Helper()
 	dir := runDir(t, s00Record)
@@ -564,6 +587,17 @@ func aliasRun(t *testing.T, scenarios ...Scenario) string {
 		summary.Scenarios[i].Result, summary.Scenarios[i].Evidence = Pass, []string{s00Record}
 	}
 	if err := summary.Write(dir, NewRedactor()); err != nil {
+		t.Fatal(err)
+	}
+	written := withoutIdentity(loadSummary(t, dir))
+	written[fieldSchemaVersion] = schemaV1
+	saveSummary(t, dir, written)
+	path := filepath.Join(dir, junitFile)
+	junit, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, junitKeyProperties.ReplaceAll(junit, nil), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return dir

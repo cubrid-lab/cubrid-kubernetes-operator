@@ -18,6 +18,9 @@
 
 New to the project? [docs/architecture/](./docs/architecture/README.md) explains
 the architecture with diagrams before you read the design or the code.
+For operational inspection, SQL/backup/recovery boundaries and installation
+prerequisites, start with the **[pre-release operator guide](./docs/operations/README.md)**.
+It is not yet an independently verified installation/recovery runbook (#125/#127).
 
 ## Why this project?
 
@@ -344,6 +347,9 @@ still run when they cannot have them.
 [docs/architecture/voluntary-disruption.md](./docs/architecture/voluntary-disruption.md)
 has the result for each topology and degraded state, and what to do about a
 blocked drain. No drain has been run against these budgets yet (#614).
+The generated PDBs are implemented, while the policy decision remains
+**Proposed** in ADR-0012 pending maintainer acceptance (#613); do not treat
+a green envtest as a real-node drain or SQL safety qualification.
 
 ## Scope and validation
 
@@ -362,6 +368,9 @@ Core API, HA safety and recovery changes require design agreement.
 
 ## Documentation
 
+- [docs/operations/](./docs/operations/README.md) — pre-release operational
+  inspection, safe diagnostics, backups/recovery boundaries, evidence requirements
+  and unverified procedures; **not a production runbook**
 - [docs/architecture/](./docs/architecture/README.md) — the architecture in
   diagrams: where the Operator runs, what it reconciles, how clients reach
   the database, who handles a failure and what a node drain may take; start

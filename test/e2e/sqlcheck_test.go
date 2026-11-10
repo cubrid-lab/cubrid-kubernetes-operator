@@ -22,6 +22,7 @@ package e2e
 import (
 	"context"
 	"os/exec"
+	"strings"
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/sqlcheck"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
@@ -43,17 +44,33 @@ func csqlInPodQuiet(ctx context.Context, namespace, pod, database string) sqlRun
 	return csqlRunner(ctx, namespace, pod, database, utils.RunQuiet)
 }
 
+// csqlRunner runs csql on a member and counts each pair of -199 and -111 for
+// the whole run (lostSessionLedger). It changes no result.
 func csqlRunner(ctx context.Context, namespace, pod, database string,
 	run func(*exec.Cmd) (string, error)) sqlRunner {
+	return watchedCSQL(ctx, namespace, pod, database, run, nil)
+}
+
+// watchedCSQL is csqlRunner that also hands the record of each pair to seen.
+func watchedCSQL(ctx context.Context, namespace, pod, database string, run func(*exec.Cmd) (string, error),
+	seen func(*lostSessionRecord)) sqlRunner {
 	return func(sql string) (string, error) {
-		return run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "exec", pod, "--",
+		out, err := run(exec.CommandContext(ctx, "kubectl", "-n", namespace, "exec", pod, "--",
 			"bash", "-c", `PATH="${CUBRID}/bin:${PATH}" csql -u dba "$0" -c "$1"`, database+"@localhost", sql))
+		csqlLedger.observe(pod, sql, out, seen)
+		return out, err
 	}
 }
 
 // runSQL runs sql and checks csql output for errors.
 func runSQL(run sqlRunner, sql string) (string, error) {
 	return sqlcheck.Run(run, sql)
+}
+
+// firstLine is the first line of s.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return line
 }
 
 // s00Table is the table the S00 checks write and read.

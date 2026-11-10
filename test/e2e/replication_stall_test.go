@@ -442,8 +442,8 @@ func openTransactionStep(r *haRun) {
 		r.mu.Unlock()
 		master, slaves, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
-		count := func(pod string) (string, error) {
-			values, err := r.memberValues(context.Background(), pod, "SELECT TO_CHAR(COUNT(*)) AS v FROM "+table+";")
+		countWith := func(read func(context.Context, string, string) ([]string, error), pod string) (string, error) {
+			values, err := read(context.Background(), pod, "SELECT TO_CHAR(COUNT(*)) AS v FROM "+table+";")
 			if err == nil && len(values) != 1 {
 				err = fmt.Errorf("count of %s on %s: %v", table, pod, values)
 			}
@@ -452,6 +452,7 @@ func openTransactionStep(r *haRun) {
 			}
 			return values[0], nil
 		}
+		count := func(pod string) (string, error) { return countWith(r.memberValues, pod) }
 		// conditions reads both conditions, asking again on a failed read; an
 		// error is returned only when three reads in a row failed.
 		conditions := func() (string, error) {
@@ -497,8 +498,10 @@ func openTransactionStep(r *haRun) {
 		}
 
 		By("creating a table with a primary key and without AUTO_INCREMENT on " + master)
-		_, err = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database),
-			"CREATE TABLE "+table+" (id INT PRIMARY KEY, pad VARCHAR(1000));")
+		// The verdict on this statement is the count on each slave below, so it
+		// runs once under the rule of sqlcheck.RunOnce and is never repeated.
+		err = r.memberCSQL(context.Background(), master).
+			runOnce("CREATE TABLE "+table+" (id INT PRIMARY KEY, pad VARCHAR(1000));", statementFinished)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() {
 			_, _ = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database), "DROP TABLE IF EXISTS "+table+";")
@@ -522,6 +525,7 @@ func openTransactionStep(r *haRun) {
 			openTxRounds, openTxRows, table, int(openTxPause.Seconds()), r.database)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(openTxRounds)*openTxPause+2*time.Minute)
 		defer cancel()
+		masterServer := r.memberCSQL(context.Background(), master).guard.Before()
 		type result struct {
 			out string
 			err error
@@ -571,7 +575,7 @@ func openTransactionStep(r *haRun) {
 				Expect(err).NotTo(HaveOccurred(), "cubrid tranlist on %s: %s", master, tranlist)
 				Expect(open).To(BeNumerically(">=", (time.Duration(openTxRounds)*openTxPause/3).Seconds()),
 					"how long the csql transaction on %s has been open halfway", master)
-				n, err := count(slaves[0])
+				n, err := countWith(r.memberValuesOnce, slaves[0])
 				samples = append(samples, fmt.Sprintf("rows on %s halfway: %s %v", slaves[0], n, err))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(n).To(Equal("0"), "rows of the open transaction on %s before the commit", slaves[0])
@@ -579,8 +583,8 @@ func openTransactionStep(r *haRun) {
 		}
 		held := time.Since(started)
 		Expect(midChecked).To(BeTrue(), "the transaction was not checked halfway")
-		Expect(session.err).NotTo(HaveOccurred(), "the csql session: %s", session.out)
-		Expect(session.out).NotTo(ContainSubstring("ERROR"), "the csql session")
+		// The count on every member below decides whether the rows committed.
+		Expect(heldSessionVerdict(masterServer, master, session.out, session.err)).To(Succeed(), "the csql session")
 		Expect(held).To(BeNumerically(">", 90*time.Second), "how long the transaction was open")
 		Expect(unhealthy).To(BeEmpty(), "samples in which ReplicationHealthy or HAReady was not True")
 		Expect(len(unreadable)).To(BeNumerically("<", len(samples)/2), "samples whose conditions could not be read: %v",

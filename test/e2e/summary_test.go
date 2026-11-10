@@ -106,6 +106,13 @@ func recordScenario(s evidence.Scenario) {
 			s.Name(), s.Result)
 		return
 	}
+	if s.Result != evidence.NotRun {
+		if s.Measurements == nil {
+			s.Measurements = map[string]any{}
+		}
+		s.Measurements[lostSessionsMeasurement] = csqlLedger.measure(
+			evidence.Requirement{ID: s.ID, Variant: s.Variant}.Label())
+	}
 	runSummary.Record(s)
 }
 
@@ -329,8 +336,15 @@ func concludeRun() error {
 			"the suite's deadline passed during %s: the steps after it did not run", timedOutStep))
 	}
 	problems = append(problems, credentialLeaks(evidenceDir())...)
+	if note := csqlLedger.note(); note != "" {
+		runSummary.Notes = append(runSummary.Notes, note)
+	}
 	return runSummary.Conclude(evidenceDir(), redactor, runLane(), problems...)
 }
+
+// evidenceHoldSuffix names the marker beside the evidence directory that keeps
+// the workflow from publishing it (.github/workflows/test-e2e.yml).
+const evidenceHoldSuffix = ".held"
 
 // credentialLeaks is a problem for each evidence file of the run that holds a
 // credential the run registered with the redactor, such as the Instance
@@ -344,13 +358,28 @@ func credentialLeaks(dir string) []string {
 	}
 	leaks, err := redactor.Leaks(dir)
 	if err != nil {
-		return []string{fmt.Sprintf("the evidence could not be searched for credentials: %v", err)}
+		problem := fmt.Sprintf("the evidence could not be searched for credentials: %v", err)
+		holdEvidence(dir, problem)
+		return []string{problem}
 	}
 	problems := make([]string, 0, len(leaks))
 	for _, file := range leaks {
 		problems = append(problems, "the evidence file "+file+" holds a credential of the run")
 	}
+	if len(problems) > 0 {
+		holdEvidence(dir, strings.Join(problems, "\n"))
+	}
 	return problems
+}
+
+// holdEvidence writes the marker that keeps the evidence directory from being
+// published. The run fails either way: a file that holds a credential is not
+// removed, because the workflow's logs name it and the runner discards it. It
+// names the files only, and a marker that could not be written is printed.
+func holdEvidence(dir, reason string) {
+	if err := os.WriteFile(dir+evidenceHoldSuffix, []byte(reason+"\n"), 0o600); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "could not hold the evidence: %v\n", err)
+	}
 }
 
 // imageLoadEvidence is where the output of the attempts to load the Instance

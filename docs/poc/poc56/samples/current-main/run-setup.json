@@ -1,0 +1,9 @@
+{
+ "clusterA": "d6776415-621e-4bea-a101-f199031a838b",
+ "clusterB": "6fc1f563-24c8-4777-a0b3-683f29c63121",
+ "prefixes": {
+  "good": "cubrid/d6776415-621e-4bea-a101-f199031a838b/seed-demo-2-from-demo-0-r1/appdb",
+  "other-cluster": "cubrid/6fc1f563-24c8-4777-a0b3-683f29c63121/seed-demo-2-from-demo-0-r1/appdb",
+  "slave": "cubrid/d6776415-621e-4bea-a101-f199031a838b/backups/attempt-c1e198050cdc7536ddd65a26db5630c5"
+ }
+}

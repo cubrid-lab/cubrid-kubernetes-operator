@@ -1,0 +1,1 @@
+appdb		/var/lib/cubrid/databases/appdb	demo-0:demo-1:demo-2	/var/lib/cubrid/databases/appdb	file:/var/lib/cubrid/databases/appdb/lob

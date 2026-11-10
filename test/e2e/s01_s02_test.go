@@ -188,23 +188,47 @@ func (r *haRun) observedLoss(report workload.Report, faultAt time.Time, clients 
 	return loss.String(), loss.Resolution.Round(time.Millisecond).String()
 }
 
-// master asks CUBRID on every member for its role and returns the one master
-// and the slaves. Any other distribution of roles is an error.
-func (r *haRun) master(ctx context.Context) (string, []string, error) {
-	var masters, slaves []string
+// memberRole is what cubrid heartbeat status printed on a member: its role as
+// heartbeatRoleIn reads it, its node state, and the output.
+type memberRole struct{ role, state, out string }
+
+// memberRoles is one reading of every member, by Pod name.
+type memberRoles map[string]memberRole
+
+// readRoles asks CUBRID on every member for its role, once, in the order of
+// r.members. A failed read returns the members read before it with the error.
+func (r *haRun) readRoles(ctx context.Context) (memberRoles, error) {
+	roles := memberRoles{}
 	for _, pod := range r.members {
 		out, err := r.kubectl(ctx, "exec", pod, "--", "bash", "-c", heartbeatStatus)
 		if err != nil {
+			return roles, err
+		}
+		roles[pod] = memberRole{role: heartbeatRoleIn(pod, out), state: heartbeatNodeStateIn(pod, out), out: out}
+	}
+	return roles, nil
+}
+
+// master asks CUBRID on every member for its role and returns the one master
+// and the slaves. Any other distribution of roles is an error.
+func (r *haRun) master(ctx context.Context) (string, []string, error) {
+	// A member read before a failed read and in neither role is reported as
+	// an unmet role, before the read's error, as when each was read in turn.
+	roles, err := r.readRoles(ctx)
+	var masters, slaves []string
+	for _, pod := range r.members {
+		got, read := roles[pod]
+		if !read {
 			return "", nil, err
 		}
-		switch heartbeatRoleIn(pod, out) {
+		switch got.role {
 		case "master":
 			masters = append(masters, pod)
 		case "slave":
 			slaves = append(slaves, pod)
 		default:
 			return "", nil, &faults.Unmet{Member: pod, Kind: faults.UnmetRole,
-				Detail: "neither an active master nor a standby slave:\n" + out}
+				Detail: "neither an active master nor a standby slave:\n" + got.out}
 		}
 	}
 	if len(masters) != 1 || len(slaves) != len(r.members)-1 {
@@ -221,6 +245,17 @@ func (r *haRun) memberValues(ctx context.Context, pod, query string) ([]string, 
 		return nil, err
 	}
 	return sqlcheck.Values(out)
+}
+
+// memberValuesOnce is memberValues for a read that is made once and not
+// retried by a loop. It follows the rule of sqlcheck.Read, which costs one
+// more kubectl exec on each call, so the retried reads stay on memberValues.
+func (r *haRun) memberValuesOnce(ctx context.Context, pod, query string) ([]string, error) {
+	result, err := r.memberCSQL(ctx, pod).read(query, sqlcheck.ValuesComplete)
+	if err != nil {
+		return nil, err
+	}
+	return sqlcheck.Values(result.Out)
 }
 
 // memberRows reads the ledger rows a member holds, not through a Broker.
@@ -347,7 +382,8 @@ func s01AndS02Steps(r *haRun) {
 		result := evidence.Scenario{ID: "S01", Result: evidence.Fail, Reason: "a check of S01 failed; see the test output"}
 		// Recorded also when a check below fails.
 		defer func() { recordScenario(result) }()
-		defer func() { r.scenarioLogs("S01").conclude(context.Background(), true, &result) }()
+		logs := r.scenarioLogs("S01")
+		defer func() { logs.conclude(context.Background(), true, &result) }()
 
 		By("asking CUBRID for the roles and comparing them with the operator's status")
 		master, _, err := r.master(context.Background())
@@ -395,11 +431,14 @@ func s01AndS02Steps(r *haRun) {
 		result := evidence.Scenario{ID: "S02", Result: evidence.Fail, Reason: "a check of S02 failed; see the test output"}
 		// Recorded also when a check below fails.
 		defer func() { recordScenario(result) }()
-		defer func() { r.scenarioLogs("S02").conclude(context.Background(), true, &result) }()
+		logs := r.scenarioLogs("S02")
+		defer func() { logs.conclude(context.Background(), true, &result) }()
 
 		master, slaves, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 
+		// This write and the marker row's are strict: a write that printed -199
+		// and -111 counts as failed until a maintainer decides otherwise (#238).
 		By("changing the schema on the master")
 		_, err = runSQL(csqlInPod(context.Background(), r.namespace, master, r.database),
 			"ALTER TABLE ledger ADD COLUMN extra VARCHAR(16);"+
@@ -419,7 +458,7 @@ func s01AndS02Steps(r *haRun) {
 		// is an upper bound; the full check below is not part of it.
 		By("committing a marker row on the master and timing until every slave returns it with every row")
 		ledgerRows := "SELECT CAST(COUNT(*) AS VARCHAR(20)) AS n FROM ledger;"
-		wantRows, err := r.memberValues(context.Background(), master, ledgerRows)
+		wantRows, err := r.memberValuesOnce(context.Background(), master, ledgerRows)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(wantRows).To(HaveLen(1), "the ledger row count on the master")
 		marker := fmt.Sprintf("marker-%d", time.Now().UnixNano())
@@ -495,7 +534,7 @@ func s01AndS02Steps(r *haRun) {
 		uid, err := r.kubectl(context.Background(), "get", "pod", replaced, "-o", "jsonpath={.metadata.uid}")
 		Expect(err).NotTo(HaveOccurred())
 		outcome := r.runFault(faults.Scenario{
-			Fault:  podDeletion{namespace: r.namespace, pod: replaced, uid: uid},
+			Fault:  logs.observeFault(podDeletion{namespace: r.namespace, pod: replaced, uid: uid}),
 			Limits: podDeletionLimits,
 			Before: func(ctx context.Context) error { _, _, err := r.master(ctx); return err },
 			// The same master, the replaced member a standby slave again, and

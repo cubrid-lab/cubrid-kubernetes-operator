@@ -33,10 +33,13 @@ This reference does **not** change any required scenario or acceptance rule.
 - **ADR**: Architecture Decision Record, in [docs/adr](../adr/).
 - **POC**: a proof-of-concept experiment on a real engine, recorded in
   [docs/poc/RESULTS.md](../poc/RESULTS.md).
-- **RTO**: recovery time objective. Here always the *measured* recovery time
-  defined in [Measurements](#measurements).
-- **RPO**: recovery point objective. Here always the *observed* data loss
-  defined in [Measurements](#measurements).
+- **RTO (Recovery Time Objective)**: an explicit *target* maximum acceptable
+  recovery duration. This contract measures actual recovery duration, which
+  must not be described as an RTO target unless a target was agreed.
+- **RPO (Recovery Point Objective)**: an explicit *target* maximum acceptable
+  data-loss window. The contract reports actual acknowledged writes missing
+  and an observed data-loss window; these are observations, not RPO targets.
+  No zero-loss RTO/RPO objective is inferred from a passing scenario.
 - **PVC**: PersistentVolumeClaim, the Kubernetes object that holds a member's
   data volume.
 - **VM**: virtual machine.
@@ -107,6 +110,83 @@ cause is outside the product.
 Where the judging logic can run without a cluster, it is unit-tested with
 deliberately wrong inputs, including each "Must never happen" case, and the
 real system is exercised by the scenario itself.
+
+#### When `csql` prints `-199` and `-111`
+
+`csql` sometimes prints `ERROR CODE = -199` (server no longer responding) and
+`ERROR CODE = -111` (transaction aborted) together with the results of its
+statements. The pair is not harmless and this contract does not call it so:
+its cause is unknown and [#238](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/238)
+stays open. What is known limits what a test may do with it:
+
+- The output cannot separate it from a real server death. In POC-55
+  (`docs/poc/RESULTS.md`) a server killed or stopped during `csql`'s session
+  printed exactly this shape, exit 0, only the two codes and complete results,
+  in 260 of 997 forced runs. That is a share of forced moments, not a field
+  rate.
+- The identity of `cub_server`, its process ID and start time from
+  `/proc/<pid>/stat`, changed or vanished in all of those 260 and held in all
+  75 runs of that shape with no fault. It has to be read before the call:
+  `cub_master` revives a killed server within 0.04 seconds. It is read after
+  the call only after a short bounded wait, because one server in POC-55 read
+  as unchanged at `csql`'s exit while it was dying. That is a comparison over
+  recorded runs and is not a guarantee on another build or host.
+- A process identity does not show a change of HA mode: a standby promoted to
+  active keeps its process, and the message of `-111` names a mode change as
+  one of its causes. On an HA member the same read therefore also asks for the
+  server's HA mode with `cubrid changemode <db>@localhost` and no mode
+  argument, which POC-52 used because it does not call `cubrid heartbeat
+  status`; the mode must be readable and the same before and after.
+- A server that died and was revived by `cub_master` before a call's own
+  identity read is not seen by that call. S00 also compares the identity read
+  before its write with the one at the end of its smoke checks.
+
+**What is tolerated.** A pair is tolerated at a listed step only when all of
+these hold; otherwise the step fails as it did before:
+
+1. the command exited 0;
+2. the output holds both codes and no other error: no other `ERROR CODE`, no
+   `ERROR:` line and no other `ERROR`;
+3. the step's result is complete in the output;
+4. the identity read before the call equals the one read after it, and on an
+   HA member so does its HA mode; a read that failed, found no server, found
+   several or could not read the mode never counts as equal;
+5. an independent check then passes. It decides the step: the tolerance says
+   nothing about whether the statement took effect.
+
+| Step | Why it is listed | The independent check |
+|---|---|---|
+| `CREATE TABLE` of the check that holds a transaction open | Not a contract step; the statement runs once | The table's count on each slave |
+| The `csql` session that holds that transaction open | Not a contract step; its command's error and any other `ERROR` still fail it | The row count on every member after the commit |
+| S00's read after its write and its read at the end of the smoke checks | Read-only | A second read, the only repeat there is |
+| S02's count of the ledger rows on the master before its marker row | Read-only and made once | A second read |
+| The count on a slave halfway through the held transaction | Read-only and made once | A second read |
+
+A read may be made once more, so at most two `csql` calls, and only a single
+SELECT can be repeated: any other text, also a script that holds a SELECT and
+another statement, is refused before anything runs. A second pair never passes.
+A statement that is not a read is never repeated.
+
+**What stays strict.** A write that printed the pair counts as failed: S00's
+write of the marker row and S02's schema change and marker row, because the
+output does not show whether they committed, and relaxing a mandatory check
+needs a maintainer's decision (#238). Everything in the histories of the fault
+scenarios stays as it is too. Reads that a loop retries are not given the rule:
+they already read again, and they do not pay for an identity read.
+
+**What is counted.** Every pair in a `csql` call of the Kind suite, and in the
+held session, is counted for the whole run, also on reads a loop absorbs and on
+a run that passes. `suite/csql-lost-sessions.jsonl` has a line for each: its
+time, step, member, the first line of the query, whether it was a read or a
+write, what the identity comparison found and how the second read answered,
+as a fixed reason without the read's output.
+A run with any has a line in the `notes` of `summary.json`, and each scenario
+result has `measurements.csqlLostSessions`, which is `unknown` when the scenario
+made no `csql` read and printed no pair: only reads count as a chance to see
+one, so a scenario that only wrote and printed none says `unknown`. A call is
+credited to the step running when it returns, so a background read that
+outlives its step counts toward the next one. These counts are recorded and judge
+nothing: no limit applies to them.
 
 ### Required scenarios
 
@@ -619,19 +699,24 @@ removed, and no later variant of the same system is started.
 
 These are different things and are never reported as one another:
 
-1. **Removing endpoints from the managed write path.** The Operator stops
-   offering the read-write endpoint: new connections through the `-rw`
-   Service fail or are refused. This is the only one the Operator does on
-   its own (write quarantine, ADR-0005 section 2). Reporting
-   `RoutingReady=False` is not this: a scenario checks it with new
-   connections through `-rw`, never with the Condition.
+1. **Removing endpoints from the managed write path (planned, not yet
+   implemented).** If the #113 policy is implemented, the Operator would
+   withhold the managed read-write Service endpoint so *new* connections
+   through `-rw` fail or are refused. **Today the Operator does not do this:**
+   it sets `RoutingReady=False` while Brokers and Service endpoints remain.
+   A scenario must test actual SQL through `-rw`, never infer enforcement
+   from a Condition. A missing/stale observation alone does not prove native
+   CUBRID has entered a two-master state; #113/#115 must establish the
+   accepted availability/safety policy.
 2. **Closing existing connections.** Sessions that were open before the
-   quarantine are ended. ADR-0005 states that the Operator does *not* do
-   this: an open session may keep writing.
+   proposed quarantine would have to be ended separately. ADR-0005 does
+   **not** claim the Operator does this: an open session may keep writing.
+   Any future claim must be supported by direct SQL/session evidence.
 3. **Fencing the database.** The database process itself is stopped or
-   isolated so that it cannot accept writes from anyone. The Operator does
-   this only as a planned step against a known, reachable member
-   (`/v1/shutdown`), never automatically to resolve an ambiguous state.
+   isolated so that it cannot accept writes from anyone. In the current
+   design, `/v1/shutdown` is used by the Pod's planned lifecycle preStop
+   action against its own member; the Operator controller does not use it
+   as automatic emergency split-brain fencing.
 
 A scenario that involves quarantine states its expectation for **new
 connections** and for **already-open connections** separately.
@@ -724,7 +809,7 @@ present, it must be present exactly once and with the values that were sent.
 
 ### Measurements
 
-- **Recovery time (RTO).** The time from the start of the fault (the moment
+- **Observed recovery duration (not the RTO target).** The time from the start of the fault (the moment
   the injection command was issued) until the first moment after which a
   write and a read through the read-write endpoint succeed without
   interruption for the scenario's `stable_period`. Only an acknowledged insert
@@ -732,7 +817,7 @@ present, it must be present exactly once and with the values that were sent.
   acknowledged rollback committed nothing and neither counts nor interrupts.
   A client that does not read is judged on its writes alone. Any `failed` or
   `unknown` outcome interrupts (`workload.Recovery`).
-- **Observed data loss (observed RPO).** The number of `acknowledged`
+- **Observed data loss (not the RPO target).** The number of `acknowledged`
   operations missing after recovery (`acknowledgedMissing`), and the time
   between the oldest of them and the start of the fault
   (`observedDataLossWindow`; `0s` when none is missing). The window is taken
@@ -749,6 +834,9 @@ present, it must be present exactly once and with the values that were sent.
   record their skew.
 - A measurement that could not be taken is reported as `unknown`, with the
   reason, and never as zero. Zero means "measured, and it was zero".
+  The existing evidence keys remain unchanged for backward compatibility;
+  terminology clarification does not rename measurements, verdicts, or
+  alter any required fault/SQL oracle.
 
 ## Evidence
 
@@ -762,7 +850,7 @@ reader can tell what to expect.
   <scenario-id>/
     history.jsonl       one line per client operation event
     timeline.jsonl      one line per test step, fault and observation
-    cluster/            CubridCluster YAML and conditions at each checkpoint
+    cluster/            Kubernetes state at each checkpoint and its UTC observations
     conditions.jsonl    one line per read of the status during the fault
     agreement.txt       how the Conditions compared with SQL and the fault
     logs/               Operator, Instance Manager, CUBRID and Broker logs
@@ -911,7 +999,7 @@ it.
 
 ```json
 {
-  "schemaVersion": "1",
+  "schemaVersion": "2",
   "runId": "2026-10-12T09-30-00Z-a1b2c3",
   "startedAt": "2026-10-12T09:30:00Z",
   "finishedAt": "2026-10-12T10:05:12Z",
@@ -929,6 +1017,8 @@ it.
   "problems": [],
   "scenarios": [
     {
+      "key": "ha-primary-pod-recovery-abrupt-later-master",
+      "displayName": "Primary database Pod termination and recovery - abrupt, later master",
       "id": "S03",
       "variant": "abrupt",
       "result": "pass",
@@ -951,11 +1041,18 @@ it.
 }
 ```
 
+- `key` is the canonical key of the result in `test/evidence/registry.go`,
+  under this run's `lane` and `level`, and `displayName` its name for people.
+  Both are left out for a result the registry does not hold there, such as a
+  lab lane run at the `kind` level. `id` and `variant` stay as they were: the
+  gates, the labels, the evidence paths and the JUnit case names still use
+  them ([Result format versions](#result-format-versions-migration-and-rollback)).
 - `level` is `unit`, `envtest`, `kind` or `vm-lab`.
 - `lane` names the [required scenarios](#required-scenarios) the run was
   judged against, `passed` says whether it passed them, and `problems` lists
-  why not, one line per problem. A line about a scenario starts
-  `<key>: <result>: <reason>`, for example `S03/abrupt: fail: ...`, and when
+  why not, one line per problem. A line about a scenario starts with its
+  `id` and `variant`, `<id>/<variant>: <result>: <reason>`, for example
+  `S03/abrupt: fail: ...`, and when
   the scenario's description is known it ends with that description in
   parentheses. The start of the line is the stable format; the description is
   for people only and is not part of the scenario's identity.
@@ -1025,13 +1122,43 @@ for result matching and comparison. A testcase whose scenario has a known
 description also has a `<system-out>` element after its verdict element, such
 as `Primary database Pod termination and recovery - abrupt, later master
 (S03/abrupt)`; a scenario with no known description has none. The description
-does not replace the identity, and nothing matches on it. A future schema
-migration must explicitly version any identity change (see #715).
+does not replace the identity, and nothing matches on it.
 
-`junit.xml` is uploaded with the run's evidence and nothing in this repository
-reads it, so the description is seen by opening the file. The run's returned
-error and the `problems` of `summary.json` carry the description of each
+A testcase the registry holds under this run's `lane` and `level` also has its
+canonical key as a property, before its verdict element, and one it does not
+hold has no property:
+
+```xml
+<testcase name="S03/abrupt" classname="scenario">
+  <properties>
+    <property name="key" value="ha-primary-pod-recovery-abrupt-later-master"></property>
+  </properties>
+  <system-out>Primary database Pod termination and recovery - abrupt, later master (S03/abrupt)</system-out>
+</testcase>
+```
+
+The `name` does not change, so anything that groups cases by it reads what it
+did. Cases are correlated across runs by key, never by `name` alone: `S06/restart`
+is one `name` at two levels and two different tests. A case's key is the property
+when the case has one, and otherwise the `key` of the entry of `summary.json` at
+the same place, which is all a file from before the property has; a version 1
+result gets its key from the registry, under its own lane and level. Any change
+to a testcase `name` needs its own versioned migration.
+
+`junit.xml` is uploaded with the run's evidence and only `ReadRun` in this
+repository reads it, so the description is seen by opening the file. The run's
+returned error and the `problems` of `summary.json` carry the description of each
 scenario they report as well.
+
+Consumers were checked on 2026-11-07 UTC before the property was added. In this
+repository, no workflow reads the file, and `.github/workflows/test-e2e.yml`
+only uploads the evidence directory; the tests in `test/installed` look for
+problem lines in its text. A code search of the `cubrid-lab` organization found
+`junit.xml` only in `sqlalchemy-cubrid` and `cubrid-mcp-server`, which handle the
+reports of their own pytest runs. A search covers default branches and public code, so
+a tool elsewhere is not excluded; one that reads `name` and the verdict elements
+is unaffected, and one that validates the file against a strict schema may have to
+allow `<properties>` in a `<testcase>`.
 
 | Result | JUnit |
 |---|---|
@@ -1063,34 +1190,260 @@ under the `lane` and `environment.level` in its own `summary.json`, never under
 another: `S06/restart` is `operator-failure-recovery-restart` in
 a `kind` run, and `installed-operator-failure-recovery-restart` in a
 `lab-installed-ha-s06` run at the `vm-lab` level. The JUnit testcase `name` and
-the `id` and `variant` fields stay the identity of schema version 1.
+the `id` and `variant` fields stay the identity of a version 1 result, and a
+version 2 result must record the key they resolve to.
 
 | The reader finds | What it does |
 |---|---|
-| A `schemaVersion` other than the string `"1"`, or none | Refuses the file with an error and returns no results |
-| A field schema version 1 never had, or a file that is not one JSON object | Refuses the file with an error and returns no results |
+| A `schemaVersion` other than the string `"1"` or `"2"`, or none | Refuses the file with an error and returns no results |
+| A field its schema version never had, such as a `key` in a version 1 file, or a file that is not one JSON object | Refuses the file with an error and returns no results |
 | A lane that is not registered, or a lane at a level it is not judged at | Keeps every result readable, resolves none of them, and does not validate the run |
 | A legacy name unknown at that level, shared by two results, or recorded in the wrong field | Keeps the result without a key; it counts for no requirement |
+| A version 2 result with no `key` or `displayName`, or a `key` other than the one its legacy name resolves to under the run's lane and level | Keeps what it recorded, gives it no key, and does not validate the run; it counts for no requirement |
 | Two legacy names of one result in one run | Reports the conflict; neither replaces another requirement |
 | A required result missing, or not passed | Reports it in the words of the gate, with `Lane.Gate` applied to the registered lane |
 | A claimed pass whose evidence file is gone, with no evidence, an unconfirmed fault or a never-event | Reports it as a `fail`, and keeps the recorded `pass` |
 | A run with no `finishedAt`, or one that says it did not pass | Marks an unfinished run provisional, and does not validate it |
 | A filtered `kind-filtered` run | Resolves its results and does not validate it: it chose its own requirements |
 | A missing or unreadable `junit.xml`, one of another run, or cases that differ in name, order, number or verdict from `summary.json` | Reports the difference and does not validate the run |
+| A `junit.xml` case with a key other than the one `summary.json` recorded at the same place, or with a key beside a version 1 result, which records none | Reports the difference and does not validate the run. A case with no key is an older file, not a defect |
 
 The read keeps three things apart. `Summary` is what the run recorded, with its
 own verdict, and is never changed. `Results` adds to each entry its key and what
 its files support now. `Problems` says why the run does not prove the lane
 **as it is registered today**, so a run that passed an earlier, shorter list of
-requirements stays `passed` in `Summary` and is not validated. The directory
+requirements stays `passed` in `Summary` and is not validated. A version 2
+result also keeps its `RecordedKey` and `DisplayName` beside `Summary`; a
+version 1 result has no recorded key, and its display name comes from the
+registry. The display name is not compared with the registry: its wording may
+improve, and an earlier run keeps the words it was written with. The directory
 and the SHA-256 digests of the two files refer to the unmodified source. A name
 repeated within a run keeps the rule of the gate: every record of it must pass,
 and it can never stand for a different requirement.
 
-Schema version 1 is the only version. A later version must be added to the
-reader, with frozen results of version 1 still read the same, before anything
-writes it. Fixtures of version 1 are in `test/evidence/testdata/v1`; their bytes
-do not change.
+A later version must be added to the reader, with frozen results of the earlier
+versions still read the same, before anything writes it. Fixtures are in
+`test/evidence/testdata/v1` and `test/evidence/testdata/v2`; their bytes do not
+change. The version 2 fixtures are derived: the version 2 writer wrote them from
+the version 1 fixtures, so no CI or lab run produced them.
+
+### Comparing two runs
+
+`CompareRuns` in `test/evidence/compare.go` sets two runs that `ReadRun` read side
+by side. It writes nothing, keeps both runs as read, with their directories,
+digests and evidence paths, and converts neither. Results are paired by the key
+each resolved to under its own run's lane and level, and a display name or a
+similar spelling pairs nothing. Each key either run holds or either run's lane
+requires gets one entry, sorted by key, followed by one entry for each result
+without a key, so two comparisons of one pair are equal.
+
+| Change | What it means |
+|---|---|
+| `unchanged` | One key under one legacy name in both runs |
+| `renamed` | One key under two legacy names, both of which the registry holds as aliases of that key. This is the only way a rename is shown |
+| `added` | Only the new run holds the result |
+| `removed` | Only the old run holds the result, and neither run's lane requires it as registered today |
+| `not_run` | A run recorded it as `not_run`: the test still exists, and that run says nothing of it. It comes before `added`, so a placeholder never reads as a new test |
+| `missing` | A lane requires it and the new run, or both runs, hold no record |
+| `unresolved` | It has no single identity, because its name is unknown at the run's level or shared by two results, a run holds it under two names, or the registry does not hold a name as an alias of its key. It is paired with nothing, even under the same legacy name in both runs |
+
+The change says what became of the identity, and each side's verdict says how
+the result went: the worst judged result of the run's records, or none when it
+has no record. So a required result that turned `blocked` stays `unchanged` with
+the verdict `blocked`, rather than reading as gone.
+
+`Matches` is true only when both runs are validated (`ReadRun` found no
+problem), are of one lane and one level, and every entry is `unchanged` or
+`renamed` with a judged `pass` on both sides. Everything else is listed in
+`Problems`:
+
+| The comparison finds | What it does |
+|---|---|
+| Runs of two levels | Reports it and pairs nothing: `S06/restart` at the `kind` level is not `S06/restart` at the `vm-lab` level, and neither is added or removed |
+| Runs of two lanes, including `kind` and `kind-filtered` | Reports it and still shows each result. A key a `kind-filtered` run left out is required, because its results are read as the Kind suite's |
+| A run that did not finish, failed its lane, or whose `junit.xml` differs from its summary | Reports each of `ReadRun`'s problems under that run |
+| A result `fail`, `blocked`, `not_run`, `not_applicable` or missing on either side, or a claimed `pass` its files do not support | Reports it, also when both runs agree on it: the same `blocked` result twice is not a match |
+| A result recorded more than once in a run | Reports it, because its records cannot be paired, and takes the worst record as the verdict, as the gate requires every record to hold |
+| One key judged by a different limit, by an `unset` limit or by a limit only one run recorded | Reports it: the same pass under another limit is a different check |
+| A fault in only one of the two runs | Reports it for the same reason |
+| Nothing to compare | Reports it; an empty comparison never matches |
+
+What a run measured and what it ran on are shown beside the results and decide
+nothing, because they differ between any two runs; `Matches` does not say that the
+two runs tested one candidate. Each value is `same`, `changed` or `unknown`. A
+value a run did not record, or recorded as `"unknown"`, is `unknown` beside
+anything, even beside `"unknown"` in the other run, and is never zero. A run with
+no `operations` has unknown counts, not counts of zero.
+
+To rename a legacy name, add the new name to the `Aliases` of the result in the
+registry and keep the old one. The key stays, and earlier runs stay readable.
+To retire a result, take its key out of the lanes and keep its entry: its earlier
+results still resolve, and a later run shows it as `removed`. Deleting the entry
+makes those results `unresolved` instead, which fails closed and loses the
+history. A renamed key is not a rename here: a version 2 run that recorded the old
+key no longer resolves ([Result format versions](#result-format-versions-migration-and-rollback)).
+
+The real registry holds one alias per result, so no real pair of runs shows a
+rename: the tests register an alias in a copy of it. A comparison looks at the
+results a run recorded and does not read the evidence files beyond their
+existence, so it does not replace reviewing a scenario's evidence.
+
+### Result format versions, migration and rollback
+
+The writer in `test/evidence` writes schema version 2. Version 1 stays readable
+for as long as its results are kept.
+
+A new version was needed, rather than two more fields in version 1, because
+version 1 is closed: `ReadRun` refuses a field it never had, so that nothing is
+lost without a trace. Version 2 is additive in content. A scenario of version 1
+such as
+
+```json
+{
+  "schemaVersion": "1",
+  "scenarios": [
+    { "id": "S03", "variant": "abrupt", "result": "pass", "reason": "" }
+  ]
+}
+```
+
+is written in version 2 of a `kind` run as
+
+```json
+{
+  "schemaVersion": "2",
+  "scenarios": [
+    {
+      "key": "ha-primary-pod-recovery-abrupt-later-master",
+      "displayName": "Primary database Pod termination and recovery - abrupt, later master",
+      "id": "S03",
+      "variant": "abrupt",
+      "result": "pass",
+      "reason": ""
+    }
+  ]
+}
+```
+
+and both are the same `junit.xml` case, with the same `name`, class, verdict and
+text. A file written before cases carried their key has no `<properties>` element;
+the writer's current output adds it, as [`junit.xml`](#junitxml) shows:
+
+```xml
+<testcase name="S03/abrupt" classname="scenario">
+  <system-out>Primary database Pod termination and recovery - abrupt, later master (S03/abrupt)</system-out>
+</testcase>
+```
+
+Removing `key` and `displayName` and restoring the version number gives the
+version 1 summary, with `notes` moved before `scenarios`; JSON readers do not
+depend on that order. What version 2 leaves unchanged:
+
+- **The verdict.** `Lane.Gate` matches on `id` and `variant` and does not read
+  the key. A result with a key is still failed, blocked, not run or without
+  evidence, and the five results and the Kind and filtered lanes mean what they
+  did. Writing a key decides nothing: a result with no key keeps its verdict in
+  the file, and `ReadRun` reports it.
+- **The problem lines.** They start with the legacy name as in version 1.
+- **Selectors and evidence paths.** They are the subject of #712.
+- **`junit.xml`.** A test removes the key property from the writer's output and
+  compares the rest with the frozen version 1 file byte by byte. The `name` stays
+  the legacy one; the key is added beside it after the check of its consumers
+  described under [`junit.xml`](#junitxml).
+
+A key is permanent once it is written: `ReadRun` compares it with the registry,
+so renaming a key leaves earlier version 2 runs unvalidated until a new version
+says how the old key is read. A change to a display name needs no new version.
+
+A reader written for version 1 only refuses a version 2 file with an error,
+which fails closed. In this repository, nothing outside `test/evidence` depends
+on the version: the workflows upload the evidence directory without reading it,
+and the tests in `test/installed` read the fields of version 1, which version 2
+keeps. A tool outside this repository that requires `schemaVersion` to be `"1"`
+has to accept `"2"`; one that reads `id` and `variant` is unaffected.
+
+To roll back, set `SchemaVersion` to `"1"`, write the `Summary` itself in
+`Summary.Write`, and stop setting `Properties` in `Summary.junit`. Keep the
+reader. Results written as version 2 in the meantime, with or without a key in
+`junit.xml`, stay as they are and are read as version 2: no file of either version
+is converted, in either direction.
+
+### Release evidence index
+
+A release decision needs to name the runs behind one candidate after their
+CI artifacts have expired. The release evidence index is the record that does
+so. This section defines what it holds; it is not a store, and the retention,
+integrity checks and acceptance of a candidate's evidence belong to #94 and #126.
+An index is written once for a candidate and never edited. A changed candidate
+or a new run gets a new index, and the files it refers to are never rewritten.
+
+```json
+{
+  "indexVersion": "1",
+  "createdAt": "2026-11-30T09:00:00Z",
+  "candidate": {
+    "commit": "<the 40-character commit of the candidate>",
+    "operatorImageDigest": "sha256:<digest>",
+    "cubridImageDigest": "sha256:<digest>"
+  },
+  "runs": [
+    {
+      "runId": "2026-11-29T01-00-38Z",
+      "source": "https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/<run>",
+      "schemaVersion": "2",
+      "lane": "kind",
+      "level": "kind",
+      "startedAt": "2026-11-29T01:00:38Z",
+      "finishedAt": "2026-11-29T01:43:15Z",
+      "environment": {
+        "operatorCommit": "<as summary.json records it>",
+        "operatorImageDigest": "<as summary.json records it>",
+        "cubridImageDigest": "<as summary.json records it>"
+      },
+      "scenarios": [
+        {
+          "key": "ha-primary-pod-recovery-abrupt-later-master",
+          "id": "S03",
+          "variant": "abrupt",
+          "recorded": "pass",
+          "judged": "pass",
+          "evidence": ["S03/abrupt/history.jsonl"]
+        }
+      ],
+      "files": [
+        { "path": "summary.json", "sha256": "<digest>", "state": "archived", "location": "<durable locator>" },
+        { "path": "S03/abrupt/history.jsonl", "sha256": "<digest>", "state": "listed" },
+        { "path": "S03/abrupt/cluster/index.json", "sha256": "unknown", "state": "unavailable", "reason": "<why>" }
+      ]
+    }
+  ]
+}
+```
+
+- **`candidate`** is what is being decided on. **`environment`** is what the run
+  observed, copied from `summary.json`. The two are kept apart so that a run of
+  another candidate shows as one; `unknown` stays `unknown` and matches nothing.
+- **`source`** is the run's URL or another durable locator of the original
+  bundle. An index never replaces that bundle.
+- **`schemaVersion`** is the version of that run's `summary.json`. A later reader
+  uses it to read the original file through `ReadRun`.
+- **`scenarios`** has one entry per result of the run. `key` is what `ReadRun`
+  resolved, and is left out for a result that has none; `id` and `variant` are as
+  recorded. `recorded` is the result the file holds and `judged` what its files
+  supported when the index was made, so a recorded `pass` whose evidence is gone
+  stays visible as `fail`. `evidence` lists the paths exactly as the run did.
+- **`files`** lists every file the run listed, plus `summary.json` and
+  `junit.xml`, and states what is known of each:
+
+  | `state` | What it claims |
+  |---|---|
+  | `archived` | The bytes were copied to `location`, and a copy read back from there has this SHA-256 digest |
+  | `listed` | The digest was taken from the run directory; no copy is claimed |
+  | `unavailable` | The file could not be read when the index was made, `sha256` is `unknown`, and `reason` says why |
+
+An index proves only what it says of each file. `listed` and `unavailable` never
+count as preserved, a pathname or a digest does not show that the file survived,
+and no entry turns a `blocked`, `not_run`, `fail` or missing result into a `pass`.
 
 ### `history.jsonl`
 
@@ -1215,7 +1568,7 @@ it is `deferred`.
 is named in the index or in the run's `notes`, and the scenario's `result` and
 `reason` stay as they were. The index joins the scenario's `evidence` only once
 it exists. A credential of the run found in a bundle fails the run like one in
-any other evidence file: see [Secrets](#secrets).
+any other evidence file: see [Secrets](#secrets). Such a run, or one whose evidence could not be searched, also leaves `e2e-evidence.held` beside the directory, naming the files, and the workflow then publishes nothing. A run killed before the search leaves no marker.
 
 **An interrupted collection.** A deadline, a cancellation or a Pod that
 disappears keeps what was read. The index is replaced after each source, so a
@@ -1236,6 +1589,137 @@ is abandoned at the deadline with no grace. Its collection runs only if the
 abandoned step reaches it while the process and the cluster still exist, so
 such a step may leave no `after-verdict` logs. A collection before a fault never
 outlives its scenario's context.
+
+### `cluster/`
+
+What Kubernetes showed of one scenario's cluster, collected by `StateBundle` in
+`test/evidence` next to the [logs](#logs). On Kind each scenario that collects
+logs also keeps these snapshots. On the VM lab they are kept in the same case
+as the logs, into `LAB01/cluster/`. S00 uses a cluster of its own and collects
+neither.
+
+```text
+<scenario-id>/cluster/
+  index.json            every source of every checkpoint, read or not
+  observations.jsonl    the times of the objects and of the fault, each with its clock
+  before-fault/         just before the fault
+  fault-confirmed/      as soon as the fault was confirmed
+  after-verdict/        once the result was reached
+```
+
+A checkpoint lists, in this order: the `CubridCluster`, the cluster's Pods, the
+Operator's Pods, the cluster's Services and EndpointSlices, and the Events of
+the namespace. The Operator's Pods are found by their label, so a Pod that
+replaced another one is found. The file of a source is one JSON document. Only
+named fields are copied: a Pod's identity, node, phase, Conditions and container
+states, for example, and never its environment, its specification or an
+annotation of any object. The `CubridCluster` keeps its identity, generation
+and whole `status`, and a Service, an EndpointSlice and an endpoint keep their
+whole `ports` and `conditions`; these parts are copied as they are, and go
+through the redaction like the rest. A scenario that injects no fault has no
+`fault-confirmed/`. S02 takes no snapshot before its fault, so it has no
+`before-fault/`, and S01 and S14 without a variant have only `after-verdict/`.
+
+`index.json` names the cluster, its UID, and when the scenario began. Per
+checkpoint it has one entry per source, with the `status` of the
+[logs table](#logs) and these additions:
+
+| Field or status | Meaning |
+|---|---|
+| `obsolete` | The source answered with nothing current: no Event observed in this scenario since the last checkpoint, a `status` behind the object's `metadata.generation`, or a `status` nothing keeps current: see below |
+| `listed` | How many objects the listing returned; left out when nothing was read, because an unknown count is not zero |
+| `objects` | The name, UID and node of what the file holds, except for Events. Of a `truncated` source these are the objects kept, and `listed` says how many there were |
+| `missing` | Expected objects a listing that was read did not hold. `status` is then `truncated`. A listing that failed names no object: its `reason` says it failed |
+| `lastObservedTime`, `statusAge` | Of the `CubridCluster`: its `status.lastObservedTime`, and how old that time was when it was read. `statusAge` is `unknown` when the field is unset, and it compares the runner's clock with the Operator's |
+| `gone` | Objects an earlier checkpoint saw that no longer exist under the same UID |
+| `excluded` | How many Events were left out, by why |
+
+A missing `CubridCluster` is `unavailable`, never `empty`. A Pod a fault removed
+leaves the rest of the checkpoint in place: the snapshot is partial, not
+absent.
+
+**A status nobody keeps current.** A stopped Operator cannot mark its own status
+as stale, and `generation` does not change with it, so its Conditions can stay
+`True`. The `CubridCluster` is therefore `obsolete` when its
+`status.lastObservedTime` is more than 60 seconds old, the reader rule of
+[Freshness](../observability.md#freshness), with the one second the times'
+resolution allows, or when no Operator Pod of the same checkpoint is running and
+Ready and not being deleted. Ready matters: the snapshot of the Operator's
+restart (S06) in E2E run 42333021727 found the replacement Pod `Running` with
+its manager not ready yet, and a status 17 seconds old. If the Operator's Pods
+could not be read, the `reason` says that this is not known, and the status of
+the source stays what it was. This reads a status, and it says nothing of
+whether the Operator would have changed it.
+
+**Events.** An Event is evidence of a scenario only if it was observed during
+it, and a repeated Event keeps the name of its first occurrence. So the last of
+`lastTimestamp`, `eventTime` and `series.lastObservedTime` decides, not the
+name. An Event last observed before the scenario began is excluded as
+`olderThanScenario`; one that began earlier and repeated during it is kept with
+`beganBeforeScenario`. One that a checkpoint already stored and that did not
+change since is excluded as `unchangedSinceEarlierCheckpoint`, which needs no
+clock. One with no time is `undated`. One about a `CubridCluster` of this name
+with another UID is `otherCluster`. The start of the scenario is rounded down to
+the second, because that is the resolution of these timestamps. It is a
+comparison between the runner's clock and the reporter's, so an Event close to
+the start can fall on the wrong side when those clocks differ. On the VM lab
+the run created the namespace, so no Event is excluded by age.
+
+**Clocks.** Every line of `observations.jsonl` has a time in UTC and a `clock`:
+
+| `clock` | Whose time | Used for |
+|---|---|---|
+| `test-runner` | The machine that runs the suite | Checkpoints and the fault steps `fault_issued`, `fault_confirmed` and `fault_removed` |
+| `operator` | The Operator's Pod | The transition of a Condition |
+| `node/<node>` | The kubelet of that node | The start and the end of a container |
+| `reporter/<component>` | The component that reported it | An Event |
+
+The file is sorted by time as a reading aid. The clocks are not compared, so
+the skew of each in `index.json` is `unknown`, and the order of two lines of
+different clocks is not proven. An interval between them is not a measured
+recovery time: that remains the one `timeline.jsonl` gives, on one clock. On Kind
+the clocks are one machine's; this says nothing of the VM lab's.
+
+**Not collected.** The Operator's metrics are not read. The endpoint answers
+only the token of an authorized service account, which a read-only
+snapshot neither holds nor creates, so each checkpoint names
+`operator-metrics` as `unavailable`.
+
+**Bounds.** There is no periodic collection: a scenario has at most three
+checkpoints, one source takes at most 10 seconds and a checkpoint at most 20. A
+listing of more than 8 MiB is not parsed and is `unavailable`, since a part of a
+JSON document is no part of the cluster. A source stores at most 512 KiB, the
+newest objects that fit, whole; a scenario stores at most 4 MiB, of which
+`observations.jsonl` takes at most 512 KiB; and all the scenarios of a Kind run
+store at most 64 MiB and spend at most 90 seconds. This budget is apart from the
+logs', which a run with every scenario passing used almost to its end, so that
+neither can use up the other. Added to the 5 minutes of the logs and the slowest
+suite without collection (42.8 minutes), the 90 seconds end 5.7 minutes before
+the deadline of 55. These are starting values. One passing Kind run, E2E run
+42333021727, took 46.4 minutes for the suite and spent 40.7 seconds on 32
+snapshots, the longest 2.28 seconds, stored 1.3 MiB, and spent 264.7 seconds on
+the logs of 24 scenarios. A failing run and the VM lab have not been measured.
+`startedAt` and `finishedAt` of each checkpoint show what a run spent. The
+`fault-confirmed` snapshot runs beside the scenario and costs it no time, though
+it is charged to the budget.
+
+**The verdict.** Like the logs, a snapshot never decides a result. Nothing reads
+these files to judge a scenario: the SQL checks, the fault's confirmation and
+`conditions.jsonl` stay what they were. The `fault-confirmed` snapshot watches a
+fault without changing what the fault reports. A confirmation whose context has
+ended, which the fault's runner discards, leaves neither `fault_confirmed` nor a
+snapshot, and neither does one that arrives once the scenario is concluding. A
+read or a write that fails is named in the index or in the run's `notes`, and
+the index joins the scenario's `evidence` only once it exists. A credential of the run found in these files
+fails the run like one in any other evidence file: see [Secrets](#secrets).
+
+**An interrupted collection.** A deadline, a cancellation or a Pod that
+disappears keeps what was read, and the index is replaced after each source.
+The logs keep the whole time they have after a deadline: the last snapshot, which
+otherwise comes first, stops at the deadline and the logs' time starts after it,
+and a scenario already past its deadline takes the logs first and gives the
+snapshot what is left. If the `fault-confirmed` snapshot still runs when that
+time ends, the last one is not taken and the run's `notes` say so.
 
 ### Secrets
 
@@ -1366,21 +1850,27 @@ it needs more.
     row, still count as failed.
 
     Such a read is never a conclusive read and never yields a pass on its
-    own. The write and the first read keep failing S00 through their own
-    checks, and so does the read before the Pod deletion. When the read at the
-    end of the smoke checks prints the pair, it is read once more, as the
-    installed lab harness does: the first read is noted in `S00/agreement.txt`
-    and adds the step `csql_lost_session_after_row` to `S00/timeline.jsonl`,
-    and the second read decides. If it succeeded, it is the last `csql`
-    operation the rule compares with. If it printed the pair again, the last
-    `csql` operation is inconclusive, this rule is not judged and S00 ends
-    `blocked` however early `Ready` was `True`, unless something else failed
-    it. Any other result fails S00, as on the first read: a failed statement,
-    a row that did not match, or a `csql` that could not be run.
-    `measurements.csqlLostSessionReads` counts the `csql` reads of the smoke
-    checks that printed the pair, also on a run that passed, and is `unknown`
-    when the run made no such read. The read before the Pod deletion and the
-    reads after it are not counted.
+    own. The write keeps failing S00 through its own check, and so does the
+    read before the Pod deletion. When the read after the write or the read
+    at the end of the smoke checks prints the pair, the rule of
+    [When `csql` prints `-199` and `-111`](#when-csql-prints--199-and--111)
+    applies: a server whose identity did not hold fails S00, and otherwise the
+    read is made once more. The first read is noted in `S00/agreement.txt` and
+    adds the step `csql_lost_session_after_row` to `S00/timeline.jsonl`, and the
+    second read decides. If it succeeded, it is the operation the rule compares
+    with. If the read after the write printed the pair again, that fails S00.
+    If the read at the end of the smoke checks did, the last `csql` operation
+    is inconclusive, this rule is not judged and S00 ends `blocked` however
+    early `Ready` was `True`, unless something else failed it. Any other result
+    fails S00: a failed statement, a row that did not match, or a `csql` that
+    could not be run. The identity of `cub_server` read before the write must
+    also equal the one read at the end of the smoke checks, which adds the step
+    `server_identity_compared` to `S00/timeline.jsonl`: a changed, missing,
+    ambiguous or unreadable identity fails S00, because nothing then shows that
+    the server ran the whole time. `measurements.csqlLostSessionReads` counts the `csql`
+    reads of the smoke checks that printed the pair, also on a run that passed,
+    and is `unknown` when the run made no such read. The read before the Pod
+    deletion and the reads after it are not counted.
 
     This rule can only refine the reason of a run that already failed, since
     every failed `csql` operation in the Pod already fails S00 through its own
@@ -1403,7 +1893,8 @@ it needs more.
   after that judgement, so it holds the result and reason of the summary.
   `S00/timeline.jsonl` starts with
   the steps of the installation and the smoke checks (`cluster_created`,
-  `pod_ready`, `ready_observed`, `brokers_available`, `smoke_checks_ended`)
+  `pod_ready`, `ready_observed`, `brokers_available`, `server_identity_compared`,
+  `smoke_checks_ended`)
   before the steps of the Pod deletion. The checks above, and the limits
   below, are made as before.
 - **Limits:** `install_limit`, `ready_limit`.
@@ -2238,6 +2729,22 @@ because they move the master.
   operator before #326 left it. Then the DB Pods are deleted one at a time,
   slaves first and the master last, each after the one before is `Ready`
   again and CUBRID reports one master and two slaves.
+- **Starting roles:** the roles are read before the action until one member
+  is an active master and the others standby slaves, for up to 15 seconds,
+  while the only other state read is `to-be-master` beside that master. POC-50
+  measured that state ending by itself within 3.6 s (#704). Any other state,
+  `to-be-master` with no active master, two active masters, a change of the
+  active master or a state that outlasts the 15 seconds fails the step. Then
+  `PrimaryResolved` is read for up to 30 seconds, two Operator passes, until
+  it is `True` with `SinglePrimaryObserved` and that master. Only `False`
+  with `PrimaryObservationIncomplete` is read again, since a pass that read
+  the member in `to-be-master` leaves it until the next pass; any other
+  reading, `MultiplePrimariesObserved` above all (#702), fails the step at
+  once. A member read in `to-be-master` and each `PrimaryResolved` reading
+  other than `True` are recorded in `S14/<variant>/result.txt`, in the
+  scenario's failure reason, and in the measurements
+  `startingToBeMasterMembers` and `startingIncompleteReads`; a failure
+  message carries them too.
 - **The Operator must** (ADR-0003, #324): keep the token the
   members hold as `previousToken` and keep calling them with it; drop it only
   once every member was started after the rotation and accepts the new token.

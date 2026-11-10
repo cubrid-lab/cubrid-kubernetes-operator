@@ -55,8 +55,16 @@ type BackupManifest struct {
 	Level int `json:"level"`
 	// SourceInstance is the pod that ran the backup.
 	SourceInstance string `json:"sourceInstance"`
-	// SourceRole is the ADR-0005 role of the source at backup start (master or
-	// slave); rebuild policy depends on this (ADR-0006).
+	// SourceRole is the role the source member itself reported from `cubrid
+	// heartbeat status` when the backup started: master, slave or replica, or
+	// unknown for a member with no HA role (a standalone server). A request
+	// that named another role fails instead. After backupdb the role is read
+	// again: a master or a seed source whose role differs then is not
+	// uploaded, and a slave or replica that CUBRID promoted meanwhile is
+	// uploaded with the role it had at the start. The role is not held for
+	// the whole backup, and a change after the last reading is not excluded.
+	// Rebuild policy depends on this (ADR-0006). A manifest written by an
+	// earlier manager carries the role the request named.
 	SourceRole string `json:"sourceRole"`
 	// CreatedAt is the backup completion time (RFC3339).
 	CreatedAt string `json:"createdAt"`

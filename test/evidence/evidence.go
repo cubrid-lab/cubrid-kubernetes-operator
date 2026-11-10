@@ -37,7 +37,7 @@ import (
 )
 
 // SchemaVersion is the version of summary.json this package writes.
-const SchemaVersion = "1"
+const SchemaVersion = "2"
 
 // Unknown is the value of a measurement that could not be taken. It is never
 // replaced by zero.
@@ -118,8 +118,30 @@ type Summary struct {
 	planned map[Requirement]int
 }
 
-// Name is the stable scenario key used by required-lane gates and evidence:
-// "S03/abrupt", or "S00" without a variant. Use DisplayName for reports.
+// summaryV2 is summary.json as schema version 2 holds it: version 1 with a key
+// and a display name added to each scenario. Everything version 1 records stays
+// in its place, so a reader of version 1's fields reads version 2 the same.
+// Scenarios replaces the field of the embedded Summary. Summary stays what code
+// works with: a key depends on the lane and level, which are known when a run
+// is written, and a version 1 file can hold no such field.
+type summaryV2 struct {
+	Summary
+	Scenarios []scenarioV2 `json:"scenarios"`
+}
+
+// scenarioV2 is a scenario with the identity the registry gives it under the
+// lane and level of its run. Both are left out for a result the registry does
+// not hold in that lane and level, such as a lab lane run at the kind level.
+// The key is the identity; the display name is for people, and nothing matches
+// on it.
+type scenarioV2 struct {
+	Key         string `json:"key,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	Scenario
+}
+
+// Name is the legacy name used by required-lane gates, evidence paths and
+// JUnit: "S03/abrupt", or "S00" without a variant. Use DisplayName for reports.
 func (s Scenario) Name() string {
 	if s.Variant == "" {
 		return s.ID
@@ -152,8 +174,8 @@ func (s Scenario) description() string {
 // DisplayName is the scenario's name for people: its description followed by
 // its stable key, or the key alone when no description is known. It appears
 // in the <system-out> element of junit.xml, not in the testcase name. Name()
-// and the ID and Variant fields stay what gates, filters, summary.json and
-// comparisons with earlier results use.
+// and the ID and Variant fields stay what gates, filters and comparisons with
+// earlier results use, and summary.json keeps them beside the canonical key.
 func (s Scenario) DisplayName() string {
 	if description := s.description(); description != "" {
 		return description + " (" + s.Name() + ")"
@@ -162,8 +184,9 @@ func (s Scenario) DisplayName() string {
 }
 
 // problemLine is the line of a run's problems about this scenario. It starts
-// "<key>: <detail>", the format of schema version 1, which readers may match
-// on; the description, when there is one, only follows it.
+// with the legacy name, "<name>: <detail>", the format of schema versions 1 and
+// 2, which readers may match on; the description, when there is one, only
+// follows it.
 func (s Scenario) problemLine(detail string) string {
 	if description := s.description(); description != "" {
 		return s.Name() + ": " + detail + " (" + description + ")"
@@ -340,11 +363,25 @@ func (s Summary) Write(dir string, r *Redactor) error {
 	if err := r.WriteFile(dir, "junit.xml", append([]byte(xml.Header), append(report, '\n')...)); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(out, "", "  ")
+	data, err := json.MarshalIndent(out.versioned(), "", "  ")
 	if err != nil {
 		return err
 	}
 	return r.WriteFile(dir, "summary.json", append(data, '\n'))
+}
+
+// versioned adds to each scenario its key and display name, resolved under the
+// lane and level this run records. It decides nothing: a result with no key
+// keeps its verdict here, and ReadRun reports it.
+func (s Summary) versioned() summaryV2 {
+	out := summaryV2{Summary: s, Scenarios: make([]scenarioV2, len(s.Scenarios))}
+	for i, sc := range s.Scenarios {
+		out.Scenarios[i].Scenario = sc
+		if entry, err := registry.resolveResult(s.Lane, s.Environment.Level, sc); err == nil {
+			out.Scenarios[i].Key, out.Scenarios[i].DisplayName = entry.Key, entry.Name
+		}
+	}
+	return out
 }
 
 type junitSuite struct {
@@ -358,11 +395,14 @@ type junitSuite struct {
 }
 
 type junitCase struct {
-	Name      string        `xml:"name,attr"`
-	Classname string        `xml:"classname,attr"`
-	Failure   *junitMessage `xml:"failure,omitempty"`
-	Error     *junitMessage `xml:"error,omitempty"`
-	Skipped   *junitMessage `xml:"skipped,omitempty"`
+	Name      string `xml:"name,attr"`
+	Classname string `xml:"classname,attr"`
+	// Properties holds the canonical key of a case the registry knows. The
+	// name stays the legacy one, which a case is matched on.
+	Properties []junitProperty `xml:"properties>property,omitempty"`
+	Failure    *junitMessage   `xml:"failure,omitempty"`
+	Error      *junitMessage   `xml:"error,omitempty"`
+	Skipped    *junitMessage   `xml:"skipped,omitempty"`
 	// SystemOut explains a scenario without changing the historical JUnit
 	// testcase name used for result grouping and comparisons.
 	SystemOut string `xml:"system-out,omitempty"`
@@ -371,6 +411,14 @@ type junitCase struct {
 type junitMessage struct {
 	Message string `xml:"message,attr"`
 }
+
+type junitProperty struct {
+	Name  string `xml:"name,attr"`
+	Value string `xml:"value,attr"`
+}
+
+// junitKeyProperty names the property that holds a case's canonical key.
+const junitKeyProperty = "key"
 
 // junitRunCase names the JUnit case of the run as a whole.
 const junitRunCase = "run"
@@ -385,6 +433,9 @@ func (s Summary) junit() junitSuite {
 		c := junitCase{Name: sc.Name(), Classname: "scenario"}
 		if sc.description() != "" {
 			c.SystemOut = sc.DisplayName()
+		}
+		if entry, err := registry.resolveResult(s.Lane, s.Environment.Level, sc); err == nil {
+			c.Properties = []junitProperty{{Name: junitKeyProperty, Value: entry.Key}}
 		}
 		switch sc.Result {
 		case Pass:
