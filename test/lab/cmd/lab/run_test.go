@@ -55,6 +55,13 @@ type fakeLab struct {
 // any later one at once, or "hang" (kubectl hangs, its children holding its
 // output, one of them in a session of its own). A get of the Lease returns
 // the last renewal stored, or else another holder's Lease.
+//
+// A renewal is stored when the version file is renamed into place, last, as
+// an API server stores a write whole or not at all. The run cancels a renewal
+// still in flight when the command ends, which kills the script; killed
+// before that rename, it has changed nothing a replace or delete checks
+// (#777). With the file slow-store, every renewal after the flaky one pauses
+// just before that rename, so that the run's cancellation lands there.
 func newFakeLab(t *testing.T, marker, create, renew string) *fakeLab {
 	t.Helper()
 	dir := t.TempDir()
@@ -122,9 +129,16 @@ case "$*" in
 		exit 1 ;;
 	esac
 	v=$((v+1))
-	echo "$v" > "$dir/version"
 	printf '%%s\n' "$body" >> "$dir/renewals"
-	printf '%%s' "$body" | sed 's/"resourceVersion":"[0-9]*"/"resourceVersion":"'"$v"'"/' > "$dir/lease"
+	printf '%%s' "$body" | sed 's/"resourceVersion":"[0-9]*"/"resourceVersion":"'"$v"'"/' > "$dir/lease.new"
+	mv "$dir/lease.new" "$dir/lease"
+	if [ -e "$dir/slow-store" ] && [ -e "$dir/flaked" ]; then
+		: > "$dir/storing"
+		sleep 2
+	fi
+	echo "$v" > "$dir/version.new"
+	mv "$dir/version.new" "$dir/version"
+	rm -f "$dir/storing"
 	if [ "$renew" = flaky ] && ! [ -e "$dir/flaked" ]; then
 		: > "$dir/flaked"
 		echo 'Unable to connect to the server: net/http: request canceled (Client.Timeout exceeded)' >&2
@@ -485,6 +499,29 @@ func TestRunKeepsALeaseWhoseRenewalWasStoredThoughItFailed(t *testing.T) {
 	options, _ := os.ReadFile(f.deleteOptions)
 	if want := `"resourceVersion":"` + strings.TrimSpace(string(version)) + `"`; !strings.Contains(string(options), want) {
 		t.Fatalf("the release carried %q, want %s", options, want)
+	}
+}
+
+// A renewal that the run cancels when the command ends, while the API server
+// stores it, leaves the Lease as this run last wrote it, and the release
+// deletes it (#777).
+func TestRunReleasesTheLeaseAfterARenewalCancelledWhileItWasStored(t *testing.T) {
+	f := newFakeLab(t, labA, "ok", "flaky")
+	if err := os.WriteFile(filepath.Join(f.dir, "slow-store"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code := run(labArgsFor(3*time.Second, "sleep", "1.5"), callerEnviron(t), f.kubectl, newSignalSource().notify)
+	if code != 0 {
+		t.Fatalf("run() = %d, want 0", code)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "flaked")); err != nil {
+		t.Fatal("no renewal was stored and failed")
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "storing")); err != nil {
+		t.Fatal("no renewal was cancelled while it was stored")
+	}
+	if !f.released() {
+		t.Error("the Lease was not released")
 	}
 }
 
