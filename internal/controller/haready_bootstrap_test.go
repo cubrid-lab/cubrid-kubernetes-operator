@@ -127,11 +127,17 @@ func TestHAReadyFollowsTheHABootstrap(t *testing.T) {
 // While the HA bootstrap is Failed, Ready is False with the bootstrap's
 // failure reason, also when every instance is ready, and also when not all
 // are (#770): the bootstrap waits for a person and is not starting. Two
-// observed masters on ready instances still come first. A bootstrap in
-// progress or completed leaves Ready to the instances and the roles.
-func TestReadyFollowsAFailedHABootstrap(t *testing.T) {
+// observed masters on ready instances still come first. While the bootstrap
+// runs and a member is not yet recorded as seeded, Ready is False: with
+// InstancesNotReady while not every instance is ready, and with
+// MemberNotSeeded once every member's server runs, as while the last member
+// catches up after its seed restore. A completed bootstrap leaves Ready to
+// the instances and the roles.
+func TestReadyFollowsTheHABootstrap(t *testing.T) {
 	const name = "ready-boot"
 	failed := databasev1alpha1.DatabaseStatus{Phase: databasePhaseFailed, PrimaryCreated: true,
+		SeededMembers: []string{name + "-1"}}
+	seeding := databasev1alpha1.DatabaseStatus{Phase: databasePhaseCreated, PrimaryCreated: true,
 		SeededMembers: []string{name + "-1"}}
 	completed := databasev1alpha1.DatabaseStatus{Phase: databasePhaseCreated, PrimaryCreated: true, HAConfigured: true,
 		SeededMembers: []string{name + "-1", name + "-2"}}
@@ -144,6 +150,9 @@ func TestReadyFollowsAFailedHABootstrap(t *testing.T) {
 		"failed, every instance ready":    {db: failed, ready: 3, reason: stoppedSeedReason},
 		"failed, an instance not ready":   {db: failed, ready: 2, reason: stoppedSeedReason},
 		"failed, two masters observed":    {db: failed, ready: 3, multiple: true, reason: reasonMultiplePrimaries},
+		"seeding, every instance ready":   {db: seeding, ready: 3, reason: reasonMemberNotSeeded},
+		"seeding, an instance not ready":  {db: seeding, ready: 2, reason: "InstancesNotReady"},
+		"seeding, two masters observed":   {db: seeding, ready: 3, multiple: true, reason: reasonMultiplePrimaries},
 		"completed, every instance ready": {db: completed, ready: 3, reason: "ClusterReady"},
 	} {
 		t.Run(tc, func(t *testing.T) {
@@ -154,6 +163,9 @@ func TestReadyFollowsAFailedHABootstrap(t *testing.T) {
 			if ready == nil || ready.Reason != want.reason ||
 				(ready.Status == metav1.ConditionTrue) != (want.reason == "ClusterReady") {
 				t.Fatalf("Ready = %+v, want reason %s", ready, want.reason)
+			}
+			if want.reason == reasonMemberNotSeeded && !strings.Contains(ready.Message, name+"-2") {
+				t.Errorf("Ready's message %q does not name the member not seeded", ready.Message)
 			}
 			if want.reason == stoppedSeedReason {
 				if !strings.Contains(ready.Message, "the master changed") {

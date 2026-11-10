@@ -24,6 +24,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -808,13 +809,20 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		Expect(status.Seeding).To(BeNil())
 	})
 
-	It("keeps HAReady False while a restored member is not recorded as seeded, and True once it is (#770)", func() {
+	It("keeps HAReady and Ready False while a restored member is not recorded as seeded, and True once it is (#770)", func() {
 		f := restoringFromActiveSource("src-haready")
-		haReady := func() *metav1.Condition {
+		// Every member's server runs, so every Pod is ready: only the record
+		// of the bootstrap can keep Ready off.
+		sts := &appsv1.StatefulSet{}
+		Expect(k8sClient.Get(ctx, f.key, sts)).To(Succeed())
+		sts.Status.Replicas, sts.Status.ReadyReplicas = 3, 3
+		Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
+		conditions := func() (ha, ready *metav1.Condition) {
 			got := &databasev1alpha1.CubridCluster{}
 			Expect(k8sClient.Get(ctx, f.key, got)).To(Succeed())
 			Expect(meta.IsStatusConditionTrue(got.Status.Conditions, conditionReplicationHealthy)).To(BeTrue())
-			return meta.FindStatusCondition(got.Status.Conditions, conditionHAReady)
+			return meta.FindStatusCondition(got.Status.Conditions, conditionHAReady),
+				meta.FindStatusCondition(got.Status.Conditions, conditionReady)
 		}
 
 		By("the last member restored and applying its source's log with pages still waiting")
@@ -824,19 +832,23 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 		status := reconcileOnce(f)
 		Expect(status.SeededMembers).To(Equal([]string{f.peer}))
 		Expect(reason(f)).To(Equal("SeedCatchUpInProgress"))
-		ha := haReady()
-		Expect(ha.Status).To(Equal(metav1.ConditionFalse))
-		Expect(ha.Reason).To(Equal(reasonMemberNotSeeded))
-		Expect(ha.Message).To(ContainSubstring(f.last))
+		ha, ready := conditions()
+		for _, c := range []*metav1.Condition{ha, ready} {
+			Expect(c.Status).To(Equal(metav1.ConditionFalse), c.Type)
+			Expect(c.Reason).To(Equal(reasonMemberNotSeeded), c.Type)
+			Expect(c.Message).To(ContainSubstring(f.last), c.Type)
+		}
 
 		By("the member caught up and recorded as seeded")
 		f.prober.answers[f.last] = slaveOf(f.peer, 10, 0, 0)
 		status = reconcileOnce(f)
 		Expect(status.HAConfigured).To(BeTrue())
 		reconcileOnce(f)
-		ha = haReady()
+		ha, ready = conditions()
 		Expect(ha.Status).To(Equal(metav1.ConditionTrue))
 		Expect(ha.Reason).To(Equal(reasonHealthyReplication))
+		Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+		Expect(ready.Reason).To(Equal("ClusterReady"))
 	})
 
 	DescribeTable("waits without using an attempt while the member has not caught up with an active source",
