@@ -165,7 +165,7 @@ func (f brokerProcessKill) Remove(context.Context) error { return nil }
 func s05Steps(r *haRun) {
 	for _, variant := range s05Variants {
 		It("S05/"+variant+": clients recover from a Broker failure, and it causes no database failover",
-			Label("S05", evidence.Requirement{ID: "S05", Variant: variant}.Label()), func() {
+			Label(evidence.KindLabels("S05", evidence.Requirement{ID: "S05", Variant: variant}.Label())...), func() {
 				r.enter(nil)
 				r.s05(variant)
 			})

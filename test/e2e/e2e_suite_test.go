@@ -61,6 +61,11 @@ var (
 // To skip CertManager installation, set: CERT_MANAGER_INSTALL_SKIP=true
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
+	// Before anything is built: a filter that selects nothing would otherwise
+	// skip the suite's setup and its gate, and the run would pass.
+	if err := checkSelection(PreviewSpecs(suiteDescription)); err != nil {
+		t.Fatal(err)
+	}
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting cubrid-kubernetes-operator e2e test suite\n")
 	RunSpecs(t, suiteDescription)
 }

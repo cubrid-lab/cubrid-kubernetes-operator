@@ -590,6 +590,24 @@ scenario must therefore also select `ha-setup`, for example
 `-ginkgo.focus=S03` or `E2E_LABEL_FILTER=S03`) the scenario runs on a cluster
 that is not formed yet, and its result says nothing about the scenario.
 
+Each scenario step also carries the descriptive key of its check from the
+registry (`test/evidence/registry.go`), and each scenario ID its family key:
+`ha-replication` beside `S02`, `ha-primary-pod-recovery` beside `S03`,
+`ha-primary-pod-recovery-graceful` beside `S03-graceful`. A key selects
+exactly the steps of the older label, which stays valid, so
+`E2E_LABEL_FILTER='ha-setup || ha-primary-pod-recovery-graceful'` is the same
+run as the example above. Before the suite sets anything up, it fails when a
+key does not select the same steps as its older label, when a label or
+`/pattern/` of `E2E_LABEL_FILTER` matches no step (a misspelled key, a VM-lab
+check such as `installed-backup-complete`, a family with no Kind check such as
+`S04`), or when the filters select no step at all. Without that check Ginkgo
+would run no step, skip the suite's setup and its gate, and report success.
+A negated term is checked the same way: `!ha-replicaton` would otherwise run
+every step, so it fails too. `make test-e2e` creates the Kind cluster before
+the suite starts, so a rejected filter still costs that cluster's creation.
+The results, `summary.json`, `junit.xml` and evidence paths keep their
+existing names; the labels only select.
+
 A run that selects specs, for example with `E2E_LABEL_FILTER`, is a filtered
 local baseline and does not validate the `kind` lane. It is judged as the
 lane `kind-filtered`: every scenario it selected a step of must pass, a run

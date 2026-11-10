@@ -71,7 +71,8 @@ type s00Evidence struct {
 // The official CUBRID image is linux/amd64 only, so on another architecture
 // the scenario is skipped: a skip is "not run", never a pass.
 func s00Scenario() {
-	Context("S00 standalone cluster with the real CUBRID image", Label("db", "S00"), Ordered, func() {
+	labels := Label(evidence.KindLabels("db", "S00")...)
+	Context("S00 standalone cluster with the real CUBRID image", labels, Ordered, func() {
 		const (
 			s00Namespace = "cubrid-s00"
 			// clientNamespace holds the remote client of the Broker Services.

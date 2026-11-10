@@ -193,7 +193,7 @@ func canI(c rbacCheck) (bool, error) {
 // contract on the cluster the earlier steps formed.
 func s14Step(r *haRun) {
 	const text = "S14: the Instance Manager refuses a caller without the token, and the token is not shown anywhere"
-	It(text, Label("S14"), func() {
+	It(text, Label(evidence.KindLabels("S14")...), func() {
 		r.enter(nil)
 		result := evidence.Scenario{ID: "S14", Result: evidence.Fail,
 			Reason: "a check of S14 failed; see the test output"}
