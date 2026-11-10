@@ -110,7 +110,7 @@ func TestSeedVerdict(t *testing.T) {
 	now := time.Now()
 	const source = holderPeer
 	caughtUpAnswer := RoleObservation{Reachable: true, Role: databasev1alpha1.RoleSlave, ObservedAt: now,
-		Replication: &ReplicationObservation{Source: source, CopiedEOF: logAt(10, 5)}}
+		Replication: &ReplicationObservation{Source: source, FinalLSA: logAt(10, 5), CopiedEOF: logAt(10, 5)}}
 	with := func(edit func(*RoleObservation)) RoleObservation {
 		o := caughtUpAnswer
 		r := *o.Replication
@@ -144,6 +144,12 @@ func TestSeedVerdict(t *testing.T) {
 		{"caught up past the target", true, nil, logAt(9, 100), false, true, caughtUpAnswer, seedSeeded},
 		{"no target read yet", true, nil, nil, false, true, caughtUpAnswer, seedCatchingUp},
 		{"the copy ends before the target", true, nil, logAt(10, 6), false, true, caughtUpAnswer, seedCatchingUp},
+		{"the copy reached the target, the applier is behind it", true, nil, logAt(10, 5), false, true, with(func(o *RoleObservation) { o.Replication.FinalLSA = logAt(10, 4) }), seedCatchingUp},
+		{"the copy and the applier past the target", true, nil, logAt(9, 100), false, true, with(func(o *RoleObservation) {
+			o.Replication.FinalLSA = logAt(11, 0)
+			o.Replication.CopiedEOF = logAt(11, 8)
+		}), seedSeeded},
+		{"no applier position read", true, nil, logAt(10, 5), false, true, with(func(o *RoleObservation) { o.Replication.FinalLSA = nil }), seedCatchingUp},
 		{"pages wait", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Replication.DelayedPages = 1 }), seedCatchingUp},
 		{"a failed change", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Replication.FailCount = 1 }), seedCatchingUp},
 		{"another source", true, nil, logAt(10, 0), false, true, with(func(o *RoleObservation) { o.Replication.Source = holderFirst }), seedCatchingUp},
@@ -786,7 +792,7 @@ var _ = Describe("The source of a member's copy after the first peer joined (#28
 	// waiting and failed changes that could not be applied.
 	slaveOf := func(source string, copied, delayed, failed int64) RoleObservation {
 		o := answersSlave
-		o.Replication = &ReplicationObservation{Source: source, CopiedEOF: logAt(copied, 0), DelayedPages: delayed, FailCount: failed}
+		o.Replication = &ReplicationObservation{Source: source, CopiedEOF: logAt(copied, 0), DelayedPages: delayed, FailCount: failed, FinalLSA: logAt(copied, 0)}
 		return o
 	}
 	// restoringFromActiveSource starts the restore of the last member from
