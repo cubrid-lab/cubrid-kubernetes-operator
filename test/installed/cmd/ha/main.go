@@ -255,13 +255,18 @@ func run(ctx context.Context, args []string) (runErr error) {
 		}
 		return err
 	}
-	if check != "" {
+	set := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	// An empty -check is refused as an unknown key rather than read as no
+	// selection, and a key names a VM-lab check, which a Kind-level run is not.
+	if set["check"] {
+		if cfg.Level == "kind" {
+			return fmt.Errorf("-check %s names a VM-lab check; run it with -level vm-lab", check)
+		}
 		if err := cfg.SelectCheck(check); err != nil {
 			return err
 		}
 	}
-	set := map[string]bool{}
-	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	if set["backup-denied-ready-limit"] && !cfg.BackupDeniedCredentials {
 		return errors.New("-backup-denied-ready-limit needs -backup-denied-credentials")
 	}

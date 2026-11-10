@@ -135,8 +135,9 @@ refuses `-backup-bucket`. The command refuses, before it opens the cluster
 and with the keys it takes, a key combined with an option that selects a
 check, a misspelled key, a family key such as `installed-backup`, a Kind key
 such as `operator-failure-recovery-restart`, a legacy name such as
-`S06/restart`, and the keys of the installed smoke. The options keep working
-without `-check`.
+`S06/restart`, the keys of the installed smoke, an empty `-check`, and
+`-check` with `-level kind`, because a key names a VM-lab check. The options
+keep working without `-check`.
 
 ## Database member requests
 

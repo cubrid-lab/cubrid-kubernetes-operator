@@ -78,10 +78,15 @@ func run(ctx context.Context, args []string) (runErr error) {
 		}
 		return err
 	}
-	if check != "" {
-		set := false
-		flags.Visit(func(f *flag.Flag) { set = set || f.Name == "namespace-mode" })
-		if set {
+	set := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	// An empty -check is refused as an unknown key rather than read as no
+	// selection, and a key names a VM-lab check, which a Kind-level run is not.
+	if set["check"] {
+		if cfg.Level == "kind" {
+			return fmt.Errorf("-check %s names a VM-lab check; run it with -level vm-lab", check)
+		}
+		if set["namespace-mode"] {
 			return fmt.Errorf("-check %s selects the namespace mode by itself; remove -namespace-mode", check)
 		}
 		mode, err := installed.SmokeCheck(check)

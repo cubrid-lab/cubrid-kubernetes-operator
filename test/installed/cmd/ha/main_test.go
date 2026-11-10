@@ -21,7 +21,10 @@ import (
 	"testing"
 )
 
-const vmLab = "--level=vm-lab"
+const (
+	vmLab      = "--level=vm-lab"
+	haSQLSmoke = "-check=installed-ha-sql-smoke"
+)
 
 // A check the HA command does not run, or one combined with a legacy option
 // that selects a check, is refused before any cluster is opened.
@@ -32,11 +35,13 @@ func TestAWrongCheckIsRefusedBeforeACluster(t *testing.T) {
 	}{
 		{[]string{vmLab, "-check=operator-failure-recovery-restart"}, "Kind check"},
 		{[]string{vmLab, "-check=installed-backup"}, "family"},
+		{[]string{vmLab, "-check="}, "unknown scenario key"},
+		{[]string{"--level=kind", haSQLSmoke}, "-level vm-lab"},
 		{[]string{vmLab, "-check=S06/restart"}, "unknown scenario key"},
 		{[]string{vmLab, "-check=installed-standalone-sql-smoke"}, "installed smoke command"},
 		{[]string{vmLab, "-check=installed-backup-complete"}, "needs -backup-bucket"},
-		{[]string{vmLab, "-check=installed-ha-sql-smoke", "-backup-bucket=b"}, "remove -backup-bucket"},
-		{[]string{vmLab, "-check=installed-ha-sql-smoke", "-fault=operator-restart"}, "remove -fault"},
+		{[]string{vmLab, haSQLSmoke, "-backup-bucket=b"}, "remove -backup-bucket"},
+		{[]string{vmLab, haSQLSmoke, "-fault=operator-restart"}, "remove -fault"},
 		{[]string{vmLab, "-check=installed-restore-new-cluster-exact", "-backup-bucket=b", "-restore"},
 			"remove -restore"},
 	} {

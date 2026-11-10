@@ -43,6 +43,8 @@ func TestAWrongCheckIsRefusedBeforeACluster(t *testing.T) {
 	for _, args := range [][]string{
 		{vmLab, "-check=installed-ha-sql-smoke"},
 		{vmLab, "-check=LAB00"},
+		{vmLab, "-check="},
+		{"--level=kind", "-check=installed-standalone-sql-smoke"},
 		{vmLab, "-check=standalone-database-sql"},
 		{vmLab, "-check=installed-standalone-sql-smoke", "-namespace-mode=fresh"},
 	} {
