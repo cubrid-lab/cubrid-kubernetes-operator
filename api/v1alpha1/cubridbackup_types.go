@@ -22,9 +22,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // CubridBackupSpec defines the desired state of CubridBackup (ADR-0007).
 // v1alpha1 backups are Instance Manager-executed, single-shot, full backups.
 //
