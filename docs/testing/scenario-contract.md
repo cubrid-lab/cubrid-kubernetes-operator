@@ -615,7 +615,10 @@ local baseline and does not validate the `kind` lane. It is judged as the
 lane `kind-filtered`: every scenario it selected a step of must pass, a run
 that selected none does not pass, and its `summary.json` names that lane so
 it cannot be mistaken for a full run. The scenarios it did not select are
-listed as `not_run`.
+listed as `not_run`. The selection is made before the suite starts, so when
+the suite's setup fails and no step is reported, each selected scenario is
+recorded as `blocked` with the setup failure as the reason and the run still
+fails; it is never reported as a lane that requires nothing.
 
 ### When CI runs the Kind lane
 
