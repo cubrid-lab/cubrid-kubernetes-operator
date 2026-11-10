@@ -11,7 +11,9 @@ approve release candidates. A contributor's PR does not automatically grant
 write access, merge rights or a release role. Contributions are welcomed
 within the agreed issue scope; no response-time guarantee is made.
 
-A behavior change is reviewed by the other maintainer. Release publication
+A behavior change is reviewed by the other maintainer; until v0.1 is released
+one maintainer's review is enough to merge
+([CONTRIBUTING.md](../CONTRIBUTING.md#until-v01-is-released)). Release publication
 requires reviewed evidence for the candidate; public source availability is
 not a claim of production readiness. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 

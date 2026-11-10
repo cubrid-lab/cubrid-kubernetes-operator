@@ -146,6 +146,10 @@ mandatory. Optional AI reviews are **advisory**.
 4. Preserve the existing **two-maintainer independent review**, high-risk
    safety/HA/backup and release checks, and final maintainer merge
    decision. No CI result or AI summary grants automatic approval.
+   Until v0.1 is released, one maintainer's review is enough to merge, as
+   [CONTRIBUTING.md — Until v0.1 is released](CONTRIBUTING.md#until-v01-is-released)
+   sets out; the PR then says it merged without a second maintainer's
+   review.
 
 Before an agent opens or revises a PR, compare its final code diff with the
 human-readable title, summary, linked issue's acceptance criteria, changed
@@ -157,7 +161,9 @@ For required scenario limits, test zero/unset, unmeasured, boundary and
 exceeded values against the same gate semantics as other scenarios. Do not
 introduce an exception merely to keep CI green. If a required reviewer is
 unavailable, leave approval pending rather than self-waiving the independent
-maintainer review or substituting an AI review.
+maintainer review or substituting an AI review. Until v0.1 is released the
+second maintainer's review is not required; an AI review still never stands
+in for the one maintainer's review.
 
 ## PR overlap, priority, and readiness
 
