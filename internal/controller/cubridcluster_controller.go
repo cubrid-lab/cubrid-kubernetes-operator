@@ -1179,6 +1179,17 @@ func (r *CubridClusterReconciler) updateStatus(ctx context.Context, cluster *dat
 	return ctrl.Result{RequeueAfter: r.idleRetry(cluster)}, nil
 }
 
+// bootstrapProgress says where the HA bootstrap stands, in BootstrapReady's
+// reason and message: it may copy a member, wait for its source or for a
+// person, or be held by its configuration.
+func bootstrapProgress(cluster *databasev1alpha1.CubridCluster) string {
+	c := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady)
+	if c == nil || c.Reason == "" {
+		return "BootstrapReady is not reported yet"
+	}
+	return fmt.Sprintf("BootstrapReady is %s with %s: %s", c.Status, c.Reason, c.Message)
+}
+
 // setRecoveryFailedHAReady keeps HAReady False with the failure's reason
 // (BootstrapReady's) once the recovery bootstrap of an HA cluster is Failed,
 // as a failed HA bootstrap does (#770); msg says that the recovery failed.
@@ -1187,7 +1198,8 @@ func setRecoveryFailedHAReady(cluster *databasev1alpha1.CubridCluster, msg strin
 		return
 	}
 	reason := reasonBootstrapRecoveryFailed
-	if c := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady); c != nil && c.Reason != "" {
+	if c := meta.FindStatusCondition(cluster.Status.Conditions, conditionBootstrapReady); c != nil &&
+		c.Status == metav1.ConditionFalse && c.Reason != "" {
 		reason = c.Reason
 	}
 	setCondition(cluster, conditionHAReady, metav1.ConditionFalse, reason, msg)
@@ -1264,7 +1276,7 @@ func (r *CubridClusterReconciler) setReady(cluster *databasev1alpha1.CubridClust
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonMemberNotSeeded,
 			fmt.Sprintf("%d/%d instances ready, but %s", ready, desired, unseededMessage))
 		setCondition(cluster, conditionProgressing, metav1.ConditionTrue, reasonMemberNotSeeded,
-			"the HA bootstrap is copying the database to the other members, see BootstrapReady")
+			"the HA bootstrap has not finished; "+bootstrapProgress(cluster))
 	case instancesReady && unresolvedLong:
 		setCondition(cluster, conditionReady, metav1.ConditionFalse, reasonPrimaryUnresolved,
 			fmt.Sprintf("%d/%d instances ready, but no single primary is resolved since %s (%s)", ready, desired,

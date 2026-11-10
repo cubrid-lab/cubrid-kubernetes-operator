@@ -152,7 +152,10 @@ the HA bootstrap has not recorded as holding the database
 (#768), and when the resolved master is such a member, neither `PrimaryOnly`
 nor the fallback of `PreferStandby` takes it: it may lack what an earlier
 master committed, so the backup waits with `MasterNotSeeded` and no other
-member is taken in its place (#770). A target
+member is taken in its place (#770). Once the bootstrap completed
+(`status.databases[].haConfigured`) every member counts as recorded: the
+bootstrap records that only after it seeded every member, also for a cluster
+whose status predates `seededMembers`. A target
 already recorded is not judged again on its replication (an earlier dispatch
 to it may run); it must still be authoritatively a slave. Pod readiness is
 not evaluated, and the `FencingRequired` check has no input because no step

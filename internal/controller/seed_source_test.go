@@ -313,6 +313,29 @@ func TestSeedAdmitted(t *testing.T) {
 	if seedAdmitted(notCreated) != nil {
 		t.Fatal("a cluster with no database recorded as created rejects members")
 	}
+
+	// A completed bootstrap (haConfigured) seeded every member before it
+	// recorded the completion, and promotableMembers cannot change, so every
+	// member is admitted: also one whose status was written before
+	// seededMembers existed (#193), after a failover made a peer master
+	// (#770).
+	for name, seeded := range map[string][]string{"recorded": {holderPeer, seededMember}, "before seededMembers": nil} {
+		completed := cluster(seeded...)
+		completed.Status.Databases[0].HAConfigured = true
+		admitted = seedAdmitted(completed)
+		for _, member := range []string{holderFirst, holderPeer, seededMember} {
+			if admitted != nil && !admitted(member) {
+				t.Fatalf("completed bootstrap, %s: %s is not admitted", name, member)
+			}
+		}
+		peerMaster := PrimaryResolution{CurrentPrimary: holderPeer, Status: metav1.ConditionTrue, Reason: singlePrimary}
+		obs := map[string]RoleObservation{holderFirst: obsUnknown(), holderPeer: obsMaster(), seededMember: obsUnknown()}
+		got := selectBackupTarget([]string{holderFirst, holderPeer, seededMember}, obs, nil, nil, admitted, peerMaster,
+			databasev1alpha1.PrimaryOnly, false, false, testNow)
+		if !got.Selected || got.Instance != holderPeer {
+			t.Fatalf("completed bootstrap, %s: a backup on the master %s got %+v", name, holderPeer, got)
+		}
+	}
 }
 
 func TestObservationFromStatus_MasterNotYetActive(t *testing.T) {

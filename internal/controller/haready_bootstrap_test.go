@@ -103,8 +103,11 @@ func TestHAReadyFollowsTheHABootstrap(t *testing.T) {
 			if want.recovery {
 				cluster.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
 					Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI}}
-				cluster.Status.Bootstrap = &databasev1alpha1.BootstrapStatus{
-					Phase: databasev1alpha1.BootstrapComplete, TargetMember: first}
+				phase := databasev1alpha1.BootstrapSeedingReplicas
+				if want.db.HAConfigured {
+					phase = databasev1alpha1.BootstrapComplete
+				}
+				cluster.Status.Bootstrap = &databasev1alpha1.BootstrapStatus{Phase: phase, TargetMember: first}
 			}
 			r := &CubridClusterReconciler{Prober: &memberProber{master: first}}
 			r.reconcileHAStatus(context.Background(), cluster, 3)
@@ -121,6 +124,28 @@ func TestHAReadyFollowsTheHABootstrap(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A cluster without HA has no HA bootstrap, so what its status records about
+// databases never keeps HAReady or Ready off as an unseeded member would.
+// A failed recovery takes BootstrapReady's reason only from a BootstrapReady
+// that is False, as a failed HA bootstrap does.
+func TestHABootstrapRecordGuards(t *testing.T) {
+	standalone := bootstrapAt("standalone-boot", databasev1alpha1.DatabaseStatus{Phase: databasePhaseCreated, PrimaryCreated: true})
+	standalone.Spec.HighAvailability.Enabled = false
+	standalone.Spec.Topology.PromotableMembers = 1
+	if reason, _, ok := haBootstrapUnadmitted(standalone); ok {
+		t.Errorf("a standalone cluster is unadmitted with %s", reason)
+	}
+
+	recovery := haCluster("recovery-guard")
+	recovery.Status.Bootstrap = &databasev1alpha1.BootstrapStatus{Phase: databasev1alpha1.BootstrapFailed}
+	setCondition(recovery, conditionBootstrapReady, metav1.ConditionTrue, "PeersSeeded", "copied")
+	setRecoveryFailedHAReady(recovery, "the recovery failed")
+	if got := meta.FindStatusCondition(recovery.Status.Conditions, conditionHAReady); got == nil ||
+		got.Status != metav1.ConditionFalse || got.Reason != reasonBootstrapRecoveryFailed {
+		t.Errorf("HAReady = %+v, want False with %s when BootstrapReady is not False", got, reasonBootstrapRecoveryFailed)
 	}
 }
 
@@ -157,6 +182,11 @@ func TestReadyFollowsTheHABootstrap(t *testing.T) {
 	} {
 		t.Run(tc, func(t *testing.T) {
 			cluster := bootstrapAt(name, want.db)
+			if want.db.Phase != databasePhaseFailed && !want.db.HAConfigured {
+				// A seeding that does not go on: the copy is not being made.
+				setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, "SeedStorageNotConfigured",
+					"spec.objectStorage with a bucket is needed to copy it to the other members")
+			}
 			r := &CubridClusterReconciler{Clock: func() time.Time { return testNow }}
 			r.setReady(cluster, want.ready, 3, want.multiple)
 			ready := meta.FindStatusCondition(cluster.Status.Conditions, conditionReady)
@@ -164,8 +194,17 @@ func TestReadyFollowsTheHABootstrap(t *testing.T) {
 				(ready.Status == metav1.ConditionTrue) != (want.reason == "ClusterReady") {
 				t.Fatalf("Ready = %+v, want reason %s", ready, want.reason)
 			}
-			if want.reason == reasonMemberNotSeeded && !strings.Contains(ready.Message, name+"-2") {
-				t.Errorf("Ready's message %q does not name the member not seeded", ready.Message)
+			if want.reason == reasonMemberNotSeeded {
+				if !strings.Contains(ready.Message, name+"-2") {
+					t.Errorf("Ready's message %q does not name the member not seeded", ready.Message)
+				}
+				// Progressing says the bootstrap is unfinished and what
+				// BootstrapReady says about it, not that a copy is being made.
+				p := meta.FindStatusCondition(cluster.Status.Conditions, conditionProgressing)
+				if p == nil || p.Status != metav1.ConditionTrue || p.Reason != reasonMemberNotSeeded ||
+					!strings.Contains(p.Message, "SeedStorageNotConfigured") || strings.Contains(p.Message, "copying") {
+					t.Errorf("Progressing = %+v, want True with %s carrying BootstrapReady's reason", p, reasonMemberNotSeeded)
+				}
 			}
 			if want.reason == stoppedSeedReason {
 				if !strings.Contains(ready.Message, "the master changed") {

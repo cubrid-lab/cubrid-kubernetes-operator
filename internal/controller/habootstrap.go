@@ -374,14 +374,18 @@ func seedHolders(status *databasev1alpha1.DatabaseStatus, holder string) []strin
 // as created or restored, whether a member is recorded as holding it: the
 // member it was created or restored on, or a member in seededMembers. A
 // member seeded across a change of master is not recorded (#768). It is nil,
-// admitting every member, when no database is recorded as created.
+// admitting every member, when no database is recorded as created, or when
+// every such database's bootstrap completed (haConfigured): the bootstrap
+// records that only after it seeded every member, and promotableMembers
+// cannot change. That also admits the members of a cluster whose bootstrap
+// completed before seededMembers was recorded (#193, #770).
 func seedAdmitted(cluster *databasev1alpha1.CubridCluster) func(string) bool {
 	if !cluster.Spec.HighAvailability.Enabled {
 		return nil
 	}
 	var recorded []*databasev1alpha1.DatabaseStatus
 	for i := range cluster.Status.Databases {
-		if cluster.Status.Databases[i].PrimaryCreated {
+		if cluster.Status.Databases[i].PrimaryCreated && !cluster.Status.Databases[i].HAConfigured {
 			recorded = append(recorded, &cluster.Status.Databases[i])
 		}
 	}
@@ -458,6 +462,9 @@ func haBootstrapFailure(cluster *databasev1alpha1.CubridCluster) (reason, msg st
 // recorded every member was seeded, as promotableMembers cannot change. A
 // cluster that records no bootstrap gives nothing.
 func haBootstrapUnadmitted(cluster *databasev1alpha1.CubridCluster) (reason, msg string, ok bool) {
+	if !cluster.Spec.HighAvailability.Enabled {
+		return "", "", false
+	}
 	if reason, msg, failed := haBootstrapFailure(cluster); failed {
 		return reason, msg, true
 	}
