@@ -233,9 +233,18 @@ func TestSelectBackupTarget_RefusesMasterNotRecordedAsSeeded(t *testing.T) {
 		if got.Selected || got.Reason != reasonMasterNotSeeded {
 			t.Errorf("%s: got %+v, want no target with MasterNotSeeded", pref, got)
 		}
+		// The master's Instance Manager here shows no backup-source-role
+		// check. The refusal comes first: no target is selected, so the
+		// capability hold, asked only of a selected master, does not apply.
+		if reason, _, held := backupCapabilityHold(got, noStandby, testNow); held {
+			t.Errorf("%s: an unseeded master was held for its capabilities (%s) instead of refused", pref, reason)
+		}
 		got = selectBackupTarget(members, noStandby, nil, nil, nil, resolvedPrimary(), pref, false, false, testNow)
 		if !got.Selected || got.Instance != c0 {
 			t.Errorf("%s with every member admitted: got %+v, want the master %s", pref, got, c0)
+		}
+		if _, _, held := backupCapabilityHold(got, noStandby, testNow); !held {
+			t.Errorf("%s: a seeded master without the backup-source-role check was not held", pref)
 		}
 	}
 	logEndUnread := map[string]RoleObservation{c0: masterLogEndUnread(), c1: obsSlave(), c2: obsSlave()}

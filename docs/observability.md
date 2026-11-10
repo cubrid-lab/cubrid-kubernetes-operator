@@ -454,7 +454,11 @@ is recorded once when it begins. A `PreferStandby` backup that fell back to
 the master because the master's log end was not read stays on this wait and
 does not begin the log-end wait again. A recorded master is not sent the
 start again; an operation it holds under the backup's key is followed, and
-otherwise the wait is bounded as below.
+otherwise the wait is bounded as below. A master the HA bootstrap has not
+recorded as holding the database is not selected at all (`MasterNotSeeded`,
+#770), so that refusal comes before this wait, whatever its Instance Manager
+shows; a `PreferStandby` backup refused so after the log-end wait stays on
+`MasterNotSeeded` and does not begin the log-end wait again.
 
 The `BackupFailed` Event carries the message of the CubridBackup's `Ready`
 condition. A backup whose start was not confirmed within 30 minutes
