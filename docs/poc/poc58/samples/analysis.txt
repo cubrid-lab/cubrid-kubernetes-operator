@@ -1,0 +1,650 @@
+trials: 22 (14 cuts, 8 rolling replacements)
+states: {'done': 22}
+
+Cuts (cell, trials, caught up, took over, tables equal at takeover, acks reading->writes on, both active, acked missing on final master, keys differ, final equal):
+  full-h0  all       2  caught-up 2  took-over 2 (h-0@9.59s/in-cut, h-0@10.4s/in-cut)  new-master-as-reading 1  old-read/as-reading 2/0  acks-in-window 0  both-active [38.0, 36.0]  missing-on-master [44, 44]  keys-differ [44, 44]  equal 0
+  full-h0  new-only  4  caught-up 4  took-over 4 (h-0@9.8s/in-cut, h-0@10.17s/in-cut, h-0@10.02s/in-cut, h-0@9.77s/in-cut)  new-master-as-reading 4  old-read/as-reading 4/4  acks-in-window 0  both-active [37.0, 36.0, 37.0, 38.0]  missing-on-master [0, 0, 0, 0]  keys-differ [0, 0, 0, 0]  equal 4
+  full-h1  new-only  4  caught-up 4  took-over 4 (h-0@9.63s/in-cut, h-0@9.2s/in-cut, h-0@10.37s/in-cut, h-0@9.54s/in-cut)  new-master-as-reading 4  old-read/as-reading 4/4  acks-in-window 0  both-active [37.0, 38.0, 36.0, 38.0]  missing-on-master [0, 0, 0, 0]  keys-differ [0, 0, 0, 0]  equal 4
+  hb       new-only  4  caught-up 4  took-over 4 (h-0@47.43s/healed, h-0@46.76s/healed, h-0@46.71s/healed, h-0@47.77s/healed)  new-master-as-reading 4  old-read/as-reading 0/0  acks-in-window 0  both-active [0.0, 0.0, 0.0, 0.0]  missing-on-master [0, 0, 0, 0]  keys-differ [0, 0, 0, 0]  equal 4
+
+Rolling replacements (trial, replacements, master stops, grace expired, acked, acked missing on final master, on no member, unacknowledged rows, keys differ, final equal):
+  roll-n1   reps 3 master-stops 2 expired 0 acked 600 missing-on-master 0 on-no-member 0 unacked-rows 0 keys-differ 0 equal True results {'disabled': 1103, 'ack': 600, 'other:-191': 63, 'other:-353': 3, 'other:-199': 1}
+  roll-n2   reps 3 master-stops 2 expired 0 acked 598 missing-on-master 0 on-no-member 0 unacked-rows 0 keys-differ 0 equal True results {'disabled': 1099, 'ack': 598, 'other:-191': 63, 'other:-353': 3}
+  roll-n3   reps 3 master-stops 2 expired 0 acked 593 missing-on-master 0 on-no-member 0 unacked-rows 0 keys-differ 0 equal True results {'disabled': 1094, 'ack': 593, 'other:-191': 62, 'other:-353': 3}
+  roll-n4   reps 3 master-stops 2 expired 0 acked 593 missing-on-master 0 on-no-member 0 unacked-rows 0 keys-differ 0 equal True results {'disabled': 1087, 'ack': 593, 'other:-191': 63, 'other:-353': 3}
+  roll-n5   reps 3 master-stops 2 expired 0 acked 585 missing-on-master 0 on-no-member 0 unacked-rows 0 keys-differ 0 equal True results {'disabled': 1082, 'ack': 585, 'other:-191': 62, 'other:-353': 3}
+  roll-n6   reps 3 master-stops 2 expired 0 acked 583 missing-on-master 0 on-no-member 0 unacked-rows 0 keys-differ 0 equal True results {'disabled': 1080, 'ack': 583, 'other:-191': 62, 'other:-353': 3}
+  roll-n7   reps 3 master-stops 2 expired 0 acked 587 missing-on-master 0 on-no-member 0 unacked-rows 0 keys-differ 0 equal True results {'disabled': 1076, 'ack': 587, 'other:-191': 61, 'other:-353': 3}
+  roll-n8   reps 3 master-stops 2 expired 0 acked 587 missing-on-master 0 on-no-member 0 unacked-rows 0 keys-differ 0 equal True results {'disabled': 1080, 'ack': 587, 'other:-191': 62, 'other:-353': 3}
+
+== full-h0-all-n1 state done load (3.08, 3.73)
+  kind: cut
+  shape: full-h0
+  writes: all
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.07
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}, 'h-2': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}}
+  master_eof_precut: (151, 8712)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 9.59, 'when': 'in-cut', 'same': False, 'rows_new': 16, 'rows_old': 23, 'old_mode': 'active', 'new_final': (151, 8808), 'new_copied_eof': (151, 8808), 'new_apply_delay': 0, 'old_eof': (152, 3632), 'writes_on': -9.71, 'new_equals_reading': True, 'old_read': True, 'old_equals_reading': False, 'all_equal_precut': False}
+  hold: 45.2
+  both_active_s: 38.0
+  old_master_writes_after_cut: 44
+  new_writes: 105
+  results: Counter({'disabled': 162, 'ack': 120, 'other:-670': 15, 'other:-191': 3})
+  final_read: ('not-equal', 302)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 88
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 120, equal False
+  missing_on_master: 44 [('h-1', 'full-h0-all-n1/g1', 16, 17), ('h-1', 'full-h0-all-n1/g1', 17, 18), ('h-1', 'full-h0-all-n1/g1', 18, 19), ('h-1', 'full-h0-all-n1/g1', 19, 20), ('h-1', 'full-h0-all-n1/g1', 20, 21), ('h-1', 'full-h0-all-n1/g1', 21, 22), ('h-1', 'full-h0-all-n1/g1', 22, 23), ('h-1', 'full-h0-all-n1/g1', 23, 24), ('h-1', 'full-h0-all-n1/g1', 24, 25), ('h-1', 'full-h0-all-n1/g1', 25, 26), ('h-1', 'full-h0-all-n1/g1', 26, 27), ('h-1', 'full-h0-all-n1/g1', 27, 28)]
+  missing_somewhere: 88 [('h-0', 'full-h0-all-n1/g1', 26, 17), ('h-0', 'full-h0-all-n1/g1', 27, 18), ('h-0', 'full-h0-all-n1/g1', 28, 19), ('h-0', 'full-h0-all-n1/g1', 29, 20), ('h-0', 'full-h0-all-n1/g1', 30, 21), ('h-0', 'full-h0-all-n1/g1', 31, 22), ('h-0', 'full-h0-all-n1/g1', 32, 23), ('h-0', 'full-h0-all-n1/g1', 33, 24), ('h-0', 'full-h0-all-n1/g1', 34, 25), ('h-0', 'full-h0-all-n1/g1', 35, 26), ('h-0', 'full-h0-all-n1/g1', 36, 27), ('h-0', 'full-h0-all-n1/g1', 37, 28)]
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]
+
+== full-h0-all-n2 state done load (3.75, 3.37)
+  kind: cut
+  shape: full-h0
+  writes: all
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.1
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8760), 'copied_eof': (151, 8760), 'master_eof': (151, 8760)}, 'h-2': {'final': (151, 8760), 'copied_eof': (151, 8760), 'master_eof': (151, 8760)}}
+  master_eof_precut: (151, 8760)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 10.4, 'when': 'in-cut', 'same': False, 'rows_new': 17, 'rows_old': 25, 'old_mode': 'active', 'new_final': (151, 8856), 'new_copied_eof': (151, 8856), 'new_apply_delay': 0, 'old_eof': (152, 5760), 'writes_on': -10.52, 'new_equals_reading': False, 'old_read': True, 'old_equals_reading': False, 'all_equal_precut': False}
+  hold: 45.3
+  both_active_s: 36.0
+  old_master_writes_after_cut: 44
+  new_writes: 105
+  results: Counter({'disabled': 163, 'ack': 119, 'other:-670': 15, 'other:-191': 3, 'ack-199-111': 1})
+  final_read: ('not-equal', 302)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 88
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 120, equal False
+  missing_on_master: 44 [('h-1', 'full-h0-all-n2/g1', 16, 17), ('h-1', 'full-h0-all-n2/g1', 17, 18), ('h-1', 'full-h0-all-n2/g1', 18, 19), ('h-1', 'full-h0-all-n2/g1', 19, 20), ('h-1', 'full-h0-all-n2/g1', 20, 21), ('h-1', 'full-h0-all-n2/g1', 21, 22), ('h-1', 'full-h0-all-n2/g1', 22, 23), ('h-1', 'full-h0-all-n2/g1', 23, 24), ('h-1', 'full-h0-all-n2/g1', 24, 25), ('h-1', 'full-h0-all-n2/g1', 25, 26), ('h-1', 'full-h0-all-n2/g1', 26, 27), ('h-1', 'full-h0-all-n2/g1', 27, 28)]
+  missing_somewhere: 88 [('h-0', 'full-h0-all-n2/g1', 26, 17), ('h-0', 'full-h0-all-n2/g1', 27, 18), ('h-0', 'full-h0-all-n2/g1', 28, 19), ('h-0', 'full-h0-all-n2/g1', 29, 20), ('h-0', 'full-h0-all-n2/g1', 30, 21), ('h-0', 'full-h0-all-n2/g1', 31, 22), ('h-0', 'full-h0-all-n2/g1', 32, 23), ('h-0', 'full-h0-all-n2/g1', 33, 24), ('h-0', 'full-h0-all-n2/g1', 34, 25), ('h-0', 'full-h0-all-n2/g1', 35, 26), ('h-0', 'full-h0-all-n2/g1', 36, 27), ('h-0', 'full-h0-all-n2/g1', 37, 28)]
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]
+
+== full-h0-new-only-n1 state done load (2.19, 3.26)
+  kind: cut
+  shape: full-h0
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.07
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}, 'h-2': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}}
+  master_eof_precut: (151, 8808)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 9.8, 'when': 'in-cut', 'same': True, 'rows_new': 16, 'rows_old': 16, 'old_mode': 'active', 'new_final': (151, 8808), 'new_copied_eof': (151, 8808), 'new_apply_delay': 0, 'old_eof': (151, 11496), 'writes_on': 0.18, 'new_equals_reading': True, 'old_read': True, 'old_equals_reading': True, 'all_equal_precut': True}
+  hold: 45.3
+  both_active_s: 37.0
+  old_master_writes_after_cut: 0
+  new_writes: 76
+  results: Counter({'ack': 91, 'disabled': 30})
+  final_read: ('equal', 61)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 91, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== full-h0-new-only-n2 state done load (3.33, 1.98)
+  kind: cut
+  shape: full-h0
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.06
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8720), 'copied_eof': (151, 8720), 'master_eof': (151, 8720)}, 'h-2': {'final': (151, 8720), 'copied_eof': (151, 8720), 'master_eof': (151, 8720)}}
+  master_eof_precut: (151, 8720)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 10.17, 'when': 'in-cut', 'same': True, 'rows_new': 16, 'rows_old': 16, 'old_mode': 'active', 'new_final': (151, 8816), 'new_copied_eof': (151, 8816), 'new_apply_delay': 0, 'old_eof': (151, 11456), 'writes_on': 0.21, 'new_equals_reading': True, 'old_read': True, 'old_equals_reading': True, 'all_equal_precut': True}
+  hold: 45.3
+  both_active_s: 36.0
+  old_master_writes_after_cut: 0
+  new_writes: 76
+  results: Counter({'ack': 91, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 91, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== full-h0-new-only-n3 state done load (3.75, 4.38)
+  kind: cut
+  shape: full-h0
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.06
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}, 'h-2': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}}
+  master_eof_precut: (151, 8712)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 10.02, 'when': 'in-cut', 'same': True, 'rows_new': 16, 'rows_old': 16, 'old_mode': 'active', 'new_final': (151, 8808), 'new_copied_eof': (151, 8808), 'new_apply_delay': 0, 'old_eof': (151, 11496), 'writes_on': 0.22, 'new_equals_reading': True, 'old_read': True, 'old_equals_reading': True, 'all_equal_precut': True}
+  hold: 45.3
+  both_active_s: 37.0
+  old_master_writes_after_cut: 0
+  new_writes: 76
+  results: Counter({'ack': 91, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 91, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== full-h0-new-only-n4 state done load (2.67, 3.48)
+  kind: cut
+  shape: full-h0
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.07
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}, 'h-2': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}}
+  master_eof_precut: (151, 8712)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 9.77, 'when': 'in-cut', 'same': True, 'rows_new': 16, 'rows_old': 16, 'old_mode': 'active', 'new_final': (151, 8808), 'new_copied_eof': (151, 8808), 'new_apply_delay': 0, 'old_eof': (151, 11448), 'writes_on': 0.21, 'new_equals_reading': True, 'old_read': True, 'old_equals_reading': True, 'all_equal_precut': True}
+  hold: 45.2
+  both_active_s: 38.0
+  old_master_writes_after_cut: 0
+  new_writes: 76
+  results: Counter({'ack': 91, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 91, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== full-h1-new-only-n1 state done load (3.43, 2.67)
+  kind: cut
+  shape: full-h1
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.07
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}, 'h-2': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}}
+  master_eof_precut: (151, 8808)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 9.63, 'when': 'in-cut', 'same': True, 'rows_new': 16, 'rows_old': 16, 'old_mode': 'active', 'new_final': (151, 8808), 'new_copied_eof': (151, 8808), 'new_apply_delay': 0, 'old_eof': (151, 11496), 'writes_on': 0.18, 'new_equals_reading': True, 'old_read': True, 'old_equals_reading': True, 'all_equal_precut': True}
+  hold: 45.3
+  both_active_s: 37.0
+  old_master_writes_after_cut: 0
+  new_writes: 77
+  results: Counter({'ack': 92, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 92, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== full-h1-new-only-n2 state done load (3.74, 2.82)
+  kind: cut
+  shape: full-h1
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.09
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}, 'h-2': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}}
+  master_eof_precut: (151, 8712)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 9.2, 'when': 'in-cut', 'same': True, 'rows_new': 16, 'rows_old': 16, 'old_mode': 'active', 'new_final': (151, 8808), 'new_copied_eof': (151, 8808), 'new_apply_delay': 0, 'old_eof': (151, 11496), 'writes_on': 0.2, 'new_equals_reading': True, 'old_read': True, 'old_equals_reading': True, 'all_equal_precut': True}
+  hold: 45.3
+  both_active_s: 38.0
+  old_master_writes_after_cut: 0
+  new_writes: 76
+  results: Counter({'ack': 91, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 91, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== full-h1-new-only-n3 state done load (4.27, 3.04)
+  kind: cut
+  shape: full-h1
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.05
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8760), 'copied_eof': (151, 8760), 'master_eof': (151, 8760)}, 'h-2': {'final': (151, 8760), 'copied_eof': (151, 8760), 'master_eof': (151, 8760)}}
+  master_eof_precut: (151, 8760)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 10.37, 'when': 'in-cut', 'same': True, 'rows_new': 16, 'rows_old': 16, 'old_mode': 'active', 'new_final': (151, 8856), 'new_copied_eof': (151, 8856), 'new_apply_delay': 0, 'old_eof': (151, 11544), 'writes_on': 0.18, 'new_equals_reading': True, 'old_read': True, 'old_equals_reading': True, 'all_equal_precut': True}
+  hold: 45.3
+  both_active_s: 36.0
+  old_master_writes_after_cut: 0
+  new_writes: 75
+  results: Counter({'ack': 90, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 90, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== full-h1-new-only-n4 state done load (4.74, 3.4)
+  kind: cut
+  shape: full-h1
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.17
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8720), 'copied_eof': (151, 8720), 'master_eof': (151, 8720)}, 'h-2': {'final': (151, 8720), 'copied_eof': (151, 8720), 'master_eof': (151, 8720)}}
+  master_eof_precut: (151, 8720)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 9.54, 'when': 'in-cut', 'same': True, 'rows_new': 16, 'rows_old': 16, 'old_mode': 'active', 'new_final': (151, 8816), 'new_copied_eof': (151, 8816), 'new_apply_delay': 0, 'old_eof': (151, 11504), 'writes_on': 0.2, 'new_equals_reading': True, 'old_read': True, 'old_equals_reading': True, 'all_equal_precut': True}
+  hold: 45.3
+  both_active_s: 38.0
+  old_master_writes_after_cut: 0
+  new_writes: 76
+  results: Counter({'ack': 91, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 91, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== hb-new-only-n1 state done load (2.62, 2.21)
+  kind: cut
+  shape: hb
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.12
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8760), 'copied_eof': (151, 8808), 'master_eof': (151, 8808)}, 'h-2': {'final': (151, 8712), 'copied_eof': (151, 8808), 'master_eof': (151, 8808)}}
+  master_eof_precut: (151, 8808)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 47.43, 'when': 'healed', 'same': False, 'rows_new': 16, 'rows_old': 0, 'old_mode': 'other', 'new_final': (152, 6840), 'new_copied_eof': (152, 6840), 'new_apply_delay': 0, 'old_eof': None, 'writes_on': 0.18, 'new_equals_reading': True, 'old_read': False, 'old_equals_reading': None, 'all_equal_precut': False}
+  hold: 45.1
+  both_active_s: 0.0
+  old_master_writes_after_cut: 0
+  new_writes: 39
+  results: Counter({'ack': 54, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 54, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== hb-new-only-n2 state done load (1.98, 1.93)
+  kind: cut
+  shape: hb
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.08
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8760), 'copied_eof': (151, 8760), 'master_eof': (151, 8760)}, 'h-2': {'final': (151, 8760), 'copied_eof': (151, 8760), 'master_eof': (151, 8760)}}
+  master_eof_precut: (151, 8760)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 46.76, 'when': 'healed', 'same': False, 'rows_new': 16, 'rows_old': 0, 'old_mode': 'other', 'new_final': (152, 6792), 'new_copied_eof': (152, 6792), 'new_apply_delay': 0, 'old_eof': None, 'writes_on': 0.17, 'new_equals_reading': True, 'old_read': False, 'old_equals_reading': None, 'all_equal_precut': False}
+  hold: 45.3
+  both_active_s: 0.0
+  old_master_writes_after_cut: 0
+  new_writes: 38
+  results: Counter({'ack': 53, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 53, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== hb-new-only-n3 state done load (1.94, 2.66)
+  kind: cut
+  shape: hb
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.06
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8760), 'copied_eof': (151, 8760), 'master_eof': (151, 8760)}, 'h-2': {'final': (151, 8760), 'copied_eof': (151, 8760), 'master_eof': (151, 8760)}}
+  master_eof_precut: (151, 8760)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 46.71, 'when': 'healed', 'same': False, 'rows_new': 16, 'rows_old': 0, 'old_mode': 'active', 'new_final': (152, 6792), 'new_copied_eof': (152, 6792), 'new_apply_delay': 0, 'old_eof': None, 'writes_on': 0.16, 'new_equals_reading': True, 'old_read': False, 'old_equals_reading': None, 'all_equal_precut': False}
+  hold: 45.1
+  both_active_s: 0.0
+  old_master_writes_after_cut: 0
+  new_writes: 39
+  results: Counter({'ack': 54, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 54, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== hb-new-only-n4 state done load (3.12, 2.64)
+  kind: cut
+  shape: hb
+  writes: new-only
+  caught_up: True
+  reading_n: 1
+  reading_to_cut: 1.09
+  copy_delay: {'h-0': 0, 'h-2': 0}
+  apply_delay: {'h-0': 0, 'h-2': 0}
+  precut_rows: 16
+  precut_pos: {'h-0': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}, 'h-2': {'final': (151, 8712), 'copied_eof': (151, 8712), 'master_eof': (151, 8712)}}
+  master_eof_precut: (151, 8808)
+  acks_reading_to_writes_on: 0
+  attempts_reading_to_writes_on: 0
+  takeover: {'member': 'h-0', 'secs': 47.77, 'when': 'healed', 'same': False, 'rows_new': 16, 'rows_old': 0, 'old_mode': 'other', 'new_final': (152, 6840), 'new_copied_eof': (152, 6840), 'new_apply_delay': 0, 'old_eof': None, 'writes_on': 0.28, 'new_equals_reading': True, 'old_read': False, 'old_equals_reading': None, 'all_equal_precut': False}
+  hold: 45.1
+  both_active_s: 0.0
+  old_master_writes_after_cut: 0
+  new_writes: 38
+  results: Counter({'ack': 53, 'disabled': 30})
+  final_read: ('equal', 60)
+  roles: {'h-0': 'master', 'h-1': 'slave', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-0, read ['h-0', 'h-1', 'h-2'], acked 53, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== roll-n1 state done load (4.62, 3.3)
+  kind: roll
+  reps: [{'member': 'h-2', 'role': 'slave', 't': 1794287306.542, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.4}, {'member': 'h-1', 'role': 'master', 't': 1794287335.94, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-0', 'rejoin_s': 25.3}, {'member': 'h-0', 'role': 'master', 't': 1794287366.238, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 25.1}]
+  results: Counter({'disabled': 1103, 'ack': 600, 'other:-191': 63, 'other:-353': 3, 'other:-199': 1})
+  errors_outside_own_replacement: 0
+  master_stop_acks: [{'member': 'h-1', 'before': 25, 'during': 0, 'gap': 1.8}, {'member': 'h-0', 'before': 24, 'during': 1, 'gap': 1.9}]
+  final_read: ('equal', 60)
+  roles: {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-1, read ['h-0', 'h-1', 'h-2'], acked 600, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== roll-n2 state done load (3.15, 3.09)
+  kind: roll
+  reps: [{'member': 'h-2', 'role': 'slave', 't': 1794289249.792, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.8}, {'member': 'h-1', 'role': 'master', 't': 1794289279.581, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-0', 'rejoin_s': 24.5}, {'member': 'h-0', 'role': 'master', 't': 1794289309.117, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.5}]
+  results: Counter({'disabled': 1099, 'ack': 598, 'other:-191': 63, 'other:-353': 3})
+  errors_outside_own_replacement: 0
+  master_stop_acks: [{'member': 'h-1', 'before': 25, 'during': 0, 'gap': 1.6}, {'member': 'h-0', 'before': 25, 'during': 0, 'gap': 1.9}]
+  final_read: ('equal', 60)
+  roles: {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-1, read ['h-0', 'h-1', 'h-2'], acked 598, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== roll-n3 state done load (2.69, 3.64)
+  kind: roll
+  reps: [{'member': 'h-2', 'role': 'slave', 't': 1794290085.866, 'hb_s': 2.1, 'server_s': 2.1, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.2}, {'member': 'h-1', 'role': 'master', 't': 1794290115.105, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-0', 'rejoin_s': 24.4}, {'member': 'h-0', 'role': 'master', 't': 1794290144.505, 'hb_s': 2.1, 'server_s': 2.1, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.3}]
+  results: Counter({'disabled': 1094, 'ack': 593, 'other:-191': 62, 'other:-353': 3})
+  errors_outside_own_replacement: 0
+  master_stop_acks: [{'member': 'h-1', 'before': 25, 'during': 0, 'gap': 1.8}, {'member': 'h-0', 'before': 25, 'during': 0, 'gap': 1.6}]
+  final_read: ('equal', 60)
+  roles: {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-1, read ['h-0', 'h-1', 'h-2'], acked 593, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== roll-n4 state done load (4.01, 1.78)
+  kind: roll
+  reps: [{'member': 'h-2', 'role': 'slave', 't': 1794291344.249, 'hb_s': 2.1, 'server_s': 2.1, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.1}, {'member': 'h-1', 'role': 'master', 't': 1794291373.354, 'hb_s': 2.2, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-0', 'rejoin_s': 24.4}, {'member': 'h-0', 'role': 'master', 't': 1794291402.768, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 25.4}]
+  results: Counter({'disabled': 1087, 'ack': 593, 'other:-191': 63, 'other:-353': 3})
+  errors_outside_own_replacement: 0
+  master_stop_acks: [{'member': 'h-1', 'before': 25, 'during': 0, 'gap': 1.9}, {'member': 'h-0', 'before': 24, 'during': 0, 'gap': 1.4}]
+  final_read: ('equal', 60)
+  roles: {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-1, read ['h-0', 'h-1', 'h-2'], acked 593, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== roll-n5 state done load (1.78, 2.97)
+  kind: roll
+  reps: [{'member': 'h-2', 'role': 'slave', 't': 1794291570.482, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.3}, {'member': 'h-1', 'role': 'master', 't': 1794291599.798, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-0', 'rejoin_s': 24.3}, {'member': 'h-0', 'role': 'master', 't': 1794291629.146, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.6}]
+  results: Counter({'disabled': 1082, 'ack': 585, 'other:-191': 62, 'other:-353': 3})
+  errors_outside_own_replacement: 0
+  master_stop_acks: [{'member': 'h-1', 'before': 24, 'during': 1, 'gap': 1.9}, {'member': 'h-0', 'before': 24, 'during': 1, 'gap': 1.8}]
+  final_read: ('equal', 60)
+  roles: {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-1, read ['h-0', 'h-1', 'h-2'], acked 585, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== roll-n6 state done load (2.97, 3.85)
+  kind: roll
+  reps: [{'member': 'h-2', 'role': 'slave', 't': 1794291796.091, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.3}, {'member': 'h-1', 'role': 'master', 't': 1794291825.353, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-0', 'rejoin_s': 24.5}, {'member': 'h-0', 'role': 'master', 't': 1794291854.811, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.2}]
+  results: Counter({'disabled': 1080, 'ack': 583, 'other:-191': 62, 'other:-353': 3})
+  errors_outside_own_replacement: 0
+  master_stop_acks: [{'member': 'h-1', 'before': 25, 'during': 0, 'gap': 1.8}, {'member': 'h-0', 'before': 24, 'during': 1, 'gap': 1.8}]
+  final_read: ('equal', 60)
+  roles: {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-1, read ['h-0', 'h-1', 'h-2'], acked 583, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== roll-n7 state done load (3.85, 1.32)
+  kind: roll
+  reps: [{'member': 'h-2', 'role': 'slave', 't': 1794292021.202, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.2}, {'member': 'h-1', 'role': 'master', 't': 1794292050.387, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-0', 'rejoin_s': 24.4}, {'member': 'h-0', 'role': 'master', 't': 1794292079.774, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.4}]
+  results: Counter({'disabled': 1076, 'ack': 587, 'other:-191': 61, 'other:-353': 3})
+  errors_outside_own_replacement: 0
+  master_stop_acks: [{'member': 'h-1', 'before': 24, 'during': 1, 'gap': 1.6}, {'member': 'h-0', 'before': 24, 'during': 1, 'gap': 1.2}]
+  final_read: ('equal', 60)
+  roles: {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-1, read ['h-0', 'h-1', 'h-2'], acked 587, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+== roll-n8 state done load (1.32, 1.95)
+  kind: roll
+  reps: [{'member': 'h-2', 'role': 'slave', 't': 1794292246.257, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.3}, {'member': 'h-1', 'role': 'master', 't': 1794292275.57, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-0', 'rejoin_s': 24.4}, {'member': 'h-0', 'role': 'master', 't': 1794292304.928, 'hb_s': 2.1, 'server_s': 2.2, 'expired': False, 'rejoined': True, 'master_after': 'h-1', 'rejoin_s': 24.5}]
+  results: Counter({'disabled': 1080, 'ack': 587, 'other:-191': 62, 'other:-353': 3})
+  errors_outside_own_replacement: 0
+  master_stop_acks: [{'member': 'h-1', 'before': 24, 'during': 1, 'gap': 1.5}, {'member': 'h-0', 'before': 24, 'during': 1, 'gap': 1.9}]
+  final_read: ('equal', 60)
+  roles: {'h-0': 'slave', 'h-1': 'master', 'h-2': 'slave'}
+  applier_670: 0
+  final master h-1, read ['h-0', 'h-1', 'h-2'], acked 587, equal True
+  missing_on_master: 0 []
+  missing_somewhere: 0 []
+  on_no_member: 0 []
+  no_key: 0 []
+  unacked rows: []
+  keys differ: []
+
+checks:
+  ok   trials recorded, all done: found (22, 22), stated (22, 22)
+  ok   cut trials with new-only writes, by shape: found {'full-h0': 4, 'full-h1': 4, 'hb': 4}, stated {'hb': 4, 'full-h0': 4, 'full-h1': 4}
+  ok   control trials: found 2, stated 2
+  ok   rolling replacements: found 8, stated 8
+  ok   load average (1 min) at trial starts and ends: found (1.32, 4.74), stated (1.32, 4.74)
+  ok   cut trials caught up at the first reading: found 14, stated 14
+  ok   slave readings with copying delay 0: found 28, stated 28
+  ok   slave readings with applying delay 0: found 28, stated 28
+  ok   slave readings with Final LSA at the copied EOF: found 26, stated 26
+  ok   seconds from the reading to the cut: found (1.05, 1.17), stated (1.05, 1.17)
+  ok   write attempts between the reading and the first write let through: found 0, stated 0
+  ok   new-only trials where h-0 took over: found 12, stated 12
+  ok   full cuts: took over during the cut, seconds after it: found (8, (9.2, 10.37)), stated (8, (9.2, 10.37))
+  ok   heartbeat cuts: took over after healing, seconds after the cut: found (4, (46.71, 47.77)), stated (4, (46.71, 47.77))
+  ok   new-only: new master's table at takeover equal to the reading: found 12, stated 12
+  ok   full cuts: old master read at takeover and equal to the reading: found 8, stated 8
+  ok   heartbeat cuts: old master's server not answering at takeover: found 4, stated 4
+  ok   new-only: new master's apply delay 0 and Final LSA at its copied EOF at takeover: found 12, stated 12
+  ok   full cuts: new master's copied EOF minus the old master's EOF at the reading, bytes: found [0, 96], stated [0, 96]
+  ok   full cuts: old master's log end at takeover past the new master's copy, same page, bytes: found (8, (2640, 2688)), stated (8, (2640, 2688))
+  ok   heartbeat cuts: seconds from healing to the takeover: found (1.5, 2.7), stated (1.5, 2.7)
+  ok   heartbeat cuts: new master's copied log end on page 152 at takeover: found 4, stated 4
+  ok   acknowledged writes per new-only cell: found {'full-h0': 364, 'full-h1': 364, 'hb': 214}, stated {'full-h0': 364, 'full-h1': 364, 'hb': 214}
+  ok   cut trials ending with h-1 a slave: found 14, stated 14
+  ok   control: rows the old master held at takeover beyond the new master's: found [7, 8], stated [7, 8]
+  ok   full cuts: seconds both servers sampled active: found (36.0, 38.0), stated (36.0, 38.0)
+  ok   heartbeat cuts: seconds both servers sampled active: found (0.0, 0.0), stated (0.0, 0.0)
+  ok   new-only: acknowledged writes by the old master after the cut: found 0, stated 0
+  ok   new-only: acknowledged writes: found 942, stated 942
+  ok   new-only: acknowledged writes missing on the final master: found 0, stated 0
+  ok   new-only: acknowledged writes missing on any member: found 0, stated 0
+  ok   new-only: keys holding different rows: found 0, stated 0
+  ok   new-only: trials ending with three equal tables, h-0 the master: found 12, stated 12
+  ok   new-only: -670 in a client or an applier: found 0, stated 0
+  ok   new-only: results other than ack and -581: found 0, stated 0
+  ok   control: acknowledged writes missing on the final master, per trial: found [44, 44], stated [44, 44]
+  ok   control: acknowledged writes, both trials: found 240, stated 240
+  ok   control: seconds both servers sampled active, takeover seconds: found ([38.0, 36.0], [9.59, 10.4]), stated ([38.0, 36.0], [9.59, 10.4])
+  ok   control: all of them the old master's, after the cut: found 88, stated 88
+  ok   control: keys differing, per trial: found [44, 44], stated [44, 44]
+  ok   control: old master's table at takeover held rows the new master lacked: found 2, stated 2
+  ok   control: new master's client refused with -670, and applier -670 lines: found (30, 176), stated (30, 176)
+  ok   graceful replacements, of them stops of a master: found (24, 16), stated (24, 16)
+  ok   grace period expired: found 0, stated 0
+  ok   heartbeat stop seconds: found (2.1, 2.2), stated (2.1, 2.2)
+  ok   server already stopped by the heartbeat stop: found 24, stated 24
+  ok   rejoined with stable roles, seconds from the stop: found (24, (24.1, 25.4)), stated (24, (24.1, 25.4))
+  ok   after h-1's stop h-0 was master, after h-0's stop h-1: found 16, stated 16
+  ok   acknowledged writes in the rolls: found 4726, stated 4726
+  ok   acknowledged by a stopping master after its stop began: found 8, stated 8
+  ok   seconds from a stopping master's last acknowledgement to the new master's first: found (1.2, 1.9), stated (1.2, 1.9)
+  ok   rolls: acknowledged writes missing on the final master: found 0, stated 0
+  ok   rolls: acknowledged writes missing on any member: found 0, stated 0
+  ok   rolls: rows no client saw acknowledged: found 0, stated 0
+  ok   rolls: acknowledged writes without a key: found 0, stated 0
+  ok   rolls: trials ending with three equal tables: found 8, stated 8
+  ok   rolls: results other than ack and -581: found {'other:-191': 498, 'other:-353': 24, 'other:-199': 1}, stated {'other:-191': 498, 'other:-353': 24, 'other:-199': 1}
+  ok   rolls: those errors outside the replacement of the client's own member: found 0, stated 0
+
+all checks hold
