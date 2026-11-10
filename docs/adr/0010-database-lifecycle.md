@@ -307,9 +307,12 @@ change seen then is not recorded.
   applies). 10 minutes after the first reconcile that found the restore
   completed and the member not caught up, a Warning event `SeedCatchUpOverdue`
   says so once, and the wait goes on: the member is not at risk while it is not
-  recorded as seeded, and a person decides. That these readings show that the
-  member applied everything up to the target is not verified on the engine;
-  the check only makes the Operator wait longer than before, never less, and
+  recorded as seeded, and a person decides. In Docker on 11.4.6, without the
+  Operator, a member held every row acknowledged before the target when these
+  readings first held, and a kill or stop of the master right after it lost
+  none in 12 trials (POC-59); the readings do not include the applier's own
+  position, and the Operator on Kind or the VM lab has not been run through
+  it. The check only makes the Operator wait longer than before, never less, and
   a slave that keeps pages waiting (POC-51 saw standing delayed pages on Kind)
   waits until a person acts.
 - A change of master recorded after the restore was started, also after it
