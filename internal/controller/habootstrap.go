@@ -590,8 +590,10 @@ const (
 // of master can lack what the new master committed without showing it
 // (POC-57). Otherwise the member is seeded only when it is a slave that
 // applies the source's log with no failed change and no page waiting, and its
-// copy of that log reached the catch-up target. Whether that shows that the
-// member applied everything up to the target is not verified on the engine.
+// copy of that log reached the catch-up target. In Docker the member held
+// every row acknowledged before the target when this first held, and a kill
+// of the master right after it lost none (POC-59); the readings do not
+// include the applier's own position.
 func seedVerdict(seeding *databasev1alpha1.DatabaseSeeding, gap, completed bool, member RoleObservation, now time.Time) seedOutcome {
 	switch {
 	case seeding.ActiveMasterSince == nil:
