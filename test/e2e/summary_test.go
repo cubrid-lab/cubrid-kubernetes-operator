@@ -284,6 +284,11 @@ func TestKindLaneIsRegistered(t *testing.T) {
 // not_run.
 func runLane() evidence.Lane {
 	suite, _ := GinkgoConfiguration()
+	return laneFor(suite)
+}
+
+// laneFor is runLane for the given suite configuration.
+func laneFor(suite types.SuiteConfig) evidence.Lane {
 	if !filtered(suite) {
 		return kindLane
 	}
@@ -318,7 +323,10 @@ func checkSelection(report Report) error {
 			continue
 		}
 		steps = append(steps, spec.Labels())
-		selected = selected || evidence.Selected(spec, suite, suiteDescription)
+		if evidence.Selected(spec, suite, suiteDescription) {
+			selected = true
+			markSelectedSteps(spec.Labels())
+		}
 	}
 	problems := evidence.KeyLabelProblems(steps)
 	if err := evidence.CheckLabelFilter(suite.LabelFilter, steps); err != nil {
@@ -331,6 +339,33 @@ func checkSelection(report Report) error {
 		return fmt.Errorf("the run's selection of scenarios is not valid:\n%s", strings.Join(problems, "\n"))
 	}
 	return nil
+}
+
+// markSelectedSteps records the scenarios a selected step carries the label
+// of. checkSelection does it before the suite starts, so that a filtered run
+// whose setup fails, and so reports no step, still knows what it selected.
+func markSelectedSteps(labels []string) {
+	summaryMu.Lock()
+	defer summaryMu.Unlock()
+	for _, req := range kindLane.Required {
+		if slices.Contains(labels, req.Label()) {
+			selectedSteps[req] = true
+		}
+	}
+}
+
+// blockSelectedBySetupFailure settles each scenario a filtered run selected a
+// step of as blocked when no step was reported at all: Ginkgo reports no step
+// when the suite's setup fails. An unfiltered run keeps the not_run
+// placeholders of planRun. The caller holds summaryMu.
+func blockSelectedBySetupFailure(suite types.SuiteConfig) {
+	if !filtered(suite) || len(reportedLabels) > 0 {
+		return
+	}
+	for _, req := range laneFor(suite).Required {
+		runSummary.Settle(req, evidence.Blocked,
+			"the suite's setup failed before any step started, so this selected scenario could not run")
+	}
 }
 
 // concludeRun writes summary.json and junit.xml to E2E_EVIDENCE_DIR and
@@ -368,6 +403,8 @@ func concludeRun() error {
 	// A required scenario no step carries the label of can never record a
 	// result. When no step was reported at all, the suite's setup failed and
 	// the placeholders say so.
+	suite, _ := GinkgoConfiguration()
+	blockSelectedBySetupFailure(suite)
 	var problems []string
 	if len(reportedLabels) > 0 {
 		problems = evidence.UnlabelledSteps(kindLane.Required, reportedLabels)
