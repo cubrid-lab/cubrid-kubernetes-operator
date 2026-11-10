@@ -671,10 +671,11 @@ const (
 // of master can lack what the new master committed without showing it
 // (POC-57). Otherwise the member is seeded only when it is a slave that
 // applies the source's log with no failed change and no page waiting, and its
-// copy of that log reached the catch-up target. In Docker the member held
-// every row acknowledged before the target when this first held, and a kill
-// of the master right after it lost none (POC-59); the readings do not
-// include the applier's own position.
+// copy of that log reached the catch-up target and its applier's position in
+// that copy did too. In Docker the member held every row acknowledged before
+// the target when the check without the applier's position first held, and a
+// kill of the master right after it lost none; in 1 of 20 passing readings
+// the applier was still 592 bytes behind the target (POC-59, #779).
 func seedVerdict(seeding *databasev1alpha1.DatabaseSeeding, gap, completed bool, member RoleObservation, now time.Time) seedOutcome {
 	switch {
 	case seeding.ActiveMasterSince == nil:
@@ -697,13 +698,14 @@ func seedVerdict(seeding *databasev1alpha1.DatabaseSeeding, gap, completed bool,
 
 // caughtUp reports whether member, the answer of the member being seeded,
 // shows it as a slave that applies the log of the copy's source with no
-// failed change and no page waiting, and whose copy of that log reached the
-// catch-up target.
+// failed change and no page waiting, and whose copy of that log and applier
+// reached the catch-up target. A missing reading counts as not reached.
 func caughtUp(seeding *databasev1alpha1.DatabaseSeeding, member RoleObservation, now time.Time) bool {
 	r := member.Replication
 	return seeding.CatchUpTarget != nil && fresh(member, now) && member.Role == databasev1alpha1.RoleSlave &&
 		!member.Conflicting && r != nil && r.Source == seeding.Source && r.FailCount == 0 && r.DelayedPages == 0 &&
-		r.CopiedEOF != nil && !logBefore(*r.CopiedEOF, *seeding.CatchUpTarget)
+		r.CopiedEOF != nil && !logBefore(*r.CopiedEOF, *seeding.CatchUpTarget) &&
+		r.FinalLSA != nil && !logBefore(*r.FinalLSA, *seeding.CatchUpTarget)
 }
 
 // seedStopped ends the bootstrap for the copy seeding, in which an active
@@ -1159,6 +1161,13 @@ func catchUpMissing(seeding *databasev1alpha1.DatabaseSeeding, member RoleObserv
 	case logBefore(*r.CopiedEOF, *t):
 		missing = append(missing, fmt.Sprintf("its copy ends at log page %d offset %d, before page %d offset %d",
 			r.CopiedEOF.Page, r.CopiedEOF.Offset, t.Page, t.Offset))
+	}
+	switch {
+	case r.FinalLSA == nil:
+		missing = append(missing, "the applier position was not read")
+	case logBefore(*r.FinalLSA, *t):
+		missing = append(missing, fmt.Sprintf("the applier is at log page %d offset %d, before page %d offset %d",
+			r.FinalLSA.Page, r.FinalLSA.Offset, t.Page, t.Offset))
 	}
 	return strings.Join(missing, ", ")
 }

@@ -299,19 +299,21 @@ change seen then is not recorded.
   meanwhile.
 - Once an active master was seen, the member is recorded as seeded only when
   no change of master was recorded and the member answers as a slave that
-  applies the source's log with no failed change, no page waiting, and its
-  copy of that log at or past `catchUpTarget`. Until then
+  applies the source's log with no failed change, no page waiting, and both
+  its copy of that log and its applier's position in it (`finalLSA`) at or past
+  `catchUpTarget`. Until then
   `BootstrapReady=False` with `SeedCatchUpInProgress`, and no attempt is used
   up; the message says since when it waits and which reading is missing (pages
-  waiting, failed changes, the end of the copy, or the source the member
-  applies). 10 minutes after the first reconcile that found the restore
+  waiting, failed changes, the end of the copy, the applier position, or the
+  source the member applies). 10 minutes after the first reconcile that found the restore
   completed and the member not caught up, a Warning event `SeedCatchUpOverdue`
   says so once, and the wait goes on: the member is not at risk while it is not
   recorded as seeded, and a person decides. In Docker on 11.4.6, without the
   Operator, a member held every row acknowledged before the target when these
-  readings first held, and a kill or stop of the master right after it lost
-  none in 12 trials (POC-59); the readings do not include the applier's own
-  position, and the Operator on Kind or the VM lab has not been run through
+  readings without the applier's position first held, and a kill or stop of
+  the master right after it lost none in 12 trials; in 1 of 20 passing
+  readings the applier was 592 bytes behind the target, which the applier
+  position now rules out (POC-59, #779). The Operator on Kind or the VM lab has not been run through
   it. The check only makes the Operator wait longer than before, never less, and
   a slave that keeps pages waiting (POC-51 saw standing delayed pages on Kind)
   waits until a person acts.
