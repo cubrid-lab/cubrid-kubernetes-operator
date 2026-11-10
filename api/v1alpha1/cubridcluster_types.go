@@ -586,6 +586,13 @@ type DatabaseStatus struct {
 	// source when the master changes meanwhile.
 	// +optional
 	Seeding *DatabaseSeeding `json:"seeding,omitempty"`
+	// seedActiveMasterSince is the time of the first reading during the
+	// seeding of this database in which a member answered as a master whose
+	// server is active. It outlasts a new round and a failed attempt, which
+	// clear seeding: every later copy is then judged as one in which an
+	// active master was seen (ADR-0010).
+	// +optional
+	SeedActiveMasterSince *metav1.Time `json:"seedActiveMasterSince,omitempty"`
 	// bootstrapAttempts counts the bootstrap steps that failed and were
 	// started again. The bootstrap stops as Failed when it reaches the limit.
 	// +optional
@@ -612,8 +619,10 @@ type DatabaseSeeding struct {
 	// member that was last observed as the master among the members that
 	// hold the database.
 	Source string `json:"source"`
-	// round counts how often the source changed before the restore was
-	// started. Every round has a backup of its own.
+	// round counts how often the copy was begun again before the restore was
+	// started: when the source changed, or when a change of master or a gap
+	// without a verified reading was seen while the source stayed the same.
+	// Every round has a backup of its own.
 	// +optional
 	Round int32 `json:"round,omitempty"`
 	// restoreOperationID is the restore on the member, once it was started.
@@ -631,6 +640,54 @@ type DatabaseSeeding struct {
 	// operation clears it.
 	// +optional
 	OperationMissingSince *metav1.Time `json:"operationMissingSince,omitempty"`
+	// activeMasterSince is the time of the first reading during this copy in
+	// which a member that holds the database, or the member being seeded,
+	// answered as a master whose server is active; for a copy begun after
+	// seedActiveMasterSince was set, the time the copy began. From then on the member is recorded as seeded only
+	// once it is shown to have caught up with the source (catchUpTarget), a
+	// change of master is recorded, and a gap of more than 30 seconds
+	// without a verified reading stops the bootstrap (ADR-0010).
+	// +optional
+	ActiveMasterSince *metav1.Time `json:"activeMasterSince,omitempty"`
+	// masterChange is the first reading during this copy, once an active
+	// master was seen, that showed another master than the source: another
+	// member, or the member being seeded once its restore was started,
+	// reporting itself master, or the source reporting itself a slave. It is
+	// never cleared, and the member is then not recorded as seeded.
+	// +optional
+	MasterChange *SeedMasterChange `json:"masterChange,omitempty"`
+	// catchUpSince is when the copy's restore was first found completed while
+	// the member was not yet shown caught up with its source. After ten
+	// minutes a Warning event is emitted; the copy keeps waiting.
+	// +optional
+	CatchUpSince *metav1.Time `json:"catchUpSince,omitempty"`
+	// catchUpWarnedAt is when the Warning event of a catch-up that waited
+	// longer than ten minutes was emitted, so that it is emitted once.
+	// +optional
+	CatchUpWarnedAt *metav1.Time `json:"catchUpWarnedAt,omitempty"`
+	// lastVerifiedAt is the time of the last reading during this copy in
+	// which every member that holds the database answered and the source was
+	// the only master among them.
+	// +optional
+	LastVerifiedAt *metav1.Time `json:"lastVerifiedAt,omitempty"`
+	// catchUpTarget is the end of the source's own log, read in the first
+	// reading after the restore reported Completed. A member whose source was
+	// observed active is recorded as seeded only once its copy of the source's
+	// log has reached it.
+	// +optional
+	CatchUpTarget *LogAddress `json:"catchUpTarget,omitempty"`
+}
+
+// SeedMasterChange is a reading that showed a change of master while a
+// member was being seeded.
+type SeedMasterChange struct {
+	// member is the member whose answer showed the change: the member that
+	// reported itself master, or the source when it reported itself a slave.
+	Member string `json:"member"`
+	// role is the role that member reported.
+	Role CubridRole `json:"role"`
+	// observedAt is when the answer was received.
+	ObservedAt metav1.Time `json:"observedAt"`
 }
 
 // CubridClusterStatus defines the observed state of CubridCluster.

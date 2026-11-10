@@ -122,8 +122,10 @@ KIND_CLUSTER ?= cubrid-kubernetes-operator-test-e2e
 # refuses to start when a cluster with that name exists; E2E_REUSE_CLUSTER=1
 # runs against that cluster instead and keeps it.
 E2E_REUSE_CLUSTER ?=
-# E2E_LABEL_FILTER selects scenarios by Ginkgo label, e.g. E2E_LABEL_FILTER=S00
-# for one scenario or E2E_LABEL_FILTER='!db' to leave out the real-database ones.
+# E2E_LABEL_FILTER selects scenarios by Ginkgo label: a check's descriptive key
+# or its older label, e.g. E2E_LABEL_FILTER=standalone-database-sql or S00, or
+# E2E_LABEL_FILTER='!db' to leave out the real-database ones. A filter that
+# names a label no step carries, or selects no step, fails before the suite starts.
 # E2E_EVIDENCE_DIR receives the run's evidence: summary.json, junit.xml and each
 # scenario's files (docs/testing/scenario-contract.md). The run fails unless every
 # required scenario passed; with E2E_LABEL_FILTER it is a filtered baseline that

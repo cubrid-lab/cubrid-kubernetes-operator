@@ -394,7 +394,7 @@ func (r *haRun) replicationState(spec context.Context, variant string, result *e
 // master's Pod is deleted.
 func s03Step(r *haRun, variant string) {
 	It("S03/"+variant+": one member is master again after the master Pod is deleted, and no acknowledged write is lost",
-		Label("S03", evidence.Requirement{ID: "S03", Variant: variant}.Label()), func(ctx SpecContext) {
+		Label(evidence.KindLabels("S03", evidence.Requirement{ID: "S03", Variant: variant}.Label())...), func(ctx SpecContext) {
 			var needs func(context.Context) error
 			if variant == s03AbruptFirst {
 				needs = r.needsFirstMemberAsMaster

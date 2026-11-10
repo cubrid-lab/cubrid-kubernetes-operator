@@ -152,7 +152,7 @@ func (f *operatorAbsence) Remove(ctx context.Context) error {
 // s06Step registers one variant of S06 (Operator failure) of the scenario
 // contract, on the cluster the earlier steps left.
 func s06Step(r *haRun, variant string) {
-	labels := Label("S06", evidence.Requirement{ID: "S06", Variant: variant}.Label())
+	labels := Label(evidence.KindLabels("S06", evidence.Requirement{ID: "S06", Variant: variant}.Label())...)
 	switch variant {
 	case s06Restart:
 		It("S06/"+variant+": SQL is not interrupted and no member is restarted when the Operator Pod is killed",

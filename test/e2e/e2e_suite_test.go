@@ -61,6 +61,15 @@ var (
 // To skip CertManager installation, set: CERT_MANAGER_INSTALL_SKIP=true
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
+	// Before anything is built: a filter that selects nothing would otherwise
+	// skip the suite's setup and its gate, and the run would pass.
+	if err := checkSelection(PreviewSpecs(suiteDescription)); err != nil {
+		t.Fatal(err)
+	}
+	// A step to break on purpose that names no HA step would break nothing.
+	if err := checkBreakSettings(); err != nil {
+		t.Fatal(err)
+	}
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting cubrid-kubernetes-operator e2e test suite\n")
 	RunSpecs(t, suiteDescription)
 }
@@ -78,7 +87,6 @@ var _ = BeforeSuite(func() {
 	// AfterSuite still runs after a refusal, but writes nothing there.
 	Expect(acquireEvidenceDir()).To(Succeed())
 	planRun()
-	Expect(checkBreakSettings()).To(Succeed())
 	// Before anything reaches a cluster, and before AfterSuite may undeploy.
 	Expect(utils.RequireKindContext()).To(Succeed())
 	kindContextVerified = true

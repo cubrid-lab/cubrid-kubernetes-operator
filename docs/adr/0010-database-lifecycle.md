@@ -251,15 +251,92 @@ restarted with the cluster's `spec.objectStorage`. Before #290 the backup
 ran and failed at the upload, which ended the step `SeedBackupFailed` and used
 up an attempt.
 
-The roles are asked for at every reconcile until the restore on the member is
-started. A master that changes before that is followed, and every change of
+The source is chosen again at every reconcile until the restore on the
+member is started. A master that changes before that is followed, and every change of
 source takes a backup of its own, also when a member is master again after
 another one was: its earlier backup is not used again. The source is recorded
 in `status.databases[].seeding`, and the restore is started only by a
 reconcile that found the source it observes already recorded, so the roles
 are checked in the same reconcile that starts the restore. Once the restore's
 operation is recorded, the copy keeps its source and its backup whatever the
-roles become, and the source is not asked again.
+roles become.
+
+A change of master during a copy (#768). A member seeded with
+`restoreslave -m <source>` that joins after its source lost the role, or
+before it applied the source's log past the backup, lacks what the new master
+committed, and nothing in its readings shows it: in POC-57 the restore ended
+`Completed`, and the member reported a replication from the new master with
+no failed change and no page waiting while it lacked acknowledged rows. So
+the roles of the members that hold the database and of the member being
+seeded are read at every reconcile of a copy, for the first peer too, from
+the reconcile that starts its seed backup until the member is recorded as
+seeded, and also while the restore runs. The reading is recorded in
+`status.databases[].seeding`, so that it survives an Operator restart: the
+time of the first reading in which a member that holds the database, or the
+member being seeded once its restore was started, answered as a master whose
+server is active (`activeMasterSince`), the first answer
+after that which showed another master (`masterChange`: another holder
+reporting itself master, the member being seeded reporting itself master once
+its restore was started, or the source reporting itself a slave; never
+cleared), the time of the last reading in which every holder answered and the
+source was the only master (`lastVerifiedAt`), the end of the source's own log
+read in the first reading after the restore completed (`catchUpTarget`), and
+when the member began to wait to catch up (`catchUpSince`) and when that
+wait was reported (`catchUpWarnedAt`). Once an active master was seen, that
+is also kept for the database (`status.databases[].seedActiveMasterSince`),
+which outlasts a new round and a failed attempt: every later copy of the
+database is judged as one in which an active master was seen, from its start.
+A missing or
+contradictory answer shows nothing: it neither records a change nor verifies
+the source. Before any master's server is active nothing can be committed
+(POC-23), and before its restore the member being seeded holds no data, so a
+change seen then is not recorded.
+
+- A copy in which no holder was ever observed as an active master is the
+  state of a new group's bootstrap: no master's server is active before every
+  member has joined once. Such a copy is recorded as seeded once its restore
+  is `Completed`, as before, also when another member reported itself master
+  meanwhile.
+- Once an active master was seen, the member is recorded as seeded only when
+  no change of master was recorded and the member answers as a slave that
+  applies the source's log with no failed change, no page waiting, and its
+  copy of that log at or past `catchUpTarget`. Until then
+  `BootstrapReady=False` with `SeedCatchUpInProgress`, and no attempt is used
+  up; the message says since when it waits and which reading is missing (pages
+  waiting, failed changes, the end of the copy, or the source the member
+  applies). 10 minutes after the first reconcile that found the restore
+  completed and the member not caught up, a Warning event `SeedCatchUpOverdue`
+  says so once, and the wait goes on: the member is not at risk while it is not
+  recorded as seeded, and a person decides. That these readings show that the
+  member applied everything up to the target is not verified on the engine;
+  the check only makes the Operator wait longer than before, never less, and
+  a slave that keeps pages waiting (POC-51 saw standing delayed pages on Kind)
+  waits until a person acts.
+- A change of master recorded after the restore was started, also after it
+  completed and before the member caught up, stops the bootstrap
+  (`SeedSourceChangedDuringSeed`): the database is `Failed`, the message names
+  the source and the member that reported itself master, or the source that
+  reported itself a slave, with the time in UTC; the member is not recorded as
+  seeded, the seeding record is kept, and nothing is started or deleted. More
+  than 30 seconds, three HA resync intervals, since the last verified reading,
+  or since the first active master when no reading was verified, stops it the
+  same way with `SeedSourceUnverified`. A reading in which no master was
+  active shows nothing about the time after it, so a span without readings
+  counts also when it ends with the first active master. An Operator that was
+  not running, a slow reconcile, or one Operator
+  reconciling many clusters so that a cluster is reached less often than
+  every 30 seconds all count toward this bound.
+- Before the restore is started nothing is restored, so a change of master,
+  or a gap, seen while the source stays the same begins the copy again in the
+  next round with a backup of its own, as a change of source does. For the
+  first peer, which has only one possible source, it stops the bootstrap as
+  after the restore was started.
+
+The Operator still promotes nothing and chooses no master (ADR-0005), and the
+member's data is never discarded: seeding it again needs a destructive step,
+which belongs with the rebuild of a member (#117). A member that the bootstrap
+has not recorded as seeded is never chosen as the standby a backup is taken on
+(#291).
 
 On the VM lab (2026-11-04, Operator `16dbbf8`, two scripted runs on #281),
 a master whose CUBRID was killed while the last member's seed backup ran on
@@ -268,8 +345,11 @@ grace period, so that it started again; the operator waited with
 `SeedSourceNotResolved` until it answered as a slave, then took a backup on
 the new master in round 1 and restored the last member from it.
 
-What this does not cover: a master that changes while `restoreslave` runs,
-which is not detected and has not been tried on the engine (#678); and a copy
+What this does not cover: a change of master that no reading saw, within the
+30 seconds between verified readings, or one that left the source master
+again by the next reading; a change of master after the member was recorded
+as seeded, which POC-57 did not try (#678); the Operator itself on the VM
+lab, and the catch-up check on the engine; and a copy
 that failed after it had restored the data, when the master has changed since:
 the next attempt copies from the new master, the Instance Manager refuses to
 restore over data that another request restored (ADR-0008), and the bootstrap

@@ -571,13 +571,15 @@ detail is cut at 512 bytes and the reason at about 1 KiB; both are redacted
 before they are cut, so that a cut does not leave part of a secret, and
 again when the evidence files are written.
 
-To see this on Kind, `E2E_BREAK_STEP=<label>` (the label of an HA step
-after S01, for example `S05-one-broker-pod`) makes that step fail on purpose
+To see this on Kind, `E2E_BREAK_STEP=<label or key>` (the label of an HA
+step after S01, for example `S05-one-broker-pod`, or the registry key of its
+result, `broker-failure-recovery-one-pod`) makes that step fail on purpose
 once its starting state holds, leaving a client writing, a read-write Broker
 Pod deleted and the Operator scaled to zero; with
 `E2E_BREAK_STEP_UNRESTORABLE=true` it also deletes the workload client,
 without which the starting state cannot be verified. The suite refuses to
-start when `E2E_BREAK_STEP` names no such step, or when
+start when `E2E_BREAK_STEP` names no such step, listing the labels and keys
+it takes, or when
 `E2E_BREAK_STEP_UNRESTORABLE` is set without it. A run that sets either does
 not pass its lane.
 
@@ -590,12 +592,33 @@ scenario must therefore also select `ha-setup`, for example
 `-ginkgo.focus=S03` or `E2E_LABEL_FILTER=S03`) the scenario runs on a cluster
 that is not formed yet, and its result says nothing about the scenario.
 
+Each scenario step also carries the descriptive key of its check from the
+registry (`test/evidence/registry.go`), and each scenario ID its family key:
+`ha-replication` beside `S02`, `ha-primary-pod-recovery` beside `S03`,
+`ha-primary-pod-recovery-graceful` beside `S03-graceful`. A key selects
+exactly the steps of the older label, which stays valid, so
+`E2E_LABEL_FILTER='ha-setup || ha-primary-pod-recovery-graceful'` is the same
+run as the example above. Before the suite sets anything up, it fails when a
+key does not select the same steps as its older label, when a label or
+`/pattern/` of `E2E_LABEL_FILTER` matches no step (a misspelled key, a VM-lab
+check such as `installed-backup-complete`, a family with no Kind check such as
+`S04`), or when the filters select no step at all. Without that check Ginkgo
+would run no step, skip the suite's setup and its gate, and report success.
+A negated term is checked the same way: `!ha-replicaton` would otherwise run
+every step, so it fails too. `make test-e2e` creates the Kind cluster before
+the suite starts, so a rejected filter still costs that cluster's creation.
+The results, `summary.json`, `junit.xml` and evidence paths keep their
+existing names; the labels only select.
+
 A run that selects specs, for example with `E2E_LABEL_FILTER`, is a filtered
 local baseline and does not validate the `kind` lane. It is judged as the
 lane `kind-filtered`: every scenario it selected a step of must pass, a run
 that selected none does not pass, and its `summary.json` names that lane so
 it cannot be mistaken for a full run. The scenarios it did not select are
-listed as `not_run`.
+listed as `not_run`. The selection is made before the suite starts, so when
+the suite's setup fails and no step is reported, each selected scenario is
+recorded as `blocked` with the setup failure as the reason and the run still
+fails; it is never reported as a lane that requires nothing.
 
 ### When CI runs the Kind lane
 

@@ -378,7 +378,8 @@ func (r *haRun) evidenceFiles(id string, report workload.Report) []string {
 // They continue on the cluster the HA bootstrap steps formed, after the
 // workload client has run through the read-write Service.
 func s01AndS02Steps(r *haRun) {
-	It("S01: has one master and two slaves, and accepts writes only through the read-write Service", Label("S01"), func() {
+	s01Labels, s02Labels := Label(evidence.KindLabels("S01")...), Label(evidence.KindLabels("S02")...)
+	It("S01: has one master and two slaves, and accepts writes only through the read-write Service", s01Labels, func() {
 		result := evidence.Scenario{ID: "S01", Result: evidence.Fail, Reason: "a check of S01 failed; see the test output"}
 		// Recorded also when a check below fails.
 		defer func() { recordScenario(result) }()
@@ -426,7 +427,7 @@ func s01AndS02Steps(r *haRun) {
 		}, within(formationLimit, formation))
 	})
 
-	It("S02: replicates rows, schema changes and rollbacks, also to a replaced slave", Label("S02"), func() {
+	It("S02: replicates rows, schema changes and rollbacks, also to a replaced slave", s02Labels, func() {
 		r.enter(nil)
 		result := evidence.Scenario{ID: "S02", Result: evidence.Fail, Reason: "a check of S02 failed; see the test output"}
 		// Recorded also when a check below fails.

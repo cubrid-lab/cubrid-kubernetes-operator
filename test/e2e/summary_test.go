@@ -166,10 +166,15 @@ func checkpointRun() {
 // Label): "S00", "S03-abrupt". After each spec, whether it ran or not, a
 // scenario whose step recorded nothing is given the result that says why.
 var _ = ReportAfterEach(func(report SpecReport) {
+	suite, _ := GinkgoConfiguration()
+	// checkSelection's PreviewSpecs walks the suite as a dry run, which runs
+	// no step and records nothing.
+	if suite.DryRun {
+		return
+	}
 	defer checkpointRun()
 	summaryMu.Lock()
 	defer summaryMu.Unlock()
-	suite, _ := GinkgoConfiguration()
 	selected := evidence.Selected(report, suite, suiteDescription)
 	// A group whose setup failed to load the Instance Manager image, and the
 	// steps it then did not start, are blocked by that environment problem.
@@ -279,8 +284,12 @@ func TestKindLaneIsRegistered(t *testing.T) {
 // not_run.
 func runLane() evidence.Lane {
 	suite, _ := GinkgoConfiguration()
-	if suite.LabelFilter == "" && suite.SemVerFilter == "" && len(suite.FocusStrings) == 0 &&
-		len(suite.SkipStrings) == 0 && len(suite.FocusFiles) == 0 && len(suite.SkipFiles) == 0 {
+	return laneFor(suite)
+}
+
+// laneFor is runLane for the given suite configuration.
+func laneFor(suite types.SuiteConfig) evidence.Lane {
+	if !filtered(suite) {
 		return kindLane
 	}
 	lane := evidence.Lane{Name: "kind-filtered"}
@@ -290,6 +299,73 @@ func runLane() evidence.Lane {
 		}
 	}
 	return lane
+}
+
+// filtered reports whether the run selects specs with a label, semantic
+// version, focus, skip or file filter.
+func filtered(suite types.SuiteConfig) bool {
+	return suite.LabelFilter != "" || suite.SemVerFilter != "" || len(suite.FocusStrings) > 0 ||
+		len(suite.SkipStrings) > 0 || len(suite.FocusFiles) > 0 || len(suite.SkipFiles) > 0
+}
+
+// checkSelection returns an error, before the suite sets anything up, when a
+// scenario's descriptive key does not select exactly the steps of its legacy
+// label (evidence.KindLabels), when E2E_LABEL_FILTER names a label or pattern
+// no step carries, or when the run's filters select no step. Ginkgo runs
+// neither BeforeSuite nor AfterSuite, and so no gate, when nothing is
+// selected, and such a run would otherwise pass.
+func checkSelection(report Report) error {
+	suite, _ := GinkgoConfiguration()
+	var steps [][]string
+	selected := false
+	for _, spec := range report.SpecReports {
+		if spec.LeafNodeType != types.NodeTypeIt {
+			continue
+		}
+		steps = append(steps, spec.Labels())
+		if evidence.Selected(spec, suite, suiteDescription) {
+			selected = true
+			markSelectedSteps(spec.Labels())
+		}
+	}
+	problems := evidence.KeyLabelProblems(steps)
+	if err := evidence.CheckLabelFilter(suite.LabelFilter, steps); err != nil {
+		problems = append(problems, err.Error())
+	}
+	if len(problems) == 0 && filtered(suite) && !selected {
+		problems = append(problems, "the run's filters select no step of the suite")
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("the run's selection of scenarios is not valid:\n%s", strings.Join(problems, "\n"))
+	}
+	return nil
+}
+
+// markSelectedSteps records the scenarios a selected step carries the label
+// of. checkSelection does it before the suite starts, so that a filtered run
+// whose setup fails, and so reports no step, still knows what it selected.
+func markSelectedSteps(labels []string) {
+	summaryMu.Lock()
+	defer summaryMu.Unlock()
+	for _, req := range kindLane.Required {
+		if slices.Contains(labels, req.Label()) {
+			selectedSteps[req] = true
+		}
+	}
+}
+
+// blockSelectedBySetupFailure settles each scenario a filtered run selected a
+// step of as blocked when no step was reported at all: Ginkgo reports no step
+// when the suite's setup fails. An unfiltered run keeps the not_run
+// placeholders of planRun. The caller holds summaryMu.
+func blockSelectedBySetupFailure(suite types.SuiteConfig) {
+	if !filtered(suite) || len(reportedLabels) > 0 {
+		return
+	}
+	for _, req := range laneFor(suite).Required {
+		runSummary.Settle(req, evidence.Blocked,
+			"the suite's setup failed before any step started, so this selected scenario could not run")
+	}
 }
 
 // concludeRun writes summary.json and junit.xml to E2E_EVIDENCE_DIR and
@@ -327,6 +403,8 @@ func concludeRun() error {
 	// A required scenario no step carries the label of can never record a
 	// result. When no step was reported at all, the suite's setup failed and
 	// the placeholders say so.
+	suite, _ := GinkgoConfiguration()
+	blockSelectedBySetupFailure(suite)
 	var problems []string
 	if len(reportedLabels) > 0 {
 		problems = evidence.UnlabelledSteps(kindLane.Required, reportedLabels)
