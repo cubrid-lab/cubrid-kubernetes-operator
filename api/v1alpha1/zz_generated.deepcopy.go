@@ -582,6 +582,10 @@ func (in *DatabaseSeeding) DeepCopyInto(out *DatabaseSeeding) {
 		in, out := &in.CatchUpSince, &out.CatchUpSince
 		*out = (*in).DeepCopy()
 	}
+	if in.CatchUpWarnedAt != nil {
+		in, out := &in.CatchUpWarnedAt, &out.CatchUpWarnedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.LastVerifiedAt != nil {
 		in, out := &in.LastVerifiedAt, &out.LastVerifiedAt
 		*out = (*in).DeepCopy()
@@ -615,6 +619,10 @@ func (in *DatabaseStatus) DeepCopyInto(out *DatabaseStatus) {
 		in, out := &in.Seeding, &out.Seeding
 		*out = new(DatabaseSeeding)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.SeedActiveMasterSince != nil {
+		in, out := &in.SeedActiveMasterSince, &out.SeedActiveMasterSince
+		*out = (*in).DeepCopy()
 	}
 	if in.BootstrapOperationMissingSince != nil {
 		in, out := &in.BootstrapOperationMissingSince, &out.BootstrapOperationMissingSince

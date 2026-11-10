@@ -152,6 +152,9 @@ func (f *fakeSeedClient) forget() {
 	f.backups, f.restoresByKey = nil, nil
 }
 
+// restoreslaveFailed is how a seed restore that failed reports why.
+const restoreslaveFailed = "restoreslave failed: exit status 1"
+
 // anotherDatabase is a database that no step of these tests is for.
 const anotherDatabase = "anotherdb"
 
@@ -164,7 +167,7 @@ func withoutOperations(s *databasev1alpha1.DatabaseSeeding) *databasev1alpha1.Da
 	}
 	c := *s
 	c.BackupOperationID, c.OperationMissingSince = "", nil
-	c.ActiveMasterSince, c.MasterChange, c.LastVerifiedAt, c.CatchUpTarget, c.CatchUpSince = nil, nil, nil, nil, nil
+	c.ActiveMasterSince, c.MasterChange, c.LastVerifiedAt, c.CatchUpTarget, c.CatchUpSince, c.CatchUpWarnedAt = nil, nil, nil, nil, nil, nil
 	return &c
 }
 
@@ -1587,7 +1590,7 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			seed := newRecoverySeedClient()
 			seed.recovered, seed.backupState = instancemanager.OpCompleted, instancemanager.OpCompleted
 			seed.restore["rseed-fail-1"] = instancemanager.OpFailed
-			seed.reason = "restoreslave failed: exit status 1"
+			seed.reason = restoreslaveFailed
 			key := recoveryCluster("rseed-fail")
 			r := reconcilerFor(seed)
 
