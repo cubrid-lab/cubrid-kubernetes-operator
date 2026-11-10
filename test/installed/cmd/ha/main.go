@@ -48,7 +48,7 @@ func main() {
 
 func run(ctx context.Context, args []string) (runErr error) {
 	flags := flag.NewFlagSet("installed-ha", flag.ContinueOnError)
-	var path, targetContext string
+	var path, targetContext, check string
 	var cfg installed.HAConfig
 	flags.StringVar(&path, "kubeconfig", "", "explicit target kubeconfig (credentials stay private)")
 	flags.StringVar(&targetContext, "context", "", "explicit context to snapshot")
@@ -229,6 +229,11 @@ func run(ctx context.Context, args []string) (runErr error) {
 			" (the restore's target, once restoredb is seen) or "+installed.GracefulStopAtSeeding+" (the first "+
 			"member being seeded, once restoreslave is seen); a value other than "+installed.GracefulStopAtRestoring+
 			" needs -restore-graceful-stop")
+	flags.StringVar(&check, "check", "",
+		"VM-lab check to run, by its key in the scenario registry (for example installed-backup-denied-credentials), "+
+			"instead of the options -fault, -backup-<variant>, -restore, -restore-<variant> and the placements "+
+			"-restore-instance-manager-restart-at and -restore-graceful-stop-at; a backup or restore check still "+
+			"needs -backup-bucket, and a check without a backup refuses it")
 	flags.StringVar(&cfg.EvidenceDir, "evidence-dir", "", "empty directory for summary, JUnit and LAB01 evidence")
 	flags.StringVar(&cfg.Level, "level", "", "evidence environment: kind or vm-lab")
 	flags.DurationVar(&cfg.Timeout, "timeout", 30*time.Minute, "whole run deadline")
@@ -249,6 +254,11 @@ func run(ctx context.Context, args []string) (runErr error) {
 			return nil
 		}
 		return err
+	}
+	if check != "" {
+		if err := cfg.SelectCheck(check); err != nil {
+			return err
+		}
 	}
 	set := map[string]bool{}
 	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })

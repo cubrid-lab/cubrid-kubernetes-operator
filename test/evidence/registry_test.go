@@ -347,6 +347,15 @@ func TestRegisteredKeys(t *testing.T) {
 		t.Errorf("lanes of %s = %q", kindResult.Key, kindResult.Lanes)
 	}
 	for _, level := range []string{LevelKind, LevelVMLab} {
+		keys := RegisteredKeys(level)
+		if len(keys) == 0 {
+			t.Errorf("no key at level %s", level)
+		}
+		for _, key := range keys {
+			if found, err := ResolveKey(key); err != nil || found.Level != level {
+				t.Errorf("key %s listed at level %s resolves to level %q, %v", key, level, found.Level, err)
+			}
+		}
 		lanes := RegisteredLanes(level)
 		if len(lanes) == 0 {
 			t.Errorf("no lane at level %s", level)

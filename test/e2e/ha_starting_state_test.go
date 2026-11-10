@@ -58,8 +58,9 @@ const startingStateSettle = 15 * time.Second
 // from starting: each of them first restores and verifies the starting state
 // of S01 (enter), and is blocked when that state cannot be restored.
 
-// breakStepEnv names the requirement label of one HA step (for example
-// S05-one-broker-pod) that is made to fail on purpose, once its starting state
+// breakStepEnv names one HA step, by its requirement label (for example
+// S05-one-broker-pod) or by its descriptive key in the scenario registry
+// (broker-failure-recovery-one-pod), that is made to fail on purpose, once its starting state
 // is verified, leaving damage behind as a failed variant could: a client that
 // keeps writing, a read-write Broker Pod deleted without a grace period, and
 // the Operator scaled to zero. It shows that the steps after it start from a
@@ -90,19 +91,42 @@ func (r *haRun) newGate() *faults.Gate {
 // without it: a mistyped name would break nothing and the run would look
 // like a demonstration that was never made.
 func checkBreakSettings() error {
-	step, unrestorable := os.Getenv(breakStepEnv), os.Getenv(breakUnrestorableEnv)
+	step, err := breakStepLabel()
+	if err != nil {
+		return err
+	}
+	if step == "" && os.Getenv(breakUnrestorableEnv) != "" {
+		return fmt.Errorf("%s is set without %s", breakUnrestorableEnv, breakStepEnv)
+	}
+	return nil
+}
+
+// breakStepLabel returns the requirement label of the HA step after S01 that
+// breakStepEnv names by that label or by its key in the scenario registry, or
+// "" when it is not set. The key is resolved at the Kind level only. A value
+// that names no such step is an error that lists the labels and keys taken.
+func breakStepLabel() (string, error) {
+	step := os.Getenv(breakStepEnv)
 	if step == "" {
-		if unrestorable != "" {
-			return fmt.Errorf("%s is set without %s", breakUnrestorableEnv, breakStepEnv)
-		}
-		return nil
+		return "", nil
 	}
+	var choices []string
 	for _, req := range kindLane.Required {
-		if req.Label() == step && req.ID != "S00" && req.ID != "S01" {
-			return nil
+		if req.ID == "S00" || req.ID == "S01" {
+			continue
 		}
+		alias := evidence.Scenario{ID: req.ID, Variant: req.Variant}.Name()
+		resolved, err := evidence.ResolveAlias(kindLane.Name, evidence.LevelKind, alias)
+		if err != nil {
+			return "", fmt.Errorf("%s: the Kind step %s has no registered key: %w", breakStepEnv, alias, err)
+		}
+		if step == req.Label() || step == resolved.Key {
+			return req.Label(), nil
+		}
+		choices = append(choices, req.Label()+" or "+resolved.Key)
 	}
-	return fmt.Errorf("%s=%q is not the label of an HA step after S01", breakStepEnv, step)
+	return "", fmt.Errorf("%s=%q is neither the label nor the key of an HA step after S01; it takes one of: %s",
+		breakStepEnv, step, strings.Join(choices, ", "))
 }
 
 // sleepUnlessDone waits for d and returns ctx.Err() if ctx ends first.
@@ -322,7 +346,9 @@ func (r *haRun) enter(needs func(context.Context) error) {
 	if e := r.admit(name, needs); e.Reason != "" {
 		blockStep(e.Reason)
 	}
-	if os.Getenv(breakStepEnv) == name {
+	// checkBreakSettings refused a value that names no step before the suite
+	// started.
+	if step, _ := breakStepLabel(); step != "" && step == name {
 		r.breakOnPurpose(name)
 	}
 }

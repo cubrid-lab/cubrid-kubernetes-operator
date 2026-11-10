@@ -62,7 +62,7 @@ func (r scenarioRegistry) kindLabelKeys() []labelKey {
 // KindLabels returns the Ginkgo labels of a step of the Kind suite: the given
 // labels, each legacy scenario label followed by its descriptive key, so that
 // E2E_LABEL_FILTER=ha-replication selects what E2E_LABEL_FILTER=S02 does. The
-// legacy labels stay: gates, evidence paths and E2E_BREAK_STEP use them.
+// legacy labels stay: gates and evidence paths use them.
 func KindLabels(labels ...string) []string {
 	pairs := registry.kindLabelKeys()
 	out := make([]string, 0, 2*len(labels))

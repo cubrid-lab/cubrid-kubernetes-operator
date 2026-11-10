@@ -571,13 +571,15 @@ detail is cut at 512 bytes and the reason at about 1 KiB; both are redacted
 before they are cut, so that a cut does not leave part of a secret, and
 again when the evidence files are written.
 
-To see this on Kind, `E2E_BREAK_STEP=<label>` (the label of an HA step
-after S01, for example `S05-one-broker-pod`) makes that step fail on purpose
+To see this on Kind, `E2E_BREAK_STEP=<label or key>` (the label of an HA
+step after S01, for example `S05-one-broker-pod`, or the registry key of its
+result, `broker-failure-recovery-one-pod`) makes that step fail on purpose
 once its starting state holds, leaving a client writing, a read-write Broker
 Pod deleted and the Operator scaled to zero; with
 `E2E_BREAK_STEP_UNRESTORABLE=true` it also deletes the workload client,
 without which the starting state cannot be verified. The suite refuses to
-start when `E2E_BREAK_STEP` names no such step, or when
+start when `E2E_BREAK_STEP` names no such step, listing the labels and keys
+it takes, or when
 `E2E_BREAK_STEP_UNRESTORABLE` is set without it. A run that sets either does
 not pass its lane.
 

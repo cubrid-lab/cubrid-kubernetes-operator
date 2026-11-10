@@ -40,13 +40,16 @@ func main() {
 
 func run(ctx context.Context, args []string) (runErr error) {
 	flags := flag.NewFlagSet("installed-smoke", flag.ContinueOnError)
-	var path, targetContext, namespaceMode string
+	var path, targetContext, namespaceMode, check string
 	var cfg installed.Config
 	flags.StringVar(&path, "kubeconfig", "", "explicit target kubeconfig (credentials stay private)")
 	flags.StringVar(&targetContext, "context", "", "explicit context to snapshot")
 	flags.StringVar(&cfg.ClusterUID, "cluster-uid", "", "expected kube-system namespace UID")
 	flags.StringVar(&cfg.Namespace, "namespace", "", "explicit disposable run namespace")
 	flags.StringVar(&namespaceMode, "namespace-mode", "fresh", "fresh or explicitly preallocated namespace")
+	flags.StringVar(&check, "check", "",
+		"VM-lab check to run, by its key in the scenario registry, instead of -namespace-mode: "+
+			"installed-standalone-sql-smoke (fresh) or installed-preallocated-standalone-smoke (preallocated)")
 	flags.StringVar(&cfg.NamespaceUID, "namespace-uid", "", "expected preallocated namespace UID")
 	flags.StringVar(&cfg.OwnerConfigMap, "owner-configmap", "", "external immutable owner ConfigMap name")
 	flags.StringVar(&cfg.OwnerUID, "owner-uid", "", "expected external owner ConfigMap UID")
@@ -74,6 +77,18 @@ func run(ctx context.Context, args []string) (runErr error) {
 			return nil
 		}
 		return err
+	}
+	if check != "" {
+		set := false
+		flags.Visit(func(f *flag.Flag) { set = set || f.Name == "namespace-mode" })
+		if set {
+			return fmt.Errorf("-check %s selects the namespace mode by itself; remove -namespace-mode", check)
+		}
+		mode, err := installed.SmokeCheck(check)
+		if err != nil {
+			return err
+		}
+		namespaceMode = string(mode)
 	}
 	if flags.NArg() != 0 || (cfg.Level != "kind" && cfg.Level != "vm-lab") {
 		return errors.New("choose kind or vm-lab explicitly and provide no positional command")
