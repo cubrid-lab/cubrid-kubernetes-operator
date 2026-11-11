@@ -106,7 +106,11 @@ sequenceDiagram
    (POC-19). The Operator takes no part in either decision.
 3. **Step 4:** the read-write Brokers find the new master through the
    same host list. Open transactions can fail; new ones succeed once the new
-   master accepts writes.
+   master accepts writes. Until then, a read-write Broker that finds no
+   member accepting read-write connections connects to a standby instead
+   (POC-60): a transaction through `demo-rw` can then run there with no
+   error, its reads return only what that standby has applied, and its
+   writes fail with `-581`. See "Limits and assumptions".
 4. **Steps 5–6:** the StatefulSet controller creates the Pod again with the
    same name and volume, and CUBRID brings the member back, normally as a
    slave. One exception was observed: when the first member of the member
@@ -182,6 +186,7 @@ and direct database clients.
 | When the first member's Pod is deleted without a grace period it can be back within a second, and CUBRID makes it master again instead of promoting a slave | Observed (Kind and manual POC) | POC-19 in [docs/poc/RESULTS.md](../poc/RESULTS.md); scenario contract S03 |
 | CUBRID fails over without the Operator, and a restarted Operator names the new master without restarting a member | Observed (Kind in CI; one VM-lab run of the Operator restart) | ROADMAP.md row "HA and Broker" and the Operator restart paragraph; scenario contract "S06: Operator failure"; [ADR-0005](../adr/0005-failover-split-brain.md) section 7 |
 | Writes through `-rw` stay acknowledged while `RoutingReady` is not `True` | Observed (Kind in CI) | ROADMAP.md row "Recovery and safety"; [ADR-0005](../adr/0005-failover-split-brain.md) section 2 |
+| While no member accepts read-write connections, a read-write Broker configured as the Operator writes it connects to a standby; a read there succeeds and can miss the client's own acknowledged write, and a write fails with `-581`, until the new master is active | Observed (manual POC in Docker; the lag was made on purpose) | POC-60 in [docs/poc/RESULTS.md](../poc/RESULTS.md); [#786](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/786) |
 
 ## Limits and assumptions
 
@@ -195,6 +200,18 @@ and direct database clients.
   readiness or Conditions alone.
 - No zero-data-loss or automatic-failback guarantee is made (ROADMAP.md,
   "v0.1 scope").
+- **`-rw` does not guarantee read-your-writes during a failover.** From the
+  moment the master is lost until the new master is active, a transaction
+  through `demo-rw` can run on a standby with no error. Its reads return
+  what that standby has applied, which can miss the client's own
+  acknowledged writes, and its writes fail with `-581`. In POC-60 the
+  window lasted about 1.5 s after a graceful stop and 6 to 9 s after a
+  kill, in Docker. None of the Broker settings tried there
+  (`RECONNECT_TIME`, `CONNECT_ORDER`, `PREFERRED_HOSTS`,
+  `MAX_NUM_DELAYED_HOSTS_LOOKUP`) closes it, and `REPLICA_ONLY=ON` refuses
+  every connection, so the Operator leaves the Broker configuration as it
+  is. That a standby's natural lag caused the Kind read mismatches of
+  [#786](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/786) is a hypothesis; the POC made the lag itself.
 - Installation and recovery procedures for operators of a cluster are out of
   scope here; they are tracked in
   [#125](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/125).

@@ -192,6 +192,15 @@ usable backend?" — distinct from "which DB pod is master?" (status) and
 6. If a broker pod dies, readiness-gated Endpoints remove it from -rw
 ```
 
+Between steps 3 and 4, while no member accepts a read-write connection,
+the read-write Broker connects to a standby rather than refusing the
+client (POC-60). A transaction there gets no error; its reads return what
+that standby has applied, which can miss the client's own acknowledged
+writes, and its writes fail with `-581`. This lasts until the new master is
+active. `-rw` therefore gives no read-your-writes guarantee during a
+failover; the limit is stated in
+[failure-recovery.md](../architecture/failure-recovery.md#limits-and-assumptions).
+
 ### Client caveat (`altHosts`)
 
 A single Kubernetes Service helps new TCP connections find a live broker
