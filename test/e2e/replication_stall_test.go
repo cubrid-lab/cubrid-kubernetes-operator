@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
@@ -35,6 +36,7 @@ import (
 
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/evidence"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/faults"
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/utils"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/test/workload"
 )
 
@@ -309,6 +311,25 @@ func replicationStallStep(r *haRun) {
 			"ReplicationHealthy: False ReplicationStalled: %s\nHAReady at the same time: %s\n",
 			victim, newMaster, len(behind), len(ahead), message, haReady)
 
+		By("checking that a backup that needs a standby is taken from the healthy slave, not the stalled one (#291)")
+		// A slave that looks healthy and applies nothing must not be chosen as
+		// a backup source: its copy would lack what the master committed
+		// since it stopped. With one other slave caught up, StandbyOnly must
+		// choose that one.
+		stallBackup := fmt.Sprintf("stall-standby-%d", r.markers)
+		Expect(r.startStandbyBackup(context.Background(), stallBackup)).To(Succeed())
+		var stallTarget string
+		Eventually(func(g Gomega) {
+			target, phase, err := r.backupTarget(context.Background(), stallBackup)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(target).NotTo(BeEmpty(), "the backup's target, phase %q", phase)
+			stallTarget = target
+		}, 2*time.Minute, 3*time.Second).Should(Succeed(), observed)
+		Expect(stallTarget).To(Equal(healthySlave), "the standby a StandbyOnly backup chose while %s was stalled", victim)
+		stallPhase := r.waitBackupEnded(stallBackup, 5*time.Minute)
+		record += fmt.Sprintf("StandbyOnly backup %s while stalled: target %s, ended in phase %s\n",
+			stallBackup, stallTarget, stallPhase)
+
 		By("deleting the Pod of the stalled slave")
 		repairIssued := time.Now().UTC()
 		_, err = r.kubectl(context.Background(), "delete", "pod", victim, "--wait=false")
@@ -537,6 +558,8 @@ func openTransactionStep(r *haRun) {
 			done <- result{out, err}
 		}()
 		var samples, unhealthy, unreadable []string
+		openTxBackup := fmt.Sprintf("open-tx-standby-%d", r.markers)
+		var openTxTarget string
 		// The samples are kept also when the step fails.
 		DeferCleanup(func() {
 			writeScenarioFile("open-transaction/samples.txt", []byte(strings.Join(samples, "\n")+"\n"))
@@ -579,6 +602,18 @@ func openTransactionStep(r *haRun) {
 				samples = append(samples, fmt.Sprintf("rows on %s halfway: %s %v", slaves[0], n, err))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(n).To(Equal("0"), "rows of the open transaction on %s before the commit", slaves[0])
+				// A long transaction keeps log pages waiting on the slaves while
+				// they apply nothing of it. That must not exclude them as backup
+				// sources (#249, #291): a StandbyOnly backup started now must
+				// choose a slave before the commit.
+				Expect(r.startStandbyBackup(context.Background(), openTxBackup)).To(Succeed())
+			}
+			if midChecked && openTxTarget == "" {
+				if target, _, err := r.backupTarget(context.Background(), openTxBackup); err == nil && target != "" {
+					openTxTarget = target
+					samples = append(samples, fmt.Sprintf("%s StandbyOnly backup %s chose %s while the transaction was open",
+						stamp, openTxBackup, target))
+				}
 			}
 		}
 		held := time.Since(started)
@@ -589,6 +624,9 @@ func openTransactionStep(r *haRun) {
 		Expect(unhealthy).To(BeEmpty(), "samples in which ReplicationHealthy or HAReady was not True")
 		Expect(len(unreadable)).To(BeNumerically("<", len(samples)/2), "samples whose conditions could not be read: %v",
 			unreadable)
+		Expect(openTxTarget).To(BeElementOf(slaves),
+			"the standby a StandbyOnly backup chose while the transaction was open on %s", master)
+		samples = append(samples, "the backup ended in phase "+r.waitBackupEnded(openTxBackup, 5*time.Minute))
 
 		By("checking that every slave holds the rows after the commit")
 		want := fmt.Sprint(openTxRounds * openTxRows)
@@ -602,4 +640,71 @@ func openTransactionStep(r *haRun) {
 				"samples: %d, every one with ReplicationHealthy and HAReady True\n",
 			master, table, held.Round(time.Second), want, len(samples))))
 	})
+}
+
+// startStandbyBackup creates a CubridBackup of the run's database that must
+// be taken from a standby (StandbyOnly), into the cluster's own bucket under
+// a prefix of its own. Its target is what a step checks: which member the
+// Operator chose (status.targetInstance).
+func (r *haRun) startStandbyBackup(ctx context.Context, name string) error {
+	bucket, err := r.kubectl(ctx, "get", "cubridcluster", r.cluster, "-o", "jsonpath={.spec.objectStorage.bucket}")
+	if err != nil {
+		return err
+	}
+	if bucket == "" {
+		return fmt.Errorf("CubridCluster %s names no object storage bucket", r.cluster)
+	}
+	manifest := fmt.Sprintf(`apiVersion: database.cubrid.io/v1alpha1
+kind: CubridBackup
+metadata:
+  name: %s
+spec:
+  clusterRef:
+    name: %s
+  database: %s
+  target:
+    preference: StandbyOnly
+  level: Full
+  destination:
+    type: ObjectStorage
+    objectStorage:
+      provider: S3Compatible
+      bucket: %s
+      prefix: e2e-backups/%s
+`, name, r.cluster, r.database, bucket, name)
+	cmd := exec.CommandContext(ctx, "kubectl", "-n", r.namespace, "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(manifest)
+	_, err = utils.Run(cmd)
+	return err
+}
+
+// backupTarget reads the member a CubridBackup was given to and its phase.
+func (r *haRun) backupTarget(ctx context.Context, name string) (target, phase string, err error) {
+	out, err := r.kubectlQuiet(ctx, "get", "cubridbackup", name, "-o",
+		"jsonpath={.status.targetInstance}{\"|\"}{.status.phase}")
+	if err != nil {
+		return "", "", err
+	}
+	target, phase, _ = strings.Cut(out, "|")
+	return target, phase, nil
+}
+
+// waitBackupEnded waits up to limit for a CubridBackup to end, so that it
+// does not run into a later step, and returns its last phase. Whether it
+// completed is recorded, not judged: the step checks which member was
+// chosen, and the upload goes to a mock that keeps nothing.
+func (r *haRun) waitBackupEnded(name string, limit time.Duration) string {
+	deadline := time.Now().Add(limit)
+	phase := ""
+	for time.Now().Before(deadline) {
+		_, p, err := r.backupTarget(context.Background(), name)
+		if err == nil {
+			phase = p
+			if p == "Completed" || p == "Failed" {
+				return p
+			}
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return phase + " (still running after " + limit.String() + ")"
 }
