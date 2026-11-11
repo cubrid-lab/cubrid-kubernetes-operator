@@ -83,15 +83,15 @@ The same summary gives the memory kubelet reports available on each of those
 nodes (`node.memory.availableBytes`). A node with less than
 `--min-node-free-memory` refuses the run, and nothing is created. So does a
 node that reports no figure, because an unknown measurement is not taken as
-enough. The default is `1Gi`, room for one member at about 600Mi. The shared
+enough. The default is `1Gi`, room for one member at about 640Mi. The shared
 clusters' database Pods request no memory, so the scheduler does not avoid a
 node they already fill. There the kernel kills `cub_server` and the node goes
 NotReady (#672). The values read are recorded as `nodeAvailableMemoryBytes`.
 `0` reads nothing. This is a snapshot taken when the run starts: it does not
 stop the memory use growing during the run.
 
-`--member-memory-request` (default `600Mi`) and `--member-cpu-request` (default
-`100m`) are set as `spec.resources.requests` on the cluster the run creates, and
+`--member-memory-request` (default `640Mi`) and `--member-cpu-request` (default
+`150m`) are set as `spec.resources.requests` on the cluster the run creates, and
 both must be positive. The values the database Pod declares are recorded as
 `memoryRequest` and `cpuRequest` under `database`, and the same fields record
 what each manager Pod declares, under `operator.pods`. A database Pod the
