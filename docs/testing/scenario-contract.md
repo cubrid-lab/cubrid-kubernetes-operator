@@ -1309,6 +1309,8 @@ no `operations` has unknown counts, not counts of zero.
 
 To rename a legacy name, add the new name to the `Aliases` of the result in the
 registry and keep the old one. The key stays, and earlier runs stay readable.
+`Lane.Gate` matches by that key too, so a lane that still lists the old name is
+satisfied only when every record of the result, under either name, passes.
 To retire a result, take its key out of the lanes and keep its entry: its earlier
 results still resolve, and a later run shows it as `removed`. Deleting the entry
 makes those results `unresolved` instead, which fails closed and loses the
@@ -1371,11 +1373,18 @@ Removing `key` and `displayName` and restoring the version number gives the
 version 1 summary, with `notes` moved before `scenarios`; JSON readers do not
 depend on that order. What version 2 leaves unchanged:
 
-- **The verdict.** `Lane.Gate` matches on `id` and `variant` and does not read
-  the key. A result with a key is still failed, blocked, not run or without
-  evidence, and the five results and the Kind and filtered lanes mean what they
-  did. Writing a key decides nothing: a result with no key keeps its verdict in
-  the file, and `ReadRun` reports it.
+- **The verdict.** `Lane.Gate` does not read the recorded key. It resolves the
+  `id` and `variant` of each requirement and each result to a registry key
+  under the run's lane and `environment.level`, as `ReadRun` does, and matches
+  them by that key; a name that does not resolve there, as in a run that
+  records no level, matches only the same `id` and `variant`. The real registry
+  holds one legacy name per result, so every run of either version is judged
+  as it was when the gate compared `id` and `variant`. Once a result has a
+  second legacy name, a record under either name is held to the requirement,
+  and every record must pass. A result with a key is still failed, blocked, not
+  run or without evidence, and the five results and the Kind and filtered lanes
+  mean what they did. Writing a key decides nothing: a result with no key keeps
+  its verdict in the file, and `ReadRun` reports it.
 - **The problem lines.** They start with the legacy name as in version 1.
 - **Selectors and evidence paths.** They are the subject of #712.
 - **`junit.xml`.** A test removes the key property from the writer's output and

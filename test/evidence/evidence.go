@@ -250,16 +250,51 @@ type Lane struct {
 // the lane allows that. A scenario judged a fail is a problem even when the
 // lane does not require it. A lane that requires nothing never passes: such
 // a run proved nothing.
-func (l Lane) Gate(s Summary, dir string) []string {
+//
+// A result is a record of a requirement when both are one check: when their
+// legacy names resolve to one registry key under the lane's name and the level
+// the summary records (ResolveAlias), or, where a name does not resolve, when
+// the legacy names are equal. So a result recorded under another registered
+// legacy name of a required check is held to the requirement, and a result
+// whose name the registry does not hold at that level matches its exact name
+// only, as before keys existed. A key written into a result's ID is not a
+// legacy name and matches nothing. The problem lines keep the legacy name of
+// the requirement.
+func (l Lane) Gate(s Summary, dir string) []string { return registry.gate(l, s, dir) }
+
+// checkIdentity is what Gate matches a requirement and a result on: the
+// registry key of a legacy name that resolves under the run's lane and level,
+// or the legacy name itself where it does not. Exactly one field is set, so a
+// key never equals a name.
+type checkIdentity struct {
+	key, legacy string
+}
+
+func (r scenarioRegistry) identity(lane, level string, sc Scenario) checkIdentity {
+	if entry, err := r.resolveResult(lane, level, sc); err == nil {
+		return checkIdentity{key: entry.Key}
+	}
+	return checkIdentity{legacy: sc.Name()}
+}
+
+func (r scenarioRegistry) gate(l Lane, s Summary, dir string) []string {
 	var problems []string
 	if len(l.Required) == 0 {
 		problems = append(problems, "no scenario recorded: the lane requires nothing, so the run proved nothing")
 	}
+	identify := func(sc Scenario) checkIdentity { return r.identity(l.Name, s.Environment.Level, sc) }
+	results := make([]checkIdentity, len(s.Scenarios))
+	for i, sc := range s.Scenarios {
+		results[i] = identify(sc)
+	}
+	required := map[checkIdentity]bool{}
 	for _, req := range l.Required {
-		required := Scenario{ID: req.ID, Variant: req.Variant}
+		name := Scenario{ID: req.ID, Variant: req.Variant}
+		want := identify(name)
+		required[want] = true
 		seen := false
-		for _, sc := range s.Scenarios {
-			if sc.ID != req.ID || sc.Variant != req.Variant {
+		for i, sc := range s.Scenarios {
+			if results[i] != want {
 				continue
 			}
 			seen = true
@@ -267,14 +302,14 @@ func (l Lane) Gate(s Summary, dir string) []string {
 			if result == Pass || (result == NotApplicable && req.NotApplicable) {
 				continue
 			}
-			problems = append(problems, required.problemLine(fmt.Sprintf("%s: %s", result, reason)))
+			problems = append(problems, name.problemLine(fmt.Sprintf("%s: %s", result, reason)))
 		}
 		if !seen {
-			problems = append(problems, required.problemLine("missing: no result was recorded"))
+			problems = append(problems, name.problemLine("missing: no result was recorded"))
 		}
 	}
-	for _, sc := range s.Scenarios {
-		if l.requires(sc) {
+	for i, sc := range s.Scenarios {
+		if required[results[i]] {
 			continue
 		}
 		if result, reason := sc.Judge(dir); result == Fail {
@@ -282,12 +317,6 @@ func (l Lane) Gate(s Summary, dir string) []string {
 		}
 	}
 	return problems
-}
-
-func (l Lane) requires(sc Scenario) bool {
-	return slices.ContainsFunc(l.Required, func(req Requirement) bool {
-		return req.ID == sc.ID && req.Variant == sc.Variant
-	})
 }
 
 // Conclude judges the run against the lane, writes summary.json and

@@ -156,10 +156,12 @@ func restoreLane(name string, keys ...string) RequiredLane {
 
 // registry is the one source of scenario identity: the descriptive keys, what
 // people read, the contract sections, the legacy names and the lanes.
-// docs/testing/scenario-name-migration.md explains how it was derived. The
-// gates, the labels and the evidence paths still use the legacy names, and
-// the lists of requirements stay explicit where the runs assemble them; tests
-// compare those lists, and the lane table of the contract, with this one.
+// docs/testing/scenario-name-migration.md explains how it was derived. Gate
+// matches requirements and results by the key their legacy names resolve to.
+// The requirements, the results, the labels and the evidence paths still name
+// the legacy names, and the lists of requirements stay explicit where the runs
+// assemble them; tests compare those lists, and the lane table of the
+// contract, with this one.
 var registry = scenarioRegistry{
 	families: []ScenarioFamily{
 		{"S00", "standalone-database-sql", standaloneText, "s00-install-and-single-database-smoke-test"},
@@ -304,8 +306,9 @@ func ResolveAlias(lane, level, alias string) (ResolvedScenario, error) {
 // one line per difference: a requirement that maps to no result of the lane,
 // a registered result with no requirement, or two requirements of one result.
 // An empty answer means that the two agree exactly. Tests use it; a lane's
-// verdict comes from Gate alone, which does not read the registry, so that a
-// result that failed to map stays missing there.
+// verdict comes from Gate alone. Gate matches by the key a legacy name
+// resolves to, and a result that fails to map satisfies only a requirement of
+// its exact legacy name, so it stays missing for a registered requirement.
 func (l Lane) RegistryProblems(level string) []string { return registry.laneProblems(l, level) }
 
 // RegisteredLanes returns the names of the lanes of a level.
