@@ -419,13 +419,17 @@ var activeCSQL = regexp.MustCompile(`(?m)\(ACTIVE\)\s+\S+\s+\S+\s+\d+\s+csql\s+[
 // 5 s keep it open for about 100 s, past the 90 s the decision on #249 asks
 // for and past the 60-second stall window.
 const (
-	openTxRounds = 20
+	openTxRounds = 30
 	openTxRows   = 200
 	openTxPause  = 5 * time.Second
 	// openTxBackupAfter is when the open-transaction step creates its
-	// backup: past the Operator's 60 s stall window (replicationStallWindow)
-	// with a margin, and about 20 s before the commit.
-	openTxBackupAfter = 75 * time.Second
+	// backup. The Operator starts a slave's stall at its second reading with
+	// pages waiting and nothing applied, readings come every 10 s
+	// (haResyncInterval), and a stall excludes a slave after 60 s
+	// (replicationStallWindow): about 72 to 82 s into the transaction at the
+	// latest. 100 s leaves a margin past that and about 50 s before the
+	// commit.
+	openTxBackupAfter = 100 * time.Second
 )
 
 // openTransactionStep registers a check that a transaction held open on the
@@ -572,7 +576,14 @@ func openTransactionStep(r *haRun) {
 				Expect(r.startStandbyBackup(context.Background(), openTxBackup)).To(Succeed())
 				backupStarted = time.Now()
 				samples = append(samples, stamp+" StandbyOnly backup "+openTxBackup+" created")
+				// Deleting the object does not stop the backup on the member,
+				// so the cleanup first waits for it to end, and says so when it
+				// may still run into the next step.
 				DeferCleanup(func() {
+					if phase := r.waitBackupEnded(openTxBackup, 2*time.Minute); phase != "Completed" && phase != "Failed" {
+						AddReportEntry("backup still running", openTxBackup+" was in phase "+phase+
+							" when this step ended, and may run into the next step")
+					}
 					_, _ = r.kubectl(context.Background(), "delete", "cubridbackup", openTxBackup, "--wait=false",
 						"--ignore-not-found")
 				})
