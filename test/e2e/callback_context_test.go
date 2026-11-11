@@ -78,6 +78,9 @@ func TestCallbackHelpersEndWithTheStepContext(t *testing.T) {
 		"readS00Row": func(ctx context.Context) {
 			_ = readS00Row(csqlInPod(ctx, "ns", pod0, "db"), "m")
 		},
+		"s00ReadBeforePodDeletion": func(ctx context.Context) {
+			_ = s00ReadBeforePodDeletion(memberCSQL(ctx, "ns", pod0, "db", false).read, pod0, "m")
+		},
 	}
 	hangingKubectl(t)
 	for name, call := range helpers {

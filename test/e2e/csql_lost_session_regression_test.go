@@ -452,3 +452,91 @@ func TestHAMembersReadTheirMode(t *testing.T) {
 		}
 	}
 }
+
+// The check of the starting state before S00 deletes the Pod reads the marker
+// row once more when csql printed -199 and -111 beside it, as the smoke reads
+// do, and passes only on an unchanged server whose second read shows the row
+// (#238; E2E run 42985228360 was blocked on that pair).
+func TestS00ReadBeforePodDeletion(t *testing.T) {
+	calls := 0
+	err := s00ReadBeforePodDeletion(readThrough(sameServer(), func(string) (string, error) {
+		calls++
+		if calls == 1 {
+			return lostSession, nil
+		}
+		return cleanRead, nil
+	}), "s00-0", s00TestMarker)
+	if err != nil {
+		t.Fatalf("a pair on an unchanged server, then the row: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("csql ran %d times, want 2", calls)
+	}
+}
+
+// The starting state stays unverified when the server did not hold, when the
+// second read prints the pair too, when the row is not there on either read,
+// and when csql cannot be run. Each case is checked for the reason it fails,
+// so that a change of fixture cannot make it fail for another one.
+func TestS00ReadBeforePodDeletionStaysStrict(t *testing.T) {
+	vanished := func() sqlcheck.Guard {
+		reads := 0
+		return sqlcheck.Guard{Identity: func() (string, error) {
+			reads++
+			if reads == 1 {
+				return "cub_server 77 1\n", nil
+			}
+			return "", nil
+		}}
+	}
+	sequence := func(outs ...string) sqlRunner {
+		calls := 0
+		return func(string) (string, error) {
+			out := outs[min(calls, len(outs)-1)]
+			calls++
+			return out, nil
+		}
+	}
+	noRow := "0 rows selected.\n"
+	lostWithoutRow := strings.Replace(lostSession, s00TestMarker, "another-marker", 1)
+	if lostWithoutRow == lostSession {
+		t.Fatal("the lost-session fixture does not hold the marker")
+	}
+	lost := func(want func(*sqlcheck.LostSessionError) bool) func(error) bool {
+		return func(err error) bool {
+			var le *sqlcheck.LostSessionError
+			return errors.As(err, &le) && want(le)
+		}
+	}
+	cases := map[string]struct {
+		guard sqlcheck.Guard
+		run   sqlRunner
+		want  func(error) bool
+	}{
+		"the server vanished": {vanished(), sequence(lostSession, cleanRead),
+			lost(func(le *sqlcheck.LostSessionError) bool { return le.Identity == sqlcheck.IdentityVanished })},
+		"the pair twice": {sameServer(), sequence(lostSession),
+			lost(func(le *sqlcheck.LostSessionError) bool { return le.Twice })},
+		"no such row": {sameServer(), sequence(noRow),
+			func(err error) bool {
+				return err != nil && !lost(func(*sqlcheck.LostSessionError) bool { return true })(err)
+			}},
+		"the pair without the row": {sameServer(), sequence(lostWithoutRow, cleanRead),
+			func(err error) bool { return err != nil }},
+		"the pair, then no row": {sameServer(), sequence(lostSession, noRow),
+			func(err error) bool { return err != nil }},
+		"transport error": {sameServer(), func(string) (string, error) { return "", errors.New("transport") },
+			func(err error) bool { return err != nil && strings.Contains(err.Error(), "transport") }},
+	}
+	for name, c := range cases {
+		calls := 0
+		run := func(sql string) (string, error) { calls++; return c.run(sql) }
+		err := s00ReadBeforePodDeletion(readThrough(c.guard, run), "s00-0", s00TestMarker)
+		if !c.want(err) {
+			t.Errorf("%s: the error is %v", name, err)
+		}
+		if name == "the pair without the row" && calls != 1 {
+			t.Errorf("%s: csql ran %d times, want 1: a read without its row is not repeated", name, calls)
+		}
+	}
+}
