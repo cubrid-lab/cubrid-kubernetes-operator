@@ -205,7 +205,7 @@ lane's environment rules the scenario out; work that was skipped is
 
 | Lane | Where it runs | Required scenarios and variants | `not_applicable` allowed |
 |---|---|---|---|
-| `kind` | `make test-e2e` with no filter; the E2E workflow on a GitHub-hosted `ubuntu-latest` (linux/amd64) runner | S00, S01, S02, S03 (`abrupt-first-member`, `abrupt`, `graceful`), S05 (`broker-process`, `one-broker-pod`, `all-rw-brokers`), S06 (`restart`, `absent-during-failover`), S14, S14 (`token-rotation`, `token-migration`) | none |
+| `kind` | `make test-e2e` with no filter; the E2E workflow on a GitHub-hosted `ubuntu-latest` (linux/amd64) runner | S00, S01, S02, S03 (`abrupt-first-member`, `abrupt`, `graceful`), S05 (`broker-process`, `one-broker-pod`, `all-rw-brokers`), S06 (`restart`, `absent-during-failover`), S13 (`retain`, `delete`), S14, S14 (`token-rotation`, `token-migration`) | none |
 | `lab-installed-smoke` | The [installed-Operator connection command](installed-smoke.md), under an authorized launcher on its explicitly selected environment | LAB00: create a new standalone cluster, commit/read SQL and verify scoped cleanup | none |
 | `lab-preallocated-component-smoke` | The installed command with explicit preallocated ownership inputs on its selected environment | LAB00 (`preallocated`): commit/read SQL, UID-delete only the created CR, observe owned StatefulSet/DB Pod disappearance, retain/report PVCs | none |
 | `lab-installed-ha` | The [installed-Operator HA command](installed-ha.md), under an authorized launcher on its explicitly selected environment | LAB01: create a new three-member HA cluster, reach the common starting state, run the workload client and check the data rules on every member and both Services, verify scoped cleanup | none |
@@ -2721,6 +2721,52 @@ it needs more.
 - **Data check:** `retain`: all data rules after the cluster is recreated.
 - **Limits:** `delete_limit`.
 
+On Kind (`test/e2e/s13_test.go`) both variants run on a standalone cluster,
+each in a namespace of its own that enforces Pod Security `restricted`:
+
+- The cluster is created, becomes `Ready`, and a marker row is written with
+  `csql`. The run records the claim `data-s13-0` (UID, volume, phase), the
+  StatefulSet's `persistentVolumeClaimRetentionPolicy.whenDeleted`, which must
+  match the variant, and the objects in the namespace. In `retain` the
+  policy is left out of the manifest, and the API server's default `Retain`
+  is checked.
+- The fault is `kubectl delete cubridcluster --wait=false`, confirmed when the
+  `CubridCluster` can no longer be read. The expected outcome is that no
+  StatefulSet, Deployment, Service or Pod is left in the namespace, and in
+  `delete` no PVC either. `deleteSeconds` is measured from the deletion to that
+  outcome. In `retain` each read also requires the recorded claim with the
+  same UID and volume and no deletion timestamp; anything else fails the run
+  as a PVC removed under `Retain`. The test waits 5 minutes for the outcome
+  (longer when a set `delete_limit` would not fit); this wait is the test's
+  own bound, not `delete_limit`.
+- In `retain` the volume is checked to still exist, its reclaim policy is
+  recorded, and the cluster is created again with the same name. Once it is
+  `Ready`, the claim must still have the same UID and volume, and the marker
+  row must read back. The member's container log must say that the database
+  was already present (`[im-entrypoint] database 'appdb' already present`)
+  and must not show the entrypoint's `createdb` line (`[im-entrypoint]
+  createdb 'appdb'`); a `createdb` line there fails the run as the database
+  created again over retained data. The first start's log must show that
+  `createdb` line, or the check after the recreation could not see one, and
+  the run is blocked. A container that restarted more than once has lost its
+  first log, and the run is blocked.
+- `delete_limit` has no value yet, so a run whose checks all held is
+  `blocked` with `time_limit_unset` and records `deleteSeconds` as a
+  baseline; it is never a pass until the limit is set from baselines. Both
+  variants are required in the `kind` lane, so until then the lane does not
+  pass.
+- The cleanup deletes the cluster, then the recorded claim by name in the
+  variant's namespace and only while its UID is the recorded one, then the
+  namespace. Nothing outside that namespace is deleted.
+- Evidence: `S13/<variant>/record.json` (the claims before and after, the
+  volume's reclaim policy, the objects before the deletion and at the last
+  read, both log verdicts and any cleanup problem), `timeline.jsonl`, and the
+  logs and snapshots under `S13/<variant>/`.
+
+Not covered on Kind: an HA cluster created again over its retained PVCs, whose
+bootstrap fails over the retained data (#798); a PVC kept when a cluster is
+scaled or updated; the PV reclaim policy of a real StorageClass; the VM lab.
+
 ### S14: authentication and Secrets
 
 - **Level:** real database on Kind.
@@ -2869,8 +2915,8 @@ another environment without changing the code, through an environment
 variable that holds a duration such as `45s` or `2m`:
 `E2E_INSTALL_LIMIT`, `E2E_READY_LIMIT`, `E2E_FORMATION_LIMIT`,
 `E2E_REPLICATION_LIMIT`, `E2E_FAILOVER_LIMIT`, `E2E_REJOIN_LIMIT`,
-`E2E_STABLE_PERIOD`, `E2E_BROKER_RECOVERY_LIMIT` and
-`E2E_OPERATOR_RESYNC_LIMIT`. The value `0` or `unset` runs the scenario as a
+`E2E_STABLE_PERIOD`, `E2E_BROKER_RECOVERY_LIMIT`,
+`E2E_OPERATOR_RESYNC_LIMIT` and `E2E_DELETE_LIMIT`. The value `0` or `unset` runs the scenario as a
 baseline, which is reported as `blocked`. A value that is not a duration,
 or is negative, stops the suite before it starts. The limit a scenario was
 judged by is in its entry of `summary.json`, with `unset` for one that has
@@ -2913,7 +2959,7 @@ measured; **unset** limits have neither a value nor a baseline.
 | `rebuild_limit` | Rebuild requested until the member holds all rows | unset | unset |
 | `backup_limit` | Backup requested until `Completed` or `Failed` | unset | unset |
 | `restore_limit` | Recovery cluster created until `Ready` | unset | unset |
-| `delete_limit` | Cluster deleted until its resources are gone | unset | unset |
+| `delete_limit` | Cluster deleted until its resources are gone | unset (Kind: `E2E_DELETE_LIMIT`, no default) | unset |
 | `drain_limit` | Drain issued until it finishes or is refused | unset | unset |
 
 S00 uses the same four rules as every other required scenario

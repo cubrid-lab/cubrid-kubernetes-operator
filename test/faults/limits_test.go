@@ -92,6 +92,7 @@ func TestLimitDefaults(t *testing.T) {
 		{StablePeriod, "stable_period", "E2E_STABLE_PERIOD", 30 * time.Second},
 		{BrokerRecoveryLimit, "broker_recovery_limit", "E2E_BROKER_RECOVERY_LIMIT", time.Minute},
 		{OperatorResyncLimit, "operator_resync_limit", "E2E_OPERATOR_RESYNC_LIMIT", 2 * time.Minute},
+		{DeleteLimit, "delete_limit", "E2E_DELETE_LIMIT", 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

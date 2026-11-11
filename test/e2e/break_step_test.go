@@ -56,7 +56,8 @@ func TestBreakStepTakesTheLabelOrTheKey(t *testing.T) {
 func TestBreakStepRefusesANameOfNoHAStep(t *testing.T) {
 	for _, value := range []string{"S99", "broker-failure-recovery-one-pd", "S00", "standalone-database-sql",
 		"S01", "ha-broker-access", "S03", "ha-primary-pod-recovery", "S05/one-broker-pod",
-		"installed-operator-failure-recovery-restart", "S04-power-off"} {
+		"installed-operator-failure-recovery-restart", "S04-power-off", "S13-retain",
+		"cluster-deletion-retention-delete"} {
 		t.Setenv(breakStepEnv, value)
 		err := checkBreakSettings()
 		if err == nil {

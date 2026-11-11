@@ -87,6 +87,11 @@ var (
 	// OperatorResyncLimit: the Operator started until its status matches
 	// fresh observations.
 	OperatorResyncLimit = LimitSpec{"operator_resync_limit", "E2E_OPERATOR_RESYNC_LIMIT", 2 * time.Minute}
+	// DeleteLimit: a cluster deleted until what the Operator created for it,
+	// and with retentionPolicy Delete its PVCs, are gone. It has no baseline
+	// yet, so it is unset: a run of S13 is a baseline, blocked with
+	// time_limit_unset.
+	DeleteLimit = LimitSpec{"delete_limit", "E2E_DELETE_LIMIT", 0}
 )
 
 // FromEnv reads the limit from its environment variable, as LimitFromEnv

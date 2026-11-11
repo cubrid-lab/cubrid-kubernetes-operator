@@ -118,7 +118,9 @@ that cluster and keeps it (without one, it creates and deletes its own as
 usual). A run whose cluster could not be deleted fails and names the command
 that deletes it. Never point `KIND_CLUSTER` at a valuable cluster. The suite has independent groups: the manager itself, the wiring
 scenario with a fake Instance Manager (label `fake-instance-manager`, no
-CUBRID), S00 with the real CUBRID image (labels `db` and `S00`), and the HA
+CUBRID), S00 with the real CUBRID image (labels `db` and `S00`), S13, the
+deletion of a standalone cluster with each retention policy (labels `db`,
+`S13`, `S13-retain` and `S13-delete`; the HA case is #798), and the HA
 group on the real image (labels `db` and `ha-bootstrap`; each scenario step is
 labelled with its ID, and a variant also with `<ID>-<variant>`). The real-image
 groups run on linux/amd64 only and are skipped elsewhere. A failure in one
@@ -140,6 +142,7 @@ step, makes the run fail before the suite starts.
 make test-e2e E2E_LABEL_FILTER=standalone-database-sql   # one scenario by its key (or by its ID: S00)
 make test-e2e E2E_LABEL_FILTER='ha-setup || ha-primary-pod-recovery-graceful'  # one HA variant; always select ha-setup with it
 make test-e2e E2E_LABEL_FILTER='ha-setup || S03-graceful'  # the same, by the older label
+make test-e2e E2E_LABEL_FILTER=cluster-deletion-retention-retain   # S13 retain alone (or S13-retain)
 make test-e2e E2E_LABEL_FILTER='!db'      # without the real-database scenarios
 make test-e2e E2E_EVIDENCE_DIR=$PWD/artifacts/e2e   # keep the evidence elsewhere than e2e-evidence/
 ```

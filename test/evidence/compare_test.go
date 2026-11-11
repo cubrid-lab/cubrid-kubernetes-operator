@@ -38,8 +38,8 @@ const (
 // withAlias is the registry after a result took another legacy name, as a
 // rename of its scenario would register it.
 func withAlias(key, alias string) scenarioRegistry {
-	renamed := registry
-	renamed.entries = slices.Clone(registry.entries)
+	renamed := frozen
+	renamed.entries = slices.Clone(frozen.entries)
 	for i, entry := range renamed.entries {
 		if entry.Key == key {
 			renamed.entries[i].Aliases = append(slices.Clone(entry.Aliases), alias)
@@ -51,8 +51,8 @@ func withAlias(key, alias string) scenarioRegistry {
 // outOfLanes is the registry after a result left its lanes. The entry stays, so
 // that the results earlier runs recorded of it still have an identity.
 func outOfLanes(key string) scenarioRegistry {
-	retired := registry
-	retired.lanes = slices.Clone(registry.lanes)
+	retired := frozen
+	retired.lanes = slices.Clone(frozen.lanes)
 	for i, lane := range retired.lanes {
 		retired.lanes[i].Keys = slices.DeleteFunc(slices.Clone(lane.Keys), func(k string) bool { return k == key })
 	}
@@ -123,10 +123,10 @@ func abruptRenamedInBothFiles() bundleChange {
 func TestCompareRunsMatchesARunAcrossTheFormatVersions(t *testing.T) {
 	for _, fixture := range []string{kindRun, labRestartRun} {
 		t.Run(fixture, func(t *testing.T) {
-			older := readChanged(t, registry, version1, fixture)
-			newer := readChanged(t, registry, version2, fixture)
+			older := readChanged(t, frozen, version1, fixture)
+			newer := readChanged(t, frozen, version2, fixture)
 			oldFiles, newFiles := snapshot(t, older.Dir), snapshot(t, newer.Dir)
-			got := CompareRuns(older, newer)
+			got := frozen.compareRuns(older, newer)
 			if !got.Matches() {
 				t.Fatalf("problems = %q, want none", got.Problems)
 			}
@@ -183,9 +183,9 @@ func TestCompareRunsNeverMatchesAnUnprovenRequiredResult(t *testing.T) {
 	for name, tc := range tests {
 		for _, version := range []string{version1, version2} {
 			t.Run(name+" at version "+version, func(t *testing.T) {
-				good := readChanged(t, registry, version, kindRun)
-				bad := readChanged(t, registry, version, kindRun, tc.change)
-				later := CompareRuns(good, bad)
+				good := readChanged(t, frozen, version, kindRun)
+				bad := readChanged(t, frozen, version, kindRun, tc.change)
+				later := frozen.compareRuns(good, bad)
 				if later.Matches() {
 					t.Error("the damaged new run matched")
 				}
@@ -193,7 +193,7 @@ func TestCompareRunsNeverMatchesAnUnprovenRequiredResult(t *testing.T) {
 					got.OldVerdict != Pass || got.Problem == "" {
 					t.Errorf("new side: %+v, want %s with verdict %q", got, tc.state, tc.verdict)
 				}
-				earlier := CompareRuns(bad, good)
+				earlier := frozen.compareRuns(bad, good)
 				if earlier.Matches() {
 					t.Error("the damaged old run matched")
 				}
@@ -221,8 +221,8 @@ func TestCompareRunsDoesNotTakeTheSameUnprovenResultForAMatch(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := CompareRuns(readChanged(t, registry, version2, kindRun, tc.change),
-				readChanged(t, registry, version2, kindRun, tc.change))
+			got := frozen.compareRuns(readChanged(t, frozen, version2, kindRun, tc.change),
+				readChanged(t, frozen, version2, kindRun, tc.change))
 			if got.Matches() {
 				t.Error("two runs with the same unproven result matched")
 			}
@@ -266,9 +266,9 @@ func TestCompareRunsShowsARenameTheRegistryRecords(t *testing.T) {
 // identity, and neither is a rename. The same holds for a new name whose
 // display name is the old one's: nothing matches on a display name.
 func TestCompareRunsNeverGuessesARename(t *testing.T) {
-	older := readChanged(t, registry, version2, kindRun)
-	newer := readChanged(t, registry, version2, kindRun, abruptRenamedInBothFiles())
-	got := CompareRuns(older, newer)
+	older := readChanged(t, frozen, version2, kindRun)
+	newer := readChanged(t, frozen, version2, kindRun, abruptRenamedInBothFiles())
+	got := frozen.compareRuns(older, newer)
 	if got.Matches() {
 		t.Error("an unregistered new name matched")
 	}
@@ -293,7 +293,7 @@ func TestCompareRunsRequiresBothNamesAmongTheAliasesOfTheKey(t *testing.T) {
 	renamed := withAlias(abruptKey, renamedAlias)
 	older := readChanged(t, renamed, version2, kindRun)
 	newer := readChanged(t, renamed, version2, kindRun, abruptRenamedInBothFiles())
-	got := CompareRuns(older, newer)
+	got := frozen.compareRuns(older, newer)
 	if got.Matches() {
 		t.Error("a name the registry does not hold matched")
 	}
@@ -371,8 +371,8 @@ func TestCompareRunsNeverPairsAResultWithoutOneIdentity(t *testing.T) {
 		}
 	})
 	t.Run("a lab lane recorded at the kind level", func(t *testing.T) {
-		run := readChanged(t, registry, version1, labSmokeRun)
-		got := CompareRuns(run, readChanged(t, registry, version1, labSmokeRun))
+		run := readChanged(t, frozen, version1, labSmokeRun)
+		got := frozen.compareRuns(run, readChanged(t, frozen, version1, labSmokeRun))
 		if got.Matches() {
 			t.Error("results with no key matched")
 		}
@@ -389,7 +389,7 @@ func TestCompareRunsDoesNotPairARepeatedResult(t *testing.T) {
 		sc := scenarioNamed(t, summary, s03, abrupt)
 		summary[fieldScenarios] = append(summary[fieldScenarios].([]any), maps.Clone(sc))
 	})
-	got := CompareRuns(readChanged(t, registry, version2, kindRun), readChanged(t, registry, version2, kindRun, twice))
+	got := frozen.compareRuns(readChanged(t, frozen, version2, kindRun), readChanged(t, frozen, version2, kindRun, twice))
 	if got.Matches() {
 		t.Error("a repeated result matched")
 	}
@@ -409,7 +409,8 @@ func TestCompareRunsDoesNotPairARepeatedResult(t *testing.T) {
 		inSummary(func(summary map[string]any) { slices.Reverse(summary[fieldScenarios].([]any)) })(t, dir)
 	}
 	for _, change := range []bundleChange{blockedLast, blockedFirst} {
-		got := CompareRuns(readChanged(t, registry, version2, kindRun), readChanged(t, registry, version2, kindRun, change))
+		got := frozen.compareRuns(readChanged(t, frozen, version2, kindRun),
+			readChanged(t, frozen, version2, kindRun, change))
 		if result := resultWithKey(t, got, abruptKey); result.NewVerdict != Blocked {
 			t.Errorf("result = %+v, want it blocked", result)
 		}
@@ -419,7 +420,7 @@ func TestCompareRunsDoesNotPairARepeatedResult(t *testing.T) {
 // S06/restart is a Kind test and a lab test. Results of two levels are never
 // compared, so neither reads as the other, and as nothing added or removed.
 func TestCompareRunsRefusesRunsOfTwoLevels(t *testing.T) {
-	got := CompareRuns(readChanged(t, registry, version2, kindRun), readChanged(t, registry, version2, labRestartRun))
+	got := frozen.compareRuns(readChanged(t, frozen, version2, kindRun), readChanged(t, frozen, version2, labRestartRun))
 	if got.Matches() {
 		t.Error("runs of two levels matched")
 	}
@@ -434,8 +435,8 @@ func TestCompareRunsRefusesRunsOfTwoLevels(t *testing.T) {
 func TestCompareRunsDoesNotMatchRunsOfTwoLanes(t *testing.T) {
 	filtered := []bundleChange{inSummary(func(summary map[string]any) { summary[fieldLane] = filteredKindLane }),
 		abruptResult("not_run")}
-	got := CompareRuns(readChanged(t, registry, version2, kindRun),
-		readChanged(t, registry, version2, kindRun, filtered...))
+	got := frozen.compareRuns(readChanged(t, frozen, version2, kindRun),
+		readChanged(t, frozen, version2, kindRun, filtered...))
 	if got.Matches() {
 		t.Error("a filtered run matched the full lane")
 	}
@@ -446,19 +447,19 @@ func TestCompareRunsDoesNotMatchRunsOfTwoLanes(t *testing.T) {
 		t.Errorf("result = %+v, want it not run", result)
 	}
 	onlyLane := filtered[:1:1]
-	missing := CompareRuns(readChanged(t, registry, version2, kindRun, onlyLane...),
-		readChanged(t, registry, version2, kindRun, append(onlyLane, abruptRemoved())...))
+	missing := frozen.compareRuns(readChanged(t, frozen, version2, kindRun, onlyLane...),
+		readChanged(t, frozen, version2, kindRun, append(onlyLane, abruptRemoved())...))
 	if result := resultWithKey(t, missing, abruptKey); result.Change != ScenarioMissing {
 		t.Errorf("a result the Kind suite requires and a filtered run lacks = %+v, want it missing", result)
 	}
 
 	shorter := inSummary(func(summary map[string]any) { summary[fieldLane] = "lab-installed-ha" })
-	wider := readChanged(t, registry, version2, labRestartRun)
-	narrower := readChanged(t, registry, version2, labRestartRun, shorter)
+	wider := readChanged(t, frozen, version2, labRestartRun)
+	narrower := readChanged(t, frozen, version2, labRestartRun, shorter)
 	if !wider.Validated() || !narrower.Validated() {
 		t.Fatalf("problems: %q and %q, want two runs that each prove their own lane", wider.Problems, narrower.Problems)
 	}
-	if got := CompareRuns(wider, narrower); got.Matches() || !comparisonSays(got, "lane lab-installed-ha") {
+	if got := frozen.compareRuns(wider, narrower); got.Matches() || !comparisonSays(got, "lane lab-installed-ha") {
 		t.Errorf("runs of two lab lanes: problems = %q, want the lanes named", got.Problems)
 	}
 }
@@ -481,11 +482,11 @@ func TestCompareRunsNeverMatchesARunThatProvesNothing(t *testing.T) {
 	}
 	for name, change := range tests {
 		t.Run(name, func(t *testing.T) {
-			good, bad := readChanged(t, registry, version2, kindRun), readChanged(t, registry, version2, kindRun, change)
-			if CompareRuns(good, bad).Matches() || CompareRuns(bad, good).Matches() {
+			good, bad := readChanged(t, frozen, version2, kindRun), readChanged(t, frozen, version2, kindRun, change)
+			if frozen.compareRuns(good, bad).Matches() || frozen.compareRuns(bad, good).Matches() {
 				t.Error("a run that proves nothing matched")
 			}
-			if got := CompareRuns(good, bad); !comparisonSays(got, "new run") {
+			if got := frozen.compareRuns(good, bad); !comparisonSays(got, "new run") {
 				t.Errorf("problems = %q, want the new run named", got.Problems)
 			}
 		})
@@ -517,8 +518,8 @@ func TestCompareRunsKeepsUnknownApartFromZero(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := CompareRuns(readChanged(t, registry, version2, kindRun, tc.older),
-				readChanged(t, registry, version2, kindRun, tc.newer))
+			got := frozen.compareRuns(readChanged(t, frozen, version2, kindRun, tc.older),
+				readChanged(t, frozen, version2, kindRun, tc.newer))
 			value := comparedValue(t, resultWithKey(t, got, abruptKey).Values, "measurements.acknowledgedMissing")
 			if value.State != tc.state {
 				t.Errorf("value = %+v, want %s", value, tc.state)
@@ -527,8 +528,8 @@ func TestCompareRunsKeepsUnknownApartFromZero(t *testing.T) {
 	}
 
 	noOperations := inAbrupt(func(scenario map[string]any) { delete(scenario, fieldOperation) })
-	got := CompareRuns(readChanged(t, registry, version2, kindRun),
-		readChanged(t, registry, version2, kindRun, noOperations))
+	got := frozen.compareRuns(readChanged(t, frozen, version2, kindRun),
+		readChanged(t, frozen, version2, kindRun, noOperations))
 	value := comparedValue(t, resultWithKey(t, got, abruptKey).Values, "operations.unknown")
 	if value.State != ValueUnknown || value.Old != "0" || value.New != Unknown {
 		t.Errorf("operations not recorded = %+v, want unknown, not 0", value)
@@ -537,12 +538,12 @@ func TestCompareRunsKeepsUnknownApartFromZero(t *testing.T) {
 	unknownImage := inSummary(func(summary map[string]any) {
 		summary["environment"].(map[string]any)["operatorImageDigest"] = Unknown
 	})
-	got = CompareRuns(readChanged(t, registry, version2, kindRun, unknownImage),
-		readChanged(t, registry, version2, kindRun, unknownImage))
+	got = frozen.compareRuns(readChanged(t, frozen, version2, kindRun, unknownImage),
+		readChanged(t, frozen, version2, kindRun, unknownImage))
 	if value := comparedValue(t, got.Environment, "operatorImageDigest"); value.State != ValueUnknown {
 		t.Errorf("an image digest unknown in both = %+v, want unknown", value)
 	}
-	got = CompareRuns(readChanged(t, registry, version2, kindRun), readChanged(t, registry, version2, kindRun))
+	got = frozen.compareRuns(readChanged(t, frozen, version2, kindRun), readChanged(t, frozen, version2, kindRun))
 	if value := comparedValue(t, got.Environment, "operatorCommit"); value.State != ValueSame {
 		t.Errorf("one commit in both = %+v, want same", value)
 	}
@@ -565,11 +566,11 @@ func TestCompareRunsDoesNotTakeAChangedCheckForTheSameBaseline(t *testing.T) {
 	}
 	for name, change := range tests {
 		t.Run(name, func(t *testing.T) {
-			newer := readChanged(t, registry, version2, kindRun, change)
+			newer := readChanged(t, frozen, version2, kindRun, change)
 			if !newer.Validated() {
 				t.Fatalf("the changed run must stay valid on its own: %q", newer.Problems)
 			}
-			got := CompareRuns(readChanged(t, registry, version2, kindRun), newer)
+			got := frozen.compareRuns(readChanged(t, frozen, version2, kindRun), newer)
 			if got.Matches() {
 				t.Error("a changed check read as the same baseline")
 			}
@@ -583,11 +584,11 @@ func TestCompareRunsDoesNotTakeAChangedCheckForTheSameBaseline(t *testing.T) {
 // A comparison depends on the runs and not on the order of a map: results come
 // sorted by key, with those without one last, and two comparisons are equal.
 func TestCompareRunsIsDeterministic(t *testing.T) {
-	older := readChanged(t, registry, version2, kindRun)
-	newer := readChanged(t, registry, version2, kindRun, abruptRenamedInBothFiles())
-	first := CompareRuns(older, newer)
+	older := readChanged(t, frozen, version2, kindRun)
+	newer := readChanged(t, frozen, version2, kindRun, abruptRenamedInBothFiles())
+	first := frozen.compareRuns(older, newer)
 	for range 20 {
-		if again := CompareRuns(older, newer); !reflect.DeepEqual(first, again) {
+		if again := frozen.compareRuns(older, newer); !reflect.DeepEqual(first, again) {
 			t.Fatal("two comparisons of one pair differ")
 		}
 	}

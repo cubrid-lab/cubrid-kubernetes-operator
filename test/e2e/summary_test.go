@@ -245,7 +245,8 @@ func kindRequired() []evidence.Requirement {
 	for _, scenario := range []struct {
 		id       string
 		variants []string
-	}{{"S03", s03Variants}, {"S05", s05Variants}, {"S06", s06Variants}, {"S14", s14TokenVariants}} {
+	}{{"S03", s03Variants}, {"S05", s05Variants}, {"S06", s06Variants}, {"S13", s13Variants},
+		{"S14", s14TokenVariants}} {
 		for _, v := range scenario.variants {
 			required = append(required, evidence.Requirement{ID: scenario.id, Variant: v})
 		}

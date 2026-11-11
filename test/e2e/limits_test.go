@@ -42,6 +42,7 @@ var (
 	stablePeriod        = limit(faults.StablePeriod)
 	brokerRecoveryLimit = limit(faults.BrokerRecoveryLimit)
 	operatorResyncLimit = limit(faults.OperatorResyncLimit)
+	deleteLimit         = limit(faults.DeleteLimit)
 )
 
 // limit reads one limit. A value that cannot be read stops the suite before
