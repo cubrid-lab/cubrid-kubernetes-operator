@@ -90,8 +90,8 @@ Manual intervention is required for confirmed/suspected split-brain.
   (delete/update/scale-down/recovery). Failure → `FencingRequired=True`
   / `FencingFailed`.
 - **Write-path quarantine** — in the states section 8 names (two active
-  masters, or an active master while a member that outranks it is
-  unverified), scale the RW Brokers to zero and set `RoutingReady=False`.
+  masters, or an active master while a member that outranks it, or the
+  last resolved primary, is unverified), scale the RW Brokers to zero and set `RoutingReady=False`.
   An incomplete or ambiguous observation outside those states is reported,
   not quarantined. This is **not** DB fencing; it stops writes through the
   managed path without picking a winner. As implemented, only
@@ -168,10 +168,10 @@ HA findings.
 
 | Scenario | Promotion decided by | `-rw` | Stale master identified | Stale writes minimized | Fencing / surfacing |
 |---|---|---|---|---|---|
-| Master reachable, slave isolated | CUBRID (usually none) | RW brokers seek master natively | isolated slave is `unknown`, not proven self-promoted | `PrimaryObservationIncomplete`; RW quarantine (section 8) only if the isolated slave outranks the active master, else reported only | no auto-fence; `Degraded / InstanceObservationIncomplete` |
+| Master reachable, slave isolated | CUBRID (usually none) | RW brokers seek master natively | isolated slave is `unknown`, not proven self-promoted | `PrimaryObservationIncomplete`; RW quarantine (section 8) only if the isolated slave outranks the active master or is the last resolved primary, else reported only | no auto-fence; `Degraded / InstanceObservationIncomplete` |
 | Master isolated, slave reachable | CUBRID promotes per `ha_node_list` | RW brokers stayed on the isolated old master in POC-40 | old master stale only once it returns as master or two masters seen | `HAReady=False`, `PrimaryObservationIncomplete` until verified; RW quarantine once another member is an active master while the old master stays unverified, or two active masters are seen (section 8) | no auto-fence while unreachable; if it returns as master → `FencingRequired / ManualInterventionRequired` |
 | Operator partitioned/restarted | CUBRID continues | existing brokers continue | operator can't ID while partitioned; rebuilds from fresh observations | nothing worsens (no in-memory promotion/fencing); a recorded quarantine stays in force (section 8) | no fencing without evidence |
-| Kubernetes node partition | CUBRID (not Node condition) | RW brokers | NodeNotReady/PodUnknown ≠ DB death | affected members `unknown`; RW quarantine if one of them outranks the active master or was the last recorded master (section 8) | no pod delete/evict; `KubernetesNodePartitionSuspected`; `FencingRequired` only if conflicting masters |
+| Kubernetes node partition | CUBRID (not Node condition) | RW brokers | NodeNotReady/PodUnknown ≠ DB death | affected members `unknown`; RW quarantine if one of them outranks the active master or is the last resolved primary (section 8) | no pod delete/evict; `KubernetesNodePartitionSuspected`; `FencingRequired` only if conflicting masters |
 | Broker sees old master, operator sees new | CUBRID decided | never selects DB pod directly | compare broker-observed target vs operator primary | `RoutingReady=False / BrokerPrimaryMismatch`; drop RW readiness | no DB fence from mismatch alone; manual if persists |
 
 ### 5. Conditions and reasons
@@ -239,23 +239,30 @@ case is reduced availability, not operator-induced split-brain.
 tag on Kind), from small trial counts, and none of it is a CUBRID guarantee.
 The records are in `docs/poc/RESULTS.md`.
 
-- **A second writable master appeared only when the cut-off member ranked
-  above the active master in `ha_node_list`.** In that case both acknowledged writes in 4 of 26 trials, for up to
-  40.6 s (POC-50). With the highest-ranked member as master, no second
-  server accepted a write in 85 trials, including a 600 s hold.
-- **Writes acknowledged during a cut were lost when it healed.** The member
-  that took over went active 8.8 to 10.5 s into a full cut, and the cut-off
-  master stayed an active server beside it (POC-52, POC-58). Where both
-  sides took writes, one side's acknowledged writes were missing from the
-  final master:
-  - in Kind runs with the Operator and Brokers (data on #702, 2026-11-08),
-    the higher-ranked member was master again after the heal in 19 of 19
-    trials, and the writes the lower member had acknowledged through `-rw`
-    during the cut were not on it;
-  - in POC-52, 922 acknowledged writes in 23 of 78 trials were not on the
-    final master;
-  - in POC-58's control trials, 44 per trial were missing. Its trials in
-    which the cut-off master took no write after the cut lost none.
+- **Two active servers appear when a member is cut off from its peers,
+  whatever its rank.**
+  - When the cut-off member ranked above the active master, it promoted
+    itself, and both acknowledged writes in 4 of 26 trials, for up to
+    40.6 s (POC-50).
+  - When the cut-off member was the master, ranked below the one that took
+    over, it stayed an active server beside the new master for 36 to 38 s
+    (POC-58, its `full-h1` trials).
+  - With the highest-ranked member as master and a lower one cut off, no
+    second server accepted a write in 85 trials, including a 600 s hold
+    (POC-50).
+- **Writes acknowledged on one side during a cut were lost when it
+  healed.** Where both sides took writes, one side's acknowledged writes
+  were missing from the final master:
+  - In Kind runs with the Operator and Brokers (data on #702, 2026-11-08),
+    the higher-ranked member was cut off. It was master again after the
+    heal in 19 of 19 trials, and the writes the lower member had
+    acknowledged through `-rw` during the cut were not on it.
+  - In POC-52, 922 acknowledged writes in 23 of 78 trials were not on the
+    final master.
+  - In POC-58's control trials, the higher-ranked member was cut off and
+    took over. The old master's own client went on writing, and 44 of
+    those writes per trial were missing from the final master. The trials
+    in which the old master took no write after the cut lost none.
 - **A cut-off master that no other member replaced** stayed the only server
   accepting writes. In POC-40 on the VM lab, blocking would have refused up
   to 948 s of writes. All of them were kept, though for a while only on that
@@ -289,22 +296,30 @@ The records are in `docs/poc/RESULTS.md`.
   `ha_node_list`, that is, when A has the lower ordinal. Ranking is used
   only to close the write path, never to choose a primary (section 6).
 - **Unverified:** a promotable member (ordinal below `promotableMembers`)
-  without a fresh authoritative observation, confirmed by a second probe a
-  few seconds later in the same or the next pass. Two kinds of member are
-  not unverified, because neither can be running a server from before its
-  last answer:
-  - **Recreated:** its current Pod was created after the member's last fresh
-    observation. The StatefulSet creates a replacement only after the
-    previous Pod is gone. A Pod force-deleted on an unreachable node breaks
-    that guarantee, and the Operator cannot tell (see Limits).
-  - **Being deleted:** its Pod is being deleted on a Node whose `Ready`
-    condition is `True`, so the Pod's preStop hook stops its server
-    (ADR-0003). This covers planned restarts: rolling updates and drains.
-    That the stop completes before the server could act alone is measured
-    in #96 and #614, not assumed.
-- **Last recorded master:** the member `status.currentPrimary` named when
-  it was last set. Reading it here only ever closes the write path, as
-  section 3 allows for no other use.
+  for which neither of the following holds, in two probes a few seconds
+  apart within the same pass:
+  - **It answers without the master role.** A fresh answer that does not
+    report the master role shows that the member is not accepting writes at
+    that moment, even when the answer is not authoritative under section 3,
+    as during a rejoin.
+  - **Kubernetes shows no running database.** The Pod has no running
+    database container, or does not exist, as read from a Node whose
+    Lease was renewed within the last 15 s. A Node that has stopped
+    renewing its Lease gives no evidence, whatever its `Ready` condition
+    says.
+
+  These two replace any reasoning from when a Pod was created. A Pod
+  recreated after a deletion, as in S03, is verified once it answers
+  without the master role. Until then it is unverified, even if it started
+  alone. A member that starts alone and hears no peers can become master
+  (POC-53, POC-58).
+- **Last resolved primary:** a new status field,
+  `status.lastResolvedPrimary`, with the time it was set. #113 adds it. It
+  is set to the member `currentPrimary` names on every pass that reports
+  `PrimaryResolved=True`, and is never cleared. `currentPrimary` itself is
+  cleared as soon as the primary is unresolved, so it cannot serve here.
+  The field is read only to close the write path, as section 3 allows for
+  no other use.
 
 **When the write path is quarantined.** The rules are checked in this
 order on every pass:
@@ -312,7 +327,7 @@ order on every pass:
 1. **Two or more active masters** → quarantine with reason
    `WriteQuarantinedMultipleMasters`.
 2. **Exactly one active master M, and an unverified member that outranks M
-   or is the last recorded master and is not M** → quarantine with reason
+   or is the last resolved primary and is not M** → quarantine with reason
    `WriteQuarantinedMemberUnverified`, recording M and those members.
    - The first case is the cut-off higher-ranked member of POC-50 and the
      Kind runs recorded on #702.
@@ -322,8 +337,8 @@ order on every pass:
 3. **Otherwise no quarantine starts.** That leaves the state reported, as
    today, through `PrimaryResolved`, `RoutingReady`, and `Ready` after
    60 s. It covers two cases:
-   - one active master whose only unverified members rank below it and
-     were never its predecessor;
+   - one active master whose only unverified members rank below it and are
+     not the last resolved primary;
    - no active master at all. POC-40's isolated master is here: its promoted
      slave never went active, so the Brokers had only one writable server.
      Every member running with none accepting writes is here too (#716).
@@ -331,7 +346,8 @@ order on every pass:
 A quarantine already in force is ended only by a release, never by rule 3.
 While a rule-2 quarantine is in force, it becomes a manual one with reason
 `WriteQuarantinedMasterChanged` as soon as a pass sees another active master,
-or sees M answer freshly without claiming an active master.
+or sees M answer without claiming an active master in two probes a few
+seconds apart, the same confirmation as for an unverified member.
 
 **Enforcement.** While a quarantine is in force:
 
@@ -376,17 +392,23 @@ and, for rule 2, M. Changing the reason keeps the start time.
   `WriteQuarantinedMasterChanged`, members may hold different acknowledged
   rows under the same keys (POC-50, POC-52), and the Operator never picks a
   winner (section 6).
-  1. An administrator checks the members' data.
+  1. An administrator checks the members' data. They also confirm that
+     each member recorded as unverified is stopped or fenced, for example
+     that its VM is off. A member that cannot be reached cannot have its
+     data checked, so that confirmation is what the release rests on.
   2. They set the annotation `database.cubrid.io/release-write-quarantine`
      to the recorded start time. An old annotation therefore cannot release
      a later quarantine.
   3. The Operator releases at the first pass that sees at most one active
-     master. It does not require every member to answer, so a member that
+     master and whose unverified members are all in the quarantine's
+     record. It does not require every member to answer, so a member that
      never comes back, or a group with no active master, cannot hold the
      quarantine forever.
-  4. The members that were unverified at the release are recorded as
-     accepted by the administrator. Rule 2 ignores them until each next
-     answers freshly.
+  4. If a member not in the record is unverified, the release is refused.
+     A Warning event names the member, and the administrator checks it too.
+     The record is updated to include it, and the start time is kept.
+  5. The recorded members are accepted by the administrator. Rule 2 ignores
+     them until each next answers freshly.
 
   The annotation also ends a `WriteQuarantinedMemberUnverified` quarantine
   whose member does not return, for example during a rebuild (#117). The
@@ -410,19 +432,31 @@ and, for rule 2, M. Changing the reason keeps the start time.
   affected.
 - **An Operator that is down or partitioned starts no quarantine.** A
   recorded one stays in force, because the read-write Brokers stay at zero.
-- **A force-deleted Pod defeats the recreated-member exemption.** If the
-  replacement starts while the old server still runs on an unreachable node,
-  rule 2 does not fire. The same action already breaks the StatefulSet's
-  guarantee of one Pod per member.
+- **Kubernetes evidence is trusted only from a Node that renews its
+  Lease.** A Node cut off from the API server can show `Ready=True` until
+  the node monitor grace period runs out (about 40 s by default). Its Pods'
+  status is not used during that time.
 - **Availability cost.** Writes through `-rw` are refused from the start of
-  the quarantine until its release, plus the time to recreate the
-  read-write Broker Pods (7.7 to 15.8 s in scenario S05, all of them
-  deleted). When a higher-ranked member or the former master is cut off by
-  a network or node failure, without its Pod being deleted, that means for
-  as long as it stays unverified, plus at least 10 s. A master Pod deletion
-  and a planned restart are covered by the exemptions above. So they are
-  expected to stay within `failover_limit`, which #113's implementation
-  must show in S03.
+  the quarantine until its release. Then the read-write Broker Pods must be
+  recreated, which took 7.7 to 15.8 s in scenario S05 with all of them
+  deleted. When a higher-ranked member or the last resolved primary is
+  unverified, writes are refused for as long as it stays unverified, plus
+  at least 10 s.
+  - **Master Pod deletion (S03).** The deleted member is unverified from
+    the deletion until it answers without the master role. Whether this
+    stays within the 30 s `failover_limit` is not known: the Instance
+    Manager's answers during a rejoin have not been sampled pass by pass.
+    #113 measures S03 before any claim.
+  - **Master VM power-off (S04), a maintainer decision.** The old master's
+    Node stops renewing its Lease, so the Operator cannot tell a powered-off
+    master from a cut-off one that is still writable. Under this policy,
+    writes through `-rw` are refused until the VM returns or an
+    administrator confirms it is off and releases the quarantine. That
+    exceeds S04's `failover_limit` of 30 s. Choosing the policy means
+    either giving S04 a limit of its own, with the cost documented, or
+    accepting the risk of a cut-off master on a Node that is not renewing
+    its Lease. This ADR does not decide that alone, and the limit is not
+    changed without that decision.
 - **No opt-out field in v1alpha1.**
 
 ## Consequences
@@ -446,10 +480,11 @@ and, for rule 2, M. Changing the reason keeps the start time.
   `-rw` are refused. The refusal lasts as long as that member stays
   unverified, plus at least 10 s and the time to recreate the read-write
   Brokers.
-- **The exemptions carry the S03 outage.** A master Pod deletion and
-  planned restarts stay fast only through the recreated and being-deleted
-  exemptions of section 8. #113 must show S03 within `failover_limit`, and
-  the limit is not to be changed to fit the policy.
+- **Failover limits are at stake.** Whether a master Pod deletion (S03)
+  stays within `failover_limit` is not known until #113 measures it. A
+  master VM power-off (S04) exceeds it under this policy, and that needs a
+  maintainer decision (section 8, Limits). Neither limit is changed
+  without that decision.
 - **A double-master reading needs a person.** A quarantine after two
   active masters, or after the master changed during one, stays until an
   administrator releases it. A short double-master reading can therefore
@@ -476,10 +511,11 @@ and, for rule 2, M. Changing the reason keeps the start time.
    `RoutingReady=False`, `FencingRequired=True`, manual.
 3. **Slave isolated / master healthy** — isolated slave = `unknown`, no
    fence; `PrimaryObservationIncomplete`; no quarantine unless the slave
-   outranks the master or was the last recorded master (section 8).
+   outranks the master or is the last resolved primary (section 8).
 4. **Master isolated / slave reachable** — CUBRID decides; old master
    unverified; `FencingRequired=OldPrimaryStateUnverified` or
-   `FencingStatusUnknown`; no auto-fence.
+   `FencingStatusUnknown`; no auto-fence; RW quarantine once another member
+   is an active master (section 8, rule 2).
 5. **Operator partition** — failover while absent; on restart rebuild
    from fresh observations; no replayed fencing.
 6. **Kubernetes node partition** — NodeNotReady/PodUnknown ≠ DB death; no
@@ -515,22 +551,29 @@ and, for rule 2, M. Changing the reason keeps the start time.
       The quarantine stays until the annotation names it.
     - **No quarantine:** an isolated master with no replacement, as in
       POC-40.
-    - **Exemptions:** a master Pod deletion (S03) and a rolling update or
-      drain stay within `failover_limit`.
+    - **Timing against the limits:** measure a master Pod deletion (S03)
+      and a rolling update or drain against `failover_limit`, and record a
+      master VM power-off (S04) under the decision section 8 asks for.
+    - **A recreated member that starts alone,** cut off from its peers,
+      stays unverified until it answers without the master role.
     - **Releases:** the release works across an Operator restart; an old
-      annotation does not release a later quarantine; the annotation
+      annotation does not release a later quarantine; a member that became
+      unverified after the record was written blocks the release; the
+      annotation
       releases a quarantine whose member never returns.
     - **Measured in #115:** that already-open sessions end, and the length
       of the detection window.
 
 ## Revisit When
 
-- **Detection window too long.** If the detection window that #115 measures
-  loses many acknowledged writes, the quarantine needs a faster signal
-  than the reconcile pass.
-- **Exemptions fail.** If a recreated member, or one being deleted on a
-  Ready Node, is ever seen as an active master beside the member that took
-  over, the exemptions of section 8 must be withdrawn.
+- **Detection window.** Section 8 already expects every write in the
+  detection window to be lost. If the window #115 measures is longer than
+  a few seconds, the quarantine needs a faster signal than the reconcile
+  pass.
+- **Verification by a non-master answer fails.** If a member that answered
+  without the master role is ever seen as an active master beside the
+  member that took over within a pass, section 8's definition of
+  unverified must be tightened.
 - `fencingPolicy: Automatic` is scheduled → design active fencing with
   strong evidence (e.g. quorum/lease) and prove correctness.
 - Broker introspection lets the operator confirm the broker's write
