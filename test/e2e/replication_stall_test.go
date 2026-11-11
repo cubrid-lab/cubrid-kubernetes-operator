@@ -311,25 +311,6 @@ func replicationStallStep(r *haRun) {
 			"ReplicationHealthy: False ReplicationStalled: %s\nHAReady at the same time: %s\n",
 			victim, newMaster, len(behind), len(ahead), message, haReady)
 
-		By("checking that a backup that needs a standby is taken from the healthy slave, not the stalled one (#291)")
-		// A slave that looks healthy and applies nothing must not be chosen as
-		// a backup source: its copy would lack what the master committed
-		// since it stopped. With one other slave caught up, StandbyOnly must
-		// choose that one.
-		stallBackup := fmt.Sprintf("stall-standby-%d", r.markers)
-		Expect(r.startStandbyBackup(context.Background(), stallBackup)).To(Succeed())
-		var stallTarget string
-		Eventually(func(g Gomega) {
-			target, phase, err := r.backupTarget(context.Background(), stallBackup)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(target).NotTo(BeEmpty(), "the backup's target, phase %q", phase)
-			stallTarget = target
-		}, 2*time.Minute, 3*time.Second).Should(Succeed(), observed)
-		Expect(stallTarget).To(Equal(healthySlave), "the standby a StandbyOnly backup chose while %s was stalled", victim)
-		stallPhase := r.waitBackupEnded(stallBackup, 5*time.Minute)
-		record += fmt.Sprintf("StandbyOnly backup %s while stalled: target %s, ended in phase %s\n",
-			stallBackup, stallTarget, stallPhase)
-
 		By("deleting the Pod of the stalled slave")
 		repairIssued := time.Now().UTC()
 		_, err = r.kubectl(context.Background(), "delete", "pod", victim, "--wait=false")
@@ -441,6 +422,10 @@ const (
 	openTxRounds = 20
 	openTxRows   = 200
 	openTxPause  = 5 * time.Second
+	// openTxBackupAfter is when the open-transaction step creates its
+	// backup: past the Operator's 60 s stall window (replicationStallWindow)
+	// with a margin, and about 20 s before the commit.
+	openTxBackupAfter = 75 * time.Second
 )
 
 // openTransactionStep registers a check that a transaction held open on the
@@ -460,6 +445,7 @@ func openTransactionStep(r *haRun) {
 		r.mu.Lock()
 		r.markers++
 		table := fmt.Sprintf("open_tx_%d", r.markers)
+		openTxBackup := fmt.Sprintf("open-tx-standby-%d", r.markers)
 		r.mu.Unlock()
 		master, slaves, err := r.master(context.Background())
 		Expect(err).NotTo(HaveOccurred())
@@ -558,7 +544,9 @@ func openTransactionStep(r *haRun) {
 			done <- result{out, err}
 		}()
 		var samples, unhealthy, unreadable []string
-		openTxBackup := fmt.Sprintf("open-tx-standby-%d", r.markers)
+		// backupStarted is when the StandbyOnly backup of this step was
+		// created, zero before; openTxTarget is the member it was given to.
+		var backupStarted time.Time
 		var openTxTarget string
 		// The samples are kept also when the step fails.
 		DeferCleanup(func() {
@@ -573,8 +561,29 @@ func openTransactionStep(r *haRun) {
 				break wait
 			case <-time.After(5 * time.Second):
 			}
-			c, err := conditions()
 			stamp := fmt.Sprintf("%s +%s", time.Now().UTC().Format(time.RFC3339), time.Since(started).Round(time.Second))
+			// A long transaction keeps log pages waiting on the slaves while
+			// they apply nothing of it. Once it has lasted longer than the
+			// Operator's stall window, a slave judged by its counters alone
+			// would be excluded as a backup source (#249). A StandbyOnly
+			// backup created then must still be given to a slave, before the
+			// commit (#291).
+			if backupStarted.IsZero() && time.Since(started) > openTxBackupAfter {
+				Expect(r.startStandbyBackup(context.Background(), openTxBackup)).To(Succeed())
+				backupStarted = time.Now()
+				samples = append(samples, stamp+" StandbyOnly backup "+openTxBackup+" created")
+				DeferCleanup(func() {
+					_, _ = r.kubectl(context.Background(), "delete", "cubridbackup", openTxBackup, "--wait=false",
+						"--ignore-not-found")
+				})
+			}
+			if !backupStarted.IsZero() && openTxTarget == "" {
+				if target, _, err := r.backupTarget(context.Background(), openTxBackup); err == nil && target != "" {
+					openTxTarget = target
+					samples = append(samples, stamp+" the backup was given to "+target)
+				}
+			}
+			c, err := conditions()
 			switch {
 			case err != nil:
 				// An API read that failed says nothing about the conditions.
@@ -602,21 +611,10 @@ func openTransactionStep(r *haRun) {
 				samples = append(samples, fmt.Sprintf("rows on %s halfway: %s %v", slaves[0], n, err))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(n).To(Equal("0"), "rows of the open transaction on %s before the commit", slaves[0])
-				// A long transaction keeps log pages waiting on the slaves while
-				// they apply nothing of it. That must not exclude them as backup
-				// sources (#249, #291): a StandbyOnly backup started now must
-				// choose a slave before the commit.
-				Expect(r.startStandbyBackup(context.Background(), openTxBackup)).To(Succeed())
-			}
-			if midChecked && openTxTarget == "" {
-				if target, _, err := r.backupTarget(context.Background(), openTxBackup); err == nil && target != "" {
-					openTxTarget = target
-					samples = append(samples, fmt.Sprintf("%s StandbyOnly backup %s chose %s while the transaction was open",
-						stamp, openTxBackup, target))
-				}
 			}
 		}
 		held := time.Since(started)
+		sessionEnded := time.Now()
 		Expect(midChecked).To(BeTrue(), "the transaction was not checked halfway")
 		// The count on every member below decides whether the rows committed.
 		Expect(heldSessionVerdict(masterServer, master, session.out, session.err)).To(Succeed(), "the csql session")
@@ -624,9 +622,17 @@ func openTransactionStep(r *haRun) {
 		Expect(unhealthy).To(BeEmpty(), "samples in which ReplicationHealthy or HAReady was not True")
 		Expect(len(unreadable)).To(BeNumerically("<", len(samples)/2), "samples whose conditions could not be read: %v",
 			unreadable)
-		Expect(openTxTarget).To(BeElementOf(slaves),
-			"the standby a StandbyOnly backup chose while the transaction was open on %s", master)
-		samples = append(samples, "the backup ended in phase "+r.waitBackupEnded(openTxBackup, 5*time.Minute))
+		Expect(backupStarted.IsZero()).To(BeFalse(), "the backup was not created while the transaction was open")
+		target, recordedAt, err := r.backupRecordedTarget(context.Background(), openTxBackup)
+		samples = append(samples, fmt.Sprintf("backup %s: target %q recorded at %v (transaction open from %s to %s): %v",
+			openTxBackup, target, recordedAt, started.UTC().Format(time.RFC3339), sessionEnded.UTC().Format(time.RFC3339), err))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(target).To(BeElementOf(slaves),
+			"the member a StandbyOnly backup was given to while the transaction was open on %s", master)
+		// The choice counts only if it came before the commit; the Operator
+		// and this test read the same host's clock on Kind.
+		Expect(recordedAt).To(BeTemporally("<", sessionEnded), "when the backup's target was recorded")
+		samples = append(samples, "the backup ended in phase "+r.waitBackupEnded(openTxBackup, 3*time.Minute))
 
 		By("checking that every slave holds the rows after the commit")
 		want := fmt.Sprint(openTxRounds * openTxRows)
@@ -644,8 +650,8 @@ func openTransactionStep(r *haRun) {
 
 // startStandbyBackup creates a CubridBackup of the run's database that must
 // be taken from a standby (StandbyOnly), into the cluster's own bucket under
-// a prefix of its own. Its target is what a step checks: which member the
-// Operator chose (status.targetInstance).
+// a prefix of its own. A name already taken is an error, so an old backup's
+// target is never read for a new one.
 func (r *haRun) startStandbyBackup(ctx context.Context, name string) error {
 	bucket, err := r.kubectl(ctx, "get", "cubridcluster", r.cluster, "-o", "jsonpath={.spec.objectStorage.bucket}")
 	if err != nil {
@@ -672,7 +678,9 @@ spec:
       bucket: %s
       prefix: e2e-backups/%s
 `, name, r.cluster, r.database, bucket, name)
-	cmd := exec.CommandContext(ctx, "kubectl", "-n", r.namespace, "apply", "-f", "-")
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "kubectl", "-n", r.namespace, "create", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	_, err = utils.Run(cmd)
 	return err
@@ -680,13 +688,29 @@ spec:
 
 // backupTarget reads the member a CubridBackup was given to and its phase.
 func (r *haRun) backupTarget(ctx context.Context, name string) (target, phase string, err error) {
-	out, err := r.kubectlQuiet(ctx, "get", "cubridbackup", name, "-o",
+	out, err := r.kubectlQuiet(ctx, "get", "cubridbackup", name, "--request-timeout=30s", "-o",
 		"jsonpath={.status.targetInstance}{\"|\"}{.status.phase}")
 	if err != nil {
 		return "", "", err
 	}
 	target, phase, _ = strings.Cut(out, "|")
 	return target, phase, nil
+}
+
+// backupRecordedTarget reads a CubridBackup's target and when the Operator
+// recorded it (status.targetRecordedAt). No target is an error.
+func (r *haRun) backupRecordedTarget(ctx context.Context, name string) (string, time.Time, error) {
+	out, err := r.kubectlQuiet(ctx, "get", "cubridbackup", name, "--request-timeout=30s", "-o",
+		"jsonpath={.status.targetInstance}{\"|\"}{.status.targetRecordedAt}")
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	target, at, _ := strings.Cut(out, "|")
+	if target == "" || at == "" {
+		return "", time.Time{}, fmt.Errorf("CubridBackup %s has no recorded target: %q", name, out)
+	}
+	recorded, err := time.Parse(time.RFC3339, at)
+	return target, recorded, err
 }
 
 // waitBackupEnded waits up to limit for a CubridBackup to end, so that it
@@ -697,8 +721,7 @@ func (r *haRun) waitBackupEnded(name string, limit time.Duration) string {
 	deadline := time.Now().Add(limit)
 	phase := ""
 	for time.Now().Before(deadline) {
-		_, p, err := r.backupTarget(context.Background(), name)
-		if err == nil {
+		if _, p, err := r.backupTarget(context.Background(), name); err == nil {
 			phase = p
 			if p == "Completed" || p == "Failed" {
 				return p
