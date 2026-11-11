@@ -71,7 +71,7 @@ In addition to the smoke's inputs:
   read are recorded as `nodeFreeBytes` in `LAB01/record.json`.
 - `-min-node-free-memory` (default `2Gi`) is the memory every schedulable
   node must report available before anything is created, as in the smoke.
-  Here it is one three-member cluster, at about 600Mi a member, on one node.
+  Here it is one three-member cluster, at about 640Mi a member, 1920Mi in all, on one node.
   A node with no figure refuses the run too. Lanes that create more clusters,
   such as S12's, can need more. The values read are recorded as
   `nodeAvailableMemoryBytes` in `LAB01/record.json`.
@@ -87,8 +87,8 @@ In addition to the smoke's inputs:
   nothing about separate-node placement. The value is recorded as
   `memberSpread`, and under `Required` the nodes counted as
   `schedulableNodes`, in `LAB01/record.json` (#596).
-- `-member-memory-request` (default `600Mi`) and `-member-cpu-request`
-  (default `100m`) are set as `spec.resources.requests` on every cluster the
+- `-member-memory-request` (default `640Mi`) and `-member-cpu-request`
+  (default `150m`) are set as `spec.resources.requests` on every cluster the
   run creates: the source cluster and the S11 and S12 ones. Both must be
   positive, so a run cannot turn them off. A member whose request does not
   fit stays `Pending`, and the run ends `blocked`
@@ -148,28 +148,55 @@ member they create, which matches this manifest:
 spec:
   resources:
     requests:
-      memory: 600Mi
-      cpu: 100m
+      memory: 640Mi
+      cpu: 150m
 ```
 
-These are starting values for the three-worker VM lab (2 vCPU, 8 GiB each),
-not a production sizing guarantee. Size any other cluster from its own
-measurements.
+These values come from one measured run on the three-worker VM lab (2 vCPU,
+8 GiB each). They are not a production sizing guarantee: size any other cluster
+from its own measurements.
 
-- **Memory.** `kubectl top` showed about 575 MiB for each long-lived member
-  on the lab on 2026-11-03 UTC (#671). `600Mi` is that figure rounded up, and
-  it is the per-member figure `-min-node-free-memory` already counts with. Use
-  during a bootstrap or a SQL workload was not measured, and neither was any
-  overhead of the manager, Brokers or the system, so a member can use more.
-- **CPU.** No CPU use of a member has been measured. `100m` is a small value
-  chosen so that the members of a run that restores (S12) declare little beside
-  the shared clusters on 2 vCPU workers: six at once with S12 `exact` alone, in
-  two clusters, and up to nine, 900m in total, in a lane with a further variant.
-  S12 `exact`'s cluster stays until the namespace goes, and the flags of the
-  further variants exclude each other, so a run has at most three clusters at
-  once: the source, `ha-restore` and one of `ha-restart`, `ha-imrestart`,
-  `ha-gracefulstop`, `ha-wt` or `ha-tampered`. It is not evidence of what a
-  member needs.
+**The measured run.** LAB01 passed on 2026-11-11 at 16:06 to 16:11 UTC, against
+the installed Operator `ab23f02` (#671). It ran with the earlier defaults,
+`600Mi` and `100m`. `kubectl top` read the members every 10 s:
+
+| | CPU | Memory |
+|---|---|---|
+| While a member bootstrapped (first readings of each) | 255 to 355m, for 10 to 20 s | rising to about 580 MiB |
+| While the SQL workload ran, to the end of the run | 90 to 130m | 600 to 605 MiB, rising by about 1 MiB in 30 s |
+
+Run details:
+- **Placement:** the three members ran on three different workers, under
+  `Required` member spread.
+- **Health:** no container restarted, and every node stayed `Ready`, with no
+  memory or disk pressure.
+- **Earlier reading:** long-lived members used about 575 MiB each on
+  2026-11-03.
+
+**The values.**
+- **Memory, `640Mi`.** It keeps a member under its request through what was
+  seen. Above its request, a member ranks with Pods that declare none for
+  node-pressure eviction (below).
+- **CPU, `150m`.** It covers the workload. The bootstrap peaks are brief and
+  are not covered: a request is what the scheduler sets aside, not a limit.
+- **A restore lane:** with nine members at once (below), it declares 1350m and
+  5760Mi in total.
+
+**Limits of the measurement.**
+- **Short run:** one run of about five minutes, with 200 client operations.
+- **Coarse sampling:** `kubectl top` reports values averaged over its own
+  window, so a peak shorter than that is not seen.
+- **Not measured:** a member that runs for days, a heavier workload, and
+  memory growth beyond the run.
+
+**Restore lanes.** The members of a run that restores (S12) declare these
+beside the shared clusters: six at once with S12 `exact` alone, in two
+clusters, and up to nine in a lane with a further variant.
+- S12 `exact`'s cluster stays until the namespace goes.
+- The flags of the further variants exclude each other.
+- So a run has at most three clusters at once: the source, `ha-restore` and
+  one of `ha-restart`, `ha-imrestart`, `ha-gracefulstop`, `ha-wt` or
+  `ha-tampered`.
 
 The Operator itself has no default: a cluster that sets no `spec.resources`
 gets no requests, and the flags apply only to clusters a run creates. The same
@@ -233,7 +260,7 @@ not replace `-min-node-free-memory`:
   use is above their requests first, by priority and then by how far above
   ([node-pressure eviction](https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/#pod-selection-for-kubelet-eviction)).
   A long-lived member without requests is always in that group. A member with
-  these requests is outside it only while it uses less than `600Mi`, and above
+  these requests is outside it only while it uses less than `640Mi`, and above
   that it ranks with the `BestEffort` Pods, so the request protects it less
   than the class name suggests. The kernel's OOM killer is a separate path that
   does use the class, through the `oom_score_adj` the kubelet sets: 1000 for

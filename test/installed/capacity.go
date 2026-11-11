@@ -373,18 +373,20 @@ func refusalBlocks(refusal corev1.PodCondition, now time.Time) bool {
 		now.Sub(refusal.LastTransitionTime.Time) >= refusalMinimumHold
 }
 
-// The requests a member of a run declares unless a flag says otherwise. The
-// memory is the about 575 MiB kubectl top showed for each long-lived member on
-// the VM lab on 2026-11-03 (#671), rounded up to 600Mi, the figure per member
-// that the memory pre-flight counts with; use during a bootstrap or a SQL
-// workload was not measured. No CPU use of a member has been measured, so the
-// CPU is a small value chosen without a measurement. It is low enough for the
-// nine members a restore lane can hold at once (three clusters: the source,
-// S12 exact's and one other S12 variant's, whose flags exclude each other) to
-// declare 900m in total beside the shared clusters on 2 vCPU workers.
+// The requests a member of a run declares unless a flag says otherwise,
+// from LAB01 on the VM lab on 2026-11-11 (#671). While the SQL workload ran,
+// each member used 90 to 130m of CPU and 600 to 605 MiB of memory by kubectl
+// top, the memory still rising by about 1 MiB in 30 s. 640Mi keeps a member
+// under its request through that, so node-pressure eviction does not rank it
+// with Pods that declare none. 150m covers the CPU while the workload ran. The
+// peaks during a bootstrap, 255 to 355m, were brief and are not covered: a
+// request is what the scheduler sets aside, not a limit. The nine members a
+// restore lane can hold at once (three clusters: the source, S12 exact's and
+// one other S12 variant's, whose flags exclude each other) declare 1350m and
+// 5760Mi in total beside the shared clusters on three 2 vCPU, 8 GiB workers.
 const (
-	DefaultMemberMemoryRequest = "600Mi"
-	DefaultMemberCPURequest    = "100m"
+	DefaultMemberMemoryRequest = "640Mi"
+	DefaultMemberCPURequest    = "150m"
 )
 
 // MemberRequestFlags registers the flags of a run's member requests.
