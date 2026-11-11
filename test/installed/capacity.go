@@ -374,16 +374,20 @@ func refusalBlocks(refusal corev1.PodCondition, now time.Time) bool {
 }
 
 // The requests a member of a run declares unless a flag says otherwise,
-// from LAB01 on the VM lab on 2026-11-11 (#671). While the SQL workload ran,
-// each member used 90 to 130m of CPU and 600 to 605 MiB of memory by kubectl
-// top, the memory still rising by about 1 MiB in 30 s. 640Mi keeps a member
-// under its request through that, so node-pressure eviction does not rank it
-// with Pods that declare none. 150m covers the CPU while the workload ran. The
-// peaks during a bootstrap, 255 to 355m, were brief and are not covered: a
-// request is what the scheduler sets aside, not a limit. The nine members a
-// restore lane can hold at once (three clusters: the source, S12 exact's and
-// one other S12 variant's, whose flags exclude each other) declare 1350m and
-// 5760Mi in total beside the shared clusters on three 2 vCPU, 8 GiB workers.
+// from LAB01 on the VM lab on 2026-11-11 (#671), read with kubectl top every
+// 10 s. Once a member served, to the last reading at 16:10 UTC, it used 85 to
+// 131m of CPU, after readings of 165 to 172m just after its bootstrap, and 581
+// to 605 MiB of memory, rising by about 5 MiB in 30 s at first and 1 to 2.5 MiB
+// in 30 s at the end. 640Mi was above every reading of the run. At the rates
+// seen at its end, the 35 MiB above 605 MiB would last about 7 to 17 minutes,
+// so whether the growth levels off is not known; the long-lived members of
+// 2026-11-03 used about 575 MiB each. 150m covers the
+// steady CPU readings, not the readings just after a bootstrap or its peaks of
+// 255 to 355m: a request is what the scheduler sets aside, not a limit. The
+// nine members a restore lane can hold at once (three clusters: the source,
+// S12 exact's and one other S12 variant's, whose flags exclude each other)
+// declare 1350m and 5760Mi in total beside the shared clusters on three
+// 2 vCPU, 8 GiB workers.
 const (
 	DefaultMemberMemoryRequest = "640Mi"
 	DefaultMemberCPURequest    = "150m"
@@ -392,11 +396,11 @@ const (
 // MemberRequestFlags registers the flags of a run's member requests.
 func MemberRequestFlags(flags *flag.FlagSet, cfg *Config) {
 	flags.Var(requestFlag(&cfg.MemberMemoryRequest, DefaultMemberMemoryRequest), "member-memory-request",
-		"spec.resources.requests.memory of every cluster the run creates: about 575 MiB observed per "+
-			"long-lived member on the VM lab, rounded up; must be positive")
+		"spec.resources.requests.memory of every cluster the run creates: above every reading of a member "+
+			"in a measured VM-lab run on 2026-11-11 (#671); must be positive")
 	flags.Var(requestFlag(&cfg.MemberCPURequest, DefaultMemberCPURequest), "member-cpu-request",
-		"spec.resources.requests.cpu of every cluster the run creates: a small value, not a measurement; must be "+
-			"positive")
+		"spec.resources.requests.cpu of every cluster the run creates: the steady use of a member in a "+
+			"measured VM-lab run on 2026-11-11 (#671); must be positive")
 }
 
 // requestFlag is a command-line flag that sets *quantity, starting from def.
@@ -417,7 +421,7 @@ func (v requestValue) String() string {
 func (v requestValue) Set(value string) error {
 	quantity, err := resource.ParseQuantity(value)
 	if err != nil || quantity.Sign() <= 0 {
-		return fmt.Errorf("want a positive quantity such as 600Mi or 100m: %q", value)
+		return fmt.Errorf("want a positive quantity such as 640Mi or 150m: %q", value)
 	}
 	*v.quantity = quantity
 	return nil

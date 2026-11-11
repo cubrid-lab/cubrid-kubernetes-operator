@@ -71,7 +71,8 @@ In addition to the smoke's inputs:
   read are recorded as `nodeFreeBytes` in `LAB01/record.json`.
 - `-min-node-free-memory` (default `2Gi`) is the memory every schedulable
   node must report available before anything is created, as in the smoke.
-  Here it is one three-member cluster, at about 640Mi a member, 1920Mi in all, on one node.
+  Here it is one three-member cluster, at about 640Mi a member, 1920Mi in
+  all, on one node.
   A node with no figure refuses the run too. Lanes that create more clusters,
   such as S12's, can need more. The values read are recorded as
   `nodeAvailableMemoryBytes` in `LAB01/record.json`.
@@ -162,8 +163,9 @@ the installed Operator `ab23f02` (#671). It ran with the earlier defaults,
 
 | | CPU | Memory |
 |---|---|---|
-| While a member bootstrapped (first readings of each) | 255 to 355m, for 10 to 20 s | rising to about 580 MiB |
-| While the SQL workload ran, to the end of the run | 90 to 130m | 600 to 605 MiB, rising by about 1 MiB in 30 s |
+| While a member bootstrapped (readings of 200m or more) | 255 to 355m, for 10 to 20 s | 110 to 578 MiB, rising |
+| Just after its bootstrap | 165 to 172m, in one or two readings | 587 to 601 MiB |
+| Serving, to the last reading at 16:10 UTC | 85 to 131m | 581 to 605 MiB, rising by about 5 MiB in 30 s at first and 1 to 2.5 MiB in 30 s at the end |
 
 Run details:
 - **Placement:** the three members ran on three different workers, under
@@ -174,11 +176,17 @@ Run details:
   2026-11-03.
 
 **The values.**
-- **Memory, `640Mi`.** It keeps a member under its request through what was
-  seen. Above its request, a member ranks with Pods that declare none for
-  node-pressure eviction (below).
-- **CPU, `150m`.** It covers the workload. The bootstrap peaks are brief and
-  are not covered: a request is what the scheduler sets aside, not a limit.
+- **Memory, `640Mi`.** It is above every reading of the run. Above its
+  request, a member ranks with Pods that declare none for node-pressure
+  eviction (below).
+  - The growth slowed during the run. At the rates seen at its end, the
+    35 MiB above 605 MiB would last about 7 to 17 minutes, so whether the
+    growth levels off is not known.
+  - The long-lived members of 2026-11-03 used about 575 MiB each, which
+    suggests it does, but that is not a measurement of these members.
+- **CPU, `150m`.** It covers the readings while a member served. It does not
+  cover the readings just after a bootstrap or the bootstrap peaks: a request
+  is what the scheduler sets aside, not a limit.
 - **A restore lane:** with nine members at once (below), it declares 1350m and
   5760Mi in total.
 
