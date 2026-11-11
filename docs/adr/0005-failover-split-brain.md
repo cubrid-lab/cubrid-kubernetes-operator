@@ -2,14 +2,15 @@
 
 ## Status
 
-Accepted (POC-gated) — tracked in issue #5
+Accepted (POC-gated) — tracked in issue #5. Amended for #113: the
+write-path quarantine policy (section 8).
 
 The responsibility split, observation rules, and conservative fencing posture
-are accepted. **Managed write-path quarantine is a required design target, not
-yet an implemented or validated safety mechanism**: the Operator currently
-reports `RoutingReady=False` without removing the `-rw` Service endpoints
-(#113/#115). The checklist below defines tests still to be completed; it
-must not be read as confirmation that every scenario passed.
+are accepted. **Managed write-path quarantine is a required safety mechanism
+whose policy is section 8; it is not yet implemented or validated**: the
+Operator currently reports `RoutingReady=False` without removing the `-rw`
+Service endpoints (#113/#115). The checklist below defines tests still to be
+completed; it must not be read as confirmation that every scenario passed.
 
 ## Context
 
@@ -47,8 +48,9 @@ Grounded in CUBRID 11.4 + prior ADRs:
 > creates, chooses, or fences a primary automatically during ambiguous
 > evidence; it delegates role transitions to CUBRID native HA and reports
 > unresolved or conflicting observations. The accepted design **requires**
-> managed write-path quarantine under the policy being validated in #113/#115;
-> the current code does not enforce it. Split-brain and unverified old-primary
+> managed write-path quarantine under the policy of section 8, to be
+> implemented in #113 and validated in #115; the current code does not
+> enforce it. Split-brain and unverified old-primary
 > states require manual investigation rather than guessed role changes.
 
 ### 1. Responsibility split
@@ -87,11 +89,13 @@ Manual intervention is required for confirmed/suspected split-brain.
   reachable target as part of a declared lifecycle transition
   (delete/update/scale-down/recovery). Failure → `FencingRequired=True`
   / `FencingFailed`.
-- **Write-path quarantine** — on ambiguous/incomplete/multi primary, set
-  `RoutingReady=False` and withhold the RW endpoint (broker readiness
-  gate / config gate / scale RW brokers to zero). This is **not** DB
-  fencing; it minimizes *new* stale-master writes without picking a
-  winner. As implemented, only `RoutingReady=False` is set: the RW
+- **Write-path quarantine** — in the states section 8 names (two active
+  masters, or an active master while a member that outranks it is
+  unverified), scale the RW Brokers to zero and set `RoutingReady=False`.
+  An incomplete or ambiguous observation outside those states is reported,
+  not quarantined. This is **not** DB fencing; it stops writes through the
+  managed path without picking a winner. As implemented, only
+  `RoutingReady=False` is set: the RW
   Brokers keep running and the `-rw` Service keeps its endpoints, so the
   quarantine is reported and not enforced (S03 on Kind saw writes
   acknowledged through `-rw` meanwhile; #113, ROADMAP.md). The operator
@@ -163,10 +167,10 @@ HA findings.
 
 | Scenario | Promotion decided by | `-rw` | Stale master identified | Stale writes minimized | Fencing / surfacing |
 |---|---|---|---|---|---|
-| Master reachable, slave isolated | CUBRID (usually none) | RW brokers seek master natively | isolated slave is `unknown`, not proven self-promoted | `PrimaryObservationIncomplete` → RW quarantine (relaxable if POC proves brokers safe) | no auto-fence; `Degraded / InstanceObservationIncomplete` |
-| Master isolated, slave reachable | CUBRID promotes per `ha_node_list` | RW brokers seek new master | old master stale only once it returns as master or two masters seen | `HAReady=False`, `PrimaryObservationIncomplete` until verified; quarantine if ambiguous | no auto-fence while unreachable; if it returns as master → `FencingRequired / ManualInterventionRequired` |
-| Operator partitioned/restarted | CUBRID continues | existing brokers continue | operator can't ID while partitioned; rebuilds from fresh observations | nothing worsens (no in-memory promotion/fencing) | no fencing without evidence |
-| Kubernetes node partition | CUBRID (not Node condition) | RW brokers | NodeNotReady/PodUnknown ≠ DB death | affected members `unknown`; quarantine if primary depends on them | no pod delete/evict; `KubernetesNodePartitionSuspected`; `FencingRequired` only if conflicting masters |
+| Master reachable, slave isolated | CUBRID (usually none) | RW brokers seek master natively | isolated slave is `unknown`, not proven self-promoted | `PrimaryObservationIncomplete`; RW quarantine (section 8) only if the isolated slave outranks the active master, else reported only | no auto-fence; `Degraded / InstanceObservationIncomplete` |
+| Master isolated, slave reachable | CUBRID promotes per `ha_node_list` | RW brokers stayed on the isolated old master in POC-40 | old master stale only once it returns as master or two masters seen | `HAReady=False`, `PrimaryObservationIncomplete` until verified; RW quarantine once a slave is an active master below the unverified old master, or two active masters are seen (section 8) | no auto-fence while unreachable; if it returns as master → `FencingRequired / ManualInterventionRequired` |
+| Operator partitioned/restarted | CUBRID continues | existing brokers continue | operator can't ID while partitioned; rebuilds from fresh observations | nothing worsens (no in-memory promotion/fencing); a recorded quarantine stays in force (section 8) | no fencing without evidence |
+| Kubernetes node partition | CUBRID (not Node condition) | RW brokers | NodeNotReady/PodUnknown ≠ DB death | affected members `unknown`; RW quarantine if one of them outranks the active master (section 8) | no pod delete/evict; `KubernetesNodePartitionSuspected`; `FencingRequired` only if conflicting masters |
 | Broker sees old master, operator sees new | CUBRID decided | never selects DB pod directly | compare broker-observed target vs operator primary | `RoutingReady=False / BrokerPrimaryMismatch`; drop RW readiness | no DB fence from mismatch alone; manual if persists |
 
 ### 5. Conditions and reasons
@@ -187,8 +191,11 @@ without breaking. Key set (the target set of this decision; as implemented,
   `PrimaryUnresolved` / `AmbiguousPrimary` / `ReplicationDegraded` /
   `ObservationIncomplete` (Unknown).
 - **RoutingReady**: `BrokersReady` (True) / `PrimaryUnresolved` /
-  `WriteQuarantinedPrimaryAmbiguous` / `BrokerPrimaryMismatch` /
-  `BrokersNotReady` / `ConfigReconcilePending`.
+  `WriteQuarantinedMultipleMasters` /
+  `WriteQuarantinedOutrankingMemberUnverified` /
+  `WriteQuarantinedMasterChanged` / `BrokerPrimaryMismatch` /
+  `BrokersNotReady` / `ConfigReconcilePending` (the three
+  `WriteQuarantined*` reasons are defined in section 8).
 - **Degraded**: `ClusterHealthy` (False) / `NativeFailoverInProgress` /
   `ObservationIncomplete` / `AmbiguousPrimary` / `BrokerPrimaryMismatch`
   / `ManualInterventionRequired` / `FencingFailed`.
@@ -224,6 +231,135 @@ from Kubernetes objects + persisted status + fresh observations; incomplete
 data → incomplete/ambiguous status, never action on stale memory. Worst
 case is reduced availability, not operator-induced split-brain.
 
+### 8. Write-path quarantine policy (#113)
+
+**Evidence the policy rests on.** All of it comes from one engine build
+(11.4.6), in Docker, on Kind or on the VM lab. None of it is a CUBRID
+guarantee, and the trial counts are small. The records are in
+`docs/poc/RESULTS.md`.
+
+- A second writable master appeared only when the member losing heartbeats
+  **outranked** the active master in `ha_node_list`. In POC-50 both
+  acknowledged writes in 4 of 26 such trials, for up to 40.6 s. With the
+  highest-priority member as master, no second server accepted a write in
+  85 trials, including a 600 s hold.
+- Most of the loss came after the cut ended. In the Kind runs for #702
+  (POC-51 harness, Operator and Brokers running), the outranking member
+  became master again after the heal in 19 of 19 trials, and the writes the
+  lower member had acknowledged through `-rw` during the cut were not on
+  it. In POC-52, 922 acknowledged writes, in 23 of 78 trials, were not on
+  the final master.
+- An isolated master that no other member replaced stayed the only server
+  that accepted writes. In POC-40 on the VM lab, blocking would have
+  refused up to 948 s of writes that were all kept. A member that called
+  itself master without a `registered_and_active` server accepted no write.
+- In a master Pod deletion (S03 on Kind), writes through `-rw` resumed
+  1.1 to 1.8 s after the fault and none was lost, while the Operator could
+  not resolve the primary for 17 to 19 s.
+- `ha_ping_hosts` is not a substitute (POC-52). It stopped the promotion
+  only with every packet cut and no `cubrid heartbeat status` call on the
+  member, and the Instance Manager's readiness check makes that call every
+  5 s. The Operator does not render it.
+
+**Definitions.** Each is read from the current pass's snapshot (section 3).
+
+- An **active master** is a member with a fresh authoritative observation
+  that reports the master role with a `registered_and_active` server. A
+  master whose server is not `registered_and_active` is not one.
+- Member A **outranks** member B when A comes before B in `ha_node_list`,
+  that is, when A has the lower ordinal.
+- A member is **unverified** when it has no fresh authoritative
+  observation in this pass. A member is not unverified if its Pod does not
+  exist. A Pod in any other state counts as unverified: a container that
+  restarted after the takeover still carries a database that could
+  become active, and that has not been ruled out (see Revisit When).
+
+**When the write path is quarantined.** The rules are checked in this
+order on every pass:
+
+1. **Two or more active masters** → quarantine with reason
+   `WriteQuarantinedMultipleMasters`. It is released only by hand (below).
+2. **Exactly one active master M, and an unverified member that outranks
+   M** → quarantine with reason
+   `WriteQuarantinedOutrankingMemberUnverified`, recording M. It is
+   released automatically (below).
+3. **Otherwise no quarantine starts.** This covers one active master with
+   every unverified member ranked below it, and no active master at all.
+   The state is reported as today (`PrimaryResolved`, `RoutingReady`,
+   `Ready` after 60 s). With no active master observed, the Brokers find
+   no writable server or follow the only one CUBRID has (POC-40), and
+   blocking would protect nothing the evidence shows at risk. A quarantine
+   already in force is not lifted by this rule. It ends only as described
+   under release.
+
+A quarantine under rule 2 that observes two active masters becomes a rule-1
+quarantine.
+
+**Enforcement.** While a quarantine is in force:
+
+- the Operator scales the read-write Broker Deployment to zero replicas.
+  That removes every `-rw` endpoint and is expected to end the client
+  sessions those Brokers hold. A selector or endpoint change alone would
+  not end established sessions. Whether every open session is ended is
+  what #115 measures; the claim is not made before then;
+- `RoutingReady=False` carries the quarantine reason, and `Ready=False`
+  carries it at once, without the 60 s grace of `PrimaryUnresolved`;
+- a Warning event names the reason, the members and their observed roles;
+- the read-only Brokers and the `-ro` Service are not changed;
+- the Operator does not stop, restart, isolate or call `/v1/shutdown` on
+  any member. CUBRID's roles are not changed, and no winner is chosen.
+
+**Persistence.** The quarantine is recorded in the cluster's status
+(reason, start time in UTC, the members involved and, for rule 2, M). A
+pass that starts with a recorded quarantine keeps the RW Brokers at zero
+until the release conditions hold. That includes the first pass after an
+Operator restart. The record never sets `currentPrimary` or
+`PrimaryResolved` (section 3). It can only keep the write path closed.
+
+**Release.**
+
+- **Automatic, rule 2 only.** Every promotable member must have a fresh
+  authoritative observation, exactly one must be an active master and it
+  must be M, and the rest must be non-masters. All of this must hold in
+  every pass for at least 30 s. The RW Brokers are then scaled back and the
+  record is cleared. If the active master is not M by then, the master
+  changed during the quarantine, and writes M acknowledged before the
+  quarantine may be missing from the new master (the #702 runs). The
+  quarantine then becomes a manual one, with reason
+  `WriteQuarantinedMasterChanged`.
+- **By hand, rule 1 and a changed master.** Members may hold different
+  acknowledged rows under the same keys (POC-50, POC-52), and the Operator
+  never picks a winner (section 6). An administrator checks the members'
+  data. They then set the annotation
+  `database.cubrid.io/release-write-quarantine` to the recorded start time
+  of the quarantine. The Operator releases only when the annotation names
+  the quarantine in force, so an old annotation cannot release a later
+  one, and only once the automatic conditions hold, without the M check.
+  The Operator does not compare or repair data. Resolving divergent rows
+  and rebuilding a member stay manual (#116, #117).
+
+**Limits.** These are stated so that no stronger claim is made.
+
+- **Detection is not instant.** A quarantine starts on a reconcile pass,
+  which runs at least every 10 s for an HA cluster, and then the Broker
+  Pods have to terminate. Writes acknowledged before that are not
+  prevented, and some may be missing from the final master. #115 measures
+  the window.
+- **Only the managed path is closed.** A client connected directly to a
+  database member, or through a Broker the Operator does not manage, is
+  not affected.
+- **An Operator that is down or partitioned starts no quarantine.** A
+  recorded one stays in force, since the RW Brokers stay at zero.
+- **Availability cost.** Writes through `-rw` are refused while the
+  quarantine holds. That includes a deletion of a master Pod that
+  outranked the new master, until the deleted member's Instance Manager
+  answers. In S03 that took 17 to 19 s, where writes had resumed after
+  about 2 s without a quarantine.
+- **A cluster with no serving member** (the state of #716) is not
+  quarantined, because no write can succeed there anyway. It is reported
+  by `Ready=False` after 60 s.
+- There is no opt-out field in v1alpha1.
+
 ## Consequences
 
 ### Positive
@@ -237,10 +373,15 @@ case is reduced availability, not operator-induced split-brain.
 
 ### Negative
 
-- Conservative `PrimaryResolved` reports incomplete observation today. A
-  *future* managed quarantine may trade availability for reduced exposure,
-  but only after #113/#115 define and verify its behavior; missing Operator
-  observations alone do not prove the native SQL path is unsafe.
+- Conservative `PrimaryResolved` reports incomplete observation today.
+  The managed quarantine of section 8 trades availability for reduced
+  exposure only in the states the evidence ties to lost writes. A missing
+  Operator observation is not, on its own, a reason to quarantine. A master
+  Pod deletion that leaves a lower-priority member as master is refused
+  writes until the deleted member answers again.
+- A quarantine after two active masters, or after the master changed
+  during one, stays until an administrator releases it. A short
+  double-master reading can therefore stop writes until a person acts.
 - Confirmed split-brain / unverified old-primary needs manual
   intervention in v1alpha1.
 - **Planned write-path quarantine** would withhold the managed RW endpoint
@@ -275,7 +416,7 @@ case is reduced availability, not operator-induced split-brain.
    write exposure.
 8. **Two-master injection** — `MultiplePrimariesObserved`,
    `currentPrimary=null`, `HAReady=False`, `Degraded=AmbiguousPrimary`,
-   `RoutingReady=WriteQuarantinedPrimaryAmbiguous`,
+   `RoutingReady=WriteQuarantinedMultipleMasters`, RW Brokers at zero,
    `FencingRequired=MultiplePrimariesObserved`; no winner picked; events
    name both masters.
 9. **Manager uncertainty** — `unknown` / ha-status unavailable /
@@ -288,7 +429,25 @@ case is reduced availability, not operator-induced split-brain.
     the isolated old master; record broker behavior to decide whether
     stronger quarantine is needed.
 
+12. **Write-path quarantine (section 8)** — rule 2: cut a member that
+    outranks the active master; the RW Brokers reach zero, no `-rw`
+    write is acknowledged after that, and the quarantine is released
+    automatically once the member returns as a slave. If it returns as
+    master, the quarantine stays with `WriteQuarantinedMasterChanged`. Rule
+    1: two active masters; it stays until the annotation names it. Also
+    check across an Operator restart, an old annotation, an isolated
+    master with no replacement (no quarantine, as POC-40), and the
+    already-open sessions and the window length (#115).
+
 ## Revisit When
+
+- A POC shows that a member whose container restarted after a takeover
+  never becomes an active master over the member that took over. That
+  would let section 8 treat such a member as verified, and shorten the
+  S03 outage.
+- The detection window that #115 measures is long enough that writes
+  acknowledged before the quarantine are commonly lost. A faster signal
+  than the reconcile pass would then be needed.
 
 - `fencingPolicy: Automatic` is scheduled → design active fencing with
   strong evidence (e.g. quorum/lease) and prove correctness.
