@@ -39,7 +39,7 @@ const (
 // every call, one line each: its pid, its process group, and its arguments,
 // separated by tabs; it writes the delete options it takes to deleteOptions,
 // taking only those that carry the uid and the current resourceVersion,
-// and appends every renewal it accepts to renewals, one per line.
+// and appends every renewal it stores to renewals, one per line.
 type fakeLab struct {
 	dir, kubectl, log, deleteOptions, renewals string
 }
@@ -56,12 +56,14 @@ type fakeLab struct {
 // output, one of them in a session of its own). A get of the Lease returns
 // the last renewal stored, or else another holder's Lease.
 //
-// A renewal is stored when the version file is renamed into place, last, as
-// an API server stores a write whole or not at all. The run cancels a renewal
-// still in flight when the command ends, which kills the script; killed
-// before that rename, it has changed nothing a replace or delete checks
-// (#777). With the file slow-store, every renewal after the flaky one pauses
-// just before that rename, so that the run's cancellation lands there; with
+// The stored Lease is the file state: its resourceVersion on the first line,
+// then the Lease as a get returns it, if this run has renewed it. Every call
+// reads that one file, and a renewal is stored by renaming a new one into
+// place, as an API server stores a write whole or not at all. The run cancels
+// a renewal still in flight when the command ends, which kills the script;
+// killed before that rename, it has changed nothing any call sees (#777).
+// With the file slow-store, every renewal after the flaky one pauses just
+// before that rename, so that the run's cancellation lands there; with
 // slow-answer, just after it, so that the run never hears it was stored.
 func newFakeLab(t *testing.T, marker, create, renew string) *fakeLab {
 	t.Helper()
@@ -95,11 +97,12 @@ case "$*" in
 		: > "$dir/created"
 		while ! [ -e "$dir/go" ]; do sleep 0.01; done ;;
 	esac
-	echo 7 > "$dir/version"
+	echo 7 > "$dir/state.new"
+	mv "$dir/state.new" "$dir/state"
 	printf 'uid-1 7' ;;
 *" replace "*)
 	body=$(cat)
-	v=$(cat "$dir/version")
+	v=$(head -n 1 "$dir/state")
 	case $renew in
 	down)
 		echo 'Unable to connect to the server: dial tcp 10.0.0.1:6443: i/o timeout' >&2
@@ -130,16 +133,17 @@ case "$*" in
 		exit 1 ;;
 	esac
 	v=$((v+1))
-	printf '%%s\n' "$body" >> "$dir/renewals"
-	printf '%%s' "$body" | sed 's/"resourceVersion":"[0-9]*"/"resourceVersion":"'"$v"'"/' > "$dir/lease.new"
-	mv "$dir/lease.new" "$dir/lease"
+	{
+		echo "$v"
+		printf '%%s' "$body" | sed 's/"resourceVersion":"[0-9]*"/"resourceVersion":"'"$v"'"/'
+	} > "$dir/state.new"
 	if [ -e "$dir/slow-store" ] && [ -e "$dir/flaked" ]; then
 		: > "$dir/storing"
 		sleep 2
 	fi
-	echo "$v" > "$dir/version.new"
-	mv "$dir/version.new" "$dir/version"
+	mv "$dir/state.new" "$dir/state"
 	rm -f "$dir/storing"
+	printf '%%s\n' "$body" >> "$dir/renewals"
 	if [ -e "$dir/slow-answer" ] && [ -e "$dir/flaked" ]; then
 		: > "$dir/answering"
 		sleep 2
@@ -151,15 +155,16 @@ case "$*" in
 	fi
 	printf '{"metadata":{"uid":"uid-1","resourceVersion":"%%s"}}' "$v" ;;
 *"get lease"*)
-	if [ -e "$dir/lease" ]; then
-		cat "$dir/lease"
+	lease=$(tail -n +2 "$dir/state" 2>/dev/null)
+	if [ -n "$lease" ]; then
+		printf '%%s' "$lease"
 		exit
 	fi
 	printf '{"metadata":{"uid":"uid-0","resourceVersion":"3"},'
 	printf '"spec":{"holderIdentity":"other","leaseDurationSeconds":3600,"acquireTime":"2026-10-15T06:00:00.000000Z"}}' ;;
 *" delete "*)
 	options=$(cat)
-	v=$(cat "$dir/version")
+	v=$(head -n 1 "$dir/state")
 	case $options in
 	*'"resourceVersion":"'"$v"'"'*'"uid":"uid-1"'*) ;;
 	*)
@@ -196,6 +201,17 @@ func (f *fakeLab) calls(t *testing.T) []call {
 		calls = append(calls, call{pid: fields[0], group: fields[1], args: fields[2:]})
 	}
 	return calls
+}
+
+// version is the resourceVersion of the stored Lease.
+func (f *fakeLab) version(t *testing.T) string {
+	t.Helper()
+	out, err := os.ReadFile(filepath.Join(f.dir, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(out), "\n")
+	return first
 }
 
 func (f *fakeLab) released() bool {
@@ -480,9 +496,8 @@ func TestRunRenewsTheLeaseWhileTheCommandRuns(t *testing.T) {
 	if renewals < 2 {
 		t.Fatalf("the Lease was renewed %d times during a command that outlasted it, want at least 2", renewals)
 	}
-	version, _ := os.ReadFile(filepath.Join(f.dir, "version"))
 	options, _ := os.ReadFile(f.deleteOptions)
-	want := `"resourceVersion":"` + strings.TrimSpace(string(version)) + `"`
+	want := `"resourceVersion":"` + f.version(t) + `"`
 	if !strings.Contains(string(options), want) || !strings.Contains(string(options), `"uid":"uid-1"`) {
 		t.Fatalf("the release carried %s, want the uid and the version of the last renewal (%s)", options, want)
 	}
@@ -500,9 +515,8 @@ func TestRunKeepsALeaseWhoseRenewalWasStoredThoughItFailed(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.dir, "flaked")); err != nil {
 		t.Fatal("no renewal was stored and failed")
 	}
-	version, _ := os.ReadFile(filepath.Join(f.dir, "version"))
 	options, _ := os.ReadFile(f.deleteOptions)
-	if want := `"resourceVersion":"` + strings.TrimSpace(string(version)) + `"`; !strings.Contains(string(options), want) {
+	if want := `"resourceVersion":"` + f.version(t) + `"`; !strings.Contains(string(options), want) {
 		t.Fatalf("the release carried %q, want %s", options, want)
 	}
 }
