@@ -161,6 +161,7 @@ these hold; otherwise the step fails as it did before:
 | S00's read after its write and its read at the end of the smoke checks | Read-only | A second read, the only repeat there is |
 | S02's count of the ledger rows on the master before its marker row | Read-only and made once | A second read |
 | The count on a slave halfway through the held transaction | Read-only and made once | A second read |
+| S00's check of the starting state, the read of the marker row before the Pod is deleted | Read-only and made once; it sets up the fault and is not part of its history. A second pair leaves the starting state unverified, so S00 is blocked, not passed | A second read |
 
 A read may be made once more, so at most two `csql` calls, and only a single
 SELECT can be repeated: any other text, also a script that holds a SELECT and
@@ -171,7 +172,8 @@ A statement that is not a read is never repeated.
 write of the marker row and S02's schema change and marker row, because the
 output does not show whether they committed, and relaxing a mandatory check
 needs a maintainer's decision (#238). Everything in the histories of the fault
-scenarios stays as it is too. Reads that a loop retries are not given the rule:
+scenarios stays as it is too: only the check of a starting state listed above
+is given the rule. Reads that a loop retries are not given the rule:
 they already read again, and they do not pay for an identity read.
 
 **What is counted.** Every pair in a `csql` call of the Kind suite, and in the

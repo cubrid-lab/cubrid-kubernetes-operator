@@ -452,3 +452,63 @@ func TestHAMembersReadTheirMode(t *testing.T) {
 		}
 	}
 }
+
+// The check of the starting state before S00 deletes the Pod reads the marker
+// row once more when csql printed -199 and -111 beside it, as the smoke reads
+// do, and passes only on an unchanged server whose second read shows the row
+// (#238; E2E run 42985228360 was blocked on that pair).
+func TestS00ReadBeforePodDeletion(t *testing.T) {
+	calls := 0
+	err := s00ReadBeforePodDeletion(readThrough(sameServer(), func(string) (string, error) {
+		calls++
+		if calls == 1 {
+			return lostSession, nil
+		}
+		return cleanRead, nil
+	}), "s00-0", s00TestMarker)
+	if err != nil {
+		t.Fatalf("a pair on an unchanged server, then the row: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("csql ran %d times, want 2", calls)
+	}
+}
+
+// The starting state stays unverified when the server did not hold, when the
+// second read prints the pair too, and when the row is not there.
+func TestS00ReadBeforePodDeletionStaysStrict(t *testing.T) {
+	vanished := func() sqlcheck.Guard {
+		reads := 0
+		return sqlcheck.Guard{Identity: func() (string, error) {
+			reads++
+			if reads == 1 {
+				return "cub_server 77 1\n", nil
+			}
+			return "", nil
+		}}
+	}
+	twice := func(string) (string, error) { return lostSession, nil }
+	cases := map[string]struct {
+		guard sqlcheck.Guard
+		run   sqlRunner
+	}{
+		"the server vanished": {vanished(), func() sqlRunner {
+			calls := 0
+			return func(string) (string, error) {
+				calls++
+				if calls == 1 {
+					return lostSession, nil
+				}
+				return cleanRead, nil
+			}
+		}()},
+		"the pair twice":  {sameServer(), twice},
+		"no such row":     {sameServer(), func(string) (string, error) { return "0 rows selected.\n", nil }},
+		"transport error": {sameServer(), func(string) (string, error) { return "", errors.New("transport") }},
+	}
+	for name, c := range cases {
+		if err := s00ReadBeforePodDeletion(readThrough(c.guard, c.run), "s00-0", s00TestMarker); err == nil {
+			t.Errorf("%s: the starting state was verified", name)
+		}
+	}
+}
