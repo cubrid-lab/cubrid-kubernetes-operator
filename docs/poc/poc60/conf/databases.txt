@@ -1,0 +1,2 @@
+#db-name	vol-path	db-host	log-path	lob-base-path
+appdb	/home/cubrid/CUBRID/databases/appdb	hab-0.hab-instances.poc60.svc:hab-1.hab-instances.poc60.svc:hab-2.hab-instances.poc60.svc	/home/cubrid/CUBRID/databases/appdb	file:/home/cubrid/CUBRID/databases/appdb/lob

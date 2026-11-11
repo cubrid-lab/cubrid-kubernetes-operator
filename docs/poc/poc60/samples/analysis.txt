@@ -1,0 +1,100 @@
+Per trial; times in seconds after the fault started.
+trial | fault returned | first read after the master was lost: at, result, rows, server state, member by rows | write after it | appliers continued | reads missing B / reads | reads by a standby (after the new master was active) | write errors | first acknowledged write after the loss | new master to-be-active, active (heartbeat samples) | first read by an active server after the loss | reads failed before the loss, codes | slowest operation ms until that read | Broker connects after the fault / of them with the standby warning, hosts / hosts during the loss | Broker warnings | acknowledged rows missing at the end
+control-n1 | 0.00 | - | - | 1.11 | 0/100 | 0 (-) | [] | 0.00 | -, -  | - | 0 [] | 21 | 0 / 0 [] [] |  | {'hab-0': 0, 'hab-1': 0, 'hab-2': 0}
+control-n2 | 0.00 | - | - | 1.10 | 0/100 | 0 (-) | [] | 0.01 | -, -  | - | 0 [] | 20 | 0 / 0 [] [] |  | {'hab-0': 0, 'hab-1': 0, 'hab-2': 0}
+control-n3 | 0.00 | - | - | 1.09 | 0/100 | 0 (-) | [] | 0.00 | -, -  | - | 0 [] | 16 | 0 / 0 [] [] |  | {'hab-0': 0, 'hab-1': 0, 'hab-2': 0}
+control-n4 | 0.00 | - | - | 1.06 | 0/100 | 0 (-) | [] | 0.00 | -, -  | - | 0 [] | 18 | 0 / 0 [] [] |  | {'hab-0': 0, 'hab-1': 0, 'hab-2': 0}
+control-n5 | 0.00 | - | - | 1.10 | 0/100 | 0 (-) | [] | 0.00 | -, -  | - | 0 [] | 17 | 0 / 0 [] [] |  | {'hab-0': 0, 'hab-1': 0, 'hab-2': 0}
+delayed-0-n1 | 1.17 | 0.20 ack [] standby hab-1 | failed -581 | 0.32 | 1/126 | 16 (0) | [-581] | 8.38 | -, 8.63 hab-1 | 8.51 | 0 [] | 5066 | 49 / 0 [] ['hab-1'] | attempt to connect to <host> timed out; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+delayed-0-n2 | 1.22 | 0.20 ack [] standby hab-1 | failed -581 | 0.33 | 1/125 | 12 (0) | [-581] | 7.61 | -, 7.74 hab-1 | 7.77 | 0 [] | 5117 | 36 / 0 [] ['hab-1'] | attempt to connect to <host> timed out; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+delayed-0-n3 | 1.25 | 0.20 ack [] standby hab-1 | failed -581 | 0.28 | 1/126 | 15 (0) | [-581] | 8.18 | -, 8.14 hab-1 | 8.31 | 0 [] | 5067 | 46 / 0 [] ['hab-1'] | attempt to connect to <host> timed out; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+delayed-0-n4 | 1.26 | 0.20 ack [] standby hab-1 | failed -581 | 0.31 | 1/125 | 15 (0) | [-581] | 8.19 | -, 8.14 hab-1 | 8.35 | 0 [] | 5076 | 45 / 0 [] ['hab-1'] | attempt to connect to <host> timed out; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+delayed-0-n5 | 1.09 | 0.20 ack [] standby hab-1 | failed -581 | 0.30 | 1/126 | 12 (0) | [-581] | 7.56 | -, 7.55 hab-1 | 7.70 | 0 [] | 5085 | 36 / 0 [] ['hab-1'] | attempt to connect to <host> timed out; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-n1 | 1.36 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.48 | 1/175 | 6 (0) | [-581] | 6.52 | -, 6.51 hab-1 | 6.67 | 0 [] | 5118 | 18 / 17 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-n2 | 1.40 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.53 | 1/174 | 16 (0) | [-581] | 8.54 | -, 8.58 hab-1 | 8.69 | 0 [] | 5042 | 48 / 47 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-n3 | 1.08 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.39 | 1/175 | 17 (0) | [-581] | 8.65 | -, 8.65 hab-1 | 8.80 | 0 [] | 5099 | 51 / 50 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-n4 | 1.15 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.42 | 1/175 | 14 (0) | [-581] | 8.06 | -, 8.06 hab-1 | 8.23 | 0 [] | 5116 | 42 / 41 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-n5 | 1.26 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.34 | 1/175 | 14 (0) | [-581] | 7.99 | -, 7.93 hab-1 | 8.15 | 0 [] | 5123 | 42 / 41 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-reads-n1 | 1.45 | 0.20 ack ['A'] standby hab-2 | - | 0.34 | 1/3165 | 8 (0) | [] | - | -, 6.73 hab-1 | 8.67 | 0 [] | 5059 | 9 / 8 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-reads-n2 | 1.29 | 0.20 ack ['A'] standby hab-2 | - | 0.33 | 1/3164 | 13 (0) | [] | - | -, 7.67 hab-1 | 8.68 | 0 [] | 5064 | 14 / 13 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-reads-n3 | 1.29 | 0.20 ack ['A'] standby hab-2 | - | 0.36 | 1/3165 | 10 (0) | [] | - | -, 7.17 hab-1 | 8.09 | 0 [] | 5063 | 11 / 10 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-reads-n4 | 1.38 | 0.20 ack ['A'] standby hab-2 | - | 0.35 | 1/3165 | 13 (0) | [] | - | -, 7.50 hab-1 | 8.67 | 0 [] | 5056 | 14 / 13 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+kill-reads-n5 | 1.21 | 0.20 ack ['A'] standby hab-2 | - | 0.30 | 1/3165 | 14 (0) | [] | - | -, 7.83 hab-1 | 9.86 | 0 [] | 5040 | 15 / 14 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+order-random-n1 | 1.32 | 0.20 ack [] standby hab-1 | failed -581 | 0.37 | 1/125 | 16 (0) | [-581] | 8.48 | -, 8.52 hab-1 | 8.59 | 0 [] | 5112 | 49 / 48 ['hab-1', 'hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+order-random-n2 | 1.01 | 0.20 ack [] standby hab-1 | failed -581 | 0.28 | 1/125 | 16 (0) | [-581] | 8.38 | -, 8.47 hab-1 | 8.53 | 0 [] | 5115 | 48 / 48 ['hab-1', 'hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host>; skipped unusable databases at <host> | {'hab-1': 0, 'hab-2': 0}
+order-random-n3 | 1.12 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.28 | 1/125 | 18 (0) | [-581] | 8.83 | -, 8.86 hab-1 | 8.96 | 0 [] | 5100 | 55 / 55 ['hab-1', 'hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+order-random-n4 | 1.09 | 0.20 ack [] standby hab-1 | failed -581 | 0.32 | 1/125 | 19 (0) | [-581] | 8.98 | -, 8.82 hab-1 | 9.16 | 0 [] | 5114 | 57 / 56 ['hab-1', 'hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+order-random-n5 | 1.38 | 0.21 ack ['A'] standby hab-2 | failed -581 | 0.31 | 1/125 | 16 (0) | [-581] | 8.37 | -, 8.41 hab-1 | 8.53 | 0 [] | 5105 | 48 / 47 ['hab-1', 'hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+preferred-0-n1 | 1.08 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.36 | 1/126 | 11 (0) | [-581] | 7.34 | -, 7.45 hab-1 | 7.50 | 0 [] | 5059 | 33 / 32 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; connected to non-preferred host; connection will be reset in 600 sec(s) or later; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+preferred-0-n2 | 1.19 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.43 | 1/125 | 10 (0) | [-581] | 7.25 | -, 7.19 hab-1 | 7.43 | 0 [] | 5113 | 30 / 29 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; connected to non-preferred host; connection will be reset in 600 sec(s) or later; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+preferred-0-n3 | 1.11 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.31 | 1/126 | 15 (0) | [-581] | 8.17 | -, 8.13 hab-1 | 8.32 | 0 [] | 5102 | 45 / 44 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; connected to non-preferred host; connection will be reset in 600 sec(s) or later; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+preferred-0-n4 | 1.21 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.42 | 1/125 | 15 (0) | [-581] | 8.31 | -, 8.27 hab-1 | 8.47 | 0 [] | 5124 | 45 / 44 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; connected to non-preferred host; connection will be reset in 600 sec(s) or later; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+preferred-0-n5 | 1.27 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.36 | 1/125 | 19 (0) | [-581] | 9.03 | -, 9.18 hab-1 | 9.18 | 0 [] | 5119 | 57 / 56 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; connected to non-preferred host; connection will be reset in 600 sec(s) or later; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+replica-only-n1 | abandoned: no write through the Broker: {'cmd': 'ins', 'arg': 'warm', 't0': 1794354601301, 't1': 1794354601321, | warm-up writes 20, acknowledged 0, codes [-743]
+replica-only-n2 | abandoned: no write through the Broker: {'cmd': 'ins', 'arg': 'warm', 't0': 1794355983790, 't1': 1794355983798, | warm-up writes 20, acknowledged 0, codes [-743]
+replica-only-n3 | abandoned: no write through the Broker: {'cmd': 'ins', 'arg': 'warm', 't0': 1794357351065, 't1': 1794357351085, | warm-up writes 20, acknowledged 0, codes [-743]
+replica-only-n4 | abandoned: no write through the Broker: {'cmd': 'ins', 'arg': 'warm', 't0': 1794358718530, 't1': 1794358718548, | warm-up writes 20, acknowledged 0, codes [-743]
+replica-only-n5 | abandoned: no write through the Broker: {'cmd': 'ins', 'arg': 'warm', 't0': 1794360087998, 't1': 1794360088002, | warm-up writes 20, acknowledged 0, codes [-743]
+rt10-reads-n1 | 1.32 | 0.20 ack ['A'] standby hab-2 | - | 0.29 | 1/275 | 13 (0) | [] | - | -, 7.52 hab-1 | 8.69 | 0 [] | 5075 | 14 / 13 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+rt10-reads-n2 | 1.39 | 0.20 ack ['A'] standby hab-2 | - | 0.32 | 1/275 | 17 (0) | [] | - | -, 8.38 hab-1 | 9.48 | 0 [] | 5063 | 18 / 17 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+rt10-reads-n3 | 1.28 | 0.20 ack ['A'] standby hab-2 | - | 0.30 | 1/275 | 17 (0) | [] | - | -, 8.45 hab-1 | 9.65 | 0 [] | 5036 | 18 / 17 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+rt10-reads-n4 | 1.12 | 0.20 ack ['A'] standby hab-2 | - | 0.38 | 1/275 | 12 (0) | [] | - | -, 7.58 hab-1 | 8.50 | 0 [] | 5048 | 13 / 12 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+rt10-reads-n5 | 1.23 | 0.40 ack ['A'] standby hab-2 | - | 0.51 | 1/275 | 14 (0) | [] | - | -, 8.12 hab-1 | 9.07 | 1 [-224] | 5056 | 16 / 15 ['hab-2'] ['hab-1', 'hab-2'] | attempt to connect to <host> timed out; connected to HA standby DB host; failed to connect to <host> | {'hab-1': 0, 'hab-2': 0}
+stop-n1 | 3.67 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.32 | 1/200 | 8 (0) | [-581] | 1.82 | -, 1.68 hab-1 | 2.01 | 0 [] | 76 | 24 / 23 ['hab-2'] ['hab-1', 'hab-2'] | connected to HA standby DB host; skipped unusable databases at <host> | {'hab-1': 0, 'hab-2': 0}
+stop-n2 | 3.33 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.31 | 1/200 | 8 (0) | [-581] | 1.82 | -, 1.75 hab-1 | 2.01 | 0 [] | 93 | 24 / 23 ['hab-2'] ['hab-1', 'hab-2'] | connected to HA standby DB host | {'hab-1': 0, 'hab-2': 0}
+stop-n3 | 3.28 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.33 | 1/200 | 8 (0) | [-581] | 1.82 | -, 1.77 hab-1 | 2.01 | 0 [] | 80 | 24 / 23 ['hab-2'] ['hab-1', 'hab-2'] | connected to HA standby DB host | {'hab-1': 0, 'hab-2': 0}
+stop-n4 | 3.22 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.28 | 1/200 | 6 (0) | [-581] | 1.42 | -, 1.34 hab-1 | 1.61 | 0 [] | 82 | 18 / 17 ['hab-2'] ['hab-1', 'hab-2'] | connected to HA standby DB host | {'hab-1': 0, 'hab-2': 0}
+stop-n5 | 3.27 | 0.20 ack ['A'] standby hab-2 | failed -581 | 0.35 | 1/200 | 8 (0) | [-581] | 1.82 | -, 1.76 hab-1 | 2.01 | 0 [] | 87 | 24 / 23 ['hab-2'] ['hab-1', 'hab-2'] | connected to HA standby DB host | {'hab-1': 0, 'hab-2': 0}
+
+Per arm; times in seconds after the fault started.
+arm | trials | abandoned | first read after the loss: by a standby / missing B | write after it: -581 | reads missing B | Broker connects to a standby (trials) | new master active | first acknowledged write after the loss | last read by a standby | first read by an active server after the loss | reads by a standby after the new master was active | acknowledged rows missing at the end
+control | 5 | 0 | 0 / 0 | 0 | 0 | 0 (0) | - | 0.00 to 0.01 | - | - | 0 | 0
+delayed-0 | 5 | 0 | 5 / 5 | 5 | 5 | 0 (0) | 7.55 to 8.63 | 7.56 to 8.38 | 7.30 to 8.11 | 7.70 to 8.51 | 0 | 0
+kill | 5 | 0 | 5 / 5 | 5 | 5 | 196 (5) | 6.51 to 8.65 | 6.52 to 8.65 | 6.27 to 8.39 | 6.67 to 8.80 | 0 | 0
+kill-reads | 5 | 0 | 5 / 5 | 0 | 5 | 58 (5) | 6.73 to 7.83 | - | 6.47 to 7.65 | 8.09 to 9.86 | 0 | 0
+order-random | 5 | 0 | 5 / 5 | 5 | 5 | 254 (5) | 8.41 to 8.86 | 8.37 to 8.98 | 8.13 to 8.76 | 8.53 to 9.16 | 0 | 0
+preferred-0 | 5 | 0 | 5 / 5 | 5 | 5 | 205 (5) | 7.19 to 9.18 | 7.25 to 9.03 | 7.03 to 8.78 | 7.43 to 9.18 | 0 | 0
+replica-only | 5 | 5 | 0 / 0 | 0 | 0 | 0 (0) | - | - | - | - | 0 | 0
+rt10-reads | 5 | 0 | 5 / 5 | 0 | 5 | 74 (5) | 7.52 to 8.45 | - | 7.29 to 8.27 | 8.50 to 9.65 | 0 | 0
+stop | 5 | 0 | 5 / 5 | 5 | 5 | 109 (5) | 1.34 to 1.77 | 1.42 to 1.82 | 1.20 to 1.61 | 1.61 to 2.01 | 0 | 0
+
+ok   45 trials, 5 in each of 9 arms
+ok   only the 5 REPLICA_ONLY=ON trials were abandoned
+ok   REPLICA_ONLY=ON: 100 warm-up writes with a healthy master, none acknowledged, every one -743
+ok   control: 500 reads, none answered by a server other than an active one, none missing B, no write error, no Broker connection after the moment of the fault
+ok   35 trials with a fault ran to the end
+ok   in all 35 the first read a non-active server answered was acknowledged, answered by a standby, and missed B
+ok   that read started 0.20 s after the fault started in 34 trials and 0.40 s in 1
+ok   and 0.51 to 0.73 s after B was acknowledged
+ok   on the connection that wrote B in 34; in the other (rt10-reads-n5) a read during the kill failed with -224 and the client opened a new one
+ok   no other read failed before that read in any trial
+ok   exactly one read missed B in each fault trial (the appliers were continued right after it)
+ok   by its rows the first read was answered by hab-2 in the 25 trials of kill, stop, kill-reads, rt10-reads and preferred-0, by hab-1 in the 5 of delayed-0, and by hab-1 in 3 and hab-2 in 2 of order-random
+ok   in all 25 mixed fault trials the write after that read failed with -581
+ok   every failed write in the 35 fault trials failed with -581 before its commit; none was unknown
+ok   no read was answered by a standby after the new master was active, in any of the 35
+ok   the new master was hab-1 in all 35
+ok   kill: last read by a standby (6.27, 8.39), new master active (6.51, 8.65), first acknowledged write after the loss (6.52, 8.65)
+ok   stop: last read by a standby (1.2, 1.61), new master active (1.34, 1.77), first acknowledged write after the loss (1.42, 1.82)
+ok   kill-reads: last read by a standby (6.47, 7.65), new master active (6.73, 7.83), first acknowledged write after the loss None
+ok   rt10-reads: last read by a standby (7.29, 8.27), new master active (7.52, 8.45), first acknowledged write after the loss None
+ok   order-random: last read by a standby (8.13, 8.76), new master active (8.41, 8.86), first acknowledged write after the loss (8.37, 8.98)
+ok   preferred-0: last read by a standby (7.03, 8.78), new master active (7.19, 9.18), first acknowledged write after the loss (7.25, 9.03)
+ok   delayed-0: last read by a standby (7.3, 8.11), new master active (7.55, 8.63), first acknowledged write after the loss (7.56, 8.38)
+ok   reads by a standby per fault trial: 6 to 19
+ok   the appliers were continued 0.28 to 0.53 s after the fault started, each time after a read a standby answered
+ok   the last read by a standby: 1.2 to 1.6 s after a heartbeat stop, 6.3 to 8.8 s after a kill
+ok   the Broker's error log has -1139 (incompatible read/write mode) in the 30 fault trials outside delayed-0, and none in delayed-0 or the controls
+ok   by its rows the stale read came from hab-2 in 27 trials and from hab-1 in 8
+ok   between the last read by a standby and the first read whose log header said active, every read was answered by a server whose log header said to-be-active; the first such active read came up to 2.0 s after the heartbeat reported the new master active
+ok   only the first read by a standby missed B in each trial; the later ones returned it
+ok   stop: the heartbeat stop and kill returned 3.22 to 3.67 s after they started
+ok   kill arms: the slowest operation until the first read by an active server took 5.036 to 5.124 s, and the Broker logged 'attempt to connect to <host> timed out' in all 30
+ok   stop: the slowest operation took 76 to 93 ms, and no connection attempt timed out
+ok   reads-only arms: the Broker logged one connection with the standby warning per read a standby answered (one more in rt10-reads-n5)
+ok   kill-reads: 3164 to 3165 reads over the 640 s each
+ok   delayed-0: no connection carried the standby warning, although 12 to 16 reads per trial were answered by a standby
+ok   preferred-0: the Broker logged 'connected to non-preferred host' and 'connection will be reset in 600 sec(s) or later' in all 5
+ok   no acknowledged row was missing on any running member at the end, in all 40 trials; 4,044 acknowledged inserts
+
+every claim holds
