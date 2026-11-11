@@ -208,8 +208,13 @@ destinations and an interrupted upload are not covered. Since then the harness
 also reads the target member's backup staging directory after the failed
 upload, by name and size only: a staged file left there fails the variant
 unless a recorded process held it, and a directory that could not be read
-blocks it (#636). Unit tests cover it with fakes; no VM-lab run has used that
-check yet.
+blocks it (#636). Unit tests cover it with fakes. On 2026-11-11 the variant
+passed again on the VM lab with that check (harness `95c20a8`, manager
+`ab23f02`, after LAB01 and S11 `complete` on the same run): the backup on the
+slave `ha-1` was `Failed` 12.0 s after the request with `The specified bucket
+does not exist`, and at 22:10:41 UTC, right after the run saw `Failed`, the
+member's staging directory for it was not there (0 files left). One run is
+not a baseline.
 
 S11 `denied-credentials` also follows S11 `complete`, in a run of its own
 (`lab-installed-ha-s11-denied-credentials`, `-backup-denied-credentials`,
@@ -233,8 +238,8 @@ directory and the Operator's and Instance Manager's logs were not checked.
 Only an unknown access key was tested there; the seed Secret's access key
 with a wrong secret key is S11 `signature-mismatch`. The staging check
 described for S11 `missing-destination` applies to this variant and to
-S11 `signature-mismatch` and `interrupted-upload` too; no VM-lab run has used
-it yet.
+S11 `signature-mismatch` and `interrupted-upload` too; on the VM lab it has
+run only with S11 `missing-destination`.
 
 S11 `signature-mismatch` also follows S11 `complete`, in a run of its own
 (`lab-installed-ha-s11-signature-mismatch`, `-backup-signature-mismatch`,
