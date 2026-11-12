@@ -7,7 +7,7 @@ narrow for the MVP and are widened only after they are validated in CI.
 
 | Component | MVP target | Notes |
 |---|---|---|
-| CUBRID | 11.4.x; reference engine 11.4.6.1963 | Engine-version migration is out of MVP scope (ADR-0009). The derivative Instance Manager Dockerfile pins the official linux/amd64 engine base to `cubrid/cubrid:11.4@sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`, the manifest observed with CUBRID 11.4.6.1963 in POC-23 and POC-26. The version series alone does not select or pin the runtime image. |
+| CUBRID | 11.4.x; reference engine 11.4.7.1995 | Engine-version migration is out of MVP scope (ADR-0009). The Instance Manager Dockerfile pins the official linux/amd64 engine base to `cubrid/cubrid:11.4@sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604`, which runs CUBRID 11.4.7.1995. The POCs up to POC-61 ran the earlier build 11.4.6.1963 (`sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791`). The version series alone does not select or pin the runtime image. |
 | Kubernetes | 1.37 dependency/envtest target; supported range unverified | Kubernetes modules target 1.37. The Kind e2e runs on the kind version and node image pinned in the `Makefile` (`KIND_VERSION`, `KIND_NODE_IMAGE`: kind v0.33.0, `kindest/node:v1.37.0`). Record executed versions and evidence before claiming support. |
 | Architecture | amd64 | arm64 is not targeted for the MVP. The official CUBRID image is linux/amd64 only. The operator image and the wiring scenario with a fake Instance Manager can be built and run on arm64, but no CI job does so (every workflow runs on `ubuntu-latest`), and the real-engine scenarios are recorded as `not_run` there. |
 | Go toolchain | see `go.mod` | Pinned via `go.mod`; CI uses `go-version-file: go.mod`. |
@@ -21,8 +21,28 @@ narrow for the MVP and are widened only after they are validated in CI.
 The default Instance Manager build uses exactly:
 
 ```text
-cubrid/cubrid:11.4@sha256:1248b77ad39888df9e064655937188ab99fe056ed7e35b57d06155a015dc1791
+cubrid/cubrid:11.4@sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604
 ```
+
+`cubrid_rel` in it prints `CUBRID 11.4.7 (11.4.7.1995-f39ab8c) (64bit release
+build for Linux) (Nov 10 2026 13:45:55)` (read 2026-11-12 UTC).
+
+**Why this build.** The `11.4` tag moved twice without a change in this
+repository:
+- 11.4.6.1963 is the build of the POCs (POC-23, POC-26, POC-61);
+- 11.4.7.1994 is what the Instance Manager image built from `main` `cc0dfdd`
+  ran on the VM lab on 2026-11-12 (#122);
+- 11.4.7.1995 is what the tag held later that day.
+
+Images built while the tag was on 11.4.7 already run 11.4.7. Pinning the
+earlier 11.4.6 build would make the next build of those a patch downgrade,
+which ADR-0009 puts out of scope and which the version check, comparing only
+the `11.4` series, would not stop. So the pin moves forward, to the build the
+Kind suite was run on when this pin was set.
+
+On the VM lab, an HA cluster moved from 11.4.6 to 11.4.7.1994 one member at a
+time and kept replicating while its members ran different builds (#122). That
+is one observation, not a compatibility guarantee for every 11.4.6 data set.
 
 This is the **CUBRID base image** digest (linux/amd64), not the digest of the
 derived Instance Manager image. The `11.4` tag alone is mutable; the digest
