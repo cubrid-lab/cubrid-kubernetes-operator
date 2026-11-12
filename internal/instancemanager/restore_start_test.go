@@ -85,6 +85,9 @@ type restoreMember struct {
 	// processes is the process table the member's manager reads; nil is one
 	// without any CUBRID process.
 	processes func() (map[string]bool, error)
+	// holdsDatabase gives the target a directory of the database before the
+	// restore is posted, as a member with retained data has (#798).
+	holdsDatabase bool
 	// seed restores the member as a slave of seedMaster from that master's
 	// backup.
 	seed bool
@@ -118,6 +121,11 @@ func runRestoreOperation(t *testing.T, cli CLI, member restoreMember) Operation 
 		t.Fatalf("NewOperationStore: %v", err)
 	}
 	lastRestoreTarget = req.TargetDir
+	if member.holdsDatabase {
+		if err := os.Mkdir(filepath.Join(req.TargetDir, dbName), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
 	srv := NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(objects).WithRestoreRoots(rootsFor(req))
 	if member.logger != nil {
 		srv = srv.WithLogger(member.logger)
@@ -324,6 +332,36 @@ func TestServer_Restore_SeededHAMemberJoinsHA(t *testing.T) {
 	}
 	if entry := databasesTxtEntry(t, lastRestoreTarget, dbName); len(entry) < 3 || entry[2] != "demo-0:demo-1:demo-2" {
 		t.Errorf("databases.txt entry = %q, want the member list as host", entry)
+	}
+}
+
+// A seed restore on a member that already holds the database fails with a
+// failure code that says so, so that the Operator does not send the same
+// restore again: the wrong-target guard would refuse every retry (#798).
+func TestServer_Restore_TellsATargetThatHoldsTheDatabase(t *testing.T) {
+	conf := filepath.Join(t.TempDir(), "cubrid_ha.conf")
+	if err := os.WriteFile(conf, []byte(testHAConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cli := &stepCLI{}
+	final := runRestoreOperation(t, cli, restoreMember{haConf: conf, holdsDatabase: true})
+	if final.State != OpFailed {
+		t.Fatalf("final state = %s, want Failed", final.State)
+	}
+	if final.FailureCode != FailureTargetHoldsDatabase {
+		t.Errorf("failure code = %q (%s), want %q", final.FailureCode, final.FailureReason, FailureTargetHoldsDatabase)
+	}
+	if calls := cli.recorded(); len(calls) != 0 {
+		t.Errorf("calls = %q, want none", calls)
+	}
+}
+
+// A restore that fails for another reason carries no failure code.
+func TestServer_Restore_OtherFailuresCarryNoCode(t *testing.T) {
+	cli := &stepCLI{failing: map[string]bool{"server start": true}}
+	final := runRestoreOperation(t, cli, restoreMember{standalone: true})
+	if final.State != OpFailed || final.FailureCode != "" {
+		t.Errorf("final = %s with code %q, want Failed with none", final.State, final.FailureCode)
 	}
 }
 

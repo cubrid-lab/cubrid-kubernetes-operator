@@ -78,6 +78,10 @@ type Operation struct {
 	State OperationState `json:"state"`
 	// FailureReason is set when State is Failed.
 	FailureReason string `json:"failureReason,omitempty"`
+	// FailureCode is set with FailureReason when the failure is one a caller
+	// acts on: one of the Failure* codes. An operation of an earlier manager,
+	// or one that failed for another reason, has none.
+	FailureCode string `json:"failureCode,omitempty"`
 	// Artifact holds the completed backup facts (set only on Completed).
 	Artifact *OperationArtifact `json:"artifact,omitempty"`
 	// Restored is set on a restore once restoredb has succeeded and before

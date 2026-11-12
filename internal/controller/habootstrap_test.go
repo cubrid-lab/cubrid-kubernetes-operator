@@ -114,6 +114,9 @@ type fakeSeedClient struct {
 	backupState instancemanager.OperationState
 	restore     map[string]instancemanager.OperationState
 	reason      string
+	// code is the failure code of a failed restore, as an Instance Manager
+	// reports it (Operation.FailureCode).
+	code string
 	// backups and restores keep every request by its idempotency key, as the
 	// Instance Managers do.
 	backups  map[string]seedBackup
@@ -179,6 +182,9 @@ func (f *fakeSeedClient) restoreOp(podName, key string) instancemanager.Operatio
 	}
 	op := instancemanager.Operation{ID: "op-restore-" + key, Kind: instancemanager.OpRestore, Database: f.restoresByKey[key].Database,
 		State: state, FailureReason: f.reason}
+	if state == instancemanager.OpFailed {
+		op.FailureCode = f.code
+	}
 	if uri, ok := f.restoredFrom[key]; ok {
 		op.Restored = &instancemanager.OperationArtifact{ManifestURI: uri}
 	}
@@ -1464,6 +1470,58 @@ var _ = Describe("HA bootstrap of the first database (ADR-0010, #106)", func() {
 			_, reason := bootstrapCondition(got)
 			Expect(reason).To(Equal("SeedRestoreFailed"))
 			Expect(seed.restoreOn).To(HaveEach("seed-failed-1"), "the second peer is not touched")
+		})
+
+		// A cluster recreated over the retained volumes of an earlier one
+		// (#798): every member already holds the database, and the Instance
+		// Manager refuses to restore over it (ADR-0008) with a failure code
+		// that says so. A retry would be refused again, so the bootstrap stops
+		// at the first such refusal: no further seed backup or restore is
+		// sent, the other peer is not touched, and nothing is deleted.
+		It("stops at the first restore refused because the member already holds the database (#798)", func() {
+			const peer, other = "seed-retained-1", "seed-retained-2"
+			seed := &fakeSeedClient{
+				backupState: instancemanager.OpCompleted,
+				restore: map[string]instancemanager.OperationState{
+					peer:  instancemanager.OpFailed,
+					other: instancemanager.OpFailed,
+				},
+				reason: `restore failed: target /var/lib/cubrid/databases already holds database "appdb"; ` +
+					`refusing to overwrite (ADR-0008): the target already holds the database`,
+				code: instancemanager.FailureTargetHoldsDatabase,
+			}
+			key := create(seededCluster("seed-retained"))
+			r := reconcilerFor(seed)
+			var got *databasev1alpha1.CubridCluster
+			for range maxBootstrapAttempts + 2 {
+				got = reconcileOnce(r, key)
+			}
+			Expect(seed.backupOn).To(HaveLen(1), "one seed backup, for the first restore only")
+			Expect(seed.restoreOn).To(Equal([]string{peer}), "the restore is not sent again, and the other peer is not touched")
+			status := got.Status.Databases[0]
+			Expect(status.Phase).To(Equal("Failed"))
+			Expect(status.BootstrapAttempts).To(BeZero(), "a refusal that a retry cannot change uses up no attempt")
+			Expect(status.SeededMembers).To(BeEmpty())
+			Expect(status.HAConfigured).To(BeFalse())
+			cond := meta.FindStatusCondition(got.Status.Conditions, conditionBootstrapReady)
+			Expect(cond.Reason).To(Equal(reasonMemberHoldsDatabase))
+			Expect(cond.Message).To(And(ContainSubstring(peer), ContainSubstring("already holds"),
+				ContainSubstring("#798")))
+			Expect(drain(r.Recorder.(*record.FakeRecorder))).To(ContainElement(And(
+				ContainSubstring("Warning"), ContainSubstring(reasonMemberHoldsDatabase))))
+		})
+
+		It("starts a restore again that failed for another reason, as before", func() {
+			seed := &fakeSeedClient{
+				backupState: instancemanager.OpCompleted,
+				restore:     map[string]instancemanager.OperationState{"seed-nocode-1": instancemanager.OpFailed},
+				reason:      "restore failed: download failed",
+			}
+			key := create(seededCluster("seed-nocode"))
+			got := reconcileOnce(reconcilerFor(seed), key)
+			Expect(got.Status.Databases[0].BootstrapAttempts).To(BeEquivalentTo(1))
+			_, reason := bootstrapCondition(got)
+			Expect(reason).To(Equal("SeedRestoreFailedRetrying"))
 		})
 	})
 

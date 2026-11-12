@@ -310,6 +310,20 @@ start from empty volumes, delete the PVCs of the old
 cluster once their data is known not to be needed, or create the cluster
 under another name.
 
+The same holds for the seed restore of an HA bootstrap (#798). An HA cluster
+created again over its retained PVCs starts with an empty status, so the
+Operator bootstraps it anew, and every peer's Instance Manager refuses the
+seed restore because the peer already holds the database. A retry of that
+restore would be refused again, so the Instance Manager marks the failed
+operation with `failureCode: TargetHoldsDatabase`, and the Operator stops the
+bootstrap at the first such refusal: the database is `Failed`,
+`BootstrapReady` is `False` with reason `MemberHoldsDatabase`, no attempt is
+used, no other peer is sent a restore, and nothing is deleted. An Instance
+Manager of an earlier build sends no code, and the restore is retried within
+the attempt limit as before. Taking such members over, after a check that
+they form one HA group, is not implemented; which member's data is kept is a
+decision ADR-0005 leaves to a person.
+
 The marker stays until the restore is recorded `Completed`, not only until
 `restoredb` has succeeded (#267). Once `restoredb` has succeeded, the restore
 records the restored artifact on its operation (`restored`) before it starts

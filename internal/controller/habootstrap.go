@@ -1043,6 +1043,10 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 	case instancemanager.OpFailed:
 		// The next attempt chooses its source again.
 		status.Seeding = nil
+		if restore.FailureCode == instancemanager.FailureTargetHoldsDatabase {
+			r.seedTargetHoldsDatabase(cluster, status, peer, restore.FailureReason)
+			return false
+		}
 		r.bootstrapStepFailed(cluster, status, "SeedRestoreFailed", "on "+peer+": "+restore.FailureReason)
 		return false
 	default:
@@ -1050,6 +1054,32 @@ func (r *CubridClusterReconciler) seedMember(ctx context.Context, cluster *datab
 			"restoring database "+database+" on "+peer)
 		return false
 	}
+}
+
+// reasonMemberHoldsDatabase is BootstrapReady False, and the database Failed,
+// when a member's Instance Manager refused its seed restore because it
+// already holds the database (#798).
+const reasonMemberHoldsDatabase = "MemberHoldsDatabase"
+
+// seedTargetHoldsDatabase stops the bootstrap of a database whose seed
+// restore on peer was refused because peer already holds it (ADR-0008): a
+// retry of the restore would be refused again, so it is not started again and
+// uses up no attempt. A cluster recreated over the retained volumes of an
+// earlier one has such members. Nothing is deleted; which member's data to
+// keep is for a person (ADR-0005).
+func (r *CubridClusterReconciler) seedTargetHoldsDatabase(cluster *databasev1alpha1.CubridCluster,
+	status *databasev1alpha1.DatabaseStatus, peer, why string) {
+	status.Phase = databasePhaseFailed
+	msg := fmt.Sprintf("the seed restore of database %s on %s was refused because %s already holds it, which this "+
+		"bootstrap did not put there (%s). This is what a cluster created over the retained volumes of an earlier "+
+		"one looks like (#798). The Operator does not take such members over yet, and a retry would be refused "+
+		"again, so the bootstrap stops; nothing was deleted or overwritten. The retained volumes may hold the only "+
+		"copy of that data. To start with empty members while keeping it, create the cluster under another name "+
+		"(ADR-0008). Deleting the PersistentVolumeClaims of the members destroys their data for good: do it only "+
+		"after a backup of it has been restored and checked elsewhere, or once it is known not to be needed",
+		status.Name, peer, peer, why)
+	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonMemberHoldsDatabase, msg)
+	r.statusEvent(cluster, corev1.EventTypeWarning, reasonMemberHoldsDatabase, msg)
 }
 
 // seedReadingAfterPoll reads the roles for the copy in status.databases[].

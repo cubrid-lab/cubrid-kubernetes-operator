@@ -18,6 +18,7 @@ package instancemanager
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -113,6 +114,35 @@ func TestRestore_RejectsDatabaseRegisteredInTarget(t *testing.T) {
 		t.Fatal("expected refusal: the database is registered in the target's databases.txt")
 	}
 	assertNoSideEffects(t, store, cli, req.StagingDir)
+}
+
+// A target that already holds the database, as a directory or as a line in
+// databases.txt, is refused with ErrTargetHoldsDatabase, so that a caller can
+// tell that a retry of the same restore can never succeed there (#798).
+func TestRestore_TargetHoldsDatabaseIsTold(t *testing.T) {
+	for name, hold := range map[string]func(t *testing.T, target string){
+		"directory": func(t *testing.T, target string) {
+			if err := os.Mkdir(filepath.Join(target, dbName), 0o750); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"databases.txt": func(t *testing.T, target string) {
+			entry := dbName + "\t/elsewhere/" + dbName + "\tlocalhost\t/elsewhere/" + dbName + "/log\tfile:/elsewhere/" + dbName + "/lob\n"
+			if err := os.WriteFile(filepath.Join(target, "databases.txt"), []byte("#db-name\tvol-path\n"+entry), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, bucket, prefix := stageUploadedArtifact(t)
+			req := baseRestoreRequest(t, bucket, prefix)
+			hold(t, req.TargetDir)
+			_, err := Restore(context.Background(), &restoreCLI{}, &countingStore{fakeObjectStore: fake}, rootsFor(req), req)
+			if !errors.Is(err, ErrTargetHoldsDatabase) {
+				t.Fatalf("Restore: %v, want ErrTargetHoldsDatabase", err)
+			}
+		})
+	}
 }
 
 // Another database in databases.txt does not block the restore.

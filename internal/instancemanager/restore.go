@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -124,6 +125,12 @@ type RestoreResult struct {
 	ManifestURI   string `json:"manifestURI"`
 }
 
+// ErrTargetHoldsDatabase is the ADR-0008 wrong-target guard's refusal: the
+// target already holds the database. A restore of the same request is
+// refused there again, whatever is retried, until a person changes what the
+// target holds (#798).
+var ErrTargetHoldsDatabase = errors.New("the target already holds the database")
+
 // Restore verifies the artifact's trust (ADR-0007/0008), downloads its objects
 // to staging, registers the database at the empty target and runs
 // `cubrid restoredb -u -B` into it.
@@ -154,15 +161,16 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	// pre-existing DB volume, or the database already registered in the
 	// target's databases.txt, is a hard block, never dropped or overwritten.
 	if hasExistingDB(targetDir, req.Database) {
-		return RestoreResult{}, fmt.Errorf("target %s already holds database %q; refusing to overwrite (ADR-0008)", targetDir, req.Database)
+		return RestoreResult{}, fmt.Errorf("target %s already holds database %q; refusing to overwrite (ADR-0008): %w",
+			targetDir, req.Database, ErrTargetHoldsDatabase)
 	}
 	registered, err := registeredInDatabasesTxt(targetDir, req.Database)
 	if err != nil {
 		return RestoreResult{}, err
 	}
 	if registered {
-		return RestoreResult{}, fmt.Errorf("database %q is already registered in %s; refusing to overwrite (ADR-0008)",
-			req.Database, filepath.Join(targetDir, databasesTxt))
+		return RestoreResult{}, fmt.Errorf("database %q is already registered in %s; refusing to overwrite (ADR-0008): %w",
+			req.Database, filepath.Join(targetDir, databasesTxt), ErrTargetHoldsDatabase)
 	}
 
 	// The staging directory is removed after a successful restore, and after a
