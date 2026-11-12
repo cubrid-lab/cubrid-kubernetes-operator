@@ -105,7 +105,7 @@ they were not observed, so what an earlier reconcile saw is not kept:
 reported either way. A failed Broker write, like a failed delete of an
 outdated slave's Pod (`MemberUpdateInProgress`), does not stop the other steps
 of the reconcile: the status is written with its Condition, and the failure is
-then returned to controller-runtime, which retries it with backoff. A
+then returned to controller-runtime, which retries it with backoff that never exceeds 10 seconds (`clusterRateLimiter`), so a write that keeps failing does not delay the next observation of the members' roles. A
 conflicting Broker write is retried after a second.
 
 An object that has a name the cluster needs, but that the cluster does not
