@@ -1,0 +1,50 @@
+### 2026-11-12T01:27:32Z [poc-dbapw-slave] csql -u dba -p Poc-Pw-1 appdb@localhost -c "select * from t"
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'before password'   
+            2  'after password on master'
+            3  'after slave restart'
+            4  'after restoreslave'
+
+4 rows selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+### 2026-11-12T01:27:32Z [poc-dbapw-master] cubrid heartbeat status | grep -E "Node|Process|Server|logdb"; grep -c "Incorrect or missing password" $CUBRID/log/*.err | grep -v ":0$"; grep -h -B3 "Incorrect or missing password" $CUBRID/log/*.err | grep -E "^Time|Program" | cut -c1-150
+ HA-Node Info (current poc-dbapw-master, state master)
+   Node poc-dbapw-slave (priority 2, state slave)
+   Node poc-dbapw-master (priority 1, state master)
+ HA-Process Info (master 63, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 3941, state registered)
+   Copylogdb appdb@poc-dbapw-slave:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 3968, state registered)
+   Server appdb (pid 72, state registered_and_active)
+/home/cubrid/CUBRID/log/appdb@poc-dbapw-slave_copylogdb.err:2
+Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave' on the host 'poc-dbapw-slave' (port 1523).
+Time: 11/12/26 01:12:08.184 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -1
+Program 'copylogdb' (pid 3939) connected to database server 'appdb@poc-dbapw-slave' on the host 'poc-dbapw-slave' (port 1523).
+Time: 11/12/26 01:27:19.167 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -1
+rc=0
+### 2026-11-12T01:27:32Z [poc-dbapw-slave] cubrid heartbeat status | grep -E "Node|Process|Server|logdb"; grep -c "Incorrect or missing password" $CUBRID/log/*.err | grep -v ":0$"; grep -h -B3 "Incorrect or missing password" $CUBRID/log/*.err | grep -E "^Time|Program" | cut -c1-150
+ HA-Node Info (current poc-dbapw-slave, state slave)
+   Node poc-dbapw-slave (priority 2, state slave)
+   Node poc-dbapw-master (priority 1, state master)
+ HA-Process Info (master 93, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 15007, state registered)
+   Copylogdb appdb@poc-dbapw-master:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 15543, state registered)
+   Server appdb (pid 14751, state registered_and_standby)
+/home/cubrid/CUBRID/log/appdb@poc-dbapw-master_copylogdb.err:3
+Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Time: 11/12/26 01:09:42.959 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -1
+Program 'copylogdb' (pid 11686) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Time: 11/12/26 01:12:04.620 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -1
+Program 'copylogdb' (pid 15005) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Time: 11/12/26 01:24:28.247 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -1
+rc=0
+### 2026-11-12T01:27:32Z [poc-dbapw-slave] grep -h "applylogdb\|log applier" $CUBRID/log/*applylogdb*.err | grep -v "^\s*$" | tail -5 | cut -c1-200
+log applier: log applier started. required LSA: 145|10248. last committed LSA: 145|10344. last committed repl LSA: 145|10248.
+Program 'applylogdb' (pid 12792) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+log applier: log applier started. required LSA: 147|7920. last committed LSA: 147|7688. last committed repl LSA: 147|3416.
+Program 'applylogdb' (pid 15007) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+log applier: log applier started. required LSA: 149|11640. last committed LSA: 150|1584. last committed repl LSA: 149|11640.
+rc=0

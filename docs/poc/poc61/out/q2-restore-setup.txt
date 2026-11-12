@@ -1,0 +1,1 @@
+appdb		/home/cubrid/CUBRID/databases/appdb	localhost	/home/cubrid/CUBRID/databases/appdb	file:/home/cubrid/CUBRID/databases/appdb/lob

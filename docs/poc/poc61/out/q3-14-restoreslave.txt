@@ -1,0 +1,88 @@
+# rebuild the slave with restoreslave while both members have dba password Poc-Pw-1; no password supplied
+### 2026-11-12T01:19:04Z [poc-dbapw-slave] cubrid heartbeat stop
+@ cubrid heartbeat stop
+
+The heartbeat feature has been deactivated. Please wait until all shutdown processes of cub_servers are completed.
+
+++ cubrid heartbeat stop: success
+rc=0
+### 2026-11-12T01:19:11Z [poc-dbapw-slave] cubrid deletedb appdb
+rc=0
+### 2026-11-12T01:19:15Z [poc-dbapw-slave] cat $CUBRID_DATABASES/databases.txt; ls $CUBRID_DATABASES $CUBRID_DATABASES/appdb
+#db-name	vol-path		db-host		log-path		lob-base-path
+/home/cubrid/CUBRID/databases:
+appdb
+appdb_poc-dbapw-master
+databases.txt
+databases.txt.sample
+
+/home/cubrid/CUBRID/databases/appdb:
+appdb_bkvinf
+lob
+rc=0
+### 2026-11-12T01:19:15Z [poc-dbapw-slave] rm -rf $CUBRID_DATABASES/appdb_poc-dbapw-master /tmp/bk; mkdir -p $CUBRID_DATABASES/appdb/lob
+rc=0
+### 2026-11-12T01:19:15Z [poc-dbapw-master] rm -rf /tmp/bk2 && mkdir -p /tmp/bk2 && cubrid backupdb -C -D /tmp/bk2 -l 0 appdb@localhost
+Backup Volume Label: Level: 0, Unit: 0, Database appdb, Backup Time: Thu Nov 12 01:19:15 2026
+rc=0
+### 2026-11-12T01:20:06Z [poc-dbapw-slave] cat $CUBRID_DATABASES/databases.txt
+#db-name	vol-path		db-host		log-path		lob-base-path
+appdb		/home/cubrid/CUBRID/databases/appdb	poc-dbapw-master:poc-dbapw-slave	/home/cubrid/CUBRID/databases/appdb	file:/home/cubrid/CUBRID/databases/appdb/lob
+rc=0
+### 2026-11-12T01:20:06Z [poc-dbapw-slave] cd $CUBRID_DATABASES && cubrid restoreslave -u -s master -m poc-dbapw-master -B /tmp/bk2 appdb
+
+CUBRID 11.4.6
+
+rc=0
+### 2026-11-12T01:20:32Z [poc-dbapw-slave] cubrid heartbeat start
+@ cubrid heartbeat start
+@ HA processes start
+@ cubrid server start: appdb
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.4.6
+
+++ cubrid server start: success
+@ copylogdb start
+++ copylogdb start: success
+@ applylogdb start
+++ applylogdb start: success
+++ HA processes start: success
+++ cubrid heartbeat start: success
+rc=0
+### 2026-11-12T01:21:06Z [poc-dbapw-slave] cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc-dbapw-slave, state slave)
+   Node poc-dbapw-slave (priority 2, state slave)
+   Node poc-dbapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 93, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 15007, state registered)
+   Copylogdb appdb@poc-dbapw-master:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 15005, state registered)
+   Server appdb (pid 14751, state registered_and_standby)
+
+rc=0
+### 2026-11-12T01:21:06Z [poc-dbapw-slave] csql -u dba -p "" appdb@localhost -c "select * from t"
+
+ERROR: Incorrect or missing password.
+
+rc=1
+### 2026-11-12T01:21:06Z [poc-dbapw-slave] csql -u dba -p Poc-Pw-1 appdb@localhost -c "select * from t"
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'before password'   
+            2  'after password on master'
+            3  'after slave restart'
+
+3 rows selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+### 2026-11-12T01:21:06Z [poc-dbapw-master] csql -u dba -p Poc-Pw-1 appdb@localhost -c "INSERT INTO t VALUES (4, 'after restoreslave')"
+1 row affected. (2.395977 sec) Committed. (0.000000 sec) 
+rc=0
+wait_rc=0 2026-11-12T01:27:26Z

@@ -1,0 +1,18 @@
+### 2026-11-12T01:00:58Z poc-dbapw-restore: python3 /usr/local/bin/ptypw.py -u dba -S appdb
+Enter Password : 
+
+	CUBRID SQL Interpreter (version 11.4.6)
+
+
+Type ';help' for help messages, or ';exit' to quit.
+
+csql> ALTER USER dba PASSWORD 'Poc-Pw-2';
+;exit
+ALTER USER dba PASSWORD 'Poc-Pw-2';
+Execute OK. (0.000000 sec) Committed. (0.483996 sec) 
+
+1 command(s) successfully processed.
+csql> ;exit
+
+prompt_seen=True sql_sent=True child_rc=0
+rc=0

@@ -1,0 +1,79 @@
+# dba password is Poc-Pw-1; no password supplied to any command; stdin is /dev/null
+### 2026-11-12T00:57:19Z cubrid server status
+@ cubrid server status
+ Server appdb (rel 11.4.6, pid 7215)
+rc=0
+### 2026-11-12T00:57:19Z mkdir -p /tmp/bk-online && cubrid backupdb -D /tmp/bk-online -C -l 0 appdb@localhost
+Backup Volume Label: Level: 0, Unit: 0, Database appdb, Backup Time: Thu Nov 12 00:57:19 2026
+rc=0
+### 2026-11-12T00:57:23Z ls -l /tmp/bk-online
+total 3088
+-rw------- 1 cubrid cubrid 3159040 Nov 12 00:57 appdb_bk0v000
+rc=0
+### 2026-11-12T00:57:23Z cubrid applyinfo appdb
+applyinfo: display CUBRID HA Apply information.
+usage: cubrid applyinfo [OPTION] database-name
+
+valid options:
+  -r, --remote-host-name      remote host name; display remote node's active log information 
+  -L, --copied-log-path=PATH  path of copied log volumes; display copied log information 
+  -a, --applied-info 	      display applied information; the -L option is required 
+  -p, --page=ID               page id; the -L option is required; default : 0
+  -v, --verbose               enable verbose status messages; default : disable
+  -i, --interval=S            print information every S secs
+rc=1
+### 2026-11-12T00:57:23Z cubrid applyinfo -r localhost appdb
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 12:38:28.000 AM 11/12/2026 (1794443908)
+Vol creation time              : 12:38:28.000 AM 11/12/2026 (1794443908)
+EOF LSA                        : 146 | 2040
+Append LSA                     : 146 | 2040
+HA server state                : active
+HA promotion time              : 12:55:18.000 AM 11/12/2026 (1794444918)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+rc=0
+### 2026-11-12T00:57:23Z cubrid server stop appdb
+@ cubrid server stop: appdb
+
+Server appdb notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
+rc=0
+### 2026-11-12T00:57:24Z cubrid server status
+@ cubrid server status
+rc=0
+### 2026-11-12T00:57:24Z mkdir -p /tmp/bk-sa && cubrid backupdb -D /tmp/bk-sa -S -l 0 appdb
+Backup Volume Label: Level: 0, Unit: 0, Database appdb, Backup Time: Thu Nov 12 00:57:25 2026
+rc=0
+### 2026-11-12T00:57:31Z ls -l /tmp/bk-sa
+total 3088
+-rw------- 1 cubrid cubrid 3159040 Nov 12 00:57 appdb_bk0v000
+rc=0
+### 2026-11-12T00:57:31Z cubrid applyinfo appdb
+applyinfo: display CUBRID HA Apply information.
+usage: cubrid applyinfo [OPTION] database-name
+
+valid options:
+  -r, --remote-host-name      remote host name; display remote node's active log information 
+  -L, --copied-log-path=PATH  path of copied log volumes; display copied log information 
+  -a, --applied-info 	      display applied information; the -L option is required 
+  -p, --page=ID               page id; the -L option is required; default : 0
+  -v, --verbose               enable verbose status messages; default : disable
+  -i, --interval=S            print information every S secs
+rc=1
+### 2026-11-12T00:57:31Z cubrid server start appdb
+@ cubrid server start: appdb
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.4.6
+
+++ cubrid server start: success
+rc=0
+### 2026-11-12T00:57:37Z cubrid server status
+@ cubrid server status
+ Server appdb (rel 11.4.6, pid 9598)
+rc=0

@@ -1,0 +1,6 @@
+### no -p, under a pty (script), password written to the pty after 3 s
+Poc-Pw-1
+Enter Password : 
+ERROR: Incorrect or missing password.
+
+rc=1

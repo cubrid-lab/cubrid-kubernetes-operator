@@ -1,0 +1,16 @@
+### 2026-11-12T00:58:24Z cd $CUBRID_DATABASES && cubrid restoredb -u -B /tmp/bk-online appdb (no password supplied)
+
+CUBRID 11.4.6
+
+rc=0
+### 2026-11-12T00:59:05Z ls $CUBRID_DATABASES/appdb (no password supplied)
+appdb
+appdb_bkvinf
+appdb_keys
+appdb_lgar_t
+appdb_lgat
+appdb_lginf
+appdb_vinf
+appdb_x001
+lob
+rc=0

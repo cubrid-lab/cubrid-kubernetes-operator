@@ -1,0 +1,66 @@
+### 2026-11-12T01:08:30Z [poc-dbapw-slave] csql -u dba -p "" appdb@localhost -c "select * from t"
+
+In line 1, column 1,
+
+ERROR: Unknown class "dba.t".
+
+rc=1
+### 2026-11-12T01:08:30Z [poc-dbapw-master] ls -l $CUBRID/log $CUBRID/log/server 2>/dev/null | head -40; grep -il -E "password|authoriz" $CUBRID/log/*.err $CUBRID/log/*/*.err 2>/dev/null
+/home/cubrid/CUBRID/log:
+total 212
+-rw-rw-r-- 1 cubrid cubrid 105475 Nov 12 01:08 appdb@localhost_applylogdb_appdb_poc-dbapw-slave.err
+-rw-rw-r-- 1 cubrid cubrid    334 Nov 12 01:06 appdb@localhost_backupdb.err
+-rw-rw-r-- 1 cubrid cubrid  39027 Nov 12 01:07 appdb@poc-dbapw-slave_copylogdb.err
+-rw-rw-r-- 1 cubrid cubrid      0 Nov 12 01:03 appdb_createdb.access
+-rw-rw-r-- 1 cubrid cubrid  13878 Nov 12 01:06 appdb_createdb.err
+-rw-rw-r-- 1 cubrid cubrid      0 Nov 12 01:06 cub_client.err
+-rw-rw-r-- 1 cubrid cubrid      0 Nov 12 01:03 cub_server.access
+-rw-rw-r-- 1 cubrid cubrid      0 Nov 12 01:03 cub_server.err
+-rw-rw-r-- 1 cubrid cubrid    737 Nov 12 01:08 cubrid_utility.log
+drwxrwxr-x 2 cubrid cubrid   4096 Nov 12 01:06 pl
+-rw-rw-r-- 1 cubrid cubrid  25265 Nov 12 01:07 poc-dbapw-master_master.err
+drwxrwxr-x 2 cubrid cubrid   4096 Nov 12 01:06 server
+
+/home/cubrid/CUBRID/log/server:
+total 8
+-rw-rw-r-- 1 cubrid cubrid 1574 Nov 12 01:08 appdb_20261112_0106.access
+-rw-rw-r-- 1 cubrid cubrid 1594 Nov 12 01:07 appdb_20261112_0106.err
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 12 01:06 appdb_20261112_0106.event
+lrwxrwxrwx 1 cubrid cubrid   57 Nov 12 01:06 appdb_latest.access -> /home/cubrid/CUBRID/log/server/appdb_20261112_0106.access
+lrwxrwxrwx 1 cubrid cubrid   54 Nov 12 01:06 appdb_latest.err -> /home/cubrid/CUBRID/log/server/appdb_20261112_0106.err
+lrwxrwxrwx 1 cubrid cubrid   56 Nov 12 01:06 appdb_latest.event -> /home/cubrid/CUBRID/log/server/appdb_20261112_0106.event
+/home/cubrid/CUBRID/log/appdb_createdb.err
+rc=0
+### 2026-11-12T01:08:31Z [poc-dbapw-slave] ls -l $CUBRID/log $CUBRID/log/server 2>/dev/null | head -40; grep -il -E "password|authoriz" $CUBRID/log/*.err $CUBRID/log/*/*.err 2>/dev/null
+/home/cubrid/CUBRID/log:
+total 36
+-rw-rw-r-- 1 cubrid cubrid 2645 Nov 12 01:08 appdb@localhost_applylogdb_appdb_poc-dbapw-master.err
+-rw-rw-r-- 1 cubrid cubrid 1096 Nov 12 01:07 appdb@poc-dbapw-master_copylogdb.err
+-rw-rw-r-- 1 cubrid cubrid  323 Nov 12 01:07 appdb_restoreslave.access
+-rw-rw-r-- 1 cubrid cubrid 5457 Nov 12 01:07 appdb_restoreslave.err
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 12 01:07 cub_client.err
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 12 01:06 cub_server.access
+-rw-rw-r-- 1 cubrid cubrid    0 Nov 12 01:06 cub_server.err
+-rw-rw-r-- 1 cubrid cubrid  305 Nov 12 01:08 cubrid_utility.log
+drwxrwxr-x 2 cubrid cubrid 4096 Nov 12 01:07 pl
+-rw-rw-r-- 1 cubrid cubrid 1577 Nov 12 01:07 poc-dbapw-slave_master.err
+drwxrwxr-x 2 cubrid cubrid 4096 Nov 12 01:07 server
+
+/home/cubrid/CUBRID/log/server:
+total 8
+-rw-rw-r-- 1 cubrid cubrid 966 Nov 12 01:08 appdb_20261112_0107.access
+-rw-rw-r-- 1 cubrid cubrid 492 Nov 12 01:07 appdb_20261112_0107.err
+-rw-rw-r-- 1 cubrid cubrid   0 Nov 12 01:07 appdb_20261112_0107.event
+lrwxrwxrwx 1 cubrid cubrid  57 Nov 12 01:07 appdb_latest.access -> /home/cubrid/CUBRID/log/server/appdb_20261112_0107.access
+lrwxrwxrwx 1 cubrid cubrid  54 Nov 12 01:07 appdb_latest.err -> /home/cubrid/CUBRID/log/server/appdb_20261112_0107.err
+lrwxrwxrwx 1 cubrid cubrid  56 Nov 12 01:07 appdb_latest.event -> /home/cubrid/CUBRID/log/server/appdb_20261112_0107.event
+rc=1
+### 2026-11-12T01:08:58Z [slave] select * from t
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'before password'   
+
+1 row selected. (0.004000 sec) Committed. (0.000000 sec) 

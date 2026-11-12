@@ -1,0 +1,8 @@
+  1071 /home/cubrid/CUBRID/log/appdb@localhost_applylogdb_appdb_poc-dbapw-slave.err
+     6 /home/cubrid/CUBRID/log/appdb@localhost_backupdb.err
+   480 /home/cubrid/CUBRID/log/appdb@poc-dbapw-slave_copylogdb.err
+   171 /home/cubrid/CUBRID/log/appdb_createdb.err
+     0 /home/cubrid/CUBRID/log/cub_client.err
+     0 /home/cubrid/CUBRID/log/cub_server.err
+   250 /home/cubrid/CUBRID/log/poc-dbapw-master_master.err
+  1978 total

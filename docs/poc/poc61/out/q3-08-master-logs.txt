@@ -1,0 +1,61 @@
+  1098 /home/cubrid/CUBRID/log/appdb@localhost_applylogdb_appdb_poc-dbapw-slave.err
+     6 /home/cubrid/CUBRID/log/appdb@localhost_backupdb.err
+   531 /home/cubrid/CUBRID/log/appdb@poc-dbapw-slave_copylogdb.err
+     6 /home/cubrid/CUBRID/log/appdb_applyinfo.err
+   171 /home/cubrid/CUBRID/log/appdb_createdb.err
+     0 /home/cubrid/CUBRID/log/cub_client.err
+     0 /home/cubrid/CUBRID/log/cub_server.err
+   256 /home/cubrid/CUBRID/log/poc-dbapw-master_master.err
+  2068 total
+/home/cubrid/CUBRID/log/appdb@poc-dbapw-slave_copylogdb.err-526-
+/home/cubrid/CUBRID/log/appdb@poc-dbapw-slave_copylogdb.err:527:Time: 11/12/26 01:12:08.184 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -171, Tran = 1, EID = 173
+/home/cubrid/CUBRID/log/appdb@poc-dbapw-slave_copylogdb.err:528:Incorrect or missing password.
+--
+/home/cubrid/CUBRID/log/appdb_createdb.err-137-Time: 11/12/26 01:06:15.453 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/storage/statistics_sr.c, line 169  CODE = -1115, Tran = 1, EID = 46
+/home/cubrid/CUBRID/log/appdb_createdb.err:138:Started to update statistics (class "db_authorization", oid : 0|193|5).
+--
+/home/cubrid/CUBRID/log/appdb_createdb.err-140-Time: 11/12/26 01:06:15.453 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/storage/statistics_sr.c, line 327  CODE = -1116, Tran = 1, EID = 47
+/home/cubrid/CUBRID/log/appdb_createdb.err:141:Finished to update statistics (class "db_authorization", oid : 0|193|5, error code : 0).
+--
+/home/cubrid/CUBRID/log/appdb_createdb.err-149-Time: 11/12/26 01:06:15.453 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/storage/statistics_sr.c, line 169  CODE = -1115, Tran = 1, EID = 50
+/home/cubrid/CUBRID/log/appdb_createdb.err:150:Started to update statistics (class "db_password", oid : 0|193|4).
+--
+/home/cubrid/CUBRID/log/appdb_createdb.err-152-Time: 11/12/26 01:06:15.453 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/storage/statistics_sr.c, line 327  CODE = -1116, Tran = 1, EID = 51
+/home/cubrid/CUBRID/log/appdb_createdb.err:153:Finished to update statistics (class "db_password", oid : 0|193|4, error code : 0).
+===server-err
+Time: 11/12/26 01:06:24.420 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/server_support.c, line 2197 ERROR CODE = -970, Tran = 0, CLIENT = :(0), EID = 1
+Server HA mode is changed from 'idle' to 'standby'.
+Time: 11/12/26 01:06:24.420 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_sr.c, line 240  CODE = -973, Tran = 0, CLIENT = :(0), EID = 2
+Server status is UP.
+Time: 11/12/26 01:06:34.938 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/server_support.c, line 2197 ERROR CODE = -970, Tran = 0, CLIENT = :(0), EID = 4
+Server HA mode is changed from 'standby' to 'to-be-active'.
+Time: 11/12/26 01:06:51.274 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 8372  CODE = -1087, Tran = 2, CLIENT = poc-dbapw-master:backupdb(355), EID = 6
+Backup active log '/home/cubrid/CUBRID/databases/appdb/appdb_lgat' started.
+Time: 11/12/26 01:06:54.000 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_page_buffer.c, line 8486  CODE = -1088, Tran = 2, CLIENT = poc-dbapw-master:backupdb(355), EID = 7
+Backup active log '/home/cubrid/CUBRID/databases/appdb/appdb_lgat' finished.
+Time: 11/12/26 01:07:53.166 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/connection/server_support.c, line 2197 ERROR CODE = -970, Tran = 1, CLIENT = poc-dbapw-master:applylogdb(328), EID = 9
+Server HA mode is changed from 'to-be-active' to 'active'.
+Time: 11/12/26 01:08:36.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6702 ERROR CODE = -1122, Tran = 2, CLIENT = poc-dbapw-slave:copylogdb(357), EID = 12
+Time out in receiving data.
+Time: 11/12/26 01:09:37.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6702 ERROR CODE = -1122, Tran = 2, CLIENT = poc-dbapw-slave:copylogdb(357), EID = 18
+Time out in receiving data.
+Time: 11/12/26 01:12:00.000 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_interface_sr.c, line 6702 ERROR CODE = -1122, Tran = 2, CLIENT = poc-dbapw-slave:copylogdb(11686), EID = 24
+Time out in receiving data.
+*** The previous error message is the last one. ***
+===master-err
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:72). 
+Time: 11/12/26 01:07:45.017 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 75
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:72). 
+Time: 11/12/26 01:07:50.023 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 76
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:72). 
+Time: 11/12/26 01:07:50.023 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 77
+HA generic: Receive changemode response from the server. (state:2[to-be-active], args:[cub_server appdb ], pid:72). 
+Time: 11/12/26 01:07:55.031 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4432 ERROR CODE = -1040, Tran = -1, EID = 78
+HA generic: Send changemode request to the server. (state:1[active], args:[cub_server appdb ], pid:72). 
+Time: 11/12/26 01:07:55.031 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4477 ERROR CODE = -1040, Tran = -1, EID = 79
+HA generic: Receive changemode response from the server. (state:1[active], args:[cub_server appdb ], pid:72). 
+Time: 11/12/26 01:12:08.184 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4146 ERROR CODE = -989, Tran = -1, EID = 80
+Process event: Process failure detected. (pid:326, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slave )
+Time: 11/12/26 01:12:09.185 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 3132 ERROR CODE = -989, Tran = -1, EID = 81
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slave )
+*** The previous error message is the last one. ***

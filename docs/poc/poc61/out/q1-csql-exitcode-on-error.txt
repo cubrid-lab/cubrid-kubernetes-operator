@@ -1,0 +1,38 @@
+# exit code of csql -i when the ALTER USER statement fails (dba password Poc-Pw-1 supplied on argv on purpose)
+### 2026-11-12T01:01:43Z csql -u dba -p Poc-Pw-1 -C -i /tmp/bad.sql appdb
+
+In the command from line 1,
+
+ERROR: User "nosuch" is invalid.
+
+
+=== <Result of SELECT Command in Line 2> ===
+
+            1
+=============
+            1
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+### 2026-11-12T01:01:43Z csql -u dba -p Poc-Pw-1 -C appdb < /tmp/bad.sql
+
+In the command from line 1,
+
+ERROR: User "nosuch" is invalid.
+
+
+=== <Result of SELECT Command in Line 2> ===
+
+            1
+=============
+            1
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+### 2026-11-12T01:01:43Z csql -u dba -p Poc-Pw-1 -C -c "ALTER USER nosuch PASSWORD 'x'" appdb
+
+In the command from line 1,
+
+ERROR: User "nosuch" is invalid.
+
+rc=1

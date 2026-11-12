@@ -1,0 +1,52 @@
+cubrid utility, version 11.4.6
+usage: cubrid <utility-name> [args]
+Type 'cubrid <utility-name>' for help on a specific utility.
+
+Available service's utilities:
+    service
+    server
+    broker
+    gateway
+    manager
+    heartbeat
+    pl
+
+Available administrator's utilities:
+    addvoldb
+    alterdbhost
+    backupdb
+    checkdb
+    compactdb
+    copydb
+    createdb
+    deletedb
+    diagdb
+    installdb
+    tranlist
+    killtran
+    loaddb
+    lockdb
+    optimizedb
+    plandump
+    renamedb
+    restoredb
+    restoreslave
+    spacedb
+    unloaddb
+    paramdump
+    statdump
+    changemode
+    applyinfo
+    genlocale
+    dumplocale
+    synccolldb
+    gen_tz
+    dump_tz
+    vacuumdb
+    checksumdb
+    tde
+    flashback
+    memmon
+
+cubrid is a tool for DBMS.
+For additional information, see http://www.cubrid.org

@@ -1,0 +1,8 @@
+/sbin/docker-init -- sleep infinity 
+/bin/bash /usr/local/bin/sampler.sh /tmp/q1b-S-ifile.argv /tmp/q1b-S-ifile.stop 
+/usr/bin/coreutils --coreutils-prog-shebang=sleep /usr/bin/sleep infinity 
+runc init 
+csql -u dba -S -i /tmp/pw1.sql appdb 
+cub_pl appdb 
+SAMPLES=257
+argv lines containing Poc-Pw: 0

@@ -1,0 +1,56 @@
+== poc-dbapw-master
+Process event: Process failure detected. (pid:326, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slave
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slave )
+Process event: Process failure detected. (pid:3703, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slav
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slave )
+Process event: Process failure detected. (pid:328, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave --max-mem-size=500 appdb@loc
+Process event: Restart the process. (args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave --max-mem-size=500 appdb@localhost )
+Process event: Process failure detected. (pid:3939, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slav
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slave )
+-- copylogdb connects / reconnects (pid) and auth failures
+      1 Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave'
+      2 Server no longer responding.... Invalid argument
+      1 Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave'
+      2 Server no longer responding.... Invalid argument
+      1 Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave'
+      2 Server no longer responding.... Invalid argument
+      1 Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave'
+      1 Incorrect or missing password.
+      1 Program 'copylogdb' (pid 3703) connected to database server 'appdb@poc-dbapw-slave'
+      1 Server no longer responding.
+      1 Program 'copylogdb' (pid 3703) connected to database server 'appdb@poc-dbapw-slave'
+      1 Server no longer responding.
+      1 Program 'copylogdb' (pid 3703) connected to database server 'appdb@poc-dbapw-slave'
+      1 Program 'copylogdb' (pid 3939) connected to database server 'appdb@poc-dbapw-slave'
+      2 Server no longer responding.... Invalid argument
+      1 Program 'copylogdb' (pid 3939) connected to database server 'appdb@poc-dbapw-slave'
+      1 Incorrect or missing password.
+      1 Program 'copylogdb' (pid 3968) connected to database server 'appdb@poc-dbapw-slave'
+== poc-dbapw-slave
+Process event: Process failure detected. (pid:357, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-mast
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-master )
+Process event: Process failure detected. (pid:11686, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-ma
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-master )
+Process event: No response to shutdown request. Process killed. (pid: 359, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master --m
+Process event: No response to shutdown request. Process killed. (pid: 12416, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m
+Process event: No response to shutdown request. Process killed. (pid: 12790, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m
+Process event: Process failure detected. (pid:15005, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-ma
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-master )
+-- copylogdb connects / reconnects (pid) and auth failures
+      1 Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master'
+      2 Server no longer responding.... Invalid argument
+      1 Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master'
+      2 Server no longer responding.... Invalid argument
+      1 Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master'
+      1 Incorrect or missing password.
+      1 Program 'copylogdb' (pid 11686) connected to database server 'appdb@poc-dbapw-master'
+      2 Server no longer responding.... Invalid argument
+      1 Program 'copylogdb' (pid 11686) connected to database server 'appdb@poc-dbapw-master'
+      1 Incorrect or missing password.
+      1 Program 'copylogdb' (pid 12416) connected to database server 'appdb@poc-dbapw-master'
+      1 Program 'copylogdb' (pid 12790) connected to database server 'appdb@poc-dbapw-master'
+      1 Program 'copylogdb' (pid 15005) connected to database server 'appdb@poc-dbapw-master'
+      2 Server no longer responding.... Invalid argument
+      1 Program 'copylogdb' (pid 15005) connected to database server 'appdb@poc-dbapw-master'
+      1 Incorrect or missing password.
+      1 Program 'copylogdb' (pid 15543) connected to database server 'appdb@poc-dbapw-master'

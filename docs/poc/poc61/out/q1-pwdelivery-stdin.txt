@@ -1,0 +1,15 @@
+### no -p, stdin is /dev/null
+
+ERROR: Incorrect or missing password.
+
+rc=1
+### no -p, password then SQL on stdin (no tty)
+
+ERROR: Incorrect or missing password.
+
+rc=1
+### no -p, password on stdin with -c (no tty)
+
+ERROR: Incorrect or missing password.
+
+rc=1
