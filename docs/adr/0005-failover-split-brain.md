@@ -2,15 +2,17 @@
 
 ## Status
 
-Accepted (POC-gated) — tracked in issue #5. Amended for #113: the
-write-path quarantine policy (section 8).
+Accepted (POC-gated) for the original responsibility split — tracked in #5.
+**Section 8 is a proposed amendment, not accepted or implemented.** On
+2026-11-12 the maintainer chose an out-of-service taint as an external
+fencing assertion for S04 (PR #793); the remaining freshness and manual
+release questions are open. No proposal on this branch authorizes an
+unsafe shortcut or a change to the scenario contract without review.
 
-The responsibility split, observation rules, and conservative fencing posture
-are accepted. **Managed write-path quarantine is a required safety mechanism
-whose policy is section 8; it is not yet implemented or validated**: the
-Operator currently reports `RoutingReady=False` without removing the `-rw`
-Service endpoints (#113/#115). The checklist below defines tests still to be
-completed; it must not be read as confirmation that every scenario passed.
+The Operator still reports `RoutingReady=False` without enforcing a
+write-path quarantine on `-rw` (#113/#115). The existing responsibility
+split and conservative fencing posture remain accepted; the proposed
+quarantine requires additional code and real SQL/fault evidence.
 
 ## Context
 
@@ -295,24 +297,32 @@ The records are in `docs/poc/RESULTS.md`.
 - **Outranks:** member A outranks member B when A comes before B in
   `ha_node_list`, that is, when A has the lower ordinal. Ranking is used
   only to close the write path, never to choose a primary (section 6).
-- **Unverified:** a promotable member (ordinal below `promotableMembers`)
-  for which neither of the following holds, in two probes a few seconds
-  apart within the same pass:
-  - **It answers without the master role.** A fresh answer that does not
-    report the master role shows that the member is not accepting writes at
-    that moment, even when the answer is not authoritative under section 3,
-    as during a rejoin.
-  - **Kubernetes shows no running database.** The Pod has no running
-    database container, or does not exist, as read from a Node whose
-    Lease was renewed within the last 15 s. A Node that has stopped
-    renewing its Lease gives no evidence, whatever its `Ready` condition
-    says.
+- **Unverified:** a promotable member for which the Operator lacks
+  affirmative evidence that it is not an active master:
+  1. **Fresh authenticated non-master readings** from the correct member
+     and cluster identity in two probes a few seconds apart. Any failed
+     authentication, incomplete response, Pod UID change, member restart,
+     active-master claim or other intervening uncertainty invalidates the
+     reading. These are samples, not a durable fence; #115 must test a
+     restart or promotion between them.
+  2. **Authorized external fence assertion:** the member's Node has a
+     `node.kubernetes.io/out-of-service` taint with effect `NoExecute`,
+     applied **only after** an authorized actor has independently verified
+     the VM is powered off or otherwise fenced. The Operator must not add
+     this taint, infer it from a Node Lease/`Ready`, or mistake a force-deleted
+     Pod for evidence of process termination. The taint is an administrator
+     assertion, **not proof** that the database process cannot still run.
+     A wrong or premature taint on a live partitioned node can force-delete
+     its Pod and enable a second database process. Record out-of-band
+     VM-fence proof, actor and audit evidence in the test campaign.
 
-  These two replace any reasoning from when a Pod was created. A Pod
-  recreated after a deletion, as in S03, is verified once it answers
-  without the master role. Until then it is unverified, even if it started
-  alone. A member that starts alone and hears no peers can become master
-  (POC-53, POC-58).
+  A fresh Node Lease plus Pod status saying no database is running is
+  **not sufficient to verify a fence**. A Lease records kubelet activity,
+  not linearizable absence of a DB process; status may be delayed and a
+  container may restart between observations. A taint that disappears
+  before the member freshly answers as a non-master does not establish
+  safety. The final evidence/freshness predicate needs maintainer review
+  and controlled fault tests before implementation.
 - **Last resolved primary:** a new status field,
   `status.lastResolvedPrimary`, with the time it was set. #113 adds it. It
   is set to the member `currentPrimary` names on every pass that reports
@@ -367,53 +377,67 @@ seconds apart, the same confirmation as for an unverified member.
   isolate or call `/v1/shutdown` on any member, changes no CUBRID role, and
   chooses no winner.
 
-**Persistence.** The quarantine is recorded in the cluster's status: its
-reason, its start time in UTC to the second (RFC 3339), the members involved
-and, for rule 2, M. Changing the reason keeps the start time.
-- **After an Operator restart.** A pass that starts with a recorded
-  quarantine keeps the read-write Brokers at zero until a release, including
-  the first pass after the restart.
-- **Primary.** The record never sets `currentPrimary` or `PrimaryResolved`.
-- **Where it is lost.** The record does not survive the resource being
-  recreated or restored from a copy without its status. An Operator build
-  older than this policy ignores it.
+**Persistence and fail-closed reconciliation (proposed).**
+
+- Store the reason, UTC start time, affected members, observed master M (rule
+  2) and a **new unpredictable quarantine token** generated once per
+  quarantine, scoped to the `CubridCluster` UID. A random nonce of at least
+  128 bits plus the UID remains distinct across same-second changes and
+  delete/recreate with empty status; a timestamp or status-only increment
+  cannot prevent those replay/ABA cases. A reason change keeps its identity,
+  but changes to the affected-member set invalidate any earlier approval.
+- On every pass, including the first after an Operator restart, enforce the
+  persisted quarantine **before normal Broker reconciliation** could restore
+  RW replicas. Converge the RW Deployment to zero and verify actual Pod
+  termination and EndpointSlices before claiming enforcement; a desired
+  replica count or `RoutingReady=False` is insufficient. Report partial
+  enforcement as pending/failed, not safe. Status, Deployment or Service
+  update failure must trigger a retry, never an unreviewed scale-up.
+- Release must compare the current token, current cluster UID, member set and
+  fresh observations, and update status with Kubernetes resourceVersion
+  conflict handling. Clear/consume the release annotation only after an
+  accepted release. An old annotation cannot reopen a new quarantine;
+  a racing or failed update does not bypass an outstanding quarantine.
+- This guarantee does **not** hold after the status is omitted from a restored
+  object or an old Operator binary that ignores the field is installed.
+  Test and document that cross-build/recreation limit explicitly.
 
 **Release.**
 
-- **Automatic, `WriteQuarantinedMemberUnverified` only.** Two consecutive
-  passes, at least 10 s apart, must each show:
-  - every promotable member with a fresh authoritative observation;
-  - exactly one active master, and that master is M;
-  - every other member a non-master.
+- **Automatic only for `WriteQuarantinedMemberUnverified`:** two complete
+  passes at least 10 s apart must each show fresh authoritative evidence from
+  every promotable member, the **same** single active master M, and no
+  other master. Change of identity, missed probe, newly uncertain member or
+  reason escalation resets or prevents the automatic release.
+- **Manual: risk acceptance, not a verified fence.** Any API actor allowed
+  to update `CubridCluster` could set
+  `database.cubrid.io/release-write-quarantine`; restrict that RBAC
+  permission to administrators. The annotation must name the **unique
+  quarantine token**, not its RFC3339 start time. The actor first obtains
+  independent evidence that the affected nodes were actually fenced and
+  reviews potential divergent data. They explicitly accept **loss of
+  previously acknowledged writes** if any affected member was not fenced.
+  Record token, UTC time, accepted member identities and warning in status
+  and a Warning Event. The actor identity comes from Kubernetes API audit
+  logs, not from an invented controller field.
+- **Expanded uncertainty:** a previously unrecorded member becomes
+  unverified -> reject the existing approval, expand the recorded affected
+  set and require a new explicit approval of that set; never silently
+  broaden consent while reusing the old annotation.
+- **No active master:** do **not** infer that manual release restores a
+  writable primary. POC-60 shows RW Brokers may still serve stale reads
+  from a standby. The conservative proposal is to keep RW closed unless
+  one active master is verified; an exceptional zero-master override is
+  a **separate, unresolved maintainer decision**, with distinct audit and
+  degraded-read behavior if explicitly authorized.
+- **Out-of-service taint:** this assertion alone does not pick a primary
+  or authorize write traffic. Its early removal reintroduces uncertainty;
+  the normal release prerequisites still apply. With a node-local PVC, a
+  forced-deleted Pod may stay Pending until the taint is removed.
 
-  A pass that fails any of these starts the count again. The read-write
-  Brokers are then scaled back and the record is cleared.
-- **By hand, any quarantine.** For `WriteQuarantinedMultipleMasters` and
-  `WriteQuarantinedMasterChanged`, members may hold different acknowledged
-  rows under the same keys (POC-50, POC-52), and the Operator never picks a
-  winner (section 6).
-  1. An administrator checks the members' data. They also confirm that
-     each member recorded as unverified is stopped or fenced, for example
-     that its VM is off. A member that cannot be reached cannot have its
-     data checked, so that confirmation is what the release rests on.
-  2. They set the annotation `database.cubrid.io/release-write-quarantine`
-     to the recorded start time. An old annotation therefore cannot release
-     a later quarantine.
-  3. The Operator releases at the first pass that sees at most one active
-     master and whose unverified members are all in the quarantine's
-     record. It does not require every member to answer, so a member that
-     never comes back, or a group with no active master, cannot hold the
-     quarantine forever.
-  4. If a member not in the record is unverified, the release is refused.
-     A Warning event names the member, and the administrator checks it too.
-     The record is updated to include it, and the start time is kept.
-  5. The recorded members are accepted by the administrator. Rule 2 ignores
-     them until each next answers freshly.
-
-  The annotation also ends a `WriteQuarantinedMemberUnverified` quarantine
-  whose member does not return, for example during a rebuild (#117). The
-  Operator does not compare or repair data. Resolving divergent rows and
-  rebuilding a member stay manual (#116, #117).
+No automatic winner choice, member deletion, filesystem overwrite or
+database emergency fencing is part of this managed write-path policy.
+Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
 
 **Limits.** These are stated so that no stronger claim is made.
 
@@ -447,16 +471,21 @@ and, for rule 2, M. Changing the reason keeps the start time.
     stays within the 30 s `failover_limit` is not known: the Instance
     Manager's answers during a rejoin have not been sampled pass by pass.
     #113 measures S03 before any claim.
-  - **Master VM power-off (S04), a maintainer decision.** The old master's
-    Node stops renewing its Lease, so the Operator cannot tell a powered-off
-    master from a cut-off one that is still writable. Under this policy,
-    writes through `-rw` are refused until the VM returns or an
-    administrator confirms it is off and releases the quarantine. That
-    exceeds S04's `failover_limit` of 30 s. Choosing the policy means
-    either giving S04 a limit of its own, with the cost documented, or
-    accepting the risk of a cut-off master on a Node that is not renewing
-    its Lease. This ADR does not decide that alone, and the limit is not
-    changed without that decision.
+  - **Master VM power-off (S04):** as decided by the maintainer in
+    PR #793, an authorized actor confirms that the targeted worker VM is
+    actually stopped, then adds
+    `node.kubernetes.io/out-of-service:NoExecute`. They remove the taint
+    only once the VM returns and its Node is verified Ready. This is not a
+    self-proving fence: the out-of-band proof and actor must be recorded.
+    Kubernetes can force-delete the original Pod and recreate it with a
+    different UID; distinguish this from Operator deletion. Node-local
+    storage may keep the replacement Pending until the taint is removed.
+    **Report two separate intervals**: VM fault -> observed SQL recovery
+    (possibly unbounded until external action), and taint added -> SQL
+    recovery (maintainer's proposed 30 s post-fence target). This requires
+    an explicit amendment of the S04 scenario contract; changing the
+    measurement origin must not hide the pre-fence outage. The one Kind
+    experiment does not establish this result on k3s/VMs.
 - **No opt-out field in v1alpha1.**
 
 ## Consequences
@@ -480,11 +509,11 @@ and, for rule 2, M. Changing the reason keeps the start time.
   `-rw` are refused. The refusal lasts as long as that member stays
   unverified, plus at least 10 s and the time to recreate the read-write
   Brokers.
-- **Failover limits are at stake.** Whether a master Pod deletion (S03)
-  stays within `failover_limit` is not known until #113 measures it. A
-  master VM power-off (S04) exceeds it under this policy, and that needs a
-  maintainer decision (section 8, Limits). Neither limit is changed
-  without that decision.
+- **Failover limits are at stake.** S03 remains subject to its accepted
+  `failover_limit` until a fault run proves it. The S04 proposal adds a
+  **post-fence** 30 s metric without hiding the total VM-fault-to-SQL
+  outage. The scenario contract must be explicitly updated and approved;
+  neither interval is yet validated on the VM lab.
 - **A double-master reading needs a person.** A quarantine after two
   active masters, or after the master changed during one, stays until an
   administrator releases it. A short double-master reading can therefore
@@ -563,6 +592,32 @@ and, for rule 2, M. Changing the reason keeps the start time.
       releases a quarantine whose member never returns.
     - **Measured in #115:** that already-open sessions end, and the length
       of the detection window.
+
+### Quarantine edge-case acceptance tests (proposed, not executed)
+
+| Fault or race | Required assertion |
+| --- | --- |
+| Two active masters, including conflicting peer lists | RW endpoints and **new and existing** managed SQL sessions are blocked, without automatic winner selection |
+| Former master unreachable or outranking member unverified | Quarantine persists even if TCP Broker probes and Pods appear Ready |
+| One isolated master, no active replacement (POC-40) | Preserve deliberate non-quarantine case, disclose durability exposure |
+| Non-master response then Pod UID change, token rejection or role promotion | Stale evidence never releases quarantine |
+| Fresh Node Lease, stale Pod status, live process | No invented fencing proof, quarantine stays |
+| Verified VM off, out-of-service taint, Pod force-delete and node-local PVC | Record external power proof, distinguish Kubernetes Pod deletion from Operator action, preserve stored data |
+| Taint added too early or removed while old process could run | Fail safety preflight or keep member unverified |
+| No active master (POC-60) | No false write readiness; emergency override remains a maintainer decision |
+| Two quarantines begin within one second, old annotation persists | Unique tokens; replay does not reopen RW |
+| Cluster deleted and recreated with same name but new UID | Old annotation/token cannot release another cluster |
+| New unverified member after an approved release request | Reject original consent; require explicit expanded approval |
+| Conflicting status/Deployment writes and Operator restart | No lost quarantine; no unsafe scale-up or false enforced condition |
+| RW replicas requested zero but terminating Broker sessions live | Check actual EndpointSlices and acknowledged SQL after enforcement |
+| Operator absent, direct member and unmanaged Broker access | State explicitly which paths are **not** protected |
+| Pod deletion (S03) and real VM shutdown (S04) | Record fault/detection/fence/SQL timestamps against the accepted contract, separately |
+
+**Open maintainer decisions before #113 implementation:** final member
+verification freshness, no-active-master manual release behavior, unique
+token/status audit schema, and the S04 test-contract amendment. These are
+not settled by a docs-only passing workflow. #115 must retain the raw
+SQL/fault evidence and rejected attempts, not infer safety from Conditions.
 
 ## Revisit When
 
