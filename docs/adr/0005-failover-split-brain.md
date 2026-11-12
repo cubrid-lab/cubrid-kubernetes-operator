@@ -438,11 +438,24 @@ seconds apart, the same confirmation as for an unverified member.
   an administrative taint must not fabricate DB health or a known
   client route. Report the actual reason that quarantine was lifted and
   verify post-fence acknowledged SQL writes separately from Conditions.
-  A taint removed before the member becomes a freshly verified
-  non-master makes it unverified again; the next pass must re-evaluate
-  the trigger and **re-quarantine** when a former/higher-ranked
-  primary remains uncertain. The intermediate readiness/metrics
-  contract needs explicit maintainer approval and scenario tests.
+  **Removing the taint while the RW tier is open is not a safe
+  failover/rejoin protocol.** A returning old database process may start
+  accepting writes **before the next Operator reconcile**; re-quarantine
+  after that observation cannot undo an acknowledged write. A safe
+  return requires a separate, durable **pre-untaint / pre-restart
+  maintenance transition** that verifies the managed RW path is already
+  closed (and stays closed across concurrent normal reconciliation and
+  Operator restarts) **before** an old primary can run without the
+  external fence. Then remove the taint and bring the member up, verify
+  fresh non-master role and replica data/catch-up (or stop for manual
+  divergent-data reconciliation), and only then release the maintained
+  RW block. An ad hoc `kubectl scale` of Broker Pods is not a durable
+  barrier because regular Broker reconciliation may scale them back up.
+  If a durable transition is not implementable in v0.1, require a
+  strictly coordinated manual **external** write fence with evidence
+  of continued enforcement, and do not advertise automatic safe S04
+  return. The intermediate readiness/metrics and return-to-service
+  semantics require explicit maintainer approval and SQL fault tests.
 - **Manual: risk acceptance, not a verified fence.** Any API actor allowed
   to update `CubridCluster` could set
   `database.cubrid.io/release-write-quarantine`; restrict that RBAC
@@ -469,9 +482,14 @@ seconds apart, the same confirmation as for an unverified member.
   a **separate, unresolved maintainer decision**, with distinct audit and
   degraded-read behavior if explicitly authorized.
 - **Out-of-service taint:** this assertion alone does not pick a primary
-  or authorize write traffic. Its early removal reintroduces uncertainty;
-  the normal release prerequisites still apply. With a node-local PVC, a
-  forced-deleted Pod may stay Pending until the taint is removed.
+  or authorize write traffic. **Its removal must be coordinated *before*
+  it happens**, under the durable return-to-service quarantine above;
+  waiting for the next reconciliation after removal is insufficient to
+  protect writes already acknowledged in the gap. With a node-local PVC,
+  a force-deleted Pod may stay Pending until the taint is removed.
+  Neither the existing implementation nor this proposed section contains
+  the required maintenance barrier yet: **the safe return procedure
+  remains a release-blocking design decision**, not an implemented claim.
 
 No automatic winner choice, member deletion, filesystem overwrite or
 database emergency fencing is part of this managed write-path policy.
@@ -520,6 +538,13 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
     Kubernetes can force-delete the original Pod and recreate it with a
     different UID; distinguish this from Operator deletion. Node-local
     storage may keep the replacement Pending until the taint is removed.
+    **Node Ready is not CUBRID rejoin safety:** before that removal (or
+    before an old database process can restart), the managed RW route
+    must already be durably quarantined or an equivalently enforced
+    external write fence must be proven, followed by safe non-master
+    rejoin/catch-up validation. The proposed fence-assisted recovery
+    covers the powered-off interval only; it does **not** yet establish
+    a safe return to normal service.
     **Report two separate intervals**: VM fault -> observed SQL recovery
     (possibly unbounded until external action), and taint added -> SQL
     recovery (maintainer's proposed 30 s post-fence target). This requires
@@ -643,7 +668,7 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
 | Non-master response then Pod UID change, token rejection or role promotion | Stale evidence never releases quarantine |
 | Fresh Node Lease, stale Pod status, live process | No invented fencing proof, quarantine stays |
 | Verified VM off, out-of-service taint, Pod force-delete and node-local PVC | With one stable active master and authorized taint present through both release passes, prove **automatic fence-assisted release**, no invented role/health, post-fence SQL success, and preserved PVC data |
-| Taint added too early or removed while old process could run | Fail safety preflight or keep member unverified |
+| Taint added too early or removed while old process could run | Fail the safety preflight; **prove a durable RW return-maintenance barrier was enforced before removing the taint**, not only a next-pass re-quarantine |
 | No active master (POC-60) | No false write readiness; emergency override remains a maintainer decision |
 | Two quarantines begin within one second, old annotation persists | Unique tokens; replay does not reopen RW |
 | Cluster deleted and recreated with same name but new UID | Old annotation/token cannot release another cluster |
@@ -654,7 +679,9 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
 | Pod deletion (S03) and real VM shutdown (S04) | Record fault/detection/fence/SQL timestamps against the accepted contract, separately |
 
 **Open maintainer decisions before #113 implementation:** approve or
-reject **taint-assisted automatic release**, its intermediate
+reject **taint-assisted automatic release**, the **durable
+pre-untaint/pre-restart RW maintenance barrier and verified return
+procedure** (without relying on a later reconcile), its intermediate
 readiness/metrics semantics, identity and taint evidence freshness,
 no-active-master emergency release, the **quarantine generation plus
 one-time member-set approval-token** status/audit schema, and the S04
