@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // DBAPasswordFileEnv names the environment variable that holds the path of
@@ -108,6 +109,11 @@ func emptyLoginRefused(ctx context.Context, cli CLI, database string) (bool, err
 	}
 	return false, nil
 }
+
+// dbaPasswordStepTimeout bounds the DBA password step that runs after a
+// restore: each of its csql runs opens the stopped database in standalone
+// mode, which takes seconds, not the hours a restore may take.
+const dbaPasswordStepTimeout = 5 * time.Minute
 
 // csqlPasswordPrompt is how csql asks for a password on a terminal (POC-61).
 const csqlPasswordPrompt = "Enter Password"

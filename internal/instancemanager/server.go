@@ -1109,6 +1109,10 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			// data is taken back as after a failed restoredb (ADR-0008).
 			if password != "" {
 				roots.AfterRestore = func(ctx context.Context) error {
+					// The step has its own bound: a csql that never answers
+					// must not hold the restore for the whole restore timeout.
+					ctx, cancel := context.WithTimeout(ctx, dbaPasswordStepTimeout)
+					defer cancel()
 					if req.SeedFromMaster != "" {
 						return confirmDBAPassword(ctx, s.cli, s.log(), req.Database, password)
 					}
