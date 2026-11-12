@@ -38,8 +38,8 @@ import (
 // spec.dbaPasswordSecretRef names exists and holds a value the Instance
 // Manager accepts. The DB container sets the password, or checks it, before
 // its server starts, so a member that is ready already has it; afterwards the
-// ready member is asked whether the value is still the database's password
-// (reconcileDBAPasswordRotation). A cluster without the reference has no such
+// ready member of a standalone cluster is asked whether the value is still the
+// database's password (reconcileDBAPasswordRotation). A cluster without the reference has no such
 // condition.
 const conditionDBAPasswordSecretResolved = "DBAPasswordSecretResolved"
 
@@ -260,6 +260,10 @@ func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 // DBA password Secret whether the Secret's value is still the database's DBA
 // password, and returns the delay after which to ask again; zero for a
 // cluster without the reference.
+//
+// An HA cluster is not asked, and zero is returned for it: its members'
+// Instance Managers answer Unknown, so a changed Secret value on an HA cluster
+// is not reported. Its condition keeps saying only whether the key resolves.
 //
 // Differs sets conditionDBAPasswordSecretResolved False with
 // reasonDBAPasswordRotationUnsupported, and records a Warning Event when it

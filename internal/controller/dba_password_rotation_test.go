@@ -274,6 +274,30 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		Expect(res.RequeueAfter).To(Equal(poll))
 	})
 
+	// An HA member's Instance Manager answers Unknown to the check, so the
+	// operator does not ask it, and a changed value on an HA cluster is not
+	// reported; the condition says only that the key resolves (#834).
+	It("never asks the members of an HA cluster", func() {
+		checker := &fakeDBAPasswordChecker{}
+		checker.set(instancemanager.DBAPasswordDiffers, "refused", nil)
+		r := newReconciler(checker)
+		r.Prober = &memberProber{master: "dba-rotation-ha-0"}
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dba-rotation-ha-secret", Namespace: testNamespace},
+			Data: map[string][]byte{dbaTestKey: []byte(dbaTestPassword)}}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).To(Succeed()) })
+		c := haCluster("dba-rotation-ha")
+		c.Spec.DBAPasswordSecretRef = dbaPasswordRef(secret.Name, dbaTestKey)
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, c))).To(Succeed()) })
+		key := client.ObjectKeyFromObject(c)
+		reconcileOnce(r, key)
+		setReadyReplicas(ctx, key, 1)
+		reconcileOnce(r, key)
+		Expect(checker.calls()).To(BeEmpty())
+		Expect(resolvedOf(key).Reason).To(Equal(reasonDBAPasswordSecretResolved))
+	})
+
 	It("asks the member at most once per poll, however often the cluster is reconciled", func() {
 		checker := &fakeDBAPasswordChecker{}
 		r := newReconciler(checker)

@@ -64,8 +64,9 @@ func (s *Server) dbaPassword(w http.ResponseWriter, r *http.Request) {
 // The login runs SELECT 1 and changes nothing, and no record of the value is
 // kept, so a password changed by hand with ALTER USER is seen as well.
 //
-// Only a standalone member is checked: an HA cluster cannot set a DBA
-// password. A check that cannot tell answers Unknown, never Differs: the
+// Only a standalone member is checked. An HA member answers Unknown, and the
+// operator does not ask it (reconcileDBAPasswordRotation), so a changed value
+// on an HA cluster is not reported. A check that cannot tell answers Unknown, never Differs: the
 // file is not set or cannot be used, the server does not run, an operation
 // that stops the server runs, or the login was neither accepted nor refused
 // for its password. One check runs at a time; one that arrives while another

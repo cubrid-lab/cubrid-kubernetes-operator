@@ -60,9 +60,9 @@ func dbaPasswordRef(name, key string) *corev1.SecretKeySelector {
 	return &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: key}
 }
 
-// The API admits a DBA password Secret only for a standalone cluster, only
-// with a Secret name and key, never as optional, and never changed after the
-// cluster was created (#803).
+// The API admits a DBA password Secret on a standalone or an HA cluster
+// (#803, #834), only with a Secret name and key, never as optional, and never
+// changed after the cluster was created.
 var _ = Describe("The DBA password Secret reference in the API (#803)", func() {
 	ctx := context.Background()
 
@@ -92,6 +92,24 @@ var _ = Describe("The DBA password Secret reference in the API (#803)", func() {
 			Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
 		}
 		Expect(create(restored)).To(Succeed())
+	})
+
+	It("is admitted on an HA cluster, new or restored", func() {
+		c := haCluster("dba-api-ha")
+		c.Spec.DBAPasswordSecretRef = dbaPasswordRef("dba", dbaTestKey)
+		Expect(create(c)).To(Succeed())
+
+		restored := haCluster("dba-api-ha-restored")
+		restored.Spec.DBAPasswordSecretRef = dbaPasswordRef("dba", dbaTestKey)
+		restored.Spec.Bootstrap = &databasev1alpha1.CubridBootstrap{
+			Recovery: &databasev1alpha1.RecoverySource{ManifestURI: testManifestURI},
+		}
+		Expect(create(restored)).To(Succeed())
+
+		By("and cannot be pointed elsewhere afterwards, as on a standalone cluster")
+		Expect(change(client.ObjectKeyFromObject(c), func(c *databasev1alpha1.CubridCluster) {
+			c.Spec.DBAPasswordSecretRef.Name = "dba-other"
+		})).To(MatchError(ContainSubstring("dbaPasswordSecretRef cannot be added, removed or changed")))
 	})
 
 	It("is refused without a Secret name or key, and as optional", func() {
@@ -141,7 +159,7 @@ var _ = Describe("The DBA password Secret reference in the API (#803)", func() {
 // container as a file, and creates the database only once the Secret holds a
 // usable value, so a database is never created without the password it asked
 // for (#805). It never puts the value into anything it writes.
-var _ = Describe("The DBA password Secret of a standalone cluster (#805)", func() {
+var _ = Describe("The DBA password Secret of a standalone or HA cluster (#805, #834)", func() {
 	ctx := context.Background()
 
 	// logged collects the log lines of the reconciles that run with its
@@ -372,6 +390,90 @@ var _ = Describe("The DBA password Secret of a standalone cluster (#805)", func(
 		file, ok := envValue(spec.Containers[0], instancemanager.DBAPasswordFileEnv)
 		Expect(ok).To(BeTrue())
 		Expect(file.Value).To(Equal(dbaPasswordMountPath + "/" + dbaPasswordFileName))
+	})
+
+	// An HA cluster's members are created by the same StatefulSet, and its HA
+	// bootstrap asks a running member to create the database. So while the
+	// Secret is missing, no member runs and the bootstrap cannot start; once
+	// it resolves, every member gets the file (#834).
+	It("starts no member and no HA bootstrap of an HA cluster while the Secret is missing", func() {
+		c := haCluster("dba-ha-missing")
+		c.Spec.DBAPasswordSecretRef = dbaPasswordRef("dba-ha-missing-secret", dbaTestKey)
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, c))).To(Succeed()) })
+		key := client.ObjectKeyFromObject(c)
+		boot := &fakeHABootstrapClient{state: instancemanager.OpCompleted}
+		r := newReconciler()
+		r.Prober = &memberProber{}
+		r.HABootstrap = boot
+		logCtx, l := withLog()
+
+		for range 2 {
+			_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Expect(statefulSetExists(key)).To(BeFalse(), "an HA member would create the database without the password")
+		Expect(boot.members).To(BeEmpty(), "the HA bootstrap was asked to create the database")
+		got := getCluster(key)
+		Expect(got.Status.Databases).To(BeEmpty(), "the HA bootstrap recorded progress")
+		resolved := meta.FindStatusCondition(got.Status.Conditions, conditionDBAPasswordSecretResolved)
+		Expect(resolved).NotTo(BeNil())
+		Expect(resolved.Reason).To(Equal(reasonDBAPasswordSecretNotFound))
+		ready := meta.FindStatusCondition(got.Status.Conditions, conditionReady)
+		Expect(ready).NotTo(BeNil())
+		Expect(ready.Reason).To(Equal(reasonDBAPasswordSecretNotFound))
+
+		By("creating the Secret, after which every member is created with the file")
+		createSecret("dba-ha-missing-secret", map[string][]byte{dbaTestKey: []byte(dbaTestPassword)})
+		_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(statefulSetExists(key)).To(BeTrue())
+		expectNoValue(key, drain(r.Recorder.(*record.FakeRecorder)), l)
+	})
+
+	It("mounts only the named key, read-only, into the DB container of every HA member and names the file in its environment", func() {
+		createSecret("dba-ha-secret", map[string][]byte{
+			dbaTestKey: []byte(dbaTestPassword + "\n"), "unrelated": []byte("not for the DB Pod"),
+		})
+		c := haCluster("dba-ha")
+		c.Spec.DBAPasswordSecretRef = dbaPasswordRef("dba-ha-secret", dbaTestKey)
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, c))).To(Succeed()) })
+		key := client.ObjectKeyFromObject(c)
+		r := newReconciler()
+		logCtx, l := withLog()
+		_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		sts := &appsv1.StatefulSet{}
+		Expect(k8sClient.Get(ctx, key, sts)).To(Succeed())
+		Expect(sts.Spec.Replicas).To(HaveValue(Equal(c.Spec.Topology.PromotableMembers)),
+			"every member is a Pod of this one template")
+		spec := sts.Spec.Template.Spec
+		Expect(spec.Volumes).To(ContainElement(dbaPasswordVolumeFor(c.Spec.DBAPasswordSecretRef)),
+			"only the named key is projected, as a Secret volume that is not optional")
+		db := spec.Containers[0]
+		Expect(db.Name).To(Equal(appName))
+		Expect(db.VolumeMounts).To(ContainElement(corev1.VolumeMount{
+			Name: dbaPasswordVolume, MountPath: dbaPasswordMountPath, ReadOnly: true,
+		}))
+		file, ok := envValue(db, instancemanager.DBAPasswordFileEnv)
+		Expect(ok).To(BeTrue())
+		Expect(file.Value).To(Equal(dbaPasswordFile))
+		for _, other := range append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers[1:]...) {
+			for _, m := range other.VolumeMounts {
+				Expect(m.Name).NotTo(Equal(dbaPasswordVolume), "container %s mounts the DBA password", other.Name)
+			}
+		}
+
+		By("keeping the HA configuration the members need beside it")
+		_, ok = envValue(db, "CUBRID_HA_CONF")
+		Expect(ok).To(BeTrue())
+
+		raw, err := json.Marshal(sts)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(raw)).NotTo(ContainSubstring(dbaTestPassword), "the StatefulSet holds the password")
+		expectNoValue(key, drain(r.Recorder.(*record.FakeRecorder)), l)
 	})
 
 	It("leaves an existing StatefulSet as it is when the Secret goes away, and reports it", func() {

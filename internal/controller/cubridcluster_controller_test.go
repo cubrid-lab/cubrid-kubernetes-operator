@@ -726,17 +726,17 @@ var _ = Describe("CubridCluster Controller", func() {
 			Expect(k8sClient.Update(ctx, got)).To(Succeed())
 		})
 
-		// A password set on an HA cluster has not been checked against
-		// copylogdb's reconnects on the VM lab (POC-61), so the field is
-		// admitted only on a standalone cluster (#803).
-		It("rejects dbaPasswordSecretRef on an HA cluster", func() {
+		// A DBA password on an HA cluster was checked on the VM lab: copylogdb
+		// kept replicating through a standby restart and a failover with the
+		// password set (#801), so the field is admitted on an HA cluster too
+		// (#834).
+		It("admits dbaPasswordSecretRef on an HA cluster", func() {
 			c := haCluster("dba-password")
 			c.Spec.DBAPasswordSecretRef = &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "dba-password"}, Key: "password",
 			}
-			err := k8sClient.Create(ctx, c)
-			Expect(err).To(HaveOccurred(), "a password setting on an HA cluster was accepted")
-			Expect(err.Error()).To(ContainSubstring("dbaPasswordSecretRef is admitted only when highAvailability.enabled is false"))
+			Expect(k8sClient.Create(ctx, c)).To(Succeed(), "a password setting on an HA cluster was refused")
+			Expect(k8sClient.Delete(ctx, c)).To(Succeed())
 		})
 
 		It("rejects a database name rename (immutability)", func() {
