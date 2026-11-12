@@ -379,13 +379,23 @@ seconds apart, the same confirmation as for an unverified member.
 
 **Persistence and fail-closed reconciliation (proposed).**
 
-- Store the reason, UTC start time, affected members, observed master M (rule
-  2) and a **new unpredictable quarantine token** generated once per
-  quarantine, scoped to the `CubridCluster` UID. A random nonce of at least
-  128 bits plus the UID remains distinct across same-second changes and
-  delete/recreate with empty status; a timestamp or status-only increment
-  cannot prevent those replay/ABA cases. A reason change keeps its identity,
-  but changes to the affected-member set invalidate any earlier approval.
+- Store a **quarantine generation ID**, a cryptographically random nonce of
+  at least 128 bits scoped to the `CubridCluster` UID, alongside the
+  reason, UTC start time, affected-member identity set and the observed
+  master M (rule 2). Keep the generation ID for reason changes within
+  one quarantine; create a fresh one for each **new** quarantine, including
+  same-second transitions and delete/recreate with a different UID.
+- Store a separate **one-time release-approval token**, also a random
+  nonce, bound to both the generation ID **and the exact recorded affected
+  member identities**. Every expansion, removal, or identity change of
+  the affected set increments a durable revision and **rotates this
+  approval token**, even while the quarantine generation ID stays the same.
+  An existing release annotation carrying the old token becomes inert
+  until an administrator deliberately submits the **new** one after
+  reviewing the revised set. Persist the set and token atomically under
+  the current resourceVersion before accepting an approval; retry
+  conflicts and never trust in-memory approval state.
+
 - On every pass, including the first after an Operator restart, enforce the
   persisted quarantine **before normal Broker reconciliation** could restore
   RW replicas. Converge the RW Deployment to zero and verify actual Pod
@@ -393,11 +403,14 @@ seconds apart, the same confirmation as for an unverified member.
   replica count or `RoutingReady=False` is insufficient. Report partial
   enforcement as pending/failed, not safe. Status, Deployment or Service
   update failure must trigger a retry, never an unreviewed scale-up.
-- Release must compare the current token, current cluster UID, member set and
-  fresh observations, and update status with Kubernetes resourceVersion
-  conflict handling. Clear/consume the release annotation only after an
-  accepted release. An old annotation cannot reopen a new quarantine;
-  a racing or failed update does not bypass an outstanding quarantine.
+- Release must compare the current **release-approval token**, quarantine
+  generation ID, cluster UID, exact affected-member set and revision, and
+  fresh observations, under the current resourceVersion. A previously
+  valid token is never authorization for a changed set. On release,
+  consume the approval token **exactly once**, persist the decision before
+  scaling up, then clear the annotation; an annotation removal conflict
+  must not allow the consumed token to work again. A failed status write,
+  racing update or Operator restart never bypasses active quarantine.
 - This guarantee does **not** hold after the status is omitted from a restored
   object or an old Operator binary that ignores the field is installed.
   Test and document that cross-build/recreation limit explicitly.
@@ -405,25 +418,50 @@ seconds apart, the same confirmation as for an unverified member.
 **Release.**
 
 - **Automatic only for `WriteQuarantinedMemberUnverified`:** two complete
-  passes at least 10 s apart must each show fresh authoritative evidence from
-  every promotable member, the **same** single active master M, and no
-  other master. Change of identity, missed probe, newly uncertain member or
-  reason escalation resets or prevents the automatic release.
+  passes at least 10 s apart must see **the same exactly one freshly
+  observed active master M**, matching the master recorded for this
+  quarantine, with no second active master. For each other promotable
+  member, each pass must establish **either** (a) a fresh authenticated
+  and identity-matched non-master answer, **or** (b) a continuously present
+  `node.kubernetes.io/out-of-service:NoExecute` taint on its verified
+  Node, backed by the authorized, audited **out-of-band VM power-off
+  assertion** above. Option (b) is a conditional *external fence
+  assertion*, **not** an invented role response. Recheck the cluster UID,
+  Pod/Node identity, observed taint and fence assertion on both passes;
+  a disappearing taint, inconsistent Node mapping, stale/failed role
+  answer, changed member, new uncertainty, conflicting active master or
+  manual-only escalation resets or forbids automatic release.
+- **S04 taint-assisted release is not the same as primary resolution.**
+  This proposed transition permits RW Broker availability **while a
+  powered-off former primary cannot answer**. Keep `PrimaryResolved`,
+  `HAReady`, and `RoutingReady` faithful to actual observations;
+  an administrative taint must not fabricate DB health or a known
+  client route. Report the actual reason that quarantine was lifted and
+  verify post-fence acknowledged SQL writes separately from Conditions.
+  A taint removed before the member becomes a freshly verified
+  non-master makes it unverified again; the next pass must re-evaluate
+  the trigger and **re-quarantine** when a former/higher-ranked
+  primary remains uncertain. The intermediate readiness/metrics
+  contract needs explicit maintainer approval and scenario tests.
 - **Manual: risk acceptance, not a verified fence.** Any API actor allowed
   to update `CubridCluster` could set
   `database.cubrid.io/release-write-quarantine`; restrict that RBAC
-  permission to administrators. The annotation must name the **unique
-  quarantine token**, not its RFC3339 start time. The actor first obtains
+  permission to administrators. The annotation must name the **current one-time release-approval
+  token** bound to this exact member set, not its RFC3339 start time or a
+  reusable quarantine generation ID. The actor first obtains
   independent evidence that the affected nodes were actually fenced and
   reviews potential divergent data. They explicitly accept **loss of
   previously acknowledged writes** if any affected member was not fenced.
   Record token, UTC time, accepted member identities and warning in status
   and a Warning Event. The actor identity comes from Kubernetes API audit
   logs, not from an invented controller field.
-- **Expanded uncertainty:** a previously unrecorded member becomes
-  unverified -> reject the existing approval, expand the recorded affected
-  set and require a new explicit approval of that set; never silently
-  broaden consent while reusing the old annotation.
+- **Expanded uncertainty:** if a new member becomes unverified, a known
+  affected member is removed, or an affected member's identity changes,
+  reject prior consent, persist the revised set and **rotate its
+  one-time release-approval token**. An old annotation is inert. Require
+  a new deliberate administrative annotation that names the new token
+  after the revised risk has been reviewed. A token match without the
+  current set revision never authorizes future members.
 - **No active master:** do **not** infer that manual release restores a
   writable primary. POC-60 shows RW Brokers may still serve stale reads
   from a standby. The conservative proposal is to keep RW closed unless
@@ -604,21 +642,24 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
 | One isolated master, no active replacement (POC-40) | Preserve deliberate non-quarantine case, disclose durability exposure |
 | Non-master response then Pod UID change, token rejection or role promotion | Stale evidence never releases quarantine |
 | Fresh Node Lease, stale Pod status, live process | No invented fencing proof, quarantine stays |
-| Verified VM off, out-of-service taint, Pod force-delete and node-local PVC | Record external power proof, distinguish Kubernetes Pod deletion from Operator action, preserve stored data |
+| Verified VM off, out-of-service taint, Pod force-delete and node-local PVC | With one stable active master and authorized taint present through both release passes, prove **automatic fence-assisted release**, no invented role/health, post-fence SQL success, and preserved PVC data |
 | Taint added too early or removed while old process could run | Fail safety preflight or keep member unverified |
 | No active master (POC-60) | No false write readiness; emergency override remains a maintainer decision |
 | Two quarantines begin within one second, old annotation persists | Unique tokens; replay does not reopen RW |
 | Cluster deleted and recreated with same name but new UID | Old annotation/token cannot release another cluster |
-| New unverified member after an approved release request | Reject original consent; require explicit expanded approval |
+| New unverified member or identity change after an approved request | Rotate persisted approval token bound to the updated member-set revision; old annotation remains inert after restart |
 | Conflicting status/Deployment writes and Operator restart | No lost quarantine; no unsafe scale-up or false enforced condition |
 | RW replicas requested zero but terminating Broker sessions live | Check actual EndpointSlices and acknowledged SQL after enforcement |
 | Operator absent, direct member and unmanaged Broker access | State explicitly which paths are **not** protected |
 | Pod deletion (S03) and real VM shutdown (S04) | Record fault/detection/fence/SQL timestamps against the accepted contract, separately |
 
-**Open maintainer decisions before #113 implementation:** final member
-verification freshness, no-active-master manual release behavior, unique
-token/status audit schema, and the S04 test-contract amendment. These are
-not settled by a docs-only passing workflow. #115 must retain the raw
+**Open maintainer decisions before #113 implementation:** approve or
+reject **taint-assisted automatic release**, its intermediate
+readiness/metrics semantics, identity and taint evidence freshness,
+no-active-master emergency release, the **quarantine generation plus
+one-time member-set approval-token** status/audit schema, and the S04
+fault-to-SQL versus taint-to-SQL scenario-contract amendment. None is
+approved by a docs-only passing workflow. #115 must retain the raw
 SQL/fault evidence and rejected attempts, not infer safety from Conditions.
 
 ## Revisit When
