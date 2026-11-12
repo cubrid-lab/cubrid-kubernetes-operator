@@ -50,8 +50,11 @@ spec:
   removed, or pointed at another Secret or key afterwards.
 
 The value may end with one line feed, which is not part of the password. It
-must not be empty, must hold no other line feed, no carriage return and no
-NUL byte, and must be at most 256 bytes long.
+must not be empty, must hold no other line feed, no carriage return, no
+NUL byte or other ASCII control byte (including tab, Ctrl+C and DEL), and
+must be at most 256 bytes long. These bytes are rejected because the csql
+terminal used to confirm a DBA login can interpret them as input editing,
+signals or flow control rather than literal password characters.
 
 ## How the password reaches the database
 

@@ -176,6 +176,31 @@ func TestApplyDBAPassword_FeedsTheStatementOnStdinOnly(t *testing.T) {
 	}
 }
 
+// Direct callers of ApplyDBAPassword must not bypass file validation. The
+// operation refuses terminal-control input before any SQL command or
+// authentication call, so no half-configured database is created.
+func TestApplyDBAPassword_RejectsTerminalControlBeforeSQL(t *testing.T) {
+	for name, value := range map[string]string{
+		"interrupt": testPassword + "\x03",
+		"eof":       testPassword + "\x04",
+		"erase":     testPassword + "\x7f",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cli := &passwordCLI{t: t}
+			logs, err := applyForTest(t, cli, value)
+			if err == nil || !strings.Contains(err.Error(), "control byte") {
+				t.Fatalf("ApplyDBAPassword err = %v; want control-byte refusal", err)
+			}
+			if len(cli.recorded()) != 0 || len(cli.stdins) != 0 {
+				t.Fatalf("the invalid value reached csql: %q / %q", cli.recorded(), cli.stdins)
+			}
+			if strings.Contains(err.Error(), value) || strings.Contains(logs, value) {
+				t.Fatal("invalid password leaked into error or log")
+			}
+		})
+	}
+}
+
 // A single quote ends an SQL string literal; it is doubled, so the value is
 // set as it was given and cannot end the statement early.
 func TestApplyDBAPassword_DoublesSingleQuotes(t *testing.T) {
@@ -416,9 +441,10 @@ func (c *argvOnlyCLI) Run(_ context.Context, name string, args ...string) (strin
 }
 
 // The file holds the value and at most one trailing newline. A value that is
-// empty, holds NUL, CR or LF, or is longer than the bound is refused, and no
+// empty, holds NUL/CR/LF or terminal control bytes, or exceeds the bound is refused, and no
 // error carries the content of the file.
 func TestReadDBAPassword(t *testing.T) {
+	const wantTerminalControlByte = "control byte"
 	dir := t.TempDir()
 	long := strings.Repeat("x", maxDBAPasswordBytes)
 	tests := []struct {
@@ -436,6 +462,11 @@ func TestReadDBAPassword(t *testing.T) {
 		{name: "inner newline", content: testPassword + "\nsecond", wantErr: "line feed"},
 		{name: "carriage return", content: testPassword + "\r\n", wantErr: "carriage return"},
 		{name: "NUL", content: testPassword + "\x00", wantErr: "NUL"},
+		{name: "tab", content: testPassword + "\t", wantErr: wantTerminalControlByte},
+		{name: "terminal interrupt", content: testPassword + "\x03", wantErr: wantTerminalControlByte},
+		{name: "terminal EOF", content: testPassword + "\x04", wantErr: wantTerminalControlByte},
+		{name: "terminal flow control", content: testPassword + "\x13", wantErr: wantTerminalControlByte},
+		{name: "terminal erase", content: testPassword + "\x7f", wantErr: wantTerminalControlByte},
 		{name: "over the bound", content: long + "x" + testPassword, wantErr: "longer than"},
 	}
 	for _, tc := range tests {

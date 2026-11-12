@@ -202,6 +202,10 @@ func TestDBAPasswordCheck_AnswersUnknownWhenItCannotTell(t *testing.T) {
 			file: func(t *testing.T) string { return filepath.Join(t.TempDir(), "missing") }, says: "open the DBA password file"},
 		{name: "the file is empty", cli: &checkCLI{running: true, current: testPassword},
 			file: func(t *testing.T) string { return passwordFile(t, "") }, says: "empty"},
+		// A value with a terminal control byte would be acted on by the
+		// terminal instead of reaching csql, so it is never typed (#833).
+		{name: "the value holds a terminal control byte", cli: &checkCLI{running: true, current: testPassword},
+			file: func(t *testing.T) string { return passwordFile(t, testPassword+"\x03") }, says: "control byte"},
 		{name: "the server is not running", cli: &checkCLI{current: testPassword},
 			file: func(t *testing.T) string { return passwordFile(t, testPassword) }, says: "not running"},
 		{name: "the server status fails", cli: &checkCLI{statusErr: timeout, current: testPassword},
