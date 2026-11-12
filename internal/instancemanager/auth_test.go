@@ -41,6 +41,7 @@ var v1Routes = []struct{ method, path, body string }{
 	{http.MethodPost, "/v1/restore/prepare", `{"database":"appdb"}`},
 	{http.MethodGet, "/v1/operations/op-1", ""},
 	{http.MethodPost, "/v1/shutdown?database=appdb", ""},
+	{http.MethodGet, "/v1/dba-password", ""},
 }
 
 func sendV1(h http.Handler, method, path, body, authorization, remoteAddr string) *httptest.ResponseRecorder {
