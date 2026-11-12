@@ -57,7 +57,10 @@ Measured side-by-side scenarios are tracked in
 - `CubridBackup`: a backup of a member to object storage.
 
 The API version is `v1alpha1` and may change between alpha revisions
-([docs/compatibility.md](./docs/compatibility.md)). The v0.1 scope, what is
+([docs/compatibility.md](./docs/compatibility.md)). A later build never
+silently reinterprets or destroys the stored data of a cluster an earlier
+one created, and migrates none automatically; what else it promises is in
+[docs/governance.md](./docs/governance.md#existing-clusters-across-operator-builds-800). The v0.1 scope, what is
 implemented and what has been validated, and at which level, are in
 [ROADMAP.md](./ROADMAP.md). CUBRID engine-version migration is out of scope
 for the first release (ADR-0009).
