@@ -1,0 +1,9 @@
+/sbin/docker-init -- sleep infinity 
+/bin/bash /usr/local/bin/sampler.sh /tmp/q4-change-with-old-pty-interactive.argv /tmp/q4-change-with-old-pty-interactive.stop 
+/usr/bin/coreutils --coreutils-prog-shebang=sleep /usr/bin/sleep infinity 
+python3 /usr/local/bin/ptypw.py -u dba -S appdb 
+csql -u dba -S appdb 
+cub_pl appdb 
+runc init 
+SAMPLES=375
+argv lines containing Poc-Pw: 0

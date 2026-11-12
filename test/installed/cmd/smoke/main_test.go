@@ -16,7 +16,10 @@ limitations under the License.
 
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestMissingOrImplicitLabInputsAreRejected(t *testing.T) {
 	for _, args := range [][]string{nil, {"--level=unit"}, {"--level=vm-lab"}, {"--level=kind", "arbitrary-command"}} {
@@ -29,5 +32,25 @@ func TestMissingOrImplicitLabInputsAreRejected(t *testing.T) {
 func TestHelpDoesNotConnectToACluster(t *testing.T) {
 	if err := run(t.Context(), []string{"--help"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+const vmLab = "--level=vm-lab"
+
+// A check named by a key that is not one of the smoke command's, or with
+// -namespace-mode beside it, is refused before any cluster is opened.
+func TestAWrongCheckIsRefusedBeforeACluster(t *testing.T) {
+	for _, args := range [][]string{
+		{vmLab, "-check=installed-ha-sql-smoke"},
+		{vmLab, "-check=LAB00"},
+		{vmLab, "-check="},
+		{"--level=kind", "-check=installed-standalone-sql-smoke"},
+		{vmLab, "-check=standalone-database-sql"},
+		{vmLab, "-check=installed-standalone-sql-smoke", "-namespace-mode=fresh"},
+	} {
+		err := run(t.Context(), args)
+		if err == nil || !strings.Contains(err.Error(), "-check") {
+			t.Errorf("%q = %v, want a refusal of -check", args, err)
+		}
 	}
 }

@@ -31,11 +31,11 @@ func TestMemberRequestFlagsDefaultToTheDocumentedBaseline(t *testing.T) {
 	if err := flags.Parse(nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.MemberMemoryRequest.String(); got != "600Mi" {
-		t.Errorf("memory default = %s, want 600Mi", got)
+	if got := cfg.MemberMemoryRequest.String(); got != "640Mi" {
+		t.Errorf("memory default = %s, want 640Mi", got)
 	}
-	if got := cfg.MemberCPURequest.String(); got != "100m" {
-		t.Errorf("CPU default = %s, want 100m", got)
+	if got := cfg.MemberCPURequest.String(); got != "150m" {
+		t.Errorf("CPU default = %s, want 150m", got)
 	}
 }
 

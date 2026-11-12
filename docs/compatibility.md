@@ -104,10 +104,17 @@ stays `:dev`; to use a development image, pass it to the manager with
 ## Versioning
 
 - API version: `v1alpha1` — breaking changes may occur between alpha
-  revisions.
-- Operator and Instance Manager: no combination of different builds is
-  declared supported. What each side does today when they differ, and what
-  nothing tests, is in
+  revisions. What a later build still promises to a cluster an earlier one
+  created (stored data is never silently reinterpreted or destroyed, and no
+  migration of stored data runs automatically), when a compatibility path
+  is kept, and the inventory of those paths, are in
+  [governance.md](governance.md#existing-clusters-across-operator-builds-800).
+- Operator and Instance Manager: only the two built and validated together
+  from the same commit are supported; no combination of different builds is.
+  An Instance Manager of another build is not sent a seed step or a
+  `CubridBackup` on the master whose checks it does not report; the step
+  waits with `InstanceManagerCapabilityMissing` until its Pod is replaced. What each side
+  does when they differ, and what nothing tests, is in
   [ADR-0013](adr/0013-operator-instance-manager-compatibility.md).
 - The Kubernetes support range and any additional CUBRID patch versions are
   recorded here only after they pass CI, not asserted upfront.

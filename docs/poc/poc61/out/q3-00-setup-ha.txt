@@ -1,0 +1,68 @@
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 192.0M.
+
+CUBRID 11.4.6
+
+@ cubrid heartbeat start
+@ cubrid master start
+++ cubrid master start: success
+@ HA processes start
+@ cubrid server start: appdb
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.4.6
+
+++ cubrid server start: success
+@ copylogdb start
+++ copylogdb start: success
+@ applylogdb start
+++ applylogdb start: success
+++ HA processes start: success
+++ cubrid heartbeat start: success
+Backup Volume Label: Level: 0, Unit: 0, Database appdb, Backup Time: Thu Nov 12 01:06:48 2026
+
+CUBRID 11.4.6
+
+@ cubrid heartbeat start
+@ cubrid master start
+++ cubrid master start: success
+@ HA processes start
+@ cubrid server start: appdb
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.4.6
+
+++ cubrid server start: success
+@ copylogdb start
+++ copylogdb start: success
+@ applylogdb start
+++ applylogdb start: success
+++ HA processes start: success
+++ cubrid heartbeat start: success
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc-dbapw-master, state master)
+   Node poc-dbapw-slave (priority 2, state slave)
+   Node poc-dbapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 63, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 328, state registered)
+   Copylogdb appdb@poc-dbapw-slave:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 326, state registered)
+   Server appdb (pid 72, state registered_and_active)
+
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc-dbapw-slave, state slave)
+   Node poc-dbapw-slave (priority 2, state slave)
+   Node poc-dbapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 93, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 359, state registered)
+   Copylogdb appdb@poc-dbapw-master:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 357, state registered)
+   Server appdb (pid 102, state registered_and_standby)
+
+Execute OK. (4.007963 sec) Committed. (3.407970 sec) 
+1 row affected. (2.331979 sec) Committed. (0.000000 sec) 

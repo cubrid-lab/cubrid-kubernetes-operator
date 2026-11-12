@@ -1,0 +1,29 @@
+csql: unrecognized option '--help'
+interactive SQL utility, version 11.4.6
+usage: csql [OPTION] database-name[@host]
+
+valid options:
+  -S, --SA-mode                standalone mode execution
+  -C, --CS-mode                client-server mode execution
+  -u, --user=ARG               alternate user name
+  -p, --password=ARG           password string, give "" for none
+  -e, --error-continue         don't exit on statement error
+  -i, --input-file=ARG         input-file-name
+  -o, --output-file=ARG        output-file-name
+  -s, --single-line            single line oriented execution
+  -c, --command=ARG            CSQL-commands
+  -l, --line-output            display each value in a line
+  -r, --read-only              read-only mode
+  -t, --plain-output           display results in a script-friendly format (only works with -c and -i)
+  -q, --query-output           display results in a query-friendly format (only work with -c and -i)
+  -d, --loaddb-output	       display results in a loaddb-friendly format (only work with -c and -i)
+  -N, --skip-column-names      do not display column names in results (only works with -c and -i)
+      --string-width           display each column which is a string type in this width
+      --no-auto-commit         disable auto commit mode execution
+      --no-pager               do not use pager
+      --no-single-line         turn off single line oriented execution
+      --no-trigger-action      disable trigger action
+      --delimiter=ARG          delimiter between columns (only work with -q)
+      --enclosure=ARG          enclosure for result string (only work with -q)
+
+For additional information, see http://www.cubrid.org

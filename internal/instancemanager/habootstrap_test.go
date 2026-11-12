@@ -46,6 +46,25 @@ type haCLI struct {
 	statusErr error
 	// exit is the error of a command that ran to its end and exited 1.
 	exit error
+	// dbaPasswordSet is whether the database's DBA user has a password: an
+	// empty csql login is then refused (docs/poc/RESULTS.md, POC-61).
+	dbaPasswordSet bool
+	// alterFails makes the ALTER USER fed on stdin print an ERROR line and
+	// set nothing, with exit 0 as csql does.
+	alterFails bool
+	stdins     []string
+}
+
+func (c *haCLI) RunWithStdin(_ context.Context, stdin, name string, args ...string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, name+" "+strings.Join(args, " "))
+	c.stdins = append(c.stdins, stdin)
+	if c.alterFails {
+		return "ERROR: the statement failed\n", nil
+	}
+	c.dbaPasswordSet = true
+	return "Execute OK.\n", nil
 }
 
 func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, error) {
@@ -69,7 +88,13 @@ func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, err
 		return "++ cubrid " + args[0] + ": fail", errors.New("exit status 1")
 	}
 	switch {
+	case name == "csql":
+		if c.dbaPasswordSet {
+			return outRefused, c.exit
+		}
+		return outAccepted, nil
 	case len(args) > 0 && args[0] == "createdb":
+		c.dbaPasswordSet = false
 		line := dbName + "\t\t" + filepath.Join(c.databases, dbName) + "\thosts\n"
 		_ = os.WriteFile(filepath.Join(c.databases, databasesTxt), []byte(line), 0o600)
 	case len(args) > 1 && args[0] == "heartbeat" && args[1] == "start":
@@ -155,6 +180,140 @@ func TestHABootstrap_CreatesTheDatabaseThenStartsHeartbeat(t *testing.T) {
 	}
 	if got := f.cli.recorded(); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("commands = %q\nwant       %q", got, want)
+	}
+}
+
+// withDBAPassword gives the manager a DBA password file holding value.
+func (f *haFixture) withDBAPassword(value string) {
+	f.t.Helper()
+	file := filepath.Join(f.t.TempDir(), "dba-password")
+	if err := os.WriteFile(file, []byte(value+"\n"), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+	ha := f.srv.ha
+	ha.DBAPasswordFile = file
+	f.srv.WithHAConfig(ha)
+}
+
+// wantNoPasswordInOperations checks that no operation record carries value.
+func (f *haFixture) wantNoPasswordInOperations(value string) {
+	f.t.Helper()
+	dir := filepath.Join(filepath.Dir(f.databases), "operations")
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path) // #nosec G304 -- the test's own operation store
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(data), value) {
+			f.t.Errorf("operation record %s carries the password", path)
+		}
+		return nil
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// With a DBA password file, the bootstrap member sets the password right
+// after its createdb and before heartbeat starts, while the database still
+// carries the operation's marker; a slave receives it by replication
+// (docs/poc/RESULTS.md, POC-61, Q3).
+func TestHABootstrap_SetsTheDBAPasswordAfterCreatedbBeforeHeartbeatStart(t *testing.T) {
+	f := newHAFixture(t)
+	f.withDBAPassword(testPassword)
+	final := f.run("boot-1")
+	if final.State != OpCompleted {
+		t.Fatalf("final state = %s (%s), want Completed", final.State, final.FailureReason)
+	}
+	got := f.cli.recorded()
+	want := []string{"cubrid createdb", callEmptyLogin, callSetPass, callEmptyLogin, callHeartbeatStart}
+	if len(got) != len(want) {
+		t.Fatalf("commands = %q\nwant       %q", got, want)
+	}
+	for i := range want {
+		if !strings.HasPrefix(got[i], want[i]) || (want[i] == callSetPass && got[i] != callSetPass) {
+			t.Errorf("command %d = %q, want %q", i, got[i], want[i])
+		}
+		if strings.Contains(got[i], testPassword) {
+			t.Errorf("an argv carries the password: %q", got[i])
+		}
+	}
+	if len(f.cli.stdins) != 1 || !strings.Contains(f.cli.stdins[0], "'"+testPassword+"'") {
+		t.Errorf("stdin = %q, want the statement once", f.cli.stdins)
+	}
+	if _, err := os.Stat(filepath.Join(f.databases, dbName, ".im-operation")); !os.IsNotExist(err) {
+		t.Errorf("the ownership marker is still there after a complete bootstrap (err=%v)", err)
+	}
+	f.wantNoPasswordInOperations(testPassword)
+}
+
+// A failed password step fails the bootstrap: heartbeat is not started, and
+// the marker stays, so the entrypoint never starts that database and the next
+// attempt removes it and creates it again (reclaimIncomplete).
+func TestHABootstrap_AFailedPasswordStepStartsNothing(t *testing.T) {
+	f := newHAFixture(t)
+	f.withDBAPassword(testPassword)
+	f.cli.alterFails = true
+	final := f.run("boot-1")
+	if final.State != OpFailed || !strings.Contains(final.FailureReason, "DBA password") {
+		t.Fatalf("final = %s (%s), want Failed naming the DBA password", final.State, final.FailureReason)
+	}
+	if strings.Contains(final.FailureReason, testPassword) {
+		t.Errorf("the failure reason carries the password: %q", final.FailureReason)
+	}
+	for _, call := range f.cli.recorded() {
+		if strings.Contains(call, "heartbeat start") {
+			t.Errorf("heartbeat was started without the password: %q", f.cli.recorded())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.databases, dbName, ".im-operation")); err != nil {
+		t.Errorf("the ownership marker is gone after a failed password step: %v", err)
+	}
+
+	f.cli.alterFails = false
+	before := len(f.cli.recorded())
+	if again := f.run("boot-2"); again.State != OpCompleted {
+		t.Fatalf("retry: state = %s (%s), want Completed", again.State, again.FailureReason)
+	}
+	got := f.cli.recorded()[before:]
+	if len(got) != 5 || !strings.HasPrefix(got[0], "cubrid createdb") || got[2] != callSetPass || got[4] != callHeartbeatStart {
+		t.Errorf("retry commands = %q, want createdb, the password step, heartbeat start", got)
+	}
+	f.wantNoPasswordInOperations(testPassword)
+}
+
+// A retry after the password step, here after a failed heartbeat start, finds
+// the database registered and creates nothing; the password is not set twice.
+func TestHABootstrap_ARetryAfterThePasswordStepDoesNotSetItAgain(t *testing.T) {
+	f := newHAFixture(t)
+	f.withDBAPassword(testPassword)
+	f.cli.failing = heartbeatCmd
+	if final := f.run("boot-1"); final.State != OpFailed {
+		t.Fatalf("final state = %s, want Failed at heartbeat start", final.State)
+	}
+	f.cli.failing = ""
+	if again := f.run("boot-2"); again.State != OpCompleted {
+		t.Fatalf("retry: state = %s (%s), want Completed", again.State, again.FailureReason)
+	}
+	if len(f.cli.stdins) != 1 {
+		t.Errorf("the password was fed %d times, want once", len(f.cli.stdins))
+	}
+}
+
+// A password file that cannot be used fails the bootstrap before createdb:
+// nothing is created that would then wait for a password.
+func TestHABootstrap_AnUnusablePasswordFileCreatesNothing(t *testing.T) {
+	f := newHAFixture(t)
+	f.withDBAPassword("")
+	final := f.run("boot-1")
+	if final.State != OpFailed || !strings.Contains(final.FailureReason, "empty") {
+		t.Fatalf("final = %s (%s), want Failed for an empty password", final.State, final.FailureReason)
+	}
+	if got := f.cli.recorded(); len(got) != 0 {
+		t.Errorf("commands ran: %q", got)
 	}
 }
 

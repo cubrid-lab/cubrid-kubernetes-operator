@@ -99,7 +99,7 @@ Each item below was found in the official source at `fa7b6c2`.
 
 | Concern | Kubernetes | CUBRID native HA | Official Operator (`fa7b6c2`) | This project |
 |---|---|---|---|---|
-| Pods, volumes, restarts | StatefulSet recreates Pods and keeps their volumes | — | Creates the StatefulSet, Services and volumes | Same, plus per-member DNS aliases and NetworkPolicies ([README](../README.md#network-access)) |
+| Pods, volumes, restarts | StatefulSet recreates Pods and keeps their volumes | — | Creates the StatefulSet, Services and volumes | Same, plus per-member DNS aliases and NetworkPolicies ([network access](operations/network-access.md)) |
 | Choosing and changing the master | Not involved | Elects the master, fails over, applies replication | Writes the HA member list; does not choose a master | Writes the HA member list; never chooses, promotes or fences a master ([ADR-0005](adr/0005-failover-split-brain.md#1-responsibility-split)) |
 | Learning the current roles | — | Answers `ha_status` / `heartbeat status` per member | Takes the node view of the first member whose CMS answers | Asks every member's Instance Manager, and resolves a primary only when every member answered freshly and exactly one is master |
 | How the Operator acts inside a Pod | — | — | `pods/exec` commands | An authenticated HTTP API (Instance Manager) in the database container; no `pods/exec` permission ([ADR-0003](adr/0003-instance-manager.md#security)) |

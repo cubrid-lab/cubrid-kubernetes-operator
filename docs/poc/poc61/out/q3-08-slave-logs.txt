@@ -1,0 +1,95 @@
+   42 /home/cubrid/CUBRID/log/appdb@localhost_applylogdb_appdb_poc-dbapw-master.err
+   78 /home/cubrid/CUBRID/log/appdb@poc-dbapw-master_copylogdb.err
+   12 /home/cubrid/CUBRID/log/appdb_applyinfo.err
+   75 /home/cubrid/CUBRID/log/appdb_restoreslave.err
+    0 /home/cubrid/CUBRID/log/cub_client.err
+    0 /home/cubrid/CUBRID/log/cub_server.err
+   27 /home/cubrid/CUBRID/log/poc-dbapw-slave_master.err
+  234 total
+==== /home/cubrid/CUBRID/log/appdb@localhost_applylogdb_appdb_poc-dbapw-master.err
+Time: 11/12/26 01:07:40.461 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'applylogdb' (pid 359) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+Time: 11/12/26 01:07:40.490 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 2
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master/appdb_lgat".... No such file or directory
+Time: 11/12/26 01:07:40.691 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 3
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master/appdb_lgat".... No such file or directory
+Time: 11/12/26 01:07:40.891 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 4
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master/appdb_lgat".... No such file or directory
+Time: 11/12/26 01:07:41.091 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 2592 ERROR CODE = -82, Tran = 2, EID = 5
+Unable to mount log disk volume/file "/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master/appdb_lgat".... No such file or directory
+Time: 11/12/26 01:07:51.120 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 8218 ERROR CODE = -1038, Tran = 2, EID = 6
+log applier: log applier started. required LSA: 145|10248. last committed LSA: 145|10344. last committed repl LSA: 145|10248.
+Time: 11/12/26 01:07:53.166 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6449  CODE = -1040, Tran = 2, EID = 7
+HA generic: change the state of HA server (appdb@poc-dbapw-master) from 'idle' to 'to-be-active'. 
+Time: 11/12/26 01:07:54.167 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6544  CODE = -1040, Tran = 2, EID = 8
+HA generic: change log apply state from 'unregistered' to 'working'. last committed LSA: 145|11288. 
+Time: 11/12/26 01:08:04.027 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6449  CODE = -1040, Tran = 2, EID = 9
+HA generic: change the state of HA server (appdb@poc-dbapw-master) from 'to-be-active' to 'active'. 
+Time: 11/12/26 01:09:26.201 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6449  CODE = -1040, Tran = 2, EID = 10
+HA generic: change the state of HA server (appdb@poc-dbapw-master) from 'active' to 'dead'. 
+Time: 11/12/26 01:09:29.053 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6544  CODE = -1040, Tran = 2, EID = 11
+HA generic: change log apply state from 'working' to 'done'. last committed LSA: 146|11424. 
+Time: 11/12/26 01:10:21.138 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6449  CODE = -1040, Tran = 2, EID = 12
+HA generic: change the state of HA server (appdb@poc-dbapw-master) from 'dead' to 'active'. 
+Time: 11/12/26 01:10:25.784 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_applier.c, line 6544  CODE = -1040, Tran = 2, EID = 13
+HA generic: change log apply state from 'done' to 'recovering'. last committed LSA: 146|15808. 
+*** The previous error message is the last one. ***
+==== /home/cubrid/CUBRID/log/appdb@poc-dbapw-master_copylogdb.err
+Time: 11/12/26 01:08:37.211 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 2, EID = 5
+Server no longer responding.... Invalid argument
+Time: 11/12/26 01:08:37.211 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 2, EID = 6
+Your transaction has been aborted by the system due to server failure or mode change.
+Time: 11/12/26 01:08:38.645 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = -1, EID = 7
+HA generic: change the state of HA server (appdb@poc-dbapw-master) from 'active' to 'dead'. 
+Time: 11/12/26 01:08:39.347 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = -1, EID = 8
+Server no longer responding.... Invalid argument
+Time: 11/12/26 01:08:39.969 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_admin.c, line 1093 ERROR CODE = -224, Tran = -1, EID = 9
+A database has not been restarted.
+*** The previous error message is the last one. ***
+Time: 11/12/26 01:08:41.291 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 10
+Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Time: 11/12/26 01:08:41.594 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 2, EID = 11
+log writer: log writer started. mode: 3.
+Time: 11/12/26 01:08:45.279 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 2, EID = 12
+HA generic: change the state of HA server (appdb@poc-dbapw-master) from 'dead' to 'active'. 
+Time: 11/12/26 01:09:38.434 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = 2, EID = 13
+Server no longer responding.... Invalid argument
+Time: 11/12/26 01:09:38.588 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/transaction_cl.c, line 600 ERROR CODE = -111, Tran = 2, EID = 14
+Your transaction has been aborted by the system due to server failure or mode change.
+Time: 11/12/26 01:09:40.100 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = -1, EID = 15
+HA generic: change the state of HA server (appdb@poc-dbapw-master) from 'active' to 'dead'. 
+Time: 11/12/26 01:09:40.100 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/communication/network_cl.c, line 177 ERROR CODE = -199, Tran = -1, EID = 16
+Server no longer responding.... Invalid argument
+Time: 11/12/26 01:09:40.838 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/compat/db_admin.c, line 1093 ERROR CODE = -224, Tran = -1, EID = 17
+A database has not been restarted.
+*** The previous error message is the last one. ***
+Time: 11/12/26 01:09:42.942 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 18
+Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Time: 11/12/26 01:09:42.959 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -171, Tran = 2, EID = 19
+Incorrect or missing password.
+*** The previous error message is the last one. ***
+Time: 11/12/26 01:09:45.629 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/boot_cl.c, line 1085  CODE = -971, Tran = -1, EID = 1
+Program 'copylogdb' (pid 11686) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Time: 11/12/26 01:09:46.170 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1672 ERROR CODE = -1039, Tran = 2, EID = 2
+log writer: log writer started. mode: 3.
+Time: 11/12/26 01:09:49.428 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/transaction/log_writer.c, line 1261  CODE = -1040, Tran = 2, EID = 3
+HA generic: change the state of HA server (appdb@poc-dbapw-master) from 'na' to 'active'. 
+*** The previous error message is the last one. ***
+==== /home/cubrid/CUBRID/log/poc-dbapw-slave_master.err
+Time: 11/12/26 01:07:34.613 - NOTIFICATION *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 5256  CODE = -986, Tran = -1, EID = 1
+CUBRID heartbeat feature started. 
+Time: 11/12/26 01:07:35.772 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 6620 ERROR CODE = -990, Tran = -1, EID = 2
+Command execution: activate. Failure. (CUBRID heartbeat feature already activated)
+Time: 11/12/26 01:07:39.439 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 3
+Process event: Registered as local process entries. Success (pid:102, state:registered_and_standby, args:cub_server appdb )
+Time: 11/12/26 01:07:40.453 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 4
+Process event: Registered as local process entries. Success (pid:357, state:registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-master )
+Time: 11/12/26 01:07:40.460 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 5
+Process event: Registered as local process entries. Success (pid:359, state:registered, args:cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master --max-mem-size=500 appdb@localhost )
+Time: 11/12/26 01:09:42.960 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4146 ERROR CODE = -989, Tran = -1, EID = 6
+Process event: Process failure detected. (pid:357, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-master )
+Time: 11/12/26 01:09:43.964 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 3132 ERROR CODE = -989, Tran = -1, EID = 7
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-master )
+Time: 11/12/26 01:09:45.628 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/executables/master_heartbeat.c, line 4331 ERROR CODE = -989, Tran = -1, EID = 8
+Process event: Registered as local process entries. Success (pid:11686, state:not_registered, args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-master )
+*** The previous error message is the last one. ***

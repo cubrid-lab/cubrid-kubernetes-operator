@@ -1,0 +1,21 @@
+### no -p, csql on a pty, password typed after the prompt
+Enter Password : 
+
+=== <Result of SELECT Command in Line 1> ===
+
+   CURRENT_USER       
+======================
+  'DBA'               
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+
+prompt_seen=True child_rc=0
+rc=0
+### same, wrong password Poc-Pw-2
+Enter Password : 
+
+ERROR: Incorrect or missing password.
+
+
+prompt_seen=True child_rc=1
+rc=1

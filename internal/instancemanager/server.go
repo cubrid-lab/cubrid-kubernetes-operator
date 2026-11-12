@@ -17,6 +17,7 @@ limitations under the License.
 package instancemanager
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -30,6 +31,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -538,6 +540,7 @@ func (s *Server) role(w http.ResponseWriter, r *http.Request) {
 	st.LogEnd = logEndOf(replCtx, s.cli, st, s.replicationDB)
 	s.logMissingApplier(ctx, st)
 	st.Unfinished = s.unfinishedDatabase()
+	st.Capabilities = Capabilities()
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -581,8 +584,7 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req BackupRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+	if !decodeRequest(w, body, &req) {
 		return
 	}
 	// Nothing is done for a request this manager does not support: no
@@ -954,8 +956,7 @@ func (s *Server) restorePrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req RestoreRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+	if !decodeRequest(w, body, &req) {
 		return
 	}
 	// The request is checked before it is admitted and recorded, so an
@@ -1073,6 +1074,15 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			return
 		}
 		if restored == nil {
+			// A requested DBA password is read before anything is restored,
+			// so a file that cannot be used restores nothing.
+			var password string
+			if s.ha.DBAPasswordFile != "" {
+				if password, err = ReadDBAPassword(s.ha.DBAPasswordFile); err != nil {
+					fail("restore refused: " + err.Error())
+					return
+				}
+			}
 			// What an interrupted restore of this manager left is removed first;
 			// anything else in the target is refused by the restore's own guard.
 			if err := s.reclaimIncomplete(req.Database); err != nil {
@@ -1087,6 +1097,27 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 				_, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring })
 				restoringFailed = err != nil
 				return err
+			}
+			// The restored database keeps the DBA password of the backup's
+			// source (docs/poc/RESULTS.md, POC-61, Q4). With a password
+			// requested it gets that password if it has none, and is accepted
+			// with it only if it has that one, before its restore is recorded
+			// and anything starts it. A seeded slave carries its master's
+			// password, which replicates, and is only checked. A database
+			// whose password is another one cannot be given the requested one,
+			// so a retry cannot succeed either: the restore fails, and the
+			// data is taken back as after a failed restoredb (ADR-0008).
+			if password != "" {
+				roots.AfterRestore = func(ctx context.Context) error {
+					// The step has its own bound: a csql that never answers
+					// must not hold the restore for the whole restore timeout.
+					ctx, cancel := context.WithTimeout(ctx, dbaPasswordStepTimeout)
+					defer cancel()
+					if req.SeedFromMaster != "" {
+						return confirmDBAPassword(ctx, s.cli, s.log(), req.Database, password)
+					}
+					return ApplyDBAPassword(ctx, s.cli, s.log(), req.Database, password)
+				}
 			}
 			res, err := Restore(ctx, s.cli, s.objects, roots, req)
 			if err != nil {
@@ -1328,6 +1359,38 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 		return nil, false
 	}
 	return body, true
+}
+
+// decodeRequest decodes the JSON body of a request into req, a pointer, and
+// reports whether it could. A body that is not one JSON value of req's form
+// is answered 400 here. So is a body with a field this manager does not know,
+// with the code UnknownRequestField: a check that field carries would
+// otherwise not run, and the answer would be the same as for a request
+// without it (ADR-0013). Such a body is told apart by decoding it again
+// without the rule: only the unknown field makes the two differ.
+func decodeRequest(w http.ResponseWriter, body []byte, req any) bool {
+	if t := reflect.TypeOf(req); t == nil || t.Kind() != reflect.Pointer {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{errKey: "the request cannot be decoded by this manager"})
+		return false
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(req)
+	if err == nil {
+		if dec.Decode(&json.RawMessage{}) != io.EOF {
+			writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+			return false
+		}
+		return true
+	}
+	lenient := reflect.New(reflect.TypeOf(req).Elem()).Interface()
+	if json.Unmarshal(body, lenient) != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{errKey: msgInvalidBody})
+		return false
+	}
+	writeError(w, http.StatusBadRequest, CodeUnknownRequestField,
+		"the request body has a field this Instance Manager does not know: "+strings.TrimPrefix(err.Error(), "json: unknown field "))
+	return false
 }
 
 // validateBackupRequest rejects a backup request this manager does not carry

@@ -54,6 +54,10 @@ const (
 	// CodeObjectStorageNotApplied answers 412: the manager was started
 	// without object storage. Terminal until the Pod is restarted with it.
 	CodeObjectStorageNotApplied = "ObjectStorageNotApplied"
+	// CodeUnknownRequestField answers 400: the request body has a field this
+	// manager does not know, so a check the field carries would not run
+	// (ADR-0013). Terminal for the request.
+	CodeUnknownRequestField = "UnknownRequestField"
 	// CodeOperationRecordUnreadable answers 500: the manager holds an
 	// operation record it cannot read, which may be the operation the key
 	// names, so it starts none. Retryable once the record is readable or

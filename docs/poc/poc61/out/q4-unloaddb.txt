@@ -1,0 +1,10 @@
+# restored appdb, server stopped, dba password now Poc-Pw-2; is there another way in without the password?
+### 2026-11-12T01:01:44Z mkdir -p /tmp/unl && cd /tmp/unl && cubrid unloaddb -S appdb
+Password:unloaddb: Incorrect or missing password.
+rc=85
+### 2026-11-12T01:01:59Z mkdir -p /tmp/unl && cd /tmp/unl && cubrid unloaddb -S -u dba appdb
+Password:unloaddb: Incorrect or missing password.
+rc=85
+### 2026-11-12T01:02:07Z ls -l /tmp/unl
+total 0
+rc=0

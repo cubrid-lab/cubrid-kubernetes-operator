@@ -270,6 +270,12 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 			return r.holdRecordedTarget(ctx, backup, reasonRecordedTargetNotEligible,
 				"recorded target "+sel.Instance+" is no longer eligible for its recorded role "+backup.Status.TargetRole)
 		}
+		// The start is not sent again to a recorded master whose manager does
+		// not show the role check; an operation it holds is followed.
+		if reason, msg, held := backupCapabilityHold(sel, obs, observedAt); held {
+			r.capabilityHoldEvent(backup, reason, msg)
+			return r.holdRecordedTarget(ctx, backup, reason, msg)
+		}
 	} else {
 		// The wait for the master's log end counts from the first reconcile
 		// that waited for it, as recorded in status, so that a backup that
@@ -277,27 +283,24 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 		// requeue or an Operator restart neither restarts nor loses it.
 		since := backup.Status.PrimaryLogEndNotReadSince
 		logEndWaitOver := since != nil && r.now().Sub(since.Time) >= primaryLogEndWait
-		sel = selectBackupTarget(members, obs, replicationHistory(cluster), r.Positions.readings(cluster.UID, observedAt), res,
+		sel = selectBackupTarget(members, obs, replicationHistory(cluster), r.Positions.readings(cluster.UID, observedAt), seedAdmitted(cluster), res,
 			backup.Spec.Target.Preference, single, logEndWaitOver, observedAt)
-		// A selection that ended otherwise ends this wait; a later one starts
-		// it again with the whole bound. Each wait is bounded, and between
-		// them the backup waits for another reason or proceeds.
-		switch {
-		case sel.Reason != reasonPrimaryLogEndNotRead:
-			backup.Status.PrimaryLogEndNotReadSince = nil
-		case since == nil:
-			now := metav1.NewTime(r.now())
-			backup.Status.PrimaryLogEndNotReadSince = &now
-		}
+		_, _, fallbackHeld := backupCapabilityHold(sel, obs, observedAt)
+		r.recordLogEndWait(backup, sel, logEndWaitOver, fallbackHeld)
 		if !sel.Selected {
 			// Not terminal: HA may resolve later. Surface why and requeue.
 			// A wait for object storage that this interrupts starts again
 			// when a Pod without the settings is selected next.
 			backup.Status.ObjectStorageNotAppliedSince = nil
 			msg := "no safe backup target yet; waiting for a healthy target"
-			if sel.Reason == reasonPrimaryLogEndNotRead {
+			switch sel.Reason {
+			case reasonPrimaryLogEndNotRead:
 				msg = fmt.Sprintf("the master's own log end was not read, so no standby's copy of its log can be judged; "+
 					"asking again, and falling back to the master %s after this wait began", primaryLogEndWait)
+			case reasonMasterNotSeeded:
+				msg = "the master " + res.CurrentPrimary + " is not recorded by the HA bootstrap of cluster " + cluster.Name +
+					" as holding the database (status.databases[].seededMembers), so it may lack what an earlier master " +
+					"committed and no backup is taken on it; waiting, and no other member is taken in its place"
 			}
 			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, sel.Reason, msg)
 			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
@@ -305,6 +308,18 @@ func (r *CubridBackupReconciler) startBackup(ctx context.Context, backup *databa
 	}
 
 	if backup.Status.TargetInstance == "" {
+		// Not terminal, and the target is not recorded: a later selection may
+		// take a standby, or the master once its Pod runs a manager that
+		// shows the role check.
+		if reason, msg, held := backupCapabilityHold(sel, obs, observedAt); held {
+			r.capabilityHoldEvent(backup, reason, msg)
+			backup.Status.ObjectStorageNotAppliedSince = nil
+			if backup.Status.Phase == "" {
+				backup.Status.Phase = databasev1alpha1.BackupPhasePending
+			}
+			setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, reason, msg)
+			return r.commit(ctx, backup, ctrl.Result{RequeueAfter: backupPollAfter})
+		}
 		// Not terminal: the Pod picks the settings up when it is restarted,
 		// and the backup goes on then. The target stays unrecorded, so a
 		// later selection may take another member. A recorded target is not
@@ -565,6 +580,55 @@ func (r *CubridBackupReconciler) failedBackup(ctx context.Context, backup *datab
 	backup.Status.CompletedAt = &now
 	setBackupCondition(backup, conditionBackupReady, metav1.ConditionFalse, "BackupFailed", reason)
 	return r.commit(ctx, backup, ctrl.Result{})
+}
+
+// recordLogEndWait keeps status.primaryLogEndNotReadSince for the selection
+// sel. A selection that ended otherwise ends the wait; a later one starts it
+// again with the whole bound. Each wait is bounded, and between them the
+// backup waits for another reason or proceeds. A fallback to a master held on
+// its Instance Manager's checks (fallbackHeld) keeps the wait over, so that
+// the next selection falls back again and the backup stays on that hold
+// instead of beginning this wait anew. A fallback refused because the master
+// is not recorded as seeded keeps an ended wait the same way, so the backup
+// stays on MasterNotSeeded (#770). That refusal comes from the selection,
+// before the capability hold, which is asked only of a selected master: an
+// unseeded master is refused whatever its Instance Manager shows.
+func (r *CubridBackupReconciler) recordLogEndWait(backup *databasev1alpha1.CubridBackup, sel TargetSelection,
+	waitOver, fallbackHeld bool) {
+	switch {
+	case sel.Reason == reasonMasterFallbackPrimaryLogEndNotRead && fallbackHeld:
+	case sel.Reason == reasonMasterNotSeeded && waitOver:
+	case sel.Reason != reasonPrimaryLogEndNotRead:
+		backup.Status.PrimaryLogEndNotReadSince = nil
+	case backup.Status.PrimaryLogEndNotReadSince == nil:
+		now := metav1.NewTime(r.now())
+		backup.Status.PrimaryLogEndNotReadSince = &now
+	}
+}
+
+// backupCapabilityHold says whether the backup on sel waits for its
+// Instance Manager to show the check the request relies on (ADR-0013). A
+// backup on the master names it master, and the manager does not upload it
+// unless the member reports master before and after backupdb (#756); an
+// older manager uploads the backup of a master demoted while backupdb ran.
+// A backup on another role relies on no such check.
+func backupCapabilityHold(sel TargetSelection, obs map[string]RoleObservation, now time.Time) (reason, msg string, held bool) {
+	if sel.Role != databasev1alpha1.RoleMaster {
+		return "", "", false
+	}
+	return capabilityHold(sel.Instance, "backup", obs[sel.Instance], now, instancemanager.CapabilityBackupSourceRole)
+}
+
+// capabilityHoldEvent records a Warning Event when the backup begins to
+// wait on its target's Instance Manager checks: the Ready condition did not
+// carry reason before. The wait has no time limit while no target is
+// recorded, so the Event is the notice that a Pod needs replacing.
+func (r *CubridBackupReconciler) capabilityHoldEvent(backup *databasev1alpha1.CubridBackup, reason, msg string) {
+	if ready := meta.FindStatusCondition(backup.Status.Conditions, conditionBackupReady); r.Recorder == nil ||
+		ready != nil && ready.Reason == reason {
+		return
+	}
+	r.Recorder.Event(backup, corev1.EventTypeWarning, reason, msg)
 }
 
 func (r *CubridBackupReconciler) buildBackupRequest(backup *databasev1alpha1.CubridBackup, cluster *databasev1alpha1.CubridCluster, sel TargetSelection) instancemanager.BackupRequest {

@@ -29,7 +29,26 @@ import (
 // day one because restore/rebuild (ADR-0008/0006) consume this manifest as an
 // API: a future field/shape change must be detectable, and an unknown version
 // must be rejected rather than silently mis-read.
-const ManifestVersion = 1
+//
+// Version 2 is version 1 with the meanings this build gives its fields:
+// cubridVersion is the engine version the member read from cubrid_rel (#621)
+// and sourceRole the role the member reported (#756). A version 1 manifest is
+// still read (manifestVersionRequestedRole), with the meaning it was written
+// with (docs/governance.md, #810).
+const ManifestVersion = 2
+
+// manifestVersionRequestedRole is the version of the manifests written before
+// #756 and #621: their sourceRole is the role the backup request named, which
+// a demoted master's backup could name as master, and their cubridVersion may
+// be the declared spec.version. Verify refuses such a manifest where the
+// source role must have been observed, and checks its cubridVersion by engine
+// series only, which a declared version can answer.
+const manifestVersionRequestedRole = 1
+
+// readableManifestVersion reports whether a manifest of version v can be read.
+func readableManifestVersion(v int) bool {
+	return v == ManifestVersion || v == manifestVersionRequestedRole
+}
 
 // ManifestObjectName is the manifest's object key within a backup prefix. It is
 // written LAST and is the atomic completion marker: a backup is trustworthy only
@@ -48,8 +67,8 @@ type BackupManifest struct {
 	// ClusterUID is the source CubridCluster UID (artifact-trust check).
 	ClusterUID string `json:"clusterUID"`
 	// CubridVersion is the engine version that produced the backup, as the
-	// member that ran backupdb read it from cubrid_rel (ADR-0011). A manifest
-	// written by an earlier manager carries the declared spec.version.
+	// member that ran backupdb read it from cubrid_rel (ADR-0011). A version 1
+	// manifest may carry the declared spec.version instead.
 	CubridVersion string `json:"cubridVersion"`
 	// Level is the CUBRID backup level (0 = full).
 	Level int `json:"level"`
@@ -63,8 +82,9 @@ type BackupManifest struct {
 	// uploaded, and a slave or replica that CUBRID promoted meanwhile is
 	// uploaded with the role it had at the start. The role is not held for
 	// the whole backup, and a change after the last reading is not excluded.
-	// Rebuild policy depends on this (ADR-0006). A manifest written by an
-	// earlier manager carries the role the request named.
+	// Rebuild policy depends on this (ADR-0006). A version 1 manifest carries
+	// the role the request named, so Verify refuses it where a role is
+	// required.
 	SourceRole string `json:"sourceRole"`
 	// CreatedAt is the backup completion time (RFC3339).
 	CreatedAt string `json:"createdAt"`
@@ -118,8 +138,9 @@ func ParseManifest(data []byte) (BackupManifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return BackupManifest{}, fmt.Errorf("decode manifest: %w", err)
 	}
-	if m.ManifestVersion != ManifestVersion {
-		return BackupManifest{}, fmt.Errorf("unsupported manifest version %d (want %d)", m.ManifestVersion, ManifestVersion)
+	if !readableManifestVersion(m.ManifestVersion) {
+		return BackupManifest{}, fmt.Errorf("unsupported manifest version %d (want %d or %d)",
+			m.ManifestVersion, ManifestVersion, manifestVersionRequestedRole)
 	}
 	return m, nil
 }
@@ -149,8 +170,9 @@ type ManifestExpectation struct {
 // operation (ADR-0007/0008 artifact trust). It checks metadata only; per-object
 // checksum validation is the caller's separate step.
 func (m BackupManifest) Verify(exp ManifestExpectation) error {
-	if m.ManifestVersion != ManifestVersion {
-		return fmt.Errorf("manifest version %d does not match supported %d", m.ManifestVersion, ManifestVersion)
+	if !readableManifestVersion(m.ManifestVersion) {
+		return fmt.Errorf("manifest version %d does not match supported %d or %d",
+			m.ManifestVersion, ManifestVersion, manifestVersionRequestedRole)
 	}
 	if exp.Database != "" && m.Database != exp.Database {
 		return fmt.Errorf("manifest database %q does not match expected %q", m.Database, exp.Database)
@@ -162,6 +184,10 @@ func (m BackupManifest) Verify(exp ManifestExpectation) error {
 	}
 	if exp.Level != nil && m.Level != *exp.Level {
 		return fmt.Errorf("manifest level %d does not match expected %d", m.Level, *exp.Level)
+	}
+	if exp.RequireSourceRole != "" && m.ManifestVersion == manifestVersionRequestedRole {
+		return fmt.Errorf("manifest version %d records the role the backup request named, not the role "+
+			"the member reported, so it cannot show the backup was taken on a %s", m.ManifestVersion, exp.RequireSourceRole)
 	}
 	if exp.RequireSourceRole != "" && m.SourceRole != exp.RequireSourceRole {
 		return fmt.Errorf("manifest sourceRole %q does not match required %q", m.SourceRole, exp.RequireSourceRole)

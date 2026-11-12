@@ -416,7 +416,7 @@ spec:
 				Fault:  podDeletion{namespace: s00Namespace, pod: pod, uid: record.PodUID},
 				Limits: podDeletionLimits,
 				Before: func(ctx context.Context) error {
-					return readS00Row(csqlInPod(ctx, s00Namespace, pod, database), marker)
+					return s00ReadBeforePodDeletion(memberCSQL(ctx, s00Namespace, pod, database, false).read, pod, marker)
 				},
 				// The row written before the deletion is read from the new Pod.
 				Check: func(ctx context.Context) (bool, error) {
@@ -706,4 +706,20 @@ func smokeOutcome(err error, readMarker string) (ok bool, inconclusive string) {
 	}
 	first, _, _ := strings.Cut(err.Error(), "\n")
 	return false, "the check did not show a failed statement: " + first
+}
+
+// s00ReadBeforePodDeletion verifies the starting state of S00's Pod
+// deletion: the marker row is on the member before the fault. It reads under
+// the rule of sqlcheck.Read, as the smoke reads do: when csql printed -199 and
+// -111 beside the row, the row is read once more, and that counts only on a
+// cub_server whose identity held across the first call. Any other error, a
+// second pair included, leaves the starting state unverified, so the scenario
+// is blocked, not passed (#238). This read is not part of the fault's history,
+// which stays strict.
+func s00ReadBeforePodDeletion(read oneShotRead, pod, marker string) error {
+	_, err := read(sqlcheck.ReadRowQuery, sqlcheck.RowCheck(marker))
+	if err != nil {
+		return fmt.Errorf("csql read of the marker row in %s before the Pod is deleted: %w", pod, err)
+	}
+	return nil
 }

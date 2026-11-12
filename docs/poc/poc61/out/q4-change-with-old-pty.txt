@@ -1,0 +1,7 @@
+### 2026-11-12T01:00:15Z poc-dbapw-restore: python3 /usr/local/bin/ptypw.py -u dba -S -i /tmp/pw2.sql appdb
+
+ERROR: Incorrect or missing password.
+
+
+prompt_seen=False child_rc=1
+rc=1

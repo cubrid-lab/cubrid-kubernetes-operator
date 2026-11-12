@@ -114,6 +114,7 @@ const (
 	standaloneText  = "Standalone database installation and real SQL"
 	brokerHAText    = "Three-member HA and read-write/read-only Broker access"
 	replicationText = "Normal HA replication"
+	deletionText    = "Cluster deletion and data-retention policy"
 	accessText      = "Instance Manager network isolation, token-checked requests, service-account permissions " +
 		"and a search for leaked credentials"
 	smokeText   = "Installed Operator standalone connection and SQL smoke"
@@ -156,10 +157,12 @@ func restoreLane(name string, keys ...string) RequiredLane {
 
 // registry is the one source of scenario identity: the descriptive keys, what
 // people read, the contract sections, the legacy names and the lanes.
-// docs/testing/scenario-name-migration.md explains how it was derived. The
-// gates, the labels and the evidence paths still use the legacy names, and
-// the lists of requirements stay explicit where the runs assemble them; tests
-// compare those lists, and the lane table of the contract, with this one.
+// docs/testing/scenario-name-migration.md explains how it was derived. Gate
+// matches requirements and results by the key their legacy names resolve to.
+// The requirements, the results, the labels and the evidence paths still name
+// the legacy names, and the lists of requirements stay explicit where the runs
+// assemble them; tests compare those lists, and the lane table of the
+// contract, with this one.
 var registry = scenarioRegistry{
 	families: []ScenarioFamily{
 		{"S00", "standalone-database-sql", standaloneText, "s00-install-and-single-database-smoke-test"},
@@ -176,8 +179,7 @@ var registry = scenarioRegistry{
 		{"S10", "ha-pvc-loss-rebuild", "Rebuild after persistent-volume data loss", "s10-rebuild-after-pvc-loss"},
 		{"S11", "installed-backup", backupText, "s11-backup-failure-and-restart"},
 		{"S12", "installed-restore-new-cluster", restoreText, "s12-restore-into-a-new-cluster"},
-		{"S13", "cluster-deletion-retention", "Cluster deletion and data-retention policy",
-			"s13-deletion-and-retention"},
+		{"S13", "cluster-deletion-retention", deletionText, "s13-deletion-and-retention"},
 		{"S14", "instance-manager-access-and-secret-protection", accessText, "s14-authentication-and-secrets"},
 		{"S15", "node-drain-disruption-policy", "Node drain and PodDisruptionBudget behavior",
 			"s15-node-drain-and-poddisruptionbudget"},
@@ -199,6 +201,8 @@ var registry = scenarioRegistry{
 		kindResult("operator-failure-recovery-restart", "S06/restart", operatorText+" - restart"),
 		kindResult("operator-failure-recovery-absent-during-failover", "S06/absent-during-failover",
 			operatorText+" - absent during failover"),
+		kindResult("cluster-deletion-retention-retain", "S13/retain", deletionText+" - retain"),
+		kindResult("cluster-deletion-retention-delete", "S13/delete", deletionText+" - delete"),
 		kindResult("instance-manager-access-and-secret-protection", "S14", accessText),
 		kindResult("ha-token-rotation", "S14/token-rotation", "HA Instance Manager token rotation"),
 		kindResult("ha-legacy-token-migration", "S14/token-migration", "Migration from legacy Instance Manager token"),
@@ -254,6 +258,7 @@ var registry = scenarioRegistry{
 			"ha-primary-pod-recovery-graceful",
 			"broker-failure-recovery-process", "broker-failure-recovery-one-pod", "broker-failure-recovery-all-rw-pods",
 			"operator-failure-recovery-restart", "operator-failure-recovery-absent-during-failover",
+			"cluster-deletion-retention-retain", "cluster-deletion-retention-delete",
 			"ha-token-rotation", "ha-legacy-token-migration"}},
 		{Name: "lab-installed-smoke", Level: LevelVMLab, Keys: []string{"installed-standalone-sql-smoke"}},
 		{Name: "lab-preallocated-component-smoke", Level: LevelVMLab,
@@ -304,8 +309,9 @@ func ResolveAlias(lane, level, alias string) (ResolvedScenario, error) {
 // one line per difference: a requirement that maps to no result of the lane,
 // a registered result with no requirement, or two requirements of one result.
 // An empty answer means that the two agree exactly. Tests use it; a lane's
-// verdict comes from Gate alone, which does not read the registry, so that a
-// result that failed to map stays missing there.
+// verdict comes from Gate alone. Gate matches by the key a legacy name
+// resolves to, and a result that fails to map satisfies only a requirement of
+// its exact legacy name, so it stays missing for a registered requirement.
 func (l Lane) RegistryProblems(level string) []string { return registry.laneProblems(l, level) }
 
 // RegisteredLanes returns the names of the lanes of a level.
@@ -317,6 +323,18 @@ func RegisteredLanes(level string) []string {
 		}
 	}
 	return names
+}
+
+// RegisteredKeys returns the keys of the results of a level, in the
+// registry's order.
+func RegisteredKeys(level string) []string {
+	var keys []string
+	for _, entry := range registry.entries {
+		if entry.Level == level {
+			keys = append(keys, entry.Key)
+		}
+	}
+	return keys
 }
 
 func (r scenarioRegistry) family(id string) (ScenarioFamily, bool) {

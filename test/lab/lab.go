@@ -308,6 +308,9 @@ func (l *Lock) Renew(ctx context.Context, k Kubectl, now time.Time) error {
 			case adopted:
 				return errors.New("renewing the campaign Lease: it changed again while this run renewed it")
 			}
+			// adopt kept only the renewal time it found; the retry below
+			// sends now again, and may be stored though its answer is lost.
+			l.sent = append(l.sent, now)
 			continue
 		default:
 			return fmt.Errorf("renewing the campaign Lease: %w", err)

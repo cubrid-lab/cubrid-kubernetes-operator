@@ -39,6 +39,11 @@ const (
 	// reasonMasterFallbackPrimaryLogEndNotRead is the master fallback taken
 	// when that wait has lasted primaryLogEndWait.
 	reasonMasterFallbackPrimaryLogEndNotRead = "MasterFallbackPrimaryLogEndNotRead"
+	// reasonMasterNotSeeded is a selection that would take the master, by
+	// PrimaryOnly or by the fallback of PreferStandby, while the HA bootstrap
+	// has not recorded that master as holding the database (seedAdmitted).
+	// The backup waits.
+	reasonMasterNotSeeded = "MasterNotSeeded"
 )
 
 // primaryLogEndWait bounds how long a PreferStandby selection waits for the
@@ -69,22 +74,31 @@ type TargetSelection struct {
 //
 // members are the ordinal-ordered pod names, obs the per-member role
 // observations, history the replication the cluster's status records per
-// member, res the ADR-0005 primary resolution, single reports a 1-member
+// member, admitted the members a standby may be taken from (eligibleStandbys;
+// nil for all), res the ADR-0005 primary resolution, single reports a 1-member
 // (standalone) cluster, and primaryLogEndWaitOver that primaryLogEndWait has
 // passed since the selection began to wait for the master's log end.
+//
+// The master is never taken while admitted rejects it (MasterNotSeeded,
+// #770): CUBRID chose it, but a member the HA bootstrap did not record as
+// holding the database can lack what an earlier master committed (POC-57,
+// #768), and a backup of it would keep that gap as a backup. The selection
+// waits instead; it never takes another member in its place.
 func selectBackupTarget(
 	members []string,
 	obs map[string]RoleObservation,
 	history map[string]*databasev1alpha1.InstanceReplication,
 	positions map[string]applierReading,
+	admitted func(string) bool,
 	res PrimaryResolution,
 	pref databasev1alpha1.TargetPreference,
 	single bool,
 	primaryLogEndWaitOver bool,
 	now time.Time,
 ) TargetSelection {
-	standbys, logEndUnread := eligibleStandbys(members, obs, history, positions, res, now)
+	standbys, logEndUnread := eligibleStandbys(members, obs, history, positions, admitted, res, now)
 	primaryResolved := res.Status == metav1.ConditionTrue && res.CurrentPrimary != ""
+	masterUnadmitted := primaryResolved && admitted != nil && !admitted(res.CurrentPrimary)
 
 	switch pref {
 	case databasev1alpha1.StandbyOnly:
@@ -96,6 +110,9 @@ func selectBackupTarget(
 	case databasev1alpha1.PrimaryOnly:
 		if !primaryResolved {
 			return TargetSelection{Reason: "PrimaryNotResolved"}
+		}
+		if masterUnadmitted {
+			return TargetSelection{Reason: reasonMasterNotSeeded}
 		}
 		return TargetSelection{Instance: res.CurrentPrimary, Role: databasev1alpha1.RoleMaster, Selected: true, Reason: "PrimarySelected"}
 
@@ -119,6 +136,9 @@ func selectBackupTarget(
 		if primaryResolved && logEndUnread && !primaryLogEndWaitOver {
 			return TargetSelection{Reason: reasonPrimaryLogEndNotRead}
 		}
+		if masterUnadmitted {
+			return TargetSelection{Reason: reasonMasterNotSeeded}
+		}
 		if primaryResolved && logEndUnread {
 			return TargetSelection{Instance: res.CurrentPrimary, Role: databasev1alpha1.RoleMaster, FallbackUsed: true, Selected: true, Reason: reasonMasterFallbackPrimaryLogEndNotRead}
 		}
@@ -130,7 +150,12 @@ func selectBackupTarget(
 }
 
 // eligibleStandbys returns the standbys a new backup may be taken on, the
-// best first (#291). A standby is eligible when, in this reconcile's
+// best first (#291). A member that admitted rejects, one the HA bootstrap
+// has not recorded as holding the database (seedAdmitted), is never
+// eligible: a member seeded across a change of master can apply the master's
+// log with no failed change and no page waiting while it lacks what that
+// master committed (docs/poc/RESULTS.md, POC-57, #768). A nil admitted
+// rejects nobody. A standby is eligible when, in this reconcile's
 // observations, it is authoritatively a slave (authoritativeSlaves), its
 // applier was read, it applies the log of the resolved primary, it has failed
 // no change, and neither the stall series this reading continues nor the
@@ -169,8 +194,8 @@ func selectBackupTarget(
 // long transaction can still exclude it; that only moves the backup to
 // another standby or to the master fallback.
 func eligibleStandbys(members []string, obs map[string]RoleObservation,
-	history map[string]*databasev1alpha1.InstanceReplication, positions map[string]applierReading, res PrimaryResolution,
-	now time.Time) (standbys []string, logEndUnread bool) {
+	history map[string]*databasev1alpha1.InstanceReplication, positions map[string]applierReading, admitted func(string) bool,
+	res PrimaryResolution, now time.Time) (standbys []string, logEndUnread bool) {
 	if res.Status != metav1.ConditionTrue || res.CurrentPrimary == "" {
 		return nil, false
 	}
@@ -180,6 +205,9 @@ func eligibleStandbys(members []string, obs map[string]RoleObservation,
 	}
 	var candidates []candidate
 	for _, m := range authoritativeSlaves(members, obs, now) {
+		if admitted != nil && !admitted(m) {
+			continue
+		}
 		r := obs[m].Replication
 		if r == nil || r.FailCount > 0 || r.Source != res.CurrentPrimary || r.CopiedEOF == nil {
 			continue

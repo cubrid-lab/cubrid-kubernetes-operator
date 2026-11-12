@@ -107,6 +107,12 @@ func (r *CubridClusterReconciler) reconcileHAStatus(ctx context.Context, cluster
 	setCondition(cluster, conditionReplicationHealthy, replStatus, replReason, replMessage)
 	haStatus, haReason, haMessage := haReadyCondition(res, cluster.Status.Instances, obs,
 		meta.FindStatusCondition(cluster.Status.Conditions, conditionHAReady), replStatus, replReason, replMessage, now)
+	// A member the HA bootstrap has not recorded as holding the database, or
+	// a bootstrap that failed, keeps HAReady False whatever the roles show
+	// (#770). It reports only: nothing is started or chosen because of it.
+	if reason, msg, ok := haBootstrapUnadmitted(cluster); ok {
+		haStatus, haReason, haMessage = metav1.ConditionFalse, reason, msg+"; roles: "+haMessage
+	}
 	setCondition(cluster, conditionHAReady, haStatus, haReason, haMessage)
 	return res
 }

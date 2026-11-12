@@ -302,14 +302,16 @@ func TestLaneProblems(t *testing.T) {
 	}
 }
 
-// The gates keep matching on the legacy name. A result recorded under the
-// canonical key, or under a key that maps to nothing, satisfies no
-// requirement, and the registry knowing the name changes nothing about it.
+// A result is matched through the legacy name it records, never through a
+// canonical key written into its ID: a result recorded under the canonical
+// key, or under a key that maps to nothing, satisfies no requirement, also in
+// a run whose lane and level resolve every legacy name.
 func TestGateIsNotSatisfiedByARenamedResult(t *testing.T) {
 	dir := runDir(t, s00Record)
 	required := Requirement{ID: "S14", Variant: rotation}
 	key := Scenario{Result: Pass, Evidence: []string{s00Record}, ID: "ha-token-rotation"}
-	got := Lane{Name: testKindLane, Required: []Requirement{required}}.Gate(Summary{Scenarios: []Scenario{key}}, dir)
+	got := Lane{Name: testKindLane, Required: []Requirement{required}}.Gate(
+		Summary{Environment: Environment{Level: LevelKind}, Scenarios: []Scenario{key}}, dir)
 	want := []string{"S14/token-rotation: missing: no result was recorded (HA Instance Manager token rotation)"}
 	if !slices.Equal(got, want) {
 		t.Errorf("Gate = %q, want %q", got, want)
@@ -318,6 +320,120 @@ func TestGateIsNotSatisfiedByARenamedResult(t *testing.T) {
 	unmapped := Lane{Name: testKindLane, Required: []Requirement{{ID: s98}}}
 	if got := unmapped.Gate(Summary{}, dir); !slices.Equal(got, []string{"S98: missing: no result was recorded"}) {
 		t.Errorf("Gate of a requirement the registry does not know = %q", got)
+	}
+}
+
+// laterVariant is the later variant of testKindKey in renamedRegistry.
+const laterVariant = "manager-restart"
+
+// renamedRegistry is testRegistry with the Kind restart check renamed: its
+// result is recorded as S06/manager-restart from now on, and S06/restart stays
+// its alias so that earlier results keep their identity.
+func renamedRegistry() scenarioRegistry {
+	r := testRegistry()
+	r.entries[1].Aliases = []string{testAlias, s06 + "/" + laterVariant}
+	return r
+}
+
+// A requirement and a result are one check when they resolve to one key under
+// the lane and level of the run, so a lane that still names the check by its
+// earlier legacy name is satisfied by a result recorded under the later one.
+// Everything that fails a required result under its own name fails it under
+// the other name too, and a result whose name does not resolve at the run's
+// level is matched by its exact legacy name only, as before keys existed.
+func TestGateMatchesARequirementAndAResultByRegistryKey(t *testing.T) {
+	dir := runDir(t, s00Record)
+	r := renamedRegistry()
+	lane := Lane{Name: testKindLane, Required: []Requirement{{ID: testBaseAlias}, {ID: s06, Variant: testRestart}}}
+	base := Scenario{ID: testBaseAlias, Result: Pass, Evidence: []string{s00Record}}
+	renamed := func(result Result, reason string, evidence ...string) Scenario {
+		return Scenario{ID: s06, Variant: laterVariant, Result: result, Reason: reason, Evidence: evidence}
+	}
+	earlier := Scenario{ID: s06, Variant: testRestart, Result: Pass, Evidence: []string{s00Record}}
+	const required = "S06/restart: "
+	for _, tc := range []struct {
+		name      string
+		lane      Lane
+		level     string
+		scenarios []Scenario
+		// want starts the one problem expected; "" means the lane passes.
+		want string
+	}{
+		{"a pass recorded under the later name satisfies the earlier one", lane, LevelKind,
+			[]Scenario{base, renamed(Pass, "", s00Record)}, ""},
+		{"a pass under each name of one check", lane, LevelKind,
+			[]Scenario{base, earlier, renamed(Pass, "", s00Record)}, ""},
+		{"a failure under the later name fails the requirement", lane, LevelKind,
+			[]Scenario{base, renamed(Fail, "x", s00Record)}, required + "fail: x"},
+		{"a blocked result under the later name", lane, LevelKind,
+			[]Scenario{base, renamed(Blocked, setupFailed)}, required + "blocked: " + setupFailed},
+		{"a result under the later name that was not run", lane, LevelKind,
+			[]Scenario{base, renamed(NotRun, setupFailed)}, required + "not_run: " + setupFailed},
+		{"not_applicable under the later name where the lane does not allow it", lane, LevelKind,
+			[]Scenario{base, renamed(NotApplicable, setupFailed)}, required + "not_applicable: " + setupFailed},
+		{"a claimed pass under the later name without evidence", lane, LevelKind,
+			[]Scenario{base, renamed(Pass, "")}, required + "fail: claimed a pass, but no evidence is listed"},
+		{"a pass under one name and a block under the other", lane, LevelKind,
+			[]Scenario{base, earlier, renamed(Blocked, setupFailed)}, required + "blocked: " + setupFailed},
+		{"no result under either name", lane, LevelKind, []Scenario{base}, required + "missing"},
+		{"a run that records no level resolves no key", lane, "",
+			[]Scenario{base, renamed(Pass, "", s00Record)}, required + "missing"},
+		{"a Kind lane recorded at the VM-lab level resolves no key", lane, LevelVMLab,
+			[]Scenario{base, renamed(Pass, "", s00Record)}, required + "missing"},
+		{"the later name is a Kind alias, not one of the lab check", Lane{Name: testLabLane,
+			Required: []Requirement{{ID: s06, Variant: testRestart}}}, LevelVMLab,
+			[]Scenario{renamed(Pass, "", s00Record)}, required + "missing"},
+		{"the canonical key in the ID field is not a legacy name", lane, LevelKind,
+			[]Scenario{base, {ID: testKindKey, Result: Pass, Evidence: []string{s00Record}}}, required + "missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := Summary{Environment: Environment{Level: tc.level}, Scenarios: tc.scenarios}
+			problems := r.gate(tc.lane, s, dir)
+			switch {
+			case tc.want == "" && len(problems) != 0:
+				t.Errorf("problems = %q, want none", problems)
+			case tc.want != "" && (len(problems) != 1 || !strings.HasPrefix(problems[0], tc.want)):
+				t.Errorf("problems = %q, want exactly one starting with %q", problems, tc.want)
+			}
+		})
+	}
+}
+
+// The real registry holds one legacy name per result, so matching by key
+// judges every registered lane as matching by legacy name did, at the lane's
+// level and in a run that records no level: all passes pass, and a blocked
+// result fails its own requirement and no other.
+func TestGateJudgesEveryRegisteredLaneAsItsLegacyNamesDid(t *testing.T) {
+	dir := runDir(t, s00Record)
+	for _, registered := range registry.lanes {
+		lane := Lane{Name: registered.Name}
+		var passing []Scenario
+		for _, key := range registered.Keys {
+			entry, err := ResolveKey(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id, variant, _ := strings.Cut(entry.Aliases[0], "/")
+			lane.Required = append(lane.Required, Requirement{ID: id, Variant: variant})
+			passing = append(passing, Scenario{ID: id, Variant: variant, Result: Pass, Evidence: []string{s00Record}})
+		}
+		for _, level := range []string{registered.Level, ""} {
+			gate := func(scenarios []Scenario) []string {
+				return lane.Gate(Summary{Environment: Environment{Level: level}, Scenarios: scenarios}, dir)
+			}
+			if problems := gate(passing); len(problems) != 0 {
+				t.Errorf("lane %s at level %q: problems = %q, want none", lane.Name, level, problems)
+			}
+			for i := range passing {
+				scenarios := slices.Clone(passing)
+				scenarios[i].Result, scenarios[i].Reason = Blocked, setupFailed
+				want := passing[i].Name() + ": blocked: " + setupFailed
+				if problems := gate(scenarios); len(problems) != 1 || !strings.HasPrefix(problems[0], want) {
+					t.Errorf("lane %s at level %q: problems = %q, want exactly one starting with %q",
+						lane.Name, level, problems, want)
+				}
+			}
+		}
 	}
 }
 
@@ -347,6 +463,15 @@ func TestRegisteredKeys(t *testing.T) {
 		t.Errorf("lanes of %s = %q", kindResult.Key, kindResult.Lanes)
 	}
 	for _, level := range []string{LevelKind, LevelVMLab} {
+		keys := RegisteredKeys(level)
+		if len(keys) == 0 {
+			t.Errorf("no key at level %s", level)
+		}
+		for _, key := range keys {
+			if found, err := ResolveKey(key); err != nil || found.Level != level {
+				t.Errorf("key %s listed at level %s resolves to level %q, %v", key, level, found.Level, err)
+			}
+		}
 		lanes := RegisteredLanes(level)
 		if len(lanes) == 0 {
 			t.Errorf("no lane at level %s", level)

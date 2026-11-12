@@ -1,0 +1,8 @@
+/usr/bin/script
+no expect
+/usr/bin/python3
+no python
+no perl
+/usr/bin/strings
+/usr/bin/timeout
+/usr/bin/setsid

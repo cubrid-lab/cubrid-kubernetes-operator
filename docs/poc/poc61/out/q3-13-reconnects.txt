@@ -1,0 +1,49 @@
+== poc-dbapw-master
+Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave' on the host 'poc-dbapw-slave' (port 1523).
+Server no longer responding.... Invalid argument
+Server no longer responding.... Invalid argument
+Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave' on the host 'poc-dbapw-slave' (port 1523).
+Server no longer responding.... Invalid argument
+Server no longer responding.... Invalid argument
+Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave' on the host 'poc-dbapw-slave' (port 1523).
+Server no longer responding.... Invalid argument
+Server no longer responding.... Invalid argument
+Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave' on the host 'poc-dbapw-slave' (port 1523).
+Incorrect or missing password.
+Program 'copylogdb' (pid 3703) connected to database server 'appdb@poc-dbapw-slave' on the host 'poc-dbapw-slave' (port 1523).
+Server no longer responding.
+Program 'copylogdb' (pid 3703) connected to database server 'appdb@poc-dbapw-slave' on the host 'poc-dbapw-slave' (port 1523).
+Program 'applylogdb' (pid 328) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slave )
+
+Time: 11/12/26 01:12:45.592 - NOTIFICATI
+Time: 11/12/26 01:12:45.882 - ERROR *** 
+Time: 11/12/26 01:12:47.681 - NOTIFICATI
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 328, state registered)
+   Copylogdb appdb@poc-dbapw-slave:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 3703, state registered)
+== poc-dbapw-slave
+Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Server no longer responding.... Invalid argument
+Server no longer responding.... Invalid argument
+Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Server no longer responding.... Invalid argument
+Server no longer responding.... Invalid argument
+Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Incorrect or missing password.
+Program 'copylogdb' (pid 11686) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Server no longer responding.... Invalid argument
+Server no longer responding.... Invalid argument
+Program 'copylogdb' (pid 11686) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Incorrect or missing password.
+Program 'copylogdb' (pid 12416) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Program 'copylogdb' (pid 12790) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Program 'applylogdb' (pid 359) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+Program 'applylogdb' (pid 12792) connected to database server 'appdb@localhost' on the host 'localhost' (port 1523).
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-master )
+Process event: Restart the process. (args:cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-master -m sync appdb@poc-dbapw-master )
+
+Time: 11/12/26 01:12:40.382 - NOTIFICATI
+Time: 11/12/26 01:12:40.582 - ERROR *** 
+Time: 11/12/26 01:12:43.885 - NOTIFICATI
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 12792, state registered)
+   Copylogdb appdb@poc-dbapw-master:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 12790, state registered)

@@ -44,7 +44,8 @@ func useEvidenceDir(t *testing.T, dir string) {
 // and labels behind: a planned scenario keeps the result the suite recorded,
 // so a test would judge the suite's run instead of its own. Which directory
 // the process has acquired is deliberately left as the suite left it, because
-// a refusal must hold after a successful acquisition (#310).
+// a refusal must hold after a successful acquisition (#310); a suite that
+// concluded has already given its directory up (#807).
 func startRunState(t *testing.T) {
 	t.Helper()
 	summaryMu.Lock()
@@ -202,4 +203,35 @@ func TestAcquiredEvidenceDirGetsTheFinalReport(t *testing.T) {
 			t.Errorf("the acquired directory has no %s: %v", name, err)
 		}
 	}
+}
+
+// A concluded run's summary.json and junit.xml are its final report. "go test"
+// runs the package's unit tests in the process of TestE2E after the suite has
+// concluded, and a unit test that plans, records or checkpoints a run of its
+// own, as startSetupFailedRun and TestLostSessionMeasurement do, must not
+// replace that report with a provisional checkpoint in which every scenario is
+// not_run (#807).
+func TestConcludedRunKeepsItsFinalReport(t *testing.T) {
+	startRunState(t)
+	dir := t.TempDir()
+	t.Setenv("E2E_EVIDENCE_DIR", dir)
+	t.Setenv("PATH", t.TempDir())
+	if err := acquireEvidenceDir(); err != nil {
+		t.Fatalf("an empty directory was refused: %v", err)
+	}
+	planRun()
+	_ = concludeRun()
+	final := snapshotDir(t, dir)
+	if len(final) == 0 {
+		t.Fatal("the run left no final report: this test would prove nothing about it")
+	}
+
+	// What a later unit test does to the run's state.
+	t.Run("a later unit test", func(t *testing.T) {
+		req := kindLane.Required[0]
+		startSetupFailedRun(t, req.Label())
+		recordScenario(evidence.Scenario{ID: req.ID, Variant: req.Variant, Result: evidence.Pass})
+		checkpointRun()
+	})
+	checkDirUnchanged(t, dir, final)
 }

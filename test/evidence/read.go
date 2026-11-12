@@ -263,11 +263,13 @@ func (r *RecordedRun) checkJUnit() {
 
 // checkLane resolves each result under the lane and level the run recorded and
 // judges the run with Gate against that registered lane, so a missing, failed,
-// blocked, unproven or not_run required result reads as it does in a run. A
-// result that does not resolve counts for no requirement. A name repeated in
-// one run is the rule of Gate, which needs every record of it to pass; it can
-// never stand for another requirement. A version 2 result must also record the
-// key the registry gives it, so a key cannot move a verdict to another result.
+// blocked, unproven or not_run required result reads as it does in a run. Gate
+// matches a result to a requirement by the key both resolve to, so a result
+// whose legacy name does not resolve counts for no requirement, and every
+// record of a required key must pass, under any of its legacy names; two names
+// of one key in one run are also reported. A result never stands for another
+// requirement. A version 2 result must also record the key the registry gives
+// it, so a key cannot move a verdict to another result.
 func (r scenarioRegistry) checkLane(run *RecordedRun) {
 	name, level := run.Summary.Lane, run.Summary.Environment.Level
 	if err := r.checkLaneLevel(name, level); err != nil {
@@ -309,20 +311,17 @@ func (r scenarioRegistry) checkLane(run *RecordedRun) {
 	}
 	gate := Lane{Name: lane.Name}
 	for _, key := range lane.Keys {
-		alias := ""
-		if names := recorded[key]; len(names) > 0 {
-			alias = names[0]
-		} else if entry, err := r.resolveKey(key); err == nil && len(entry.Aliases) > 0 {
-			alias = entry.Aliases[0]
-		}
-		if alias == "" {
+		entry, err := r.resolveKey(key)
+		if err != nil || len(entry.Aliases) == 0 {
 			run.Problems = append(run.Problems, fmt.Sprintf("lane %s: key %s has no legacy name", name, key))
 			continue
 		}
-		id, variant, _ := strings.Cut(alias, "/")
+		// The gate matches by key, so any legacy name of the key requires
+		// every record the run holds of it, under whichever name.
+		id, variant, _ := strings.Cut(entry.Aliases[0], "/")
 		gate.Required = append(gate.Required, Requirement{ID: id, Variant: variant})
 	}
-	run.Problems = append(run.Problems, gate.Gate(run.Summary, run.Dir)...)
+	run.Problems = append(run.Problems, r.gate(gate, run.Summary, run.Dir)...)
 }
 
 // checkRecordedIdentity compares what a version 2 result recorded of itself

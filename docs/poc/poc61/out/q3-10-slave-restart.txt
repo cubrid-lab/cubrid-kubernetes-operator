@@ -1,0 +1,90 @@
+# dba password Poc-Pw-1 on both members; no password supplied to heartbeat commands
+### 2026-11-12T01:12:24Z [poc-dbapw-slave] cubrid heartbeat stop
+@ cubrid heartbeat stop
+
+The heartbeat feature has been deactivated. Please wait until all shutdown processes of cub_servers are completed.
+
+++ cubrid heartbeat stop: success
+rc=0
+### 2026-11-12T01:12:34Z [poc-dbapw-slave] cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc-dbapw-slave, state unknown)
+
+
+ HA-Process Info (master 93, state unknown)
+
+rc=0
+### 2026-11-12T01:12:35Z [poc-dbapw-master] cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc-dbapw-master, state master)
+   Node poc-dbapw-slave (priority 2, state unknown)
+   Node poc-dbapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 63, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 328, state registered)
+   Copylogdb appdb@poc-dbapw-slave:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 3703, state registered)
+   Server appdb (pid 72, state registered_and_active)
+
+rc=0
+### 2026-11-12T01:12:35Z [poc-dbapw-slave] cubrid heartbeat start
+@ cubrid heartbeat start
+@ HA processes start
+@ cubrid server start: appdb
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.4.6
+
+++ cubrid server start: success
+@ copylogdb start
+++ copylogdb start: success
+@ applylogdb start
+++ applylogdb start: success
+++ HA processes start: success
+++ cubrid heartbeat start: success
+rc=0
+### 2026-11-12T01:13:11Z [poc-dbapw-slave] cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc-dbapw-slave, state slave)
+   Node poc-dbapw-slave (priority 2, state slave)
+   Node poc-dbapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 93, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 12792, state registered)
+   Copylogdb appdb@poc-dbapw-master:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 12790, state registered)
+   Server appdb (pid 12534, state registered_and_standby)
+
+rc=0
+### 2026-11-12T01:13:11Z [poc-dbapw-master] csql -u dba -p Poc-Pw-1 appdb@localhost -c "INSERT INTO t VALUES (3, 'after slave restart')"
+1 row affected. (1.835983 sec) Committed. (0.000000 sec) 
+rc=0
+### 2026-11-12T01:18:13Z [poc-dbapw-slave] csql -u dba -p Poc-Pw-1 appdb@localhost -c "select * from t"
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'before password'   
+            2  'after password on master'
+
+2 rows selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+### 2026-11-12T01:18:13Z [poc-dbapw-slave] cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc-dbapw-slave, state slave)
+   Node poc-dbapw-slave (priority 2, state slave)
+   Node poc-dbapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 93, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 12792, state registered)
+   Copylogdb appdb@poc-dbapw-master:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 12790, state registered)
+   Server appdb (pid 12534, state registered_and_standby)
+
+rc=0

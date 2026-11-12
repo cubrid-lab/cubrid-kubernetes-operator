@@ -164,10 +164,16 @@ const minHealthyHA = 2
 // safety-first decision, and deletes at most ONE outdated slave per reconcile.
 // It never deletes the master and never disrupts a pod while the cluster is
 // unsafe (unresolved primary, fencing, in-flight replacement, PDB, catch-up).
-func (r *CubridClusterReconciler) reconcileRollingUpdate(ctx context.Context, cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet, res PrimaryResolution) {
+//
+// It returns the error of a delete the API server rejected, after setting
+// Updating to say so; the caller writes the status before it returns the
+// error. Every other outcome, a member state that could not be read included,
+// is reported by Updating alone.
+func (r *CubridClusterReconciler) reconcileRollingUpdate(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
+	sts *appsv1.StatefulSet, res PrimaryResolution) error {
 	desiredRev := sts.Status.UpdateRevision
 	if desiredRev == "" {
-		return
+		return nil
 	}
 	cluster.Status.Update = &databasev1alpha1.UpdateStatus{
 		DesiredRevision: desiredRev,
@@ -178,7 +184,7 @@ func (r *CubridClusterReconciler) reconcileRollingUpdate(ctx context.Context, cl
 	members, err := r.buildUpdateMembers(ctx, cluster, desiredRev)
 	if err != nil {
 		setCondition(cluster, conditionUpdating, metav1.ConditionUnknown, "UpdateStateUnavailable", err.Error())
-		return
+		return nil
 	}
 
 	fencing := meta.IsStatusConditionTrue(cluster.Status.Conditions, "FencingRequired")
@@ -195,13 +201,13 @@ func (r *CubridClusterReconciler) reconcileRollingUpdate(ctx context.Context, cl
 			setCondition(cluster, conditionUpdating, metav1.ConditionFalse, "AutomaticReplacementDisabled",
 				"member "+plan.Target+" runs an outdated revision; the operator does not replace Pods by itself yet (#96), "+
 					"so the change takes effect when a Pod is replaced by hand")
-			return
+			return nil
 		}
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: plan.Target, Namespace: cluster.Namespace}}
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			setCondition(cluster, conditionUpdating, metav1.ConditionTrue, "MemberUpdateInProgress",
 				"failed to delete "+plan.Target+": "+err.Error())
-			return
+			return fmt.Errorf("delete outdated slave %s: %w", plan.Target, err)
 		}
 		r.event(cluster, corev1.EventTypeNormal, "RollingUpdate", "deleted outdated slave "+plan.Target)
 		setCondition(cluster, conditionUpdating, metav1.ConditionTrue, plan.Reason, "replacing outdated slave "+plan.Target)
@@ -213,6 +219,7 @@ func (r *CubridClusterReconciler) reconcileRollingUpdate(ctx context.Context, cl
 	default:
 		setCondition(cluster, conditionUpdating, metav1.ConditionFalse, "UpToDate", "all members run the desired revision")
 	}
+	return nil
 }
 
 // buildUpdateMembers derives each member's observed update state: role/ready
