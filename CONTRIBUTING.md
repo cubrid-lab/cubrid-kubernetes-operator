@@ -212,6 +212,100 @@ The author of a change writes its tests. The reviewer checks the expected
 results against the agreed contract and independent evidence, not only against
 the implementation.
 
+## Retaining POC evidence and temporary tooling
+
+A proof of concept (POC) is evidence of what **one pinned environment actually
+did**, not a product guarantee or disposable output. Keep historical failures,
+counterexamples, original source revisions, and native-versus-emulated
+distinctions. The authoritative findings remain in
+[POC results](./docs/poc/RESULTS.md); the relevant issue, ADR, or
+[scenario contract](./docs/testing/scenario-contract.md) records why they
+matter. Do not start a parallel POC registry.
+
+### Before adding a temporary file or running a POC
+
+Record the following in the **local** issue and PR or alongside the harness
+(for example, in its existing `docs/poc/pocNN/README.md`):
+
+1. **Purpose and owner:** the claim or negative case to test, owning local
+   issue, named implementer/reviewer, and whether this is manual, a reusable
+   test, or a one-off release/repair tool.
+2. **Reproduction identity:** source commit or immutable script revision;
+   CUBRID version and image digest; Docker/Kind/VM, OS, CPU architecture,
+   native or emulated execution, relevant configuration and commands.
+3. **Run identity:** UTC start/end or checkpoint timestamps, immutable run ID
+   or CI link, clock source/skew if measured, and any missing provenance.
+   Never manufacture missing times or promote unsynchronized timestamps to
+   a measured recovery time.
+4. **Durable proof:** the smallest useful SQL/role/status observations,
+   negative outcomes, logs and raw samples, with paths and a link from
+   `docs/poc/RESULTS.md` or the owning scenario issue. Redact credentials,
+   tokens and kubeconfigs before committing or archiving evidence.
+5. **End/review trigger:** who reviews the files when the experiment, issue,
+   migration or release repair ends; which proof must remain and which
+   temporary scripts or intermediates are candidates for removal.
+
+Prefer a manually invoked, untracked or ephemeral helper for one-time
+experiments. Do not add a permanent CI workflow, scheduled cleanup task or
+large testing framework merely to preserve a one-off command. A stable
+diagnostic utility, compatibility path or required reproducible test can
+remain when its owner and ongoing purpose are explicit.
+
+### Inventory and retention decision
+
+The repository has different evidence classes; filename, size, age and a
+closed POC are **not** grounds for deleting them.
+
+| Class | Existing example | Default review decision |
+| --- | --- | --- |
+| Conclusions and corrections | `docs/poc/RESULTS.md` | Keep; append corrections instead of rewriting observations. |
+| Reproduction source | `docs/poc/poc48/run.sh`, `analyse.py` and `README.md` | Keep while required to reproduce or audit referenced findings; remove only after checking downstream references. |
+| Raw run measurements | `docs/poc/poc48/samples/P2.tsv`; `docs/poc/poc55/samples/ha.jsonl.gz` | Keep representative **and failed** cases needed for a claim, with run/environment identity. |
+| Source/run provenance | `docs/poc/poc53/PROVENANCE.md`, `provenance/scripts/` and `samples/results.jsonl` | Keep where conclusions depend on different script revisions or incomplete trials; #355 remains open. |
+| Command output / intermediates | `docs/poc/poc61/out/` | Examine line-by-line against the finding and linked issue before calling an output derived or redundant; some outputs may be the only evidence. |
+| Duplicate raw copies or scratch | No specific tracked file has been verified redundant in this review | Compare run IDs, content hashes, references and coverage before proposing removal; never remove an entire numbered POC by pattern. |
+
+When a POC is complete, choose and record **one disposition per candidate**:
+
+- **Keep:** necessary for an open safety/recovery investigation, an ADR,
+  `RESULTS.md` claim, reproducibility or a release acceptance gate.
+- **Archive:** only to a durable, accessible location with original run
+  provenance, verified hashes and updated working references; review the
+  move before removing the repository copy.
+- **Remove:** only proven-redundant scratch or an explicitly temporary tool
+  after verifying that no active issue, ADR, scenario or historical failure
+  depends on it. Record the reviewed paths and rationale in a focused PR.
+
+Before any deletion or archive, search references from `RESULTS.md`, ADRs,
+the scenario contract, `ROADMAP.md`, open issues and PRs. Verify links,
+sample identities, image/source revisions, negative trials and evidence for
+mandatory gates. Do not erase a failed observation because a later run
+passed. Experimental harnesses are not automatically production tooling;
+conversely, accepted test infrastructure is not temporary simply because
+it originated in a POC.
+
+### Worked review: standalone database-name length (POC-24)
+
+[POC-24 in `RESULTS.md`](./docs/poc/RESULTS.md) and the completed
+[database-name boundary issue #284](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/284)
+record a standalone `createdb` boundary test, including failing 18-character
+names, on the CUBRID 11.4.6 image identified by digest. The recorded run
+used **emulated linux/amd64 on an arm64 Mac**, not a native HA/lab run.
+The report gives a date but not an exact UTC run timestamp or a source
+commit for the harness; leave those fields explicitly unknown.
+
+**Decision:** retain the result, negative outputs, limitations and image
+identity in `RESULTS.md` because they support the accepted API boundary.
+There is no `docs/poc/poc24/` directory in the reviewed tree, and no
+tracked POC-24 scratch file has been identified for removal or archiving.
+Do not claim a deletion, a complete raw archive or native validation that
+did not occur. Future POCs should record the missing provenance at run time.
+
+For temporary-tool and evidence reviews, check in the PR that the owning
+issue, reviewer, claim, provenance, durable evidence and review trigger are
+identified, and document the **keep/archive/remove** choice. Actual deletion
+requires a separate, path-scoped, reviewed change with preserved proof.
+
 ## Two-maintainer coordination
 
 - Each maintainer has one implementation issue in progress by default.
