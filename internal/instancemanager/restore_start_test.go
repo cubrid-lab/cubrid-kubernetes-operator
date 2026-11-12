@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,6 +85,15 @@ type restoreMember struct {
 	// processes is the process table the member's manager reads; nil is one
 	// without any CUBRID process.
 	processes func() (map[string]bool, error)
+	// seed restores the member as a slave of seedMaster from that master's
+	// backup.
+	seed bool
+	// dbaPasswordFile is the manager's DBA password file; empty is none.
+	dbaPasswordFile string
+	// logger, when set, is the manager's log.
+	logger *slog.Logger
+	// opsDir, when set, is the operation store's directory.
+	opsDir string
 }
 
 // lastRestoreTarget is the database root of the latest runRestoreOperation.
@@ -92,18 +102,31 @@ var lastRestoreTarget string
 func runRestoreOperation(t *testing.T, cli CLI, member restoreMember) Operation {
 	t.Helper()
 	objects, bucket, prefix := stageUploadedArtifact(t)
+	if member.seed {
+		objects, bucket, prefix = stageSeedArtifact(t, nil)
+	}
 	req := baseRestoreRequest(t, bucket, prefix)
-	store, err := NewOperationStore(t.TempDir())
+	if member.seed {
+		req.SeedFromMaster, req.ExpectedClusterUID = seedMaster, seedClusterUID
+	}
+	opsDir := member.opsDir
+	if opsDir == "" {
+		opsDir = t.TempDir()
+	}
+	store, err := NewOperationStore(opsDir)
 	if err != nil {
 		t.Fatalf("NewOperationStore: %v", err)
 	}
 	lastRestoreTarget = req.TargetDir
 	srv := NewServer(cli, "tok").WithOperationStore(store).WithObjectStore(objects).WithRestoreRoots(rootsFor(req))
+	if member.logger != nil {
+		srv = srv.WithLogger(member.logger)
+	}
 	if member.standalone {
 		srv = srv.WithStandaloneDatabase(dbName)
 	}
-	if member.haConf != "" {
-		srv = srv.WithHAConfig(HAConfig{ConfPath: member.haConf})
+	if member.haConf != "" || member.dbaPasswordFile != "" {
+		srv = srv.WithHAConfig(HAConfig{ConfPath: member.haConf, DBAPasswordFile: member.dbaPasswordFile})
 	}
 	srv.heartbeatProcesses, srv.heartbeatSettle = processTable(), 0
 	if member.processes != nil {

@@ -92,7 +92,7 @@ func (c *haCLI) Run(_ context.Context, name string, args ...string) (string, err
 		if c.dbaPasswordSet {
 			return outRefused, c.exit
 		}
-		return "1 row selected.\n", nil
+		return outAccepted, nil
 	case len(args) > 0 && args[0] == "createdb":
 		c.dbaPasswordSet = false
 		line := dbName + "\t\t" + filepath.Join(c.databases, dbName) + "\thosts\n"

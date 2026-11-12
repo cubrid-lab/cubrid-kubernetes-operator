@@ -110,6 +110,11 @@ type RestoreRoots struct {
 	// right before the target is registered and restoredb runs. An error
 	// from it stops the restore there (#598).
 	BeforeRestore func() error
+	// AfterRestore, when set, runs on the stopped database once restoredb (or
+	// restoreslave) has succeeded, before Restore returns. An error from it
+	// fails the restore, which then takes the registration and the directory
+	// back as a failed restoredb does (#804).
+	AfterRestore func(ctx context.Context) error
 }
 
 // RestoreResult reports a completed restore (ADR-0008).
@@ -207,6 +212,12 @@ func Restore(ctx context.Context, cli CLI, store ObjectStore, roots RestoreRoots
 	if err != nil {
 		unregister()
 		return RestoreResult{}, fmt.Errorf("%s failed: %w: %s", command[0], err, out)
+	}
+	if roots.AfterRestore != nil {
+		if err := roots.AfterRestore(ctx); err != nil {
+			unregister()
+			return RestoreResult{}, err
+		}
 	}
 
 	return RestoreResult{
