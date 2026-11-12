@@ -234,6 +234,12 @@ func confirmDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, datab
 // line, since csql exits 0 when a statement fed on stdin fails, and a dba
 // login with the empty password is then refused (POC-61, Q1).
 func ApplyDBAPassword(ctx context.Context, cli CLI, logger *slog.Logger, database, password string) error {
+	// Reject before issuing even the first csql command: direct callers must
+	// not bypass ReadDBAPassword's terminal-safety rule. The value is never
+	// included in an error or log.
+	if HasDBAPasswordControlByte([]byte(password)) {
+		return errors.New("the DBA password holds an ASCII control byte")
+	}
 	if !databaseNamePattern.MatchString(database) {
 		return fmt.Errorf("database name %q is not a plain identifier", database)
 	}
