@@ -39,12 +39,10 @@ removed is no longer seen by the operator: updates that replace members wait
 for it, and backups report the Pod as not found. The label limits what the
 manager holds in memory, not what its role allows it to read.
 
-The manager also watches the metadata of every Secret in the same namespaces,
-without the label, so that a cluster waiting for the Secret its
-`spec.dbaPasswordSecretRef` names is reconciled when that Secret is created
-or changed ([DBA password](dba-password.md)). That cache holds names,
-labels and annotations, never a Secret's data. The Operator reads the named
-Secret itself from the API server, with the `get` it already has on Secrets.
+The DBA password Secret a cluster names with `spec.dbaPasswordSecretRef` is
+not in that cache either: the Operator reads it from the API server, with the
+`get` it already has on Secrets, and does not watch it. A cluster waiting for
+that Secret checks it again every 30 seconds ([DBA password](dba-password.md)).
 
 **Cache scope is not API authorization.** Client writes go directly to the API
 server; explicitly injected uncached readers/clients and any cluster-scoped

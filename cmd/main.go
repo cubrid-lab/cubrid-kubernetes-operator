@@ -253,15 +253,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The DBA password Secret a cluster names is the user's, which the
-	// manager's cache does not hold: the controller watches the metadata of
-	// the Secrets in the same namespaces, never their data.
-	secretMetadata, err := controller.NewSecretMetadataCache(mgr, cacheOptions.DefaultNamespaces)
-	if err != nil {
-		setupLog.Error(err, "Failed to create the Secret metadata cache")
-		os.Exit(1)
-	}
-
 	// Each cluster's Instance Managers are called with that cluster's own token.
 	tokens := controller.ClusterTokens(mgr.GetClient())
 	clusterProber := controller.NewHTTPRoleProber(tokens)
@@ -273,16 +264,15 @@ func main() {
 		APIReader: mgr.GetAPIReader(),
 		Scheme:    mgr.GetScheme(),
 		//nolint:staticcheck // v0.25 GetEventRecorder returns an events/v1 interface incompatible with record.EventRecorder.
-		Recorder:       mgr.GetEventRecorderFor("cubridcluster-controller"),
-		Prober:         clusterProber,
-		TokenChecker:   clusterProber,
-		Restore:        controller.NewHTTPBackupClient(tokens),
-		HABootstrap:    controller.NewHTTPBackupClient(tokens),
-		Backup:         controller.NewHTTPBackupClient(tokens),
-		DefaultImage:   instanceManagerImage,
-		OperatorNS:     operatorNamespace,
-		Positions:      positions,
-		SecretMetadata: secretMetadata,
+		Recorder:     mgr.GetEventRecorderFor("cubridcluster-controller"),
+		Prober:       clusterProber,
+		TokenChecker: clusterProber,
+		Restore:      controller.NewHTTPBackupClient(tokens),
+		HABootstrap:  controller.NewHTTPBackupClient(tokens),
+		Backup:       controller.NewHTTPBackupClient(tokens),
+		DefaultImage: instanceManagerImage,
+		OperatorNS:   operatorNamespace,
+		Positions:    positions,
 		// Checked above: at least MIN_NUM_APPL_SERVER.
 		BrokerMaxApplServers: brokerMaxApplServers,
 		// Checked above: neither is negative.

@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -39,7 +38,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -125,11 +123,9 @@ func TestManagedCacheScope(t *testing.T) {
 		HealthProbeBindAddress: "0", Controller: config.Controller{SkipNameValidation: &skipNameValidation},
 	})
 	mustWatch(t, err)
-	secretMetadata, err := controller.NewSecretMetadataCache(manager, options.DefaultNamespaces)
-	mustWatch(t, err)
 	mustWatch(t, (&controller.CubridClusterReconciler{
 		Client: manager.GetClient(), APIReader: manager.GetAPIReader(), Scheme: scheme,
-		Recorder: record.NewFakeRecorder(1000), SecretMetadata: secretMetadata,
+		Recorder: record.NewFakeRecorder(1000),
 	}).SetupWithManager(manager))
 	managerCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -195,25 +191,6 @@ func TestManagedCacheScope(t *testing.T) {
 		if !apierrors.IsNotFound(err) {
 			t.Errorf("cached read of an unmanaged %T = %v, want NotFound", object, err)
 		}
-	}
-
-	// The Secret metadata cache, under the same role, sees a Secret the
-	// operator did not write, which a cluster's spec.dbaPasswordSecretRef may
-	// name, and holds no Secret's data.
-	waitWatch(t, ctx, func() bool {
-		secrets := &metav1.PartialObjectMetadataList{}
-		secrets.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("SecretList"))
-		mustWatch(t, secretMetadata.List(ctx, secrets, client.InNamespace(namespace)))
-		for _, s := range secrets.Items {
-			if s.Name == unrelated {
-				return true
-			}
-		}
-		return false
-	})
-	err = secretMetadata.Get(ctx, client.ObjectKey{Namespace: namespace, Name: unrelated}, &corev1.Secret{})
-	if !errors.As(err, new(*cache.ErrResourceNotCached)) {
-		t.Errorf("read of a whole Secret from the Secret metadata cache = %v, want it refused as not cached", err)
 	}
 
 	// The cluster's own objects of those kinds are still cached.

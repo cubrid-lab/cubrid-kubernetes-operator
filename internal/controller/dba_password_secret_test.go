@@ -397,8 +397,8 @@ var _ = Describe("The DBA password Secret of a standalone cluster (#805)", func(
 	})
 
 	// The Secret is usually created after or together with the cluster. The
-	// operator caches only its own Secrets, so a watch on the metadata of
-	// every Secret brings the waiting cluster back when it appears.
+	// operator does not watch the user's Secrets (#282), so a waiting cluster
+	// is checked again after DBAPasswordRecheck, and goes on once it appears.
 	It("creates the database once the missing Secret is created, without being asked again", func() {
 		const namespace = "dba-password-watch"
 		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})).To(Succeed())
@@ -412,11 +412,9 @@ var _ = Describe("The DBA password Secret of a standalone cluster (#805)", func(
 			Controller:             config.Controller{SkipNameValidation: &skipNameValidation},
 		})
 		Expect(err).NotTo(HaveOccurred())
-		secrets, err := NewSecretMetadataCache(mgr, cacheOptions.DefaultNamespaces)
-		Expect(err).NotTo(HaveOccurred())
 		r := &CubridClusterReconciler{
 			Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Scheme: mgr.GetScheme(),
-			Recorder: record.NewFakeRecorder(100), SecretMetadata: secrets,
+			Recorder: record.NewFakeRecorder(100), DBAPasswordRecheck: 500 * time.Millisecond,
 		}
 		Expect(r.SetupWithManager(mgr)).To(Succeed())
 		mgrCtx, stop := context.WithCancel(ctx)

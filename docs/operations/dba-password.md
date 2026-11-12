@@ -95,8 +95,9 @@ records a Warning Event with the same reason.
 **Before the database exists.** While the key does not resolve, the Operator
 does not create the cluster's StatefulSet, so no database is created without
 its password. `Ready` and `Progressing` are `False` with the same reason. The
-Operator watches Secrets, so once the Secret is created or corrected the
-cluster goes on by itself.
+Operator does not watch Secrets it did not create; it checks the Secret again
+every 30 seconds, so once the Secret is created or corrected the cluster goes
+on by itself within that time.
 
 **After the database exists.** The StatefulSet is left as it is; nothing is
 deleted or created again. A running member keeps the file it mounted. A DB

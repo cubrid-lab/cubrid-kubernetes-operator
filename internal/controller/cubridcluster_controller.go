@@ -42,15 +42,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/metrics"
@@ -159,12 +156,12 @@ type CubridClusterReconciler struct {
 	// keeps the readings in a store of this reconciler's own.
 	Positions    *ApplierPositions
 	ownPositions ApplierPositions
-	// SecretMetadata holds the metadata of the Secrets that
-	// spec.dbaPasswordSecretRef may name (NewSecretMetadataCache); a change of
-	// one starts a reconcile of the clusters that name it. Nil watches none:
-	// a cluster that waits for its Secret is then reconciled again only on
-	// another event.
-	SecretMetadata cache.Cache
+	// DBAPasswordRecheck is how long a cluster whose DBA password Secret does
+	// not resolve waits before it is checked again; zero is
+	// defaultDBAPasswordRecheck. The operator does not watch the user's
+	// Secrets, so this check is what lets the cluster go on once the Secret
+	// is created or corrected.
+	DBAPasswordRecheck time.Duration
 
 	// reports holds, per cluster, the report of the reconcile that is running
 	// for it (reconcileReport).
@@ -425,8 +422,8 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// A database is never created without the DBA password its cluster
 	// names: the StatefulSet waits for the Secret.
-	if stop, err := r.reconcileDBAPasswordSecret(ctx, &cluster); stop {
-		return ctrl.Result{}, err
+	if stop, recheck, err := r.reconcileDBAPasswordSecret(ctx, &cluster); stop {
+		return ctrl.Result{RequeueAfter: recheck}, err
 	}
 
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
@@ -1482,13 +1479,7 @@ var clusterEvents = predicate.Or[client.Object](
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	b := ctrl.NewControllerManagedBy(mgr)
-	if r.SecretMetadata != nil {
-		secret := &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}}
-		b = b.WatchesRawSource(source.Kind(r.SecretMetadata, secret,
-			handler.TypedEnqueueRequestsFromMapFunc(r.clustersNamingSecret)))
-	}
-	return b.
+	return ctrl.NewControllerManagedBy(mgr).
 		For(&databasev1alpha1.CubridCluster{}, builder.WithPredicates(clusterEvents)).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&appsv1.Deployment{}).

@@ -20,17 +20,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
@@ -155,18 +153,20 @@ func (r *CubridClusterReconciler) dbaPasswordProblem(ctx context.Context,
 // asks for. Ready then says why. An existing StatefulSet is left as it is: its
 // running members keep the file they mounted.
 //
-// A missing Secret or key ends the reconcile without an error: the watch on
-// Secrets (SecretMetadata) brings the cluster back when it changes. A read
-// that failed for another cause is returned, and retried.
+// While it waits, a missing Secret, a missing key or an unusable value ends
+// the reconcile without an error and with the delay after which it is checked
+// again (DBAPasswordRecheck): the operator does not watch the user's Secrets
+// (#282). A read that failed for another cause is returned, and retried with
+// backoff.
 func (r *CubridClusterReconciler) reconcileDBAPasswordSecret(ctx context.Context,
-	cluster *databasev1alpha1.CubridCluster) (bool, error) {
+	cluster *databasev1alpha1.CubridCluster) (bool, time.Duration, error) {
 	if cluster.Spec.DBAPasswordSecretRef == nil {
-		return false, nil
+		return false, 0, nil
 	}
 	reason, msg, readErr := r.dbaPasswordProblem(ctx, cluster)
 	if reason == reasonDBAPasswordSecretResolved {
 		setCondition(cluster, conditionDBAPasswordSecretResolved, metav1.ConditionTrue, reason, msg)
-		return false, nil
+		return false, 0, nil
 	}
 	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionDBAPasswordSecretResolved)
 	same := was != nil && was.Status == metav1.ConditionFalse && was.Reason == reason && was.Message == msg
@@ -178,10 +178,10 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordSecret(ctx context.Context
 			r.statusEvent(cluster, corev1.EventTypeWarning, reason,
 				msg+"; the StatefulSet is left as it is, but a DB Pod that is started again does not start until this is corrected")
 		}
-		return false, nil
+		return false, 0, nil
 	}
 	if !apierrors.IsNotFound(err) {
-		return true, err
+		return true, 0, err
 	}
 	if !same {
 		r.statusEvent(cluster, corev1.EventTypeWarning, reason,
@@ -193,52 +193,23 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordSecret(ctx context.Context
 	setCondition(cluster, conditionProgressing, metav1.ConditionFalse, reason,
 		"waiting for the DBA password Secret named by spec.dbaPasswordSecretRef")
 	if err := r.writeStatus(ctx, cluster); err != nil {
-		return true, err
+		return true, 0, err
 	}
-	return true, readErr
+	if readErr != nil {
+		return true, 0, readErr
+	}
+	return true, r.dbaPasswordRecheck(), nil
 }
 
-// clustersNamingSecret maps a Secret to the clusters in its namespace whose
-// spec.dbaPasswordSecretRef names it.
-func (r *CubridClusterReconciler) clustersNamingSecret(ctx context.Context,
-	secret *metav1.PartialObjectMetadata) []reconcile.Request {
-	var clusters databasev1alpha1.CubridClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(secret.Namespace)); err != nil {
-		logf.FromContext(ctx).Error(err, "Could not list CubridClusters for a changed Secret",
-			"namespace", secret.Namespace, "secret", secret.Name)
-		return nil
-	}
-	var requests []reconcile.Request
-	for _, c := range clusters.Items {
-		if ref := c.Spec.DBAPasswordSecretRef; ref != nil && ref.Name == secret.Name {
-			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&c)})
-		}
-	}
-	return requests
-}
+// defaultDBAPasswordRecheck is how long a cluster whose DBA password Secret
+// does not resolve waits, by default, before it is checked again.
+const defaultDBAPasswordRecheck = 30 * time.Second
 
-// NewSecretMetadataCache returns a cache of the metadata of every Secret in
-// namespaces (every namespace when empty), which the CubridCluster controller
-// watches for the Secrets that spec.dbaPasswordSecretRef names. The manager's
-// own cache holds only the Secrets the operator writes, so it never sees a
-// user's Secret. This cache holds no Secret's data: it is only ever asked for
-// metadata, and a read of any other kind fails rather than starting a cache of
-// it. The cache is added to mgr, which starts it.
-func NewSecretMetadataCache(mgr ctrl.Manager, namespaces map[string]cache.Config) (cache.Cache, error) {
-	c, err := cache.New(mgr.GetConfig(), cache.Options{
-		HTTPClient:                  mgr.GetHTTPClient(),
-		Scheme:                      mgr.GetScheme(),
-		Mapper:                      mgr.GetRESTMapper(),
-		DefaultNamespaces:           namespaces,
-		ReaderFailOnMissingInformer: true,
-	})
-	if err != nil {
-		return nil, err
+func (r *CubridClusterReconciler) dbaPasswordRecheck() time.Duration {
+	if r.DBAPasswordRecheck > 0 {
+		return r.DBAPasswordRecheck
 	}
-	if err := mgr.Add(c); err != nil {
-		return nil, err
-	}
-	return c, nil
+	return defaultDBAPasswordRecheck
 }
 
 // dbaPasswordEnv is the Instance Manager's variable that names the password
