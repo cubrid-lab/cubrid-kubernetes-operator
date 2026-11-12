@@ -75,3 +75,90 @@ func TestBuildInstaller_LeavesConfigUnchanged(t *testing.T) {
 		t.Errorf("overlay left behind: %v", left)
 	}
 }
+
+// deployKustomizeStandIn produces the overlay's text instead of applying real
+// manifests. This lets the test verify both image selection and input piping
+// without touching a Kubernetes cluster.
+const deployKustomizeStandIn = `#!/bin/sh
+case "$1" in
+edit) echo "$*" >> kustomization.yaml ;;
+build) cat "$2/kustomization.yaml" ;;
+esac
+`
+
+// deployKubectlStandIn records the manifest stream received by "apply" and
+// optionally fails to verify that make reports an unsuccessful deployment.
+const deployKubectlStandIn = `#!/bin/sh
+printf '%s\n' "$*" > "$APPLY_ARGS"
+cat > "$APPLY_INPUT"
+[ "$APPLY_FAIL" != 1 ]
+`
+
+// make deploy must not modify the tracked manager config or leave a temporary
+// overlay behind, even when the kubectl apply step fails (#529, #537).
+func TestDeploy_LeavesConfigUnchanged(t *testing.T) {
+	_, here, _, _ := runtime.Caller(0)
+	repo := filepath.Join(filepath.Dir(here), "..", "..")
+	original, err := os.ReadFile(filepath.Join(repo, "config", "manager", "kustomization.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		fail bool
+	}{
+		{name: "apply succeeds"},
+		{name: "apply fails", fail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			manager := filepath.Join(dir, "config", "manager", "kustomization.yaml")
+			if err := os.MkdirAll(filepath.Dir(manager), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(manager, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			kustomize := filepath.Join(bin, "kustomize-stand-in")
+			kubectl := filepath.Join(bin, "kubectl-stand-in")
+			for file, script := range map[string]string{
+				kustomize: deployKustomizeStandIn,
+				kubectl:   deployKubectlStandIn,
+			} {
+				if err := os.WriteFile(file, []byte(script), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			applied := filepath.Join(dir, "applied")
+			args := filepath.Join(dir, "apply-args")
+			fail := "0"
+			if tc.fail {
+				fail = "1"
+			}
+			// Neither manifests generation nor a real cluster command runs.
+			cmd := exec.Command("make", "-C", dir, "-f", filepath.Join(repo, "Makefile"),
+				"-o", "manifests", "-o", kustomize, "deploy",
+				"KUSTOMIZE="+kustomize, "KUBECTL="+kubectl, "IMG=example.com/manager:test")
+			cmd.Env = append(childMakeEnv(), "APPLY_ARGS="+args, "APPLY_INPUT="+applied, "APPLY_FAIL="+fail)
+			out, err := cmd.CombinedOutput()
+			if tc.fail != (err != nil) {
+				t.Errorf("make deploy error = %v (expect failure: %v)\n%s", err, tc.fail, out)
+			}
+			if got, err := os.ReadFile(manager); err != nil || string(got) != string(original) {
+				t.Errorf("tracked manager config changed or was lost: %v\n%s", err, got)
+			}
+			if got, err := os.ReadFile(args); err != nil || strings.TrimSpace(string(got)) != "apply -f -" {
+				t.Errorf("kubectl arguments = %q, error = %v; want apply -f -", got, err)
+			}
+			if got, err := os.ReadFile(applied); err != nil ||
+				!strings.Contains(string(got), "resources:\n- ../../config/default\n") ||
+				!strings.Contains(string(got), "edit set image controller=example.com/manager:test") {
+				t.Errorf("kubectl did not receive the image-overridden overlay: %v\n%s", err, got)
+			}
+			if left, _ := filepath.Glob(filepath.Join(dir, "dist", "overlay.*")); len(left) != 0 {
+				t.Errorf("temporary overlay left after deploy: %v", left)
+			}
+		})
+	}
+}
