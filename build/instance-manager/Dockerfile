@@ -4,7 +4,9 @@
 # all present (validated in docs/poc/RESULTS.md).
 
 ARG GO_IMAGE=golang:1.26
-ARG CUBRID_IMAGE=cubrid/cubrid:11.4
+# Pin the CUBRID 11.4.7.1995 linux/amd64 manifest, not the moving 11.4 tag.
+# Change this digest only after reviewing and rerunning the real-engine tests.
+ARG CUBRID_IMAGE=cubrid/cubrid:11.4@sha256:a8c8792f8092cb4ddf200cf0ab1bb6caac164194d9aec9d6ff2a828c3ec1b604
 
 # The official CUBRID image exists for linux/amd64 only. The manager is built
 # on the build host's own platform and cross-compiled, so an arm64 host does
