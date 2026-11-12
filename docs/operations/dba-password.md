@@ -169,7 +169,12 @@ its DB Pod is started again.
 To undo such a change, put the database's current DBA password back in the
 Secret.
 
-The client-mode login on a terminal is tested with a stand-in for csql, not
-yet against a running CUBRID server (POC-61, question 5, tested the same login
-with `-p`). If a real csql does not prompt in that mode, the check answers
-that it cannot tell, and no change is reported.
+The client-mode login on a terminal was observed once against a running
+CUBRID 11.4.7.1995 server, in Docker, outside the Operator (2026-11-12 UTC,
+#830): csql printed `Enter Password :`, the right value was accepted and a
+wrong one refused with `Incorrect or missing password.`. Before it prompts,
+csql tries the empty password and prints that same refusal, so only what csql
+prints after the prompt decides the answer. The Instance Manager's own check
+is tested with a stand-in for csql, not yet through the Operator on a real
+cluster. If csql does not prompt, the check answers that it cannot tell, and
+no change is reported.
