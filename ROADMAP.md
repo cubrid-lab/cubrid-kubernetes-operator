@@ -615,7 +615,9 @@ the marker and not S11's. On 2026-10-25 it passed three times on the VM lab
 #238 before #575. An HA cluster created without a recovery over retained PVCs
 (S13 `retain` for HA) is not covered: its bootstrap fails over the retained
 data (#798). For a standalone cluster, S13 `retain` and `delete` were added to
-the Kind suite (#615) and have not yet run in CI.
+the Kind suite (#615). Their first CI run, on 2026-11-12, held every check
+and measured the deletion at 2.65 s (`retain`) and 2.45 s (`delete`), from
+which `delete_limit` was set to 1 minute on Kind.
 
 S12 `operator-restart`, a lab-only variant (`lab-installed-ha-s12-operator-restart`,
 `-restore-operator-restart`, #121), deletes the installed manager Pod without a

@@ -2750,11 +2750,11 @@ each in a namespace of its own that enforces Pod Security `restricted`:
   `createdb` line, or the check after the recreation could not see one, and
   the run is blocked. A container that restarted more than once has lost its
   first log, and the run is blocked.
-- `delete_limit` has no value yet, so a run whose checks all held is
-  `blocked` with `time_limit_unset` and records `deleteSeconds` as a
-  baseline; it is never a pass until the limit is set from baselines. Both
-  variants are required in the `kind` lane, so until then the lane does not
-  pass.
+- A run whose checks all held is judged by `delete_limit` (1 minute on
+  Kind, set from the baseline in [Baselines](#baselines)) against
+  `deleteSeconds`. With `E2E_DELETE_LIMIT=0` the run is a baseline again,
+  `blocked` with `time_limit_unset`. Both variants are required in the
+  `kind` lane.
 - The cleanup deletes the cluster, then the recorded claim by name in the
   variant's namespace and only while its UID is the recorded one, then the
   namespace. Nothing outside that namespace is deleted.
@@ -2959,7 +2959,7 @@ measured; **unset** limits have neither a value nor a baseline.
 | `rebuild_limit` | Rebuild requested until the member holds all rows | unset | unset |
 | `backup_limit` | Backup requested until `Completed` or `Failed` | unset | unset |
 | `restore_limit` | Recovery cluster created until `Ready` | unset | unset |
-| `delete_limit` | Cluster deleted until its resources are gone | unset (Kind: `E2E_DELETE_LIMIT`, no default) | unset |
+| `delete_limit` | Cluster deleted until its resources are gone | Kind on a GitHub-hosted runner: 1 minute. VM lab: unset | Kind: measured |
 | `drain_limit` | Drain issued until it finishes or is refused | unset | unset |
 
 S00 uses the same four rules as every other required scenario
@@ -2985,6 +2985,8 @@ no limit is unset. S00 records both limits and the resulting
 | `broker_recovery_limit` | The same; scenario S05, three variants | Slowest of four clients per run, in two runs on 2026-10-05: 1.4 s and 2.4 s (Broker process killed), 0.1 s and 0.2 s (one Broker Pod deleted), 7.7 s and 15.8 s (all read-write Broker Pods deleted) | From the moment the fault was issued to the client's first acknowledged operation after which none failed, taken from each client's history | 1 minute, about four times the slowest run |
 
 | `operator_resync_limit` | The same; scenario S06, both variants | In five runs on 2026-10-05 and 2026-10-06: 12.3 s to 13.5 s (`restart`), 17.5 s to 20.3 s (`absent-during-failover`) | `restart`: from the moment the Operator Pod's deletion was issued until another Operator Pod is available and the status names the master with every condition `True`. `absent-during-failover`: from the moment the Operator's Deployment was scaled back to one until the status names the new master with every condition `True` | 2 minutes |
+
+| `delete_limit` | The same; scenario S13, a standalone cluster, both variants | 2.65 s (`retain`) and 2.45 s (`delete`) in one run on 2026-11-12, [E2E run 43118644220](https://github.com/cubrid-lab/cubrid-kubernetes-operator/actions/runs/43118644220) at `d518b4f`, both `blocked` with `time_limit_unset` and every other check held. The run's `summary.json` was overwritten after the suite by a provisional checkpoint (#807), so the values are taken from `S13/<variant>/timeline.jsonl` in its `e2e-evidence` artifact: `fault_issued` to `outcome_reached`, the same two instants `deleteSeconds` is computed from | `deleteSeconds`: from the moment `kubectl delete cubridcluster --wait=false` was issued until no StatefulSet, Deployment, Service or Pod is left in the namespace (and in `delete` no PVC), as the test's polling saw it | 1 minute. One run is a small sample, and how fast a PVC goes depends on the storage provisioner, so the margin is wider than the usual four times the slowest run |
 
 `stable_period` is a choice, not a measurement: 30 seconds.
 
