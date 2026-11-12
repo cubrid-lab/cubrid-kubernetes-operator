@@ -65,6 +65,15 @@ const (
 	CodeOperationRecordUnreadable = "OperationRecordUnreadable"
 )
 
+// Failure codes of an operation that ended Failed (Operation.FailureCode).
+const (
+	// FailureTargetHoldsDatabase: a restore was refused by the wrong-target
+	// guard, because the target already holds the database (ADR-0008). A
+	// retry of the same request there is refused again until a person
+	// changes what the target holds (#798).
+	FailureTargetHoldsDatabase = "TargetHoldsDatabase"
+)
+
 // writeError answers with status and an ErrorResponse; an empty code is left
 // out.
 func writeError(w http.ResponseWriter, status int, code, msg string) {

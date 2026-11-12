@@ -1091,9 +1091,17 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			}
 			res, err := Restore(ctx, s.cli, s.objects, roots, req)
 			if err != nil {
-				if restoringFailed {
+				switch {
+				case restoringFailed:
 					fail(notRecorded(OpRestoring, err))
-				} else {
+				case errors.Is(err, ErrTargetHoldsDatabase):
+					reason := s.stoppingReason("restore failed: " + err.Error())
+					_ = s.store.Settle(id, func(op *Operation) {
+						op.State = OpFailed
+						op.FailureReason = reason
+						op.FailureCode = FailureTargetHoldsDatabase
+					})
+				default:
 					fail("restore failed: " + err.Error())
 				}
 				return
