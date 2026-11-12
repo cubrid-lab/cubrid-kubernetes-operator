@@ -264,8 +264,9 @@ func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 // was not already so. Matches sets it back to True. The new value is never
 // applied, and neither the StatefulSet nor its Pod is changed. An answer that
 // cannot tell (Unknown, a failed call, no member ready) leaves the condition
-// as it is, so that it does not flap. Nothing is kept between reconciles: an
-// operator that restarts asks again.
+// as it is, so that it does not flap. The member is asked at most once per
+// poll; only the time of the last check is kept, in memory, so an operator
+// that restarts asks again at once.
 func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Context,
 	cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) time.Duration {
 	ref := cluster.Spec.DBAPasswordSecretRef
@@ -280,6 +281,15 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 		(was.Status != metav1.ConditionTrue && was.Reason != reasonDBAPasswordRotationUnsupported) {
 		return poll
 	}
+	// The member is asked at most once per poll: each check is a login to the
+	// database, and a cluster is reconciled on every event of its objects.
+	now := r.now()
+	if last, ok := r.dbaPasswordCheckedAt.Load(cluster.UID); ok {
+		if since := now.Sub(last.(time.Time)); since >= 0 && since < poll {
+			return poll - since
+		}
+	}
+	r.dbaPasswordCheckedAt.Store(cluster.UID, now)
 	log := logf.FromContext(ctx)
 	member := memberNames(cluster, 1)[0]
 	check, err := r.DBAPassword.CheckDBAPassword(ctx, member, cluster.Namespace)

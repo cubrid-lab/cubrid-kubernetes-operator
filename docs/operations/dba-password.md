@@ -132,10 +132,10 @@ applied. The running server keeps the password the database has; the kubelet
 updates the mounted file, but nothing sets it as the password.
 
 **How a changed value is reported.** While the cluster's member is ready, the
-Operator asks its Instance Manager every 5 minutes, and at each reconcile of
-the cluster, whether the value is still the database's DBA password
-(`GET /v1/dba-password`). The Instance Manager logs in as `dba` through the
-running server, in client mode (`csql -u dba -c "SELECT 1" <db>@localhost`),
+Operator asks its Instance Manager, at most once every 5 minutes and at once
+after the Operator restarts, whether the value is still the database's DBA
+password (`GET /v1/dba-password`). The Instance Manager logs in as `dba`
+through the running server, in client mode (`csql -u dba -c "SELECT 1" <db>@localhost`),
 and types the file's value at csql's `Enter Password` prompt on a
 pseudo-terminal, as the password step does. The login changes nothing, and no
 copy or hash of the value is stored. So it also notices a password changed in

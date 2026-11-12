@@ -87,10 +87,27 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 	}, funcr.Options{Verbosity: 2}))
 
 	const poll = 2 * time.Minute
+	// Each reconcileOnce happens one poll after the one before, by the
+	// reconciler's clock, so that every reconcile asks the member; the member
+	// is asked at most once per poll.
+	var clock struct {
+		sync.Mutex
+		offset time.Duration
+	}
+	now := func() time.Time {
+		clock.Lock()
+		defer clock.Unlock()
+		return time.Now().Add(clock.offset)
+	}
+	advance := func(d time.Duration) {
+		clock.Lock()
+		defer clock.Unlock()
+		clock.offset += d
+	}
 	newReconciler := func(checker DBAPasswordChecker) *CubridClusterReconciler {
 		return &CubridClusterReconciler{
 			Client: k8sClient, APIReader: k8sClient, Scheme: k8sClient.Scheme(),
-			Recorder: record.NewFakeRecorder(100), DBAPassword: checker, DBAPasswordPoll: poll,
+			Recorder: record.NewFakeRecorder(100), DBAPassword: checker, DBAPasswordPoll: poll, Clock: now,
 		}
 	}
 	getCluster := func(key types.NamespacedName) *databasev1alpha1.CubridCluster {
@@ -104,6 +121,7 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		return c
 	}
 	reconcileOnce := func(r *CubridClusterReconciler, key types.NamespacedName) reconcile.Result {
+		advance(poll)
 		res, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
 		return res
@@ -254,6 +272,29 @@ var _ = Describe("A changed DBA password Secret value (#824)", func() {
 		res = reconcileOnce(r, key)
 		Expect(checker.calls()).To(Equal([]string{testNamespace + "/dba-rotation-unready-0"}))
 		Expect(res.RequeueAfter).To(Equal(poll))
+	})
+
+	It("asks the member at most once per poll, however often the cluster is reconciled", func() {
+		checker := &fakeDBAPasswordChecker{}
+		r := newReconciler(checker)
+		key := runningCluster("dba-throttled", r)
+		checker.set(instancemanager.DBAPasswordMatches, "", nil)
+		reconcileOnce(r, key)
+		asked := len(checker.calls())
+		Expect(asked).To(BeNumerically(">=", 1))
+
+		By("reconciling again at once, as an event of the cluster's objects does")
+		for range 3 {
+			res, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(res.RequeueAfter).To(BeNumerically("<=", poll))
+		}
+		Expect(checker.calls()).To(HaveLen(asked), "the member was asked again before the poll interval ended")
+
+		By("asking again once the poll interval has passed")
+		reconcileOnce(r, key)
+		Expect(checker.calls()).To(HaveLen(asked + 1))
 	})
 })
 

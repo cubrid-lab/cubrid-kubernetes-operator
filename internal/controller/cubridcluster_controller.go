@@ -183,6 +183,11 @@ type CubridClusterReconciler struct {
 	// unresolvedSince holds, per cluster, since when PrimaryResolved has not
 	// been True (unresolvedStart).
 	unresolvedSince sync.Map
+	// dbaPasswordCheckedAt holds, per cluster UID, when its member was last
+	// asked whether the DBA password Secret's value is the database's
+	// password (reconcileDBAPasswordRotation), so that a burst of reconciles
+	// does not log in to the database once each.
+	dbaPasswordCheckedAt sync.Map
 }
 
 // conflictKey names one group of a cluster's writes in conflicts.
