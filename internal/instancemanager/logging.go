@@ -229,7 +229,8 @@ func (s *Server) log() *slog.Logger {
 
 // polledPaths are asked at every probe or reconcile. They are logged below
 // info unless the status of the answer changed.
-var polledPaths = map[string]bool{"/livez": true, "/readyz": true, "/v1/role": true, "/v1/ha/status": true}
+var polledPaths = map[string]bool{"/livez": true, "/readyz": true, "/v1/role": true, "/v1/ha/status": true,
+	"/v1/dba-password": true}
 
 // usableRequestID is what a caller's request ID must look like to be kept.
 var usableRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
