@@ -49,6 +49,19 @@ type StdinCLI interface {
 	RunWithStdin(ctx context.Context, stdin, name string, args ...string) (string, error)
 }
 
+// TerminalCLI is a CLI that can also run a command on a pseudo-terminal and
+// type a line at its prompt. csql reads a password only at its terminal
+// prompt or from -p, its argv (docs/poc/RESULTS.md, POC-61).
+type TerminalCLI interface {
+	CLI
+	// RunOnTerminal runs a command on a new pseudo-terminal, its controlling
+	// terminal, and types input and a line feed once prompt appears in what
+	// it prints. It returns what the command printed after the prompt, and
+	// whether the prompt appeared: a command that ends, or whose context
+	// ends, before the prompt is typed nothing.
+	RunOnTerminal(ctx context.Context, prompt, input, name string, args ...string) (out string, prompted bool, err error)
+}
+
 // ErrOutputUnread marks a command whose output could not be read. ExecCLI
 // returns it whatever the command's exit status was.
 var ErrOutputUnread = errors.New("the command's output could not be read")

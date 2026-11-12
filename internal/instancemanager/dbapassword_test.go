@@ -38,6 +38,11 @@ const (
 	callEmptyLogin = "csql -u dba -S appdb -c SELECT 1"
 	callSetPass    = "csql -u dba -S appdb"
 	outRefused     = "ERROR: Incorrect or missing password.\n"
+	// outAccepted is what csql prints for a login whose SELECT 1 ran.
+	outAccepted = "1 row selected.\n"
+	// msgNoPrompt is part of the error of a login on a terminal that did
+	// not prompt.
+	msgNoPrompt = "did not prompt"
 )
 
 // passwordCLI stands in for csql on a stopped database (docs/poc/RESULTS.md,
@@ -60,6 +65,45 @@ type passwordCLI struct {
 	// login prints, whatever the password.
 	loginOut string
 	loginErr error
+	// current is the DBA password the database has when set is true.
+	current string
+	// typed is every line typed at a terminal prompt.
+	typed []string
+	// terminal, when set, answers every login on a terminal.
+	terminal *terminalAnswer
+}
+
+// terminalAnswer is what a login on a terminal returns.
+type terminalAnswer struct {
+	out      string
+	prompted bool
+	err      error
+}
+
+// callTerminalLogin is how passwordCLI records a login on a terminal.
+const callTerminalLogin = "terminal csql -u dba -S appdb -c SELECT 1"
+
+// RunOnTerminal stands in for csql on a pseudo-terminal (POC-61): with a
+// password set it prompts, and the login is accepted only with that
+// password; a wrong one prints "Incorrect or missing password" and exits 1.
+func (c *passwordCLI) RunOnTerminal(_ context.Context, _, input, name string, args ...string) (string, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, "terminal "+name+" "+strings.Join(args, " "))
+	c.typed = append(c.typed, input)
+	if c.terminal != nil {
+		return c.terminal.out, c.terminal.prompted, c.terminal.err
+	}
+	if c.set && input == c.current {
+		return "\n" + outAccepted, true, nil
+	}
+	return "\n" + outRefused, true, exitStatus1(c.t)
+}
+
+// alterPassword is the password an ALTER USER statement fed on stdin sets.
+func alterPassword(statement string) string {
+	value := strings.TrimSuffix(strings.TrimPrefix(statement, "ALTER USER dba PASSWORD '"), "';\n")
+	return strings.ReplaceAll(value, "''", "'")
 }
 
 func (c *passwordCLI) Run(_ context.Context, name string, args ...string) (string, error) {
@@ -85,7 +129,7 @@ func (c *passwordCLI) RunWithStdin(_ context.Context, stdin, name string, args .
 		out = "Execute OK. (0.001 sec) Committed. (0.000 sec)\n"
 	}
 	if !c.alterIgnored && !strings.Contains(out, "ERROR") {
-		c.set = true
+		c.set, c.current = true, alterPassword(stdin)
 	}
 	return out, nil
 }
@@ -172,21 +216,168 @@ func TestApplyDBAPassword_AnEmptyLoginStillAcceptedIsAFailure(t *testing.T) {
 }
 
 // A database whose empty-password login is already refused has a password:
-// a restart after the step, or a restored database, is left as it is.
-func TestApplyDBAPassword_SkipsADatabaseThatHasAPassword(t *testing.T) {
-	cli := &passwordCLI{t: t, set: true}
+// a restart after the step, or a restored database. It is left as it is once
+// a login with the requested password, typed at csql's prompt on a terminal,
+// is accepted.
+func TestApplyDBAPassword_ConfirmsAPasswordAlreadySetToTheRequestedOne(t *testing.T) {
+	cli := &passwordCLI{t: t, set: true, current: testPassword}
 	logs, err := applyForTest(t, cli, testPassword)
 	if err != nil {
 		t.Fatalf("ApplyDBAPassword: %v", err)
 	}
-	if got := cli.recorded(); len(got) != 1 || got[0] != callEmptyLogin {
-		t.Errorf("commands = %q, want only the empty-login check", got)
+	want := []string{callEmptyLogin, callTerminalLogin}
+	if got := cli.recorded(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("commands = %q\nwant       %q", got, want)
+	}
+	if len(cli.typed) != 1 || cli.typed[0] != testPassword {
+		t.Errorf("typed = %q, want the requested password once", cli.typed)
 	}
 	if len(cli.stdins) != 0 {
 		t.Errorf("an ALTER was fed: %q", cli.stdins)
 	}
 	if lines := withEvent(logLines(t, bytes.NewBufferString(logs)), eventDBAPasswordAlreadySet); len(lines) != 1 {
 		t.Errorf("want one %s line, got %v", eventDBAPasswordAlreadySet, lines)
+	}
+	if strings.Contains(logs, testPassword) {
+		t.Errorf("the log carries the password:\n%s", logs)
+	}
+}
+
+// A database that has a password other than the requested one, such as a
+// database restored from a backup of a database with another password, is
+// not given the requested one: CUBRID does not change a password without the
+// old one (POC-61, Q4). The step fails and says why, never with either value.
+func TestApplyDBAPassword_RefusesAPasswordThatIsNotTheRequestedOne(t *testing.T) {
+	const other = otherSourcePassword
+	cli := &passwordCLI{t: t, set: true, current: other}
+	logs, err := applyForTest(t, cli, testPassword)
+	if err == nil {
+		t.Fatal("ApplyDBAPassword succeeded on a database whose password is not the requested one")
+	}
+	if !strings.Contains(err.Error(), "not the requested") {
+		t.Errorf("err = %v, want it to say the password is not the requested one", err)
+	}
+	for _, value := range []string{testPassword, other} {
+		if strings.Contains(err.Error(), value) || strings.Contains(logs, value) {
+			t.Errorf("a password reached the error or the log:\nerr=%v\n%s", err, logs)
+		}
+	}
+	if len(cli.stdins) != 0 {
+		t.Errorf("an ALTER was fed: %q", cli.stdins)
+	}
+	if lines := withEvent(logLines(t, bytes.NewBufferString(logs)), eventDBAPasswordAlreadySet); len(lines) != 0 {
+		t.Errorf("a refused password was logged as already set: %v", lines)
+	}
+}
+
+// A login on a terminal that neither connected nor was refused for its
+// password says nothing about the password: the step fails, and does not
+// report the password as set.
+func TestApplyDBAPassword_AnUnansweredTerminalLoginIsAFailure(t *testing.T) {
+	for name, answer := range map[string]terminalAnswer{
+		"no prompt":       {out: "", prompted: false, err: context.DeadlineExceeded},
+		"database in use": {out: "\nERROR: Unable to mount disk volume.\n", prompted: true, err: errors.New("exit status 1")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cli := &passwordCLI{t: t, set: true, current: testPassword, terminal: &answer}
+			logs, err := applyForTest(t, cli, testPassword)
+			if err == nil {
+				t.Fatal("ApplyDBAPassword succeeded on a login that did not answer")
+			}
+			if lines := withEvent(logLines(t, bytes.NewBufferString(logs)), eventDBAPasswordAlreadySet); len(lines) != 0 {
+				t.Errorf("an unanswered login was logged as already set: %v", lines)
+			}
+		})
+	}
+}
+
+// A CLI that cannot run csql on a terminal cannot confirm a password that is
+// already set; the step fails instead of passing over it.
+func TestApplyDBAPassword_RefusesACLIWithoutATerminal(t *testing.T) {
+	inner := &passwordCLI{t: t, set: true, current: testPassword}
+	_, err := applyForTest(t, stdinOnly{inner}, testPassword)
+	if err == nil {
+		t.Fatal("ApplyDBAPassword succeeded without a way to confirm the password")
+	}
+}
+
+// stdinOnly hides RunOnTerminal from the CLI it wraps.
+type stdinOnly struct{ StdinCLI }
+
+// dbaPasswordAccepted reads csql's answer on the terminal: accepted after
+// the prompt with exit 0, refused when csql says the password is wrong, and
+// an error for anything else. No error carries what csql printed, since a
+// terminal may echo what was typed.
+func TestDBAPasswordAccepted(t *testing.T) {
+	tests := []struct {
+		name     string
+		answer   terminalAnswer
+		accepted bool
+		wantErr  string
+	}{
+		{name: "accepted", answer: terminalAnswer{out: "\n" + outAccepted, prompted: true}, accepted: true},
+		{name: "refused", answer: terminalAnswer{out: "\n" + outRefused, prompted: true, err: errors.New("exit status 1")}},
+		{name: "no prompt, refused", answer: terminalAnswer{out: outRefused, err: errors.New("exit status 1")}, wantErr: msgNoPrompt},
+		{name: "no prompt, ended", answer: terminalAnswer{err: context.DeadlineExceeded}, wantErr: msgNoPrompt},
+		{name: "no prompt, exit 0", answer: terminalAnswer{out: outAccepted}, wantErr: msgNoPrompt},
+		{name: "other failure", answer: terminalAnswer{out: "\nERROR: Unable to mount " + testPassword + "\n", prompted: true,
+			err: errors.New("exit status 1")}, wantErr: "neither"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := &passwordCLI{t: t, terminal: &tc.answer}
+			accepted, err := dbaPasswordAccepted(context.Background(), cli, dbName, testPassword)
+			if tc.wantErr == "" {
+				if err != nil || accepted != tc.accepted {
+					t.Fatalf("dbaPasswordAccepted = %v, %v; want %v", accepted, err, tc.accepted)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("dbaPasswordAccepted = %v, %v; want an error naming %q", accepted, err, tc.wantErr)
+			}
+			if err != nil && (strings.Contains(err.Error(), testPassword) || strings.Contains(err.Error(), "mount")) {
+				t.Errorf("the error carries csql's output: %v", err)
+			}
+			if got := cli.recorded(); len(got) != 1 || got[0] != callTerminalLogin {
+				t.Errorf("commands = %q, want one login on a terminal", got)
+			}
+			for _, call := range cli.recorded() {
+				if strings.Contains(call, testPassword) {
+					t.Errorf("an argv carries the password: %q", call)
+				}
+			}
+		})
+	}
+}
+
+// A slave seeded from its master's backup carries the master's password,
+// which replicates and is never set on the slave (POC-61, Q3). Its password
+// is only confirmed: the requested one passes, and no password or another
+// one fails without any statement fed.
+func TestConfirmDBAPassword(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		set     bool
+		current string
+		ok      bool
+	}{
+		{name: "requested", set: true, current: testPassword, ok: true},
+		{name: "another", set: true, current: otherSourcePassword},
+		{name: "none", set: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := &passwordCLI{t: t, set: tc.set, current: tc.current}
+			var buf bytes.Buffer
+			err := confirmDBAPassword(context.Background(), cli, testLogger(&buf, slog.LevelDebug), dbName, testPassword)
+			if (err == nil) != tc.ok {
+				t.Fatalf("confirmDBAPassword = %v, want ok=%v", err, tc.ok)
+			}
+			if len(cli.stdins) != 0 {
+				t.Errorf("a statement was fed on a seeded slave: %q", cli.stdins)
+			}
+			if err != nil && strings.Contains(err.Error(), testPassword) || strings.Contains(buf.String(), testPassword) {
+				t.Errorf("the password reached the error or the log: %v\n%s", err, buf.String())
+			}
+		})
 	}
 }
 
@@ -277,16 +468,27 @@ func TestReadDBAPassword(t *testing.T) {
 }
 
 // fakeCSQL stands in for csql in a real child process: it records its argv,
-// its environment and its stdin, and behaves as passwordCLI does.
+// its environment and its stdin, and behaves as passwordCLI does. On a
+// terminal it prompts as csql does, reads one line, and accepts the login
+// only when that line is the password set (POC-61).
 const fakeCSQL = `#!/bin/bash
 printf '%s\n' "$*" >> "${CAPTURE}/argv"
 env >> "${CAPTURE}/env"
 if [ "${@: -2:1}" = "-c" ]; then
+  if [ -t 0 ]; then
+    printf 'Enter Password : '
+    IFS= read -r typed
+    echo
+    if [ -e "${CAPTURE}/set" ] && [ "${typed}" = "$(cat "${CAPTURE}/set")" ]; then echo "1 row selected."; exit 0; fi
+    echo "ERROR: Incorrect or missing password."; exit 1
+  fi
   if [ -e "${CAPTURE}/set" ]; then echo "ERROR: Incorrect or missing password."; exit 1; fi
   echo "1 row selected."; exit 0
 fi
-cat >> "${CAPTURE}/stdin"
-: > "${CAPTURE}/set"
+statement=$(cat)
+printf '%s\n' "${statement}" >> "${CAPTURE}/stdin"
+value=${statement#"ALTER USER dba PASSWORD '"}
+printf '%s' "${value%"';"}" > "${CAPTURE}/set"
 echo "Execute OK."
 `
 
@@ -323,8 +525,8 @@ func TestApplyDBAPassword_LeaksTheValueNowhere(t *testing.T) {
 	if err := ApplyDBAPassword(context.Background(), cli, logger, dbName, password); err != nil {
 		t.Fatalf("ApplyDBAPassword: %v", err)
 	}
-	// A second run finds the password set and changes nothing; its error, if
-	// any, is checked too.
+	// A second run finds the password set, confirms it by a login on a
+	// terminal and changes nothing; its error, if any, is checked too.
 	err = ApplyDBAPassword(context.Background(), cli, logger, dbName, password)
 	if err != nil && strings.Contains(err.Error(), testPassword) {
 		t.Errorf("the error carries the password: %v", err)
@@ -347,8 +549,8 @@ func TestApplyDBAPassword_LeaksTheValueNowhere(t *testing.T) {
 			t.Errorf("the password is in the %s:\n%s", where.name, where.text)
 		}
 	}
-	if strings.Count(read("argv"), "\n") != 4 {
-		t.Errorf("csql ran %d times, want 4 (check, set, check, check):\n%s",
+	if strings.Count(read("argv"), "\n") != 5 {
+		t.Errorf("csql ran %d times, want 5 (check, set, check, check, login on a terminal):\n%s",
 			strings.Count(read("argv"), "\n"), read("argv"))
 	}
 	if err != nil {
@@ -400,4 +602,28 @@ func (stdinFailCLI) Run(context.Context, string, ...string) (string, error) {
 
 func (stdinFailCLI) RunWithStdin(context.Context, string, string, ...string) (string, error) {
 	return "echoed " + testPassword, errors.New("exit status 1")
+}
+
+// LoggingCLI logs a login on a terminal as a command, without its output,
+// which may hold what was typed.
+func TestLoggingCLI_RunOnTerminalLogsNoOutput(t *testing.T) {
+	var buf bytes.Buffer
+	inner := &passwordCLI{t: t, terminal: &terminalAnswer{out: "echoed " + testPassword, prompted: true,
+		err: errors.New("exit status 1")}}
+	cli := LoggingCLI{CLI: inner, Logger: testLogger(&buf, slog.LevelDebug)}
+	out, prompted, err := cli.RunOnTerminal(context.Background(), csqlPasswordPrompt, testPassword, "csql",
+		emptyLoginArgs(dbName)...)
+	if !prompted || err == nil || !strings.Contains(out, testPassword) {
+		t.Fatalf("RunOnTerminal = %q, %v, %v; want the inner answer returned to the caller", out, prompted, err)
+	}
+	if strings.Contains(buf.String(), testPassword) {
+		t.Errorf("the log carries the output or the input:\n%s", buf.String())
+	}
+	if lines := withEvent(logLines(t, &buf), eventCommand); len(lines) != 1 {
+		t.Errorf("want one command line, got %v", lines)
+	}
+	if _, _, err := (LoggingCLI{CLI: &argvOnlyCLI{}, Logger: testLogger(&buf, slog.LevelDebug)}).RunOnTerminal(
+		context.Background(), csqlPasswordPrompt, testPassword, "csql"); err == nil {
+		t.Error("a CLI without a terminal was reported as having run the command")
+	}
 }

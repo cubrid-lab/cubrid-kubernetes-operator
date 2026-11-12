@@ -164,6 +164,20 @@ func (c LoggingCLI) RunWithStdin(ctx context.Context, stdin, name string, args .
 	return out, err
 }
 
+// RunOnTerminal runs a command on a terminal through the wrapped CLI and
+// logs it as Run does, but never its output, nor the line typed: a terminal
+// may print back what was typed.
+func (c LoggingCLI) RunOnTerminal(ctx context.Context, prompt, input, name string, args ...string) (string, bool, error) {
+	inner, ok := c.CLI.(TerminalCLI)
+	if !ok {
+		return "", false, errNoTerminal
+	}
+	start := time.Now()
+	out, prompted, err := inner.RunOnTerminal(ctx, prompt, input, name, args...)
+	c.logCommand(ctx, start, out, err, false, name, args)
+	return out, prompted, err
+}
+
 // logCommand logs one command that ran; withOutput adds the end of the
 // output of a failed one.
 func (c LoggingCLI) logCommand(ctx context.Context, start time.Time, out string, err error, withOutput bool,

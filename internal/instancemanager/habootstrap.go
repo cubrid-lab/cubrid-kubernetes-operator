@@ -49,7 +49,8 @@ type HAConfig struct {
 	// Locale is the locale of a database this member creates.
 	Locale string
 	// DBAPasswordFile is the file holding the DBA password set on a database
-	// this member creates (DBAPasswordFileEnv). Empty sets none.
+	// this member creates or restores, and checked on one it restores
+	// (DBAPasswordFileEnv). Empty sets and checks none.
 	DBAPasswordFile string
 }
 

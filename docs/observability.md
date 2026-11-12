@@ -722,23 +722,43 @@ locks) never starts there; that is by design.
 
 When `CUBRID_DBA_PASSWORD_FILE` names a file in the database container, the
 Instance Manager sets that file's value as the DBA password of a database it
-or the entrypoint has just created. A new standalone database gets it from
-`instance-manager apply-dba-password`, which the entrypoint runs before each
-start of the server. The HA bootstrap member gets it right after its
+or the entrypoint has just created or restored. A new standalone database gets
+it from `instance-manager apply-dba-password`, which the entrypoint runs before
+each start of the server. The HA bootstrap member gets it right after its
 `createdb`, before heartbeat starts; the slaves receive it by replication
-(docs/poc/RESULTS.md, POC-61). No line carries the value or csql's output
-of the statement:
+(docs/poc/RESULTS.md, POC-61). A restored database gets it after `restoredb`,
+before its restore is recorded and before the server or heartbeat starts.
+
+A database that already has a password is not changed: the Instance Manager
+runs `csql -u dba -S <db> -c "SELECT 1"` on a pseudo-terminal, types the
+requested password at csql's `Enter Password` prompt, and goes on only when
+that login is accepted. A database whose password is another one, such as a
+database restored from a backup of a database with another password, cannot
+be given the requested one: CUBRID does not change a password without the old
+one (POC-61, Q4). A slave seeded from its master's backup is never given a
+password of its own; its password, the master's, is only checked.
+
+No line carries the value, csql's output of the statement, or what csql
+printed on the terminal:
 
 | `event` | Level | Fields | What it means |
 |---|---|---|---|
 | `dba_password_applied` | info | | The password was set: csql printed no error and a `dba` login with the empty password is now refused |
-| `dba_password_already_set` | info | | A `dba` login with the empty password was already refused, so a password is set and nothing was changed (a restart after the step, or a restored database) |
+| `dba_password_already_set` | info | | A `dba` login with the empty password was refused and a login with the requested password, typed on a terminal, was accepted, so nothing was changed (a restart after the step, or a restored database whose source had the requested password) |
 | `dba_password_not_requested` | info | | `instance-manager apply-dba-password` ran without `CUBRID_DBA_PASSWORD_FILE` and changed nothing |
-| `dba_password_failed` | error | `err` | The standalone step failed: the file is missing, empty, holds a NUL, a carriage return or an inner line feed, or is longer than 256 bytes; csql reported an error; or an empty-password login is still accepted. The entrypoint then logs `could not set the requested DBA password`, does not start the server, and the container ends and is started again |
+| `dba_password_failed` | error | `err` | The standalone step failed: the file is missing, empty, holds a NUL, a carriage return or an inner line feed, or is longer than 256 bytes; csql reported an error; an empty-password login is still accepted; the database's password is not the requested one; or the login on a terminal did not prompt or failed for another reason. The entrypoint then logs `could not set the requested DBA password`, does not start the server, and the container ends and is started again |
 
 On the HA bootstrap member the same failures end the bootstrap operation
 `Failed` with that reason, heartbeat is not started, and the next attempt
 creates the database again.
+
+On a restore the same failures end the restore operation `Failed` with that
+reason, nothing is started, and the restored database and its registration
+are removed, as after a failed `restoredb` (ADR-0008). A failure reason that
+says `the database's DBA password is not the requested one` will not go away
+by retrying: restore a backup whose source had the requested password, or no
+password, or request the source's password. An unusable password file fails
+the restore before anything is downloaded.
 
 ### Runbook: a slave whose copy of the master's log does not grow
 

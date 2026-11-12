@@ -243,8 +243,10 @@ start_cubrid() {
       # start, so a restart after a crash between createdb and this step sets
       # it then; the manager leaves a database that has a password as it is.
       # A server asked for a password is never started without one: a failure
-      # ends the container, and the Pod is restarted. A restored database
-      # keeps the password of its source and is not touched here.
+      # ends the container, and the Pod is restarted. The manager also fails
+      # when the database has a password other than the requested one. A
+      # restored database is not touched here: the restore gives it the
+      # requested password, or checks it, before it is first started.
       if [ "${CUBRID_BOOTSTRAP}" = "new" ] && [ -n "${CUBRID_DBA_PASSWORD_FILE:-}" ]; then
         log "setting the requested DBA password of '${CUBRID_DB}' before the server starts"
         "${IM_BIN}" apply-dba-password \

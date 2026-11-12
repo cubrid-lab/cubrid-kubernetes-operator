@@ -72,7 +72,8 @@ func main() {
 	// "instance-manager apply-dba-password" sets the requested DBA password
 	// on the stopped standalone database. The entrypoint runs it before every
 	// start of the server when CUBRID_DBA_PASSWORD_FILE is set; a database
-	// that already has a password is left as it is.
+	// that already has a password is left as it is when that password is the
+	// requested one, and fails the step otherwise.
 	if len(os.Args) > 1 && os.Args[1] == "apply-dba-password" {
 		ctx, cancel := context.WithTimeout(context.Background(), applyDBAPasswordTimeout)
 		cli := instancemanager.LoggingCLI{CLI: instancemanager.ExecCLI{Logger: logger}, Logger: logger}
@@ -326,8 +327,9 @@ func haConfigFromEnv() instancemanager.HAConfig {
 }
 
 // applyDBAPassword sets the DBA password from the file DBAPasswordFileEnv
-// names on the stopped standalone database CUBRID_DB, unless it has one
-// (instancemanager.ApplyDBAPassword). Unset, it does nothing.
+// names on the stopped standalone database CUBRID_DB, unless it has one, which
+// must then be the requested one (instancemanager.ApplyDBAPassword). Unset, it
+// does nothing.
 func applyDBAPassword(ctx context.Context, logger *slog.Logger, cli instancemanager.CLI) error {
 	path := os.Getenv(instancemanager.DBAPasswordFileEnv)
 	if path == "" {
