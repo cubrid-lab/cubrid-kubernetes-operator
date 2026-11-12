@@ -277,6 +277,9 @@ var _ = Describe("Manager", func() {
 	// HA bootstrap on a real engine: one database, seeded peers (linux/amd64 only).
 	haBootstrapScenario()
 
+	// A standalone cluster with a DBA password from a Secret (linux/amd64 only).
+	dbaPasswordScenario()
+
 	// Wiring only: the DB Pods run test/fakeim, which serves the Instance
 	// Manager API over a scripted CLI. There is no CUBRID in this scenario and
 	// a pass is never real-database, replication or failover evidence.

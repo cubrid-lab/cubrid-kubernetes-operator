@@ -115,9 +115,14 @@ prove that a client can run SQL.
 
 ## Security limitations
 
-- **The DBA password is empty.** Every database is created with an empty
-  DBA password (`dbaPasswordSecretRef` is rejected in `v1alpha1`, #801), so
-  every client the Broker NetworkPolicy admits can connect as `dba`.
+- **The DBA password is empty unless a standalone cluster names one.** A
+  standalone cluster can take its DBA password from a Secret with
+  `spec.dbaPasswordSecretRef`
+  ([docs/operations/dba-password.md](./docs/operations/dba-password.md)).
+  The API refuses the field on an HA cluster, and every other database is
+  created with an empty DBA password (#801), so every client the Broker
+  NetworkPolicy admits can connect to it as `dba`. Changing the password
+  later is not supported.
 - **No traffic is encrypted:** not between clients and Brokers, Brokers and
   the database, members, or the Operator and the Instance Manager. The
   Instance Manager requires a bearer token.
@@ -144,6 +149,9 @@ These pages hold the details that used to be in this README:
   the `MemberPlacement` Condition.
 - [Voluntary disruption](./docs/operations/voluntary-disruption.md): the
   PodDisruptionBudgets and what a node drain can take.
+- [DBA password](./docs/operations/dba-password.md): giving a standalone
+  cluster its DBA password from a Secret, what the cluster reports, and what
+  is not supported.
 
 ## Contributing
 

@@ -127,8 +127,23 @@ spec:
                 x-kubernetes-list-type: map
               dbaPasswordSecretRef:
                 description: |-
-                  dbaPasswordSecretRef references the DBA password Secret. It is reserved:
-                  nothing applies it yet, so a cluster that sets it is rejected.
+                  dbaPasswordSecretRef names a key of a Secret in the cluster's namespace
+                  that holds the password of the database's DBA user. Omitted, the
+                  database is created with an empty DBA password.
+
+                  The DB container alone mounts the key read-only as a file, and the
+                  operator writes the value into no object, status, Event or log. The
+                  value must not be empty, may end with one line feed, which is not part
+                  of the password, and must otherwise hold no line feed, carriage return
+                  or NUL byte, and at most 256 bytes. A new database gets the password
+                  before its server first starts; a database restored from a backup keeps
+                  its source's password, so the key must hold that password. The
+                  StatefulSet is not created until the key resolves, and the condition
+                  DBAPasswordSecretResolved reports it.
+
+                  The reference is fixed when the cluster is created, and is admitted
+                  only on a standalone cluster. Changing the value in the Secret later
+                  does not change the database's password.
                 properties:
                   key:
                     description: The key of the secret to select from.  Must be a
@@ -150,6 +165,14 @@ spec:
                 - key
                 type: object
                 x-kubernetes-map-type: atomic
+                x-kubernetes-validations:
+                - message: dbaPasswordSecretRef.name is required
+                  rule: has(self.name) && self.name.size() > 0
+                - message: dbaPasswordSecretRef.key is required
+                  rule: self.key.size() > 0
+                - message: 'dbaPasswordSecretRef cannot be optional: a missing Secret
+                    would create the database without the password it asks for'
+                  rule: '!has(self.optional) || !self.optional'
               highAvailability:
                 description: highAvailability configures CUBRID HA (ADR-0001, ADR-0005).
                 properties:
@@ -606,10 +629,18 @@ spec:
               rule: (has(self.bootstrap) && has(self.bootstrap.recovery)) == (has(oldSelf.bootstrap)
                 && has(oldSelf.bootstrap.recovery)) && (!(has(self.bootstrap) && has(self.bootstrap.recovery))
                 || self.bootstrap.recovery.manifestUri == oldSelf.bootstrap.recovery.manifestUri)
-            - message: 'dbaPasswordSecretRef is not implemented in v1alpha1: the database
-                is created with an empty DBA password, so the field is rejected instead
-                of being ignored'
-              rule: '!has(self.dbaPasswordSecretRef)'
+            - message: 'dbaPasswordSecretRef is admitted only when highAvailability.enabled
+                is false: a DBA password on an HA cluster waits for a VM-lab check
+                that copylogdb reconnects with a password set (docs/poc/RESULTS.md,
+                POC-61, Q3)'
+              rule: '!has(self.dbaPasswordSecretRef) || !self.highAvailability.enabled'
+            - message: 'dbaPasswordSecretRef cannot be added, removed or changed after
+                the cluster is created: the database keeps the password it was created
+                or restored with, and changing it is not supported'
+              rule: has(self.dbaPasswordSecretRef) == has(oldSelf.dbaPasswordSecretRef)
+                && (!has(self.dbaPasswordSecretRef) || (self.dbaPasswordSecretRef.name
+                == oldSelf.dbaPasswordSecretRef.name && self.dbaPasswordSecretRef.key
+                == oldSelf.dbaPasswordSecretRef.key))
             - message: database names are immutable; existing names must be preserved
               rule: oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))
           status:

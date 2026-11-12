@@ -484,8 +484,8 @@ The samples in this section are the original proposal. The `v1alpha1`
 fields are those of the CRD (`api/v1alpha1/cubridcluster_types.go`). It has
 no `broker`, `credentials`, `config`, `scheduling` or `storage.logs` field:
 the Operator runs two Broker Pods per access mode (`brokerReplicas` in
-`internal/controller/broker.go`), and `dbaPasswordSecretRef` is rejected
-(see Section 19). It has `fencingPolicy`, `bootstrap`, `objectStorage` and
+`internal/controller/broker.go`), and `dbaPasswordSecretRef` is a top-level
+field of `spec`, admitted only on a standalone cluster (see Section 19). It has `fencingPolicy`, `bootstrap`, `objectStorage` and
 `networkPolicy`, which the sample does not show.
 
 ```yaml
@@ -1557,10 +1557,14 @@ RuntimeDefault` (pod + container), and all Linux capabilities dropped
 (`drop: ["ALL"]`). The operator does not use `pods/exec` (role discovery
 and DB-local ops go through the Instance Manager, ADR-0003).
 Object-storage credentials are referenced by Secret
-(`objectStorage.credentialsSecretRef`), never inlined. A DBA password is not
-supported: `dbaPasswordSecretRef` is rejected by the CRD and the database is
-created with an empty DBA password, so every client the Broker policy admits
-can connect as `dba` (README, "Network access"). The Instance Manager authenticates
+(`objectStorage.credentialsSecretRef`), never inlined. A standalone cluster
+can name its DBA password with `dbaPasswordSecretRef`: only the DB container
+mounts that key, read-only, as a file, the Instance Manager sets it on a new
+database before the server first starts, and the Operator writes the value
+into no object, status, Event or log (docs/operations/dba-password.md). The
+CRD refuses the field on an HA cluster, and a database of a cluster without
+it is created with an empty DBA password, so every client the Broker policy
+admits can connect as `dba` (README, "Network access"). The Instance Manager authenticates
 `/v1` endpoints with a bearer token (the preStop path sends it too; loopback
 is not exempt, ADR-0003), and object-storage credentials come from the manager's env,
 never a request body. Per-cluster ingress NetworkPolicies admit only the

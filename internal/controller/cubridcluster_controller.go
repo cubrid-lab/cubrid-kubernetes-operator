@@ -42,12 +42,15 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	databasev1alpha1 "github.com/cubrid-lab/cubrid-kubernetes-operator/api/v1alpha1"
 	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/metrics"
@@ -156,6 +159,12 @@ type CubridClusterReconciler struct {
 	// keeps the readings in a store of this reconciler's own.
 	Positions    *ApplierPositions
 	ownPositions ApplierPositions
+	// SecretMetadata holds the metadata of the Secrets that
+	// spec.dbaPasswordSecretRef may name (NewSecretMetadataCache); a change of
+	// one starts a reconcile of the clusters that name it. Nil watches none:
+	// a cluster that waits for its Secret is then reconciled again only on
+	// another event.
+	SecretMetadata cache.Cache
 
 	// reports holds, per cluster, the report of the reconcile that is running
 	// for it (reconcileReport).
@@ -412,6 +421,12 @@ func (r *CubridClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// StatefulSet exists, so that it tells a new cluster from an old one.
 	if err := r.recordMemberSpreadDefault(ctx, &cluster); err != nil {
 		return r.failed(ctx, &cluster, "PlacementReconcileFailed", err)
+	}
+
+	// A database is never created without the DBA password its cluster
+	// names: the StatefulSet waits for the Secret.
+	if stop, err := r.reconcileDBAPasswordSecret(ctx, &cluster); stop {
+		return ctrl.Result{}, err
 	}
 
 	// Reconcile the StatefulSet (DB instances + per-ordinal data PVC).
@@ -859,6 +874,13 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 		volumes = append(volumes, haConfVolume(cluster))
 		mounts = append(mounts, haConfMount())
 	}
+	env := append(instanceManagerEnv(cluster), r.timeLimitEnv()...)
+	// Only the DB container mounts the DBA password, read-only.
+	if ref := cluster.Spec.DBAPasswordSecretRef; ref != nil {
+		volumes = append(volumes, dbaPasswordVolumeFor(ref))
+		mounts = append(mounts, corev1.VolumeMount{Name: dbaPasswordVolume, MountPath: dbaPasswordMountPath, ReadOnly: true})
+		env = append(env, dbaPasswordEnv())
+	}
 	// Pod Security Standards "restricted" (#18).
 	security := &corev1.SecurityContext{
 		RunAsNonRoot:             &runAsNonRoot,
@@ -889,7 +911,7 @@ func (r *CubridClusterReconciler) podSpec(cluster *databasev1alpha1.CubridCluste
 		Containers: []corev1.Container{{
 			Name:      appName,
 			Image:     image,
-			Env:       append(instanceManagerEnv(cluster), r.timeLimitEnv()...),
+			Env:       env,
 			Resources: cluster.Spec.Resources,
 			// preStop triggers the ADR-0003 ordered graceful shutdown via the
 			// local Instance Manager; the command sends the Pod's IM_TOKEN.
@@ -1460,7 +1482,13 @@ var clusterEvents = predicate.Or[client.Object](
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CubridClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr)
+	if r.SecretMetadata != nil {
+		secret := &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}}
+		b = b.WatchesRawSource(source.Kind(r.SecretMetadata, secret,
+			handler.TypedEnqueueRequestsFromMapFunc(r.clustersNamingSecret)))
+	}
+	return b.
 		For(&databasev1alpha1.CubridCluster{}, builder.WithPredicates(clusterEvents)).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&appsv1.Deployment{}).
