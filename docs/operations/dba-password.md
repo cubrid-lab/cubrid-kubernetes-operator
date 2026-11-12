@@ -108,12 +108,13 @@ Pod that is started again while the Secret or key is missing cannot mount the
 volume: it stays in `ContainerCreating`, and the kubelet records `FailedMount`
 Events on the Pod, until the Secret is back. With an empty or unusable value,
 the container's password step fails (`dba_password_failed`) and the server is
-not started. Once the StatefulSet exists, the Operator does not check the
-Secret again on a schedule: `DBAPasswordSecretResolved` is brought up to date
-only by the cluster's next reconcile, for any other reason, and can stay
-`True` after the Secret was removed or changed until then (#824). A `True`
-condition says the Secret was usable when last checked, not that a login with
-it works.
+not started. Once the StatefulSet exists, the Operator reconciles the cluster
+again at least every 5 minutes, and reads the Secret again each time, so a
+removed or unusable Secret is reported within about that time. A changed value
+that is still usable is reported as described under "Changing the password is
+not supported" below. A `True` condition says the Secret was usable when last
+checked, not that a login with it works; the interval is between checks, not a
+bound.
 
 ## Restoring from a backup
 
