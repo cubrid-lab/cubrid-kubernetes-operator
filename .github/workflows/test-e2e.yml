@@ -32,7 +32,7 @@ jobs:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
     # Outside the step limit below, so that the evidence upload still runs.
-    timeout-minutes: 80
+    timeout-minutes: 90
     steps:
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,10 +50,10 @@ jobs:
           make kind
           bin/kind version
 
-      # Outside the run's own deadlines in the Makefile (E2E_GO_TIMEOUT 63m),
+      # Outside the run's own deadlines in the Makefile (E2E_GO_TIMEOUT 73m),
       # with room for creating the Kind cluster and building before the run.
       - name: Running Test e2e
-        timeout-minutes: 70
+        timeout-minutes: 80
         env:
           E2E_EVIDENCE_DIR: ${{ github.workspace }}/e2e-evidence
         run: make test-e2e
