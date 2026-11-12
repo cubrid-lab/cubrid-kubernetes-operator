@@ -416,7 +416,7 @@ func (c *argvOnlyCLI) Run(_ context.Context, name string, args ...string) (strin
 }
 
 // The file holds the value and at most one trailing newline. A value that is
-// empty, holds NUL, CR or LF, or is longer than the bound is refused, and no
+// empty, holds NUL/CR/LF or terminal control bytes, or exceeds the bound is refused, and no
 // error carries the content of the file.
 func TestReadDBAPassword(t *testing.T) {
 	dir := t.TempDir()
@@ -436,6 +436,11 @@ func TestReadDBAPassword(t *testing.T) {
 		{name: "inner newline", content: testPassword + "\nsecond", wantErr: "line feed"},
 		{name: "carriage return", content: testPassword + "\r\n", wantErr: "carriage return"},
 		{name: "NUL", content: testPassword + "\x00", wantErr: "NUL"},
+		{name: "tab", content: testPassword + "\t", wantErr: "control byte"},
+		{name: "terminal interrupt", content: testPassword + "\x03", wantErr: "control byte"},
+		{name: "terminal EOF", content: testPassword + "\x04", wantErr: "control byte"},
+		{name: "terminal flow control", content: testPassword + "\x13", wantErr: "control byte"},
+		{name: "terminal erase", content: testPassword + "\x7f", wantErr: "control byte"},
 		{name: "over the bound", content: long + "x" + testPassword, wantErr: "longer than"},
 	}
 	for _, tc := range tests {
