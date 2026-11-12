@@ -318,7 +318,7 @@ spec:
 				}, 15*time.Minute, 2*time.Second).Should(Succeed())
 
 				By("checking that only the cubrid user's group can read the password file")
-				out, err := kubectl("exec", pod, "--", "stat", "-L", "-c", "%a %g", dbaPasswordFile)
+				out, err := kubectl("exec", pod, "-c", "cubrid", "--", "stat", "-L", "-c", "%a %g", dbaPasswordFile)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(Equal("440 1000"))
 
@@ -518,7 +518,7 @@ func (h dbaPasswordHelpers) clusterField(name, jsonPath string) (string, error) 
 // the shell text that gives csql its password option, if any. A test password
 // on csql's command line inside the test Pod is acceptable: it is synthetic.
 func (h dbaPasswordHelpers) csqlOn(member, login, statement string) (string, error) {
-	return h.kubectl("exec", member, "--", "bash", "-c",
+	return h.kubectl("exec", member, "-c", "cubrid", "--", "bash", "-c",
 		`PATH="${CUBRID}/bin:${PATH}" csql -u dba `+login+` "$0" -c "$1" </dev/null`,
 		h.database+"@localhost", statement)
 }
@@ -748,7 +748,7 @@ spec:
 			It("refuses the empty DBA password and accepts the Secret's on every member", func() {
 				for _, member := range members {
 					By("checking that only the cubrid user's group can read the password file on " + member)
-					out, err := h.kubectl("exec", member, "--", "stat", "-L", "-c", "%a %g", dbaPasswordFile)
+					out, err := h.kubectl("exec", member, "-c", "cubrid", "--", "stat", "-L", "-c", "%a %g", dbaPasswordFile)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(strings.TrimSpace(out)).To(Equal("440 1000"), member)
 
