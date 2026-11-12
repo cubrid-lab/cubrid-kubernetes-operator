@@ -397,7 +397,7 @@ type CubridClusterSpec struct {
 	// operator writes the value into no object, status, Event or log. The
 	// value must not be empty, may end with one line feed, which is not part
 	// of the password, and must otherwise hold no line feed, carriage return
-	// or NUL byte, and at most 256 bytes. A new database gets the password
+	// or NUL byte, other ASCII control byte or DEL, and at most 256 bytes. A new database gets the password
 	// before its server first starts; a database restored from a backup keeps
 	// its source's password, so the key must hold that password. The
 	// StatefulSet is not created until the key resolves, and the condition
