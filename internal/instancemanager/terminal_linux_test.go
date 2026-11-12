@@ -133,6 +133,36 @@ func TestExecCLI_RunOnTerminal_TypesThePasswordAtThePrompt(t *testing.T) {
 	}
 }
 
+// The check of a running server logs in in client mode, as db@localhost,
+// through a real pseudo-terminal: the database's password is accepted and
+// another one refused, and neither is on csql's argv or in its environment.
+func TestExecCLI_RunOnTerminal_ChecksThePasswordThroughTheRunningServer(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		typed    string
+		accepted bool
+	}{
+		{name: "the password", typed: testPassword, accepted: true},
+		{name: "a password that is not the database's", typed: testPassword + "-wrong"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			capture := terminalFixture(t, "")
+			accepted, err := runningDBAPasswordAccepted(context.Background(), ExecCLI{}, dbName, tc.typed)
+			if err != nil || accepted != tc.accepted {
+				t.Fatalf("runningDBAPasswordAccepted = %v, %v; want %v", accepted, err, tc.accepted)
+			}
+			argv, err := os.ReadFile(filepath.Join(capture, "argv")) // #nosec G304 -- the test's own capture directory
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(argv)); got != "-u dba -c SELECT 1 "+dbName+"@localhost" {
+				t.Errorf("csql argv = %q, want a client-mode login to %s@localhost", got, dbName)
+			}
+			wantNoPasswordIn(t, capture)
+		})
+	}
+}
+
 // A csql that prompts, then fails for another reason than the password, is
 // an error, and the error does not carry what it printed.
 func TestExecCLI_RunOnTerminal_AnotherFailureIsAnError(t *testing.T) {

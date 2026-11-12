@@ -136,7 +136,28 @@ var errPasswordNotRequested = errors.New("the database's DBA password is not the
 // ended), is an error: it says nothing about the password. No error carries
 // what csql printed, since a terminal may print back what was typed.
 func dbaPasswordAccepted(ctx context.Context, cli TerminalCLI, database, password string) (bool, error) {
-	out, prompted, err := cli.RunOnTerminal(ctx, csqlPasswordPrompt, password, "csql", emptyLoginArgs(database)...)
+	return loginAccepted(ctx, cli, emptyLoginArgs(database), password)
+}
+
+// clientLoginArgs is a csql login as dba in client mode, through the running
+// server of database on this member. Client mode checks the password as
+// standalone mode does (docs/poc/RESULTS.md, POC-61, Q5).
+func clientLoginArgs(database string) []string {
+	return []string{"-u", "dba", "-c", "SELECT 1", database + "@localhost"}
+}
+
+// runningDBAPasswordAccepted is dbaPasswordAccepted for a database whose
+// server runs: the login goes through that server in client mode, and changes
+// nothing.
+func runningDBAPasswordAccepted(ctx context.Context, cli TerminalCLI, database, password string) (bool, error) {
+	return loginAccepted(ctx, cli, clientLoginArgs(database), password)
+}
+
+// loginAccepted runs csql with args on a pseudo-terminal, types password at
+// its prompt, and tells an accepted login from one refused for its password,
+// as dbaPasswordAccepted describes.
+func loginAccepted(ctx context.Context, cli TerminalCLI, args []string, password string) (bool, error) {
+	out, prompted, err := cli.RunOnTerminal(ctx, csqlPasswordPrompt, password, "csql", args...)
 	switch {
 	case !prompted:
 		return false, fmt.Errorf("csql did not prompt for the DBA password on a terminal (%s)", exitOf(err))
