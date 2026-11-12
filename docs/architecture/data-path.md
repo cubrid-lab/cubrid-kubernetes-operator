@@ -185,4 +185,4 @@ replication direction follows the elected CUBRID Master.
   [Failure and recovery](failure-recovery.md#planned-and-partial-behavior).
 - Traffic is not encrypted, and the database is created with an empty DBA
   password in `v1alpha1`
-  ([README — Network access](../../README.md#network-access)).
+  ([Network access](../operations/network-access.md)).

@@ -287,8 +287,8 @@ is replaced by hand or recreated after a failure
 directly; a master needs a planned failover first. A replaced member returns to
 the node of its `local-path` volume. If its request does not fit there, it
 stays `Pending`, and the scheduler cannot move it. To place the data elsewhere,
-take a backup and restore it into a new cluster (the README's "Member
-placement"). Check the requested and available memory of the volume's node
+take a backup and restore it into a new cluster ([Member
+placement](../operations/member-placement.md)). Check the requested and available memory of the volume's node
 before replacing a member, and replace slaves one at a time.
 
 ## What the run checks

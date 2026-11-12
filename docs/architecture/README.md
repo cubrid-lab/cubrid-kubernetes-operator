@@ -139,7 +139,7 @@ namespace; the real names are built from the `CubridCluster` name.
 | Headless Service `demo-instances` and member alias Services `demo-0` … | Stable DNS names for each member, which CUBRID HA and the Operator use | Operator | `reconcileHeadlessService` in `cubridcluster_controller.go`, `reconcileMemberServices` in [`memberservice.go`](../../internal/controller/memberservice.go), [ADR-0004](../adr/0004-ha-hostname-dns.md) |
 | Broker Deployments `demo-broker-rw`, `demo-broker-ro` | Two read-write and two read-only CUBRID Broker Pods, separate from the database Pods | object: Operator; routing: CUBRID | `brokerReplicas` and `reconcileBrokerTier` in [`broker.go`](../../internal/controller/broker.go), [ADR-0002](../adr/0002-broker-routing.md) |
 | Services `demo-rw`, `demo-ro` | Application endpoints (ports 33000 and 33001) that select Broker Pods, never database Pods | Operator | `rwServiceName`, `roServiceName` and `reconcileBrokerService` in `broker.go` |
-| NetworkPolicies `demo-database`, `demo-broker` | Ingress rules for the database and Broker Pods | Operator writes them; the network plugin enforces them | `reconcileNetworkPolicies` in [`networkpolicy.go`](../../internal/controller/networkpolicy.go), [README — Network access](../../README.md#network-access) |
+| NetworkPolicies `demo-database`, `demo-broker` | Ingress rules for the database and Broker Pods | Operator writes them; the network plugin enforces them | `reconcileNetworkPolicies` in [`networkpolicy.go`](../../internal/controller/networkpolicy.go), [Network access](../operations/network-access.md) |
 | Object storage | Where backups go and where HA members are seeded from | outside | [ADR-0007](../adr/0007-backup-execution.md) |
 
 ## Short answers

@@ -72,7 +72,7 @@ databases use an **empty DBA password**. Ingress NetworkPolicies are not
 database authentication and work only with an enforcing CNI. Restrict
 who can create Pods in admitted namespaces. Do not expose this experimental
 configuration to untrusted networks or production data
-([network access](../../README.md#network-access)).
+([network access](network-access.md)).
 
 ## 2. Install and verify SQL — candidate procedure, not yet signed off
 
