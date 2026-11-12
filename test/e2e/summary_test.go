@@ -418,7 +418,13 @@ func concludeRun() error {
 	if note := csqlLedger.note(); note != "" {
 		runSummary.Notes = append(runSummary.Notes, note)
 	}
-	return runSummary.Conclude(evidenceDir(), redactor, runLane(), problems...)
+	err := runSummary.Conclude(evidenceDir(), redactor, runLane(), problems...)
+	// The report just written is the run's final one. "go test" runs the
+	// package's unit tests in this process after the suite, and their own
+	// plans and checkpoints must not replace it (#807): the run gives up its
+	// directory, so nothing more is written there.
+	acquiredEvidenceDir = ""
+	return err
 }
 
 // evidenceHoldSuffix names the marker beside the evidence directory that keeps
