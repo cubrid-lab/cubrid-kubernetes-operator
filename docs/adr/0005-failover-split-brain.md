@@ -456,10 +456,12 @@ Retained-data rejoin/rebuild remain explicit recovery procedures (#116/#117).
   affected.
 - **An Operator that is down or partitioned starts no quarantine.** A
   recorded one stays in force, because the read-write Brokers stay at zero.
-- **Kubernetes evidence is trusted only from a Node that renews its
-  Lease.** A Node cut off from the API server can show `Ready=True` until
-  the node monitor grace period runs out (about 40 s by default). Its Pods'
-  status is not used during that time.
+- **Kubernetes evidence is not a process fence.** A fresh Node
+  Lease, `Ready=True`, or a Pod that disappeared from the API does not
+  prove the old database process stopped. A Node cut off from the API
+  server may retain stale Pod status; the administrative
+  `out-of-service:NoExecute` assertion must be backed by recorded external
+  fencing evidence as described above.
 - **Availability cost.** Writes through `-rw` are refused from the start of
   the quarantine until its release. Then the read-write Broker Pods must be
   recreated, which took 7.7 to 15.8 s in scenario S05 with all of them
