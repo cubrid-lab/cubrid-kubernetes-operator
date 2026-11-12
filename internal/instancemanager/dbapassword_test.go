@@ -176,6 +176,31 @@ func TestApplyDBAPassword_FeedsTheStatementOnStdinOnly(t *testing.T) {
 	}
 }
 
+// Direct callers of ApplyDBAPassword must not bypass file validation. The
+// operation refuses terminal-control input before any SQL command or
+// authentication call, so no half-configured database is created.
+func TestApplyDBAPassword_RejectsTerminalControlBeforeSQL(t *testing.T) {
+	for name, value := range map[string]string{
+		"interrupt": testPassword + "\x03",
+		"eof":       testPassword + "\x04",
+		"erase":     testPassword + "\x7f",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cli := &passwordCLI{t: t}
+			logs, err := applyForTest(t, cli, value)
+			if err == nil || !strings.Contains(err.Error(), "control byte") {
+				t.Fatalf("ApplyDBAPassword err = %v; want control-byte refusal", err)
+			}
+			if len(cli.recorded()) != 0 || len(cli.stdins) != 0 {
+				t.Fatalf("the invalid value reached csql: %q / %q", cli.recorded(), cli.stdins)
+			}
+			if strings.Contains(err.Error(), value) || strings.Contains(logs, value) {
+				t.Fatal("invalid password leaked into error or log")
+			}
+		})
+	}
+}
+
 // A single quote ends an SQL string literal; it is doubled, so the value is
 // set as it was given and cannot end the statement early.
 func TestApplyDBAPassword_DoublesSingleQuotes(t *testing.T) {
