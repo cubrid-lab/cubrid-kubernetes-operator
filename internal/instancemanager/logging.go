@@ -146,6 +146,28 @@ func readOnlyCommand(name string, args []string) bool {
 func (c LoggingCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
 	start := time.Now()
 	out, err := c.CLI.Run(ctx, name, args...)
+	c.logCommand(ctx, start, out, err, true, name, args)
+	return out, err
+}
+
+// RunWithStdin runs a command with stdin through the wrapped CLI and logs it
+// as Run does, but never its output: a command fed a secret on stdin may
+// echo it.
+func (c LoggingCLI) RunWithStdin(ctx context.Context, stdin, name string, args ...string) (string, error) {
+	inner, ok := c.CLI.(StdinCLI)
+	if !ok {
+		return "", errNoStdin
+	}
+	start := time.Now()
+	out, err := inner.RunWithStdin(ctx, stdin, name, args...)
+	c.logCommand(ctx, start, out, err, false, name, args)
+	return out, err
+}
+
+// logCommand logs one command that ran; withOutput adds the end of the
+// output of a failed one.
+func (c LoggingCLI) logCommand(ctx context.Context, start time.Time, out string, err error, withOutput bool,
+	name string, args []string) {
 	attrs := []any{
 		"event", eventCommand,
 		"command", strings.Join(append([]string{name}, args...), " "),
@@ -157,18 +179,21 @@ func (c LoggingCLI) Run(ctx context.Context, name string, args ...string) (strin
 			level = slog.LevelDebug
 		}
 		c.Logger.Log(ctx, level, "Ran command", append(attrs, "exitCode", 0)...)
-		return out, nil
+		return
 	}
 	exitCode := -1
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		exitCode = exit.ExitCode()
 	}
-	tail := strings.TrimSpace(out)
-	if len(tail) > maxOutputTail {
-		tail = tail[len(tail)-maxOutputTail:]
+	attrs = append(attrs, "exitCode", exitCode, "err", err)
+	if withOutput {
+		tail := strings.TrimSpace(out)
+		if len(tail) > maxOutputTail {
+			tail = tail[len(tail)-maxOutputTail:]
+		}
+		attrs = append(attrs, "outputTail", tail)
 	}
-	c.Logger.Warn("Command failed", append(attrs, "exitCode", exitCode, "err", err, "outputTail", tail)...)
-	return out, err
+	c.Logger.Warn("Command failed", attrs...)
 }
 
 // WithLogger makes the server log its requests, refused callers and

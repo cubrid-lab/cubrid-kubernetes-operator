@@ -48,6 +48,9 @@ const (
 	callShutdown    = "manager shutdown"
 	callManagerTerm = "manager term"
 	callHeartbeat   = "cubrid heartbeat start"
+	callCreatedb    = "cubrid createdb"
+	// callApplyPassword is followed by the password file it was given.
+	callApplyPassword = "manager apply-dba-password "
 
 	// cubridStub records its arguments. `createdb` behaves as the real one
 	// does on the pinned image (docs/poc/RESULTS.md, POC-25): it writes its
@@ -94,6 +97,14 @@ fi
   trap 'echo "manager wait-volume-free term" >> "${CALLS}"; exit 1' TERM
   while [ -e "${VOLUME_HELD}" ]; do sleep 0.05; done
   exit "${WAIT_EXIT:-0}"
+fi
+` + applyPasswordStub
+	// applyPasswordStub stands in for "instance-manager apply-dba-password":
+	// it records the call and the password file it was given, and exits with
+	// ${APPLY_EXIT} when set.
+	applyPasswordStub = `if [ "${1:-}" = "apply-dba-password" ]; then
+  echo "manager apply-dba-password ${CUBRID_DBA_PASSWORD_FILE:-}" >> "${CALLS}"
+  exit "${APPLY_EXIT:-0}"
 fi
 `
 	// managerStub exits at once, with ${IM_EXIT} when set.
@@ -325,6 +336,83 @@ func TestEntrypoint_ExistingDatabaseIsNotRecreated(t *testing.T) {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	wantCalls(t, f.recorded(), "cubrid server start "+dbName, callManagerStart)
+}
+
+// requestDBAPassword sets CUBRID_DBA_PASSWORD_FILE, as the operator does
+// when a DBA password is requested, and returns the path.
+func (f *fixture) requestDBAPassword() string {
+	f.t.Helper()
+	path := filepath.Join(f.root, "dba-password")
+	f.env["CUBRID_DBA_PASSWORD_FILE"] = path
+	return path
+}
+
+// With a DBA password requested, a standalone member sets it on the stopped
+// database after createdb and before the server starts, and on every later
+// start of the registered database too: a restart after a crash between
+// createdb and the password step finds it unset and sets it then. The manager
+// leaves a database that already has a password as it is.
+func TestEntrypoint_StandaloneSetsTheDBAPasswordBeforeTheServerStarts(t *testing.T) {
+	for _, registered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("registered=%v", registered), func(t *testing.T) {
+			f := newFixture(t, managerStub)
+			path := f.requestDBAPassword()
+			want := []string{callCreatedb, callApplyPassword + path, "cubrid server start " + dbName,
+				callManagerStart}
+			if registered {
+				f.registerDatabase()
+				want = want[1:]
+			}
+			code, out := f.run()
+			if code != 0 {
+				t.Fatalf("exit %d:\n%s", code, out)
+			}
+			wantCalls(t, f.recorded(), want...)
+		})
+	}
+}
+
+// A password step that failed stops the start with a non-zero exit, so the
+// Pod restarts: a server asked for a password is never started without one.
+func TestEntrypoint_AFailedDBAPasswordStepStartsNothing(t *testing.T) {
+	f := newFixture(t, managerStub)
+	path := f.requestDBAPassword()
+	f.env["APPLY_EXIT"] = "1"
+	code, out := f.run()
+	if code == 0 {
+		t.Fatalf("exit 0 after a failed password step:\n%s", out)
+	}
+	wantCalls(t, f.recorded(), callCreatedb, callApplyPassword+path)
+	if !strings.Contains(out, "DBA password") {
+		t.Errorf("no log line names the DBA password:\n%s", out)
+	}
+}
+
+// The step runs only for a new standalone database. An HA member's password is
+// set by the HA bootstrap, on the bootstrap member only, and a restored
+// database keeps its source's password; neither runs it here.
+func TestEntrypoint_DBAPasswordStepIsOnlyForANewStandaloneDatabase(t *testing.T) {
+	t.Run("HA", func(t *testing.T) {
+		f := newFixture(t, managerStub)
+		f.requestDBAPassword()
+		f.env["CUBRID_COMPONENTS"] = componentsHA
+		f.configureHA()
+		f.registerDatabase()
+		if code, out := f.run(); code != 0 {
+			t.Fatalf("exit %d:\n%s", code, out)
+		}
+		wantCalls(t, f.recorded(), callHeartbeat, callManagerStart)
+	})
+	t.Run("recovery", func(t *testing.T) {
+		f := newFixture(t, managerStub)
+		f.requestDBAPassword()
+		f.env["CUBRID_BOOTSTRAP"] = bootstrapRecovery
+		f.registerDatabase()
+		if code, out := f.run(); code != 0 {
+			t.Fatalf("exit %d:\n%s", code, out)
+		}
+		wantCalls(t, f.recorded(), "cubrid server start "+dbName, callManagerStart)
+	})
 }
 
 // Restore startup: no empty database may be created first (ADR-0008).

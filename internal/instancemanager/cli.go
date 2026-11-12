@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -36,6 +37,16 @@ import (
 // (ADR-0003: local ops via the manager, never pods/exec).
 type CLI interface {
 	Run(ctx context.Context, name string, args ...string) (string, error)
+}
+
+// StdinCLI is a CLI that can also feed a command's standard input. A secret
+// a command reads goes there, never on its argv, which every process of the
+// host can read.
+type StdinCLI interface {
+	CLI
+	// RunWithStdin runs a command as Run does, with stdin as its standard
+	// input.
+	RunWithStdin(ctx context.Context, stdin, name string, args ...string) (string, error)
 }
 
 // ErrOutputUnread marks a command whose output could not be read. ExecCLI
@@ -55,6 +66,17 @@ type ExecCLI struct {
 }
 
 func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, error) {
+	return c.run(ctx, nil, name, args...)
+}
+
+// RunWithStdin runs a command as Run does, with stdin as its standard input.
+func (c ExecCLI) RunWithStdin(ctx context.Context, stdin, name string, args ...string) (string, error) {
+	return c.run(ctx, strings.NewReader(stdin), name, args...)
+}
+
+// run runs a command with stdin as its standard input; nil is the null
+// device.
+func (c ExecCLI) run(ctx context.Context, stdin io.Reader, name string, args ...string) (string, error) {
 	// A caller that set a deadline knows how long its command may take
 	// (backupdb, restoredb, server stop); the default bounds everything else.
 	if _, ok := ctx.Deadline(); !ok {
@@ -78,7 +100,7 @@ func (c ExecCLI) Run(ctx context.Context, name string, args ...string) (string, 
 		_ = os.Remove(output.Name())
 	}()
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stdout, cmd.Stderr = output, output
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, output, output
 	grouped := filepath.Base(name) == "cubrid" && len(args) > 0 && groupUtilities[args[0]]
 	if grouped {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
