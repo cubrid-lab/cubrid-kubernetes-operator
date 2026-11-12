@@ -1204,15 +1204,18 @@ func (r *CubridClusterReconciler) reconcileStandaloneMembers(ctx context.Context
 		setStandaloneBrokerConditions(cluster, sts.Status.ReadyReplicas >= desired && desired > 0, available)
 	}
 	// The sooner of the two retries is kept.
-	if poll := r.reconcileDBAPasswordRotation(ctx, cluster, sts); poll > 0 && (steps.retry == 0 || poll < steps.retry) {
+	if poll := r.reconcileDBAPasswordRotation(ctx, cluster, dbaPasswordStandaloneMember(cluster, sts)); poll > 0 &&
+		(steps.retry == 0 || poll < steps.retry) {
 		steps.retry = poll
 	}
 	return steps
 }
 
 // reconcileHAMembers runs the steps of an HA cluster with a role prober: the
-// HA bootstrap (ADR-0010), the role observation, the Broker tier and the
-// rolling update. It reports whether more than one master was observed.
+// HA bootstrap (ADR-0010), the role observation, the Broker tier, the rolling
+// update and the check of its DBA password Secret against its primary
+// (reconcileDBAPasswordRotation). It reports whether more than one master was
+// observed.
 func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluster *databasev1alpha1.CubridCluster,
 	sts *appsv1.StatefulSet) (bool, stepResult) {
 	// The first database is created once, on one member (ADR-0010).
@@ -1233,6 +1236,11 @@ func (r *CubridClusterReconciler) reconcileHAMembers(ctx context.Context, cluste
 		if err := r.reconcileRollingUpdate(ctx, cluster, sts, res); err != nil {
 			steps.err = errors.Join(steps.err, err)
 		}
+	}
+	// The sooner of the two retries is kept.
+	if poll := r.reconcileDBAPasswordRotation(ctx, cluster, dbaPasswordHAMember(cluster, res)); poll > 0 &&
+		(steps.retry == 0 || poll < steps.retry) {
+		steps.retry = poll
 	}
 	return res.MultipleMasters, steps
 }

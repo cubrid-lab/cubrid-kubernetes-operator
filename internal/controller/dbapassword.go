@@ -38,8 +38,9 @@ import (
 // spec.dbaPasswordSecretRef names exists and holds a value the Instance
 // Manager accepts. The DB container sets the password, or checks it, before
 // its server starts, so a member that is ready already has it; afterwards the
-// ready member of a standalone cluster is asked whether the value is still the
-// database's password (reconcileDBAPasswordRotation). A cluster without the reference has no such
+// ready member of a standalone cluster, or the resolved primary of an HA
+// cluster, is asked whether the value is still the database's password
+// (reconcileDBAPasswordRotation). A cluster without the reference has no such
 // condition.
 const conditionDBAPasswordSecretResolved = "DBAPasswordSecretResolved"
 
@@ -243,8 +244,8 @@ type DBAPasswordChecker interface {
 // password was changed in the database. The database keeps its password.
 const reasonDBAPasswordRotationUnsupported = "DBAPasswordRotationUnsupported"
 
-// defaultDBAPasswordPoll is how often, by default, the member of a cluster
-// with a DBA password Secret is asked whether the Secret's value is still the
+// defaultDBAPasswordPoll is how often, by default, a member of a cluster with
+// a DBA password Secret is asked whether the Secret's value is still the
 // database's password. The operator does not watch the user's Secrets (#282),
 // so this is how long a changed value may go unreported.
 const defaultDBAPasswordPoll = 5 * time.Minute
@@ -256,34 +257,32 @@ func (r *CubridClusterReconciler) dbaPasswordPoll() time.Duration {
 	return defaultDBAPasswordPoll
 }
 
-// reconcileDBAPasswordRotation asks the member of a standalone cluster with a
-// DBA password Secret whether the Secret's value is still the database's DBA
+// reconcileDBAPasswordRotation asks member, a ready member of a cluster with a
+// DBA password Secret, whether the Secret's value is still the database's DBA
 // password, and returns the delay after which to ask again; zero for a
-// cluster without the reference.
-//
-// An HA cluster is not asked, and zero is returned for it: its members'
-// Instance Managers answer Unknown, so a changed Secret value on an HA cluster
-// is not reported. Its condition keeps saying only whether the key resolves.
+// cluster without the reference. member is "" when no member may be asked
+// now (dbaPasswordStandaloneMember, dbaPasswordHAMember): nothing is asked,
+// the condition is left as it is, and the poll is returned.
 //
 // Differs sets conditionDBAPasswordSecretResolved False with
 // reasonDBAPasswordRotationUnsupported, and records a Warning Event when it
 // was not already so. Matches sets it back to True. The new value is never
-// applied, and neither the StatefulSet nor its Pod is changed. An answer that
-// cannot tell (Unknown, a failed call, no member ready) leaves the condition
-// as it is, so that it does not flap. The member is asked at most once per
-// poll; only the time of the last check is kept, in memory, so an operator
-// that restarts asks again at once.
+// applied, and neither the StatefulSet nor its Pods are changed. An answer
+// that cannot tell (Unknown, a failed call, no member to ask) leaves the
+// condition as it is, so that it does not flap. A member is asked at most
+// once per poll per cluster; only the time of the last check is kept, in
+// memory, so an operator that restarts asks again at once.
 func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Context,
-	cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) time.Duration {
+	cluster *databasev1alpha1.CubridCluster, member string) time.Duration {
 	ref := cluster.Spec.DBAPasswordSecretRef
-	if ref == nil || cluster.Spec.HighAvailability.Enabled {
+	if ref == nil {
 		return 0
 	}
 	poll := r.dbaPasswordPoll()
 	was := meta.FindStatusCondition(cluster.Status.Conditions, conditionDBAPasswordSecretResolved)
 	// A Secret that does not resolve is reported as such, and is what has to
 	// be corrected first.
-	if r.DBAPassword == nil || sts.Status.ReadyReplicas < 1 || was == nil ||
+	if r.DBAPassword == nil || member == "" || was == nil ||
 		(was.Status != metav1.ConditionTrue && was.Reason != reasonDBAPasswordRotationUnsupported) {
 		return poll
 	}
@@ -297,7 +296,6 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 	}
 	r.dbaPasswordCheckedAt.Store(cluster.UID, now)
 	log := logf.FromContext(ctx)
-	member := memberNames(cluster, 1)[0]
 	check, err := r.DBAPassword.CheckDBAPassword(ctx, member, cluster.Namespace)
 	switch {
 	case err != nil:
@@ -325,4 +323,39 @@ func (r *CubridClusterReconciler) reconcileDBAPasswordRotation(ctx context.Conte
 			"reason", check.Reason)
 	}
 	return poll
+}
+
+// dbaPasswordStandaloneMember is the member of a standalone cluster asked
+// about its DBA password Secret: its one member, once it is ready.
+func dbaPasswordStandaloneMember(cluster *databasev1alpha1.CubridCluster, sts *appsv1.StatefulSet) string {
+	if sts.Status.ReadyReplicas < 1 {
+		return ""
+	}
+	return memberNames(cluster, 1)[0]
+}
+
+// dbaPasswordHAMember is the member of an HA cluster asked about its DBA
+// password Secret: the primary that res resolved in this pass, which
+// heartbeat reports as the master and whose role answer counts. The password
+// was set on it, and reaches the slaves from it by replication (POC-61, Q3);
+// its Instance Manager checks only while heartbeat reports its server as the
+// active master (instancemanager checkDBAPassword). No member is asked while
+// no primary is resolved, while more than one member claims to be the
+// master, while the primary is not ready in the status, or while the HA
+// bootstrap has not admitted every member or failed (haBootstrapUnadmitted),
+// so a member that is still being seeded is never asked. A slave that lags
+// does not stop the check: the primary answers for the database's password.
+func dbaPasswordHAMember(cluster *databasev1alpha1.CubridCluster, res PrimaryResolution) string {
+	if res.Status != metav1.ConditionTrue || res.CurrentPrimary == "" || res.MultipleMasters {
+		return ""
+	}
+	if _, _, unadmitted := haBootstrapUnadmitted(cluster); unadmitted {
+		return ""
+	}
+	for _, in := range cluster.Status.Instances {
+		if in.Name == res.CurrentPrimary && in.Ready && in.Role == databasev1alpha1.RoleMaster {
+			return in.Name
+		}
+	}
+	return ""
 }
