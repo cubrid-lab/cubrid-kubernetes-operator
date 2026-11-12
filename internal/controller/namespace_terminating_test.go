@@ -193,7 +193,8 @@ var _ = Describe("Reconcile while the cluster goes away (#526)", func() {
 
 		logged, errorLines := logging()
 		_, err := r.Reconcile(logged, request(cluster))
-		Expect(err).NotTo(HaveOccurred())
+		// Returned for a retry with backoff, after the status is written (#799).
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "%v", err)
 		Expect(*errorLines).To(ContainElement(ContainSubstring("Failed to reconcile broker tier")))
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
 		broker := meta.FindStatusCondition(cluster.Status.Conditions, conditionBrokerReady)

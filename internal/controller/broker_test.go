@@ -209,6 +209,13 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
 	}
+	// reconcileUnreadable reconciles a cluster whose Broker configuration
+	// cannot be read: the failure is returned for a retry with backoff, after
+	// the status that reports it is written (#799).
+	reconcileUnreadable := func(r *CubridClusterReconciler, key types.NamespacedName) {
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).To(MatchError(ContainSubstring("etcd is unavailable")))
+	}
 
 	// A Broker reads its configuration when its container starts, so a
 	// changed configuration reaches a Broker only when its Pod is replaced
@@ -319,7 +326,7 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 				return c.Get(ctx, key, obj, opts...)
 			},
 		})
-		reconcileAgain(r, key)
+		reconcileUnreadable(r, key)
 		Expect(conditionOf(key, conditionBrokerReady).Reason).To(Equal("BrokerReconcileFailed"))
 		for _, conditionType := range []string{conditionWriteEndpointReady, conditionReadEndpointReady, conditionRoutingReady} {
 			cond := conditionOf(key, conditionType)
@@ -329,7 +336,7 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 
 		By("an unresolved primary still being reported as such")
 		r.Prober = &memberProber{}
-		reconcileAgain(r, key)
+		reconcileUnreadable(r, key)
 		routing := conditionOf(key, conditionRoutingReady)
 		Expect(routing.Status).To(BeEquivalentTo("False"))
 		Expect(routing.Reason).To(Equal(conditionOf(key, conditionPrimaryResolved).Reason))
@@ -453,7 +460,7 @@ var _ = Describe("Broker tier (ADR-0002, #83)", func() {
 					return c.Get(ctx, key, obj, opts...)
 				},
 			})
-			reconcileAgain(r, key)
+			reconcileUnreadable(r, key)
 			Expect(conditionOf(key, conditionBrokerReady).Reason).To(Equal("BrokerReconcileFailed"))
 			for _, conditionType := range []string{conditionWriteEndpointReady, conditionReadEndpointReady, conditionRoutingReady} {
 				cond := conditionOf(key, conditionType)

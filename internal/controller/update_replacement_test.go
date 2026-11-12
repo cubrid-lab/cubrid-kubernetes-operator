@@ -85,7 +85,7 @@ var _ = Describe("Replacement of outdated members (ADR-0009, #196)", func() {
 		resolved.CurrentPrimary = "replace-off-0"
 		r := &CubridClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(20)}
 
-		r.reconcileRollingUpdate(ctx, cluster, sts, resolved)
+		Expect(r.reconcileRollingUpdate(ctx, cluster, sts, resolved)).To(Succeed())
 
 		Expect(podsLeft(cluster)).To(HaveLen(3), "an outdated slave was deleted")
 		cond := meta.FindStatusCondition(cluster.Status.Conditions, conditionUpdating)
@@ -105,7 +105,7 @@ var _ = Describe("Replacement of outdated members (ADR-0009, #196)", func() {
 			AutomaticReplacement: true,
 		}
 
-		r.reconcileRollingUpdate(ctx, cluster, sts, resolved)
+		Expect(r.reconcileRollingUpdate(ctx, cluster, sts, resolved)).To(Succeed())
 
 		Expect(podsLeft(cluster)).To(ConsistOf("replace-on-0", "replace-on-2"), "one slave, never the master")
 	})

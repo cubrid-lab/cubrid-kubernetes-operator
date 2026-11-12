@@ -542,8 +542,9 @@ var _ = Describe("Children that already exist under the cluster's names", func()
 		expectControlled(cluster, foreign)
 	})
 
-	// A failed read of a Broker object is no collision, so it is reported as
-	// it always was: by the conditions, with no Warning Event.
+	// A failed read of a Broker object is no collision, so it is reported by
+	// the conditions, with no Warning Event, and returned for a retry with
+	// backoff (#799).
 	It("records no refusal for a Broker write that failed for another reason", func() {
 		const name = "child-broker-write-failed"
 		cluster := haCluster(name)
@@ -560,7 +561,7 @@ var _ = Describe("Children that already exist under the cluster's names", func()
 			},
 		})
 		_, err = r.Reconcile(ctx, request(cluster))
-		Expect(err).NotTo(HaveOccurred())
+		Expect(err).To(MatchError(ContainSubstring("etcd is unavailable")))
 		Expect(condition(cluster, conditionBrokerReady).Reason).To(Equal("BrokerReconcileFailed"))
 		Expect(warnings(r)).To(BeEmpty())
 	})

@@ -292,9 +292,11 @@ var _ = Describe("Child object writes (#280)", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(brokerReady().Reason).To(Equal(before.Reason), "one conflict changes no Condition")
 
+		// Past the bound the conflict is a failed write like any other: it is
+		// returned for a retry with backoff, after the status is written (#799).
 		now = now.Add(conflictPatience + time.Second)
 		_, err = r.Reconcile(ctx, request(cluster))
-		Expect(err).NotTo(HaveOccurred())
+		Expect(apierrors.IsConflict(err)).To(BeTrue(), "the cause stays recognizable: %v", err)
 		after := brokerReady()
 		Expect(after.Status).To(Equal(metav1.ConditionFalse))
 		Expect(after.Reason).To(Equal("BrokerReconcileFailed"))
