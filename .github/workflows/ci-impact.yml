@@ -85,6 +85,10 @@ jobs:
               "codeql_go", "codeql_actions",
           )
           ACTIONS = {"codeql_actions"}
+          # This Markdown file defines required real-database scenario gates.
+          # The Go registry tests parse its table: changing it must not follow
+          # the ordinary documentation-only fast path.
+          SAFETY_CONTRACTS = {"docs/testing/scenario-contract.md"}
           WORKFLOW_CHECKS = {
               "lint.yml": {"go_lint"},
               "test.yml": {"go_tests"},
@@ -100,6 +104,8 @@ jobs:
           def select(paths):
               selected = set()
               for path in paths:
+                  if path in SAFETY_CONTRACTS:
+                      return set(CHECKS)
                   # Documentation, including the PR template and agent guide,
                   # does not need compilation or integration testing.
                   if path.endswith((".md", ".mdx", ".rst")):
@@ -130,6 +136,13 @@ jobs:
           # Classification regression cases run without executing PR code.
           examples = [
               (["README.md", "docs/testing/installed-ha.md", "AGENTS.md"], set()),
+              # The scenario contract is a test input, not docs-only. Its
+              # changes must run the full Kind lane and its Go contract tests.
+              (["docs/testing/scenario-contract.md"], set(CHECKS)),
+              (["docs/testing/scenario-contract.md", "README.md"], set(CHECKS)),
+              # Moving a required test contract is not a docs-only change:
+              # rename handling feeds both old and new paths to select().
+              (["docs/testing/scenario-contract.md", "docs/testing/archived-contract.md"], set(CHECKS)),
               ([".github/PULL_REQUEST_TEMPLATE.md", ".github/workflows/pr-title.yml"], ACTIONS),
               ([".github/workflows/ci-impact.yml"], set(CHECKS)),
               (["build/instance-manager/entrypoint.sh"], set(CHECKS)),
