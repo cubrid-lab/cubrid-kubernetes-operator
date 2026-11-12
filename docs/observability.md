@@ -718,6 +718,28 @@ the member as the user that owns the volume. A member that ends with
 `invalid argument` on a sandboxed runtime without open file description
 locks) never starts there; that is by design.
 
+### The DBA password step in the Instance Manager's log
+
+When `CUBRID_DBA_PASSWORD_FILE` names a file in the database container, the
+Instance Manager sets that file's value as the DBA password of a database it
+or the entrypoint has just created. A new standalone database gets it from
+`instance-manager apply-dba-password`, which the entrypoint runs before each
+start of the server. The HA bootstrap member gets it right after its
+`createdb`, before heartbeat starts; the slaves receive it by replication
+(docs/poc/RESULTS.md, POC-61). No line carries the value or csql's output
+of the statement:
+
+| `event` | Level | Fields | What it means |
+|---|---|---|---|
+| `dba_password_applied` | info | | The password was set: csql printed no error and a `dba` login with the empty password is now refused |
+| `dba_password_already_set` | info | | A `dba` login with the empty password was already refused, so a password is set and nothing was changed (a restart after the step, or a restored database) |
+| `dba_password_not_requested` | info | | `instance-manager apply-dba-password` ran without `CUBRID_DBA_PASSWORD_FILE` and changed nothing |
+| `dba_password_failed` | error | `err` | The standalone step failed: the file is missing, empty, holds a NUL, a carriage return or an inner line feed, or is longer than 256 bytes; csql reported an error; or an empty-password login is still accepted. The entrypoint then logs `could not set the requested DBA password`, does not start the server, and the container ends and is started again |
+
+On the HA bootstrap member the same failures end the bootstrap operation
+`Failed` with that reason, heartbeat is not started, and the next attempt
+creates the database again.
+
 ### Runbook: a slave whose copy of the master's log does not grow
 
 `ReplicationHealthy=False` with `LogCopyStalled` names the slaves whose copy

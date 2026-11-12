@@ -29,6 +29,9 @@
 #      another process holds a CUBRID lock on the volume. The wait has no
 #      time limit of its own; the Pod's startup probe still bounds the
 #      container's start (ADR-0003).
+#   7. With CUBRID_DBA_PASSWORD_FILE set, a new standalone database gets the
+#      requested DBA password from "instance-manager apply-dba-password"
+#      before each start of its server, and is not started without it.
 #
 # Roles map to CUBRID_COMPONENTS (as in the official image): SERVER | MASTER |
 # SLAVE | HA. The operator sets the environment.
@@ -235,6 +238,21 @@ start_cubrid() {
       if [ "${terminating}" = "1" ]; then
         log "termination requested during createdb: the server is not started"
         return 0
+      fi
+      # A requested DBA password is set on the stopped database before every
+      # start, so a restart after a crash between createdb and this step sets
+      # it then; the manager leaves a database that has a password as it is.
+      # A server asked for a password is never started without one: a failure
+      # ends the container, and the Pod is restarted. A restored database
+      # keeps the password of its source and is not touched here.
+      if [ "${CUBRID_BOOTSTRAP}" = "new" ] && [ -n "${CUBRID_DBA_PASSWORD_FILE:-}" ]; then
+        log "setting the requested DBA password of '${CUBRID_DB}' before the server starts"
+        "${IM_BIN}" apply-dba-password \
+          || die "could not set the requested DBA password of '${CUBRID_DB}' (CUBRID_DBA_PASSWORD_FILE): the server is not started"
+        if [ "${terminating}" = "1" ]; then
+          log "termination requested while the DBA password was set: the server is not started"
+          return 0
+        fi
       fi
       stop_recorded && return 0
       started=1

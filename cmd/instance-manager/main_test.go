@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -24,8 +26,100 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/cubrid-lab/cubrid-kubernetes-operator/internal/instancemanager"
 )
+
+// dbaCLI stands in for csql: an empty dba login is accepted until a password
+// was fed on stdin, then refused (docs/poc/RESULTS.md, POC-61).
+type dbaCLI struct {
+	calls []string
+	set   bool
+	// alterErr makes the run fed on stdin fail and set nothing.
+	alterErr error
+}
+
+func (c *dbaCLI) Run(_ context.Context, name string, args ...string) (string, error) {
+	c.calls = append(c.calls, name+" "+strings.Join(args, " "))
+	if c.set {
+		return "ERROR: Incorrect or missing password.\n", errors.New("exit status 1")
+	}
+	return "1 row selected.\n", nil
+}
+
+func (c *dbaCLI) RunWithStdin(_ context.Context, _, name string, args ...string) (string, error) {
+	c.calls = append(c.calls, name+" "+strings.Join(args, " "))
+	if c.alterErr != nil {
+		return "", c.alterErr
+	}
+	c.set = true
+	return "Execute OK.\n", nil
+}
+
+const subcommandPassword = "Subcommand-Canary-41b2"
+
+// "instance-manager apply-dba-password" sets the password from the file
+// CUBRID_DBA_PASSWORD_FILE names; unset, it runs nothing and succeeds, so a
+// member without a requested password starts as before.
+func TestApplyDBAPasswordCommand(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv(instancemanager.DBAPasswordFileEnv, "")
+		cli := &dbaCLI{}
+		if err := applyDBAPassword(context.Background(), logger, cli); err != nil {
+			t.Fatalf("applyDBAPassword: %v", err)
+		}
+		if len(cli.calls) != 0 {
+			t.Errorf("commands ran without a password file: %q", cli.calls)
+		}
+	})
+	t.Run("set", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "password")
+		if err := os.WriteFile(file, []byte(subcommandPassword+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(instancemanager.DBAPasswordFileEnv, file)
+		t.Setenv("CUBRID_DB", "appdb")
+		cli := &dbaCLI{}
+		if err := applyDBAPassword(context.Background(), logger, cli); err != nil {
+			t.Fatalf("applyDBAPassword: %v", err)
+		}
+		if !cli.set || len(cli.calls) != 3 {
+			t.Errorf("commands = %q, want the check, the statement and the check", cli.calls)
+		}
+	})
+	t.Run("csql failed", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "password")
+		if err := os.WriteFile(file, []byte(subcommandPassword), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(instancemanager.DBAPasswordFileEnv, file)
+		cli := &dbaCLI{alterErr: errors.New("exit status 1")}
+		if err := applyDBAPassword(context.Background(), logger, cli); err == nil {
+			t.Fatal("a failed csql run was reported as success")
+		}
+	})
+	t.Run("unusable file", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "password")
+		if err := os.WriteFile(file, []byte(subcommandPassword+"\r\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(instancemanager.DBAPasswordFileEnv, file)
+		cli := &dbaCLI{}
+		err := applyDBAPassword(context.Background(), logger, cli)
+		if err == nil {
+			t.Fatal("an unusable password file was accepted")
+		}
+		if strings.Contains(err.Error(), subcommandPassword) {
+			t.Errorf("the error carries the password: %v", err)
+		}
+		if len(cli.calls) != 0 {
+			t.Errorf("commands ran: %q", cli.calls)
+		}
+	})
+}
 
 // "instance-manager shutdown" records the stop before it asks the manager.
 // A manager that does not listen yet, and would start CUBRID once it does,

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,6 +48,9 @@ type HAConfig struct {
 	LogVolumeSize string
 	// Locale is the locale of a database this member creates.
 	Locale string
+	// DBAPasswordFile is the file holding the DBA password set on a database
+	// this member creates (DBAPasswordFileEnv). Empty sets none.
+	DBAPasswordFile string
 }
 
 func (c HAConfig) withDefaults() HAConfig {
@@ -170,7 +174,7 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 				fail(notRecorded(OpCreating, err))
 				return
 			}
-			if err := createHADatabase(ctx, s.cli, s.restoreRoots.Target, s.ha, req.Database, id); err != nil {
+			if err := createHADatabase(ctx, s.cli, s.log(), s.restoreRoots.Target, s.ha, req.Database, id); err != nil {
 				fail(err.Error())
 				return
 			}
@@ -207,10 +211,26 @@ func (s *Server) runHABootstrap(id string, req HABootstrapRequest) {
 // A directory that exists although the database is not registered is what an
 // interrupted createdb, or someone else's data, looks like. It is never
 // removed here: the bootstrap stops and says so.
-func createHADatabase(ctx context.Context, cli CLI, target string, ha HAConfig, database, owner string) error {
+//
+// With a DBA password file, the password is set on the new database before
+// its marker is cleared (ApplyDBAPassword): a database that has not had its
+// password set keeps the marker, so the entrypoint never starts it, and the
+// next attempt removes it and creates it again (reclaimIncomplete). Setting
+// it here, on the bootstrap member only, is enough: the change replicates to
+// the slaves, which are seeded from this database (docs/poc/RESULTS.md,
+// POC-61, Q3). The file is read before createdb, so a file that cannot be
+// used creates nothing.
+func createHADatabase(ctx context.Context, cli CLI, logger *slog.Logger, target string, ha HAConfig,
+	database, owner string) error {
 	hosts, err := haHosts(ha.ConfPath)
 	if err != nil {
 		return err
+	}
+	var password string
+	if ha.DBAPasswordFile != "" {
+		if password, err = ReadDBAPassword(ha.DBAPasswordFile); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(target, 0o750); err != nil {
 		return fmt.Errorf("create the database root: %w", err)
@@ -253,5 +273,10 @@ func createHADatabase(ctx context.Context, cli CLI, target string, ha HAConfig, 
 		return fmt.Errorf("createdb failed: %w: %s", err, strings.TrimSpace(out))
 	}
 	databasesTxtMu.Unlock()
+	if password != "" {
+		if err := ApplyDBAPassword(ctx, cli, logger, database, password); err != nil {
+			return err
+		}
+	}
 	return clearOwned(target, database)
 }
