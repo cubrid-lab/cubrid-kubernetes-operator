@@ -775,12 +775,14 @@ of that write in the Secret's annotation
 The operator drops `previousToken` only when both hold for every member:
 its container is running and was started after the rotation time, and its
 Instance Manager accepts the current token when asked with that token alone
-(`GET /v1/role`; only the manager's authentication answers 401). The start
+(`GET /v1/role` answers 200). The start
 time is a cheap precondition; the question to the member is what ends the
 overlap, so a node clock ahead of the operator's or a kubelet that read a
 stale Secret cannot end it while a member still holds the previous token. A
 member that is missing, not running, started earlier, refuses the current
-token or cannot be asked keeps the overlap open. When it ends the operator
+token (401 or 403) or cannot be asked keeps the overlap open; so does any
+other answer, such as a 5xx from the manager or a proxy, which shows neither
+that the member holds the token nor that it refuses it (#840). When it ends the operator
 records a Normal Event `InstanceManagerTokenOverlapEnded`; from then on the
 previous token is neither sent nor accepted by any member. No second
 rotation starts while `previousToken` is kept, since it would drop the token

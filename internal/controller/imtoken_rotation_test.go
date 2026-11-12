@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -236,6 +237,42 @@ var _ = Describe("Instance Manager token rotation (#324)", func() {
 		Expect(previousKept(cluster.Name)).To(BeFalse())
 		Expect(receivedEvent(recorder, "InstanceManagerTokenOverlapEnded")).To(BeTrue())
 		Expect(checker.tokens).To(HaveEach(current), "a member was asked with a token other than the current one")
+	})
+
+	// The Instance Manager check here is the operator's own HTTPRoleProber
+	// over a fake transport. A 500 from a member proves neither that it holds
+	// the current token nor that it refuses it, so the previous token stays;
+	// a later 200 lets the overlap end (#840).
+	It("keeps the previous token while a member answers the token check with an unexpected status", func() {
+		cluster := createCluster("rotate-unexpected")
+		reconcileAt(rotation.Add(-time.Hour), cluster.Name)
+		asOlderOperator(cluster.Name, "shared-token")
+		reconcileAt(rotation, cluster.Name)
+		memberStartedAt(cluster, 0, rotation.Add(time.Minute))
+		current := string(tokenSecretOf(cluster.Name).Data["token"])
+
+		transport := &statusRecorder{status: http.StatusInternalServerError}
+		prober := NewHTTPRoleProber(nil)
+		prober.Client = &http.Client{Transport: transport}
+		reconcileWithProber := func(now time.Time) *record.FakeRecorder {
+			r := newReconciler(now)
+			r.TokenChecker = prober
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+			Expect(err).NotTo(HaveOccurred())
+			return r.Recorder.(*record.FakeRecorder)
+		}
+
+		recorder := reconcileWithProber(rotation.Add(time.Hour))
+		Expect(transport.sent).NotTo(BeEmpty(), "the member was not asked about the current token")
+		Expect(string(tokenSecretOf(cluster.Name).Data["previousToken"])).To(Equal("shared-token"),
+			"the previous token was dropped on a 500 answer")
+		Expect(receivedEvent(recorder, "InstanceManagerTokenOverlapEnded")).To(BeFalse())
+
+		transport.status = http.StatusOK
+		recorder = reconcileWithProber(rotation.Add(2 * time.Hour))
+		Expect(previousKept(cluster.Name)).To(BeFalse())
+		Expect(receivedEvent(recorder, "InstanceManagerTokenOverlapEnded")).To(BeTrue())
+		Expect(transport.sent).To(HaveEach("Bearer "+current), "a member was asked with a token other than the current one")
 	})
 
 	It("keeps the previous token without a token checker", func() {

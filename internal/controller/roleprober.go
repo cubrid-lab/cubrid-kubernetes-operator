@@ -224,10 +224,12 @@ type TokenChecker interface {
 	AcceptsToken(ctx context.Context, podName, namespace, token string) (bool, error)
 }
 
-// AcceptsToken sends GET /v1/role with the token alone. Only the manager's
-// authentication answers 401, so any other answer means the member holds the
-// token. A failed request is an error, not a refusal. A 403, which
-// tokenRefused reports as a refusal, is not one here.
+// AcceptsToken sends GET /v1/role with the token alone, never the previous
+// one. Only a 200 shows that the member holds the token. A 401 or 403
+// (tokenRefused) is a refusal. Any other answer, such as a server or proxy
+// error or another success code, shows neither, and is an error naming the
+// Pod and the status, as is a failed request; the caller then keeps the
+// previous token in use (#840). The token is never put into the error.
 func (p *HTTPRoleProber) AcceptsToken(ctx context.Context, podName, namespace, token string) (bool, error) {
 	url := fmt.Sprintf("http://%s.%s.svc:%d/v1/role", podName, namespace, instancemanager.DefaultPort)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -241,7 +243,14 @@ func (p *HTTPRoleProber) AcceptsToken(ctx context.Context, podName, namespace, t
 		return false, fmt.Errorf("ask %s about its token: %w", podName, err)
 	}
 	_ = resp.Body.Close()
-	return resp.StatusCode != http.StatusUnauthorized, nil
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		return true, nil
+	case tokenRefused(resp.StatusCode):
+		return false, nil
+	default:
+		return false, fmt.Errorf("ask %s about its token: unexpected status %d", podName, resp.StatusCode)
+	}
 }
 
 func (p *HTTPRoleProber) now() time.Time {
