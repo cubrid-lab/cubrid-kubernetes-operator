@@ -295,16 +295,26 @@ endpoint is safe. Setting it changes nothing else: the `-rw` Service and the
 read-write Brokers stay as they are, and the Brokers keep following the master
 that CUBRID reports. When and how the managed write path is closed is issue
 [#113](https://github.com/cubrid-lab/cubrid-kubernetes-operator/issues/113),
-"feat(safety): enforce and release managed write quarantine". Whatever that
-issue decides, these limits apply:
+"feat(safety): enforce and release managed write quarantine". The points
+below describe **current behavior** and the boundaries a future change must
+respect; #115 will determine which managed client paths a new enforcement
+mechanism really closes:
 
 - **Only the managed write path.** A client that reaches a member's database
   server without a Broker of the `-rw` Service, for example `csql` run inside
   a database Pod, is outside that path, and nothing done to the path stops
   its writes.
-- **Only new connections.** The Operator does not end sessions that are
-  already open through a Broker; an open session may keep writing
-  (ADR-0005, "Consequences").
+- **Neither new nor established managed connections are blocked today.**
+  The current Operator only changes its reported Conditions; it does not
+  withdraw `-rw` endpoints, refuse new SQL writes, or terminate sessions
+  that are already open through a Broker. An old session and a new
+  connection may both continue accepting writes while
+  `RoutingReady=False`, including during a dangerous partition.
+  A proposed amendment to ADR-0005 (a new section 8, in PR #793) would
+  scale the managed RW Broker Deployment to zero during specific unsafe
+  states, but it is **not accepted or implemented yet**. Even if implemented, do not claim existing sessions
+  have ended until #115 confirms their actual SQL outcomes and EndpointSlice
+  convergence under fault and termination conditions.
 - **Nothing while the Operator is away.** A stopped Operator, or one that
   cannot reach the API server, changes nothing: the Brokers
   keep their configuration and CUBRID keeps failing over by itself
