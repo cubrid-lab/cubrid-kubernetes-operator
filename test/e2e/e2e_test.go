@@ -280,6 +280,9 @@ var _ = Describe("Manager", func() {
 	// A standalone cluster with a DBA password from a Secret (linux/amd64 only).
 	dbaPasswordScenario()
 
+	// An HA cluster with a DBA password from a Secret (linux/amd64 only).
+	dbaPasswordHAScenario()
+
 	// Wiring only: the DB Pods run test/fakeim, which serves the Instance
 	// Manager API over a scripted CLI. There is no CUBRID in this scenario and
 	// a pass is never real-database, replication or failover evidence.

@@ -342,7 +342,6 @@ type CubridBootstrap struct {
 // +kubebuilder:validation:XValidation:rule="self.topology.promotableMembers == oldSelf.topology.promotableMembers",message="topology.promotableMembers cannot be changed after the cluster is created: v1alpha1 has no procedure to add or remove members"
 // +kubebuilder:validation:XValidation:rule="self.highAvailability.enabled == oldSelf.highAvailability.enabled",message="highAvailability.enabled cannot be changed after the cluster is created: v1alpha1 has no procedure to switch between a standalone and an HA cluster"
 // +kubebuilder:validation:XValidation:rule="(has(self.bootstrap) && has(self.bootstrap.recovery)) == (has(oldSelf.bootstrap) && has(oldSelf.bootstrap.recovery)) && (!(has(self.bootstrap) && has(self.bootstrap.recovery)) || self.bootstrap.recovery.manifestUri == oldSelf.bootstrap.recovery.manifestUri)",message="bootstrap.recovery cannot be added, removed or changed after the cluster is created: it decides whether the first database is restored from a backup or created empty"
-// +kubebuilder:validation:XValidation:rule="!has(self.dbaPasswordSecretRef) || !self.highAvailability.enabled",message="dbaPasswordSecretRef is admitted only when highAvailability.enabled is false: a DBA password on an HA cluster waits for a VM-lab check that copylogdb reconnects with a password set (docs/poc/RESULTS.md, POC-61, Q3)"
 // +kubebuilder:validation:XValidation:rule="has(self.dbaPasswordSecretRef) == has(oldSelf.dbaPasswordSecretRef) && (!has(self.dbaPasswordSecretRef) || (self.dbaPasswordSecretRef.name == oldSelf.dbaPasswordSecretRef.name && self.dbaPasswordSecretRef.key == oldSelf.dbaPasswordSecretRef.key))",message="dbaPasswordSecretRef cannot be added, removed or changed after the cluster is created: the database keeps the password it was created or restored with, and changing it is not supported"
 // +kubebuilder:validation:XValidation:rule="oldSelf.databases.all(o, self.databases.exists(n, n.name == o.name))",message="database names are immutable; existing names must be preserved"
 type CubridClusterSpec struct {
@@ -403,9 +402,12 @@ type CubridClusterSpec struct {
 	// StatefulSet is not created until the key resolves, and the condition
 	// DBAPasswordSecretResolved reports it.
 	//
-	// The reference is fixed when the cluster is created, and is admitted
-	// only on a standalone cluster. Changing the value in the Secret later
-	// does not change the database's password.
+	// On an HA cluster every member's DB container mounts the key. The member
+	// that creates the database sets the password before the other members
+	// are seeded from it, so they carry the same password and only check it.
+	//
+	// The reference is fixed when the cluster is created. Changing the value
+	// in the Secret later does not change the database's password.
 	// +optional
 	// +kubebuilder:validation:XValidation:rule="has(self.name) && self.name.size() > 0",message="dbaPasswordSecretRef.name is required"
 	// +kubebuilder:validation:XValidation:rule="self.key.size() > 0",message="dbaPasswordSecretRef.key is required"

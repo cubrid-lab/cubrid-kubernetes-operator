@@ -68,8 +68,8 @@ observation and may be unset for a standalone cluster
 
 **Security boundary:** in current `v1alpha1`, SQL/Broker and Operator-to-
 Instance-Manager traffic are not encrypted, and newly created CUBRID
-databases use an **empty DBA password** unless a standalone cluster names
-one in a Secret ([DBA password](dba-password.md); an HA cluster cannot).
+databases use an **empty DBA password** unless the cluster names one in a
+Secret ([DBA password](dba-password.md)).
 Ingress NetworkPolicies are not
 database authentication and work only with an enforcing CNI. Restrict
 who can create Pods in admitted namespaces. Do not expose this experimental

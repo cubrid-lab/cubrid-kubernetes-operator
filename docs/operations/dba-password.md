@@ -6,10 +6,9 @@
 > and is not validated.
 
 A CUBRID database is created with an empty password for its `dba` user. A
-standalone cluster can name a password for it in a Secret with
-`spec.dbaPasswordSecretRef`. The API refuses the field on an HA cluster: a
-password on an HA cluster waits for a check on the VM lab that copylogdb
-reconnects with a password set (docs/poc/RESULTS.md, POC-61, question 3).
+standalone or an HA cluster can name a password for it in a Secret with
+`spec.dbaPasswordSecretRef`. An HA cluster is described under
+[HA clusters](#ha-clusters).
 
 ```yaml
 apiVersion: v1
@@ -90,7 +89,7 @@ database, if one could tell, accepted it.
 | `DBAPasswordSecretNotFound` | No Secret of that name in the cluster's namespace |
 | `DBAPasswordKeyNotFound` | The Secret has no such key |
 | `DBAPasswordKeyEmpty` | The key is empty, or holds only a line feed |
-| `DBAPasswordValueInvalid` | The value is longer than 256 bytes, or holds a NUL byte, a carriage return or a line feed other than one at its end |
+| `DBAPasswordValueInvalid` | The value exceeds 256 bytes or contains NUL, CR, a line feed other than the one optional trailing newline, another ASCII control byte (including tab and Ctrl+C), or DEL. These bytes are refused because a terminal password prompt may interpret them as editing, signals or flow control |
 | `DBAPasswordSecretReadFailed` | The Operator could not read the Secret, for example for lack of permission; it retries with backoff |
 | `DBAPasswordRotationUnsupported` | The value is usable, but a `dba` login with it through the running server was refused: it is not the database's current DBA password (see [Changing the password is not supported](#changing-the-password-is-not-supported)) |
 
@@ -119,6 +118,41 @@ not supported" below. A `True` condition says the Secret was usable when last
 checked, not that a login with it works; the interval is between checks, not a
 bound.
 
+## HA clusters
+
+On an HA cluster every member's DB container mounts the same key, in the same
+way. The Operator does not create the StatefulSet while the key does not
+resolve, so no member runs and the HA bootstrap does not start until it does.
+
+- **The member that creates the database** sets the password right after
+  `createdb`, before the database's ownership marker is cleared, so heartbeat
+  never starts the database without it ([the DBA password step](../observability.md#the-dba-password-step-in-the-instance-managers-log)).
+  When it cannot, the bootstrap operation fails and the database is created
+  again on the next attempt.
+- **The other members** are seeded from a backup of that database, so they
+  carry the same password. Their Instance Manager never sets a password; it
+  only checks, after the seed restore and before heartbeat starts, that the
+  restored database's password is the requested one.
+- **Replication** with a password set was checked once on the VM lab, on a
+  three-member cluster whose password was set by hand on the master
+  (2026-11-12 UTC, results on #801): 309 inserts with the password, every row
+  on all three members, through a standby restart and a failover, and no
+  `Incorrect or missing password` (`-171`) line in any member's copylogdb
+  log. A network cut, a VM power loss, `changemode` and the Brokers with a
+  password were not part of that check. On Kind, an e2e scenario creates an
+  HA cluster with the Secret and logs in on every member and through
+  `<cluster>-rw` and `<cluster>-ro`; Kind runs all members on one node.
+
+The check of a changed value described under
+[Changing the password is not supported](#changing-the-password-is-not-supported)
+is made only on a standalone cluster. On an HA cluster a changed value is not
+reported: `DBAPasswordSecretResolved` says only whether the key resolves. A
+member whose container starts again still refuses to start its server when
+the database's password is not the file's value.
+
+An HA cluster restored from a backup (`spec.bootstrap.recovery`) follows the
+rules of the next section.
+
 ## Restoring from a backup
 
 A cluster created with `spec.bootstrap.recovery` gets the same file. The
@@ -135,8 +169,8 @@ The reference cannot change, and a changed value in the Secret is never
 applied. The running server keeps the password the database has; the kubelet
 updates the mounted file, but nothing sets it as the password.
 
-**How a changed value is reported.** While the cluster's member is ready, the
-Operator asks its Instance Manager, at most once every 5 minutes and at once
+**How a changed value is reported** on a standalone cluster. While the
+cluster's member is ready, the Operator asks its Instance Manager, at most once every 5 minutes and at once
 after the Operator restarts, whether the value is still the database's DBA
 password (`GET /v1/dba-password`). The Instance Manager logs in as `dba`
 through the running server, in client mode (`csql -u dba -c "SELECT 1" <db>@localhost`),
