@@ -63,7 +63,7 @@ func TestCreateHADatabase_KeepsARegistrationMadeWhileCreatedbRuns(t *testing.T) 
 	cli := createdbCLI{target: target, started: make(chan struct{}), release: make(chan struct{})}
 	created := make(chan error, 1)
 	go func() {
-		created <- createHADatabase(context.Background(), cli, target,
+		created <- createHADatabase(context.Background(), cli, discardLogger(), target,
 			HAConfig{ConfPath: conf, VolumeSize: "64M", Locale: "en_US"}, dbName, "op-bootstrap")
 	}()
 	<-cli.started

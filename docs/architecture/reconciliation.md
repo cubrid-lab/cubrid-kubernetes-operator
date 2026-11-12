@@ -122,7 +122,8 @@ sequenceDiagram
    rolling update only when the engine version guard allows it.
 5. **Last steps:** the status is written once, with the Conditions, the
    member list and `currentPrimary`, and Events are emitted for changes. The
-   pass then returns a requeue delay or none. A restore in progress is the
+   pass then returns a requeue delay or none, or, after a failed Broker write
+   or Pod delete, that failure as its error. A restore in progress is the
    exception: that branch writes its status and returns the 10-second restore
    poll at once, so these last steps do not run for it.
 
@@ -138,8 +139,10 @@ It is not a fixed one-second poll.
 | HA cluster with role discovery configured, after a successful status write | 10 seconds | a CUBRID failover changes no Kubernetes object, so no event would report the new roles | the end of `updateStatus` in `cubridcluster_controller.go`; `haResyncInterval` in [`haresolve.go`](../../internal/controller/haresolve.go) |
 | Restore into a new cluster in progress | 10 seconds | poll the restore operation | `restorePollAfter` in [`bootstrap.go`](../../internal/controller/bootstrap.go) |
 | Standalone cluster whose engine version is not known yet | 30 seconds | otherwise an idle cluster would stay blocked until an unrelated event | `standaloneVersionPending` and `standaloneVersionRetryInterval` in [`update.go`](../../internal/controller/update.go), used by `updateStatus` |
-| Token Secret not yet in the cache; a short-lived write conflict; a status write conflict | 1 second | retry a transient condition without reporting it | `errIMTokenSecretNotCached` in `Reconcile`, `lastingConflict` in `failed`, and the conflict check after `writeStatus` in `updateStatus`, all in `cubridcluster_controller.go` |
-| Any other write failure | controller-runtime's rate-limited backoff | the error is returned; the failure is reported once as a Condition and an Event | `failed` in `cubridcluster_controller.go` |
+| Token Secret not yet in the cache; a short-lived write conflict; a status write conflict | 1 second | retry a transient condition without reporting it | `errIMTokenSecretNotCached` in `Reconcile`, `lastingConflict` in `failed`, and the conflict check after `writeStatus` in `updateStatus`, all in `cubridcluster_controller.go`; `lastingConflict` in `brokerTier`, [`broker.go`](../../internal/controller/broker.go), for a Broker write |
+| Any other write failure | controller-runtime's backoff, from 5 ms doubling up to 10 seconds (`clusterRateLimiter`, capped at `haResyncInterval` so that a failing write never keeps an HA cluster's roles unobserved longer than its resync) | the error is returned; the failure is reported once as a Condition and an Event | `failed` in `cubridcluster_controller.go` |
+| A failed Broker write, other than a Broker object the cluster does not control; a failed delete of an outdated slave's Pod | controller-runtime's backoff, from 5 ms doubling up to 10 seconds (`clusterRateLimiter`, capped at `haResyncInterval` so that a failing write never keeps an HA cluster's roles unobserved longer than its resync) | the other steps still run and the status is written with the Condition that reports the failure (`BrokerReconcileFailed`, `MemberUpdateInProgress`); the error is returned after that | `brokerTier` in `broker.go`, `reconcileRollingUpdate` in [`update.go`](../../internal/controller/update.go), and `updateStatus` in `cubridcluster_controller.go` |
+| A Broker object the cluster does not control | 30 seconds (standalone), 10 seconds (HA) | only a person can free the name, and its removal starts no pass | `refusedBrokerRetryInterval` and `reportBrokerRefusal` in `broker.go` |
 | Standalone cluster, nothing pending; or a cluster name that cannot be used | no timed requeue | the next event starts the next pass; an unusable name is a terminal error and is not retried | the end of `updateStatus`, and `refuseClusterName`, in `cubridcluster_controller.go` |
 
 A role answer older than 15 seconds is treated as unknown
@@ -234,7 +237,7 @@ sequenceDiagram
 | Statement | Level | Where |
 |---|---|---|
 | Order of the Kubernetes writes | Implemented | `CubridClusterReconciler.Reconcile` in `cubridcluster_controller.go` |
-| Recovery first, then the HA or standalone branch, then one status write | Implemented | `updateStatus` in `cubridcluster_controller.go` |
+| Recovery first, then the HA or standalone branch, then one status write | Implemented | `reconcileMembers`, `reconcileHAMembers`, `reconcileStandaloneMembers` and `updateStatus` in `cubridcluster_controller.go` |
 | Primary resolved only from the current pass's fresh answers | Implemented, Design | `reconcileHAStatus` and `resolvePrimary` in `haresolve.go`; [ADR-0005](../adr/0005-failover-split-brain.md) section 3 |
 | Pod readiness follows `/readyz` only; `HAReady` is a separate Condition | Implemented, Design | the `ReadinessProbe` in `podSpec`, `cubridcluster_controller.go`; [docs/observability.md — Health model](../observability.md#health-model) |
 | The Conditions and what each reason means | Implemented | [docs/observability.md — Conditions](../observability.md#conditions) |

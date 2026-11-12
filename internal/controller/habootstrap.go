@@ -1073,8 +1073,10 @@ func (r *CubridClusterReconciler) seedTargetHoldsDatabase(cluster *databasev1alp
 	msg := fmt.Sprintf("the seed restore of database %s on %s was refused because %s already holds it, which this "+
 		"bootstrap did not put there (%s). This is what a cluster created over the retained volumes of an earlier "+
 		"one looks like (#798). The Operator does not take such members over yet, and a retry would be refused "+
-		"again, so the bootstrap stops; nothing was deleted or overwritten. To bootstrap with empty members, delete "+
-		"the CubridCluster and the PersistentVolumeClaims of its members, then create it again",
+		"again, so the bootstrap stops; nothing was deleted or overwritten. The retained volumes may hold the only "+
+		"copy of that data. To start with empty members while keeping it, create the cluster under another name "+
+		"(ADR-0008). Deleting the PersistentVolumeClaims of the members destroys their data for good: do it only "+
+		"after a backup of it has been restored and checked elsewhere, or once it is known not to be needed",
 		status.Name, peer, peer, why)
 	setCondition(cluster, conditionBootstrapReady, metav1.ConditionFalse, reasonMemberHoldsDatabase, msg)
 	r.statusEvent(cluster, corev1.EventTypeWarning, reasonMemberHoldsDatabase, msg)

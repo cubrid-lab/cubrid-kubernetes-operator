@@ -1074,6 +1074,15 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 			return
 		}
 		if restored == nil {
+			// A requested DBA password is read before anything is restored,
+			// so a file that cannot be used restores nothing.
+			var password string
+			if s.ha.DBAPasswordFile != "" {
+				if password, err = ReadDBAPassword(s.ha.DBAPasswordFile); err != nil {
+					fail("restore refused: " + err.Error())
+					return
+				}
+			}
 			// What an interrupted restore of this manager left is removed first;
 			// anything else in the target is refused by the restore's own guard.
 			if err := s.reclaimIncomplete(req.Database); err != nil {
@@ -1088,6 +1097,27 @@ func (s *Server) runRestore(id string, req RestoreRequest) {
 				_, err := s.store.Update(id, func(op *Operation) { op.State = OpRestoring })
 				restoringFailed = err != nil
 				return err
+			}
+			// The restored database keeps the DBA password of the backup's
+			// source (docs/poc/RESULTS.md, POC-61, Q4). With a password
+			// requested it gets that password if it has none, and is accepted
+			// with it only if it has that one, before its restore is recorded
+			// and anything starts it. A seeded slave carries its master's
+			// password, which replicates, and is only checked. A database
+			// whose password is another one cannot be given the requested one,
+			// so a retry cannot succeed either: the restore fails, and the
+			// data is taken back as after a failed restoredb (ADR-0008).
+			if password != "" {
+				roots.AfterRestore = func(ctx context.Context) error {
+					// The step has its own bound: a csql that never answers
+					// must not hold the restore for the whole restore timeout.
+					ctx, cancel := context.WithTimeout(ctx, dbaPasswordStepTimeout)
+					defer cancel()
+					if req.SeedFromMaster != "" {
+						return confirmDBAPassword(ctx, s.cli, s.log(), req.Database, password)
+					}
+					return ApplyDBAPassword(ctx, s.cli, s.log(), req.Database, password)
+				}
 			}
 			res, err := Restore(ctx, s.cli, s.objects, roots, req)
 			if err != nil {
