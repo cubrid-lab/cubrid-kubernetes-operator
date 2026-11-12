@@ -123,7 +123,7 @@ All names are those of the [shared component table](README.md#shared-components)
   container in which the Instance Manager is the main process and supervises
   the CUBRID server and, for HA, heartbeat. An HA member with NetworkPolicies
   enabled also has a short init container that waits until a peer's server
-  port answers ([README — Network access](../../README.md#network-access)).
+  port answers ([Network access](../operations/network-access.md)).
   Each member keeps its own volume.
 - **Member DNS** — the headless Service `demo-instances` and one alias
   Service per member give every member a stable name that survives a Pod
@@ -189,17 +189,17 @@ Validation rules for the member count are in
 
 - The diagram shows one cluster in one namespace. The manager can watch all
   namespaces or one (`--watch-namespace`, see
-  [README — Manager watch namespace](../../README.md#manager-watch-namespace)).
+  [Manager watch namespace](../operations/watch-namespace.md)).
 - Non-promotable read replicas are not supported in `v1alpha1`
   (`readReplicas` must be 0).
 - NetworkPolicies and PodDisruptionBudgets are grouped as Operator-owned
   safety objects. NetworkPolicies only take effect with a network
   plugin that enforces them; PDBs govern voluntary Evictions, **not** CUBRID
   failover or split-brain prevention. See
-  [README — Network access](../../README.md#network-access).
+  [Network access](../operations/network-access.md).
 - Multi-zone layouts are not shown because the Operator does not manage them
   (ROADMAP.md, "Hardening"). **PDB resource identities** are shown in the
   control path, but actual node placement and allowed evictions are not:
-  members are placed as in [README — Member placement](../../README.md#member-placement),
+  members are placed as in [Member placement](../operations/member-placement.md),
   and Brokers prefer distinct nodes; see
   [Voluntary disruption](voluntary-disruption.md).
