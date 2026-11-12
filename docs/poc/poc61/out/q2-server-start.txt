@@ -1,0 +1,15 @@
+### 2026-11-12T00:55:15Z cubrid server start appdb (dba password Poc-Pw-1 set, none supplied)
+@ cubrid master start
+++ cubrid master start: success
+@ cubrid server start: appdb
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.4.6
+
+++ cubrid server start: success
+rc=0
+### 2026-11-12T00:55:20Z cubrid server status (dba password Poc-Pw-1 set, none supplied)
+@ cubrid server status
+ Server appdb (rel 11.4.6, pid 7215)
+rc=0

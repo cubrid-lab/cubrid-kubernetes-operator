@@ -1,0 +1,104 @@
+### 2026-11-12T01:11:46Z [poc-dbapw-master] cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc-dbapw-master, state master)
+   Node poc-dbapw-slave (priority 2, state slave)
+   Node poc-dbapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 63, state master)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 328, state registered)
+   Copylogdb appdb@poc-dbapw-slave:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave (pid 326, state registered)
+   Server appdb (pid 72, state registered_and_active)
+
+rc=0
+### 2026-11-12T01:11:46Z [poc-dbapw-slave] cubrid heartbeat status
+@ cubrid heartbeat status
+
+ HA-Node Info (current poc-dbapw-slave, state slave)
+   Node poc-dbapw-slave (priority 2, state slave)
+   Node poc-dbapw-master (priority 1, state master)
+
+
+ HA-Process Info (master 93, state slave)
+   Applylogdb appdb@localhost:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 359, state registered)
+   Copylogdb appdb@poc-dbapw-master:/home/cubrid/CUBRID/databases/appdb_poc-dbapw-master (pid 11686, state registered)
+   Server appdb (pid 102, state registered_and_standby)
+
+rc=0
+### 2026-11-12T01:11:46Z [poc-dbapw-slave] cubrid applyinfo -L $CUBRID_DATABASES/appdb_poc-dbapw-master -a -v appdb
+
+ *** Applied Info. *** 
+DB creation time               : 01:03:25.000 AM 11/12/2026
+Last committed LSA             : 147 | 4200
+Last committed replog LSA      : 147 | 3416
+Last append LSA                : 147 | 8064
+Last EOF LSA                   : 147 | 8064
+Final LSA                      : 147 | 4288
+Required LSA                   : 147 | 4288
+Log record time                : 01:09:42.000 AM 11/12/2026
+Log committed time             : 01:11:43.000 AM 11/12/2026
+Last access time               : 01:11:43.529 AM 11/12/2026
+Insert count                   : 2
+Update count                   : 0
+Delete count                   : 0
+Schema count                   : 2
+Commit count                   : 17
+Fail count                     : 0
+Start time                     : 01:07:50.400 AM 11/12/2026
+
+ *** Copied Active Info. *** 
+Magic                          : CUBRID/LogActive
+DB name                        : appdb
+DB creation time               : 01:03:25.000 AM 11/12/2026 (1794445405)
+Vol creation time              : 01:03:25.000 AM 11/12/2026 (1794445405)
+EOF LSA                        : 147 | 13136
+Append LSA                     : 147 | 13136
+HA server state                : active
+CUBRID release                 : 11.4.6
+DB iopagesize                  : 16384
+DB logpagesize                 : 16384
+Is log shutdown                : 1
+Next transaction identifier    : 74
+Number of pages                : 4095
+Charset                        : 3 (iso88591)
+Logical pageid                 : 0
+CHKPT LSA                      : 145 | 10248
+Next archive pageid            : 0
+Next archive physical pageid   : 1
+Next archive number            : 0
+HA file status                 : SYNCHRONIZED
+HA promotion time              : 01:07:53.000 AM 11/12/2026 (1794445673)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+
+ *** Delay in Applying Copied Log *** 
+Delayed log page count         : 0
+Estimated Delay                : - second(s)
+rc=0
+### 2026-11-12T01:11:46Z [poc-dbapw-master] cubrid applyinfo -r localhost appdb
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 01:03:25.000 AM 11/12/2026 (1794445405)
+Vol creation time              : 01:03:25.000 AM 11/12/2026 (1794445405)
+EOF LSA                        : 147 | 13328
+Append LSA                     : 147 | 13328
+HA server state                : active
+HA promotion time              : 01:07:53.000 AM 11/12/2026 (1794445673)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+rc=0
+### 2026-11-12T01:11:49Z [poc-dbapw-slave] cubrid applyinfo -r poc-dbapw-master appdb
+
+ ***  Active Info. *** 
+DB name                        : appdb
+DB creation time               : 01:03:25.000 AM 11/12/2026 (1794445405)
+Vol creation time              : 01:03:25.000 AM 11/12/2026 (1794445405)
+EOF LSA                        : 147 | 13424
+Append LSA                     : 147 | 13424
+HA server state                : active
+HA promotion time              : 01:07:53.000 AM 11/12/2026 (1794445673)
+DB restore time                : 12:00:00.000 AM 01/01/1970 (0)
+Mark will be deleted           : false 
+rc=0

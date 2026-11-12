@@ -1,0 +1,2 @@
+Poc-Pw-1
+ALTER USER dba PASSWORD 'Poc-Pw-2';

@@ -1,0 +1,20 @@
+### 2026-11-12T00:55:27Z csql -u dba -p '' -C appdb -c 'select 1'
+
+ERROR: Incorrect or missing password.
+
+rc=1
+### 2026-11-12T00:55:27Z csql -u dba -p 'Poc-Pw-1' -C appdb -c 'select 1'
+
+=== <Result of SELECT Command in Line 1> ===
+
+   CURRENT_USER       
+======================
+  'DBA'               
+
+1 row selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+### 2026-11-12T00:55:28Z csql -u dba -p 'Poc-Pw-2' -C appdb -c 'select 1'
+
+ERROR: Incorrect or missing password.
+
+rc=1

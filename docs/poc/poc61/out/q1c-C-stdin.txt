@@ -1,0 +1,3 @@
+### 2026-11-12T00:55:22Z poc-dbapw-standalone: csql -u dba -C appdb
+Execute OK. (0.000000 sec) Committed. (0.531997 sec) 
+rc=0

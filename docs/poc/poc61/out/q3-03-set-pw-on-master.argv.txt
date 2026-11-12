@@ -1,0 +1,13 @@
+/sbin/docker-init -- sleep infinity 
+cub_admin copylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave -m sync appdb@poc-dbapw-slave 
+cub_admin applylogdb -L /home/cubrid/CUBRID/databases/appdb_poc-dbapw-slave --max-mem-size=500 appdb@localhost 
+/bin/bash /usr/local/bin/sampler.sh /tmp/q3-03-set-pw-on-master.argv /tmp/q3-03-set-pw-on-master.stop 
+cub_master 
+/usr/bin/coreutils --coreutils-prog-shebang=sleep /usr/bin/sleep infinity 
+cub_server appdb 
+cub_pl appdb 
+bash -lc csql -u dba -C -i /tmp/pw1.sql appdb@localhost 
+csql -u dba -C -i /tmp/pw1.sql appdb@localhost 
+runc init 
+SAMPLES=159
+argv lines containing Poc-Pw: 0

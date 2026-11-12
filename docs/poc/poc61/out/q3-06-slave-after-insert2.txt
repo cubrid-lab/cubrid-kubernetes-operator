@@ -1,0 +1,16 @@
+### 2026-11-12T01:11:39Z [poc-dbapw-slave] csql -u dba -p "" appdb@localhost -c "select * from t"
+
+ERROR: Incorrect or missing password.
+
+rc=1
+### 2026-11-12T01:11:39Z [poc-dbapw-slave] csql -u dba -p Poc-Pw-1 appdb@localhost -c "select * from t"
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'before password'   
+            2  'after password on master'
+
+2 rows selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0

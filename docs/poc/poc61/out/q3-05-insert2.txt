@@ -1,0 +1,3 @@
+### 2026-11-12T01:09:37Z [poc-dbapw-master] csql -u dba -p Poc-Pw-1 appdb@localhost -c "INSERT INTO t VALUES (2, 'after password on master')"
+1 row affected. (2.599976 sec) Committed. (0.000000 sec) 
+rc=0

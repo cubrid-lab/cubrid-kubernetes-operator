@@ -1,0 +1,4 @@
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 192.0M.
+
+CUBRID 11.4.6
+

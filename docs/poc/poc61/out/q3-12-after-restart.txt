@@ -1,0 +1,24 @@
+### 2026-11-12T01:18:41Z [poc-dbapw-slave] csql -u dba -p Poc-Pw-1 appdb@localhost -c "select * from t"
+
+=== <Result of SELECT Command in Line 1> ===
+
+           id  note                
+===================================
+            1  'before password'   
+            2  'after password on master'
+            3  'after slave restart'
+
+3 rows selected. (0.000000 sec) Committed. (0.000000 sec) 
+rc=0
+### 2026-11-12T01:18:41Z [poc-dbapw-master] for f in $CUBRID/log/*.err; do n=$(grep -c "Incorrect or missing password" "$f"); [ "$n" != 0 ] && echo "$f: $n"; done; grep -h -B3 "Incorrect or missing password" $CUBRID/log/*.err | grep -E "^Time|Program" 
+/home/cubrid/CUBRID/log/appdb@poc-dbapw-slave_copylogdb.err: 1
+Program 'copylogdb' (pid 326) connected to database server 'appdb@poc-dbapw-slave' on the host 'poc-dbapw-slave' (port 1523).
+Time: 11/12/26 01:12:08.184 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -171, Tran = 1, EID = 173
+rc=0
+### 2026-11-12T01:18:41Z [poc-dbapw-slave] for f in $CUBRID/log/*.err; do n=$(grep -c "Incorrect or missing password" "$f"); [ "$n" != 0 ] && echo "$f: $n"; done; grep -h -B3 "Incorrect or missing password" $CUBRID/log/*.err | grep -E "^Time|Program" 
+/home/cubrid/CUBRID/log/appdb@poc-dbapw-master_copylogdb.err: 2
+Program 'copylogdb' (pid 357) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Time: 11/12/26 01:09:42.959 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -171, Tran = 2, EID = 19
+Program 'copylogdb' (pid 11686) connected to database server 'appdb@poc-dbapw-master' on the host 'poc-dbapw-master' (port 1523).
+Time: 11/12/26 01:12:04.620 - ERROR *** file /home/jenkins/workspace/cubrid_release_11.4/src/object/authenticate_context.cpp, line 683 ERROR CODE = -171, Tran = 2, EID = 10
+rc=0

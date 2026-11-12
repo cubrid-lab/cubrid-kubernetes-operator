@@ -1,0 +1,44 @@
+backupdb: unrecognized option '--help'
+backupdb: Backup a database.
+usage: cubrid backupdb [OPTION] database-name
+
+valid options:
+  -D, --destination-path=PATH  store backup volumes to directory PATH; default: database's log directory
+  -r, --remove-archive         delete unnecessary log-archives; use carefully and consult manual
+  -l, --level=LEVEL            backup level; default: full level
+                               LEVEL is allowed:
+                                   0 - full
+                                   1 - incremental 1
+                                   2 - incremental 2
+  -o, --output-file=FILE       print detailed backup messages to FILE
+  -S, --SA-mode                stand-alone mode execution
+  -C, --CS-mode                client-server mode execution
+      --no-check               don't check a consistency of the database; default: check
+  -t, --thread-count=COUNT     number of threads; default: 0(auto)
+      --no-compress            don't compress backup volumes; default: compression
+      --sleep-msecs=N          sleep N millisecond per 1M read; default: 0
+  -k, --separate-keys          keys file (_keys) for TDE is not included in the backup volume, but is separated into a file instead
+restoredb: unrecognized option '--help'
+restoredb: Restore a database.
+usage: cubrid restoredb [OPTION] database-name
+
+valid options:
+  -d, --up-to-date=DATE             restore the database up to its condition at given DATE. DATE is given as follows: dd-mm-yyyy:hh:mm:ss or 'backuptime' keyword
+      --list                        display a list of backup volumes without restoring
+  -B, --backup-file-path=PATH       PATH is a directory of backup volumes to be restored
+  -l, --level=LEVEL                 LEVEL of backup to be restored; see backup usage; default: 0(full backup)
+  -p, --partial-recovery            perform partial recovery if any log archive is absent
+  -o, --output-file=FILE            redirect output messages to FILE; default: none
+  -u, --use-database-location-path  restore the database and log volumes to the path specified in the database location file
+  -k, --keys-file-path              Path of key file (_keys) for TDE to be used during restoring
+applyinfo: unrecognized option '--help'
+applyinfo: display CUBRID HA Apply information.
+usage: cubrid applyinfo [OPTION] database-name
+
+valid options:
+  -r, --remote-host-name      remote host name; display remote node's active log information 
+  -L, --copied-log-path=PATH  path of copied log volumes; display copied log information 
+  -a, --applied-info 	      display applied information; the -L option is required 
+  -p, --page=ID               page id; the -L option is required; default : 0
+  -v, --verbose               enable verbose status messages; default : disable
+  -i, --interval=S            print information every S secs

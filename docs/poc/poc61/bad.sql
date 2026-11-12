@@ -1,0 +1,2 @@
+ALTER USER nosuch PASSWORD 'x';
+SELECT 1;
