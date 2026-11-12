@@ -101,8 +101,59 @@ Manager on Kubernetes. It does not show that creating on every member is
 unsafe for a new cluster, only that it is unsafe when applied to a member
 that joins a group holding data.
 
-Removing the need for object storage during a bootstrap is a separate design
-about how the backup travels (#256).
+### Why object storage remains required for HA seeding
+
+**Proposed transport decision for #256 (2026-11-12): keep the current
+object-storage-backed backup and restore path as the only supported HA seeding
+transport.** This is a transport prerequisite, not a requirement of the
+CUBRID HA engine. It does not change the decision to create one authoritative
+database and seed every peer from it. The v0.1 scope and the API's refusal of
+an HA cluster without configured object storage remain unchanged.
+
+The current Instance Manager takes a CUBRID backup from the selected source,
+uploads the artifact to the configured bucket and restores it on an empty
+target with `restoreslave -u -s master -m <source member>`. The source is
+reselected before restore when roles change, so a later peer does not
+silently use an old master's backup. POC-14 established the required
+replication-catalog behavior of this restore path; POC-15 established why
+creating independent empty databases on peers cannot replace seeding.
+Those observations support *the restore contract*, not a claim that
+object storage is the only possible transport.
+
+| Bucket-free candidate | Platform/network prerequisites | Main correctness and recovery gap |
+| --- | --- | --- |
+| Snapshot the source PVC and make a new PVC for each peer | CSI snapshot driver, snapshot controller, `VolumeSnapshot` CRDs and compatible `VolumeSnapshotClass`; snapshot/restore must be usable across the members' storage topology | A filesystem or crash-consistent snapshot is not by itself a CUBRID seeding backup. It must prove matching replication catalog and log position, database quiescence or engine consistency, and safe restore across a source change. A lost PVC can only be rebuilt when a valid snapshot remains and its storage backend can restore it. |
+| Transfer a CUBRID backup directly between Instance Managers | Authenticated, authorized network path between source and target Pods; bounded streaming, durable staging, integrity verification and resumable operation records | The peer must still run the correct `restoreslave` flow, reject partial/old/wrong-source artifacts and fail closed on source changes. A lost PVC needs a fresh transfer from a verified surviving master; disconnection and retry must not erase retained data. |
+| Seeding Job with a shared staging volume | A separate readable staging PVC (for cross-node access, a storage backend with an appropriate access mode), Job identity/RBAC, bounded scheduling and lifecycle/cleanup | The Job must never mount a live database data PVC as another writer. A backup staged on a shared volume needs the same manifest, checksum, source identity and `restoreslave` proof as the bucket path. A lost PVC still requires a fresh verified seed; Job retries must not adopt unknown target data. |
+
+For the snapshot option, Kubernetes only offers the snapshot API when the
+cluster has the necessary CSI support and snapshot components. A normal
+`ReadWriteOnce` data PVC restricts nodes, not necessarily writers on the same
+node; it must **not** be treated as a safety fence for a Job or a peer.
+See [Kubernetes Volume Snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/)
+and [Persistent Volumes access modes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/).
+None of these alternatives is implemented or measured in this repository.
+
+**Why keep the bucket path now:** it already has an operation/artifact
+identity, an integrity-checked backup/restore process and failure evidence
+under the existing HA bootstrap and recovery contracts. Replacing the
+transport would otherwise add new storage-driver assumptions or new
+cross-Pod credentials and retry semantics without evidence that it retains
+the database's exact committed history. A missing bucket/credential still
+blocks HA bootstrap; the Operator must not silently fall back to
+`createdb` on each member, reuse a stale seed, overwrite retained PVCs,
+or report an unverified member as seeded.
+
+**Reconsider after v0.1 only if** one candidate demonstrates on disposable
+Kind and the guarded multi-VM lab: exact seeded rows and replication position
+through source changes and concurrent writes; interruption and retry with
+checksums and one authoritative artifact; safe recovery from a lost member
+PVC without touching surviving PVCs; network, RBAC and credential isolation;
+and observable failure, cleanup and resource limits. The maintainers must
+approve any changed API prerequisite and amend the related lifecycle and
+recovery ADRs before enabling that path. Until then the bucket remains
+required and no fallback is provided.
+
 
 Reconcile order (bootstrap):
 
