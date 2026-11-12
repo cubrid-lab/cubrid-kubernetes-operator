@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -40,6 +41,8 @@ const (
 	testVMStatus = "lab-vm status"
 	// testMasterNode is the node of testHAPrimary in the HA fixture.
 	testMasterNode = "node-2"
+	// testOtherNode runs a member that is not the master.
+	testOtherNode = "other-node"
 )
 
 // shortGrace shortens primaryResolvedGrace for one test.
@@ -614,5 +617,34 @@ func TestAnsweredSinceNeedsAKnownRoleObservedAfterThePowerOn(t *testing.T) {
 				t.Fatalf("answeredSince() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// The VM of the master's node loses power in S04, and the run refuses a
+// workload client on that node, so the client is kept off it (#110).
+func TestS04ClientStaysOffTheMastersNode(t *testing.T) {
+	h := &haRun{cfg: testS04Config(t)}
+	h.rec.StartingState = &startingState{Master: testHAPrimary}
+	h.rec.Members = []imageIdentity{{Pod: testHAPrimary, Node: testMasterNode}, {Pod: "ha-0", Node: testOtherNode}}
+	affinity := h.clientPod().Spec.Affinity
+	if affinity == nil || affinity.NodeAffinity == nil ||
+		affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		t.Fatalf("the S04 workload client has no required node affinity: %+v", affinity)
+	}
+	terms := affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	want := corev1.NodeSelectorRequirement{Key: "metadata.name", Operator: corev1.NodeSelectorOpNotIn,
+		Values: []string{testMasterNode}}
+	if len(terms) != 1 || len(terms[0].MatchFields) != 1 || len(terms[0].MatchExpressions) != 0 ||
+		!reflect.DeepEqual(terms[0].MatchFields[0], want) {
+		t.Fatalf("the S04 workload client is not kept off the master's node %s: %+v", testMasterNode, terms)
+	}
+}
+
+func TestClientIsNotPlacedWithoutS04(t *testing.T) {
+	h := &haRun{cfg: testHAConfig(t)}
+	h.rec.StartingState = &startingState{Master: testHAPrimary}
+	h.rec.Members = []imageIdentity{{Pod: testHAPrimary, Node: testMasterNode}}
+	if affinity := h.clientPod().Spec.Affinity; affinity != nil {
+		t.Fatalf("a workload client without S04 is placed: %+v", affinity)
 	}
 }
