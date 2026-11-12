@@ -742,6 +742,14 @@ spec:
 					ready, err := h.clusterField(clusterName, `{.status.conditions[?(@.type=="Ready")].status}`)
 					g.Expect(err).NotTo(HaveOccurred())
 					g.Expect(ready).To(Equal("True"))
+					// Ready alone is not a replication-health oracle. HAReady and
+					// ReplicationHealthy must agree with the seeded data state.
+					haReady, err := h.clusterField(clusterName, `{.status.conditions[?(@.type=="HAReady")].status}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(haReady).To(Equal("True"))
+					repl, err := h.clusterField(clusterName, `{.status.conditions[?(@.type=="ReplicationHealthy")].status}`)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(repl).To(Equal("True"))
 				}, 15*time.Minute, 3*time.Second).Should(Succeed())
 			})
 
