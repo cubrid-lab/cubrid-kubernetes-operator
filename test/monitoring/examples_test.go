@@ -20,11 +20,13 @@ limitations under the License.
 package monitoring
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/yaml"
@@ -118,11 +120,17 @@ func TestAlertRulesAreWellFormed(t *testing.T) {
 	if err := yaml.UnmarshalStrict(read(t, "cubrid-alerts.yaml"), &rule); err != nil {
 		t.Fatal(err)
 	}
-	if rule.Kind != "PrometheusRule" {
-		t.Errorf("kind = %q, want PrometheusRule", rule.Kind)
+	if rule.APIVersion != "monitoring.coreos.com/v1" || rule.Kind != "PrometheusRule" {
+		t.Errorf("apiVersion/kind = %q/%q, want monitoring.coreos.com/v1/PrometheusRule", rule.APIVersion, rule.Kind)
+	}
+	if len(rule.Spec.Groups) == 0 {
+		t.Error("no alert groups found")
 	}
 	seen := map[string]bool{}
 	for _, g := range rule.Spec.Groups {
+		if g.Name == "" || len(g.Rules) == 0 {
+			t.Errorf("alert group %q must have a name and at least one rule", g.Name)
+		}
 		for _, r := range g.Rules {
 			switch {
 			case r.Alert == "" || r.Expr == "":
@@ -134,10 +142,53 @@ func TestAlertRulesAreWellFormed(t *testing.T) {
 			case r.Labels["severity"] == "" || r.Annotations["summary"] == "":
 				t.Errorf("alert %s needs a severity label and a summary", r.Alert)
 			}
+			if duration, err := time.ParseDuration(r.For); err != nil || duration <= 0 {
+				t.Errorf("alert %s has an invalid or nonpositive for duration %q: %v", r.Alert, r.For, err)
+			}
 			seen[r.Alert] = true
 		}
 	}
 	if len(seen) == 0 {
 		t.Error("no alert found")
+	}
+}
+// The metric-name regex above deliberately inspects raw text so a removed
+// metric cannot escape checks. Also parse the dashboard structure: invalid
+// JSON, duplicate panel IDs, or an empty query must not reach users as a
+// supposedly importable Grafana example.
+func TestDashboardIsWellFormed(t *testing.T) {
+	var dashboard struct {
+		Title  string `json:"title"`
+		Panels []struct {
+			ID      int    `json:"id"`
+			Title   string `json:"title"`
+			Targets []struct {
+				RefID string `json:"refId"`
+				Expr  string `json:"expr"`
+			} `json:"targets"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal(read(t, "cubrid-dashboard.json"), &dashboard); err != nil {
+		t.Fatalf("dashboard is not valid JSON: %v", err)
+	}
+	if dashboard.Title == "" || len(dashboard.Panels) == 0 {
+		t.Fatal("dashboard needs a title and panels")
+	}
+	seen := map[int]bool{}
+	for _, panel := range dashboard.Panels {
+		if panel.ID <= 0 || seen[panel.ID] {
+			t.Errorf("panel %q has a missing or duplicate positive ID %d", panel.Title, panel.ID)
+		}
+		seen[panel.ID] = true
+		if panel.Title == "" || len(panel.Targets) == 0 {
+			t.Errorf("panel %d needs a title and at least one query", panel.ID)
+		}
+		refs := map[string]bool{}
+		for _, target := range panel.Targets {
+			if target.RefID == "" || refs[target.RefID] || target.Expr == "" {
+				t.Errorf("panel %d has a missing/duplicate query refId or empty PromQL expression", panel.ID)
+			}
+			refs[target.RefID] = true
+		}
 	}
 }
