@@ -2173,6 +2173,29 @@ func seedBackupAfterKill(r *s12IMRestart, p s12Phase) {
 	r.SeedBackupOperationIDAfter, r.SeedAttemptsAfter = p.SeedBackupOperationID, &seedAttempts
 }
 
+// retryFromMatchingEvent recognizes an attempt increment only if one of the
+// Operator's recorded messages names that precise attempt and passes the
+// caller's fault-cause check. Seed restore and initial restore have different
+// reasons and ownership checks, which stay in their respective callers.
+func retryFromMatchingEvent(events []string, x attemptRise, reason string,
+	matchesCause func(string) bool) *s12Retry {
+	starting := fmt.Sprintf("starting attempt %d of ", x.to+1)
+	for _, message := range events {
+		if strings.Contains(message, starting) && matchesCause(message) {
+			return &s12Retry{At: x.at, From: x.from, To: x.to, Reason: reason, Message: message, FromEvent: true}
+		}
+	}
+	return nil
+}
+
+// appendSortedRetry preserves chronological ordering for an event-derived
+// retry that a periodic bootstrap reading may have missed.
+func appendSortedRetry(retries []s12Retry, retry s12Retry) []s12Retry {
+	retries = append(retries, retry)
+	slices.SortStableFunc(retries, func(a, b s12Retry) int { return a.At.Compare(b.At) })
+	return retries
+}
+
 // seedRetryFromEvent returns the seed retry x is, and records it, when an
 // Event of the Operator's names the restart on the killed member and the
 // attempt x starts, as retryFromEvent does for the restore: x must be by one
@@ -2181,18 +2204,14 @@ func seedRetryFromEvent(r *s12IMRestart, x attemptRise) *s12Retry {
 	if r.SeedAttemptsBefore == nil || x.from != *r.SeedAttemptsBefore || x.to != x.from+1 {
 		return nil
 	}
-	starting := fmt.Sprintf("starting attempt %d of ", x.to+1)
-	for _, message := range r.SeedRetryEvents {
-		if strings.HasPrefix(message, "on "+r.Pod+": ") && strings.Contains(message, cmp.Or(r.cause, s12IMRestartedReason)) &&
-			strings.Contains(message, starting) {
-			retry := s12Retry{At: x.at, From: x.from, To: x.to, Reason: seedRetryReasonAt(r.At), Message: message,
-				FromEvent: true}
-			r.SeedRetries = append(r.SeedRetries, retry)
-			slices.SortStableFunc(r.SeedRetries, func(a, b s12Retry) int { return a.At.Compare(b.At) })
-			return &retry
-		}
+	retry := retryFromMatchingEvent(r.SeedRetryEvents, x, seedRetryReasonAt(r.At), func(message string) bool {
+		return strings.HasPrefix(message, "on "+r.Pod+": ") &&
+			strings.Contains(message, cmp.Or(r.cause, s12IMRestartedReason))
+	})
+	if retry != nil {
+		r.SeedRetries = appendSortedRetry(r.SeedRetries, *retry)
 	}
-	return nil
+	return retry
 }
 
 // judgeSeedKillRetries judges the seed retries after the kill of a cluster
@@ -2358,17 +2377,13 @@ func retryFromEvent(r *s12IMRestart, x attemptRise) *s12Retry {
 		r.OperationIDAfter == r.OperationIDBefore {
 		return nil
 	}
-	starting := fmt.Sprintf("starting attempt %d of ", x.to+1)
-	for _, message := range r.RetryEvents {
-		if strings.Contains(message, cmp.Or(r.cause, s12IMRestartedReason)) && strings.Contains(message, starting) {
-			retry := s12Retry{At: x.at, From: x.from, To: x.to, Reason: s12RetryReason, Message: message,
-				FromEvent: true}
-			r.Retries = append(r.Retries, retry)
-			slices.SortStableFunc(r.Retries, func(a, b s12Retry) int { return a.At.Compare(b.At) })
-			return &retry
-		}
+	retry := retryFromMatchingEvent(r.RetryEvents, x, s12RetryReason, func(message string) bool {
+		return strings.Contains(message, cmp.Or(r.cause, s12IMRestartedReason))
+	})
+	if retry != nil {
+		r.Retries = appendSortedRetry(r.Retries, *retry)
 	}
-	return nil
+	return retry
 }
 
 // judgeKillRetries judges the retries after the kill of a restore that
