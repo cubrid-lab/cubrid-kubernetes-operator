@@ -169,12 +169,7 @@ func run(logger *slog.Logger) error {
 
 	// What an HA member needs to create the cluster's first database; the
 	// endpoint refuses a standalone member.
-	server = server.WithHAConfig(instancemanager.HAConfig{
-		ConfPath:      envOr("CUBRID_HA_CONF", "/etc/cubrid-ha/cubrid_ha.conf"),
-		VolumeSize:    os.Getenv("CUBRID_VOLUME_SIZE"),
-		LogVolumeSize: os.Getenv("CUBRID_LOG_VOLUME_SIZE"),
-		Locale:        os.Getenv("CUBRID_LOCALE"),
-	})
+	server = server.WithHAConfig(haConfigFromEnv())
 
 	timeouts, err := timeoutsFromEnv()
 	if err != nil {
@@ -316,6 +311,19 @@ func processGrace() (time.Duration, error) {
 // applyDBAPasswordTimeout bounds "instance-manager apply-dba-password": its
 // csql runs each open the stopped database in standalone mode.
 const applyDBAPasswordTimeout = 5 * time.Minute
+
+// haConfigFromEnv is what an HA member needs to create the cluster's first
+// database, from the environment the operator sets on the DB container. The
+// DBA password file is set only when the cluster asks for a password.
+func haConfigFromEnv() instancemanager.HAConfig {
+	return instancemanager.HAConfig{
+		ConfPath:        envOr("CUBRID_HA_CONF", "/etc/cubrid-ha/cubrid_ha.conf"),
+		VolumeSize:      os.Getenv("CUBRID_VOLUME_SIZE"),
+		LogVolumeSize:   os.Getenv("CUBRID_LOG_VOLUME_SIZE"),
+		Locale:          os.Getenv("CUBRID_LOCALE"),
+		DBAPasswordFile: os.Getenv(instancemanager.DBAPasswordFileEnv),
+	}
+}
 
 // applyDBAPassword sets the DBA password from the file DBAPasswordFileEnv
 // names on the stopped standalone database CUBRID_DB, unless it has one

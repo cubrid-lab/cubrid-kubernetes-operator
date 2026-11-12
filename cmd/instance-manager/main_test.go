@@ -156,3 +156,16 @@ func TestShutdown_RecordsTheStopBeforeItAsksTheManager(t *testing.T) {
 		t.Errorf("the stop was not recorded: %v", err)
 	}
 }
+
+// The HA bootstrap member reads the DBA password file the operator names in
+// CUBRID_DBA_PASSWORD_FILE; without the variable it sets no password (#804).
+func TestHAConfigFromEnvNamesTheDBAPasswordFile(t *testing.T) {
+	t.Setenv(instancemanager.DBAPasswordFileEnv, "/etc/cubrid-dba/password")
+	if got := haConfigFromEnv().DBAPasswordFile; got != "/etc/cubrid-dba/password" {
+		t.Errorf("DBAPasswordFile = %q, want the path from %s", got, instancemanager.DBAPasswordFileEnv)
+	}
+	t.Setenv(instancemanager.DBAPasswordFileEnv, "")
+	if got := haConfigFromEnv().DBAPasswordFile; got != "" {
+		t.Errorf("DBAPasswordFile = %q without the variable, want none", got)
+	}
+}
