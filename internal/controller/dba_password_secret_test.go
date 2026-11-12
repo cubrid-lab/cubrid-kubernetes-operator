@@ -431,6 +431,46 @@ var _ = Describe("The DBA password Secret of a standalone or HA cluster (#805, #
 		expectNoValue(key, drain(r.Recorder.(*record.FakeRecorder)), l)
 	})
 
+	It("never creates an HA database with a password value that csql's terminal would rewrite", func() {
+		secret := createSecret("dba-ha-control-secret", map[string][]byte{
+			dbaTestKey: []byte(dbaTestPassword + "\x03"),
+		})
+		c := haCluster("dba-ha-control")
+		c.Spec.DBAPasswordSecretRef = dbaPasswordRef(secret.Name, dbaTestKey)
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, c))).To(Succeed()) })
+		key := client.ObjectKeyFromObject(c)
+		boot := &fakeHABootstrapClient{state: instancemanager.OpCompleted}
+		r := newReconciler()
+		r.Prober = &memberProber{}
+		r.HABootstrap = boot
+		logCtx, l := withLog()
+
+		for range 2 {
+			_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Expect(statefulSetExists(key)).To(BeFalse(),
+			"an invalid password must never reach the HA bootstrap member")
+		Expect(boot.members).To(BeEmpty(), "the HA bootstrap ran with an invalid password")
+		got := getCluster(key)
+		Expect(got.Status.Databases).To(BeEmpty())
+		resolved := meta.FindStatusCondition(got.Status.Conditions, conditionDBAPasswordSecretResolved)
+		Expect(resolved).NotTo(BeNil())
+		Expect(resolved.Status).To(Equal(metav1.ConditionFalse))
+		Expect(resolved.Reason).To(Equal(reasonDBAPasswordValueInvalid))
+		Expect(resolved.Message).To(ContainSubstring("control byte"))
+		expectNoValue(key, drain(r.Recorder.(*record.FakeRecorder)), l)
+
+		By("accepting the corrected Secret without recreating or overwriting existing data")
+		secret.Data[dbaTestKey] = []byte(dbaTestPassword)
+		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+		_, err := r.Reconcile(logCtx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(statefulSetExists(key)).To(BeTrue())
+		expectNoValue(key, drain(r.Recorder.(*record.FakeRecorder)), l)
+	})
+
 	It("mounts only the named key, read-only, into the DB container of every HA member and names the file in its environment", func() {
 		createSecret("dba-ha-secret", map[string][]byte{
 			dbaTestKey: []byte(dbaTestPassword + "\n"), "unrelated": []byte("not for the DB Pod"),
